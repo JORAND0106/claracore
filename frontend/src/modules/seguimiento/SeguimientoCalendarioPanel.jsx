@@ -204,6 +204,7 @@ export default function SeguimientoCalendarioPanel({
           modo={bitacoraEditor.modo}
           entrada={bitacoraEditor.entrada}
           fechaInicial={bitacoraEditor.fechaInicial}
+          viewportCompact={viewportCompact}
           onClose={closeBitacoraEditor}
           onSaved={() => {
             setLocalKey((n) => n + 1)

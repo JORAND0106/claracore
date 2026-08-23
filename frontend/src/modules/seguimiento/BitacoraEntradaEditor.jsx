@@ -18,8 +18,14 @@ import {
   personalEnColumnas,
   personalPlantillaVacia,
 } from './bitacoraConstants'
+import { debeUsarGrillaDiarioCompacta } from './bitacoraDiarioMobile'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
+import {
+  seguimientoModalOverlayStyle,
+  seguimientoModalSheetStyle,
+  useSeguimientoCompact,
+} from './seguimientoShared'
 
 function emptyUso() {
   return {
@@ -158,7 +164,11 @@ export default function BitacoraEntradaEditor({
   fechaInicial = null,
   onClose,
   onSaved,
+  viewportCompact: viewportCompactProp,
 }) {
+  const viewportCompactHook = useSeguimientoCompact()
+  const viewportCompact = viewportCompactProp ?? viewportCompactHook
+  const grillaCompacta = debeUsarGrillaDiarioCompacta(viewportCompact)
   const ui = bitacoraSheetStyles(t)
   const esNuevo = !entrada?.id
   const tipo = entrada?.tipo || (modo === 'evento' ? 'evento' : 'diario')
@@ -574,20 +584,27 @@ export default function BitacoraEntradaEditor({
   const fechaRo = tipo === 'diario' || !esNuevo
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 11000,
-      background: 'rgba(15,23,42,0.45)',
-      display: 'grid', placeItems: 'center', padding: 10,
-    }}>
-      <div style={{
-        width: 'min(1180px, 100%)',
-        maxHeight: '94vh',
-        overflow: 'auto',
-        background: t.bgCard,
-        borderRadius: 10,
-        border: `1px solid ${t.border}`,
-        boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
-      }}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
+      style={seguimientoModalOverlayStyle(viewportCompact)}
+    >
+      <div
+        className={
+          viewportCompact
+            ? 'cc-seguim-modal-sheet cc-bitacora-entrada cc-bitacora-entrada--compact'
+            : 'cc-seguim-modal-sheet--desktop cc-bitacora-entrada'
+        }
+        style={{
+          ...seguimientoModalSheetStyle(viewportCompact, { wide: true }),
+          background: t.bgCard,
+          border: viewportCompact ? 'none' : `1px solid ${t.border}`,
+          boxShadow: t.shadow || '0 20px 50px rgba(0,0,0,0.2)',
+          width: viewportCompact ? '100%' : 'min(1180px, 100%)',
+          maxHeight: viewportCompact ? '96dvh' : '94vh',
+        }}
+      >
         <div style={{
           position: 'sticky', top: 0, zIndex: 3,
           display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
@@ -713,103 +730,172 @@ export default function BitacoraEntradaEditor({
 
           {tipo === 'diario' && (
             <>
-              {/* Personal 3 columnas Excel */}
+              {/* Personal — escritorio: 3 cols Excel; móvil: lista Cargo|Cant accesible */}
               <div>
                 <div style={ui.sectionTitle}>Personal en obra</div>
-                <div style={ui.sheetWrap}>
-                  <table style={ui.sheetTable}>
-                    <thead>
-                      <tr>
-                        {[0, 1, 2].map((c) => (
-                          <th key={`h${c}`} colSpan={2} style={{ ...ui.th, textAlign: 'center' }}>
-                            Col. {c + 1}
-                          </th>
+                <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+                  {grillaCompacta ? (
+                    <table
+                      className="cc-bitacora-responsive-table cc-bitacora-personal-table"
+                      style={{ ...ui.sheetTable, tableLayout: 'auto' }}
+                    >
+                      <thead>
+                        <tr>
+                          <th style={{ ...ui.th, width: '70%' }}>Cargo</th>
+                          <th style={{ ...ui.th, width: '30%', textAlign: 'center' }}>Cant.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(Array.isArray(personal) ? personal : []).map((row) => (
+                          <tr key={`pc-${row.cargo}`}>
+                            <td style={ui.td} data-label="Cargo">
+                              {row.cargo === 'Otro' && editable ? (
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
+                                  <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>Otro:</span>
+                                  <input
+                                    value={row.cargo_otro || ''}
+                                    placeholder="¿Cuál?"
+                                    onChange={(e) => setPersonal((rows) => rows.map((r) => (
+                                      r.cargo === 'Otro' ? { ...r, cargo_otro: e.target.value } : r
+                                    )))}
+                                    onBlur={async (e) => {
+                                      const nombre = String(e.target.value || '').trim()
+                                      if (!nombre || !api?.upsertBitacoraCargo) return
+                                      try {
+                                        await api.upsertBitacoraCargo({ nombre })
+                                        const data = await api.listBitacoraCargos()
+                                        const plantilla = Array.isArray(data?.plantilla) ? data.plantilla : []
+                                        setPersonal((prev) => {
+                                          const qtyOtro = prev.find((p) => p.cargo === 'Otro')?.cantidad || 0
+                                          const merged = mergePersonalPlantilla(plantilla, prev)
+                                          return merged.map((r) => {
+                                            if (String(r.cargo).toLowerCase() === nombre.toLowerCase() && qtyOtro) {
+                                              return { ...r, cantidad: qtyOtro }
+                                            }
+                                            if (r.cargo === 'Otro') {
+                                              return { ...r, cantidad: 0, cargo_otro: '' }
+                                            }
+                                            return r
+                                          })
+                                        })
+                                      } catch { /* ignore */ }
+                                    }}
+                                    style={ui.cellInp}
+                                  />
+                                </div>
+                              ) : (
+                                <span style={{ fontSize: 12, fontWeight: 600 }}>{row.cargo}</span>
+                              )}
+                            </td>
+                            <td style={{ ...ui.td, textAlign: 'center' }} data-label="Cant.">
+                              <input
+                                type="number"
+                                min={0}
+                                disabled={!editable}
+                                value={row.cantidad}
+                                onChange={(e) => setPersonalCantidad(row.cargo, e.target.value)}
+                                style={{ ...ui.cellInp, textAlign: 'center', fontWeight: 700 }}
+                              />
+                            </td>
+                          </tr>
                         ))}
-                      </tr>
-                      <tr>
-                        {[0, 1, 2].map((c) => (
-                          <Fragment key={`hh${c}`}>
-                            <th style={{ ...ui.th, width: '18%' }}>Cargo</th>
-                            <th style={{ ...ui.th, width: '7%', textAlign: 'center' }}>Cant.</th>
-                          </Fragment>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Array.from({ length: maxRowsPersonal }).map((_, ri) => (
-                        <tr key={`pr${ri}`}>
-                          {[0, 1, 2].map((ci) => {
-                            const row = personalCols[ci][ri]
-                            if (!row) {
+                      </tbody>
+                    </table>
+                  ) : (
+                    <table style={ui.sheetTable} className="cc-bitacora-personal-table">
+                      <thead>
+                        <tr>
+                          {[0, 1, 2].map((c) => (
+                            <th key={`h${c}`} colSpan={2} style={{ ...ui.th, textAlign: 'center' }}>
+                              Col. {c + 1}
+                            </th>
+                          ))}
+                        </tr>
+                        <tr>
+                          {[0, 1, 2].map((c) => (
+                            <Fragment key={`hh${c}`}>
+                              <th style={{ ...ui.th, width: '18%' }}>Cargo</th>
+                              <th style={{ ...ui.th, width: '7%', textAlign: 'center' }}>Cant.</th>
+                            </Fragment>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from({ length: maxRowsPersonal }).map((_, ri) => (
+                          <tr key={`pr${ri}`}>
+                            {[0, 1, 2].map((ci) => {
+                              const row = personalCols[ci][ri]
+                              if (!row) {
+                                return (
+                                  <Fragment key={`e${ci}-${ri}`}>
+                                    <td style={ui.td} />
+                                    <td style={ui.td} />
+                                  </Fragment>
+                                )
+                              }
                               return (
-                                <Fragment key={`e${ci}-${ri}`}>
-                                  <td style={ui.td} />
-                                  <td style={ui.td} />
+                                <Fragment key={`${row.cargo}-${ri}`}>
+                                  <td style={ui.td}>
+                                    {row.cargo === 'Otro' && editable ? (
+                                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                        <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>Otro:</span>
+                                        <input
+                                          value={row.cargo_otro || ''}
+                                          placeholder="¿Cuál?"
+                                          onChange={(e) => setPersonal((rows) => rows.map((r) => (
+                                            r.cargo === 'Otro' ? { ...r, cargo_otro: e.target.value } : r
+                                          )))}
+                                          onBlur={async (e) => {
+                                            const nombre = String(e.target.value || '').trim()
+                                            if (!nombre || !api?.upsertBitacoraCargo) return
+                                            try {
+                                              await api.upsertBitacoraCargo({ nombre })
+                                              const data = await api.listBitacoraCargos()
+                                              const plantilla = Array.isArray(data?.plantilla) ? data.plantilla : []
+                                              setPersonal((prev) => {
+                                                const qtyOtro = prev.find((p) => p.cargo === 'Otro')?.cantidad || 0
+                                                const merged = mergePersonalPlantilla(plantilla, prev)
+                                                return merged.map((r) => {
+                                                  if (String(r.cargo).toLowerCase() === nombre.toLowerCase() && qtyOtro) {
+                                                    return { ...r, cantidad: qtyOtro }
+                                                  }
+                                                  if (r.cargo === 'Otro') {
+                                                    return { ...r, cantidad: 0, cargo_otro: '' }
+                                                  }
+                                                  return r
+                                                })
+                                              })
+                                            } catch { /* ignore */ }
+                                          }}
+                                          style={ui.cellInp}
+                                        />
+                                      </div>
+                                    ) : (
+                                      <span style={{ fontSize: 12, fontWeight: 600 }}>{row.cargo}</span>
+                                    )}
+                                  </td>
+                                  <td style={{ ...ui.td, textAlign: 'center' }}>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      disabled={!editable}
+                                      value={row.cantidad}
+                                      onChange={(e) => setPersonalCantidad(row.cargo, e.target.value)}
+                                      style={{ ...ui.cellInp, textAlign: 'center', fontWeight: 700 }}
+                                    />
+                                  </td>
                                 </Fragment>
                               )
-                            }
-                            return (
-                              <Fragment key={`${row.cargo}-${ri}`}>
-                                <td style={ui.td}>
-                                  {row.cargo === 'Otro' && editable ? (
-                                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                                      <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>Otro:</span>
-                                      <input
-                                        value={row.cargo_otro || ''}
-                                        placeholder="¿Cuál?"
-                                        onChange={(e) => setPersonal((rows) => rows.map((r) => (
-                                          r.cargo === 'Otro' ? { ...r, cargo_otro: e.target.value } : r
-                                        )))}
-                                        onBlur={async (e) => {
-                                          const nombre = String(e.target.value || '').trim()
-                                          if (!nombre || !api?.upsertBitacoraCargo) return
-                                          try {
-                                            await api.upsertBitacoraCargo({ nombre })
-                                            const data = await api.listBitacoraCargos()
-                                            const plantilla = Array.isArray(data?.plantilla) ? data.plantilla : []
-                                            setPersonal((prev) => {
-                                              const qtyOtro = prev.find((p) => p.cargo === 'Otro')?.cantidad || 0
-                                              const merged = mergePersonalPlantilla(plantilla, prev)
-                                              // Trasladar cantidad de Otro al nuevo cargo si aplica
-                                              return merged.map((r) => {
-                                                if (String(r.cargo).toLowerCase() === nombre.toLowerCase() && qtyOtro) {
-                                                  return { ...r, cantidad: qtyOtro }
-                                                }
-                                                if (r.cargo === 'Otro') {
-                                                  return { ...r, cantidad: 0, cargo_otro: '' }
-                                                }
-                                                return r
-                                              })
-                                            })
-                                          } catch { /* ignore */ }
-                                        }}
-                                        style={ui.cellInp}
-                                      />
-                                    </div>
-                                  ) : (
-                                    <span style={{ fontSize: 12, fontWeight: 600 }}>{row.cargo}</span>
-                                  )}
-                                </td>
-                                <td style={{ ...ui.td, textAlign: 'center' }}>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    disabled={!editable}
-                                    value={row.cantidad}
-                                    onChange={(e) => setPersonalCantidad(row.cargo, e.target.value)}
-                                    style={{ ...ui.cellInp, textAlign: 'center', fontWeight: 700 }}
-                                  />
-                                </td>
-                              </Fragment>
-                            )
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
                 <div style={{ marginTop: 4, fontSize: 11, color: t.textMuted }}>
                   {CARGOS_PERSONAL.length} cargos · registro solo por cantidad
+                  {grillaCompacta ? ' · vista móvil (lista)' : ''}
                 </div>
               </div>
 
@@ -826,8 +912,15 @@ export default function BitacoraEntradaEditor({
                     </button>
                   )}
                 </div>
-                <div style={ui.sheetWrap}>
-                  <table style={ui.sheetTable}>
+                <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+                  <table
+                    className="cc-bitacora-responsive-table cc-bitacora-maquinaria-table"
+                    style={{
+                      ...ui.sheetTable,
+                      tableLayout: grillaCompacta ? 'auto' : 'fixed',
+                      minWidth: grillaCompacta ? 0 : undefined,
+                    }}
+                  >
                     <thead>
                       <tr>
                         <th style={{ ...ui.th, width: '22%' }}>Equipo / máquina</th>
@@ -843,7 +936,7 @@ export default function BitacoraEntradaEditor({
                     <tbody>
                       {usos.map((u, idx) => (
                         <tr key={`uso-${idx}`}>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Equipo / máquina">
                             <EquipoCatalogSelect
                               t={t}
                               api={api}
@@ -855,7 +948,7 @@ export default function BitacoraEntradaEditor({
                               )))}
                             />
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Operador">
                             <input
                               disabled={!editable}
                               value={u.operador || ''}
@@ -865,7 +958,7 @@ export default function BitacoraEntradaEditor({
                               style={ui.cellInp}
                             />
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Cant.">
                             <input
                               type="number"
                               min={0.1}
@@ -878,7 +971,7 @@ export default function BitacoraEntradaEditor({
                               style={{ ...ui.cellInp, textAlign: 'center' }}
                             />
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Hora inicio">
                             <input
                               type="time"
                               disabled={!editable}
@@ -889,7 +982,7 @@ export default function BitacoraEntradaEditor({
                               style={ui.cellInp}
                             />
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Hora fin">
                             <input
                               type="time"
                               disabled={!editable}
@@ -900,7 +993,7 @@ export default function BitacoraEntradaEditor({
                               style={ui.cellInp}
                             />
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Hora interm.">
                             <input
                               type="time"
                               disabled={!editable}
@@ -911,7 +1004,7 @@ export default function BitacoraEntradaEditor({
                               style={ui.cellInp}
                             />
                           </td>
-                          <td style={{ ...ui.td, textAlign: 'center' }}>
+                          <td style={{ ...ui.td, textAlign: 'center' }} data-label="Preop.">
                             <BitacoraClipAdjuntos
                               t={t}
                               files={u.preoperacionales || []}
@@ -923,7 +1016,7 @@ export default function BitacoraEntradaEditor({
                             />
                           </td>
                           {editable && (
-                            <td style={{ ...ui.td, textAlign: 'center' }}>
+                            <td style={{ ...ui.td, textAlign: 'center' }} data-label="">
                               {usos.length > 1 && (
                                 <button
                                   type="button"
@@ -955,8 +1048,15 @@ export default function BitacoraEntradaEditor({
                     </button>
                   )}
                 </div>
-                <div style={ui.sheetWrap}>
-                  <table style={ui.sheetTable}>
+                <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+                  <table
+                    className="cc-bitacora-responsive-table cc-bitacora-materiales-table"
+                    style={{
+                      ...ui.sheetTable,
+                      tableLayout: grillaCompacta ? 'auto' : 'fixed',
+                      minWidth: grillaCompacta ? 0 : undefined,
+                    }}
+                  >
                     <thead>
                       <tr>
                         <th style={{ ...ui.th, width: '10%' }}>Movimiento</th>
@@ -972,7 +1072,7 @@ export default function BitacoraEntradaEditor({
                     <tbody>
                       {materiales.map((m, idx) => (
                         <tr key={`mat-${idx}`}>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Movimiento">
                             <select
                               disabled={!editable}
                               value={m.movimiento || 'ingreso'}
@@ -985,7 +1085,7 @@ export default function BitacoraEntradaEditor({
                               <option value="salida">Salida</option>
                             </select>
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Tipo de material">
                             <MaterialTipoCatalogSelect
                               t={t}
                               api={api}
@@ -998,7 +1098,7 @@ export default function BitacoraEntradaEditor({
                               )))}
                             />
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Proveedor">
                             <input
                               disabled={!editable}
                               value={m.proveedor}
@@ -1008,7 +1108,7 @@ export default function BitacoraEntradaEditor({
                               style={ui.cellInp}
                             />
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Cant.">
                             <input
                               type="number"
                               min={0}
@@ -1021,7 +1121,7 @@ export default function BitacoraEntradaEditor({
                               style={{ ...ui.cellInp, textAlign: 'center' }}
                             />
                           </td>
-                          <td style={ui.td}>
+                          <td style={ui.td} data-label="Nº vale(s)">
                             <input
                               disabled={!editable}
                               value={m.numeros_vale}
@@ -1033,7 +1133,7 @@ export default function BitacoraEntradaEditor({
                               title="Número(s) de vale"
                             />
                           </td>
-                          <td style={{ ...ui.td, textAlign: 'center' }}>
+                          <td style={{ ...ui.td, textAlign: 'center' }} data-label="Remisión">
                             <BitacoraClipAdjuntos
                               t={t}
                               files={(m.adjuntos || []).slice(0, 2)}
@@ -1045,7 +1145,7 @@ export default function BitacoraEntradaEditor({
                               )))}
                             />
                           </td>
-                          <td style={{ ...ui.td, textAlign: 'center' }}>
+                          <td style={{ ...ui.td, textAlign: 'center' }} data-label="PK">
                             <button
                               type="button"
                               title={m.ubicacion_pk
@@ -1064,7 +1164,7 @@ export default function BitacoraEntradaEditor({
                                   : t.textMuted,
                                 fontWeight: 800,
                                 fontSize: 11,
-                                maxWidth: 72,
+                                maxWidth: grillaCompacta ? '100%' : 72,
                                 overflow: 'hidden',
                                 textOverflow: 'ellipsis',
                               }}
@@ -1073,7 +1173,7 @@ export default function BitacoraEntradaEditor({
                             </button>
                           </td>
                           {editable && (
-                            <td style={{ ...ui.td, textAlign: 'center' }}>
+                            <td style={{ ...ui.td, textAlign: 'center' }} data-label="">
                               {materiales.length > 1 && (
                                 <button
                                   type="button"
