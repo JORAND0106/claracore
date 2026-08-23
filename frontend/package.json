@@ -18,6 +18,7 @@
     "test:bitacora-visitantes": "node --test src/modules/seguimiento/visitantesEvento.test.js",
     "test:bitacora-tipo-material": "node --test src/modules/seguimiento/materialTipoCatalogo.test.js",
     "test:bitacora-diario-mobile": "node --test src/modules/seguimiento/bitacoraDiarioMobile.test.js",
+    "test:tema-table": "node --test src/modules/seguimiento/temaTableWidth.test.js",
     "test:tarea-excel": "node --test src/modules/seguimiento/tareaExcelLayout.test.js src/modules/seguimiento/tareaAvance.test.mjs src/modules/seguimiento/tareaChecklistMigracion.test.js src/modules/seguimiento/tareaSheetColors.test.js"
   },
   "dependencies": {
@@ -29,6 +30,10 @@
     "@microsoft/applicationinsights-web": "^3.4.3",
     "@supabase/supabase-js": "^2.105.4",
     "@tiptap/extension-placeholder": "^2.27.2",
+    "@tiptap/extension-table": "^2.27.2",
+    "@tiptap/extension-table-cell": "^2.27.2",
+    "@tiptap/extension-table-header": "^2.27.2",
+    "@tiptap/extension-table-row": "^2.27.2",
     "@tiptap/extension-underline": "^2.27.2",
     "@tiptap/pm": "^2.27.2",
     "@tiptap/react": "^2.27.2",

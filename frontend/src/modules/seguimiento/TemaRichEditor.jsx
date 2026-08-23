@@ -1,15 +1,20 @@
 import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
+import { Table } from '@tiptap/extension-table'
+import TableCell from '@tiptap/extension-table-cell'
+import TableHeader from '@tiptap/extension-table-header'
+import TableRow from '@tiptap/extension-table-row'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { plainTextToHtml } from './richTextUtils'
+import { applyColumnWidthPx, currentCellColWidth } from './temaTableWidth'
 
 /**
- * Editor TipTap para temas/ideas centrales.
- * - Viñetas, numeración y listas multinivel (1. / 1.1. / 1.1.1. vía CSS counters)
- * - Nivel de lista: Tab / Shift+Tab (sin botones en la barra)
- * - Negrita / cursiva / subrayado por barra y Ctrl+N / Ctrl+K / Ctrl+S
+ * Editor TipTap para temas/ideas y bitácora.
+ * - Viñetas, numeración y listas multinivel
+ * - Negrita / cursiva / subrayado
+ * - Tablas con columnas redimensionables (arrastre + ancho numérico)
  */
 export default function TemaRichEditor({
   t,
@@ -25,6 +30,8 @@ export default function TemaRichEditor({
   const skipNextExternal = useRef(false)
   const onPasteImageRef = useRef(onPasteImage)
   const onChangeRef = useRef(onChange)
+  const [colWidthDraft, setColWidthDraft] = useState('')
+  const [, setTick] = useState(0)
 
   useEffect(() => {
     onPasteImageRef.current = onPasteImage
@@ -47,6 +54,16 @@ export default function TemaRichEditor({
       }),
       Underline,
       Placeholder.configure({ placeholder }),
+      Table.configure({
+        resizable: true,
+        lastColumnResizable: true,
+        handleWidth: 6,
+        cellMinWidth: 40,
+        HTMLAttributes: { class: 'tema-rich-table' },
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
     ],
     content: plainTextToHtml(value),
     editable,
@@ -103,6 +120,10 @@ export default function TemaRichEditor({
     onUpdate: ({ editor: ed }) => {
       skipNextExternal.current = true
       onChangeRef.current?.(ed.getHTML())
+      setTick((n) => n + 1)
+    },
+    onSelectionUpdate: () => {
+      setTick((n) => n + 1)
     },
   })
 
@@ -128,6 +149,19 @@ export default function TemaRichEditor({
     if (editor) editor.setEditable(!!editable)
   }, [editable, editor])
 
+  useEffect(() => {
+    if (!editor) return undefined
+    const sync = () => {
+      const w = currentCellColWidth(editor)
+      setColWidthDraft(w != null ? String(w) : '')
+    }
+    sync()
+    editor.on('selectionUpdate', sync)
+    return () => {
+      editor.off('selectionUpdate', sync)
+    }
+  }, [editor])
+
   if (!editor) {
     return (
       <div style={{ ...box(t), minHeight, color: t.textMuted, fontSize: 'var(--cc-sm)', padding: 12 }}>
@@ -136,6 +170,7 @@ export default function TemaRichEditor({
     )
   }
 
+  const inTable = editor.isActive('table')
   const btn = (active) => ({
     border: `1px solid ${active ? t.primary : t.border}`,
     background: active ? `${t.primary}22` : 'transparent',
@@ -150,6 +185,13 @@ export default function TemaRichEditor({
     minHeight: 32,
   })
 
+  const applyWidth = () => {
+    if (!editable) return
+    applyColumnWidthPx(editor, colWidthDraft)
+    editor.chain().focus().run()
+    setTick((n) => n + 1)
+  }
+
   return (
     <div style={box(t)}>
       <style>{editorCss(t, minHeight)}</style>
@@ -163,6 +205,7 @@ export default function TemaRichEditor({
             gap: 6,
             padding: '8px 8px 0',
             borderBottom: `1px solid ${t.border}`,
+            alignItems: 'center',
           }}
         >
           <button
@@ -195,7 +238,7 @@ export default function TemaRichEditor({
           >
             <span style={{ textDecoration: 'underline' }}>S</span>
           </button>
-          <span style={{ width: 1, background: t.border, margin: '4px 2px' }} aria-hidden="true" />
+          <span style={{ width: 1, background: t.border, margin: '4px 2px', alignSelf: 'stretch' }} aria-hidden="true" />
           <button
             type="button"
             title="Viñetas"
@@ -216,6 +259,112 @@ export default function TemaRichEditor({
           >
             1. Lista
           </button>
+          <span style={{ width: 1, background: t.border, margin: '4px 2px', alignSelf: 'stretch' }} aria-hidden="true" />
+          <button
+            type="button"
+            title="Insertar tabla 3×3"
+            aria-pressed={inTable}
+            style={btn(inTable)}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+          >
+            ⊞ Tabla
+          </button>
+          {inTable && (
+            <>
+              <button
+                type="button"
+                title="Agregar fila"
+                style={btn(false)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => editor.chain().focus().addRowAfter().run()}
+              >
+                + Fila
+              </button>
+              <button
+                type="button"
+                title="Agregar columna"
+                style={btn(false)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => editor.chain().focus().addColumnAfter().run()}
+              >
+                + Col
+              </button>
+              <button
+                type="button"
+                title="Eliminar fila"
+                style={btn(false)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => editor.chain().focus().deleteRow().run()}
+              >
+                − Fila
+              </button>
+              <button
+                type="button"
+                title="Eliminar columna"
+                style={btn(false)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => editor.chain().focus().deleteColumn().run()}
+              >
+                − Col
+              </button>
+              <button
+                type="button"
+                title="Eliminar tabla"
+                style={btn(false)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => editor.chain().focus().deleteTable().run()}
+              >
+                Quitar tabla
+              </button>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 11,
+                  color: t.textMuted,
+                  fontWeight: 600,
+                  marginLeft: 4,
+                }}
+                title="Ancho de la columna activa (px). También puede arrastrar el borde entre columnas."
+              >
+                Ancho
+                <input
+                  type="number"
+                  min={40}
+                  max={640}
+                  value={colWidthDraft}
+                  onChange={(e) => setColWidthDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applyWidth()
+                    }
+                  }}
+                  style={{
+                    width: 64,
+                    boxSizing: 'border-box',
+                    border: `1px solid ${t.border}`,
+                    borderRadius: 6,
+                    padding: '4px 6px',
+                    fontSize: 12,
+                    background: t.bgCard || '#fff',
+                    color: t.text,
+                    height: 32,
+                  }}
+                />
+                <button
+                  type="button"
+                  style={{ ...btn(false), fontSize: 11 }}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={applyWidth}
+                >
+                  Aplicar
+                </button>
+              </label>
+            </>
+          )}
         </div>
       )}
       <EditorContent editor={editor} />
@@ -265,7 +414,6 @@ function editorCss(t, minHeight) {
   padding-left: 0;
   counter-reset: item;
 }
-/* Número y texto en la misma línea (el <p> de TipTap es block; ::before absoluto evita el salto). */
 .tema-rich-prose ol > li {
   display: block;
   position: relative;
@@ -304,6 +452,46 @@ function editorCss(t, minHeight) {
   float: left;
   height: 0;
   pointer-events: none;
+}
+.tema-rich-prose .tableWrapper {
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.tema-rich-prose table.tema-rich-table,
+.tema-rich-prose table {
+  border-collapse: collapse;
+  width: auto;
+  max-width: 100%;
+  table-layout: fixed;
+  margin: 0;
+}
+.tema-rich-prose th,
+.tema-rich-prose td {
+  border: 1px solid ${t.border || '#cbd5e1'};
+  padding: 6px 8px;
+  vertical-align: top;
+  min-width: 40px;
+  position: relative;
+  background: ${t.bgCard || '#fff'};
+}
+.tema-rich-prose th {
+  font-weight: 700;
+  background: ${t.bg || '#f8fafc'};
+}
+.tema-rich-prose .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: ${t.primary || '#2563eb'};
+  opacity: 0.35;
+  cursor: col-resize;
+  pointer-events: auto;
+  z-index: 2;
+}
+.tema-rich-prose.resize-cursor {
+  cursor: col-resize;
 }
 `
 }

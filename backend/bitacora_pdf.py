@@ -21,6 +21,7 @@ from bitacora_service import (
     list_entradas_del_dia,
     leer_media_bitacora,
 )
+from seguimiento_richtext import render_tema_html_for_pdf
 from topografia_utils import to_pdf_bytes
 
 _log = logging.getLogger("claracore.bitacora.pdf")
@@ -464,14 +465,15 @@ def _html_materiales(diario: Optional[dict], pal: dict) -> str:
 
 
 def _html_observaciones(diario: Optional[dict], pal: dict) -> str:
-    txt = _plain_from_html((diario or {}).get("cuerpo_html"))
+    cuerpo = (diario or {}).get("cuerpo_html")
+    rich = render_tema_html_for_pdf(cuerpo)
     elaborador = (diario or {}).get("created_by_nombre") or "—"
     lp = pal["linea_principal"]
     t2 = pal["titulo_2"]
     return (
         _section_title("Observaciones", pal)
-        + f'<div style="font-size:6pt;color:{lp["text"]};white-space:pre-wrap;border:0.25pt solid {t2["bg"]};'
-        f'padding:3pt 4pt;min-height:28pt;background:{lp["bg"]};">{_esc(txt or "—")}</div>'
+        + f'<div style="font-size:6pt;color:{lp["text"]};border:0.25pt solid {t2["bg"]};'
+        f'padding:3pt 4pt;min-height:28pt;background:{lp["bg"]};">{rich}</div>'
         + f'<div style="font-size:5pt;color:{t2["text"]};margin-top:1pt;">Elaborado por: {_esc(elaborador)}</div>'
     )
 
@@ -591,7 +593,7 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
         if not isinstance(ev, dict):
             continue
         tipo = _label_evento(ev.get("evento_tipo"))
-        desc = _plain_from_html(ev.get("cuerpo_html"))
+        desc_html = render_tema_html_for_pdf(ev.get("cuerpo_html"))
         dest = ev.get("dirigido_a") or "—"
         elab = ev.get("created_by_nombre") or "—"
         parts.append(
@@ -599,8 +601,8 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
             f'<div style="font-size:7pt;font-weight:bold;color:{t2["text"]};">{_esc(tipo)}</div>'
             f'<div style="font-size:5.5pt;color:{lp["text"]};margin-top:1pt;">'
             f'{_esc(ev.get("fecha") or "")} · {_esc(elab)} · Dirigido a: {_esc(dest)}</div>'
-            f'<div style="font-size:6pt;color:{lp["text"]};margin-top:2pt;white-space:pre-wrap;">'
-            f'{_esc(desc or "—")}</div>'
+            f'<div style="font-size:6pt;color:{lp["text"]};margin-top:2pt;">'
+            f'{desc_html}</div>'
             f"</div>"
         )
         imgs = [im for im in (ev.get("imagenes") or []) if isinstance(im, dict)]
