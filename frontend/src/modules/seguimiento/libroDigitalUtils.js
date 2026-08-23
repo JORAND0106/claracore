@@ -208,7 +208,29 @@ export function labelMovimientoMaterial(mov) {
 }
 
 /**
- * Texto de lectura para una fila de material (movimiento, tipo, proveedor, cant., PK).
+ * Normaliza el texto de número(s) de vale del diario (campo libre `numeros_vale`).
+ * Conserva todos los valores; no trunca.
+ * @param {object|string|null|undefined} m
+ * @returns {string}
+ */
+export function formatNumerosVale(m) {
+  const raw = typeof m === 'string' || typeof m === 'number'
+    ? m
+    : (m?.numeros_vale ?? m?.numero_vale ?? (typeof m?.vales === 'string' ? m.vales : ''))
+  const text = String(raw ?? '').trim()
+  if (!text) return ''
+  // Separadores habituales en el placeholder «Ej. 101, 102»; se unifican para lectura.
+  const parts = text
+    .split(/[,;/\n]+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  if (parts.length === 0) return text
+  return parts.join(', ')
+}
+
+/**
+ * Texto de lectura para una fila de material
+ * (movimiento, tipo, proveedor, cant., vale(s), PK).
  * @param {object} m
  */
 export function formatMaterialLine(m) {
@@ -223,6 +245,8 @@ export function formatMaterialLine(m) {
   if (cant != null && cant !== '' && Number(cant) !== 0) {
     parts.push(String(cant))
   }
+  const vales = formatNumerosVale(m)
+  if (vales) parts.push(`Vale(s): ${vales}`)
   const pk = String(m.ubicacion_pk || m.pk_label || m.pk || '').trim()
   if (pk) parts.push(`PK ${pk}`)
   return parts.join(' · ')
