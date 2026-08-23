@@ -2701,6 +2701,89 @@ select.cc-dashboard-acta-select--light option {
   height: min(360px, 55vh) !important;
 }
 
+/* Bitácora Diario — grillas Excel adaptadas a móvil (Personal / Maquinaria / Materiales) */
+.cc-bitacora-entrada--compact .cc-bitacora-sheet-scroll {
+  overflow: visible;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table {
+  width: 100%;
+  min-width: 0 !important;
+  table-layout: auto !important;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table thead {
+  display: none;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table tbody tr {
+  display: block;
+  margin: 0 0 10px;
+  padding: 10px;
+  border: 1px solid var(--cc-border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--cc-bg-card, #fff);
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table tbody tr:last-child {
+  margin-bottom: 0;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: auto !important;
+  min-height: 40px;
+  padding: 6px 0 !important;
+  border: none !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--cc-border, #e2e8f0) 70%, transparent);
+  box-sizing: border-box;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td:last-child {
+  border-bottom: none !important;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td::before {
+  content: attr(data-label);
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--cc-text-muted, #64748b);
+  flex: 0 0 38%;
+  max-width: 42%;
+  line-height: 1.25;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label=""]::before,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td:not([data-label])::before {
+  content: none;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table input,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table select,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table button {
+  min-height: 40px;
+  font-size: 16px; /* evita zoom iOS */
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-personal-table td[data-label="Cant."] > input,
+.cc-bitacora-entrada--compact .cc-bitacora-maquinaria-table td[data-label="Cant."] > input,
+.cc-bitacora-entrada--compact .cc-bitacora-materiales-table td[data-label="Cant."] > input {
+  text-align: right;
+  max-width: 120px;
+  margin-left: auto;
+}
+
 /* Checklist de tareas — grilla Excel */
 .cc-seguim-tarea-excel .cc-seguim-tarea-nivel1-table,
 .cc-seguim-tarea-excel .cc-seguim-tarea-checklist-table {
