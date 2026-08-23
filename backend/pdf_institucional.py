@@ -3,7 +3,8 @@ Encabezado institucional (3 logos) y preparación de imágenes para PDF.
 
 xhtml2pdf/reportlab:
 - pinta canales alpha como negro → siempre aplanar sobre blanco (y JPEG opaco).
-- ignora max-height/max-width CSS → fijar width/height en pt (como Bitácora).
+- ignora max-height/max-width CSS → fijar width/height en pt + attrs HTML.
+- el bitmap se redimensiona a la caja −40% para que el tamaño no dependa solo del CSS.
 """
 from __future__ import annotations
 
@@ -16,9 +17,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from typing import Dict, Optional, Tuple
 
-# Píxeles de trabajo (suficiente nitidez a ~22pt de alto en el PDF).
-_LOGO_MAX_PX_W = 220
-_LOGO_MAX_PX_H = 80
 _HTTP_TIMEOUT = 8.0
 _CACHE_TTL = 600.0
 _CACHE: Dict[str, Tuple[float, str]] = {}
@@ -26,11 +24,28 @@ _CACHE_LOCK = Lock()
 
 _LOGO_KEYS = ("logo_contratista", "logo_interventoria", "logo_entidad")
 
-# Tamaño en el PDF (pt). ~50% del intento previo (48px/~36pt → 22pt; 110px → 55pt).
-_LOGO_BOX_H_PT = 22.0
-_LOGO_BOX_W_PT = 55.0
-_LOGO_BOX_H_PT_COMPACT = 18.0
-_LOGO_BOX_W_PT_COMPACT = 48.0
+# Caja ORIGINAL del encabezado (primer diseño: max-height 48 / max-width 110).
+# La reducción pedida es −40% → factor 0.60 sobre ese original.
+_LOGO_ORIG_H_PT = 48.0
+_LOGO_ORIG_W_PT = 110.0
+_LOGO_ORIG_H_PT_COMPACT = 36.0
+_LOGO_ORIG_W_PT_COMPACT = 90.0
+_LOGO_SIZE_FACTOR = 0.60  # −40% respecto al original
+
+_LOGO_BOX_H_PT = round(_LOGO_ORIG_H_PT * _LOGO_SIZE_FACTOR, 2)  # 28.8
+_LOGO_BOX_W_PT = round(_LOGO_ORIG_W_PT * _LOGO_SIZE_FACTOR, 2)  # 66.0
+_LOGO_BOX_H_PT_COMPACT = round(_LOGO_ORIG_H_PT_COMPACT * _LOGO_SIZE_FACTOR, 2)  # 21.6
+_LOGO_BOX_W_PT_COMPACT = round(_LOGO_ORIG_W_PT_COMPACT * _LOGO_SIZE_FACTOR, 2)  # 54.0
+
+
+def _pt_to_px(pt: float) -> int:
+    """xhtml2pdf: tamaño intrínseco ≈ px * 72/96 pt. Invertimos para el failsafe."""
+    return max(1, int(round(float(pt) * 96.0 / 72.0)))
+
+
+# Píxeles = caja objetivo: aunque se ignore el CSS, el bitmap ya sale al −40%.
+_LOGO_MAX_PX_W = _pt_to_px(_LOGO_BOX_W_PT)
+_LOGO_MAX_PX_H = _pt_to_px(_LOGO_BOX_H_PT)
 
 
 def prepare_image_for_pdf(
@@ -194,9 +209,13 @@ def _logo_cell_html(
     ph = html.escape(placeholder)
     if uri:
         w, h = _fit_pt(uri, max_w_pt, max_h_pt)
+        # Atributos HTML + CSS: doble anclaje (xhtml2pdf a veces ignora uno u otro).
+        w_attr = _pt_to_px(w)
+        h_attr = _pt_to_px(h)
         return (
             f'<div style="text-align:center;line-height:0;">'
             f'<img src="{html.escape(uri, quote=True)}" '
+            f'width="{w_attr}" height="{h_attr}" '
             f'style="width:{w}pt;height:{h}pt;border:0;display:inline-block;" />'
             f"</div>"
         )
@@ -248,14 +267,14 @@ def html_encabezado_institucional(
         )
     gen_html = f"<br/><span style=\"font-size:{meta_fs};\"><b>Generado por:</b> {gen}</span>" if gen else ""
 
-    # Columnas logo más estrechas: más espacio al título central.
+    # Columnas logo equilibradas con caja −40% (más aire al título).
     return f"""
 <table width="100%" cellspacing="0" cellpadding="0"
   style="border-collapse:collapse;border:0.8pt solid #0f172a;margin:0 0 8px;background:#fff;">
   <tr>
-    <td width="12%" style="padding:3px 2px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_c}</td>
-    <td width="12%" style="padding:3px 2px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_i}</td>
-    <td width="64%" style="padding:3px 8px;vertical-align:middle;background:#f1f5f9;">
+    <td width="13%" style="padding:4px 3px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_c}</td>
+    <td width="13%" style="padding:4px 3px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_i}</td>
+    <td width="61%" style="padding:4px 8px;vertical-align:middle;background:#f1f5f9;">
       <div style="font-size:{title_fs};font-weight:bold;color:#0f172a;line-height:1.15;">{titulo_esc}</div>
       {sub_html}
       <div style="font-size:{meta_fs};color:#334155;margin-top:2px;line-height:1.25;">
@@ -267,7 +286,7 @@ def html_encabezado_institucional(
       </div>
       {gen_html}
     </td>
-    <td width="12%" style="padding:3px 2px;border-left:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_e}</td>
+    <td width="13%" style="padding:4px 3px;border-left:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_e}</td>
   </tr>
 </table>
 """
