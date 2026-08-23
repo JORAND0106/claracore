@@ -2878,40 +2878,45 @@ def html_cierre_nivelacion_pdf(niv: dict, lecturas: list[dict] | None = None) ->
         )
 
     th, td, tbl, sec = _NIV_PDF_TH_BLK, _NIV_PDF_CELL_BLK, _PDF_TBL_BLK, _NIV_PDF_SEC
+    # Anchos al contenido (sin % mínimos que xhtml2pdf vuelve negativos).
+    tbl_cierre = (
+        "border-collapse:collapse;table-layout:auto;width:100%;"
+        "border:0.5pt solid #334155;"
+    )
+    td_lbl = f"{td}white-space:nowrap;font-weight:700;background:#f8fafc;"
+    td_val = f"{td}white-space:nowrap;"
+    td_val_wrap = f"{td}"
+    dictamen_cell = (
+        f"{td}background:{adm_bg};color:{adm_color};font-weight:800;white-space:nowrap;"
+    )
+    # 8 campos en 2 columnas de pares (4 filas) → ~mitad de altura vs lista vertical.
     cuadro_cierre = f"""
-    <table cellspacing="0" cellpadding="0" style="{tbl}">
-      <tr><th style="{th}" colspan="2">Verificación de cierre</th></tr>
+    <table cellspacing="0" cellpadding="0" style="{tbl_cierre}">
+      <tr><th style="{th}" colspan="4">Verificación de cierre</th></tr>
       <tr>
-        <td style="{td}width:42%;"><b>Error cierre</b></td>
-        <td style="{td}"><b>{err_mm} mm</b></td>
+        <td style="{td_lbl}">Error cierre</td>
+        <td style="{td_val}"><b>{err_mm} mm</b></td>
+        <td style="{td_lbl}">Tolerancia</td>
+        <td style="{td_val_wrap}"><b>{tol_mm} mm</b><br/>
+          <span style="font-size:6.5pt;color:#64748b;">{html.escape(tol_formula)}</span></td>
       </tr>
       <tr>
-        <td style="{td}"><b>Tolerancia</b></td>
-        <td style="{td}"><b>{tol_mm} mm</b><br/><span style="font-size:6.5pt;color:#64748b;">{html.escape(tol_formula)}</span></td>
+        <td style="{td_lbl}">Dist. total</td>
+        <td style="{td_val}">{dist_km_s} km</td>
+        <td style="{td_lbl}">Dist. V+</td>
+        <td style="{td_val}">{dist_vp_s} km</td>
       </tr>
       <tr>
-        <td style="{td}"><b>Dist. total</b></td>
-        <td style="{td}">{dist_km_s} km</td>
+        <td style="{td_lbl}">Dist. V−</td>
+        <td style="{td_val}">{dist_vm_s} km</td>
+        <td style="{td_lbl}">BM ini. → fin.</td>
+        <td style="{td_val_wrap}">{bm_ini} → {bm_fin}</td>
       </tr>
       <tr>
-        <td style="{td}"><b>Dist. V+</b></td>
-        <td style="{td}">{dist_vp_s} km</td>
-      </tr>
-      <tr>
-        <td style="{td}"><b>Dist. V−</b></td>
-        <td style="{td}">{dist_vm_s} km</td>
-      </tr>
-      <tr>
-        <td style="{td}"><b>BM ini. → fin.</b></td>
-        <td style="{td}">{bm_ini} → {bm_fin}</td>
-      </tr>
-      <tr>
-        <td style="{td}"><b>Tipo nivel</b></td>
-        <td style="{td}">{html.escape(tipo_txt)}</td>
-      </tr>
-      <tr>
-        <td style="{td}"><b>Dictamen</b></td>
-        <td style="{td}background:{adm_bg};color:{adm_color};font-weight:800;">{adm_txt}</td>
+        <td style="{td_lbl}">Tipo nivel</td>
+        <td style="{td_val_wrap}">{html.escape(tipo_txt)}</td>
+        <td style="{td_lbl}">Dictamen</td>
+        <td style="{dictamen_cell}">{adm_txt}</td>
       </tr>
     </table>"""
 
@@ -2930,8 +2935,8 @@ def html_cierre_nivelacion_pdf(niv: dict, lecturas: list[dict] | None = None) ->
     <div style="{sec}">Verificación y cierre del circuito</div>
     <table cellspacing="0" cellpadding="0" style="width:100%;border:none;border-collapse:collapse;margin-bottom:6px;">
       <tr>
-        <td width="32%" valign="top" style="padding:0 8px 0 0;border:none;">{cuadro_cierre}</td>
-        <td width="68%" valign="top" style="padding:0;border:none;">{procedimiento}</td>
+        <td width="52%" valign="top" style="padding:0 8px 0 0;border:none;">{cuadro_cierre}</td>
+        <td width="48%" valign="top" style="padding:0;border:none;">{procedimiento}</td>
       </tr>
     </table>"""
 
