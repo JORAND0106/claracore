@@ -18,7 +18,7 @@
     "test:bitacora-visitantes": "node --test src/modules/seguimiento/visitantesEvento.test.js",
     "test:bitacora-tipo-material": "node --test src/modules/seguimiento/materialTipoCatalogo.test.js",
     "test:bitacora-diario-mobile": "node --test src/modules/seguimiento/bitacoraDiarioMobile.test.js",
-    "test:tema-table": "node --test src/modules/seguimiento/temaTableWidth.test.js",
+    "test:tema-table": "node --test src/modules/seguimiento/temaTableWidth.test.js src/modules/seguimiento/temaEditorTables.test.js src/modules/seguimiento/temaEditorScroll.test.js",
     "test:tarea-excel": "node --test src/modules/seguimiento/tareaExcelLayout.test.js src/modules/seguimiento/tareaAvance.test.mjs src/modules/seguimiento/tareaChecklistMigracion.test.js src/modules/seguimiento/tareaSheetColors.test.js"
   },
   "dependencies": {
