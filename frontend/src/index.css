@@ -3212,3 +3212,379 @@ select.cc-dashboard-acta-select--light option {
 .cc-panel-calc-float {
   backdrop-filter: blur(8px);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Seguimiento — Libro digital (Actas / Bitácora, solo lectura)
+   ═══════════════════════════════════════════════════════════ */
+
+.cc-libro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  flex-direction: column;
+  color: var(--libro-text, #0c4a6e);
+  animation: ccLibroFadeIn 280ms ease-out;
+}
+
+@keyframes ccLibroFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.cc-libro-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(10, 22, 40, 0.18);
+  flex-shrink: 0;
+}
+
+.cc-libro-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cc-libro-logo {
+  height: 36px;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
+}
+
+.cc-libro-brand-title {
+  font-weight: 800;
+  font-size: var(--cc-body);
+  line-height: 1.2;
+}
+
+.cc-libro-brand-sub {
+  font-size: var(--cc-xs);
+  opacity: 0.9;
+}
+
+.cc-libro-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-weight: 700;
+  font-size: var(--cc-sm);
+  cursor: pointer;
+}
+
+.cc-libro-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.cc-libro-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 12px 8px;
+  perspective: 1800px;
+}
+
+.cc-libro-nav {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--libro-accent, #0077B6) 40%, transparent);
+  background: color-mix(in srgb, var(--libro-page-bg, #fff) 88%, transparent);
+  color: var(--libro-accent, #0077B6);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(10, 22, 40, 0.12);
+}
+
+.cc-libro-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.cc-libro-book {
+  position: relative;
+  width: min(720px, 100%);
+  height: min(78vh, 820px);
+  margin: 0 auto;
+  transform-style: preserve-3d;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.cc-libro-spine {
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 14px;
+  border-radius: 4px 0 0 4px;
+  background: linear-gradient(90deg, var(--libro-spine, #164e63), color-mix(in srgb, var(--libro-spine, #164e63) 55%, #fff));
+  box-shadow: 2px 0 10px rgba(10, 22, 40, 0.18);
+  z-index: 3;
+}
+
+.cc-libro-page {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(15, 40, 70, 0.06), transparent 18px),
+    var(--libro-page-bg, #fff);
+  border: 1px solid var(--libro-page-edge, #bae6fd);
+  border-radius: 4px 14px 14px 4px;
+  box-shadow:
+    0 18px 40px rgba(10, 22, 40, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+  overflow: hidden;
+  transform-origin: left center;
+  backface-visibility: hidden;
+}
+
+.cc-libro-page--under {
+  z-index: 1;
+  transform: scale(0.992) translateX(6px);
+  opacity: 0.92;
+}
+
+.cc-libro-page--front {
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1), box-shadow 420ms ease;
+}
+
+.cc-libro-book.is-flip-next .cc-libro-page--front {
+  transform: rotateY(-118deg);
+  box-shadow: -18px 12px 28px rgba(10, 22, 40, 0.22);
+}
+
+.cc-libro-book.is-flip-prev .cc-libro-page--front {
+  animation: ccLibroFlipPrev 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@keyframes ccLibroFlipPrev {
+  0% { transform: rotateY(-118deg); }
+  100% { transform: rotateY(0deg); }
+}
+
+.cc-libro-session-mark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px 0 26px;
+  color: var(--libro-accent, #0077B6);
+  font-size: var(--cc-xs);
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.cc-libro-session-logo {
+  height: 22px;
+  width: auto;
+  object-fit: contain;
+}
+
+.cc-libro-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 22px 22px 28px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-libro-list,
+.cc-libro-ol {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: var(--cc-sm);
+  color: var(--libro-text, #0c4a6e);
+  line-height: 1.45;
+}
+
+.cc-libro-list li,
+.cc-libro-ol li {
+  margin-bottom: 6px;
+}
+
+.cc-libro-fotos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cc-libro-prose p {
+  margin: 0 0 0.65em;
+}
+
+.cc-libro-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--cc-xs);
+  margin: 8px 0;
+}
+
+.cc-libro-prose td,
+.cc-libro-prose th {
+  border: 1px solid var(--libro-page-edge, #bae6fd);
+  padding: 4px 6px;
+  vertical-align: top;
+}
+
+.cc-libro-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  color: color-mix(in srgb, var(--libro-text, #0c4a6e) 85%, #fff);
+  font-size: var(--cc-sm);
+  flex-shrink: 0;
+}
+
+.cc-libro-footer-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.cc-libro-pager {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--libro-accent, #0077B6) 16%, transparent);
+  color: var(--libro-accent, #0077B6);
+}
+
+.cc-libro-footer-hint {
+  opacity: 0.8;
+  font-size: var(--cc-xs);
+}
+
+.cc-libro-message {
+  margin: auto;
+  padding: 24px;
+  text-align: center;
+  color: var(--libro-text, #0c4a6e);
+  font-size: var(--cc-body);
+}
+
+.cc-libro-message--error {
+  color: var(--cc-color-danger, #b91c1c);
+}
+
+.cc-libro-selector-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11900;
+  background: rgba(10, 22, 40, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  animation: ccLibroFadeIn 200ms ease-out;
+}
+
+.cc-libro-selector-card {
+  width: min(440px, 100%);
+  border-radius: 14px;
+  border: 1px solid;
+  box-shadow: 0 24px 48px rgba(10, 22, 40, 0.28);
+  padding: 16px;
+}
+
+.cc-libro-selector-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cc-libro-selector-logo {
+  height: 40px;
+  width: auto;
+  object-fit: contain;
+}
+
+.cc-libro-selector-x {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  padding: 4px;
+}
+
+.cc-libro-selector-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cc-libro-selector-btn {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+  border: none;
+  border-radius: 12px;
+  padding: 14px 14px;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(10, 22, 40, 0.16);
+}
+
+.cc-libro-selector-btn strong {
+  display: block;
+  font-size: var(--cc-body);
+}
+
+.cc-libro-selector-btn small {
+  display: block;
+  margin-top: 2px;
+  opacity: 0.9;
+  font-size: var(--cc-xs);
+}
+
+@media (max-width: 720px) {
+  .cc-libro-stage {
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    gap: 4px;
+    padding: 10px 6px 4px;
+  }
+
+  .cc-libro-nav {
+    width: 40px;
+    height: 40px;
+  }
+
+  .cc-libro-book {
+    height: min(68vh, 640px);
+    width: 100%;
+  }
+
+  .cc-libro-close span {
+    display: none;
+  }
+
+  .cc-libro-footer-hint {
+    width: 100%;
+    text-align: center;
+  }
+}
