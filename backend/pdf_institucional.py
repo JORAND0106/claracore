@@ -233,13 +233,34 @@ def html_encabezado_institucional(
     compact: bool = False,
     generado_por: str = "",
     logo_uris: Optional[Dict[str, str]] = None,
+    logo_scale: float = 1.0,
+    title_fs: Optional[str] = None,
+    meta_fs: Optional[str] = None,
+    sub_fs: Optional[str] = None,
+    dense: bool = False,
 ) -> str:
     """
     Encabezado con 3 logos (Contratista | Interventoría | título | Entidad),
     mismo patrón visual que Bitácora de Obra (logos compactos en pt).
+
+    ``logo_scale`` multiplica la caja de logos (p.ej. 1.2 = +20%).
+    ``dense`` reduce padding/márgenes verticales del bloque.
     """
     c = contrato or {}
-    uris = logo_uris if logo_uris is not None else prepare_logos_contrato(c)
+    scale = float(logo_scale or 1.0)
+    if scale <= 0:
+        scale = 1.0
+    max_h = (_LOGO_BOX_H_PT_COMPACT if compact else _LOGO_BOX_H_PT) * scale
+    max_w = (_LOGO_BOX_W_PT_COMPACT if compact else _LOGO_BOX_W_PT) * scale
+    # Re-preparar bitmaps a la caja efectiva para que +scale no quede limitado por píxeles chicos.
+    if logo_uris is not None:
+        uris = logo_uris
+    else:
+        uris = prepare_logos_contrato(
+            c,
+            max_px_w=_pt_to_px(max_w),
+            max_px_h=_pt_to_px(max_h),
+        )
     numero = html.escape(str(c.get("numero") or ""))
     objeto = html.escape(str(c.get("objeto") or ""))
     contratista = html.escape(str(c.get("contratista") or "—"))
@@ -251,42 +272,54 @@ def html_encabezado_institucional(
     titulo_esc = html.escape(str(titulo or ""))
     sub_esc = html.escape(str(subtitulo or ""))
 
-    max_h = _LOGO_BOX_H_PT_COMPACT if compact else _LOGO_BOX_H_PT
-    max_w = _LOGO_BOX_W_PT_COMPACT if compact else _LOGO_BOX_W_PT
     cell_c = _logo_cell_html(uris.get("logo_contratista") or "", "Contratista", max_h_pt=max_h, max_w_pt=max_w)
     cell_i = _logo_cell_html(uris.get("logo_interventoria") or "", "Interventoría", max_h_pt=max_h, max_w_pt=max_w)
     cell_e = _logo_cell_html(uris.get("logo_entidad") or "", "Entidad", max_h_pt=max_h, max_w_pt=max_w)
 
-    title_fs = "8pt" if compact else "10pt"
-    meta_fs = "5.5pt" if compact else "7pt"
+    if title_fs is None:
+        title_fs = "8pt" if compact else "10pt"
+    if meta_fs is None:
+        meta_fs = "5.5pt" if compact else "7pt"
+    if sub_fs is None:
+        sub_fs = "5.5pt"
     sub_html = ""
     if sub_esc:
+        sub_mt = "0" if dense else "1px"
         sub_html = (
-            f'<div style="font-size:5.5pt;font-weight:600;color:#475569;margin-top:1px;line-height:1.2;">'
+            f'<div style="font-size:{sub_fs};font-weight:600;color:#475569;margin-top:{sub_mt};line-height:1.15;">'
             f"{sub_esc}</div>"
         )
-    gen_html = f"<br/><span style=\"font-size:{meta_fs};\"><b>Generado por:</b> {gen}</span>" if gen else ""
+    gen_html = (
+        f'<div style="font-size:{meta_fs};margin-top:{"0" if dense else "1px"};line-height:1.15;">'
+        f"<b>Generado por:</b> {gen}</div>"
+        if gen
+        else ""
+    )
 
-    # Columnas logo equilibradas con caja −40% (más aire al título).
+    pad = "2px 2px" if dense else "4px 3px"
+    pad_c = "2px 6px" if dense else "4px 8px"
+    margin = "0 0 4px" if dense else "0 0 8px"
+    meta_mt = "1px" if dense else "2px"
+
     return f"""
 <table width="100%" cellspacing="0" cellpadding="0"
-  style="border-collapse:collapse;border:0.8pt solid #0f172a;margin:0 0 8px;background:#fff;">
+  style="border-collapse:collapse;border:0.8pt solid #0f172a;margin:{margin};background:#fff;">
   <tr>
-    <td width="13%" style="padding:4px 3px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_c}</td>
-    <td width="13%" style="padding:4px 3px;border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_i}</td>
-    <td width="61%" style="padding:4px 8px;vertical-align:middle;background:#f1f5f9;">
-      <div style="font-size:{title_fs};font-weight:bold;color:#0f172a;line-height:1.15;">{titulo_esc}</div>
+    <td width="13%" style="padding:{pad};border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_c}</td>
+    <td width="13%" style="padding:{pad};border-right:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_i}</td>
+    <td width="61%" style="padding:{pad_c};vertical-align:middle;background:#f1f5f9;">
+      <div style="font-size:{title_fs};font-weight:bold;color:#0f172a;line-height:1.1;">{titulo_esc}</div>
       {sub_html}
-      <div style="font-size:{meta_fs};color:#334155;margin-top:2px;line-height:1.25;">
+      <div style="font-size:{meta_fs};color:#334155;margin-top:{meta_mt};line-height:1.2;">
         <b>Contrato N° {numero}</b>
         {(" · " + objeto) if objeto else ""}
       </div>
-      <div style="font-size:{meta_fs};color:#475569;margin-top:1px;line-height:1.2;">
+      <div style="font-size:{meta_fs};color:#475569;margin-top:0;line-height:1.15;">
         {contratista} · {interventoria} · {entidad_txt}
       </div>
       {gen_html}
     </td>
-    <td width="13%" style="padding:4px 3px;border-left:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_e}</td>
+    <td width="13%" style="padding:{pad};border-left:0.4pt solid #cbd5e1;vertical-align:middle;">{cell_e}</td>
   </tr>
 </table>
 """

@@ -2438,7 +2438,9 @@ def html_firmas_validacion_newpoint_pdf(np: dict, contrato: dict) -> str:
     return html_firmas_elabora_aprueba_pdf(np, contrato)
 
 
-def html_firmas_elabora_aprueba_pdf(registro: dict, contrato: dict) -> str:
+def html_firmas_elabora_aprueba_pdf(
+    registro: dict, contrato: dict, *, font_size: str = "5pt", meta_font_size: str = "4.8pt"
+) -> str:
     """Pie del informe: elabora (contratista) y aprueba (interventoría)."""
     contratista = html.escape(str(contrato.get("contratista") or "—"))
     interventoria = html.escape(str(contrato.get("interventoria") or "—"))
@@ -2453,20 +2455,20 @@ def html_firmas_elabora_aprueba_pdf(registro: dict, contrato: dict) -> str:
     return f"""
     <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:3px;border-top:1px solid #64748b;">
       <tr>
-        <td width="50%" valign="bottom" style="padding:3px 6px 2px;font-size:5pt;">
+        <td width="50%" valign="bottom" style="padding:3px 6px 2px;font-size:{font_size};">
           <div style="font-weight:700;color:#1e40af;margin-bottom:8px;">ELABORÓ — Contratista</div>
           <div style="border-top:1px solid #0f172a;width:90%;padding-top:2px;min-height:22px;">
             <strong>{elabora or '—'}</strong><br/>
             <span style="color:#475569;">{contratista}</span><br/>
-            <span style="color:#64748b;font-size:4.8pt;">{meta_c}</span>
+            <span style="color:#64748b;font-size:{meta_font_size};">{meta_c}</span>
           </div>
         </td>
-        <td width="50%" valign="bottom" style="padding:3px 6px 2px;font-size:5pt;border-left:1px solid #cbd5e1;">
+        <td width="50%" valign="bottom" style="padding:3px 6px 2px;font-size:{font_size};border-left:1px solid #cbd5e1;">
           <div style="font-weight:700;color:#1e40af;margin-bottom:8px;">APROBÓ — Interventoría</div>
           <div style="border-top:1px solid #0f172a;width:90%;padding-top:2px;min-height:22px;">
             <strong>{aprueba or '—'}</strong><br/>
             <span style="color:#475569;">{interventoria}</span><br/>
-            <span style="color:#64748b;font-size:4.8pt;">{meta_i}</span>
+            <span style="color:#64748b;font-size:{meta_font_size};">{meta_i}</span>
           </div>
         </td>
       </tr>
@@ -2499,8 +2501,8 @@ def _bloque_hilos_pdf(lect: dict | None, tipo_nivel: str) -> str:
 def html_tabla_circuito_nivelacion_pdf(niv: dict, lecturas: list[dict]) -> str:
     """Tabla cartera de circuito de nivelación (filas agrupadas)."""
     tipo_nivel = niv.get("tipo_nivel") or "electronico"
-    th = _PDF_TH_C
-    td = _PDF_CELL_C
+    th = _NIV_PDF_TH_C
+    td = _NIV_PDF_CELL_C
     tbl = _PDF_TBL
     grupos = _agrupar_lecturas_por_fila(lecturas)
     body = ""
@@ -2580,6 +2582,17 @@ def html_tabla_circuito_nivelacion_pdf(niv: dict, lecturas: list[dict]) -> str:
 _PDF_TH_BLK = "padding:2px 4px;font-size:5.5pt;font-weight:700;background:#f8fafc;border:0.5pt solid #334155;vertical-align:middle;"
 _PDF_CELL_BLK = "padding:2px 4px;font-size:5.5pt;border:0.5pt solid #334155;vertical-align:top;line-height:1.35;"
 _PDF_TBL_BLK = "border-collapse:collapse;table-layout:fixed;width:100%;border:0.5pt solid #334155;"
+
+# Estilos del informe Circuito de Nivelación (+≈2pt vs estilos compactos compartidos).
+_NIV_PDF_SEC = "font-size:7.5pt;font-weight:700;color:#1e40af;margin:2px 0 1px;"
+_NIV_PDF_TH_C = "padding:2px;font-size:7pt;font-weight:700;background:#e2e8f0;border:1px solid #94a3b8;vertical-align:middle;"
+_NIV_PDF_CELL_C = "padding:2px;font-size:7pt;border:1px solid #cbd5e1;vertical-align:middle;"
+_NIV_PDF_TH_BLK = "padding:3px 5px;font-size:7.5pt;font-weight:700;background:#f8fafc;border:0.5pt solid #334155;vertical-align:middle;"
+_NIV_PDF_CELL_BLK = "padding:3px 5px;font-size:7.5pt;border:0.5pt solid #334155;vertical-align:top;line-height:1.35;"
+_NIV_PDF_BODY_FS = "10pt"
+_NIV_PDF_PIE_FS = "9pt"
+_NIV_PDF_FIRMAS_FS = "7pt"
+_NIV_PDF_FIRMAS_META_FS = "6.5pt"
 
 
 def _merge_lecturas_calculo_pdf(lecturas: list[dict], calc: dict) -> list[dict]:
@@ -2864,7 +2877,7 @@ def html_cierre_nivelacion_pdf(niv: dict, lecturas: list[dict] | None = None) ->
             "para determinar admisibilidad."
         )
 
-    th, td, tbl, sec = _PDF_TH_BLK, _PDF_CELL_BLK, _PDF_TBL_BLK, _PDF_SEC
+    th, td, tbl, sec = _NIV_PDF_TH_BLK, _NIV_PDF_CELL_BLK, _PDF_TBL_BLK, _NIV_PDF_SEC
     cuadro_cierre = f"""
     <table cellspacing="0" cellpadding="0" style="{tbl}">
       <tr><th style="{th}" colspan="2">Verificación de cierre</th></tr>
@@ -2874,7 +2887,7 @@ def html_cierre_nivelacion_pdf(niv: dict, lecturas: list[dict] | None = None) ->
       </tr>
       <tr>
         <td style="{td}"><b>Tolerancia</b></td>
-        <td style="{td}"><b>{tol_mm} mm</b><br/><span style="font-size:5pt;color:#64748b;">{html.escape(tol_formula)}</span></td>
+        <td style="{td}"><b>{tol_mm} mm</b><br/><span style="font-size:6.5pt;color:#64748b;">{html.escape(tol_formula)}</span></td>
       </tr>
       <tr>
         <td style="{td}"><b>Dist. total</b></td>
@@ -2903,15 +2916,15 @@ def html_cierre_nivelacion_pdf(niv: dict, lecturas: list[dict] | None = None) ->
     </table>"""
 
     procedimiento = f"""
-    <div style="font-size:5.5pt;font-weight:700;color:#1e40af;margin:0 0 4px;">Procedimiento de verificación</div>
-    <ul style="margin:0;padding-left:12px;font-size:5.5pt;line-height:1.5;color:#0f172a;">
+    <div style="font-size:7.5pt;font-weight:700;color:#1e40af;margin:0 0 4px;">Procedimiento de verificación</div>
+    <ul style="margin:0;padding-left:12px;font-size:7.5pt;line-height:1.5;color:#0f172a;">
       <li>Circuito desde <b>{bm_ini}</b> con V+, Vi y V− ({html.escape(tipo_txt)}).</li>
       <li>Distancia = suma tramos V+ y V− (excluye Vi).</li>
       <li>Cierre en <b>{bm_fin}</b>: error = cota V− calculada − cota biblioteca.</li>
       <li>Tolerancia <b>T = {tol_mm_km:g} mm/km × √L</b>; distribución proporcional del error.</li>
     </ul>
-    <div style="font-size:5.5pt;font-weight:700;color:#1e40af;margin:8px 0 4px;">Conclusión</div>
-    <p style="margin:0;font-size:5.5pt;line-height:1.45;padding:4px 6px;border:0.5pt solid #334155;border-radius:2px;">{conclusion}</p>"""
+    <div style="font-size:7.5pt;font-weight:700;color:#1e40af;margin:8px 0 4px;">Conclusión</div>
+    <p style="margin:0;font-size:7.5pt;line-height:1.45;padding:4px 6px;border:0.5pt solid #334155;border-radius:2px;">{conclusion}</p>"""
 
     layout = f"""
     <div style="{sec}">Verificación y cierre del circuito</div>
@@ -2955,27 +2968,52 @@ def html_documento_nivelacion_pdf(
             equipo += html.escape(f" · S/N {niv.get('equipo_serial')}")
 
     datos_campo = f"""
-    <div style="{_PDF_SEC}">Datos de campo</div>
+    <div style="{_NIV_PDF_SEC}">Datos de campo</div>
     <table cellspacing="0" cellpadding="0" style="{_PDF_TBL}margin-bottom:4px;">
       <tr>
-        <td style="{_PDF_CELL_C}"><b>Operador</b><br/>{operador}</td>
-        <td style="{_PDF_CELL_C}"><b>Fecha</b><br/>{fecha}</td>
-        <td style="{_PDF_CELL_C}"><b>Equipo</b><br/>{equipo}</td>
-        <td style="{_PDF_CELL_C}"><b>Tipo nivel</b><br/>{html.escape(tipo_txt)}</td>
+        <td style="{_NIV_PDF_CELL_C}"><b>Operador</b><br/>{operador}</td>
+        <td style="{_NIV_PDF_CELL_C}"><b>Fecha</b><br/>{fecha}</td>
+        <td style="{_NIV_PDF_CELL_C}"><b>Equipo</b><br/>{equipo}</td>
+        <td style="{_NIV_PDF_CELL_C}"><b>Tipo nivel</b><br/>{html.escape(tipo_txt)}</td>
       </tr>
     </table>
-    <div style="{_PDF_SEC}">Cálculo de nivelación — cartera de lecturas</div>
+    <div style="{_NIV_PDF_SEC}">Cálculo de nivelación — cartera de lecturas</div>
     """
-    firmas = html_firmas_elabora_aprueba_pdf(niv, contrato)
+    firmas = html_firmas_elabora_aprueba_pdf(
+        niv,
+        contrato,
+        font_size=_NIV_PDF_FIRMAS_FS,
+        meta_font_size=_NIV_PDF_FIRMAS_META_FS,
+    )
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"/></head>
-    <body style="font-family:Arial,Helvetica,sans-serif;font-size:8pt;margin:8px;color:#0f172a;">
-    {html_encabezado_pdf_compacto(contrato, titulo, subtitulo, generado_por=generado_por)}
+    <body style="font-family:Arial,Helvetica,sans-serif;font-size:{_NIV_PDF_BODY_FS};margin:8px;color:#0f172a;">
+    {html_encabezado_pdf_nivelacion(contrato, titulo, subtitulo, generado_por=generado_por)}
     {datos_campo}
     {html_tabla_circuito_nivelacion_pdf(niv, lecturas)}
     {html_cierre_nivelacion_pdf(niv, lecturas)}
     {firmas}
-    {html_pie_pdf(contrato)}
+    {html_pie_pdf(contrato, font_size=_NIV_PDF_PIE_FS)}
     </body></html>"""
+
+
+def html_encabezado_pdf_nivelacion(
+    contrato: dict, titulo: str, subtitulo: str = "", *, generado_por: str = ""
+) -> str:
+    """Encabezado solo para Circuito de Nivelación: logos +20%, tipografía +2pt, bloque denso."""
+    from pdf_institucional import html_encabezado_institucional
+
+    return html_encabezado_institucional(
+        contrato,
+        titulo,
+        subtitulo=subtitulo,
+        compact=True,
+        generado_por=generado_por,
+        logo_scale=1.2,
+        title_fs="10pt",
+        meta_fs="7.5pt",
+        sub_fs="7.5pt",
+        dense=True,
+    )
 
 
 def html_documento_newpoint_pdf(
@@ -3295,10 +3333,10 @@ def html_encabezado_pdf(contrato: dict, titulo: str) -> str:
     return html_encabezado_institucional(contrato, titulo, compact=False)
 
 
-def html_pie_pdf(contrato: dict) -> str:
+def html_pie_pdf(contrato: dict, *, font_size: str = "7pt") -> str:
     nombre = html.escape(str(contrato.get("objeto") or contrato.get("numero") or ""))
     return f"""
-    <div style="font-size:7pt;color:#64748b;text-align:center;margin-top:16px;border-top:1px solid #e2e8f0;padding-top:6px;">
+    <div style="font-size:{font_size};color:#64748b;text-align:center;margin-top:16px;border-top:1px solid #e2e8f0;padding-top:6px;">
       Producto ClaraCore para el contrato {nombre}
     </div>
     """
