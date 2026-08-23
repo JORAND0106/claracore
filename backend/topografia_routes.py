@@ -136,7 +136,8 @@ def _row(table: str, select: str = "*", **eq) -> Optional[dict]:
 def _require_contrato_row(contrato_id: int) -> dict:
     row = _row(
         "contratos",
-        "id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_contratista, logo_interventoria",
+        "id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, "
+        "logo_contratista, logo_interventoria, logo_entidad",
         id=contrato_id,
     )
     if not row:
