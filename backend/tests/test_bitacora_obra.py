@@ -105,6 +105,104 @@ def test_sync_tipos_material_desde_materiales(monkeypatch):
     assert svc._norm_nombre_tipo_material("  Concreto   3000 ") == "concreto 3000"
 
 
+def test_extraer_tipos_material_solo_bitacora_json():
+    assert svc._extraer_tipos_material_de_filas([
+        {"tipo_material": "Concreto"},
+        {"tipo": "Arena"},
+        {"insumo": "NO-ALMACEN"},
+        "x",
+    ]) == ["Concreto", "Arena"]
+    assert svc._extraer_tipos_material_de_filas('[{"tipo_material":"Grava"}]') == ["Grava"]
+
+
+def test_backfill_tipos_material_desde_entradas(monkeypatch):
+    """Backfill solo desde entradas de Bitácora; nunca tablas de Almacén."""
+    upserts = []
+
+    class FakeQuery:
+        def __init__(self, data):
+            self._data = data
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            return MagicMock(data=self._data)
+
+    class FakeSb:
+        def table(self, name):
+            assert name == "seguimiento_bitacora_entrada", (
+                "backfill no debe consultar tablas ajenas a Bitácora"
+            )
+            assert "almacen" not in name.lower()
+            assert "insumo" not in name.lower()
+            return FakeQuery([
+                {"materiales": [{"tipo_material": "Concreto 3000"}, {"tipo_material": ""}]},
+                {"materiales": [{"tipo_material": "Arena"}, {"tipo_material": "Concreto 3000"}]},
+            ])
+
+    def fake_upsert(sb, cid, nombre, user_id=None):
+        upserts.append((cid, nombre, user_id))
+        return {"id": len(upserts), "nombre": nombre}
+
+    monkeypatch.setattr(svc, "upsert_tipo_material", fake_upsert)
+    n = svc.backfill_tipos_material_desde_entradas(FakeSb(), 11, user_id=5)
+    assert n == 2
+    assert upserts == [(11, "Concreto 3000", 5), (11, "Arena", 5)]
+
+
+def test_list_tipos_material_filtra_y_tabla_bitacora(monkeypatch):
+    calls = []
+
+    class FakeQuery:
+        def __init__(self):
+            self._data = [
+                {"id": 1, "nombre": "Arena", "activo": True},
+                {"id": 2, "nombre": "Concreto 3000", "activo": True},
+            ]
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            return MagicMock(data=list(self._data))
+
+    class FakeSb:
+        def table(self, name):
+            calls.append(name)
+            assert name == svc.TABLA_TIPO_MATERIAL_BITACORA
+            assert "almacen" not in name
+            return FakeQuery()
+
+    monkeypatch.setattr(svc, "backfill_tipos_material_desde_entradas", lambda *a, **k: 0)
+    rows = svc.list_tipos_material(FakeSb(), 3, "con", backfill=False)
+    assert [r["nombre"] for r in rows] == ["Concreto 3000"]
+    assert all(c == "seguimiento_bitacora_tipo_material" for c in calls)
+
+
+def test_catalogo_tipo_material_sin_relacion_almacen():
+    """Garantiza que el módulo no cablea Almacén en el catálogo de tipo material."""
+    src = open(svc.__file__, encoding="utf-8").read()
+    assert svc.TABLA_TIPO_MATERIAL_BITACORA == "seguimiento_bitacora_tipo_material"
+    assert "almacen_insumo" not in src
+    assert "independiente de Almacén" in src
+    # La función de listado no debe mencionar tablas de insumos de Almacén.
+    assert "list_tipos_material" in src
+    assert "backfill_tipos_material_desde_entradas" in src
+
+
 def test_diario_vencido_bloquea_edicion_no_dev():
     ayer = (svc.hoy_bogota() - timedelta(days=1)).isoformat()
     entrada = {"tipo": "diario", "estado": "abierto", "fecha": ayer}

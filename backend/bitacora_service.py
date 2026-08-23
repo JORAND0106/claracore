@@ -772,7 +772,14 @@ def plantilla_personal_contrato(sb, contrato_id: int) -> List[dict]:
     return [{"cargo": c, "cantidad": 0, "cargo_otro": ""} for c in merged]
 
 
-# ── Catálogo de tipo de material ──────────────────────────────────────────────
+# ── Catálogo de tipo de material (Bitácora de Obra, independiente de Almacén) ──
+#
+# Fuente de verdad exclusiva: public.seguimiento_bitacora_tipo_material
+# (por contrato). Nunca consultar, referenciar ni mezclar el catálogo de
+# insumos del módulo Almacén.
+
+TABLA_TIPO_MATERIAL_BITACORA = "seguimiento_bitacora_tipo_material"
+
 
 def _norm_nombre_tipo_material(nombre: str) -> str:
     s = str(nombre or "").strip().lower()
@@ -786,10 +793,102 @@ def _norm_nombre_visitante(nombre: str) -> str:
     return s
 
 
-def list_tipos_material(sb, contrato_id: int, q: str = "") -> List[dict]:
+def _extraer_tipos_material_de_filas(materiales) -> List[str]:
+    """Extrae nombres de tipo_material desde JSON de Bitácora (no Almacén)."""
+    if isinstance(materiales, str):
+        try:
+            import json
+            materiales = json.loads(materiales)
+        except Exception:
+            return []
+    if not isinstance(materiales, list):
+        return []
+    out: List[str] = []
+    for item in materiales:
+        if not isinstance(item, dict):
+            continue
+        tipo = str(item.get("tipo_material") or item.get("tipo") or "").strip()
+        if tipo:
+            out.append(tipo)
+    return out
+
+
+def backfill_tipos_material_desde_entradas(
+    sb,
+    contrato_id: int,
+    *,
+    user_id: Optional[int] = None,
+) -> int:
+    """
+    Rellena el catálogo Bitácora con tipos ya guardados en Reportes Diario
+    del mismo contrato (columna materiales). No toca Almacén.
+    """
     try:
         rows = (
-            sb.table("seguimiento_bitacora_tipo_material")
+            sb.table("seguimiento_bitacora_entrada")
+            .select("materiales")
+            .eq("contrato_id", int(contrato_id))
+            .eq("tipo", "diario")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning(
+            "backfill_tipos_material_desde_entradas contrato=%s: %s",
+            contrato_id, exc,
+        )
+        return 0
+    seen: set = set()
+    guardados = 0
+    for row in rows:
+        for tipo in _extraer_tipos_material_de_filas(row.get("materiales")):
+            nn = _norm_nombre_tipo_material(tipo)
+            if not nn or nn in seen:
+                continue
+            seen.add(nn)
+            if upsert_tipo_material(sb, contrato_id, tipo, user_id=user_id):
+                guardados += 1
+    return guardados
+
+
+def list_tipos_material(
+    sb,
+    contrato_id: int,
+    q: str = "",
+    *,
+    backfill: bool = True,
+    user_id: Optional[int] = None,
+) -> List[dict]:
+    """
+    Lista el catálogo propio de Bitácora por contrato.
+    Si está vacío (o se pide backfill), rellena desde materiales de diarios
+    previos del mismo contrato — nunca desde Almacén.
+    """
+    if backfill:
+        try:
+            existentes_prev = (
+                sb.table(TABLA_TIPO_MATERIAL_BITACORA)
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("activo", True)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if not existentes_prev:
+                backfill_tipos_material_desde_entradas(
+                    sb, contrato_id, user_id=user_id,
+                )
+        except Exception as exc:
+            _log.warning(
+                "list_tipos_material backfill contrato=%s (¿migración aplicada?): %s",
+                contrato_id, exc,
+            )
+    try:
+        rows = (
+            sb.table(TABLA_TIPO_MATERIAL_BITACORA)
             .select("*")
             .eq("contrato_id", int(contrato_id))
             .eq("activo", True)
@@ -817,13 +916,14 @@ def upsert_tipo_material(
     *,
     user_id: Optional[int] = None,
 ) -> Optional[dict]:
+    """Inserta/reactiva un tipo en el catálogo Bitácora (no Almacén)."""
     nombre_limpio = str(nombre or "").strip()
     if not nombre_limpio:
         return None
     nombre_norm = _norm_nombre_tipo_material(nombre_limpio)
     try:
         existentes = (
-            sb.table("seguimiento_bitacora_tipo_material")
+            sb.table(TABLA_TIPO_MATERIAL_BITACORA)
             .select("*")
             .eq("contrato_id", int(contrato_id))
             .eq("nombre_norm", nombre_norm)
@@ -842,7 +942,7 @@ def upsert_tipo_material(
         if row.get("activo"):
             return row
         updated = (
-            sb.table("seguimiento_bitacora_tipo_material")
+            sb.table(TABLA_TIPO_MATERIAL_BITACORA)
             .update({
                 "activo": True,
                 "nombre": nombre_limpio,
@@ -864,7 +964,9 @@ def upsert_tipo_material(
         "updated_at": _now_utc().isoformat(),
     }
     try:
-        inserted = sb.table("seguimiento_bitacora_tipo_material").insert(payload).execute().data or []
+        inserted = (
+            sb.table(TABLA_TIPO_MATERIAL_BITACORA).insert(payload).execute().data or []
+        )
         return inserted[0] if inserted else None
     except Exception as exc:
         _log.warning(
@@ -881,7 +983,7 @@ def sync_tipos_material_desde_materiales(
     *,
     user_id: Optional[int] = None,
 ) -> None:
-    """Persiste tipos nuevos escritos en Materiales al catálogo del contrato."""
+    """Persiste tipos nuevos del Reporte Diario en el catálogo Bitácora (no Almacén)."""
     for item in materiales or []:
         if not isinstance(item, dict):
             continue
