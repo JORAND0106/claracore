@@ -436,6 +436,9 @@ def _normalizar_imagen_ref(raw: dict) -> Optional[dict]:
     }
     if raw.get("content_hash"):
         out["content_hash"] = str(raw["content_hash"]).lower()
+    pie = str(raw.get("pie") or raw.get("caption") or "").strip()
+    if pie:
+        out["pie"] = pie[:300]
     if url and not blob_path and not data_uri:
         out["url"] = url
     if data_uri and not blob_path:
@@ -1854,6 +1857,7 @@ def crear_reporte_evento(
                     str(data_uri),
                     str(im.get("mime_type") or "image/png"),
                     origen=str(im.get("origen") or "archivo"),
+                    pie=str(im.get("pie") or im.get("caption") or "").strip() or None,
                     current_user=current_user,
                     force_during_create=True,
                 )
@@ -1873,6 +1877,8 @@ def crear_reporte_evento(
             }
             if ref.get("content_hash"):
                 store["content_hash"] = ref["content_hash"]
+            if ref.get("pie"):
+                store["pie"] = ref["pie"]
             if not store.get("blob_path") and ref.get("data_uri"):
                 store["data_uri"] = ref["data_uri"]
             if ref.get("url") and not store.get("blob_path"):
@@ -2124,6 +2130,7 @@ def adjuntar_imagen_entrada(
     mime: str = "image/png",
     *,
     origen: str = "archivo",
+    pie: Optional[str] = None,
     current_user: Optional[dict] = None,
     force_during_create: bool = False,
 ) -> dict:
@@ -2186,6 +2193,9 @@ def adjuntar_imagen_entrada(
         "kind": "foto",
         "content_hash": digest,
     }
+    pie_txt = str(pie or "").strip()
+    if pie_txt:
+        persist["pie"] = pie_txt[:300]
     if not persist.get("blob_path") and ref.get("data_uri"):
         persist["data_uri"] = ref["data_uri"]
 

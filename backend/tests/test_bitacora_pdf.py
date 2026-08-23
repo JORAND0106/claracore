@@ -112,6 +112,21 @@ def test_fit_pt_no_deforma_vertical_en_caja_horizontal():
     assert abs((w / h) - 0.5) < 0.02
 
 
+def test_foto_box_mas_grande_que_legacy():
+    """Caja landscape ampliada respecto al tamaño previo (~118×78)."""
+    assert pdf._FOTO_BOX_W >= 160
+    assert pdf._FOTO_BOX_H >= 100
+    assert pdf._FOTO_BOX_W / pdf._FOTO_BOX_H > 1.3  # landscape
+
+
+def test_pie_foto_label_combina_tipo_y_usuario():
+    assert pdf._pie_foto_label({}, "Reporte Diario") == "Reporte Diario"
+    assert pdf._pie_foto_label({"pie": "Frente norte"}, "Reporte Diario") == (
+        "Reporte Diario — Frente norte"
+    )
+    assert pdf._pie_foto_label({"caption": "X"}, "Reporte de Evento").endswith("X")
+
+
 def test_omit_pagina_eventos_si_vacia(monkeypatch):
     pdf.clear_pdf_caches_for_tests()
     captured = {}

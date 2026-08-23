@@ -188,14 +188,27 @@ def looks_like_html(raw: Optional[str]) -> bool:
 
 
 class _ListNumberer(HTMLParser):
-    """Inyecta numeración jerárquica 1. / 1.1. / 1.1.1. (xhtml2pdf no usa CSS counters)."""
+    """Inyecta numeración jerárquica 1. / 1.1. / 1.1.1. (xhtml2pdf no usa CSS counters).
+    Aplica anchos de columna en % según plan (contenido + proporción editor).
+    """
 
-    def __init__(self) -> None:
+    def __init__(self, table_plans: Optional[List[List[float]]] = None) -> None:
         super().__init__(convert_charrefs=True)
         self.out: List[str] = []
         self._ol_stack: List[List[int]] = []
         self._ul_depth = 0
         self._li_pending_marker: Optional[str] = None
+        self._table_plans = list(table_plans or [])
+        self._table_idx = -1
+        self._col_idx = 0
+        self._in_table_depth = 0
+        self._pending_colgroup = False
+        self._skip_colgroup = 0
+
+    def _current_plan(self) -> Optional[List[float]]:
+        if 0 <= self._table_idx < len(self._table_plans):
+            return self._table_plans[self._table_idx]
+        return None
 
     def handle_starttag(self, tag: str, attrs) -> None:
         tag = tag.lower()
@@ -224,43 +237,80 @@ class _ListNumberer(HTMLParser):
             self.out.append("<br/>")
             return
         if tag == "table":
-            filtered = [(k, v) for k, v in _filter_attrs(tag, attrs) if k not in ("border", "cellpadding", "cellspacing")]
-            style = "border-collapse:collapse;width:100%;font-size:9pt;margin:4pt 0;"
-            for k, v in list(filtered):
-                if k == "style" and v.startswith("width:"):
-                    style = f"{v};border-collapse:collapse;font-size:9pt;margin:4pt 0;"
-                    filtered = [(a, b) for a, b in filtered if a != "style"]
-                    break
+            self._in_table_depth += 1
+            if self._in_table_depth == 1:
+                self._table_idx += 1
+                self._col_idx = 0
+                self._pending_colgroup = True
+            filtered = [
+                (k, v) for k, v in _filter_attrs(tag, attrs)
+                if k not in ("border", "cellpadding", "cellspacing")
+            ]
+            # Siempre 100% del ancho disponible; los % de columna viven en col/td.
+            style = "border-collapse:collapse;width:100%;font-size:9pt;margin:4pt 0;table-layout:fixed;"
+            filtered = [(a, b) for a, b in filtered if a != "style"]
             self.out.append(
                 f'<table border="1" cellpadding="4" cellspacing="0"'
                 f'{_attrs_html(filtered)} style="{style}">'
             )
+            plan = self._current_plan()
+            if self._pending_colgroup and plan:
+                cols = "".join(
+                    f'<col style="width:{pct}%;"/>' for pct in plan
+                )
+                self.out.append(f"<colgroup>{cols}</colgroup>")
+                self._pending_colgroup = False
             return
-        if tag in ("thead", "tbody", "tr", "colgroup"):
+        if tag in ("thead", "tbody", "colgroup"):
+            # Ignorar colgroup original del editor: ya inyectamos el planificado.
+            if tag == "colgroup":
+                self._skip_colgroup = getattr(self, "_skip_colgroup", 0) + 1
+                return
             self.out.append(f"<{tag}>")
             return
-        if tag in ("td", "th", "col"):
+        if tag == "col":
+            if getattr(self, "_skip_colgroup", 0):
+                return
+            self.out.append("<col>")
+            return
+        if tag == "tr":
+            self._col_idx = 0
+            self.out.append("<tr>")
+            return
+        if tag in ("td", "th"):
             filtered = _filter_attrs(tag, attrs)
-            # Si ya hay style width, combinar
-            style_bits = ['border:0.4pt solid #94a3b8', 'padding:3pt 4pt', 'vertical-align:top']
-            for k, v in list(filtered):
-                if k == "style" and v.startswith("width:"):
-                    style_bits.insert(0, v)
-                    filtered = [(a, b) for a, b in filtered if a != "style"]
-                    break
+            # Quitar width px absolutos; usar % del plan.
+            filtered = [(a, b) for a, b in filtered if a != "style" and a != "colwidth"]
+            style_bits = [
+                "border:0.4pt solid #94a3b8",
+                "padding:3pt 4pt",
+                "vertical-align:top",
+                "word-wrap:break-word",
+            ]
+            plan = self._current_plan() if self._in_table_depth == 1 else None
+            colspan = 1
+            for k, v in filtered:
+                if k == "colspan" and str(v).isdigit():
+                    colspan = max(1, int(v))
+            if plan and self._col_idx < len(plan):
+                # Suma de % cubiertos por colspan
+                span_pct = sum(plan[self._col_idx:self._col_idx + colspan])
+                style_bits.insert(0, f"width:{round(span_pct, 1)}%")
             if tag == "th":
                 style_bits.append("font-weight:700")
                 style_bits.append("background:#f1f5f9")
-            if tag != "col":
-                self.out.append(f'<{tag}{_attrs_html(filtered)} style="{";".join(style_bits)}">')
-            else:
-                self.out.append(f"<{tag}{_attrs_html(filtered)}>")
+            self.out.append(f'<{tag}{_attrs_html(filtered)} style="{";".join(style_bits)}">')
+            self._col_idx += colspan
             return
         if tag in _ALLOWED_TAGS:
             self.out.append(f"<{tag}>")
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
+        if tag == "colgroup":
+            if getattr(self, "_skip_colgroup", 0):
+                self._skip_colgroup = max(0, self._skip_colgroup - 1)
+            return
         if tag == "ol":
             if self._ol_stack:
                 self._ol_stack.pop()
@@ -273,6 +323,10 @@ class _ListNumberer(HTMLParser):
         if tag == "li":
             self.out.append("</li>")
             self._li_pending_marker = None
+            return
+        if tag == "table":
+            self.out.append("</table>")
+            self._in_table_depth = max(0, self._in_table_depth - 1)
             return
         if tag in _VOID:
             return
@@ -292,11 +346,15 @@ def render_tema_html_for_pdf(raw: Optional[str]) -> str:
     """
     HTML seguro para xhtml2pdf: negrita/cursiva/subrayado + listas + tablas.
     Las ol anidadas llevan marcadores explícitos 1. / 1.1. / 1.1.1.
+    Tablas: anchos en % según contenido + proporción relativa del editor.
     """
+    from tema_table_pdf_widths import plan_table_column_pcts
+
     clean = sanitize_tema_html(raw)
     if not clean:
         return "<div style='color:#94a3b8;'>—</div>"
-    parser = _ListNumberer()
+    plans = plan_table_column_pcts(clean)
+    parser = _ListNumberer(table_plans=plans)
     try:
         parser.feed(clean)
         body = parser.close()
