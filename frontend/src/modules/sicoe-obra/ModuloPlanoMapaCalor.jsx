@@ -6,6 +6,7 @@ import {
   sicoeEstadosReporteFiltro,
   sicoeFiltroSnapshot,
   sicoeFSicoeVacios,
+  sicoePuedeVerFiltroSubcontratista,
 } from './sicoeFiltroCatalogo'
 import {
   cargarSicoeFiltroSesion,
@@ -256,6 +257,10 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const estadosReporte = useMemo(
     () => sicoeEstadosReporteFiltro(usuario, nivelInfo),
     [usuario, nivelInfo],
+  )
+  const puedeVerSubcontratista = useMemo(
+    () => sicoePuedeVerFiltroSubcontratista(usuario, contratoId),
+    [usuario, contratoId],
   )
 
   const tieneCriterios = useMemo(
@@ -697,7 +702,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           actualizarDisabled={!tieneCriterios || buscando}
           buscando={buscando}
           puedeExportar={false}
-          puedeVerSubcontratista={!nivelInfo.esInterventoria}
+          puedeVerSubcontratista={puedeVerSubcontratista}
           estadosReporte={estadosReporte}
           etiquetasValidacion={ETIQUETAS_VALIDACION}
           nivelesDisponibles={nivelesDisponibles}
