@@ -119,6 +119,7 @@ import {
   sicoeItemsChipsFromFSicoe,
   sicoePanelLabelToRpo,
   sicoeEstadosReporteFiltro,
+  sicoePuedeVerFiltroSubcontratista,
   sicoeCapasEsFiltroNivelMaxAprobado,
   sicoeReversionMasivaPermitidaContrato,
   sicoeRegistroReversionBloqueadaNivel6,
@@ -2353,15 +2354,9 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
   }
 }
 
-/** Filtro subcontratista: contratista / operativo / gerencial; desarrollador y admin ven todo. */
-function puedeVerFiltroSubcontratista(usuario) {
-  const cargo = String(usuario?.cargo_nombre || '').toLowerCase().trim()
-  if (cargo === 'desarrollador' || cargo === 'administrador') return true
-  const rol = String(usuario?.rol_nombre || '').toLowerCase().trim()
-  if (rol === 'contratista' || rol === 'operativo contratista') return true
-  if (rol.includes('contratista') && rol.includes('gerencial')) return true
-  if (cargo.includes('contratista gerencial')) return true
-  return false
+/** Filtro subcontratista: por permiso Reporte de Cantidades (no por rol Contratista/Interventoría). */
+function puedeVerFiltroSubcontratista(usuario, contratoId) {
+  return sicoePuedeVerFiltroSubcontratista(usuario, contratoId)
 }
 
 function labelSubcontratistaOpt(s) {
@@ -7936,7 +7931,7 @@ function ModuloSicoeObra({
   const nivelInfo = determinarNivelValidacion(usuario, contrato_id, nivelesContrato)
   const estadosReporteFiltro = useMemo(
     () => sicoeEstadosReporteFiltro(usuario, nivelInfo),
-    [usuario, nivelInfo.esInterventoria, usuario?.rol_nombre],
+    [usuario, nivelInfo],
   )
   const elevCapPanel = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0 || nivelInfo.adminValidarEnContrato
   const elevCapLimiteN3Panel = elevCapPanel && !nivelInfo.adminValidarEnContrato
@@ -7973,11 +7968,7 @@ function ModuloSicoeObra({
   const esSub       = nivelInfo.esSubcontratista
   // subcontratista_id del usuario para filtrar (puede venir como campo directo o en el objeto)
   const subIdUsuario = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
-
-  useEffect(() => {
-    if (!nivelInfo.esInterventoria) return
-    setFiltros((f) => (f.subcontratista_id ? { ...f, subcontratista_id: '' } : f))
-  }, [nivelInfo.esInterventoria])
+  const puedeVerSubcFiltro = puedeVerFiltroSubcontratista(usuario, contrato_id)
 
   /** Sin filtros de grilla ni capa de validación → no se consulta el backend (grilla vacía).
    *  Usa refs de chips y refinamiento (obs/nodo) para no desincronizarse con debounce / cierres viejos. */
@@ -8109,7 +8100,7 @@ function ModuloSicoeObra({
     }
 
     // Con red → fetch, con fallback a IndexedDB si falla
-    const pSub = nivelInfo.esInterventoria
+    const pSub = !puedeVerFiltroSubcontratista(usuario, contrato_id)
       ? Promise.resolve([])
       : fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()).catch(() => null)
     Promise.all([
@@ -8134,7 +8125,7 @@ function ModuloSicoeObra({
           : [],
       )
     }).catch(() => cargarFiltrosOffline())
-  }, [contrato_id, nivelInfo.esInterventoria, isOfflineReady, efectivoOffline])
+  }, [contrato_id, usuario, isOfflineReady, efectivoOffline])
 
   busquedaRealizadaRef.current = busquedaRealizada
 
@@ -8196,7 +8187,6 @@ function ModuloSicoeObra({
     if (esSub && subIdUsuario && !params.has('subcontratista_id')) {
       params.set('subcontratista_id', String(subIdUsuario))
     }
-    if (nivelInfo.esInterventoria) params.delete('subcontratista_id')
     if (capas.length > 0) {
       const ser = sicoeSerializarCapasValidacion(capas)
       if (ser.length > 0) {
@@ -8898,9 +8888,7 @@ function ModuloSicoeObra({
     }
     const hdrs = { Authorization: `Bearer ${getToken()}` }
     const params = new URLSearchParams()
-    const fa = nivelInfo.esInterventoria
-      ? { ...filtrosActivos, subcontratista_id: '' }
-      : filtrosActivos
+    const fa = filtrosActivos
     if (fa.acta_rpo)          params.append('acta_rpo', fa.acta_rpo)
     if (fa.semana)            params.append('semana', fa.semana)
     if (fa.subcontratista_id) params.append('subcontratista_id', fa.subcontratista_id)
@@ -9182,7 +9170,6 @@ function ModuloSicoeObra({
 
   const armarPayloadFiltrosRegistrosMasivo = () => {
     const fNorm = { ...filtros }
-    if (nivelInfo.esInterventoria) fNorm.subcontratista_id = null
     Object.keys(fNorm).forEach((k) => { if (fNorm[k] === '' || fNorm[k] === undefined) fNorm[k] = null })
     const serEx = sicoeSerializarCapasValidacion(capasValidacion)
     const capaFirst = capasValidacion?.[0] || null
@@ -10393,7 +10380,6 @@ function ModuloSicoeObra({
     setExportando(true)
     try {
       const fNorm = { ...filtros }
-      if (nivelInfo.esInterventoria) fNorm.subcontratista_id = null
       Object.keys(fNorm).forEach(k => { if (fNorm[k] === '' || fNorm[k] === undefined) fNorm[k] = null })
       const camposRequest = exportSeleccionCampos.filter(c => !CAMPOS_VIRTUALES_EXPORT.includes(c))
       const serEx = sicoeSerializarCapasValidacion(capasValidacion)
@@ -10571,7 +10557,7 @@ function ModuloSicoeObra({
         if (filtros.capitulo)         params.append('capitulo', filtros.capitulo)
         if (filtros.acta_rpo)         params.append('acta_rpo', filtros.acta_rpo)
         if (filtros.semana)           params.append('semana', filtros.semana)
-        if (filtros.subcontratista_id && !nivelInfo.esInterventoria) {
+        if (filtros.subcontratista_id) {
           params.append('subcontratista_id', filtros.subcontratista_id)
         }
         const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/items?${params}`, {
@@ -11331,7 +11317,7 @@ function ModuloSicoeObra({
         puedeExportar={puedeExportar}
         onExportarExcel={abrirPopupExportRegistros}
         exportDisabled={!reportesMostrados || reportesMostrados.length === 0}
-        puedeVerSubcontratista={puedeVerFiltroSubcontratista(usuario) && !nivelInfo.esInterventoria}
+        puedeVerSubcontratista={puedeVerSubcFiltro}
         estadosReporte={estadosReporteFiltro}
         etiquetasValidacion={ETIQUETAS_VALIDACION}
         nivelesDisponibles={nivelesDisponiblesEnFiltro}
@@ -11857,8 +11843,8 @@ function ModuloSicoeObra({
               <select
                 value={pkMapaSubcontratistaId}
                 onChange={(e) => setPkMapaSubcontratistaId(e.target.value)}
-                disabled={nivelInfo.esInterventoria}
-                style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${t.border}`, background: t.bg, color: t.text, opacity: nivelInfo.esInterventoria ? 0.6 : 1 }}
+                disabled={!puedeVerSubcFiltro}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${t.border}`, background: t.bg, color: t.text, opacity: !puedeVerSubcFiltro ? 0.6 : 1 }}
               >
                 <option value="">— Sin asignar —</option>
                 {filtroSubcList.map((s) => (

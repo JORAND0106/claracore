@@ -1,11 +1,18 @@
 /** Catálogo de filtros SicoeObra — modal, plantillas y query API. */
 
+import {
+  esDesarrolladorUsuario,
+  permisoReporteCantidades,
+  tienePermisoAlgunaAccion,
+} from '../../utils/permisosContrato.js'
+
 export const SICOE_FILTRO_MODULO = 'sicoe_obra'
 
 /** Valor enviado a la API como filtro virtual (no es estado de cabecera so_reportes). */
 export const SICOE_ESTADO_REPORTE_REVERSION = 'Reversión'
 
-const ESTADOS_REPORTE_CONTRATISTA = [
+/** Conjunto completo del desplegable «Estado del reporte» (misma lista para todos los roles con permiso). */
+export const SICOE_ESTADOS_REPORTE_FILTRO = [
   'Borrador',
   'Sin Asignar Ítem',
   'No Revisados',
@@ -14,22 +21,30 @@ const ESTADOS_REPORTE_CONTRATISTA = [
   SICOE_ESTADO_REPORTE_REVERSION,
 ]
 
-/** Operativo / Interventoría / Interventoría Gerencial: solo cola de reversión (primera llave pendiente). */
-export function sicoeFiltroSoloReversionInterventoria(usuario) {
-  const rol = String(usuario?.rol_nombre || usuario?.rol || '')
-    .toLowerCase()
-    .trim()
-    .replace(/í/g, 'i')
-  if (rol === 'operativo interventoria' || rol === 'interventoria') return true
-  if (rol.includes('gerencial') && rol.includes('intervent')) return true
+/**
+ * @deprecated No restringir por rol. Se conserva por compatibilidad; siempre false.
+ * Antes ocultaba estados a Interventoría dejando solo «Reversión».
+ */
+export function sicoeFiltroSoloReversionInterventoria(_usuario) {
   return false
 }
 
-export function sicoeEstadosReporteFiltro(usuario, nivelInfo) {
-  if (sicoeFiltroSoloReversionInterventoria(usuario) || nivelInfo?.esInterventoria) {
-    return [SICOE_ESTADO_REPORTE_REVERSION]
-  }
-  return ESTADOS_REPORTE_CONTRATISTA
+/**
+ * Opciones del filtro «Estado del reporte».
+ * No depende de Contratista/Interventoría: quien tiene permiso de módulo ve el catálogo completo.
+ */
+export function sicoeEstadosReporteFiltro(_usuario, _nivelInfo) {
+  return SICOE_ESTADOS_REPORTE_FILTRO
+}
+
+/**
+ * Visibilidad del filtro Subcontratista: solo por permiso «Reporte de Cantidades», no por rol.
+ */
+export function sicoePuedeVerFiltroSubcontratista(usuario, contratoId) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  const cargo = String(usuario?.cargo_nombre || '').toLowerCase().trim()
+  if (cargo === 'administrador') return true
+  return tienePermisoAlgunaAccion(permisoReporteCantidades(usuario, contratoId))
 }
 
 export const SICOE_FILTRO_CATEGORIAS = [
