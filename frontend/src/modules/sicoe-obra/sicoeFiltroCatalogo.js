@@ -3,7 +3,6 @@
 import {
   esDesarrolladorUsuario,
   permisoReporteCantidades,
-  tienePermisoAlgunaAccion,
 } from '../../utils/permisosContrato.js'
 
 export const SICOE_FILTRO_MODULO = 'sicoe_obra'
@@ -11,7 +10,7 @@ export const SICOE_FILTRO_MODULO = 'sicoe_obra'
 /** Valor enviado a la API como filtro virtual (no es estado de cabecera so_reportes). */
 export const SICOE_ESTADO_REPORTE_REVERSION = 'Reversión'
 
-/** Conjunto completo del desplegable «Estado del reporte» (misma lista para todos los roles con permiso). */
+/** Catálogo completo del desplegable «Estado del reporte» (Crear y/o Editar). */
 export const SICOE_ESTADOS_REPORTE_FILTRO = [
   'Borrador',
   'Sin Asignar Ítem',
@@ -21,30 +20,47 @@ export const SICOE_ESTADOS_REPORTE_FILTRO = [
   SICOE_ESTADO_REPORTE_REVERSION,
 ]
 
+/** Vista restringida: solo cola de reversión (usuarios sin Crear/Editar). */
+export const SICOE_ESTADOS_REPORTE_SOLO_REVERSION = [SICOE_ESTADO_REPORTE_REVERSION]
+
 /**
- * @deprecated No restringir por rol. Se conserva por compatibilidad; siempre false.
- * Antes ocultaba estados a Interventoría dejando solo «Reversión».
+ * Catálogo completo de estados + lista de subcontratistas:
+ * requiere Crear y/o Editar en «Reporte de Cantidades» (no basta Ver).
+ * Independiente de Contratista vs Interventoría.
  */
-export function sicoeFiltroSoloReversionInterventoria(_usuario) {
-  return false
+export function sicoePuedeFiltroCatalogoCompleto(usuario, contratoId) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  const cargo = String(usuario?.cargo_nombre || '').toLowerCase().trim()
+  if (cargo === 'administrador') return true
+  const p = permisoReporteCantidades(usuario, contratoId)
+  return !!(p?.crear || p?.editar)
+}
+
+/**
+ * @deprecated Preferir !sicoePuedeFiltroCatalogoCompleto. Conservado por compatibilidad.
+ * Antes miraba el rol Interventoría; ahora refleja la restricción por permiso.
+ */
+export function sicoeFiltroSoloReversionInterventoria(usuario, contratoId) {
+  return !sicoePuedeFiltroCatalogoCompleto(usuario, contratoId)
 }
 
 /**
  * Opciones del filtro «Estado del reporte».
- * No depende de Contratista/Interventoría: quien tiene permiso de módulo ve el catálogo completo.
+ * - Crear y/o Editar → catálogo completo (cualquier rol).
+ * - Solo Ver (u otros sin Crear/Editar) → únicamente «Reversión».
  */
-export function sicoeEstadosReporteFiltro(_usuario, _nivelInfo) {
-  return SICOE_ESTADOS_REPORTE_FILTRO
+export function sicoeEstadosReporteFiltro(usuario, _nivelInfo, contratoId) {
+  if (sicoePuedeFiltroCatalogoCompleto(usuario, contratoId)) {
+    return SICOE_ESTADOS_REPORTE_FILTRO
+  }
+  return SICOE_ESTADOS_REPORTE_SOLO_REVERSION
 }
 
 /**
- * Visibilidad del filtro Subcontratista: solo por permiso «Reporte de Cantidades», no por rol.
+ * Visibilidad del filtro Subcontratista: Crear y/o Editar en Reporte de Cantidades.
  */
 export function sicoePuedeVerFiltroSubcontratista(usuario, contratoId) {
-  if (esDesarrolladorUsuario(usuario)) return true
-  const cargo = String(usuario?.cargo_nombre || '').toLowerCase().trim()
-  if (cargo === 'administrador') return true
-  return tienePermisoAlgunaAccion(permisoReporteCantidades(usuario, contratoId))
+  return sicoePuedeFiltroCatalogoCompleto(usuario, contratoId)
 }
 
 export const SICOE_FILTRO_CATEGORIAS = [

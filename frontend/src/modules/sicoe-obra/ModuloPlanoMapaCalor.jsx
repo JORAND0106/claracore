@@ -255,8 +255,8 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   }, [usuario])
 
   const estadosReporte = useMemo(
-    () => sicoeEstadosReporteFiltro(usuario, nivelInfo),
-    [usuario, nivelInfo],
+    () => sicoeEstadosReporteFiltro(usuario, nivelInfo, contratoId),
+    [usuario, nivelInfo, contratoId],
   )
   const puedeVerSubcontratista = useMemo(
     () => sicoePuedeVerFiltroSubcontratista(usuario, contratoId),
