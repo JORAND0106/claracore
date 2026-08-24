@@ -7930,8 +7930,8 @@ function ModuloSicoeObra({
   const perm = permisoReporteCantidades(usuario)
   const nivelInfo = determinarNivelValidacion(usuario, contrato_id, nivelesContrato)
   const estadosReporteFiltro = useMemo(
-    () => sicoeEstadosReporteFiltro(usuario, nivelInfo),
-    [usuario, nivelInfo],
+    () => sicoeEstadosReporteFiltro(usuario, nivelInfo, contrato_id),
+    [usuario, nivelInfo, contrato_id],
   )
   const elevCapPanel = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0 || nivelInfo.adminValidarEnContrato
   const elevCapLimiteN3Panel = elevCapPanel && !nivelInfo.adminValidarEnContrato
