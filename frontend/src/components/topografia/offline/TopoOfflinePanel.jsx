@@ -161,12 +161,25 @@ export function TopoOfflineStatusBar({ contratoId, compact }) {
   const totalPend = pendingCount + failedCount
   const syncing = syncState === 'syncing'
 
+  const statusLabel = syncing
+    ? 'Sincronizando…'
+    : isOnline
+      ? (cacheReady
+        ? (totalPend > 0
+          ? `En línea — ${totalPend} pendiente${totalPend === 1 ? '' : 's'} de sincronizar`
+          : 'En línea')
+        : 'Cargando referencia…')
+      : (totalPend > 0
+        ? `Sin conexión — ${totalPend} registro${totalPend === 1 ? '' : 's'} pendiente${totalPend === 1 ? '' : 's'} de sincronizar`
+        : 'Sin conexión')
+
   return (
     <div style={{ position: 'relative', marginBottom: compact ? 0 : 8 }}>
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
+        title={statusLabel}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -181,17 +194,10 @@ export function TopoOfflineStatusBar({ contratoId, compact }) {
           fontWeight: 600,
           cursor: 'pointer',
           maxWidth: '100%',
+          textAlign: 'left',
         }}
       >
-        <span>{syncing ? '⟳ Sync…' : isOnline ? (cacheReady ? '● En línea' : '● Cargando ref.') : '○ Offline'}</span>
-        {totalPend > 0 && (
-          <span style={{ background: failedCount > 0 ? '#dc2626' : '#2563eb', color: '#fff', borderRadius: 999, padding: '1px 6px' }}>
-            {totalPend}
-          </span>
-        )}
-        {failedCount > 0 && !totalPend && (
-          <span style={{ color: '#dc2626' }}>({failedCount} fall.)</span>
-        )}
+        <span>{statusLabel}</span>
       </button>
 
       {open && (
