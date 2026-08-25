@@ -124,9 +124,10 @@ def azimut_base_referencia(
     Fórmula (norte = 0°, este = 90°):
         Az_base = atan2(E_visado − E_estación, N_visado − N_estación) ∈ [0, 360)
 
-    - Con N/E reales → método ``coordenadas``. Ese Az_base es la referencia que el
-      operador introduce en el equipo al hacer backsight; NO se suma a las lecturas.
-      Cada punto usa como azimut el valor registrado en «Ang. Obs.» (lectura directa).
+    - Con N/E reales → método ``coordenadas``. En la armada inicial este Az_base es
+      la orientación de amarre. En armadas siguientes ``radiar_armadas`` sustituye
+      Az_base por el recíproco Az_punto(llegada)+180°. Az_base NO se suma a las
+      lecturas: cada punto usa «Ang. Obs.» como azimut directo.
     - Sin coordenadas → método ``ceros_atras`` con Az_base = 0°; entonces
       Az_punto = α_obs (ángulo desde el cero en el visado).
     """
@@ -147,6 +148,11 @@ def azimut_punto_desde_lectura(angulo_medido: float, metodo_azimut: str, base_az
     if metodo_azimut == "coordenadas":
         return alpha % 360.0
     return (float(base_azimut or 0.0) + alpha) % 360.0
+
+
+def azimut_reciproco(azimut: float) -> float:
+    """Contra-azimut / azimut recíproco: Az + 180° (mod 360)."""
+    return (float(azimut) + 180.0) % 360.0
 
 
 def enriquecer_estaciones_poligonal(estaciones: list) -> list:
@@ -190,9 +196,11 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
     """Calcula la cartera por armadas (radiación desde cada setup).
 
     Por cada armada:
-      1. Az_base = azimut(estación → visado) si hay N/E reales; si no, Az_base = 0°
-         (respaldo «ceros atrás»). Az_base es referencia de orientación (backsight);
-         no se combina con las lecturas de puntos cuando hay coordenadas.
+      1. Az_base (referencia Estación→Visado en «Puntos de armada»):
+         - Armada inicial con N/E: atan2(estación→visado) desde amarres.
+         - Armada siguiente con método ``coordenadas``: Az_punto(llegada a la
+           estación) + 180° (recíproco dinámico; no atan2 ni valor cacheado).
+         - Sin N/E: Az_base = 0° (ceros atrás; sin cambios).
       2. Az_punto:
          - método ``coordenadas``: Az = α_obs (lectura directa del equipo orientado)
          - método ``ceros_atras``: Az = (0 + α_obs) mod 360
@@ -244,12 +252,21 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
         first = sorted(armadas, key=lambda a: a.get("orden") or 0)[0]
         vertice_prev = coords_estacion(first.get("estacion_nombre"))
 
+    # Az_punto de llegada por nombre (lectura directa ya corregida) → recíproco de armada
+    azimut_llegada_por_nombre: dict = {}
+
     armadas_out = []
     estaciones_flat = []
     for arm in sorted(armadas or [], key=lambda a: a.get("orden") or 0):
         est = coords_estacion(arm.get("estacion_nombre"))
         vis = coords_visado(arm.get("visado_nombre"))
         base_az, metodo_az = azimut_base_referencia(est, vis)
+        # Armada siguiente con equipo orientado: AZ Estación→Visado = Az_punto(llegada) + 180°
+        # (no atan2 ni valor cacheado de la fórmula anterior).
+        if metodo_az == "coordenadas":
+            az_llegada = azimut_llegada_por_nombre.get(arm.get("estacion_nombre"))
+            if az_llegada is not None:
+                base_az = azimut_reciproco(az_llegada)
         hi = arm.get("altura_instrumento") or 0
         puntos = []
         for o in obs_by_arm.get(arm.get("id"), []):
@@ -289,6 +306,9 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
                 "norte_estacion": est.get("norte") if est else None,
                 "este_estacion": est.get("este") if est else None,
             }
+            if az is not None and o.get("nombre_punto"):
+                # Última visual a ese nombre (llegada) alimenta el recíproco de armadas siguientes
+                azimut_llegada_por_nombre[o["nombre_punto"]] = az
             if n is not None and e_ is not None and o.get("nombre_punto"):
                 vertice_prev = {
                     "norte": round(n, 4),
