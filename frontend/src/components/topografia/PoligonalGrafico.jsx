@@ -2,6 +2,11 @@ import { useMemo, useState } from 'react'
 import { useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
 import { useTopoViewportGestures } from './useTopoViewportGestures'
+import {
+  pickVisibleLabelIndices,
+  resolvePlanoLod,
+  textCounterScale,
+} from './topoPlanoLod'
 
 function puntosGrafico(estaciones) {
   const verts = (estaciones || []).filter(
@@ -21,6 +26,34 @@ function niceStep(span) {
   return 10 * mag
 }
 
+/** Texto con tamaño de pantalla estable (counter-scale respecto al zoom del SVG). */
+function ScreenText({
+  x,
+  y,
+  scale,
+  fontSize = 10,
+  children,
+  textAnchor = 'start',
+  dx = 0,
+  dy = 0,
+  ...rest
+}) {
+  const inv = textCounterScale(scale)
+  return (
+    <text
+      transform={`translate(${x}, ${y}) scale(${inv})`}
+      x={dx}
+      y={dy}
+      fontSize={fontSize}
+      textAnchor={textAnchor}
+      style={{ pointerEvents: 'none' }}
+      {...rest}
+    >
+      {children}
+    </text>
+  )
+}
+
 export default function PoligonalGrafico({
   estaciones,
   puntoInicial = null,
@@ -34,6 +67,7 @@ export default function PoligonalGrafico({
   const [mostrarAngulos, setMostrarAngulos] = useState(true)
   const {
     containerRef,
+    scale,
     resetVista,
     viewportHandlers,
     containerStyle,
@@ -158,6 +192,29 @@ export default function PoligonalGrafico({
     }
   }, [estaciones, puntoInicial, puntoFinal, cierre, ancho, alto])
 
+  const lod = useMemo(() => resolvePlanoLod(scale), [scale])
+
+  const labelsVisible = useMemo(() => {
+    if (!plot?.coords?.length) return []
+    return pickVisibleLabelIndices(plot.coords, scale, lod.level)
+  }, [plot, scale, lod.level])
+
+  const ladosVisible = useMemo(() => {
+    if (!plot?.lados?.length) return []
+    const mids = plot.lados.map((l) => ({ x: l.mx, y: l.my }))
+    return pickVisibleLabelIndices(mids, scale, lod.level)
+  }, [plot, scale, lod.level])
+
+  const showDists = mostrarDistancias && lod.showDistancias
+  const showAngs = mostrarAngulos && lod.showAngulos
+  const showCoords = lod.showCoords
+
+  const lodHint = lod.level === 0
+    ? 'Detalle: nombres'
+    : lod.level === 1
+      ? 'Detalle: nombres + distancias'
+      : 'Detalle: nombres + distancias + ángulos + coords'
+
   if (!plot) {
     return (
       <div style={{ ...ui.card, color: ui.textMuted }}>
@@ -182,7 +239,7 @@ export default function PoligonalGrafico({
           Restablecer zoom
         </button>
         <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-          Rueda / pellizcar: zoom · Arrastrar: pan
+          Rueda / pellizcar: zoom · Arrastrar: pan · {lodHint}
         </span>
       </div>
 
@@ -219,23 +276,35 @@ export default function PoligonalGrafico({
             g.type === 'h' ? (
               <g key={`h-${g.val}`}>
                 <line x1={plot.margin.l} y1={g.y} x2={plot.margin.l + plot.w} y2={g.y} stroke="#cbd5e1" strokeWidth="1" />
-                <text x={6} y={g.y + 3} fontSize="9" fill="#64748b">{fmtNum(g.val, 0)}</text>
+                <ScreenText x={6} y={g.y} scale={scale} fontSize={9} fill="#64748b" dy={3}>
+                  {fmtNum(g.val, 0)}
+                </ScreenText>
               </g>
             ) : (
               <g key={`v-${g.val}`}>
                 <line x1={g.x} y1={plot.margin.t} x2={g.x} y2={plot.margin.t + plot.h} stroke="#cbd5e1" strokeWidth="1" />
-                <text x={g.x} y={alto - 8} fontSize="9" fill="#64748b" textAnchor="middle">{fmtNum(g.val, 0)}</text>
+                <ScreenText x={g.x} y={alto - 8} scale={scale} fontSize={9} fill="#64748b" textAnchor="middle">
+                  {fmtNum(g.val, 0)}
+                </ScreenText>
               </g>
             ),
           )}
 
-          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill="#64748b" textAnchor="middle">Este →</text>
-          <text x={14} y={plot.margin.t + plot.h / 2} fontSize="9" fill="#64748b" textAnchor="middle" transform={`rotate(-90 14 ${plot.margin.t + plot.h / 2})`}>Norte →</text>
+          <ScreenText x={plot.margin.l + plot.w / 2} y={alto - 6} scale={scale} fontSize={9} fill="#64748b" textAnchor="middle">
+            Este →
+          </ScreenText>
+          <g transform={`translate(14, ${plot.margin.t + plot.h / 2}) rotate(-90) scale(${textCounterScale(scale)})`}>
+            <text x={0} y={0} fontSize={9} fill="#64748b" textAnchor="middle" style={{ pointerEvents: 'none' }}>
+              Norte →
+            </text>
+          </g>
 
           <g>
             <line x1={plot.north.x} y1={plot.north.y} x2={plot.north.x} y2={plot.north.tip} stroke="#1e40af" strokeWidth="2.5" />
             <polygon points={`${plot.north.x},${plot.north.tip} ${plot.north.x - 6},${plot.north.tip + 10} ${plot.north.x + 6},${plot.north.tip + 10}`} fill="#1e40af" />
-            <text x={plot.north.x} y={plot.north.tip - 5} fontSize="12" fill="#1e40af" fontWeight="700" textAnchor="middle">N</text>
+            <ScreenText x={plot.north.x} y={plot.north.tip - 5} scale={scale} fontSize={12} fill="#1e40af" fontWeight="700" textAnchor="middle">
+              N
+            </ScreenText>
           </g>
 
           {plot.esCerrada ? (
@@ -246,10 +315,10 @@ export default function PoligonalGrafico({
 
           {plot.lados.map((l, i) => (
             <g key={i}>
-              {mostrarDistancias && (
-                <text x={l.mx} y={l.my - 5} fontSize="9" fill="#0f766e" textAnchor="middle" fontWeight="600">
+              {showDists && ladosVisible[i] && (
+                <ScreenText x={l.mx} y={l.my} scale={scale} fontSize={9} fill="#0f766e" textAnchor="middle" fontWeight="600" dy={-5}>
                   {fmtNum(l.dist, 2)} m
-                </text>
+                </ScreenText>
               )}
             </g>
           ))}
@@ -274,39 +343,55 @@ export default function PoligonalGrafico({
                 stroke="#15803d"
                 strokeWidth="1.5"
               />
-              <text x={plot.llegadaObjCoord.x + 8} y={plot.llegadaObjCoord.y - 10} fontSize="10" fill="#15803d" fontWeight="700">
+              <ScreenText x={plot.llegadaObjCoord.x} y={plot.llegadaObjCoord.y} scale={scale} fontSize={10} fill="#15803d" fontWeight="700" dx={8} dy={-10}>
                 {plot.llegadaObjCoord.p.nombre || 'Llegada'} (obj.)
-              </text>
+              </ScreenText>
             </g>
           )}
 
           {plot.llegadaCalcCoord && (
             <g>
               <circle cx={plot.llegadaCalcCoord.x} cy={plot.llegadaCalcCoord.y} r="6" fill="none" stroke="#c2410c" strokeWidth="2" strokeDasharray="3 2" />
-              <text x={plot.llegadaCalcCoord.x + 8} y={plot.llegadaCalcCoord.y + 12} fontSize="10" fill="#c2410c" fontWeight="700">
+              <ScreenText x={plot.llegadaCalcCoord.x} y={plot.llegadaCalcCoord.y} scale={scale} fontSize={10} fill="#c2410c" fontWeight="700" dx={8} dy={12}>
                 {plot.llegadaCalcCoord.p.nombre || 'Llegada'} (calc.)
-              </text>
+              </ScreenText>
             </g>
           )}
 
           {plot.amarreCoord && (
             <g>
               <circle cx={plot.amarreCoord.x} cy={plot.amarreCoord.y} r="6" fill="#16a34a" stroke="#fff" strokeWidth="2" />
-              <text x={plot.amarreCoord.x + 8} y={plot.amarreCoord.y - 10} fontSize="10" fill="#166534" fontWeight="700">
+              <ScreenText x={plot.amarreCoord.x} y={plot.amarreCoord.y} scale={scale} fontSize={10} fill="#166534" fontWeight="700" dx={8} dy={-10}>
                 {plot.amarreCoord.p.nombre} (amarre)
-              </text>
+              </ScreenText>
             </g>
           )}
 
-          {plot.coords.map(({ x, y, p }) => (
-            <g key={p.id || p.nombre_punto}>
-              <circle cx={x} cy={y} r="5" fill="#2563eb" stroke="#fff" strokeWidth="1.5" />
-              <text x={x + 8} y={y - 8} fontSize="10" fill={ui.grafico.pointLabel} fontWeight="600">{p.nombre_punto}</text>
-              {mostrarAngulos && (p.angulo_observado_texto || p.angulo_medido != null) && (
-                <text x={x + 8} y={y + 4} fontSize="8" fill="#7c3aed">{p.angulo_observado_texto || '—'}</text>
-              )}
-            </g>
-          ))}
+          {plot.coords.map(({ x, y, p }, idx) => {
+            const showName = labelsVisible[idx]
+            const angTxt = p.angulo_observado_texto || (p.angulo_medido != null ? '—' : null)
+            return (
+              <g key={p.id || p.nombre_punto || idx}>
+                <circle cx={x} cy={y} r="5" fill="#2563eb" stroke="#fff" strokeWidth="1.5" />
+                {showName && (
+                  <ScreenText x={x} y={y} scale={scale} fontSize={10} fill={ui.grafico.pointLabel} fontWeight="600" dx={8} dy={-8}>
+                    {p.nombre_punto}
+                  </ScreenText>
+                )}
+                {showName && showAngs && angTxt && (
+                  <ScreenText x={x} y={y} scale={scale} fontSize={8} fill="#7c3aed" dx={8} dy={4}>
+                    {angTxt}
+                  </ScreenText>
+                )}
+                {showName && showCoords && p.norte != null && p.este != null && (
+                  <ScreenText x={x} y={y} scale={scale} fontSize={7} fill="#64748b" dx={8} dy={showAngs && angTxt ? 16 : 6}>
+                    N {fmtNum(p.norte, 2)} · E {fmtNum(p.este, 2)}
+                    {p.cota != null ? ` · Z ${fmtNum(p.cota, 2)}` : ''}
+                  </ScreenText>
+                )}
+              </g>
+            )
+          })}
         </svg>
       </div>
     </div>
