@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
+import { useTopoViewportGestures } from './useTopoViewportGestures'
 
 function puntosGrafico(estaciones) {
   const verts = (estaciones || []).filter(
@@ -31,10 +32,13 @@ export default function PoligonalGrafico({
   const ui = useTopoTheme()
   const [mostrarDistancias, setMostrarDistancias] = useState(true)
   const [mostrarAngulos, setMostrarAngulos] = useState(true)
-  const [scale, setScale] = useState(1)
-  const [pan, setPan] = useState({ x: 0, y: 0 })
-  const panRef = useRef({ dragging: false, x0: 0, y0: 0, pan0: { x: 0, y: 0 } })
-  const containerRef = useRef(null)
+  const {
+    containerRef,
+    resetVista,
+    viewportHandlers,
+    containerStyle,
+    contentStyle,
+  } = useTopoViewportGestures()
 
   const plot = useMemo(() => {
     const tipoPol = cierre?.tipo_pol || (puntoFinal ? 'abierta' : 'cerrada')
@@ -154,34 +158,6 @@ export default function PoligonalGrafico({
     }
   }, [estaciones, puntoInicial, puntoFinal, cierre, ancho, alto])
 
-  const onWheel = useCallback((e) => {
-    e.preventDefault()
-    const delta = e.deltaY > 0 ? 0.9 : 1.1
-    setScale((s) => Math.min(12, Math.max(0.4, s * delta)))
-  }, [])
-
-  const onMouseDown = useCallback((e) => {
-    if (e.button !== 0) return
-    panRef.current = { dragging: true, x0: e.clientX, y0: e.clientY, pan0: { ...pan } }
-  }, [pan])
-
-  const onMouseMove = useCallback((e) => {
-    if (!panRef.current.dragging) return
-    setPan({
-      x: panRef.current.pan0.x + (e.clientX - panRef.current.x0),
-      y: panRef.current.pan0.y + (e.clientY - panRef.current.y0),
-    })
-  }, [])
-
-  const onMouseUp = useCallback(() => {
-    panRef.current.dragging = false
-  }, [])
-
-  const resetVista = () => {
-    setScale(1)
-    setPan({ x: 0, y: 0 })
-  }
-
   if (!plot) {
     return (
       <div style={{ ...ui.card, color: ui.textMuted }}>
@@ -205,7 +181,9 @@ export default function PoligonalGrafico({
         <button type="button" onClick={resetVista} style={{ fontSize: 'var(--cc-xs)', padding: '4px 10px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}>
           Restablecer zoom
         </button>
-        <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Rueda: zoom · Arrastrar: pan</span>
+        <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+          Rueda / pellizcar: zoom · Arrastrar: pan
+        </span>
       </div>
 
       {plot.gapLine && (
@@ -220,18 +198,12 @@ export default function PoligonalGrafico({
 
       <div
         ref={containerRef}
-        onWheel={onWheel}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
+        {...viewportHandlers}
         style={{
-          overflow: 'hidden',
+          ...containerStyle,
           borderRadius: 8,
           border: ui.grafico.border,
           background: ui.grafico.background,
-          cursor: panRef.current.dragging ? 'grabbing' : 'grab',
-          touchAction: 'none',
         }}
       >
         <svg
@@ -240,8 +212,7 @@ export default function PoligonalGrafico({
           style={{
             maxHeight: alto,
             display: 'block',
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-            transformOrigin: 'center center',
+            ...contentStyle,
           }}
         >
           {plot.gridLines.map((g) =>
