@@ -68,11 +68,12 @@ export default function PoligonalGrafico({
   const {
     containerRef,
     scale,
+    viewBox,
     resetVista,
     viewportHandlers,
     containerStyle,
     contentStyle,
-  } = useTopoViewportGestures()
+  } = useTopoViewportGestures({ worldWidth: ancho, worldHeight: alto })
 
   const plot = useMemo(() => {
     const tipoPol = cierre?.tipo_pol || (puntoFinal ? 'abierta' : 'cerrada')
@@ -265,12 +266,12 @@ export default function PoligonalGrafico({
       >
         <svg
           width="100%"
-          viewBox={`0 0 ${ancho} ${alto}`}
-          style={{
-            maxHeight: alto,
-            display: 'block',
-            ...contentStyle,
-          }}
+          height={alto}
+          viewBox={viewBox}
+          preserveAspectRatio="xMidYMid meet"
+          shapeRendering="geometricPrecision"
+          textRendering="geometricPrecision"
+          style={contentStyle}
         >
           {plot.gridLines.map((g) =>
             g.type === 'h' ? (

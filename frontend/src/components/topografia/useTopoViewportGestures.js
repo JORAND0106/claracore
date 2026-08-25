@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { MAX_SCALE, MIN_SCALE, zoomPanAtPoint } from './topoViewportMath'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { MAX_SCALE, MIN_SCALE, viewBoxFromPanScale, zoomPanAtPoint } from './topoViewportMath'
 
-export { zoomPanAtPoint } from './topoViewportMath'
+export { zoomPanAtPoint, viewBoxFromPanScale } from './topoViewportMath'
 
 function touchDistance(a, b) {
   return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY)
@@ -15,23 +15,25 @@ function touchMidpoint(a, b) {
 }
 
 /**
- * Gestos de viewport para planos SVG topográficos:
- * - Rueda / pinch: zoom (centrado en el cursor o en el pellizco)
- * - Arrastre mouse / un dedo: pan
- * Requiere `touchAction: 'none'` en el contenedor para no hacer zoom de página.
+ * Gestos de viewport para planos SVG topográficos.
+ * El zoom/pan se aplica vía viewBox (vectorial nítido), no con CSS scale
+ * (que rasteriza y pixeliza al acercar).
  */
 export function useTopoViewportGestures({
   minScale = MIN_SCALE,
   maxScale = MAX_SCALE,
   wheelFactor = 1.1,
+  worldWidth = 560,
+  worldHeight = 400,
 } = {}) {
   const [scale, setScale] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [containerEl, setContainerEl] = useState(null)
+  const [cssSize, setCssSize] = useState({ w: worldWidth, h: worldHeight })
   const scaleRef = useRef(1)
   const panStateRef = useRef({ x: 0, y: 0 })
   const gestureRef = useRef({
-    mode: null, // 'pan' | 'pinch' | null
+    mode: null,
     x0: 0,
     y0: 0,
     pan0: { x: 0, y: 0 },
@@ -50,6 +52,28 @@ export function useTopoViewportGestures({
   useEffect(() => {
     panStateRef.current = pan
   }, [pan])
+
+  useEffect(() => {
+    if (!containerEl || typeof ResizeObserver === 'undefined') {
+      if (containerEl) {
+        const r = containerEl.getBoundingClientRect()
+        setCssSize({ w: r.width || worldWidth, h: r.height || worldHeight })
+      }
+      return undefined
+    }
+    const ro = new ResizeObserver((entries) => {
+      const cr = entries[0]?.contentRect
+      if (!cr) return
+      setCssSize({
+        w: cr.width || worldWidth,
+        h: cr.height || worldHeight,
+      })
+    })
+    ro.observe(containerEl)
+    const r = containerEl.getBoundingClientRect()
+    setCssSize({ w: r.width || worldWidth, h: r.height || worldHeight })
+    return () => ro.disconnect()
+  }, [containerEl, worldWidth, worldHeight])
 
   const resetVista = useCallback(() => {
     scaleRef.current = 1
@@ -213,10 +237,16 @@ export function useTopoViewportGestures({
     return () => containerEl.removeEventListener('wheel', wheel)
   }, [containerEl, onWheel])
 
+  const viewBox = useMemo(
+    () => viewBoxFromPanScale(worldWidth, worldHeight, scale, pan, cssSize.w, cssSize.h).viewBox,
+    [worldWidth, worldHeight, scale, pan, cssSize.w, cssSize.h],
+  )
+
   return {
     containerRef,
     scale,
     pan,
+    viewBox,
     resetVista,
     viewportHandlers: {
       onMouseDown,
@@ -231,10 +261,12 @@ export function useTopoViewportGestures({
       WebkitUserSelect: 'none',
       userSelect: 'none',
     },
+    /** Sin CSS transform/scale: el zoom va en viewBox (nitidez vectorial). */
     contentStyle: {
-      transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-      transformOrigin: 'center center',
-      willChange: 'transform',
+      display: 'block',
+      width: '100%',
+      height: '100%',
+      maxHeight: worldHeight,
     },
   }
 }
