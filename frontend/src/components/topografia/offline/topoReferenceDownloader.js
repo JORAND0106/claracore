@@ -103,6 +103,13 @@ export async function downloadTopoReferenceData(contratoId, token) {
     }
   }
 
+  // Detalles «calientes» para captura en campo (borradores / abiertos / no sellados)
+  await cacheHotEntityDetails(contratoId, token, {
+    poligonales: poligonales || [],
+    nivelaciones: nivelaciones || [],
+    entregas: entregas || [],
+  })
+
   // Cachear selladas metadata (puntos-biblioteca se resuelve on-demand desde puntos)
   await topoDb.topo_entity_detail.put({
     key: entityDetailKey(contratoId, 'meta', 'poligonales_selladas'),
@@ -122,6 +129,61 @@ export async function downloadTopoReferenceData(contratoId, token) {
     nivelaciones: (nivelaciones || []).length,
     entregas: (entregas || []).length,
     ejes: ejeIds.length,
+  }
+}
+
+/** Cachea detalle de circuitos abiertos / en progreso para operar offline. */
+async function cacheHotEntityDetails(contratoId, token, { poligonales, nivelaciones, entregas }) {
+  const polHot = (poligonales || [])
+    .filter((p) => {
+      const est = (p.estado || '').toLowerCase()
+      return est !== 'cerrado' && !p.biblioteca_at && (p.nivel2_estado || 'No Revisado') !== 'Aprobado'
+    })
+    .slice(0, 25)
+  for (const p of polHot) {
+    try {
+      const det = await fetchJson(contratoId, `/poligonales/${p.id}`, token)
+      await topoDb.topo_entity_detail.put({
+        key: entityDetailKey(contratoId, 'poligonal', p.id),
+        data: det,
+        updated_at: det?.poligonal?.updated_at || new Date().toISOString(),
+      })
+    } catch (e) {
+      console.warn('[Topo offline] No se pudo cachear poligonal', p.id, e)
+    }
+  }
+
+  const nivHot = (nivelaciones || [])
+    .filter((n) => {
+      const est = (n.estado || '').toLowerCase()
+      return est !== 'cerrado' && est !== 'finalizado' && (n.nivel2_estado || 'No Revisado') !== 'Aprobado'
+    })
+    .slice(0, 25)
+  for (const n of nivHot) {
+    try {
+      const det = await fetchJson(contratoId, `/nivelaciones/${n.id}`, token)
+      await topoDb.topo_entity_detail.put({
+        key: entityDetailKey(contratoId, 'nivelacion', n.id),
+        data: det,
+        updated_at: det?.nivelacion?.updated_at || det?.updated_at || new Date().toISOString(),
+      })
+    } catch (e) {
+      console.warn('[Topo offline] No se pudo cachear nivelación', n.id, e)
+    }
+  }
+
+  const entHot = (entregas || []).slice(0, 30)
+  for (const e of entHot) {
+    try {
+      const det = await fetchJson(contratoId, `/entrega-dg/${e.id}`, token)
+      await topoDb.topo_entity_detail.put({
+        key: entityDetailKey(contratoId, 'entrega_dg', e.id),
+        data: det,
+        updated_at: det?.entrega?.updated_at || new Date().toISOString(),
+      })
+    } catch (err) {
+      console.warn('[Topo offline] No se pudo cachear entrega DG', e.id, err)
+    }
   }
 }
 

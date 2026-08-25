@@ -22,7 +22,7 @@ function svgFromPuntos(puntos, ancho = 480, alto = 320) {
 export default function AreasForm({ contratoId, token, permisos }) {
   const ui = useTopoTheme()
   const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
-  const { api, downloadPdf, online, saveDraft, loadDraft, syncDraft } = useTopografiaApi(contratoId, token)
+  const { api, downloadPdf, online, saveDraft, loadDraft, syncDraft, clearDraft } = useTopografiaApi(contratoId, token)
   const [nombre, setNombre] = useState('')
   const [vertices, setVertices] = useState([{ nombre: 'P1', norte: '', este: '' }])
   const [resultado, setResultado] = useState(null)
@@ -56,14 +56,17 @@ export default function AreasForm({ contratoId, token, permisos }) {
     setError('')
     try {
       const puntos = vertices.map((v) => ({ nombre: v.nombre, norte: Number(v.norte), este: Number(v.este) }))
-      if (!online) {
-        saveDraft('areas', { nombre, puntos, operador: '' })
-        setError('Guardado localmente. Se sincronizara al reconectar.')
-        return
-      }
+      // Offline: encola en Dexie vía api() (mismo flujo que online); draft solo como respaldo.
       const res = await api('/areas', { method: 'POST', body: JSON.stringify({ nombre, puntos }) })
-      setResultado(res)
-      api('/areas').then(setLista)
+      if (res?._offline || res?._queued) {
+        saveDraft('areas', { nombre, puntos, operador: '' })
+        setError('Guardado localmente. Se sincronizará al reconectar.')
+        setResultado(res)
+      } else {
+        setResultado(res)
+        clearDraft?.('areas')
+      }
+      api('/areas').then(setLista).catch(() => {})
     } catch (e) { setError(e.message) }
   }
 

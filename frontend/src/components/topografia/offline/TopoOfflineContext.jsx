@@ -9,6 +9,7 @@ import {
   countTopoPendingOps,
   getTopoPendingOps,
   getTopoSyncMeta,
+  topoDb,
 } from './topoDb.js'
 import { downloadTopoReferenceData } from './topoReferenceDownloader.js'
 import { processTopoSyncQueue, resolveTopoConflict, retryFailedTopoOps } from './topoSyncEngine.js'
@@ -53,7 +54,18 @@ export function TopoOfflineProvider({ children, contratoId, token }) {
     setCacheReady(!!meta?.synced_at)
     setLastSyncAt(meta?.synced_at || null)
     const ops = await getTopoPendingOps(contratoId)
-    setConflicts(ops.filter((o) => o.status === 'conflict'))
+    const conflictOps = ops.filter((o) => o.status === 'conflict')
+    const enriched = []
+    for (const op of conflictOps) {
+      const row = await topoDb.topo_conflicts.where('operation_id').equals(op.local_id).first()
+      enriched.push({
+        ...op,
+        local_payload: row?.local_payload || op.payload,
+        server_entity: row?.server_entity || null,
+        conflict_row_id: row?.id || null,
+      })
+    }
+    setConflicts(enriched)
   }, [contratoId])
 
   useEffect(() => {

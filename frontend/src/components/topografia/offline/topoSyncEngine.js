@@ -136,12 +136,20 @@ export async function processTopoSyncQueue(contratoId, token, onProgress) {
 
       if (response.status === 409) {
         const detail = await response.json().catch(() => ({}))
+        const serverEntity = await fetchServerEntity(contratoId, token, op)
         await topoDb.topo_pending_ops.update(op.local_id, {
           status: 'conflict',
-          error_message: detail?.detail || 'Conflicto',
+          error_message: detail?.detail || 'Conflicto HTTP 409',
           attempts: (op.attempts || 0) + 1,
         })
-        result.conflicts.push({ op, detail })
+        await topoDb.topo_conflicts.add({
+          operation_id: op.local_id,
+          contrato_id: cid,
+          local_payload: op.payload,
+          server_entity: serverEntity || detail,
+          created_at: new Date().toISOString(),
+        })
+        result.conflicts.push({ op, serverEntity: serverEntity || detail })
         result.failed++
         continue
       }
@@ -194,27 +202,59 @@ export async function processTopoSyncQueue(contratoId, token, onProgress) {
 export async function resolveTopoConflict(operationLocalId, useLocal, contratoId, token) {
   const op = await topoDb.topo_pending_ops.get(operationLocalId)
   if (!op) throw new Error('Operación no encontrada')
+  const conflict = await topoDb.topo_conflicts.where('operation_id').equals(operationLocalId).first()
 
   if (!useLocal) {
+    // Prevalece servidor: marcar op como resuelta y refrescar caché local con la entidad del servidor
     await topoDb.topo_pending_ops.update(op.local_id, {
       status: 'synced',
       error_message: 'Descartada (prevaleció servidor)',
     })
-    const conflict = await topoDb.topo_conflicts.where('operation_id').equals(operationLocalId).first()
+    if (conflict?.server_entity) {
+      await applyServerEntityToCache(contratoId, op, conflict.server_entity)
+    }
     if (conflict?.id) await topoDb.topo_conflicts.delete(conflict.id)
     return { ok: true, action: 'server' }
   }
 
+  // Prevalece local: reencolar sin comparar timestamps (usuario eligió explícitamente)
   await topoDb.topo_pending_ops.update(op.local_id, {
     status: 'pendiente',
     attempts: 0,
     server_updated_at: null,
     error_message: null,
   })
-  const conflict = await topoDb.topo_conflicts.where('operation_id').equals(operationLocalId).first()
   if (conflict?.id) await topoDb.topo_conflicts.delete(conflict.id)
   await processTopoSyncQueue(contratoId, token)
   return { ok: true, action: 'local' }
+}
+
+async function applyServerEntityToCache(contratoId, op, serverEntity) {
+  if (!serverEntity || typeof serverEntity !== 'object') return
+  const { cacheTopoEntityDetail } = await import('./topoReferenceDownloader.js')
+  if (op.submodule === 'poligonal' && (serverEntity.poligonal || serverEntity.id)) {
+    const id = serverEntity.poligonal?.id || op.server_entity_id
+    if (id) {
+      if (serverEntity.poligonal) {
+        await cacheTopoEntityDetail(contratoId, 'poligonal', id, serverEntity)
+        await topoDb.topo_poligonales.put({ ...serverEntity.poligonal, contrato_id: Number(contratoId) })
+      }
+    }
+    return
+  }
+  if (op.submodule === 'nivelacion' && (serverEntity.nivelacion || serverEntity.id)) {
+    const id = serverEntity.nivelacion?.id || op.server_entity_id
+    if (id && serverEntity.nivelacion) {
+      await cacheTopoEntityDetail(contratoId, 'nivelacion', id, serverEntity)
+    }
+    return
+  }
+  if (op.submodule === 'entrega_dg' && (serverEntity.entrega || serverEntity.id)) {
+    const id = serverEntity.entrega?.id || op.server_entity_id
+    if (id && serverEntity.entrega) {
+      await cacheTopoEntityDetail(contratoId, 'entrega_dg', id, serverEntity)
+    }
+  }
 }
 
 export async function retryFailedTopoOps(contratoId) {

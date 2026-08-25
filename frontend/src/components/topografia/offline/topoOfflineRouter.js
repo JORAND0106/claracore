@@ -87,14 +87,40 @@ function extractDependsOn(body, path) {
   return [...new Set(deps)]
 }
 
+async function inferServerUpdatedAt(contratoId, path, submodule, entityId) {
+  if (!entityId || String(entityId).startsWith('local_')) return null
+  const kindBySub = {
+    [TOPO_SUBMODULES.poligonal]: 'poligonal',
+    [TOPO_SUBMODULES.nivelacion]: 'nivelacion',
+    [TOPO_SUBMODULES.entrega_dg]: 'entrega_dg',
+    [TOPO_SUBMODULES.newpoint]: 'newpoint',
+  }
+  const kind = kindBySub[submodule]
+  if (!kind) return null
+  try {
+    const det = await getCachedTopoEntityDetail(contratoId, kind, entityId)
+    if (!det) return null
+    return det.updated_at
+      || det.poligonal?.updated_at
+      || det.nivelacion?.updated_at
+      || det.entrega?.updated_at
+      || null
+  } catch {
+    return null
+  }
+}
+
 export async function enqueueTopoOperation(contratoId, path, method, body, options = {}) {
   const cid = Number(contratoId)
   const parsed = parseBody(body)
   const entityId = options.localEntityId || extractEntityId(path) || localId()
+  const submodule = inferSubmodule(path, method)
+  const serverUpdatedAt = options.serverUpdatedAt
+    || await inferServerUpdatedAt(contratoId, path, submodule, entityId)
   const op = {
     contrato_id: cid,
     op_type: inferOpType(method, path),
-    submodule: inferSubmodule(path, method),
+    submodule,
     method: method.toUpperCase(),
     endpoint: path,
     payload: parsed,
@@ -107,7 +133,7 @@ export async function enqueueTopoOperation(contratoId, path, method, body, optio
     created_at: new Date().toISOString(),
     idempotency_key: uuidv4(),
     error_message: null,
-    server_updated_at: options.serverUpdatedAt || null,
+    server_updated_at: serverUpdatedAt || null,
   }
 
   const localIdNum = await topoDb.topo_pending_ops.add(op)
@@ -117,6 +143,166 @@ export async function enqueueTopoOperation(contratoId, path, method, body, optio
     return { ...base, ...optimistic }
   }
   return base
+}
+
+async function ensurePoligonalDetail(contratoId, polId) {
+  let det = await getCachedTopoEntityDetail(contratoId, 'poligonal', polId)
+  if (!det) {
+    const pol = await topoDb.topo_poligonales.get(polId)
+    det = {
+      poligonal: pol || { id: polId },
+      estaciones: [],
+      armadas: [],
+      cierre: null,
+    }
+  }
+  if (!Array.isArray(det.estaciones)) det.estaciones = []
+  if (!Array.isArray(det.armadas)) det.armadas = []
+  return det
+}
+
+/** Actualiza entity_detail de poligonal para estaciones/armadas/amarres/sentido offline. */
+async function applyPoligonalNestedOptimistic(contratoId, op) {
+  const ep = op.endpoint || ''
+  const m = (op.method || '').toUpperCase()
+  const b = op.payload || {}
+  const parts = ep.split('/').filter(Boolean)
+  if (parts[0] !== 'poligonales' || !parts[1]) return null
+  const polId = parts[1]
+
+  // POST /poligonales/{id}/estaciones
+  if (m === 'POST' && parts[2] === 'estaciones' && parts.length === 3) {
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    const estId = localId()
+    const orden = (det.estaciones.reduce((max, e) => Math.max(max, e.orden || 0), 0) || 0) + 1
+    const armadaId = b.armada_id
+      || (det.armadas.length ? det.armadas[det.armadas.length - 1].id : null)
+    const row = {
+      id: estId,
+      poligonal_id: polId,
+      armada_id: armadaId,
+      tipo_punto: b.tipo_punto || 'auxiliar',
+      orden,
+      nombre_punto: (b.nombre_punto || '').trim(),
+      angulo_medido: b.angulo_gms != null ? b.angulo_gms : b.angulo_medido,
+      angulo_vertical: b.angulo_vertical_gms != null ? b.angulo_vertical_gms : b.angulo_vertical,
+      distancia: b.distancia ?? null,
+      altura_objetivo: b.altura_objetivo ?? 0,
+      _local: true,
+      _pending_sync: true,
+    }
+    // Guardar GMS crudo; el backend convierte. Offline mostramos lo capturado.
+    det.estaciones = [...det.estaciones, row]
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { id: estId, ...row, _offline: true }
+  }
+
+  // PUT /poligonales/{id}/estaciones/{estId}
+  if (m === 'PUT' && parts[2] === 'estaciones' && parts[3]) {
+    const estId = parts[3]
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    det.estaciones = det.estaciones.map((e) => {
+      if (e.id !== estId) return e
+      return {
+        ...e,
+        ...(b.tipo_punto != null ? { tipo_punto: b.tipo_punto } : {}),
+        ...(b.nombre_punto != null ? { nombre_punto: String(b.nombre_punto).trim() } : {}),
+        ...(b.angulo_gms != null ? { angulo_medido: b.angulo_gms } : {}),
+        ...(b.angulo_vertical_gms !== undefined ? { angulo_vertical: b.angulo_vertical_gms } : {}),
+        ...(b.distancia !== undefined ? { distancia: b.distancia } : {}),
+        ...(b.altura_objetivo !== undefined ? { altura_objetivo: b.altura_objetivo } : {}),
+        _pending_sync: true,
+      }
+    })
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { id: estId, ok: true, _offline: true }
+  }
+
+  // DELETE /poligonales/{id}/estaciones/{estId}
+  if (m === 'DELETE' && parts[2] === 'estaciones' && parts[3]) {
+    const estId = parts[3]
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    det.estaciones = det.estaciones.filter((e) => e.id !== estId)
+    det.estaciones = det.estaciones.map((e, i) => ({ ...e, orden: i + 1 }))
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { ok: true, _offline: true }
+  }
+
+  // POST /poligonales/{id}/armadas
+  if (m === 'POST' && parts[2] === 'armadas' && parts.length === 3) {
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    const armId = localId()
+    const orden = (det.armadas.reduce((max, a) => Math.max(max, a.orden || 0), 0) || 0) + 1
+    const arm = {
+      id: armId,
+      poligonal_id: polId,
+      orden,
+      estacion_nombre: (b.estacion_nombre || '').trim(),
+      visado_nombre: (b.visado_nombre || '').trim(),
+      altura_instrumento: b.altura_instrumento ?? null,
+      puntos: [],
+      _local: true,
+      _pending_sync: true,
+    }
+    det.armadas = [...det.armadas, arm]
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { id: armId, ...arm, _offline: true }
+  }
+
+  // PUT /poligonales/{id}/armadas/{armId} (HI)
+  if (m === 'PUT' && parts[2] === 'armadas' && parts[3]) {
+    const armId = parts[3]
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    det.armadas = det.armadas.map((a) => (
+      a.id === armId
+        ? {
+            ...a,
+            ...(b.altura_instrumento !== undefined ? { altura_instrumento: b.altura_instrumento } : {}),
+            ...(b.estacion_nombre != null ? { estacion_nombre: b.estacion_nombre } : {}),
+            ...(b.visado_nombre != null ? { visado_nombre: b.visado_nombre } : {}),
+            _pending_sync: true,
+          }
+        : a
+    ))
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { ok: true, _offline: true }
+  }
+
+  // POST /poligonales/{id}/sentido
+  if (m === 'POST' && parts[2] === 'sentido') {
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    if (det.poligonal) {
+      det.poligonal = { ...det.poligonal, sentido: b.sentido || det.poligonal.sentido, _pending_sync: true }
+    }
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { ok: true, sentido: b.sentido, _offline: true }
+  }
+
+  // PUT /poligonales/{id}/amarres
+  if (m === 'PUT' && parts[2] === 'amarres') {
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    det._amarres_offline = b
+    det._pending_sync = true
+    if (b.estacion && det.poligonal) {
+      det.punto_inicial = { ...(det.punto_inicial || {}), ...b.estacion }
+    }
+    if (b.visado) {
+      det.punto_visado = { ...(det.punto_visado || {}), ...b.visado }
+    }
+    if (b.llegada) {
+      det.punto_final = { ...(det.punto_final || {}), ...b.llegada }
+    }
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { ...det, _offline: true }
+  }
+
+  return null
 }
 
 async function applyOptimisticMutation(contratoId, op) {
@@ -178,6 +364,12 @@ async function applyOptimisticMutation(contratoId, op) {
     return { id, ...row }
   }
 
+  // Poligonal: mutaciones anidadas → actualizar entity_detail para captura usable offline
+  if (op.submodule === TOPO_SUBMODULES.poligonal) {
+    const polOptimistic = await applyPoligonalNestedOptimistic(contratoId, op)
+    if (polOptimistic) return polOptimistic
+  }
+
   if (op.submodule === TOPO_SUBMODULES.entrega_dg && op.endpoint.includes('/guardar-cartera')) {
     const entregaId = extractEntityId(op.endpoint)
     const cached = await getCachedTopoEntityDetail(contratoId, 'entrega_dg', entregaId)
@@ -212,6 +404,20 @@ async function applyOptimisticMutation(contratoId, op) {
     const id = op.local_entity_id
     const row = { id, contrato_id: cid, ...b, _local: true, _pending_sync: true }
     await topoDb.topo_areas.put(row)
+    return row
+  }
+
+  if (op.submodule === TOPO_SUBMODULES.equipos && op.method === 'POST' && op.endpoint === '/equipos') {
+    const id = op.local_entity_id
+    const row = {
+      id,
+      contrato_id: cid,
+      ...b,
+      _local: true,
+      _pending_sync: true,
+      created_at: new Date().toISOString(),
+    }
+    await topoDb.topo_equipos.put(row)
     return row
   }
 
@@ -323,11 +529,13 @@ export async function readTopoOffline(contratoId, path, query = '') {
     return rows.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0))
   }
 
-  if (path.match(/^\/entrega-dg\/[^/]+$/) && !path.includes('/')) {
+  if (path.match(/^\/entrega-dg\/[^/]+$/)) {
     const id = path.split('/')[2]?.split('?')[0]
     const det = await getCachedTopoEntityDetail(contratoId, 'entrega_dg', id)
     if (det) return det
-    throw new Error('Entrega DG no disponible offline. Ábrala una vez con conexión.')
+    const row = await topoDb.topo_entrega_dg.get(id)
+    if (row) return { entrega: row, lecturas: [], _offline_partial: true }
+    throw new Error('Entrega DG no disponible offline. Ábrala una vez con conexión o espere la descarga de referencia.')
   }
 
   if (path === '/diseno-geometrico/ejes') {
@@ -437,10 +645,10 @@ export async function handleOfflineMutation(contratoId, path, method, body, opti
   if (path === '/poligonales' && m === 'POST') {
     return { id: result.local_entity_id, ...result }
   }
-  if (path.match(/^\/poligonales\/[^/]+$/) && m === 'POST' && path.includes('/calcular')) {
+  if (path.match(/^\/poligonales\/[^/]+\/calcular$/) && m === 'POST') {
     return { ok: true, mensaje: 'Cálculo encolado. Se aplicará al sincronizar.', _offline: true }
   }
-  if (path.match(/^\/poligonales\/[^/]+$/) && m === 'POST' && path.includes('/cerrar')) {
+  if (path.match(/^\/poligonales\/[^/]+\/cerrar$/) && m === 'POST') {
     const polId = path.split('/')[2]
     const det = await getCachedTopoEntityDetail(contratoId, 'poligonal', polId)
     if (det?.poligonal) {

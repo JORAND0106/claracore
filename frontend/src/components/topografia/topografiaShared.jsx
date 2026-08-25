@@ -612,23 +612,30 @@ export function Semaforo({ ok, labelOk = 'Admisible', labelBad = 'Inadmisible' }
 }
 
 export function OfflineBadge({ online, pendingCount = 0, failedCount = 0, syncing = false }) {
+  const totalPend = (pendingCount || 0) + (failedCount || 0)
   const label = syncing
     ? 'Sincronizando…'
     : online
-      ? (pendingCount > 0 ? `En línea · ${pendingCount} pend.` : 'En línea')
-      : 'Offline'
+      ? (totalPend > 0
+        ? `En línea — ${totalPend} pendiente${totalPend === 1 ? '' : 's'} de sincronizar`
+        : 'En línea')
+      : (totalPend > 0
+        ? `Sin conexión — ${totalPend} registro${totalPend === 1 ? '' : 's'} pendiente${totalPend === 1 ? '' : 's'} de sincronizar`
+        : 'Sin conexión')
   return (
-    <span style={{
-      padding: '3px 8px',
-      borderRadius: 999,
-      fontSize: 'var(--cc-xs)',
-      background: syncing ? '#dbeafe' : online ? (failedCount > 0 ? '#fee2e2' : pendingCount > 0 ? '#eff6ff' : '#dcfce7') : '#fef3c7',
-      color: syncing ? '#1d4ed8' : online ? (failedCount > 0 ? '#991b1b' : pendingCount > 0 ? '#1d4ed8' : '#166534') : '#92400e',
-    }}>
+    <span
+      title={label}
+      style={{
+        padding: '3px 8px',
+        borderRadius: 999,
+        fontSize: 'var(--cc-xs)',
+        background: syncing ? '#dbeafe' : online ? (failedCount > 0 ? '#fee2e2' : pendingCount > 0 ? '#eff6ff' : '#dcfce7') : '#fef3c7',
+        color: syncing ? '#1d4ed8' : online ? (failedCount > 0 ? '#991b1b' : pendingCount > 0 ? '#1d4ed8' : '#166534') : '#92400e',
+        maxWidth: '100%',
+        display: 'inline-block',
+      }}
+    >
       {label}
-      {failedCount > 0 && !syncing && (
-        <span style={{ marginLeft: 4 }}>({failedCount} fall.)</span>
-      )}
     </span>
   )
 }
