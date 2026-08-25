@@ -1739,13 +1739,13 @@ export default function PoligonalModal({
                   )}
                 </div>
 
-                {/* Bloque derecho — Agregar punto en dos columnas de campos */}
+                {/* Bloque derecho — Punto siguiente en dos columnas de campos */}
                 <div ref={formRef} style={panelCol}>
                   {(editandoId || armadaActual) ? (
                     <>
                       <TopoExcelSheet
                         sheet={sheetInCol}
-                        title={editandoId ? 'Editar punto' : `Agregar punto (armada ${armadaActual?.orden ?? '—'})`}
+                        title={editandoId ? 'Editar punto' : `Punto siguiente (armada ${armadaActual?.orden ?? '—'})`}
                         columns={COLS_AGREGAR_PUNTO_2COL}
                         style={{ marginBottom: 0 }}
                       >
@@ -1772,7 +1772,7 @@ export default function PoligonalModal({
                                 onClick={agregarPunto}
                                 disabled={busy}
                               >
-                                Agregar punto
+                                Punto siguiente
                               </button>
                             )}
                           </td>
@@ -1785,7 +1785,7 @@ export default function PoligonalModal({
                       )}
                     </>
                   ) : (
-                    <div style={{ ...sheet.sectionTitle, color: ui.textMuted }}>Agregar punto</div>
+                    <div style={{ ...sheet.sectionTitle, color: ui.textMuted }}>Punto siguiente</div>
                   )}
                 </div>
               </div>
