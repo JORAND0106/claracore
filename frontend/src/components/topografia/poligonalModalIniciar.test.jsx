@@ -256,7 +256,7 @@ describe('PoligonalModal iniciar — regresión pantalla blanca', () => {
     const text = document.body.textContent || ''
     cap.restore()
     assert.equal(cap.reactCrashes().length, 0)
-    assert.ok(/EST-1|VIS-1|Agregar punto|Libreta|Cartera/i.test(text), 'detalle de estaciones visible')
+    assert.ok(/EST-1|VIS-1|Punto siguiente|Libreta|Cartera/i.test(text), 'detalle de estaciones visible')
     root.unmount()
   })
 })

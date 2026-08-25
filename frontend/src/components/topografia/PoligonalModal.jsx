@@ -236,18 +236,28 @@ export default function PoligonalModal({
   const [armadaForm, setArmadaForm] = useState({ estacion_nombre: '', visado_nombre: '', altura_instrumento: '' })
   const [mostrarCambioArmada, setMostrarCambioArmada] = useState(false)
   const prevOpenRef = useRef(false)
+  const prevPoligonalIdRef = useRef(null)
 
   const showError = useCallback((err) => {
     const parsed = parseApiError(err?.message || String(err))
     setErrorModal(parsed)
   }, [])
 
-  const aplicarDetalle = useCallback((data, id) => {
+  /**
+   * Aplica el detalle del servidor a la UI.
+   * Por defecto NO reinicia el formulario «Agregar punto» (estForm): los refrescos
+   * de cartera/armadas/HI no deben borrar captura en curso. Usar resetCaptura solo
+   * al abrir/cambiar de poligonal o tras acciones que limpian la captura a propósito.
+   */
+  const aplicarDetalle = useCallback((data, id, opts = {}) => {
+    const { resetCaptura = false } = opts
     setDetalle(data)
     setPoligonalId(id)
     setStep('estaciones')
-    setEditandoId(null)
-    setEstForm(resetEstForm())
+    if (resetCaptura) {
+      setEditandoId(null)
+      setEstForm(resetEstForm())
+    }
     setUltimaSync(Date.now())
     if (!data?.poligonal) return
     const pi = data.punto_inicial
@@ -294,11 +304,11 @@ export default function PoligonalModal({
   }, [])
 
   const cargarDetalle = useCallback(async (id, opts = {}) => {
-    const { silencioso = false } = opts
+    const { silencioso = false, resetCaptura = false } = opts
     if (!silencioso) setRefreshing(true)
     try {
       const data = await api(`/poligonales/${id}?_=${Date.now()}`)
-      aplicarDetalle(data, id)
+      aplicarDetalle(data, id, { resetCaptura })
     } finally {
       if (!silencioso) setRefreshing(false)
     }
@@ -330,6 +340,7 @@ export default function PoligonalModal({
   useEffect(() => {
     if (!open) {
       prevOpenRef.current = false
+      prevPoligonalIdRef.current = null
       return
     }
     const justOpened = !prevOpenRef.current
@@ -337,20 +348,32 @@ export default function PoligonalModal({
     if (open) setModo(modoInicial || 'editar')
     setResultado(null)
     if (justOpened) setErrorModal(null)
-    api('/operadores')
-      .then((rows) => setOperadores(Array.isArray(rows) ? rows : []))
-      .catch(() => setOperadores([]))
+    // Operadores solo al abrir: evitar trabajo extra en cada cambio de identidad de deps.
+    if (justOpened) {
+      api('/operadores')
+        .then((rows) => setOperadores(Array.isArray(rows) ? rows : []))
+        .catch(() => setOperadores([]))
+    }
     if (initialPoligonalId) {
-      const cacheOk = initialDetalle?.poligonal?.id === initialPoligonalId
-      if (cacheOk) {
-        aplicarDetalle(initialDetalle, initialPoligonalId)
-        cargarDetalle(initialPoligonalId, { silencioso: true }).catch(showError)
-      } else {
-        cargarDetalle(initialPoligonalId).catch(showError)
+      // Hidratar solo al abrir o al cambiar de poligonal. Si el padre refresca
+      // initialDetalle tras onSaved (p. ej. tras «Cambiar armada» o HI), NO
+      // re-aplicar ni re-fetch: eso reiniciaba «Agregar punto» mientras el
+      // usuario escribía. El modal ya mantiene su propio detalle vía sincronizarDetalle.
+      const switched = prevPoligonalIdRef.current !== initialPoligonalId
+      if (justOpened || switched) {
+        prevPoligonalIdRef.current = initialPoligonalId
+        const cacheOk = initialDetalle?.poligonal?.id === initialPoligonalId
+        if (cacheOk) {
+          aplicarDetalle(initialDetalle, initialPoligonalId, { resetCaptura: true })
+          cargarDetalle(initialPoligonalId, { silencioso: true }).catch(showError)
+        } else {
+          cargarDetalle(initialPoligonalId, { resetCaptura: true }).catch(showError)
+        }
       }
     } else if (justOpened) {
       // Solo reiniciar al abrir «Nueva»: no borrar la libreta si `api`/`cargarDetalle`
       // cambian de identidad a mitad de la creación (p. ej. contexto offline).
+      prevPoligonalIdRef.current = null
       setStep('chooseTipo')
       setPoligonalId(null)
       setDetalle(null)
@@ -731,6 +754,10 @@ export default function PoligonalModal({
       setArmadaForm({ estacion_nombre: '', visado_nombre: '', altura_instrumento: '' })
       setMostrarCambioArmada(false)
       setResultado(null)
+      // Tras cambiar de armada la captura queda limpia y lista; el sync posterior
+      // no debe volver a tocar estForm (aplicarDetalle ya no lo reinicia).
+      setEditandoId(null)
+      setEstForm(resetEstForm())
       await sincronizarDetalle('Armada creada.')
     } catch (e) {
       showError(e)
@@ -748,6 +775,7 @@ export default function PoligonalModal({
         body: JSON.stringify({ altura_instrumento: hi === '' ? null : Number(hi) }),
       })
       setResultado(null)
+      // Solo refresca cartera/armadas; estForm (Agregar punto) debe persistir.
       await sincronizarDetalle()
     } catch (e) {
       showError(e)
@@ -1358,17 +1386,18 @@ export default function PoligonalModal({
                   <input
                     key="punto"
                     value={estForm.nombre_punto}
-                    onChange={(e) => setEstForm({ ...estForm, nombre_punto: e.target.value })}
+                    onChange={(e) => setEstForm((f) => ({ ...f, nombre_punto: e.target.value }))}
                     style={sheet.cellInp}
                     placeholder="Ej. P1"
                     title="Nombre del punto observado adelante (o radiado)."
+                    data-testid="agregar-punto-nombre"
                   />
                 )
                 const fieldTipo = (
                   <select
                     key="tipo"
                     value={estForm.tipo_punto}
-                    onChange={(e) => setEstForm({ ...estForm, tipo_punto: e.target.value })}
+                    onChange={(e) => setEstForm((f) => ({ ...f, tipo_punto: e.target.value }))}
                     style={sheet.cellSelect}
                     title="Estación = vértice del circuito. Auxiliar = punto de detalle radiado."
                   >
@@ -1398,20 +1427,22 @@ export default function PoligonalModal({
                   <input
                     key="ht"
                     value={estForm.altura_objetivo}
-                    onChange={(e) => setEstForm({ ...estForm, altura_objetivo: e.target.value })}
+                    onChange={(e) => setEstForm((f) => ({ ...f, altura_objetivo: e.target.value }))}
                     style={sheet.cellInp}
                     placeholder="0"
                     title="HT: altura del prisma u objetivo sobre el punto observado (m)."
+                    data-testid="agregar-punto-ht"
                   />
                 )
                 const fieldDist = (
                   <input
                     key="dist"
                     value={estForm.distancia}
-                    onChange={(e) => setEstForm({ ...estForm, distancia: e.target.value })}
+                    onChange={(e) => setEstForm((f) => ({ ...f, distancia: e.target.value }))}
                     style={sheet.cellInp}
                     placeholder="0.000"
                     title="Distancia horizontal medida al punto observado (m)."
+                    data-testid="agregar-punto-dist"
                   />
                 )
                 const agregarPares = [
@@ -1708,13 +1739,13 @@ export default function PoligonalModal({
                   )}
                 </div>
 
-                {/* Bloque derecho — Agregar punto en dos columnas de campos */}
+                {/* Bloque derecho — Punto siguiente en dos columnas de campos */}
                 <div ref={formRef} style={panelCol}>
                   {(editandoId || armadaActual) ? (
                     <>
                       <TopoExcelSheet
                         sheet={sheetInCol}
-                        title={editandoId ? 'Editar punto' : `Agregar punto (armada ${armadaActual?.orden ?? '—'})`}
+                        title={editandoId ? 'Editar punto' : `Punto siguiente (armada ${armadaActual?.orden ?? '—'})`}
                         columns={COLS_AGREGAR_PUNTO_2COL}
                         style={{ marginBottom: 0 }}
                       >
@@ -1741,7 +1772,7 @@ export default function PoligonalModal({
                                 onClick={agregarPunto}
                                 disabled={busy}
                               >
-                                Agregar punto
+                                Punto siguiente
                               </button>
                             )}
                           </td>
@@ -1754,7 +1785,7 @@ export default function PoligonalModal({
                       )}
                     </>
                   ) : (
-                    <div style={{ ...sheet.sectionTitle, color: ui.textMuted }}>Agregar punto</div>
+                    <div style={{ ...sheet.sectionTitle, color: ui.textMuted }}>Punto siguiente</div>
                   )}
                 </div>
               </div>
