@@ -59,6 +59,7 @@ function inferSubmodule(path, method) {
 }
 
 function inferOpType(method, path) {
+  if (path.includes('/recalcular')) return 'calcular'
   if (path.includes('/calcular')) return 'calcular'
   if (path.includes('/cerrar')) return 'cerrar'
   if (path.includes('/guardar-cartera')) return 'editar'
@@ -647,6 +648,26 @@ export async function handleOfflineMutation(contratoId, path, method, body, opti
   }
   if (path.match(/^\/poligonales\/[^/]+\/calcular$/) && m === 'POST') {
     return { ok: true, mensaje: 'Cálculo encolado. Se aplicará al sincronizar.', _offline: true }
+  }
+  if (path.match(/^\/poligonales\/[^/]+\/recalcular$/) && m === 'POST') {
+    const polId = path.split('/')[2]
+    const det = await getCachedTopoEntityDetail(contratoId, 'poligonal', polId)
+    if (det?.poligonal) {
+      det.poligonal.ajustada_at = null
+      det.poligonal._pending_sync = true
+      for (const e of det.estaciones || []) {
+        e.norte_ajustado = null
+        e.este_ajustado = null
+        e.cota_ajustada = null
+        e.angulo_corregido = null
+        e.correccion_norte = null
+        e.correccion_este = null
+        e.correccion_cota = null
+      }
+      await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+      return { ...det, _offline: true, mensaje: 'Recálculo encolado. Ajuste anterior invalidado localmente.' }
+    }
+    return { ok: true, mensaje: 'Recálculo encolado. Se aplicará al sincronizar.', _offline: true }
   }
   if (path.match(/^\/poligonales\/[^/]+\/cerrar$/) && m === 'POST') {
     const polId = path.split('/')[2]

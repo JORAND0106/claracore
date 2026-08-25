@@ -119,24 +119,34 @@ def azimut_base_referencia(
     estacion: Optional[dict],
     visado: Optional[dict],
 ) -> tuple[float, str]:
-    """Azimut de la línea de referencia estación → visado.
+    """Azimut de la línea de referencia estación → visado (orientación de armada).
 
     Fórmula (norte = 0°, este = 90°):
         Az_base = atan2(E_visado − E_estación, N_visado − N_estación) ∈ [0, 360)
 
-    - Con N/E reales de estación y visado → método ``coordenadas`` (azimut real).
-    - Sin coordenadas completas → método ``ceros_atras`` con Az_base = 0°
-      (la lectura observada se interpreta como ángulo desde un cero en el visado).
-
-    El azimut de cada punto observado es luego:
-        Az_punto = (Az_base + α_obs) mod 360
-    donde α_obs es el ángulo horizontal observado (grados decimales).
+    - Con N/E reales → método ``coordenadas``. Ese Az_base es la referencia que el
+      operador introduce en el equipo al hacer backsight; NO se suma a las lecturas.
+      Cada punto usa como azimut el valor registrado en «Ang. Obs.» (lectura directa).
+    - Sin coordenadas → método ``ceros_atras`` con Az_base = 0°; entonces
+      Az_punto = α_obs (ángulo desde el cero en el visado).
     """
     if _coord_ne_completa(estacion) and _coord_ne_completa(visado):
         dn = float(visado["norte"]) - float(estacion["norte"])
         de = float(visado["este"]) - float(estacion["este"])
         return azimut_desde_deltas(dn, de), "coordenadas"
     return 0.0, "ceros_atras"
+
+
+def azimut_punto_desde_lectura(angulo_medido: float, metodo_azimut: str, base_azimut: float = 0.0) -> float:
+    """Azimut de un punto observado según el método de la armada.
+
+    - ``coordenadas``: el equipo ya está orientado; Ang.Obs. ES el azimut (lectura directa).
+    - ``ceros_atras``: Ang.Obs. es el ángulo desde el cero en el visado → Az = 0 + α.
+    """
+    alpha = float(angulo_medido)
+    if metodo_azimut == "coordenadas":
+        return alpha % 360.0
+    return (float(base_azimut or 0.0) + alpha) % 360.0
 
 
 def enriquecer_estaciones_poligonal(estaciones: list) -> list:
@@ -181,8 +191,11 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
 
     Por cada armada:
       1. Az_base = azimut(estación → visado) si hay N/E reales; si no, Az_base = 0°
-         (respaldo «ceros atrás»).
-      2. Az_punto = (Az_base + α_obs) mod 360 para cada lectura.
+         (respaldo «ceros atrás»). Az_base es referencia de orientación (backsight);
+         no se combina con las lecturas de puntos cuando hay coordenadas.
+      2. Az_punto:
+         - método ``coordenadas``: Az = α_obs (lectura directa del equipo orientado)
+         - método ``ceros_atras``: Az = (0 + α_obs) mod 360
       3. Coordenadas adelante desde el origen de la armada (o vértice acumulado).
 
     Los amarres no se sobrescriben: el visado con nombre de amarre siempre usa
@@ -248,7 +261,7 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
             # Coordenada del leg desde donde esta el instrumento (estacion de la armada).
             origen = est if _coord_ne_completa(est) else vertice_prev
             if ang is not None:
-                az = (base_az + float(ang)) % 360
+                az = azimut_punto_desde_lectura(ang, metodo_az, base_az)
                 if origen and _coord_ne_completa(origen) and dist is not None:
                     n = float(origen["norte"]) + float(dist) * math.cos(math.radians(az))
                     e_ = float(origen["este"]) + float(dist) * math.sin(math.radians(az))
@@ -349,8 +362,8 @@ def ajustar_poligonal_armadas(
 ) -> dict:
     """Corrección angular + Bowditch usando azimuts de radiación por armadas.
 
-    Los azimuts provienen de ``radiar_armadas`` (azimut real desde coordenadas de
-    amarre cuando existen; respaldo ceros atrás si no).
+    Los azimuts provienen de ``radiar_armadas``: con amarres reales, Ang.Obs. es el
+    azimut leído del equipo orientado; sin amarres, ceros atrás.
     """
     armadas_enr, _, flat = radiar_armadas(armadas, estaciones_db, amarres)
     flat_by_id = {p["id"]: p for p in flat if p.get("id")}
