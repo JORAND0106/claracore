@@ -11,6 +11,7 @@ import {
   useTopoViewport,
   parseApiError,
   puede,
+  esDesarrolladorTopo,
 } from './topografiaShared'
 import TopoExcelSheet from './TopoExcelSheet'
 import { topoSheetStyles } from './topoSheetStyles'
@@ -330,6 +331,26 @@ export default function PoligonalModal({
     try {
       await api(`/poligonales/${poligonalId}/calcular`, { method: 'POST' })
       await sincronizarDetalle('Poligonal corregida y ajustada. Coordenadas listas para validación.')
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const recalcularPoligonalDev = async () => {
+    if (!poligonalId) return
+    setBusy(true)
+    try {
+      const data = await api(`/poligonales/${poligonalId}/recalcular`, { method: 'POST' })
+      if (data?.poligonal) {
+        aplicarDetalle(data, poligonalId, { resetCaptura: false })
+      } else {
+        await cargarDetalle(poligonalId)
+      }
+      onSaved?.(poligonalId)
+      setSyncMsg('Poligonal recalculada (ajuste anterior invalidado). Revise cartera y cierre.')
+      window.setTimeout(() => setSyncMsg(null), 5000)
     } catch (e) {
       showError(e)
     } finally {
@@ -914,6 +935,17 @@ export default function PoligonalModal({
                   disabled={busy || refreshing}
                 >
                   {refreshing ? 'Actualizando…' : 'Actualizar'}
+                </button>
+              )}
+              {step === 'estaciones' && poligonalId && esDesarrolladorTopo(usuario) && !((detalle?.poligonal?.nivel2_estado || '') === 'Aprobado' || Boolean(detalle?.poligonal?.biblioteca_at)) && (
+                <button
+                  type="button"
+                  style={ui.btnSecondary}
+                  title="Invalida coordenadas/azimuts ajustados y recalcula con la fórmula vigente (Desarrollador)"
+                  onClick={recalcularPoligonalDev}
+                  disabled={busy || refreshing}
+                >
+                  {busy ? 'Recalculando…' : 'Recalcular'}
                 </button>
               )}
               <button type="button" style={ui.btnSecondary} onClick={onClose}>Cerrar</button>

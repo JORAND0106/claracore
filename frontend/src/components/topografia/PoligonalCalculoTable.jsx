@@ -100,9 +100,9 @@ export default function PoligonalCalculoTable({
       .concat((estaciones || []).map((e) => e?.metodo_azimut).filter(Boolean)),
   )
   const etiquetaMetodo = metodos.has('coordenadas') && metodos.has('ceros_atras')
-    ? 'azimut real desde amarres (con respaldo ceros atrás)'
+    ? 'azimut leído del equipo orientado + respaldo ceros atrás'
     : metodos.has('coordenadas')
-      ? 'azimut real desde coordenadas de amarre'
+      ? 'azimut real leído directamente del equipo orientado — sin combinación de ángulos'
       : 'ceros atrás'
 
   return (

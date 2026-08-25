@@ -2254,6 +2254,35 @@ def eliminar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, cur
     return {"ok": True}
 
 
+@router.post("/{contrato_id}/poligonales/{poligonal_id}/recalcular")
+def recalcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+    """Desarrollador: invalida ajuste Bowditch almacenado y recalcula cartera en vivo.
+
+    Descarta norte/este/azimut persistidos (fórmula anterior incorrecta con amarres)
+    y devuelve el mismo payload que GET detalle con radiación actualizada.
+    """
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    try:
+        from main import _es_desarrollador
+
+        if not _es_desarrollador(current_user):
+            raise HTTPException(status_code=403, detail="Solo desarrollador puede recalcular poligonales.")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Solo desarrollador puede recalcular poligonales.")
+
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    if _poligonal_sellada(pol):
+        raise HTTPException(status_code=403, detail="Poligonal sellada tras validación de interventoría.")
+
+    _limpiar_ajuste_poligonal(poligonal_id)
+    return obtener_poligonal(contrato_id, poligonal_id, current_user)
+
+
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/calcular")
 def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Corregir y ajustar: distribuye error angular y aplica Bowditch (azimuts por armadas)."""
