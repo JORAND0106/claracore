@@ -90,15 +90,25 @@ export default function PoligonalCalculoTable({
   if (!estaciones?.length) {
     return (
       <div style={{ ...ui.card, color: ui.textMuted }}>
-        Agregue puntos para ver la cartera de radiacion por armadas (ceros atras).
+        Agregue puntos para ver la cartera de radiacion por armadas.
       </div>
     )
   }
 
+  const metodos = new Set(
+    (armadas || []).map((a) => a?.metodo_azimut).filter(Boolean)
+      .concat((estaciones || []).map((e) => e?.metodo_azimut).filter(Boolean)),
+  )
+  const etiquetaMetodo = metodos.has('coordenadas') && metodos.has('ceros_atras')
+    ? 'azimut real desde amarres (con respaldo ceros atrás)'
+    : metodos.has('coordenadas')
+      ? 'azimut real desde coordenadas de amarre'
+      : 'ceros atrás'
+
   return (
     <div style={ui.card}>
       <h4 style={{ marginTop: 0, marginBottom: 6, color: ui.text }}>
-        Cartera de calculo — Radiacion por armadas (ceros atras)
+        Cartera de calculo — Radiacion por armadas ({etiquetaMetodo})
         {ajustada && <span style={{ fontWeight: 400, color: ui.success, fontSize: 'var(--cc-xs)' }}> · coordenadas ajustadas</span>}
       </h4>
       {poligonal && (

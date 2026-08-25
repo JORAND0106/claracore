@@ -103,6 +103,42 @@ def azimut_desde_deltas(dn: float, de: float) -> float:
     return az
 
 
+def _coord_ne_completa(c: Optional[dict]) -> bool:
+    """True si el punto tiene Norte y Este numéricos finitos (cota opcional)."""
+    if not c:
+        return False
+    try:
+        n = float(c.get("norte"))
+        e = float(c.get("este"))
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(n) and math.isfinite(e)
+
+
+def azimut_base_referencia(
+    estacion: Optional[dict],
+    visado: Optional[dict],
+) -> tuple[float, str]:
+    """Azimut de la línea de referencia estación → visado.
+
+    Fórmula (norte = 0°, este = 90°):
+        Az_base = atan2(E_visado − E_estación, N_visado − N_estación) ∈ [0, 360)
+
+    - Con N/E reales de estación y visado → método ``coordenadas`` (azimut real).
+    - Sin coordenadas completas → método ``ceros_atras`` con Az_base = 0°
+      (la lectura observada se interpreta como ángulo desde un cero en el visado).
+
+    El azimut de cada punto observado es luego:
+        Az_punto = (Az_base + α_obs) mod 360
+    donde α_obs es el ángulo horizontal observado (grados decimales).
+    """
+    if _coord_ne_completa(estacion) and _coord_ne_completa(visado):
+        dn = float(visado["norte"]) - float(estacion["norte"])
+        de = float(visado["este"]) - float(estacion["este"])
+        return azimut_desde_deltas(dn, de), "coordenadas"
+    return 0.0, "ceros_atras"
+
+
 def enriquecer_estaciones_poligonal(estaciones: list) -> list:
     """Agrega columnas de calculo para la libreta de poligonal trigonométrica."""
     out = []
@@ -141,22 +177,27 @@ def enriquecer_estaciones_poligonal(estaciones: list) -> list:
 
 
 def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
-    """Calcula la cartera por armadas (ceros atras).
+    """Calcula la cartera por armadas (radiación desde cada setup).
 
-    Por cada armada: azimut base = azimut(estacion -> visado); cada punto adelante
-    se coordena acumulando desde el vertice anterior (cadena de poligonal), no
-    re-radiando desde un origen fijo. Los amarres no se sobrescriben: el visado
-    con nombre de amarre siempre usa coordenadas de amarre; la estacion en un
-    monumento de amarre usa esas coordenadas fijas al plantar el equipo.
+    Por cada armada:
+      1. Az_base = azimut(estación → visado) si hay N/E reales; si no, Az_base = 0°
+         (respaldo «ceros atrás»).
+      2. Az_punto = (Az_base + α_obs) mod 360 para cada lectura.
+      3. Coordenadas adelante desde el origen de la armada (o vértice acumulado).
+
+    Los amarres no se sobrescriben: el visado con nombre de amarre siempre usa
+    coordenadas de amarre; la estación en un monumento de amarre usa esas
+    coordenadas fijas al plantar el equipo.
 
     Retorna (armadas_enriquecidas, puntos_conocidos, estaciones_planas).
+    Cada armada incluye ``metodo_azimut``: ``coordenadas`` | ``ceros_atras``.
     """
     amarre_fijos: dict = {}
     for nombre, c in (amarres or {}).items():
-        if c and c.get("norte") is not None and c.get("este") is not None:
+        if _coord_ne_completa(c):
             amarre_fijos[nombre] = {
-                "norte": c.get("norte"),
-                "este": c.get("este"),
+                "norte": float(c.get("norte")),
+                "este": float(c.get("este")),
                 "cota": c.get("cota"),
             }
 
@@ -195,9 +236,7 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
     for arm in sorted(armadas or [], key=lambda a: a.get("orden") or 0):
         est = coords_estacion(arm.get("estacion_nombre"))
         vis = coords_visado(arm.get("visado_nombre"))
-        base_az = None
-        if est and vis and est.get("norte") is not None and vis.get("norte") is not None:
-            base_az = azimut_desde_deltas(vis["norte"] - est["norte"], vis["este"] - est["este"])
+        base_az, metodo_az = azimut_base_referencia(est, vis)
         hi = arm.get("altura_instrumento") or 0
         puntos = []
         for o in obs_by_arm.get(arm.get("id"), []):
@@ -207,22 +246,23 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
             ht = o.get("altura_objetivo") or 0
             az = n = e_ = z = None
             # Coordenada del leg desde donde esta el instrumento (estacion de la armada).
-            origen = est if (est and est.get("norte") is not None) else vertice_prev
-            if base_az is not None and ang is not None:
-                az = (base_az + ang) % 360
-                if origen and origen.get("norte") is not None and dist is not None:
-                    n = origen["norte"] + dist * math.cos(math.radians(az))
-                    e_ = origen["este"] + dist * math.sin(math.radians(az))
+            origen = est if _coord_ne_completa(est) else vertice_prev
+            if ang is not None:
+                az = (base_az + float(ang)) % 360
+                if origen and _coord_ne_completa(origen) and dist is not None:
+                    n = float(origen["norte"]) + float(dist) * math.cos(math.radians(az))
+                    e_ = float(origen["este"]) + float(dist) * math.sin(math.radians(az))
                     z_base = origen.get("cota")
                     if z_base is not None and ang_v is not None:
                         vz = math.radians(ang_v)
                         sin_vz = math.sin(vz)
-                        desnivel = (dist * math.cos(vz) / sin_vz) if abs(sin_vz) > 1e-9 else 0.0
-                        z = z_base + hi + desnivel - ht
+                        desnivel = (float(dist) * math.cos(vz) / sin_vz) if abs(sin_vz) > 1e-9 else 0.0
+                        z = float(z_base) + hi + desnivel - ht
             punto = {
                 **o,
                 "tipo_punto": o.get("tipo_punto") or "auxiliar",
                 "armada_orden": arm.get("orden"),
+                "metodo_azimut": metodo_az,
                 "angulo_observado_gms": decimal_a_gms_numero(ang) if ang is not None else None,
                 "angulo_observado_texto": decimal_to_gms(ang) if ang is not None else None,
                 "angulo_vertical_gms": decimal_a_gms_numero(ang_v) if ang_v is not None else None,
@@ -249,8 +289,9 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
             estaciones_flat.append(punto)
         armadas_out.append({
             **arm,
-            "base_azimut": round(base_az, 6) if base_az is not None else None,
-            "base_azimut_texto": decimal_to_gms(base_az) if base_az is not None else None,
+            "base_azimut": round(base_az, 6),
+            "base_azimut_texto": decimal_to_gms(base_az),
+            "metodo_azimut": metodo_az,
             "estacion_coords": est,
             "visado_coords": vis,
             "puntos": puntos,
@@ -306,7 +347,11 @@ def ajustar_poligonal_armadas(
     punto_inicial: Optional[dict],
     punto_final: Optional[dict] = None,
 ) -> dict:
-    """Corrección angular + Bowditch usando azimuts de radiación por armadas (ceros atrás)."""
+    """Corrección angular + Bowditch usando azimuts de radiación por armadas.
+
+    Los azimuts provienen de ``radiar_armadas`` (azimut real desde coordenadas de
+    amarre cuando existen; respaldo ceros atrás si no).
+    """
     armadas_enr, _, flat = radiar_armadas(armadas, estaciones_db, amarres)
     flat_by_id = {p["id"]: p for p in flat if p.get("id")}
     armada_hi = {a["id"]: a.get("altura_instrumento") or 0 for a in armadas or []}

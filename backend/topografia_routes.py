@@ -199,6 +199,23 @@ def _assert_poligonal_editable(pol: dict) -> None:
     _assert_poligonal_libreta_editable(pol)
 
 
+def _amarres_poligonal(
+    punto_inicial: Optional[dict],
+    punto_visado: Optional[dict],
+    punto_final: Optional[dict] = None,
+) -> dict:
+    """Mapa nombre → N/E/cota de amarres conocidos (estación, visado, llegada)."""
+    amarres = {}
+    for p in (punto_inicial, punto_visado, punto_final):
+        if p and p.get("nombre"):
+            amarres[p["nombre"]] = {
+                "norte": p.get("norte"),
+                "este": p.get("este"),
+                "cota": p.get("cota"),
+            }
+    return amarres
+
+
 def _cierre_poligonal_vivo(pol: dict, poligonal_id: str) -> dict:
     estaciones = (
         supabase.table("topo_poligonal_estaciones")
@@ -221,10 +238,7 @@ def _cierre_poligonal_vivo(pol: dict, poligonal_id: str) -> dict:
     punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
     punto_final = _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None
     punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
-    amarres = {}
-    for p in (punto_inicial, punto_visado):
-        if p and p.get("nombre"):
-            amarres[p["nombre"]] = {"norte": p.get("norte"), "este": p.get("este"), "cota": p.get("cota")}
+    amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
     armadas_enr, _, _ = radiar_armadas(armadas, estaciones, amarres)
     return calcular_cierre_poligonal(
         armadas_enr,
@@ -1850,10 +1864,7 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
         .data
         or []
     )
-    amarres = {}
-    for p in (punto_inicial, punto_visado):
-        if p and p.get("nombre"):
-            amarres[p["nombre"]] = {"norte": p.get("norte"), "este": p.get("este"), "cota": p.get("cota")}
+    amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
     armadas_enr, known, estaciones_flat = radiar_armadas(armadas, estaciones, amarres)
 
     # Puntos disponibles para el selector de cambio de armada
@@ -2274,13 +2285,8 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
     )
     punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
     punto_final = _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None
-    amarres = {}
-    for p in (
-        punto_inicial,
-        _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None,
-    ):
-        if p and p.get("nombre"):
-            amarres[p["nombre"]] = {"norte": p.get("norte"), "este": p.get("este"), "cota": p.get("cota")}
+    punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
+    amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
 
     resultado = ajustar_poligonal_armadas(pol, armadas, estaciones, amarres, punto_inicial, punto_final)
     resumen = resultado["resumen"]

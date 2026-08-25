@@ -51,7 +51,7 @@ export default function PoligonalCierrePanel({ cierre }) {
             </tr>
             <tr><td style={C.rowL}>Diferencia</td><td style={{ ...C.rowV, color: '#b45309' }}>{segTxt}</td></tr>
             {cierre.error_orientacion_seg != null && (
-              <tr title="Azimut al visado de referencia al inicio vs al final (ceros atrás)">
+              <tr title="Azimut al visado de referencia al inicio vs al final (coordenadas de amarre o ceros atrás)">
                 <td style={C.rowL}>Orient. ref.</td>
                 <td style={C.rowV}>
                   {cierre.error_orientacion_seg >= 0 ? '' : '-'}
