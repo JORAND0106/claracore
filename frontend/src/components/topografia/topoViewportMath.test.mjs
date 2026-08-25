@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { zoomPanAtPoint } from './topoViewportMath.js'
+import { zoomPanAtPoint, viewBoxFromPanScale } from './topoViewportMath.js'
 
 describe('zoomPanAtPoint', () => {
   it('zoom en el centro escala el pan existente proporcionalmente', () => {
@@ -30,5 +30,29 @@ describe('zoomPanAtPoint', () => {
     const f = { x: 0, y: 0 }
     assert.equal(zoomPanAtPoint({ x: 0, y: 0 }, 1, 100, f, o).scale, 12)
     assert.equal(zoomPanAtPoint({ x: 0, y: 0 }, 1, 0.01, f, o).scale, 0.4)
+  })
+})
+
+describe('viewBoxFromPanScale', () => {
+  it('sin zoom ni pan cubre el mundo completo', () => {
+    const vb = viewBoxFromPanScale(560, 400, 1, { x: 0, y: 0 }, 560, 400)
+    assert.ok(Math.abs(vb.x) < 1e-9)
+    assert.ok(Math.abs(vb.y) < 1e-9)
+    assert.ok(Math.abs(vb.w - 560) < 1e-9)
+    assert.ok(Math.abs(vb.h - 400) < 1e-9)
+  })
+
+  it('zoom 2× reduce el viewBox a la mitad y lo centra', () => {
+    const vb = viewBoxFromPanScale(560, 400, 2, { x: 0, y: 0 }, 560, 400)
+    assert.ok(Math.abs(vb.w - 280) < 1e-9)
+    assert.ok(Math.abs(vb.h - 200) < 1e-9)
+    assert.ok(Math.abs(vb.x - 140) < 1e-9)
+    assert.ok(Math.abs(vb.y - 100) < 1e-9)
+  })
+
+  it('pan positivo desplaza el viewBox en sentido opuesto', () => {
+    const vb0 = viewBoxFromPanScale(560, 400, 2, { x: 0, y: 0 }, 560, 400)
+    const vb = viewBoxFromPanScale(560, 400, 2, { x: 40, y: 0 }, 560, 400)
+    assert.ok(vb.x < vb0.x)
   })
 })

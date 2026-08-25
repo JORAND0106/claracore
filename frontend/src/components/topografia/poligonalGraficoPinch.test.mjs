@@ -28,4 +28,11 @@ describe('PoligonalGrafico pinch-to-zoom', () => {
     assert.match(hook, /touchAction:\s*'none'/)
     assert.match(hook, /applyZoomAtClient/)
   })
+
+  it('el zoom usa viewBox vectorial, no CSS scale', () => {
+    assert.match(hook, /viewBoxFromPanScale/)
+    assert.doesNotMatch(hook, /transform:\s*`translate\(\$\{pan\.x\}px/)
+    assert.match(grafico, /\bviewBox=\{viewBox\}/)
+    assert.doesNotMatch(grafico, /transform:\s*`translate\(\$\{pan/)
+  })
 })
