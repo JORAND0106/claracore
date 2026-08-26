@@ -256,6 +256,18 @@ export default function PoligonalModal({
     setErrorModal(parsed)
   }, [])
 
+  // Mantener el popup de armada sincronizado tras recálculo / edición de puntos
+  const editArmadaId = editArmadaModal?.id
+  useEffect(() => {
+    if (!editArmadaId || !detalle?.armadas) return
+    const fresh = (detalle.armadas || []).find((a) => a.id === editArmadaId)
+    if (!fresh) {
+      setEditArmadaModal(null)
+      return
+    }
+    setEditArmadaModal(fresh)
+  }, [detalle, editArmadaId])
+
   /**
    * Aplica el detalle del servidor a la UI.
    * Por defecto NO reinicia el formulario «Agregar punto» (estForm): los refrescos
@@ -845,11 +857,52 @@ export default function PoligonalModal({
         method: 'PUT',
         body: JSON.stringify(payload),
       })
-      setEditArmadaModal(null)
       setResultado(null)
+      // Mantener el popup abierto: la revisión integrada requiere seguir viendo los puntos
       await sincronizarDetalle('Armada actualizada. Cartera y plano recalculados.')
     } catch (e) {
       showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const guardarPuntoDesdeArmada = async (puntoId, payload) => {
+    if (!poligonalId || !puntoId) return false
+    setBusy(true)
+    try {
+      await api(`/poligonales/${poligonalId}/estaciones/${puntoId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      })
+      setResultado(null)
+      await sincronizarDetalle('Punto guardado. Cartera y plano actualizados.')
+      return true
+    } catch (e) {
+      showError(e)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const agregarPuntoDesdeArmada = async (payload) => {
+    if (!poligonalId || !editArmadaModal?.id) return false
+    setBusy(true)
+    try {
+      await api(`/poligonales/${poligonalId}/estaciones`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...payload,
+          armada_id: editArmadaModal.id,
+        }),
+      })
+      setResultado(null)
+      await sincronizarDetalle('Punto agregado a la armada. Cartera actualizada.')
+      return true
+    } catch (e) {
+      showError(e)
+      return false
     } finally {
       setBusy(false)
     }
@@ -2137,17 +2190,18 @@ export default function PoligonalModal({
         <PoligonalArmadaEditModal
           theme={theme}
           armada={editArmadaModal}
-          puntos={
-            editArmadaModal.puntos?.length
-              ? editArmadaModal.puntos
-              : (detalle?.estaciones || []).filter((e) => e.armada_id === editArmadaModal.id)
-          }
+          puntos={(detalle?.estaciones || []).filter((e) => e.armada_id === editArmadaModal.id)}
           estacionesDisponibles={detalle?.puntos_estacion_disponibles || []}
           visadosDisponibles={detalle?.puntos_visado_disponibles || []}
           canDelete={(detalle?.armadas || []).length > 1}
+          canEditPuntos={puede(permisos, 'editar')}
           busy={busy}
           onSave={guardarArmadaPopup}
           onDelete={() => solicitarEliminarArmada(editArmadaModal)}
+          onSavePunto={guardarPuntoDesdeArmada}
+          onAddPunto={agregarPuntoDesdeArmada}
+          onDeletePunto={solicitarEliminarPunto}
+          onError={setErrorModal}
           onClose={() => setEditArmadaModal(null)}
         />
       )}
