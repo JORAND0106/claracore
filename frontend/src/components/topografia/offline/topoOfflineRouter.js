@@ -170,14 +170,17 @@ async function applyPoligonalNestedOptimistic(contratoId, op) {
   const parts = ep.split('/').filter(Boolean)
   if (parts[0] !== 'poligonales' || !parts[1]) return null
   const polId = parts[1]
+  const ahoraIso = () => new Date().toISOString()
+  const esActivo = (r) => r && !r.dado_de_baja
 
   // POST /poligonales/{id}/estaciones
   if (m === 'POST' && parts[2] === 'estaciones' && parts.length === 3) {
     const det = await ensurePoligonalDetail(contratoId, polId)
     const estId = localId()
     const orden = (det.estaciones.reduce((max, e) => Math.max(max, e.orden || 0), 0) || 0) + 1
+    const armadasActivas = (det.armadas || []).filter(esActivo)
     const armadaId = b.armada_id
-      || (det.armadas.length ? det.armadas[det.armadas.length - 1].id : null)
+      || (armadasActivas.length ? armadasActivas[armadasActivas.length - 1].id : null)
     const row = {
       id: estId,
       poligonal_id: polId,
@@ -189,6 +192,8 @@ async function applyPoligonalNestedOptimistic(contratoId, op) {
       angulo_vertical: b.angulo_vertical_gms != null ? b.angulo_vertical_gms : b.angulo_vertical,
       distancia: b.distancia ?? null,
       altura_objetivo: b.altura_objetivo ?? 0,
+      dado_de_baja: false,
+      dado_de_baja_at: null,
       _local: true,
       _pending_sync: true,
     }
@@ -199,8 +204,34 @@ async function applyPoligonalNestedOptimistic(contratoId, op) {
     return { id: estId, ...row, _offline: true }
   }
 
+  // PUT /poligonales/{id}/estaciones/{estId}/restaurar
+  if (m === 'PUT' && parts[2] === 'estaciones' && parts[3] && parts[4] === 'restaurar') {
+    const estId = parts[3]
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    const maxOrden = det.estaciones.reduce((max, e) => Math.max(max, e.orden || 0), 0)
+    det.estaciones = det.estaciones.map((e) => {
+      if (e.id !== estId) return e
+      const arm = det.armadas.find((a) => a.id === e.armada_id)
+      if (arm?.dado_de_baja) {
+        det.armadas = det.armadas.map((a) => (
+          a.id === arm.id ? { ...a, dado_de_baja: false, dado_de_baja_at: null, _pending_sync: true } : a
+        ))
+      }
+      return {
+        ...e,
+        dado_de_baja: false,
+        dado_de_baja_at: null,
+        orden: maxOrden + 1,
+        _pending_sync: true,
+      }
+    })
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { id: estId, ok: true, _offline: true }
+  }
+
   // PUT /poligonales/{id}/estaciones/{estId}
-  if (m === 'PUT' && parts[2] === 'estaciones' && parts[3]) {
+  if (m === 'PUT' && parts[2] === 'estaciones' && parts[3] && !parts[4]) {
     const estId = parts[3]
     const det = await ensurePoligonalDetail(contratoId, polId)
     det.estaciones = det.estaciones.map((e) => {
@@ -221,15 +252,41 @@ async function applyPoligonalNestedOptimistic(contratoId, op) {
     return { id: estId, ok: true, _offline: true }
   }
 
-  // DELETE /poligonales/{id}/estaciones/{estId}
-  if (m === 'DELETE' && parts[2] === 'estaciones' && parts[3]) {
+  // DELETE /poligonales/{id}/estaciones/{estId}/purgar
+  if (m === 'DELETE' && parts[2] === 'estaciones' && parts[3] && parts[4] === 'purgar') {
     const estId = parts[3]
     const det = await ensurePoligonalDetail(contratoId, polId)
     det.estaciones = det.estaciones.filter((e) => e.id !== estId)
-    det.estaciones = det.estaciones.map((e, i) => ({ ...e, orden: i + 1 }))
     det._pending_sync = true
     await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
     return { ok: true, _offline: true }
+  }
+
+  // DELETE /poligonales/{id}/estaciones/{estId} — soft-delete (papelera)
+  if (m === 'DELETE' && parts[2] === 'estaciones' && parts[3] && !parts[4]) {
+    const estId = parts[3]
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    const bajaAt = ahoraIso()
+    det.estaciones = det.estaciones.map((e) => (
+      e.id === estId
+        ? { ...e, dado_de_baja: true, dado_de_baja_at: bajaAt, _pending_sync: true }
+        : e
+    ))
+    let ord = 1
+    det.estaciones = det.estaciones.map((e) => {
+      if (e.dado_de_baja) return e
+      const next = { ...e, orden: ord }
+      ord += 1
+      return next
+    })
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { ok: true, papelera: true, id: estId, _offline: true }
+  }
+
+  // GET /poligonales/{id}/papelera — handled in read path; no-op here
+  if (m === 'GET' && parts[2] === 'papelera') {
+    return null
   }
 
   // POST /poligonales/{id}/armadas
@@ -245,6 +302,8 @@ async function applyPoligonalNestedOptimistic(contratoId, op) {
       visado_nombre: (b.visado_nombre || '').trim(),
       altura_instrumento: b.altura_instrumento ?? null,
       puntos: [],
+      dado_de_baja: false,
+      dado_de_baja_at: null,
       _local: true,
       _pending_sync: true,
     }
@@ -254,8 +313,35 @@ async function applyPoligonalNestedOptimistic(contratoId, op) {
     return { id: armId, ...arm, _offline: true }
   }
 
-  // PUT /poligonales/{id}/armadas/{armId} (HI)
-  if (m === 'PUT' && parts[2] === 'armadas' && parts[3]) {
+  // PUT /poligonales/{id}/armadas/{armId}/restaurar
+  if (m === 'PUT' && parts[2] === 'armadas' && parts[3] && parts[4] === 'restaurar') {
+    const armId = parts[3]
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    det.armadas = det.armadas.map((a) => (
+      a.id === armId
+        ? { ...a, dado_de_baja: false, dado_de_baja_at: null, _pending_sync: true }
+        : a
+    ))
+    let nextOrden = det.estaciones.reduce((max, e) => Math.max(max, e.orden || 0), 0) + 1
+    det.estaciones = det.estaciones.map((e) => {
+      if (e.armada_id !== armId || !e.dado_de_baja) return e
+      const row = {
+        ...e,
+        dado_de_baja: false,
+        dado_de_baja_at: null,
+        orden: nextOrden,
+        _pending_sync: true,
+      }
+      nextOrden += 1
+      return row
+    })
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { ok: true, id: armId, _offline: true }
+  }
+
+  // PUT /poligonales/{id}/armadas/{armId} (HI / nombres)
+  if (m === 'PUT' && parts[2] === 'armadas' && parts[3] && !parts[4]) {
     const armId = parts[3]
     const det = await ensurePoligonalDetail(contratoId, polId)
     det.armadas = det.armadas.map((a) => (
@@ -269,9 +355,58 @@ async function applyPoligonalNestedOptimistic(contratoId, op) {
           }
         : a
     ))
+    if (b.altura_instrumento !== undefined) {
+      det.estaciones = det.estaciones.map((e) => (
+        e.armada_id === armId && !e.dado_de_baja
+          ? { ...e, altura_instrumento: b.altura_instrumento, _pending_sync: true }
+          : e
+      ))
+    }
     det._pending_sync = true
     await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
     return { ok: true, _offline: true }
+  }
+
+  // DELETE /poligonales/{id}/armadas/{armId}/purgar
+  if (m === 'DELETE' && parts[2] === 'armadas' && parts[3] && parts[4] === 'purgar') {
+    const armId = parts[3]
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    det.estaciones = det.estaciones.filter((e) => e.armada_id !== armId)
+    det.armadas = det.armadas.filter((a) => a.id !== armId)
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { ok: true, _offline: true }
+  }
+
+  // DELETE /poligonales/{id}/armadas/{armId} — soft-delete
+  if (m === 'DELETE' && parts[2] === 'armadas' && parts[3] && !parts[4]) {
+    const armId = parts[3]
+    const det = await ensurePoligonalDetail(contratoId, polId)
+    const activas = (det.armadas || []).filter(esActivo)
+    if (activas.length <= 1) {
+      throw new Error('No se puede eliminar la armada inicial.')
+    }
+    const bajaAt = ahoraIso()
+    det.armadas = det.armadas.map((a) => (
+      a.id === armId
+        ? { ...a, dado_de_baja: true, dado_de_baja_at: bajaAt, _pending_sync: true }
+        : a
+    ))
+    det.estaciones = det.estaciones.map((e) => (
+      e.armada_id === armId && !e.dado_de_baja
+        ? { ...e, dado_de_baja: true, dado_de_baja_at: bajaAt, _pending_sync: true }
+        : e
+    ))
+    let ord = 1
+    det.estaciones = det.estaciones.map((e) => {
+      if (e.dado_de_baja) return e
+      const next = { ...e, orden: ord }
+      ord += 1
+      return next
+    })
+    det._pending_sync = true
+    await cacheTopoEntityDetail(contratoId, 'poligonal', polId, det)
+    return { ok: true, papelera: true, id: armId, _offline: true }
   }
 
   // POST /poligonales/{id}/sentido
@@ -492,10 +627,29 @@ export async function readTopoOffline(contratoId, path, query = '') {
     return puntos.filter((p) => !p.circuito_id || p.circuito_id === polId)
   }
 
-  if (path.match(/^\/poligonales\/[^/]+$/) && !path.includes('/puntos-biblioteca')) {
+  if (path.match(/^\/poligonales\/[^/]+\/papelera$/)) {
+    const id = path.split('/')[2]
+    const det = await getCachedTopoEntityDetail(contratoId, 'poligonal', id)
+    const armadas = (det?.armadas || []).filter((a) => a.dado_de_baja)
+    const estaciones = (det?.estaciones || []).filter((e) => e.dado_de_baja)
+    return {
+      dias_retencion: 30,
+      armadas,
+      estaciones,
+      total: armadas.length + estaciones.length,
+    }
+  }
+
+  if (path.match(/^\/poligonales\/[^/]+$/) && !path.includes('/puntos-biblioteca') && !path.includes('/papelera')) {
     const id = path.split('/')[2]?.split('?')[0]
     const det = await getCachedTopoEntityDetail(contratoId, 'poligonal', id)
-    if (det) return det
+    if (det) {
+      return {
+        ...det,
+        estaciones: (det.estaciones || []).filter((e) => !e.dado_de_baja),
+        armadas: (det.armadas || []).filter((a) => !a.dado_de_baja),
+      }
+    }
     const pol = await topoDb.topo_poligonales.get(id)
     if (pol) return { poligonal: pol, estaciones: [], armadas: [], cierre: null }
     throw new Error('Poligonal no disponible offline.')
