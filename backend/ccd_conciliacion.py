@@ -166,10 +166,47 @@ def _registro_aprobado_matriz_panel(
     return True
 
 
-def matriz_params_contrato(sb, contrato_id: int) -> Tuple[str, List[int]]:
-    """(campo nivel máximo, niveles activos) para RPC panel actas y fallback Python."""
+def matriz_params_hasta_nivel(
+    niveles_activos: List[int],
+    nivel_aprobacion: Optional[int] = None,
+) -> Tuple[str, List[int]]:
+    """
+    (campo_estado_tope, niveles_cascada) para filtrar informes CC-MES por nivel elegido.
+
+    - Sin ``nivel_aprobacion``: tope = max(activos) — comportamiento histórico.
+    - Con ``nivel_aprobacion``: debe estar en activos; cascada = activos ≤ tope elegido.
+      Así, elegir Nivel 2 con activos [1,2,3,4] exige N1+N2 Aprobado (no N3/N4).
+    """
+    base = sorted(
+        {int(n) for n in (niveles_activos or []) if 1 <= int(n) <= 6}
+    ) or [1, 2, 3]
+    if nivel_aprobacion is None:
+        return _campo_nivel_maximo_matriz(base), base
+    try:
+        sel = int(nivel_aprobacion)
+    except (TypeError, ValueError) as e:
+        raise ValueError("nivel_aprobacion debe ser un entero entre 1 y 6") from e
+    if sel < 1 or sel > 6:
+        raise ValueError("nivel_aprobacion debe estar entre 1 y 6")
+    if sel not in base:
+        raise ValueError(
+            f"nivel_aprobacion={sel} no está entre los niveles activos del contrato: {base}"
+        )
+    cascada = [n for n in base if n <= sel]
+    if not cascada:
+        cascada = [sel]
+    return f"nivel{sel}_estado", cascada
+
+
+def matriz_params_contrato(
+    sb,
+    contrato_id: int,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> Tuple[str, List[int]]:
+    """(campo nivel tope, niveles en cascada) para RPC panel actas, informes y fallback Python."""
     niveles = _niveles_activos_contrato_sb(sb, contrato_id)
-    return _campo_nivel_maximo_matriz(niveles), niveles
+    return matriz_params_hasta_nivel(niveles, nivel_aprobacion)
 
 
 def _bloque_capitulo_matriz(capitulo: Optional[str]) -> str:
@@ -474,15 +511,29 @@ def _fetch_cascade_interventoria_actas_rpo(
 
 
 def fetch_registros_informe_cc_mes_por_acta(
-    sb, contrato_id: int, acta_rpo_id: int
+    sb,
+    contrato_id: int,
+    acta_rpo_id: int,
+    *,
+    nivel_aprobacion: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Totales y filas alineados con el listado de actas / módulo Actas: cascada N1·N2·N3 aprobada,
+    Totales y filas alineados con el listado de actas / módulo Actas: cascada de niveles
+    activos aprobada hasta el tope (último activo o ``nivel_aprobacion``),
     sin regla CCD de «solo bloqueados» (es la causa típica de 4M vs 510M).
     """
     if not acta_rpo_id:
         return []
-    return _fetch_cascade_interventoria_actas_rpo(sb, int(contrato_id), [int(acta_rpo_id)])
+    campo_mx, niveles_act = matriz_params_contrato(
+        sb, int(contrato_id), nivel_aprobacion=nivel_aprobacion
+    )
+    return _fetch_cascade_interventoria_actas_rpo(
+        sb,
+        int(contrato_id),
+        [int(acta_rpo_id)],
+        campo_nivel_max=campo_mx,
+        niveles_activos=niveles_act,
+    )
 
 
 def registro_tiene_pendiente_matriz(r: Dict[str, Any]) -> bool:
@@ -504,6 +555,8 @@ def fetch_registros_memoria_cc_mes_acta_todos(
     sb,
     contrato_id: int,
     acta_rpo_id: int,
+    *,
+    nivel_aprobacion: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Todos los registros de memoria CC-MES-002 de un acta en UNA lectura paginada.
@@ -515,7 +568,9 @@ def fetch_registros_memoria_cc_mes_acta_todos(
     if not acta_rpo_id:
         return []
     aprob = _estados_aprob_sql()
-    campo_mx, niveles_act = matriz_params_contrato(sb, int(contrato_id))
+    campo_mx, niveles_act = matriz_params_contrato(
+        sb, int(contrato_id), nivel_aprobacion=nivel_aprobacion
+    )
     niveles_q = [int(n) for n in (niveles_act or [1, 2, 3]) if 1 <= int(n) <= 6]
     cid, aid = int(contrato_id), int(acta_rpo_id)
 
@@ -568,16 +623,19 @@ def fetch_registros_memoria_cc_mes_alineado_acta(
     *,
     acta_rpo_id: int,
     item_exacto: bool = False,
+    nivel_aprobacion: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Misma lógica de aprobación que el informe mensual alineado a actas (cascada de los niveles
-    ACTIVOS del contrato + nivel máximo «Aprobado»), con el detalle de memoria (fotos, PK, etc.);
-    sin regla CCD de bloqueado. El nivel máximo es configurable (multinivel), no siempre nivel 3.
+    ACTIVOS del contrato hasta el tope elegido + tope «Aprobado»), con el detalle de memoria
+    (fotos, PK, etc.); sin regla CCD de bloqueado. Por defecto el tope es el último nivel activo.
     """
     if not acta_rpo_id:
         return []
     aprob = _estados_aprob_sql()
-    campo_mx, niveles_act = matriz_params_contrato(sb, int(contrato_id))
+    campo_mx, niveles_act = matriz_params_contrato(
+        sb, int(contrato_id), nivel_aprobacion=nivel_aprobacion
+    )
     sel = _SEL_MEMORIA_CC_MES
     itn = (item_numero or "").strip()
     exact = item_exacto
