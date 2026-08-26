@@ -86,6 +86,7 @@ from topografia_utils import (
     _grupo_es_cierre,
     lectura_efectiva_nivelacion,
     media_hilos_nivelacion,
+    modo_apertura_nivelacion,
     validar_lecturas_nivelacion,
     perimetro_por_coordenadas,
     radiar_armadas,
@@ -3050,7 +3051,10 @@ def sincronizar_lecturas_nivelacion(
     )
     if not tiene_util:
         raise HTTPException(status_code=422, detail="No hay lecturas ni fila de cierre para guardar.")
-    reglas = validar_lecturas_nivelacion(lect_dicts, tipo_nivel, bm_ini_nombre)
+    apertura = modo_apertura_nivelacion(niv, lect_dicts, tipo_nivel)
+    reglas = validar_lecturas_nivelacion(
+        lect_dicts, tipo_nivel, bm_ini_nombre, modo_apertura=apertura
+    )
     if reglas:
         raise HTTPException(status_code=422, detail="; ".join(reglas))
     previas = (
@@ -3124,6 +3128,52 @@ def calcular_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depen
     return _ejecutar_calculo_nivelacion(contrato_id, nivelacion_id)
 
 
+@router.post("/{contrato_id}/nivelaciones/{nivelacion_id}/abrir")
+def abrir_circuito_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
+    """Declara la apertura formal del circuito (análogo al cierre).
+
+    Exige BM inicial. Persiste ``circuito_abierto_at`` para relajar la validación
+    de la primera vuelta (V+ en BM y V− en otro punto) hasta completar esa vuelta.
+    """
+    from datetime import datetime, timezone
+
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
+    if not niv:
+        raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
+    _assert_nivelacion_editable(niv)
+    if niv.get("circuito_abierto_at"):
+        return {"ok": True, "nivelacion": niv, "ya_abierto": True}
+    if not niv.get("bm_inicial_id"):
+        raise HTTPException(
+            status_code=422,
+            detail="Seleccione el BM inicial antes de abrir el circuito.",
+        )
+    _punto_verificado(niv["bm_inicial_id"], contrato_id)
+    ahora = datetime.now(timezone.utc).isoformat()
+    try:
+        row = (
+            supabase.table("topo_nivelaciones")
+            .update({"circuito_abierto_at": ahora})
+            .eq("id", nivelacion_id)
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "No se pudo marcar la apertura del circuito. "
+                "Ejecute la migración topo_migration_nivelacion_apertura.sql "
+                f"({exc})"
+            ),
+        ) from exc
+    actualizado = (row or [None])[0] or {**niv, "circuito_abierto_at": ahora}
+    return {"ok": True, "nivelacion": actualizado, "ya_abierto": False}
+
+
 @router.post("/{contrato_id}/nivelaciones/{nivelacion_id}/cerrar")
 def cerrar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -3142,7 +3192,9 @@ def cerrar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends
         or []
     )
     _, bm_ini, _ = _resolver_bms_nivelacion(niv, contrato_id)
-    reglas = validar_lecturas_nivelacion(lecturas, niv.get("tipo_nivel") or "electronico", bm_ini)
+    tipo_n = niv.get("tipo_nivel") or "electronico"
+    # Cierre / finalizar siempre con reglas estrictas (circuito en curso).
+    reglas = validar_lecturas_nivelacion(lecturas, tipo_n, bm_ini, modo_apertura=False)
     if reglas:
         raise HTTPException(status_code=422, detail="; ".join(reglas))
     calc = _ejecutar_calculo_nivelacion(contrato_id, nivelacion_id)
@@ -3182,7 +3234,8 @@ def finalizar_circuito_nivelacion(contrato_id: int, nivelacion_id: str, current_
             "resultado": None,
         }
     _, bm_ini, _ = _resolver_bms_nivelacion(niv, contrato_id)
-    reglas = validar_lecturas_nivelacion(lecturas, niv.get("tipo_nivel") or "electronico", bm_ini)
+    tipo_n = niv.get("tipo_nivel") or "electronico"
+    reglas = validar_lecturas_nivelacion(lecturas, tipo_n, bm_ini, modo_apertura=False)
     if reglas:
         return {"ok": False, "fase": "validacion", "mensaje": "; ".join(reglas), "resultado": None}
     try:

@@ -35,11 +35,14 @@ import {
   HILO_INCONGRUENCIA_MSG,
   HILO_INPUT_WIDTH,
   hilosIncongruentes,
+  diagnosticoHilosIncongruentes,
   lecturasToFilas,
   metadatosFilaCompletos,
+  modoAperturaNivelacion,
   nombreBmDesdeId,
   nuevaFilaCierre,
   nuevaFilaPunto,
+  puedeAbrirCircuito,
   puedeAgregarFila,
   puedeIngresarCierre,
   puedeRegistrarVplus,
@@ -132,7 +135,27 @@ function PanelColapsable({ titulo, resumen, abierto, onToggle, ui, children }) {
   )
 }
 
-function AlertaHilos({ title }) {
+function AlertaHilos({ title, compact = false }) {
+  if (compact) {
+    return (
+      <div
+        role="status"
+        style={{
+          marginTop: 4,
+          padding: '4px 6px',
+          borderRadius: 6,
+          fontSize: 'var(--cc-xxs)',
+          fontWeight: 600,
+          lineHeight: 1.35,
+          color: '#991b1b',
+          background: 'rgba(220,38,38,0.12)',
+          border: '1px solid rgba(220,38,38,0.35)',
+        }}
+      >
+        {title}
+      </div>
+    )
+  }
   return (
     <span
       title={title}
@@ -232,6 +255,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const [confirmEliminar, setConfirmEliminar] = useState(null)
   const [eliminando, setEliminando] = useState(false)
   const [creando, setCreando] = useState(false)
+  const [abriendoCircuito, setAbriendoCircuito] = useState(false)
 
   const [form, setForm] = useState({ ...FORM_VACIO_NIV })
 
@@ -240,6 +264,15 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const tipoNivel = inferirTipoNivelFilas(filas, tipoNivelDeclarado)
   const esAutomatico = tipoNivel === 'automatico'
   const sellada = (niv?.nivel2_estado || '') === 'Aprobado' || Boolean(niv?.biblioteca_at)
+  const modoApertura = useMemo(
+    () => modoAperturaNivelacion(filas, tipoNivel, niv),
+    [filas, tipoNivel, niv],
+  )
+  const circuitoAbierto = Boolean(niv?.circuito_abierto_at)
+  const puedeAbrir = useMemo(
+    () => puedeAbrirCircuito(niv, form),
+    [niv, form],
+  )
 
   const bmInicialNombre = useMemo(
     () => nombreBmDesdeId(puntos, niv?.bm_inicial_id || form.bm_inicial_id),
@@ -569,8 +602,8 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   }
 
   const puedeNuevaFila = useMemo(
-    () => puedeAgregarFila(filas, tipoNivel, bmInicialNombre),
-    [filas, tipoNivel, bmInicialNombre],
+    () => puedeAgregarFila(filas, tipoNivel, bmInicialNombre, { modoApertura }),
+    [filas, tipoNivel, bmInicialNombre, modoApertura],
   )
 
   const puedeCierre = useMemo(
@@ -592,7 +625,12 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   }
 
   const updateBloque = (idx, bloqueKey, bloque) => {
-    if (bloqueKey === 'vplus' && idx > 0 && !puedeRegistrarVplus({ ...filas[idx], vplus: bloque }, idx, tipoNivel).ok) {
+    if (
+      !modoApertura
+      && bloqueKey === 'vplus'
+      && idx > 0
+      && !puedeRegistrarVplus({ ...filas[idx], vplus: bloque }, idx, tipoNivel).ok
+    ) {
       const tieneEntrada = esAutomatico
         ? [bloque?.hS, bloque?.hM, bloque?.hI].some((v) => v !== '' && v != null)
         : bloque?.lectura !== '' && bloque?.lectura != null
@@ -604,9 +642,45 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setFilas((rows) => rows.map((r, i) => (i === idx ? { ...r, [bloqueKey]: bloque } : r)))
   }
 
+  const abrirCircuito = async () => {
+    if (!sel) {
+      setError('Seleccione o cree una nivelación primero.')
+      return
+    }
+    if (!puedeAbrir.ok) {
+      setError(puedeAbrir.msg)
+      return
+    }
+    setAbriendoCircuito(true)
+    setError('')
+    setOkMsg('')
+    try {
+      // Persistir BM / fecha / equipo antes de marcar apertura.
+      if (!(await guardarCabecera())) return
+      const res = await api(`/nivelaciones/${sel}/abrir`, { method: 'POST' })
+      const nivUp = res?.nivelacion
+      if (nivUp) {
+        setDetalle((prev) => (prev ? { ...prev, nivelacion: { ...prev.nivelacion, ...nivUp } } : prev))
+      } else {
+        await cargarDetalle(sel)
+      }
+      setOkMsg(
+        'Circuito abierto. Registre V+ en el BM y V− en el siguiente punto; al completar la primera vuelta aplican las validaciones de tramo.',
+      )
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setAbriendoCircuito(false)
+    }
+  }
+
   const addFila = () => {
     if (tieneFilaCierre) {
       setError(mensajeFilaCierreExistente(filas))
+      return
+    }
+    if (!circuitoAbierto) {
+      setError('Abra el circuito antes de agregar filas de la primera vuelta.')
       return
     }
     if (!puedeNuevaFila.ok) {
@@ -776,7 +850,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   })
 
   const renderBloque = (fila, idx, bloqueKey, alerta = false) => {
-    const vplusBloqueado = bloqueKey === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
+    const vplusBloqueado = !modoApertura && bloqueKey === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
     if (sellada) {
       const b = fila[bloqueKey]
       if (esAutomatico) {
@@ -812,9 +886,10 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   }
 
   const renderCeldasHilos = (fila, idx, bk, vplusAlerta) => {
-    const vplusOff = bk === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
+    const vplusOff = !modoApertura && bk === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
     const vplusResaltar = bk === 'vplus' && vplusAlerta
     const hilosAlerta = esAutomatico && hilosIncongruentes(fila[bk], tipoNivel)
+    const hilosDiag = esAutomatico ? diagnosticoHilosIncongruentes(fila[bk], tipoNivel) : null
     const tdStyle = tdGroupColor(bk)
     if (fila.es_fila_cierre && bk !== 'vminus') {
       if (!esAutomatico) {
@@ -831,29 +906,36 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
         </td>
       )
     }
-    return ['hS', 'hM', 'hI'].map((hk) => (
+    return ['hS', 'hM', 'hI'].map((hk, hi) => (
       <td key={`${bk}-${hk}`} style={tdStyle}>
         {sellada ? fmtN(fila[bk]?.[hk], 3) : (
-          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-            <input
-              value={fila[bk]?.[hk] ?? ''}
-              disabled={vplusOff && !vplusResaltar}
-              onChange={(e) => updateBloque(idx, bk, { ...fila[bk], [hk]: e.target.value })}
-              style={styleInputHilo(ui, bloques, bk, hk, {
-                alerta: vplusResaltar || hilosAlerta,
-                opacity: vplusOff && !vplusResaltar ? 0.45 : 1,
-              })}
-              title={
-                hilosAlerta
-                  ? HILO_INCONGRUENCIA_MSG
-                  : vplusOff
-                    ? 'Registre V− antes de V+'
-                    : hk === 'hM'
-                      ? 'Hilo medio (lectura de cálculo)'
-                      : ['Superior', 'Medio', 'Inferior'][['hS', 'hM', 'hI'].indexOf(hk)]
-              }
-            />
-            {hk === 'hM' && hilosAlerta && <AlertaHilos title={HILO_INCONGRUENCIA_MSG} />}
+          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+              <input
+                value={fila[bk]?.[hk] ?? ''}
+                disabled={vplusOff && !vplusResaltar}
+                onChange={(e) => updateBloque(idx, bk, { ...fila[bk], [hk]: e.target.value })}
+                style={styleInputHilo(ui, bloques, bk, hk, {
+                  alerta: vplusResaltar || hilosAlerta,
+                  opacity: vplusOff && !vplusResaltar ? 0.45 : 1,
+                })}
+                title={
+                  hilosAlerta
+                    ? (hilosDiag?.msg || HILO_INCONGRUENCIA_MSG)
+                    : vplusOff
+                      ? 'Registre V− antes de V+'
+                      : hk === 'hM'
+                        ? 'Hilo medio (lectura de cálculo)'
+                        : ['Superior', 'Medio', 'Inferior'][['hS', 'hM', 'hI'].indexOf(hk)]
+                }
+              />
+              {hk === 'hM' && hilosAlerta && <AlertaHilos title={hilosDiag?.msg || HILO_INCONGRUENCIA_MSG} />}
+            </span>
+            {hk === 'hM' && hilosAlerta && (
+              <span style={{ fontSize: 'var(--cc-xxs)', color: '#991b1b', fontWeight: 600, maxWidth: 120, lineHeight: 1.25, textAlign: 'center' }}>
+                {(hilosDiag?.msg || HILO_INCONGRUENCIA_MSG).split(':')[0]}
+              </span>
+            )}
           </span>
         )}
       </td>
@@ -913,9 +995,10 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const renderBloqueHilosMovil = (fila, idx, bk, vistaRow, vplusAlerta = false) => {
     const labels = { vplus: 'V+', vi: 'Vi', vminus: 'V−' }
     const accent = bloques[bk]?.accent || ui.accent
-    const vplusOff = bk === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
+    const vplusOff = !modoApertura && bk === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
     const cierreSoloVminus = Boolean(fila.es_fila_cierre) && bk !== 'vminus'
     const hilosAlerta = esAutomatico && hilosIncongruentes(fila[bk], tipoNivel)
+    const hilosDiag = esAutomatico ? diagnosticoHilosIncongruentes(fila[bk], tipoNivel) : null
     const distCalc = bk === 'vplus' ? vistaRow.distancia_vplus_calc : bk === 'vminus' ? vistaRow.distancia_vminus_calc : null
     const distOver = distCalc != null && distCalc > 50
     const conDist = bk === 'vplus' || bk === 'vminus'
@@ -943,7 +1026,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
               minWidth: 0,
               boxSizing: 'border-box',
             }}
-            title={hilosAlerta ? HILO_INCONGRUENCIA_MSG : undefined}
+            title={hilosAlerta ? (hilosDiag?.msg || HILO_INCONGRUENCIA_MSG) : undefined}
           />
         )}
       </label>
@@ -969,17 +1052,22 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
         {cierreSoloVminus ? (
           <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>—</div>
         ) : esAutomatico ? (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-            {['hS', 'hM', 'hI'].map(cellInp)}
-            {conDist && (
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
-                <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>Dist</span>
-                <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)', fontWeight: distOver ? 700 : 400, color: distOver ? '#dc2626' : ui.text }}>
-                  {fmtN(distCalc, 2)}
-                </span>
-              </label>
+          <>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+              {['hS', 'hM', 'hI'].map(cellInp)}
+              {conDist && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
+                  <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>Dist</span>
+                  <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)', fontWeight: distOver ? 700 : 400, color: distOver ? '#dc2626' : ui.text }}>
+                    {fmtN(distCalc, 2)}
+                  </span>
+                </label>
+              )}
+            </div>
+            {hilosAlerta && !sellada && (
+              <AlertaHilos compact title={hilosDiag?.msg || HILO_INCONGRUENCIA_MSG} />
             )}
-          </div>
+          </>
         ) : (
           <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
@@ -1564,10 +1652,27 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                         type="button"
                         style={ui.btnSecondary}
                         onClick={addFila}
-                        disabled={tieneFilaCierre}
-                        title={tieneFilaCierre ? 'Elimine la fila de cierre para agregar tramos' : (!puedeNuevaFila.ok ? puedeNuevaFila.msg : 'Agregar fila')}
+                        disabled={tieneFilaCierre || !circuitoAbierto}
+                        title={
+                          !circuitoAbierto
+                            ? 'Abra el circuito para agregar filas'
+                            : (tieneFilaCierre ? 'Elimine la fila de cierre para agregar tramos' : (!puedeNuevaFila.ok ? puedeNuevaFila.msg : 'Agregar fila'))
+                        }
                       >
                         + Fila
+                      </button>
+                      <button
+                        type="button"
+                        style={circuitoAbierto ? ui.btnSecondary : ui.btnPrimary}
+                        onClick={abrirCircuito}
+                        disabled={circuitoAbierto || abriendoCircuito || !sel}
+                        title={
+                          circuitoAbierto
+                            ? 'Circuito ya abierto'
+                            : (!puedeAbrir.ok ? puedeAbrir.msg : 'Declarar el inicio formal del circuito (BM inicial)')
+                        }
+                      >
+                        {abriendoCircuito ? 'Abriendo…' : circuitoAbierto ? 'Circuito abierto' : 'Abrir circuito'}
                       </button>
                       <button
                         type="button"
@@ -1586,6 +1691,44 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     Las lecturas están en modo {tipoNivel === 'automatico' ? 'automático (S/M/I)' : 'electrónico'}.
                     Al guardar se sincronizará el tipo de nivel con los datos de la cartera.
                   </p>
+                )}
+                {!sellada && !circuitoAbierto && (
+                  <div
+                    style={{
+                      margin: '0 0 8px',
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      fontSize: 'var(--cc-xs)',
+                      background: 'rgba(37,99,235,0.08)',
+                      border: `1px solid ${ui.accent}55`,
+                      color: ui.text,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    <strong>Apertura pendiente.</strong>
+                    {' '}
+                    Pulse «Abrir circuito» (con BM inicial) para iniciar la captura.
+                    En la primera vuelta puede registrar V+ en el BM y V− en otro punto sin bloqueo de tramo.
+                  </div>
+                )}
+                {!sellada && circuitoAbierto && modoApertura && (
+                  <div
+                    style={{
+                      margin: '0 0 8px',
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      fontSize: 'var(--cc-xs)',
+                      background: 'rgba(22,163,74,0.08)',
+                      border: '1px solid rgba(22,163,74,0.35)',
+                      color: ui.text,
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    <strong>Circuito abierto — primera vuelta.</strong>
+                    {' '}
+                    Complete V+ en el BM y al menos una Vi/V− en el siguiente punto.
+                    Después aplican las validaciones estrictas de cambio/tramo.
+                  </div>
                 )}
                 <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
                   {esAutomatico
@@ -1628,8 +1771,12 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                         type="button"
                         style={{ ...ui.btnSecondary, alignSelf: 'stretch', marginTop: 4 }}
                         onClick={addFila}
-                        disabled={tieneFilaCierre}
-                        title={tieneFilaCierre ? 'Elimine la fila de cierre para agregar tramos' : (!puedeNuevaFila.ok ? puedeNuevaFila.msg : 'Agregar fila')}
+                        disabled={tieneFilaCierre || !circuitoAbierto}
+                        title={
+                          !circuitoAbierto
+                            ? 'Abra el circuito para agregar filas'
+                            : (tieneFilaCierre ? 'Elimine la fila de cierre para agregar tramos' : (!puedeNuevaFila.ok ? puedeNuevaFila.msg : 'Agregar fila'))
+                        }
                       >
                         + Fila
                       </button>

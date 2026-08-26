@@ -28,18 +28,41 @@ export function distanciaTaquimetrica(hSup, hInf, k = STADIA_K) {
 /** Tolerancia (m) para comparar separación S–M vs M–I en nivel automático. */
 export const HILO_PAR_TOL = 0.002
 
-/** True si los tres hilos están diligenciados y |S−M| ≠ |M−I| (incongruencia taquimétrica). */
-export function hilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_TOL) {
-  if (tipoNivel !== 'automatico' || !bloque) return false
+export const HILO_INCONGRUENCIA_MSG =
+  'Hilos inconsistentes: |S−M| debe igualar |M−I| y el medio debe quedar entre superior e inferior.'
+
+export const HILO_INCONGRUENCIA_SEP_MSG =
+  'Separación desigual: |S−M| ≠ |M−I|. Revise HS, HM e HI.'
+
+export const HILO_INCONGRUENCIA_ORDEN_MSG =
+  'El hilo medio (HM) debe quedar entre el superior (HS) y el inferior (HI).'
+
+/**
+ * Diagnóstico de inconsistencia S/M/I (nivel automático).
+ * @returns {null | { tipo: 'separacion'|'orden'|'ambos', msg: string }}
+ */
+export function diagnosticoHilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_TOL) {
+  if (tipoNivel !== 'automatico' || !bloque) return null
   const s = numOrNull(bloque.hS)
   const m = numOrNull(bloque.hM)
   const i = numOrNull(bloque.hI)
-  if (s == null || m == null || i == null) return false
-  return Math.abs(Math.abs(m - s) - Math.abs(i - m)) > tol
+  if (s == null || m == null || i == null) return null
+  const sepOk = Math.abs(Math.abs(m - s) - Math.abs(i - m)) <= tol
+  const lo = Math.min(s, i)
+  const hi = Math.max(s, i)
+  const ordenOk = m >= lo - tol && m <= hi + tol
+  if (sepOk && ordenOk) return null
+  if (!sepOk && !ordenOk) {
+    return { tipo: 'ambos', msg: HILO_INCONGRUENCIA_MSG }
+  }
+  if (!sepOk) return { tipo: 'separacion', msg: HILO_INCONGRUENCIA_SEP_MSG }
+  return { tipo: 'orden', msg: HILO_INCONGRUENCIA_ORDEN_MSG }
 }
 
-export const HILO_INCONGRUENCIA_MSG =
-  'Incongruencia entre hilos: la separación superior–medio debe ser igual a medio–inferior. Verifique la lectura.'
+/** True si los tres hilos están diligenciados y hay incongruencia taquimétrica u orden. */
+export function hilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_TOL) {
+  return diagnosticoHilosIncongruentes(bloque, tipoNivel, tol) != null
+}
 
 export const ABSCISA_NUMERICA_MSG = 'La abscisa debe ser un valor numérico (metros).'
 
@@ -253,7 +276,49 @@ export function ultimaFilaVminusSinVplus(filas, tipoNivel) {
   return filaTieneVminus(last, tipoNivel) && !filaTieneVplus(last, tipoNivel)
 }
 
-export function puedeAgregarFila(filas, tipoNivel, bmInicialNombre) {
+/**
+ * Circuito formalmente abierto (botón «Abrir circuito»).
+ * La marca persiste en `circuito_abierto_at` aunque el estado vuelva a borrador al guardar.
+ */
+export function circuitoEstaAbierto(nivelacion) {
+  return Boolean(nivelacion?.circuito_abierto_at)
+}
+
+/**
+ * Primera vuelta completa: BM con V+ y al menos una vista adelante (Vi/V−) en otra fila.
+ * A partir de aquí aplican las validaciones estrictas de tramo/cambio.
+ */
+export function primeraVueltaCompleta(filas, tipoNivel) {
+  const rows = filas || []
+  if (rows.length < 2) return false
+  if (!filaTieneVplus(rows[0], tipoNivel)) return false
+  return rows.slice(1).some(
+    (f) => filaTieneVminus(f, tipoNivel) || filaTieneVi(f, tipoNivel),
+  )
+}
+
+/**
+ * Fase de apertura: aún no se abrió el circuito, o se abrió pero falta cerrar la primera vuelta.
+ * En esta fase se permite V+ (BM) y V− en puntos distintos sin exigir consistencia de tramo.
+ */
+export function modoAperturaNivelacion(filas, tipoNivel, nivelacion) {
+  if (!circuitoEstaAbierto(nivelacion)) return true
+  return !primeraVueltaCompleta(filas, tipoNivel)
+}
+
+export function puedeAbrirCircuito(nivelacion, form = {}) {
+  if (circuitoEstaAbierto(nivelacion)) {
+    return { ok: false, msg: 'El circuito ya está abierto.' }
+  }
+  const bm = form.bm_inicial_id || nivelacion?.bm_inicial_id
+  if (!bm) {
+    return { ok: false, msg: 'Seleccione el BM inicial antes de abrir el circuito.' }
+  }
+  return { ok: true }
+}
+
+export function puedeAgregarFila(filas, tipoNivel, bmInicialNombre, opts = {}) {
+  const apertura = Boolean(opts.modoApertura)
   if (filasTieneCierre(filas)) {
     return {
       ok: false,
@@ -269,6 +334,10 @@ export function puedeAgregarFila(filas, tipoNivel, bmInicialNombre) {
       ok: false,
       msg: 'Complete nombre, abscisa, descripción y tipo en la última fila antes de agregar otra.',
     }
+  }
+  if (apertura) {
+    // Primera vuelta: BM con solo V+, o V− intermedia en otro punto, no bloquean +Fila.
+    return { ok: true }
   }
   if (ultimaFilaVminusSinVplus(filas, tipoNivel)) {
     return {
@@ -294,7 +363,8 @@ export function puedeRegistrarVplus(fila, idx, tipoNivel) {
   return { ok: true }
 }
 
-export function validarCarteraNivelacion(filas, tipoNivel, bmInicialNombre) {
+export function validarCarteraNivelacion(filas, tipoNivel, bmInicialNombre, opts = {}) {
+  const apertura = Boolean(opts.modoApertura)
   const errores = []
   filas.forEach((fila, idx) => {
     const tieneLect = ['vplus', 'vi', 'vminus'].some((k) => bloqueTieneLecturaCalculo(fila[k], tipoNivel))
@@ -304,10 +374,10 @@ export function validarCarteraNivelacion(filas, tipoNivel, bmInicialNombre) {
     } else if (abscisaInvalida(fila)) {
       errores.push(`Fila ${idx + 1}: la abscisa debe ser numérica.`)
     }
-    if (idx > 0 && filaTieneVplus(fila, tipoNivel) && !filaTieneVminus(fila, tipoNivel)) {
+    if (!apertura && idx > 0 && filaTieneVplus(fila, tipoNivel) && !filaTieneVminus(fila, tipoNivel)) {
       errores.push(`Fila ${idx + 1}: V+ requiere V− previa en la misma fila (cambio).`)
     }
-    if (filaVplusSinVistaAdelante(fila, idx, tipoNivel, filas)) {
+    if (!apertura && filaVplusSinVistaAdelante(fila, idx, tipoNivel, filas)) {
       errores.push(`Fila ${idx + 1}: V+ sin Vi ni V−. Registre vista adelante o borre la V+.`)
     }
   })
@@ -315,17 +385,18 @@ export function validarCarteraNivelacion(filas, tipoNivel, bmInicialNombre) {
   if (cierre && !filaTieneVminus(cierre, tipoNivel)) {
     errores.push('Complete la lectura V− en la fila de cierre.')
   }
-  if (ultimaFilaVminusSinVplus(filas, tipoNivel)) {
+  if (!apertura && ultimaFilaVminusSinVplus(filas, tipoNivel)) {
     errores.push('La última fila tiene V− sin V+. Complete el cambio o el cierre del tramo.')
   }
-  if (ultimaFilaVplusSinVista(filas, tipoNivel)) {
+  if (!apertura && ultimaFilaVplusSinVista(filas, tipoNivel)) {
     errores.push(MSG_VPLUS_SIN_VISTA)
   }
   return errores
 }
 
 /** Validación laxa al guardar borrador: no exige cierre ni tramos cerrados. */
-export function validarCarteraParaGuardado(filas, tipoNivel, bmInicialNombre) {
+export function validarCarteraParaGuardado(filas, tipoNivel, bmInicialNombre, opts = {}) {
+  const apertura = Boolean(opts.modoApertura)
   const errores = []
   filas.forEach((fila, idx) => {
     const tieneLect = ['vplus', 'vi', 'vminus'].some((k) => bloqueTieneLecturaCalculo(fila[k], tipoNivel))
@@ -336,7 +407,13 @@ export function validarCarteraParaGuardado(filas, tipoNivel, bmInicialNombre) {
     } else if (abscisaInvalida(fila)) {
       errores.push(`Fila ${idx + 1}: la abscisa debe ser numérica.`)
     }
-    if (tieneLect && idx > 0 && filaTieneVplus(fila, tipoNivel) && !filaTieneVminus(fila, tipoNivel)) {
+    if (
+      !apertura
+      && tieneLect
+      && idx > 0
+      && filaTieneVplus(fila, tipoNivel)
+      && !filaTieneVminus(fila, tipoNivel)
+    ) {
       errores.push(`Fila ${idx + 1}: V+ requiere V− previa en la misma fila (cambio).`)
     }
   })

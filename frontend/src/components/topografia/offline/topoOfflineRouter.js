@@ -783,6 +783,29 @@ export async function handleOfflineMutation(contratoId, path, method, body, opti
     return row
   }
 
+  // Abrir circuito de nivelación (marca local)
+  if (path.match(/^\/nivelaciones\/[^/]+\/abrir$/) && m === 'POST') {
+    const nivId = path.split('/')[2]
+    const det = (await getCachedTopoEntityDetail(contratoId, 'nivelacion', nivId)) || {}
+    const niv = { ...(det.nivelacion || {}), id: nivId }
+    if (!niv.bm_inicial_id) {
+      throw new Error('Seleccione el BM inicial antes de abrir el circuito.')
+    }
+    const ahora = new Date().toISOString()
+    const nivUp = { ...niv, circuito_abierto_at: niv.circuito_abierto_at || ahora }
+    await cacheTopoEntityDetail(contratoId, 'nivelacion', nivId, {
+      ...det,
+      nivelacion: nivUp,
+    })
+    try {
+      await topoDb.topo_nivelaciones.update(nivId, { circuito_abierto_at: nivUp.circuito_abierto_at })
+    } catch {
+      /* columna puede no existir en schema local antiguo */
+    }
+    await enqueueTopoOperation(contratoId, path, method, body, { localEntityId: nivId })
+    return { ok: true, nivelacion: nivUp, ya_abierto: Boolean(niv.circuito_abierto_at), _offline: true }
+  }
+
   // Nivelación calc local preview al guardar lecturas
   if (path.match(/^\/nivelaciones\/[^/]+\/lecturas$/) && m === 'PUT') {
     const nivId = path.split('/')[2]
