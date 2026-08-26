@@ -11,6 +11,14 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from main import _require_contract_access, get_current_user, supabase, supabase_execute
+from topografia_poligonal_papelera import (
+    DIAS_PURGA_PAPELERA,
+    edad_en_papelera_dias,
+    filtrar_activos,
+    filtrar_papelera,
+    payload_marcar_baja,
+    payload_restaurar,
+)
 from topografia_permissions import (
     lado_validacion_topo_usuario,
     require_permiso_topografia,
@@ -216,8 +224,9 @@ def _amarres_poligonal(
     return amarres
 
 
-def _cierre_poligonal_vivo(pol: dict, poligonal_id: str) -> dict:
-    estaciones = (
+
+def _fetch_estaciones_poligonal(poligonal_id: str) -> list:
+    return (
         supabase.table("topo_poligonal_estaciones")
         .select("*")
         .eq("poligonal_id", poligonal_id)
@@ -226,7 +235,10 @@ def _cierre_poligonal_vivo(pol: dict, poligonal_id: str) -> dict:
         .data
         or []
     )
-    armadas = (
+
+
+def _fetch_armadas_poligonal(poligonal_id: str) -> list:
+    return (
         supabase.table("topo_poligonal_armadas")
         .select("*")
         .eq("poligonal_id", poligonal_id)
@@ -235,6 +247,51 @@ def _cierre_poligonal_vivo(pol: dict, poligonal_id: str) -> dict:
         .data
         or []
     )
+
+
+def _estaciones_activas(poligonal_id: str) -> list:
+    return filtrar_activos(_fetch_estaciones_poligonal(poligonal_id))
+
+
+def _armadas_activas(poligonal_id: str) -> list:
+    return filtrar_activos(_fetch_armadas_poligonal(poligonal_id))
+
+
+def _reordenar_estaciones_activas(poligonal_id: str) -> None:
+    restantes = _estaciones_activas(poligonal_id)
+    for idx, est in enumerate(restantes, start=1):
+        if (est.get("orden") or 0) != idx:
+            supabase.table("topo_poligonal_estaciones").update({"orden": idx}).eq("id", est["id"]).execute()
+
+
+def _siguiente_orden_estaciones(poligonal_id: str) -> int:
+    """Siguiente orden: max entre todas (incl. papelera) + 1 para no chocar al restaurar."""
+    rows = _fetch_estaciones_poligonal(poligonal_id)
+    if not rows:
+        return 1
+    return max(int(r.get("orden") or 0) for r in rows) + 1
+
+
+def _siguiente_orden_armadas(poligonal_id: str) -> int:
+    rows = _fetch_armadas_poligonal(poligonal_id)
+    if not rows:
+        return 1
+    return max(int(r.get("orden") or 0) for r in rows) + 1
+
+
+def _enrich_papelera_item(row: dict, tipo: str) -> dict:
+    out = dict(row)
+    out["tipo_papelera"] = tipo
+    out["edad_dias"] = edad_en_papelera_dias(row)
+    out["dias_restantes"] = None
+    if out["edad_dias"] is not None:
+        out["dias_restantes"] = max(0, int(DIAS_PURGA_PAPELERA - out["edad_dias"]))
+    return out
+
+
+def _cierre_poligonal_vivo(pol: dict, poligonal_id: str) -> dict:
+    estaciones = _estaciones_activas(poligonal_id)
+    armadas = _armadas_activas(poligonal_id)
     punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
     punto_final = _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None
     punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
@@ -458,15 +515,7 @@ def _punto_biblioteca_de_poligonal(punto_id: str, contrato_id: int, poligonal_id
 
 def _vertices_poligonal_named_para_newpoint(contrato_id: int, poligonal_id: str) -> list[dict]:
     """Vertices del circuito con nombre (para SVG)."""
-    armadas = (
-        supabase.table("topo_poligonal_armadas")
-        .select("orden, estacion_nombre")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
+    armadas = _armadas_activas(poligonal_id)
     puntos = (
         supabase.table("topo_puntos")
         .select("nombre, norte, este")
@@ -498,15 +547,7 @@ def _vertices_poligonal_named_para_newpoint(contrato_id: int, poligonal_id: str)
 
 def _vertices_poligonal_para_newpoint(contrato_id: int, poligonal_id: str) -> list[tuple[float, float]]:
     """Vertices del circuito en orden de estacion (para distinguir solucion espejo)."""
-    armadas = (
-        supabase.table("topo_poligonal_armadas")
-        .select("orden, estacion_nombre")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
+    armadas = _armadas_activas(poligonal_id)
     puntos = (
         supabase.table("topo_puntos")
         .select("nombre, norte, este")
@@ -744,15 +785,7 @@ def _rol_origen_topo(current_user) -> str:
 
 def _publicar_poligonal_en_biblioteca(contrato_id: int, poligonal_id: str, pol: dict) -> None:
     """Publica coordenadas ajustadas en topo_puntos (solo tras aprobación interventoría)."""
-    estaciones = (
-        supabase.table("topo_poligonal_estaciones")
-        .select("*")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
+    estaciones = _estaciones_activas(poligonal_id)
     now = datetime.now(timezone.utc).isoformat()
     usar_ajustadas = bool(pol.get("ajustada_at"))
 
@@ -1842,28 +1875,12 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
-    estaciones = (
-        supabase.table("topo_poligonal_estaciones")
-        .select("*")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
+    estaciones = _estaciones_activas(poligonal_id)
     punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
     punto_final = _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None
     punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
 
-    armadas = (
-        supabase.table("topo_poligonal_armadas")
-        .select("*")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
+    armadas = _armadas_activas(poligonal_id)
     amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
     armadas_enr, known, estaciones_flat = radiar_armadas(armadas, estaciones, amarres)
 
@@ -1993,21 +2010,15 @@ def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, cu
         raise HTTPException(status_code=422, detail="Indique el nombre del punto observado.")
     if body.distancia is not None and body.distancia < 0:
         raise HTTPException(status_code=422, detail="La distancia no puede ser negativa.")
-    # Armada destino: la indicada o la ultima de la poligonal
+    # Armada destino: la indicada (activa) o la ultima activa de la poligonal
     armada = None
     if body.armada_id:
         armada = _row("topo_poligonal_armadas", id=body.armada_id, poligonal_id=poligonal_id)
+        if armada and armada.get("dado_de_baja"):
+            raise HTTPException(status_code=422, detail="La armada indicada está en papelera.")
     if not armada:
-        ultimas = (
-            supabase.table("topo_poligonal_armadas")
-            .select("*")
-            .eq("poligonal_id", poligonal_id)
-            .order("orden", desc=True)
-            .limit(1)
-            .execute()
-            .data
-        )
-        armada = ultimas[0] if ultimas else None
+        activas = _armadas_activas(poligonal_id)
+        armada = activas[-1] if activas else None
     if not armada:
         raise HTTPException(status_code=422, detail="No hay armada activa. Defina la armada (estacion y visado) antes de radiar puntos.")
     # HI: el de la armada (o el enviado para inicializarlo)
@@ -2016,16 +2027,7 @@ def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, cu
         hi = body.altura_instrumento
         if hi is not None:
             supabase.table("topo_poligonal_armadas").update({"altura_instrumento": hi}).eq("id", armada["id"]).execute()
-    ultima = (
-        supabase.table("topo_poligonal_estaciones")
-        .select("orden")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden", desc=True)
-        .limit(1)
-        .execute()
-        .data
-    )
-    next_orden = (ultima[0]["orden"] + 1) if ultima else 1
+    next_orden = _siguiente_orden_estaciones(poligonal_id)
     row = (
         supabase.table("topo_poligonal_estaciones")
         .insert(
@@ -2060,6 +2062,11 @@ def editar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, body:
     est = _row("topo_poligonal_estaciones", id=estacion_id, poligonal_id=poligonal_id)
     if not est:
         raise HTTPException(status_code=404, detail="Punto no encontrado")
+    if est.get("dado_de_baja"):
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede editar un punto en papelera; restáurelo primero",
+        )
     # exclude_unset permite distinguir "no enviado" de "enviado vacio" (limpiar a null).
     enviados = body.model_dump(exclude_unset=True)
     cambios = {}
@@ -2110,15 +2117,7 @@ def editar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, body:
 def listar_armadas(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "ver")
-    return (
-        supabase.table("topo_poligonal_armadas")
-        .select("*")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
+    return _armadas_activas(poligonal_id)
 
 
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/armadas")
@@ -2131,16 +2130,7 @@ def crear_armada(contrato_id: int, poligonal_id: str, body: ArmadaBody, current_
     _assert_poligonal_libreta_editable(pol)
     if not (body.estacion_nombre or "").strip() or not (body.visado_nombre or "").strip():
         raise HTTPException(status_code=422, detail="Indique la estacion y el visado de la nueva armada.")
-    ultimas = (
-        supabase.table("topo_poligonal_armadas")
-        .select("orden")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden", desc=True)
-        .limit(1)
-        .execute()
-        .data
-    )
-    next_orden = (ultimas[0]["orden"] + 1) if ultimas else 1
+    next_orden = _siguiente_orden_armadas(poligonal_id)
     row = (
         supabase.table("topo_poligonal_armadas")
         .insert(
@@ -2166,14 +2156,24 @@ def actualizar_armada(contrato_id: int, poligonal_id: str, armada_id: str, body:
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
     _assert_poligonal_libreta_editable(pol)
+    arm = _row("topo_poligonal_armadas", id=armada_id, poligonal_id=poligonal_id)
+    if not arm:
+        raise HTTPException(status_code=404, detail="Armada no encontrada")
+    if arm.get("dado_de_baja"):
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede editar una armada en papelera; restáurela primero",
+        )
     cambios = {k: v for k, v in body.model_dump().items() if v is not None}
     if not cambios:
-        return _row("topo_poligonal_armadas", id=armada_id, poligonal_id=poligonal_id) or {}
-    # Si cambia el HI de la armada, propagarlo a sus puntos radiados
+        return arm
+    # Si cambia el HI de la armada, propagarlo a sus puntos radiados activos
     if "altura_instrumento" in cambios:
-        supabase.table("topo_poligonal_estaciones").update(
-            {"altura_instrumento": cambios["altura_instrumento"]}
-        ).eq("armada_id", armada_id).execute()
+        for est in _estaciones_activas(poligonal_id):
+            if est.get("armada_id") == armada_id:
+                supabase.table("topo_poligonal_estaciones").update(
+                    {"altura_instrumento": cambios["altura_instrumento"]}
+                ).eq("id", est["id"]).execute()
     row = (
         supabase.table("topo_poligonal_armadas")
         .update(cambios)
@@ -2187,24 +2187,91 @@ def actualizar_armada(contrato_id: int, poligonal_id: str, armada_id: str, body:
 
 @router.delete("/{contrato_id}/poligonales/{poligonal_id}/armadas/{armada_id}")
 def eliminar_armada(contrato_id: int, poligonal_id: str, armada_id: str, current_user=Depends(get_current_user)):
+    """Soft-delete de armada y de sus puntos activos (papelera, recuperable ~30 días)."""
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar")
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
     _assert_poligonal_libreta_editable(pol)
-    armadas = (
-        supabase.table("topo_poligonal_armadas")
-        .select("id, orden")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
+    armadas = _armadas_activas(poligonal_id)
     if len(armadas) <= 1:
         raise HTTPException(status_code=422, detail="No se puede eliminar la armada inicial.")
-    supabase.table("topo_poligonal_armadas").delete().eq("id", armada_id).eq("poligonal_id", poligonal_id).execute()
+    arm = next((a for a in armadas if a.get("id") == armada_id), None)
+    if not arm:
+        existente = _row("topo_poligonal_armadas", id=armada_id, poligonal_id=poligonal_id)
+        if existente and existente.get("dado_de_baja"):
+            return {"ok": True, "ya_en_papelera": True, "id": armada_id}
+        raise HTTPException(status_code=404, detail="Armada no encontrada")
+
+    baja = payload_marcar_baja()
+    # Soft-delete puntos activos de la armada (no CASCADE hard-delete)
+    for est in _estaciones_activas(poligonal_id):
+        if est.get("armada_id") == armada_id:
+            supabase.table("topo_poligonal_estaciones").update(baja).eq("id", est["id"]).execute()
+    supabase.table("topo_poligonal_armadas").update(baja).eq("id", armada_id).eq(
+        "poligonal_id", poligonal_id
+    ).execute()
+    _reordenar_estaciones_activas(poligonal_id)
+    return {"ok": True, "id": armada_id, "papelera": True}
+
+
+@router.put("/{contrato_id}/poligonales/{poligonal_id}/armadas/{armada_id}/restaurar")
+def restaurar_armada(contrato_id: int, poligonal_id: str, armada_id: str, current_user=Depends(get_current_user)):
+    """Restaura armada y sus puntos que estaban en papelera."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_poligonal_libreta_editable(pol)
+    arm = _row("topo_poligonal_armadas", id=armada_id, poligonal_id=poligonal_id)
+    if not arm:
+        raise HTTPException(status_code=404, detail="Armada no encontrada")
+    if not arm.get("dado_de_baja"):
+        return arm
+
+    supabase.table("topo_poligonal_armadas").update(payload_restaurar()).eq("id", armada_id).eq(
+        "poligonal_id", poligonal_id
+    ).execute()
+
+    # Restaura puntos de esta armada que estén en papelera (append al final)
+    en_papelera = [
+        e for e in filtrar_papelera(_fetch_estaciones_poligonal(poligonal_id))
+        if e.get("armada_id") == armada_id
+    ]
+    en_papelera.sort(key=lambda e: int(e.get("orden") or 0))
+    orden = _siguiente_orden_estaciones(poligonal_id)
+    for est in en_papelera:
+        supabase.table("topo_poligonal_estaciones").update(
+            {**payload_restaurar(), "orden": orden}
+        ).eq("id", est["id"]).execute()
+        orden += 1
+
+    return _row("topo_poligonal_armadas", id=armada_id, poligonal_id=poligonal_id) or {"ok": True, "id": armada_id}
+
+
+@router.delete("/{contrato_id}/poligonales/{poligonal_id}/armadas/{armada_id}/purgar")
+def purgar_armada(contrato_id: int, poligonal_id: str, armada_id: str, current_user=Depends(get_current_user)):
+    """Eliminación definitiva de armada en papelera (CASCADE a sus puntos)."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_poligonal_libreta_editable(pol)
+    arm = _row("topo_poligonal_armadas", id=armada_id, poligonal_id=poligonal_id)
+    if not arm:
+        raise HTTPException(status_code=404, detail="Armada no encontrada")
+    if not arm.get("dado_de_baja"):
+        raise HTTPException(status_code=400, detail="Solo se pueden purgar armadas en papelera")
+    # Purga puntos en papelera de esta armada primero (evita huérfanos si FK no cascadea update)
+    for est in filtrar_papelera(_fetch_estaciones_poligonal(poligonal_id)):
+        if est.get("armada_id") == armada_id:
+            supabase.table("topo_poligonal_estaciones").delete().eq("id", est["id"]).execute()
+    supabase.table("topo_poligonal_armadas").delete().eq("id", armada_id).eq(
+        "poligonal_id", poligonal_id
+    ).execute()
     return {"ok": True}
 
 
@@ -2232,26 +2299,105 @@ def set_sentido_poligonal(contrato_id: int, poligonal_id: str, body: SentidoBody
 
 @router.delete("/{contrato_id}/poligonales/{poligonal_id}/estaciones/{estacion_id}")
 def eliminar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, current_user=Depends(get_current_user)):
+    """Soft-delete: mueve el punto a papelera (recuperable ~30 días)."""
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar")
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
     _assert_poligonal_libreta_editable(pol)
-    supabase.table("topo_poligonal_estaciones").delete().eq("id", estacion_id).eq("poligonal_id", poligonal_id).execute()
-    # Reordena los puntos restantes para mantener la secuencia 1..n
-    restantes = (
+    existente = _row("topo_poligonal_estaciones", id=estacion_id, poligonal_id=poligonal_id)
+    if not existente:
+        raise HTTPException(status_code=404, detail="Punto no encontrado")
+    if existente.get("dado_de_baja"):
+        return {"ok": True, "ya_en_papelera": True, "id": estacion_id}
+    supabase.table("topo_poligonal_estaciones").update(payload_marcar_baja()).eq(
+        "id", estacion_id
+    ).eq("poligonal_id", poligonal_id).execute()
+    _reordenar_estaciones_activas(poligonal_id)
+    return {"ok": True, "id": estacion_id, "papelera": True}
+
+
+@router.put("/{contrato_id}/poligonales/{poligonal_id}/estaciones/{estacion_id}/restaurar")
+def restaurar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, current_user=Depends(get_current_user)):
+    """Restaura un punto desde la papelera (al final del orden)."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_poligonal_libreta_editable(pol)
+    existente = _row("topo_poligonal_estaciones", id=estacion_id, poligonal_id=poligonal_id)
+    if not existente:
+        raise HTTPException(status_code=404, detail="Punto no encontrado")
+    if not existente.get("dado_de_baja"):
+        return existente
+
+    armada_id = existente.get("armada_id")
+    if armada_id:
+        arm = _row("topo_poligonal_armadas", id=armada_id, poligonal_id=poligonal_id)
+        if arm and arm.get("dado_de_baja"):
+            supabase.table("topo_poligonal_armadas").update(payload_restaurar()).eq(
+                "id", armada_id
+            ).execute()
+
+    orden = _siguiente_orden_estaciones(poligonal_id)
+    row = (
         supabase.table("topo_poligonal_estaciones")
-        .select("id")
+        .update({**payload_restaurar(), "orden": orden})
+        .eq("id", estacion_id)
         .eq("poligonal_id", poligonal_id)
-        .order("orden")
         .execute()
         .data
-        or []
     )
-    for idx, est in enumerate(restantes, start=1):
-        supabase.table("topo_poligonal_estaciones").update({"orden": idx}).eq("id", est["id"]).execute()
+    if not row:
+        raise HTTPException(status_code=404, detail="Punto no encontrado")
+    return row[0]
+
+
+@router.delete("/{contrato_id}/poligonales/{poligonal_id}/estaciones/{estacion_id}/purgar")
+def purgar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, current_user=Depends(get_current_user)):
+    """Eliminación definitiva (solo desde papelera)."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    _assert_poligonal_libreta_editable(pol)
+    existente = _row("topo_poligonal_estaciones", id=estacion_id, poligonal_id=poligonal_id)
+    if not existente:
+        raise HTTPException(status_code=404, detail="Punto no encontrado")
+    if not existente.get("dado_de_baja"):
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se pueden purgar puntos que están en la papelera",
+        )
+    supabase.table("topo_poligonal_estaciones").delete().eq("id", estacion_id).eq(
+        "poligonal_id", poligonal_id
+    ).execute()
     return {"ok": True}
+
+
+@router.get("/{contrato_id}/poligonales/{poligonal_id}/papelera")
+def listar_papelera_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+    """Lista armadas y puntos en papelera (retención ~30 días)."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver")
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    armadas = [_enrich_papelera_item(a, "armada") for a in filtrar_papelera(_fetch_armadas_poligonal(poligonal_id))]
+    estaciones = [
+        _enrich_papelera_item(e, "estacion") for e in filtrar_papelera(_fetch_estaciones_poligonal(poligonal_id))
+    ]
+    armadas.sort(key=lambda r: r.get("dado_de_baja_at") or "", reverse=True)
+    estaciones.sort(key=lambda r: r.get("dado_de_baja_at") or "", reverse=True)
+    return {
+        "dias_retencion": DIAS_PURGA_PAPELERA,
+        "armadas": armadas,
+        "estaciones": estaciones,
+        "total": len(armadas) + len(estaciones),
+    }
 
 
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/recalcular")
@@ -2294,24 +2440,8 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
     if _poligonal_sellada(pol):
         raise HTTPException(status_code=403, detail="Poligonal sellada tras validación de interventoría.")
 
-    estaciones = (
-        supabase.table("topo_poligonal_estaciones")
-        .select("*")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
-    armadas = (
-        supabase.table("topo_poligonal_armadas")
-        .select("*")
-        .eq("poligonal_id", poligonal_id)
-        .order("orden")
-        .execute()
-        .data
-        or []
-    )
+    estaciones = _estaciones_activas(poligonal_id)
+    armadas = _armadas_activas(poligonal_id)
     punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
     punto_final = _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None
     punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None

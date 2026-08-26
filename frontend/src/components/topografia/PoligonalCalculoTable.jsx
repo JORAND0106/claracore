@@ -166,7 +166,16 @@ export default function PoligonalCalculoTable({
               return (
                 <tr
                   key={e.id || e.orden}
-                  style={enEdicion ? { background: ui.rowHighlight } : undefined}
+                  style={{
+                    ...(enEdicion ? { background: ui.rowHighlight } : undefined),
+                    cursor: onEditar ? 'pointer' : undefined,
+                  }}
+                  onClick={(ev) => {
+                    if (!onEditar) return
+                    if (ev.target.closest('button, input, select, textarea, a')) return
+                    onEditar(e)
+                  }}
+                  title={onEditar ? 'Clic para editar punto' : undefined}
                 >
                   <td style={td}>{e.orden}</td>
                   <td style={td}>{e.armada_orden ?? '—'}</td>
@@ -239,7 +248,10 @@ export default function PoligonalCalculoTable({
                         <button
                           type="button"
                           title="Editar punto"
-                          onClick={() => onEditar(e)}
+                          onClick={(ev) => {
+                            ev.stopPropagation()
+                            onEditar(e)
+                          }}
                           style={{ border: 'none', background: 'transparent', color: ui.link, cursor: 'pointer', fontSize: 'var(--cc-sm)', marginRight: 6 }}
                         >
                           ✎
@@ -249,7 +261,10 @@ export default function PoligonalCalculoTable({
                         <button
                           type="button"
                           title="Eliminar punto"
-                          onClick={() => onEliminar(e.id)}
+                          onClick={(ev) => {
+                            ev.stopPropagation()
+                            onEliminar(e)
+                          }}
                           style={{ border: 'none', background: 'transparent', color: '#dc2626', cursor: 'pointer', fontSize: 'var(--cc-sm)' }}
                         >
                           ✕

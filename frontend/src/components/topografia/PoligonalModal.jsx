@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TopoAngularInput from './TopoAngularInput'
 import TopoErrorModal from './TopoErrorModal'
+import TopoConfirmModal from './TopoConfirmModal'
 import PoligonalCalculoTable from './PoligonalCalculoTable'
 import PoligonalCierrePanel from './PoligonalCierrePanel'
 import PoligonalGrafico from './PoligonalGrafico'
 import PoligonalValidacionPanel from './PoligonalValidacionPanel'
+import PoligonalArmadaEditModal from './PoligonalArmadaEditModal'
+import PoligonalPuntoEditModal from './PoligonalPuntoEditModal'
+import PoligonalUndoToast from './PoligonalUndoToast'
+import PoligonalPapeleraPanel from './PoligonalPapeleraPanel'
 import FirmaPerfilTopo from './FirmaPerfilTopo'
 import {
   useTopoTheme,
@@ -229,6 +234,13 @@ export default function PoligonalModal({
   })
 
   const [editandoId, setEditandoId] = useState(null)
+  const [editPuntoModal, setEditPuntoModal] = useState(null)
+  const [editArmadaModal, setEditArmadaModal] = useState(null)
+  const [confirmEliminar, setConfirmEliminar] = useState(null)
+  const [undoToast, setUndoToast] = useState(null)
+  const [mostrarPapelera, setMostrarPapelera] = useState(false)
+  const [papeleraData, setPapeleraData] = useState(null)
+  const [papeleraLoading, setPapeleraLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [ultimaSync, setUltimaSync] = useState(null)
   const [syncMsg, setSyncMsg] = useState(null)
@@ -645,66 +657,25 @@ export default function PoligonalModal({
 
   const iniciarEdicion = (p) => {
     setEditandoId(p.id)
-    setEstForm({
-      tipo_punto: p.tipo_punto || 'auxiliar',
-      nombre_punto: p.nombre_punto || '',
-      angulo_gms: p.angulo_observado_gms ?? '',
-      angulo_vertical_gms: p.angulo_vertical_gms ?? '',
-      distancia: p.distancia ?? '',
-      altura_objetivo: p.altura_objetivo ?? '',
-    })
-    setTimeout(() => { formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }, 50)
+    setEditPuntoModal(p)
   }
 
   const cancelarEdicion = () => {
     setEditandoId(null)
+    setEditPuntoModal(null)
     setEstForm(resetEstForm())
   }
 
-  const guardarEdicion = async () => {
-    if (!poligonalId || !editandoId) return
-    if (!estForm.nombre_punto.trim()) {
-      setErrorModal({ titulo: 'Nombre del punto', mensaje: 'Escriba el nombre del punto observado.' })
-      return
-    }
-    if (estForm.angulo_gms === '' || estForm.angulo_gms == null) {
-      setErrorModal({ titulo: 'Angulo requerido', mensaje: 'Ingrese el angulo horizontal observado (GG.MMSS).' })
-      return
-    }
-    const angGms = Number(estForm.angulo_gms)
-    if (!Number.isFinite(angGms) || !validarGms(angGms)) {
-      setErrorModal({ titulo: 'Angulo invalido', mensaje: 'Use formato GG.MMSS (minutos y segundos menores a 60).' })
-      return
-    }
-    const dist = parseMetrosInput(estForm.distancia)
-    if (estForm.distancia !== '' && estForm.distancia != null && dist == null) {
-      setErrorModal({ titulo: 'Distancia invalida', mensaje: 'Ingrese la distancia en metros (use punto o coma decimal).' })
-      return
-    }
-    if (dist != null && dist < 0) {
-      setErrorModal({ titulo: 'Distancia invalida', mensaje: 'La distancia horizontal no puede ser negativa (metros).' })
-      return
-    }
+  const guardarEdicionPopup = async (payload) => {
+    if (!poligonalId || !editPuntoModal?.id) return
     setBusy(true)
     try {
-      const av =
-        estForm.angulo_vertical_gms === '' || estForm.angulo_vertical_gms == null
-          ? null
-          : Number(estForm.angulo_vertical_gms)
-      const payload = {
-        tipo_punto: estForm.tipo_punto,
-        nombre_punto: estForm.nombre_punto.trim(),
-        angulo_gms: angGms,
-        angulo_vertical_gms: av != null && Number.isFinite(av) ? av : null,
-        distancia: dist,
-        altura_objetivo: parseMetrosInput(estForm.altura_objetivo) ?? 0,
-      }
-      await api(`/poligonales/${poligonalId}/estaciones/${editandoId}`, {
+      await api(`/poligonales/${poligonalId}/estaciones/${editPuntoModal.id}`, {
         method: 'PUT',
         body: JSON.stringify(payload),
       })
       setResultado(null)
-      await sincronizarDetalle('Punto guardado. Revise la cartera consolidada abajo.')
+      await sincronizarDetalle('Punto guardado. Cartera y plano actualizados.')
       cancelarEdicion()
     } catch (e) {
       showError(e)
@@ -727,13 +698,156 @@ export default function PoligonalModal({
     }
   }
 
-  const eliminarPunto = async (estacionId) => {
-    if (!poligonalId || !estacionId) return
+  const solicitarEliminarPunto = (puntoOId) => {
+    const id = typeof puntoOId === 'object' ? puntoOId?.id : puntoOId
+    if (!id) return
+    const p = typeof puntoOId === 'object'
+      ? puntoOId
+      : (detalle?.estaciones || []).find((e) => e.id === id)
+    setConfirmEliminar({
+      tipo: 'estacion',
+      id,
+      nombre: p?.nombre_punto || 'punto',
+    })
+  }
+
+  const solicitarEliminarArmada = (arm) => {
+    if (!arm?.id) return
+    setConfirmEliminar({
+      tipo: 'armada',
+      id: arm.id,
+      nombre: `armada #${arm.orden} (${arm.estacion_nombre || '?'})`,
+    })
+  }
+
+  const ejecutarEliminacion = async () => {
+    if (!poligonalId || !confirmEliminar) return
+    const { tipo, id, nombre } = confirmEliminar
     setBusy(true)
     try {
-      await api(`/poligonales/${poligonalId}/estaciones/${estacionId}`, { method: 'DELETE' })
+      if (tipo === 'armada') {
+        await api(`/poligonales/${poligonalId}/armadas/${id}`, { method: 'DELETE' })
+        setEditArmadaModal(null)
+        setConfirmEliminar(null)
+        setResultado(null)
+        await sincronizarDetalle()
+        setUndoToast({
+          message: `Armada eliminada — ${nombre}`,
+          restorePath: `/poligonales/${poligonalId}/armadas/${id}/restaurar`,
+        })
+        if (mostrarPapelera) await cargarPapelera()
+      } else {
+        await api(`/poligonales/${poligonalId}/estaciones/${id}`, { method: 'DELETE' })
+        if (editandoId === id) cancelarEdicion()
+        setConfirmEliminar(null)
+        setResultado(null)
+        await sincronizarDetalle()
+        setUndoToast({
+          message: `Punto eliminado — ${nombre}`,
+          restorePath: `/poligonales/${poligonalId}/estaciones/${id}/restaurar`,
+        })
+        if (mostrarPapelera) await cargarPapelera()
+      }
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const deshacerEliminacion = async () => {
+    if (!undoToast?.restorePath) return
+    const path = undoToast.restorePath
+    setUndoToast(null)
+    setBusy(true)
+    try {
+      await api(path, { method: 'PUT' })
       setResultado(null)
-      await sincronizarDetalle('Punto eliminado.')
+      await sincronizarDetalle('Elemento restaurado.')
+      if (mostrarPapelera) await cargarPapelera()
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const cargarPapelera = useCallback(async () => {
+    if (!poligonalId) return
+    setPapeleraLoading(true)
+    try {
+      const data = await api(`/poligonales/${poligonalId}/papelera`)
+      setPapeleraData(data)
+    } catch (e) {
+      showError(e)
+    } finally {
+      setPapeleraLoading(false)
+    }
+  }, [api, poligonalId, showError])
+
+  const restaurarDesdePapelera = async (tipo, item) => {
+    if (!poligonalId || !item?.id) return
+    setBusy(true)
+    try {
+      const path = tipo === 'armada'
+        ? `/poligonales/${poligonalId}/armadas/${item.id}/restaurar`
+        : `/poligonales/${poligonalId}/estaciones/${item.id}/restaurar`
+      await api(path, { method: 'PUT' })
+      setResultado(null)
+      await sincronizarDetalle('Elemento restaurado desde papelera.')
+      await cargarPapelera()
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const purgarDesdePapelera = async (tipo, item) => {
+    if (!poligonalId || !item?.id) return
+    setConfirmEliminar({
+      tipo: tipo === 'armada' ? 'purgar_armada' : 'purgar_estacion',
+      id: item.id,
+      nombre: tipo === 'armada'
+        ? `armada #${item.orden}`
+        : (item.nombre_punto || 'punto'),
+    })
+  }
+
+  const ejecutarPurga = async () => {
+    if (!poligonalId || !confirmEliminar) return
+    const { tipo, id } = confirmEliminar
+    setBusy(true)
+    try {
+      const path = tipo === 'purgar_armada'
+        ? `/poligonales/${poligonalId}/armadas/${id}/purgar`
+        : `/poligonales/${poligonalId}/estaciones/${id}/purgar`
+      await api(path, { method: 'DELETE' })
+      setConfirmEliminar(null)
+      await cargarPapelera()
+      await sincronizarDetalle('Elemento eliminado definitivamente.')
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const guardarArmadaPopup = async (payload) => {
+    if (!poligonalId || !editArmadaModal?.id) return
+    if (!payload.estacion_nombre || !payload.visado_nombre) {
+      setErrorModal({ titulo: 'Armada incompleta', mensaje: 'Indique estación y visado.' })
+      return
+    }
+    setBusy(true)
+    try {
+      await api(`/poligonales/${poligonalId}/armadas/${editArmadaModal.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      })
+      setEditArmadaModal(null)
+      setResultado(null)
+      await sincronizarDetalle('Armada actualizada. Cartera y plano recalculados.')
     } catch (e) {
       showError(e)
     } finally {
@@ -1671,10 +1785,21 @@ export default function PoligonalModal({
                         return (
                           <tr
                             key={arm.id}
-                            style={esActual ? { background: '#fff' } : undefined}
-                            title={ec.norte != null
-                              ? `Est N ${fmt(ec.norte, 2)} E ${fmt(ec.este, 2)} Z ${fmt(ec.cota, 2)}`
-                              : undefined}
+                            style={{
+                              ...(esActual ? { background: '#fff' } : undefined),
+                              cursor: editableLibreta ? 'pointer' : undefined,
+                            }}
+                            title={
+                              editableLibreta
+                                ? 'Clic para editar armada'
+                                : (ec.norte != null
+                                  ? `Est N ${fmt(ec.norte, 2)} E ${fmt(ec.este, 2)} Z ${fmt(ec.cota, 2)}`
+                                  : undefined)
+                            }
+                            onClick={() => {
+                              if (!editableLibreta || busy) return
+                              setEditArmadaModal(arm)
+                            }}
                           >
                             <td style={sheet.td}>
                               <span style={{ fontWeight: 700 }}>
@@ -1771,13 +1896,13 @@ export default function PoligonalModal({
                   )}
                 </div>
 
-                {/* Bloque derecho — Punto siguiente en dos columnas de campos */}
+                {/* Bloque derecho — Punto siguiente */}
                 <div ref={formRef} style={panelCol}>
-                  {(editandoId || armadaActual) ? (
+                  {armadaActual ? (
                     <>
                       <TopoExcelSheet
                         sheet={sheetInCol}
-                        title={editandoId ? 'Editar punto' : `Punto siguiente (armada ${armadaActual?.orden ?? '—'})`}
+                        title={`Punto siguiente (armada ${armadaActual?.orden ?? '—'})`}
                         columns={COLS_AGREGAR_PUNTO_2COL}
                         style={{ marginBottom: 0 }}
                       >
@@ -1792,21 +1917,14 @@ export default function PoligonalModal({
                         <tr>
                           <td style={labelCell} colSpan={2} />
                           <td style={sheet.td} colSpan={2}>
-                            {editandoId ? (
-                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                <button type="button" style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }} onClick={guardarEdicion} disabled={busy}>Guardar</button>
-                                <button type="button" style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }} onClick={cancelarEdicion} disabled={busy}>Cancelar</button>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)', width: '100%' }}
-                                onClick={agregarPunto}
-                                disabled={busy}
-                              >
-                                Punto siguiente
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              style={{ ...ui.btnPrimary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)', width: '100%' }}
+                              onClick={agregarPunto}
+                              disabled={busy}
+                            >
+                              Punto siguiente
+                            </button>
                           </td>
                         </tr>
                       </TopoExcelSheet>
@@ -1838,6 +1956,19 @@ export default function PoligonalModal({
                   >
                     {refreshing ? '…' : 'Actualizar'}
                   </button>
+                  <button
+                    type="button"
+                    style={{ ...ui.btnSecondary, padding: '4px 10px', fontSize: 'var(--cc-xs)' }}
+                    onClick={() => {
+                      const next = !mostrarPapelera
+                      setMostrarPapelera(next)
+                      if (next) cargarPapelera()
+                    }}
+                    disabled={busy}
+                    title="Ver elementos eliminados (recuperables ~30 días)"
+                  >
+                    {mostrarPapelera ? 'Ocultar papelera' : 'Papelera'}
+                  </button>
                 </div>
                 <PoligonalCalculoTable
                   key={ultimaSync || 'cartera'}
@@ -1849,9 +1980,23 @@ export default function PoligonalModal({
                   armadas={armadas}
                   canEditHI={editableLibreta}
                   onUpdateHI={editableLibreta ? actualizarHIArmada : null}
-                  onEliminar={editableLibreta ? eliminarPunto : null}
+                  onEliminar={editableLibreta ? solicitarEliminarPunto : null}
                   onEditar={editableLibreta ? iniciarEdicion : null}
                 />
+                {mostrarPapelera && (
+                  <PoligonalPapeleraPanel
+                    theme={theme}
+                    data={papeleraData}
+                    loading={papeleraLoading}
+                    busy={busy}
+                    onRefresh={cargarPapelera}
+                    onRestaurarArmada={(a) => restaurarDesdePapelera('armada', a)}
+                    onRestaurarEstacion={(e) => restaurarDesdePapelera('estacion', e)}
+                    onPurgarArmada={(a) => purgarDesdePapelera('armada', a)}
+                    onPurgarEstacion={(e) => purgarDesdePapelera('estacion', e)}
+                    onClose={() => setMostrarPapelera(false)}
+                  />
+                )}
               </div>
 
               <div style={{ marginTop: 16 }}>
@@ -1972,6 +2117,77 @@ export default function PoligonalModal({
         <TopoErrorModal theme={theme} titulo={errorModal.titulo} onClose={() => setErrorModal(null)}>
           {errorModal.mensaje}
         </TopoErrorModal>
+      )}
+
+      {editPuntoModal && (
+        <PoligonalPuntoEditModal
+          theme={theme}
+          punto={editPuntoModal}
+          armada={(detalle?.armadas || []).find((a) => a.id === editPuntoModal.armada_id)
+            || (detalle?.armadas || []).find((a) => a.orden === editPuntoModal.armada_orden)
+            || null}
+          busy={busy}
+          onSave={guardarEdicionPopup}
+          onClose={cancelarEdicion}
+          onError={setErrorModal}
+        />
+      )}
+
+      {editArmadaModal && (
+        <PoligonalArmadaEditModal
+          theme={theme}
+          armada={editArmadaModal}
+          puntos={
+            editArmadaModal.puntos?.length
+              ? editArmadaModal.puntos
+              : (detalle?.estaciones || []).filter((e) => e.armada_id === editArmadaModal.id)
+          }
+          estacionesDisponibles={detalle?.puntos_estacion_disponibles || []}
+          visadosDisponibles={detalle?.puntos_visado_disponibles || []}
+          canDelete={(detalle?.armadas || []).length > 1}
+          busy={busy}
+          onSave={guardarArmadaPopup}
+          onDelete={() => solicitarEliminarArmada(editArmadaModal)}
+          onClose={() => setEditArmadaModal(null)}
+        />
+      )}
+
+      {confirmEliminar && (
+        <TopoConfirmModal
+          theme={theme}
+          danger
+          titulo={
+            confirmEliminar.tipo?.startsWith('purgar')
+              ? 'Eliminar definitivamente'
+              : confirmEliminar.tipo === 'armada'
+                ? 'Eliminar armada'
+                : 'Eliminar punto'
+          }
+          confirmLabel={confirmEliminar.tipo?.startsWith('purgar') ? 'Purgar' : 'Eliminar'}
+          cancelLabel="Cancelar"
+          busy={busy}
+          onConfirm={() => {
+            if (confirmEliminar.tipo?.startsWith('purgar')) ejecutarPurga()
+            else ejecutarEliminacion()
+          }}
+          onCancel={() => { if (!busy) setConfirmEliminar(null) }}
+        >
+          {confirmEliminar.tipo?.startsWith('purgar') ? (
+            <>¿Eliminar definitivamente «{confirmEliminar.nombre}»? Esta acción no se puede deshacer.</>
+          ) : confirmEliminar.tipo === 'armada' ? (
+            <>¿Eliminar «{confirmEliminar.nombre}» y sus puntos? Podrá deshacerlo ahora o recuperarlos después desde la papelera (hasta 30 días).</>
+          ) : (
+            <>¿Eliminar el punto «{confirmEliminar.nombre}»? Podrá deshacerlo ahora o recuperarlo después desde la papelera (hasta 30 días).</>
+          )}
+        </TopoConfirmModal>
+      )}
+
+      {undoToast && (
+        <PoligonalUndoToast
+          message={undoToast.message}
+          onUndo={deshacerEliminacion}
+          onDismiss={() => setUndoToast(null)}
+        />
       )}
     </>
   )
