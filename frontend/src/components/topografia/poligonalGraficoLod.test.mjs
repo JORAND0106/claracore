@@ -24,4 +24,11 @@ describe('PoligonalGrafico LOD', () => {
     assert.match(src, /useTopoViewportGestures/)
     assert.match(src, /\bscale\b/)
   })
+
+  it('usa marcadores acotados y etiquetas con anti-colisión + fondo', () => {
+    assert.match(src, /markerRadiusSvg/)
+    assert.match(src, /placePointLabels/)
+    assert.match(src, /LabelBlock/)
+    assert.match(src, /rgba\(255,255,255/)
+  })
 })
