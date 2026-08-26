@@ -43,7 +43,8 @@ describe('poligonal edición popup y papelera', () => {
   })
 
   it('componentes de UI existen', () => {
-    assert.ok(read('PoligonalArmadaEditModal.jsx').includes('Editar armada'))
+    assert.ok(read('PoligonalArmadaEditModal.jsx').includes('Armada #'))
+    assert.ok(read('PoligonalArmadaEditModal.jsx').includes('Puntos capturados'))
     assert.ok(read('PoligonalPuntoEditModal.jsx').includes('Editar punto'))
     assert.ok(read('PoligonalUndoToast.jsx').includes('Deshacer'))
     assert.ok(read('PoligonalPapeleraPanel.jsx').includes('Papelera'))
