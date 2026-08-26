@@ -2505,6 +2505,17 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
             status_code=422,
             detail=f"El cierre lineal es inadmisible (precision 1:{int(prec) if prec else 0}, tolerancia 1:{int(cierre.get('tolerancia_relativa') or 0)}). Revise angulos y distancias antes de terminar.",
         )
+    if cierre.get("admisible_angular") is False:
+        err = cierre.get("error_angular_seg")
+        tol = cierre.get("tolerancia_angular_seg")
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"El cierre angular es inadmisible "
+                f"(diferencia {err}\" , tolerancia ±{tol}\"). "
+                "Revise azimuts/ángulos antes de terminar."
+            ),
+        )
 
     supabase.table("topo_poligonales").update({"estado": "cerrado"}).eq("id", poligonal_id).execute()
     return {"ok": True, "cierre": cierre, "mensaje": "Poligonal terminada. Pendiente validación contratista e interventoría."}

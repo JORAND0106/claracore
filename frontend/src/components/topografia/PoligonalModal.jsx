@@ -2069,20 +2069,29 @@ export default function PoligonalModal({
 
               {editableLibreta && (
                 <div className="cc-topo-actions-bar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
+                  {(() => {
+                    const c = detalle.cierre
+                    const angOk = c?.admisible_angular !== false
+                    const puedeTerminar = !!(c?.cerrado && c?.admisible_lineal && angOk && detalle.estaciones?.length)
+                    let title = 'Cierra la libreta y habilita validación contratista / interventoría'
+                    if (!c?.cerrado || !c?.admisible_lineal) {
+                      title = 'El circuito debe cerrar dentro de tolerancia lineal antes de terminar'
+                    } else if (c?.admisible_angular === false) {
+                      title = 'El cierre angular está fuera de tolerancia; revise azimuts/ángulos antes de terminar'
+                    }
+                    return (
                   <button
                     type="button"
                     className="cc-topo-touch-btn"
-                    style={{ ...ui.btnPrimary, opacity: (detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal) ? 1 : 0.5 }}
+                    style={{ ...ui.btnPrimary, opacity: puedeTerminar ? 1 : 0.5 }}
                     onClick={cerrarCircuito}
-                    disabled={busy || !(detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal) || !detalle.estaciones?.length}
-                    title={
-                      !(detalle.cierre?.cerrado && detalle.cierre?.admisible_lineal)
-                        ? 'El circuito debe cerrar dentro de tolerancia antes de terminar'
-                        : 'Cierra la libreta y habilita validación contratista / interventoría'
-                    }
+                    disabled={busy || !puedeTerminar}
+                    title={title}
                   >
                     {busy ? 'Terminando…' : 'Terminar poligonal'}
                   </button>
+                    )
+                  })()}
                 </div>
               )}
               </>

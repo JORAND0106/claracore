@@ -155,6 +155,26 @@ def azimut_reciproco(azimut: float) -> float:
     return (float(azimut) + 180.0) % 360.0
 
 
+def _norm_grados_360(valor: float) -> float:
+    """Normaliza grados al intervalo [0, 360)."""
+    return float(valor) % 360.0
+
+
+def angulo_obs_derivado_desde_azimuts(az_siguiente: float, az_anterior: float) -> float:
+    """Despeje único de ceros atrás: Ang_Obs = (Az_sig − Az_ant − 180°) mod 360.
+
+    Equivalente a ``(Az_siguiente − base_azimut) mod 360`` cuando
+    ``base_azimut = Az_anterior + 180°`` (recíproco). El Sentido no interviene
+    aquí: solo afecta Σ Teórica del cierre angular.
+    """
+    return _norm_grados_360(float(az_siguiente) - float(az_anterior) - 180.0)
+
+
+def angulo_obs_derivado_desde_base(az_siguiente: float, base_azimut: float) -> float:
+    """Ang_Obs derivado con Az_base ya conocido: (Az_sig − Az_base) mod 360."""
+    return _norm_grados_360(float(az_siguiente) - float(base_azimut))
+
+
 def enriquecer_estaciones_poligonal(estaciones: list) -> list:
     """Agrega columnas de calculo para la libreta de poligonal trigonométrica."""
     out = []
@@ -288,6 +308,12 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
                         sin_vz = math.sin(vz)
                         desnivel = (float(dist) * math.cos(vz) / sin_vz) if abs(sin_vz) > 1e-9 else 0.0
                         z = float(z_base) + hi + desnivel - ht
+            ang_deriv = None
+            ang_deriv_texto = None
+            # Ángulo interno/exterior derivado solo para cierre (método coordenadas).
+            if metodo_az == "coordenadas" and az is not None:
+                ang_deriv = angulo_obs_derivado_desde_base(az, base_az)
+                ang_deriv_texto = decimal_to_gms(ang_deriv)
             punto = {
                 **o,
                 "tipo_punto": o.get("tipo_punto") or "auxiliar",
@@ -295,6 +321,9 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
                 "metodo_azimut": metodo_az,
                 "angulo_observado_gms": decimal_a_gms_numero(ang) if ang is not None else None,
                 "angulo_observado_texto": decimal_to_gms(ang) if ang is not None else None,
+                "angulo_derivado": round(ang_deriv, 6) if ang_deriv is not None else None,
+                "angulo_derivado_texto": ang_deriv_texto,
+                "angulo_derivado_para_cierre": metodo_az == "coordenadas" and ang_deriv is not None,
                 "angulo_vertical_gms": decimal_a_gms_numero(ang_v) if ang_v is not None else None,
                 "angulo_vertical_texto": decimal_to_gms(ang_v) if ang_v is not None else None,
                 "azimut": round(az, 6) if az is not None else None,
@@ -610,6 +639,8 @@ def calcular_cierre_poligonal(
             }
 
     angulos_travesia: List[float] = []
+    angulos_detalle: List[dict] = []
+    angulos_derivados = False
     perimetro = 0.0
     n_legs = 0
     retorno = None
@@ -617,33 +648,83 @@ def calcular_cierre_poligonal(
     orientacion_ang = None
     az_ref_inicial = None
     az_ref_final = None
+    az_anterior: Optional[float] = None
 
     if armadas_enr:
         first = armadas_enr[0]
         if first.get("base_azimut") is not None:
             az_ref_inicial = first["base_azimut"]
 
+    def _angulo_para_cierre(arm: dict, fwd: dict) -> tuple[Optional[float], bool]:
+        """Ángulo que alimenta Σ Observada. Con método coordenadas: derivado de azimuts."""
+        metodo = arm.get("metodo_azimut") or fwd.get("metodo_azimut")
+        az_fwd = fwd.get("azimut")
+        base = arm.get("base_azimut")
+        if metodo == "coordenadas" and az_fwd is not None:
+            if base is not None:
+                return angulo_obs_derivado_desde_base(az_fwd, base), True
+            if az_anterior is not None:
+                return angulo_obs_derivado_desde_azimuts(az_fwd, az_anterior), True
+        ang = fwd.get("angulo_medido")
+        return (float(ang) if ang is not None else None), False
+
     for arm in armadas_enr or []:
         fwd = _punto_estacion_adelante(arm)
         if not fwd:
             continue
         dist = float(fwd.get("distancia") or 0)
-        ang = fwd.get("angulo_medido")
+        ang, derivado = _angulo_para_cierre(arm, fwd)
 
         if dist > 1e-9 and not cerrado:
             if ang is not None:
                 angulos_travesia.append(ang)
+                if derivado:
+                    angulos_derivados = True
+                angulos_detalle.append({
+                    "armada_orden": arm.get("orden"),
+                    "estacion": arm.get("estacion_nombre"),
+                    "visado": arm.get("visado_nombre"),
+                    "punto_adelante": fwd.get("nombre_punto"),
+                    "azimut": fwd.get("azimut"),
+                    "azimut_texto": fwd.get("azimut_texto") or (
+                        decimal_to_gms(fwd["azimut"]) if fwd.get("azimut") is not None else None
+                    ),
+                    "base_azimut": arm.get("base_azimut"),
+                    "angulo_cierre": round(ang, 6),
+                    "angulo_cierre_texto": decimal_to_gms(ang),
+                    "derivado": derivado,
+                })
             perimetro += dist
             n_legs += 1
+            if fwd.get("azimut") is not None:
+                az_anterior = float(fwd["azimut"])
             if fwd.get("nombre_punto") == end_name and fwd.get("norte") is not None:
                 retorno = fwd
                 cerrado = True
         elif (dist <= 1e-9) and ang is not None:
             # Armada de orientacion (sin distancia): cierre angular al visado de referencia.
             orientacion_ang = ang
+            if derivado:
+                angulos_derivados = True
             base = arm.get("base_azimut")
-            if base is not None:
-                az_ref_final = (base + ang) % 360
+            az_fwd = fwd.get("azimut")
+            if derivado and az_fwd is not None:
+                # Lectura directa = azimut; no sumar base (ceros atrás).
+                az_ref_final = float(az_fwd) % 360.0
+            elif base is not None and fwd.get("angulo_medido") is not None:
+                az_ref_final = (base + float(fwd["angulo_medido"])) % 360
+            angulos_detalle.append({
+                "armada_orden": arm.get("orden"),
+                "estacion": arm.get("estacion_nombre"),
+                "visado": arm.get("visado_nombre"),
+                "punto_adelante": fwd.get("nombre_punto"),
+                "azimut": az_fwd,
+                "base_azimut": base,
+                "angulo_cierre": round(ang, 6),
+                "angulo_cierre_texto": decimal_to_gms(ang),
+                "derivado": derivado,
+                "orientacion": True,
+            })
 
     n_ang_trav = len(angulos_travesia)
     n_vert = n_legs
@@ -752,6 +833,8 @@ def calcular_cierre_poligonal(
         "sentido": sentido,
         "cerrado": cerrado,
         "tiene_orientacion": tiene_orientacion,
+        "angulos_derivados": angulos_derivados,
+        "angulos_cierre_detalle": angulos_detalle,
         "num_angulos": n_ang,
         "num_vertices": n_vert,
         "suma_observada": round(suma_obs, 6),
