@@ -122,6 +122,10 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
         await api('/puntos', { method: 'POST', body: JSON.stringify(payload) })
       }
       setFormOpen(false)
+      // Tras verificar un BM pendiente, mostrar verificados para que el estado se vea al instante.
+      if (payload.verificado && filtroVerificado === 'pendiente') {
+        setFiltroVerificado('verificado')
+      }
       await cargar()
     } catch (e) {
       setErrorModal(parseApiError(e.message))
