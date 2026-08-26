@@ -612,6 +612,11 @@ export default function ModuloInformes({
   const [actasConc, setActasConc] = useState([])
   const [semanaConcId, setSemanaConcId] = useState('')
   const [actaConcId, setActaConcId] = useState('')
+  /** Niveles activos del contrato para selector Preacta mensual (CC-MES). */
+  const [nivelesValidacionMes, setNivelesValidacionMes] = useState([])
+  /** Nivel de aprobación elegido; default = nivel_maximo del contrato. */
+  const [nivelAprobacionMes, setNivelAprobacionMes] = useState(null)
+  const [cargandoNivelesMes, setCargandoNivelesMes] = useState(false)
   /** CC-GER-001: acta presente = RPO en período (misma lógica que matriz SICOE), vía /json/informe-gerencia-matriz. */
   const [gerAutoActaId, setGerAutoActaId] = useState(null)
   const [gerMatDato, setGerMatDato] = useState(null)
@@ -867,6 +872,77 @@ export default function ModuloInformes({
       setFormatoMes002Abierto(false)
     }
   }, [formatosMesAbierto])
+
+  /** Carga niveles activos del contrato al abrir Preacta mensual; default = último nivel. */
+  useEffect(() => {
+    if (!contratoId || !formatosMesAbierto) {
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setNivelesValidacionMes([])
+      setNivelAprobacionMes(null)
+      return
+    }
+    let cancelled = false
+    setCargandoNivelesMes(true)
+    fetchConFallback(`/sicoe-obra/${contratoId}/niveles-validacion`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return
+        const activos = Array.isArray(d?.niveles_activos)
+          ? d.niveles_activos.map((n) => parseInt(n, 10)).filter((n) => Number.isFinite(n) && n >= 1 && n <= 6)
+          : []
+        const detalle = Array.isArray(d?.niveles) ? d.niveles : []
+        const opts = (activos.length ? activos : [1, 2, 3]).map((n) => {
+          const row = detalle.find((x) => Number(x?.nivel) === n)
+          return {
+            nivel: n,
+            encabezado: (row?.encabezado || `Nivel ${n}`).trim(),
+          }
+        })
+        setNivelesValidacionMes(opts)
+        const mx = Number.isFinite(Number(d?.nivel_maximo))
+          ? Number(d.nivel_maximo)
+          : (opts.length ? opts[opts.length - 1].nivel : null)
+        setNivelAprobacionMes((prev) => {
+          if (prev != null && opts.some((o) => o.nivel === prev)) return prev
+          return mx
+        })
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNivelesValidacionMes([{ nivel: 1, encabezado: 'Nivel 1' }, { nivel: 2, encabezado: 'Nivel 2' }, { nivel: 3, encabezado: 'Nivel 3' }])
+          setNivelAprobacionMes((prev) => (prev != null ? prev : 3))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCargandoNivelesMes(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId, formatosMesAbierto])
+
+  /** Query `nivel_aprobacion` para todas las rutas CC-MES (items, PDF, Excel). */
+  function withQsNivelAprobacionMes(path, extraParams) {
+    const s = String(path || '')
+    const qi = s.indexOf('?')
+    const base = qi === -1 ? s : s.slice(0, qi)
+    const params = new URLSearchParams(qi === -1 ? '' : s.slice(qi + 1))
+    if (nivelAprobacionMes != null && nivelAprobacionMes !== '') {
+      params.set('nivel_aprobacion', String(nivelAprobacionMes))
+    }
+    if (extraParams && typeof extraParams === 'object') {
+      Object.entries(extraParams).forEach(([k, v]) => {
+        if (v != null && v !== '') params.set(k, String(v))
+      })
+    }
+    const q = params.toString()
+    return q ? `${base}?${q}` : base
+  }
 
   useEffect(() => {
     if (!formatoMemorias002Abierto) setCcSub002ListadoItemsAbierto(false)
@@ -1302,7 +1378,10 @@ export default function ModuloInformes({
     }
     let cancelled = false
     setCargandoItemsMensual(true)
-    fetchConFallback(`/informes/${contratoId}/ccd/conciliacion/acta/${aid}/items`, {
+    const pathItems = withQsNivelAprobacionMes(
+      `/informes/${contratoId}/ccd/conciliacion/acta/${aid}/items`
+    )
+    fetchConFallback(pathItems, {
       headers: { Authorization: `Bearer ${authToken}` },
     })
       .then((r) => (r.ok ? r.json() : null))
@@ -1319,7 +1398,7 @@ export default function ModuloInformes({
     return () => {
       cancelled = true
     }
-  }, [contratoId, actaConcId, formatosMesAbierto])
+  }, [contratoId, actaConcId, formatosMesAbierto, nivelAprobacionMes])
 
   function onSubChange(e) {
     const id = e.target.value
@@ -1764,7 +1843,7 @@ export default function ModuloInformes({
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
-    const pathPdf = `/informes/${cid}/pdf/cc-mes-001/acta/${aid}`
+    const pathPdf = withQsNivelAprobacionMes(`/informes/${cid}/pdf/cc-mes-001/acta/${aid}`)
     try {
       const r = await fetchConFallback(pathPdf, opts)
       if (!r || !r.ok) {
@@ -1888,11 +1967,13 @@ export default function ModuloInformes({
       return { fase: 'cargando', tipo: 'memoria-mes', itemNumero }
     })
     setError(null)
-    const q = encodeURIComponent(itemNumero)
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
-    const pathPdf = `/informes/${cid}/pdf/cc-mes-002/acta/${aid}?item_numero=${q}`
+    const pathPdf = withQsNivelAprobacionMes(
+      `/informes/${cid}/pdf/cc-mes-002/acta/${aid}`,
+      { item_numero: itemNumero }
+    )
     try {
       const r = await fetchConFallback(pathPdf, opts)
       if (!r || !r.ok) {
@@ -1937,7 +2018,7 @@ export default function ModuloInformes({
     }
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
-    const pathPdf = `/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo`
+    const pathPdf = withQsNivelAprobacionMes(`/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo`)
     try {
       const r = await fetchConFallback(pathPdf, opts)
       if (!r || !r.ok) {
@@ -1967,7 +2048,9 @@ export default function ModuloInformes({
         pdfBlob: blob,
         mimeTipo: 'application/pdf',
         nombreArchivo,
-        rutaSello: `/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo/con-sello-firma`,
+        rutaSello: withQsNivelAprobacionMes(
+          `/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo/con-sello-firma`
+        ),
         nombreArchivoSello: asegurarNombreArchivoPdf(nombreArchivo.replace(/\.pdf$/i, '') + '_firmado.pdf'),
       })
     } catch (e) {
@@ -2565,7 +2648,7 @@ export default function ModuloInformes({
     setError(null)
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
-    const path = `/informes/${cid}/excel/cc-mes-002/acta/${aid}/completo`
+    const path = withQsNivelAprobacionMes(`/informes/${cid}/excel/cc-mes-002/acta/${aid}/completo`)
     try {
       const fetchOpts = { headers: { Authorization: `Bearer ${authToken}` } }
       if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
@@ -2612,8 +2695,10 @@ export default function ModuloInformes({
     setError(null)
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
-    const q = encodeURIComponent(itemNumero)
-    const path = `/informes/${cid}/excel/cc-mes-002/acta/${aid}?item_numero=${q}`
+    const path = withQsNivelAprobacionMes(
+      `/informes/${cid}/excel/cc-mes-002/acta/${aid}`,
+      { item_numero: itemNumero }
+    )
     try {
       const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
       if (!r || !r.ok) {
@@ -5253,6 +5338,33 @@ export default function ModuloInformes({
           )}
         </div>
 
+        <div style={{ marginBottom: ui.gap + 'px' }}>
+          <label style={labelSub}>Nivel de aprobación (cantidades Aprobadas)</label>
+          <select
+            style={selectSub}
+            value={nivelAprobacionMes ?? ''}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10)
+              setNivelAprobacionMes(Number.isFinite(v) ? v : null)
+            }}
+            disabled={cargandoNivelesMes || nivelesValidacionMes.length === 0}
+            title="Filtra registros Aprobados en cascada hasta el nivel elegido. Por defecto: último nivel activo del contrato."
+          >
+            {cargandoNivelesMes && <option value="">Cargando niveles…</option>}
+            {!cargandoNivelesMes && nivelesValidacionMes.length === 0 && (
+              <option value="">Sin niveles configurados</option>
+            )}
+            {nivelesValidacionMes.map((n) => (
+              <option key={n.nivel} value={n.nivel}>
+                {n.encabezado || `Nivel ${n.nivel}`}
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '4px', lineHeight: 1.35 }}>
+            Por defecto el último nivel activo del contrato. Al cambiar el nivel se regeneran tabla y memorias solo con lo aprobado hasta ese nivel.
+          </div>
+        </div>
+
         {actaConcId && (
           <div
             style={{
@@ -5345,7 +5457,9 @@ export default function ModuloInformes({
                       onClick={() =>
                         descargarPdfConc(
                           rutaPdfConcConSello(
-                            `/informes/${contratoId}/pdf/cc-mes-001/acta/${encodeURIComponent(actaConcId)}`
+                            withQsNivelAprobacionMes(
+                              `/informes/${contratoId}/pdf/cc-mes-001/acta/${encodeURIComponent(actaConcId)}`
+                            )
                           ),
                           'CC-MES-001.pdf'
                         )
@@ -5566,7 +5680,9 @@ export default function ModuloInformes({
                             onClick={() =>
                               descargarPdfConc(
                                 rutaPdfConcConSello(
-                                  `/informes/${contratoId}/pdf/cc-mes-002/acta/${encodeURIComponent(actaConcId)}/completo`
+                                  withQsNivelAprobacionMes(
+                                    `/informes/${contratoId}/pdf/cc-mes-002/acta/${encodeURIComponent(actaConcId)}/completo`
+                                  )
                                 ),
                                 'CC-MES-002-todos.pdf'
                               )
@@ -5634,7 +5750,10 @@ export default function ModuloInformes({
                                 onClick={() =>
                                   descargarPdfConc(
                                     rutaPdfConcConSello(
-                                      `/informes/${contratoId}/pdf/cc-mes-002/acta/${encodeURIComponent(actaConcId)}?item_numero=${encodeURIComponent(item.item_numero)}`
+                                      withQsNivelAprobacionMes(
+                                        `/informes/${contratoId}/pdf/cc-mes-002/acta/${encodeURIComponent(actaConcId)}`,
+                                        { item_numero: item.item_numero }
+                                      )
                                     ),
                                     `CC-MES-002-${item.item_numero}.pdf`
                                   )

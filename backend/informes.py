@@ -2322,6 +2322,39 @@ def _acta_pertenece_contrato(contrato_id: int, acta_id: int) -> bool:
     return bool(r and int(r.get("contrato_id") or 0) == int(contrato_id))
 
 
+def _nivel_aprobacion_mes_query(
+    contrato_id: int,
+    nivel_aprobacion: Optional[int],
+) -> Optional[int]:
+    """
+    Query opcional ``nivel_aprobacion`` para Preacta mensual (CC-MES-001/002).
+
+    None → último nivel activo del contrato (comportamiento histórico).
+    Entero → debe ser un nivel activo; 422 si no pertenece al contrato.
+    """
+    if nivel_aprobacion is None:
+        return None
+    try:
+        n = int(nivel_aprobacion)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(422, "nivel_aprobacion debe ser un entero entre 1 y 6") from e
+    try:
+        matriz_params_contrato(_sb, int(contrato_id), nivel_aprobacion=n)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return n
+
+
+_NIVEL_APROBACION_MES_Q = Query(
+    None,
+    ge=1,
+    le=6,
+    description=(
+        "Nivel de validación activo del contrato con el que filtrar cantidades Aprobadas "
+        "(cascada hasta ese nivel). Por defecto: último nivel activo."
+    ),
+)
+
 def _resolver_acta_id_en_contrato(contrato_id: int, acta_ref: Optional[int]) -> Optional[int]:
     """Resuelve una referencia de acta al id real dentro del contrato.
 
@@ -2682,11 +2715,19 @@ def ccd_items_conciliacion_semana(contrato_id: int, semana_id: int, current_user
 
 
 @router.get("/{contrato_id}/ccd/conciliacion/acta/{acta_id}/items")
-def ccd_items_conciliacion_acta(contrato_id: int, acta_id: int, current_user=Depends(_get_user)):
+def ccd_items_conciliacion_acta(
+    contrato_id: int,
+    acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    current_user=Depends(_get_user),
+):
     _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    reg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
+    niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+    reg = fetch_registros_informe_cc_mes_por_acta(
+        _sb, contrato_id, acta_id, nivel_aprobacion=niv
+    )
     items, total = aggregate_items_conciliacion(reg)
     _sort_items_corte_por_item_numero_asc(items)
     caps = _capitulos_por_item_numero_desde_items(items)
@@ -5511,12 +5552,16 @@ def pdf_cc_sem_001_semana(
 def pdf_cc_mes_001_acta(
     contrato_id: int,
     acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
     current_user=Depends(_get_user),
 ):
     _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    reg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
+    niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+    reg = fetch_registros_informe_cc_mes_por_acta(
+        _sb, contrato_id, acta_id, nivel_aprobacion=niv
+    )
     items, total = aggregate_items_conciliacion(reg)
     _sort_items_corte_por_item_numero_asc(items)
     ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
@@ -5770,13 +5815,20 @@ def pdf_cc_mes_002_acta(
     contrato_id: int,
     acta_id: int,
     item_numero: str = Query(...),
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
     current_user=Depends(_get_user),
 ):
     _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
+    niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
     registros = fetch_registros_memoria_cc_mes_alineado_acta(
-        _sb, contrato_id, item_numero, acta_rpo_id=acta_id, item_exacto=True
+        _sb,
+        contrato_id,
+        item_numero,
+        acta_rpo_id=acta_id,
+        item_exacto=True,
+        nivel_aprobacion=niv,
     )
     if not registros:
         raise HTTPException(404, "No hay registros para este ítem y acta")
@@ -5903,13 +5955,17 @@ def pdf_cc_sem_001_semana_con_sello_firma(
 def pdf_cc_mes_001_acta_con_sello_firma(
     contrato_id: int,
     acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
     current_user=Depends(_get_user),
 ):
     """Mismo PDF que CC-MES-001 + página final de sello."""
     _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    reg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
+    niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+    reg = fetch_registros_informe_cc_mes_por_acta(
+        _sb, contrato_id, acta_id, nivel_aprobacion=niv
+    )
     items, total = aggregate_items_conciliacion(reg)
     _sort_items_corte_por_item_numero_asc(items)
     ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
@@ -6355,14 +6411,21 @@ def pdf_cc_mes_002_acta_con_sello_firma(
     contrato_id: int,
     acta_id: int,
     item_numero: str = Query(...),
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
     current_user=Depends(_get_user),
 ):
     """Misma memoria CC-MES-002 + página de sello."""
     _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
+    niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
     registros = fetch_registros_memoria_cc_mes_alineado_acta(
-        _sb, contrato_id, item_numero, acta_rpo_id=acta_id, item_exacto=True
+        _sb,
+        contrato_id,
+        item_numero,
+        acta_rpo_id=acta_id,
+        item_exacto=True,
+        nivel_aprobacion=niv,
     )
     if not registros:
         raise HTTPException(404, "No hay registros para este ítem y acta")
@@ -6454,7 +6517,13 @@ _CC_MES_002_SINGLE_PASS_MAX_REGS = max(
 )
 
 
-def _cc_mes_002_acta_completo_ctx(contrato_id: int, acta_id: int, current_user) -> Dict[str, Any]:
+def _cc_mes_002_acta_completo_ctx(
+    contrato_id: int,
+    acta_id: int,
+    current_user,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> Dict[str, Any]:
     """Contexto «todos los ítems» CC-MES-002: 1 lectura Supabase + HTML por ítem.
 
     Antes se hacía N+1 (listado agregado + fetch memoria por ítem, cada uno con
@@ -6462,7 +6531,9 @@ def _cc_mes_002_acta_completo_ctx(contrato_id: int, acta_id: int, current_user) 
     y/o agotamiento al renderizar con xhtml2pdf.
     """
     # Una sola lectura paginada con detalle de memoria (fotos, PK, etc.).
-    todos = fetch_registros_memoria_cc_mes_acta_todos(_sb, contrato_id, acta_id)
+    todos = fetch_registros_memoria_cc_mes_acta_todos(
+        _sb, contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
+    )
     if not todos:
         raise HTTPException(
             status_code=404,
@@ -6588,9 +6659,17 @@ def _cc_mes_002_acta_completo_ctx(contrato_id: int, acta_id: int, current_user) 
     }
 
 
-def _cc_mes_002_acta_html_parts_completo(contrato_id: int, acta_id: int, current_user):
+def _cc_mes_002_acta_html_parts_completo(
+    contrato_id: int,
+    acta_id: int,
+    current_user,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+):
     """Arma el HTML «todos los ítems» de un acta RPO (CC-MES-002). Devuelve (html, contrato, nrpo)."""
-    ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
+    ctx = _cc_mes_002_acta_completo_ctx(
+        contrato_id, acta_id, current_user, nivel_aprobacion=nivel_aprobacion
+    )
     return ctx["html_joined"], ctx["contrato"], ctx["nrpo"]
 
 
@@ -6648,8 +6727,15 @@ _CCD_MES_002_CACHE_TTL_SEC = max(
 _CCD_MES_002_CACHE_LOCK = threading.Lock()
 
 
-def _cc_mes_002_cache_key(contrato_id: int, acta_id: int) -> str:
-    raw = f"CC-MES-002|completo|{int(contrato_id)}|{int(acta_id)}"
+def _cc_mes_002_cache_key(
+    contrato_id: int,
+    acta_id: int,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> str:
+    # nivel 0 = último nivel activo (default); distinto nivel → distinta clave de caché.
+    nkey = int(nivel_aprobacion) if nivel_aprobacion is not None else 0
+    raw = f"CC-MES-002|completo|{int(contrato_id)}|{int(acta_id)}|n{nkey}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
 
@@ -6672,9 +6758,10 @@ def _cc_mes_002_cache_put(
     contrato_numero: str = "",
     n_items: Any = None,
     n_regs: Any = None,
+    nivel_aprobacion: Optional[int] = None,
 ) -> str:
     """Persiste el PDF sin sello; devuelve la clave de caché."""
-    key = _cc_mes_002_cache_key(contrato_id, acta_id)
+    key = _cc_mes_002_cache_key(contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion)
     pdf_path, meta_path = _cc_mes_002_cache_paths(key)
     with _CCD_MES_002_CACHE_LOCK:
         tmp = pdf_path + ".part"
@@ -6685,6 +6772,7 @@ def _cc_mes_002_cache_put(
             "key": key,
             "contrato_id": int(contrato_id),
             "acta_id": int(acta_id),
+            "nivel_aprobacion": int(nivel_aprobacion) if nivel_aprobacion is not None else None,
             "nrpo": str(nrpo or ""),
             "fname": str(fname or ""),
             "contrato_numero": str(contrato_numero or ""),
@@ -6698,17 +6786,23 @@ def _cc_mes_002_cache_put(
             json.dump(meta, f)
         _os.replace(tmp_m, meta_path)
     _log.info(
-        "cc_mes_002 cache put key=%s bytes=%s acta=%s",
+        "cc_mes_002 cache put key=%s bytes=%s acta=%s nivel=%s",
         key[:12],
         len(pdf_bytes),
         acta_id,
+        nivel_aprobacion,
     )
     return key
 
 
-def _cc_mes_002_cache_get(contrato_id: int, acta_id: int) -> Optional[Tuple[bytes, Dict[str, Any]]]:
+def _cc_mes_002_cache_get(
+    contrato_id: int,
+    acta_id: int,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> Optional[Tuple[bytes, Dict[str, Any]]]:
     """Devuelve (pdf_bytes, meta) si el caché es válido; si no, None."""
-    key = _cc_mes_002_cache_key(contrato_id, acta_id)
+    key = _cc_mes_002_cache_key(contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion)
     pdf_path, meta_path = _cc_mes_002_cache_paths(key)
     with _CCD_MES_002_CACHE_LOCK:
         if not (_os.path.isfile(pdf_path) and _os.path.isfile(meta_path)):
@@ -6743,6 +6837,7 @@ def _cc_mes_002_pdf_completo_bytes_cached(
     current_user,
     *,
     force_refresh: bool = False,
+    nivel_aprobacion: Optional[int] = None,
 ) -> Tuple[bytes, Dict[str, Any]]:
     """PDF consolidado reutilizando caché de vista previa cuando exista.
 
@@ -6750,13 +6845,16 @@ def _cc_mes_002_pdf_completo_bytes_cached(
         (pdf_bytes, info) donde info incluye nrpo, fname, contrato, from_cache, n_items, n_regs.
     """
     if not force_refresh:
-        hit = _cc_mes_002_cache_get(contrato_id, acta_id)
+        hit = _cc_mes_002_cache_get(
+            contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
+        )
         if hit:
             pdf_bytes, meta = hit
             _log.info(
-                "cc_mes_002 PDF completo desde caché acta=%s bytes=%s",
+                "cc_mes_002 PDF completo desde caché acta=%s bytes=%s nivel=%s",
                 acta_id,
                 len(pdf_bytes),
+                nivel_aprobacion,
             )
             nrpo = str(meta.get("nrpo") or acta_id)
             fname = _safe_filename_pdf(
@@ -6776,7 +6874,9 @@ def _cc_mes_002_pdf_completo_bytes_cached(
                 "n_regs": meta.get("n_regs"),
             }
 
-    ctx = _cc_mes_002_acta_completo_ctx(contrato_id, acta_id, current_user)
+    ctx = _cc_mes_002_acta_completo_ctx(
+        contrato_id, acta_id, current_user, nivel_aprobacion=nivel_aprobacion
+    )
     pdf_bytes = _cc_mes_002_pdf_completo_bytes(ctx)
     nrpo = ctx["nrpo"]
     fname = _safe_filename_pdf(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
@@ -6790,6 +6890,7 @@ def _cc_mes_002_pdf_completo_bytes_cached(
         contrato_numero=str(contrato.get("numero") or ""),
         n_items=ctx.get("n_items"),
         n_regs=ctx.get("n_regs"),
+        nivel_aprobacion=nivel_aprobacion,
     )
     return pdf_bytes, {
         "nrpo": nrpo,
@@ -6805,6 +6906,7 @@ def _cc_mes_002_pdf_completo_bytes_cached(
 def pdf_cc_mes_002_acta_completo(
     contrato_id: int,
     acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
     current_user=Depends(_get_user),
 ):
     """Un solo PDF CC-MES-002: todos los ítems del acta (mismo formato que por ítem, salto entre ítems)."""
@@ -6812,8 +6914,11 @@ def pdf_cc_mes_002_acta_completo(
     try:
         if not _acta_pertenece_contrato(contrato_id, acta_id):
             raise HTTPException(404, "Acta no encontrada en este contrato")
+        niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
         try:
-            pdf_bytes, info = _cc_mes_002_pdf_completo_bytes_cached(contrato_id, acta_id, current_user)
+            pdf_bytes, info = _cc_mes_002_pdf_completo_bytes_cached(
+                contrato_id, acta_id, current_user, nivel_aprobacion=niv
+            )
         except Exception as e:
             _log.exception("pdf_cc_mes_002_acta_completo: fallo PDF")
             raise HTTPException(500, f"Error generando PDF memoria mensual completa: {e!s}") from e
@@ -6846,6 +6951,7 @@ def pdf_cc_mes_002_acta_completo(
 def pdf_cc_mes_002_acta_completo_con_sello_firma(
     contrato_id: int,
     acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
     current_user=Depends(_get_user),
 ):
     """PDF «todos los ítems» CC-MES-002 + página de sello.
@@ -6857,8 +6963,11 @@ def pdf_cc_mes_002_acta_completo_con_sello_firma(
     try:
         if not _acta_pertenece_contrato(contrato_id, acta_id):
             raise HTTPException(404, "Acta no encontrada en este contrato")
+        niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
         try:
-            pdf_bytes, info = _cc_mes_002_pdf_completo_bytes_cached(contrato_id, acta_id, current_user)
+            pdf_bytes, info = _cc_mes_002_pdf_completo_bytes_cached(
+                contrato_id, acta_id, current_user, nivel_aprobacion=niv
+            )
         except Exception as e:
             _log.exception(
                 "pdf_cc_mes_002_acta_completo_con_sello_firma: fallo PDF from_cache=%s",
@@ -7076,12 +7185,16 @@ def excel_cc_mes_002_acta(
     contrato_id: int,
     acta_id: int,
     item_numero: str = Query(...),
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
     current_user=Depends(_get_user),
 ):
     """Excel CC-MES-002 por ítem: misma estructura que la memoria PDF mensual."""
     _perm_informes_ccd(current_user, "exportar")
     try:
-        xbytes = _cc_mes_002_item_excel_bytes(contrato_id, acta_id, item_numero, current_user)
+        niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+        xbytes = _cc_mes_002_item_excel_bytes(
+            contrato_id, acta_id, item_numero, current_user, nivel_aprobacion=niv
+        )
         ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
         nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
         item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
@@ -7102,12 +7215,16 @@ def excel_cc_mes_002_acta(
 def excel_cc_mes_002_acta_completo(
     contrato_id: int,
     acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
     current_user=Depends(_get_user),
 ):
     """Excel CC-MES-002: una hoja por ítem (todos los ítems del acta)."""
     _perm_informes_ccd(current_user, "exportar")
     try:
-        xbytes = _cc_mes_002_acta_completo_excel_bytes(contrato_id, acta_id, current_user)
+        niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+        xbytes = _cc_mes_002_acta_completo_excel_bytes(
+            contrato_id, acta_id, current_user, nivel_aprobacion=niv
+        )
         ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
         nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
         fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.xlsx")
@@ -11296,12 +11413,19 @@ def _cc_mes_002_item_excel_bytes(
     acta_id: int,
     item_numero: str,
     current_user: dict,
+    *,
+    nivel_aprobacion: Optional[int] = None,
 ) -> bytes:
     """Excel CC-MES-002 por ítem: mismo contenido lógico que el PDF mensual."""
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
     registros = fetch_registros_memoria_cc_mes_alineado_acta(
-        _sb, contrato_id, item_numero, acta_rpo_id=acta_id, item_exacto=True
+        _sb,
+        contrato_id,
+        item_numero,
+        acta_rpo_id=acta_id,
+        item_exacto=True,
+        nivel_aprobacion=nivel_aprobacion,
     )
     if not registros:
         raise HTTPException(404, "No hay registros para este ítem y acta")
@@ -11354,12 +11478,20 @@ def _cc_mes_002_item_excel_bytes(
     return buf.getvalue()
 
 
-def _cc_mes_002_acta_completo_excel_bytes(contrato_id: int, acta_id: int, current_user: dict) -> bytes:
+def _cc_mes_002_acta_completo_excel_bytes(
+    contrato_id: int,
+    acta_id: int,
+    current_user: dict,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> bytes:
     """Excel CC-MES-002: una hoja por ítem (misma lógica que PDF completo mensual)."""
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
     # Misma lectura única que el PDF consolidado (evita N+1 a Supabase).
-    todos = fetch_registros_memoria_cc_mes_acta_todos(_sb, contrato_id, acta_id)
+    todos = fetch_registros_memoria_cc_mes_acta_todos(
+        _sb, contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
+    )
     if not todos:
         raise HTTPException(404, "No hay registros en esta acta para generar memorias")
     items_agg, _total = aggregate_items_conciliacion(todos)
