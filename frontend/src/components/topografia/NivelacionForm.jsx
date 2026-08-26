@@ -1357,9 +1357,10 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
             <TopoExcelSheet
               sheet={sheet}
               title="Nueva nivelación"
-              minWidth={640}
+              minWidth={isCompact ? undefined : 640}
+              compact={isCompact}
               columns={[
-                { key: 'nombre', label: 'Nombre', ayuda: 'Identificador del circuito.', width: '20%' },
+                { key: 'nombre', label: 'Nombre', ayuda: 'Identificador del circuito.', width: '20%', compactFull: true },
                 { key: 'circuito', label: 'Circuito', ayuda: 'Directa (A→B→A) o circuito cerrado.', width: '18%' },
                 { key: 'nivel', label: 'Nivel', ayuda: 'Automático: 3 hilos y distancia taquimétrica. Electrónico: V+ y distancia manual.', width: '18%' },
                 { key: 'bm_ini', label: 'BM ini.', ayuda: 'Punto de partida con cota en biblioteca.', width: '22%' },
@@ -1421,14 +1422,15 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
               <TopoExcelSheet
                 sheet={sheet}
                 title="Datos generales"
-                minWidth={720}
+                minWidth={isCompact ? undefined : 720}
+                compact={isCompact}
                 columns={[
-                  { key: 'nombre', label: 'Nombre', ayuda: 'Identificador del circuito.', width: '16%' },
+                  { key: 'nombre', label: 'Nombre', ayuda: 'Identificador del circuito.', width: '16%', compactFull: true },
                   { key: 'circuito', label: 'Circuito', ayuda: 'Directa o circuito cerrado.', width: '14%' },
                   { key: 'nivel', label: 'Nivel', ayuda: 'Automático (3 hilos) o electrónico.', width: '14%' },
                   { key: 'bm_ini', label: 'BM inicio', ayuda: 'Punto de arranque (biblioteca).', width: '18%' },
                   { key: 'bm_fin', label: 'BM fin', ayuda: 'BM de cierre para error de cierre.', width: '18%' },
-                  { key: 'operador', label: 'Operador', ayuda: 'Nombre del operador (autocompletado).', width: '20%' },
+                  { key: 'operador', label: 'Operador', ayuda: 'Nombre del operador (autocompletado).', width: '20%', compactFull: true },
                 ]}
                 cells={[
                   <input
@@ -1497,7 +1499,8 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
               <TopoExcelSheet
                 sheet={sheet}
                 title="Equipo de medición"
-                minWidth={400}
+                minWidth={isCompact ? undefined : 400}
+                compact={isCompact}
                 columns={[
                   { key: 'marca', label: 'Marca', ayuda: 'Marca del nivel.' },
                   { key: 'modelo', label: 'Modelo', ayuda: 'Modelo / referencia.' },
