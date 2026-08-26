@@ -64,7 +64,7 @@ export function hilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_TOL) {
   return diagnosticoHilosIncongruentes(bloque, tipoNivel, tol) != null
 }
 
-export const ABSCISA_NUMERICA_MSG = 'La abscisa debe ser un valor numérico (metros).'
+export const ABSCISA_NUMERICA_MSG = 'Seleccione la ubicación en el plano PK.'
 
 /** Abscisa en metros; acepta coma decimal. */
 export function parseAbscisa(v) {
@@ -76,6 +76,7 @@ export function parseAbscisa(v) {
 }
 
 export function abscisaInvalida(fila) {
+  if (fila?.ubicacion_pk_id) return false
   const raw = String(fila?.abscisa ?? '').trim()
   if (!raw) return false
   return parseAbscisa(fila.abscisa) === null
@@ -123,6 +124,13 @@ export function nuevaFilaPunto(orden = 1, esPrimera = false) {
     vminus: bloqueVacio(),
     es_fila_cierre: false,
     punto_biblioteca_id: null,
+    ubicacion_pk_id: null,
+    ubicacion_pk: '',
+    ubicacion_tramo: '',
+    ubicacion_costado: '',
+    ubicacion_infraestructura: '',
+    ubicacion_lat: null,
+    ubicacion_lng: null,
   }
 }
 
@@ -245,14 +253,16 @@ export function faltantesMetadatosFila(fila, idx, bmInicialNombre) {
   const nombre = idx === 0
     ? (bmInicialNombre || (fila.nombre_punto || '').trim())
     : (fila.nombre_punto || '').trim()
-  const abscisaVal = parseAbscisa(fila.abscisa)
+  const abscisaVal = fila?.ubicacion_pk_id
+    ? String(fila.ubicacion_pk || fila.abscisa || '').trim() || 'pk'
+    : parseAbscisa(fila.abscisa)
   const descripcion = (fila.descripcion_punto || '').trim()
   let tipo = (fila.tipo_punto || '').trim()
   if (idx === 0 && !tipo) tipo = 'BM'
   const abscisaNoNumerica = abscisaInvalida(fila)
   return {
     nombre: !nombre,
-    abscisa: abscisaVal == null,
+    abscisa: !abscisaVal,
     abscisaNoNumerica,
     descripcion: !descripcion,
     tipo: idx > 0 && !tipo,
@@ -372,7 +382,7 @@ export function validarCarteraNivelacion(filas, tipoNivel, bmInicialNombre, opts
     if (!metadatosFilaCompletos(fila, idx, bmInicialNombre)) {
       errores.push(`Fila ${idx + 1}: complete nombre, abscisa, descripción y tipo.`)
     } else if (abscisaInvalida(fila)) {
-      errores.push(`Fila ${idx + 1}: la abscisa debe ser numérica.`)
+      errores.push(`Fila ${idx + 1}: seleccione la ubicación en el plano PK.`)
     }
     if (!apertura && idx > 0 && filaTieneVplus(fila, tipoNivel) && !filaTieneVminus(fila, tipoNivel)) {
       errores.push(`Fila ${idx + 1}: V+ requiere V− previa en la misma fila (cambio).`)
@@ -405,7 +415,7 @@ export function validarCarteraParaGuardado(filas, tipoNivel, bmInicialNombre, op
     if (!metadatosFilaCompletos(fila, idx, bmInicialNombre)) {
       errores.push(`Fila ${idx + 1}: complete nombre, abscisa, descripción y tipo.`)
     } else if (abscisaInvalida(fila)) {
-      errores.push(`Fila ${idx + 1}: la abscisa debe ser numérica.`)
+      errores.push(`Fila ${idx + 1}: seleccione la ubicación en el plano PK.`)
     }
     if (
       !apertura
@@ -577,11 +587,18 @@ export function filasToLecturas(filas, tipoNivel) {
         nombre_punto: fila.nombre_punto.trim(),
         tipo_punto: fila.tipo_punto || (rowIdx === 0 ? 'BM' : 'estacion'),
         tipo_lectura: tipo,
-        abscisa: fila.abscisa?.trim() || null,
+        abscisa: (fila.ubicacion_pk || fila.abscisa)?.trim?.() || fila.abscisa?.trim?.() || null,
         descripcion_punto: fila.descripcion_punto?.trim() || null,
         distancia_m: distLect,
         lectura,
         punto_biblioteca_id: fila.punto_biblioteca_id || null,
+        ubicacion_pk_id: fila.ubicacion_pk_id || null,
+        ubicacion_pk: fila.ubicacion_pk || null,
+        ubicacion_tramo: fila.ubicacion_tramo || null,
+        ubicacion_costado: fila.ubicacion_costado || null,
+        ubicacion_infraestructura: fila.ubicacion_infraestructura || null,
+        ubicacion_lat: fila.ubicacion_lat != null ? Number(fila.ubicacion_lat) : null,
+        ubicacion_lng: fila.ubicacion_lng != null ? Number(fila.ubicacion_lng) : null,
       }
       if (tipoExport === 'automatico' || numOrNull(bloque?.hM) != null) {
         item.hilo_superior = numOrNull(bloque.hS)
@@ -602,11 +619,18 @@ export function filasToLecturas(filas, tipoNivel) {
       nombre_punto: nombre,
       tipo_punto: fila.tipo_punto || 'estacion',
       tipo_lectura: 'Vi',
-      abscisa: fila.abscisa?.trim() || null,
+      abscisa: (fila.ubicacion_pk || fila.abscisa)?.trim?.() || fila.abscisa?.trim?.() || null,
       descripcion_punto: fila.descripcion_punto?.trim() || null,
       distancia_m: null,
       lectura: null,
       punto_biblioteca_id: fila.punto_biblioteca_id || null,
+      ubicacion_pk_id: fila.ubicacion_pk_id || null,
+      ubicacion_pk: fila.ubicacion_pk || null,
+      ubicacion_tramo: fila.ubicacion_tramo || null,
+      ubicacion_costado: fila.ubicacion_costado || null,
+      ubicacion_infraestructura: fila.ubicacion_infraestructura || null,
+      ubicacion_lat: fila.ubicacion_lat != null ? Number(fila.ubicacion_lat) : null,
+      ubicacion_lng: fila.ubicacion_lng != null ? Number(fila.ubicacion_lng) : null,
     })
   })
 
@@ -623,6 +647,13 @@ export function lecturasToFilas(lecturas, tipoNivel) {
     fila.tipo_punto = l.tipo_punto === 'TP' ? 'estacion' : (l.tipo_punto || fila.tipo_punto)
     fila.abscisa = l.abscisa ?? fila.abscisa ?? ''
     fila.descripcion_punto = l.descripcion_punto ?? l.ubicacion ?? fila.descripcion_punto ?? ''
+    if (l.ubicacion_pk_id != null) fila.ubicacion_pk_id = l.ubicacion_pk_id
+    if (l.ubicacion_pk != null) fila.ubicacion_pk = l.ubicacion_pk
+    if (l.ubicacion_tramo != null) fila.ubicacion_tramo = l.ubicacion_tramo
+    if (l.ubicacion_costado != null) fila.ubicacion_costado = l.ubicacion_costado
+    if (l.ubicacion_infraestructura != null) fila.ubicacion_infraestructura = l.ubicacion_infraestructura
+    if (l.ubicacion_lat != null) fila.ubicacion_lat = l.ubicacion_lat
+    if (l.ubicacion_lng != null) fila.ubicacion_lng = l.ubicacion_lng
     const tipo = (l.tipo_lectura || 'V+').replace('V−', 'V-')
     if (tipoNivel === 'electronico' && l.distancia_m != null) {
       if (tipo === 'V+') fila.dist_vplus_m = l.distancia_m

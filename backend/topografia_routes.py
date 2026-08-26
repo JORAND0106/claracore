@@ -11,6 +11,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from main import _require_contract_access, get_current_user, supabase, supabase_execute
+from topografia_cargos import es_cargo_topografia
 from topografia_poligonal_papelera import (
     DIAS_PURGA_PAPELERA,
     edad_en_papelera_dias,
@@ -1308,6 +1309,13 @@ class LecturaNivelBody(BaseModel):
     descripcion_punto: Optional[str] = None
     ubicacion: Optional[str] = None
     punto_biblioteca_id: Optional[str] = None
+    ubicacion_pk_id: Optional[str] = None
+    ubicacion_pk: Optional[str] = None
+    ubicacion_tramo: Optional[str] = None
+    ubicacion_costado: Optional[str] = None
+    ubicacion_infraestructura: Optional[str] = None
+    ubicacion_lat: Optional[float] = None
+    ubicacion_lng: Optional[float] = None
     hilo_superior: Optional[float] = None
     hilo_medio: Optional[float] = None
     hilo_inferior: Optional[float] = None
@@ -1639,8 +1647,8 @@ def listar_puntos_verificados(
 def listar_operadores(contrato_id: int, current_user=Depends(get_current_user)):
     """Usuarios activos del contrato cuyo cargo esta relacionado con topografia.
 
-    Coincide por nombre de cargo: 'topograf...' (Topografo, Coordinador de Topografia,
-    Auxiliar de Topografia) o 'cadenero'.
+    Coincide por nombre de cargo normalizado (sin acentos): topógrafo / topografia,
+    cadenero, desarrollador.
     """
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "ver")
@@ -1650,8 +1658,7 @@ def listar_operadores(contrato_id: int, current_user=Depends(get_current_user)):
     }
 
     def es_topo(cargo_id) -> bool:
-        n = (cargos.get(cargo_id) or "").lower()
-        return "topograf" in n or "cadenero" in n or "desarrollador" in n
+        return es_cargo_topografia(cargos.get(cargo_id))
 
     by_id: Dict[Any, dict] = {}
     directos = (
@@ -1699,6 +1706,69 @@ def listar_operadores(contrato_id: int, current_user=Depends(get_current_user)):
         out.append({"id": r["id"], "nombre": nombre, "cargo": cargos.get(r.get("cargo_id"), "")})
     out.sort(key=lambda x: (x.get("nombre") or "").lower())
     return out
+
+
+@router.get("/{contrato_id}/nivelaciones/puntos-mapa")
+def listar_puntos_nivelacion_mapa(contrato_id: int, current_user=Depends(get_current_user)):
+    """Puntos de cartera de nivelación vinculados a un PK real (para capa opcional en planos)."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver")
+    nivs = (
+        supabase.table("topo_nivelaciones")
+        .select("id, nombre")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    if not nivs:
+        return {"puntos": []}
+    by_niv = {n["id"]: n for n in nivs}
+    lecturas = (
+        supabase.table("topo_nivelacion_lecturas")
+        .select(
+            "id, nivelacion_id, nombre_punto, orden, abscisa, "
+            "ubicacion_pk_id, ubicacion_pk, ubicacion_tramo, ubicacion_costado, "
+            "ubicacion_infraestructura, ubicacion_lat, ubicacion_lng"
+        )
+        .in_("nivelacion_id", list(by_niv.keys()))
+        .not_.is_("ubicacion_pk_id", "null")
+        .not_.is_("ubicacion_lat", "null")
+        .not_.is_("ubicacion_lng", "null")
+        .execute()
+        .data
+        or []
+    )
+    # Una feature por (nivelacion, nombre_punto, pk) — evita triplicar V+/Vi/V−
+    seen = set()
+    out = []
+    for l in lecturas:
+        try:
+            lat = float(l.get("ubicacion_lat"))
+            lng = float(l.get("ubicacion_lng"))
+        except (TypeError, ValueError):
+            continue
+        key = (l.get("nivelacion_id"), l.get("nombre_punto"), l.get("ubicacion_pk_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        niv = by_niv.get(l.get("nivelacion_id")) or {}
+        label = (l.get("ubicacion_pk") or l.get("nombre_punto") or "Nivelación").strip()
+        out.append({
+            "id": l.get("id"),
+            "nivelacion_id": l.get("nivelacion_id"),
+            "nivelacion_nombre": niv.get("nombre"),
+            "nombre_punto": l.get("nombre_punto"),
+            "label": label,
+            "ubicacion_pk": l.get("ubicacion_pk"),
+            "ubicacion_pk_id": l.get("ubicacion_pk_id"),
+            "ubicacion_tramo": l.get("ubicacion_tramo"),
+            "ubicacion_costado": l.get("ubicacion_costado"),
+            "ubicacion_infraestructura": l.get("ubicacion_infraestructura"),
+            "lat": lat,
+            "lng": lng,
+        })
+    return {"puntos": out}
 
 
 @router.post("/{contrato_id}/puntos")

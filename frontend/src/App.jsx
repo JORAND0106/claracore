@@ -56,6 +56,7 @@ import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoFiltroSesion'
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
+import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
 import {
   PanelCalculadoraProvider,
@@ -14849,6 +14850,9 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
   const [capEtiquetas, setCapEtiquetas] = useState('ambos')
   const capEtiquetasRef = useRef('ambos')
   capEtiquetasRef.current = capEtiquetas
+  const getMapNiv = useCallback(() => mapInstance.current, [])
+  const [mapaListo, setMapaListo] = useState(0)
+  const capaNiv = useTopoNivelacionMapaCapa(getMapNiv, contratoId, token, { readyKey: mapaListo })
 
   const getColor = (pct, sobrecosto) => {
     if (sobrecosto) return '#DC2626'
@@ -15033,6 +15037,7 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
       if (b) {
         _mapboxFitBoundsLngLat(map, b, { padding: 48, bearing: 270, maxZoom: 17 })
       }
+      setMapaListo((n) => n + 1)
     })
 
     return () => {
@@ -15103,6 +15108,10 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
             >{label}</button>
           ))}
         </div>
+        <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:10, fontSize:'var(--cc-caption)', color:t.text, cursor:'pointer' }}>
+          <input {...capaNiv.checkboxProps} />
+          Puntos de nivelación{capaNiv.count ? ` (${capaNiv.count})` : ''}
+        </label>
       </div>
 
       {mapaSinTrazos && (

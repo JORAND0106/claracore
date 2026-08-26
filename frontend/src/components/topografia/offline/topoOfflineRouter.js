@@ -662,6 +662,10 @@ export async function readTopoOffline(contratoId, path, query = '') {
     throw new Error('Poligonal no disponible offline.')
   }
 
+  if (path === '/nivelaciones/puntos-mapa') {
+    return { puntos: [], _offline: true }
+  }
+
   if (path === '/nivelaciones') {
     return topoDb.topo_nivelaciones.where('contrato_id').equals(cid).sortBy('created_at')
   }

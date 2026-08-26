@@ -511,6 +511,7 @@ export default function PptoFiltroObraVista({
                 selectedPk={mapPkSelRef.current || f.pkCriterio}
                 onClearSelection={onMapClearPk}
                 height="100%"
+                showNivelacionLayerToggle
               />
             </div>
           </div>
