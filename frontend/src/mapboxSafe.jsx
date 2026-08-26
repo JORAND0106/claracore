@@ -1,4 +1,9 @@
 import mapboxgl from 'mapbox-gl'
+export {
+  addMapboxGeolocateControl,
+  MAPBOX_GEOLOCATE_CONTROL_OPTIONS,
+  MAPBOX_GEOLOCATE_FLAG,
+} from './mapboxGeolocate.js'
 
 /** Comprueba si el navegador puede crear un contexto WebGL (requerido por Mapbox GL). */
 export function webglDisponible() {

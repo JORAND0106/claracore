@@ -13,6 +13,7 @@ import { createRealtimeDebouncer, isEfectivoOffline } from '../../realtimeUtils'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import { useClaraViewport } from '../../useClaraViewport'
+import { addMapboxGeolocateControl } from '../../mapboxSafe'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoPanelValidacion from './PptoPanelValidacion'
 import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
@@ -8254,6 +8255,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, pkidsResaltados = [], o
     })
     mapInst.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
     map.on('load', () => {
       fetch('/pOLIGONOS_1551t_Project_Feat.json').then(r => r.json()).then(geojson => {
         const features = geojson.features

@@ -191,7 +191,7 @@ import {
   addMapboxAbscisaLabelLayers as _addMapboxAbscisaLabelLayers,
   setMapboxAbscisaLabelsVisibility as _setMapboxAbscisaLabelsVisibility,
 } from './mapboxPlanoLabels'
-import { crearMapboxMapSeguro, MapaNoDisponible } from './mapboxSafe'
+import { addMapboxGeolocateControl, crearMapboxMapSeguro, MapaNoDisponible } from './mapboxSafe'
 import { ModuloProvider, useModulo } from './context/ModuloContext'
 import AVI, { AVITriggerButton } from './components/AVI/AVI'
 import ModuloMapaNavegacion from './modules/ayuda/ModuloMapaNavegacion'
@@ -1238,6 +1238,7 @@ function MapaPortada({
     map.__sicoeBasemapUrl = sicoeBasemapStyleUrl(initialVista)
     map.__sicoeBasemapMode = initialVista
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
     map.addControl(
       createSicoeBasemapStyleControl({
         getMode: () => vistaRef.current,
@@ -1549,6 +1550,7 @@ function MapaPortadaMulti({ puntos = [], t, fallbackBounds = null, planoGeojson 
     map.__sicoeBasemapUrl = sicoeBasemapStyleUrl(initialVista)
     map.__sicoeBasemapMode = initialVista
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
     map.addControl(
       createSicoeBasemapStyleControl({
         getMode: () => vistaRef.current,
@@ -9889,6 +9891,7 @@ function ModuloSicoeObra({
     const unregSicoeAttrib = installMapboxAttributionLinksOpenNewTab(map)
     sicoeFiltroMapaInst.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
 
     const puntos = sicoePuntosPlano
     const pkList = sicoePkList
@@ -13379,6 +13382,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     const unregNuevoMapAttrib = installMapboxAttributionLinksOpenNewTab(map)
     mapaPkInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
 
     const onLoad = () => {
       map.addSource('pkids', { type: 'geojson', data: geojson })
@@ -14943,6 +14947,7 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
     mapInstance.current = map
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
 
     map.on('load', () => {
       const base = planoGeojson || { type: 'FeatureCollection', features: [] }
@@ -15346,6 +15351,7 @@ function MiniMapaSemaforo({
     const unregMiniAttrib = installMapboxAttributionLinksOpenNewTab(map)
     mapInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
     map.on('load', () => {
       const features = buildFeatures(planoBase)
       const data = { ...planoBase, type: planoBase.type || 'FeatureCollection', features }

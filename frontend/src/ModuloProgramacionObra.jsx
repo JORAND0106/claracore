@@ -10,6 +10,7 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from './apiBase'
 import { useModulo } from './context/ModuloContext'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
+import { addMapboxGeolocateControl } from './mapboxSafe'
 import {
   getProgObraVistaCache,
   invalidateProgObraVistaCache,
@@ -1617,6 +1618,7 @@ export default function ModuloProgramacionObra({
     const unreg = installMapboxAttributionLinksOpenNewTab(map)
     mapInst.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
     map.addControl(
       createBasemapStyleControl({
         getMode: () => mapBaseModeRef.current,

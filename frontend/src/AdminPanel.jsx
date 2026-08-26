@@ -7,6 +7,7 @@ import { mergeExportPalette, EXPORT_PALETTE_DEFAULTS } from "./utils/exportPalet
 import { formatCOP } from "./utils/formatCOP";
 import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
 import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
+import { addMapboxGeolocateControl } from "./mapboxSafe";
 import CompetenciaSelect from "./components/CompetenciaSelect";
 import { RefreshCw } from "lucide-react";
 import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
@@ -3595,6 +3596,7 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
       });
       mapRef.current._contratoMapStyle = mapStyle;
       mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+      addMapboxGeolocateControl(mapRef.current);
     }
 
     const map = mapRef.current;

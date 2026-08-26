@@ -26,6 +26,7 @@ import {
   setMapboxAbscisaLabelsVisibility,
 } from '../../mapboxPlanoLabels'
 import { useTopoNivelacionMapaCapa } from '../../components/topografia/useTopoNivelacionMapaCapa'
+import { addMapboxGeolocateControl } from '../../mapboxSafe'
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
@@ -476,6 +477,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     })
     const unreg = installMapboxAttributionLinksOpenNewTab(map)
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    addMapboxGeolocateControl(map)
     mapInstance.current = map
     popupRef.current = new mapboxgl.Popup({ closeButton: true, maxWidth: '320px' })
 
