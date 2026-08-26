@@ -39,7 +39,32 @@ export default function PoligonalCierrePanel({ cierre }) {
               <td style={C.rowL}>Ángulos / Vértices</td>
               <td style={C.rowV}>{cierre.num_angulos} / {cierre.num_vertices}</td>
             </tr>
-            <tr><td style={C.rowL}>Σ Observada</td><td style={C.rowV}>{cierre.suma_observada_texto ?? '—'}</td></tr>
+            <tr>
+              <td style={C.rowL}>Σ Observada</td>
+              <td style={C.rowV}>
+                {cierre.suma_observada_texto ?? '—'}
+                {cierre.angulos_derivados && (
+                  <span
+                    title="Ángulos internos/exteriores despejados de los azimuts reales: (Az_sig − Az_ant − 180°) mod 360. No son lecturas de campo."
+                    style={{
+                      marginLeft: 6,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      letterSpacing: 0.3,
+                      textTransform: 'uppercase',
+                      background: '#ecfeff',
+                      color: '#0e7490',
+                      border: '1px solid #a5f3fc',
+                      borderRadius: 4,
+                      padding: '1px 5px',
+                      verticalAlign: 'middle',
+                    }}
+                  >
+                    derivado
+                  </span>
+                )}
+              </td>
+            </tr>
             <tr>
               <td style={C.rowL}>Σ Teórica</td>
               <td style={C.rowV}>

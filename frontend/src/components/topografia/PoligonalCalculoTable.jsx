@@ -190,7 +190,24 @@ export default function PoligonalCalculoTable({
                       {e.tipo_punto === 'estacion' ? 'Estacion' : 'Auxiliar'}
                     </span>
                   </td>
-                  <td style={td}>{e.angulo_observado_texto ?? '—'}</td>
+                  <td style={td}>
+                    {e.angulo_observado_texto ?? '—'}
+                    {e.tipo_punto === 'estacion' && e.angulo_derivado_para_cierre && e.angulo_derivado_texto && (
+                      <span
+                        title={`Ángulo para cierre angular (derivado del azimut): ${e.angulo_derivado_texto}`}
+                        style={{
+                          display: 'block',
+                          marginTop: 2,
+                          fontSize: 9,
+                          fontWeight: 700,
+                          color: '#0e7490',
+                          letterSpacing: 0.2,
+                        }}
+                      >
+                        cierre {e.angulo_derivado_texto} · derivado
+                      </span>
+                    )}
+                  </td>
                   {ajustada && <td style={td}>{e.angulo_corregido_texto ?? '—'}</td>}
                   <td style={td}>{e.angulo_vertical_texto ?? '—'}</td>
                   <td style={{ ...td, color: ladoExcedido ? ui.warn : undefined, fontWeight: ladoExcedido ? 700 : undefined }}>
