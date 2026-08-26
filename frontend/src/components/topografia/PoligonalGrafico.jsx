@@ -3,9 +3,14 @@ import { useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
 import { useTopoViewportGestures } from './useTopoViewportGestures'
 import {
+  MARKER_PX,
+  markerRadiusSvg,
+  markerStrokeSvg,
   pickVisibleLabelIndices,
+  placePointLabels,
   resolvePlanoLod,
   textCounterScale,
+  estimateLabelBoxPx,
 } from './topoPlanoLod'
 
 function puntosGrafico(estaciones) {
@@ -51,6 +56,74 @@ function ScreenText({
     >
       {children}
     </text>
+  )
+}
+
+/**
+ * Bloque de etiqueta: nombre (jerarquía) + datos técnicos + fondo semitransparente.
+ * Offsets dx/dy en píxeles de pantalla (espacio counter-scaled).
+ */
+function LabelBlock({
+  x,
+  y,
+  scale,
+  lines = [],
+  dx = 7,
+  dy = -4,
+  textAnchor = 'start',
+  nameColor = '#1e3a8a',
+  bodyColor = '#475569',
+}) {
+  const inv = textCounterScale(scale)
+  const rows = (lines || []).filter((l) => l != null && String(l).length > 0)
+  if (!rows.length) return null
+
+  const nameSize = 11
+  const bodySize = 8
+  const lineGap = 2
+  const padX = 5
+  const padY = 3
+  const box = estimateLabelBoxPx(rows, { nameSize, bodySize, padX, padY, lineGap })
+
+  let rectX = 0
+  if (textAnchor === 'end') rectX = -box.w
+  else if (textAnchor === 'middle') rectX = -box.w / 2
+
+  const rectTop = dy - padY
+
+  return (
+    <g transform={`translate(${x}, ${y}) scale(${inv})`} style={{ pointerEvents: 'none' }}>
+      <rect
+        x={rectX + dx}
+        y={rectTop}
+        width={box.w}
+        height={box.h}
+        rx={4}
+        ry={4}
+        fill="rgba(255,255,255,0.92)"
+        stroke="rgba(148,163,184,0.55)"
+        strokeWidth={1}
+      />
+      {rows.map((line, i) => {
+        const fs = i === 0 ? nameSize : bodySize
+        const yPos = i === 0
+          ? padY + nameSize * 0.78
+          : padY + nameSize + lineGap + (i - 1) * (bodySize + lineGap) + bodySize * 0.78
+        return (
+          <text
+            key={`${i}-${String(line).slice(0, 12)}`}
+            x={dx}
+            y={rectTop + yPos}
+            fontSize={fs}
+            fontWeight={i === 0 ? 700 : 500}
+            fill={i === 0 ? nameColor : bodyColor}
+            textAnchor={textAnchor}
+          >
+            {line}
+          </text>
+        )
+      })}
+    </g>
   )
 }
 
@@ -195,20 +268,48 @@ export default function PoligonalGrafico({
 
   const lod = useMemo(() => resolvePlanoLod(scale), [scale])
 
+  const showDists = mostrarDistancias && lod.showDistancias
+  const showAngs = mostrarAngulos && lod.showAngulos
+  const showCoords = lod.showCoords
+
   const labelsVisible = useMemo(() => {
     if (!plot?.coords?.length) return []
     return pickVisibleLabelIndices(plot.coords, scale, lod.level)
   }, [plot, scale, lod.level])
 
+  const placedLabels = useMemo(() => {
+    if (!plot?.coords?.length) return []
+    const items = plot.coords.map(({ x, y, p }, idx) => {
+      if (!labelsVisible[idx]) return { x, y, lines: [] }
+      const lines = [p.nombre_punto || `#${idx + 1}`]
+      if (showAngs) {
+        const angTxt = p.angulo_observado_texto
+        if (angTxt) lines.push(angTxt)
+      }
+      if (showCoords && p.norte != null && p.este != null) {
+        lines.push(`N ${fmtNum(p.norte, 2)}`)
+        lines.push(`E ${fmtNum(p.este, 2)}`)
+        if (p.cota != null) lines.push(`Z ${fmtNum(p.cota, 2)}`)
+      }
+      return { x, y, lines }
+    })
+    return placePointLabels(items, { scale, lodLevel: lod.level })
+  }, [plot, labelsVisible, scale, lod.level, showAngs, showCoords])
+
   const ladosVisible = useMemo(() => {
     if (!plot?.lados?.length) return []
     const mids = plot.lados.map((l) => ({ x: l.mx, y: l.my }))
-    return pickVisibleLabelIndices(mids, scale, lod.level)
+    // Más exigente cuando hay muchas etiquetas de punto (zoom alto)
+    return pickVisibleLabelIndices(mids, scale, Math.max(0, lod.level - 1))
   }, [plot, scale, lod.level])
 
-  const showDists = mostrarDistancias && lod.showDistancias
-  const showAngs = mostrarAngulos && lod.showAngulos
-  const showCoords = lod.showCoords
+  const markerR = markerRadiusSvg(scale)
+  const markerStroke = markerStrokeSvg(scale)
+  const amarreR = markerRadiusSvg(scale, {
+    desiredPx: MARKER_PX.AMARRE,
+    minPx: MARKER_PX.MIN,
+    maxPx: MARKER_PX.MAX + 0.5,
+  })
 
   const lodHint = lod.level === 0
     ? 'Detalle: nombres'
@@ -223,6 +324,8 @@ export default function PoligonalGrafico({
       </div>
     )
   }
+
+  const nameColor = ui.grafico?.pointLabel || '#1e3a8a'
 
   return (
     <div style={ui.card}>
@@ -276,14 +379,14 @@ export default function PoligonalGrafico({
           {plot.gridLines.map((g) =>
             g.type === 'h' ? (
               <g key={`h-${g.val}`}>
-                <line x1={plot.margin.l} y1={g.y} x2={plot.margin.l + plot.w} y2={g.y} stroke="#cbd5e1" strokeWidth="1" />
+                <line x1={plot.margin.l} y1={g.y} x2={plot.margin.l + plot.w} y2={g.y} stroke="#cbd5e1" strokeWidth={markerStrokeSvg(scale, 1)} />
                 <ScreenText x={6} y={g.y} scale={scale} fontSize={9} fill="#64748b" dy={3}>
                   {fmtNum(g.val, 0)}
                 </ScreenText>
               </g>
             ) : (
               <g key={`v-${g.val}`}>
-                <line x1={g.x} y1={plot.margin.t} x2={g.x} y2={plot.margin.t + plot.h} stroke="#cbd5e1" strokeWidth="1" />
+                <line x1={g.x} y1={plot.margin.t} x2={g.x} y2={plot.margin.t + plot.h} stroke="#cbd5e1" strokeWidth={markerStrokeSvg(scale, 1)} />
                 <ScreenText x={g.x} y={alto - 8} scale={scale} fontSize={9} fill="#64748b" textAnchor="middle">
                   {fmtNum(g.val, 0)}
                 </ScreenText>
@@ -301,25 +404,54 @@ export default function PoligonalGrafico({
           </g>
 
           <g>
-            <line x1={plot.north.x} y1={plot.north.y} x2={plot.north.x} y2={plot.north.tip} stroke="#1e40af" strokeWidth="2.5" />
-            <polygon points={`${plot.north.x},${plot.north.tip} ${plot.north.x - 6},${plot.north.tip + 10} ${plot.north.x + 6},${plot.north.tip + 10}`} fill="#1e40af" />
+            <line
+              x1={plot.north.x}
+              y1={plot.north.y}
+              x2={plot.north.x}
+              y2={plot.north.tip}
+              stroke="#1e40af"
+              strokeWidth={markerStrokeSvg(scale, 2)}
+            />
+            <polygon
+              points={`${plot.north.x},${plot.north.tip} ${plot.north.x - 6 * textCounterScale(scale)},${plot.north.tip + 10 * textCounterScale(scale)} ${plot.north.x + 6 * textCounterScale(scale)},${plot.north.tip + 10 * textCounterScale(scale)}`}
+              fill="#1e40af"
+            />
             <ScreenText x={plot.north.x} y={plot.north.tip - 5} scale={scale} fontSize={12} fill="#1e40af" fontWeight="700" textAnchor="middle">
               N
             </ScreenText>
           </g>
 
           {plot.esCerrada ? (
-            <polygon points={plot.polyStr} fill="rgba(37,99,235,0.08)" stroke="#2563eb" strokeWidth="2" strokeDasharray={plot.gapLine ? '6 4' : undefined} />
+            <polygon
+              points={plot.polyStr}
+              fill="rgba(37,99,235,0.08)"
+              stroke="#2563eb"
+              strokeWidth={markerStrokeSvg(scale, 1.75)}
+              strokeDasharray={plot.gapLine ? '6 4' : undefined}
+            />
           ) : (
-            <polyline points={plot.polyStr} fill="none" stroke="#2563eb" strokeWidth="2" />
+            <polyline
+              points={plot.polyStr}
+              fill="none"
+              stroke="#2563eb"
+              strokeWidth={markerStrokeSvg(scale, 1.75)}
+            />
           )}
 
           {plot.lados.map((l, i) => (
             <g key={i}>
               {showDists && ladosVisible[i] && (
-                <ScreenText x={l.mx} y={l.my} scale={scale} fontSize={9} fill="#0f766e" textAnchor="middle" fontWeight="600" dy={-5}>
-                  {fmtNum(l.dist, 2)} m
-                </ScreenText>
+                <LabelBlock
+                  x={l.mx}
+                  y={l.my}
+                  scale={scale}
+                  lines={[`${fmtNum(l.dist, 2)} m`]}
+                  dx={0}
+                  dy={-2}
+                  textAnchor="middle"
+                  nameColor="#0f766e"
+                  bodyColor="#0f766e"
+                />
               )}
             </g>
           ))}
@@ -331,7 +463,7 @@ export default function PoligonalGrafico({
               x2={plot.gapLine.x2}
               y2={plot.gapLine.y2}
               stroke={plot.gapLine.modo === 'llegada' ? '#94a3b8' : '#dc2626'}
-              strokeWidth="2"
+              strokeWidth={markerStrokeSvg(scale, 1.75)}
               strokeDasharray="4 3"
             />
           )}
@@ -339,56 +471,96 @@ export default function PoligonalGrafico({
           {plot.llegadaObjCoord && (
             <g>
               <polygon
-                points={`${plot.llegadaObjCoord.x},${plot.llegadaObjCoord.y - 6} ${plot.llegadaObjCoord.x + 6},${plot.llegadaObjCoord.y} ${plot.llegadaObjCoord.x},${plot.llegadaObjCoord.y + 6} ${plot.llegadaObjCoord.x - 6},${plot.llegadaObjCoord.y}`}
+                points={(() => {
+                  const { x, y } = plot.llegadaObjCoord
+                  const r = amarreR
+                  return `${x},${y - r} ${x + r},${y} ${x},${y + r} ${x - r},${y}`
+                })()}
                 fill="none"
                 stroke="#15803d"
-                strokeWidth="1.5"
+                strokeWidth={markerStroke}
               />
-              <ScreenText x={plot.llegadaObjCoord.x} y={plot.llegadaObjCoord.y} scale={scale} fontSize={10} fill="#15803d" fontWeight="700" dx={8} dy={-10}>
-                {plot.llegadaObjCoord.p.nombre || 'Llegada'} (obj.)
-              </ScreenText>
+              <LabelBlock
+                x={plot.llegadaObjCoord.x}
+                y={plot.llegadaObjCoord.y}
+                scale={scale}
+                lines={[`${plot.llegadaObjCoord.p.nombre || 'Llegada'} (obj.)`]}
+                dx={8}
+                dy={-10}
+                nameColor="#15803d"
+              />
             </g>
           )}
 
           {plot.llegadaCalcCoord && (
             <g>
-              <circle cx={plot.llegadaCalcCoord.x} cy={plot.llegadaCalcCoord.y} r="6" fill="none" stroke="#c2410c" strokeWidth="2" strokeDasharray="3 2" />
-              <ScreenText x={plot.llegadaCalcCoord.x} y={plot.llegadaCalcCoord.y} scale={scale} fontSize={10} fill="#c2410c" fontWeight="700" dx={8} dy={12}>
-                {plot.llegadaCalcCoord.p.nombre || 'Llegada'} (calc.)
-              </ScreenText>
+              <circle
+                cx={plot.llegadaCalcCoord.x}
+                cy={plot.llegadaCalcCoord.y}
+                r={amarreR}
+                fill="none"
+                stroke="#c2410c"
+                strokeWidth={markerStroke}
+                strokeDasharray="3 2"
+              />
+              <LabelBlock
+                x={plot.llegadaCalcCoord.x}
+                y={plot.llegadaCalcCoord.y}
+                scale={scale}
+                lines={[`${plot.llegadaCalcCoord.p.nombre || 'Llegada'} (calc.)`]}
+                dx={8}
+                dy={12}
+                nameColor="#c2410c"
+              />
             </g>
           )}
 
           {plot.amarreCoord && (
             <g>
-              <circle cx={plot.amarreCoord.x} cy={plot.amarreCoord.y} r="6" fill="#16a34a" stroke="#fff" strokeWidth="2" />
-              <ScreenText x={plot.amarreCoord.x} y={plot.amarreCoord.y} scale={scale} fontSize={10} fill="#166534" fontWeight="700" dx={8} dy={-10}>
-                {plot.amarreCoord.p.nombre} (amarre)
-              </ScreenText>
+              <circle
+                cx={plot.amarreCoord.x}
+                cy={plot.amarreCoord.y}
+                r={amarreR}
+                fill="#16a34a"
+                stroke="#fff"
+                strokeWidth={markerStroke}
+              />
+              <LabelBlock
+                x={plot.amarreCoord.x}
+                y={plot.amarreCoord.y}
+                scale={scale}
+                lines={[`${plot.amarreCoord.p.nombre} (amarre)`]}
+                dx={8}
+                dy={-10}
+                nameColor="#166534"
+              />
             </g>
           )}
 
           {plot.coords.map(({ x, y, p }, idx) => {
-            const showName = labelsVisible[idx]
-            const angTxt = p.angulo_observado_texto || (p.angulo_medido != null ? '—' : null)
+            const placed = placedLabels[idx]
             return (
               <g key={p.id || p.nombre_punto || idx}>
-                <circle cx={x} cy={y} r="5" fill="#2563eb" stroke="#fff" strokeWidth="1.5" />
-                {showName && (
-                  <ScreenText x={x} y={y} scale={scale} fontSize={10} fill={ui.grafico.pointLabel} fontWeight="600" dx={8} dy={-8}>
-                    {p.nombre_punto}
-                  </ScreenText>
-                )}
-                {showName && showAngs && angTxt && (
-                  <ScreenText x={x} y={y} scale={scale} fontSize={8} fill="#7c3aed" dx={8} dy={4}>
-                    {angTxt}
-                  </ScreenText>
-                )}
-                {showName && showCoords && p.norte != null && p.este != null && (
-                  <ScreenText x={x} y={y} scale={scale} fontSize={7} fill="#64748b" dx={8} dy={showAngs && angTxt ? 16 : 6}>
-                    N {fmtNum(p.norte, 2)} · E {fmtNum(p.este, 2)}
-                    {p.cota != null ? ` · Z ${fmtNum(p.cota, 2)}` : ''}
-                  </ScreenText>
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={markerR}
+                  fill="#2563eb"
+                  stroke="#fff"
+                  strokeWidth={markerStroke}
+                />
+                {placed && (
+                  <LabelBlock
+                    x={x}
+                    y={y}
+                    scale={scale}
+                    lines={placed.lines}
+                    dx={placed.dx}
+                    dy={placed.dy}
+                    textAnchor={placed.textAnchor}
+                    nameColor={nameColor}
+                    bodyColor="#475569"
+                  />
                 )}
               </g>
             )
