@@ -10,7 +10,7 @@ import {
   MAPBOX_ABSCISA_TEXT_FIELD,
   addMapboxAbscisaLabelLayers,
 } from '../../mapboxPlanoLabels'
-import { crearMapboxMapSeguro } from '../../mapboxSafe'
+import { addMapboxGeolocateControl, crearMapboxMapSeguro } from '../../mapboxSafe'
 import {
   SICOE_MAPA_VISTAS_CALLE,
   applySicoeBasemapTerrain,
@@ -209,6 +209,7 @@ export default function PptoFiltroMapaPk({
       try { map.doubleClickZoom.disable() } catch { /* ignore */ }
       map.getCanvas().style.touchAction = 'manipulation'
       map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+      addMapboxGeolocateControl(map)
       mapRef.current = map
 
       let withCoords = 0
