@@ -127,21 +127,63 @@ export function markerStrokeSvg(scale, strokePx = MARKER_PX.STROKE) {
   return px / s
 }
 
-/** Anclas candidatas (offset en píxeles de pantalla, antes de counter-scale). */
-export const LABEL_ANCHORS = [
-  { dx: 7, dy: -4, anchor: 'start' },
-  { dx: -7, dy: -4, anchor: 'end' },
-  { dx: 7, dy: 12, anchor: 'start' },
-  { dx: -7, dy: 12, anchor: 'end' },
-  { dx: 0, dy: -14, anchor: 'middle' },
-  { dx: 0, dy: 18, anchor: 'middle' },
-  { dx: 12, dy: 4, anchor: 'start' },
-  { dx: -12, dy: 4, anchor: 'end' },
-  { dx: 10, dy: -16, anchor: 'start' },
-  { dx: -10, dy: -16, anchor: 'end' },
-  { dx: 10, dy: 22, anchor: 'start' },
-  { dx: -10, dy: 22, anchor: 'end' },
-]
+/**
+ * Convierte coordenada del mundo SVG a píxeles CSS del contenedor
+ * (viewBox + preserveAspectRatio xMidYMid meet).
+ */
+export function svgPointToCss(x, y, viewBoxStr, cssW, cssH) {
+  const parts = String(viewBoxStr || '0 0 1 1').trim().split(/[\s,]+/).map(Number)
+  const vbX = parts[0] || 0
+  const vbY = parts[1] || 0
+  const vbW = Math.max(parts[2] || 1, 1e-6)
+  const vbH = Math.max(parts[3] || 1, 1e-6)
+  const cw = Math.max(Number(cssW) || 1, 1e-6)
+  const ch = Math.max(Number(cssH) || 1, 1e-6)
+  const s = Math.min(cw / vbW, ch / vbH)
+  const ox = (cw - vbW * s) / 2
+  const oy = (ch - vbH * s) / 2
+  return {
+    left: ox + (x - vbX) * s,
+    top: oy + (y - vbY) * s,
+  }
+}
+
+/**
+ * Distancias al vértice anterior y siguiente en la poligonal (metros).
+ * @param {Array<{ p: { norte?: number, este?: number, nombre_punto?: string, nombre?: string } }>} coords
+ * @param {number} index
+ * @param {boolean} esCerrada
+ */
+export function distanciasVecinas(coords, index, esCerrada = false) {
+  const n = coords?.length || 0
+  if (n < 2 || index < 0 || index >= n) {
+    return { prev: null, next: null, prevNombre: null, nextNombre: null }
+  }
+  const pt = (i) => coords[i]?.p
+  const nombreDe = (p) => p?.nombre_punto || p?.nombre || null
+  const dist = (a, b) => {
+    if (a?.norte == null || a?.este == null || b?.norte == null || b?.este == null) return null
+    return Math.hypot(b.norte - a.norte, b.este - a.este)
+  }
+
+  let prevIdx = index - 1
+  let nextIdx = index + 1
+  if (esCerrada) {
+    if (prevIdx < 0) prevIdx = n - 1
+    if (nextIdx >= n) nextIdx = 0
+  }
+
+  const cur = pt(index)
+  const prevP = prevIdx >= 0 && prevIdx < n ? pt(prevIdx) : null
+  const nextP = nextIdx >= 0 && nextIdx < n ? pt(nextIdx) : null
+
+  return {
+    prev: prevP ? dist(prevP, cur) : null,
+    next: nextP ? dist(cur, nextP) : null,
+    prevNombre: prevP ? nombreDe(prevP) : null,
+    nextNombre: nextP ? nombreDe(nextP) : null,
+  }
+}
 
 const CHAR_W = 0.58 // ancho aprox. por em
 
@@ -168,144 +210,4 @@ export function estimateLabelBoxPx(lines, {
     h += fs + (i > 0 ? lineGap : 0)
   })
   return { w: maxW + padX * 2, h, padX, padY }
-}
-
-/**
- * Convierte ancla + caja (px pantalla) a AABB en coordenadas SVG.
- * El bloque vive en `translate(x,y) scale(inv)` con inv≈1/scale.
- */
-export function labelBoxToSvgAabb(pointX, pointY, anchor, boxPx, scale) {
-  const inv = textCounterScale(scale)
-  const s = Math.max(Number(scale) || 1, 0.01)
-  // En SVG: offsets de ancla también van en espacio counter-scaled (como ScreenText dx/dy)
-  const ax = (Number(anchor.dx) || 0) * inv
-  const ay = (Number(anchor.dy) || 0) * inv
-  const w = boxPx.w * inv
-  const h = boxPx.h * inv
-  let left
-  if (anchor.anchor === 'end') left = pointX + ax - w
-  else if (anchor.anchor === 'middle') left = pointX + ax - w / 2
-  else left = pointX + ax
-  // text baseline ≈ padY + nameSize; caja empieza un poco arriba del dy
-  const top = pointY + ay - boxPx.padY * inv
-  return {
-    left,
-    top,
-    right: left + w,
-    bottom: top + h,
-    w,
-    h,
-  }
-}
-
-function aabbOverlap(a, b, pad = 0) {
-  return !(
-    a.right + pad < b.left
-    || a.left - pad > b.right
-    || a.bottom + pad < b.top
-    || a.top - pad > b.bottom
-  )
-}
-
-function pointInAabb(x, y, box, pad = 0) {
-  return (
-    x >= box.left - pad
-    && x <= box.right + pad
-    && y >= box.top - pad
-    && y <= box.bottom + pad
-  )
-}
-
-/**
- * Coloca etiquetas de puntos evitando solapes entre sí y con marcadores vecinos.
- *
- * @param {Array<{ x: number, y: number, lines: string[] }>} items
- * @param {{ scale: number, lodLevel?: number, candidates?: typeof LABEL_ANCHORS }} [opts]
- * @returns {Array<null|{ index: number, dx: number, dy: number, textAnchor: string, lines: string[], box: object }>}
- */
-export function placePointLabels(items, {
-  scale = 1,
-  lodLevel = 0,
-  candidates = LABEL_ANCHORS,
-} = {}) {
-  const s = Math.max(Number(scale) || 1, 0.01)
-  const inv = textCounterScale(s)
-  const markerR = markerRadiusSvg(s)
-  const padSvg = 3 / s
-  const placed = []
-  const out = new Array(items.length).fill(null)
-
-  // Priorizar puntos más aislados primero (mejor chance de ancla “natural”)
-  const order = items
-    .map((it, index) => ({ it, index }))
-    .filter(({ it }) => it && it.x != null && it.y != null && (it.lines || []).length)
-    .sort((a, b) => {
-      const densOf = (idx, pt) => {
-        let n = 0
-        const lim2 = (40 / s) ** 2
-        for (let j = 0; j < items.length; j += 1) {
-          if (j === idx) continue
-          const q = items[j]
-          if (!q || q.x == null) continue
-          const dx = pt.x - q.x
-          const dy = pt.y - q.y
-          if (dx * dx + dy * dy < lim2) n += 1
-        }
-        return n
-      }
-      return densOf(a.index, a.it) - densOf(b.index, b.it)
-    })
-
-  for (const { it, index } of order) {
-    const fullLines = it.lines
-    const nameOnly = [fullLines[0]]
-    const variants = lodLevel >= 2 && fullLines.length > 1
-      ? [fullLines, nameOnly]
-      : [fullLines]
-
-    let best = null
-    for (const lines of variants) {
-      const boxPx = estimateLabelBoxPx(lines)
-      for (const cand of candidates) {
-        const box = labelBoxToSvgAabb(it.x, it.y, cand, boxPx, s)
-        let clash = false
-        // No tapar el propio marcador ni vecinos cercanos
-        for (let j = 0; j < items.length; j += 1) {
-          const q = items[j]
-          if (!q || q.x == null) continue
-          const rPad = markerR + padSvg + (j === index ? markerR * 0.2 : markerR)
-          if (pointInAabb(q.x, q.y, box, rPad)) {
-            clash = true
-            break
-          }
-        }
-        if (clash) continue
-        for (const prev of placed) {
-          if (aabbOverlap(box, prev.box, padSvg)) {
-            clash = true
-            break
-          }
-        }
-        if (clash) continue
-        best = {
-          index,
-          dx: cand.dx,
-          dy: cand.dy,
-          textAnchor: cand.anchor,
-          lines,
-          box,
-          inv,
-        }
-        break
-      }
-      if (best) break
-    }
-
-    if (best) {
-      placed.push(best)
-      out[index] = best
-    }
-  }
-
-  return out
 }

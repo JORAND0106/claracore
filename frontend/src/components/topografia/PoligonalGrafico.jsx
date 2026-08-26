@@ -1,14 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
 import { useTopoViewportGestures } from './useTopoViewportGestures'
 import {
   MARKER_PX,
+  distanciasVecinas,
   markerRadiusSvg,
   markerStrokeSvg,
   pickVisibleLabelIndices,
-  placePointLabels,
-  resolvePlanoLod,
+  svgPointToCss,
   textCounterScale,
   estimateLabelBoxPx,
 } from './topoPlanoLod'
@@ -59,38 +59,25 @@ function ScreenText({
   )
 }
 
-/**
- * Bloque de etiqueta: nombre (jerarquía) + datos técnicos + fondo semitransparente.
- * Offsets dx/dy en píxeles de pantalla (espacio counter-scaled).
- */
-function LabelBlock({
+/** Solo el nombre del punto, con fondo suave para contraste. */
+function NameLabel({
   x,
   y,
   scale,
-  lines = [],
+  nombre,
   dx = 7,
-  dy = -4,
+  dy = -5,
   textAnchor = 'start',
-  nameColor = '#1e3a8a',
-  bodyColor = '#475569',
+  color = '#1e3a8a',
+  selected = false,
 }) {
   const inv = textCounterScale(scale)
-  const rows = (lines || []).filter((l) => l != null && String(l).length > 0)
-  if (!rows.length) return null
-
-  const nameSize = 11
-  const bodySize = 8
-  const lineGap = 2
-  const padX = 5
-  const padY = 3
-  const box = estimateLabelBoxPx(rows, { nameSize, bodySize, padX, padY, lineGap })
-
+  const name = nombre || '—'
+  const box = estimateLabelBoxPx([name], { nameSize: selected ? 12 : 11, padX: 4, padY: 2 })
   let rectX = 0
   if (textAnchor === 'end') rectX = -box.w
   else if (textAnchor === 'middle') rectX = -box.w / 2
-
-  const rectTop = dy - padY
-
+  const rectTop = dy - box.padY
   return (
     <g transform={`translate(${x}, ${y}) scale(${inv})`} style={{ pointerEvents: 'none' }}>
       <rect
@@ -98,32 +85,107 @@ function LabelBlock({
         y={rectTop}
         width={box.w}
         height={box.h}
-        rx={4}
-        ry={4}
-        fill="rgba(255,255,255,0.92)"
-        stroke="rgba(148,163,184,0.55)"
+        rx={3}
+        ry={3}
+        fill={selected ? 'rgba(219,234,254,0.95)' : 'rgba(255,255,255,0.9)'}
+        stroke={selected ? 'rgba(37,99,235,0.55)' : 'rgba(148,163,184,0.45)'}
         strokeWidth={1}
       />
-      {rows.map((line, i) => {
-        const fs = i === 0 ? nameSize : bodySize
-        const yPos = i === 0
-          ? padY + nameSize * 0.78
-          : padY + nameSize + lineGap + (i - 1) * (bodySize + lineGap) + bodySize * 0.78
-        return (
-          <text
-            key={`${i}-${String(line).slice(0, 12)}`}
-            x={dx}
-            y={rectTop + yPos}
-            fontSize={fs}
-            fontWeight={i === 0 ? 700 : 500}
-            fill={i === 0 ? nameColor : bodyColor}
-            textAnchor={textAnchor}
-          >
-            {line}
-          </text>
-        )
-      })}
+      <text
+        x={dx}
+        y={rectTop + box.padY + (selected ? 12 : 11) * 0.78}
+        fontSize={selected ? 12 : 11}
+        fontWeight={700}
+        fill={color}
+        textAnchor={textAnchor}
+      >
+        {name}
+      </text>
     </g>
+  )
+}
+
+function NodoDetallePopup({ detalle, style, onClose }) {
+  if (!detalle) return null
+  const row = { display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 4 }
+  const label = { color: '#64748b', fontSize: 11 }
+  const value = { color: '#0f172a', fontSize: 12, fontWeight: 600, textAlign: 'right' }
+  return (
+    <div
+      role="dialog"
+      aria-label={`Detalle de ${detalle.nombre}`}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      style={{
+        position: 'absolute',
+        zIndex: 5,
+        minWidth: 200,
+        maxWidth: 260,
+        padding: '10px 12px',
+        background: '#fff',
+        border: '1px solid #cbd5e1',
+        borderRadius: 10,
+        boxShadow: '0 10px 28px rgba(15,23,42,0.18)',
+        fontFamily: 'inherit',
+        ...style,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ fontWeight: 800, fontSize: 13, color: '#1e3a8a' }}>{detalle.nombre}</div>
+        <button
+          type="button"
+          aria-label="Cerrar detalle"
+          onClick={onClose}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            color: '#94a3b8',
+            cursor: 'pointer',
+            fontSize: 16,
+            lineHeight: 1,
+            padding: 0,
+          }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ marginTop: 8, borderTop: '1px solid #e2e8f0', paddingTop: 6 }}>
+        <div style={row}>
+          <span style={label}>Norte</span>
+          <span style={value}>{detalle.norte != null ? fmtNum(detalle.norte, 3) : '—'}</span>
+        </div>
+        <div style={row}>
+          <span style={label}>Este</span>
+          <span style={value}>{detalle.este != null ? fmtNum(detalle.este, 3) : '—'}</span>
+        </div>
+        <div style={row}>
+          <span style={label}>Cota</span>
+          <span style={value}>{detalle.cota != null ? fmtNum(detalle.cota, 3) : '—'}</span>
+        </div>
+      </div>
+      <div style={{ marginTop: 8, borderTop: '1px solid #e2e8f0', paddingTop: 6 }}>
+        <div style={row}>
+          <span style={label}>
+            Dist. anterior{detalle.prevNombre ? ` (${detalle.prevNombre})` : ''}
+          </span>
+          <span style={value}>
+            {detalle.distPrev != null ? `${fmtNum(detalle.distPrev, 3)} m` : '—'}
+          </span>
+        </div>
+        <div style={row}>
+          <span style={label}>
+            Dist. siguiente{detalle.nextNombre ? ` (${detalle.nextNombre})` : ''}
+          </span>
+          <span style={value}>
+            {detalle.distNext != null ? `${fmtNum(detalle.distNext, 3)} m` : '—'}
+          </span>
+        </div>
+      </div>
+      <p style={{ margin: '8px 0 0', fontSize: 10, color: '#94a3b8' }}>
+        Clic fuera o en otro punto para cerrar
+      </p>
+    </div>
   )
 }
 
@@ -136,13 +198,14 @@ export default function PoligonalGrafico({
   alto = 400,
 }) {
   const ui = useTopoTheme()
-  const [mostrarDistancias, setMostrarDistancias] = useState(true)
-  const [mostrarAngulos, setMostrarAngulos] = useState(true)
+  const [selectedKey, setSelectedKey] = useState(null)
   const {
     containerRef,
     scale,
     viewBox,
+    cssSize,
     resetVista,
+    consumeTap,
     viewportHandlers,
     containerStyle,
     contentStyle,
@@ -206,17 +269,6 @@ export default function PoligonalGrafico({
     const polyStr = coords.map((c) => `${c.x},${c.y}`).join(' ')
     const esCerrada = !esAbierta && coords.length >= 3
 
-    const lados = []
-    const nLados = esCerrada ? coords.length : Math.max(coords.length - 1, 0)
-    for (let i = 0; i < nLados; i++) {
-      const j = esCerrada ? (i + 1) % coords.length : i + 1
-      if (j >= coords.length) break
-      const a = coords[i]
-      const b = coords[j]
-      const dist = Math.hypot(b.p.norte - a.p.norte, b.p.este - a.p.este)
-      lados.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, dist })
-    }
-
     let gapLine = null
     if (esAbierta && llegadaObj && llegadaCalc) {
       const err = cierre?.error_lineal
@@ -254,7 +306,6 @@ export default function PoligonalGrafico({
       esCerrada,
       esAbierta,
       gridLines,
-      lados,
       gapLine,
       amarreCoord,
       llegadaObjCoord,
@@ -266,56 +317,97 @@ export default function PoligonalGrafico({
     }
   }, [estaciones, puntoInicial, puntoFinal, cierre, ancho, alto])
 
-  const lod = useMemo(() => resolvePlanoLod(scale), [scale])
-
-  const showDists = mostrarDistancias && lod.showDistancias
-  const showAngs = mostrarAngulos && lod.showAngulos
-  const showCoords = lod.showCoords
-
-  const labelsVisible = useMemo(() => {
+  // Solo nombres: declutter fijo (nivel 0), en cualquier zoom
+  const namesVisible = useMemo(() => {
     if (!plot?.coords?.length) return []
-    return pickVisibleLabelIndices(plot.coords, scale, lod.level)
-  }, [plot, scale, lod.level])
-
-  const placedLabels = useMemo(() => {
-    if (!plot?.coords?.length) return []
-    const items = plot.coords.map(({ x, y, p }, idx) => {
-      if (!labelsVisible[idx]) return { x, y, lines: [] }
-      const lines = [p.nombre_punto || `#${idx + 1}`]
-      if (showAngs) {
-        const angTxt = p.angulo_observado_texto
-        if (angTxt) lines.push(angTxt)
-      }
-      if (showCoords && p.norte != null && p.este != null) {
-        lines.push(`N ${fmtNum(p.norte, 2)}`)
-        lines.push(`E ${fmtNum(p.este, 2)}`)
-        if (p.cota != null) lines.push(`Z ${fmtNum(p.cota, 2)}`)
-      }
-      return { x, y, lines }
-    })
-    return placePointLabels(items, { scale, lodLevel: lod.level })
-  }, [plot, labelsVisible, scale, lod.level, showAngs, showCoords])
-
-  const ladosVisible = useMemo(() => {
-    if (!plot?.lados?.length) return []
-    const mids = plot.lados.map((l) => ({ x: l.mx, y: l.my }))
-    // Más exigente cuando hay muchas etiquetas de punto (zoom alto)
-    return pickVisibleLabelIndices(mids, scale, Math.max(0, lod.level - 1))
-  }, [plot, scale, lod.level])
+    return pickVisibleLabelIndices(plot.coords, scale, 0)
+  }, [plot, scale])
 
   const markerR = markerRadiusSvg(scale)
   const markerStroke = markerStrokeSvg(scale)
+  const hitR = markerRadiusSvg(scale, {
+    desiredPx: 14,
+    minPx: 10,
+    maxPx: 18,
+  })
   const amarreR = markerRadiusSvg(scale, {
     desiredPx: MARKER_PX.AMARRE,
     minPx: MARKER_PX.MIN,
     maxPx: MARKER_PX.MAX + 0.5,
   })
 
-  const lodHint = lod.level === 0
-    ? 'Detalle: nombres'
-    : lod.level === 1
-      ? 'Detalle: nombres + distancias'
-      : 'Detalle: nombres + distancias + ángulos + coords'
+  const selectedDetalle = useMemo(() => {
+    if (!plot || selectedKey == null) return null
+    if (typeof selectedKey === 'string' && selectedKey.startsWith('extra:')) {
+      const kind = selectedKey.slice(6)
+      const c = kind === 'amarre'
+        ? plot.amarreCoord
+        : kind === 'llegadaObj'
+          ? plot.llegadaObjCoord
+          : kind === 'llegadaCalc'
+            ? plot.llegadaCalcCoord
+            : null
+      if (!c) return null
+      const p = c.p
+      return {
+        key: selectedKey,
+        x: c.x,
+        y: c.y,
+        nombre: `${p.nombre || p.nombre_punto || kind}${kind === 'amarre' ? ' (amarre)' : kind === 'llegadaObj' ? ' (obj.)' : kind === 'llegadaCalc' ? ' (calc.)' : ''}`,
+        norte: p.norte,
+        este: p.este,
+        cota: p.cota,
+        distPrev: null,
+        distNext: null,
+        prevNombre: null,
+        nextNombre: null,
+      }
+    }
+    const idx = Number(selectedKey)
+    const c = plot.coords[idx]
+    if (!c) return null
+    const vecinos = distanciasVecinas(plot.coords, idx, plot.esCerrada)
+    const p = c.p
+    return {
+      key: selectedKey,
+      x: c.x,
+      y: c.y,
+      nombre: p.nombre_punto || p.nombre || `#${idx + 1}`,
+      norte: p.norte,
+      este: p.este,
+      cota: p.cota,
+      distPrev: vecinos.prev,
+      distNext: vecinos.next,
+      prevNombre: vecinos.prevNombre,
+      nextNombre: vecinos.nextNombre,
+    }
+  }, [plot, selectedKey])
+
+  const popupCss = useMemo(() => {
+    if (!selectedDetalle || !viewBox) return null
+    const pos = svgPointToCss(selectedDetalle.x, selectedDetalle.y, viewBox, cssSize.w, cssSize.h)
+    // Anclar popup a la derecha del punto; si no cabe, a la izquierda
+    const popupW = 230
+    const popupH = 180
+    let left = pos.left + 14
+    let top = pos.top - 20
+    if (left + popupW > cssSize.w - 8) left = pos.left - popupW - 10
+    if (left < 8) left = 8
+    if (top + popupH > cssSize.h - 8) top = Math.max(8, cssSize.h - popupH - 8)
+    if (top < 8) top = 8
+    return { left, top }
+  }, [selectedDetalle, viewBox, cssSize])
+
+  const selectNodo = useCallback((key) => {
+    setSelectedKey((prev) => (prev === key ? null : key))
+  }, [])
+
+  const trySelectFromTap = useCallback((key, e) => {
+    e?.stopPropagation?.()
+    const tap = consumeTap()
+    if (!tap) return
+    selectNodo(key)
+  }, [consumeTap, selectNodo])
 
   if (!plot) {
     return (
@@ -331,19 +423,15 @@ export default function PoligonalGrafico({
     <div style={ui.card}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>Plano de la poligonal</span>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-xs)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={mostrarDistancias} onChange={(e) => setMostrarDistancias(e.target.checked)} />
-          Longitudes (m)
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-xs)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={mostrarAngulos} onChange={(e) => setMostrarAngulos(e.target.checked)} />
-          Ángulos observados
-        </label>
-        <button type="button" onClick={resetVista} style={{ fontSize: 'var(--cc-xs)', padding: '4px 10px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}>
+        <button
+          type="button"
+          onClick={resetVista}
+          style={{ fontSize: 'var(--cc-xs)', padding: '4px 10px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}
+        >
           Restablecer zoom
         </button>
         <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-          Rueda / pellizcar: zoom · Arrastrar: pan · {lodHint}
+          Rueda / pellizcar: zoom · Arrastrar: pan · Clic en un punto: detalle
         </span>
       </div>
 
@@ -375,6 +463,11 @@ export default function PoligonalGrafico({
           shapeRendering="geometricPrecision"
           textRendering="geometricPrecision"
           style={contentStyle}
+          onClick={() => {
+            // Clic en vacío (no en nodo): cerrar popup si fue tap limpio
+            const tap = consumeTap()
+            if (tap) setSelectedKey(null)
+          }}
         >
           {plot.gridLines.map((g) =>
             g.type === 'h' ? (
@@ -438,24 +531,6 @@ export default function PoligonalGrafico({
             />
           )}
 
-          {plot.lados.map((l, i) => (
-            <g key={i}>
-              {showDists && ladosVisible[i] && (
-                <LabelBlock
-                  x={l.mx}
-                  y={l.my}
-                  scale={scale}
-                  lines={[`${fmtNum(l.dist, 2)} m`]}
-                  dx={0}
-                  dy={-2}
-                  textAnchor="middle"
-                  nameColor="#0f766e"
-                  bodyColor="#0f766e"
-                />
-              )}
-            </g>
-          ))}
-
           {plot.gapLine && (
             <line
               x1={plot.gapLine.x1}
@@ -469,7 +544,12 @@ export default function PoligonalGrafico({
           )}
 
           {plot.llegadaObjCoord && (
-            <g>
+            <g
+              data-nodo-key="extra:llegadaObj"
+              style={{ cursor: 'pointer' }}
+              onClick={(e) => trySelectFromTap('extra:llegadaObj', e)}
+              onTouchEnd={(e) => trySelectFromTap('extra:llegadaObj', e)}
+            >
               <polygon
                 points={(() => {
                   const { x, y } = plot.llegadaObjCoord
@@ -480,20 +560,25 @@ export default function PoligonalGrafico({
                 stroke="#15803d"
                 strokeWidth={markerStroke}
               />
-              <LabelBlock
+              <circle cx={plot.llegadaObjCoord.x} cy={plot.llegadaObjCoord.y} r={hitR} fill="transparent" />
+              <NameLabel
                 x={plot.llegadaObjCoord.x}
                 y={plot.llegadaObjCoord.y}
                 scale={scale}
-                lines={[`${plot.llegadaObjCoord.p.nombre || 'Llegada'} (obj.)`]}
-                dx={8}
-                dy={-10}
-                nameColor="#15803d"
+                nombre={`${plot.llegadaObjCoord.p.nombre || 'Llegada'} (obj.)`}
+                color="#15803d"
+                selected={selectedKey === 'extra:llegadaObj'}
               />
             </g>
           )}
 
           {plot.llegadaCalcCoord && (
-            <g>
+            <g
+              data-nodo-key="extra:llegadaCalc"
+              style={{ cursor: 'pointer' }}
+              onClick={(e) => trySelectFromTap('extra:llegadaCalc', e)}
+              onTouchEnd={(e) => trySelectFromTap('extra:llegadaCalc', e)}
+            >
               <circle
                 cx={plot.llegadaCalcCoord.x}
                 cy={plot.llegadaCalcCoord.y}
@@ -503,20 +588,25 @@ export default function PoligonalGrafico({
                 strokeWidth={markerStroke}
                 strokeDasharray="3 2"
               />
-              <LabelBlock
+              <circle cx={plot.llegadaCalcCoord.x} cy={plot.llegadaCalcCoord.y} r={hitR} fill="transparent" />
+              <NameLabel
                 x={plot.llegadaCalcCoord.x}
                 y={plot.llegadaCalcCoord.y}
                 scale={scale}
-                lines={[`${plot.llegadaCalcCoord.p.nombre || 'Llegada'} (calc.)`]}
-                dx={8}
-                dy={12}
-                nameColor="#c2410c"
+                nombre={`${plot.llegadaCalcCoord.p.nombre || 'Llegada'} (calc.)`}
+                color="#c2410c"
+                selected={selectedKey === 'extra:llegadaCalc'}
               />
             </g>
           )}
 
           {plot.amarreCoord && (
-            <g>
+            <g
+              data-nodo-key="extra:amarre"
+              style={{ cursor: 'pointer' }}
+              onClick={(e) => trySelectFromTap('extra:amarre', e)}
+              onTouchEnd={(e) => trySelectFromTap('extra:amarre', e)}
+            >
               <circle
                 cx={plot.amarreCoord.x}
                 cy={plot.amarreCoord.y}
@@ -525,47 +615,61 @@ export default function PoligonalGrafico({
                 stroke="#fff"
                 strokeWidth={markerStroke}
               />
-              <LabelBlock
+              <circle cx={plot.amarreCoord.x} cy={plot.amarreCoord.y} r={hitR} fill="transparent" />
+              <NameLabel
                 x={plot.amarreCoord.x}
                 y={plot.amarreCoord.y}
                 scale={scale}
-                lines={[`${plot.amarreCoord.p.nombre} (amarre)`]}
-                dx={8}
-                dy={-10}
-                nameColor="#166534"
+                nombre={`${plot.amarreCoord.p.nombre} (amarre)`}
+                color="#166534"
+                selected={selectedKey === 'extra:amarre'}
               />
             </g>
           )}
 
           {plot.coords.map(({ x, y, p }, idx) => {
-            const placed = placedLabels[idx]
+            const key = String(idx)
+            const isSel = selectedKey === key
             return (
-              <g key={p.id || p.nombre_punto || idx}>
+              <g
+                key={p.id || p.nombre_punto || idx}
+                data-nodo-key={key}
+                style={{ cursor: 'pointer' }}
+                onClick={(e) => trySelectFromTap(key, e)}
+                onTouchEnd={(e) => trySelectFromTap(key, e)}
+              >
                 <circle
                   cx={x}
                   cy={y}
-                  r={markerR}
-                  fill="#2563eb"
+                  r={isSel ? markerR * 1.25 : markerR}
+                  fill={isSel ? '#1d4ed8' : '#2563eb'}
                   stroke="#fff"
                   strokeWidth={markerStroke}
                 />
-                {placed && (
-                  <LabelBlock
+                {/* Área de toque ampliada */}
+                <circle cx={x} cy={y} r={hitR} fill="transparent" />
+                {namesVisible[idx] && (
+                  <NameLabel
                     x={x}
                     y={y}
                     scale={scale}
-                    lines={placed.lines}
-                    dx={placed.dx}
-                    dy={placed.dy}
-                    textAnchor={placed.textAnchor}
-                    nameColor={nameColor}
-                    bodyColor="#475569"
+                    nombre={p.nombre_punto}
+                    color={nameColor}
+                    selected={isSel}
                   />
                 )}
               </g>
             )
           })}
         </svg>
+
+        {selectedDetalle && popupCss && (
+          <NodoDetallePopup
+            detalle={selectedDetalle}
+            style={popupCss}
+            onClose={() => setSelectedKey(null)}
+          />
+        )}
       </div>
     </div>
   )

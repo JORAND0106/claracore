@@ -39,7 +39,10 @@ export function useTopoViewportGestures({
     pan0: { x: 0, y: 0 },
     pinchDist0: 0,
     scale0: 1,
+    moved: false,
   })
+  const tapRef = useRef({ valid: false, x: 0, y: 0 })
+  const TAP_SLOP_PX = 8
 
   const containerRef = useCallback((node) => {
     setContainerEl(node)
@@ -123,12 +126,18 @@ export function useTopoViewportGestures({
       pan0: { ...panStateRef.current },
       pinchDist0: 0,
       scale0: scaleRef.current,
+      moved: false,
     }
+    tapRef.current = { valid: false, x: e.clientX, y: e.clientY }
   }, [])
 
   const onMouseMove = useCallback((e) => {
     const g = gestureRef.current
     if (g.mode !== 'pan') return
+    if (!g.moved) {
+      const d = Math.hypot(e.clientX - g.x0, e.clientY - g.y0)
+      if (d > TAP_SLOP_PX) g.moved = true
+    }
     const next = {
       x: g.pan0.x + (e.clientX - g.x0),
       y: g.pan0.y + (e.clientY - g.y0),
@@ -138,7 +147,13 @@ export function useTopoViewportGestures({
   }, [])
 
   const onMouseUp = useCallback(() => {
-    if (gestureRef.current.mode === 'pan') {
+    const g = gestureRef.current
+    if (g.mode === 'pan') {
+      tapRef.current = {
+        valid: !g.moved,
+        x: g.x0,
+        y: g.y0,
+      }
       gestureRef.current.mode = null
     }
   }, [])
@@ -154,7 +169,9 @@ export function useTopoViewportGestures({
         pan0: { ...panStateRef.current },
         pinchDist0: 0,
         scale0: scaleRef.current,
+        moved: false,
       }
+      tapRef.current = { valid: false, x: t.clientX, y: t.clientY }
     } else if (touches.length >= 2) {
       const d = touchDistance(touches[0], touches[1])
       gestureRef.current = {
@@ -164,7 +181,9 @@ export function useTopoViewportGestures({
         pan0: { ...panStateRef.current },
         pinchDist0: Math.max(d, 1),
         scale0: scaleRef.current,
+        moved: true,
       }
+      tapRef.current = { valid: false, x: 0, y: 0 }
     }
   }, [])
 
@@ -174,6 +193,10 @@ export function useTopoViewportGestures({
     if (g.mode === 'pan' && touches.length === 1) {
       e.preventDefault()
       const t = touches[0]
+      if (!g.moved) {
+        const d = Math.hypot(t.clientX - g.x0, t.clientY - g.y0)
+        if (d > TAP_SLOP_PX) g.moved = true
+      }
       const next = {
         x: g.pan0.x + (t.clientX - g.x0),
         y: g.pan0.y + (t.clientY - g.y0),
@@ -197,6 +220,14 @@ export function useTopoViewportGestures({
   const onTouchEnd = useCallback((e) => {
     const touches = e.touches
     if (touches.length === 0) {
+      const g = gestureRef.current
+      if (g.mode === 'pan') {
+        tapRef.current = {
+          valid: !g.moved,
+          x: g.x0,
+          y: g.y0,
+        }
+      }
       gestureRef.current.mode = null
       return
     }
@@ -209,8 +240,17 @@ export function useTopoViewportGestures({
         pan0: { ...panStateRef.current },
         pinchDist0: 0,
         scale0: scaleRef.current,
+        moved: true, // coming from pinch/multi → no tap
       }
+      tapRef.current = { valid: false, x: 0, y: 0 }
     }
+  }, [])
+
+  /** Consume un tap/clic limpio (sin arrastre significativo). */
+  const consumeTap = useCallback(() => {
+    const t = tapRef.current
+    tapRef.current = { valid: false, x: 0, y: 0 }
+    return t.valid ? { x: t.x, y: t.y } : null
   }, [])
 
   useEffect(() => {
@@ -220,13 +260,14 @@ export function useTopoViewportGestures({
     const end = (ev) => onTouchEnd(ev)
     containerEl.addEventListener('touchstart', start, { passive: true })
     containerEl.addEventListener('touchmove', move, { passive: false })
-    containerEl.addEventListener('touchend', end, { passive: true })
-    containerEl.addEventListener('touchcancel', end, { passive: true })
+    // capture: el tap se marca antes de que el nodo (React) consuma el evento
+    containerEl.addEventListener('touchend', end, { passive: true, capture: true })
+    containerEl.addEventListener('touchcancel', end, { passive: true, capture: true })
     return () => {
       containerEl.removeEventListener('touchstart', start)
       containerEl.removeEventListener('touchmove', move)
-      containerEl.removeEventListener('touchend', end)
-      containerEl.removeEventListener('touchcancel', end)
+      containerEl.removeEventListener('touchend', end, { capture: true })
+      containerEl.removeEventListener('touchcancel', end, { capture: true })
     }
   }, [containerEl, onTouchStart, onTouchMove, onTouchEnd])
 
@@ -247,7 +288,9 @@ export function useTopoViewportGestures({
     scale,
     pan,
     viewBox,
+    cssSize,
     resetVista,
+    consumeTap,
     viewportHandlers: {
       onMouseDown,
       onMouseMove,
@@ -260,6 +303,7 @@ export function useTopoViewportGestures({
       cursor: 'grab',
       WebkitUserSelect: 'none',
       userSelect: 'none',
+      position: 'relative',
     },
     /** Sin CSS transform/scale: el zoom va en viewBox (nitidez vectorial). */
     contentStyle: {
