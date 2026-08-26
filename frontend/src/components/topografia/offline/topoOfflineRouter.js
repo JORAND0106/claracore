@@ -602,8 +602,15 @@ export async function readTopoOffline(contratoId, path, query = '') {
 
   if (path === '/puntos' || path.startsWith('/puntos/verificados')) {
     let rows = await topoDb.topo_puntos.where('contrato_id').equals(cid).toArray()
+    if (!rows.length) {
+      // Dexie puede haber guardado contrato_id como string.
+      rows = await topoDb.topo_puntos.where('contrato_id').equals(String(contratoId)).toArray()
+    }
     if (path.includes('verificados') || fullPath.includes('modulo_origen=')) {
-      rows = rows.filter((p) => p.verificado)
+      rows = rows.filter((p) => {
+        const v = p?.verificado
+        return v === true || v === 1 || v === '1' || v === 'true' || v === 't' || v === 'True'
+      })
     }
     return rows.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
   }

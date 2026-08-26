@@ -659,9 +659,30 @@ export function cotasDesdePuntos(puntos) {
   return m
 }
 
+/** True si el punto está marcado verificado en biblioteca (acepta boolean / 1 / "true"). */
+export function esPuntoVerificadoBiblioteca(p) {
+  const v = p?.verificado
+  return v === true || v === 1 || v === '1' || v === 'true' || v === 't' || v === 'True'
+}
+
+/**
+ * Puntos de biblioteca aptos como BM de nivelación (misma fuente que Biblioteca).
+ * Prioriza verificados con cota; si ninguno tiene cota, lista verificados para que el selector no quede vacío.
+ */
+export function puntosBmParaNivelacion(puntos) {
+  const list = Array.isArray(puntos) ? puntos : []
+  const verif = list.filter(esPuntoVerificadoBiblioteca)
+  const conCota = verif.filter((p) => p.cota != null && p.cota !== '')
+  const base = conCota.length ? conCota : verif
+  return base
+    .slice()
+    .sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es', { sensitivity: 'base' }))
+}
+
 export function nombreBmDesdeId(puntos, bmId) {
-  if (!bmId) return ''
-  const p = (puntos || []).find((x) => x.id === bmId)
+  if (bmId == null || bmId === '') return ''
+  const id = String(bmId)
+  const p = (puntos || []).find((x) => String(x?.id) === id)
   return (p?.nombre || '').trim()
 }
 

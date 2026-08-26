@@ -43,6 +43,7 @@ import {
   puedeAgregarFila,
   puedeIngresarCierre,
   puedeRegistrarVplus,
+  puntosBmParaNivelacion,
   resaltadoValidacionUltimaFila,
 } from '../../utils/topografia_nivelacion'
 
@@ -252,6 +253,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
 
   const cotasBib = useMemo(() => cotasDesdePuntos(puntos), [puntos])
 
+  /** BM iniciales/finales: misma biblioteca verificada que el submódulo Biblioteca de puntos. */
+  const puntosBm = useMemo(() => puntosBmParaNivelacion(puntos), [puntos])
+
   const vista = useMemo(
     () => calcularVistaNivelacion(filas, tipoNivel, cotasBib, { distMax: 50 }),
     [filas, tipoNivel, cotasBib],
@@ -260,6 +264,16 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const cargarLista = useCallback(async () => {
     const data = await api('/nivelaciones')
     setLista(data || [])
+  }, [api])
+
+  const cargarPuntosBib = useCallback(async () => {
+    try {
+      // Misma fuente que Biblioteca (`/puntos`); el filtro de BM se aplica en cliente.
+      const data = await api('/puntos')
+      setPuntos(Array.isArray(data) ? data : [])
+    } catch {
+      setPuntos([])
+    }
   }, [api])
 
   const cargarDetalle = useCallback(async (id) => {
@@ -277,8 +291,8 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
         nombre: n.nombre || f.nombre,
         tipo_contranivelacion: n.tipo_contranivelacion || 'circuito',
         tipo_nivel: n.tipo_nivel || 'electronico',
-        bm_inicial_id: n.bm_inicial_id || '',
-        bm_final_id: n.bm_final_id || '',
+        bm_inicial_id: n.bm_inicial_id != null && n.bm_inicial_id !== '' ? String(n.bm_inicial_id) : '',
+        bm_final_id: n.bm_final_id != null && n.bm_final_id !== '' ? String(n.bm_final_id) : '',
         tolerancia_mm_km: n.tolerancia_mm_km ?? 1,
         operador: n.operador || '',
         equipo_marca: n.equipo_marca || '',
@@ -301,9 +315,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
 
   useEffect(() => {
     cargarLista().catch((e) => setError(e.message))
-    api('/puntos/verificados').then(setPuntos).catch(() => {})
+    cargarPuntosBib()
     api('/operadores').then(setOperadores).catch(() => {})
-  }, [api, cargarLista])
+  }, [api, cargarLista, cargarPuntosBib])
 
   useEffect(() => {
     if (!lista.length || sel || creando) return
@@ -319,6 +333,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setResultado(null)
     setError('')
     setOkMsg('')
+    cargarPuntosBib()
   }
 
   const seleccionarTab = (id) => {
@@ -615,12 +630,13 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   }
 
   const confirmarIngresarCierre = () => {
-    const punto = puntos.find((p) => p.id === puntoCierreId)
+    const punto = puntosBm.find((p) => String(p.id) === String(puntoCierreId))
+      || puntos.find((p) => String(p.id) === String(puntoCierreId))
     if (!punto) {
       setError('Seleccione un punto de biblioteca para el cierre.')
       return
     }
-    setForm((f) => ({ ...f, bm_final_id: punto.id }))
+    setForm((f) => ({ ...f, bm_final_id: String(punto.id) }))
     setFilas((rows) => {
       const ultAbscisa = rows.length ? String(rows[rows.length - 1]?.abscisa ?? '').trim() : ''
       return [...rows, nuevaFilaCierre(punto, rows.length + 1, ultAbscisa || '0')]
@@ -893,6 +909,266 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     )
   }
 
+  /** Bloque V+/Vi/V− en tarjeta móvil (HS|HM|HI|Dist) — misma lógica que la tabla escritorio. */
+  const renderBloqueHilosMovil = (fila, idx, bk, vistaRow, vplusAlerta = false) => {
+    const labels = { vplus: 'V+', vi: 'Vi', vminus: 'V−' }
+    const accent = bloques[bk]?.accent || ui.accent
+    const vplusOff = bk === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
+    const cierreSoloVminus = Boolean(fila.es_fila_cierre) && bk !== 'vminus'
+    const hilosAlerta = esAutomatico && hilosIncongruentes(fila[bk], tipoNivel)
+    const distCalc = bk === 'vplus' ? vistaRow.distancia_vplus_calc : bk === 'vminus' ? vistaRow.distancia_vminus_calc : null
+    const distOver = distCalc != null && distCalc > 50
+    const conDist = bk === 'vplus' || bk === 'vminus'
+
+    const cellInp = (hk) => (
+      <label key={hk} style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
+        <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>
+          {hk === 'hS' ? 'HS' : hk === 'hM' ? 'HM' : 'HI'}
+        </span>
+        {sellada || cierreSoloVminus ? (
+          <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)', fontWeight: hk === 'hM' ? 600 : 400 }}>
+            {cierreSoloVminus ? '—' : fmtN(fila[bk]?.[hk], 3)}
+          </span>
+        ) : (
+          <input
+            value={fila[bk]?.[hk] ?? ''}
+            disabled={vplusOff && !vplusAlerta}
+            onChange={(e) => updateBloque(idx, bk, { ...fila[bk], [hk]: e.target.value })}
+            style={{
+              ...styleInputHilo(ui, bloques, bk, hk, {
+                alerta: vplusAlerta || hilosAlerta,
+                opacity: vplusOff && !vplusAlerta ? 0.45 : 1,
+              }),
+              width: '100%',
+              minWidth: 0,
+              boxSizing: 'border-box',
+            }}
+            title={hilosAlerta ? HILO_INCONGRUENCIA_MSG : undefined}
+          />
+        )}
+      </label>
+    )
+
+    return (
+      <div
+        key={bk}
+        style={{
+          marginTop: 8,
+          padding: '8px 8px 6px',
+          borderRadius: 8,
+          background: bloques[bk]?.bg || ui.t?.bgSoft || 'transparent',
+          border: `1px solid ${bloques[bk]?.border || ui.t?.border || '#e2e8f0'}`,
+          boxShadow: `inset 3px 0 0 ${accent}`,
+        }}
+      >
+        <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 800, color: accent, marginBottom: 6, letterSpacing: 0.3 }}>
+          {labels[bk]}
+          {esAutomatico ? ' · HS | HM | HI' : ''}
+          {conDist ? (esAutomatico ? ' | Dist' : ' · Lect | Dist') : (esAutomatico ? '' : ' · Lect')}
+        </div>
+        {cierreSoloVminus ? (
+          <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>—</div>
+        ) : esAutomatico ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+            {['hS', 'hM', 'hI'].map(cellInp)}
+            {conDist && (
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
+                <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>Dist</span>
+                <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)', fontWeight: distOver ? 700 : 400, color: distOver ? '#dc2626' : ui.text }}>
+                  {fmtN(distCalc, 2)}
+                </span>
+              </label>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
+              <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>Lect</span>
+              {sellada ? (
+                <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)' }}>{fmtN(fila[bk]?.lectura)}</span>
+              ) : (
+                <input
+                  value={fila[bk]?.lectura ?? ''}
+                  disabled={vplusOff && !vplusAlerta}
+                  onChange={(e) => updateBloque(idx, bk, { ...fila[bk], lectura: e.target.value })}
+                  style={{
+                    ...styleInputCartera(ui, bloques, bk, { width: '100%', textAlign: 'center', boxSizing: 'border-box', opacity: vplusOff && !vplusAlerta ? 0.45 : 1 }, vplusAlerta),
+                    minWidth: 0,
+                  }}
+                  placeholder="M"
+                />
+              )}
+            </label>
+            {conDist && (
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
+                <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>Dist</span>
+                {esAutomatico ? null : sellada ? (
+                  <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)', color: distOver ? '#dc2626' : undefined }}>
+                    {fmtN(bk === 'vplus' ? fila.dist_vplus_m : fila.dist_vminus_m, 2)}
+                  </span>
+                ) : (
+                  <input
+                    value={bk === 'vplus' ? fila.dist_vplus_m : fila.dist_vminus_m}
+                    disabled={bk === 'vplus' ? !filaTieneVplus(fila, tipoNivel) : !filaTieneVminus(fila, tipoNivel)}
+                    onChange={(e) => updateFila(idx, bk === 'vplus' ? { dist_vplus_m: e.target.value } : { dist_vminus_m: e.target.value })}
+                    style={{
+                      ...styleInputCartera(ui, bloques, bk, {
+                        width: '100%',
+                        textAlign: 'center',
+                        boxSizing: 'border-box',
+                        opacity: (bk === 'vplus' ? filaTieneVplus(fila, tipoNivel) : filaTieneVminus(fila, tipoNivel)) ? 1 : 0.45,
+                      }, distOver),
+                      minWidth: 0,
+                    }}
+                  />
+                )}
+              </label>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderFilaCarteraMovil = (vistaRow, idx) => {
+    const fila = filas[idx] || vistaRow
+    const distVp = vistaRow.distancia_vplus_calc
+    const distVm = vistaRow.distancia_vminus_calc
+    const distOver = (distVp != null && distVp > 50) || (distVm != null && distVm > 50)
+    const esUltimaResaltada = resaltarUltima?.idx === idx
+    const metaAlerta = esUltimaResaltada ? resaltarUltima.meta : null
+    const vplusAlerta = esUltimaResaltada && resaltarUltima.vminusSinVplus
+    const filaResaltada = esUltimaResaltada && (resaltarUltima.incompleta || resaltarUltima.vminusSinVplus)
+    const abscisaFmtInvalida = abscisaInvalida(fila)
+    const abscisaAlerta = metaAlerta?.abscisa || abscisaFmtInvalida
+    const esCierre = Boolean(fila.es_fila_cierre)
+    const border = ui.t?.border || '#e2e8f0'
+    return (
+      <div
+        key={idx}
+        style={{
+          marginBottom: 10,
+          padding: 10,
+          borderRadius: 10,
+          border: `1px solid ${esCierre ? bloques.cierre.border : border}`,
+          background: esCierre
+            ? bloques.cierre.row
+            : filaResaltada
+              ? bloques.aviso.row
+              : distOver
+                ? bloques.alerta.row
+                : (ui.t?.bgCard || '#fff'),
+          boxShadow: esCierre ? `inset 3px 0 0 ${bloques.cierre.border}` : undefined,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
+          <div style={{ flexShrink: 0, minWidth: 28 }}>
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)' }}>#{idx + 1}</div>
+            {esCierre && (
+              <span
+                style={{
+                  display: 'inline-block',
+                  marginTop: 2,
+                  padding: '1px 5px',
+                  borderRadius: 4,
+                  fontSize: 'var(--cc-xxs)',
+                  fontWeight: 800,
+                  color: '#fff',
+                  background: '#7c3aed',
+                }}
+              >
+                CIERRE
+              </span>
+            )}
+          </div>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {sellada || esCierre ? (
+              <span style={{ fontWeight: esCierre ? 700 : 600 }}>{fila.nombre_punto || '—'}</span>
+            ) : idx === 0 && bmInicialNombre ? (
+              <span style={{ fontWeight: 600 }} title="BM de amarre (biblioteca)">{bmInicialNombre}</span>
+            ) : (
+              <input
+                value={fila.nombre_punto}
+                onChange={(e) => updateFila(idx, { nombre_punto: e.target.value })}
+                style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, metaAlerta?.nombre)}
+                placeholder="Punto"
+              />
+            )}
+            {sellada || esCierre ? (
+              <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>{idx === 0 ? 'BM' : (fila.tipo_punto || '—')}</span>
+            ) : idx === 0 ? (
+              <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.textMuted }}>BM</span>
+            ) : (
+              <select
+                value={fila.tipo_punto || ''}
+                onChange={(e) => updateFila(idx, { tipo_punto: e.target.value })}
+                style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, metaAlerta?.tipo)}
+              >
+                <option value="">Tipo —</option>
+                {TIPOS_PUNTO.map(({ v, l }) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            )}
+          </div>
+          {!sellada && (
+            <button type="button" style={{ ...ui.btnSecondary, padding: '4px 10px', flexShrink: 0 }} onClick={() => removeFila(idx)} title="Eliminar fila">×</button>
+          )}
+        </div>
+
+        {renderBloqueHilosMovil(fila, idx, 'vplus', vistaRow, vplusAlerta)}
+        {renderBloqueHilosMovil(fila, idx, 'vi', vistaRow, false)}
+        {renderBloqueHilosMovil(fila, idx, 'vminus', vistaRow, false)}
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr 1fr',
+            gap: 6,
+            marginTop: 8,
+            paddingTop: 8,
+            borderTop: `1px solid ${border}`,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>H. ins.</div>
+            <div style={{ fontWeight: 600, color: ui.accent, fontSize: 'var(--cc-sm)' }}>{fmtN(vistaRow.altura_instrumento)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>Cota</div>
+            <div style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>{fmtN(vistaRow.cota)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>Abscisa</div>
+            {sellada ? (
+              <div style={{ fontSize: 'var(--cc-sm)' }}>{fila.abscisa || '—'}</div>
+            ) : (
+              <input
+                type="text"
+                inputMode="decimal"
+                value={fila.abscisa}
+                onChange={(e) => updateFila(idx, { abscisa: e.target.value })}
+                style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, abscisaAlerta)}
+                placeholder="0+000"
+              />
+            )}
+          </div>
+        </div>
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, marginBottom: 2 }}>Descripción</div>
+          {sellada ? (
+            <div style={{ fontSize: 'var(--cc-sm)' }}>{fila.descripcion_punto || '—'}</div>
+          ) : (
+            <input
+              value={fila.descripcion_punto}
+              onChange={(e) => updateFila(idx, { descripcion_punto: e.target.value })}
+              style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, metaAlerta?.descripcion)}
+              placeholder="Descripción del punto"
+            />
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div>
       {(error || okMsg) && (
@@ -1011,20 +1287,35 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                   <option value="electronico">Electrónico</option>
                   <option value="automatico">Automático</option>
                 </select>,
-                <select key="bi" value={form.bm_inicial_id} onChange={(e) => setForm({ ...form, bm_inicial_id: e.target.value })} style={sheet.cellSelect}>
-                  <option value="">—</option>
-                  {puntos.map((p) => (
-                    <option key={p.id} value={p.id}>{p.nombre} ({p.cota ?? '—'} m)</option>
+                <select
+                  key="bi"
+                  value={form.bm_inicial_id}
+                  onChange={(e) => setForm({ ...form, bm_inicial_id: e.target.value })}
+                  style={sheet.cellSelect}
+                >
+                  <option value="">{puntosBm.length ? '— Seleccione BM —' : '— Sin puntos en biblioteca —'}</option>
+                  {puntosBm.map((p) => (
+                    <option key={String(p.id)} value={String(p.id)}>{p.nombre} ({p.cota ?? '—'} m)</option>
                   ))}
                 </select>,
-                <select key="bf" value={form.bm_final_id} onChange={(e) => setForm({ ...form, bm_final_id: e.target.value })} style={sheet.cellSelect}>
+                <select
+                  key="bf"
+                  value={form.bm_final_id}
+                  onChange={(e) => setForm({ ...form, bm_final_id: e.target.value })}
+                  style={sheet.cellSelect}
+                >
                   <option value="">—</option>
-                  {puntos.map((p) => (
-                    <option key={p.id} value={p.id}>{p.nombre} ({p.cota ?? '—'} m)</option>
+                  {puntosBm.map((p) => (
+                    <option key={String(p.id)} value={String(p.id)}>{p.nombre} ({p.cota ?? '—'} m)</option>
                   ))}
                 </select>,
               ]}
             />
+            {puntosBm.length === 0 && (
+              <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
+                No hay puntos verificados en la Biblioteca de puntos de este contrato. Cree o publique un BM allí y vuelva a abrir «Nueva nivelación».
+              </p>
+            )}
             <button type="button" style={{ ...ui.btnPrimary, marginTop: 4 }} onClick={crear}>Crear</button>
           </div>
         </PermisoAviso>
@@ -1086,9 +1377,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     onChange={(e) => setForm({ ...form, bm_inicial_id: e.target.value })}
                     style={sheet.cellSelect}
                   >
-                    <option value="">—</option>
-                    {puntos.map((p) => (
-                      <option key={p.id} value={p.id}>{p.nombre} ({p.cota ?? '—'} m)</option>
+                    <option value="">{puntosBm.length ? '—' : '— Sin puntos —'}</option>
+                    {puntosBm.map((p) => (
+                      <option key={String(p.id)} value={String(p.id)}>{p.nombre} ({p.cota ?? '—'} m)</option>
                     ))}
                   </select>,
                   <select
@@ -1099,8 +1390,8 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     style={sheet.cellSelect}
                   >
                     <option value="">—</option>
-                    {puntos.map((p) => (
-                      <option key={p.id} value={p.id}>{p.nombre} ({p.cota ?? '—'} m)</option>
+                    {puntosBm.map((p) => (
+                      <option key={String(p.id)} value={String(p.id)}>{p.nombre} ({p.cota ?? '—'} m)</option>
                     ))}
                   </select>,
                   <input
@@ -1329,6 +1620,22 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     {vista.avisos.slice(0, 3).join(' ')}
                   </p>
                 )}
+                {isCompact ? (
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    {vista.filasVista.map((vistaRow, idx) => renderFilaCarteraMovil(vistaRow, idx))}
+                    {!sellada && (
+                      <button
+                        type="button"
+                        style={{ ...ui.btnSecondary, alignSelf: 'stretch', marginTop: 4 }}
+                        onClick={addFila}
+                        disabled={tieneFilaCierre}
+                        title={tieneFilaCierre ? 'Elimine la fila de cierre para agregar tramos' : (!puedeNuevaFila.ok ? puedeNuevaFila.msg : 'Agregar fila')}
+                      >
+                        + Fila
+                      </button>
+                    )}
+                  </div>
+                ) : (
                 <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
                   <table style={{ ...sheet.sheetTable, tableLayout: 'auto' }}>
                     <thead>
@@ -1501,6 +1808,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     </tbody>
                   </table>
                 </div>
+                )}
               </div>
             </PermisoAviso>
 
@@ -1534,8 +1842,8 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
             style={{ ...ui.compactInput, width: '100%', maxWidth: 320, textAlign: 'left' }}
           >
             <option value="">— Seleccione punto —</option>
-            {puntos.map((p) => (
-              <option key={p.id} value={p.id}>
+            {puntosBm.map((p) => (
+              <option key={String(p.id)} value={String(p.id)}>
                 {p.nombre} ({p.cota ?? '—'} m)
               </option>
             ))}
