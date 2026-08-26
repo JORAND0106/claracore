@@ -1505,7 +1505,16 @@ def validar_lecturas_nivelacion(
     lecturas: list[dict],
     tipo_nivel: str,
     bm_inicial_nombre: str | None = None,
+    *,
+    modo_apertura: bool = False,
 ) -> list[str]:
+    """
+    Reglas de cartera.
+
+    ``modo_apertura=True``: primera vuelta (BM V+ y V− en otro punto) sin exigir
+    tramo cerrado ni V+/V− en la misma fila. Una vez el circuito está en curso,
+    ``modo_apertura=False`` restaura las validaciones estrictas.
+    """
     errores: list[str] = []
     grupos = _agrupar_lecturas_por_fila(lecturas)
     for g_idx, grupo in enumerate(grupos):
@@ -1526,33 +1535,59 @@ def validar_lecturas_nivelacion(
             elif not _abscisa_numerica_valida(abscisa):
                 errores.append(f"Fila {g_idx + 1}: la abscisa debe ser numérica.")
             if (
-                g_idx > 0
+                not modo_apertura
+                and g_idx > 0
                 and _fila_tiene_lectura_vplus(grupo, tipo_nivel)
                 and not _fila_tiene_lectura_vminus(grupo, tipo_nivel)
             ):
                 errores.append(f"Fila {g_idx + 1}: V+ requiere V− en la misma fila (cambio).")
-            if _fila_vplus_sin_vista(grupo, g_idx, tipo_nivel, grupos):
+            if not modo_apertura and _fila_vplus_sin_vista(grupo, g_idx, tipo_nivel, grupos):
                 errores.append(
                     f"Fila {g_idx + 1}: V+ sin Vi ni V−. Registre vista adelante o borre la V+."
                 )
     for g_idx, grupo in enumerate(grupos):
         if _grupo_es_cierre(grupo) and not _fila_tiene_lectura_vminus(grupo, tipo_nivel):
             errores.append(f"Fila {g_idx + 1}: complete la lectura V− en el punto de cierre.")
-    if grupos:
+    if grupos and not modo_apertura:
         ultimo = grupos[-1]
-        if _grupo_es_cierre(ultimo):
-            pass
-        elif _fila_tiene_lectura_vminus(ultimo, tipo_nivel) and not _fila_tiene_lectura_vplus(ultimo, tipo_nivel):
-            errores.append("La última fila tiene V− sin V+. Complete el cambio o el cierre del tramo.")
-        ult_idx = len(grupos) - 1
-        if (
-            not _grupo_es_cierre(ultimo)
-            and _fila_tiene_lectura_vplus(ultimo, tipo_nivel)
-            and not _fila_tiene_lectura_vminus(ultimo, tipo_nivel)
-            and not _fila_tiene_lectura_vi(ultimo, tipo_nivel)
-        ):
-            errores.append("La última fila tiene V+ sin Vi ni V−. Complete el tramo o ingrese cierre.")
+        if not _grupo_es_cierre(ultimo):
+            if _fila_tiene_lectura_vminus(ultimo, tipo_nivel) and not _fila_tiene_lectura_vplus(
+                ultimo, tipo_nivel
+            ):
+                errores.append(
+                    "La última fila tiene V− sin V+. Complete el cambio o el cierre del tramo."
+                )
+            # BM sola (única fila) con V+ de amarre: siempre permitida.
+            if (
+                len(grupos) > 1
+                and _fila_tiene_lectura_vplus(ultimo, tipo_nivel)
+                and not _fila_tiene_lectura_vminus(ultimo, tipo_nivel)
+                and not _fila_tiene_lectura_vi(ultimo, tipo_nivel)
+            ):
+                errores.append(
+                    "La última fila tiene V+ sin Vi ni V−. Complete el tramo o ingrese cierre."
+                )
     return errores
+
+
+def primera_vuelta_completa_nivelacion(lecturas: list[dict], tipo_nivel: str) -> bool:
+    """BM con V+ y al menos una Vi/V− en una fila posterior."""
+    grupos = _agrupar_lecturas_por_fila(lecturas)
+    if len(grupos) < 2:
+        return False
+    if not _fila_tiene_lectura_vplus(grupos[0], tipo_nivel):
+        return False
+    return any(
+        _fila_tiene_lectura_vminus(g, tipo_nivel) or _fila_tiene_lectura_vi(g, tipo_nivel)
+        for g in grupos[1:]
+    )
+
+
+def modo_apertura_nivelacion(niv: dict | None, lecturas: list[dict], tipo_nivel: str) -> bool:
+    """True si aún no se abrió el circuito o falta completar la primera vuelta."""
+    if not (niv or {}).get("circuito_abierto_at"):
+        return True
+    return not primera_vuelta_completa_nivelacion(lecturas, tipo_nivel)
 
 
 def faltantes_campo_nivelacion(row: dict) -> list[str]:
