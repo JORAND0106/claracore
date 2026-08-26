@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from '../../apiBase'
@@ -20,6 +20,7 @@ import {
   normalizarVistaBasemap,
   sicoeBasemapStyleUrl,
 } from '../sicoe-obra/sicoeMapaBasemap'
+import { useTopoNivelacionMapaCapa } from '../../components/topografia/useTopoNivelacionMapaCapa'
 
 /** [lng, lat] WGS84 si el maestro trae coordenadas; si no, null. */
 function pickLngLat(row) {
@@ -77,6 +78,7 @@ export default function PptoFiltroMapaPk({
   zoomToSelected = false,
   hideCaption = false,
   showBasemapToggle = false,
+  showNivelacionLayerToggle = false,
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -84,10 +86,18 @@ export default function PptoFiltroMapaPk({
   const onClearRef = useRef(onClearSelection)
   const tokenRef = useRef(token)
   const selectedRef = useRef(selectedPk)
+  const [mapaTick, setMapaTick] = useState(0)
   onPickRef.current = onPkPick
   onClearRef.current = onClearSelection
   tokenRef.current = token
   selectedRef.current = selectedPk
+  const getMapNiv = useCallback(() => mapRef.current, [])
+  const capaNiv = useTopoNivelacionMapaCapa(
+    getMapNiv,
+    showNivelacionLayerToggle ? contratoId : null,
+    token,
+    { readyKey: mapaTick },
+  )
 
   const NORTH_RIGHT_BEARING = 270
   const filtroKey =
@@ -518,6 +528,7 @@ export default function PptoFiltroMapaPk({
           mapEl.style.position = 'relative'
           mapEl.appendChild(hint)
         }
+        setMapaTick((n) => n + 1)
       })
     })()
 
@@ -533,11 +544,25 @@ export default function PptoFiltroMapaPk({
   }, [contratoId, filtroKey, selKey, height, zoomToSelected, showBasemapToggle])
 
   return (
-    <div style={{ fontSize: 'var(--cc-body)', height: typeof height === 'number' ? `${height}px` : height, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ fontSize: 'var(--cc-body)', height: typeof height === 'number' ? `${height}px` : height, display: 'flex', flexDirection: 'column', position: 'relative' }}>
       {!hideCaption && (
         <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 4 }}>Clic = filtrar PK · norte → derecha</div>
       )}
       <div ref={containerRef} style={{ borderRadius: 8, overflow: 'hidden', border: `1px solid ${t.border}`, flex: 1, minHeight: 0 }} />
+      {showNivelacionLayerToggle && (
+        <label
+          style={{
+            position: 'absolute', top: hideCaption ? 8 : 28, left: 8, zIndex: 5,
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: `${t.bgCard || '#fff'}EE`, border: `1px solid ${t.border}`,
+            borderRadius: 8, padding: '4px 8px', fontSize: 'var(--cc-caption)',
+            color: t.text, cursor: 'pointer', boxShadow: '0 1px 6px rgba(0,0,0,0.12)',
+          }}
+        >
+          <input {...capaNiv.checkboxProps} />
+          Puntos de nivelación{capaNiv.count ? ` (${capaNiv.count})` : ''}
+        </label>
+      )}
     </div>
   )
 }

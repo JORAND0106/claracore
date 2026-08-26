@@ -5,6 +5,7 @@ import PoligonalValidacionPanel from './PoligonalValidacionPanel'
 import TopoConfirmModal from './TopoConfirmModal'
 import TopoExcelSheet from './TopoExcelSheet'
 import { topoSheetStyles } from './topoSheetStyles'
+import BitacoraMaterialUbicacionModal from '../../modules/seguimiento/BitacoraMaterialUbicacionModal'
 import {
   PermisoAviso,
   puede,
@@ -243,6 +244,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const [detalle, setDetalle] = useState(null)
   const [puntos, setPuntos] = useState([])
   const [operadores, setOperadores] = useState([])
+  const [pkMapIdx, setPkMapIdx] = useState(null)
   const [resultado, setResultado] = useState(null)
   const [error, setError] = useState('')
   const [filas, setFilas] = useState([nuevaFilaPunto(1, true)])
@@ -1225,18 +1227,25 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
             <div style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>{fmtN(vistaRow.cota)}</div>
           </div>
           <div>
-            <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>Abscisa</div>
+            <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>Abscisa (PK)</div>
             {sellada ? (
-              <div style={{ fontSize: 'var(--cc-sm)' }}>{fila.abscisa || '—'}</div>
+              <div style={{ fontSize: 'var(--cc-sm)' }}>{fila.ubicacion_pk || fila.abscisa || '—'}</div>
             ) : (
-              <input
-                type="text"
-                inputMode="decimal"
-                value={fila.abscisa}
-                onChange={(e) => updateFila(idx, { abscisa: e.target.value })}
-                style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, abscisaAlerta)}
-                placeholder="0+000"
-              />
+              <button
+                type="button"
+                onClick={() => setPkMapIdx(idx)}
+                style={estiloCampo({
+                  ...ui.btnSecondary,
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  fontSize: 'var(--cc-xs)',
+                  padding: '4px 6px',
+                  textAlign: 'left',
+                }, abscisaAlerta)}
+                title={fila.ubicacion_pk ? `PK ${fila.ubicacion_pk}` : ABSCISA_NUMERICA_MSG}
+              >
+                {fila.ubicacion_pk || fila.abscisa || '📍 Elegir PK'}
+              </button>
             )}
           </div>
         </div>
@@ -1273,11 +1282,6 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
           {okMsg && <div style={{ color: '#16a34a', fontSize: 'var(--cc-sm)', fontWeight: 600 }}>{okMsg}</div>}
         </div>
       )}
-      <datalist id="topo-operadores-niv">
-        {operadores.map((u) => (
-          <option key={u.id || u.nombre} value={u.nombre} />
-        ))}
-      </datalist>
 
       <div style={ui.tabBar} role="tablist" aria-label="Circuitos de nivelación">
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -1484,18 +1488,25 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                       <option key={String(p.id)} value={String(p.id)}>{p.nombre} ({p.cota ?? '—'} m)</option>
                     ))}
                   </select>,
-                  <input
+                  <select
                     key="op"
-                    list="topo-operadores-niv"
                     value={form.operador}
                     disabled={sellada}
                     onChange={(e) => setForm({ ...form, operador: e.target.value })}
-                    style={sellada ? sheet.cellRo : sheet.cellInp}
-                    placeholder="Buscar operador…"
-                    autoComplete="off"
-                  />,
+                    style={sellada ? sheet.cellRo : sheet.cellSelect}
+                    title="Solo usuarios con cargo de topografía (Topógrafo, Cadenero, Coordinador, etc.)"
+                  >
+                    <option value="">{operadores.length ? '— Seleccione —' : '— Sin operadores topo —'}</option>
+                    {operadores.map((u) => (
+                      <option key={u.id} value={u.nombre}>{u.nombre}{u.cargo ? ` (${u.cargo})` : ''}</option>
+                    ))}
+                    {form.operador && !operadores.some((u) => u.nombre === form.operador) && (
+                      <option value={form.operador}>{form.operador}</option>
+                    )}
+                  </select>,
                 ]}
               />
+              {/* operador estricto por cargo (select arriba) */}
               <TopoExcelSheet
                 sheet={sheet}
                 title="Equipo de medición"
@@ -1798,7 +1809,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                         <th style={thGroupColor('vminus')} colSpan={esAutomatico ? 4 : 2}>V− {esAutomatico ? '(3 hilos)' : ''}</th>
                         <th style={thGroup} rowSpan={2}>H. ins.</th>
                         <th style={thGroup} rowSpan={2}>Cota</th>
-                        <th style={thBase} rowSpan={2}>Abscisa</th>
+                        <th style={thBase} rowSpan={2}>Abscisa (PK)</th>
                         <th style={thBase} rowSpan={2}>Descripción de punto</th>
                         {!sellada && <th style={thBase} rowSpan={2} />}
                       </tr>
@@ -1923,17 +1934,30 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                               {fmtN(vistaRow.cota)}
                             </td>
                             <td style={tdBase}>
-                              {sellada ? (fila.abscisa || '—') : (
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={fila.abscisa}
-                                  onChange={(e) => updateFila(idx, { abscisa: e.target.value })}
-                                  style={estiloCampo({ ...ui.compactInput, color: ui.text, minWidth: 72 }, abscisaAlerta)}
-                                  placeholder="0"
-                                  title={abscisaFmtInvalida ? ABSCISA_NUMERICA_MSG : 'Abscisa en metros (numérico)'}
+                              {sellada ? (fila.ubicacion_pk || fila.abscisa || '—') : (
+                                <button
+                                  type="button"
+                                  onClick={() => setPkMapIdx(idx)}
+                                  style={estiloCampo({
+                                    ...ui.btnSecondary,
+                                    minWidth: 88,
+                                    maxWidth: 140,
+                                    fontSize: 'var(--cc-xs)',
+                                    padding: '4px 6px',
+                                    textAlign: 'left',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                  }, abscisaAlerta)}
+                                  title={
+                                    fila.ubicacion_pk
+                                      ? `PK ${fila.ubicacion_pk}${fila.ubicacion_tramo ? ` · ${fila.ubicacion_tramo}` : ''}${fila.ubicacion_costado ? ` · ${fila.ubicacion_costado}` : ''}`
+                                      : ABSCISA_NUMERICA_MSG
+                                  }
                                   aria-invalid={abscisaAlerta || undefined}
-                                />
+                                >
+                                  {fila.ubicacion_pk || fila.abscisa || '📍 PK'}
+                                </button>
                               )}
                             </td>
                             <td style={tdBase}>
@@ -1973,6 +1997,36 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
             </PermisoAviso>
           </div>
         )}
+
+      {pkMapIdx != null && filas[pkMapIdx] && (
+        <BitacoraMaterialUbicacionModal
+          t={ui.t}
+          token={token}
+          contratoId={contratoId}
+          pkId={filas[pkMapIdx].ubicacion_pk_id || ''}
+          pkLabel={filas[pkMapIdx].ubicacion_pk || filas[pkMapIdx].abscisa || ''}
+          tramo={filas[pkMapIdx].ubicacion_tramo || ''}
+          costado={filas[pkMapIdx].ubicacion_costado || ''}
+          infraestructura={filas[pkMapIdx].ubicacion_infraestructura || ''}
+          readOnly={sellada}
+          onClose={() => setPkMapIdx(null)}
+          onConfirm={(loc) => {
+            const pkLabel = loc?.ubicacion_pk || ''
+            updateFila(pkMapIdx, {
+              ubicacion_pk_id: loc?.ubicacion_pk_id || null,
+              ubicacion_pk: pkLabel,
+              ubicacion_tramo: loc?.ubicacion_tramo || '',
+              ubicacion_costado: loc?.ubicacion_costado || '',
+              ubicacion_infraestructura: loc?.ubicacion_infraestructura || '',
+              ubicacion_lat: loc?.ubicacion_lat ?? null,
+              ubicacion_lng: loc?.ubicacion_lng ?? null,
+              // Mantener abscisa legible (código PK) para PDF / legado
+              abscisa: pkLabel || '',
+            })
+            setPkMapIdx(null)
+          }}
+        />
+      )}
 
       {modalCierre && (
         <TopoConfirmModal

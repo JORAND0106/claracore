@@ -1555,16 +1555,17 @@ def validar_lecturas_nivelacion(
         abscisa = (grupo[0].get("abscisa") or "").strip()
         desc = (grupo[0].get("descripcion_punto") or grupo[0].get("ubicacion") or "").strip()
         tipo = (grupo[0].get("tipo_punto") or "").strip()
+        pk_ok = bool(grupo[0].get("ubicacion_pk_id"))
         if g_idx == 0 and not tipo:
             tipo = "BM"
         if tipo == "TP":
             tipo = "estacion"
         tiene_lect = any(lectura_efectiva_nivelacion(l, tipo_nivel) is not None for l in grupo)
         if tiene_lect:
-            if not nombre or not abscisa or not desc or not tipo:
-                errores.append(f"Fila {g_idx + 1}: complete nombre, abscisa, descripción y tipo.")
-            elif not _abscisa_numerica_valida(abscisa):
-                errores.append(f"Fila {g_idx + 1}: la abscisa debe ser numérica.")
+            if not nombre or not (abscisa or pk_ok) or not desc or not tipo:
+                errores.append(f"Fila {g_idx + 1}: complete nombre, abscisa (PK), descripción y tipo.")
+            elif not pk_ok and not _abscisa_numerica_valida(abscisa):
+                errores.append(f"Fila {g_idx + 1}: seleccione la ubicación en el plano PK.")
             if (
                 not modo_apertura
                 and g_idx > 0

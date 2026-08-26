@@ -25,6 +25,7 @@ import {
   mapboxPlanoSymbolLayout,
   setMapboxAbscisaLabelsVisibility,
 } from '../../mapboxPlanoLabels'
+import { useTopoNivelacionMapaCapa } from '../../components/topografia/useTopoNivelacionMapaCapa'
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
@@ -241,6 +242,8 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const [mostrarPlano, setMostrarPlano] = useState(true)
   const [mostrarHeat, setMostrarHeat] = useState(true)
   const [mostrarPuntos, setMostrarPuntos] = useState(true)
+  const getMapNiv = useCallback(() => mapInstance.current, [])
+  const capaNiv = useTopoNivelacionMapaCapa(getMapNiv, contratoId, token, { readyKey: mapReady })
   const [seleccionado, setSeleccionado] = useState(null)
   const [filtroSubcList, setFiltroSubcList] = useState([])
   const [nivelesDisponibles, setNivelesDisponibles] = useState([1, 2, 3])
@@ -738,6 +741,10 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
               {label}
             </label>
           ))}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.text, cursor: 'pointer' }}>
+            <input {...capaNiv.checkboxProps} />
+            Puntos de nivelación{capaNiv.count ? ` (${capaNiv.count})` : ''}
+          </label>
         </div>
 
         {!tieneCriterios && (

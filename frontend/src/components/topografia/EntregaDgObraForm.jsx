@@ -488,12 +488,6 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
 
   return (
     <div>
-      <datalist id="topo-operadores-entrega">
-        {operadores.map((u) => (
-          <option key={u.id || u.nombre} value={u.nombre} />
-        ))}
-      </datalist>
-
       <div style={ui.tabBar} role="tablist" aria-label="Entregas DG Obra">
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           <PermisoAviso permisos={permisos} accion="crear">
@@ -680,13 +674,21 @@ export default function EntregaDgObraForm({ contratoId, token, permisos, registe
                   placeholder="1+200"
                   style={sheet.cellInp}
                 />,
-                <input
+                <select
                   key="o"
-                  list="topo-operadores-entrega"
                   value={formNuevo.operador}
                   onChange={(e) => setFormNuevo({ ...formNuevo, operador: e.target.value })}
-                  style={sheet.cellInp}
-                />,
+                  style={sheet.cellSelect || sheet.cellInp}
+                  title="Solo usuarios con cargo de topografía"
+                >
+                  <option value="">{operadores.length ? '— Seleccione —' : '— Sin operadores topo —'}</option>
+                  {operadores.map((u) => (
+                    <option key={u.id} value={u.nombre}>{u.nombre}{u.cargo ? ` (${u.cargo})` : ''}</option>
+                  ))}
+                  {formNuevo.operador && !operadores.some((u) => u.nombre === formNuevo.operador) && (
+                    <option value={formNuevo.operador}>{formNuevo.operador}</option>
+                  )}
+                </select>,
                 <input
                   key="f"
                   type="date"
