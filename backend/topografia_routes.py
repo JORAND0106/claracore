@@ -90,6 +90,7 @@ from topografia_utils import (
     validar_lecturas_nivelacion,
     perimetro_por_coordenadas,
     radiar_armadas,
+    payload_actualizar_punto_biblioteca,
     segundos_arco_a_texto,
     svg_interseccion,
     svg_newpoint_opciones,
@@ -1740,13 +1741,15 @@ def actualizar_punto(contrato_id: int, punto_id: str, body: PuntoBody, current_u
     row = (
         supabase.table("topo_puntos")
         .update(
-            {
-                "nombre": body.nombre.strip(),
-                "norte": body.norte,
-                "este": body.este,
-                "cota": body.cota,
-                "tipo": body.tipo,
-            }
+            payload_actualizar_punto_biblioteca(
+                existing,
+                nombre=body.nombre,
+                norte=body.norte,
+                este=body.este,
+                cota=body.cota,
+                tipo=body.tipo,
+                verificado=body.verificado,
+            )
         )
         .eq("id", punto_id)
         .eq("contrato_id", contrato_id)

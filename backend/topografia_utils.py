@@ -17,6 +17,37 @@ def _fecha_informe_pdf() -> str:
     return datetime.now(_PDF_TZ).strftime("%d/%m/%Y %H:%M")
 
 
+def payload_actualizar_punto_biblioteca(
+    existing: dict,
+    *,
+    nombre: str,
+    norte: Optional[float],
+    este: Optional[float],
+    cota: Optional[float],
+    tipo: str,
+    verificado: bool,
+) -> dict:
+    """Campos a persistir al editar un punto de biblioteca (incluye verificación de BM).
+
+    Solo tipo BM puede marcarse/desmarcarse como verificado manualmente; el resto
+    queda sin verificación manual (mismo criterio que el formulario de Biblioteca).
+    """
+    verificado_final = bool(verificado) if tipo == "BM" else False
+    payload = {
+        "nombre": (nombre or "").strip(),
+        "norte": norte,
+        "este": este,
+        "cota": cota,
+        "tipo": tipo,
+        "verificado": verificado_final,
+    }
+    if verificado_final and not existing.get("verificado"):
+        payload["fecha_verificacion"] = datetime.now(timezone.utc).isoformat()
+    elif not verificado_final:
+        payload["fecha_verificacion"] = None
+    return payload
+
+
 def gms_to_decimal(gms: float) -> float:
     """Convierte GG.MMSS (valor numerico) a grados decimales.
 
