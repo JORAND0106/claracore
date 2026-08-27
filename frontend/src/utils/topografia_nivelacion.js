@@ -262,7 +262,7 @@ export function faltantesMetadatosFila(fila, idx, bmInicialNombre) {
   const abscisaNoNumerica = abscisaInvalida(fila)
   return {
     nombre: !nombre,
-    abscisa: !abscisaVal,
+    abscisa: abscisaVal == null,
     abscisaNoNumerica,
     descripcion: !descripcion,
     tipo: idx > 0 && !tipo,
@@ -638,7 +638,8 @@ export function filasToLecturas(filas, tipoNivel) {
 }
 
 export function lecturasToFilas(lecturas, tipoNivel) {
-  if (!lecturas?.length) return [nuevaFilaPunto(1)]
+  // Cartera vacía: el panel de ingreso compacto captura la primera lectura (patrón Poligonal).
+  if (!lecturas?.length) return []
   const sorted = [...lecturas].sort((a, b) => (a.orden || 0) - (b.orden || 0))
   const legacy = sorted.every((l) => (l.orden || 0) < 10)
 
@@ -796,3 +797,79 @@ export function nombreBmDesdeId(puntos, bmId) {
 
 /** Ancho de celdas de hilos (doble del tamaño base). */
 export const HILO_INPUT_WIDTH = 88
+
+/**
+ * ¿El borrador del panel de ingreso tiene al menos una lectura usable?
+ */
+export function borradorTieneLectura(borrador, tipoNivel) {
+  if (!borrador) return false
+  return ['vplus', 'vi', 'vminus'].some((k) => bloqueTieneLecturaCalculo(borrador[k], tipoNivel))
+}
+
+/**
+ * Valida el borrador del panel compacto antes de «Agregar lectura».
+ * No altera fórmulas de HI/cota; solo reglas de captura ya existentes.
+ * @returns {{ ok: boolean, msg?: string, avisosHilos?: string[] }}
+ */
+export function validarBorradorParaAgregar(borrador, filas, tipoNivel, bmInicialNombre, opts = {}) {
+  const apertura = Boolean(opts.modoApertura)
+  const circuitoAbierto = Boolean(opts.circuitoAbierto)
+  if (!circuitoAbierto) {
+    return { ok: false, msg: 'Abra el circuito antes de agregar lecturas.' }
+  }
+  if (filasTieneCierre(filas)) {
+    return { ok: false, msg: mensajeFilaCierreExistente(filas), esCierre: true }
+  }
+  const gate = puedeAgregarFila(filas, tipoNivel, bmInicialNombre, { modoApertura: apertura })
+  if (!gate.ok) return { ok: false, msg: gate.msg, esCierre: gate.esCierre }
+
+  if (!borradorTieneLectura(borrador, tipoNivel)) {
+    return { ok: false, msg: 'Registre al menos una lectura (V+, Vi o V−) antes de agregar.' }
+  }
+
+  const idx = (filas || []).length
+  const nombreEfectivo = idx === 0
+    ? (bmInicialNombre || (borrador.nombre_punto || '').trim())
+    : (borrador.nombre_punto || '').trim()
+  const filaCheck = {
+    ...borrador,
+    nombre_punto: nombreEfectivo,
+    tipo_punto: idx === 0 ? (borrador.tipo_punto || 'BM') : borrador.tipo_punto,
+  }
+  if (!metadatosFilaCompletos(filaCheck, idx, bmInicialNombre)) {
+    return { ok: false, msg: 'Complete nombre, abscisa (PK), descripción y tipo antes de agregar.' }
+  }
+  if (abscisaInvalida(filaCheck)) {
+    return { ok: false, msg: ABSCISA_NUMERICA_MSG }
+  }
+
+  const vplusGate = puedeRegistrarVplus(filaCheck, idx, tipoNivel)
+  if (!apertura && !vplusGate.ok && filaTieneVplus(filaCheck, tipoNivel)) {
+    return { ok: false, msg: vplusGate.msg }
+  }
+
+  const avisosHilos = []
+  if (tipoNivel === 'automatico') {
+    for (const [bk, label] of [['vplus', 'V+'], ['vi', 'Vi'], ['vminus', 'V−']]) {
+      const diag = diagnosticoHilosIncongruentes(filaCheck[bk], tipoNivel)
+      if (diag?.msg) avisosHilos.push(`${label}: ${diag.msg}`)
+    }
+  }
+
+  return { ok: true, avisosHilos, fila: filaCheck }
+}
+
+/** Siguiente borrador vacío tras agregar (no BM si ya hay filas). */
+export function prepararBorradorSiguiente(filasLength) {
+  return nuevaFilaPunto(filasLength + 1, filasLength === 0)
+}
+
+/** Prefill del primer punto con BM inicial de biblioteca. */
+export function prepararBorradorBmInicial(bmNombre) {
+  return {
+    ...nuevaFilaPunto(1, true),
+    nombre_punto: (bmNombre || '').trim(),
+    tipo_punto: 'BM',
+    descripcion_punto: 'BM inicial',
+  }
+}

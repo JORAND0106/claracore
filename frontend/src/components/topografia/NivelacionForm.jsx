@@ -6,25 +6,26 @@ import TopoConfirmModal from './TopoConfirmModal'
 import TopoExcelSheet from './TopoExcelSheet'
 import { topoSheetStyles } from './topoSheetStyles'
 import BitacoraMaterialUbicacionModal from '../../modules/seguimiento/BitacoraMaterialUbicacionModal'
+import NivelacionCarteraTable from './NivelacionCarteraTable'
+import NivelacionIngresoPanel from './NivelacionIngresoPanel'
+import NivelacionLecturaEditModal from './NivelacionLecturaEditModal'
+import PoligonalUndoToast from './PoligonalUndoToast'
+import { fmtN } from './nivelacionUiShared'
 import {
   PermisoAviso,
   puede,
   Semaforo,
   TopoHelpIcon,
   coloresBloqueNiv,
-  themeColorScheme,
+  esDesarrolladorTopo,
   useTopografiaApi,
   useTopoTheme,
   useTopoViewport,
 } from './topografiaShared'
 import {
-  ABSCISA_NUMERICA_MSG,
-  abscisaInvalida,
   inferirTipoNivelFilas,
   filaCierreInfo,
   filasTieneCierre,
-  mensajeFilaCierreExistente,
-  MSG_VPLUS_SIN_VISTA,
   carteraVplusSinVista,
   calcularVistaNivelacion,
   convertirFilasTipoNivel,
@@ -32,13 +33,7 @@ import {
   cotasDesdePuntos,
   filasToLecturas,
   filaTieneVminus,
-  filaTieneVplus,
-  HILO_INCONGRUENCIA_MSG,
-  HILO_INPUT_WIDTH,
-  hilosIncongruentes,
-  diagnosticoHilosIncongruentes,
   lecturasToFilas,
-  metadatosFilaCompletos,
   modoAperturaNivelacion,
   nombreBmDesdeId,
   nuevaFilaCierre,
@@ -46,173 +41,11 @@ import {
   puedeAbrirCircuito,
   puedeAgregarFila,
   puedeIngresarCierre,
-  puedeRegistrarVplus,
   puntosBmParaNivelacion,
-  resaltadoValidacionUltimaFila,
+  prepararBorradorBmInicial,
+  prepararBorradorSiguiente,
+  validarBorradorParaAgregar,
 } from '../../utils/topografia_nivelacion'
-
-const ESTILO_CAMPO_ALERTA = {
-  border: '2px solid #dc2626',
-  background: 'rgba(220,38,38,0.14)',
-  boxShadow: '0 0 0 1px rgba(220,38,38,0.35)',
-  color: 'inherit',
-}
-
-function estiloCampo(base, alerta) {
-  return alerta ? { ...base, ...ESTILO_CAMPO_ALERTA } : base
-}
-
-function styleInputHilo(ui, bloques, bk, hk, { alerta = false, opacity = 1 } = {}) {
-  const medio = hk === 'hM'
-  const bg = alerta
-    ? undefined
-    : (medio ? (bloques[bk]?.inputMed || `${ui.accent}22`) : (bloques[bk]?.inputTint || ui.compactInput.background))
-  return estiloCampo({
-    ...ui.compactInput,
-    width: HILO_INPUT_WIDTH,
-    minWidth: HILO_INPUT_WIDTH,
-    padding: '2px 6px',
-    textAlign: 'center',
-    color: ui.text,
-    opacity,
-    fontWeight: medio && !alerta ? 600 : 400,
-    ...(bg != null ? { background: bg } : {}),
-  }, alerta)
-}
-
-function styleInputCartera(ui, bloques, bk, extra = {}, alerta = false) {
-  return estiloCampo({
-    ...ui.compactInput,
-    color: ui.text,
-    background: bloques[bk]?.inputTint || ui.compactInput.background,
-    ...extra,
-  }, alerta)
-}
-
-const TIPOS_PUNTO = [
-  { v: 'estacion', l: 'Estación' },
-  { v: 'auxiliar', l: 'Auxiliar' },
-  { v: 'cambio', l: 'Cambio' },
-]
-
-function fmtN(v, dec = 4) {
-  if (v == null || v === '' || Number.isNaN(v)) return '—'
-  return Number(v).toFixed(dec)
-}
-
-function PanelColapsable({ titulo, resumen, abierto, onToggle, ui, children }) {
-  return (
-    <div style={{ ...ui.card, marginBottom: 16 }}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={abierto}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-          background: 'none',
-          border: 'none',
-          padding: 0,
-          cursor: 'pointer',
-          textAlign: 'left',
-          color: ui.text,
-        }}
-      >
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 'var(--cc-base)', fontWeight: 700, margin: 0, color: ui.text }}>{titulo}</div>
-          {!abierto && resumen && (
-            <div style={{ marginTop: 4, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>{resumen}</div>
-          )}
-        </div>
-        <span style={{ fontSize: 'var(--cc-lg)', color: ui.textMuted, lineHeight: 1, flexShrink: 0 }} aria-hidden>
-          {abierto ? '▾' : '▸'}
-        </span>
-      </button>
-      {abierto && <div style={{ marginTop: 12 }}>{children}</div>}
-    </div>
-  )
-}
-
-function AlertaHilos({ title, compact = false }) {
-  if (compact) {
-    return (
-      <div
-        role="status"
-        style={{
-          marginTop: 4,
-          padding: '4px 6px',
-          borderRadius: 6,
-          fontSize: 'var(--cc-xxs)',
-          fontWeight: 600,
-          lineHeight: 1.35,
-          color: '#991b1b',
-          background: 'rgba(220,38,38,0.12)',
-          border: '1px solid rgba(220,38,38,0.35)',
-        }}
-      >
-        {title}
-      </div>
-    )
-  }
-  return (
-    <span
-      title={title}
-      aria-label={title}
-      style={{
-        display: 'inline-flex',
-        width: 14,
-        height: 14,
-        borderRadius: '50%',
-        background: '#dc2626',
-        color: '#fff',
-        fontSize: 9,
-        fontWeight: 700,
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'help',
-        marginLeft: 2,
-        flexShrink: 0,
-        verticalAlign: 'middle',
-      }}
-    >
-      ?
-    </span>
-  )
-}
-
-function HilosCell({ bloque, onChange, disabled, ui, alerta, bloques, bk = 'vplus' }) {
-  return (
-    <div style={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
-      {['hS', 'hM', 'hI'].map((k) => (
-        <input
-          key={k}
-          title={['Sup', 'Med', 'Inf'][['hS', 'hM', 'hI'].indexOf(k)]}
-          disabled={disabled}
-          value={bloque?.[k] ?? ''}
-          onChange={(e) => onChange({ ...bloque, [k]: e.target.value })}
-          style={styleInputHilo(ui, bloques, bk, k, { alerta, opacity: disabled && !alerta ? 0.45 : 1 })}
-          placeholder={k === 'hS' ? 'S' : k === 'hM' ? 'M' : 'I'}
-        />
-      ))}
-    </div>
-  )
-}
-
-function LecturaCell({ bloque, onChange, disabled, ui, alerta, bloqueKey = 'vplus', bloques }) {
-  return (
-    <input
-      disabled={disabled}
-      value={bloque?.lectura ?? ''}
-      onChange={(e) => onChange({ ...bloque, lectura: e.target.value })}
-      style={styleInputCartera(ui, bloques, bloqueKey, { width: 56, textAlign: 'center' }, alerta)}
-      placeholder="M"
-      title="Lectura hilo medio (electrónico)"
-    />
-  )
-}
 
 const FORM_VACIO_NIV = {
   nombre: '',
@@ -244,10 +77,12 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const [detalle, setDetalle] = useState(null)
   const [puntos, setPuntos] = useState([])
   const [operadores, setOperadores] = useState([])
-  const [pkMapIdx, setPkMapIdx] = useState(null)
   const [resultado, setResultado] = useState(null)
   const [error, setError] = useState('')
-  const [filas, setFilas] = useState([nuevaFilaPunto(1, true)])
+  const [filas, setFilas] = useState([])
+  const [borrador, setBorrador] = useState(() => nuevaFilaPunto(1, true))
+  const [pkMapTarget, setPkMapTarget] = useState(null) // 'borrador' | number idx
+  const [editIdx, setEditIdx] = useState(null)
   const [guardando, setGuardando] = useState(false)
   const [pulsoValidacion, setPulsoValidacion] = useState(false)
   const [modalCierre, setModalCierre] = useState(false)
@@ -255,6 +90,8 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const [panelNivAbierto, setPanelNivAbierto] = useState(true)
   const [okMsg, setOkMsg] = useState('')
   const [confirmEliminar, setConfirmEliminar] = useState(null)
+  const [confirmEliminarFila, setConfirmEliminarFila] = useState(null)
+  const [undoToast, setUndoToast] = useState(null)
   const [eliminando, setEliminando] = useState(false)
   const [creando, setCreando] = useState(false)
   const [abriendoCircuito, setAbriendoCircuito] = useState(false)
@@ -266,6 +103,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const tipoNivel = inferirTipoNivelFilas(filas, tipoNivelDeclarado)
   const esAutomatico = tipoNivel === 'automatico'
   const sellada = (niv?.nivel2_estado || '') === 'Aprobado' || Boolean(niv?.biblioteca_at)
+  const esDev = esDesarrolladorTopo(usuario)
+  const circuitoTerminadoEarly = niv?.estado === 'cerrado'
+  const editableCartera = puede(permisos, 'editar') && !sellada && (!circuitoTerminadoEarly || esDev)
   const modoApertura = useMemo(
     () => modoAperturaNivelacion(filas, tipoNivel, niv),
     [filas, tipoNivel, niv],
@@ -317,7 +157,11 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setDetalle(data)
     setSel(id)
     const tn = data.nivelacion?.tipo_nivel || 'electronico'
-    setFilas(lecturasToFilas(data.lecturas || [], tn))
+    const nextFilas = lecturasToFilas(data.lecturas || [], tn)
+    setFilas(nextFilas)
+    setBorrador(nextFilas.length ? prepararBorradorSiguiente(nextFilas.length) : nuevaFilaPunto(1, true))
+    setEditIdx(null)
+    setUndoToast(null)
     setResultado(null)
     if (data.nivelacion) {
       const n = data.nivelacion
@@ -341,12 +185,18 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   useEffect(() => {
     if (!bmInicialNombre || sellada) return
     setFilas((rows) => {
-      if (!rows.length) return [{ ...nuevaFilaPunto(1, true), nombre_punto: bmInicialNombre }]
+      if (!rows.length) return rows
       const first = rows[0]
       if (first.nombre_punto === bmInicialNombre) return rows
       return [{ ...first, nombre_punto: bmInicialNombre, tipo_punto: first.tipo_punto || 'BM' }, ...rows.slice(1)]
     })
-  }, [bmInicialNombre, sellada])
+    setBorrador((b) => {
+      // Prefill panel solo si aún no hay cartera (primera lectura = BM).
+      if (filas.length > 0) return b
+      if ((b.nombre_punto || '').trim() === bmInicialNombre) return b
+      return { ...prepararBorradorBmInicial(bmInicialNombre), abscisa: b.abscisa, ubicacion_pk_id: b.ubicacion_pk_id, ubicacion_pk: b.ubicacion_pk, ubicacion_tramo: b.ubicacion_tramo, ubicacion_costado: b.ubicacion_costado, ubicacion_infraestructura: b.ubicacion_infraestructura, ubicacion_lat: b.ubicacion_lat, ubicacion_lng: b.ubicacion_lng, vplus: b.vplus, vi: b.vi, vminus: b.vminus, dist_vplus_m: b.dist_vplus_m, dist_vminus_m: b.dist_vminus_m }
+    })
+  }, [bmInicialNombre, sellada, filas.length])
 
   useEffect(() => {
     cargarLista().catch((e) => setError(e.message))
@@ -364,7 +214,10 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setSel(null)
     setDetalle(null)
     setForm({ ...FORM_VACIO_NIV })
-    setFilas([nuevaFilaPunto(1, true)])
+    setFilas([])
+    setBorrador(nuevaFilaPunto(1, true))
+    setEditIdx(null)
+    setUndoToast(null)
     setResultado(null)
     setError('')
     setOkMsg('')
@@ -616,32 +469,94 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const tieneFilaCierre = useMemo(() => filasTieneCierre(filas), [filas])
   const infoFilaCierre = useMemo(() => filaCierreInfo(filas), [filas])
 
-  const resaltarUltima = useMemo(() => {
-    if (sellada || puedeNuevaFila.ok) return null
-    return resaltadoValidacionUltimaFila(filas, tipoNivel, bmInicialNombre)
-  }, [filas, tipoNivel, bmInicialNombre, sellada, puedeNuevaFila.ok])
-
-  const updateFila = (idx, patch) => {
-    if (idx === filas.length - 1) setPulsoValidacion(false)
-    setFilas((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  const agregarLectura = () => {
+    if (!editableCartera) {
+      setError(circuitoTerminadoEarly && !esDev
+        ? 'Circuito cerrado: solo un Desarrollador puede editar la cartera.'
+        : 'No tiene permiso para editar.')
+      return
+    }
+    const gate = validarBorradorParaAgregar(borrador, filas, tipoNivel, bmInicialNombre, {
+      modoApertura,
+      circuitoAbierto,
+    })
+    if (!gate.ok) {
+      setPulsoValidacion(true)
+      setError(gate.msg)
+      return
+    }
+    if (gate.avisosHilos?.length) {
+      setOkMsg(`Lectura agregada con aviso: ${gate.avisosHilos[0]}`)
+    } else {
+      setOkMsg('Lectura agregada a la cartera.')
+    }
+    setPulsoValidacion(false)
+    setError('')
+    setFilas((rows) => {
+      const next = [...rows, { ...gate.fila, orden: rows.length + 1 }]
+      setBorrador(prepararBorradorSiguiente(next.length))
+      return next
+    })
   }
 
-  const updateBloque = (idx, bloqueKey, bloque) => {
-    if (
-      !modoApertura
-      && bloqueKey === 'vplus'
-      && idx > 0
-      && !puedeRegistrarVplus({ ...filas[idx], vplus: bloque }, idx, tipoNivel).ok
-    ) {
-      const tieneEntrada = esAutomatico
-        ? [bloque?.hS, bloque?.hM, bloque?.hI].some((v) => v !== '' && v != null)
-        : bloque?.lectura !== '' && bloque?.lectura != null
-      if (tieneEntrada) {
-        setError('Registre V− en esta fila antes de V+ (cambio de instrumento).')
-        return
-      }
-    }
-    setFilas((rows) => rows.map((r, i) => (i === idx ? { ...r, [bloqueKey]: bloque } : r)))
+  const abrirEdicion = (idx) => {
+    if (!editableCartera) return
+    setEditIdx(idx)
+  }
+
+  const guardarEdicionPopup = (patch) => {
+    if (editIdx == null) return
+    const avisos = patch.avisosHilos || []
+    const { avisosHilos: _a, ...rest } = patch
+    setFilas((rows) => rows.map((r, i) => (i === editIdx ? { ...r, ...rest } : r)))
+    setEditIdx(null)
+    setError('')
+    setOkMsg(avisos.length
+      ? `Lectura actualizada con aviso: ${avisos[0]}`
+      : 'Lectura actualizada. H. Instrumento, cota y cierre se recalculan automáticamente.')
+  }
+
+  const solicitarEliminarFila = (idx) => {
+    if (!editableCartera) return
+    const fila = filas[idx]
+    setConfirmEliminarFila({
+      idx,
+      nombre: fila?.nombre_punto || `#${idx + 1}`,
+    })
+  }
+
+  const confirmarEliminarFila = () => {
+    if (confirmEliminarFila == null) return
+    const { idx } = confirmEliminarFila
+    const snapshot = filas[idx]
+    setFilas((rows) => {
+      const next = rows.filter((_, i) => i !== idx)
+      setBorrador(next.length
+        ? prepararBorradorSiguiente(next.length)
+        : (bmInicialNombre ? prepararBorradorBmInicial(bmInicialNombre) : nuevaFilaPunto(1, true)))
+      return next
+    })
+    setConfirmEliminarFila(null)
+    setEditIdx(null)
+    setUndoToast({
+      message: `Lectura «${snapshot?.nombre_punto || `#${idx + 1}`}» eliminada`,
+      snapshot,
+      idx,
+    })
+  }
+
+  const deshacerEliminarFila = () => {
+    if (!undoToast) return
+    const { snapshot, idx } = undoToast
+    setFilas((rows) => {
+      const next = [...rows]
+      const at = Math.min(Math.max(0, idx), next.length)
+      next.splice(at, 0, snapshot)
+      setBorrador(prepararBorradorSiguiente(next.length))
+      return next
+    })
+    setUndoToast(null)
+    setOkMsg('Lectura restaurada.')
   }
 
   const abrirCircuito = async () => {
@@ -657,7 +572,6 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setError('')
     setOkMsg('')
     try {
-      // Persistir BM / fecha / equipo antes de marcar apertura.
       if (!(await guardarCabecera())) return
       const res = await api(`/nivelaciones/${sel}/abrir`, { method: 'POST' })
       const nivUp = res?.nivelacion
@@ -667,32 +581,13 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
         await cargarDetalle(sel)
       }
       setOkMsg(
-        'Circuito abierto. Registre V+ en el BM y V− en el siguiente punto; al completar la primera vuelta aplican las validaciones de tramo.',
+        'Circuito abierto. Use el panel de ingreso para registrar V+ en el BM y V− en el siguiente punto.',
       )
     } catch (e) {
       setError(e.message)
     } finally {
       setAbriendoCircuito(false)
     }
-  }
-
-  const addFila = () => {
-    if (tieneFilaCierre) {
-      setError(mensajeFilaCierreExistente(filas))
-      return
-    }
-    if (!circuitoAbierto) {
-      setError('Abra el circuito antes de agregar filas de la primera vuelta.')
-      return
-    }
-    if (!puedeNuevaFila.ok) {
-      setPulsoValidacion(true)
-      setError(puedeNuevaFila.msg)
-      return
-    }
-    setPulsoValidacion(false)
-    setError('')
-    setFilas((rows) => [...rows, nuevaFilaPunto(rows.length + 1, false)])
   }
 
   const abrirModalCierre = () => {
@@ -715,15 +610,15 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setForm((f) => ({ ...f, bm_final_id: String(punto.id) }))
     setFilas((rows) => {
       const ultAbscisa = rows.length ? String(rows[rows.length - 1]?.abscisa ?? '').trim() : ''
-      return [...rows, nuevaFilaCierre(punto, rows.length + 1, ultAbscisa || '0')]
+      const next = [...rows, nuevaFilaCierre(punto, rows.length + 1, ultAbscisa || '0')]
+      setBorrador(prepararBorradorSiguiente(next.length))
+      setEditIdx(next.length - 1) // abrir popup para registrar V− de cierre
+      return next
     })
     setModalCierre(false)
     setPulsoValidacion(false)
     setError('')
-  }
-
-  const removeFila = (idx) => {
-    setFilas((rows) => (rows.length <= 1 ? rows : rows.filter((_, i) => i !== idx)))
+    setOkMsg('Fila de cierre agregada. Registre la V− en el popup.')
   }
 
   const carteraIncompleta = carteraVplusSinVista(filas, tipoNivel)
@@ -809,462 +704,6 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     bmInicialNombre ? `BM ini. ${bmInicialNombre}` : null,
   ].filter(Boolean).join(' · ')
 
-  // Cartera de lecturas: mismos divisores tipo Excel que el resto del módulo Topografía.
-  const cellBorder = sheet.border
-  const thBase = { ...sheet.th, position: 'sticky', top: 0, zIndex: 2 }
-  const tdBase = { ...sheet.td }
-
-  const thGroup = {
-    ...thBase,
-    textAlign: 'center',
-    borderLeft: `1px solid ${cellBorder}`,
-  }
-
-  const thPunto = { ...thBase, width: '72px', maxWidth: '90px' }
-  const thTipo = { ...thBase, width: '118px', minWidth: '118px' }
-  const tdPunto = { ...tdBase, maxWidth: '90px' }
-  const tdTipo = { ...tdBase, minWidth: '118px' }
-
-  const tdGroup = {
-    ...tdBase,
-    textAlign: 'center',
-    verticalAlign: 'middle',
-    borderLeft: `1px solid ${cellBorder}`,
-  }
-
-  const thGroupColor = (bk) => ({
-    ...thGroup,
-    background: bloques[bk]?.header || sheet.th.background,
-    boxShadow: `inset 0 3px 0 ${bloques[bk]?.accent || ui.accent}`,
-  })
-
-  const thSubGroupColor = (bk) => ({
-    ...thBase,
-    fontSize: 'var(--cc-xxs)',
-    textAlign: 'center',
-    background: bloques[bk]?.header || sheet.th.background,
-    borderLeft: `1px solid ${cellBorder}`,
-  })
-
-  const tdGroupColor = (bk) => ({
-    ...tdGroup,
-    background: bloques[bk]?.bg,
-  })
-
-  const renderBloque = (fila, idx, bloqueKey, alerta = false) => {
-    const vplusBloqueado = !modoApertura && bloqueKey === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
-    if (sellada) {
-      const b = fila[bloqueKey]
-      if (esAutomatico) {
-        const has = [b?.hS, b?.hM, b?.hI].some((v) => v !== '' && v != null)
-        return has ? `${fmtN(b.hS, 3)} / ${fmtN(b.hM, 3)} / ${fmtN(b.hI, 3)}` : '—'
-      }
-      return b?.lectura !== '' && b?.lectura != null ? fmtN(b.lectura) : '—'
-    }
-    if (esAutomatico) {
-      return (
-        <HilosCell
-          bloque={fila[bloqueKey]}
-          onChange={(b) => updateBloque(idx, bloqueKey, b)}
-          disabled={vplusBloqueado && !alerta}
-          ui={ui}
-          alerta={alerta}
-          bloques={bloques}
-          bk={bloqueKey}
-        />
-      )
-    }
-    return (
-      <LecturaCell
-        bloque={fila[bloqueKey]}
-        onChange={(b) => updateBloque(idx, bloqueKey, b)}
-        disabled={vplusBloqueado && !alerta}
-        ui={ui}
-        alerta={alerta}
-        bloqueKey={bloqueKey}
-        bloques={bloques}
-      />
-    )
-  }
-
-  const renderCeldasHilos = (fila, idx, bk, vplusAlerta) => {
-    const vplusOff = !modoApertura && bk === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
-    const vplusResaltar = bk === 'vplus' && vplusAlerta
-    const hilosAlerta = esAutomatico && hilosIncongruentes(fila[bk], tipoNivel)
-    const hilosDiag = esAutomatico ? diagnosticoHilosIncongruentes(fila[bk], tipoNivel) : null
-    const tdStyle = tdGroupColor(bk)
-    if (fila.es_fila_cierre && bk !== 'vminus') {
-      if (!esAutomatico) {
-        return <td key={bk} style={tdStyle}>—</td>
-      }
-      return ['hS', 'hM', 'hI'].map((hk) => (
-        <td key={`${bk}-${hk}`} style={tdStyle}>—</td>
-      ))
-    }
-    if (!esAutomatico) {
-      return (
-        <td key={bk} style={tdStyle}>
-          {renderBloque(fila, idx, bk, vplusResaltar)}
-        </td>
-      )
-    }
-    return ['hS', 'hM', 'hI'].map((hk, hi) => (
-      <td key={`${bk}-${hk}`} style={tdStyle}>
-        {sellada ? fmtN(fila[bk]?.[hk], 3) : (
-          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-              <input
-                value={fila[bk]?.[hk] ?? ''}
-                disabled={vplusOff && !vplusResaltar}
-                onChange={(e) => updateBloque(idx, bk, { ...fila[bk], [hk]: e.target.value })}
-                style={styleInputHilo(ui, bloques, bk, hk, {
-                  alerta: vplusResaltar || hilosAlerta,
-                  opacity: vplusOff && !vplusResaltar ? 0.45 : 1,
-                })}
-                title={
-                  hilosAlerta
-                    ? (hilosDiag?.msg || HILO_INCONGRUENCIA_MSG)
-                    : vplusOff
-                      ? 'Registre V− antes de V+'
-                      : hk === 'hM'
-                        ? 'Hilo medio (lectura de cálculo)'
-                        : ['Superior', 'Medio', 'Inferior'][['hS', 'hM', 'hI'].indexOf(hk)]
-                }
-              />
-              {hk === 'hM' && hilosAlerta && <AlertaHilos title={hilosDiag?.msg || HILO_INCONGRUENCIA_MSG} />}
-            </span>
-            {hk === 'hM' && hilosAlerta && (
-              <span style={{ fontSize: 'var(--cc-xxs)', color: '#991b1b', fontWeight: 600, maxWidth: 120, lineHeight: 1.25, textAlign: 'center' }}>
-                {(hilosDiag?.msg || HILO_INCONGRUENCIA_MSG).split(':')[0]}
-              </span>
-            )}
-          </span>
-        )}
-      </td>
-    ))
-  }
-
-  const renderDistVplus = (fila, idx, vistaRow) => {
-    if (fila.es_fila_cierre) {
-      return <td style={tdGroupColor('vplus')}>—</td>
-    }
-    const dist = vistaRow.distancia_vplus_calc
-    const over = dist != null && dist > 50
-    const tieneVplus = filaTieneVplus(fila, tipoNivel)
-    return (
-      <td style={{ ...tdGroupColor('vplus'), color: over ? '#dc2626' : undefined, fontWeight: over ? 600 : 400 }}>
-        {esAutomatico ? (
-          fmtN(dist, 2)
-        ) : sellada ? (
-          fmtN(fila.dist_vplus_m, 2)
-        ) : (
-          <input
-            value={fila.dist_vplus_m}
-            disabled={!tieneVplus}
-            onChange={(e) => updateFila(idx, { dist_vplus_m: e.target.value })}
-            style={styleInputCartera(ui, bloques, 'vplus', { width: 56, textAlign: 'center', opacity: tieneVplus ? 1 : 0.45 })}
-            title={tieneVplus ? 'Distancia V+ (tope 50 m)' : 'Registre V+ para distancia'}
-          />
-        )}
-      </td>
-    )
-  }
-
-  const renderDistVminus = (fila, idx, vistaRow) => {
-    const dist = vistaRow.distancia_vminus_calc
-    const over = dist != null && dist > 50
-    const tieneVminus = filaTieneVminus(fila, tipoNivel)
-    return (
-      <td style={{ ...tdGroupColor('vminus'), color: over ? '#dc2626' : undefined, fontWeight: over ? 600 : 400 }}>
-        {esAutomatico ? (
-          fmtN(dist, 2)
-        ) : sellada ? (
-          fmtN(fila.dist_vminus_m, 2)
-        ) : (
-          <input
-            value={fila.dist_vminus_m}
-            disabled={!tieneVminus}
-            onChange={(e) => updateFila(idx, { dist_vminus_m: e.target.value })}
-            style={styleInputCartera(ui, bloques, 'vminus', { width: 56, textAlign: 'center', opacity: tieneVminus ? 1 : 0.45 })}
-            title={tieneVminus ? 'Distancia V− (tope 50 m)' : 'Registre V− para distancia'}
-          />
-        )}
-      </td>
-    )
-  }
-
-  /** Bloque V+/Vi/V− en tarjeta móvil (HS|HM|HI|Dist) — misma lógica que la tabla escritorio. */
-  const renderBloqueHilosMovil = (fila, idx, bk, vistaRow, vplusAlerta = false) => {
-    const labels = { vplus: 'V+', vi: 'Vi', vminus: 'V−' }
-    const accent = bloques[bk]?.accent || ui.accent
-    const vplusOff = !modoApertura && bk === 'vplus' && idx > 0 && !filaTieneVminus(fila, tipoNivel)
-    const cierreSoloVminus = Boolean(fila.es_fila_cierre) && bk !== 'vminus'
-    const hilosAlerta = esAutomatico && hilosIncongruentes(fila[bk], tipoNivel)
-    const hilosDiag = esAutomatico ? diagnosticoHilosIncongruentes(fila[bk], tipoNivel) : null
-    const distCalc = bk === 'vplus' ? vistaRow.distancia_vplus_calc : bk === 'vminus' ? vistaRow.distancia_vminus_calc : null
-    const distOver = distCalc != null && distCalc > 50
-    const conDist = bk === 'vplus' || bk === 'vminus'
-
-    const cellInp = (hk) => (
-      <label key={hk} style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
-        <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>
-          {hk === 'hS' ? 'HS' : hk === 'hM' ? 'HM' : 'HI'}
-        </span>
-        {sellada || cierreSoloVminus ? (
-          <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)', fontWeight: hk === 'hM' ? 600 : 400 }}>
-            {cierreSoloVminus ? '—' : fmtN(fila[bk]?.[hk], 3)}
-          </span>
-        ) : (
-          <input
-            value={fila[bk]?.[hk] ?? ''}
-            disabled={vplusOff && !vplusAlerta}
-            onChange={(e) => updateBloque(idx, bk, { ...fila[bk], [hk]: e.target.value })}
-            style={{
-              ...styleInputHilo(ui, bloques, bk, hk, {
-                alerta: vplusAlerta || hilosAlerta,
-                opacity: vplusOff && !vplusAlerta ? 0.45 : 1,
-              }),
-              width: '100%',
-              minWidth: 0,
-              boxSizing: 'border-box',
-            }}
-            title={hilosAlerta ? (hilosDiag?.msg || HILO_INCONGRUENCIA_MSG) : undefined}
-          />
-        )}
-      </label>
-    )
-
-    return (
-      <div
-        key={bk}
-        style={{
-          marginTop: 8,
-          padding: '8px 8px 6px',
-          borderRadius: 8,
-          background: bloques[bk]?.bg || ui.t?.bgSoft || 'transparent',
-          border: `1px solid ${bloques[bk]?.border || ui.t?.border || '#e2e8f0'}`,
-          boxShadow: `inset 3px 0 0 ${accent}`,
-        }}
-      >
-        <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 800, color: accent, marginBottom: 6, letterSpacing: 0.3 }}>
-          {labels[bk]}
-          {esAutomatico ? ' · HS | HM | HI' : ''}
-          {conDist ? (esAutomatico ? ' | Dist' : ' · Lect | Dist') : (esAutomatico ? '' : ' · Lect')}
-        </div>
-        {cierreSoloVminus ? (
-          <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>—</div>
-        ) : esAutomatico ? (
-          <>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-              {['hS', 'hM', 'hI'].map(cellInp)}
-              {conDist && (
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
-                  <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>Dist</span>
-                  <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)', fontWeight: distOver ? 700 : 400, color: distOver ? '#dc2626' : ui.text }}>
-                    {fmtN(distCalc, 2)}
-                  </span>
-                </label>
-              )}
-            </div>
-            {hilosAlerta && !sellada && (
-              <AlertaHilos compact title={hilosDiag?.msg || HILO_INCONGRUENCIA_MSG} />
-            )}
-          </>
-        ) : (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
-              <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>Lect</span>
-              {sellada ? (
-                <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)' }}>{fmtN(fila[bk]?.lectura)}</span>
-              ) : (
-                <input
-                  value={fila[bk]?.lectura ?? ''}
-                  disabled={vplusOff && !vplusAlerta}
-                  onChange={(e) => updateBloque(idx, bk, { ...fila[bk], lectura: e.target.value })}
-                  style={{
-                    ...styleInputCartera(ui, bloques, bk, { width: '100%', textAlign: 'center', boxSizing: 'border-box', opacity: vplusOff && !vplusAlerta ? 0.45 : 1 }, vplusAlerta),
-                    minWidth: 0,
-                  }}
-                  placeholder="M"
-                />
-              )}
-            </label>
-            {conDist && (
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 0', minWidth: 0 }}>
-                <span style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, textAlign: 'center' }}>Dist</span>
-                {esAutomatico ? null : sellada ? (
-                  <span style={{ textAlign: 'center', fontSize: 'var(--cc-sm)', color: distOver ? '#dc2626' : undefined }}>
-                    {fmtN(bk === 'vplus' ? fila.dist_vplus_m : fila.dist_vminus_m, 2)}
-                  </span>
-                ) : (
-                  <input
-                    value={bk === 'vplus' ? fila.dist_vplus_m : fila.dist_vminus_m}
-                    disabled={bk === 'vplus' ? !filaTieneVplus(fila, tipoNivel) : !filaTieneVminus(fila, tipoNivel)}
-                    onChange={(e) => updateFila(idx, bk === 'vplus' ? { dist_vplus_m: e.target.value } : { dist_vminus_m: e.target.value })}
-                    style={{
-                      ...styleInputCartera(ui, bloques, bk, {
-                        width: '100%',
-                        textAlign: 'center',
-                        boxSizing: 'border-box',
-                        opacity: (bk === 'vplus' ? filaTieneVplus(fila, tipoNivel) : filaTieneVminus(fila, tipoNivel)) ? 1 : 0.45,
-                      }, distOver),
-                      minWidth: 0,
-                    }}
-                  />
-                )}
-              </label>
-            )}
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  const renderFilaCarteraMovil = (vistaRow, idx) => {
-    const fila = filas[idx] || vistaRow
-    const distVp = vistaRow.distancia_vplus_calc
-    const distVm = vistaRow.distancia_vminus_calc
-    const distOver = (distVp != null && distVp > 50) || (distVm != null && distVm > 50)
-    const esUltimaResaltada = resaltarUltima?.idx === idx
-    const metaAlerta = esUltimaResaltada ? resaltarUltima.meta : null
-    const vplusAlerta = esUltimaResaltada && resaltarUltima.vminusSinVplus
-    const filaResaltada = esUltimaResaltada && (resaltarUltima.incompleta || resaltarUltima.vminusSinVplus)
-    const abscisaFmtInvalida = abscisaInvalida(fila)
-    const abscisaAlerta = metaAlerta?.abscisa || abscisaFmtInvalida
-    const esCierre = Boolean(fila.es_fila_cierre)
-    const border = ui.t?.border || '#e2e8f0'
-    return (
-      <div
-        key={idx}
-        style={{
-          marginBottom: 10,
-          padding: 10,
-          borderRadius: 10,
-          border: `1px solid ${esCierre ? bloques.cierre.border : border}`,
-          background: esCierre
-            ? bloques.cierre.row
-            : filaResaltada
-              ? bloques.aviso.row
-              : distOver
-                ? bloques.alerta.row
-                : (ui.t?.bgCard || '#fff'),
-          boxShadow: esCierre ? `inset 3px 0 0 ${bloques.cierre.border}` : undefined,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
-          <div style={{ flexShrink: 0, minWidth: 28 }}>
-            <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)' }}>#{idx + 1}</div>
-            {esCierre && (
-              <span
-                style={{
-                  display: 'inline-block',
-                  marginTop: 2,
-                  padding: '1px 5px',
-                  borderRadius: 4,
-                  fontSize: 'var(--cc-xxs)',
-                  fontWeight: 800,
-                  color: '#fff',
-                  background: '#7c3aed',
-                }}
-              >
-                CIERRE
-              </span>
-            )}
-          </div>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {sellada || esCierre ? (
-              <span style={{ fontWeight: esCierre ? 700 : 600 }}>{fila.nombre_punto || '—'}</span>
-            ) : idx === 0 && bmInicialNombre ? (
-              <span style={{ fontWeight: 600 }} title="BM de amarre (biblioteca)">{bmInicialNombre}</span>
-            ) : (
-              <input
-                value={fila.nombre_punto}
-                onChange={(e) => updateFila(idx, { nombre_punto: e.target.value })}
-                style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, metaAlerta?.nombre)}
-                placeholder="Punto"
-              />
-            )}
-            {sellada || esCierre ? (
-              <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>{idx === 0 ? 'BM' : (fila.tipo_punto || '—')}</span>
-            ) : idx === 0 ? (
-              <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.textMuted }}>BM</span>
-            ) : (
-              <select
-                value={fila.tipo_punto || ''}
-                onChange={(e) => updateFila(idx, { tipo_punto: e.target.value })}
-                style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, metaAlerta?.tipo)}
-              >
-                <option value="">Tipo —</option>
-                {TIPOS_PUNTO.map(({ v, l }) => <option key={v} value={v}>{l}</option>)}
-              </select>
-            )}
-          </div>
-          {!sellada && (
-            <button type="button" style={{ ...ui.btnSecondary, padding: '4px 10px', flexShrink: 0 }} onClick={() => removeFila(idx)} title="Eliminar fila">×</button>
-          )}
-        </div>
-
-        {renderBloqueHilosMovil(fila, idx, 'vplus', vistaRow, vplusAlerta)}
-        {renderBloqueHilosMovil(fila, idx, 'vi', vistaRow, false)}
-        {renderBloqueHilosMovil(fila, idx, 'vminus', vistaRow, false)}
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr 1fr',
-            gap: 6,
-            marginTop: 8,
-            paddingTop: 8,
-            borderTop: `1px solid ${border}`,
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>H. ins.</div>
-            <div style={{ fontWeight: 600, color: ui.accent, fontSize: 'var(--cc-sm)' }}>{fmtN(vistaRow.altura_instrumento)}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>Cota</div>
-            <div style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>{fmtN(vistaRow.cota)}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>Abscisa (PK)</div>
-            {sellada ? (
-              <div style={{ fontSize: 'var(--cc-sm)' }}>{fila.ubicacion_pk || fila.abscisa || '—'}</div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setPkMapIdx(idx)}
-                style={estiloCampo({
-                  ...ui.btnSecondary,
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  fontSize: 'var(--cc-xs)',
-                  padding: '4px 6px',
-                  textAlign: 'left',
-                }, abscisaAlerta)}
-                title={fila.ubicacion_pk ? `PK ${fila.ubicacion_pk}` : ABSCISA_NUMERICA_MSG}
-              >
-                {fila.ubicacion_pk || fila.abscisa || '📍 Elegir PK'}
-              </button>
-            )}
-          </div>
-        </div>
-        <div style={{ marginTop: 6 }}>
-          <div style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted, marginBottom: 2 }}>Descripción</div>
-          {sellada ? (
-            <div style={{ fontSize: 'var(--cc-sm)' }}>{fila.descripcion_punto || '—'}</div>
-          ) : (
-            <input
-              value={fila.descripcion_punto}
-              onChange={(e) => updateFila(idx, { descripcion_punto: e.target.value })}
-              style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, metaAlerta?.descripcion)}
-              placeholder="Descripción del punto"
-            />
-          )}
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div>
@@ -1658,23 +1097,10 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
 
             <PermisoAviso permisos={permisos} accion="editar">
               <div style={{ ...ui.card, marginBottom: 16 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <h4 style={{ margin: 0 }}>Cartera de lecturas</h4>
-                  {!sellada && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+                  <h4 style={{ margin: 0 }}>Captura de lecturas</h4>
+                  {editableCartera && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        style={ui.btnSecondary}
-                        onClick={addFila}
-                        disabled={tieneFilaCierre || !circuitoAbierto}
-                        title={
-                          !circuitoAbierto
-                            ? 'Abra el circuito para agregar filas'
-                            : (tieneFilaCierre ? 'Elimine la fila de cierre para agregar tramos' : (!puedeNuevaFila.ok ? puedeNuevaFila.msg : 'Agregar fila'))
-                        }
-                      >
-                        + Fila
-                      </button>
                       <button
                         type="button"
                         style={circuitoAbierto ? ui.btnSecondary : ui.btnPrimary}
@@ -1692,7 +1118,7 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                         type="button"
                         style={ui.btnSecondary}
                         onClick={abrirModalCierre}
-                        disabled={tieneFilaCierre}
+                        disabled={tieneFilaCierre || !circuitoAbierto}
                         title={tieneFilaCierre ? 'Ya hay una fila de cierre' : (!puedeCierre.ok ? puedeCierre.msg : 'Agregar lectura V− en BM de cierre')}
                       >
                         Ingresar cierre
@@ -1700,13 +1126,14 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     </div>
                   )}
                 </div>
-                {tipoNivel !== tipoNivelDeclarado && !sellada && (
+
+                {tipoNivel !== tipoNivelDeclarado && editableCartera && (
                   <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
                     Las lecturas están en modo {tipoNivel === 'automatico' ? 'automático (S/M/I)' : 'electrónico'}.
                     Al guardar se sincronizará el tipo de nivel con los datos de la cartera.
                   </p>
                 )}
-                {!sellada && !circuitoAbierto && (
+                {editableCartera && !circuitoAbierto && (
                   <div
                     style={{
                       margin: '0 0 8px',
@@ -1721,11 +1148,10 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                   >
                     <strong>Apertura pendiente.</strong>
                     {' '}
-                    Pulse «Abrir circuito» (con BM inicial) para iniciar la captura.
-                    En la primera vuelta puede registrar V+ en el BM y V− en otro punto sin bloqueo de tramo.
+                    Pulse «Abrir circuito» (con BM inicial) para habilitar el panel de ingreso y la cartera.
                   </div>
                 )}
-                {!sellada && circuitoAbierto && modoApertura && (
+                {editableCartera && circuitoAbierto && modoApertura && (
                   <div
                     style={{
                       margin: '0 0 8px',
@@ -1740,16 +1166,15 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                   >
                     <strong>Circuito abierto — primera vuelta.</strong>
                     {' '}
-                    Complete V+ en el BM y al menos una Vi/V− en el siguiente punto.
-                    Después aplican las validaciones estrictas de cambio/tramo.
+                    Capture V+ en el BM y al menos una Vi/V− en el siguiente punto con «Agregar lectura».
                   </div>
                 )}
                 <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
                   {esAutomatico
-                    ? 'Automático: hilos S/M/I; cálculo con hilo medio (M). Cambio: V− fija cota → V+ actualiza H.I. Vi/V− intermedios sin cambiar H.I.'
-                    : 'Electrónico: lectura única en V+, Vi o V−; Dist (V+) y Dist (V−) manuales junto a cada columna.'}
+                    ? 'Automático: hilos S/M/I; cálculo con hilo medio (M). Cambio: V− fija cota → V+ actualiza H.I.'
+                    : 'Electrónico: lectura única en V+, Vi o V−; Dist (V+) y Dist (V−) manuales.'}
                 </p>
-                {infoFilaCierre && !sellada && (
+                {infoFilaCierre && editableCartera && (
                   <div
                     style={{
                       margin: '0 0 8px',
@@ -1764,225 +1189,55 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     <strong>Cierre del circuito — fila {infoFilaCierre.numero}</strong>
                     {' · '}
                     {infoFilaCierre.nombre} ({infoFilaCierre.descripcion}).
-                    Registre la V− en esa fila. Para agregar tramos intermedios, elimínela con × al final de la fila.
+                    Pulse la fila para editar la V−. Para agregar tramos, elimine el cierre (papelera / deshacer).
                   </div>
                 )}
-                {!puedeNuevaFila.ok && !puedeNuevaFila.esCierre && !sellada && (
+                {!puedeNuevaFila.ok && !puedeNuevaFila.esCierre && editableCartera && (
                   <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
                     {puedeNuevaFila.msg}
                   </p>
                 )}
-                {vista.avisos.length > 0 && !sellada && (
+                {vista.avisos.length > 0 && editableCartera && (
                   <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
                     {vista.avisos.slice(0, 3).join(' ')}
                   </p>
                 )}
-                {isCompact ? (
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    {vista.filasVista.map((vistaRow, idx) => renderFilaCarteraMovil(vistaRow, idx))}
-                    {!sellada && (
-                      <button
-                        type="button"
-                        style={{ ...ui.btnSecondary, alignSelf: 'stretch', marginTop: 4 }}
-                        onClick={addFila}
-                        disabled={tieneFilaCierre || !circuitoAbierto}
-                        title={
-                          !circuitoAbierto
-                            ? 'Abra el circuito para agregar filas'
-                            : (tieneFilaCierre ? 'Elimine la fila de cierre para agregar tramos' : (!puedeNuevaFila.ok ? puedeNuevaFila.msg : 'Agregar fila'))
-                        }
-                      >
-                        + Fila
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', colorScheme: themeColorScheme(ui.t) }} className="cc-topo-table-scroll">
-                  <table style={{ ...sheet.sheetTable, tableLayout: 'auto' }}>
-                    <thead>
-                      <tr>
-                        <th style={thBase} rowSpan={2}>#</th>
-                        <th style={thPunto} rowSpan={2}>Punto</th>
-                        <th style={thTipo} rowSpan={2}>Tipo</th>
-                        <th style={thGroupColor('vplus')} colSpan={esAutomatico ? 4 : 2}>V+ {esAutomatico ? '(3 hilos)' : ''}</th>
-                        <th style={thGroupColor('vi')} colSpan={esAutomatico ? 3 : 1}>Vi {esAutomatico ? '(3 hilos)' : ''}</th>
-                        <th style={thGroupColor('vminus')} colSpan={esAutomatico ? 4 : 2}>V− {esAutomatico ? '(3 hilos)' : ''}</th>
-                        <th style={thGroup} rowSpan={2}>H. ins.</th>
-                        <th style={thGroup} rowSpan={2}>Cota</th>
-                        <th style={thBase} rowSpan={2}>Abscisa (PK)</th>
-                        <th style={thBase} rowSpan={2}>Descripción de punto</th>
-                        {!sellada && <th style={thBase} rowSpan={2} />}
-                      </tr>
-                      {esAutomatico && (
-                        <tr>
-                          {['V+', 'Vi', 'V−'].flatMap((label) => {
-                            const cols = ['S', 'M', 'I'].map((h) => (
-                              <th key={`${label}-${h}`} style={{ ...thBase, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>{h}</th>
-                            ))
-                            if (label === 'V+') {
-                              cols.push(
-                                <th key="V+-dist" style={{ ...thBase, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>Dist (V+)</th>,
-                              )
-                            }
-                            if (label === 'V−') {
-                              cols.push(
-                                <th key="V--dist" style={{ ...thBase, fontSize: 'var(--cc-xxs)', textAlign: 'center' }}>Dist (V−)</th>,
-                              )
-                            }
-                            return cols
-                          })}
-                        </tr>
-                      )}
-                      {!esAutomatico && (
-                        <tr>
-                          <th style={thSubGroupColor('vplus')}>Lect.</th>
-                          <th style={thSubGroupColor('vplus')}>Dist (V+)</th>
-                          <th style={thSubGroupColor('vi')}>Lect.</th>
-                          <th style={thSubGroupColor('vminus')}>Lect.</th>
-                          <th style={thSubGroupColor('vminus')}>Dist (V−)</th>
-                        </tr>
-                      )}
-                    </thead>
-                    <tbody>
-                      {vista.filasVista.map((vistaRow, idx) => {
-                        const fila = filas[idx] || vistaRow
-                        const distVp = vistaRow.distancia_vplus_calc
-                        const distVm = vistaRow.distancia_vminus_calc
-                        const distOver = (distVp != null && distVp > 50) || (distVm != null && distVm > 50)
-                        const esUltimaResaltada = resaltarUltima?.idx === idx
-                        const metaAlerta = esUltimaResaltada ? resaltarUltima.meta : null
-                        const vplusAlerta = esUltimaResaltada && resaltarUltima.vminusSinVplus
-                        const filaResaltada = esUltimaResaltada && (resaltarUltima.incompleta || resaltarUltima.vminusSinVplus)
-                        const abscisaFmtInvalida = abscisaInvalida(fila)
-                        const abscisaAlerta = metaAlerta?.abscisa || abscisaFmtInvalida
-                        const esCierre = Boolean(fila.es_fila_cierre)
-                        return (
-                          <tr
-                            key={idx}
-                            style={
-                              esCierre
-                                ? { background: bloques.cierre.row, outline: `2px solid ${bloques.cierre.border}`, boxShadow: `inset 3px 0 0 ${bloques.cierre.border}` }
-                                : filaResaltada
-                                  ? { background: bloques.aviso.row }
-                                  : distOver
-                                    ? { background: bloques.alerta.row }
-                                    : undefined
-                            }
-                          >
-                            <td style={tdBase}>
-                              {idx + 1}
-                              {esCierre && (
-                                <span
-                                  title="Fila de cierre: registre V− para calcular error de cierre"
-                                  style={{
-                                    display: 'inline-block',
-                                    marginTop: 2,
-                                    padding: '1px 5px',
-                                    borderRadius: 4,
-                                    fontSize: 'var(--cc-xxs)',
-                                    fontWeight: 800,
-                                    color: '#fff',
-                                    background: '#7c3aed',
-                                    letterSpacing: '0.3px',
-                                  }}
-                                >
-                                  CIERRE
-                                </span>
-                              )}
-                            </td>
-                            <td style={tdPunto}>
-                              {sellada || esCierre ? (
-                                <span style={{ fontWeight: esCierre ? 700 : 400 }} title={esCierre ? 'Punto de cierre (biblioteca)' : undefined}>
-                                  {fila.nombre_punto}
-                                </span>
-                              ) : idx === 0 && bmInicialNombre ? (
-                                <span style={{ fontWeight: 600 }} title="BM de amarre (biblioteca)">{bmInicialNombre}</span>
-                              ) : (
-                                <input
-                                  value={fila.nombre_punto}
-                                  onChange={(e) => updateFila(idx, { nombre_punto: e.target.value })}
-                                  style={estiloCampo({ ...ui.compactInput, color: ui.text, maxWidth: 84 }, metaAlerta?.nombre)}
-                                  placeholder="Nombre"
-                                />
-                              )}
-                            </td>
-                            <td style={tdTipo}>
-                              {sellada || esCierre ? (
-                                idx === 0 ? 'BM' : (fila.tipo_punto || '—')
-                              ) : idx === 0 ? (
-                                <span style={{ fontWeight: 600 }} title="BM de amarre">BM</span>
-                              ) : (
-                                <select
-                                  value={fila.tipo_punto || ''}
-                                  onChange={(e) => updateFila(idx, { tipo_punto: e.target.value })}
-                                  style={estiloCampo({ ...ui.compactInput, color: ui.text, minWidth: 108 }, metaAlerta?.tipo)}
-                                >
-                                  <option value="">—</option>
-                                  {TIPOS_PUNTO.map(({ v, l }) => <option key={v} value={v}>{l}</option>)}
-                                </select>
-                              )}
-                            </td>
-                            {renderCeldasHilos(fila, idx, 'vplus', vplusAlerta)}
-                            {renderDistVplus(fila, idx, vistaRow)}
-                            {renderCeldasHilos(fila, idx, 'vi', false)}
-                            {renderCeldasHilos(fila, idx, 'vminus', false)}
-                            {renderDistVminus(fila, idx, vistaRow)}
-                            <td style={{ ...tdGroup, fontWeight: 600, color: ui.accent }}>
-                              {fmtN(vistaRow.altura_instrumento)}
-                            </td>
-                            <td style={{ ...tdGroup, fontWeight: 600 }}>
-                              {fmtN(vistaRow.cota)}
-                            </td>
-                            <td style={tdBase}>
-                              {sellada ? (fila.ubicacion_pk || fila.abscisa || '—') : (
-                                <button
-                                  type="button"
-                                  onClick={() => setPkMapIdx(idx)}
-                                  style={estiloCampo({
-                                    ...ui.btnSecondary,
-                                    minWidth: 88,
-                                    maxWidth: 140,
-                                    fontSize: 'var(--cc-xs)',
-                                    padding: '4px 6px',
-                                    textAlign: 'left',
-                                    whiteSpace: 'nowrap',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                  }, abscisaAlerta)}
-                                  title={
-                                    fila.ubicacion_pk
-                                      ? `PK ${fila.ubicacion_pk}${fila.ubicacion_tramo ? ` · ${fila.ubicacion_tramo}` : ''}${fila.ubicacion_costado ? ` · ${fila.ubicacion_costado}` : ''}`
-                                      : ABSCISA_NUMERICA_MSG
-                                  }
-                                  aria-invalid={abscisaAlerta || undefined}
-                                >
-                                  {fila.ubicacion_pk || fila.abscisa || '📍 PK'}
-                                </button>
-                              )}
-                            </td>
-                            <td style={tdBase}>
-                              {sellada ? (fila.descripcion_punto || '—') : (
-                                <input
-                                  value={fila.descripcion_punto}
-                                  onChange={(e) => updateFila(idx, { descripcion_punto: e.target.value })}
-                                  style={estiloCampo({ ...ui.compactInput, color: ui.text, minWidth: 120 }, metaAlerta?.descripcion)}
-                                  placeholder="Descripción del punto"
-                                  aria-invalid={metaAlerta?.descripcion || undefined}
-                                />
-                              )}
-                            </td>
-                            {!sellada && (
-                              <td style={tdBase}>
-                                <button type="button" style={ui.btnSecondary} onClick={() => removeFila(idx)} title="Eliminar fila">×</button>
-                              </td>
-                            )}
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+
+                {editableCartera && circuitoAbierto && !tieneFilaCierre && (
+                  <NivelacionIngresoPanel
+                    borrador={borrador}
+                    onChange={setBorrador}
+                    onAgregar={agregarLectura}
+                    onElegirPk={() => setPkMapTarget('borrador')}
+                    esAutomatico={esAutomatico}
+                    disabled={!editableCartera || !circuitoAbierto}
+                    ui={ui}
+                    bloques={bloques}
+                    sheet={sheet}
+                    isCompact={isCompact}
+                    bmInicialNombre={bmInicialNombre}
+                    esPrimeraFila={filas.length === 0}
+                    puedeAgregar={puedeNuevaFila.ok && circuitoAbierto && !tieneFilaCierre}
+                    tituloHint={filas.length === 0
+                      ? 'Primera lectura: V+ sobre el BM inicial.'
+                      : 'Complete V+/Vi/V− según el punto y pulse Agregar lectura.'}
+                  />
                 )}
+
+                <h4 style={{ margin: '12px 0 8px', fontSize: 'var(--cc-sm)' }}>Cartera consolidada</h4>
+                <NivelacionCarteraTable
+                  filas={filas}
+                  filasVista={vista.filasVista}
+                  tipoNivel={tipoNivel}
+                  ui={ui}
+                  bloques={bloques}
+                  isCompact={isCompact}
+                  bmInicialNombre={bmInicialNombre}
+                  editandoIdx={editIdx}
+                  editable={editableCartera}
+                  onEditar={editableCartera ? (idx) => abrirEdicion(idx) : null}
+                  onEliminar={editableCartera ? solicitarEliminarFila : null}
+                />
               </div>
             </PermisoAviso>
 
@@ -1998,21 +1253,41 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
           </div>
         )}
 
-      {pkMapIdx != null && filas[pkMapIdx] && (
+      {pkMapTarget != null && (
         <BitacoraMaterialUbicacionModal
           t={ui.t}
           token={token}
           contratoId={contratoId}
-          pkId={filas[pkMapIdx].ubicacion_pk_id || ''}
-          pkLabel={filas[pkMapIdx].ubicacion_pk || filas[pkMapIdx].abscisa || ''}
-          tramo={filas[pkMapIdx].ubicacion_tramo || ''}
-          costado={filas[pkMapIdx].ubicacion_costado || ''}
-          infraestructura={filas[pkMapIdx].ubicacion_infraestructura || ''}
-          readOnly={sellada}
-          onClose={() => setPkMapIdx(null)}
+          pkId={
+            pkMapTarget === 'borrador'
+              ? (borrador.ubicacion_pk_id || '')
+              : (filas[pkMapTarget]?.ubicacion_pk_id || '')
+          }
+          pkLabel={
+            pkMapTarget === 'borrador'
+              ? (borrador.ubicacion_pk || borrador.abscisa || '')
+              : (filas[pkMapTarget]?.ubicacion_pk || filas[pkMapTarget]?.abscisa || '')
+          }
+          tramo={
+            pkMapTarget === 'borrador'
+              ? (borrador.ubicacion_tramo || '')
+              : (filas[pkMapTarget]?.ubicacion_tramo || '')
+          }
+          costado={
+            pkMapTarget === 'borrador'
+              ? (borrador.ubicacion_costado || '')
+              : (filas[pkMapTarget]?.ubicacion_costado || '')
+          }
+          infraestructura={
+            pkMapTarget === 'borrador'
+              ? (borrador.ubicacion_infraestructura || '')
+              : (filas[pkMapTarget]?.ubicacion_infraestructura || '')
+          }
+          readOnly={!editableCartera}
+          onClose={() => setPkMapTarget(null)}
           onConfirm={(loc) => {
             const pkLabel = loc?.ubicacion_pk || ''
-            updateFila(pkMapIdx, {
+            const patch = {
               ubicacion_pk_id: loc?.ubicacion_pk_id || null,
               ubicacion_pk: pkLabel,
               ubicacion_tramo: loc?.ubicacion_tramo || '',
@@ -2020,13 +1295,58 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
               ubicacion_infraestructura: loc?.ubicacion_infraestructura || '',
               ubicacion_lat: loc?.ubicacion_lat ?? null,
               ubicacion_lng: loc?.ubicacion_lng ?? null,
-              // Mantener abscisa legible (código PK) para PDF / legado
               abscisa: pkLabel || '',
-            })
-            setPkMapIdx(null)
+            }
+            if (pkMapTarget === 'borrador') {
+              setBorrador((b) => ({ ...b, ...patch }))
+            } else if (typeof pkMapTarget === 'number') {
+              setFilas((rows) => rows.map((r, i) => (i === pkMapTarget ? { ...r, ...patch } : r)))
+            }
+            setPkMapTarget(null)
           }}
         />
       )}
+
+      {editIdx != null && filas[editIdx] && (
+        <NivelacionLecturaEditModal
+          theme={ui.t}
+          ui={ui}
+          bloques={bloques}
+          fila={filas[editIdx]}
+          idx={editIdx}
+          esAutomatico={esAutomatico}
+          bmInicialNombre={bmInicialNombre}
+          vistaRow={vista.filasVista[editIdx]}
+          onClose={() => setEditIdx(null)}
+          onError={(e) => setError(e?.mensaje || e?.message || 'Error al editar')}
+          onElegirPk={() => setPkMapTarget(editIdx)}
+          onSave={guardarEdicionPopup}
+        />
+      )}
+
+      {undoToast && (
+        <PoligonalUndoToast
+          message={undoToast.message}
+          onUndo={deshacerEliminarFila}
+          onDismiss={() => setUndoToast(null)}
+        />
+      )}
+
+      {confirmEliminarFila && (
+        <TopoConfirmModal
+          theme={ui.t}
+          titulo="Eliminar lectura"
+          confirmLabel="Eliminar"
+          onCancel={() => setConfirmEliminarFila(null)}
+          onConfirm={confirmarEliminarFila}
+        >
+          <p style={{ margin: 0 }}>
+            ¿Eliminar la lectura <strong>«{confirmEliminarFila.nombre}»</strong> de la cartera?
+            Podrá deshacer durante unos segundos. Guarde la cartera para persistir el cambio.
+          </p>
+        </TopoConfirmModal>
+      )}
+
 
       {modalCierre && (
         <TopoConfirmModal
