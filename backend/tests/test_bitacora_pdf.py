@@ -211,6 +211,17 @@ def test_generar_pdf_con_eventos_y_fotos(monkeypatch):
             "evento_tipo": "novedades",
             "cuerpo_html": "Nota",
             "created_by_nombre": "Luis",
+            "evento_detalle": {
+                "actividades": [{
+                    "actividad": "Excavación",
+                    "abs_inicio": "K0+000",
+                    "abs_fin": "K0+050",
+                    "ubicacion_pk": "K12",
+                    "ubicacion_tramo": "Norte",
+                    "cantidad": "10",
+                    "observacion": "OK",
+                }],
+            },
             "imagenes": [{"nombre": "e.png", "data_uri": "data:image/png;base64,aaa"}],
         }],
     })
@@ -227,6 +238,9 @@ def test_generar_pdf_con_eventos_y_fotos(monkeypatch):
     assert "Registro Fotográfico" in doc
     assert "Fotografías del día" not in doc
     assert "K12" in doc
+    assert "Actividades" in doc
+    assert "Excavación" in doc
+    assert "Abs Ini" in doc
 
 
 def test_pdf_cache_reusa_bytes_sin_regenerar(monkeypatch):

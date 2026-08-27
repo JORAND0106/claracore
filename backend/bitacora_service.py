@@ -1147,6 +1147,88 @@ def _normalizar_visitantes_lista(raw) -> List[dict]:
     return out
 
 
+def _normalizar_actividades_evento(raw) -> List[dict]:
+    """
+    Tabla estructurada de Actividades del Reporte de Evento (evento_detalle.actividades).
+    Independiente del cuerpo_html / tabla libre TipTap.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        actividad = str(item.get("actividad") or "").strip()
+        abs_inicio = str(item.get("abs_inicio") or item.get("abs_ini") or "").strip()
+        abs_fin = str(item.get("abs_fin") or "").strip()
+        cantidad = str(item.get("cantidad") or "").strip()
+        observacion = str(
+            item.get("observacion") or item.get("observaciones") or ""
+        ).strip()
+
+        ubicacion_pk = str(
+            item.get("ubicacion_pk") or item.get("pk_label") or item.get("pk") or ""
+        ).strip() or None
+        ubicacion_pk_id = item.get("ubicacion_pk_id") or item.get("pk_id_id") or item.get("pk_id")
+        if ubicacion_pk_id is not None and ubicacion_pk_id != "":
+            try:
+                ubicacion_pk_id = int(ubicacion_pk_id)
+            except (TypeError, ValueError):
+                ubicacion_pk_id = str(ubicacion_pk_id).strip() or None
+        else:
+            ubicacion_pk_id = None
+
+        ubicacion_tramo = str(
+            item.get("ubicacion_tramo") or item.get("tramo") or ""
+        ).strip() or None
+        ubicacion_costado = str(
+            item.get("ubicacion_costado") or item.get("costado") or item.get("calzada") or ""
+        ).strip() or None
+        ubicacion_infraestructura = str(
+            item.get("ubicacion_infraestructura") or item.get("infraestructura") or ""
+        ).strip() or None
+
+        ubicacion_lat = None
+        ubicacion_lng = None
+        for key_lat, key_lng in (
+            ("ubicacion_lat", "ubicacion_lng"),
+            ("lat", "lng"),
+        ):
+            raw_lat = item.get(key_lat)
+            raw_lng = item.get(key_lng)
+            if raw_lat is None or raw_lng is None or raw_lat == "" or raw_lng == "":
+                continue
+            try:
+                ubicacion_lat = float(raw_lat)
+                ubicacion_lng = float(raw_lng)
+            except (TypeError, ValueError):
+                ubicacion_lat = ubicacion_lng = None
+                continue
+            break
+
+        if not any([
+            actividad, abs_inicio, abs_fin, ubicacion_pk, ubicacion_pk_id is not None,
+            cantidad, observacion,
+        ]):
+            continue
+
+        out.append({
+            "actividad": actividad,
+            "abs_inicio": abs_inicio,
+            "abs_fin": abs_fin,
+            "ubicacion_pk": ubicacion_pk,
+            "ubicacion_pk_id": ubicacion_pk_id,
+            "ubicacion_tramo": ubicacion_tramo,
+            "ubicacion_costado": ubicacion_costado,
+            "ubicacion_infraestructura": ubicacion_infraestructura,
+            "ubicacion_lat": ubicacion_lat,
+            "ubicacion_lng": ubicacion_lng,
+            "cantidad": cantidad,
+            "observacion": observacion,
+        })
+    return out
+
+
 def _fmt_visitantes_texto(lista: List[dict]) -> str:
     parts = []
     for v in lista or []:
@@ -1483,6 +1565,11 @@ def _enrich_entrada(
     out["dirigido_a"] = str(out.get("dirigido_a") or "").strip()
     if not isinstance(out.get("evento_detalle"), dict):
         out["evento_detalle"] = {}
+    else:
+        ed = dict(out["evento_detalle"])
+        if "actividades" in ed:
+            ed["actividades"] = _normalizar_actividades_evento(ed.get("actividades"))
+        out["evento_detalle"] = ed
     if include_usos:
         if usos is not None:
             usos_list = list(usos)
@@ -1768,6 +1855,7 @@ def crear_reporte_evento(
             "reporte_actividades o novedades."
         )
     detalle = data.get("evento_detalle") if isinstance(data.get("evento_detalle"), dict) else {}
+    actividades = _normalizar_actividades_evento(detalle.get("actividades"))
     if evento_tipo == "incidente_sst":
         # Campos mínimos SST (independientes del Auditor SST IA)
         detalle = {
@@ -1777,6 +1865,7 @@ def crear_reporte_evento(
             "acciones_inmediatas": str(detalle.get("acciones_inmediatas") or "").strip(),
             "gravedad": str(detalle.get("gravedad") or "leve").strip() or "leve",
             "requiere_seguimiento": bool(detalle.get("requiere_seguimiento")),
+            "actividades": actividades,
         }
     elif evento_tipo == "visita_terceros":
         lista_in = detalle.get("visitantes_lista")
@@ -1791,6 +1880,7 @@ def crear_reporte_evento(
             "visitantes": _fmt_visitantes_texto(synced) or str(detalle.get("visitantes") or "").strip(),
             "entidad": str(detalle.get("entidad") or "").strip(),
             "motivo": str(detalle.get("motivo") or "").strip(),
+            "actividades": actividades,
         }
     else:
         # Permitir visitantes_lista en cualquier evento si el cliente lo envía.
@@ -1806,6 +1896,7 @@ def crear_reporte_evento(
             ).strip()
         else:
             detalle = {k: v for k, v in detalle.items() if v is not None}
+        detalle["actividades"] = actividades
 
     u = _usuario_row(sb, user_id)
     payload = {
@@ -1988,6 +2079,7 @@ def update_entrada(
             patch["dirigido_a"] = str(data.get("dirigido_a") or "").strip() or None
         if "evento_detalle" in data and isinstance(data.get("evento_detalle"), dict):
             detalle = dict(data["evento_detalle"])
+            actividades = _normalizar_actividades_evento(detalle.get("actividades"))
             et = str(patch.get("evento_tipo") or entrada.get("evento_tipo") or "").strip()
             if et == "visita_terceros":
                 lista_in = detalle.get("visitantes_lista")
@@ -2004,6 +2096,17 @@ def update_entrada(
                     ).strip(),
                     "entidad": str(detalle.get("entidad") or "").strip(),
                     "motivo": str(detalle.get("motivo") or "").strip(),
+                    "actividades": actividades,
+                }
+            elif et == "incidente_sst":
+                detalle = {
+                    "descripcion_incidente": str(detalle.get("descripcion_incidente") or "").strip(),
+                    "lugar": str(detalle.get("lugar") or "").strip(),
+                    "personas_involucradas": str(detalle.get("personas_involucradas") or "").strip(),
+                    "acciones_inmediatas": str(detalle.get("acciones_inmediatas") or "").strip(),
+                    "gravedad": str(detalle.get("gravedad") or "leve").strip() or "leve",
+                    "requiere_seguimiento": bool(detalle.get("requiere_seguimiento")),
+                    "actividades": actividades,
                 }
             elif isinstance(detalle.get("visitantes_lista"), list):
                 lista = _normalizar_visitantes_lista(detalle.get("visitantes_lista"))
@@ -2014,6 +2117,9 @@ def update_entrada(
                 detalle["visitantes"] = _fmt_visitantes_texto(synced) or str(
                     detalle.get("visitantes") or ""
                 ).strip()
+                detalle["actividades"] = actividades
+            else:
+                detalle["actividades"] = actividades
             patch["evento_detalle"] = detalle
 
     if "imagenes" in data:
