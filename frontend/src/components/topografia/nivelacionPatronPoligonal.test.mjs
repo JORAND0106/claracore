@@ -36,6 +36,17 @@ describe('Nivelación — patrón Poligonal (estructura)', () => {
     assert.doesNotMatch(src, /^function PanelColapsable\b/m)
   })
 
+  it('importa MSG_VPLUS_SIN_VISTA (evita blank al Agregar lectura con solo V+)', () => {
+    // Tras Agregar lectura con V+ (sin Vi/V−), carteraIncompleta es true y el JSX
+    // renderiza {MSG_VPLUS_SIN_VISTA}. Sin import → ReferenceError → pantalla en blanco.
+    const src = read('NivelacionForm.jsx')
+    assert.match(
+      src,
+      /import\s*\{[^}]*\bMSG_VPLUS_SIN_VISTA\b[^}]*\}\s*from\s*['"].*topografia_nivelacion['"]/s,
+    )
+    assert.match(src, /\{MSG_VPLUS_SIN_VISTA\}/)
+  })
+
   it('panel de ingreso expone V+/Vi/V− y Agregar lectura', () => {
     const src = read('NivelacionIngresoPanel.jsx')
     assert.match(src, /V\+ \(vista atrás\)/)
