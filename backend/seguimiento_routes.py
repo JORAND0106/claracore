@@ -1003,6 +1003,8 @@ class BitacoraColaboradorBody(BaseModel):
     cargo: Optional[str] = None
     subcontratista_id: Optional[int] = None
     subcontratista_nombre: Optional[str] = None
+    fecha_ingreso: Optional[str] = None
+    fecha_retiro: Optional[str] = None
 
 
 class BitacoraImagenBody(BaseModel):
@@ -1199,6 +1201,8 @@ def route_upsert_bitacora_colaborador(
         cargo=body.cargo or "",
         subcontratista_id=body.subcontratista_id,
         subcontratista_nombre=body.subcontratista_nombre or "",
+        fecha_ingreso=body.fecha_ingreso,
+        fecha_retiro=body.fecha_retiro,
         user_id=_uid(current_user),
     )
     return row or {"ok": False, "detail": "Colaborador no registrado (nombre vacío)"}

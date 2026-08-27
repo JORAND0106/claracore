@@ -766,6 +766,7 @@ export default function BitacoraEntradaEditor({
                 api={api}
                 rows={asistencia}
                 onChange={setAsistencia}
+                fechaDiario={fecha}
                 disabled={!editable}
                 sheetStyles={ui}
                 compact={grillaCompacta}

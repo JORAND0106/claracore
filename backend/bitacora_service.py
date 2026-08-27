@@ -1292,10 +1292,33 @@ def sync_visitantes_catalogo(
 ESTADOS_COLABORADOR = ("activo", "incapacitado", "inactivo")
 DOCUMENTO_TIPOS_COLABORADOR = ("CC", "CE", "TI", "PA", "NIT", "OTRO")
 HORA_SALIDA_DEFAULT = "16:30"
+# Solo Activo cuenta en resumen por cargo; Inactivo e Incapacitado = sin jornada.
+ESTADOS_SIN_JORNADA = frozenset({"inactivo", "incapacitado"})
 
 
 def _norm_documento_numero(raw) -> str:
     return re.sub(r"\D+", "", str(raw or ""))
+
+
+def _parse_fecha_iso(raw) -> Optional[str]:
+    """Normaliza a YYYY-MM-DD o None."""
+    if raw is None:
+        return None
+    if hasattr(raw, "isoformat"):
+        try:
+            return raw.isoformat()[:10]
+        except Exception:
+            return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if not m:
+        return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if mo < 1 or mo > 12 or d < 1 or d > 31:
+        return None
+    return f"{y:04d}-{mo:02d}-{d:02d}"
 
 
 def _capitalizar_nombre_propio(nombre: str) -> str:
@@ -1351,6 +1374,8 @@ def upsert_colaborador(
     cargo: str = "",
     subcontratista_id=None,
     subcontratista_nombre: str = "",
+    fecha_ingreso=None,
+    fecha_retiro=None,
     user_id: Optional[int] = None,
 ) -> Optional[dict]:
     nombre_limpio = _capitalizar_nombre_propio(nombre)
@@ -1363,6 +1388,8 @@ def upsert_colaborador(
     doc_num = _norm_documento_numero(documento_numero)
     cargo_limpio = str(cargo or "").strip()
     sub_nombre = str(subcontratista_nombre or "").strip()
+    f_ingreso = _parse_fecha_iso(fecha_ingreso)
+    f_retiro = _parse_fecha_iso(fecha_retiro)
     try:
         sub_id = int(subcontratista_id) if subcontratista_id not in (None, "") else None
     except (TypeError, ValueError):
@@ -1397,6 +1424,11 @@ def upsert_colaborador(
         patch_base["subcontratista_id"] = sub_id
     if sub_nombre:
         patch_base["subcontratista_nombre"] = sub_nombre
+    # Fechas históricas: actualizar solo si vienen en el payload (None = no tocar).
+    if fecha_ingreso is not None:
+        patch_base["fecha_ingreso"] = f_ingreso
+    if fecha_retiro is not None:
+        patch_base["fecha_retiro"] = f_retiro
 
     for row in existentes:
         try:
@@ -1423,6 +1455,8 @@ def upsert_colaborador(
         "cargo": cargo_limpio,
         "subcontratista_id": sub_id,
         "subcontratista_nombre": sub_nombre,
+        "fecha_ingreso": f_ingreso,
+        "fecha_retiro": f_retiro,
         "activo": True,
         "created_by": int(user_id) if user_id is not None else None,
         "created_at": _now_utc().isoformat(),
@@ -1480,6 +1514,12 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
         if key in seen:
             continue
         seen.add(key)
+        sin_jornada = estado in ESTADOS_SIN_JORNADA
+        hora_ingreso = None if sin_jornada else _parse_hora_hhmm(item.get("hora_ingreso"))
+        hora_salida = (
+            None if sin_jornada
+            else _parse_hora_hhmm(item.get("hora_salida"), default=HORA_SALIDA_DEFAULT)
+        )
         out.append({
             "colaborador_id": cid,
             "nombre": nombre,
@@ -1489,10 +1529,10 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
             "subcontratista_id": sub_id,
             "subcontratista_nombre": str(item.get("subcontratista_nombre") or "").strip(),
             "estado": estado,
-            "hora_ingreso": _parse_hora_hhmm(item.get("hora_ingreso")),
-            "hora_salida": _parse_hora_hhmm(
-                item.get("hora_salida"), default=HORA_SALIDA_DEFAULT,
-            ),
+            "hora_ingreso": hora_ingreso,
+            "hora_salida": hora_salida,
+            "fecha_ingreso": _parse_fecha_iso(item.get("fecha_ingreso")),
+            "fecha_retiro": _parse_fecha_iso(item.get("fecha_retiro")),
             "observacion": str(item.get("observacion") or item.get("observaciones") or "").strip(),
             "origen": str(item.get("origen") or "catalogo").strip() or "catalogo",
         })
@@ -1534,6 +1574,8 @@ def sync_colaboradores_catalogo(
             cargo=item.get("cargo") or "",
             subcontratista_id=item.get("subcontratista_id"),
             subcontratista_nombre=item.get("subcontratista_nombre") or "",
+            fecha_ingreso=item.get("fecha_ingreso"),
+            fecha_retiro=item.get("fecha_retiro"),
             user_id=user_id,
         )
         synced.append({
@@ -1555,6 +1597,16 @@ def sync_colaboradores_catalogo(
             "subcontratista_nombre": str(
                 item.get("subcontratista_nombre") or (cat or {}).get("subcontratista_nombre") or ""
             ).strip(),
+            "fecha_ingreso": _parse_fecha_iso(
+                item.get("fecha_ingreso")
+                if item.get("fecha_ingreso") not in (None, "")
+                else (cat or {}).get("fecha_ingreso")
+            ),
+            "fecha_retiro": _parse_fecha_iso(
+                item.get("fecha_retiro")
+                if item.get("fecha_retiro") not in (None, "")
+                else (cat or {}).get("fecha_retiro")
+            ),
             "origen": "catalogo",
         })
     return synced

@@ -6,6 +6,9 @@ import {
   HORA_SALIDA_DEFAULT,
   capitalizarNombrePropio,
   emptyAsistenciaRow,
+  estadoPermiteFechaRetiro,
+  estadoSinJornada,
+  parseFechaISO,
   soloDigitosDocumento,
 } from './personalAsistenciaHelpers'
 import {
@@ -24,6 +27,7 @@ export default function ColaboradorAsistenciaModal({
   api,
   initial = null,
   catalogHint = null,
+  fechaDiario = '',
   disabled = false,
   onClose,
   onSave,
@@ -55,6 +59,8 @@ export default function ColaboradorAsistenciaModal({
         cargo: catalogHint.cargo || '',
         subcontratista_id: catalogHint.subcontratista_id ?? null,
         subcontratista_nombre: catalogHint.subcontratista_nombre || '',
+        fecha_ingreso: parseFechaISO(catalogHint.fecha_ingreso),
+        fecha_retiro: parseFechaISO(catalogHint.fecha_retiro),
       }))
     }
   }, [catalogHint, initial])
@@ -105,10 +111,28 @@ export default function ColaboradorAsistenciaModal({
       cargo: row.cargo || form.cargo || '',
       subcontratista_id: row.subcontratista_id ?? null,
       subcontratista_nombre: row.subcontratista_nombre || '',
+      fecha_ingreso: parseFechaISO(row.fecha_ingreso) || form.fecha_ingreso || '',
+      fecha_retiro: parseFechaISO(row.fecha_retiro) || form.fecha_retiro || '',
       origen: 'catalogo',
     })
     setNombreOpen(false)
     setConfirmNew(null)
+  }
+
+  const onEstadoChange = (estado) => {
+    const next = { estado }
+    if (estadoSinJornada(estado)) {
+      next.hora_ingreso = ''
+      next.hora_salida = ''
+    } else if (!form.hora_salida) {
+      next.hora_salida = HORA_SALIDA_DEFAULT
+    }
+    if (estadoPermiteFechaRetiro(estado)) {
+      if (!parseFechaISO(form.fecha_retiro)) {
+        next.fecha_retiro = parseFechaISO(fechaDiario) || ''
+      }
+    }
+    patch(next)
   }
 
   const exactMatch = useMemo(() => {
@@ -116,6 +140,9 @@ export default function ColaboradorAsistenciaModal({
     if (!needle) return null
     return catalogOpts.find((r) => capitalizarNombrePropio(r.nombre).toLowerCase() === needle) || null
   }, [catalogOpts, form.nombre])
+
+  const sinJornada = estadoSinJornada(form.estado)
+  const retiroEditable = estadoPermiteFechaRetiro(form.estado)
 
   const guardar = async ({ registrarNuevo = false } = {}) => {
     setError('')
@@ -134,11 +161,15 @@ export default function ColaboradorAsistenciaModal({
       return
     }
 
+    const sinJ = estadoSinJornada(form.estado)
     const payload = emptyAsistenciaRow({
       ...form,
       nombre,
       documento_numero: doc,
-      hora_salida: form.hora_salida || HORA_SALIDA_DEFAULT,
+      fecha_ingreso: parseFechaISO(form.fecha_ingreso),
+      fecha_retiro: parseFechaISO(form.fecha_retiro),
+      hora_ingreso: sinJ ? '' : (form.hora_ingreso || ''),
+      hora_salida: sinJ ? '' : (form.hora_salida || HORA_SALIDA_DEFAULT),
     })
 
     if (!payload.colaborador_id && !exactMatch && !registrarNuevo && !initial?.colaborador_id) {
@@ -148,19 +179,32 @@ export default function ColaboradorAsistenciaModal({
 
     setBusy(true)
     try {
+      const catalogBody = {
+        nombre: payload.nombre,
+        documento_tipo: payload.documento_tipo,
+        documento_numero: payload.documento_numero,
+        cargo: payload.cargo,
+        subcontratista_id: payload.subcontratista_id,
+        subcontratista_nombre: payload.subcontratista_nombre,
+        fecha_ingreso: payload.fecha_ingreso || '',
+        fecha_retiro: payload.fecha_retiro || '',
+      }
+
       if (registrarNuevo || (!payload.colaborador_id && !exactMatch)) {
-        const row = await api.upsertBitacoraColaborador({
-          nombre: payload.nombre,
-          documento_tipo: payload.documento_tipo,
-          documento_numero: payload.documento_numero,
-          cargo: payload.cargo,
-          subcontratista_id: payload.subcontratista_id,
-          subcontratista_nombre: payload.subcontratista_nombre,
-        })
+        const row = await api.upsertBitacoraColaborador(catalogBody)
         if (row?.id) payload.colaborador_id = row.id
         if (row?.nombre) payload.nombre = row.nombre
-      } else if (exactMatch && !payload.colaborador_id) {
-        payload.colaborador_id = exactMatch.id
+      } else {
+        if (exactMatch && !payload.colaborador_id) {
+          payload.colaborador_id = exactMatch.id
+        }
+        // Persistir fechas históricas en catálogo también al editar existente.
+        if (api?.upsertBitacoraColaborador) {
+          try {
+            const row = await api.upsertBitacoraColaborador(catalogBody)
+            if (row?.id && !payload.colaborador_id) payload.colaborador_id = row.id
+          } catch { /* la asistencia del día igual se guarda */ }
+        }
       }
 
       if (payload.cargo && api?.upsertBitacoraCargo) {
@@ -195,12 +239,24 @@ export default function ColaboradorAsistenciaModal({
     display: 'block',
     minHeight: 40,
   }
+  const fieldDisabled = {
+    ...field,
+    opacity: 0.65,
+    cursor: 'not-allowed',
+    background: t.bg || '#f1f5f9',
+  }
   const labelStyle = {
     display: 'block',
     fontSize: 'var(--cc-xs)',
     fontWeight: 700,
     color: t.textMuted,
     marginBottom: 5,
+  }
+  const hintStyle = {
+    marginTop: 4,
+    fontSize: 11,
+    color: t.textMuted,
+    lineHeight: 1.35,
   }
   const btnGhost = {
     border: `1px solid ${t.border}`,
@@ -415,7 +471,7 @@ export default function ColaboradorAsistenciaModal({
               <select
                 disabled={disabled}
                 value={form.estado || 'activo'}
-                onChange={(e) => patch({ estado: e.target.value })}
+                onChange={(e) => onEstadoChange(e.target.value)}
                 style={field}
               >
                 {ESTADOS_COLABORADOR.map((e) => (
@@ -429,26 +485,64 @@ export default function ColaboradorAsistenciaModal({
               style={{ display: 'grid', gridTemplateColumns: viewportCompact ? '1fr' : '1fr 1fr', gap: 12 }}
             >
               <div>
-                <label style={labelStyle}>Hora de ingreso</label>
+                <label style={labelStyle}>Fecha de ingreso</label>
                 <input
                   disabled={disabled}
-                  type="time"
-                  value={form.hora_ingreso || ''}
-                  onChange={(e) => patch({ hora_ingreso: e.target.value })}
+                  type="date"
+                  value={form.fecha_ingreso || ''}
+                  onChange={(e) => patch({ fecha_ingreso: e.target.value })}
                   style={field}
+                />
+                <div style={hintStyle}>Dato histórico del colaborador en el contrato.</div>
+              </div>
+              <div>
+                <label style={labelStyle}>Fecha de retiro</label>
+                <input
+                  disabled={disabled || !retiroEditable}
+                  type="date"
+                  value={form.fecha_retiro || ''}
+                  onChange={(e) => patch({ fecha_retiro: e.target.value })}
+                  style={retiroEditable && !disabled ? field : fieldDisabled}
+                />
+                <div style={hintStyle}>
+                  {retiroEditable
+                    ? 'Editable al marcar Inactivo (por defecto: fecha del diario).'
+                    : 'Se habilita al marcar Estado «Inactivo».'}
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="cc-bitacora-colaborador-form__row"
+              style={{ display: 'grid', gridTemplateColumns: viewportCompact ? '1fr' : '1fr 1fr', gap: 12 }}
+            >
+              <div>
+                <label style={labelStyle}>Hora de ingreso</label>
+                <input
+                  disabled={disabled || sinJornada}
+                  type="time"
+                  value={sinJornada ? '' : (form.hora_ingreso || '')}
+                  onChange={(e) => patch({ hora_ingreso: e.target.value })}
+                  style={sinJornada || disabled ? fieldDisabled : field}
                 />
               </div>
               <div>
                 <label style={labelStyle}>Hora de salida</label>
                 <input
-                  disabled={disabled}
+                  disabled={disabled || sinJornada}
                   type="time"
-                  value={form.hora_salida || HORA_SALIDA_DEFAULT}
+                  value={sinJornada ? '' : (form.hora_salida || HORA_SALIDA_DEFAULT)}
                   onChange={(e) => patch({ hora_salida: e.target.value || HORA_SALIDA_DEFAULT })}
-                  style={field}
+                  style={sinJornada || disabled ? fieldDisabled : field}
                 />
               </div>
             </div>
+            {sinJornada ? (
+              <div style={{ ...hintStyle, marginTop: -6 }}>
+                Sin jornada: estado {form.estado === 'incapacitado' ? 'Incapacitado' : 'Inactivo'}
+                {' '}no registra horas ni cuenta en el resumen por cargo.
+              </div>
+            ) : null}
 
             <div>
               <label style={labelStyle}>Observación</label>
