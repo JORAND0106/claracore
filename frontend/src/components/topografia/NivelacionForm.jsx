@@ -36,6 +36,7 @@ import {
   filaTieneVminus,
   lecturasToFilas,
   modoAperturaNivelacion,
+  MSG_VPLUS_SIN_VISTA,
   nombreBmDesdeId,
   nuevaFilaCierre,
   nuevaFilaPunto,
