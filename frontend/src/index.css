@@ -2750,6 +2750,30 @@ select.cc-dashboard-acta-select--light option {
   min-width: 0 !important;
 }
 
+/* Modal Registrar colaborador — formulario apilado sin solapes */
+.cc-bitacora-colaborador-modal {
+  isolation: isolate;
+}
+
+.cc-bitacora-colaborador-modal__body {
+  background: inherit;
+}
+
+.cc-bitacora-colaborador-form > * {
+  position: relative;
+  z-index: 0;
+}
+
+.cc-bitacora-colaborador-form label {
+  display: block;
+}
+
+@media (max-width: 640px) {
+  .cc-bitacora-colaborador-form__row {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table {
   width: 100%;
   min-width: 0 !important;
