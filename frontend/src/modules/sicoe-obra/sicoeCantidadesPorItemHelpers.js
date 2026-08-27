@@ -253,6 +253,62 @@ export function filtrarFilasPorAlerta(filas, filtroAlerta) {
   return filas || []
 }
 
+/** True si la fila tiene solape, vacío o espesor atípico. */
+export function registroTieneAlerta(reg) {
+  return !!(reg?._alertaSolape || reg?._alertaVacioAntes || reg?._alertaEspesorAtipico)
+}
+
+/**
+ * Grupos para la franja: solo segmentos de registros con alerta.
+ * Sin vacíos proporcionales (evitar huecos que parezcan “tramo sin cobrar”
+ * por omitir registros sanos). Layout compacto en la UI.
+ */
+export function gruposFranjaSoloAlertas(filas, grupos) {
+  const alertById = new Map()
+  for (const f of filas || []) {
+    if (!registroTieneAlerta(f)) continue
+    alertById.set(String(f.id), {
+      solape: !!f._alertaSolape,
+      vacio: !!f._alertaVacioAntes,
+      vacioAntes: f._alertaVacioAntes || null,
+      espesorAtipico: !!f._alertaEspesorAtipico,
+      numero_registro: f.numero_registro,
+      abs_inicio: f.abs_inicio,
+      abs_final: f.abs_final,
+    })
+  }
+  if (alertById.size === 0) return []
+
+  const out = []
+  for (const g of grupos || []) {
+    const segs = []
+    for (const s of g.segmentos || []) {
+      const a = alertById.get(String(s.id))
+      if (!a) continue
+      segs.push({
+        ...s,
+        solapa: a.solape || !!s.solapa,
+        alertaVacio: a.vacio,
+        alertaEspesor: a.espesorAtipico,
+        vacioAntes: a.vacioAntes,
+        numero_registro: a.numero_registro ?? s.numero_registro,
+      })
+    }
+    if (!segs.length) continue
+    segs.sort((a, b) => (a.absInicio - b.absInicio) || (a.absFin - b.absFin))
+    out.push({
+      ...g,
+      segmentos: segs,
+      // No dibujar intervalos de vacío como huecos de escala: la franja es panel de alertas.
+      vaciosIntervalos: [],
+      totalAlertas: segs.length,
+      minAbs: null,
+      maxAbs: null,
+    })
+  }
+  return out
+}
+
 /**
  * Modo de la vista a partir del payload y si hay búsqueda activa.
  */
