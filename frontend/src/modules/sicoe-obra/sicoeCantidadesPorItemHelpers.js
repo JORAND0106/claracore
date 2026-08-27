@@ -296,14 +296,15 @@ export function gruposFranjaSoloAlertas(filas, grupos) {
     }
     if (!segs.length) continue
     segs.sort((a, b) => (a.absInicio - b.absInicio) || (a.absFin - b.absFin))
+    // Conservar rango Abs del grupo completo (todos los regs del tramo·infra),
+    // para posicionar alertas sobre el eje real del tramo — no solo el subconjunto.
     out.push({
       ...g,
       segmentos: segs,
-      // No dibujar intervalos de vacío como huecos de escala: la franja es panel de alertas.
       vaciosIntervalos: [],
       totalAlertas: segs.length,
-      minAbs: null,
-      maxAbs: null,
+      minAbs: g.minAbs,
+      maxAbs: g.maxAbs,
     })
   }
   return out

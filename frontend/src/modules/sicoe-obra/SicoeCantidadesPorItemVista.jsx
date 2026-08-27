@@ -25,80 +25,187 @@ function fmtPesos(v) {
 }
 
 /**
- * Franja gerencial de alertas: solo registros con solape / vacío / espesor atípico.
- * Layout compacto (flex), sin huecos proporcionales por abscisa.
+ * Franja «A revisar»: línea delgada de abscisas del tramo con marcas en alertas.
+ * Etiqueta #registro + tipo a la izq / centro / der de su marca según el tercio.
  */
 function estiloAlertaSegmento(s) {
   if (s.solapa || s.alertaSolape) {
-    return { background: '#fecaca', color: '#7f1d1d', tag: 'Solape' }
+    return { color: '#b91c1c', tag: 'Solape' }
   }
   if (s.alertaVacio) {
-    return { background: '#fde68a', color: '#92400e', tag: 'Vacío' }
+    return { color: '#b45309', tag: 'Vacío' }
   }
   if (s.alertaEspesor) {
-    return { background: '#ddd6fe', color: '#5b21b6', tag: 'Esp.≠' }
+    return { color: '#6d28d9', tag: 'Esp.≠' }
   }
-  return { background: '#cbd5e1', color: '#1e293b', tag: 'Alerta' }
+  return { color: '#334155', tag: 'Alerta' }
+}
+
+/** Tercio del tramo (0–100 %) → alineación de etiqueta respecto a su marca. */
+function tercioAbs(pct) {
+  if (pct < 100 / 3) return 'izq'
+  if (pct > 200 / 3) return 'der'
+  return 'cen'
 }
 
 function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
   const segs = grupo.segmentos || []
   if (!segs.length) return null
 
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6, flexWrap: 'wrap', alignItems: 'baseline' }}>
-        <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{grupo.label}</span>
-        <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-          {segs.length} a revisar
-        </span>
-      </div>
+  let min = grupo.minAbs
+  let max = grupo.maxAbs
+  if (min == null || max == null || !(max > min)) {
+    const vals = segs.flatMap((s) => [s.absInicio, s.absFin]).filter((n) => Number.isFinite(n))
+    if (!vals.length) return null
+    min = Math.min(...vals)
+    max = Math.max(...vals)
+  }
+  const span = max > min ? max - min : 1
+  const toPct = (abs) => ((abs - min) / span) * 100
 
+  const marks = segs.map((s) => {
+    const a0 = Math.min(s.absInicio, s.absFin)
+    const a1 = Math.max(s.absInicio, s.absFin)
+    const mid = (a0 + a1) / 2
+    const pct = Math.min(100, Math.max(0, toPct(mid)))
+    return { ...s, a0, a1, mid, pct, tercio: tercioAbs(pct) }
+  })
+
+  return (
+    <div style={{ marginBottom: 4 }}>
       <div
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
+          justifyContent: 'space-between',
           gap: 8,
-          padding: '8px 10px',
-          borderRadius: 10,
-          background: t.bg || '#f1f5f9',
-          border: `1px solid ${t.border}`,
+          marginBottom: 1,
+          flexWrap: 'wrap',
+          alignItems: 'baseline',
         }}
       >
-        {segs.map((s) => {
-          const sel = String(seleccionadoId) === String(s.id)
-          const label = `#${s.numero_registro ?? s.id}`
-          const st = estiloAlertaSegmento(s)
-          const a0 = Math.min(s.absInicio, s.absFin)
-          const a1 = Math.max(s.absInicio, s.absFin)
+        <span style={{ fontSize: 11, fontWeight: 700, color: t.text }}>{grupo.label}</span>
+        <span style={{ fontSize: 10, color: t.textMuted }}>
+          {fmtNum(min, 1)} → {fmtNum(max, 1)} · {segs.length}
+        </span>
+      </div>
+
+      {/* Etiquetas junto a su marca + eje Abs delgado */}
+      <div style={{ position: 'relative', height: 28, paddingTop: 14 }}>
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 20,
+            height: 2,
+            borderRadius: 1,
+            background: t.border || '#94a3b8',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 17,
+            width: 2,
+            height: 8,
+            background: t.border || '#94a3b8',
+            borderRadius: 1,
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: 17,
+            width: 2,
+            height: 8,
+            background: t.border || '#94a3b8',
+            borderRadius: 1,
+          }}
+        />
+
+        {marks.map((m) => {
+          const sel = String(seleccionadoId) === String(m.id)
+          const st = estiloAlertaSegmento(m)
+          const label = `#${m.numero_registro ?? m.id} ${st.tag}`
+          // izq → a la izquierda de la marca; cen → centrada; der → a la derecha
+          const transform =
+            m.tercio === 'izq'
+              ? 'translateX(-100%)'
+              : m.tercio === 'der'
+                ? 'translateX(0)'
+                : 'translateX(-50%)'
+          const textAlign = m.tercio === 'izq' ? 'right' : m.tercio === 'der' ? 'left' : 'center'
           return (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => onSelectSegmento?.(s.id)}
-              title={`${label} · ${st.tag} · Abs ${fmtNum(a0, 3)}–${fmtNum(a1, 3)}`}
+            <div
+              key={m.id}
               style={{
-                height: 36,
-                minWidth: 52,
-                padding: '0 12px',
-                border: sel ? `2px solid ${t.primary || '#0f172a'}` : '1px solid transparent',
-                borderRadius: 8,
-                background: st.background,
-                color: st.color,
-                boxShadow: sel ? `0 0 0 3px ${(t.primary || '#0284c7')}33` : '0 1px 2px rgba(15,23,42,0.06)',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                fontSize: 14,
-                fontWeight: 800,
-                letterSpacing: '0.01em',
+                position: 'absolute',
+                left: `${m.pct}%`,
+                top: 0,
+                bottom: 0,
+                width: 0,
+                zIndex: sel ? 2 : 1,
               }}
             >
-              {label}
-              <span style={{ fontSize: 10, fontWeight: 700, opacity: 0.85 }}>{st.tag}</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => onSelectSegmento?.(m.id)}
+                title={`${label} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  transform,
+                  textAlign,
+                  whiteSpace: 'nowrap',
+                  background: sel ? `${t.primary || '#0284c7'}22` : 'rgba(255,255,255,0.85)',
+                  border: sel ? `1px solid ${t.primary || '#0284c7'}` : '1px solid transparent',
+                  borderRadius: 3,
+                  padding: '0 3px',
+                  height: 14,
+                  lineHeight: '14px',
+                  fontSize: 10,
+                  fontWeight: 800,
+                  color: st.color,
+                  cursor: 'pointer',
+                  maxWidth: 110,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {label}
+              </button>
+              <button
+                type="button"
+                aria-label={label}
+                onClick={() => onSelectSegmento?.(m.id)}
+                title={`${label} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
+                style={{
+                  position: 'absolute',
+                  left: -4,
+                  top: 14,
+                  width: 8,
+                  height: 14,
+                  padding: 0,
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'block',
+                    width: 2,
+                    height: 12,
+                    margin: '0 auto',
+                    borderRadius: 1,
+                    background: sel ? t.primary || '#0284c7' : st.color,
+                  }}
+                />
+              </button>
+            </div>
           )
         })}
       </div>
@@ -372,9 +479,9 @@ export default function SicoeCantidadesPorItemVista({
       )}
 
       {modo === 'analisis' && gruposFranja.length > 0 && (
-        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '10px 12px' }}>
-          <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text, marginBottom: 6 }}>
-            A revisar en franja (solo registros con alerta)
+        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '6px 10px 4px' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: t.text, marginBottom: 2 }}>
+            A revisar — eje Abs del tramo (solo alertas)
           </div>
           {gruposFranja.map((g) => (
             <FranjaCoberturaGrupo
@@ -385,17 +492,11 @@ export default function SicoeCantidadesPorItemVista({
               onSelectSegmento={seleccionar}
             />
           ))}
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 'var(--cc-caption)', color: t.textMuted, alignItems: 'center' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fecaca', borderRadius: 3 }} />Solape
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fde68a', borderRadius: 3 }} />Vacío
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#ddd6fe', borderRadius: 3 }} />Espesor atípico
-            </span>
-            <span>Clic en un # → resalta la fila (la grilla sigue mostrando todos los registros)</span>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 0, fontSize: 10, color: t.textMuted, alignItems: 'center' }}>
+            <span style={{ color: '#b91c1c', fontWeight: 700 }}>Solape</span>
+            <span style={{ color: '#b45309', fontWeight: 700 }}>Vacío</span>
+            <span style={{ color: '#6d28d9', fontWeight: 700 }}>Espesor</span>
+            <span>Marca en Abs · etiqueta izq/cen/der · clic → fila</span>
           </div>
         </div>
       )}

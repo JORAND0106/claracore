@@ -140,5 +140,9 @@ describe('sicoeCantidadesPorItemHelpers', () => {
     assert.deepEqual(ids, [2, 3, 4])
     assert.equal(franja[0].vaciosIntervalos.length, 0) // sin huecos falsos
     assert.ok(franja[0].segmentos.every((s) => s.solapa || s.alertaVacio || s.alertaEspesor))
+    // Eje Abs del tramo completo (no solo del subconjunto con alerta)
+    assert.equal(franja[0].minAbs, grupos[0].minAbs)
+    assert.equal(franja[0].maxAbs, grupos[0].maxAbs)
+    assert.ok(franja[0].minAbs != null && franja[0].maxAbs != null && franja[0].maxAbs > franja[0].minAbs)
   })
 })
