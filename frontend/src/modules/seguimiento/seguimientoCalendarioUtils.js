@@ -234,6 +234,22 @@ export function filterEventsByOrigen(events, origen) {
   return (events || []).filter((ev) => ev?.extendedProps?.kind === origen)
 }
 
+/**
+ * Filtra eventos bitácora por creador (bandeja/actas ya vienen filtrados del API con solo_mias).
+ */
+export function filterEventsSoloMias(events, usuarioId) {
+  const uid = Number(usuarioId)
+  if (!Number.isFinite(uid) || uid <= 0) return events || []
+  return (events || []).filter((ev) => {
+    const kind = ev?.extendedProps?.kind
+    const raw = ev?.extendedProps?.raw || {}
+    if (kind === 'bitacora_diario' || kind === 'bitacora_evento') {
+      return Number(raw.created_by) === uid
+    }
+    return true
+  })
+}
+
 /** Eventos cuya fecha de inicio cae en `dateStr` (YYYY-MM-DD). */
 export function eventsForDate(events, dateStr) {
   const d = toDateOnly(dateStr)

@@ -180,4 +180,12 @@ assert(eventDisplayTitle({ title: '✅ Revisar planos' }) === 'Revisar planos', 
 assert(eventDisplayTime({ start: '2026-08-10T09:30:00' }) === '09:30', 'hora timed')
 assert(eventDisplayTime({ start: '2026-08-10' }) === null, 'sin hora → null')
 
+import { filterEventsSoloMias } from './seguimientoCalendarioUtils.js'
+const solo = filterEventsSoloMias([
+  { id: '1', extendedProps: { kind: 'tarea', raw: { created_by: 9 } } },
+  { id: '2', extendedProps: { kind: 'bitacora_diario', raw: { created_by: 5 } } },
+  { id: '3', extendedProps: { kind: 'bitacora_evento', raw: { created_by: 9 } } },
+], 5)
+assert(solo.map((x) => x.id).join(',') === '1,2', 'solo_mias filtra bitácora ajena; bandeja ya filtrada en API')
+
 console.log('seguimientoCalendarioUtils.test.mjs OK')

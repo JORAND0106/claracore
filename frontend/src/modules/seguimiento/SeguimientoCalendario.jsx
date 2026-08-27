@@ -19,6 +19,7 @@ import {
   eventDisplayTitle,
   eventsForDate,
   filterEventsByOrigen,
+  filterEventsSoloMias,
   formatDayCountLabelShort,
   resolveFetchRange,
   sortDayEvents,
@@ -62,6 +63,7 @@ export default function SeguimientoCalendario({
     fecha_desde: '',
     fecha_hasta: '',
     incluir_cerrados: false,
+    solo_mias: false,
     q: '',
   })
   const [filtersOpen, setFiltersOpen] = useState(true)
@@ -113,6 +115,7 @@ export default function SeguimientoCalendario({
           bandejaParams.origen = origen
         }
         if (filtros.incluir_cerrados) bandejaParams.incluir_cerrados = 'true'
+        if (filtros.solo_mias) bandejaParams.solo_mias = 'true'
         jobs.push(api.listBandeja(bandejaParams).catch((e) => { throw e }))
       } else {
         jobs.push(Promise.resolve([]))
@@ -125,6 +128,7 @@ export default function SeguimientoCalendario({
         }
         if (filtros.q) actasParams.q = filtros.q
         if (filtros.tipo_acta) actasParams.tipo_acta = filtros.tipo_acta
+        if (filtros.solo_mias) actasParams.solo_mias = 'true'
         jobs.push(api.listActas(actasParams).catch((e) => { throw e }))
       } else {
         jobs.push(Promise.resolve([]))
@@ -152,6 +156,7 @@ export default function SeguimientoCalendario({
         Array.isArray(bitacoraRows) ? bitacoraRows : [],
       )
       if (origen) mapped = filterEventsByOrigen(mapped, origen)
+      if (filtros.solo_mias) mapped = filterEventsSoloMias(mapped, usuario?.id)
       setEvents(mapped)
     } catch (e) {
       if (gen !== genRef.current) return
@@ -160,7 +165,7 @@ export default function SeguimientoCalendario({
     } finally {
       if (gen === genRef.current) setLoading(false)
     }
-  }, [api, filtros, permisosBitacora?.ver])
+  }, [api, filtros, permisosBitacora?.ver, usuario?.id])
 
   useEffect(() => { load() }, [load, refreshKey, reloadTick])
 
@@ -461,6 +466,20 @@ export default function SeguimientoCalendario({
                   disabled={filtros.origen === 'acta' || String(filtros.origen).startsWith('bitacora')}
                 />
                 Incluir cumplidos / cancelados
+              </label>
+              <label
+                className="cc-seguim-filter cc-seguim-filter--check"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4,
+                }}
+                title="Tareas/compromisos creados o asignados a usted; actas donde es elaborador o asistente; bitácora que creó"
+              >
+                <input
+                  type="checkbox"
+                  checked={!!filtros.solo_mias}
+                  onChange={(e) => setFiltros((f) => ({ ...f, solo_mias: e.target.checked }))}
+                />
+                Solo mis actividades
               </label>
               <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 <button type="button" onClick={() => setReloadTick((n) => n + 1)} style={ghost(t)}>Buscar</button>

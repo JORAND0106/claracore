@@ -24,6 +24,7 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
     fecha_hasta: '',
     responsable_id: '',
     incluir_cerrados: false,
+    solo_mias: false,
     q: '',
   })
   const [detalleId, setDetalleId] = useState(null)
@@ -110,6 +111,18 @@ export default function BandejaPanel({ t, api, usuario, usuarios = [], permisos,
               onChange={(e) => setFiltros((f) => ({ ...f, incluir_cerrados: e.target.checked }))}
             />
             Incluir cumplidos / cancelados
+          </label>
+          <label
+            className="cc-seguim-filter cc-seguim-filter--check"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', color: t.text, marginBottom: 4 }}
+            title="Solo tareas y compromisos que creó, tiene asignados o solicitó"
+          >
+            <input
+              type="checkbox"
+              checked={!!filtros.solo_mias}
+              onChange={(e) => setFiltros((f) => ({ ...f, solo_mias: e.target.checked }))}
+            />
+            Solo mis actividades
           </label>
           <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             <button type="button" onClick={load} style={ghost(t)}>Buscar</button>
