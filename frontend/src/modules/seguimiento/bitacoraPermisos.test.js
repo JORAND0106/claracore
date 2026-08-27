@@ -47,26 +47,17 @@ describe('bitacoraPermisos', () => {
     assert.equal(p.exportar, true)
   })
 
-  it('diario abierto editable; cerrado no; evento solo mismo día de creación', () => {
+  it('diario abierto editable; cerrado no; evento legacy no editable', () => {
     const perms = { editar: true, esDesarrollador: false }
     assert.equal(puedeEditarEntradaBitacora({ tipo: 'diario', estado: 'abierto' }, perms), true)
     assert.equal(puedeEditarEntradaBitacora({ tipo: 'diario', estado: 'cerrado' }, perms), false)
     assert.equal(puedeEditarEntradaBitacora(
-      { tipo: 'evento', estado: 'cerrado', evento_editable_hoy: false },
+      { tipo: 'evento', estado: 'cerrado', evento_editable_hoy: true },
       perms,
     ), false)
     assert.equal(puedeEditarEntradaBitacora(
-      { tipo: 'evento', estado: 'cerrado', evento_editable_hoy: true },
-      perms,
-    ), true)
-    assert.equal(puedeEditarEntradaBitacora(
       { tipo: 'diario', estado: 'cerrado' },
       { editar: true, esDesarrollador: true },
-    ), true)
-    // created_at = ahora → mismo día Bogotá
-    assert.equal(puedeEditarEntradaBitacora(
-      { tipo: 'evento', estado: 'cerrado', created_at: new Date().toISOString() },
-      perms,
     ), true)
   })
 })

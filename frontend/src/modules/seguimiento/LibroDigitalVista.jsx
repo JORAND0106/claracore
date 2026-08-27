@@ -231,6 +231,90 @@ function DiarioPage({ page, palette, api, onZoomPhoto }) {
           </div>
         </>
       )}
+
+      {Array.isArray(d.eventos) && d.eventos.length > 0 && (
+        <>
+          <SectionTitle palette={palette}>Eventos del día</SectionTitle>
+          {d.eventos.map((ev, ei) => {
+            const fotosEv = Array.isArray(ev.imagenes) ? ev.imagenes : []
+            const actividades = actividadesConRegistro(ev.evento_detalle)
+            return (
+              <div
+                key={ev.id || `ev-${ei}`}
+                className="cc-libro-evento-bloque"
+                style={{
+                  border: `1px solid ${palette.pageEdge}`,
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  marginBottom: 12,
+                  background: palette.accentSoft || 'transparent',
+                }}
+              >
+                <div style={{ fontWeight: 800, color: palette.accent, marginBottom: 4 }}>
+                  {labelEventoTipo(ev.evento_tipo)}
+                </div>
+                <MetaLine palette={palette} label="Dirigido a" value={ev.dirigido_a} />
+                {ev.created_by_nombre ? (
+                  <MetaLine palette={palette} label="Elaborado por" value={ev.created_by_nombre} />
+                ) : null}
+                <ProseHtml html={ev.cuerpo_html} palette={palette} />
+                {actividades.length > 0 && (
+                  <>
+                    <SectionTitle palette={palette}>Actividades</SectionTitle>
+                    <div className="cc-libro-sheet-wrap">
+                      <table className="cc-libro-sheet" style={{ borderColor: palette.pageEdge }}>
+                        <thead>
+                          <tr style={{ background: palette.accentSoft, color: palette.accent }}>
+                            <th scope="col">Actividad</th>
+                            <th scope="col">Abs Inicio</th>
+                            <th scope="col">Abs Fin</th>
+                            <th scope="col">Ubicación</th>
+                            <th scope="col">Cantidad</th>
+                            <th scope="col">Observación</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {actividades.map((a, i) => {
+                            const c = actividadRowCells(a)
+                            return (
+                              <tr key={`act-${ei}-${i}`} style={{ color: palette.text, borderColor: palette.pageEdge }}>
+                                <td data-label="Actividad">{c.actividad}</td>
+                                <td data-label="Abs Inicio">{c.abs_inicio}</td>
+                                <td data-label="Abs Fin">{c.abs_fin}</td>
+                                <td data-label="Ubicación" className="cc-libro-sheet-cell--nowrap">{c.ubicacion}</td>
+                                <td data-label="Cantidad">{c.cantidad}</td>
+                                <td data-label="Observación">{c.observacion}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+                {fotosEv.length > 0 && (
+                  <>
+                    <SectionTitle palette={palette}>Fotografías del evento</SectionTitle>
+                    <div className="cc-libro-fotos">
+                      {fotosEv.slice(0, 4).map((im, i) => (
+                        <BitacoraAuthThumb
+                          key={im.blob_path || im.id || `${ei}-${i}`}
+                          api={api}
+                          im={im}
+                          width={110}
+                          height={82}
+                          onZoom={onZoomPhoto}
+                          style={{ borderRadius: 6, overflow: 'hidden', border: `1px solid ${palette.pageEdge}` }}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </>
+      )}
     </article>
   )
 }

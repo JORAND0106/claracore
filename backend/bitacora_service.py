@@ -12,7 +12,8 @@ import re
 import threading
 import time
 from contextlib import contextmanager
-from datetime import date, datetime, time as dt_time, timezone
+import uuid
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -91,8 +92,26 @@ def ahora_bogota() -> datetime:
 
 
 def momento_cierre_diario(fecha: date) -> datetime:
-    """Cierre automático exacto: 23:59:59 (America/Bogota) de la fecha del reporte."""
-    return datetime(fecha.year, fecha.month, fecha.day, 23, 59, 59, tzinfo=BOGOTA)
+    """
+    Cierre automático: 23:59:59 (America/Bogota) del día siguiente a la fecha
+    del reporte (ventana de gracia D+1). El diario de la fecha D permanece
+    creable/editable hasta el final de D+1.
+    """
+    cierre_dia = fecha + timedelta(days=1)
+    return datetime(
+        cierre_dia.year, cierre_dia.month, cierre_dia.day,
+        23, 59, 59, tzinfo=BOGOTA,
+    )
+
+
+def fecha_en_ventana_gracia(fecha: date, *, ahora: Optional[datetime] = None) -> bool:
+    """True si la fecha del diario aún puede crearse/editarse (antes del cierre D+1)."""
+    now = ahora or ahora_bogota()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=BOGOTA)
+    if fecha > now.date():
+        return False
+    return now < momento_cierre_diario(fecha)
 
 
 def es_desarrollador_bitacora(current_user: Optional[dict] = None) -> bool:
@@ -537,7 +556,7 @@ def entrada_esta_cerrada(entrada: Optional[dict]) -> bool:
 
 
 def _debe_autocerrar(entrada: dict, ahora: Optional[datetime] = None) -> bool:
-    """True cuando ya llegó (o pasó) las 23:59:59 de la fecha del Reporte Diario."""
+    """True cuando ya llegó (o pasó) el cierre de gracia D+1 del Reporte Diario."""
     if str(entrada.get("tipo") or "") != "diario":
         return False
     if entrada_esta_cerrada(entrada):
@@ -575,7 +594,7 @@ def _aplicar_cierre(sb, entrada_id: int, user_id: Optional[int], motivo: str) ->
 
 
 def asegurar_autocierre_entrada(sb, entrada: dict, *, user_id: Optional[int] = None) -> dict:
-    """Cierra el Reporte Diario al llegar a las 23:59:59 de su fecha (lazy ensure)."""
+    """Cierra el Reporte Diario al vencer la ventana de gracia D+1 (lazy ensure)."""
     if not _debe_autocerrar(entrada):
         return entrada
     closed = _aplicar_cierre(sb, int(entrada["id"]), user_id, "automatico_dia")
@@ -619,32 +638,342 @@ def assert_puede_editar_entrada(
     current_user: Optional[dict] = None,
 ) -> None:
     """
-    Diario abierto: editable con permiso Editar (caller).
-    Diario cerrado: inmutable salvo Desarrollador.
-    Evento: editable el mismo día calendario de creación (Bogotá); luego inmutable
-    salvo Desarrollador.
+    Diario abierto dentro de ventana D+1: editable con permiso Editar (caller).
+    Diario cerrado / vencido: inmutable salvo Desarrollador.
+    Evento legacy independiente: ya no se edita (usar bloques en el Diario);
+    Desarrollador puede intervenir.
     """
     es_dev = es_desarrollador_bitacora(current_user)
     tipo = str(entrada.get("tipo") or "")
     if tipo == "evento":
-        if es_dev or evento_editable_mismo_dia(entrada):
+        if es_dev:
             return
         raise ValueError(
-            "El Reporte de Evento solo puede editarse el mismo día de su creación. "
-            "A partir del día siguiente queda inmutable. "
-            "Solo el rol Desarrollador puede modificarlo."
+            "Los Reportes de Evento independientes ya no se editan. "
+            "Los eventos viven dentro del Reporte Diario (ventana de gracia de un día). "
+            "Solo el rol Desarrollador puede modificar entradas legacy."
         )
     # diario
     if _debe_autocerrar(entrada) and not es_dev:
         raise ValueError(
-            "El Reporte Diario se cerró automáticamente a las 23:59:59 de su fecha "
-            "y es inmutable. Solo el rol Desarrollador puede modificarlo."
+            "El Reporte Diario se cerró automáticamente al vencer su ventana de gracia "
+            "(23:59:59 del día siguiente a su fecha) y es inmutable. "
+            "Solo el rol Desarrollador puede modificarlo."
         )
     if entrada_esta_cerrada(entrada) and not es_dev:
         raise ValueError(
             "El Reporte Diario está cerrado y es inmutable. "
             "Solo el rol Desarrollador puede modificarlo."
         )
+
+
+# ── Bloques de evento embebidos en Diario ─────────────────────────────────────
+
+def _nuevo_evento_bloque_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _detalle_evento_para_bloque(
+    sb,
+    contrato_id: int,
+    evento_tipo: str,
+    detalle_in: Any,
+    *,
+    user_id: Optional[int] = None,
+) -> dict:
+    detalle = detalle_in if isinstance(detalle_in, dict) else {}
+    actividades = _normalizar_actividades_evento(detalle.get("actividades"))
+    if evento_tipo == "incidente_sst":
+        return {
+            "descripcion_incidente": str(detalle.get("descripcion_incidente") or "").strip(),
+            "lugar": str(detalle.get("lugar") or "").strip(),
+            "personas_involucradas": str(detalle.get("personas_involucradas") or "").strip(),
+            "acciones_inmediatas": str(detalle.get("acciones_inmediatas") or "").strip(),
+            "gravedad": str(detalle.get("gravedad") or "leve").strip() or "leve",
+            "requiere_seguimiento": bool(detalle.get("requiere_seguimiento")),
+            "actividades": actividades,
+        }
+    if evento_tipo == "visita_terceros":
+        lista_in = detalle.get("visitantes_lista")
+        if lista_in is None and detalle.get("visitantes") is not None:
+            lista_in = detalle.get("visitantes")
+        lista = _normalizar_visitantes_lista(lista_in)
+        synced = sync_visitantes_catalogo(sb, contrato_id, lista, user_id=user_id)
+        return {
+            "visitantes_lista": synced,
+            "visitantes": _fmt_visitantes_texto(synced) or str(detalle.get("visitantes") or "").strip(),
+            "entidad": str(detalle.get("entidad") or "").strip(),
+            "motivo": str(detalle.get("motivo") or "").strip(),
+            "actividades": actividades,
+        }
+    out = {k: v for k, v in detalle.items() if v is not None}
+    if isinstance(detalle.get("visitantes_lista"), list):
+        lista = _normalizar_visitantes_lista(detalle.get("visitantes_lista"))
+        synced = sync_visitantes_catalogo(sb, contrato_id, lista, user_id=user_id)
+        out["visitantes_lista"] = synced
+        out["visitantes"] = _fmt_visitantes_texto(synced) or str(detalle.get("visitantes") or "").strip()
+    out["actividades"] = actividades
+    return out
+
+
+def _persist_imagenes_bloque(imgs_in: Any, *, contrato_id: int, entrada_id: Optional[int] = None) -> List[dict]:
+    imgs = _normalizar_imagenes(imgs_in)
+    if len(imgs) > MAX_IMAGENES_BITACORA:
+        raise ValueError(f"Máximo {MAX_IMAGENES_BITACORA} fotografías por evento")
+    store: List[dict] = []
+    for im in imgs:
+        row = {
+            "nombre": im.get("nombre"),
+            "blob_path": im.get("blob_path"),
+            "mime_type": im.get("mime_type"),
+            "created_at": im.get("created_at"),
+            "origen": im.get("origen"),
+            "kind": im.get("kind"),
+        }
+        if im.get("content_hash"):
+            row["content_hash"] = im["content_hash"]
+        if im.get("pie"):
+            row["pie"] = im["pie"]
+        data_uri = im.get("data_uri") or im.get("data_base64")
+        if not row.get("blob_path") and data_uri and entrada_id is not None:
+            try:
+                uploaded = _upload_data_uri_imagen(
+                    int(entrada_id),
+                    str(im.get("nombre") or f"evento-{_nuevo_evento_bloque_id()[:8]}.png"),
+                    str(data_uri),
+                    str(im.get("mime_type") or "image/png"),
+                    prefix=f"seguimiento-bitacora/{int(contrato_id)}/eventos",
+                )
+                row.update({k: v for k, v in uploaded.items() if k in (
+                    "nombre", "blob_path", "mime_type", "content_hash", "data_uri",
+                )})
+            except Exception as exc:
+                _log.warning("eventos bloque imagen upload: %s", exc)
+                row["data_uri"] = data_uri
+        elif not row.get("blob_path") and data_uri:
+            row["data_uri"] = data_uri
+        if im.get("url") and not row.get("blob_path"):
+            row["url"] = im["url"]
+        store.append({k: v for k, v in row.items() if v is not None})
+    return store
+
+
+def _upload_data_uri_imagen(
+    entrada_id: int,
+    nombre: str,
+    data_uri: str,
+    mime: str,
+    *,
+    prefix: str,
+) -> dict:
+    """Decodifica data_uri/base64 y reutiliza almacenamiento privado de bitácora."""
+    raw = str(data_uri or "")
+    if "," in raw and raw.strip().lower().startswith("data:"):
+        b64 = raw.split(",", 1)[1]
+    else:
+        b64 = raw
+    content = base64.b64decode(b64)
+    return _store_imagen_bytes(entrada_id, nombre, content, mime, prefix)
+
+
+def _normalizar_eventos_bloques(
+    sb,
+    contrato_id: int,
+    raw,
+    *,
+    user_id: Optional[int] = None,
+    entrada_id: Optional[int] = None,
+) -> List[dict]:
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        evento_tipo = str(item.get("evento_tipo") or "").strip()
+        if evento_tipo not in EVENTO_TIPOS:
+            continue
+        bloque_id = str(item.get("id") or "").strip() or _nuevo_evento_bloque_id()
+        detalle = _detalle_evento_para_bloque(
+            sb, contrato_id, evento_tipo, item.get("evento_detalle"), user_id=user_id,
+        )
+        imagenes = _persist_imagenes_bloque(
+            item.get("imagenes"), contrato_id=contrato_id, entrada_id=entrada_id,
+        )
+        out.append({
+            "id": bloque_id,
+            "evento_tipo": evento_tipo,
+            "dirigido_a": str(item.get("dirigido_a") or "").strip() or None,
+            "cuerpo_html": str(item.get("cuerpo_html") or ""),
+            "evento_detalle": detalle,
+            "imagenes": imagenes,
+            "created_at": str(item.get("created_at") or _now_utc().isoformat()),
+            "created_by": item.get("created_by"),
+            "created_by_nombre": str(item.get("created_by_nombre") or "").strip() or None,
+            "legacy_entrada_id": item.get("legacy_entrada_id"),
+        })
+    return out
+
+
+def _evento_entrada_a_bloque(entrada: dict) -> dict:
+    """Convierte una fila tipo=evento legacy en bloque embebido."""
+    return {
+        "id": f"legacy-{entrada.get('id')}",
+        "evento_tipo": str(entrada.get("evento_tipo") or "").strip(),
+        "dirigido_a": entrada.get("dirigido_a"),
+        "cuerpo_html": str(entrada.get("cuerpo_html") or ""),
+        "evento_detalle": entrada.get("evento_detalle") if isinstance(entrada.get("evento_detalle"), dict) else {},
+        "imagenes": list(entrada.get("imagenes") or []) if isinstance(entrada.get("imagenes"), list) else [],
+        "created_at": str(entrada.get("created_at") or _now_utc().isoformat()),
+        "created_by": entrada.get("created_by"),
+        "created_by_nombre": entrada.get("created_by_nombre"),
+        "legacy_entrada_id": entrada.get("id"),
+    }
+
+
+def _ensure_diario_shell_for_fecha(
+    sb,
+    contrato_id: int,
+    fecha: date,
+    *,
+    user_id: Optional[int] = None,
+    meta: Optional[dict] = None,
+) -> dict:
+    """Obtiene o crea un diario mínimo para consolidar eventos legacy."""
+    f = fecha.isoformat()
+    rows = (
+        sb.table("seguimiento_bitacora_entrada")
+        .select("*")
+        .eq("contrato_id", int(contrato_id))
+        .eq("tipo", "diario")
+        .eq("fecha", f)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if rows:
+        return rows[0]
+    ahora = ahora_bogota()
+    abierto = fecha_en_ventana_gracia(fecha, ahora=ahora)
+    meta = meta or {}
+    payload = {
+        "contrato_id": int(contrato_id),
+        "tipo": "diario",
+        "fecha": f,
+        "estado": "abierto" if abierto else "cerrado",
+        "hora_inicio_labores": "07:00:00",
+        "personal": [],
+        "asistencia_colaboradores": [],
+        "materiales": [],
+        "cuerpo_html": "",
+        "imagenes": [],
+        "eventos": [],
+        "created_by": int(user_id) if user_id is not None else meta.get("created_by"),
+        "created_by_nombre": meta.get("created_by_nombre") or "Migración eventos",
+        "created_by_rol": meta.get("created_by_rol"),
+        "created_at": _now_utc().isoformat(),
+        "updated_at": _now_utc().isoformat(),
+    }
+    if not abierto:
+        payload["cerrado_en"] = _now_utc().isoformat()
+        payload["cierre_motivo"] = "automatico_dia"
+    try:
+        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+        if inserted:
+            return inserted[0]
+    except Exception as exc:
+        _log.warning("ensure_diario_shell insert: %s", exc)
+        payload.pop("eventos", None)
+        payload.pop("asistencia_colaboradores", None)
+        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+        if inserted:
+            return inserted[0]
+    raise ValueError(f"No se pudo crear diario shell para {f}")
+
+
+def migrar_eventos_legacy_contrato(sb, contrato_id: int) -> int:
+    """
+    Idempotente: mueve eventos independientes no consolidados a bloques del
+    diario de la misma fecha. Devuelve cantidad migrada.
+    """
+    try:
+        eventos = (
+            sb.table("seguimiento_bitacora_entrada")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("tipo", "evento")
+            .is_("consolidado_en_diario_id", "null")
+            .order("fecha")
+            .order("created_at")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        # Columna aún no migrada en el esquema remoto.
+        _log.debug("migrar_eventos_legacy select: %s", exc)
+        return 0
+    if not eventos:
+        return 0
+    migrados = 0
+    by_fecha: Dict[str, List[dict]] = {}
+    for ev in eventos:
+        f = str(ev.get("fecha") or "")[:10]
+        if not f:
+            continue
+        by_fecha.setdefault(f, []).append(ev)
+    for f, lista in by_fecha.items():
+        try:
+            fecha = _parse_fecha(f)
+        except ValueError:
+            continue
+        meta0 = lista[0] if lista else {}
+        try:
+            diario = _ensure_diario_shell_for_fecha(
+                sb, contrato_id, fecha,
+                user_id=meta0.get("created_by"),
+                meta=meta0,
+            )
+        except Exception as exc:
+            _log.warning("migrar ensure diario %s: %s", f, exc)
+            continue
+        existentes = diario.get("eventos") if isinstance(diario.get("eventos"), list) else []
+        legacy_ids = {
+            b.get("legacy_entrada_id")
+            for b in existentes
+            if isinstance(b, dict) and b.get("legacy_entrada_id") is not None
+        }
+        nuevos = list(existentes)
+        ids_marcados: List[int] = []
+        for ev in lista:
+            eid = ev.get("id")
+            if eid in legacy_ids:
+                ids_marcados.append(int(eid))
+                continue
+            bloque = _evento_entrada_a_bloque(ev)
+            if bloque.get("evento_tipo") not in EVENTO_TIPOS:
+                continue
+            nuevos.append(bloque)
+            if eid is not None:
+                ids_marcados.append(int(eid))
+                legacy_ids.add(eid)
+        if not ids_marcados:
+            continue
+        try:
+            sb.table("seguimiento_bitacora_entrada").update({
+                "eventos": nuevos,
+                "updated_at": _now_utc().isoformat(),
+            }).eq("id", int(diario["id"])).execute()
+            for eid in ids_marcados:
+                sb.table("seguimiento_bitacora_entrada").update({
+                    "consolidado_en_diario_id": int(diario["id"]),
+                    "updated_at": _now_utc().isoformat(),
+                }).eq("id", int(eid)).execute()
+            migrados += len(ids_marcados)
+        except Exception as exc:
+            _log.warning("migrar_eventos_legacy update fecha=%s: %s", f, exc)
+    return migrados
 
 
 # ── Catálogo de cargos personalizados ─────────────────────────────────────────
@@ -1941,13 +2270,39 @@ def _enrich_entrada(
         ]
     out["equipos_uso"] = usos_list
     tipo_e = str(out.get("tipo") or "")
+    # Bloques de evento embebidos (diario) o vacío.
+    ev_raw = out.get("eventos")
+    if isinstance(ev_raw, str):
+        try:
+            ev_raw = json.loads(ev_raw)
+        except Exception:
+            ev_raw = []
+    if not isinstance(ev_raw, list):
+        ev_raw = []
+    eventos_norm: List[dict] = []
+    for b in ev_raw:
+        if not isinstance(b, dict):
+            continue
+        bb = dict(b)
+        ed = bb.get("evento_detalle") if isinstance(bb.get("evento_detalle"), dict) else {}
+        ed = dict(ed)
+        ed["actividades"] = _normalizar_actividades_evento(ed.get("actividades"))
+        bb["evento_detalle"] = ed
+        imgs = bb.get("imagenes") if isinstance(bb.get("imagenes"), list) else []
+        bb["imagenes"] = [
+            _enrich_imagen_preview(x) or x for x in _normalizar_imagenes(imgs)
+        ]
+        eventos_norm.append(bb)
+    out["eventos"] = eventos_norm
+    out["eventos_count"] = len(eventos_norm)
     if tipo_e == "evento":
-        editable_hoy = evento_editable_mismo_dia(out)
-        out["evento_editable_hoy"] = editable_hoy
-        out["inmutable"] = not editable_hoy
+        out["evento_editable_hoy"] = False
+        out["inmutable"] = not es_desarrollador_bitacora(None)
+        # Legacy: inmutable para no-dev (assert lo refuerza).
+        out["inmutable"] = True
     else:
         out["evento_editable_hoy"] = False
-        out["inmutable"] = entrada_esta_cerrada(out)
+        out["inmutable"] = entrada_esta_cerrada(out) or _debe_autocerrar(out)
     out["puede_autocerrar"] = _debe_autocerrar(out)
     if out.get("clima_codigo") is not None and not out.get("clima_descripcion"):
         out["clima_descripcion"] = clima_label(out.get("clima_codigo"))
@@ -1969,8 +2324,14 @@ def list_entradas(
     Lista entradas del contrato. Visibilidad: cualquier usuario con permiso
     «Ver» de Bitácora (o Desarrollador) ve todas las entradas del contrato;
     no hay filtro adicional por elaborador, asistencia ni asignación.
+    Por defecto oculta eventos legacy ya consolidados en un Diario.
     """
     t0 = time.perf_counter()
+    try:
+        migrar_eventos_legacy_contrato(sb, contrato_id)
+    except Exception as exc:
+        _log.debug("list_entradas migrate: %s", exc)
+
     query = (
         sb.table("seguimiento_bitacora_entrada")
         .select("*")
@@ -1984,7 +2345,14 @@ def list_entradas(
         query = query.lte("fecha", str(fecha_hasta)[:10])
     if tipo in ("diario", "evento"):
         query = query.eq("tipo", tipo)
+    else:
+        # Unificación: hilo principal = solo diarios (eventos viven embebidos).
+        query = query.eq("tipo", "diario")
     rows = query.execute().data or []
+
+    # Filtrar eventos legacy ya migrados si el caller pidió tipo=evento.
+    if tipo == "evento":
+        rows = [r for r in rows if r.get("consolidado_en_diario_id") in (None, "")]
 
     # Autocierre lazy + batch de usos (evita N+1 round-trips a PostgREST)
     closed_rows = []
@@ -2005,12 +2373,18 @@ def list_entradas(
         )
         if q:
             needle = str(q).strip().lower()
+            eventos_blob = " ".join(
+                str((b or {}).get("cuerpo_html") or "") + " " + str((b or {}).get("evento_tipo") or "")
+                for b in (enriched.get("eventos") or [])
+                if isinstance(b, dict)
+            )
             blob = " ".join([
                 str(enriched.get("cuerpo_html") or ""),
                 str(enriched.get("evento_tipo") or ""),
                 str(enriched.get("created_by_nombre") or ""),
                 str(enriched.get("clima_descripcion") or ""),
                 str(enriched.get("dirigido_a") or ""),
+                eventos_blob,
             ]).lower()
             if needle and needle not in blob:
                 continue
@@ -2095,24 +2469,16 @@ def crear_reporte_diario(
         hoy = ahora.date()
         if fecha > hoy:
             raise ValueError("No se puede crear un Reporte Diario con fecha futura")
-        if fecha < hoy and not es_desarrollador_bitacora(current_user):
+        if not fecha_en_ventana_gracia(fecha, ahora=ahora) and not es_desarrollador_bitacora(current_user):
             raise ValueError(
-                "No se puede crear un Reporte Diario para una fecha ya pasada; "
-                "el cierre automático a las 23:59:59 ya aplica."
-            )
-        if (
-            fecha == hoy
-            and ahora >= momento_cierre_diario(fecha)
-            and not es_desarrollador_bitacora(current_user)
-        ):
-            raise ValueError(
-                "El día del Reporte Diario ya cerró a las 23:59:59. "
-                "Solo puede iniciarse el Reporte Diario de una fecha nueva."
+                "No se puede crear un Reporte Diario fuera de su ventana de gracia "
+                "(fecha del reporte o el día siguiente, hasta las 23:59:59). "
+                "Solo el rol Desarrollador puede crear fechas ya cerradas."
             )
         if _diario_existe_fecha(sb, contrato_id, fecha.isoformat()):
             raise ValueError(
                 f"Ya existe un Reporte Diario para el {fecha.isoformat()}. "
-                "Ábralo para complementar mientras esté abierto."
+                "Ábralo para complementar mientras esté dentro de la ventana de gracia."
             )
 
     with _stage_timer(stages, "usuario_meta"):
@@ -2146,6 +2512,7 @@ def crear_reporte_diario(
             "materiales": _persist_materiales(_normalizar_materiales(data.get("materiales"))),
             "cuerpo_html": str(data.get("cuerpo_html") or ""),
             "imagenes": [],
+            "eventos": [],
             "created_by": int(user_id),
             "created_by_nombre": _nombre_usuario(u) or str(current_user.get("nombre") or "") if current_user else _nombre_usuario(u),
             "created_by_rol": _rol_nombre(sb, u, current_user),
@@ -2158,6 +2525,10 @@ def crear_reporte_diario(
         payload["personal"] = personal
         if asistencia is not None:
             payload["asistencia_colaboradores"] = asistencia
+        if "eventos" in data:
+            payload["eventos"] = _normalizar_eventos_bloques(
+                sb, contrato_id, data.get("eventos"), user_id=user_id,
+            )
 
     with _stage_timer(stages, "sync_cargos"):
         sync_cargos_desde_personal(sb, contrato_id, payload["personal"], user_id=user_id)
@@ -2174,6 +2545,7 @@ def crear_reporte_diario(
             # Columnas nuevas pueden faltar en esquemas antiguos: reintentar sin ellas.
             _log.warning("bitacora.crear_diario insert falló: %s", exc)
             payload.pop("asistencia_colaboradores", None)
+            payload.pop("eventos", None)
             try:
                 inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
             except Exception as exc2:
@@ -2183,6 +2555,25 @@ def crear_reporte_diario(
         if not inserted:
             raise ValueError("No se pudo crear el Reporte Diario")
         entrada = inserted[0]
+        # Si el insert omitió eventos por esquema antiguo, intentar patch.
+        if "eventos" in data and entrada.get("id") and "eventos" not in entrada:
+            try:
+                evs = _normalizar_eventos_bloques(
+                    sb, contrato_id, data.get("eventos"),
+                    user_id=user_id, entrada_id=int(entrada["id"]),
+                )
+                updated = (
+                    sb.table("seguimiento_bitacora_entrada")
+                    .update({"eventos": evs, "updated_at": _now_utc().isoformat()})
+                    .eq("id", int(entrada["id"]))
+                    .execute()
+                    .data
+                    or []
+                )
+                if updated:
+                    entrada = updated[0]
+            except Exception as exc3:
+                _log.warning("bitacora.crear_diario patch eventos: %s", exc3)
 
     with _stage_timer(stages, "sync_usos"):
         usos = data.get("equipos_uso") or data.get("maquinaria") or []
@@ -2211,152 +2602,63 @@ def crear_reporte_evento(
     *,
     current_user: Optional[dict] = None,
 ) -> dict:
+    """
+    Compatibilidad: ya no crea un documento independiente.
+    Agrega un bloque de evento al Reporte Diario de la fecha (creándolo si falta)
+    dentro de la ventana de gracia D+1.
+    """
     fecha = _parse_fecha(data.get("fecha") or hoy_bogota().isoformat())
+    ahora = ahora_bogota()
+    if not fecha_en_ventana_gracia(fecha, ahora=ahora) and not es_desarrollador_bitacora(current_user):
+        raise ValueError(
+            "No se puede registrar un evento fuera de la ventana de gracia del Reporte Diario "
+            "(fecha del reporte o el día siguiente, hasta las 23:59:59)."
+        )
     evento_tipo = str(data.get("evento_tipo") or "").strip()
     if evento_tipo not in EVENTO_TIPOS:
         raise ValueError(
             "Tipo de evento inválido. Use: visita_terceros, incidente_sst, "
             "reporte_actividades o novedades."
         )
-    detalle = data.get("evento_detalle") if isinstance(data.get("evento_detalle"), dict) else {}
-    actividades = _normalizar_actividades_evento(detalle.get("actividades"))
-    if evento_tipo == "incidente_sst":
-        # Campos mínimos SST (independientes del Auditor SST IA)
-        detalle = {
-            "descripcion_incidente": str(detalle.get("descripcion_incidente") or "").strip(),
-            "lugar": str(detalle.get("lugar") or "").strip(),
-            "personas_involucradas": str(detalle.get("personas_involucradas") or "").strip(),
-            "acciones_inmediatas": str(detalle.get("acciones_inmediatas") or "").strip(),
-            "gravedad": str(detalle.get("gravedad") or "leve").strip() or "leve",
-            "requiere_seguimiento": bool(detalle.get("requiere_seguimiento")),
-            "actividades": actividades,
-        }
-    elif evento_tipo == "visita_terceros":
-        lista_in = detalle.get("visitantes_lista")
-        if lista_in is None and detalle.get("visitantes") is not None:
-            lista_in = detalle.get("visitantes")
-        lista = _normalizar_visitantes_lista(lista_in)
-        synced = sync_visitantes_catalogo(
-            sb, contrato_id, lista, user_id=user_id,
-        )
-        detalle = {
-            "visitantes_lista": synced,
-            "visitantes": _fmt_visitantes_texto(synced) or str(detalle.get("visitantes") or "").strip(),
-            "entidad": str(detalle.get("entidad") or "").strip(),
-            "motivo": str(detalle.get("motivo") or "").strip(),
-            "actividades": actividades,
-        }
-    else:
-        # Permitir visitantes_lista en cualquier evento si el cliente lo envía.
-        if isinstance(detalle.get("visitantes_lista"), list):
-            lista = _normalizar_visitantes_lista(detalle.get("visitantes_lista"))
-            synced = sync_visitantes_catalogo(
-                sb, contrato_id, lista, user_id=user_id,
-            )
-            detalle = {k: v for k, v in detalle.items() if v is not None}
-            detalle["visitantes_lista"] = synced
-            detalle["visitantes"] = _fmt_visitantes_texto(synced) or str(
-                detalle.get("visitantes") or ""
-            ).strip()
-        else:
-            detalle = {k: v for k, v in detalle.items() if v is not None}
-        detalle["actividades"] = actividades
-
     u = _usuario_row(sb, user_id)
-    payload = {
-        "contrato_id": int(contrato_id),
-        "tipo": "evento",
-        "fecha": fecha.isoformat(),
-        "estado": "cerrado",
-        "cerrado_en": _now_utc().isoformat(),
-        "cerrado_por": int(user_id),
-        "cierre_motivo": "creacion_evento",
+    nombre = _nombre_usuario(u) or (str(current_user.get("nombre") or "") if current_user else "")
+    diario = _ensure_diario_shell_for_fecha(
+        sb, contrato_id, fecha, user_id=user_id,
+        meta={
+            "created_by": user_id,
+            "created_by_nombre": nombre,
+            "created_by_rol": _rol_nombre(sb, u, current_user),
+        },
+    )
+    assert_puede_editar_entrada(diario, current_user)
+    bloque = {
+        "id": _nuevo_evento_bloque_id(),
         "evento_tipo": evento_tipo,
-        "evento_detalle": detalle,
         "dirigido_a": str(data.get("dirigido_a") or "").strip() or None,
         "cuerpo_html": str(data.get("cuerpo_html") or ""),
-        "imagenes": [],
-        "personal": [],
-        "created_by": int(user_id),
-        "created_by_nombre": _nombre_usuario(u) or (
-            str(current_user.get("nombre") or "") if current_user else ""
-        ),
-        "created_by_rol": _rol_nombre(sb, u, current_user),
+        "evento_detalle": data.get("evento_detalle") if isinstance(data.get("evento_detalle"), dict) else {},
+        "imagenes": data.get("imagenes") if isinstance(data.get("imagenes"), list) else [],
         "created_at": _now_utc().isoformat(),
-        "updated_at": _now_utc().isoformat(),
+        "created_by": int(user_id),
+        "created_by_nombre": nombre or None,
     }
-    try:
-        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
-    except Exception:
-        payload.pop("dirigido_a", None)
-        inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
-    if not inserted:
-        raise ValueError("No se pudo crear el Reporte de Evento")
-    entrada_id = int(inserted[0]["id"])
-
-    # Adjuntar imágenes en el mismo acto de creación (editable el resto del día).
-    pending_imgs = data.get("imagenes") if isinstance(data.get("imagenes"), list) else []
-    stored_imgs: List[dict] = []
-    for im in pending_imgs[:MAX_IMAGENES_BITACORA]:
-        if not isinstance(im, dict):
-            continue
-        data_uri = im.get("data_uri") or im.get("data_base64")
-        if data_uri:
-            try:
-                adjuntar_imagen_entrada(
-                    sb,
-                    contrato_id,
-                    entrada_id,
-                    user_id,
-                    str(im.get("nombre") or "foto.png"),
-                    str(data_uri),
-                    str(im.get("mime_type") or "image/png"),
-                    origen=str(im.get("origen") or "archivo"),
-                    pie=str(im.get("pie") or im.get("caption") or "").strip() or None,
-                    current_user=current_user,
-                    force_during_create=True,
-                )
-            except Exception as exc:
-                _log.warning("bitacora evento imagen create: %s", exc)
-            continue
-        # Referencia ya persistida (galería): copiar metadatos
-        ref = _normalizar_imagen_ref(im)
-        if ref:
-            store = {
-                "nombre": ref.get("nombre"),
-                "blob_path": ref.get("blob_path"),
-                "mime_type": ref.get("mime_type"),
-                "created_at": ref.get("created_at") or _now_utc().isoformat(),
-                "origen": str(im.get("origen") or "galeria")[:40],
-                "kind": "foto",
-            }
-            if ref.get("content_hash"):
-                store["content_hash"] = ref["content_hash"]
-            if ref.get("pie"):
-                store["pie"] = ref["pie"]
-            if not store.get("blob_path") and ref.get("data_uri"):
-                store["data_uri"] = ref["data_uri"]
-            if ref.get("url") and not store.get("blob_path"):
-                store["url"] = ref["url"]
-            stored_imgs.append(store)
-
-    if stored_imgs:
-        # Merge with any already attached via adjuntar_imagen_entrada
-        current = get_entrada(sb, contrato_id, entrada_id)
-        actuales = current.get("imagenes") if isinstance(current.get("imagenes"), list) else []
-        merged = _normalizar_imagenes([
-            {k: v for k, v in im.items() if k != "data_uri" or not im.get("blob_path")}
-            for im in actuales if isinstance(im, dict)
-        ] + stored_imgs)
-        sb.table("seguimiento_bitacora_entrada").update({
-            "imagenes": [
-                {k: v for k, v in im.items() if k != "data_uri" or not im.get("blob_path")}
-                for im in merged
-            ],
-            "updated_at": _now_utc().isoformat(),
-        }).eq("id", entrada_id).execute()
-
-    return get_entrada(sb, contrato_id, entrada_id)
+    existentes = diario.get("eventos") if isinstance(diario.get("eventos"), list) else []
+    normalizados = _normalizar_eventos_bloques(
+        sb, contrato_id, list(existentes) + [bloque],
+        user_id=user_id, entrada_id=int(diario["id"]),
+    )
+    updated = (
+        sb.table("seguimiento_bitacora_entrada")
+        .update({"eventos": normalizados, "updated_at": _now_utc().isoformat()})
+        .eq("id", int(diario["id"]))
+        .execute()
+        .data
+        or []
+    )
+    row = updated[0] if updated else {**diario, "eventos": normalizados}
+    out = _enrich_entrada(sb, row)
+    out["_evento_bloque_id"] = bloque["id"]
+    return out
 
 
 def update_entrada(
@@ -2437,8 +2739,13 @@ def update_entrada(
                         usos_rows = []
                 else:
                     usos_rows = _sync_usos(sb, contrato_id, entrada_id, usos_list, user_id=user_id)
+        if "eventos" in data:
+            patch["eventos"] = _normalizar_eventos_bloques(
+                sb, contrato_id, data.get("eventos"),
+                user_id=user_id, entrada_id=entrada_id,
+            )
     else:
-        # evento — editable el mismo día de creación (o Desarrollador)
+        # evento legacy — solo Desarrollador (assert_puede_editar); se mantiene por compat.
         if "evento_tipo" in data:
             et = str(data.get("evento_tipo") or "").strip()
             if et in EVENTO_TIPOS:
@@ -2447,49 +2754,11 @@ def update_entrada(
             patch["dirigido_a"] = str(data.get("dirigido_a") or "").strip() or None
         if "evento_detalle" in data and isinstance(data.get("evento_detalle"), dict):
             detalle = dict(data["evento_detalle"])
-            actividades = _normalizar_actividades_evento(detalle.get("actividades"))
             et = str(patch.get("evento_tipo") or entrada.get("evento_tipo") or "").strip()
-            if et == "visita_terceros":
-                lista_in = detalle.get("visitantes_lista")
-                if lista_in is None and detalle.get("visitantes") is not None:
-                    lista_in = detalle.get("visitantes")
-                lista = _normalizar_visitantes_lista(lista_in)
-                synced = sync_visitantes_catalogo(
-                    sb, contrato_id, lista, user_id=user_id,
-                )
-                detalle = {
-                    "visitantes_lista": synced,
-                    "visitantes": _fmt_visitantes_texto(synced) or str(
-                        detalle.get("visitantes") or ""
-                    ).strip(),
-                    "entidad": str(detalle.get("entidad") or "").strip(),
-                    "motivo": str(detalle.get("motivo") or "").strip(),
-                    "actividades": actividades,
-                }
-            elif et == "incidente_sst":
-                detalle = {
-                    "descripcion_incidente": str(detalle.get("descripcion_incidente") or "").strip(),
-                    "lugar": str(detalle.get("lugar") or "").strip(),
-                    "personas_involucradas": str(detalle.get("personas_involucradas") or "").strip(),
-                    "acciones_inmediatas": str(detalle.get("acciones_inmediatas") or "").strip(),
-                    "gravedad": str(detalle.get("gravedad") or "leve").strip() or "leve",
-                    "requiere_seguimiento": bool(detalle.get("requiere_seguimiento")),
-                    "actividades": actividades,
-                }
-            elif isinstance(detalle.get("visitantes_lista"), list):
-                lista = _normalizar_visitantes_lista(detalle.get("visitantes_lista"))
-                synced = sync_visitantes_catalogo(
-                    sb, contrato_id, lista, user_id=user_id,
-                )
-                detalle["visitantes_lista"] = synced
-                detalle["visitantes"] = _fmt_visitantes_texto(synced) or str(
-                    detalle.get("visitantes") or ""
-                ).strip()
-                detalle["actividades"] = actividades
-            else:
-                detalle["actividades"] = actividades
+            detalle = _detalle_evento_para_bloque(
+                sb, contrato_id, et, detalle, user_id=user_id,
+            )
             patch["evento_detalle"] = detalle
-
     if "imagenes" in data:
         imgs = _normalizar_imagenes(data.get("imagenes"))
         if len(imgs) > MAX_IMAGENES_BITACORA:
@@ -2547,11 +2816,11 @@ def cerrar_reporte_diario(
     *,
     current_user: Optional[dict] = None,
 ) -> dict:
-    """Cierre manual deshabilitado: solo aplica el cierre automático a las 23:59:59."""
+    """Cierre manual deshabilitado: solo aplica el cierre automático al vencer D+1."""
     raise ValueError(
         "El cierre manual del Reporte Diario fue deshabilitado. "
-        "El reporte permanece editable hasta las 23:59:59 de su fecha, "
-        "momento en el que se cierra automáticamente de forma permanente."
+        "El reporte permanece editable hasta las 23:59:59 del día siguiente a su fecha "
+        "(ventana de gracia), momento en el que se cierra automáticamente de forma permanente."
     )
 
 
@@ -3116,10 +3385,24 @@ def clear_clima_slots_cache_for_tests() -> None:
 
 
 def list_entradas_del_dia(sb, contrato_id: int, fecha: str) -> Dict[str, Any]:
-    """Diario + eventos del día (enriquecidos) para exportación PDF."""
+    """Diario del día (con eventos embebidos) para exportación PDF."""
     f = _parse_fecha(fecha).isoformat()
-    rows = list_entradas(sb, contrato_id, fecha_desde=f, fecha_hasta=f)
+    try:
+        migrar_eventos_legacy_contrato(sb, contrato_id)
+    except Exception:
+        pass
+    rows = list_entradas(sb, contrato_id, fecha_desde=f, fecha_hasta=f, tipo="diario")
     diario = next((r for r in rows if str(r.get("tipo") or "") == "diario"), None)
-    eventos = [r for r in rows if str(r.get("tipo") or "") == "evento"]
+    eventos = []
+    if diario and isinstance(diario.get("eventos"), list):
+        for b in diario["eventos"]:
+            if not isinstance(b, dict):
+                continue
+            eventos.append({
+                **b,
+                "fecha": f,
+                "tipo": "evento",
+                "created_by_nombre": b.get("created_by_nombre") or diario.get("created_by_nombre"),
+            })
     return {"fecha": f, "diario": diario, "eventos": eventos, "todas": rows}
 

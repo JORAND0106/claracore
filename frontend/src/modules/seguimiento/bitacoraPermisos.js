@@ -58,8 +58,8 @@ export function fechaCreacionBogotaISO(entrada) {
 }
 
 /**
- * Diario abierto → editar; Evento → editable el día de creación (Bogotá);
- * cerrado / evento de otro día → solo Desarrollador.
+ * Bitácora edita el Diario (y sus bloques de evento) mientras esté abierto
+ * dentro de la ventana de gracia D+1; cerrado → solo Desarrollador.
  */
 export function puedeEditarEntradaBitacora(entrada, permisos) {
   if (!entrada) return false
@@ -67,10 +67,8 @@ export function puedeEditarEntradaBitacora(entrada, permisos) {
   if (!permisos?.editar) return false
   const tipo = String(entrada.tipo || '')
   if (tipo === 'evento') {
-    if (entrada.evento_editable_hoy === true) return true
-    if (entrada.evento_editable_hoy === false) return false
-    const creacion = fechaCreacionBogotaISO(entrada)
-    return creacion != null && creacion === hoyISOBogota()
+    // Legacy: ya no editable como documento independiente.
+    return false
   }
   if (String(entrada.estado || '') === 'cerrado') return false
   if (entrada.puede_autocerrar) return false

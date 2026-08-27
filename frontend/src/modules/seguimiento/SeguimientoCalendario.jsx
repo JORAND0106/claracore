@@ -67,7 +67,8 @@ export default function SeguimientoCalendario({
     q: '',
   })
   const [filtersOpen, setFiltersOpen] = useState(true)
-  const [bitacoraSubmenu, setBitacoraSubmenu] = useState(false)
+  const [bitacoraSubmenu] = useState(false)
+  void bitacoraSubmenu
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -750,14 +751,16 @@ export default function SeguimientoCalendario({
                   {canCreateBitacora && (
                     <button
                       type="button"
-                      onClick={() => setBitacoraSubmenu((v) => !v)}
-                      aria-expanded={bitacoraSubmenu}
+                      onClick={() => {
+                        onNuevaBitacora?.('diario', dayMenu.dateStr)
+                        setDayMenu(null)
+                      }}
                       style={{
                         ...primary(t),
-                        background: bitacoraSubmenu ? CALENDARIO_KIND.bitacora_diario.color : t.primary,
+                        borderLeft: `3px solid ${CALENDARIO_KIND.bitacora_diario.color}`,
                       }}
                     >
-                      📒 Bitácora {bitacoraSubmenu ? '▴' : '▾'}
+                      📒 Bitácora · Reporte diario
                     </button>
                   )}
                   {canExportBitacora && (
@@ -781,44 +784,6 @@ export default function SeguimientoCalendario({
                     </>
                   )}
                 </div>
-                {canCreateBitacora && bitacoraSubmenu && (
-                  <div style={{
-                    display: 'flex', flexWrap: 'wrap', gap: 8,
-                    padding: '8px 10px',
-                    borderRadius: 8,
-                    border: `1px solid ${t.border}`,
-                    background: `${CALENDARIO_KIND.bitacora_diario.color}12`,
-                  }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onNuevaBitacora?.('diario', dayMenu.dateStr)
-                        setDayMenu(null)
-                      }}
-                      style={{
-                        ...ghost(t),
-                        borderLeft: `3px solid ${CALENDARIO_KIND.bitacora_diario.color}`,
-                        fontWeight: 700,
-                      }}
-                    >
-                      Reporte diario
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onNuevaBitacora?.('evento', dayMenu.dateStr)
-                        setDayMenu(null)
-                      }}
-                      style={{
-                        ...ghost(t),
-                        borderLeft: `3px solid ${CALENDARIO_KIND.bitacora_evento.color}`,
-                        fontWeight: 700,
-                      }}
-                    >
-                      Reporte de evento
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 

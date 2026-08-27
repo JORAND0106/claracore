@@ -174,27 +174,26 @@ export function actaToEvent(acta) {
  */
 export function bitacoraToEvent(entrada) {
   if (!entrada?.id) return null
-  const esEvento = String(entrada.tipo || '') === 'evento'
-  const kind = esEvento ? 'bitacora_evento' : 'bitacora_diario'
+  // Unificación: solo diarios en calendario; eventos se muestran como contador.
+  if (String(entrada.tipo || '') === 'evento') return null
+  const kind = 'bitacora_diario'
   const meta = CALENDARIO_KIND[kind]
   const start = buildStart(entrada.fecha, entrada.hora_inicio_labores || null)
   if (!start) return null
   const allDay = !entrada.hora_inicio_labores
   const elaborador = String(entrada.created_by_nombre || '').trim()
-  let texto
-  if (esEvento) {
-    const tipoLabel = labelEventoTipo(entrada.evento_tipo)
-    texto = elaborador ? `${tipoLabel} · ${elaborador}` : tipoLabel
-  } else {
-    texto = elaborador ? `Diario · ${elaborador}` : 'Reporte diario'
-  }
+  const nEv = Array.isArray(entrada.eventos)
+    ? entrada.eventos.length
+    : (Number(entrada.eventos_count) || 0)
+  let texto = elaborador ? `Diario · ${elaborador}` : 'Reporte diario'
+  if (nEv > 0) texto += ` · ${nEv} evento${nEv === 1 ? '' : 's'}`
   return {
     id: `bitacora-${entrada.id}`,
     title: titleWithIcon(meta.icon, texto),
     start,
     allDay,
     backgroundColor: meta.color,
-    borderColor: meta.color,
+    borderColor: nEv > 0 ? (CALENDARIO_KIND.bitacora_evento?.color || meta.color) : meta.color,
     textColor: meta.textColor,
     extendedProps: {
       kind,
@@ -202,6 +201,7 @@ export function bitacoraToEvent(entrada) {
       icon: meta.icon,
       label: meta.label,
       elaborador,
+      eventosCount: nEv,
       raw: entrada,
     },
   }

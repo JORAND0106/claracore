@@ -65,7 +65,9 @@ export default function SeguimientoCalendarioPanel({
 
   const openNuevaBitacora = useCallback(async (modo, fecha) => {
     const fechaStr = fecha ? String(fecha).slice(0, 10) : null
-    if (modo === 'diario' && fechaStr && api.getBitacoraDiario) {
+    // Unificación: siempre abre/crea Reporte Diario (eventos viven dentro).
+    void modo
+    if (fechaStr && api.getBitacoraDiario) {
       try {
         const existing = await api.getBitacoraDiario(fechaStr)
         if (existing?.id) {
@@ -75,7 +77,7 @@ export default function SeguimientoCalendarioPanel({
       } catch { /* crear nuevo */ }
     }
     setBitacoraEditor({
-      modo: modo === 'evento' ? 'evento' : 'diario',
+      modo: 'diario',
       entrada: null,
       fechaInicial: fechaStr,
     })

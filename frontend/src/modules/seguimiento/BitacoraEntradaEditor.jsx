@@ -8,6 +8,8 @@ import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
+import EventoBloquesSection from './EventoBloquesSection'
+import { eventosFromEntrada, eventosParaPayload } from './eventoBloquesHelpers'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
 import {
   actividadesFromDetalle,
@@ -189,10 +191,15 @@ export default function BitacoraEntradaEditor({
   const grillaCompacta = debeUsarGrillaDiarioCompacta(viewportCompact)
   const ui = bitacoraSheetStyles(t)
   const esNuevo = !entrada?.id
-  const tipo = entrada?.tipo || (modo === 'evento' ? 'evento' : 'diario')
+  // Unificación: solo Reporte Diario; eventos viven como bloques internos.
+  const tipo = 'diario'
+  void modo
   const editable = useMemo(() => {
     if (esNuevo) return Boolean(permisos?.crear)
-    return puedeEditarEntradaBitacora(entrada, permisos)
+    return puedeEditarEntradaBitacora(
+      entrada?.tipo === 'evento' ? { ...entrada, tipo: 'diario', estado: entrada.estado || 'abierto' } : entrada,
+      permisos,
+    )
   }, [esNuevo, entrada, permisos])
 
   const [fecha, setFecha] = useState(
@@ -222,6 +229,7 @@ export default function BitacoraEntradaEditor({
       ? entrada.materiales.map(materialFromApi)
       : [emptyMaterial()],
   )
+  const [eventos, setEventos] = useState(() => eventosFromEntrada(entrada))
   const [eventoTipo, setEventoTipo] = useState(entrada?.evento_tipo || 'reporte_actividades')
   const [dirigidoA, setDirigidoA] = useState(entrada?.dirigido_a || '')
   const [eventoDetalle, setEventoDetalle] = useState(() => {
@@ -243,7 +251,7 @@ export default function BitacoraEntradaEditor({
   const [okMsg, setOkMsg] = useState('')
   const [claraOpen, setClaraOpen] = useState(false)
   const [autoBusy, setAutoBusy] = useState(false)
-  /** @type {[null|{kind:'material'|'actividad', idx:number}, Function]} */
+  /** @type {[null|{kind:'material'|'actividad', idx:number, bloqueId?:string}, Function]} */
   const [mapTarget, setMapTarget] = useState(null)
   const [contratoCentro, setContratoCentro] = useState({ lat: 4.711, lng: -74.0721 })
   const [pdfBusy, setPdfBusy] = useState(false)
@@ -416,6 +424,7 @@ export default function BitacoraEntradaEditor({
         equipos_uso: buildUsosPayload(),
         materiales: materialesPayload,
         cuerpo_html: cuerpoHtml,
+        eventos: eventosParaPayload(eventos),
       }
       let row
       const tNet0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
@@ -450,6 +459,9 @@ export default function BitacoraEntradaEditor({
       setImagenes(Array.isArray(rowClean.imagenes) ? rowClean.imagenes : [])
       if (Array.isArray(rowClean.asistencia_colaboradores)) {
         setAsistencia(asistenciaFromEntrada(rowClean))
+      }
+      if (Array.isArray(rowClean.eventos)) {
+        setEventos(eventosFromEntrada(rowClean))
       }
       onSaved?.(rowClean)
     } catch (e) {
@@ -1068,10 +1080,21 @@ export default function BitacoraEntradaEditor({
                   El número de vale es el dato de correlación. Ubicación: PK del plano.
                 </div>
               </div>
+
+              <EventoBloquesSection
+                t={t}
+                api={api}
+                ui={ui}
+                eventos={eventos}
+                onChange={setEventos}
+                disabled={!editable}
+                compact={grillaCompacta}
+                onPickMapActividad={(bloqueId, idx) => setMapTarget({ kind: 'actividad', idx, bloqueId })}
+              />
             </>
           )}
 
-          {tipo === 'evento' && (
+          {false && tipo === 'evento' && (
             <>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 <div style={{ ...ui.sheetWrap, flex: '1 1 240px' }}>
@@ -1438,7 +1461,60 @@ export default function BitacoraEntradaEditor({
         />
       )}
 
-      {mapTarget?.kind === 'actividad' && (eventoDetalle.actividades || [])[mapTarget.idx] && (
+      {mapTarget?.kind === 'actividad' && mapTarget.bloqueId && (() => {
+        const bloque = eventos.find((b) => b.id === mapTarget.bloqueId)
+        const acts = bloque?.evento_detalle?.actividades || []
+        const row = acts[mapTarget.idx]
+        if (!row) return null
+        return (
+          <BitacoraMaterialUbicacionModal
+            t={t}
+            token={token}
+            contratoId={contratoId}
+            pkId={row.ubicacion_pk_id}
+            pkLabel={row.ubicacion_pk}
+            tramo={row.ubicacion_tramo}
+            costado={row.ubicacion_costado}
+            infraestructura={row.ubicacion_infraestructura}
+            readOnly={!editable}
+            onClose={() => setMapTarget(null)}
+            onConfirm={(loc) => {
+              const idx = mapTarget.idx
+              const bloqueId = mapTarget.bloqueId
+              setEventos((lista) => lista.map((b) => {
+                if (b.id !== bloqueId) return b
+                const det = b.evento_detalle && typeof b.evento_detalle === 'object' ? b.evento_detalle : {}
+                const list = Array.isArray(det.actividades) && det.actividades.length
+                  ? det.actividades
+                  : [emptyActividadRow()]
+                return {
+                  ...b,
+                  evento_detalle: {
+                    ...det,
+                    actividades: list.map((r, i) => (
+                      i === idx
+                        ? {
+                          ...r,
+                          ubicacion_pk: loc.ubicacion_pk || '',
+                          ubicacion_pk_id: loc.ubicacion_pk_id,
+                          ubicacion_tramo: loc.ubicacion_tramo || '',
+                          ubicacion_costado: loc.ubicacion_costado || '',
+                          ubicacion_infraestructura: loc.ubicacion_infraestructura || '',
+                          ubicacion_lat: loc.ubicacion_lat,
+                          ubicacion_lng: loc.ubicacion_lng,
+                        }
+                        : r
+                    )),
+                  },
+                }
+              }))
+              setMapTarget(null)
+            }}
+          />
+        )
+      })()}
+
+      {mapTarget?.kind === 'actividad' && !mapTarget.bloqueId && (eventoDetalle.actividades || [])[mapTarget.idx] && (
         <BitacoraMaterialUbicacionModal
           t={t}
           token={token}

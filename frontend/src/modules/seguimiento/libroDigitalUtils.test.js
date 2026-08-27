@@ -16,18 +16,21 @@ import {
 } from './libroDigitalUtils.js'
 
 describe('buildBitacoraPages', () => {
-  it('agrupa por día: diario antes que eventos, fechas ascendentes', () => {
+  it('una página por diario; ignora eventos legacy; fechas ascendentes', () => {
     const pages = buildBitacoraPages([
       { id: 3, tipo: 'evento', fecha: '2026-08-12', created_at: '2026-08-12T14:00:00Z', evento_tipo: 'novedades' },
-      { id: 1, tipo: 'diario', fecha: '2026-08-12', created_at: '2026-08-12T08:00:00Z' },
-      { id: 2, tipo: 'evento', fecha: '2026-08-12', created_at: '2026-08-12T10:00:00Z', evento_tipo: 'visita_terceros' },
+      {
+        id: 1, tipo: 'diario', fecha: '2026-08-12', created_at: '2026-08-12T08:00:00Z',
+        eventos: [{ id: 'a', evento_tipo: 'novedades' }],
+      },
       { id: 4, tipo: 'diario', fecha: '2026-08-10', created_at: '2026-08-10T09:00:00Z' },
       { id: 5, tipo: 'evento', fecha: '2026-08-11', created_at: '2026-08-11T11:00:00Z' },
     ])
     assert.deepEqual(
       pages.map((p) => `${p.kind}:${p.sourceId}`),
-      ['diario:4', 'evento:5', 'diario:1', 'evento:2', 'evento:3'],
+      ['diario:4', 'diario:1'],
     )
+    assert.equal(pages[1].meta.eventos_count, 1)
   })
 
   it('omite filas sin fecha', () => {
@@ -59,9 +62,8 @@ describe('buildActasPages', () => {
 describe('findPageIndexByFecha', () => {
   const pages = buildBitacoraPages([
     { id: 4, tipo: 'diario', fecha: '2026-08-10', created_at: '2026-08-10T09:00:00Z' },
-    { id: 5, tipo: 'evento', fecha: '2026-08-11', created_at: '2026-08-11T11:00:00Z' },
+    { id: 5, tipo: 'diario', fecha: '2026-08-11', created_at: '2026-08-11T11:00:00Z' },
     { id: 1, tipo: 'diario', fecha: '2026-08-12', created_at: '2026-08-12T08:00:00Z' },
-    { id: 2, tipo: 'evento', fecha: '2026-08-12', created_at: '2026-08-12T10:00:00Z' },
   ])
 
   it('salta a la primera página de la fecha exacta', () => {
