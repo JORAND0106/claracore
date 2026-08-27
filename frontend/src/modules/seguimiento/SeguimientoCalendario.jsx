@@ -67,8 +67,6 @@ export default function SeguimientoCalendario({
     q: '',
   })
   const [filtersOpen, setFiltersOpen] = useState(true)
-  const [bitacoraSubmenu] = useState(false)
-  void bitacoraSubmenu
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -172,7 +170,6 @@ export default function SeguimientoCalendario({
 
   useEffect(() => {
     if (!dayMenu) {
-      setBitacoraSubmenu(false)
       return undefined
     }
     const onDoc = (e) => {
@@ -227,7 +224,6 @@ export default function SeguimientoCalendario({
     const rect = info.dayEl?.getBoundingClientRect?.()
     const x = info.jsEvent?.clientX ?? (rect ? rect.left + rect.width / 2 : 80)
     const y = info.jsEvent?.clientY ?? (rect ? rect.top + 28 : 80)
-    setBitacoraSubmenu(false)
     setDayMenu({ dateStr, x, y })
   }, [])
 
