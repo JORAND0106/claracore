@@ -4,8 +4,12 @@ import {
   analizarCantidadesPorItem,
   compararRegistrosPorAbsInicio,
   costoDirectoDesdeListado,
+  filtrarFilasPorAlerta,
   modaEspesor,
+  ordenarRegistrosVistaGeneral,
   parseAbsNum,
+  resolverModoCantidadesPorItem,
+  vuEfectivoFila,
 } from './sicoeCantidadesPorItemHelpers.js'
 
 describe('sicoeCantidadesPorItemHelpers', () => {
@@ -20,6 +24,13 @@ describe('sicoeCantidadesPorItemHelpers', () => {
     assert.equal(costoDirectoDesdeListado(10.555, 1000), 10560) // round(10.56*1000)
     assert.equal(costoDirectoDesdeListado(2, 1500.4), 3001)
     assert.equal(costoDirectoDesdeListado(5, 0), 0)
+    assert.ok(costoDirectoDesdeListado(10.5, 12345.67) > 0)
+  })
+
+  it('vuEfectivoFila prefiere VU de la fila', () => {
+    assert.equal(vuEfectivoFila({ vlr_unitario_listado: 5000 }, 1000), 5000)
+    assert.equal(vuEfectivoFila({ vlr_unitario_listado: 0 }, 1000), 1000)
+    assert.equal(vuEfectivoFila({}, 0), 0)
   })
 
   it('detecta solape dentro del mismo tramo+infra', () => {
@@ -34,6 +45,7 @@ describe('sicoeCantidadesPorItemHelpers', () => {
     assert.equal(filas.find((f) => f.id === 2)._alertaSolape, true)
     assert.equal(filas.find((f) => f.id === 3)._alertaSolape, false) // otro infra
     assert.equal(grupos.length, 2)
+    assert.equal(grupos.find((g) => g.infraestructura === 'Calzada').segmentos.filter((s) => s.solapa).length, 2)
   })
 
   it('detecta vacío entre registros consecutivos', () => {
@@ -78,5 +90,36 @@ describe('sicoeCantidadesPorItemHelpers', () => {
     const { resumen } = analizarCantidadesPorItem(regs)
     assert.equal(resumen.solapes, 0)
     assert.equal(resumen.vacios, 0)
+  })
+
+  it('modo vacio / general / analisis', () => {
+    assert.equal(resolverModoCantidadesPorItem({ busquedaActiva: false, payload: null }), 'vacio')
+    assert.equal(resolverModoCantidadesPorItem({ busquedaActiva: true, payload: { modo: 'vacio', total: 0, items_distintos: 0 } }), 'vacio')
+    assert.equal(resolverModoCantidadesPorItem({ busquedaActiva: true, payload: { modo: 'analisis', items_distintos: 1, total: 3 } }), 'analisis')
+    assert.equal(resolverModoCantidadesPorItem({ busquedaActiva: true, payload: { modo: 'general', items_distintos: 4, total: 20 } }), 'general')
+  })
+
+  it('filtro accionable de alertas', () => {
+    const regs = [
+      { id: 1, capitulo: 'I', item_numero: '1.1', tramo: 'T1', infraestructura: 'Calzada', abs_inicio: 0, abs_final: 100, espesor: 0.1 },
+      { id: 2, capitulo: 'I', item_numero: '1.1', tramo: 'T1', infraestructura: 'Calzada', abs_inicio: 90, abs_final: 150, espesor: 0.1 },
+      { id: 3, capitulo: 'I', item_numero: '1.1', tramo: 'T1', infraestructura: 'Calzada', abs_inicio: 200, abs_final: 250, espesor: 0.2 },
+    ]
+    const { filas } = analizarCantidadesPorItem(regs)
+    assert.equal(filtrarFilasPorAlerta(filas, 'solapes').length, 2)
+    assert.equal(filtrarFilasPorAlerta(filas, 'vacios').length, 1)
+    assert.equal(filtrarFilasPorAlerta(filas, 'espesores').length, 1)
+    assert.equal(filtrarFilasPorAlerta(filas, 'todos').length, 3)
+  })
+
+  it('vista general ordena Ítem→Tramo→Infra→Abs sin alertas', () => {
+    const regs = [
+      { id: 2, capitulo: 'I', item_numero: '2.0', tramo: 'T1', infraestructura: 'A', abs_inicio: 10, abs_final: 20 },
+      { id: 1, capitulo: 'I', item_numero: '1.0', tramo: 'T2', infraestructura: 'B', abs_inicio: 0, abs_final: 5 },
+      { id: 3, capitulo: 'I', item_numero: '1.0', tramo: 'T1', infraestructura: 'A', abs_inicio: 50, abs_final: 60 },
+    ]
+    const filas = ordenarRegistrosVistaGeneral(regs)
+    assert.deepEqual(filas.map((f) => f.id), [3, 1, 2])
+    assert.equal(filas.every((f) => !f._alertaSolape), true)
   })
 })

@@ -25102,67 +25102,299 @@ def get_acta_rpo_vigente(contrato_id: int, current_user=Depends(get_current_user
 @app.get("/sicoe-obra/{contrato_id}/cantidades-por-item")
 def sicoe_cantidades_por_item(
     contrato_id: int,
-    capitulo: str = Query(..., min_length=1),
-    item: str = Query(..., min_length=1, description="Código de ítem (item_numero)"),
+    acta_rpo: Optional[int] = None,
+    semana: Optional[int] = None,
+    subcontratista_id: Optional[int] = None,
+    capitulo: Optional[str] = None,
+    capitulos_filtro: Optional[str] = None,
+    item: Optional[str] = None,
+    items_filtro: Optional[str] = None,
+    items_filtro_op: Optional[str] = Query(None),
+    actas_filtro: Optional[str] = None,
     tramo: Optional[str] = None,
+    costado: Optional[str] = None,
+    abs_inicio: Optional[float] = None,
+    abs_final: Optional[float] = None,
+    estado: Optional[str] = None,
+    numero_reporte: Optional[int] = None,
+    numero_registro: Optional[int] = None,
+    pk_id: Optional[int] = None,
+    cargo_id: Optional[int] = None,
+    estado_validacion: Optional[str] = None,
+    validacion_capas: Optional[str] = None,
+    validacion_capas_op: Optional[str] = Query(None),
+    q_observacion: Optional[str] = None,
+    q_nodo: Optional[str] = None,
+    etiqueta_validacion: Optional[str] = None,
+    cantidad_desde: Optional[float] = None,
+    cantidad_hasta: Optional[float] = None,
+    costo_directo_desde: Optional[float] = None,
+    costo_directo_hasta: Optional[float] = None,
+    ambito_fecha: Optional[str] = None,
+    tipo_fecha: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    usuario_id: Optional[int] = None,
+    usuario_accion: Optional[str] = None,
     current_user=Depends(get_current_user),
 ):
     """
-    Lista plana de so_registros del contrato para un Capítulo+Ítem.
-    Incluye V.U. vigente de listado_precios y costo_directo_calc = round(cant×VU, 0)
-    (no usa el costo_directo almacenado ni el vlr_unitario congelado de la fila).
+    Lista plana de so_registros según los mismos filtros del modal SicoeObra.
+    Costo directo = round(cantidad_total × precio_unitario listado_precios, 0)
+    (por capítulo+ítem de cada fila; nunca costo_directo / vlr_unitario congelados).
+    Sin criterios de filtro → respuesta vacía (misma regla que la grilla por reporte).
     """
     _require_contract_access(current_user, contrato_id)
-    cap = (capitulo or "").strip()
-    it = (item or "").strip()
-    if not cap or not it:
-        raise HTTPException(status_code=422, detail="capitulo e item son obligatorios.")
+    from dashboard_costo_agregado import costo_agregado_cant_vu, listado_vu_for_cap_item
 
-    from dashboard_costo_agregado import costo_agregado_cant_vu, listado_vu_from_index
+    items_ana = _normalize_items_filtro_list(items_filtro, item)
+    caps_ana = _normalize_items_filtro_list(capitulos_filtro, capitulo)
+    actas_rpo_ana = _normalize_actas_filtro_list(actas_filtro, acta_rpo)
 
-    listado_idx = _listado_precios_index_por_item_norm(contrato_id, cap)
-    it_key = _dash_norm_item_key_py(it)
-    vu = listado_vu_from_index(_dash_norm_capitulo_key_py(cap), it_key, listado_idx) or 0.0
-    listado_row = listado_idx.get(it_key) or {}
-    ocultar_cd = _sicoe_ocultar_costo_directo_reportes(current_user)
+    tiene_criterio = any(
+        [
+            acta_rpo is not None,
+            bool(actas_rpo_ana),
+            semana is not None,
+            subcontratista_id is not None,
+            bool(caps_ana) or bool((capitulo or "").strip()),
+            bool(items_ana) or bool((item or "").strip()),
+            bool((tramo or "").strip()),
+            bool((costado or "").strip()),
+            abs_inicio is not None,
+            abs_final is not None,
+            bool((estado or "").strip()),
+            numero_reporte is not None,
+            numero_registro is not None,
+            pk_id is not None,
+            bool(validacion_capas) or cargo_id is not None,
+            bool((q_observacion or "").strip()),
+            bool((q_nodo or "").strip()),
+            bool((etiqueta_validacion or "").strip()),
+            cantidad_desde is not None,
+            cantidad_hasta is not None,
+            costo_directo_desde is not None,
+            costo_directo_hasta is not None,
+            bool((fecha_desde or "").strip()),
+            bool((fecha_hasta or "").strip()),
+            usuario_id is not None,
+        ]
+    )
+    if not tiene_criterio:
+        return {
+            "ok": True,
+            "contrato_id": contrato_id,
+            "modo": "vacio",
+            "ocultar_costo_directo": _sicoe_ocultar_costo_directo_reportes(current_user),
+            "total": 0,
+            "items_distintos": 0,
+            "registros": [],
+        }
+
+    consulta_directa_identificador = (
+        numero_reporte is not None or numero_registro is not None
+    )
+    if consulta_directa_identificador:
+        acta_rpo = None
+        semana = None
+
+    acta_ids_panel = (
+        _sicoe_resolve_acta_ids_por_rpo(contrato_id, actas_rpo_ana) if actas_rpo_ana else []
+    )
+    if actas_rpo_ana and not acta_ids_panel:
+        return {
+            "ok": True,
+            "contrato_id": contrato_id,
+            "modo": "vacio",
+            "ocultar_costo_directo": _sicoe_ocultar_costo_directo_reportes(current_user),
+            "total": 0,
+            "items_distintos": 0,
+            "registros": [],
+        }
+
+    acta_id = None
+    if acta_rpo is not None and not acta_ids_panel:
+        try:
+            def _ai():
+                rows = (
+                    supabase.table("actas")
+                    .select("id")
+                    .eq("contrato_id", contrato_id)
+                    .eq("numero_rpo", acta_rpo)
+                    .execute()
+                    .data
+                )
+                if not rows:
+                    rows = (
+                        supabase.table("actas")
+                        .select("id")
+                        .eq("contrato_id", contrato_id)
+                        .eq("consecutivo", acta_rpo)
+                        .execute()
+                        .data
+                    )
+                return rows
+
+            ar = supabase_execute(_ai)
+            if ar:
+                acta_id = ar[0]["id"]
+        except Exception:
+            acta_id = None
+        if acta_id is None:
+            return {
+                "ok": True,
+                "contrato_id": contrato_id,
+                "modo": "vacio",
+                "ocultar_costo_directo": _sicoe_ocultar_costo_directo_reportes(current_user),
+                "total": 0,
+                "items_distintos": 0,
+                "registros": [],
+            }
+
+    semana_id = None
+    if semana is not None:
+        try:
+            def _si():
+                return (
+                    supabase.table("so_semanas")
+                    .select("id")
+                    .eq("contrato_id", contrato_id)
+                    .eq("numero_semana", semana)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+
+            sr = supabase_execute(_si)
+            if sr:
+                semana_id = sr[0]["id"]
+        except Exception:
+            semana_id = None
+        if semana_id is None:
+            return {
+                "ok": True,
+                "contrato_id": contrato_id,
+                "modo": "vacio",
+                "ocultar_costo_directo": _sicoe_ocultar_costo_directo_reportes(current_user),
+                "total": 0,
+                "items_distintos": 0,
+                "registros": [],
+            }
+
+    capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+    if consulta_directa_identificador:
+        capas_v = []
+
+    reporte_id_in = None
+    if numero_reporte is not None or pk_id is not None or (estado and str(estado).strip()):
+        def _rep_ids():
+            q = supabase.table("so_reportes").select("id").eq("contrato_id", contrato_id)
+            if numero_reporte is not None:
+                q = q.eq("numero_reporte", numero_reporte)
+            if pk_id is not None:
+                q = q.eq("pk_id_id", pk_id)
+            q = _sicoe_so_reportes_q_filtro_estado_ui(q, contrato_id, estado, current_user)
+            if subcontratista_id is not None:
+                q = q.eq("subcontratista_id", subcontratista_id)
+            return q.limit(50000).execute().data
+
+        rep_rows = supabase_execute(_rep_ids) or []
+        reporte_id_in = [r["id"] for r in rep_rows if r.get("id")]
+        if not reporte_id_in:
+            return {
+                "ok": True,
+                "contrato_id": contrato_id,
+                "modo": "vacio",
+                "ocultar_costo_directo": _sicoe_ocultar_costo_directo_reportes(current_user),
+                "total": 0,
+                "items_distintos": 0,
+                "registros": [],
+            }
+
+    if q_nodo and str(q_nodo).strip():
+        ids_n = _sicoe_reporte_ids_coinciden_nodo(contrato_id, q_nodo, reporte_id_in)
+        if ids_n is not None:
+            if not ids_n:
+                return {
+                    "ok": True,
+                    "contrato_id": contrato_id,
+                    "modo": "vacio",
+                    "ocultar_costo_directo": _sicoe_ocultar_costo_directo_reportes(current_user),
+                    "total": 0,
+                    "items_distintos": 0,
+                    "registros": [],
+                }
+            reporte_id_in = list(ids_n) if reporte_id_in is None else [x for x in reporte_id_in if x in ids_n]
+            if not reporte_id_in:
+                return {
+                    "ok": True,
+                    "contrato_id": contrato_id,
+                    "modo": "vacio",
+                    "ocultar_costo_directo": _sicoe_ocultar_costo_directo_reportes(current_user),
+                    "total": 0,
+                    "items_distintos": 0,
+                    "registros": [],
+                }
+
+    _amb, _tip, _fd, _fh, _uid, _uacc, _tiene_fu = _sicoe_parse_filtros_fecha_usuario(
+        ambito_fecha, tipo_fecha, fecha_desde, fecha_hasta, usuario_id, usuario_accion
+    )
 
     cols = (
         "id,reporte_id,numero_registro,capitulo,item_numero,item_descripcion,unidad,"
         "competencia,longitud,ancho,espesor,cantidad,cantidad_total,observacion,"
         "foto_url,foto_numero,grafico_url,grafico_numero,graficos_historial,"
         "tramo,infraestructura,calzada,margen,abs_inicio,abs_final,nodo_ini,nodo_fin,"
-        "pk_id_id,civ,ubicacion,coord_lat,coord_lng,bloqueado,"
+        "pk_id_id,civ,ubicacion,coord_lat,coord_lng,bloqueado,acta_rpo_id,semana_id,"
         f"{SICOE_SELECT_NIVELES_ESTADO}"
     )
 
-    out_rows: List[dict] = []
-    off = 0
-    page = 1000
-    while True:
+    def _build_q():
+        q = (
+            supabase.table("so_registros")
+            .select(cols)
+            .eq("contrato_id", contrato_id)
+        )
+        return _sicoe_so_registros_q_linea_filtros_busqueda(
+            q,
+            numero_registro=numero_registro,
+            abs_inicio=abs_inicio,
+            abs_final=abs_final,
+            cantidad_desde=cantidad_desde,
+            cantidad_hasta=cantidad_hasta,
+            costo_directo_desde=costo_directo_desde,
+            costo_directo_hasta=costo_directo_hasta,
+            capitulo=None,
+            capitulos=caps_ana or None,
+            item=None,
+            items=items_ana or None,
+            items_op=items_filtro_op,
+            subcontratista_id=subcontratista_id,
+            tramo=tramo,
+            costado=costado,
+            pk_id=pk_id,
+            q_observacion=q_observacion,
+            semana_id=semana_id,
+            acta_rpo_id=acta_id if not acta_ids_panel else None,
+            acta_rpo_ids=acta_ids_panel or None,
+            reporte_id_in=reporte_id_in,
+            require_item=True,
+            capas_v=capas_v if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado) else None,
+            estado=estado,
+            contrato_id=contrato_id,
+            fecha_desde=_fd if _tiene_fu and _amb == "registro" else None,
+            fecha_hasta=_fh if _tiene_fu and _amb == "registro" else None,
+            tipo_fecha=_tip if _tiene_fu and _amb == "registro" else None,
+            usuario_id=_uid if _tiene_fu and _amb == "registro" else None,
+            usuario_accion=_uacc if _tiene_fu and _amb == "registro" else None,
+            ambito_fecha_registro=_amb == "registro",
+        )
 
-        def _page(o=off):
-            q = (
-                supabase.table("so_registros")
-                .select(cols)
-                .eq("contrato_id", contrato_id)
-                .eq("capitulo", cap)
-            )
-            variants = _item_numero_filter_variants(it)
-            if len(variants) == 1:
-                q = q.eq("item_numero", variants[0])
-            else:
-                q = q.in_("item_numero", variants)
-            if tramo and str(tramo).strip():
-                q = q.ilike("tramo", f"%{str(tramo).strip()}%")
-            return q.order("id").range(o, o + page - 1).execute().data
+    out_rows = _sicoe_analisis_fetch_registros_paginated(_build_q)
 
-        batch = supabase_execute(_page) or []
-        out_rows.extend(batch)
-        if len(batch) < page:
-            break
-        off += page
-        if off > 50000:
-            break
+    if etiqueta_validacion and str(etiqueta_validacion).strip():
+        # Misma semántica ligera que export: se deja pasar; capas ya filtraron si aplica.
+        pass
 
     rep_ids = list({int(r["reporte_id"]) for r in out_rows if r.get("reporte_id") is not None})
     rep_map: Dict[int, dict] = {}
@@ -25187,6 +25419,21 @@ def sicoe_cantidades_por_item(
             except (TypeError, ValueError, KeyError):
                 pass
 
+    # Índice listado por capítulo (clave ítem_norm → fila). listado_vu_for_cap_item
+    # espera este shape — NO el índice (cap,item) de listado_vu_from_index.
+    listado_by_cap: Dict[str, Dict[str, dict]] = {}
+    caps_needed = {
+        str(r.get("capitulo") or "").strip()
+        for r in out_rows
+        if str(r.get("capitulo") or "").strip()
+    }
+    for cap_raw in caps_needed:
+        listado_by_cap[_dash_norm_capitulo_key_py(cap_raw)] = _listado_precios_index_por_item_norm(
+            contrato_id, cap_raw
+        )
+
+    ocultar_cd = _sicoe_ocultar_costo_directo_reportes(current_user)
+    items_seen: Dict[str, dict] = {}
     enriched = []
     for r in out_rows:
         row = dict(r)
@@ -25197,26 +25444,50 @@ def sicoe_cantidades_por_item(
         rep = rep_map.get(rid) if rid is not None else None
         row["numero_reporte"] = (rep or {}).get("numero_reporte")
         row["reporte_estado"] = (rep or {}).get("estado")
+
+        cap_raw = str(row.get("capitulo") or "").strip()
+        it_raw = str(row.get("item_numero") or "").strip()
+        ck = _dash_norm_capitulo_key_py(cap_raw)
+        ik = _dash_norm_item_key_py(it_raw)
+        lp_idx = listado_by_cap.get(ck) or {}
+        vu = listado_vu_for_cap_item(ck, ik, cap_listado_by_item=lp_idx) or 0.0
+        lp_row = lp_idx.get(ik) or {}
         cant = float(row.get("cantidad_total") or row.get("cantidad") or 0)
         cd_calc = costo_agregado_cant_vu(cant, float(vu or 0))
         row["vlr_unitario_listado"] = float(vu or 0)
         if ocultar_cd:
             row["costo_directo_calc"] = None
-            row.pop("costo_directo", None)
         else:
             row["costo_directo_calc"] = cd_calc
         row.pop("costo_directo", None)
         row.pop("vlr_unitario", None)
+        if it_raw:
+            key_it = f"{cap_raw}\u0001{it_raw}"
+            if key_it not in items_seen:
+                items_seen[key_it] = {
+                    "capitulo": cap_raw,
+                    "item": it_raw,
+                    "item_descripcion": (row.get("item_descripcion") or lp_row.get("descripcion") or "").strip() or None,
+                    "unidad": (row.get("unidad") or lp_row.get("unidad") or "").strip() or None,
+                    "vlr_unitario_listado": float(vu or 0),
+                }
         enriched.append(row)
+
+    n_items = len(items_seen)
+    modo = "analisis" if n_items == 1 else ("general" if n_items > 1 or enriched else "vacio")
+    unico = next(iter(items_seen.values()), None) if n_items == 1 else None
 
     return {
         "ok": True,
         "contrato_id": contrato_id,
-        "capitulo": cap,
-        "item": it,
-        "item_descripcion": (listado_row.get("descripcion") or "").strip() or None,
-        "unidad": (listado_row.get("unidad") or "").strip() or None,
-        "vlr_unitario_listado": float(vu or 0),
+        "modo": modo,
+        "capitulo": (unico or {}).get("capitulo"),
+        "item": (unico or {}).get("item"),
+        "item_descripcion": (unico or {}).get("item_descripcion"),
+        "unidad": (unico or {}).get("unidad"),
+        "vlr_unitario_listado": (unico or {}).get("vlr_unitario_listado"),
+        "items_distintos": n_items,
+        "items": list(items_seen.values()),
         "ocultar_costo_directo": ocultar_cd,
         "total": len(enriched),
         "registros": enriched,
