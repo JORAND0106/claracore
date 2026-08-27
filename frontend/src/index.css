@@ -2727,25 +2727,23 @@ select.cc-dashboard-acta-select--light option {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Reporte de Evento: panel 3/4 texto + 1/4 actividades (apilado en compacto) */
-.cc-bitacora-evento-split {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
+/* Reporte de Evento: Actividades arriba + texto debajo (ambos a ancho completo) */
+.cc-bitacora-evento-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
 }
 
-.cc-bitacora-evento-split__texto,
-.cc-bitacora-evento-split__actividades {
+.cc-bitacora-evento-stack__texto,
+.cc-bitacora-evento-stack__actividades {
   min-width: 0;
+  width: 100%;
 }
 
 .cc-bitacora-evento-actividades-scroll {
   -webkit-overflow-scrolling: touch;
-}
-
-.cc-bitacora-entrada--compact .cc-bitacora-evento-split {
-  grid-template-columns: 1fr;
+  width: 100%;
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-actividades-table {

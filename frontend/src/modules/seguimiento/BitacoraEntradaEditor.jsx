@@ -1368,10 +1368,21 @@ export default function BitacoraEntradaEditor({
             </>
           )}
 
-          {/* Observaciones / texto: en Evento, panel 3/4 + Actividades 1/4 */}
+          {/* Evento: Actividades arriba (ancho completo) + texto libre debajo */}
           {tipo === 'evento' ? (
-            <div className="cc-bitacora-evento-split">
-              <div className="cc-bitacora-evento-split__texto">
+            <div className="cc-bitacora-evento-stack">
+              <div className="cc-bitacora-evento-stack__actividades">
+                <ActividadesEventoGrid
+                  t={t}
+                  rows={eventoDetalle.actividades || [emptyActividadRow()]}
+                  disabled={!editable && !esNuevo}
+                  sheetStyles={ui}
+                  compact={grillaCompacta}
+                  onChange={(lista) => setEventoDetalle((d) => ({ ...d, actividades: lista }))}
+                  onPickUbicacion={(idx) => setMapTarget({ kind: 'actividad', idx })}
+                />
+              </div>
+              <div className="cc-bitacora-evento-stack__texto">
                 <div style={{
                   display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
                   justifyContent: 'space-between', marginBottom: 6,
@@ -1411,17 +1422,6 @@ export default function BitacoraEntradaEditor({
                     } : undefined}
                   />
                 </div>
-              </div>
-              <div className="cc-bitacora-evento-split__actividades">
-                <ActividadesEventoGrid
-                  t={t}
-                  rows={eventoDetalle.actividades || [emptyActividadRow()]}
-                  disabled={!editable && !esNuevo}
-                  sheetStyles={ui}
-                  compact={grillaCompacta}
-                  onChange={(lista) => setEventoDetalle((d) => ({ ...d, actividades: lista }))}
-                  onPickUbicacion={(idx) => setMapTarget({ kind: 'actividad', idx })}
-                />
               </div>
             </div>
           ) : (
