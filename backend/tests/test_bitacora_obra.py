@@ -9,42 +9,25 @@ import pytest
 import bitacora_service as svc
 
 
-def test_entrada_evento_editable_mismo_dia_creacion(monkeypatch):
+def test_entrada_evento_legacy_solo_dev():
+    """Eventos independientes legacy ya no se editan (salvo Desarrollador)."""
     hoy = svc.hoy_bogota()
-    monkeypatch.setattr(svc, "hoy_bogota", lambda: hoy)
-    # Creado hoy (UTC cerca de medianoche Bogotá) — editable
     created = datetime(hoy.year, hoy.month, hoy.day, 15, 0, 0, tzinfo=timezone.utc)
     entrada = {
         "tipo": "evento",
         "estado": "cerrado",
-        "fecha": (hoy - timedelta(days=2)).isoformat(),  # fecha del evento puede ser pasada
+        "fecha": hoy.isoformat(),
         "created_at": created.isoformat().replace("+00:00", "Z"),
     }
-    svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
-    assert svc.evento_editable_mismo_dia(entrada) is True
-
-
-def test_entrada_evento_inmutable_dia_siguiente(monkeypatch):
-    hoy = svc.hoy_bogota()
-    monkeypatch.setattr(svc, "hoy_bogota", lambda: hoy)
-    ayer = hoy - timedelta(days=1)
-    created = datetime(ayer.year, ayer.month, ayer.day, 18, 0, 0, tzinfo=timezone.utc)
-    entrada = {
-        "tipo": "evento",
-        "estado": "cerrado",
-        "fecha": ayer.isoformat(),
-        "created_at": created.isoformat().replace("+00:00", "Z"),
-    }
-    with pytest.raises(ValueError, match="mismo día"):
+    with pytest.raises(ValueError, match="independientes|ventana de gracia"):
         svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
     svc.assert_puede_editar_entrada(entrada, {"cargo_nombre": "Desarrollador"})
-    assert svc.evento_editable_mismo_dia(entrada) is False
 
 
 def test_entrada_evento_inmutable_salvo_dev():
-    """Compat: evento sin created_at usable no es editable (salvo Dev)."""
+    """Compat: evento legacy no es editable (salvo Dev)."""
     entrada = {"tipo": "evento", "estado": "cerrado", "fecha": "2026-08-20"}
-    with pytest.raises(ValueError, match="inmutable|mismo día"):
+    with pytest.raises(ValueError, match="independientes|inmutable|ventana"):
         svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
     svc.assert_puede_editar_entrada(entrada, {"cargo_nombre": "Desarrollador"})
 
@@ -62,22 +45,58 @@ def test_diario_abierto_hoy_editable():
     svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
 
 
-def test_debe_autocerrar_a_las_235959():
+def test_debe_autocerrar_ventana_d_mas_1():
     hoy = svc.hoy_bogota()
     ayer = hoy - timedelta(days=1)
+    anteayer = hoy - timedelta(days=2)
+    # Anteayer: cierre fue fin de ayer → ya vencido
+    assert svc._debe_autocerrar({
+        "tipo": "diario", "estado": "abierto", "fecha": anteayer.isoformat(),
+    }) is True
+
     entrada_ayer = {"tipo": "diario", "estado": "abierto", "fecha": ayer.isoformat()}
-    assert svc._debe_autocerrar(entrada_ayer) is True
+    ahora_medio = datetime(hoy.year, hoy.month, hoy.day, 12, 0, 0, tzinfo=svc.BOGOTA)
+    assert svc._debe_autocerrar(entrada_ayer, ahora=ahora_medio) is False
+    justo = svc.momento_cierre_diario(ayer)
+    assert justo.date() == hoy
+    assert svc._debe_autocerrar(entrada_ayer, ahora=justo) is True
 
     entrada_hoy = {"tipo": "diario", "estado": "abierto", "fecha": hoy.isoformat()}
-    antes = svc.momento_cierre_diario(hoy).replace(hour=23, minute=59, second=58)
-    assert svc._debe_autocerrar(entrada_hoy, ahora=antes) is False
-    justo = svc.momento_cierre_diario(hoy)
-    assert svc._debe_autocerrar(entrada_hoy, ahora=justo) is True
-    manana = justo + timedelta(seconds=1)
-    assert svc._debe_autocerrar(entrada_hoy, ahora=manana) is True
+    # Hoy cierra mañana 23:59:59
+    assert svc._debe_autocerrar(entrada_hoy, ahora=ahora_medio) is False
+    assert svc.momento_cierre_diario(hoy).date() == hoy + timedelta(days=1)
     assert svc._debe_autocerrar(
         {"tipo": "evento", "estado": "cerrado", "fecha": ayer.isoformat()},
     ) is False
+
+
+def test_fecha_en_ventana_gracia():
+    hoy = svc.hoy_bogota()
+    ayer = hoy - timedelta(days=1)
+    anteayer = hoy - timedelta(days=2)
+    ahora = datetime(hoy.year, hoy.month, hoy.day, 10, 0, 0, tzinfo=svc.BOGOTA)
+    assert svc.fecha_en_ventana_gracia(hoy, ahora=ahora) is True
+    assert svc.fecha_en_ventana_gracia(ayer, ahora=ahora) is True
+    assert svc.fecha_en_ventana_gracia(anteayer, ahora=ahora) is False
+    assert svc.fecha_en_ventana_gracia(hoy + timedelta(days=1), ahora=ahora) is False
+
+
+def test_normalizar_eventos_bloques_basico(monkeypatch):
+    monkeypatch.setattr(svc, "sync_visitantes_catalogo", lambda *a, **k: [])
+    rows = svc._normalizar_eventos_bloques(
+        object(),
+        1,
+        [{
+            "evento_tipo": "novedades",
+            "cuerpo_html": "<p>Hola</p>",
+            "evento_detalle": {"actividades": [{"actividad": "Excavar", "cantidad": "1"}]},
+        }],
+        user_id=1,
+    )
+    assert len(rows) == 1
+    assert rows[0]["evento_tipo"] == "novedades"
+    assert rows[0]["id"]
+    assert rows[0]["evento_detalle"]["actividades"][0]["actividad"] == "Excavar"
 
 
 def test_cerrar_manual_deshabilitado():

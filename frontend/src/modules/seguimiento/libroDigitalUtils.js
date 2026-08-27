@@ -51,69 +51,44 @@ export function buildActasPages(actas) {
 }
 
 /**
- * Bitácora: fechas ascendentes; en cada día, Diario primero y luego Eventos
- * (por created_at / id).
+ * Bitácora unificada: una página por Reporte Diario (eventos embebidos en data.eventos).
+ * Ignora filas legacy tipo=evento (ya consolidadas o fuera del hilo).
  *
  * @param {object[]} entradas
  * @returns {Array<{ kind: LibroPageKind, id: string, fecha: string, meta: object, data: object }>}
  */
 export function buildBitacoraPages(entradas) {
   const rows = Array.isArray(entradas) ? [...entradas] : []
-  const byFecha = new Map()
-  for (const row of rows) {
-    const f = String(row?.fecha || '').slice(0, 10)
-    if (!f) continue
-    if (!byFecha.has(f)) byFecha.set(f, { diarios: [], eventos: [] })
-    const bucket = byFecha.get(f)
-    if (String(row?.tipo || '') === 'evento') bucket.eventos.push(row)
-    else bucket.diarios.push(row)
-  }
-
-  const sortWithin = (list) => {
-    list.sort((a, b) => {
-      const ca = String(a?.created_at || '')
-      const cb = String(b?.created_at || '')
-      if (ca !== cb) return ca.localeCompare(cb)
-      return Number(a?.id || 0) - Number(b?.id || 0)
-    })
-  }
-
-  const fechas = [...byFecha.keys()].sort((a, b) => a.localeCompare(b))
-  const pages = []
-  for (const fecha of fechas) {
-    const { diarios, eventos } = byFecha.get(fecha)
-    sortWithin(diarios)
-    sortWithin(eventos)
-    for (const d of diarios) {
-      pages.push({
-        kind: 'diario',
-        id: `diario-${d.id}`,
-        fecha,
-        meta: {
-          estado: d?.estado,
-          hora_inicio_labores: d?.hora_inicio_labores,
-          created_by_nombre: d?.created_by_nombre,
-        },
-        data: d,
-        sourceId: d?.id,
-      })
+  const diarios = rows.filter((r) => {
+    if (String(r?.tipo || '') === 'evento') return false
+    return Boolean(String(r?.fecha || '').slice(0, 10))
+  })
+  diarios.sort((a, b) => {
+    const fa = String(a?.fecha || '').slice(0, 10)
+    const fb = String(b?.fecha || '').slice(0, 10)
+    if (fa !== fb) return fa.localeCompare(fb)
+    const ca = String(a?.created_at || '')
+    const cb = String(b?.created_at || '')
+    if (ca !== cb) return ca.localeCompare(cb)
+    return Number(a?.id || 0) - Number(b?.id || 0)
+  })
+  return diarios.map((d) => {
+    const fecha = String(d?.fecha || '').slice(0, 10)
+    const nEv = Array.isArray(d?.eventos) ? d.eventos.length : 0
+    return {
+      kind: 'diario',
+      id: `diario-${d.id}`,
+      fecha,
+      meta: {
+        estado: d?.estado,
+        hora_inicio_labores: d?.hora_inicio_labores,
+        created_by_nombre: d?.created_by_nombre,
+        eventos_count: nEv,
+      },
+      data: d,
+      sourceId: d?.id,
     }
-    for (const e of eventos) {
-      pages.push({
-        kind: 'evento',
-        id: `evento-${e.id}`,
-        fecha,
-        meta: {
-          evento_tipo: e?.evento_tipo,
-          dirigido_a: e?.dirigido_a,
-          created_by_nombre: e?.created_by_nombre,
-        },
-        data: e,
-        sourceId: e?.id,
-      })
-    }
-  }
-  return pages
+  })
 }
 
 /**

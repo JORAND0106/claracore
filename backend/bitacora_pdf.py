@@ -693,7 +693,7 @@ def _html_cuerpo_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> 
 
 
 def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) -> str:
-    parts = [_section_title("Reportes de Evento", pal)]
+    parts = [_section_title("Eventos del día", pal)]
     t2 = pal["titulo_2"]
     lp = pal["linea_principal"]
     for ev in eventos or []:
@@ -719,7 +719,7 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
             prepared = _prefetch_fotos(imgs[:4], contrato_id)
             cells = [
                 _foto_cell(
-                    im, contrato_id, "Reporte de Evento", pal,
+                    im, contrato_id, "Evento", pal,
                     prepared=prepared.get(i),
                 )
                 for i, im in enumerate(imgs[:4])
@@ -732,7 +732,7 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
                 rows_html.append(f"<tr>{''.join(pair)}</tr>")
             parts.append(
                 f'<div style="margin:0 0 4pt 8pt;">'
-                f'{_section_title("Registro Fotográfico", pal)}'
+                f'{_section_title("Registro Fotográfico del evento", pal)}'
                 f'<table width="100%" cellspacing="0" cellpadding="0">{"".join(rows_html)}</table>'
                 f"</div>"
             )
@@ -832,12 +832,11 @@ def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
         + _html_panel_superior(diario, slots, pal)
         + _html_cuerpo_diario(diario, int(contrato_id), pal)
     )
+    # Eventos embebidos en el mismo documento (sin hoja separada).
+    if eventos:
+        hoja1 += _html_eventos_con_fotos(eventos, int(contrato_id), pal)
 
     body_parts = [hoja1]
-    if eventos:
-        hdr_ev = _encabezado(contrato, None, pal, mostrar_fecha=False, logo_uris=logo_uris)
-        body_parts.append('<div class="break"></div>')
-        body_parts.append(hdr_ev + _html_eventos_con_fotos(eventos, int(contrato_id), pal))
     t_html = time.perf_counter()
 
     text_color = pal["linea_principal"]["text"]
@@ -847,7 +846,6 @@ def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
 <style>
   @page {{ size: letter landscape; margin: 7mm 7mm; }}
   body {{ font-family: Helvetica, Arial, sans-serif; color: {text_color}; font-size: 7pt; }}
-  .break {{ page-break-before: always; }}
 </style>
 </head><body>
 {''.join(body_parts)}

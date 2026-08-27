@@ -107,6 +107,16 @@ assert(diario.backgroundColor === CALENDARIO_KIND.bitacora_diario.color, 'color 
 assert(diario.title.includes('Ana Pérez'), 'elaborador en título diario')
 assert(diario.extendedProps.elaborador === 'Ana Pérez', 'elaborador prop')
 
+const diarioConEv = bitacoraToEvent({
+  id: 42,
+  tipo: 'diario',
+  fecha: '2026-08-14',
+  eventos: [{ id: 'a' }, { id: 'b' }],
+  created_by_nombre: 'Ana',
+})
+assert(diarioConEv.title.includes('2 eventos'), 'contador eventos en título')
+assert(diarioConEv.extendedProps.eventosCount === 2, 'eventosCount')
+
 const eventoBit = bitacoraToEvent({
   id: 41,
   tipo: 'evento',
@@ -114,10 +124,7 @@ const eventoBit = bitacoraToEvent({
   evento_tipo: 'visita_terceros',
   created_by_nombre: 'Luis Gómez',
 })
-assert(eventoBit.extendedProps.kind === 'bitacora_evento', 'kind evento')
-assert(eventoBit.backgroundColor === CALENDARIO_KIND.bitacora_evento.color, 'color evento')
-assert(eventoBit.backgroundColor !== CALENDARIO_KIND.bitacora_diario.color, 'colores bitácora distintos')
-assert(eventoBit.title.includes('Luis Gómez'), 'elaborador en título evento')
+assert(eventoBit == null, 'eventos legacy no aparecen como entrada de calendario')
 
 assert(CALENDARIO_KIND.bitacora_diario.tooltip, 'tooltip diario')
 assert(CALENDARIO_KIND.bitacora_evento.tooltip, 'tooltip evento')

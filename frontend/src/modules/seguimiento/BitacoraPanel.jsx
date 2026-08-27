@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import BitacoraEntradaEditor from './BitacoraEntradaEditor'
 import { accesoBitacora } from './bitacoraPermisos'
-import { eventoTieneDestinatario, labelEventoTipo } from './bitacoraConstants'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import { createSeguimientoApi } from './seguimientoApi'
-import { htmlToPlainText } from './richTextUtils'
 
 function fmtFecha(iso) {
   try {
@@ -60,8 +58,7 @@ export default function BitacoraPanel({
 
   useEffect(() => { void load() }, [load, refreshKey])
 
-  const diarios = useMemo(() => rows.filter((r) => r.tipo === 'diario'), [rows])
-  const eventos = useMemo(() => rows.filter((r) => r.tipo === 'evento'), [rows])
+  const diarios = useMemo(() => rows.filter((r) => r.tipo !== 'evento'), [rows])
 
   if (!permisos.ver) {
     return (
@@ -98,19 +95,14 @@ export default function BitacoraPanel({
             Bitácora de Obra
           </div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, maxWidth: 560 }}>
-            Registro cronológico compartido · Reportes Diarios y de Evento
+            Un Reporte Diario por fecha · Eventos como bloques dentro del mismo documento · Ventana de gracia de un día
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {permisos.crear && (
-            <>
-              <button type="button" style={btnPrimary} onClick={() => setEditor({ modo: 'diario', entrada: null })}>
-                + Reporte Diario
-              </button>
-              <button type="button" style={btnGhost} onClick={() => setEditor({ modo: 'evento', entrada: null })}>
-                + Reporte de Evento
-              </button>
-            </>
+            <button type="button" style={btnPrimary} onClick={() => setEditor({ modo: 'diario', entrada: null })}>
+              + Reporte Diario
+            </button>
           )}
         </div>
       </div>
@@ -118,14 +110,6 @@ export default function BitacoraPanel({
       <div style={{
         display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14, alignItems: 'flex-end',
       }}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: t.textMuted }}>
-          Tipo
-          <select value={filtros.tipo} onChange={(e) => setFiltros((f) => ({ ...f, tipo: e.target.value }))} style={inp}>
-            <option value="">Todos</option>
-            <option value="diario">Reporte Diario</option>
-            <option value="evento">Reporte de Evento</option>
-          </select>
-        </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: t.textMuted }}>
           Desde
           <input type="date" value={filtros.fecha_desde} onChange={(e) => setFiltros((f) => ({ ...f, fecha_desde: e.target.value }))} style={inp} />
@@ -161,143 +145,81 @@ export default function BitacoraPanel({
         <div style={{ color: t.textMuted, padding: 20 }}>Cargando bitácora…</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {/* Reportes Diarios */}
-          {(filtros.tipo === '' || filtros.tipo === 'diario') && (
-            <section>
-              <div style={{ ...ui.sectionTitle, marginBottom: 8 }}>Reportes Diarios</div>
-              {diarios.length === 0 ? (
-                <div style={{
-                  padding: 16, textAlign: 'center', color: t.textMuted, fontSize: 13,
-                  border: `1px dashed ${t.border}`, borderRadius: 6,
-                }}>
-                  Sin reportes diarios en el rango.
-                </div>
-              ) : (
-                <div style={ui.sheetWrap}>
-                  <table style={ui.sheetTable}>
-                    <thead>
-                      <tr>
-                        <th style={{ ...ui.th, width: '16%' }}>Fecha</th>
-                        <th style={{ ...ui.th, width: '10%' }}>Hora</th>
-                        <th style={{ ...ui.th, width: '14%' }}>Estado</th>
-                        <th style={{ ...ui.th, width: '22%' }}>Clima</th>
-                        <th style={{ ...ui.th, width: '22%' }}>Elaborado por</th>
-                        <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>Fotos</th>
-                        <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>📎</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {diarios.map((row) => {
-                        const cerrado = String(row.estado || '') === 'cerrado'
-                        return (
-                          <tr
-                            key={row.id}
-                            onClick={() => setEditor({ modo: 'ver', entrada: row })}
-                            style={{ cursor: 'pointer' }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = `${t.primary || '#2563eb'}12` }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                          >
-                            <td style={ui.td}>{fmtFecha(row.fecha)}</td>
-                            <td style={{ ...ui.td, fontVariantNumeric: 'tabular-nums' }}>
-                              {String(row.hora_inicio_labores || '').slice(0, 5) || '—'}
-                            </td>
-                            <td style={ui.td}>
-                              <span style={{
-                                fontSize: 11, fontWeight: 700,
-                                color: cerrado ? '#92400E' : '#047857',
-                              }}>
-                                {cerrado
-                                  ? (row.cierre_motivo === 'automatico_dia' ? 'Cerrado (auto)' : 'Cerrado')
-                                  : 'Abierto'}
-                              </span>
-                            </td>
-                            <td style={ui.td}>
-                              {[row.clima_descripcion, row.clima_temp_c != null ? `${row.clima_temp_c}°C` : '']
-                                .filter(Boolean).join(' · ') || '—'}
-                            </td>
-                            <td style={ui.td}>
-                              {row.created_by_nombre || '—'}
-                              {row.created_by_rol ? ` · ${row.created_by_rol}` : ''}
-                            </td>
-                            <td style={{ ...ui.td, textAlign: 'center' }}>{(row.imagenes || []).length}</td>
-                            <td style={{ ...ui.td, textAlign: 'center' }}>
-                              {(row.imagenes || []).length > 0 ? '📎' : '—'}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-          )}
-
-          {/* Reportes de Evento — grilla Excel */}
-          {(filtros.tipo === '' || filtros.tipo === 'evento') && (
-            <section>
-              <div style={{ ...ui.sectionTitle, marginBottom: 8 }}>Reportes de Evento</div>
-              {eventos.length === 0 ? (
-                <div style={{
-                  padding: 16, textAlign: 'center', color: t.textMuted, fontSize: 13,
-                  border: `1px dashed ${t.border}`, borderRadius: 6,
-                }}>
-                  Sin reportes de evento en el rango.
-                </div>
-              ) : (
-                <div style={ui.sheetWrap}>
-                  <table style={ui.sheetTable}>
-                    <thead>
-                      <tr>
-                        <th style={{ ...ui.th, width: '12%' }}>Fecha</th>
-                        <th style={{ ...ui.th, width: '20%' }}>Tipo de reporte</th>
-                        <th style={{ ...ui.th, width: '28%' }}>Descripción</th>
-                        <th style={{ ...ui.th, width: '18%' }}>A quién se dirige</th>
-                        <th style={{ ...ui.th, width: '14%' }}>Elaborado por</th>
-                        <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>📎</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {eventos.map((row) => {
-                        const desc = htmlToPlainText(row.cuerpo_html || '').slice(0, 120)
-                        const nAdj = (row.imagenes || []).length
-                        const showDest = eventoTieneDestinatario(row.evento_tipo)
-                        return (
-                          <tr
-                            key={row.id}
-                            onClick={() => setEditor({ modo: 'ver', entrada: row })}
-                            style={{ cursor: 'pointer' }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = `${t.primary || '#2563eb'}12` }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                          >
-                            <td style={ui.td}>{fmtFecha(row.fecha)}</td>
-                            <td style={{ ...ui.td, fontWeight: 700 }}>{labelEventoTipo(row.evento_tipo)}</td>
-                            <td style={ui.td}>
-                              <span style={{
-                                display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                              }}>
-                                {desc || '—'}
-                              </span>
-                            </td>
-                            <td style={ui.td}>
-                              {showDest ? (row.dirigido_a || '—') : '—'}
-                            </td>
-                            <td style={ui.td}>
-                              {row.created_by_nombre || '—'}
-                              {row.created_by_rol ? ` · ${row.created_by_rol}` : ''}
-                            </td>
-                            <td style={{ ...ui.td, textAlign: 'center', color: nAdj ? (t.primary || '#2563eb') : t.textMuted }}>
-                              {nAdj > 0 ? `📎 ${nAdj}` : '—'}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-          )}
+          <section>
+            <div style={{ ...ui.sectionTitle, marginBottom: 8 }}>Reportes Diarios</div>
+            {diarios.length === 0 ? (
+              <div style={{
+                padding: 16, textAlign: 'center', color: t.textMuted, fontSize: 13,
+                border: `1px dashed ${t.border}`, borderRadius: 6,
+              }}>
+                Sin reportes diarios en el rango.
+              </div>
+            ) : (
+              <div style={ui.sheetWrap}>
+                <table style={ui.sheetTable}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...ui.th, width: '16%' }}>Fecha</th>
+                      <th style={{ ...ui.th, width: '10%' }}>Hora</th>
+                      <th style={{ ...ui.th, width: '12%' }}>Estado</th>
+                      <th style={{ ...ui.th, width: '10%', textAlign: 'center' }}>Eventos</th>
+                      <th style={{ ...ui.th, width: '20%' }}>Clima</th>
+                      <th style={{ ...ui.th, width: '20%' }}>Elaborado por</th>
+                      <th style={{ ...ui.th, width: '6%', textAlign: 'center' }}>Fotos</th>
+                      <th style={{ ...ui.th, width: '6%', textAlign: 'center' }}>📎</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {diarios.map((row) => {
+                      const cerrado = String(row.estado || '') === 'cerrado'
+                      const nEv = Array.isArray(row.eventos)
+                        ? row.eventos.length
+                        : (Number(row.eventos_count) || 0)
+                      return (
+                        <tr
+                          key={row.id}
+                          onClick={() => setEditor({ modo: 'ver', entrada: row })}
+                          style={{ cursor: 'pointer' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = `${t.primary || '#2563eb'}12` }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                        >
+                          <td style={ui.td}>{fmtFecha(row.fecha)}</td>
+                          <td style={{ ...ui.td, fontVariantNumeric: 'tabular-nums' }}>
+                            {String(row.hora_inicio_labores || '').slice(0, 5) || '—'}
+                          </td>
+                          <td style={ui.td}>
+                            <span style={{
+                              fontSize: 11, fontWeight: 700,
+                              color: cerrado ? '#92400E' : '#047857',
+                            }}>
+                              {cerrado
+                                ? (row.cierre_motivo === 'automatico_dia' ? 'Cerrado (auto)' : 'Cerrado')
+                                : 'Abierto'}
+                            </span>
+                          </td>
+                          <td style={{ ...ui.td, textAlign: 'center', fontWeight: 700 }}>
+                            {nEv || '—'}
+                          </td>
+                          <td style={ui.td}>
+                            {[row.clima_descripcion, row.clima_temp_c != null ? `${row.clima_temp_c}°C` : '']
+                              .filter(Boolean).join(' · ') || '—'}
+                          </td>
+                          <td style={ui.td}>
+                            {row.created_by_nombre || '—'}
+                            {row.created_by_rol ? ` · ${row.created_by_rol}` : ''}
+                          </td>
+                          <td style={{ ...ui.td, textAlign: 'center' }}>{(row.imagenes || []).length}</td>
+                          <td style={{ ...ui.td, textAlign: 'center' }}>
+                            {(row.imagenes || []).length > 0 ? '📎' : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
         </div>
       )}
 
