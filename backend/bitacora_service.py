@@ -620,17 +620,15 @@ def assert_puede_editar_entrada(
     """
     Diario abierto: editable con permiso Editar (caller).
     Diario cerrado: inmutable salvo Desarrollador.
-    Evento: editable el mismo día calendario de creación (Bogotá); luego inmutable
-    salvo Desarrollador.
+    Evento: inmutable desde la creación, salvo Desarrollador.
     """
     es_dev = es_desarrollador_bitacora(current_user)
     tipo = str(entrada.get("tipo") or "")
     if tipo == "evento":
-        if es_dev or evento_editable_mismo_dia(entrada):
+        if es_dev:
             return
         raise ValueError(
-            "El Reporte de Evento solo puede editarse el mismo día de su creación. "
-            "A partir del día siguiente queda inmutable. "
+            "El Reporte de Evento queda inmutable desde el momento de su creación. "
             "Solo el rol Desarrollador puede modificarlo."
         )
     # diario
@@ -1500,9 +1498,9 @@ def _enrich_entrada(
     out["equipos_uso"] = usos_list
     tipo_e = str(out.get("tipo") or "")
     if tipo_e == "evento":
-        editable_hoy = evento_editable_mismo_dia(out)
-        out["evento_editable_hoy"] = editable_hoy
-        out["inmutable"] = not editable_hoy
+        # Inmutable desde la creación (solo Desarrollador edita vía assert_puede_editar).
+        out["evento_editable_hoy"] = False
+        out["inmutable"] = True
     else:
         out["evento_editable_hoy"] = False
         out["inmutable"] = entrada_esta_cerrada(out)
@@ -1979,7 +1977,7 @@ def update_entrada(
                 else:
                     usos_rows = _sync_usos(sb, contrato_id, entrada_id, usos_list, user_id=user_id)
     else:
-        # evento — editable el mismo día de creación (o Desarrollador)
+        # evento — inmutable desde creación (solo Desarrollador llega aquí)
         if "evento_tipo" in data:
             et = str(data.get("evento_tipo") or "").strip()
             if et in EVENTO_TIPOS:

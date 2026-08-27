@@ -51,7 +51,7 @@ _PDF_BYTES_CACHE_TTL = 90.0
 _PDF_BYTES_CACHE_MAX = 24
 
 _EVENTO_LABELS = {
-    "visita_terceros": "Recorrido de obra",
+    "visita_terceros": "Visita de terceros",
     "incidente_sst": "Incidente de seguridad SST",
     "reporte_actividades": "Reporte de actividades",
     "novedades": "Novedades",

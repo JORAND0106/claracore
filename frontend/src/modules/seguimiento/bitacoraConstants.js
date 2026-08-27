@@ -21,7 +21,7 @@ export const CARGOS_PERSONAL = [
 
 /** Tipos de evento; `conDestinatario` controla el campo «a quién se dirige». */
 export const EVENTO_TIPOS = [
-  { value: 'visita_terceros', label: 'Recorrido de obra', conDestinatario: true },
+  { value: 'visita_terceros', label: 'Visita de terceros', conDestinatario: true },
   { value: 'incidente_sst', label: 'Incidente de seguridad (SST)', conDestinatario: true },
   { value: 'reporte_actividades', label: 'Reporte de actividades', conDestinatario: false },
   { value: 'novedades', label: 'Novedades/Observaciones generales', conDestinatario: true },

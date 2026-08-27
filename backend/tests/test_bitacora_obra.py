@@ -9,19 +9,20 @@ import pytest
 import bitacora_service as svc
 
 
-def test_entrada_evento_editable_mismo_dia_creacion(monkeypatch):
+def test_entrada_evento_inmutable_desde_creacion(monkeypatch):
+    """Reporte de Evento: inmutable desde el momento de creación (salvo Desarrollador)."""
     hoy = svc.hoy_bogota()
     monkeypatch.setattr(svc, "hoy_bogota", lambda: hoy)
-    # Creado hoy (UTC cerca de medianoche Bogotá) — editable
     created = datetime(hoy.year, hoy.month, hoy.day, 15, 0, 0, tzinfo=timezone.utc)
     entrada = {
         "tipo": "evento",
         "estado": "cerrado",
-        "fecha": (hoy - timedelta(days=2)).isoformat(),  # fecha del evento puede ser pasada
+        "fecha": hoy.isoformat(),
         "created_at": created.isoformat().replace("+00:00", "Z"),
     }
-    svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
-    assert svc.evento_editable_mismo_dia(entrada) is True
+    with pytest.raises(ValueError, match="inmutable"):
+        svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
+    svc.assert_puede_editar_entrada(entrada, {"cargo_nombre": "Desarrollador"})
 
 
 def test_entrada_evento_inmutable_dia_siguiente(monkeypatch):
@@ -35,16 +36,15 @@ def test_entrada_evento_inmutable_dia_siguiente(monkeypatch):
         "fecha": ayer.isoformat(),
         "created_at": created.isoformat().replace("+00:00", "Z"),
     }
-    with pytest.raises(ValueError, match="mismo día"):
+    with pytest.raises(ValueError, match="inmutable"):
         svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
     svc.assert_puede_editar_entrada(entrada, {"cargo_nombre": "Desarrollador"})
-    assert svc.evento_editable_mismo_dia(entrada) is False
 
 
 def test_entrada_evento_inmutable_salvo_dev():
     """Compat: evento sin created_at usable no es editable (salvo Dev)."""
     entrada = {"tipo": "evento", "estado": "cerrado", "fecha": "2026-08-20"}
-    with pytest.raises(ValueError, match="inmutable|mismo día"):
+    with pytest.raises(ValueError, match="inmutable"):
         svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
     svc.assert_puede_editar_entrada(entrada, {"cargo_nombre": "Desarrollador"})
 

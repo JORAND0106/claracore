@@ -2,7 +2,6 @@
  * Permisos Bitácora de Obra — fila «Bitácora» en Control de accesos.
  */
 import { esDesarrolladorUsuario, tienePermisoFlag } from '../../utils/permisosContrato.js'
-import { hoyISOBogota } from './bitacoraConstants.js'
 
 export const BITACORA_FUNCION = 'bitácora'
 export const BITACORA_FUNCION_ALT = 'bitacora'
@@ -58,8 +57,8 @@ export function fechaCreacionBogotaISO(entrada) {
 }
 
 /**
- * Diario abierto → editar; Evento → editable el día de creación (Bogotá);
- * cerrado / evento de otro día → solo Desarrollador.
+ * Diario abierto → editar; Diario cerrado → solo Desarrollador.
+ * Evento → inmutable desde la creación (solo Desarrollador).
  */
 export function puedeEditarEntradaBitacora(entrada, permisos) {
   if (!entrada) return false
@@ -67,10 +66,8 @@ export function puedeEditarEntradaBitacora(entrada, permisos) {
   if (!permisos?.editar) return false
   const tipo = String(entrada.tipo || '')
   if (tipo === 'evento') {
-    if (entrada.evento_editable_hoy === true) return true
-    if (entrada.evento_editable_hoy === false) return false
-    const creacion = fechaCreacionBogotaISO(entrada)
-    return creacion != null && creacion === hoyISOBogota()
+    // Inmutable desde el momento de creación (ticket Bitácora de Obra).
+    return false
   }
   if (String(entrada.estado || '') === 'cerrado') return false
   if (entrada.puede_autocerrar) return false

@@ -47,7 +47,7 @@ describe('bitacoraPermisos', () => {
     assert.equal(p.exportar, true)
   })
 
-  it('diario abierto editable; cerrado no; evento solo mismo día de creación', () => {
+  it('diario abierto editable; cerrado no; evento inmutable desde creación', () => {
     const perms = { editar: true, esDesarrollador: false }
     assert.equal(puedeEditarEntradaBitacora({ tipo: 'diario', estado: 'abierto' }, perms), true)
     assert.equal(puedeEditarEntradaBitacora({ tipo: 'diario', estado: 'cerrado' }, perms), false)
@@ -58,15 +58,18 @@ describe('bitacoraPermisos', () => {
     assert.equal(puedeEditarEntradaBitacora(
       { tipo: 'evento', estado: 'cerrado', evento_editable_hoy: true },
       perms,
-    ), true)
+    ), false)
     assert.equal(puedeEditarEntradaBitacora(
       { tipo: 'diario', estado: 'cerrado' },
       { editar: true, esDesarrollador: true },
     ), true)
-    // created_at = ahora → mismo día Bogotá
     assert.equal(puedeEditarEntradaBitacora(
       { tipo: 'evento', estado: 'cerrado', created_at: new Date().toISOString() },
       perms,
+    ), false)
+    assert.equal(puedeEditarEntradaBitacora(
+      { tipo: 'evento', estado: 'cerrado', created_at: new Date().toISOString() },
+      { editar: true, esDesarrollador: true },
     ), true)
   })
 })
@@ -86,7 +89,7 @@ describe('bitacoraConstants excel redesign', () => {
     assert.equal(eventoTieneDestinatario('reporte_actividades'), false)
   })
 
-  it('visita_terceros se muestra como Recorrido de obra', () => {
-    assert.equal(labelEventoTipo('visita_terceros'), 'Recorrido de obra')
+  it('visita_terceros se muestra como Visita de terceros', () => {
+    assert.equal(labelEventoTipo('visita_terceros'), 'Visita de terceros')
   })
 })
