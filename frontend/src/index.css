@@ -803,6 +803,11 @@ select.cc-dashboard-acta-select--light option {
   margin-top: 8px;
 }
 
+.cc-sicoe-filtro-chips--suave {
+  gap: 5px;
+  margin-top: 6px;
+}
+
 .cc-sicoe-filtro-chip {
   display: inline-flex;
   align-items: center;
@@ -815,6 +820,14 @@ select.cc-dashboard-acta-select--light option {
   line-height: 1.2;
 }
 
+.cc-sicoe-filtro-chip--suave {
+  padding: 4px 8px;
+  border-radius: 10px;
+  font-size: var(--cc-caption, 12px);
+  font-weight: 500;
+  opacity: 0.92;
+}
+
 .cc-sicoe-filtro-chip button {
   border: none;
   background: transparent;
@@ -824,6 +837,13 @@ select.cc-dashboard-acta-select--light option {
   padding: 0 2px;
   min-width: 28px;
   min-height: 28px;
+}
+
+.cc-sicoe-filtro-chip--suave button {
+  min-width: 22px;
+  min-height: 22px;
+  font-size: 14px;
+  opacity: 0.75;
 }
 
 /* Sheet PK: el mapa debe ocupar todo el alto disponible (desktop y móvil) */

@@ -10668,18 +10668,8 @@ function ModuloSicoeObra({
     }
   }, [fetchDetalleReporteSicoe, abortarPeticionesSicoeFondo])
 
-  const onSeleccionCantidadesItem = useCallback((fila, meta) => {
-    if (!fila) return
-    const nf = {
-      ...filtrosSicoeRef.current,
-      capitulo: String(meta?.capitulo || fila.capitulo || '').trim(),
-      item: String(meta?.item || fila.item_numero || '').trim(),
-      tramo: String(fila.tramo || '').trim(),
-      numero_registro: fila.numero_registro != null ? String(fila.numero_registro) : '',
-      numero_reporte: fila.numero_reporte != null ? String(fila.numero_reporte) : '',
-    }
-    aplicarFiltrosSicoeYBuscar(nf, { clearItems: true, clearPanelChecks: true })
-  }, [aplicarFiltrosSicoeYBuscar])
+  // Abrir detalle desde Cantidades por ítem no debe mutar los filtros del modal.
+  // (La selección/resaltado se maneja solo dentro de SicoeCantidadesPorItemVista.)
 
   const validarRapidoCantidadesItem = useCallback(async (reg, estado) => {
     const nv = Number(nivelInfo?.nivelValidacion)
@@ -11470,6 +11460,7 @@ function ModuloSicoeObra({
         filtroSubcList={filtroSubcList}
         pkList={sicoePkList}
         busquedaRealizada={busquedaRealizada}
+        chipsSuaves={sicoeModuloVista === 'cantidades_item'}
         extraActions={
           puedeReversionCantidadesMasiva && sicoeModuloVista === 'reportes' ? (
             <button
@@ -11549,7 +11540,6 @@ function ModuloSicoeObra({
           busquedaActiva={!!sicoeVistaResultadosActiva}
           buildFiltrosParams={buildCantidadesItemParams}
           onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
-          onSeleccionCambio={onSeleccionCantidadesItem}
           onValidarRapido={validarRapidoCantidadesItem}
           ejecutandoValidacion={ejecutandoCpiValidacion}
           refreshNonce={cpiRefreshNonce}

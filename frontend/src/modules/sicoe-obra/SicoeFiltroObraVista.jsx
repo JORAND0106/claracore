@@ -41,6 +41,8 @@ export default function SicoeFiltroObraVista({
   itemLabels = {},
   validacionMasivaPanel = null,
   extraActions = null,
+  /** En Cantidades por ítem: chips más sutiles (no cambia funcionalidad). */
+  chipsSuaves = false,
 }) {
   const [modalOpen, setModalOpen] = useState(false)
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport()
@@ -258,19 +260,26 @@ export default function SicoeFiltroObraVista({
         </div>
 
         {chipsActivos.length > 0 && (
-          <div className="cc-sicoe-filtro-chips" aria-label="Filtros activos">
+          <div
+            className={`cc-sicoe-filtro-chips${chipsSuaves ? ' cc-sicoe-filtro-chips--suave' : ''}`}
+            aria-label="Filtros activos"
+          >
             {chipsActivos.map((chip) => (
               <span
                 key={chip.key}
-                className="cc-sicoe-filtro-chip"
-                style={{
+                className={`cc-sicoe-filtro-chip${chipsSuaves ? ' cc-sicoe-filtro-chip--suave' : ''}`}
+                style={chipsSuaves ? {
+                  background: t.bg || 'rgba(148,163,184,0.10)',
+                  border: `1px solid ${t.border}`,
+                  color: t.textMuted,
+                } : {
                   background: `${t.primary}18`,
                   border: `1px solid ${t.primary}44`,
                   color: t.text,
                 }}
               >
-                <span style={{ color: t.primary, fontWeight: 700 }}>{chip.label}:</span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160 }}>{chip.value}</span>
+                <span style={{ color: chipsSuaves ? t.textMuted : t.primary, fontWeight: chipsSuaves ? 600 : 700 }}>{chip.label}:</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160, fontWeight: chipsSuaves ? 500 : 600, color: chipsSuaves ? t.text : undefined }}>{chip.value}</span>
                 <button
                   type="button"
                   aria-label={`Quitar filtro ${chip.label}`}
