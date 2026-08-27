@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:mapbox-geolocate": "node --test src/mapboxGeolocate.test.js",
+    "test:nivelacion-patron": "node --test src/utils/topografia_nivelacion_apertura.test.mjs src/utils/topografia_nivelacion_bm.test.mjs src/utils/topografia_nivelacion_patron_campo.test.mjs src/components/topografia/nivelacionPatronPoligonal.test.mjs",
     "test:cache": "node --test src/cache/vistaCache.test.js",
     "test:informe": "node --test src/utils/informePeriodicoSchedule.test.js src/utils/informePeriodicoCapture.test.js src/utils/permisosContratoInforme.test.js",
     "test:informes-pdf": "node --test src/informesVistaPreviaPdf.test.js",
