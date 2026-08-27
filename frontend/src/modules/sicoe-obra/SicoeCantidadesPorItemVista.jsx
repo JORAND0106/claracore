@@ -26,7 +26,7 @@ function fmtPesos(v) {
 
 /**
  * Franja «A revisar»: línea delgada de abscisas del tramo con marcas en alertas.
- * Etiqueta #registro + tipo alineada izq/centro/der según el tercio del tramo.
+ * Etiqueta #registro + tipo a la izq / centro / der de su marca según el tercio.
  */
 function estiloAlertaSegmento(s) {
   if (s.solapa || s.alertaSolape) {
@@ -41,9 +41,10 @@ function estiloAlertaSegmento(s) {
   return { color: '#334155', tag: 'Alerta' }
 }
 
+/** Tercio del tramo (0–100 %) → alineación de etiqueta respecto a su marca. */
 function tercioAbs(pct) {
   if (pct < 100 / 3) return 'izq'
-  if (pct > (200 / 3)) return 'der'
+  if (pct > 200 / 3) return 'der'
   return 'cen'
 }
 
@@ -70,121 +71,141 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
     return { ...s, a0, a1, mid, pct, tercio: tercioAbs(pct) }
   })
 
-  const porTercio = { izq: [], cen: [], der: [] }
-  for (const m of marks) porTercio[m.tercio].push(m)
-
-  const renderEtiqueta = (m) => {
-    const sel = String(seleccionadoId) === String(m.id)
-    const st = estiloAlertaSegmento(m)
-    const label = `#${m.numero_registro ?? m.id} ${st.tag}`
-    return (
-      <button
-        key={m.id}
-        type="button"
-        onClick={() => onSelectSegmento?.(m.id)}
-        title={`${label} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <div
         style={{
-          whiteSpace: 'nowrap',
-          background: sel ? `${t.primary || '#0284c7'}18` : 'transparent',
-          border: sel ? `1px solid ${t.primary || '#0284c7'}` : '1px solid transparent',
-          borderRadius: 4,
-          padding: '0 4px',
-          height: 16,
-          lineHeight: '16px',
-          fontSize: 11,
-          fontWeight: 800,
-          color: st.color,
-          cursor: 'pointer',
-          maxWidth: '100%',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 8,
+          marginBottom: 1,
+          flexWrap: 'wrap',
+          alignItems: 'baseline',
         }}
       >
-        {label}
-      </button>
-    )
-  }
-
-  return (
-    <div style={{ marginBottom: 6 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 2, flexWrap: 'wrap', alignItems: 'baseline' }}>
-        <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.text }}>{grupo.label}</span>
-        <span style={{ fontSize: 11, color: t.textMuted }}>
-          Abs {fmtNum(min, 1)} → {fmtNum(max, 1)} · {segs.length} alerta{segs.length === 1 ? '' : 's'}
+        <span style={{ fontSize: 11, fontWeight: 700, color: t.text }}>{grupo.label}</span>
+        <span style={{ fontSize: 10, color: t.textMuted }}>
+          {fmtNum(min, 1)} → {fmtNum(max, 1)} · {segs.length}
         </span>
       </div>
 
-      {/* Etiquetas: izq / centro / der según tercio del tramo */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1fr',
-          gap: 4,
-          minHeight: 16,
-          marginBottom: 2,
-        }}
-      >
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, justifyContent: 'flex-start', justifyContent: 'flex-start' }}>
-          {porTercio.izq.map(renderEtiqueta)}
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignContent: 'flex-start', justifyContent: 'center' }}>
-          {porTercio.cen.map(renderEtiqueta)}
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignContent: 'flex-start', justifyContent: 'flex-end' }}>
-          {porTercio.der.map(renderEtiqueta)}
-        </div>
-      </div>
-
-      {/* Eje Abs delgado + marcas de corte en posición real */}
-      <div style={{ position: 'relative', height: 12 }}>
+      {/* Etiquetas junto a su marca + eje Abs delgado */}
+      <div style={{ position: 'relative', height: 28, paddingTop: 14 }}>
         <div
           style={{
             position: 'absolute',
             left: 0,
             right: 0,
-            top: 5,
+            top: 20,
             height: 2,
             borderRadius: 1,
             background: t.border || '#94a3b8',
           }}
         />
-        <div style={{ position: 'absolute', left: 0, top: 2, width: 2, height: 8, background: t.border || '#94a3b8', borderRadius: 1 }} />
-        <div style={{ position: 'absolute', right: 0, top: 2, width: 2, height: 8, background: t.border || '#94a3b8', borderRadius: 1 }} />
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 17,
+            width: 2,
+            height: 8,
+            background: t.border || '#94a3b8',
+            borderRadius: 1,
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: 17,
+            width: 2,
+            height: 8,
+            background: t.border || '#94a3b8',
+            borderRadius: 1,
+          }}
+        />
 
         {marks.map((m) => {
           const sel = String(seleccionadoId) === String(m.id)
           const st = estiloAlertaSegmento(m)
+          const label = `#${m.numero_registro ?? m.id} ${st.tag}`
+          // izq → a la izquierda de la marca; cen → centrada; der → a la derecha
+          const transform =
+            m.tercio === 'izq'
+              ? 'translateX(-100%)'
+              : m.tercio === 'der'
+                ? 'translateX(0)'
+                : 'translateX(-50%)'
+          const textAlign = m.tercio === 'izq' ? 'right' : m.tercio === 'der' ? 'left' : 'center'
           return (
-            <button
-              key={`tick-${m.id}`}
-              type="button"
-              aria-label={`Marca #${m.numero_registro ?? m.id}`}
-              onClick={() => onSelectSegmento?.(m.id)}
-              title={`Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
+            <div
+              key={m.id}
               style={{
                 position: 'absolute',
                 left: `${m.pct}%`,
-                top: 1,
-                width: 8,
-                height: 10,
-                marginLeft: -4,
-                padding: 0,
-                border: 'none',
-                background: 'transparent',
-                cursor: 'pointer',
+                top: 0,
+                bottom: 0,
+                width: 0,
+                zIndex: sel ? 2 : 1,
               }}
             >
-              <span
+              <button
+                type="button"
+                onClick={() => onSelectSegmento?.(m.id)}
+                title={`${label} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
                 style={{
-                  display: 'block',
-                  width: 2,
-                  height: 10,
-                  margin: '0 auto',
-                  borderRadius: 1,
-                  background: sel ? (t.primary || '#0284c7') : st.color,
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  transform,
+                  textAlign,
+                  whiteSpace: 'nowrap',
+                  background: sel ? `${t.primary || '#0284c7'}22` : 'rgba(255,255,255,0.85)',
+                  border: sel ? `1px solid ${t.primary || '#0284c7'}` : '1px solid transparent',
+                  borderRadius: 3,
+                  padding: '0 3px',
+                  height: 14,
+                  lineHeight: '14px',
+                  fontSize: 10,
+                  fontWeight: 800,
+                  color: st.color,
+                  cursor: 'pointer',
+                  maxWidth: 110,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
                 }}
-              />
-            </button>
+              >
+                {label}
+              </button>
+              <button
+                type="button"
+                aria-label={label}
+                onClick={() => onSelectSegmento?.(m.id)}
+                title={`${label} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
+                style={{
+                  position: 'absolute',
+                  left: -4,
+                  top: 14,
+                  width: 8,
+                  height: 14,
+                  padding: 0,
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'block',
+                    width: 2,
+                    height: 12,
+                    margin: '0 auto',
+                    borderRadius: 1,
+                    background: sel ? t.primary || '#0284c7' : st.color,
+                  }}
+                />
+              </button>
+            </div>
           )
         })}
       </div>
@@ -458,9 +479,9 @@ export default function SicoeCantidadesPorItemVista({
       )}
 
       {modo === 'analisis' && gruposFranja.length > 0 && (
-        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '8px 12px' }}>
-          <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.text, marginBottom: 4 }}>
-            A revisar — posición en el tramo (solo alertas)
+        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '6px 10px 4px' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: t.text, marginBottom: 2 }}>
+            A revisar — eje Abs del tramo (solo alertas)
           </div>
           {gruposFranja.map((g) => (
             <FranjaCoberturaGrupo
@@ -471,11 +492,11 @@ export default function SicoeCantidadesPorItemVista({
               onSelectSegmento={seleccionar}
             />
           ))}
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 2, fontSize: 11, color: t.textMuted, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 0, fontSize: 10, color: t.textMuted, alignItems: 'center' }}>
             <span style={{ color: '#b91c1c', fontWeight: 700 }}>Solape</span>
             <span style={{ color: '#b45309', fontWeight: 700 }}>Vacío</span>
             <span style={{ color: '#6d28d9', fontWeight: 700 }}>Espesor</span>
-            <span>Etiqueta izq/centro/der según tercio del tramo · clic → fila</span>
+            <span>Marca en Abs · etiqueta izq/cen/der · clic → fila</span>
           </div>
         </div>
       )}
