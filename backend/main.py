@@ -25097,6 +25097,132 @@ def get_acta_rpo_vigente(contrato_id: int, current_user=Depends(get_current_user
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ─── SICOE OBRA: Cantidades por Ítem (vista de control de solapes/vacíos) ─────
+@app.get("/sicoe-obra/{contrato_id}/cantidades-por-item")
+def sicoe_cantidades_por_item(
+    contrato_id: int,
+    capitulo: str = Query(..., min_length=1),
+    item: str = Query(..., min_length=1, description="Código de ítem (item_numero)"),
+    tramo: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    """
+    Lista plana de so_registros del contrato para un Capítulo+Ítem.
+    Incluye V.U. vigente de listado_precios y costo_directo_calc = round(cant×VU, 0)
+    (no usa el costo_directo almacenado ni el vlr_unitario congelado de la fila).
+    """
+    _require_contract_access(current_user, contrato_id)
+    cap = (capitulo or "").strip()
+    it = (item or "").strip()
+    if not cap or not it:
+        raise HTTPException(status_code=422, detail="capitulo e item son obligatorios.")
+
+    from dashboard_costo_agregado import costo_agregado_cant_vu, listado_vu_from_index
+
+    listado_idx = _listado_precios_index_por_item_norm(contrato_id, cap)
+    it_key = _dash_norm_item_key_py(it)
+    vu = listado_vu_from_index(_dash_norm_capitulo_key_py(cap), it_key, listado_idx) or 0.0
+    listado_row = listado_idx.get(it_key) or {}
+    ocultar_cd = _sicoe_ocultar_costo_directo_reportes(current_user)
+
+    cols = (
+        "id,reporte_id,numero_registro,capitulo,item_numero,item_descripcion,unidad,"
+        "competencia,longitud,ancho,espesor,cantidad,cantidad_total,observacion,"
+        "foto_url,foto_numero,grafico_url,grafico_numero,graficos_historial,"
+        "tramo,infraestructura,calzada,margen,abs_inicio,abs_final,nodo_ini,nodo_fin,"
+        "pk_id_id,civ,ubicacion,coord_lat,coord_lng,bloqueado,"
+        f"{SICOE_SELECT_NIVELES_ESTADO}"
+    )
+
+    out_rows: List[dict] = []
+    off = 0
+    page = 1000
+    while True:
+
+        def _page(o=off):
+            q = (
+                supabase.table("so_registros")
+                .select(cols)
+                .eq("contrato_id", contrato_id)
+                .eq("capitulo", cap)
+            )
+            variants = _item_numero_filter_variants(it)
+            if len(variants) == 1:
+                q = q.eq("item_numero", variants[0])
+            else:
+                q = q.in_("item_numero", variants)
+            if tramo and str(tramo).strip():
+                q = q.ilike("tramo", f"%{str(tramo).strip()}%")
+            return q.order("id").range(o, o + page - 1).execute().data
+
+        batch = supabase_execute(_page) or []
+        out_rows.extend(batch)
+        if len(batch) < page:
+            break
+        off += page
+        if off > 50000:
+            break
+
+    rep_ids = list({int(r["reporte_id"]) for r in out_rows if r.get("reporte_id") is not None})
+    rep_map: Dict[int, dict] = {}
+    for i in range(0, len(rep_ids), 200):
+        chunk = rep_ids[i : i + 200]
+        if not chunk:
+            continue
+
+        def _reps(c=chunk):
+            return (
+                supabase.table("so_reportes")
+                .select("id,numero_reporte,estado,descripcion_actividad")
+                .eq("contrato_id", contrato_id)
+                .in_("id", c)
+                .execute()
+                .data
+            )
+
+        for rr in supabase_execute(_reps) or []:
+            try:
+                rep_map[int(rr["id"])] = rr
+            except (TypeError, ValueError, KeyError):
+                pass
+
+    enriched = []
+    for r in out_rows:
+        row = dict(r)
+        try:
+            rid = int(row.get("reporte_id"))
+        except (TypeError, ValueError):
+            rid = None
+        rep = rep_map.get(rid) if rid is not None else None
+        row["numero_reporte"] = (rep or {}).get("numero_reporte")
+        row["reporte_estado"] = (rep or {}).get("estado")
+        cant = float(row.get("cantidad_total") or row.get("cantidad") or 0)
+        cd_calc = costo_agregado_cant_vu(cant, float(vu or 0))
+        row["vlr_unitario_listado"] = float(vu or 0)
+        if ocultar_cd:
+            row["costo_directo_calc"] = None
+            row.pop("costo_directo", None)
+        else:
+            row["costo_directo_calc"] = cd_calc
+        row.pop("costo_directo", None)
+        row.pop("vlr_unitario", None)
+        enriched.append(row)
+
+    return {
+        "ok": True,
+        "contrato_id": contrato_id,
+        "capitulo": cap,
+        "item": it,
+        "item_descripcion": (listado_row.get("descripcion") or "").strip() or None,
+        "unidad": (listado_row.get("unidad") or "").strip() or None,
+        "vlr_unitario_listado": float(vu or 0),
+        "ocultar_costo_directo": ocultar_cd,
+        "total": len(enriched),
+        "registros": enriched,
+    }
+
+
 # ─── SICOE OBRA: Búsqueda de ítems del listado de precios ────────────────────
 @app.get("/sicoe-obra/{contrato_id}/listado-precios-busqueda")
 def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, competencia: str = None, current_user=Depends(get_current_user)):

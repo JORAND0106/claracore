@@ -55,6 +55,7 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoFiltroSesion'
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
+import SicoeCantidadesPorItemVista from './modules/sicoe-obra/SicoeCantidadesPorItemVista'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -7790,6 +7791,10 @@ function ModuloSicoeObra({
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
   const [reporteSeleccionado, setReporteSeleccionado] = useState(null)
+  /** Vista módulo: grilla por reporte (default) | cantidades por ítem (control solapes/vacíos). */
+  const [sicoeModuloVista, setSicoeModuloVista] = useState('reportes')
+  const [cpiRefreshNonce, setCpiRefreshNonce] = useState(0)
+  const [ejecutandoCpiValidacion, setEjecutandoCpiValidacion] = useState(false)
   /** Antes de filtrar la grilla por PK desde el mapa: asignar inspector/subcontratista en bloque. */
   const [modalPkAsignacionMapa, setModalPkAsignacionMapa] = useState(null)
   const [pkMapaInspectorId, setPkMapaInspectorId] = useState('')
@@ -10614,6 +10619,88 @@ function ModuloSicoeObra({
   const sicoeFIn = (px) => ({ flex: `0 0 ${px}px` })
   const sicoeFGrow = { flex: '1 1 0', minWidth: 0, maxWidth: '100%' }
 
+  const abrirRegistroDesdeCantidadesItem = useCallback(async (reg) => {
+    const rid = Number(reg?.reporte_id)
+    if (!Number.isFinite(rid) || rid <= 0) return
+    abortarPeticionesSicoeFondo()
+    setReporteSeleccionado({
+      id: rid,
+      numero_reporte: reg?.numero_reporte,
+      _cargandoDetalle: true,
+      registros: [],
+      puntos: [],
+      _autoRegistro: reg.id,
+    })
+    setModalCarpeta(true)
+    try {
+      const data = await fetchDetalleReporteSicoe(rid, { aplicarFiltros: false })
+      if (!data?.id) {
+        setReporteSeleccionado((prev) =>
+          prev && Number(prev.id) === rid
+            ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] }
+            : prev,
+        )
+        return
+      }
+      setReporteSeleccionado({
+        ...data,
+        _cargandoDetalle: false,
+        _autoRegistro: reg.id,
+      })
+    } catch {
+      setReporteSeleccionado((prev) =>
+        prev && Number(prev.id) === rid ? { ...prev, _cargandoDetalle: false } : prev,
+      )
+    }
+  }, [fetchDetalleReporteSicoe, abortarPeticionesSicoeFondo])
+
+  const onSeleccionCantidadesItem = useCallback((fila, meta) => {
+    if (!fila) return
+    const nf = {
+      ...filtrosSicoeRef.current,
+      capitulo: String(meta?.capitulo || fila.capitulo || '').trim(),
+      item: String(meta?.item || fila.item_numero || '').trim(),
+      tramo: String(fila.tramo || '').trim(),
+      numero_registro: fila.numero_registro != null ? String(fila.numero_registro) : '',
+      numero_reporte: fila.numero_reporte != null ? String(fila.numero_reporte) : '',
+    }
+    aplicarFiltrosSicoeYBuscar(nf, { clearItems: true, clearPanelChecks: true })
+  }, [aplicarFiltrosSicoeYBuscar])
+
+  const validarRapidoCantidadesItem = useCallback(async (reg, estado) => {
+    const nv = Number(nivelInfo?.nivelValidacion)
+    if (!Number.isFinite(nv) || nv < 1 || nv > 6) return
+    if (!reg?.id) return
+    if (!String(reg.item_numero || '').trim()) {
+      window.alert('No puedes validar un registro sin ítem asignado.')
+      return
+    }
+    setEjecutandoCpiValidacion(true)
+    try {
+      const sufijo = `validar-nivel${nv}`
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}/${sufijo}`, {
+        method: 'PUT',
+        headers: hdrsJSON,
+        body: JSON.stringify({ estado }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const d = data?.detail
+        throw new Error(typeof d === 'string' ? d : `Error ${res.status}`)
+      }
+      invalidateSicoeVistaCache(contrato_id)
+      invalidateDashboardVistaCache(contrato_id)
+      setCpiRefreshNonce((n) => n + 1)
+      if (busquedaRealizada) {
+        try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
+      }
+    } catch (e) {
+      window.alert(e?.message || String(e))
+    } finally {
+      setEjecutandoCpiValidacion(false)
+    }
+  }, [API_URL, contrato_id, nivelInfo, hdrsJSON, busquedaRealizada])
+
   return (
     <div className="cc-sicoe-root">
       {/* ── Banners offline ── */}
@@ -10856,11 +10943,49 @@ function ModuloSicoeObra({
         <div>
           <h2 style={{ margin:0, color:t.text, fontSize:'var(--cc-title)', fontWeight:'800' }}>🏗️ SICOE Obra</h2>
           <p style={{ margin:0, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Reporte de cantidades de campo</p>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }} role="tablist" aria-label="Vistas SICOE Obra">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sicoeModuloVista === 'reportes'}
+              onClick={() => setSicoeModuloVista('reportes')}
+              style={{
+                background: sicoeModuloVista === 'reportes' ? t.primary : 'transparent',
+                color: sicoeModuloVista === 'reportes' ? '#fff' : t.textMuted,
+                border: `1px solid ${sicoeModuloVista === 'reportes' ? t.primary : t.border}`,
+                borderRadius: 8,
+                padding: '6px 12px',
+                fontWeight: 800,
+                fontSize: 'var(--cc-caption)',
+                cursor: 'pointer',
+              }}
+            >
+              Por reporte
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sicoeModuloVista === 'cantidades_item'}
+              onClick={() => setSicoeModuloVista('cantidades_item')}
+              style={{
+                background: sicoeModuloVista === 'cantidades_item' ? t.primary : 'transparent',
+                color: sicoeModuloVista === 'cantidades_item' ? '#fff' : t.textMuted,
+                border: `1px solid ${sicoeModuloVista === 'cantidades_item' ? t.primary : t.border}`,
+                borderRadius: 8,
+                padding: '6px 12px',
+                fontWeight: 800,
+                fontSize: 'var(--cc-caption)',
+                cursor: 'pointer',
+              }}
+            >
+              Cantidades por ítem
+            </button>
+          </div>
         </div>
         <div className="cc-sicoe-header-actions" style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
           <PrepareOfflineBtn actaRpo={filtros.acta_rpo || null} />
           <ForceOfflineToggle />
-          {puedeCrear && (
+          {puedeCrear && sicoeModuloVista === 'reportes' && (
             <button type="button" className="cc-sicoe-touch-btn" onClick={() => setModalNuevoReporte(true)} style={{
               background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
               padding: sicoeCompact ? '10px 16px' : '10px 20px', minHeight: sicoeCompact ? 44 : undefined, fontWeight:'700', fontSize:'var(--cc-sm)', cursor:'pointer'
@@ -11308,6 +11433,25 @@ function ModuloSicoeObra({
       </div>
       </PanelCalculadoraProvider>
 
+      {sicoeModuloVista === 'cantidades_item' ? (
+        <SicoeCantidadesPorItemVista
+          t={t}
+          contratoId={contrato_id}
+          token={getToken()}
+          API_URL={API_URL}
+          nivelInfo={nivelInfo}
+          nivelesContrato={nivelesContrato}
+          filtroCapList={filtroCapList}
+          capituloInicial={filtros.capitulo || ''}
+          itemInicial={filtros.item || ''}
+          onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
+          onSeleccionCambio={onSeleccionCantidadesItem}
+          onValidarRapido={validarRapidoCantidadesItem}
+          ejecutandoValidacion={ejecutandoCpiValidacion}
+          refreshNonce={cpiRefreshNonce}
+        />
+      ) : (
+      <>
       <SicoeFiltroObraVista
         t={t}
         contratoId={contrato_id}
@@ -11726,6 +11870,8 @@ function ModuloSicoeObra({
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* ── Modal Configurar Semanas Iniciales ── */}
       {modalIniciarSem && (
@@ -11936,6 +12082,7 @@ function ModuloSicoeObra({
             setReporteSeleccionado(null)
             invalidateSicoeVistaCache(contrato_id)
             invalidateDashboardVistaCache(contrato_id)
+            if (sicoeModuloVista === 'cantidades_item') setCpiRefreshNonce((n) => n + 1)
             if (busquedaRealizada) {
               try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
             } else {
@@ -11945,6 +12092,7 @@ function ModuloSicoeObra({
           onRefrescarListadoSicoe={() => {
             invalidateSicoeVistaCache(contrato_id)
             invalidateDashboardVistaCache(contrato_id)
+            if (sicoeModuloVista === 'cantidades_item') setCpiRefreshNonce((n) => n + 1)
             if (busquedaRealizada) {
               try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
             }
