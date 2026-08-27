@@ -17,6 +17,10 @@ import {
   actividadesConRegistro,
 } from './bitacoraEventoActividades'
 import {
+  formatHorarioAsistencia,
+  labelEstadoColaborador,
+} from './personalAsistenciaHelpers'
+import {
   buildActasPages,
   buildBitacoraPages,
   equiposConUso,
@@ -122,6 +126,35 @@ function DiarioPage({ page, palette, api, onZoomPhoto }) {
             </li>
           ))}
         </ul>
+      )}
+      {Array.isArray(d.asistencia_colaboradores) && d.asistencia_colaboradores.length > 0 && (
+        <>
+          <SectionTitle palette={palette}>Asistencia</SectionTitle>
+          <div className="cc-libro-sheet-wrap">
+            <table className="cc-libro-sheet" style={{ borderColor: palette.pageEdge }}>
+              <thead>
+                <tr style={{ background: palette.accentSoft, color: palette.accent }}>
+                  <th scope="col">Nombre</th>
+                  <th scope="col">Cargo</th>
+                  <th scope="col">Empresa</th>
+                  <th scope="col">Estado</th>
+                  <th scope="col">Horario</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.asistencia_colaboradores.map((a, i) => (
+                  <tr key={`as-${a.colaborador_id || a.nombre}-${i}`} style={{ color: palette.text, borderColor: palette.pageEdge }}>
+                    <td data-label="Nombre">{a.nombre || '—'}</td>
+                    <td data-label="Cargo">{a.cargo || '—'}</td>
+                    <td data-label="Empresa">{a.subcontratista_nombre || '—'}</td>
+                    <td data-label="Estado">{labelEstadoColaborador(a.estado)}</td>
+                    <td data-label="Horario" className="cc-libro-sheet-cell--nowrap">{formatHorarioAsistencia(a)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       <SectionTitle palette={palette}>Maquinaria</SectionTitle>

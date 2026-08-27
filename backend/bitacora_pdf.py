@@ -610,9 +610,51 @@ def _fotos_diario(diario: Optional[dict]) -> List[dict]:
     return out
 
 
+def _html_asistencia_colaboradores(diario: Optional[dict], pal: dict) -> str:
+    """Listado de asistencia diaria (si hay filas)."""
+    rows_in = (diario or {}).get("asistencia_colaboradores") or []
+    if not isinstance(rows_in, list) or not rows_in:
+        return ""
+    rows = []
+    for a in rows_in:
+        if not isinstance(a, dict):
+            continue
+        nombre = str(a.get("nombre") or "").strip()
+        if not nombre:
+            continue
+        cargo = str(a.get("cargo") or "").strip() or "—"
+        empresa = str(a.get("subcontratista_nombre") or "").strip() or "—"
+        estado = str(a.get("estado") or "activo").strip().capitalize()
+        ini = str(a.get("hora_ingreso") or "").strip()[:5]
+        fin = str(a.get("hora_salida") or "").strip()[:5]
+        horario = "–".join(p for p in (ini, fin) if p) or "—"
+        rows.append([
+            _esc(nombre),
+            _esc(cargo),
+            _esc(empresa),
+            _esc(estado),
+            _esc(horario),
+        ])
+    if not rows:
+        return ""
+    return (
+        f'<div style="margin-top:3pt;">'
+        + _section_title("Asistencia", pal)
+        + _mini_table(
+            ["Nombre", "Cargo", "Empresa", "Estado", "Horario"],
+            rows,
+            pal,
+            ["28%", "18%", "24%", "12%", "18%"],
+            compact=True,
+        )
+        + "</div>"
+    )
+
+
 def _html_cuerpo_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> str:
     """Materiales a ancho completo; debajo, Observaciones | Registro Fotográfico."""
     mats = _html_materiales(diario, pal)
+    asist = _html_asistencia_colaboradores(diario, pal)
     left = _html_observaciones(diario, pal)
     fotos = _fotos_diario(diario)
     prepared = _prefetch_fotos(fotos[:_FOTO_MAX_DIARIO], contrato_id)
@@ -621,6 +663,7 @@ def _html_cuerpo_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> 
     )
     return f"""
 <div style="margin-top:3pt;">{mats}</div>
+{asist}
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:3pt;">
   <tr>
     <td width="50%" style="vertical-align:top;padding-right:4pt;">{left}</td>

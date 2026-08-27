@@ -1288,9 +1288,302 @@ def sync_visitantes_catalogo(
     return synced
 
 
+ESTADOS_COLABORADOR = ("activo", "incapacitado", "inactivo")
+DOCUMENTO_TIPOS_COLABORADOR = ("CC", "CE", "TI", "PA", "NIT", "OTRO")
+HORA_SALIDA_DEFAULT = "16:30"
+
+
+def _norm_documento_numero(raw) -> str:
+    return re.sub(r"\D+", "", str(raw or ""))
+
+
+def _capitalizar_nombre_propio(nombre: str) -> str:
+    parts = re.split(r"\s+", str(nombre or "").strip())
+    out = []
+    for p in parts:
+        if not p:
+            continue
+        out.append(p[:1].upper() + p[1:].lower() if len(p) > 1 else p.upper())
+    return " ".join(out)
+
+
+def list_colaboradores(sb, contrato_id: int, q: str = "") -> List[dict]:
+    try:
+        rows = (
+            sb.table("seguimiento_bitacora_colaborador")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("activo", True)
+            .order("nombre")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.debug("list_colaboradores: %s", exc)
+        return []
+    needle = _norm_nombre_visitante(q)
+    doc_needle = _norm_documento_numero(q)
+    if not needle and not doc_needle:
+        return rows
+    out = []
+    for r in rows:
+        if needle and (
+            needle in _norm_nombre_visitante(r.get("nombre") or "")
+            or needle in _norm_nombre_visitante(r.get("cargo") or "")
+            or needle in _norm_nombre_visitante(r.get("subcontratista_nombre") or "")
+        ):
+            out.append(r)
+            continue
+        if doc_needle and doc_needle in _norm_documento_numero(r.get("documento_numero") or ""):
+            out.append(r)
+    return out
+
+
+def upsert_colaborador(
+    sb,
+    contrato_id: int,
+    nombre: str,
+    *,
+    documento_tipo: str = "CC",
+    documento_numero: str = "",
+    cargo: str = "",
+    subcontratista_id=None,
+    subcontratista_nombre: str = "",
+    user_id: Optional[int] = None,
+) -> Optional[dict]:
+    nombre_limpio = _capitalizar_nombre_propio(nombre)
+    if not nombre_limpio:
+        return None
+    nombre_norm = _norm_nombre_visitante(nombre_limpio)
+    doc_tipo = str(documento_tipo or "CC").strip().upper() or "CC"
+    if doc_tipo not in DOCUMENTO_TIPOS_COLABORADOR:
+        doc_tipo = "OTRO"
+    doc_num = _norm_documento_numero(documento_numero)
+    cargo_limpio = str(cargo or "").strip()
+    sub_nombre = str(subcontratista_nombre or "").strip()
+    try:
+        sub_id = int(subcontratista_id) if subcontratista_id not in (None, "") else None
+    except (TypeError, ValueError):
+        sub_id = None
+
+    try:
+        existentes = (
+            sb.table("seguimiento_bitacora_colaborador")
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("nombre_norm", nombre_norm)
+            .limit(5)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("upsert_colaborador select: %s", exc)
+        return None
+
+    patch_base = {
+        "activo": True,
+        "nombre": nombre_limpio,
+        "documento_tipo": doc_tipo,
+        "documento_numero": doc_num,
+        "documento_norm": doc_num,
+        "updated_at": _now_utc().isoformat(),
+    }
+    if cargo_limpio:
+        patch_base["cargo"] = cargo_limpio
+    if sub_id is not None:
+        patch_base["subcontratista_id"] = sub_id
+    if sub_nombre:
+        patch_base["subcontratista_nombre"] = sub_nombre
+
+    for row in existentes:
+        try:
+            updated = (
+                sb.table("seguimiento_bitacora_colaborador")
+                .update(patch_base)
+                .eq("id", int(row["id"]))
+                .execute()
+                .data
+                or []
+            )
+            return updated[0] if updated else {**row, **patch_base}
+        except Exception as exc:
+            _log.warning("upsert_colaborador update: %s", exc)
+            return {**row, **patch_base}
+
+    payload = {
+        "contrato_id": int(contrato_id),
+        "nombre": nombre_limpio,
+        "nombre_norm": nombre_norm,
+        "documento_tipo": doc_tipo,
+        "documento_numero": doc_num,
+        "documento_norm": doc_num,
+        "cargo": cargo_limpio,
+        "subcontratista_id": sub_id,
+        "subcontratista_nombre": sub_nombre,
+        "activo": True,
+        "created_by": int(user_id) if user_id is not None else None,
+        "created_at": _now_utc().isoformat(),
+        "updated_at": _now_utc().isoformat(),
+    }
+    try:
+        inserted = sb.table("seguimiento_bitacora_colaborador").insert(payload).execute().data or []
+        return inserted[0] if inserted else None
+    except Exception as exc:
+        _log.warning("upsert_colaborador insert: %s", exc)
+        return None
+
+
+def _parse_hora_hhmm(raw, *, default: Optional[str] = None) -> Optional[str]:
+    s = str(raw or "").strip()
+    if not s:
+        return default
+    m = re.match(r"^(\d{1,2}):(\d{2})(?::\d{2})?$", s)
+    if not m:
+        return default
+    h, mi = int(m.group(1)), int(m.group(2))
+    if h > 23 or mi > 59:
+        return default
+    return f"{h:02d}:{mi:02d}"
+
+
+def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        nombre = _capitalizar_nombre_propio(item.get("nombre") or "")
+        if not nombre:
+            continue
+        cargo = str(item.get("cargo") or "").strip()
+        estado = str(item.get("estado") or "activo").strip().lower()
+        if estado not in ESTADOS_COLABORADOR:
+            estado = "activo"
+        doc_tipo = str(item.get("documento_tipo") or "CC").strip().upper() or "CC"
+        if doc_tipo not in DOCUMENTO_TIPOS_COLABORADOR:
+            doc_tipo = "OTRO"
+        doc_num = _norm_documento_numero(item.get("documento_numero"))
+        try:
+            cid = int(item["colaborador_id"]) if item.get("colaborador_id") not in (None, "") else None
+        except (TypeError, ValueError):
+            cid = None
+        try:
+            sub_id = int(item["subcontratista_id"]) if item.get("subcontratista_id") not in (None, "") else None
+        except (TypeError, ValueError):
+            sub_id = None
+        key = (cid, _norm_nombre_visitante(nombre), doc_num)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "colaborador_id": cid,
+            "nombre": nombre,
+            "documento_tipo": doc_tipo,
+            "documento_numero": doc_num,
+            "cargo": cargo,
+            "subcontratista_id": sub_id,
+            "subcontratista_nombre": str(item.get("subcontratista_nombre") or "").strip(),
+            "estado": estado,
+            "hora_ingreso": _parse_hora_hhmm(item.get("hora_ingreso")),
+            "hora_salida": _parse_hora_hhmm(
+                item.get("hora_salida"), default=HORA_SALIDA_DEFAULT,
+            ),
+            "observacion": str(item.get("observacion") or item.get("observaciones") or "").strip(),
+            "origen": str(item.get("origen") or "catalogo").strip() or "catalogo",
+        })
+    return out
+
+
+def _personal_desde_asistencia(asistencia: List[dict]) -> List[dict]:
+    """Agrega cantidades por cargo solo para colaboradores con estado Activo."""
+    counts: Dict[str, float] = {}
+    for row in asistencia or []:
+        if str(row.get("estado") or "").lower() != "activo":
+            continue
+        cargo = str(row.get("cargo") or "").strip()
+        if not cargo:
+            continue
+        counts[cargo] = counts.get(cargo, 0.0) + 1.0
+    return [{"cargo": c, "cantidad": n} for c, n in sorted(counts.items(), key=lambda x: x[0].lower())]
+
+
+def sync_colaboradores_catalogo(
+    sb,
+    contrato_id: int,
+    asistencia: List[dict],
+    *,
+    user_id: Optional[int] = None,
+) -> List[dict]:
+    """Upsert catálogo y snapshot inmutable para asistencia_colaboradores."""
+    synced: List[dict] = []
+    for item in asistencia or []:
+        nombre = str(item.get("nombre") or "").strip()
+        if not nombre:
+            continue
+        cat = upsert_colaborador(
+            sb,
+            contrato_id,
+            nombre,
+            documento_tipo=item.get("documento_tipo") or "CC",
+            documento_numero=item.get("documento_numero") or "",
+            cargo=item.get("cargo") or "",
+            subcontratista_id=item.get("subcontratista_id"),
+            subcontratista_nombre=item.get("subcontratista_nombre") or "",
+            user_id=user_id,
+        )
+        synced.append({
+            **item,
+            "colaborador_id": (
+                int((cat or {}).get("id"))
+                if cat and cat.get("id") is not None
+                else item.get("colaborador_id")
+            ),
+            "nombre": str((cat or {}).get("nombre") or nombre),
+            "documento_tipo": str((cat or {}).get("documento_tipo") or item.get("documento_tipo") or "CC"),
+            "documento_numero": str((cat or {}).get("documento_numero") or item.get("documento_numero") or ""),
+            "cargo": str(item.get("cargo") or (cat or {}).get("cargo") or "").strip(),
+            "subcontratista_id": (
+                item.get("subcontratista_id")
+                if item.get("subcontratista_id") is not None
+                else (cat or {}).get("subcontratista_id")
+            ),
+            "subcontratista_nombre": str(
+                item.get("subcontratista_nombre") or (cat or {}).get("subcontratista_nombre") or ""
+            ).strip(),
+            "origen": "catalogo",
+        })
+    return synced
+
+
+def _resolver_personal_y_asistencia(
+    sb,
+    contrato_id: int,
+    data: dict,
+    *,
+    user_id: Optional[int] = None,
+) -> Tuple[List[dict], Optional[List[dict]]]:
+    """
+    Si viene asistencia_colaboradores, sincroniza catálogo y deriva personal.
+    Si no, usa personal legacy.
+    Returns (personal, asistencia|None).
+    """
+    if "asistencia_colaboradores" in data:
+        lista = _normalizar_asistencia_colaboradores(data.get("asistencia_colaboradores"))
+        synced = sync_colaboradores_catalogo(sb, contrato_id, lista, user_id=user_id)
+        personal = _expandir_personal_otro(_personal_desde_asistencia(synced))
+        return personal, synced
+    personal = _expandir_personal_otro(_normalizar_personal(data.get("personal")))
+    return personal, None
+
+
 def _strip_para_autocompletar(entrada: dict) -> dict:
-    """Personal + maquinaria del día anterior. Materiales nunca se autocompletan."""
+    """Personal + asistencia + maquinaria del día anterior. Materiales nunca se autocompletan."""
     personal = _normalizar_personal(entrada.get("personal"))
+    asistencia = _normalizar_asistencia_colaboradores(entrada.get("asistencia_colaboradores"))
     usos = []
     for u in entrada.get("equipos_uso") or []:
         if not isinstance(u, dict):
@@ -1313,6 +1606,7 @@ def _strip_para_autocompletar(entrada: dict) -> dict:
         "fuente_id": entrada.get("id"),
         "fuente_fecha": entrada.get("fecha"),
         "personal": personal,
+        "asistencia_colaboradores": asistencia,
         "equipos_uso": usos,
         "materiales": [],  # siempre vacío: movimientos son del día
     }
@@ -1554,6 +1848,9 @@ def _enrich_entrada(
     """
     out = dict(row)
     out["personal"] = _normalizar_personal(out.get("personal"))
+    out["asistencia_colaboradores"] = _normalizar_asistencia_colaboradores(
+        out.get("asistencia_colaboradores"),
+    )
     out["imagenes"] = [
         _enrich_imagen_preview(x) or x
         for x in _normalizar_imagenes(out.get("imagenes"))
@@ -1788,7 +2085,6 @@ def crear_reporte_diario(
             "clima_temp_c": clima_temp,
             "clima_descripcion": clima_desc or None,
             "clima_editado_manual": bool(data.get("clima_editado_manual")),
-            "personal": _normalizar_personal(data.get("personal")),
             "materiales": _persist_materiales(_normalizar_materiales(data.get("materiales"))),
             "cuerpo_html": str(data.get("cuerpo_html") or ""),
             "imagenes": [],
@@ -1798,7 +2094,12 @@ def crear_reporte_diario(
             "created_at": _now_utc().isoformat(),
             "updated_at": _now_utc().isoformat(),
         }
-        payload["personal"] = _expandir_personal_otro(payload["personal"])
+        personal, asistencia = _resolver_personal_y_asistencia(
+            sb, contrato_id, data, user_id=user_id,
+        )
+        payload["personal"] = personal
+        if asistencia is not None:
+            payload["asistencia_colaboradores"] = asistencia
 
     with _stage_timer(stages, "sync_cargos"):
         sync_cargos_desde_personal(sb, contrato_id, payload["personal"], user_id=user_id)
@@ -1812,10 +2113,15 @@ def crear_reporte_diario(
         try:
             inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
         except Exception as exc:
-            # Columna materiales ausente en esquemas antiguos: un reintento sin ella.
-            _log.warning("bitacora.crear_diario insert con materiales falló: %s", exc)
-            payload.pop("materiales", None)
-            inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+            # Columnas nuevas pueden faltar en esquemas antiguos: reintentar sin ellas.
+            _log.warning("bitacora.crear_diario insert falló: %s", exc)
+            payload.pop("asistencia_colaboradores", None)
+            try:
+                inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+            except Exception as exc2:
+                _log.warning("bitacora.crear_diario insert sin asistencia falló: %s", exc2)
+                payload.pop("materiales", None)
+                inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
         if not inserted:
             raise ValueError("No se pudo crear el Reporte Diario")
         entrada = inserted[0]
@@ -2044,10 +2350,14 @@ def update_entrada(
             patch["clima_descripcion"] = str(data.get("clima_descripcion") or "").strip() or None
         if "clima_editado_manual" in data:
             patch["clima_editado_manual"] = bool(data.get("clima_editado_manual"))
-        if "personal" in data:
+        if "personal" in data or "asistencia_colaboradores" in data:
             with _stage_timer(stages, "sync_cargos"):
-                pers = _expandir_personal_otro(_normalizar_personal(data.get("personal")))
+                pers, asist = _resolver_personal_y_asistencia(
+                    sb, contrato_id, data, user_id=user_id,
+                )
                 patch["personal"] = pers
+                if asist is not None:
+                    patch["asistencia_colaboradores"] = asist
                 sync_cargos_desde_personal(sb, contrato_id, pers, user_id=user_id)
         if "materiales" in data:
             mats = _persist_materiales(_normalizar_materiales(data.get("materiales")))
