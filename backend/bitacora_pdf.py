@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import html
+import json
 import logging
 import re
 import threading
@@ -430,10 +431,28 @@ def _ubicacion_material(m: dict) -> str:
     return "—"
 
 
+def _ubicacion_actividad(a: dict) -> str:
+    """Ubicación visible de Actividad: Tramo · Infraestructura (pk_id solo interno)."""
+    tramo = str(a.get("ubicacion_tramo") or a.get("tramo") or "").strip()
+    infra = str(
+        a.get("ubicacion_infraestructura") or a.get("infraestructura") or ""
+    ).strip()
+    if tramo or infra:
+        return " · ".join(p for p in (tramo, infra) if p)
+    return "—"
+
+
 def _html_actividades_evento(ev: dict, pal: dict) -> str:
     """Tabla estructurada de Actividades del Reporte de Evento (si hay filas)."""
-    detalle = ev.get("evento_detalle") if isinstance(ev.get("evento_detalle"), dict) else {}
-    acts = detalle.get("actividades") if isinstance(detalle, dict) else None
+    detalle = ev.get("evento_detalle")
+    if isinstance(detalle, str):
+        try:
+            detalle = json.loads(detalle)
+        except Exception:
+            detalle = {}
+    if not isinstance(detalle, dict):
+        detalle = {}
+    acts = detalle.get("actividades")
     if not isinstance(acts, list) or not acts:
         return ""
     rows = []
@@ -445,7 +464,7 @@ def _html_actividades_evento(ev: dict, pal: dict) -> str:
         abs_fin = str(a.get("abs_fin") or "").strip()
         cantidad = str(a.get("cantidad") or "").strip()
         observacion = str(a.get("observacion") or a.get("observaciones") or "").strip()
-        ubi = _ubicacion_material(a)
+        ubi = _ubicacion_actividad(a)
         if not any([actividad, abs_inicio, abs_fin, cantidad, observacion, ubi and ubi != "—"]):
             continue
         rows.append([
@@ -683,7 +702,11 @@ def _fingerprint_dia(dia: dict) -> str:
     parts.append(f"d:{d.get('id')}:{d.get('updated_at')}:{len(d.get('imagenes') or [])}")
     for e in dia.get("eventos") or []:
         if isinstance(e, dict):
-            parts.append(f"e:{e.get('id')}:{e.get('updated_at')}:{len(e.get('imagenes') or [])}")
+            detalle = e.get("evento_detalle") if isinstance(e.get("evento_detalle"), dict) else {}
+            n_acts = len(detalle.get("actividades") or []) if isinstance(detalle, dict) else 0
+            parts.append(
+                f"e:{e.get('id')}:{e.get('updated_at')}:{len(e.get('imagenes') or [])}:a{n_acts}"
+            )
     return "|".join(parts)
 
 

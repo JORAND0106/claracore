@@ -3329,6 +3329,44 @@ select.cc-dashboard-acta-select--light option {
   z-index: 2;
 }
 
+.cc-libro-topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.cc-libro-fecha-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--cc-xs);
+  font-weight: 650;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.cc-libro-fecha-jump input[type="date"] {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: var(--cc-sm);
+  font-weight: 700;
+  font-family: inherit;
+  color-scheme: dark;
+  max-width: 160px;
+}
+
+.cc-libro-fecha-msg {
+  flex-shrink: 0;
+  padding: 4px 18px 0;
+  font-size: var(--cc-xs);
+  color: color-mix(in srgb, var(--libro-accent, #0077B6) 70%, #fff);
+  font-weight: 650;
+}
+
 .cc-libro-brand {
   display: flex;
   align-items: center;

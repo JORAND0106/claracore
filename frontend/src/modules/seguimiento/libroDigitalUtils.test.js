@@ -5,6 +5,7 @@ import {
   buildActasPages,
   buildBitacoraPages,
   equiposConUso,
+  findPageIndexByFecha,
   formatClimaResumen,
   formatEquipoDetalle,
   formatMaterialLine,
@@ -52,6 +53,37 @@ describe('buildActasPages', () => {
     assert.equal(pages[1].sourceId, 3)
     assert.equal(pages[2].kind, 'acta')
     assert.equal(pages[2].sourceId, 2)
+  })
+})
+
+describe('findPageIndexByFecha', () => {
+  const pages = buildBitacoraPages([
+    { id: 4, tipo: 'diario', fecha: '2026-08-10', created_at: '2026-08-10T09:00:00Z' },
+    { id: 5, tipo: 'evento', fecha: '2026-08-11', created_at: '2026-08-11T11:00:00Z' },
+    { id: 1, tipo: 'diario', fecha: '2026-08-12', created_at: '2026-08-12T08:00:00Z' },
+    { id: 2, tipo: 'evento', fecha: '2026-08-12', created_at: '2026-08-12T10:00:00Z' },
+  ])
+
+  it('salta a la primera página de la fecha exacta', () => {
+    assert.equal(findPageIndexByFecha(pages, '2026-08-12'), 2)
+    assert.equal(pages[2].kind, 'diario')
+  })
+
+  it('si no hay exacta, usa la siguiente fecha disponible', () => {
+    assert.equal(findPageIndexByFecha(pages, '2026-08-11'), 1)
+    assert.equal(findPageIndexByFecha(pages, '2026-08-09'), 0)
+  })
+
+  it('si la fecha es posterior a todas, va a la última', () => {
+    assert.equal(findPageIndexByFecha(pages, '2026-08-20'), pages.length - 1)
+  })
+
+  it('también funciona con actas', () => {
+    const actas = buildActasPages([
+      { id: 1, consecutivo: 1, fecha_reunion: '2026-08-10', puede_abrir: true },
+      { id: 2, consecutivo: 2, fecha_reunion: '2026-08-20', puede_abrir: true },
+    ])
+    assert.equal(findPageIndexByFecha(actas, '2026-08-20'), 1)
   })
 })
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import re
 import threading
@@ -1563,12 +1564,17 @@ def _enrich_entrada(
         m["adjuntos"] = [_enrich_imagen_preview(v) or v for v in (m.get("adjuntos") or [])]
     out["materiales"] = mats
     out["dirigido_a"] = str(out.get("dirigido_a") or "").strip()
-    if not isinstance(out.get("evento_detalle"), dict):
+    ed_raw = out.get("evento_detalle")
+    if isinstance(ed_raw, str):
+        try:
+            ed_raw = json.loads(ed_raw) if ed_raw.strip() else {}
+        except Exception:
+            ed_raw = {}
+    if not isinstance(ed_raw, dict):
         out["evento_detalle"] = {}
     else:
-        ed = dict(out["evento_detalle"])
-        if "actividades" in ed:
-            ed["actividades"] = _normalizar_actividades_evento(ed.get("actividades"))
+        ed = dict(ed_raw)
+        ed["actividades"] = _normalizar_actividades_evento(ed.get("actividades"))
         out["evento_detalle"] = ed
     if include_usos:
         if usos is not None:

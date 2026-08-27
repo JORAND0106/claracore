@@ -217,7 +217,8 @@ def test_generar_pdf_con_eventos_y_fotos(monkeypatch):
                     "abs_inicio": "K0+000",
                     "abs_fin": "K0+050",
                     "ubicacion_pk": "K12",
-                    "ubicacion_tramo": "Norte",
+                    "ubicacion_tramo": "TRAMO 7",
+                    "ubicacion_infraestructura": "BERM DER",
                     "cantidad": "10",
                     "observacion": "OK",
                 }],
@@ -241,6 +242,10 @@ def test_generar_pdf_con_eventos_y_fotos(monkeypatch):
     assert "Actividades" in doc
     assert "Excavación" in doc
     assert "Abs Ini" in doc
+    assert "TRAMO 7" in doc
+    assert "BERM DER" in doc
+    # Ubicación de actividad muestra Tramo/Infra, no el pk_id crudo en esa celda.
+    assert "TRAMO 7 · BERM DER" in doc
 
 
 def test_pdf_cache_reusa_bytes_sin_regenerar(monkeypatch):

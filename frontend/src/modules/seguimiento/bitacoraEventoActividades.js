@@ -93,22 +93,13 @@ export function actividadesConRegistro(detalleOrRows) {
   return rows.map(rowFromApi).filter(rowHasContent)
 }
 
-/** Etiqueta compacta de ubicación PK. */
+/** Etiqueta visible de ubicación: Tramo · Infraestructura (pk_id queda solo en datos). */
 export function formatUbicacionActividad(row) {
   if (!row) return ''
-  const pk = String(row.ubicacion_pk || '').trim()
-  if (pk) {
-    const parts = [pk.toUpperCase().startsWith('PK ') ? pk : `PK ${pk}`]
-    const tramo = String(row.ubicacion_tramo || '').trim()
-    const costado = String(row.ubicacion_costado || '').trim()
-    const infra = String(row.ubicacion_infraestructura || '').trim()
-    if (tramo) parts.push(tramo)
-    if (costado) parts.push(costado)
-    if (infra) parts.push(infra)
-    return parts.join(' · ')
-  }
-  if (row.ubicacion_lat != null && row.ubicacion_lng != null) {
-    return `${row.ubicacion_lat}, ${row.ubicacion_lng}`
+  const tramo = String(row.ubicacion_tramo || '').trim()
+  const infra = String(row.ubicacion_infraestructura || '').trim()
+  if (tramo || infra) {
+    return [tramo, infra].filter(Boolean).join(' · ')
   }
   return ''
 }

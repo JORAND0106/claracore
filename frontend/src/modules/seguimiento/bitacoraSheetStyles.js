@@ -4,13 +4,28 @@
  */
 const SHEET_CELL_BORDER = '#94a3b8'
 
+/** Tinte sólido del primary institucional (~18 % sobre blanco) para encabezados de grilla. */
+function sheetHeaderTint(primaryHex) {
+  const raw = String(primaryHex || '#0077B6').replace('#', '')
+  if (!/^[0-9a-fA-F]{6}$/.test(raw)) return '#D6EAF8'
+  const r = parseInt(raw.slice(0, 2), 16)
+  const g = parseInt(raw.slice(2, 4), 16)
+  const b = parseInt(raw.slice(4, 6), 16)
+  const mix = (c) => Math.round(c * 0.18 + 255 * 0.82)
+  const toHex = (n) => n.toString(16).padStart(2, '0')
+  return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`
+}
+
 export function bitacoraSheetStyles(t) {
   const border = t?.sheetGridBorder || SHEET_CELL_BORDER
   const text = t?.text || '#0f172a'
   const textMuted = t?.textMuted || '#64748b'
   const bgCard = t?.bgCard || '#ffffff'
   const inputBg = t?.inputBg || t?.bg || '#f8fafc'
-  const headerBg = t?.headerBg || inputBg
+  const primary = t?.primary || '#0077B6'
+  // Encabezados con más contraste que headerBg del tema (a menudo blanco / muy tenue).
+  const headerBg = t?.sheetHeaderBg || sheetHeaderTint(primary)
+  const headerColor = t?.sheetHeaderColor || primary
 
   return {
     border,
@@ -33,7 +48,7 @@ export function bitacoraSheetStyles(t) {
       padding: '5px 6px',
       fontSize: 10,
       fontWeight: 800,
-      color: textMuted,
+      color: headerColor,
       textTransform: 'uppercase',
       letterSpacing: '0.04em',
       whiteSpace: 'nowrap',
