@@ -384,9 +384,12 @@ def _notificar(
     enviar_push: bool = False,
     push_tipo: Optional[str] = None,
     push_slot_key: Optional[str] = None,
+    permitir_autoenviado: bool = False,
 ) -> bool:
     """Inserta en buzón de plataforma. Opcionalmente intenta Web Push. No usa Telegram (solo soporte)."""
-    if not destinatario_id or int(destinatario_id) == int(remitente_id):
+    if not destinatario_id:
+        return False
+    if not permitir_autoenviado and int(destinatario_id) == int(remitente_id):
         return False
     row = {
         "remitente_id": int(remitente_id),
@@ -1369,6 +1372,7 @@ def list_actas(
     q: Optional[str] = None,
     user_id: Optional[int] = None,
     current_user: Optional[dict] = None,
+    solo_mias: bool = False,
 ) -> List[dict]:
     query = (
         sb.table("seguimiento_acta")
@@ -1403,6 +1407,25 @@ def list_actas(
         out = [r for r in out if _norm_tipo_acta(r.get("tipo_acta") or "interna") == want_t]
     if user_id is not None:
         anexar_flags_acceso_actas(sb, out, int(user_id), current_user)
+    if solo_mias and user_id is not None:
+        uid = int(user_id)
+        acta_ids = [int(r["id"]) for r in out if r.get("id") is not None]
+        asis_ids = _ids_actas_donde_es_asistente(sb, uid, acta_ids)
+        filtered = []
+        for r in out:
+            try:
+                aid = int(r["id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            elab = r.get("elaborador_id")
+            creador = r.get("created_by")
+            if (
+                (elab is not None and int(elab) == uid)
+                or (creador is not None and int(creador) == uid)
+                or aid in asis_ids
+            ):
+                filtered.append(r)
+        out = filtered
     if not (q or "").strip():
         return out
     return _filtrar_actas_por_keywords(sb, out, q)
@@ -3521,9 +3544,13 @@ def list_bandeja(
     incluir_equipo: bool = True,
     incluir_cerrados: bool = False,
     q: Optional[str] = None,
+    solo_mias: bool = False,
 ) -> List[dict]:
     u = _usuario_row(sb, user_id)
     es_dev = es_desarrollador_seguimiento(current_user)
+    # «Solo mis actividades»: no ampliar a equipo ni bypass de Desarrollador.
+    if solo_mias:
+        incluir_equipo = False
     visible_ids: Set[int] = {int(user_id)}
     if not es_dev and incluir_equipo and es_contratista_gerencial(u, current_user):
         visible_ids |= ids_usuarios_bajo_gestion(sb, user_id, contrato_id or (u or {}).get("contrato_id"))
@@ -3586,17 +3613,19 @@ def list_bandeja(
             ids_asig = _ids_asignados_tarea(r)
             if int(responsable_id) not in ids_asig:
                 continue
-        # Desarrollador ve todos los ítems del contrato activo (no cross-contrato).
-        if es_dev:
+        # Desarrollador ve todos los ítems del contrato activo (no cross-contrato),
+        # salvo «solo mis actividades».
+        if es_dev and not solo_mias:
             out.append(r)
             continue
         ids_asig = _ids_asignados_tarea(r)
+        scope = {int(user_id)} if solo_mias else visible_ids
         if (
-            int(aid or 0) in visible_ids
-            or int(cid_creator or 0) in visible_ids
-            or int(referido or 0) in visible_ids
+            int(aid or 0) in scope
+            or int(cid_creator or 0) in scope
+            or int(referido or 0) in scope
             or int(r.get("solicitante_id") or 0) == int(user_id)
-            or bool(ids_asig & visible_ids)
+            or bool(ids_asig & scope)
         ):
             out.append(r)
             continue
@@ -4402,6 +4431,170 @@ def procesar_vencimientos_y_llamados(sb, *, limit: int = 100) -> dict:
                 entidad_id=str(item["id"]),
             )
     return {"procesados": len(rows), "marcados_vencidos": marcados, "llamados_generados": generados}
+
+
+RECORDATORIO_REUNION_ENTIDAD = "seguimiento_acta_recordatorio"
+RECORDATORIO_SLOTS = ("dia_antes", "mismo_dia")
+# Ventana horaria Bogotá para disparar (cron puede llamar más a menudo; idempotencia evita dupes).
+RECORDATORIO_HORA_MIN = 6
+RECORDATORIO_HORA_MAX = 10
+
+
+def _recordatorio_ya_enviado(sb, *, destinatario_id: int, entidad_id: str) -> bool:
+    try:
+        rows = (
+            sb.table("notificaciones")
+            .select("id")
+            .eq("destinatario_id", int(destinatario_id))
+            .eq("entidad_tipo", RECORDATORIO_REUNION_ENTIDAD)
+            .eq("entidad_id", str(entidad_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return bool(rows)
+    except Exception as exc:
+        _log.warning("check recordatorio acta: %s", exc)
+        return False
+
+
+def _fmt_fecha_reunion_es(d) -> str:
+    if d is None:
+        return ""
+    if hasattr(d, "isoformat"):
+        return d.isoformat()
+    return str(d)[:10]
+
+
+def procesar_recordatorios_reunion_acta(sb, *, now_bogota=None, forzar_hora: bool = False) -> dict:
+    """
+    Cron: recordatorios a asistentes registrados (usuario_id) de actas con fecha_reunion.
+
+    - Slot «dia_antes»: fecha_reunion = mañana (Bogotá)
+    - Slot «mismo_dia»: fecha_reunion = hoy (Bogotá)
+    Hora de envío prevista: 07:00 America/Bogotá (acepta llamadas 06:00–09:59).
+    Solo notifica a filas de seguimiento_acta_asistente con usuario_id; no a externos solo-email.
+    """
+    now = now_bogota or _now_bogota()
+    hora = int(now.hour)
+    if not forzar_hora and not (RECORDATORIO_HORA_MIN <= hora < RECORDATORIO_HORA_MAX):
+        return {
+            "omitido": True,
+            "motivo": "fuera_ventana_horaria",
+            "hora_bogota": hora,
+            "ventana": f"{RECORDATORIO_HORA_MIN:02d}:00–{RECORDATORIO_HORA_MAX:02d}:00",
+            "enviados": 0,
+        }
+
+    hoy = now.date()
+    manana = hoy + timedelta(days=1)
+    targets = [
+        ("mismo_dia", hoy),
+        ("dia_antes", manana),
+    ]
+    enviados = 0
+    omitidos_dup = 0
+    actas_tocadas = 0
+    skip_estados = {"cancelada", "anulada", "eliminada"}
+
+    for slot, fecha_obj in targets:
+        fecha_s = fecha_obj.isoformat()
+        try:
+            actas = (
+                sb.table("seguimiento_acta")
+                .select("id, contrato_id, consecutivo, fecha_reunion, ubicacion, elaborador_id, elaborador_nombre, estado, tipo_acta")
+                .eq("fecha_reunion", fecha_s)
+                .limit(500)
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            _log.warning("recordatorio reunion query fecha=%s: %s", fecha_s, exc)
+            continue
+
+        for acta in actas:
+            est = str(acta.get("estado") or "").strip().lower()
+            if est in skip_estados:
+                continue
+            try:
+                aid = int(acta["id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            actas_tocadas += 1
+            try:
+                asis = (
+                    sb.table("seguimiento_acta_asistente")
+                    .select("id, usuario_id, nombre")
+                    .eq("acta_id", aid)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception as exc:
+                _log.warning("recordatorio asistentes acta=%s: %s", aid, exc)
+                continue
+
+            consec = acta.get("consecutivo")
+            num = f"Nº {consec}" if consec is not None else f"#{aid}"
+            ubi = (acta.get("ubicacion") or "").strip()
+            tipo = (acta.get("tipo_acta") or "interna").strip()
+            if slot == "dia_antes":
+                asunto = f"Recordatorio: reunión mañana — Acta {num}"
+                cuando = f"mañana ({_fmt_fecha_reunion_es(fecha_obj)})"
+            else:
+                asunto = f"Recordatorio: reunión hoy — Acta {num}"
+                cuando = f"hoy ({_fmt_fecha_reunion_es(fecha_obj)})"
+            lugar = f" Lugar: {ubi}." if ubi else ""
+            mensaje = (
+                f"Tiene programada una reunión de seguimiento ({tipo}) {cuando}. "
+                f"Acta {num}.{lugar} "
+                "Consulte el módulo Seguimiento para el detalle del acta."
+            )
+            remitente = int(acta.get("elaborador_id") or 0) or 1
+            cid = acta.get("contrato_id")
+
+            vistos: Set[int] = set()
+            for a in asis:
+                uid_raw = a.get("usuario_id")
+                if uid_raw is None or uid_raw == "":
+                    continue
+                try:
+                    uid = int(uid_raw)
+                except (TypeError, ValueError):
+                    continue
+                if uid in vistos or uid <= 0:
+                    continue
+                vistos.add(uid)
+                entidad_id = f"{aid}:{slot}:{fecha_s}"
+                if _recordatorio_ya_enviado(sb, destinatario_id=uid, entidad_id=entidad_id):
+                    omitidos_dup += 1
+                    continue
+                ok = _notificar(
+                    sb,
+                    destinatario_id=uid,
+                    remitente_id=remitente,
+                    asunto=asunto,
+                    mensaje=mensaje,
+                    contrato_id=int(cid) if cid is not None else None,
+                    entidad_tipo=RECORDATORIO_REUNION_ENTIDAD,
+                    entidad_id=entidad_id,
+                    enviar_push=True,
+                    push_tipo="seguimiento_acta_recordatorio",
+                    push_slot_key=f"acta-reunion-{entidad_id}-{uid}",
+                    permitir_autoenviado=True,
+                )
+                if ok:
+                    enviados += 1
+
+    return {
+        "omitido": False,
+        "fecha_hoy": hoy.isoformat(),
+        "enviados": enviados,
+        "omitidos_duplicado": omitidos_dup,
+        "actas_consideradas": actas_tocadas,
+    }
 
 
 async def redaccion_asistida_clara(

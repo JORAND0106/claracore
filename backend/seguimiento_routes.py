@@ -44,6 +44,7 @@ from seguimiento_service import (
     list_bandeja,
     list_usuarios_contrato_enriquecidos,
     procesar_vencimientos_y_llamados,
+    procesar_recordatorios_reunion_acta,
     proximo_consecutivo,
     redaccion_asistida_clara,
     registrar_firma_asistente,
@@ -296,6 +297,7 @@ def route_bandeja(
     fecha_hasta: Optional[str] = Query(None),
     origen: Optional[str] = Query(None),
     incluir_cerrados: bool = Query(False),
+    solo_mias: bool = Query(False, description="Solo ítems del usuario (creador/asignado/solicitante)"),
     q: Optional[str] = Query(None, description="Buscador de palabras clave"),
     current_user=Depends(get_current_user),
 ):
@@ -313,6 +315,7 @@ def route_bandeja(
         fecha_hasta=fecha_hasta,
         origen=origen,
         incluir_cerrados=incluir_cerrados,
+        solo_mias=solo_mias,
         q=q,
     )
 
@@ -620,6 +623,18 @@ def route_cron_vencimientos(
         raise HTTPException(status_code=401, detail="Cron secret inválido")
     return procesar_vencimientos_y_llamados(supabase)
 
+
+@router.post("/internal/cron/recordatorios-reunion")
+def route_cron_recordatorios_reunion(
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+    forzar: bool = Query(False, description="Ignorar ventana 06–10 Bogotá (pruebas)"),
+):
+    """Recordatorios a asistentes: día anterior y mismo día de fecha_reunion (≈07:00 Bogotá)."""
+    if not _cron_secret_ok(x_cron_secret):
+        raise HTTPException(status_code=401, detail="Cron secret inválido")
+    return procesar_recordatorios_reunion_acta(supabase, forzar_hora=bool(forzar))
+
+
 # ── Actas ────────────────────────────────────────────────────────────────────
 
 @router.get("/{contrato_id}/usuarios")
@@ -636,6 +651,7 @@ def route_list_actas(
     tipo_acta: Optional[str] = Query(None),
     fecha_desde: Optional[str] = Query(None),
     fecha_hasta: Optional[str] = Query(None),
+    solo_mias: bool = Query(False, description="Solo actas donde es elaborador o asistente"),
     q: Optional[str] = Query(None, description="Buscador de palabras clave sobre contenido del acta"),
     current_user=Depends(get_current_user),
 ):
@@ -649,6 +665,7 @@ def route_list_actas(
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
         q=q,
+        solo_mias=solo_mias,
         user_id=_uid(current_user),
         current_user=current_user,
     )
