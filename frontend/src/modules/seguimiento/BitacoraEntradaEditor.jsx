@@ -3,10 +3,16 @@ import IdeaClaraModal from './IdeaClaraModal'
 import TemaRichEditor from './TemaRichEditor'
 import BitacoraAdjuntos, { BitacoraClipAdjuntos } from './BitacoraAdjuntos'
 import BitacoraClimaField from './BitacoraClimaField'
+import ActividadesEventoGrid from './ActividadesEventoGrid'
 import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
+import {
+  actividadesFromDetalle,
+  actividadesParaPayload,
+  emptyActividadRow,
+} from './bitacoraEventoActividades'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
 import {
   CARGOS_PERSONAL,
@@ -118,8 +124,10 @@ function mergePersonalPlantilla(plantillaRows, prevPersonal) {
 }
 
 function emptyEventoDetalle(tipo) {
+  const base = { actividades: [emptyActividadRow()] }
   if (tipo === 'incidente_sst') {
     return {
+      ...base,
       descripcion_incidente: '',
       lugar: '',
       personas_involucradas: '',
@@ -129,9 +137,15 @@ function emptyEventoDetalle(tipo) {
     }
   }
   if (tipo === 'visita_terceros') {
-    return { visitantes: '', visitantes_lista: [emptyVisitanteRow()], entidad: '', motivo: '' }
+    return {
+      ...base,
+      visitantes: '',
+      visitantes_lista: [emptyVisitanteRow()],
+      entidad: '',
+      motivo: '',
+    }
   }
-  return {}
+  return base
 }
 
 function usoFromApi(u) {
@@ -210,10 +224,11 @@ export default function BitacoraEntradaEditor({
     const base = entrada?.evento_detalle && typeof entrada.evento_detalle === 'object'
       ? { ...emptyEventoDetalle(tipoIni), ...entrada.evento_detalle }
       : emptyEventoDetalle(tipoIni)
+    const withActs = { ...base, actividades: actividadesFromDetalle(base) }
     if (tipoIni === 'visita_terceros' || Array.isArray(base.visitantes_lista) || base.visitantes) {
-      return { ...base, visitantes_lista: visitantesFromDetalle(base) }
+      return { ...withActs, visitantes_lista: visitantesFromDetalle(base) }
     }
-    return base
+    return withActs
   })
   const [cuerpoHtml, setCuerpoHtml] = useState(entrada?.cuerpo_html || '')
   const [imagenes, setImagenes] = useState(Array.isArray(entrada?.imagenes) ? entrada.imagenes : [])
@@ -223,7 +238,8 @@ export default function BitacoraEntradaEditor({
   const [okMsg, setOkMsg] = useState('')
   const [claraOpen, setClaraOpen] = useState(false)
   const [autoBusy, setAutoBusy] = useState(false)
-  const [mapIdx, setMapIdx] = useState(null)
+  /** @type {[null|{kind:'material'|'actividad', idx:number}, Function]} */
+  const [mapTarget, setMapTarget] = useState(null)
   const [contratoCentro, setContratoCentro] = useState({ lat: 4.711, lng: -74.0721 })
   const [pdfBusy, setPdfBusy] = useState(false)
   const [pdfUrl, setPdfUrl] = useState(null)
@@ -475,6 +491,7 @@ export default function BitacoraEntradaEditor({
         throw new Error('Describa las actividades del día en el texto libre')
       }
       const detallePayload = { ...eventoDetalle }
+      detallePayload.actividades = actividadesParaPayload(eventoDetalle.actividades)
       if (eventoTipo === 'visita_terceros') {
         const lista = (eventoDetalle.visitantes_lista || [])
           .filter((v) => v && String(v.nombre || '').trim())
@@ -529,6 +546,7 @@ export default function BitacoraEntradaEditor({
         throw new Error('Describa las actividades del día en el texto libre')
       }
       const detallePayload = { ...eventoDetalle }
+      detallePayload.actividades = actividadesParaPayload(eventoDetalle.actividades)
       if (eventoTipo === 'visita_terceros') {
         const lista = (eventoDetalle.visitantes_lista || [])
           .filter((v) => v && String(v.nombre || '').trim())
@@ -1161,7 +1179,7 @@ export default function BitacoraEntradaEditor({
                                   m.ubicacion_infraestructura ? `Infra: ${m.ubicacion_infraestructura}` : null,
                                 ].filter(Boolean).join(' · ')
                                 : 'Seleccionar PK en mapa'}
-                              onClick={() => setMapIdx(idx)}
+                              onClick={() => setMapTarget({ kind: 'material', idx })}
                               style={{
                                 ...ui.clipBtn,
                                 color: m.ubicacion_pk || m.ubicacion_pk_id
@@ -1217,8 +1235,14 @@ export default function BitacoraEntradaEditor({
                             disabled={!esNuevo}
                             value={eventoTipo}
                             onChange={(e) => {
-                              setEventoTipo(e.target.value)
-                              setEventoDetalle(emptyEventoDetalle(e.target.value))
+                              const nextTipo = e.target.value
+                              setEventoTipo(nextTipo)
+                              setEventoDetalle((prev) => ({
+                                ...emptyEventoDetalle(nextTipo),
+                                actividades: Array.isArray(prev.actividades) && prev.actividades.length
+                                  ? prev.actividades
+                                  : [emptyActividadRow()],
+                              }))
                             }}
                             style={{ ...ui.cellInp, height: 30 }}
                           >
@@ -1344,48 +1368,105 @@ export default function BitacoraEntradaEditor({
             </>
           )}
 
-          {/* Observaciones + adjuntos en una línea */}
-          <div>
-            <div style={{
-              display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
-              justifyContent: 'space-between', marginBottom: 6,
-            }}>
-              <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>
-                {tipo === 'evento' ? 'Texto del reporte' : 'Observaciones'}
+          {/* Observaciones / texto: en Evento, panel 3/4 + Actividades 1/4 */}
+          {tipo === 'evento' ? (
+            <div className="cc-bitacora-evento-split">
+              <div className="cc-bitacora-evento-split__texto">
+                <div style={{
+                  display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+                  justifyContent: 'space-between', marginBottom: 6,
+                }}>
+                  <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>
+                    Texto del reporte
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto' }}>
+                    {(editable || esNuevo) && (
+                      <button type="button" onClick={() => setClaraOpen(true)} style={btnGhost}>
+                        Redactar con Clara
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <TemaRichEditor
+                  t={t}
+                  value={cuerpoHtml}
+                  onChange={setCuerpoHtml}
+                  editable={editable || esNuevo}
+                  minHeight={110}
+                  placeholder="Describa el evento…"
+                />
+                <div style={{ marginTop: 8 }}>
+                  <BitacoraAdjuntos
+                    t={t}
+                    api={api}
+                    imagenes={imagenes}
+                    onChange={setImagenes}
+                    disabled={!(editable || esNuevo)}
+                    entradaId={localId}
+                    singleLine
+                    onUploadPersisted={localId != null ? async (body) => {
+                      const row = await api.pegarImagenBitacora(localId, body)
+                      setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
+                      onSaved?.(row)
+                    } : undefined}
+                  />
+                </div>
               </div>
-              <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto' }}>
-                {(editable || esNuevo) && (
-                  <button type="button" onClick={() => setClaraOpen(true)} style={btnGhost}>
-                    Redactar con Clara
-                  </button>
-                )}
+              <div className="cc-bitacora-evento-split__actividades">
+                <ActividadesEventoGrid
+                  t={t}
+                  rows={eventoDetalle.actividades || [emptyActividadRow()]}
+                  disabled={!editable && !esNuevo}
+                  sheetStyles={ui}
+                  compact={grillaCompacta}
+                  onChange={(lista) => setEventoDetalle((d) => ({ ...d, actividades: lista }))}
+                  onPickUbicacion={(idx) => setMapTarget({ kind: 'actividad', idx })}
+                />
               </div>
             </div>
-            <TemaRichEditor
-              t={t}
-              value={cuerpoHtml}
-              onChange={setCuerpoHtml}
-              editable={editable || esNuevo}
-              minHeight={110}
-              placeholder={tipo === 'evento' ? 'Describa el evento…' : 'Notas del día (opcional)…'}
-            />
-            <div style={{ marginTop: 8 }}>
-              <BitacoraAdjuntos
+          ) : (
+            <div>
+              <div style={{
+                display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+                justifyContent: 'space-between', marginBottom: 6,
+              }}>
+                <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>
+                  Observaciones
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto' }}>
+                  {(editable || esNuevo) && (
+                    <button type="button" onClick={() => setClaraOpen(true)} style={btnGhost}>
+                      Redactar con Clara
+                    </button>
+                  )}
+                </div>
+              </div>
+              <TemaRichEditor
                 t={t}
-                api={api}
-                imagenes={imagenes}
-                onChange={setImagenes}
-                disabled={!(editable || esNuevo)}
-                entradaId={localId}
-                singleLine
-                onUploadPersisted={localId != null ? async (body) => {
-                  const row = await api.pegarImagenBitacora(localId, body)
-                  setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
-                  onSaved?.(row)
-                } : undefined}
+                value={cuerpoHtml}
+                onChange={setCuerpoHtml}
+                editable={editable || esNuevo}
+                minHeight={110}
+                placeholder="Notas del día (opcional)…"
               />
+              <div style={{ marginTop: 8 }}>
+                <BitacoraAdjuntos
+                  t={t}
+                  api={api}
+                  imagenes={imagenes}
+                  onChange={setImagenes}
+                  disabled={!(editable || esNuevo)}
+                  entradaId={localId}
+                  singleLine
+                  onUploadPersisted={localId != null ? async (body) => {
+                    const row = await api.pegarImagenBitacora(localId, body)
+                    setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
+                    onSaved?.(row)
+                  } : undefined}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           <div style={{
             display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end',
@@ -1473,21 +1554,22 @@ export default function BitacoraEntradaEditor({
         </div>
       </div>
 
-      {mapIdx != null && materiales[mapIdx] && (
+      {mapTarget?.kind === 'material' && materiales[mapTarget.idx] && (
         <BitacoraMaterialUbicacionModal
           t={t}
           token={token}
           contratoId={contratoId}
-          pkId={materiales[mapIdx].ubicacion_pk_id}
-          pkLabel={materiales[mapIdx].ubicacion_pk}
-          tramo={materiales[mapIdx].ubicacion_tramo}
-          costado={materiales[mapIdx].ubicacion_costado}
-          infraestructura={materiales[mapIdx].ubicacion_infraestructura}
+          pkId={materiales[mapTarget.idx].ubicacion_pk_id}
+          pkLabel={materiales[mapTarget.idx].ubicacion_pk}
+          tramo={materiales[mapTarget.idx].ubicacion_tramo}
+          costado={materiales[mapTarget.idx].ubicacion_costado}
+          infraestructura={materiales[mapTarget.idx].ubicacion_infraestructura}
           readOnly={!editable}
-          onClose={() => setMapIdx(null)}
+          onClose={() => setMapTarget(null)}
           onConfirm={(loc) => {
+            const idx = mapTarget.idx
             setMateriales((rows) => rows.map((r, i) => (
-              i === mapIdx
+              i === idx
                 ? {
                   ...r,
                   ubicacion_pk: loc.ubicacion_pk || '',
@@ -1500,7 +1582,48 @@ export default function BitacoraEntradaEditor({
                 }
                 : r
             )))
-            setMapIdx(null)
+            setMapTarget(null)
+          }}
+        />
+      )}
+
+      {mapTarget?.kind === 'actividad' && (eventoDetalle.actividades || [])[mapTarget.idx] && (
+        <BitacoraMaterialUbicacionModal
+          t={t}
+          token={token}
+          contratoId={contratoId}
+          pkId={(eventoDetalle.actividades || [])[mapTarget.idx].ubicacion_pk_id}
+          pkLabel={(eventoDetalle.actividades || [])[mapTarget.idx].ubicacion_pk}
+          tramo={(eventoDetalle.actividades || [])[mapTarget.idx].ubicacion_tramo}
+          costado={(eventoDetalle.actividades || [])[mapTarget.idx].ubicacion_costado}
+          infraestructura={(eventoDetalle.actividades || [])[mapTarget.idx].ubicacion_infraestructura}
+          readOnly={!editable && !esNuevo}
+          onClose={() => setMapTarget(null)}
+          onConfirm={(loc) => {
+            const idx = mapTarget.idx
+            setEventoDetalle((d) => {
+              const list = Array.isArray(d.actividades) && d.actividades.length
+                ? d.actividades
+                : [emptyActividadRow()]
+              return {
+                ...d,
+                actividades: list.map((r, i) => (
+                  i === idx
+                    ? {
+                      ...r,
+                      ubicacion_pk: loc.ubicacion_pk || '',
+                      ubicacion_pk_id: loc.ubicacion_pk_id,
+                      ubicacion_tramo: loc.ubicacion_tramo || '',
+                      ubicacion_costado: loc.ubicacion_costado || '',
+                      ubicacion_infraestructura: loc.ubicacion_infraestructura || '',
+                      ubicacion_lat: loc.ubicacion_lat,
+                      ubicacion_lng: loc.ubicacion_lng,
+                    }
+                    : r
+                )),
+              }
+            })
+            setMapTarget(null)
           }}
         />
       )}

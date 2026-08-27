@@ -430,6 +430,48 @@ def _ubicacion_material(m: dict) -> str:
     return "—"
 
 
+def _html_actividades_evento(ev: dict, pal: dict) -> str:
+    """Tabla estructurada de Actividades del Reporte de Evento (si hay filas)."""
+    detalle = ev.get("evento_detalle") if isinstance(ev.get("evento_detalle"), dict) else {}
+    acts = detalle.get("actividades") if isinstance(detalle, dict) else None
+    if not isinstance(acts, list) or not acts:
+        return ""
+    rows = []
+    for a in acts:
+        if not isinstance(a, dict):
+            continue
+        actividad = str(a.get("actividad") or "").strip()
+        abs_inicio = str(a.get("abs_inicio") or "").strip()
+        abs_fin = str(a.get("abs_fin") or "").strip()
+        cantidad = str(a.get("cantidad") or "").strip()
+        observacion = str(a.get("observacion") or a.get("observaciones") or "").strip()
+        ubi = _ubicacion_material(a)
+        if not any([actividad, abs_inicio, abs_fin, cantidad, observacion, ubi and ubi != "—"]):
+            continue
+        rows.append([
+            _esc(actividad or "—"),
+            _esc(abs_inicio or "—"),
+            _esc(abs_fin or "—"),
+            _esc(ubi),
+            _esc(cantidad or "—"),
+            _esc(observacion or "—"),
+        ])
+    if not rows:
+        return ""
+    return (
+        f'<div style="margin-top:3pt;">'
+        + _section_title("Actividades", pal)
+        + _mini_table(
+            ["Actividad", "Abs Ini", "Abs Fin", "Ubicación", "Cant.", "Obs."],
+            rows,
+            pal,
+            ["22%", "12%", "12%", "22%", "10%", "22%"],
+            compact=True,
+        )
+        + "</div>"
+    )
+
+
 def _html_materiales(diario: Optional[dict], pal: dict) -> str:
     mats = (diario or {}).get("materiales") or []
     rows = []
@@ -599,6 +641,7 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
         desc_html = render_tema_html_for_pdf(ev.get("cuerpo_html"))
         dest = ev.get("dirigido_a") or "—"
         elab = ev.get("created_by_nombre") or "—"
+        acts_html = _html_actividades_evento(ev, pal)
         parts.append(
             f'<div style="border:0.3pt solid {t2["bg"]};padding:3pt 4pt;margin:3pt 0;page-break-inside:avoid;">'
             f'<div style="font-size:7pt;font-weight:bold;color:{t2["text"]};">{_esc(tipo)}</div>'
@@ -606,6 +649,7 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
             f'{_esc(ev.get("fecha") or "")} · {_esc(elab)} · Dirigido a: {_esc(dest)}</div>'
             f'<div style="font-size:6pt;color:{lp["text"]};margin-top:2pt;">'
             f'{desc_html}</div>'
+            f'{acts_html}'
             f"</div>"
         )
         imgs = [im for im in (ev.get("imagenes") or []) if isinstance(im, dict)]

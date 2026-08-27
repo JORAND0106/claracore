@@ -520,6 +520,38 @@ def test_normalizar_visitantes_lista_y_texto():
     assert svc._fmt_visitantes_texto(lista[:2]) == "Ana (Auditora), Luis"
 
 
+def test_normalizar_actividades_evento():
+    rows = svc._normalizar_actividades_evento([
+        {
+            "actividad": " Excavación ",
+            "abs_inicio": "K0+000",
+            "abs_fin": "K0+100",
+            "ubicacion_pk": "12",
+            "ubicacion_pk_id": "7",
+            "ubicacion_tramo": "Norte",
+            "cantidad": "15 m3",
+            "observacion": "OK",
+        },
+        {"actividad": "  "},
+        "skip",
+        {
+            "actividad": "Relleno",
+            "ubicacion_lat": "4.5",
+            "ubicacion_lng": "-74.1",
+        },
+    ])
+    assert len(rows) == 2
+    assert rows[0]["actividad"] == "Excavación"
+    assert rows[0]["ubicacion_pk_id"] == 7
+    assert rows[0]["ubicacion_tramo"] == "Norte"
+    assert rows[0]["cantidad"] == "15 m3"
+    assert rows[1]["actividad"] == "Relleno"
+    assert rows[1]["ubicacion_lat"] == 4.5
+    assert rows[1]["ubicacion_lng"] == -74.1
+    assert svc._normalizar_actividades_evento(None) == []
+    assert svc._normalizar_actividades_evento([{}]) == []
+
+
 def test_sync_visitantes_catalogo_upsert(monkeypatch):
     calls = []
 

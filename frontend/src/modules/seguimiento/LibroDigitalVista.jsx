@@ -13,6 +13,10 @@ import {
   numeroActaLabel,
 } from './seguimientoTheme'
 import {
+  actividadRowCells,
+  actividadesConRegistro,
+} from './bitacoraEventoActividades'
+import {
   buildActasPages,
   buildBitacoraPages,
   equiposConUso,
@@ -200,6 +204,7 @@ function DiarioPage({ page, palette, api, onZoomPhoto }) {
 function EventoPage({ page, palette, api, onZoomPhoto }) {
   const e = page.data || {}
   const fotos = Array.isArray(e.imagenes) ? e.imagenes : []
+  const actividades = actividadesConRegistro(e.evento_detalle)
   return (
     <article>
       <PageHeader
@@ -214,6 +219,40 @@ function EventoPage({ page, palette, api, onZoomPhoto }) {
       <MetaLine palette={palette} label="Dirigido a" value={e.dirigido_a} />
       <SectionTitle palette={palette}>Contenido</SectionTitle>
       <ProseHtml html={e.cuerpo_html} palette={palette} />
+      {actividades.length > 0 && (
+        <>
+          <SectionTitle palette={palette}>Actividades</SectionTitle>
+          <div className="cc-libro-sheet-wrap">
+            <table className="cc-libro-sheet" style={{ borderColor: palette.pageEdge }}>
+              <thead>
+                <tr style={{ background: palette.accentSoft, color: palette.accent }}>
+                  <th scope="col">Actividad</th>
+                  <th scope="col">Abs Inicio</th>
+                  <th scope="col">Abs Fin</th>
+                  <th scope="col">Ubicación</th>
+                  <th scope="col">Cantidad</th>
+                  <th scope="col">Observación</th>
+                </tr>
+              </thead>
+              <tbody>
+                {actividades.map((a, i) => {
+                  const c = actividadRowCells(a)
+                  return (
+                    <tr key={`act-${i}`} style={{ color: palette.text, borderColor: palette.pageEdge }}>
+                      <td data-label="Actividad">{c.actividad}</td>
+                      <td data-label="Abs Inicio">{c.abs_inicio}</td>
+                      <td data-label="Abs Fin">{c.abs_fin}</td>
+                      <td data-label="Ubicación" className="cc-libro-sheet-cell--nowrap">{c.ubicacion}</td>
+                      <td data-label="Cantidad">{c.cantidad}</td>
+                      <td data-label="Observación">{c.observacion}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
       {fotos.length > 0 && (
         <>
           <SectionTitle palette={palette}>Fotografías</SectionTitle>
