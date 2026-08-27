@@ -2,7 +2,6 @@
  * Permisos Bitácora de Obra — fila «Bitácora» en Control de accesos.
  */
 import { esDesarrolladorUsuario, tienePermisoFlag } from '../../utils/permisosContrato.js'
-import { hoyISOBogota } from './bitacoraConstants.js'
 
 export const BITACORA_FUNCION = 'bitácora'
 export const BITACORA_FUNCION_ALT = 'bitacora'
