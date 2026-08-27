@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, Fragment } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import IdeaClaraModal from './IdeaClaraModal'
 import TemaRichEditor from './TemaRichEditor'
 import BitacoraAdjuntos, { BitacoraClipAdjuntos } from './BitacoraAdjuntos'
@@ -7,21 +7,25 @@ import ActividadesEventoGrid from './ActividadesEventoGrid'
 import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
+import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
 import {
   actividadesFromDetalle,
   actividadesParaPayload,
   emptyActividadRow,
 } from './bitacoraEventoActividades'
+import {
+  asistenciaFromEntrada,
+  asistenciaParaPayload,
+  personalAgregadoDesdeAsistencia,
+} from './personalAsistenciaHelpers'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
 import {
-  CARGOS_PERSONAL,
   EVENTO_TIPOS,
   eventoTieneDestinatario,
   horaActualBogota,
   hoyISOBogota,
   labelEventoTipo,
-  personalEnColumnas,
   personalPlantillaVacia,
 } from './bitacoraConstants'
 import { debeUsarGrillaDiarioCompacta } from './bitacoraDiarioMobile'
@@ -207,6 +211,7 @@ export default function BitacoraEntradaEditor({
     const prev = Array.isArray(entrada?.personal) ? entrada.personal : []
     return mergePersonalPlantilla(personalPlantillaVacia(), prev)
   })
+  const [asistencia, setAsistencia] = useState(() => asistenciaFromEntrada(entrada))
   const [usos, setUsos] = useState(
     Array.isArray(entrada?.equipos_uso) && entrada.equipos_uso.length
       ? entrada.equipos_uso.map(usoFromApi)
@@ -245,7 +250,7 @@ export default function BitacoraEntradaEditor({
   const [pdfUrl, setPdfUrl] = useState(null)
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
 
-  // Cargar plantilla de cargos (fijos + custom del contrato)
+  // Plantilla de cargos: se mantiene para sync de catálogo; el resumen se deriva de asistencia.
   useEffect(() => {
     if (tipo !== 'diario' || !api?.listBitacoraCargos) return undefined
     let cancelled = false
@@ -259,6 +264,17 @@ export default function BitacoraEntradaEditor({
     })()
     return () => { cancelled = true }
   }, [api, tipo])
+
+  // Resumen de cargos siempre derivado de asistencia (solo Activos).
+  useEffect(() => {
+    if (tipo !== 'diario') return
+    const agg = personalAgregadoDesdeAsistencia(asistencia)
+    setPersonal((prev) => mergePersonalPlantilla(prev, agg.map((r) => ({
+      cargo: r.cargo,
+      cantidad: r.cantidad,
+      cargo_otro: '',
+    }))))
+  }, [asistencia, tipo])
 
   useEffect(() => {
     if (!contratoId || !token) return undefined
@@ -337,15 +353,6 @@ export default function BitacoraEntradaEditor({
     padding: '7px 12px', fontWeight: 600, cursor: 'pointer', fontSize: 'var(--cc-sm)',
   }
 
-  const personalCols = personalEnColumnas(personal)
-  const maxRowsPersonal = Math.max(...personalCols.map((c) => c.length), 0)
-
-  const setPersonalCantidad = (cargo, cantidad) => {
-    setPersonal((rows) => rows.map((r) => (
-      r.cargo === cargo ? { ...r, cantidad: Number(cantidad) || 0 } : r
-    )))
-  }
-
   const buildUsosPayload = () => usos
     .filter((u) => String(u.equipo_nombre || '').trim())
     .map((u, i) => {
@@ -373,13 +380,8 @@ export default function BitacoraEntradaEditor({
     setOkMsg('')
     const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     try {
-      const personalPayload = personal
-        .filter((p) => Number(p.cantidad) > 0)
-        .map((p) => ({
-          cargo: p.cargo,
-          cantidad: Number(p.cantidad) || 0,
-          ...(p.cargo === 'Otro' && p.cargo_otro ? { cargo_otro: p.cargo_otro } : {}),
-        }))
+      const asistenciaPayload = asistenciaParaPayload(asistencia)
+      const personalPayload = personalAgregadoDesdeAsistencia(asistenciaPayload)
       const materialesPayload = materiales
         .filter((m) => (
           m.tipo_material || m.proveedor || m.placa || m.numeros_vale
@@ -410,6 +412,7 @@ export default function BitacoraEntradaEditor({
         hora_inicio_labores: horaInicio || null,
         ...clima,
         personal: personalPayload,
+        asistencia_colaboradores: asistenciaPayload,
         equipos_uso: buildUsosPayload(),
         materiales: materialesPayload,
         cuerpo_html: cuerpoHtml,
@@ -445,6 +448,9 @@ export default function BitacoraEntradaEditor({
       const { _perf_ms: _omit, ...rowClean } = row || {}
       void _omit
       setImagenes(Array.isArray(rowClean.imagenes) ? rowClean.imagenes : [])
+      if (Array.isArray(rowClean.asistencia_colaboradores)) {
+        setAsistencia(asistenciaFromEntrada(rowClean))
+      }
       onSaved?.(rowClean)
     } catch (e) {
       setError(e.message || 'No se pudo guardar')
@@ -460,12 +466,15 @@ export default function BitacoraEntradaEditor({
     setOkMsg('')
     try {
       const data = await api.plantillaAutocompletarDiario()
-      if (!data || (!data.personal?.length && !data.equipos_uso?.length)) {
+      const prevAsist = asistenciaFromEntrada(data)
+      if (!data || (!prevAsist.length && !data.personal?.length && !data.equipos_uso?.length)) {
         setError('No hay un Reporte Diario anterior para autocompletar.')
         return
       }
       // No tocar fecha / hora / clima ni materiales
-      if (Array.isArray(data.personal)) {
+      if (prevAsist.length) {
+        setAsistencia(prevAsist)
+      } else if (Array.isArray(data.personal)) {
         setPersonal((prev) => mergePersonalPlantilla(prev, data.personal))
       }
       if (Array.isArray(data.equipos_uso) && data.equipos_uso.length) {
@@ -474,7 +483,7 @@ export default function BitacoraEntradaEditor({
       // Materiales siempre vacíos al autocompletar (movimientos del día)
       setMateriales([emptyMaterial()])
       const fuente = data.fuente_fecha ? ` (${data.fuente_fecha})` : ''
-      setOkMsg(`Personal y maquinaria cargados desde el reporte anterior${fuente}. Materiales quedan vacíos. Fecha, hora y clima no se modificaron.`)
+      setOkMsg(`Asistencia y maquinaria cargadas desde el reporte anterior${fuente}. Materiales quedan vacíos. Fecha, hora y clima no se modificaron.`)
     } catch (e) {
       setError(e.message || 'No se pudo autocompletar')
     } finally {
@@ -650,7 +659,7 @@ export default function BitacoraEntradaEditor({
                 disabled={autoBusy || busy}
                 onClick={() => void autocompletarDesdeAnterior()}
                 style={btnGhost}
-                title="Carga personal y maquinaria del último reporte. Materiales no se autocompletan. No modifica fecha, hora ni clima."
+                title="Carga asistencia y maquinaria del último reporte. Materiales no se autocompletan. No modifica fecha, hora ni clima."
               >
                 {autoBusy ? 'Cargando…' : 'Autocompletar desde día anterior'}
               </button>
@@ -752,174 +761,15 @@ export default function BitacoraEntradaEditor({
 
           {tipo === 'diario' && (
             <>
-              {/* Personal — escritorio: 3 cols Excel; móvil: lista Cargo|Cant accesible */}
-              <div>
-                <div style={ui.sectionTitle}>Personal en obra</div>
-                <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
-                  {grillaCompacta ? (
-                    <table
-                      className="cc-bitacora-responsive-table cc-bitacora-personal-table"
-                      style={{ ...ui.sheetTable, tableLayout: 'auto' }}
-                    >
-                      <thead>
-                        <tr>
-                          <th style={{ ...ui.th, width: '70%' }}>Cargo</th>
-                          <th style={{ ...ui.th, width: '30%', textAlign: 'center' }}>Cant.</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(Array.isArray(personal) ? personal : []).map((row) => (
-                          <tr key={`pc-${row.cargo}`}>
-                            <td style={ui.td} data-label="Cargo">
-                              {row.cargo === 'Otro' && editable ? (
-                                <div style={{ display: 'flex', gap: 4, alignItems: 'center', width: '100%' }}>
-                                  <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>Otro:</span>
-                                  <input
-                                    value={row.cargo_otro || ''}
-                                    placeholder="¿Cuál?"
-                                    onChange={(e) => setPersonal((rows) => rows.map((r) => (
-                                      r.cargo === 'Otro' ? { ...r, cargo_otro: e.target.value } : r
-                                    )))}
-                                    onBlur={async (e) => {
-                                      const nombre = String(e.target.value || '').trim()
-                                      if (!nombre || !api?.upsertBitacoraCargo) return
-                                      try {
-                                        await api.upsertBitacoraCargo({ nombre })
-                                        const data = await api.listBitacoraCargos()
-                                        const plantilla = Array.isArray(data?.plantilla) ? data.plantilla : []
-                                        setPersonal((prev) => {
-                                          const qtyOtro = prev.find((p) => p.cargo === 'Otro')?.cantidad || 0
-                                          const merged = mergePersonalPlantilla(plantilla, prev)
-                                          return merged.map((r) => {
-                                            if (String(r.cargo).toLowerCase() === nombre.toLowerCase() && qtyOtro) {
-                                              return { ...r, cantidad: qtyOtro }
-                                            }
-                                            if (r.cargo === 'Otro') {
-                                              return { ...r, cantidad: 0, cargo_otro: '' }
-                                            }
-                                            return r
-                                          })
-                                        })
-                                      } catch { /* ignore */ }
-                                    }}
-                                    style={ui.cellInp}
-                                  />
-                                </div>
-                              ) : (
-                                <span style={{ fontSize: 12, fontWeight: 600 }}>{row.cargo}</span>
-                              )}
-                            </td>
-                            <td style={{ ...ui.td, textAlign: 'center' }} data-label="Cant.">
-                              <input
-                                type="number"
-                                min={0}
-                                disabled={!editable}
-                                value={row.cantidad}
-                                onChange={(e) => setPersonalCantidad(row.cargo, e.target.value)}
-                                style={{ ...ui.cellInp, textAlign: 'center', fontWeight: 700 }}
-                              />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <table style={ui.sheetTable} className="cc-bitacora-personal-table">
-                      <thead>
-                        <tr>
-                          {[0, 1, 2].map((c) => (
-                            <th key={`h${c}`} colSpan={2} style={{ ...ui.th, textAlign: 'center' }}>
-                              Col. {c + 1}
-                            </th>
-                          ))}
-                        </tr>
-                        <tr>
-                          {[0, 1, 2].map((c) => (
-                            <Fragment key={`hh${c}`}>
-                              <th style={{ ...ui.th, width: '18%' }}>Cargo</th>
-                              <th style={{ ...ui.th, width: '7%', textAlign: 'center' }}>Cant.</th>
-                            </Fragment>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Array.from({ length: maxRowsPersonal }).map((_, ri) => (
-                          <tr key={`pr${ri}`}>
-                            {[0, 1, 2].map((ci) => {
-                              const row = personalCols[ci][ri]
-                              if (!row) {
-                                return (
-                                  <Fragment key={`e${ci}-${ri}`}>
-                                    <td style={ui.td} />
-                                    <td style={ui.td} />
-                                  </Fragment>
-                                )
-                              }
-                              return (
-                                <Fragment key={`${row.cargo}-${ri}`}>
-                                  <td style={ui.td}>
-                                    {row.cargo === 'Otro' && editable ? (
-                                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                                        <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>Otro:</span>
-                                        <input
-                                          value={row.cargo_otro || ''}
-                                          placeholder="¿Cuál?"
-                                          onChange={(e) => setPersonal((rows) => rows.map((r) => (
-                                            r.cargo === 'Otro' ? { ...r, cargo_otro: e.target.value } : r
-                                          )))}
-                                          onBlur={async (e) => {
-                                            const nombre = String(e.target.value || '').trim()
-                                            if (!nombre || !api?.upsertBitacoraCargo) return
-                                            try {
-                                              await api.upsertBitacoraCargo({ nombre })
-                                              const data = await api.listBitacoraCargos()
-                                              const plantilla = Array.isArray(data?.plantilla) ? data.plantilla : []
-                                              setPersonal((prev) => {
-                                                const qtyOtro = prev.find((p) => p.cargo === 'Otro')?.cantidad || 0
-                                                const merged = mergePersonalPlantilla(plantilla, prev)
-                                                return merged.map((r) => {
-                                                  if (String(r.cargo).toLowerCase() === nombre.toLowerCase() && qtyOtro) {
-                                                    return { ...r, cantidad: qtyOtro }
-                                                  }
-                                                  if (r.cargo === 'Otro') {
-                                                    return { ...r, cantidad: 0, cargo_otro: '' }
-                                                  }
-                                                  return r
-                                                })
-                                              })
-                                            } catch { /* ignore */ }
-                                          }}
-                                          style={ui.cellInp}
-                                        />
-                                      </div>
-                                    ) : (
-                                      <span style={{ fontSize: 12, fontWeight: 600 }}>{row.cargo}</span>
-                                    )}
-                                  </td>
-                                  <td style={{ ...ui.td, textAlign: 'center' }}>
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      disabled={!editable}
-                                      value={row.cantidad}
-                                      onChange={(e) => setPersonalCantidad(row.cargo, e.target.value)}
-                                      style={{ ...ui.cellInp, textAlign: 'center', fontWeight: 700 }}
-                                    />
-                                  </td>
-                                </Fragment>
-                              )
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-                <div style={{ marginTop: 4, fontSize: 11, color: t.textMuted }}>
-                  {CARGOS_PERSONAL.length} cargos · registro solo por cantidad
-                  {grillaCompacta ? ' · vista móvil (lista)' : ''}
-                </div>
-              </div>
+              <PersonalAsistenciaPanel
+                t={t}
+                api={api}
+                rows={asistencia}
+                onChange={setAsistencia}
+                disabled={!editable}
+                sheetStyles={ui}
+                compact={grillaCompacta}
+              />
 
               {/* Maquinaria Excel */}
               <div>

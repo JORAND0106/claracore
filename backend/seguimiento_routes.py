@@ -918,6 +918,7 @@ from bitacora_service import (  # noqa: E402
     get_entrada,
     leer_media_bitacora,
     list_cargos_custom,
+    list_colaboradores,
     list_entradas,
     list_equipos,
     list_galeria,
@@ -928,6 +929,7 @@ from bitacora_service import (  # noqa: E402
     revertir_cierre_diario,
     update_entrada,
     upsert_cargo_custom,
+    upsert_colaborador,
     upsert_equipo,
     upsert_tipo_material,
     upsert_visitante,
@@ -944,6 +946,7 @@ class BitacoraDiarioBody(BaseModel):
     clima_descripcion: Optional[str] = None
     clima_editado_manual: Optional[bool] = False
     personal: Optional[List[Dict[str, Any]]] = None
+    asistencia_colaboradores: Optional[List[Dict[str, Any]]] = None
     equipos_uso: Optional[List[Dict[str, Any]]] = None
     materiales: Optional[List[Dict[str, Any]]] = None
     cuerpo_html: Optional[str] = None
@@ -965,6 +968,7 @@ class BitacoraUpdateBody(BaseModel):
     clima_descripcion: Optional[str] = None
     clima_editado_manual: Optional[bool] = None
     personal: Optional[List[Dict[str, Any]]] = None
+    asistencia_colaboradores: Optional[List[Dict[str, Any]]] = None
     equipos_uso: Optional[List[Dict[str, Any]]] = None
     materiales: Optional[List[Dict[str, Any]]] = None
     cuerpo_html: Optional[str] = None
@@ -990,6 +994,15 @@ class BitacoraTipoMaterialBody(BaseModel):
 class BitacoraVisitanteBody(BaseModel):
     nombre: str = Field(..., min_length=1)
     cargo: Optional[str] = None
+
+
+class BitacoraColaboradorBody(BaseModel):
+    nombre: str = Field(..., min_length=1)
+    documento_tipo: Optional[str] = "CC"
+    documento_numero: Optional[str] = None
+    cargo: Optional[str] = None
+    subcontratista_id: Optional[int] = None
+    subcontratista_nombre: Optional[str] = None
 
 
 class BitacoraImagenBody(BaseModel):
@@ -1150,6 +1163,45 @@ def route_upsert_bitacora_visitante(
         user_id=_uid(current_user),
     )
     return row or {"ok": False, "detail": "Visitante no registrado (nombre vacío)"}
+
+
+@router.get("/{contrato_id}/bitacora/colaboradores")
+def route_list_bitacora_colaboradores(
+    contrato_id: int,
+    q: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "ver", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    return list_colaboradores(supabase, contrato_id, q or "")
+
+
+@router.post("/{contrato_id}/bitacora/colaboradores")
+def route_upsert_bitacora_colaborador(
+    contrato_id: int,
+    body: BitacoraColaboradorBody,
+    current_user=Depends(get_current_user),
+):
+    from bitacora_permissions import tiene_permiso_bitacora
+
+    if not (
+        tiene_permiso_bitacora(current_user, "crear", contrato_id)
+        or tiene_permiso_bitacora(current_user, "editar", contrato_id)
+    ):
+        require_permiso_bitacora(current_user, "crear", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    row = upsert_colaborador(
+        supabase,
+        contrato_id,
+        body.nombre,
+        documento_tipo=body.documento_tipo or "CC",
+        documento_numero=body.documento_numero or "",
+        cargo=body.cargo or "",
+        subcontratista_id=body.subcontratista_id,
+        subcontratista_nombre=body.subcontratista_nombre or "",
+        user_id=_uid(current_user),
+    )
+    return row or {"ok": False, "detail": "Colaborador no registrado (nombre vacío)"}
 
 
 @router.get("/{contrato_id}/bitacora/plantilla-autocompletar")

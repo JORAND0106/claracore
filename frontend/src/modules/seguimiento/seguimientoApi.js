@@ -222,6 +222,13 @@ export function createSeguimientoApi(contratoId, token) {
     },
     upsertBitacoraVisitante: (body) =>
       send('POST', `/seguimiento/${cid}/bitacora/visitantes`, body),
+    listBitacoraColaboradores: (q = '') => {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+      return get(`/seguimiento/${cid}/bitacora/colaboradores${qs}`)
+    },
+    upsertBitacoraColaborador: (body) =>
+      send('POST', `/seguimiento/${cid}/bitacora/colaboradores`, body),
+    listSubcontratistasActivos: () => get(`/sicoe-obra/${cid}/subcontratistas-activos`),
     plantillaAutocompletarDiario: () => get(`/seguimiento/${cid}/bitacora/plantilla-autocompletar`),
     listBitacoraGaleria: (q = '') => {
       const qs = q ? `?q=${encodeURIComponent(q)}` : ''

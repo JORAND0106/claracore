@@ -552,6 +552,43 @@ def test_normalizar_actividades_evento():
     assert svc._normalizar_actividades_evento([{}]) == []
 
 
+def test_normalizar_asistencia_y_personal_agregado():
+    rows = svc._normalizar_asistencia_colaboradores([
+        {
+            "nombre": "  juan perez ",
+            "documento_numero": "1.234",
+            "cargo": "Oficial",
+            "estado": "activo",
+            "hora_salida": "",
+        },
+        {
+            "nombre": "Ana",
+            "cargo": "Oficial",
+            "estado": "incapacitado",
+        },
+        {
+            "nombre": "Luis",
+            "cargo": "Ayudante",
+            "estado": "activo",
+        },
+        {"nombre": "  "},
+    ])
+    assert len(rows) == 3
+    assert rows[0]["nombre"] == "Juan Perez"
+    assert rows[0]["documento_numero"] == "1234"
+    assert rows[0]["hora_salida"] == "16:30"
+    agg = svc._personal_desde_asistencia(rows)
+    assert agg == [
+        {"cargo": "Ayudante", "cantidad": 1.0},
+        {"cargo": "Oficial", "cantidad": 1.0},
+    ]
+
+
+def test_capitalizar_nombre_propio():
+    assert svc._capitalizar_nombre_propio("maria jose") == "Maria Jose"
+    assert svc._norm_documento_numero("12.345-6") == "123456"
+
+
 def test_sync_visitantes_catalogo_upsert(monkeypatch):
     calls = []
 
