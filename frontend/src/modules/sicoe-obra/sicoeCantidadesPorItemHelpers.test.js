@@ -5,6 +5,7 @@ import {
   compararRegistrosPorAbsInicio,
   costoDirectoDesdeListado,
   filtrarFilasPorAlerta,
+  gruposFranjaSoloAlertas,
   modaEspesor,
   ordenarRegistrosVistaGeneral,
   parseAbsNum,
@@ -121,5 +122,23 @@ describe('sicoeCantidadesPorItemHelpers', () => {
     const filas = ordenarRegistrosVistaGeneral(regs)
     assert.deepEqual(filas.map((f) => f.id), [3, 1, 2])
     assert.equal(filas.every((f) => !f._alertaSolape), true)
+  })
+
+  it('franja solo incluye registros con alerta; grilla/análisis conserva totales', () => {
+    const regs = [
+      { id: 1, capitulo: 'I', item_numero: '1.1', tramo: 'T1', infraestructura: 'Calzada', abs_inicio: 0, abs_final: 50, espesor: 0.1, numero_registro: 10 },
+      { id: 2, capitulo: 'I', item_numero: '1.1', tramo: 'T1', infraestructura: 'Calzada', abs_inicio: 50, abs_final: 100, espesor: 0.1, numero_registro: 11 }, // OK contiguo
+      { id: 3, capitulo: 'I', item_numero: '1.1', tramo: 'T1', infraestructura: 'Calzada', abs_inicio: 90, abs_final: 140, espesor: 0.1, numero_registro: 12 }, // solape con 2
+      { id: 4, capitulo: 'I', item_numero: '1.1', tramo: 'T1', infraestructura: 'Calzada', abs_inicio: 200, abs_final: 250, espesor: 0.25, numero_registro: 13 }, // vacío + espesor
+    ]
+    const { filas, grupos, resumen } = analizarCantidadesPorItem(regs)
+    assert.equal(resumen.total, 4) // grilla/contadores: todos
+    const franja = gruposFranjaSoloAlertas(filas, grupos)
+    assert.equal(franja.length, 1)
+    const ids = franja[0].segmentos.map((s) => s.id).sort((a, b) => a - b)
+    // id 1 sin alerta; 2 y 3 solape; 4 vacío+espesor
+    assert.deepEqual(ids, [2, 3, 4])
+    assert.equal(franja[0].vaciosIntervalos.length, 0) // sin huecos falsos
+    assert.ok(franja[0].segmentos.every((s) => s.solapa || s.alertaVacio || s.alertaEspesor))
   })
 })

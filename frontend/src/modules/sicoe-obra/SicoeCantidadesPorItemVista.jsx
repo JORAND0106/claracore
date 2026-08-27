@@ -3,6 +3,7 @@ import {
   analizarCantidadesPorItem,
   costoDirectoDesdeListado,
   filtrarFilasPorAlerta,
+  gruposFranjaSoloAlertas,
   ordenarRegistrosVistaGeneral,
   resolverModoCantidadesPorItem,
   vuEfectivoFila,
@@ -24,128 +25,79 @@ function fmtPesos(v) {
 }
 
 /**
- * Franja gerencial: cada segmento se identifica por # de registro (no por Abs).
- * Paleta sobria (cubierto / solape / vacío), tipografía grande, resaltado cruzado.
+ * Franja gerencial de alertas: solo registros con solape / vacío / espesor atípico.
+ * Layout compacto (flex), sin huecos proporcionales por abscisa.
  */
-function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
-  const min = grupo.minAbs
-  const max = grupo.maxAbs
-  const span = min != null && max != null && max > min ? max - min : 0
-  if (!span || !grupo.segmentos?.length) {
-    return (
-      <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, padding: '8px 0' }}>
-        Sin rango de abscisas para graficar en este grupo.
-      </div>
-    )
+function estiloAlertaSegmento(s) {
+  if (s.solapa || s.alertaSolape) {
+    return { background: '#fecaca', color: '#7f1d1d', tag: 'Solape' }
   }
+  if (s.alertaVacio) {
+    return { background: '#fde68a', color: '#92400e', tag: 'Vacío' }
+  }
+  if (s.alertaEspesor) {
+    return { background: '#ddd6fe', color: '#5b21b6', tag: 'Esp.≠' }
+  }
+  return { background: '#cbd5e1', color: '#1e293b', tag: 'Alerta' }
+}
 
-  const toPct = (abs) => ((abs - min) / span) * 100
-  const vacios = grupo.vaciosIntervalos || []
-
-  const lanes = []
-  const segsConLane = [...grupo.segmentos]
-    .sort((a, b) => a.absInicio - b.absInicio || a.absFin - b.absFin)
-    .map((s) => {
-      let lane = 0
-      while (true) {
-        const ocupado = (lanes[lane] || []).some(
-          (o) =>
-            Math.min(s.absInicio, s.absFin) < Math.max(o.absInicio, o.absFin) &&
-            Math.max(s.absInicio, s.absFin) > Math.min(o.absInicio, o.absFin),
-        )
-        if (!ocupado) break
-        lane += 1
-      }
-      if (!lanes[lane]) lanes[lane] = []
-      lanes[lane].push(s)
-      return { ...s, lane }
-    })
-  const nLanes = Math.max(1, lanes.length)
-  const laneH = 36
-  const trackH = nLanes * laneH + 10
+function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
+  const segs = grupo.segmentos || []
+  if (!segs.length) return null
 
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6, flexWrap: 'wrap', alignItems: 'baseline' }}>
         <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{grupo.label}</span>
         <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-          {grupo.segmentos.length} reg.
-          {grupo.solapes ? ` · ${grupo.solapes} solape` : ''}
-          {grupo.vacios ? ` · ${grupo.vacios} vacío` : ''}
+          {segs.length} a revisar
         </span>
       </div>
 
       <div
         style={{
-          position: 'relative',
-          height: trackH,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          padding: '8px 10px',
           borderRadius: 10,
           background: t.bg || '#f1f5f9',
           border: `1px solid ${t.border}`,
         }}
       >
-        {vacios.map((v, i) => {
-          const left = toPct(v.desde)
-          const width = Math.max(0.6, toPct(v.hasta) - toPct(v.desde))
-          return (
-            <div
-              key={`v-${i}`}
-              title={`Vacío (posible tramo sin cobrar) · Abs ${fmtNum(v.desde, 3)} → ${fmtNum(v.hasta, 3)}`}
-              style={{
-                position: 'absolute',
-                top: 4,
-                bottom: 4,
-                left: `${left}%`,
-                width: `${width}%`,
-                background: 'repeating-linear-gradient(135deg, rgba(148,163,184,0.35) 0 3px, transparent 3px 7px)',
-                borderRadius: 6,
-                zIndex: 1,
-              }}
-            />
-          )
-        })}
-
-        {segsConLane.map((s) => {
+        {segs.map((s) => {
+          const sel = String(seleccionadoId) === String(s.id)
+          const label = `#${s.numero_registro ?? s.id}`
+          const st = estiloAlertaSegmento(s)
           const a0 = Math.min(s.absInicio, s.absFin)
           const a1 = Math.max(s.absInicio, s.absFin)
-          const left = toPct(a0)
-          const rawW = toPct(a1) - left
-          const width = Math.max(4.5, rawW)
-          const sel = String(seleccionadoId) === String(s.id)
-          const top = 5 + s.lane * laneH
-          const label = `#${s.numero_registro ?? s.id}`
           return (
             <button
               key={s.id}
               type="button"
               onClick={() => onSelectSegmento?.(s.id)}
-              title={`${label}${s.solapa ? ' · Solape' : ''} · Abs ${fmtNum(a0, 3)}–${fmtNum(a1, 3)}`}
+              title={`${label} · ${st.tag} · Abs ${fmtNum(a0, 3)}–${fmtNum(a1, 3)}`}
               style={{
-                position: 'absolute',
-                top,
-                height: laneH - 8,
-                left: `${left}%`,
-                width: `${width}%`,
-                minWidth: 40,
+                height: 36,
+                minWidth: 52,
+                padding: '0 12px',
                 border: sel ? `2px solid ${t.primary || '#0f172a'}` : '1px solid transparent',
                 borderRadius: 8,
-                background: s.solapa ? '#fecaca' : '#cbd5e1',
-                color: s.solapa ? '#7f1d1d' : '#1e293b',
-                boxShadow: sel ? `0 0 0 3px ${(t.primary || '#0284c7')}33` : '0 1px 2px rgba(15,23,42,0.08)',
+                background: st.background,
+                color: st.color,
+                boxShadow: sel ? `0 0 0 3px ${(t.primary || '#0284c7')}33` : '0 1px 2px rgba(15,23,42,0.06)',
                 cursor: 'pointer',
-                padding: '0 6px',
-                zIndex: sel ? 4 : s.solapa ? 3 : 2,
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                gap: 6,
                 fontSize: 14,
                 fontWeight: 800,
                 letterSpacing: '0.01em',
-                overflow: 'hidden',
-                whiteSpace: 'nowrap',
               }}
             >
               {label}
+              <span style={{ fontSize: 10, fontWeight: 700, opacity: 0.85 }}>{st.tag}</span>
             </button>
           )
         })}
@@ -224,6 +176,11 @@ export default function SicoeCantidadesPorItemVista({
     if (modo === 'analisis') return analizarCantidadesPorItem(payload?.registros || [])
     return null
   }, [modo, payload])
+
+  const gruposFranja = useMemo(
+    () => (analisis ? gruposFranjaSoloAlertas(analisis.filas, analisis.grupos) : []),
+    [analisis],
+  )
 
   const filasBase = useMemo(() => {
     if (modo === 'analisis') return analisis?.filas || []
@@ -414,12 +371,12 @@ export default function SicoeCantidadesPorItemVista({
         </div>
       )}
 
-      {modo === 'analisis' && analisis?.grupos?.length > 0 && (
-        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '12px 14px' }}>
-          <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text, marginBottom: 8 }}>
-            Cobertura por registro (Tramo · Infraestructura)
+      {modo === 'analisis' && gruposFranja.length > 0 && (
+        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '10px 12px' }}>
+          <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text, marginBottom: 6 }}>
+            A revisar en franja (solo registros con alerta)
           </div>
-          {analisis.grupos.map((g) => (
+          {gruposFranja.map((g) => (
             <FranjaCoberturaGrupo
               key={g.key}
               grupo={g}
@@ -428,21 +385,33 @@ export default function SicoeCantidadesPorItemVista({
               onSelectSegmento={seleccionar}
             />
           ))}
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10, fontSize: 'var(--cc-sm)', color: t.textMuted, alignItems: 'center' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 36, height: 22, background: '#cbd5e1', color: '#1e293b', borderRadius: 6, fontSize: 12, fontWeight: 800 }}>#</span>
-              Cubierto
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 'var(--cc-caption)', color: t.textMuted, alignItems: 'center' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fecaca', borderRadius: 3 }} />Solape
             </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 36, height: 22, background: '#fecaca', color: '#7f1d1d', borderRadius: 6, fontSize: 12, fontWeight: 800 }}>#</span>
-              Solape
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fde68a', borderRadius: 3 }} />Vacío
             </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ display: 'inline-block', width: 28, height: 18, background: 'repeating-linear-gradient(135deg, rgba(148,163,184,0.45) 0 3px, transparent 3px 7px)', borderRadius: 4 }} />
-              Vacío
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#ddd6fe', borderRadius: 3 }} />Espesor atípico
             </span>
-            <span style={{ fontSize: 'var(--cc-caption)' }}>Clic en un # → resalta la fila en la tabla</span>
+            <span>Clic en un # → resalta la fila (la grilla sigue mostrando todos los registros)</span>
           </div>
+        </div>
+      )}
+
+      {modo === 'analisis' && analisis && gruposFranja.length === 0 && (
+        <div
+          style={{
+            background: t.bgCard,
+            border: `1px solid ${t.border}`,
+            borderRadius: 12,
+            padding: '12px 14px',
+            fontSize: 'var(--cc-sm)',
+            color: t.textMuted,
+          }}
+        >
+          Sin alertas de solape, vacío ni espesor atípico para este ítem — la franja no muestra segmentos.
         </div>
       )}
 
