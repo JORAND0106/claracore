@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   DOCUMENTO_TIPOS,
   ESTADOS_COLABORADOR,
@@ -10,10 +11,13 @@ import {
 import {
   seguimientoModalOverlayStyle,
   seguimientoModalSheetStyle,
+  useSeguimientoCompact,
 } from './seguimientoShared'
 
 /**
  * Popup de registro/edición de colaborador en asistencia diaria.
+ * Se monta con portal a document.body para no heredar overflow/stacking
+ * del modal padre del Reporte Diario.
  */
 export default function ColaboradorAsistenciaModal({
   t,
@@ -24,6 +28,7 @@ export default function ColaboradorAsistenciaModal({
   onClose,
   onSave,
 }) {
+  const viewportCompact = useSeguimientoCompact()
   const [form, setForm] = useState(() => emptyAsistenciaRow(initial || {
     hora_salida: HORA_SALIDA_DEFAULT,
   }))
@@ -136,7 +141,6 @@ export default function ColaboradorAsistenciaModal({
       hora_salida: form.hora_salida || HORA_SALIDA_DEFAULT,
     })
 
-    // Si el nombre no está en catálogo y aún no confirmó registro nuevo.
     if (!payload.colaborador_id && !exactMatch && !registrarNuevo && !initial?.colaborador_id) {
       setConfirmNew(nombre)
       return
@@ -159,7 +163,6 @@ export default function ColaboradorAsistenciaModal({
         payload.colaborador_id = exactMatch.id
       }
 
-      // Registrar cargo nuevo en catálogo de cargos si no está.
       if (payload.cargo && api?.upsertBitacoraCargo) {
         const known = cargosOpts.some(
           (c) => String(c).toLowerCase() === payload.cargo.toLowerCase(),
@@ -184,268 +187,338 @@ export default function ColaboradorAsistenciaModal({
     boxSizing: 'border-box',
     border: `1px solid ${t.border}`,
     borderRadius: 8,
-    background: t.bg || t.inputBg || '#fff',
+    background: t.inputBg || t.bg || '#fff',
     color: t.text,
-    padding: '8px 10px',
+    padding: '9px 10px',
     fontSize: 'var(--cc-sm)',
     fontFamily: 'inherit',
+    display: 'block',
+    minHeight: 40,
   }
-  const label = {
+  const labelStyle = {
     display: 'block',
     fontSize: 'var(--cc-xs)',
     fontWeight: 700,
     color: t.textMuted,
-    marginBottom: 4,
+    marginBottom: 5,
+  }
+  const btnGhost = {
+    border: `1px solid ${t.border}`,
+    background: t.bgCard || '#fff',
+    borderRadius: 8,
+    padding: '8px 12px',
+    cursor: 'pointer',
+    fontWeight: 700,
+    color: t.text,
+    fontSize: 'var(--cc-sm)',
+  }
+  const btnPrimary = {
+    border: 'none',
+    background: t.primary,
+    color: '#fff',
+    borderRadius: 8,
+    padding: '8px 14px',
+    cursor: busy ? 'wait' : 'pointer',
+    fontWeight: 700,
+    fontSize: 'var(--cc-sm)',
+    opacity: busy ? 0.7 : 1,
   }
 
-  return (
+  const modal = (
     <div
-      role="dialog"
-      aria-modal="true"
-      style={seguimientoModalOverlayStyle(false)}
+      role="presentation"
+      className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
+      style={{
+        ...seguimientoModalOverlayStyle(viewportCompact),
+        zIndex: 12500,
+        background: 'rgba(15, 23, 42, 0.55)',
+      }}
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={initial?.nombre ? 'Editar colaborador' : 'Registrar colaborador'}
+        className={
+          viewportCompact
+            ? 'cc-seguim-modal-sheet cc-bitacora-colaborador-modal'
+            : 'cc-seguim-modal-sheet--desktop cc-bitacora-colaborador-modal'
+        }
         style={{
-          ...seguimientoModalSheetStyle(false, { wide: false, zIndex: 12000 }),
-          maxWidth: 520,
-          width: 'min(520px, 96vw)',
-          maxHeight: '92vh',
-          overflow: 'auto',
-          padding: 16,
+          ...seguimientoModalSheetStyle(viewportCompact, { wide: false }),
+          width: viewportCompact ? '100%' : 'min(520px, 96vw)',
+          maxWidth: viewportCompact ? '100%' : 520,
+          background: t.bgCard || '#ffffff',
+          border: viewportCompact ? 'none' : `1px solid ${t.border}`,
+          boxShadow: t.shadow || '0 20px 50px rgba(15, 23, 42, 0.28)',
+          color: t.text,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          padding: 0,
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
+        <div style={{
+          flexShrink: 0,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          padding: '14px 16px',
+          borderBottom: `1px solid ${t.border}`,
+          background: t.bgCard || '#fff',
+        }}>
           <div style={{ fontWeight: 800, color: t.primary || t.text, fontSize: 'var(--cc-body)' }}>
             {initial?.nombre ? 'Editar colaborador' : 'Registrar colaborador'}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 700, color: t.textMuted }}
-          >
-            ×
+          <button type="button" onClick={onClose} style={btnGhost} aria-label="Cerrar">
+            Cerrar
           </button>
         </div>
 
-        <div style={{ display: 'grid', gap: 10 }}>
-          <div style={{ position: 'relative' }}>
-            <label style={label}>Nombre y apellido</label>
-            <input
-              disabled={disabled}
-              value={form.nombre}
-              placeholder="Ej. Juan Pérez"
-              onFocus={() => setNombreOpen(true)}
-              onChange={(e) => {
-                patch({
-                  nombre: e.target.value,
-                  colaborador_id: null,
-                })
-                setNombreOpen(true)
-              }}
-              onBlur={() => {
-                setTimeout(() => {
-                  setNombreOpen(false)
-                  patch({ nombre: capitalizarNombrePropio(form.nombre) })
-                }, 180)
-              }}
-              style={field}
-            />
-            {nombreOpen && catalogOpts.length > 0 && (
-              <div style={{
-                position: 'absolute', zIndex: 5, left: 0, right: 0, top: '100%',
-                background: t.bgCard || '#fff', border: `1px solid ${t.border}`,
-                borderRadius: 8, maxHeight: 180, overflow: 'auto', boxShadow: t.shadow,
-              }}>
-                {catalogOpts.slice(0, 12).map((row) => (
-                  <button
-                    key={row.id || row.nombre}
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => aplicarCatalogo(row)}
-                    style={{
-                      display: 'block', width: '100%', textAlign: 'left',
-                      border: 'none', background: 'transparent', padding: '8px 10px',
-                      cursor: 'pointer', color: t.text, fontSize: 'var(--cc-sm)',
-                    }}
-                  >
-                    <strong>{row.nombre}</strong>
-                    <span style={{ color: t.textMuted }}>
-                      {row.cargo ? ` · ${row.cargo}` : ''}
-                      {row.documento_numero ? ` · ${row.documento_tipo || 'CC'} ${row.documento_numero}` : ''}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+        <div
+          className="cc-bitacora-colaborador-modal__body"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            padding: '14px 16px',
+            background: t.bgCard || '#fff',
+          }}
+        >
+          <div className="cc-bitacora-colaborador-form" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ position: 'relative' }}>
+              <label style={labelStyle}>Nombre y apellido</label>
+              <input
+                disabled={disabled}
+                value={form.nombre}
+                placeholder="Ej. Juan Pérez"
+                onFocus={() => setNombreOpen(true)}
+                onChange={(e) => {
+                  patch({
+                    nombre: e.target.value,
+                    colaborador_id: null,
+                  })
+                  setNombreOpen(true)
+                }}
+                onBlur={() => {
+                  setTimeout(() => {
+                    setNombreOpen(false)
+                    patch({ nombre: capitalizarNombrePropio(form.nombre) })
+                  }, 180)
+                }}
+                style={field}
+              />
+              {nombreOpen && catalogOpts.length > 0 && (
+                <div style={{
+                  position: 'absolute', zIndex: 20, left: 0, right: 0, top: '100%',
+                  marginTop: 2,
+                  background: t.bgCard || '#fff',
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 8,
+                  maxHeight: 180,
+                  overflow: 'auto',
+                  boxShadow: t.shadow || '0 8px 24px rgba(0,0,0,0.12)',
+                }}>
+                  {catalogOpts.slice(0, 12).map((row) => (
+                    <button
+                      key={row.id || row.nombre}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => aplicarCatalogo(row)}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        border: 'none', background: 'transparent', padding: '9px 10px',
+                        cursor: 'pointer', color: t.text, fontSize: 'var(--cc-sm)',
+                      }}
+                    >
+                      <strong>{row.nombre}</strong>
+                      <span style={{ color: t.textMuted }}>
+                        {row.cargo ? ` · ${row.cargo}` : ''}
+                        {row.documento_numero ? ` · ${row.documento_tipo || 'CC'} ${row.documento_numero}` : ''}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 8 }}>
+            <div
+              className="cc-bitacora-colaborador-form__row"
+              style={{ display: 'grid', gridTemplateColumns: viewportCompact ? '1fr' : '1fr 1.4fr', gap: 12 }}
+            >
+              <div>
+                <label style={labelStyle}>Tipo de documento</label>
+                <select
+                  disabled={disabled}
+                  value={form.documento_tipo || 'CC'}
+                  onChange={(e) => patch({ documento_tipo: e.target.value })}
+                  style={field}
+                >
+                  {DOCUMENTO_TIPOS.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Número de documento</label>
+                <input
+                  disabled={disabled}
+                  inputMode="numeric"
+                  value={form.documento_numero}
+                  placeholder="Solo números"
+                  onChange={(e) => patch({ documento_numero: soloDigitosDocumento(e.target.value) })}
+                  style={field}
+                />
+              </div>
+            </div>
+
             <div>
-              <label style={label}>Tipo de documento</label>
+              <label style={labelStyle}>Cargo</label>
+              <input
+                disabled={disabled}
+                list="cc-bitacora-cargos-asist"
+                value={form.cargo}
+                placeholder="Buscar o escribir cargo…"
+                onChange={(e) => patch({ cargo: e.target.value })}
+                style={field}
+              />
+              <datalist id="cc-bitacora-cargos-asist">
+                {cargosOpts.map((c) => <option key={c} value={c} />)}
+              </datalist>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Empresa (subcontratista)</label>
               <select
                 disabled={disabled}
-                value={form.documento_tipo || 'CC'}
-                onChange={(e) => patch({ documento_tipo: e.target.value })}
+                value={form.subcontratista_id != null ? String(form.subcontratista_id) : ''}
+                onChange={(e) => {
+                  const id = e.target.value
+                  const found = subs.find((s) => String(s.id) === id)
+                  patch({
+                    subcontratista_id: id ? Number(id) : null,
+                    subcontratista_nombre: found?.nombre || found?.razon_social || '',
+                  })
+                }}
                 style={field}
               >
-                {DOCUMENTO_TIPOS.map((d) => <option key={d} value={d}>{d}</option>)}
+                <option value="">— Sin empresa / contratista principal —</option>
+                {subs.map((s) => (
+                  <option key={s.id} value={s.id}>{s.nombre || s.razon_social || `#${s.id}`}</option>
+                ))}
               </select>
             </div>
+
             <div>
-              <label style={label}>Número de documento</label>
-              <input
+              <label style={labelStyle}>Estado</label>
+              <select
                 disabled={disabled}
-                inputMode="numeric"
-                value={form.documento_numero}
-                placeholder="Solo números"
-                onChange={(e) => patch({ documento_numero: soloDigitosDocumento(e.target.value) })}
+                value={form.estado || 'activo'}
+                onChange={(e) => patch({ estado: e.target.value })}
                 style={field}
-              />
+              >
+                {ESTADOS_COLABORADOR.map((e) => (
+                  <option key={e.value} value={e.value}>{e.label}</option>
+                ))}
+              </select>
             </div>
-          </div>
 
-          <div>
-            <label style={label}>Cargo</label>
-            <input
-              disabled={disabled}
-              list="cc-bitacora-cargos-asist"
-              value={form.cargo}
-              placeholder="Buscar o escribir cargo…"
-              onChange={(e) => patch({ cargo: e.target.value })}
-              style={field}
-            />
-            <datalist id="cc-bitacora-cargos-asist">
-              {cargosOpts.map((c) => <option key={c} value={c} />)}
-            </datalist>
-          </div>
-
-          <div>
-            <label style={label}>Empresa (subcontratista)</label>
-            <select
-              disabled={disabled}
-              value={form.subcontratista_id != null ? String(form.subcontratista_id) : ''}
-              onChange={(e) => {
-                const id = e.target.value
-                const found = subs.find((s) => String(s.id) === id)
-                patch({
-                  subcontratista_id: id ? Number(id) : null,
-                  subcontratista_nombre: found?.nombre || found?.razon_social || '',
-                })
-              }}
-              style={field}
+            <div
+              className="cc-bitacora-colaborador-form__row"
+              style={{ display: 'grid', gridTemplateColumns: viewportCompact ? '1fr' : '1fr 1fr', gap: 12 }}
             >
-              <option value="">— Sin empresa / contratista principal —</option>
-              {subs.map((s) => (
-                <option key={s.id} value={s.id}>{s.nombre || s.razon_social || `#${s.id}`}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label style={label}>Estado</label>
-            <select
-              disabled={disabled}
-              value={form.estado || 'activo'}
-              onChange={(e) => patch({ estado: e.target.value })}
-              style={field}
-            >
-              {ESTADOS_COLABORADOR.map((e) => (
-                <option key={e.value} value={e.value}>{e.label}</option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <div>
-              <label style={label}>Hora de ingreso</label>
-              <input
-                disabled={disabled}
-                type="time"
-                value={form.hora_ingreso || ''}
-                onChange={(e) => patch({ hora_ingreso: e.target.value })}
-                style={field}
-              />
+              <div>
+                <label style={labelStyle}>Hora de ingreso</label>
+                <input
+                  disabled={disabled}
+                  type="time"
+                  value={form.hora_ingreso || ''}
+                  onChange={(e) => patch({ hora_ingreso: e.target.value })}
+                  style={field}
+                />
+              </div>
+              <div>
+                <label style={labelStyle}>Hora de salida</label>
+                <input
+                  disabled={disabled}
+                  type="time"
+                  value={form.hora_salida || HORA_SALIDA_DEFAULT}
+                  onChange={(e) => patch({ hora_salida: e.target.value || HORA_SALIDA_DEFAULT })}
+                  style={field}
+                />
+              </div>
             </div>
+
             <div>
-              <label style={label}>Hora de salida</label>
+              <label style={labelStyle}>Observación</label>
               <input
                 disabled={disabled}
-                type="time"
-                value={form.hora_salida || HORA_SALIDA_DEFAULT}
-                onChange={(e) => patch({ hora_salida: e.target.value || HORA_SALIDA_DEFAULT })}
+                value={form.observacion || ''}
+                placeholder="Opcional"
+                onChange={(e) => patch({ observacion: e.target.value })}
                 style={field}
               />
             </div>
           </div>
 
-          <div>
-            <label style={label}>Observación</label>
-            <input
-              disabled={disabled}
-              value={form.observacion || ''}
-              placeholder="Opcional"
-              onChange={(e) => patch({ observacion: e.target.value })}
-              style={field}
-            />
-          </div>
+          {error ? (
+            <div style={{ marginTop: 12, color: '#B91C1C', fontSize: 'var(--cc-sm)', fontWeight: 650 }}>
+              {error}
+            </div>
+          ) : null}
+
+          {confirmNew ? (
+            <div style={{
+              marginTop: 14, padding: 12, borderRadius: 8,
+              border: `1px solid ${t.border}`, background: t.bg || '#f8fafc',
+            }}>
+              <div style={{ fontSize: 'var(--cc-sm)', marginBottom: 10, color: t.text }}>
+                «{confirmNew}» no está en el catálogo. ¿Registrar como nuevo colaborador?
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button type="button" disabled={busy} onClick={() => setConfirmNew(null)} style={btnGhost}>
+                  Cancelar
+                </button>
+                <button type="button" disabled={busy} onClick={() => void guardar({ registrarNuevo: true })} style={btnPrimary}>
+                  Sí, registrar
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        {error && (
-          <div style={{ marginTop: 10, color: '#B91C1C', fontSize: 'var(--cc-sm)', fontWeight: 650 }}>
-            {error}
-          </div>
-        )}
-
-        {confirmNew && (
-          <div style={{
-            marginTop: 12, padding: 10, borderRadius: 8,
-            border: `1px solid ${t.border}`, background: t.bg || '#f8fafc',
-          }}>
-            <div style={{ fontSize: 'var(--cc-sm)', marginBottom: 8, color: t.text }}>
-              «{confirmNew}» no está en el catálogo. ¿Registrar como nuevo colaborador?
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" disabled={busy} onClick={() => setConfirmNew(null)} style={{
-                border: `1px solid ${t.border}`, background: t.bgCard || '#fff', borderRadius: 8,
-                padding: '6px 10px', cursor: 'pointer', fontWeight: 700,
-              }}>
-                Cancelar
-              </button>
-              <button type="button" disabled={busy} onClick={() => void guardar({ registrarNuevo: true })} style={{
-                border: 'none', background: t.primary, color: '#fff', borderRadius: 8,
-                padding: '6px 12px', cursor: 'pointer', fontWeight: 700,
-              }}>
-                Sí, registrar
-              </button>
-            </div>
-          </div>
-        )}
-
-        {!confirmNew && (
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
-            <button type="button" onClick={onClose} style={{
-              border: `1px solid ${t.border}`, background: t.bgCard || '#fff', borderRadius: 8,
-              padding: '8px 12px', cursor: 'pointer', fontWeight: 700, color: t.text,
-            }}>
+        {!confirmNew ? (
+          <div
+            className="cc-seguim-modal-footer"
+            style={{
+              flexShrink: 0,
+              display: 'flex',
+              gap: 8,
+              justifyContent: 'flex-end',
+              flexWrap: 'wrap',
+              padding: '12px 16px',
+              borderTop: `1px solid ${t.border}`,
+              background: t.bgCard || '#fff',
+            }}
+          >
+            <button type="button" onClick={onClose} style={btnGhost}>
               Cancelar
             </button>
             <button
               type="button"
               disabled={disabled || busy}
               onClick={() => void guardar()}
-              style={{
-                border: 'none', background: t.primary, color: '#fff', borderRadius: 8,
-                padding: '8px 14px', cursor: busy ? 'wait' : 'pointer', fontWeight: 700,
-                opacity: busy ? 0.7 : 1,
-              }}
+              style={btnPrimary}
             >
               {busy ? 'Guardando…' : 'Guardar en asistencia'}
             </button>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )
+
+  if (typeof document === 'undefined') return modal
+  return createPortal(modal, document.body)
 }
