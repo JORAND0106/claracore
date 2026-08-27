@@ -560,28 +560,51 @@ def test_normalizar_asistencia_y_personal_agregado():
             "cargo": "Oficial",
             "estado": "activo",
             "hora_salida": "",
+            "fecha_ingreso": "2026-01-10",
         },
         {
             "nombre": "Ana",
             "cargo": "Oficial",
             "estado": "incapacitado",
+            "hora_ingreso": "07:00",
+            "hora_salida": "16:30",
         },
         {
             "nombre": "Luis",
             "cargo": "Ayudante",
             "estado": "activo",
         },
+        {
+            "nombre": "Pedro",
+            "cargo": "Cadenero",
+            "estado": "inactivo",
+            "hora_ingreso": "07:00",
+            "fecha_retiro": "2026-08-27",
+        },
         {"nombre": "  "},
     ])
-    assert len(rows) == 3
+    assert len(rows) == 4
     assert rows[0]["nombre"] == "Juan Perez"
     assert rows[0]["documento_numero"] == "1234"
     assert rows[0]["hora_salida"] == "16:30"
+    assert rows[0]["fecha_ingreso"] == "2026-01-10"
+    assert rows[1]["hora_ingreso"] is None
+    assert rows[1]["hora_salida"] is None
+    assert rows[3]["hora_ingreso"] is None
+    assert rows[3]["fecha_retiro"] == "2026-08-27"
     agg = svc._personal_desde_asistencia(rows)
     assert agg == [
         {"cargo": "Ayudante", "cantidad": 1.0},
         {"cargo": "Oficial", "cantidad": 1.0},
     ]
+
+
+def test_parse_fecha_iso_colaborador():
+    assert svc._parse_fecha_iso("2026-08-27") == "2026-08-27"
+    assert svc._parse_fecha_iso("2026-08-27T15:00:00Z") == "2026-08-27"
+    assert svc._parse_fecha_iso("") is None
+    assert svc._parse_fecha_iso("nope") is None
+    assert svc._parse_fecha_iso(None) is None
 
 
 def test_capitalizar_nombre_propio():

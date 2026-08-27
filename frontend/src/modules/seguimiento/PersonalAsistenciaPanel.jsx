@@ -15,6 +15,7 @@ export default function PersonalAsistenciaPanel({
   api,
   rows = [],
   onChange,
+  fechaDiario = '',
   disabled = false,
   sheetStyles = null,
   compact = false,
@@ -217,6 +218,7 @@ export default function PersonalAsistenciaPanel({
           t={t}
           api={api}
           initial={editIdx != null ? rows[editIdx] : null}
+          fechaDiario={fechaDiario}
           disabled={disabled}
           onClose={() => setModalOpen(false)}
           onSave={saveRow}
