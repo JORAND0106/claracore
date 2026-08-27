@@ -20,6 +20,7 @@ import {
   buildActasPages,
   buildBitacoraPages,
   equiposConUso,
+  findPageIndexByFecha,
   formatClimaResumen,
   formatEquipoDetalle,
   libroPalette,
@@ -436,6 +437,8 @@ export default function LibroDigitalVista({
   const [actaDetails, setActaDetails] = useState({})
   const [actaLoading, setActaLoading] = useState({})
   const [zoomPhoto, setZoomPhoto] = useState(null) // { src }
+  const [fechaSalto, setFechaSalto] = useState('')
+  const [fechaSaltoMsg, setFechaSaltoMsg] = useState('')
   const pointerRef = useRef({ x: 0, y: 0, active: false, moved: false })
   const flipLock = useRef(false)
   const actaFetchRef = useRef(new Set())
@@ -523,6 +526,38 @@ export default function LibroDigitalVista({
   const total = pages.length
   const current = pages[index] || null
   const peekNext = pages[Math.min(index + 1, Math.max(total - 1, 0))] || null
+
+  useEffect(() => {
+    const f = String(current?.fecha || '').slice(0, 10)
+    if (f) setFechaSalto(f)
+  }, [current?.fecha])
+
+  const saltarAFecha = useCallback((raw) => {
+    const value = String(raw || '').slice(0, 10)
+    setFechaSalto(value)
+    setFechaSaltoMsg('')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return
+    if (flipLock.current) return
+    const idx = findPageIndexByFecha(pages, value)
+    if (idx < 0) {
+      setFechaSaltoMsg('Sin páginas en el libro')
+      return
+    }
+    const matched = String(pages[idx]?.fecha || '').slice(0, 10)
+    if (matched !== value) {
+      setFechaSaltoMsg(matched ? `Sin entradas el ${value}. Mostrando ${matched}.` : '')
+    } else {
+      setFechaSaltoMsg('')
+    }
+    if (animRef.current) {
+      try { animRef.current.cancel() } catch { /* ignore */ }
+      animRef.current = null
+    }
+    setFlipDir(null)
+    flipLock.current = false
+    indexRef.current = idx
+    setIndex(idx)
+  }, [pages])
 
   /**
    * Causa del revert anterior: al quitar la clase CSS `is-flip-next`, el
@@ -741,11 +776,27 @@ export default function LibroDigitalVista({
             <div className="cc-libro-brand-sub">{palette.label} · solo lectura</div>
           </div>
         </div>
-        <button type="button" className="cc-libro-close" onClick={onClose} aria-label="Cerrar libro">
-          <X size={18} strokeWidth={2.2} />
-          <span>Cerrar</span>
-        </button>
+        <div className="cc-libro-topbar-actions">
+          {!loading && !error && canViewBitacora && total > 0 && (
+            <label className="cc-libro-fecha-jump">
+              <span>Ir a fecha</span>
+              <input
+                type="date"
+                value={fechaSalto}
+                onChange={(e) => saltarAFecha(e.target.value)}
+                aria-label="Buscar página por fecha"
+              />
+            </label>
+          )}
+          <button type="button" className="cc-libro-close" onClick={onClose} aria-label="Cerrar libro">
+            <X size={18} strokeWidth={2.2} />
+            <span>Cerrar</span>
+          </button>
+        </div>
       </div>
+      {fechaSaltoMsg ? (
+        <div className="cc-libro-fecha-msg" role="status">{fechaSaltoMsg}</div>
+      ) : null}
 
       {!canViewBitacora ? (
         <div className="cc-libro-message">

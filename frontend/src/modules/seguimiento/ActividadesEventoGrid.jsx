@@ -175,7 +175,7 @@ export default function ActividadesEventoGrid({
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {row.ubicacion_pk ? `PK ${row.ubicacion_pk}` : 'Seleccionar PK'}
+                      {ubiLabel || (disabled ? '—' : 'Seleccionar PK')}
                     </button>
                   </td>
                   <td style={ui.td} data-label="Cantidad">

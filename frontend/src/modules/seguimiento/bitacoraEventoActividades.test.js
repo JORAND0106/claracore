@@ -56,13 +56,14 @@ describe('actividadesParaPayload', () => {
 })
 
 describe('formatUbicacionActividad / actividadRowCells', () => {
-  it('arma etiqueta PK · tramo · costado', () => {
+  it('arma etiqueta Tramo · Infraestructura (sin pk_id)', () => {
     const label = formatUbicacionActividad({
       ubicacion_pk: 'K12',
-      ubicacion_tramo: 'Norte',
+      ubicacion_tramo: 'TRAMO 7',
       ubicacion_costado: 'Derecho',
+      ubicacion_infraestructura: 'BERM DER',
     })
-    assert.equal(label, 'PK K12 · Norte · Derecho')
+    assert.equal(label, 'TRAMO 7 · BERM DER')
   })
 
   it('celdas para Libro Digital', () => {
@@ -71,11 +72,17 @@ describe('formatUbicacionActividad / actividadRowCells', () => {
       abs_inicio: 'K1',
       abs_fin: 'K2',
       ubicacion_pk: '9',
+      ubicacion_tramo: 'Tramo A',
+      ubicacion_infraestructura: 'Calzada',
       cantidad: '2',
     })
     assert.equal(c.actividad, 'Señalización')
-    assert.equal(c.ubicacion, 'PK 9')
+    assert.equal(c.ubicacion, 'Tramo A · Calzada')
     assert.equal(c.cantidad, '2')
+  })
+
+  it('sin tramo/infra deja ubicación vacía (pk solo interno)', () => {
+    assert.equal(formatUbicacionActividad({ ubicacion_pk: 'K12' }), '')
   })
 
   it('actividadesConRegistro filtra vacías', () => {

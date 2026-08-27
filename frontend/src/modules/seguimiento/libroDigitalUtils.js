@@ -117,6 +117,30 @@ export function buildBitacoraPages(entradas) {
 }
 
 /**
+ * Índice de la primera página con la fecha indicada (YYYY-MM-DD).
+ * Si no hay coincidencia exacta, salta a la primera fecha ≥ buscada;
+ * si todas son anteriores, a la última página.
+ * @param {Array<{ fecha?: string }>} pages
+ * @param {string} fecha
+ * @returns {number} índice ≥ 0, o -1 si no hay páginas
+ */
+export function findPageIndexByFecha(pages, fecha) {
+  const list = Array.isArray(pages) ? pages : []
+  if (!list.length) return -1
+  const target = String(fecha || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(target)) return -1
+
+  const exact = list.findIndex((p) => String(p?.fecha || '').slice(0, 10) === target)
+  if (exact >= 0) return exact
+
+  for (let i = 0; i < list.length; i += 1) {
+    const pf = String(list[i]?.fecha || '').slice(0, 10)
+    if (pf && pf >= target) return i
+  }
+  return list.length - 1
+}
+
+/**
  * Paleta del libro dentro de la familia azul/steel institucional (tema `t`).
  * @param {'actas'|'bitacora'} modo
  * @param {object} t
