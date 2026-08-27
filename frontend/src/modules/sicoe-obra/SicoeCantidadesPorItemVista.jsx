@@ -26,19 +26,19 @@ function fmtPesos(v) {
 
 /**
  * Franja «A revisar»: línea delgada de abscisas del tramo con marcas en alertas.
- * Etiqueta #registro + tipo a la izq / centro / der de su marca según el tercio.
+ * Etiqueta = chip relleno; #registro dominante; tipo secundario; izq/cen/der por tercio.
  */
 function estiloAlertaSegmento(s) {
   if (s.solapa || s.alertaSolape) {
-    return { color: '#b91c1c', tag: 'Solape' }
+    return { background: '#fecaca', color: '#7f1d1d', tick: '#dc2626', tag: 'Solape' }
   }
   if (s.alertaVacio) {
-    return { color: '#b45309', tag: 'Vacío' }
+    return { background: '#fde68a', color: '#92400e', tick: '#d97706', tag: 'Vacío' }
   }
   if (s.alertaEspesor) {
-    return { color: '#6d28d9', tag: 'Esp.≠' }
+    return { background: '#ddd6fe', color: '#5b21b6', tick: '#7c3aed', tag: 'Espesor' }
   }
-  return { color: '#334155', tag: 'Alerta' }
+  return { background: '#cbd5e1', color: '#1e293b', tick: '#475569', tag: 'Alerta' }
 }
 
 /** Tercio del tramo (0–100 %) → alineación de etiqueta respecto a su marca. */
@@ -47,6 +47,9 @@ function tercioAbs(pct) {
   if (pct > 200 / 3) return 'der'
   return 'cen'
 }
+
+/** Divisor de celda tipo Excel (mismo criterio que Ítems/registros). */
+const SHEET_CELL_BORDER = '#94a3b8'
 
 function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
   const segs = grupo.segmentos || []
@@ -89,14 +92,14 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
         </span>
       </div>
 
-      {/* Etiquetas junto a su marca + eje Abs delgado */}
-      <div style={{ position: 'relative', height: 28, paddingTop: 14 }}>
+      {/* Chips rellenos junto a su marca + eje Abs delgado */}
+      <div style={{ position: 'relative', height: 32, paddingTop: 16 }}>
         <div
           style={{
             position: 'absolute',
             left: 0,
             right: 0,
-            top: 20,
+            top: 22,
             height: 2,
             borderRadius: 1,
             background: t.border || '#94a3b8',
@@ -106,7 +109,7 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
           style={{
             position: 'absolute',
             left: 0,
-            top: 17,
+            top: 19,
             width: 2,
             height: 8,
             background: t.border || '#94a3b8',
@@ -117,7 +120,7 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
           style={{
             position: 'absolute',
             right: 0,
-            top: 17,
+            top: 19,
             width: 2,
             height: 8,
             background: t.border || '#94a3b8',
@@ -128,7 +131,8 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
         {marks.map((m) => {
           const sel = String(seleccionadoId) === String(m.id)
           const st = estiloAlertaSegmento(m)
-          const label = `#${m.numero_registro ?? m.id} ${st.tag}`
+          const num = `#${m.numero_registro ?? m.id}`
+          const title = `${num} ${st.tag} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`
           // izq → a la izquierda de la marca; cen → centrada; der → a la derecha
           const transform =
             m.tercio === 'izq'
@@ -136,7 +140,6 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
               : m.tercio === 'der'
                 ? 'translateX(0)'
                 : 'translateX(-50%)'
-          const textAlign = m.tercio === 'izq' ? 'right' : m.tercio === 'der' ? 'left' : 'center'
           return (
             <div
               key={m.id}
@@ -152,40 +155,46 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
               <button
                 type="button"
                 onClick={() => onSelectSegmento?.(m.id)}
-                title={`${label} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
+                title={title}
                 style={{
                   position: 'absolute',
                   top: 0,
                   left: 0,
                   transform,
-                  textAlign,
+                  display: 'inline-flex',
+                  alignItems: 'baseline',
+                  gap: 4,
                   whiteSpace: 'nowrap',
-                  background: sel ? `${t.primary || '#0284c7'}22` : 'rgba(255,255,255,0.85)',
-                  border: sel ? `1px solid ${t.primary || '#0284c7'}` : '1px solid transparent',
-                  borderRadius: 3,
-                  padding: '0 3px',
-                  height: 14,
-                  lineHeight: '14px',
-                  fontSize: 10,
-                  fontWeight: 800,
-                  color: st.color,
+                  background: st.background,
+                  border: sel ? `2px solid ${t.primary || '#0284c7'}` : '1px solid transparent',
+                  borderRadius: 6,
+                  padding: '1px 7px 2px',
+                  height: 18,
+                  lineHeight: 1,
                   cursor: 'pointer',
-                  maxWidth: 110,
+                  boxShadow: sel
+                    ? `0 0 0 2px ${(t.primary || '#0284c7')}33`
+                    : '0 1px 2px rgba(15,23,42,0.08)',
+                  maxWidth: 120,
                   overflow: 'hidden',
-                  textOverflow: 'ellipsis',
                 }}
               >
-                {label}
+                <span style={{ fontSize: 12, fontWeight: 900, color: st.color, letterSpacing: '-0.01em' }}>
+                  {num}
+                </span>
+                <span style={{ fontSize: 9, fontWeight: 600, color: st.color, opacity: 0.75 }}>
+                  {st.tag}
+                </span>
               </button>
               <button
                 type="button"
-                aria-label={label}
+                aria-label={title}
                 onClick={() => onSelectSegmento?.(m.id)}
-                title={`${label} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
+                title={title}
                 style={{
                   position: 'absolute',
                   left: -4,
-                  top: 14,
+                  top: 16,
                   width: 8,
                   height: 14,
                   padding: 0,
@@ -201,7 +210,7 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
                     height: 12,
                     margin: '0 auto',
                     borderRadius: 1,
-                    background: sel ? t.primary || '#0284c7' : st.color,
+                    background: sel ? t.primary || '#0284c7' : st.tick,
                   }}
                 />
               </button>
@@ -338,6 +347,30 @@ export default function SicoeCantidadesPorItemVista({
     base.push('Observación', 'Foto', 'Gráfico', 'Validación')
     return base
   }, [modo, verEco])
+
+  const sheetGrid = t.sheetGridBorder || SHEET_CELL_BORDER
+  const sheetTh = {
+    padding: '7px 8px',
+    fontSize: 11,
+    fontWeight: 800,
+    color: t.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    whiteSpace: 'nowrap',
+    border: `1px solid ${sheetGrid}`,
+    background: t.headerBg || t.bg,
+    position: 'sticky',
+    top: 0,
+    zIndex: 2,
+  }
+  const sheetTd = {
+    padding: '6px 8px',
+    fontSize: 'var(--cc-sm)',
+    color: t.text,
+    border: `1px solid ${sheetGrid}`,
+    verticalAlign: 'middle',
+    lineHeight: 1.25,
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -493,10 +526,10 @@ export default function SicoeCantidadesPorItemVista({
             />
           ))}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 0, fontSize: 10, color: t.textMuted, alignItems: 'center' }}>
-            <span style={{ color: '#b91c1c', fontWeight: 700 }}>Solape</span>
-            <span style={{ color: '#b45309', fontWeight: 700 }}>Vacío</span>
-            <span style={{ color: '#6d28d9', fontWeight: 700 }}>Espesor</span>
-            <span>Marca en Abs · etiqueta izq/cen/der · clic → fila</span>
+            <span style={{ background: '#fecaca', color: '#7f1d1d', fontWeight: 800, padding: '1px 6px', borderRadius: 4 }}>Solape</span>
+            <span style={{ background: '#fde68a', color: '#92400e', fontWeight: 800, padding: '1px 6px', borderRadius: 4 }}>Vacío</span>
+            <span style={{ background: '#ddd6fe', color: '#5b21b6', fontWeight: 800, padding: '1px 6px', borderRadius: 4 }}>Espesor</span>
+            <span>Chip relleno · # registro destacado · clic → fila</span>
           </div>
         </div>
       )}
@@ -517,18 +550,19 @@ export default function SicoeCantidadesPorItemVista({
       )}
 
       {(modo === 'analisis' || modo === 'general') && (
-        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, overflow: 'auto' }}>
-          <table className="cc-sicoe-panel-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: verEco ? 1380 : 1180 }}>
+        <div style={{ background: t.bgCard, border: `1px solid ${sheetGrid}`, borderRadius: 4, overflow: 'auto' }}>
+          <table
+            className="cc-sicoe-items-sheet"
+            style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: verEco ? 1380 : 1180 }}
+          >
             <thead>
-              <tr style={{ background: t.bg, color: t.textMuted, fontSize: 'var(--cc-caption)', fontWeight: 800 }}>
+              <tr>
                 {headers.map((h) => (
                   <th
                     key={h}
                     style={{
-                      padding: '8px 10px',
+                      ...sheetTh,
                       textAlign: ['Observación', 'Tramo', 'Infraestructura', 'Capítulo', 'Ítem', 'Alertas'].includes(h) ? 'left' : 'right',
-                      borderBottom: `1px solid ${t.border}`,
-                      whiteSpace: 'nowrap',
                     }}
                   >
                     {h}
@@ -539,7 +573,7 @@ export default function SicoeCantidadesPorItemVista({
             <tbody>
               {filas.length === 0 ? (
                 <tr>
-                  <td colSpan={headers.length || colCount} style={{ padding: 24, textAlign: 'center', color: t.textMuted }}>
+                  <td colSpan={headers.length || colCount} style={{ ...sheetTd, padding: 24, textAlign: 'center', color: t.textMuted }}>
                     {filtroAlerta !== 'todos'
                       ? 'Ningún registro coincide con el filtro de alerta seleccionado.'
                       : 'No hay registros con ítem asignado para esta consulta.'}
@@ -565,6 +599,7 @@ export default function SicoeCantidadesPorItemVista({
                   const pastel = pastelDeEstadoValidacion(est)
                   const fotoOk = !!String(reg.foto_url || '').trim()
                   const grafOk = !!String(reg.grafico_url || '').trim() || (Array.isArray(reg.graficos_historial) && reg.graficos_historial.length > 0)
+                  const td = { ...sheetTd, background: sel ? `${t.primary}22` : bg }
                   return (
                     <tr
                       key={reg.id}
@@ -574,15 +609,13 @@ export default function SicoeCantidadesPorItemVista({
                       }}
                       onClick={() => seleccionar(reg.id, { scroll: false })}
                       style={{
-                        background: sel ? `${t.primary}22` : bg,
                         cursor: 'pointer',
-                        borderBottom: `1px solid ${t.border}33`,
                         outline: sel ? `2px solid ${t.primary}` : 'none',
                         outlineOffset: -2,
                       }}
                     >
                       {modo === 'analisis' && (
-                        <td style={{ padding: '7px 8px', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                        <td style={{ ...td, textAlign: 'left', whiteSpace: 'nowrap' }}>
                           {reg._alertaSolape && <Badge color="#dc2626" title="Posible solape de abscisas">Solape</Badge>}
                           {reg._alertaVacioAntes && (
                             <Badge
@@ -602,25 +635,25 @@ export default function SicoeCantidadesPorItemVista({
                           )}
                         </td>
                       )}
-                      <td style={{ padding: '7px 8px', textAlign: 'right', color: t.primary, fontWeight: 700 }}>
+                      <td style={{ ...td, textAlign: 'right', color: t.primary, fontWeight: 700 }}>
                         #{reg.numero_reporte ?? '—'}
                       </td>
-                      <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 700 }}>#{reg.numero_registro ?? '—'}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>#{reg.numero_registro ?? '—'}</td>
                       {modo === 'general' && (
                         <>
-                          <td style={{ padding: '7px 8px', textAlign: 'left' }}>{reg.capitulo || '—'}</td>
-                          <td style={{ padding: '7px 8px', textAlign: 'left', fontWeight: 700 }}>{reg.item_numero || '—'}</td>
+                          <td style={{ ...td, textAlign: 'left' }}>{reg.capitulo || '—'}</td>
+                          <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{reg.item_numero || '—'}</td>
                         </>
                       )}
-                      <td style={{ padding: '7px 8px', textAlign: 'left', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.tramo || ''}>{reg.tramo || '—'}</td>
-                      <td style={{ padding: '7px 8px', textAlign: 'left', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.infraestructura || ''}>{reg.infraestructura || '—'}</td>
-                      <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(reg.abs_inicio, 3)}</td>
-                      <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(reg.abs_final, 3)}</td>
-                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmtNum(reg.longitud)}</td>
-                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmtNum(reg.ancho)}</td>
+                      <td style={{ ...td, textAlign: 'left', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.tramo || ''}>{reg.tramo || '—'}</td>
+                      <td style={{ ...td, textAlign: 'left', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.infraestructura || ''}>{reg.infraestructura || '—'}</td>
+                      <td style={{ ...td, textAlign: 'right', fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(reg.abs_inicio, 3)}</td>
+                      <td style={{ ...td, textAlign: 'right', fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(reg.abs_final, 3)}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.longitud)}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.ancho)}</td>
                       <td
                         style={{
-                          padding: '7px 8px',
+                          ...td,
                           textAlign: 'right',
                           fontWeight: reg._alertaEspesorAtipico ? 800 : 400,
                           color: reg._alertaEspesorAtipico ? '#7c3aed' : t.text,
@@ -628,15 +661,15 @@ export default function SicoeCantidadesPorItemVista({
                       >
                         {fmtNum(reg.espesor, 3)}
                       </td>
-                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmtNum(reg.cantidad)}</td>
-                      <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 700 }}>{fmtNum(reg.cantidad_total)}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.cantidad)}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fmtNum(reg.cantidad_total)}</td>
                       {verEco && (
-                        <td style={{ padding: '7px 8px', textAlign: 'right', color: t.primary, fontWeight: 700 }}>{fmtPesos(cd)}</td>
+                        <td style={{ ...td, textAlign: 'right', color: t.primary, fontWeight: 700 }}>{fmtPesos(cd)}</td>
                       )}
-                      <td style={{ padding: '7px 8px', textAlign: 'left', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.observacion || ''}>
+                      <td style={{ ...td, textAlign: 'left', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.observacion || ''}>
                         {reg.observacion || '—'}
                       </td>
-                      <td style={{ padding: '7px 8px', textAlign: 'center' }}>
+                      <td style={{ ...td, textAlign: 'center' }}>
                         {fotoOk ? (
                           <button
                             type="button"
@@ -648,7 +681,7 @@ export default function SicoeCantidadesPorItemVista({
                           </button>
                         ) : '—'}
                       </td>
-                      <td style={{ padding: '7px 8px', textAlign: 'center' }}>
+                      <td style={{ ...td, textAlign: 'center' }}>
                         {grafOk ? (
                           <button
                             type="button"
@@ -660,7 +693,7 @@ export default function SicoeCantidadesPorItemVista({
                           </button>
                         ) : '—'}
                       </td>
-                      <td style={{ padding: '7px 8px', textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+                      <td style={{ ...td, textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                           <span
                             style={{
@@ -722,7 +755,7 @@ export default function SicoeCantidadesPorItemVista({
             </tbody>
           </table>
           {nivelesActivos?.length > 0 && nvUsuario && (
-            <div style={{ padding: '8px 12px', fontSize: 'var(--cc-caption)', color: t.textMuted, borderTop: `1px solid ${t.border}` }}>
+            <div style={{ padding: '8px 12px', fontSize: 'var(--cc-caption)', color: t.textMuted, borderTop: `1px solid ${sheetGrid}` }}>
               Costo directo = Cant. Total × VU de listado de precios (por capítulo+ítem de cada fila).
               {modo === 'analisis' ? ' Contadores Solapes/Vacíos/Espesores filtran la grilla al hacer clic.' : ''}
             </div>
