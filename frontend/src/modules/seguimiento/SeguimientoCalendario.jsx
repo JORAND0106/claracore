@@ -265,7 +265,10 @@ export default function SeguimientoCalendario({
     return []
   }, [events])
 
-  const legend = useMemo(() => Object.values(CALENDARIO_KIND), [])
+  const legend = useMemo(
+    () => Object.values(CALENDARIO_KIND).filter((k) => k.id !== 'bitacora_evento'),
+    [],
+  )
 
   const dayEvents = useMemo(() => {
     if (!dayMenu?.dateStr) return []
@@ -419,8 +422,8 @@ export default function SeguimientoCalendario({
                   <option value="compromiso">Compromisos</option>
                   <option value="tarea">Tareas</option>
                   <option value="acta">Actas</option>
-                  <option value="bitacora_diario">Bitácora · Diario</option>
-                  <option value="bitacora_evento">Bitácora · Evento</option>
+                  <option value="bitacora_diario">Bitácora</option>
+                  <option value="bitacora_evento">Bitácora</option>
                 </select>
               </Filter>
               <Filter t={t} label="Tipo de acta" className="cc-seguim-filter">
@@ -756,7 +759,7 @@ export default function SeguimientoCalendario({
                         borderLeft: `3px solid ${CALENDARIO_KIND.bitacora_diario.color}`,
                       }}
                     >
-                      📒 Bitácora · Reporte diario
+                      📒 Bitácora
                     </button>
                   )}
                   {canExportBitacora && (

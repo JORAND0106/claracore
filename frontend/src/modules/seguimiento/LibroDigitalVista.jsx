@@ -98,7 +98,7 @@ function DiarioPage({ page, palette, api, onZoomPhoto }) {
     <article>
       <PageHeader
         palette={palette}
-        eyebrow="Reporte Diario"
+        eyebrow="Bitácora"
         title={fmtFecha(page.fecha)}
         subtitle={[
           d.hora_inicio_labores ? `Inicio de labores ${String(d.hora_inicio_labores).slice(0, 5)}` : null,
@@ -917,7 +917,7 @@ export default function LibroDigitalVista({
 
       {!canViewBitacora ? (
         <div className="cc-libro-message">
-          No tiene permiso para ver la Bitácora de Obra. Solicite el permiso «Ver» en Control de accesos.
+          No tiene permiso para ver la Bitácora. Solicite el permiso «Ver» en Control de accesos.
         </div>
       ) : loading ? (
         <div className="cc-libro-message">Abriendo el libro…</div>
@@ -1084,10 +1084,10 @@ export function LibroDigitalSelector({ t, open, onClose, onSelect, puedeBitacora
             <span className="cc-libro-cover-spine" aria-hidden />
             <span className="cc-libro-cover-face">
               <img src={LOGO_SRC} alt="" className="cc-libro-cover-logo" />
-              <strong>Bitácora de Obra</strong>
+              <strong>Bitácora</strong>
               <small>
                 {puedeBitacora
-                  ? 'Reportes Diarios y de Evento por día'
+                  ? 'Documentos por día con eventos embebidos'
                   : 'Sin permiso para ver Bitácora'}
               </small>
             </span>
