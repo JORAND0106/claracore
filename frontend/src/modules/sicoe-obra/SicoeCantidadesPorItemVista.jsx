@@ -25,79 +25,165 @@ function fmtPesos(v) {
 }
 
 /**
- * Franja gerencial de alertas: solo registros con solape / vacío / espesor atípico.
- * Layout compacto (flex), sin huecos proporcionales por abscisa.
+ * Franja «A revisar»: línea delgada de abscisas del tramo con marcas en alertas.
+ * Etiqueta #registro + tipo alineada izq/centro/der según el tercio del tramo.
  */
 function estiloAlertaSegmento(s) {
   if (s.solapa || s.alertaSolape) {
-    return { background: '#fecaca', color: '#7f1d1d', tag: 'Solape' }
+    return { color: '#b91c1c', tag: 'Solape' }
   }
   if (s.alertaVacio) {
-    return { background: '#fde68a', color: '#92400e', tag: 'Vacío' }
+    return { color: '#b45309', tag: 'Vacío' }
   }
   if (s.alertaEspesor) {
-    return { background: '#ddd6fe', color: '#5b21b6', tag: 'Esp.≠' }
+    return { color: '#6d28d9', tag: 'Esp.≠' }
   }
-  return { background: '#cbd5e1', color: '#1e293b', tag: 'Alerta' }
+  return { color: '#334155', tag: 'Alerta' }
+}
+
+function tercioAbs(pct) {
+  if (pct < 100 / 3) return 'izq'
+  if (pct > (200 / 3)) return 'der'
+  return 'cen'
 }
 
 function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
   const segs = grupo.segmentos || []
   if (!segs.length) return null
 
+  let min = grupo.minAbs
+  let max = grupo.maxAbs
+  if (min == null || max == null || !(max > min)) {
+    const vals = segs.flatMap((s) => [s.absInicio, s.absFin]).filter((n) => Number.isFinite(n))
+    if (!vals.length) return null
+    min = Math.min(...vals)
+    max = Math.max(...vals)
+  }
+  const span = max > min ? max - min : 1
+  const toPct = (abs) => ((abs - min) / span) * 100
+
+  const marks = segs.map((s) => {
+    const a0 = Math.min(s.absInicio, s.absFin)
+    const a1 = Math.max(s.absInicio, s.absFin)
+    const mid = (a0 + a1) / 2
+    const pct = Math.min(100, Math.max(0, toPct(mid)))
+    return { ...s, a0, a1, mid, pct, tercio: tercioAbs(pct) }
+  })
+
+  const porTercio = { izq: [], cen: [], der: [] }
+  for (const m of marks) porTercio[m.tercio].push(m)
+
+  const renderEtiqueta = (m) => {
+    const sel = String(seleccionadoId) === String(m.id)
+    const st = estiloAlertaSegmento(m)
+    const label = `#${m.numero_registro ?? m.id} ${st.tag}`
+    return (
+      <button
+        key={m.id}
+        type="button"
+        onClick={() => onSelectSegmento?.(m.id)}
+        title={`${label} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
+        style={{
+          whiteSpace: 'nowrap',
+          background: sel ? `${t.primary || '#0284c7'}18` : 'transparent',
+          border: sel ? `1px solid ${t.primary || '#0284c7'}` : '1px solid transparent',
+          borderRadius: 4,
+          padding: '0 4px',
+          height: 16,
+          lineHeight: '16px',
+          fontSize: 11,
+          fontWeight: 800,
+          color: st.color,
+          cursor: 'pointer',
+          maxWidth: '100%',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {label}
+      </button>
+    )
+  }
+
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6, flexWrap: 'wrap', alignItems: 'baseline' }}>
-        <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{grupo.label}</span>
-        <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-          {segs.length} a revisar
+    <div style={{ marginBottom: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 2, flexWrap: 'wrap', alignItems: 'baseline' }}>
+        <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.text }}>{grupo.label}</span>
+        <span style={{ fontSize: 11, color: t.textMuted }}>
+          Abs {fmtNum(min, 1)} → {fmtNum(max, 1)} · {segs.length} alerta{segs.length === 1 ? '' : 's'}
         </span>
       </div>
 
+      {/* Etiquetas: izq / centro / der según tercio del tramo */}
       <div
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 8,
-          padding: '8px 10px',
-          borderRadius: 10,
-          background: t.bg || '#f1f5f9',
-          border: `1px solid ${t.border}`,
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr 1fr',
+          gap: 4,
+          minHeight: 16,
+          marginBottom: 2,
         }}
       >
-        {segs.map((s) => {
-          const sel = String(seleccionadoId) === String(s.id)
-          const label = `#${s.numero_registro ?? s.id}`
-          const st = estiloAlertaSegmento(s)
-          const a0 = Math.min(s.absInicio, s.absFin)
-          const a1 = Math.max(s.absInicio, s.absFin)
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, justifyContent: 'flex-start', justifyContent: 'flex-start' }}>
+          {porTercio.izq.map(renderEtiqueta)}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignContent: 'flex-start', justifyContent: 'center' }}>
+          {porTercio.cen.map(renderEtiqueta)}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignContent: 'flex-start', justifyContent: 'flex-end' }}>
+          {porTercio.der.map(renderEtiqueta)}
+        </div>
+      </div>
+
+      {/* Eje Abs delgado + marcas de corte en posición real */}
+      <div style={{ position: 'relative', height: 12 }}>
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 5,
+            height: 2,
+            borderRadius: 1,
+            background: t.border || '#94a3b8',
+          }}
+        />
+        <div style={{ position: 'absolute', left: 0, top: 2, width: 2, height: 8, background: t.border || '#94a3b8', borderRadius: 1 }} />
+        <div style={{ position: 'absolute', right: 0, top: 2, width: 2, height: 8, background: t.border || '#94a3b8', borderRadius: 1 }} />
+
+        {marks.map((m) => {
+          const sel = String(seleccionadoId) === String(m.id)
+          const st = estiloAlertaSegmento(m)
           return (
             <button
-              key={s.id}
+              key={`tick-${m.id}`}
               type="button"
-              onClick={() => onSelectSegmento?.(s.id)}
-              title={`${label} · ${st.tag} · Abs ${fmtNum(a0, 3)}–${fmtNum(a1, 3)}`}
+              aria-label={`Marca #${m.numero_registro ?? m.id}`}
+              onClick={() => onSelectSegmento?.(m.id)}
+              title={`Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`}
               style={{
-                height: 36,
-                minWidth: 52,
-                padding: '0 12px',
-                border: sel ? `2px solid ${t.primary || '#0f172a'}` : '1px solid transparent',
-                borderRadius: 8,
-                background: st.background,
-                color: st.color,
-                boxShadow: sel ? `0 0 0 3px ${(t.primary || '#0284c7')}33` : '0 1px 2px rgba(15,23,42,0.06)',
+                position: 'absolute',
+                left: `${m.pct}%`,
+                top: 1,
+                width: 8,
+                height: 10,
+                marginLeft: -4,
+                padding: 0,
+                border: 'none',
+                background: 'transparent',
                 cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                fontSize: 14,
-                fontWeight: 800,
-                letterSpacing: '0.01em',
               }}
             >
-              {label}
-              <span style={{ fontSize: 10, fontWeight: 700, opacity: 0.85 }}>{st.tag}</span>
+              <span
+                style={{
+                  display: 'block',
+                  width: 2,
+                  height: 10,
+                  margin: '0 auto',
+                  borderRadius: 1,
+                  background: sel ? (t.primary || '#0284c7') : st.color,
+                }}
+              />
             </button>
           )
         })}
@@ -372,9 +458,9 @@ export default function SicoeCantidadesPorItemVista({
       )}
 
       {modo === 'analisis' && gruposFranja.length > 0 && (
-        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '10px 12px' }}>
-          <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text, marginBottom: 6 }}>
-            A revisar en franja (solo registros con alerta)
+        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '8px 12px' }}>
+          <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.text, marginBottom: 4 }}>
+            A revisar — posición en el tramo (solo alertas)
           </div>
           {gruposFranja.map((g) => (
             <FranjaCoberturaGrupo
@@ -385,17 +471,11 @@ export default function SicoeCantidadesPorItemVista({
               onSelectSegmento={seleccionar}
             />
           ))}
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6, fontSize: 'var(--cc-caption)', color: t.textMuted, alignItems: 'center' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fecaca', borderRadius: 3 }} />Solape
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fde68a', borderRadius: 3 }} />Vacío
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ display: 'inline-block', width: 12, height: 12, background: '#ddd6fe', borderRadius: 3 }} />Espesor atípico
-            </span>
-            <span>Clic en un # → resalta la fila (la grilla sigue mostrando todos los registros)</span>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 2, fontSize: 11, color: t.textMuted, alignItems: 'center' }}>
+            <span style={{ color: '#b91c1c', fontWeight: 700 }}>Solape</span>
+            <span style={{ color: '#b45309', fontWeight: 700 }}>Vacío</span>
+            <span style={{ color: '#6d28d9', fontWeight: 700 }}>Espesor</span>
+            <span>Etiqueta izq/centro/der según tercio del tramo · clic → fila</span>
           </div>
         </div>
       )}
