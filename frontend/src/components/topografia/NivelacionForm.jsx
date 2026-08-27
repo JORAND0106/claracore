@@ -12,6 +12,7 @@ import NivelacionLecturaEditModal from './NivelacionLecturaEditModal'
 import PoligonalUndoToast from './PoligonalUndoToast'
 import { fmtN } from './nivelacionUiShared'
 import {
+  PanelColapsable,
   PermisoAviso,
   puede,
   Semaforo,
