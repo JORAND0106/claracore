@@ -24,6 +24,18 @@ describe('Nivelación — patrón Poligonal (estructura)', () => {
     assert.match(src, /confirmEliminarFila|solicitarEliminarFila/)
   })
 
+  it('importa PanelColapsable (evita pantalla en blanco al abrir circuito)', () => {
+    // Tras el merge al patrón Poligonal se eliminó el helper local PanelColapsable
+    // y quedó el JSX sin import → ReferenceError al montar detalle existente.
+    const src = read('NivelacionForm.jsx')
+    assert.match(
+      src,
+      /import\s*\{[^}]*\bPanelColapsable\b[^}]*\}\s*from\s*['"]\.\/topografiaShared['"]/s,
+    )
+    assert.match(src, /<PanelColapsable[\s>]/)
+    assert.doesNotMatch(src, /^function PanelColapsable\b/m)
+  })
+
   it('panel de ingreso expone V+/Vi/V− y Agregar lectura', () => {
     const src = read('NivelacionIngresoPanel.jsx')
     assert.match(src, /V\+ \(vista atrás\)/)
