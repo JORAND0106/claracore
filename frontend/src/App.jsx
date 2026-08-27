@@ -10982,7 +10982,7 @@ function ModuloSicoeObra({
                 cursor: 'pointer',
               }}
             >
-              Cantidades por ítem
+              Por cantidades
             </button>
           </div>
         </div>

@@ -243,7 +243,7 @@ export default function SicoeCantidadesPorItemVista({
         }}
       >
         <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.text }}>
-          Cantidades por ítem
+          Por cantidades
         </div>
         <div style={{ marginTop: 4, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
           Use el modal de <strong style={{ color: t.text }}>Filtros</strong> (igual que en Reportes).
@@ -286,7 +286,7 @@ export default function SicoeCantidadesPorItemVista({
             fontSize: 'var(--cc-sm)',
           }}
         >
-          Defina criterios en <strong style={{ color: t.text }}>Filtros</strong> y pulse <strong style={{ color: t.text }}>Buscar</strong> para ver cantidades por ítem.
+          Defina criterios en <strong style={{ color: t.text }}>Filtros</strong> y pulse <strong style={{ color: t.text }}>Buscar</strong> para ver por cantidades.
         </div>
       )}
 
