@@ -41,8 +41,8 @@ export default function ActividadesEventoGrid({
       width: '100%',
       boxSizing: 'border-box',
     }),
-    fontSize: compact ? 11 : 12,
-    padding: compact ? '4px 5px' : '5px 6px',
+    fontSize: compact ? 11 : 'var(--cc-sm)',
+    padding: compact ? '4px 5px' : '6px 8px',
     minWidth: 0,
   }
 
@@ -92,22 +92,23 @@ export default function ActividadesEventoGrid({
         }}
       >
         <table
-          className={compact ? 'cc-bitacora-responsive-table cc-bitacora-actividades-table' : undefined}
+          className={compact ? 'cc-bitacora-responsive-table cc-bitacora-actividades-table' : 'cc-bitacora-actividades-table'}
           style={{
             ...(ui.sheetTable || { width: '100%', borderCollapse: 'collapse' }),
-            minWidth: compact ? 0 : 420,
+            width: '100%',
+            minWidth: compact ? 0 : undefined,
             tableLayout: 'fixed',
           }}
         >
           <thead>
             <tr>
-              <th style={{ ...(ui.th || {}), textAlign: 'left', width: '22%' }}>Actividad</th>
+              <th style={{ ...(ui.th || {}), textAlign: 'left', width: '26%' }}>Actividad</th>
               <th style={{ ...(ui.th || {}), textAlign: 'left', width: '12%' }}>Abs Inicio</th>
               <th style={{ ...(ui.th || {}), textAlign: 'left', width: '12%' }}>Abs Fin</th>
-              <th style={{ ...(ui.th || {}), textAlign: 'center', width: '14%' }}>Ubicación</th>
-              <th style={{ ...(ui.th || {}), textAlign: 'left', width: '12%' }}>Cantidad</th>
-              <th style={{ ...(ui.th || {}), textAlign: 'left', width: '20%' }}>Observación</th>
-              <th style={{ ...(ui.th || {}), width: '8%' }} />
+              <th style={{ ...(ui.th || {}), textAlign: 'center', width: '12%' }}>Ubicación</th>
+              <th style={{ ...(ui.th || {}), textAlign: 'left', width: '10%' }}>Cantidad</th>
+              <th style={{ ...(ui.th || {}), textAlign: 'left', width: '22%' }}>Observación</th>
+              <th style={{ ...(ui.th || {}), width: '6%' }} />
             </tr>
           </thead>
           <tbody>
@@ -167,14 +168,14 @@ export default function ActividadesEventoGrid({
                         }),
                         color: ubiLabel ? (t.primary || '#0f766e') : t.textMuted,
                         fontWeight: 800,
-                        fontSize: 10,
+                        fontSize: compact ? 10 : 11,
                         maxWidth: '100%',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {row.ubicacion_pk ? `PK ${row.ubicacion_pk}` : 'PK'}
+                      {row.ubicacion_pk ? `PK ${row.ubicacion_pk}` : 'Seleccionar PK'}
                     </button>
                   </td>
                   <td style={ui.td} data-label="Cantidad">
