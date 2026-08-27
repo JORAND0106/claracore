@@ -66,7 +66,7 @@ export default function BitacoraPanel({
         padding: 20, borderRadius: 12, border: `1px solid ${t.border}`,
         background: t.bgCard, color: t.textMuted, fontSize: 'var(--cc-body)',
       }}>
-        No tiene permiso para ver la Bitácora de Obra. Solicite el permiso «Ver» en Control de accesos.
+        No tiene permiso para ver la Bitácora. Solicite el permiso «Ver» en Control de accesos.
       </div>
     )
   }
@@ -92,16 +92,16 @@ export default function BitacoraPanel({
       }}>
         <div>
           <div style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-title)' }}>
-            Bitácora de Obra
+            Bitácora
           </div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, maxWidth: 560 }}>
-            Un Reporte Diario por fecha · Eventos como bloques dentro del mismo documento · Ventana de gracia de un día
+            Un documento por fecha · Eventos como bloques dentro del mismo documento · Ventana de gracia de un día
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {permisos.crear && (
             <button type="button" style={btnPrimary} onClick={() => setEditor({ modo: 'diario', entrada: null })}>
-              + Reporte Diario
+              + Bitácora
             </button>
           )}
         </div>
@@ -146,13 +146,13 @@ export default function BitacoraPanel({
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           <section>
-            <div style={{ ...ui.sectionTitle, marginBottom: 8 }}>Reportes Diarios</div>
+            <div style={{ ...ui.sectionTitle, marginBottom: 8 }}>Documentos</div>
             {diarios.length === 0 ? (
               <div style={{
                 padding: 16, textAlign: 'center', color: t.textMuted, fontSize: 13,
                 border: `1px dashed ${t.border}`, borderRadius: 6,
               }}>
-                Sin reportes diarios en el rango.
+                Sin bitácoras en el rango.
               </div>
             ) : (
               <div style={ui.sheetWrap}>

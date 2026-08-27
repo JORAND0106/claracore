@@ -81,7 +81,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         <div>
           <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 700, color: t.text }}>Seguimiento</div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            Calendario del contrato · tareas, actas y bitácora de obra
+            Calendario del contrato · tareas, actas y bitácora
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>

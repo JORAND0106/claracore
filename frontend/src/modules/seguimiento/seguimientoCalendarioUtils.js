@@ -31,22 +31,22 @@ export const CALENDARIO_KIND = {
     textColor: '#ffffff',
     tooltip: 'Actas o reuniones programadas del contrato',
   },
-  /** Familia tonal violeta: diario más intenso, evento más claro. */
+  /** Familia tonal violeta para Bitácora. */
   bitacora_diario: {
     id: 'bitacora_diario',
-    label: 'Reporte diario',
+    label: 'Bitácora',
     icon: '📒',
     color: '#6d28d9',
     textColor: '#ffffff',
-    tooltip: 'Bitácora de Obra · Reporte Diario del día',
+    tooltip: 'Bitácora del día (incluye eventos del documento)',
   },
   bitacora_evento: {
     id: 'bitacora_evento',
-    label: 'Reporte de evento',
+    label: 'Bitácora',
     icon: '📎',
     color: '#a78bfa',
     textColor: '#1e1b4b',
-    tooltip: 'Bitácora de Obra · Reporte de Evento',
+    tooltip: 'Bitácora',
   },
 }
 
@@ -185,7 +185,7 @@ export function bitacoraToEvent(entrada) {
   const nEv = Array.isArray(entrada.eventos)
     ? entrada.eventos.length
     : (Number(entrada.eventos_count) || 0)
-  let texto = elaborador ? `Diario · ${elaborador}` : 'Reporte diario'
+  let texto = elaborador ? `Bitácora · ${elaborador}` : 'Bitácora'
   if (nEv > 0) texto += ` · ${nEv} evento${nEv === 1 ? '' : 's'}`
   return {
     id: `bitacora-${entrada.id}`,
@@ -333,7 +333,7 @@ export function formatDayCountLabel({
   if (tareas > 0) parts.push(`${tareas} tarea${tareas === 1 ? '' : 's'}`)
   if (compromisos > 0) parts.push(`${compromisos} compromiso${compromisos === 1 ? '' : 's'}`)
   if (actas > 0) parts.push(`${actas} acta${actas === 1 ? '' : 's'}`)
-  if (diarios > 0) parts.push(`${diarios} diario${diarios === 1 ? '' : 's'}`)
+  if (diarios > 0) parts.push(`${diarios} bitácora${diarios === 1 ? '' : 's'}`)
   if (eventosBit > 0) parts.push(`${eventosBit} evento${eventosBit === 1 ? '' : 's'}`)
   return parts.join(' · ')
 }
@@ -346,7 +346,7 @@ export function formatDayCountLabelShort({
   if (tareas > 0) parts.push(`${tareas}T`)
   if (compromisos > 0) parts.push(`${compromisos}C`)
   if (actas > 0) parts.push(`${actas}A`)
-  if (diarios > 0) parts.push(`${diarios}D`)
+  if (diarios > 0) parts.push(`${diarios}B`)
   if (eventosBit > 0) parts.push(`${eventosBit}E`)
   return parts.join(' · ')
 }

@@ -158,7 +158,7 @@ export function libroPalette(modo, t) {
     textMuted,
     border,
     bg,
-    label: 'Bitácora de Obra',
+    label: 'Bitácora',
     shortLabel: 'Bitácora',
   }
 }

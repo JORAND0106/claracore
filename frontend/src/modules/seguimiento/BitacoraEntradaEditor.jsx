@@ -450,8 +450,8 @@ export default function BitacoraEntradaEditor({
       const server = row?._perf_ms?.total
       setOkMsg(
         server != null
-          ? `Reporte Diario guardado (${ms} ms red · ${Math.round(server)} ms servidor).`
-          : `Reporte Diario guardado (${total} ms).`,
+          ? `Bitácora guardada (${ms} ms red · ${Math.round(server)} ms servidor).`
+          : `Bitácora guardada (${total} ms).`,
       )
       // No propagar métricas internas al estado de imágenes
       const { _perf_ms: _omit, ...rowClean } = row || {}
@@ -480,7 +480,7 @@ export default function BitacoraEntradaEditor({
       const data = await api.plantillaAutocompletarDiario()
       const prevAsist = asistenciaFromEntrada(data)
       if (!data || (!prevAsist.length && !data.personal?.length && !data.equipos_uso?.length)) {
-        setError('No hay un Reporte Diario anterior para autocompletar.')
+        setError('No hay una Bitácora anterior para autocompletar.')
         return
       }
       // No tocar fecha / hora / clima ni materiales
@@ -622,7 +622,7 @@ export default function BitacoraEntradaEditor({
 
   const titulo = tipo === 'evento'
     ? (esNuevo ? 'Nuevo Reporte de Evento' : `Evento · ${labelEventoTipo(entrada?.evento_tipo)}`)
-    : (esNuevo ? 'Nuevo Reporte Diario' : `Reporte Diario · ${entrada?.fecha || fecha}`)
+    : (esNuevo ? 'Nueva Bitácora' : `Bitácora · ${entrada?.fecha || fecha}`)
 
   const fechaRo = tipo === 'diario' || !esNuevo
 
@@ -660,7 +660,9 @@ export default function BitacoraEntradaEditor({
             <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-title)' }}>{titulo}</div>
             <div style={{ fontSize: 11, color: t.textMuted }}>
               {tipo === 'diario'
-                ? (editable ? 'Abierto — editable hasta las 23:59:59' : 'Cerrado / bloqueado — solo lectura')
+                ? (editable
+                  ? 'Abierta — editable dentro de la ventana de gracia (hasta 23:59:59 del día siguiente)'
+                  : 'Cerrada / bloqueada — solo lectura')
                 : 'Inmutable desde su creación'}
             </div>
           </div>
@@ -671,7 +673,7 @@ export default function BitacoraEntradaEditor({
                 disabled={autoBusy || busy}
                 onClick={() => void autocompletarDesdeAnterior()}
                 style={btnGhost}
-                title="Carga asistencia y maquinaria del último reporte. Materiales no se autocompletan. No modifica fecha, hora ni clima."
+                title="Carga asistencia y maquinaria de la bitácora anterior. Materiales no se autocompletan. No modifica fecha, hora ni clima."
               >
                 {autoBusy ? 'Cargando…' : 'Autocompletar desde día anterior'}
               </button>
@@ -730,7 +732,7 @@ export default function BitacoraEntradaEditor({
                             value={(horaInicio || '').slice(0, 8)}
                             onChange={(e) => setHoraInicio(e.target.value)}
                             style={ui.cellInp}
-                            title="Editable mientras el reporte esté abierto"
+                            title="Editable mientras la bitácora esté abierta"
                           />
                         ) : (
                           <div style={ui.cellRo}>{horaInicio || '—'}</div>
