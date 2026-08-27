@@ -7794,6 +7794,7 @@ function ModuloSicoeObra({
   /** Vista módulo: grilla por reporte (default) | cantidades por ítem (control solapes/vacíos). */
   const [sicoeModuloVista, setSicoeModuloVista] = useState('reportes')
   const [cpiRefreshNonce, setCpiRefreshNonce] = useState(0)
+  const [cpiFiltrosVersion, setCpiFiltrosVersion] = useState(0)
   const [ejecutandoCpiValidacion, setEjecutandoCpiValidacion] = useState(false)
   /** Antes de filtrar la grilla por PK desde el mapa: asignar inspector/subcontratista en bloque. */
   const [modalPkAsignacionMapa, setModalPkAsignacionMapa] = useState(null)
@@ -8666,6 +8667,7 @@ function ModuloSicoeObra({
       ])
       if (opSeq === sicoeOperacionSeqRef.current) {
         guardarSicoeVistaTrasBusquedaRef.current?.(f, repResult, analResult)
+        setCpiFiltrosVersion((n) => n + 1)
       }
     } catch (e) {
       if (e?.name !== 'AbortError') throw e
@@ -8712,6 +8714,7 @@ function ModuloSicoeObra({
         setBusquedaRealizada(false)
         setHayMas(false)
         setOffsetActual(0)
+        setCpiFiltrosVersion((n) => n + 1)
         return
       }
       void ejecutarBusquedaSicoeCompleta(f, bundle.capasValidacion, bundle.capasValidacionOp)
@@ -10140,6 +10143,7 @@ function ModuloSicoeObra({
     setBusquedaRealizada(false)
     setHayMas(false)
     setOffsetActual(0)
+    setCpiFiltrosVersion((n) => n + 1)
     if (efectivoOfflineRef.current && isOfflineReadyRef.current) {
       getCapitulosOffline(contrato_id).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
     } else {
@@ -10618,6 +10622,16 @@ function ModuloSicoeObra({
   }
   const sicoeFIn = (px) => ({ flex: `0 0 ${px}px` })
   const sicoeFGrow = { flex: '1 1 0', minWidth: 0, maxWidth: '100%' }
+
+  const buildCantidadesItemParams = useCallback(() => {
+    const params = new URLSearchParams()
+    sicoeAppendParamsBusquedaActivos(params)
+    const capas = capasSicoeRef.current || []
+    if (capas.length > 1) {
+      params.set('validacion_capas_op', capasValidacionOpRef.current === 'or' ? 'or' : 'and')
+    }
+    return params
+  }, [])
 
   const abrirRegistroDesdeCantidadesItem = useCallback(async (reg) => {
     const rid = Number(reg?.reporte_id)
@@ -11433,25 +11447,6 @@ function ModuloSicoeObra({
       </div>
       </PanelCalculadoraProvider>
 
-      {sicoeModuloVista === 'cantidades_item' ? (
-        <SicoeCantidadesPorItemVista
-          t={t}
-          contratoId={contrato_id}
-          token={getToken()}
-          API_URL={API_URL}
-          nivelInfo={nivelInfo}
-          nivelesContrato={nivelesContrato}
-          filtroCapList={filtroCapList}
-          capituloInicial={filtros.capitulo || ''}
-          itemInicial={filtros.item || ''}
-          onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
-          onSeleccionCambio={onSeleccionCantidadesItem}
-          onValidarRapido={validarRapidoCantidadesItem}
-          ejecutandoValidacion={ejecutandoCpiValidacion}
-          refreshNonce={cpiRefreshNonce}
-        />
-      ) : (
-      <>
       <SicoeFiltroObraVista
         t={t}
         contratoId={contrato_id}
@@ -11462,7 +11457,7 @@ function ModuloSicoeObra({
         onActualizar={refrescarVistaSicoeObra}
         actualizarDisabled={cargandoAnalisis || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)}
         buscando={cargando || cargandoAnalisis}
-        puedeExportar={puedeExportar}
+        puedeExportar={puedeExportar && sicoeModuloVista === 'reportes'}
         onExportarExcel={abrirPopupExportRegistros}
         exportDisabled={!reportesMostrados || reportesMostrados.length === 0}
         puedeVerSubcontratista={puedeVerSubcFiltro}
@@ -11476,7 +11471,7 @@ function ModuloSicoeObra({
         pkList={sicoePkList}
         busquedaRealizada={busquedaRealizada}
         extraActions={
-          puedeReversionCantidadesMasiva ? (
+          puedeReversionCantidadesMasiva && sicoeModuloVista === 'reportes' ? (
             <button
               type="button"
               title="Reversión de cantidades"
@@ -11499,7 +11494,7 @@ function ModuloSicoeObra({
           ) : null
         }
         validacionMasivaPanel={
-          mostrarPanelValidacionMasiva ? (
+          sicoeModuloVista === 'reportes' && mostrarPanelValidacionMasiva ? (
             <div style={{ marginTop: '10px', padding: '10px 12px', background: '#1E293B', borderRadius: '8px', border: '1px solid rgba(148,163,184,0.2)' }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                 <div style={{ flex: '1 1 180px', minWidth: 0 }}>
@@ -11542,6 +11537,26 @@ function ModuloSicoeObra({
           ) : null
         }
       />
+
+      {sicoeModuloVista === 'cantidades_item' ? (
+        <SicoeCantidadesPorItemVista
+          t={t}
+          contratoId={contrato_id}
+          token={getToken()}
+          API_URL={API_URL}
+          nivelInfo={nivelInfo}
+          nivelesContrato={nivelesContrato}
+          busquedaActiva={!!sicoeVistaResultadosActiva}
+          buildFiltrosParams={buildCantidadesItemParams}
+          onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
+          onSeleccionCambio={onSeleccionCantidadesItem}
+          onValidarRapido={validarRapidoCantidadesItem}
+          ejecutandoValidacion={ejecutandoCpiValidacion}
+          refreshNonce={cpiRefreshNonce}
+          filtrosVersion={cpiFiltrosVersion}
+        />
+      ) : (
+      <>
       {/* ── Grid reportes ── */}
       <div style={{ background:t.bgCard, borderRadius:'12px', border:`1px solid ${t.border}` }}>
         {puedeExportar && sicoeCompact && reportesMostrados?.length > 0 && (

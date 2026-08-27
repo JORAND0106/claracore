@@ -44,6 +44,19 @@ export function compararRegistrosPorAbsInicio(a, b) {
   return (Number(a?.id) || 0) - (Number(b?.id) || 0)
 }
 
+/** Orden jerárquico general: Ítem → Tramo → Infraestructura → Abs Inicio. */
+export function compararRegistrosJerarquiaGeneral(a, b) {
+  const ca = String(a?.capitulo || '').localeCompare(String(b?.capitulo || ''), 'es', { sensitivity: 'base' })
+  if (ca) return ca
+  const ia = String(a?.item_numero || '').localeCompare(String(b?.item_numero || ''), 'es', { sensitivity: 'base' })
+  if (ia) return ia
+  const ta = String(a?.tramo || '').localeCompare(String(b?.tramo || ''), 'es', { sensitivity: 'base' })
+  if (ta) return ta
+  const inf = String(a?.infraestructura || '').localeCompare(String(b?.infraestructura || ''), 'es', { sensitivity: 'base' })
+  if (inf) return inf
+  return compararRegistrosPorAbsInicio(a, b)
+}
+
 /**
  * Moda de espesores: valor más frecuente.
  * Empate → el de mayor conteo ya es único por Map order; si empate exacto, el primero visto.
@@ -70,11 +83,6 @@ export function modaEspesor(valores) {
 
 /**
  * Detecta solapes, vacíos y espesores atípicos dentro de cada grupo.
- * @returns {{
- *   filas: Array<object>,
- *   grupos: Array<object>,
- *   resumen: { solapes: number, vacios: number, espesoresAtipicos: number, total: number }
- * }}
  */
 export function analizarCantidadesPorItem(registros) {
   const byGrupo = new Map()
@@ -100,7 +108,7 @@ export function analizarCantidadesPorItem(registros) {
     const meta = etiquetaGrupoCantidadesPorItem(ordenados[0] || {})
 
     const segmentos = []
-    const alertasFila = new Map() // id → { solape, vacioAntes, espesorAtipico }
+    const alertasFila = new Map()
 
     for (let i = 0; i < ordenados.length; i++) {
       const cur = ordenados[i]
@@ -125,7 +133,6 @@ export function analizarCantidadesPorItem(registros) {
 
       if (i > 0) {
         const prev = ordenados[i - 1]
-        const p0 = parseAbsNum(prev.abs_inicio)
         const p1 = parseAbsNum(prev.abs_final)
         if (a0 != null && p1 != null && a0 < p1) {
           flags.solape = true
@@ -178,8 +185,20 @@ export function analizarCantidadesPorItem(registros) {
     const minAbs = absVals.length ? Math.min(...absVals) : null
     const maxAbs = absVals.length ? Math.max(...absVals) : null
 
+    const segsMarked = segmentos.map((s) => {
+      const solapa = segmentos.some(
+        (o) =>
+          o.id !== s.id &&
+          Math.min(s.absInicio, s.absFin) < Math.max(o.absInicio, o.absFin) &&
+          Math.max(s.absInicio, s.absFin) > Math.min(o.absInicio, o.absFin),
+      )
+      return { ...s, solapa }
+    })
+
     grupos.push({
       key: k,
+      capitulo: String(ordenados[0]?.capitulo || '').trim(),
+      item: String(ordenados[0]?.item_numero || '').trim(),
       tramo: meta.tramo,
       infraestructura: meta.infraestructura,
       label: meta.label,
@@ -190,7 +209,7 @@ export function analizarCantidadesPorItem(registros) {
       total: ordenados.length,
       minAbs,
       maxAbs,
-      segmentos,
+      segmentos: segsMarked,
       vaciosIntervalos: ordenados
         .map((r) => alertasFila.get(r.id)?.vacioAntes)
         .filter(Boolean),
@@ -210,10 +229,53 @@ export function analizarCantidadesPorItem(registros) {
   }
 }
 
+/** Vista general (varios ítems): orden jerárquico sin alertas de inconsistencia. */
+export function ordenarRegistrosVistaGeneral(registros) {
+  return [...(registros || [])]
+    .filter((r) => String(r?.item_numero || '').trim())
+    .sort(compararRegistrosJerarquiaGeneral)
+    .map((r) => ({
+      ...r,
+      _alertaSolape: false,
+      _alertaVacioAntes: null,
+      _alertaEspesorAtipico: false,
+      _espesorModaGrupo: null,
+      _grupoLabel: `${String(r.item_numero || '').trim()} · ${etiquetaGrupoCantidadesPorItem(r).label}`,
+    }))
+}
+
+/** Filtra filas por tipo de alerta accionable. */
+export function filtrarFilasPorAlerta(filas, filtroAlerta) {
+  if (!filtroAlerta || filtroAlerta === 'todos') return filas || []
+  if (filtroAlerta === 'solapes') return (filas || []).filter((f) => f._alertaSolape)
+  if (filtroAlerta === 'vacios') return (filas || []).filter((f) => f._alertaVacioAntes)
+  if (filtroAlerta === 'espesores') return (filas || []).filter((f) => f._alertaEspesorAtipico)
+  return filas || []
+}
+
+/**
+ * Modo de la vista a partir del payload y si hay búsqueda activa.
+ */
+export function resolverModoCantidadesPorItem({ busquedaActiva, payload }) {
+  if (!busquedaActiva) return 'vacio'
+  if (!payload) return 'vacio'
+  if (payload.modo === 'analisis' || Number(payload.items_distintos) === 1) return 'analisis'
+  if (Number(payload.total) > 0 || Number(payload.items_distintos) > 1) return 'general'
+  return 'vacio'
+}
+
 /** Costo directo de línea: round(round(cant,2) × VU_listado, 0). */
 export function costoDirectoDesdeListado(cantidadTotal, vuListado) {
   const q = Math.round((Number(cantidadTotal) || 0) * 100) / 100
   const vu = Number(vuListado) || 0
   if (!q || !vu) return 0
   return Math.round(q * vu)
+}
+
+/** VU efectivo de una fila (preferir el de la propia fila). */
+export function vuEfectivoFila(reg, payloadVu) {
+  const v = Number(reg?.vlr_unitario_listado)
+  if (Number.isFinite(v) && v > 0) return v
+  const p = Number(payloadVu)
+  return Number.isFinite(p) && p > 0 ? p : 0
 }
