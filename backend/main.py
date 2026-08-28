@@ -2500,8 +2500,14 @@ def _require_contract_access(current_user, contrato_id: int):
 COMPETENCIAS_BASE = ["EAB", "ENEL-CODENSA", "ETB", "Gas Natural", "ICCU", "IDU", "MOVISTAR"]
 
 
-def _comentario_sicoe_visible_para_usuario(c: dict, uid: int, es_privilegiado: bool) -> bool:
-    """Misma regla que listar_comentarios: destinatarios explícitos o autor."""
+def _comentario_sicoe_visible_para_usuario(
+    c: dict,
+    uid: int,
+    es_privilegiado: bool,
+    *,
+    rol_macro: Optional[str] = None,
+) -> bool:
+    """Misma regla que listar_comentarios: destinatarios explícitos, autor, o macro interventoría."""
     if es_privilegiado:
         return True
     destinatarios = c.get("destinatarios") or []
@@ -2517,9 +2523,30 @@ def _comentario_sicoe_visible_para_usuario(c: dict, uid: int, es_privilegiado: b
     if uid in ids_dest:
         return True
     try:
-        return int(c.get("autor_id") or 0) == uid
+        if int(c.get("autor_id") or 0) == uid:
+            return True
     except (TypeError, ValueError):
-        return False
+        pass
+    # Operativo / roles de interventoría: ven hilos de origen interventoría aunque
+    # no figuren como destinatario explícito (pueden crear y seguir la conversación).
+    macro = (rol_macro or "").strip().lower().replace("í", "i")
+    if macro in ("interventoria", "operativo interventoria"):
+        origen = (c.get("rol_origen") or "").strip().lower().replace("í", "i")
+        if origen in ("interventoria", "operativo interventoria"):
+            return True
+    return False
+
+
+def _sicoe_rol_macro_comentarios(current_user) -> str:
+    """Macro-rol para visibilidad de comentarios SicoeObra."""
+    rn = _sicoe_norm_txt(current_user.get("rol_nombre") or current_user.get("rol") or "")
+    if rn == "operativo interventoria" or ("operativo" in rn and "intervent" in rn):
+        return "interventoria"
+    if "intervent" in rn:
+        return "interventoria"
+    if "subcontrat" in rn:
+        return "subcontratista"
+    return "contratista"
 
 
 def _enriquecer_num_comentarios_visibles(regs_raw: List[dict], current_user) -> None:
@@ -2532,11 +2559,12 @@ def _enriquecer_num_comentarios_visibles(regs_raw: List[dict], current_user) -> 
     except (TypeError, ValueError):
         uid = 0
     es_priv = _es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user)
+    rol_macro = _sicoe_rol_macro_comentarios(current_user)
     num_map = {rid: 0 for rid in reg_ids}
     try:
         rows = (
             supabase.table("so_registro_comentarios")
-            .select("id, registro_id, autor_id, destinatarios, padre_id")
+            .select("id, registro_id, autor_id, destinatarios, padre_id, rol_origen")
             .in_("registro_id", reg_ids)
             .execute()
             .data
@@ -2554,7 +2582,7 @@ def _enriquecer_num_comentarios_visibles(regs_raw: List[dict], current_user) -> 
                 if (not dest) and c.get("padre_id") and by_id.get(c.get("padre_id")):
                     dest = by_id[c.get("padre_id")].get("destinatarios") or []
                     c = {**c, "destinatarios": dest}
-                if _comentario_sicoe_visible_para_usuario(c, uid, es_priv):
+                if _comentario_sicoe_visible_para_usuario(c, uid, es_priv, rol_macro=rol_macro):
                     num_map[rid] = num_map.get(rid, 0) + 1
     except Exception:
         pass
@@ -24438,8 +24466,8 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         elif k in _REGPUT_DIM_NULLABLE or k == "observacion" or k in _REGPUT_GRAFICO_NULLABLE:
             data[k] = None
 
-    if _registro_nivel3_aprobado(prev_row):
-        # Campos siempre editables aunque el registro esté aprobado en N3
+    if _registro_nivel_max_aprobado(prev_row, int(contrato_id)):
+        # Campos siempre editables aunque el registro esté sellado en el nivel máximo
         _CAMPOS_N3_PERMITIDOS = {
             "corte_id", "subcontratista_id", "reporte_id", "numero_registro",
             "foto_url", "foto_numero", "foto_descripcion",
@@ -24475,6 +24503,10 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
                     data["corte_id"] = None
         if not data:
             return prev_row
+    elif prev_row.get("bloqueado"):
+        # Sello espurio (p. ej. bloqueado al aprobar N3 cuando el máx. del contrato es >3):
+        # sanear para que cantidades/ítem vuelvan a ser editables.
+        data["bloqueado"] = False
 
     if data.keys() & _REGPUT_DIM_NULLABLE:
         def _dim_merged(k: str):
@@ -34065,9 +34097,10 @@ def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
 
         # Regla directa solicitada:
         # - Sin destinatarios: visible para todos.
-        # - Con destinatarios: visible solo para ids explícitos.
+        # - Con destinatarios: visible solo para ids explícitos (salvo macro interventoría).
         uid = int(current_user.get("sub") or current_user.get("id", 0))
         es_priv = _es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user)
+        rol_macro = _sicoe_rol_macro_comentarios(current_user)
         by_id = {c.get("id"): c for c in comentarios}
         filtrados = []
         for c in comentarios:
@@ -34075,7 +34108,7 @@ def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
             if (not destinatarios) and c.get("padre_id") and by_id.get(c.get("padre_id")):
                 destinatarios = by_id[c.get("padre_id")].get("destinatarios") or []
             c_vis = {**c, "destinatarios": destinatarios}
-            if _comentario_sicoe_visible_para_usuario(c_vis, uid, es_priv):
+            if _comentario_sicoe_visible_para_usuario(c_vis, uid, es_priv, rol_macro=rol_macro):
                 filtrados.append(c)
 
         if not es_priv:

@@ -1996,9 +1996,15 @@ function sicoeNivelPrevioAprobado(registro, nivelNum, nivelesActivosRaw) {
 
 /** True si el nivel máximo activo del contrato está aprobado en `registro`. */
 function sicoeRegistroSelladoMaxActivo(registro, nivelesContrato) {
-  const campo =
-    nivelesContrato?.campo_nivel_maximo ||
-    sicoeCampoEstadoNivel(Math.max(...(nivelesContrato?.niveles_activos || [1, 2, 3])))
+  // Sin config de contrato cargada → no sellar (evita bloquear por default N3).
+  if (!nivelesContrato?.contrato_id) return false
+  const activos = (Array.isArray(nivelesContrato.niveles_activos) ? nivelesContrato.niveles_activos : [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 6)
+  if (!activos.length) return false
+  // Fuente de verdad: max(activos); no confiar solo en campo_nivel_maximo obsoleto.
+  const maxN = Math.max(...activos)
+  const campo = sicoeCampoEstadoNivel(maxN)
   if (!campo) return false
   return (registro?.[campo] || 'No Revisado') === 'Aprobado'
 }
@@ -2259,6 +2265,8 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
     if (rol === 'operativo contratista') return 1
     if (rol === 'contratista') return 2
     if (rol === 'interventoria') return 4
+    // Operativo Interventoría: solo comenta (macro interventoría → nivel 4 de referencia).
+    if (rol === 'operativo interventoria' || esOperativoInterventoria) return 4
     return null
   })()
   const nivelValidacionComentario =
@@ -2266,7 +2274,10 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
       ? nivelValidacion
       : esApoyoTecnico
         ? 3
-        : puedeEditar && _nivelInferidoComentario != null
+        : // Solo-comentaristas (p. ej. Operativo Interventoría) no suelen tener «editar»;
+          // no exigir puedeEditar para habilitar ver/crear comentarios.
+          (puedeEditar || esSoloComentarista || esOperativoInterventoria) &&
+            _nivelInferidoComentario != null
           ? _nivelInferidoComentario
           : null
 
@@ -2746,8 +2757,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [fotoImgError, setFotoImgError] = useState(false)
   // Misma fila en el reporte completo: a veces el `reg` del mapa no trae foto_url; el arreglo del GET sí
   const regMismoEnReporte = reporte?.registros?.find((r) => r.id === registro.id) || null
-  const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
-  const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
+  // Gráfico: solo de ESTE registro (no heredar URL de otra línea del reporte).
+  const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || null)
   const [graficosHistLocal, setGraficosHistLocal] = useState(() => parseGraficosHistorial(registro))
   const [graficoIdx, setGraficoIdx] = useState(0)
   const [eliminandoGraf, setEliminandoGraf] = useState(false)
@@ -2764,12 +2775,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setFotoImgError(false)
   }, [registro.id, registro.foto_url, reporte?.registros])
   useEffect(() => {
-    setGrafLocal(registro.grafico_url || graficoReporte?.grafico_url || null)
-    setGraficosHistLocal(parseGraficosHistorial(registro))
-  }, [registro.id, registro.grafico_url, registro.graficos_historial, graficoReporte?.grafico_url])
+    const fromRep = reporte?.registros?.find((r) => r.id === registro.id)
+    // Si esta fila trae grafico_url (incluso null tras borrar), no heredar de hermanos.
+    const urlEste = Object.prototype.hasOwnProperty.call(registro, 'grafico_url')
+      ? (registro.grafico_url || null)
+      : (fromRep?.grafico_url || null)
+    setGrafLocal(urlEste)
+    setGraficosHistLocal(parseGraficosHistorial({
+      ...registro,
+      graficos_historial: registro.graficos_historial ?? fromRep?.graficos_historial,
+      grafico_url: urlEste,
+    }))
+  }, [registro.id, registro.grafico_url, registro.graficos_historial, reporte?.registros])
 
   const graficosLista = useMemo(() => {
-    const merged = { ...registro, graficos_historial: graficosHistLocal, grafico_url: grafLocal || registro.grafico_url }
+    const merged = { ...registro, graficos_historial: graficosHistLocal, grafico_url: grafLocal }
     return listaGraficosRegistro(merged)
   }, [registro, graficosHistLocal, grafLocal])
 
@@ -2789,11 +2809,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const fotoVista = _urlMedia(registro.foto_url) || _urlMedia(regMismoEnReporte?.foto_url) || _urlMedia(fotoLocal)
   const strRefCarpeta = strRefCarpetaFoto(registro)
   const esFotoConsecBd = regTieneFotoNumeroEnBd(registro)
+  // Solo este registro — nunca el gráfico de otra línea del mismo reporte.
   const grafVista = _urlMedia(graficoActual?.url)
+    || _urlMedia(grafLocal)
     || _urlMedia(registro.grafico_url)
     || _urlMedia(regMismoEnReporte?.grafico_url)
-    || _urlMedia(graficoReporte?.grafico_url)
-    || _urlMedia(grafLocal)
   const [estadoValidando,        setEstadoValidando]        = useState('')
   const [toastMsg,               setToastMsg]               = useState(null)
   const [listaCortes,            setListaCortes]            = useState([])
@@ -4710,7 +4730,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {nivelInfo.puedeValidar && nivelesValidablesReg.length > 0 && (() => {
         const nv = esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion
         if (nv == null) return null
-        const bloqueado = !!registro.bloqueado
+        // Solo bloquear validación si el sello del nivel MÁXIMO está activo (no por N3 intermedio).
+        const bloqueado = !!registro.bloqueado && regSelladoMax
         const sinItemAsignado = !String(registro?.item_numero || itemSel?.item_numero || '').trim()
         const validacionDeshabilitada = bloqueado || sinItemAsignado
         const campoNv = sicoeCampoEstadoNivel(nv)
