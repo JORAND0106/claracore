@@ -311,12 +311,72 @@ def _fetch_ppto_rows_batch(presupuesto_ids: List[int], contrato_id: int) -> Dict
     return out
 
 
+def _pgrst_unknown_column(err: BaseException) -> Optional[str]:
+    """Extrae el nombre de columna ausente (PGRST204 / 42703 / schema cache)."""
+    text = str(err or "")
+    low = text.lower()
+    if not any(tok in low for tok in ("pgrst204", "schema cache", "could not find", "does not exist", "42703")):
+        return None
+    m = re.search(r"find the ['\"]([^'\"]+)['\"] column", text, re.I)
+    if m:
+        return m.group(1)
+    m = re.search(r"column\s+[\w.]+\.([a-zA-Z_][\w]*)\s+does not exist", text, re.I)
+    if m:
+        return m.group(1)
+    m = re.search(r"column\s+[\"']?([a-zA-Z_][\w]*)[\"']?\s+does not exist", text, re.I)
+    return m.group(1) if m else None
+
+
+def _humanize_solicitud_db_error(exc: BaseException) -> str:
+    """Mensaje accionable para fallos de PostgREST/Postgres al persistir solicitud."""
+    col = _pgrst_unknown_column(exc)
+    if col == "descripcion_solicitada":
+        return (
+            "Falta la columna descripcion_solicitada en almacen_solicitud_item. "
+            "Ejecute en Supabase SQL Editor el script "
+            "backend/sql/almacen_solicitud_descripcion_solicitada.sql "
+            "(ADD COLUMN + NOTIFY pgrst, 'reload schema') y reintente."
+        )
+    if col:
+        return (
+            f"La base de datos no reconoce la columna «{col}» en la solicitud "
+            f"(migración pendiente o caché PostgREST). Ejecute la migración SQL "
+            f"correspondiente y NOTIFY pgrst, 'reload schema'; luego reintente. "
+            f"Detalle: {str(exc)[:280]}"
+        )
+    text = str(exc or "").strip()
+    if text:
+        return f"No se pudo guardar la solicitud en la base de datos: {text[:400]}"
+    return "No se pudo guardar la solicitud en la base de datos (error desconocido)."
+
+
 def _insert_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) -> None:
+    """Inserta ítems; si PostgREST reporta columna ausente, la omite y reintenta (migración pendiente)."""
     if not rows:
         return
+    omitted: set[str] = set()
     for i in range(0, len(rows), chunk_size):
-        chunk = rows[i : i + chunk_size]
-        sb.table("almacen_solicitud_item").insert(chunk).execute()
+        chunk = [{k: v for k, v in row.items() if k not in omitted} for row in rows[i : i + chunk_size]]
+        strips = 0
+        while strips <= 16:
+            try:
+                sb.table("almacen_solicitud_item").insert(chunk).execute()
+                break
+            except Exception as exc:
+                col = _pgrst_unknown_column(exc)
+                if not col or col in omitted:
+                    raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+                omitted.add(col)
+                _log.warning(
+                    "almacen_solicitud_item: omitiendo columna ausente %s al insertar (migración pendiente)",
+                    col,
+                )
+                chunk = [{k: v for k, v in row.items() if k not in omitted} for row in chunk]
+                strips += 1
+        else:
+            raise ValueError(
+                "No se pudieron insertar los ítems de la solicitud: demasiadas columnas ausentes en el esquema."
+            )
 
 
 def _cotizaciones_catalogo_batch(sb, insumo_ids: List[int]) -> Dict[int, dict]:
@@ -1088,7 +1148,20 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
         "observaciones": (body.get("observaciones") or "").strip() or None,
         "created_by": user_id,
     }
-    ins = sb.table("almacen_solicitud").insert(sol_row).execute().data
+    try:
+        ins = sb.table("almacen_solicitud").insert(sol_row).execute().data
+    except Exception as exc:
+        # Si falta titulo en esquema antiguo, reintentar sin esa columna.
+        col = _pgrst_unknown_column(exc)
+        if col and col in sol_row:
+            sol_row.pop(col, None)
+            _log.warning("almacen_solicitud: omitiendo columna ausente %s al crear", col)
+            try:
+                ins = sb.table("almacen_solicitud").insert(sol_row).execute().data
+            except Exception as exc2:
+                raise ValueError(_humanize_solicitud_db_error(exc2)) from exc2
+        else:
+            raise ValueError(_humanize_solicitud_db_error(exc)) from exc
     if not ins:
         raise ValueError("No se pudo crear la solicitud.")
     sid = ins[0]["id"]
@@ -1098,7 +1171,15 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
         row["solicitud_id"] = sid
         row["numero_linea"] = i
         rows.append(row)
-    _insert_solicitud_items_batch(sb, rows)
+    try:
+        _insert_solicitud_items_batch(sb, rows)
+    except ValueError:
+        # Cabecera huérfana: limpiar para no dejar borradores vacíos.
+        try:
+            sb.table("almacen_solicitud").delete().eq("id", sid).execute()
+        except Exception:
+            _log.exception("No se pudo revertir solicitud %s tras fallo de ítems", sid)
+        raise
     # Respuesta ligera: el formulario no necesita contexto/rentabilidad por línea.
     return get_solicitud(contrato_id, sid, ligera=True)
 

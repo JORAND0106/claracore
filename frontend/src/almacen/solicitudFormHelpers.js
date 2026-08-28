@@ -129,10 +129,31 @@ export function parseSolicitudApiError(err) {
   if (/failed to fetch|networkerror|network request failed|load failed|fetch failed|timeout|aborted|econnreset|econnrefused|etimedout/i.test(raw)) {
     return 'No se pudo completar la operación (tiempo de espera o conexión). Verifique su conexión e intente de nuevo. Si el problema continúa, la solicitud puede tener muchas líneas: guarde el borrador e intente enviar a aprobación otra vez.'
   }
-  if (/APIError|PGRST|schema cache|column.*could not find/i.test(raw)) {
-    return 'No se pudo guardar la solicitud por un error interno. Intente de nuevo; si persiste, contacte al administrador.'
+  // Errores de esquema / PostgREST: preferir el detalle accionable del backend.
+  if (/descripcion_solicitada|migración|NOTIFY pgrst|schema cache|PGRST204|could not find|does not exist|columna/i.test(raw)) {
+    const cleaned = raw
+      .replace(/^APIError:\s*/i, '')
+      .replace(/^\{[^}]*\}\s*/i, '')
+      .trim()
+    if (cleaned.length >= 20 && cleaned.length <= 500) return cleaned
+    return raw.length <= 500 ? raw : `${raw.slice(0, 480)}…`
   }
-  if (/complete todos los campos|seleccione|obligatorio|cantidad debe|grilla|varios registros|catálogo de insumos|describa el material|insumo del catálogo|costo de compra/i.test(raw)) {
+  if (/APIError|PGRST/i.test(raw)) {
+    // Extraer mensaje útil embebido en JSON/APIError en lugar de ocultarlo.
+    const mMsg = raw.match(/"message"\s*:\s*"([^"]+)"/i)
+    const mHint = raw.match(/"hint"\s*:\s*"([^"]+)"/i)
+    const mDetail = raw.match(/"details?"\s*:\s*"([^"]+)"/i)
+    const parts = [mMsg?.[1], mDetail?.[1], mHint?.[1]].filter(Boolean)
+    if (parts.length) {
+      return `Error de base de datos al guardar la solicitud: ${parts.join(' — ')}`
+    }
+    const trimmed = raw.replace(/^APIError:\s*/i, '').trim()
+    if (trimmed && trimmed.length <= 400) {
+      return `Error de base de datos al guardar la solicitud: ${trimmed}`
+    }
+    return 'No se pudo guardar la solicitud por un error de base de datos. Revise el detalle con el administrador o reintente tras aplicar migraciones pendientes.'
+  }
+  if (/complete todos los campos|seleccione|obligatorio|cantidad debe|grilla|varios registros|catálogo de insumos|describa el material|insumo del catálogo|costo de compra|Falta la columna|No se pudo guardar la solicitud en la base/i.test(raw)) {
     return raw
   }
   if (/Token inválido|401|403|permiso/i.test(raw)) {
@@ -145,7 +166,7 @@ export function parseSolicitudApiError(err) {
     return 'La operación falló sin detalle del servidor. Intente de nuevo; si persiste, contacte al administrador.'
   }
   if (raw.length > 180) {
-    return 'Ocurrió un error al guardar. Verifique los datos e intente de nuevo.'
+    return raw.length <= 500 ? raw : `${raw.slice(0, 480)}…`
   }
   return raw || 'Ocurrió un error al guardar la solicitud.'
 }
