@@ -2402,6 +2402,8 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
                                      estadoValidando, nivelValidacion, obligatorio,
                                      modoConversacion = false, zIndexOverlay = 2000,
                                      tituloModal = null,
+                                     /** Si false (default en validación), el clic en el fondo no cierra el modal. */
+                                     cerrarAlClicOverlay = false,
                                      onConfirmar, onCancelar }) {
   const [usuarios,      setUsuarios]      = useState([])
   const [destinatarios, setDestinatarios] = useState([])
@@ -2492,7 +2494,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: zIndexOverlay,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }} onClick={onCancelar}>
+    }} onClick={cerrarAlClicOverlay ? onCancelar : undefined}>
       <div style={{
         background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '20px',
         width: '520px', maxWidth: '96vw', maxHeight: '90vh', overflowY: 'auto',
@@ -7505,6 +7507,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           nivelValidacion={nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario ?? 1}
           obligatorio={true}
           modoConversacion={true}
+          cerrarAlClicOverlay={true}
           zIndexOverlay={10400}
           onConfirmar={async (comentarioData) => {
             if (!comentarioData) return
