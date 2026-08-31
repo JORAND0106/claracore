@@ -37,6 +37,13 @@ export const SICOE_CAMPOS_FINANCIEROS = Object.freeze([
   'semana_id',
 ])
 
+/** Clasificación + corte: no editables con solo permiso Crear. */
+export const SICOE_CAMPOS_BLOQUEADOS_SOLO_CREAR = Object.freeze([
+  ...SICOE_CAMPOS_FINANCIEROS,
+  'corte_id',
+  'subcontratista_id',
+])
+
 export function sicoeEsCreadorRegistro(usuario, registro) {
   if (!usuario || !registro) return false
   const uid = usuario.id ?? usuario.sub

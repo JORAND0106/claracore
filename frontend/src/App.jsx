@@ -1888,15 +1888,24 @@ function sicoeFiltrosOfflineConItems(filtros, itemsChips, itemsOp) {
   return next
 }
 
-function permisoReporteCantidades(usuario) {
-  const permisos = usuario?.permisos || []
-  const exact = permisos.find(
-    (p) => String(p.funcion_nombre || '').trim() === 'Reporte de Cantidades',
-  )
+/** Matriz «Reporte de Cantidades» acotada al contrato activo (no mezclar filas de otro contrato). */
+function permisoReporteCantidades(usuario, contratoId = null) {
+  const cid = Number(contratoId ?? usuario?.contrato_id)
+  const exact = permisoFuncionContrato(usuario, 'Reporte de Cantidades', Number.isFinite(cid) ? cid : contratoId)
+    || permisoFuncionContrato(usuario, 'reporte de cantidades', Number.isFinite(cid) ? cid : contratoId)
   if (exact) return exact
-  return permisos.find((p) =>
+  const fuzzy = (usuario?.permisos || []).filter((p) =>
     (p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades'),
   )
+  if (!fuzzy.length) return null
+  if (Number.isFinite(cid)) {
+    const scoped = fuzzy.find((p) => Number(p.contrato_id) === cid)
+    if (scoped) return scoped
+    const legacy = fuzzy.find((p) => p.contrato_id == null || p.contrato_id === '')
+    if (legacy) return legacy
+    return null
+  }
+  return fuzzy[0]
 }
 
 /** Matriz por contrato activo (misma lógica que ModuloPresupuesto). */
@@ -2197,7 +2206,7 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
       .replace(/\s+/g, ' ')
   const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
   const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
-  const permRpt = permisoReporteCantidades(usuario)
+  const permRpt = permisoReporteCantidades(usuario, sicoeContratoId)
   const puedeEditar = !!(permRpt?.editar)
   const esDevUsuario = esUsuarioDesarrollador(usuario)
   const esAdminCargo = esUsuarioAdministrador(usuario)
@@ -3426,8 +3435,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setMostrarLista(false)
   }, [competencia, todosLosItems, competenciasApi])
 
-  // Filtrar ítems por texto client-side
+  // Filtrar ítems por texto client-side (solo con permiso Editar; evita lista clicable residual)
   useEffect(() => {
+    if (!editableCamposFinancieros) {
+      setMostrarLista(false)
+      return
+    }
     if (itemSel && itemBusqueda === itemSel.item_numero) return
     const porComp = competencia ? todosLosItems.filter(i => i.competencia === competencia) : todosLosItems
     if (!itemBusqueda) { setItemsLista(porComp.slice(0, 50)); setMostrarLista(false); return }
@@ -3436,7 +3449,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     ).slice(0, 50)
     setItemsLista(filtrados)
     setMostrarLista(filtrados.length > 0)
-  }, [itemBusqueda, todosLosItems, competencia])
+  }, [itemBusqueda, todosLosItems, competencia, editableCamposFinancieros, itemSel])
 
   useEffect(() => {
     if (!contrato_id || listaSubs.length > 0) return
@@ -3447,6 +3460,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
 
   const seleccionarItem = (item) => {
+    if (!editableCamposFinancieros) return
     setItemSel(item)
     setItemListadoId(item.id)
     setItemBusqueda(item.item_numero)
@@ -4216,7 +4230,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           fontSize: excel ? 11 : 'var(--cc-sm)',
           color: t.text,
         }}>
-          Permiso «Crear» (mixto): puede editar dimensiones y localización de este registro. Capítulo, competencia e ítem requieren el permiso «Editar» (independiente).
+          Permiso «Crear» (mixto): puede editar dimensiones y localización de este registro. Capítulo, competencia, ítem y corte requieren el permiso «Editar» (independiente).
         </div>
       )}
 
@@ -4386,7 +4400,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       <div className="cc-sicoe-hoja-detalle-form">
 
       {/* ─ Sección: Asignación de Ítem ─ */}
-      {(editableCampos || nivelesValidablesReg.length > 0 || nivelInfo.nivelValidacionComentario) && (
+      {/* Controles editables SOLO con permiso Editar. Crear/validar ven solo lectura. */}
+      {(editableCamposFinancieros || nivelesValidablesReg.length > 0 || nivelInfo.nivelValidacionComentario || itemSel?.item_numero || registro?.item_numero) && (
         <div style={{ background:t.bg, borderRadius: excel ? 2 : 10, padding: (!hojaCompact || asignacionExpandida) ? secPad : '6px 10px', marginBottom: secMb, border:`1px solid ${excel ? sheetGrid : C.borde}` }}>
           {hojaCompact ? (
             <button
@@ -4425,6 +4440,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           )}
           {(!hojaCompact || asignacionExpandida) && (
           <>
+          {editableCamposFinancieros ? (
           <div
             className="cc-sicoe-asignacion-grid"
             style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : (excel ? 'minmax(110px,0.9fr) minmax(120px,1fr) minmax(180px,2fr)' : '1fr 1fr 2fr'), gap: excel ? 4 : 12 }}
@@ -4435,10 +4451,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             <div>
               <div style={labSt}>Capítulo</div>
               <select value={capituloHoja} onChange={e => { setCapituloHoja(e.target.value); setCompetencia(''); setItemSel(null); setItemBusqueda('') }}
-                disabled={!editableCampos}
+                disabled={!editableCamposFinancieros}
                 onMouseDown={e => e.stopPropagation()}
                 onKeyDown={e => e.stopPropagation()}
-                style={{ ...inpSt, opacity: editableCampos ? 1 : 0.65 }}>
+                style={{ ...inpSt, opacity: editableCamposFinancieros ? 1 : 0.65 }}>
                 <option value="">— Selecciona —</option>
                 {listaCapitulos.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -4451,11 +4467,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 call={apiCallSicoe}
                 value={competencia}
                 onChange={v => { setCompetencia(v); setItemSel(null); setItemBusqueda('') }}
-                disabled={!editableCampos}
+                disabled={!editableCamposFinancieros}
                 placeholder="— Todas —"
                 allowEmpty
                 opciones={competencias}
-                style={{ ...inpSt, opacity: editableCampos ? 1 : 0.65 }}
+                style={{ ...inpSt, opacity: editableCamposFinancieros ? 1 : 0.65 }}
               />
             </div>
             {/* Búsqueda de ítem */}
@@ -4466,7 +4482,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <input
                 value={itemBusqueda}
                 onChange={e => { setItemBusqueda(e.target.value); setItemSel(null); setItemListadoId(null) }}
-                onFocus={() => itemsLista.length > 0 && setMostrarLista(true)}
+                onFocus={() => editableCamposFinancieros && itemsLista.length > 0 && setMostrarLista(true)}
                 onKeyDown={e => {
                   e.stopPropagation()
                   const n = itemsLista.length
@@ -4475,7 +4491,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     setIndiceItemKbd(-1)
                     return
                   }
-                  if (!n || !editableCampos) return
+                  if (!n || !editableCamposFinancieros) return
                   if (e.key === 'ArrowDown') {
                     e.preventDefault()
                     if (!mostrarLista) { setMostrarLista(true); setIndiceItemKbd(0) }
@@ -4497,10 +4513,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   }
                 }}
                 placeholder="Buscar por número o descripción..."
-                disabled={!editableCampos}
-                style={{ ...inpSt, opacity: editableCampos ? 1 : 0.65 }}
+                disabled={!editableCamposFinancieros}
+                style={{ ...inpSt, opacity: editableCamposFinancieros ? 1 : 0.65 }}
               />
-              {mostrarLista && itemsLista.length > 0 && (
+              {editableCamposFinancieros && mostrarLista && itemsLista.length > 0 && (
                 <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
                   {itemsLista.map((item, idx) => (
                     <div
@@ -4520,6 +4536,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               )}
             </div>
           </div>
+          ) : (
+          <div
+            className="cc-sicoe-asignacion-grid"
+            style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : (excel ? 'minmax(110px,0.9fr) minmax(120px,1fr) minmax(180px,2fr)' : '1fr 1fr 2fr'), gap: excel ? 4 : 12 }}
+          >
+            <CampoRO label="Capítulo" valor={capituloHoja || registro?.capitulo || null} />
+            <CampoRO label="Competencia" valor={competencia || registro?.competencia || null} />
+            <CampoRO label="Ítem" valor={itemSel?.item_numero || registro?.item_numero || null} />
+          </div>
+          )}
           {/* Ítem seleccionado — info auto */}
           {itemSel && (
             <div style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : (excel ? 'minmax(0,2.2fr) minmax(70px,0.7fr) minmax(100px,0.9fr)' : '2fr 1fr 1fr'), gap: excel ? 4 : 10, marginTop: excel ? 4 : 12 }}>
@@ -5547,8 +5573,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     }
   }, [repoProp])
 
-  const perm        = permisoReporteCantidades(usuario)
-  const puedeEditar = perm?.editar
+  const perm        = permisoReporteCantidades(usuario, contrato_id)
+  const puedeEditar = !!perm?.editar
   const puedeCrear  = !!(perm?.crear)
   const puedeEditarCabecera = !!(perm?.editar || perm?.crear)
   const puedeAgregarRegistro = sicoePuedeAgregarRegistroEnReporte({
@@ -8374,7 +8400,7 @@ function ModuloSicoeObra({
     'En Papelera': '#374151',
   }
 
-  const perm = permisoReporteCantidades(usuario)
+  const perm = permisoReporteCantidades(usuario, contrato_id)
   const nivelInfo = determinarNivelValidacion(usuario, contrato_id, nivelesContrato)
   const estadosReporteFiltro = useMemo(
     () => sicoeEstadosReporteFiltro(usuario, nivelInfo, contrato_id),
@@ -8408,8 +8434,8 @@ function ModuloSicoeObra({
     }
   }, [elevCapPanel, nivelesOpcMasivoSelectorPanel, nivelMasivoPanelContratista])
   const puedeVer    = perm?.ver || nivelInfo.nivelValidacion != null || nivelInfo.nivelValidacionComentario != null
-  const puedeCrear  = perm?.crear
-  const puedeEditar = perm?.editar
+  const puedeCrear  = !!perm?.crear
+  const puedeEditar = !!perm?.editar
   const puedeAsignarActoresPorPk = !!(perm?.editar || perm?.crear)
   const puedeExportar = perm?.exportar
   const esSub       = nivelInfo.esSubcontratista
@@ -13725,7 +13751,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const hdrs = { Authorization: `Bearer ${getToken()}` }
   const modoEdicion = !!reporteInicial
-  const puedeEliminarBorradorReporte = esUsuarioDesarrollador(usuario) || !!(permisoReporteCantidades(usuario)?.eliminar)
+  const puedeEliminarBorradorReporte = esUsuarioDesarrollador(usuario) || !!(permisoReporteCantidades(usuario, contrato_id)?.eliminar)
   const userIdDraft = usuario?.id ?? usuario?.sub ?? null
 
   const loteGrafKey = () => (tipoLocalizacion === 'multiple' ? loteLocIdxActual : 0)
