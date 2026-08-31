@@ -9,7 +9,7 @@ import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
 import EventoBloquesSection from './EventoBloquesSection'
-import { eventosFromEntrada, eventosParaPayload } from './eventoBloquesHelpers'
+import { eventosFromEntrada, eventosParaPayload, debeMostrarObservacionesDia } from './eventoBloquesHelpers'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
 import {
   actividadesFromDetalle,
@@ -1303,47 +1303,49 @@ export default function BitacoraEntradaEditor({
               </div>
             </div>
           ) : (
-            <div>
-              <div style={{
-                display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
-                justifyContent: 'space-between', marginBottom: 6,
-              }}>
-                <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>
-                  Observaciones
+            debeMostrarObservacionesDia(eventos) ? (
+              <div>
+                <div style={{
+                  display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+                  justifyContent: 'space-between', marginBottom: 6,
+                }}>
+                  <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>
+                    Observaciones
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto' }}>
+                    {(editable || esNuevo) && (
+                      <button type="button" onClick={() => setClaraOpen(true)} style={btnGhost}>
+                        Redactar con Clara
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto' }}>
-                  {(editable || esNuevo) && (
-                    <button type="button" onClick={() => setClaraOpen(true)} style={btnGhost}>
-                      Redactar con Clara
-                    </button>
-                  )}
-                </div>
-              </div>
-              <TemaRichEditor
-                t={t}
-                value={cuerpoHtml}
-                onChange={setCuerpoHtml}
-                editable={editable || esNuevo}
-                minHeight={110}
-                placeholder="Notas del día (opcional)…"
-              />
-              <div style={{ marginTop: 8 }}>
-                <BitacoraAdjuntos
+                <TemaRichEditor
                   t={t}
-                  api={api}
-                  imagenes={imagenes}
-                  onChange={setImagenes}
-                  disabled={!(editable || esNuevo)}
-                  entradaId={localId}
-                  singleLine
-                  onUploadPersisted={localId != null ? async (body) => {
-                    const row = await api.pegarImagenBitacora(localId, body)
-                    setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
-                    onSaved?.(row)
-                  } : undefined}
+                  value={cuerpoHtml}
+                  onChange={setCuerpoHtml}
+                  editable={editable || esNuevo}
+                  minHeight={110}
+                  placeholder="Notas del día (opcional)…"
                 />
+                <div style={{ marginTop: 8 }}>
+                  <BitacoraAdjuntos
+                    t={t}
+                    api={api}
+                    imagenes={imagenes}
+                    onChange={setImagenes}
+                    disabled={!(editable || esNuevo)}
+                    entradaId={localId}
+                    singleLine
+                    onUploadPersisted={localId != null ? async (body) => {
+                      const row = await api.pegarImagenBitacora(localId, body)
+                      setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
+                      onSaved?.(row)
+                    } : undefined}
+                  />
+                </div>
               </div>
-            </div>
+            ) : null
           )}
 
           <div style={{
@@ -1610,7 +1612,7 @@ export default function BitacoraEntradaEditor({
         </div>
       )}
 
-      {claraOpen && (
+      {claraOpen && debeMostrarObservacionesDia(eventos) && (
         <IdeaClaraModal
           t={t}
           api={api}

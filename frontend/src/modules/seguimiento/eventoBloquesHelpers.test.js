@@ -9,6 +9,7 @@ import {
   emptyEventoDetalle,
   eventosFromEntrada,
   eventosParaPayload,
+  debeMostrarObservacionesDia,
 } from './eventoBloquesHelpers.js'
 
 describe('emptyEventoBloque / emptyEventoDetalle', () => {
@@ -114,5 +115,18 @@ describe('eventosParaPayload', () => {
     assert.equal(out[0].evento_detalle.visitantes_lista.length, 1)
     assert.equal(out[0].evento_detalle.visitantes_lista[0].nombre, 'Ana')
     assert.equal(out[0].evento_detalle.visitantes, 'Ana (Ing.)')
+  })
+})
+
+describe('debeMostrarObservacionesDia', () => {
+  it('muestra Observaciones sin eventos o con lista vacía', () => {
+    assert.equal(debeMostrarObservacionesDia(undefined), true)
+    assert.equal(debeMostrarObservacionesDia(null), true)
+    assert.equal(debeMostrarObservacionesDia([]), true)
+  })
+
+  it('oculta Observaciones con al menos un evento', () => {
+    assert.equal(debeMostrarObservacionesDia([{ id: '1' }]), false)
+    assert.equal(debeMostrarObservacionesDia([{ id: '1' }, { id: '2' }]), false)
   })
 })
