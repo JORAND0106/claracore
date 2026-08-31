@@ -96,16 +96,16 @@ export default function PersonalAsistenciaPanel({
           <tbody>
             {(rows || []).length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ ...ui.td, color: t.textMuted, fontSize: 12 }}>
+                <td colSpan={6} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
                   Sin colaboradores registrados hoy. Use «+ Registrar colaborador».
                 </td>
               </tr>
             ) : (rows || []).map((row, idx) => (
               <tr key={`as-${row.colaborador_id || row.nombre}-${idx}`}>
                 <td style={ui.td} data-label="Nombre">
-                  <div style={{ fontWeight: 700, fontSize: 12 }}>{row.nombre}</div>
+                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)' }}>{row.nombre}</div>
                   {row.documento_numero ? (
-                    <div style={{ fontSize: 10, color: t.textMuted }}>
+                    <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
                       {row.documento_tipo || 'CC'} {row.documento_numero}
                     </div>
                   ) : null}
@@ -120,7 +120,7 @@ export default function PersonalAsistenciaPanel({
                       <button
                         type="button"
                         onClick={() => openEdit(idx)}
-                        style={{ ...ui.clipBtn, color: t.primary, fontWeight: 700, fontSize: 11 }}
+                        style={{ ...ui.clipBtn, color: t.primary, fontWeight: 700, fontSize: 'var(--cc-caption)' }}
                       >
                         Editar
                       </button>
@@ -160,7 +160,7 @@ export default function PersonalAsistenciaPanel({
               {(agregado.length ? agregado : [{ cargo: '—', cantidad: 0 }]).map((row) => (
                 <tr key={`ag-${row.cargo}`}>
                   <td style={ui.td} data-label="Cargo">
-                    <span style={{ fontSize: 12, fontWeight: 600 }}>{row.cargo}</span>
+                    <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 600 }}>{row.cargo}</span>
                   </td>
                   <td style={{ ...ui.td, textAlign: 'center', fontWeight: 800 }} data-label="Cant.">
                     {row.cantidad}
@@ -197,7 +197,7 @@ export default function PersonalAsistenciaPanel({
                       <Fragment key={`c${ci}-${ri}`}>
                         <td style={ui.td}>
                           {row ? (
-                            <span style={{ fontSize: 12, fontWeight: 600 }}>{row.cargo}</span>
+                            <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 600 }}>{row.cargo}</span>
                           ) : null}
                         </td>
                         <td style={{ ...ui.td, textAlign: 'center', fontWeight: 800 }}>

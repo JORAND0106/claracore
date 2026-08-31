@@ -37,11 +37,11 @@ export default function ActividadesEventoGrid({
       border: `1px solid ${t.border}`,
       borderRadius: 6,
       padding: '4px 6px',
-      fontSize: 11,
+      fontSize: 'var(--cc-sm)',
       width: '100%',
       boxSizing: 'border-box',
     }),
-    fontSize: compact ? 11 : 'var(--cc-sm)',
+    fontSize: 'var(--cc-sm)',
     padding: compact ? '4px 5px' : '6px 8px',
     minWidth: 0,
   }
@@ -74,7 +74,7 @@ export default function ActividadesEventoGrid({
               borderRadius: 6,
               padding: '4px 8px',
               fontWeight: 700,
-              fontSize: 11,
+              fontSize: 'var(--cc-caption)',
               cursor: 'pointer',
               whiteSpace: 'nowrap',
             }}
@@ -118,7 +118,7 @@ export default function ActividadesEventoGrid({
                 <tr key={`act-${idx}`}>
                   <td style={ui.td} data-label="Actividad">
                     {disabled ? (
-                      <span style={{ fontSize: 11 }}>{row.actividad || '—'}</span>
+                      <span style={{ fontSize: 'var(--cc-sm)' }}>{row.actividad || '—'}</span>
                     ) : (
                       <input
                         value={row.actividad || ''}
@@ -130,7 +130,7 @@ export default function ActividadesEventoGrid({
                   </td>
                   <td style={ui.td} data-label="Abs Inicio">
                     {disabled ? (
-                      <span style={{ fontSize: 11 }}>{row.abs_inicio || '—'}</span>
+                      <span style={{ fontSize: 'var(--cc-sm)' }}>{row.abs_inicio || '—'}</span>
                     ) : (
                       <input
                         value={row.abs_inicio || ''}
@@ -142,7 +142,7 @@ export default function ActividadesEventoGrid({
                   </td>
                   <td style={ui.td} data-label="Abs Fin">
                     {disabled ? (
-                      <span style={{ fontSize: 11 }}>{row.abs_fin || '—'}</span>
+                      <span style={{ fontSize: 'var(--cc-sm)' }}>{row.abs_fin || '—'}</span>
                     ) : (
                       <input
                         value={row.abs_fin || ''}
@@ -168,7 +168,7 @@ export default function ActividadesEventoGrid({
                         }),
                         color: ubiLabel ? (t.primary || '#0f766e') : t.textMuted,
                         fontWeight: 800,
-                        fontSize: compact ? 10 : 11,
+                        fontSize: 'var(--cc-caption)',
                         maxWidth: '100%',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -180,7 +180,7 @@ export default function ActividadesEventoGrid({
                   </td>
                   <td style={ui.td} data-label="Cantidad">
                     {disabled ? (
-                      <span style={{ fontSize: 11 }}>{row.cantidad || '—'}</span>
+                      <span style={{ fontSize: 'var(--cc-sm)' }}>{row.cantidad || '—'}</span>
                     ) : (
                       <input
                         value={row.cantidad || ''}
@@ -192,7 +192,7 @@ export default function ActividadesEventoGrid({
                   </td>
                   <td style={ui.td} data-label="Observación">
                     {disabled ? (
-                      <span style={{ fontSize: 11 }}>{row.observacion || '—'}</span>
+                      <span style={{ fontSize: 'var(--cc-sm)' }}>{row.observacion || '—'}</span>
                     ) : (
                       <input
                         value={row.observacion || ''}
@@ -214,7 +214,7 @@ export default function ActividadesEventoGrid({
                           color: '#B91C1C',
                           cursor: 'pointer',
                           fontWeight: 700,
-                          fontSize: 14,
+                          fontSize: 'var(--cc-sm)',
                         }}
                       >
                         ×
