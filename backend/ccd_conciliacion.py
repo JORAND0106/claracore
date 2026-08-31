@@ -350,7 +350,7 @@ def fetch_registros_memoria_conciliacion(
     campo_mx, _niveles_mx = matriz_params_contrato(sb, int(contrato_id))
     sel = (
         "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, "
-        "cantidad, cantidad_total, observacion, foto_url, foto_numero, item_numero, item_descripcion, unidad, "
+        "cantidad, cantidad_total, observacion, foto_url, foto_numero, capitulo, item_numero, item_descripcion, unidad, "
         "bloqueado, acta_rpo_id, semana_id"
     )
 
@@ -378,6 +378,12 @@ def fetch_registros_memoria_conciliacion(
     except Exception as e:
         _log.warning("memoria conc: lectura N3 aprob. interventoría (%s)", e)
         return []
+    try:
+        from main import _overlay_sicoe_meta_vivo
+
+        raw = _overlay_sicoe_meta_vivo(int(contrato_id), raw)
+    except Exception as exc:
+        _log.warning("memoria conc: meta vivo listado (%s)", exc)
     if acta_rpo_id is not None:
         return _aplicar_regla_bloqueado_por_acta(raw)
     if semana_id is not None:

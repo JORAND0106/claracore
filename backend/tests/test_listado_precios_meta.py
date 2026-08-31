@@ -4,6 +4,7 @@ from __future__ import annotations
 from listado_precios_meta import (
     build_impacto_edicion_meta,
     listado_meta_for_cap_item,
+    merge_listado_ficha_prefer_newer,
     meta_fields_changed,
     overlay_presupuesto_row,
     overlay_sicoe_row,
@@ -37,6 +38,44 @@ def test_listado_meta_for_cap_item():
     )
     assert meta["descripcion"] == "Replanteo"
     assert listado_meta_for_cap_item("X", "1.01", full_listado_by_cap_item=idx) is None
+
+
+def test_listado_meta_fallback_sin_capitulo_si_item_unico():
+    idx = {
+        ("1.CAP", "1.01"): {
+            "item_numero": "1.01",
+            "descripcion": "Solo",
+            "unidad": "M2",
+        }
+    }
+    meta = listado_meta_for_cap_item(
+        "Sin capítulo", "1.01", full_listado_by_cap_item=idx
+    )
+    assert meta["descripcion"] == "Solo"
+
+
+def test_merge_listado_ficha_prefer_newer_por_id():
+    older = {
+        "id": 10,
+        "item_numero": "1.01",
+        "descripcion": "Vieja",
+        "unidad": "M2",
+        "competencia": "",
+    }
+    newer = {
+        "id": 20,
+        "item_numero": "1.01",
+        "descripcion": "Nueva desc",
+        "unidad": "ML",
+        "competencia": "IDU",
+    }
+    merged = merge_listado_ficha_prefer_newer(older, newer)
+    assert merged["descripcion"] == "Nueva desc"
+    assert merged["unidad"] == "ML"
+    assert merged["competencia"] == "IDU"
+    # Editar la ficha de mayor id debe prevalecer aunque llegue primero la vieja
+    merged2 = merge_listado_ficha_prefer_newer(newer, older)
+    assert merged2["descripcion"] == "Nueva desc"
 
 
 def test_overlay_presupuesto_row():
