@@ -169,6 +169,14 @@ import {
   sicoePuedeEditarCamposFinancieros,
   sicoeCantidadCambioSignificativo,
 } from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
+import {
+  sicoeNuevoReporteDraftClear,
+  sicoeNuevoReporteDraftIsDirty,
+  sicoeNuevoReporteDraftLoad,
+  sicoeNuevoReporteDraftSave,
+  sicoeNuevoReporteRequestFlush,
+  SICOE_NUEVO_REPORTE_FLUSH_EVENT,
+} from './modules/sicoe-obra/sicoeNuevoReporteDraft'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
@@ -13528,12 +13536,15 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   // Datos TAB 4 - Puntos topográficos
   const [puntos, setPuntos] = useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
-  /** Enlace opcional (Topografía) → se fusiona en `enlace_soporte` del reporte al guardar. */
   const [enlacePortadaWizard, setEnlacePortadaWizard] = useState('')
+  const [draftBanner, setDraftBanner] = useState(null) // string | null
+  const [autosaveTick, setAutosaveTick] = useState(0)
+  const draftRestoredRef = useRef(false)
 
   const hdrs = { Authorization: `Bearer ${getToken()}` }
   const modoEdicion = !!reporteInicial
   const puedeEliminarBorradorReporte = esUsuarioDesarrollador(usuario) || !!(permisoReporteCantidades(usuario)?.eliminar)
+  const userIdDraft = usuario?.id ?? usuario?.sub ?? null
 
   const loteGrafKey = () => (tipoLocalizacion === 'multiple' ? loteLocIdxActual : 0)
   const graficosLoteActual = graficosPorLote[loteGrafKey()] || []
@@ -13568,6 +13579,162 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const [numeroReporte, setNumeroReporte] = useState(null)
   const [borradorId, setBorradorId] = useState(reporteInicial?.id || null)
+
+  // Recuperar borrador local (pérdida por ✕ / sesión / red) — una sola vez al abrir.
+  useEffect(() => {
+    if (draftRestoredRef.current) return
+    draftRestoredRef.current = true
+    const snap = sicoeNuevoReporteDraftLoad(contrato_id, userIdDraft, reporteInicial?.id || null)
+      || (!reporteInicial ? sicoeNuevoReporteDraftLoad(contrato_id, userIdDraft, null) : null)
+    if (!snap || !sicoeNuevoReporteDraftIsDirty(snap)) return
+    if (snap.descripcion != null) setDescripcion(String(snap.descripcion || ''))
+    if (snap.subSeleccionado) setSubSeleccionado(snap.subSeleccionado)
+    if (snap.inspSeleccionado) setInspSeleccionado(snap.inspSeleccionado)
+    if (snap.capituloSel != null) setCapituloSel(String(snap.capituloSel || ''))
+    if (snap.tipoLocalizacion) setTipoLocalizacion(snap.tipoLocalizacion)
+    if (Array.isArray(snap.registros) && snap.registros.length) setRegistros(snap.registros)
+    if (snap.graficosPorLote && typeof snap.graficosPorLote === 'object') setGraficosPorLote(snap.graficosPorLote)
+    if (Array.isArray(snap.puntos) && snap.puntos.length) setPuntos(snap.puntos)
+    if (snap.enlacePortadaWizard != null) setEnlacePortadaWizard(String(snap.enlacePortadaWizard || ''))
+    if (snap.borradorId && !reporteInicial) setBorradorId(snap.borradorId)
+    if (snap.numeroReporte != null) setNumeroReporte(snap.numeroReporte)
+    if (snap.tabActivo != null && Number.isFinite(Number(snap.tabActivo))) setTabActivo(Number(snap.tabActivo))
+    if (snap.locLoteActual) setLocLoteActual(snap.locLoteActual)
+    if (snap.margen != null) setMargen(String(snap.margen || ''))
+    if (snap.absInicio != null) setAbsInicio(String(snap.absInicio || ''))
+    if (snap.absFinal != null) setAbsFinal(String(snap.absFinal || ''))
+    if (snap.nodoIni != null) setNodoIni(String(snap.nodoIni || ''))
+    if (snap.nodoFin != null) setNodoFin(String(snap.nodoFin || ''))
+    if (snap.coordLat != null) setCoordLat(snap.coordLat)
+    if (snap.coordLng != null) setCoordLng(snap.coordLng)
+    if (snap.pkSeleccionado) setPkSeleccionado(snap.pkSeleccionado)
+    const when = snap._savedAt ? new Date(snap._savedAt).toLocaleString('es-CO') : ''
+    setDraftBanner(
+      `Borrador local recuperado${when ? ` (${when})` : ''}. Guarde y envíe para confirmar en el servidor. No cierre con ✕ sin guardar.`,
+    )
+  }, [contrato_id, userIdDraft, reporteInicial])
+
+  const buildDraftSnapshot = useCallback(() => ({
+    descripcion,
+    subSeleccionado,
+    inspSeleccionado,
+    capituloSel,
+    tipoLocalizacion,
+    registros,
+    graficosPorLote,
+    puntos,
+    enlacePortadaWizard,
+    borradorId,
+    numeroReporte,
+    tabActivo,
+    locLoteActual,
+    margen,
+    absInicio,
+    absFinal,
+    nodoIni,
+    nodoFin,
+    coordLat,
+    coordLng,
+    pkSeleccionado,
+  }), [
+    descripcion, subSeleccionado, inspSeleccionado, capituloSel, tipoLocalizacion,
+    registros, graficosPorLote, puntos, enlacePortadaWizard, borradorId, numeroReporte,
+    tabActivo, locLoteActual, margen, absInicio, absFinal, nodoIni, nodoFin,
+    coordLat, coordLng, pkSeleccionado,
+  ])
+
+  const flushDraftLocal = useCallback(() => {
+    sicoeNuevoReporteDraftSave(
+      contrato_id,
+      userIdDraft,
+      buildDraftSnapshot(),
+      borradorId || reporteInicial?.id || null,
+    )
+  }, [contrato_id, userIdDraft, buildDraftSnapshot, borradorId, reporteInicial?.id])
+
+  // Autoguardado local cada ~2s mientras hay cambios.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      flushDraftLocal()
+      setAutosaveTick((n) => n + 1)
+    }, 2000)
+    return () => clearTimeout(id)
+  }, [flushDraftLocal])
+
+  useEffect(() => {
+    const onFlush = () => { try { flushDraftLocal() } catch { /* noop */ } }
+    window.addEventListener(SICOE_NUEVO_REPORTE_FLUSH_EVENT, onFlush)
+    return () => window.removeEventListener(SICOE_NUEVO_REPORTE_FLUSH_EVENT, onFlush)
+  }, [flushDraftLocal])
+
+  useEffect(() => {
+    const dirty = sicoeNuevoReporteDraftIsDirty(buildDraftSnapshot())
+    const onBeforeUnload = (e) => {
+      if (!dirty) return
+      flushDraftLocal()
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [buildDraftSnapshot, flushDraftLocal])
+
+  const intentarCerrarModal = useCallback((opts = {}) => {
+    const { force = false } = opts
+    const snap = buildDraftSnapshot()
+    const dirty = sicoeNuevoReporteDraftIsDirty(snap)
+    if (!force && dirty) {
+      flushDraftLocal()
+      const ok = window.confirm(
+        'Tiene datos de este reporte aún no enviados al servidor.\n\n'
+        + 'Se guardó un borrador local en este dispositivo. Si cierra ahora, puede recuperarlos al volver a abrir «Nuevo reporte».\n\n'
+        + '¿Cerrar de todos modos?',
+      )
+      if (!ok) return false
+    } else if (dirty) {
+      flushDraftLocal()
+    }
+    onClose()
+    return true
+  }, [buildDraftSnapshot, flushDraftLocal, onClose])
+
+  /** Crea borrador en servidor al salir de Info General (antes del envío final) para no depender solo de memoria. */
+  const asegurarBorradorServidorTemprano = async () => {
+    if (modoEdicion || borradorId || !isOnline || !contrato_id) return true
+    try {
+      const bRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+        method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          descripcion_actividad: descripcion || 'Borrador',
+          capitulo: capituloSel || 'Sin asignar',
+          estado: 'Borrador',
+          tipo_localizacion: tipoLocalizacion || 'unica',
+          subcontratista_id: subSeleccionado?.id || null,
+          inspector_id: inspSeleccionado?.id || null,
+        }),
+      })
+      if (!bRes.ok) {
+        // No bloquear el wizard: el autoguardado local sigue activo.
+        console.warn('No se pudo crear borrador temprano en servidor', bRes.status)
+        return true
+      }
+      const bData = await bRes.json()
+      if (bData?.id) {
+        setBorradorId(bData.id)
+        if (bData.numero_reporte != null) setNumeroReporte(bData.numero_reporte)
+        try {
+          sicoeNuevoReporteDraftSave(contrato_id, userIdDraft, {
+            ...buildDraftSnapshot(),
+            borradorId: bData.id,
+            numeroReporte: bData.numero_reporte ?? numeroReporte,
+          }, bData.id)
+        } catch { /* noop */ }
+      }
+    } catch (e) {
+      console.warn('Borrador temprano falló (red); continúa con borrador local', e)
+    }
+    return true
+  }
 
   useEffect(() => {
     if (!contrato_id) return
@@ -14112,9 +14279,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           localTable: 'so_reportes',
           localId,
         })
+        try {
+          sicoeNuevoReporteDraftClear(contrato_id, userIdDraft, borradorId || reporteInicial?.id || null)
+        } catch { /* noop */ }
+        // No fingir escritura en Supabase: solo cola local.
+        alert(
+          'Reporte guardado en este dispositivo (modo sin conexión). '
+          + 'Se enviará a la base de datos al recuperar red. No borre datos de la app hasta sincronizar.',
+        )
         onGuardado()
       } catch (e) {
-        alert(`Error guardando offline: ${e.message}`)
+        try { flushDraftLocal() } catch { /* noop */ }
+        alert(`Error guardando offline: ${e.message}. Se conservó un borrador local en este dispositivo.`)
       }
       setGuardando(false)
       return
@@ -14267,13 +14443,23 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         })
         if (!rPt.ok) throw new Error(await httpErr(rPt))
       }
+      try {
+        sicoeNuevoReporteDraftClear(contrato_id, userIdDraft, idParaGuardar || borradorId || reporteInicial?.id || null)
+      } catch { /* noop */ }
       onGuardado()
     } catch (e) {
+      try { flushDraftLocal() } catch { /* noop */ }
       const msg = (e && e.message) ? e.message : String(e)
+      const hintBorrador = borradorId
+        ? `\n\nEl borrador del reporte permanece en el servidor (id ${String(borradorId).slice(0, 8)}…). No cierre el modal: reintente. También hay copia local en este dispositivo.`
+        : '\n\nSe conservó un borrador local en este dispositivo; al reabrir «Nuevo reporte» podrá recuperarlo.'
       if (msg === 'Failed to fetch') {
-        alert('Error guardando reporte: no hubo conexión con el servidor a tiempo. Comprueba la red, vuelve a intentar o abre con Wi‑Fi. Si usas móvil, el sistema ya envía las líneas en un solo lote: actualiza la app tras el despliegue.')
+        alert(
+          'Error guardando reporte: no hubo conexión con el servidor a tiempo. Comprueba la red, vuelve a intentar o abre con Wi‑Fi. Si usas móvil, el sistema ya envía las líneas en un solo lote: actualiza la app tras el despliegue.'
+          + hintBorrador,
+        )
       } else {
-        alert('Error guardando reporte: ' + msg)
+        alert('Error guardando reporte: ' + msg + hintBorrador)
       }
     }
     setGuardando(false)
@@ -14289,9 +14475,22 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const TAB_TOPO = 4
 
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:1000,
-      display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
-      <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'780px',
+    <div
+      role="presentation"
+      data-testid="modal-nuevo-reporte-overlay"
+      data-cerrar-al-clic-overlay="false"
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:1000,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}
+      onClick={(e) => {
+        // Hipótesis overlay descartada como causa, pero se documenta: clic fuera NO cierra ni descarta.
+        if (e.target === e.currentTarget) e.stopPropagation()
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'780px',
         maxHeight:'90vh', display:'flex', flexDirection:'column', overflow:'hidden',
         boxShadow:'0 25px 60px rgba(0,0,0,0.4)' }}>
 
@@ -14305,9 +14504,22 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             </div>
             <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Todos los campos son obligatorios</div>
           </div>
-          <button onClick={onClose} style={{ background:'transparent', border:'none',
-            fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}>✕</button>
+          <button type="button" onClick={() => intentarCerrarModal()} style={{ background:'transparent', border:'none',
+            fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }} aria-label="Cerrar">✕</button>
         </div>
+
+        {/* Banner borrador local / autosave */}
+        {(draftBanner || autosaveTick > 0) && (
+          <div style={{
+            margin: '0 24px', marginTop: 10,
+            padding: '8px 12px', borderRadius: 8,
+            background: draftBanner ? 'rgba(234,179,8,0.14)' : 'rgba(16,185,129,0.10)',
+            border: `1px solid ${draftBanner ? 'rgba(234,179,8,0.45)' : 'rgba(16,185,129,0.35)'}`,
+            fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600,
+          }}>
+            {draftBanner || '✓ Autoguardado local activo (este dispositivo). Use «Guardar y Enviar» para confirmar en el servidor.'}
+          </div>
+        )}
 
         {/* Tabs */}
         <div style={{ display:'flex', borderBottom:`1px solid ${t.border}`, padding:'0 24px' }}>
@@ -14730,23 +14942,26 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         {/* Footer */}
         <div style={{ padding:'16px 24px', borderTop:`1px solid ${t.border}`,
           display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <button onClick={async () => {
-            if (borradorId) {
-              if (puedeEliminarBorradorReporte) {
-                if (window.confirm('¿Deseas eliminar este borrador?')) {
-                  const del = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${borradorId}`, {
-                    method:'DELETE', headers: hdrs
-                  })
-                  if (!del.ok) {
-                    const err = await del.json().catch(() => ({}))
-                    const d = err?.detail
-                    window.alert(typeof d === 'string' ? d : `No se pudo eliminar (${del.status}).`)
-                    return
-                  }
-                } else return
+          <button type="button" onClick={async () => {
+            if (borradorId && puedeEliminarBorradorReporte) {
+              if (window.confirm('¿Deseas eliminar este borrador del servidor? Se perderán los datos no enviados.')) {
+                const del = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${borradorId}`, {
+                  method:'DELETE', headers: hdrs
+                })
+                if (!del.ok) {
+                  const err = await del.json().catch(() => ({}))
+                  const d = err?.detail
+                  window.alert(typeof d === 'string' ? d : `No se pudo eliminar (${del.status}).`)
+                  return
+                }
+                try {
+                  sicoeNuevoReporteDraftClear(contrato_id, userIdDraft, borradorId)
+                } catch { /* noop */ }
+                onClose()
               }
+              return
             }
-            onClose()
+            intentarCerrarModal()
           }} style={{
             background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
             borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'var(--cc-sm)'
@@ -14767,10 +14982,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               </>
             )}
             {tabActivo < TAB_TOPO && !(tabActivo === 3 && tipoLocalizacion === 'multiple') && (
-              <button onClick={() => {
+              <button type="button" onClick={async () => {
                 if (tabActivo === 0 && !validarTab1()) return
                 if (tabActivo === 2 && !validarTabLocalizacion()) return
                 if (tabActivo === 3 && registros.length === 0) { alert('Debe tener al menos un registro'); return }
+                if (tabActivo === 0) await asegurarBorradorServidorTemprano()
+                flushDraftLocal()
                 setTabActivo(tabActivo + 1)
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
@@ -23164,9 +23381,12 @@ export default function App() {
         })
         if (cancelled) return
         if (!res.ok) {
+          try { sicoeNuevoReporteRequestFlush() } catch { /* noop */ }
           clearSessionCredentials()
           setUsuario(null)
-          setBannerMsg('🔒 Tu sesión expiró. Inicia sesión nuevamente.')
+          setBannerMsg(
+            '🔒 Tu sesión expiró. Si tenías un reporte en captura, se guardó un borrador local; al iniciar sesión y abrir «Nuevo reporte» podrá recuperarlo.',
+          )
           return
         }
         const now = Date.now()
@@ -23222,16 +23442,23 @@ export default function App() {
       // Cerrar sesión por inactividad
       if (inactivo >= INACTIVITY_LIMIT) {
         clearInterval(id)
+        // Flush borrador local de «Nuevo reporte» antes de desmontar (pérdida de datos en campo).
+        try { sicoeNuevoReporteRequestFlush() } catch { /* noop */ }
         clearSessionCredentials()
         setUsuario(null)
-        setBannerMsg('🔒 Sesión cerrada por inactividad. Inicia sesión nuevamente.')
+        setBannerMsg(
+          '🔒 Sesión cerrada por inactividad. Si tenías un reporte en captura, se guardó un borrador local y se restaurará al volver a iniciar sesión y abrir «Nuevo reporte».',
+        )
         return
       }
 
-      // Advertir 5 min antes
+      // Advertir 5 min antes — y forzar flush del borrador local por si el usuario no alcanza a guardar.
       if (inactivo >= INACTIVITY_LIMIT - WARN_BEFORE) {
+        try { sicoeNuevoReporteRequestFlush() } catch { /* noop */ }
         const mins = Math.ceil((INACTIVITY_LIMIT - inactivo) / 60000)
-        setBannerMsg(`⚠️ Tu sesión expirará en ${mins} minuto${mins !== 1 ? 's' : ''} por inactividad.`)
+        setBannerMsg(
+          `⚠️ Tu sesión expirará en ${mins} minuto${mins !== 1 ? 's' : ''} por inactividad. Guarde el reporte ahora; hay autoguardado local en este dispositivo.`,
+        )
       }
 
       // Renovar token si el usuario ha estado activo (inactivo < 50 min)
@@ -23246,9 +23473,12 @@ export default function App() {
             const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
             storage.setItem('cc_token', access_token)
           } else if (refreshRes.status === 401) {
+            try { sicoeNuevoReporteRequestFlush() } catch { /* noop */ }
             clearSessionCredentials()
             setUsuario(null)
-            setBannerMsg('🔒 Tu sesión expiró. Inicia sesión nuevamente.')
+            setBannerMsg(
+              '🔒 Tu sesión expiró. Si tenías un reporte en captura, se guardó un borrador local; al iniciar sesión y abrir «Nuevo reporte» podrá recuperarlo.',
+            )
             return
           }
         } catch { /* silencioso */ }
