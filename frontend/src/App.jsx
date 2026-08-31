@@ -4619,8 +4619,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       </div>{/* /.cc-sicoe-hoja-detalle-form */}
 
-      {/* ─ Columna media 1/4: miniaturas cuadradas Foto + Gráfico ─ */}
+      {/* ─ Columna media 1/4: Foto | Gráfico en la misma línea ─ */}
       <aside className="cc-sicoe-hoja-detalle-media" aria-label="Registros fotográficos">
+        <div className="cc-sicoe-hoja-detalle-media-row">
           {/* Foto de obra */}
           <div className="cc-sicoe-hoja-media-card" style={{ borderColor: C.borde }}>
             {fotoVista ? (
@@ -4654,50 +4655,49 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 />
                 {uploadingFoto && (
                   <div style={{
-                    position:'absolute', left:0, right:0, bottom:0, padding:'4px 6px',
-                    background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:'var(--cc-caption)',
+                    position:'absolute', left:0, right:0, bottom:0, padding:'2px 3px',
+                    background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:9,
                     fontWeight:600, textAlign:'center',
                   }}>
-                    Guardando…
+                    …
                   </div>
                 )}
                 </div>
                 {fotoImgError && (
-                  <div style={{ padding:'6px', fontSize:'var(--cc-caption)', color:'#B91C1C', background:'#FEF2F2' }}>
-                    No se pudo cargar.{' '}
+                  <div style={{ padding:'3px', fontSize:9, color:'#B91C1C', background:'#FEF2F2' }}>
                     <a href={fotoVista} target="_blank" rel="noreferrer" style={{ color:t.primary, fontWeight:700 }}>Abrir</a>
                   </div>
                 )}
                 <div className="cc-sicoe-hoja-media-actions" style={{ color:t.textMuted, background:t.bg }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:4, flexWrap:'wrap' }}>
-                    <span style={{ fontWeight:700 }}>📷{strRefCarpeta ? <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}> #{strRefCarpeta}</span> : ''}</span>
-                    {editableFotoGrafico && (
-                      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                        <label style={{ cursor:'pointer', color:t.primary, fontWeight:'600' }}>
-                          Cambiar
-                          <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
-                        </label>
-                        <button type="button" onClick={() => {
-                          setGaleriaHojaRefreshKey((k) => k + 1)
-                          setModalGaleriaHoja(true)
-                        }}
-                          style={{ cursor:'pointer', color:t.primary, fontWeight:'600', background:'none', border:'none', padding:0 }}>
-                          Galería
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                  <span style={{ fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={strRefCarpeta || 'Foto'}>
+                    📷{strRefCarpeta ? ` #${strRefCarpeta}` : ''}
+                  </span>
+                  {editableFotoGrafico && (
+                    <div style={{ display:'flex', flexDirection:'column', gap:1, alignItems:'flex-start' }}>
+                      <label style={{ cursor:'pointer', color:t.primary, fontWeight:'600' }} title="Cambiar foto">
+                        Cambiar
+                        <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+                      </label>
+                      <button type="button" onClick={() => {
+                        setGaleriaHojaRefreshKey((k) => k + 1)
+                        setModalGaleriaHoja(true)
+                      }}
+                        title="Galería de fotos"
+                        style={{ cursor:'pointer', color:t.primary, fontWeight:'600', background:'none', border:'none', padding:0 }}>
+                        Galería
+                      </button>
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
-              <div style={{ ...mediaEmptyThumbStyle, opacity: editableFotoGrafico ? 1 : 0.65, borderRadius: excel ? 2 : 8, overflow:'hidden' }}>
-                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:4, cursor: editableFotoGrafico ? 'pointer' : 'default', width:'100%', height:'100%' }}>
+              <div style={{ ...mediaEmptyThumbStyle, opacity: editableFotoGrafico ? 1 : 0.65, borderRadius: excel ? 2 : 6, overflow:'hidden', gap:2, padding:'4px 2px' }}>
+                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:2, cursor: editableFotoGrafico ? 'pointer' : 'default', width:'100%', height:'100%' }}>
                   {uploadingFoto
-                    ? <span style={{ color:t.textMuted, fontSize:'var(--cc-caption)' }}>⏳…</span>
+                    ? <span style={{ color:t.textMuted, fontSize:9 }}>⏳</span>
                     : <>
-                        <span style={{ fontSize: excel ? 16 : 22 }}>📷</span>
-                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, textAlign:'center' }}>Foto</span>
-                        {editableFotoGrafico && <span style={{ fontSize:'var(--cc-caption)', color:t.primary, fontWeight:'600' }}>Cargar</span>}
+                        <span style={{ fontSize: excel ? 14 : 18 }}>📷</span>
+                        {editableFotoGrafico && <span style={{ fontSize:9, color:t.primary, fontWeight:'600' }}>Cargar</span>}
                       </>
                   }
                   <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableFotoGrafico}
@@ -4708,24 +4708,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   setGaleriaHojaRefreshKey((k) => k + 1)
                   setModalGaleriaHoja(true)
                 }}
-                  style={{ padding:'4px', width:'100%', background:'transparent', border:'none', borderTop:`1px solid ${t.border}`, color:t.primary, fontSize:'var(--cc-caption)', fontWeight:'600', cursor:'pointer' }}>
+                  title="Galería de fotos"
+                  style={{ padding:'2px', width:'100%', background:'transparent', border:'none', borderTop:`1px solid ${t.border}`, color:t.primary, fontSize:9, fontWeight:'600', cursor:'pointer' }}>
                   Galería
                 </button>
                 )}
                 {!fotoVista && strRefCarpeta && (
                   <div
-                    title={esFotoConsecBd ? 'Consecutivo de foto (BD). Búsqueda en carpeta del contrato.' : 'N.º de registro (falta foto en BD). Úsalo para buscar el archivo si en tu convención aplica.'}
-                    style={{ margin: 0, padding: '6px 4px', background: 'linear-gradient(90deg, #0d948818, #0d948800)', borderTop: `1px solid ${C.borde}`, textAlign: 'center', width:'100%' }}
+                    title={esFotoConsecBd ? 'Consecutivo de foto (BD).' : 'N.º de registro (falta foto en BD).'}
+                    style={{ margin: 0, padding: '2px', background: 'linear-gradient(90deg, #0d948818, #0d948800)', borderTop: `1px solid ${C.borde}`, textAlign: 'center', width:'100%' }}
                   >
-                    <div style={{ fontSize: '14px', fontWeight: '900', color: '#0f766e', fontFamily: 'ui-monospace, Consolas, monospace', letterSpacing: '0.5px', lineHeight: 1.2 }}>
+                    <div style={{ fontSize: 10, fontWeight: '900', color: '#0f766e', fontFamily: 'ui-monospace, Consolas, monospace', lineHeight: 1.2 }}>
                       {strRefCarpeta}
                     </div>
                   </div>
-                )}
-                {!fotoVista && !strRefCarpeta && esDeveloper && (
-                  <p style={{ margin: '4px', fontSize:'var(--cc-caption)', color: t.textMuted, lineHeight: 1.3 }}>
-                    id: {registro.id}
-                  </p>
                 )}
               </div>
             )}
@@ -4764,68 +4760,57 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   {graficosLista.length > 1 && (
                     <>
                       <button type="button" disabled={graficoIdx <= 0} onClick={() => setGraficoIdx((i) => Math.max(0, i - 1))}
-                        style={{ position:'absolute', left:4, top:'50%', transform:'translateY(-50%)', background:'rgba(0,0,0,0.55)', color:'#fff', border:'none', borderRadius:'50%', width:24, height:24, fontSize:14, cursor: graficoIdx <= 0 ? 'default' : 'pointer', opacity: graficoIdx <= 0 ? 0.35 : 1 }}>‹</button>
+                        style={{ position:'absolute', left:2, top:'50%', transform:'translateY(-50%)', background:'rgba(0,0,0,0.55)', color:'#fff', border:'none', borderRadius:'50%', width:18, height:18, fontSize:11, lineHeight:1, cursor: graficoIdx <= 0 ? 'default' : 'pointer', opacity: graficoIdx <= 0 ? 0.35 : 1 }}>‹</button>
                       <button type="button" disabled={graficoIdx >= graficosLista.length - 1} onClick={() => setGraficoIdx((i) => Math.min(graficosLista.length - 1, i + 1))}
-                        style={{ position:'absolute', right:4, top:'50%', transform:'translateY(-50%)', background:'rgba(0,0,0,0.55)', color:'#fff', border:'none', borderRadius:'50%', width:24, height:24, fontSize:14, cursor: graficoIdx >= graficosLista.length - 1 ? 'default' : 'pointer', opacity: graficoIdx >= graficosLista.length - 1 ? 0.35 : 1 }}>›</button>
+                        style={{ position:'absolute', right:2, top:'50%', transform:'translateY(-50%)', background:'rgba(0,0,0,0.55)', color:'#fff', border:'none', borderRadius:'50%', width:18, height:18, fontSize:11, lineHeight:1, cursor: graficoIdx >= graficosLista.length - 1 ? 'default' : 'pointer', opacity: graficoIdx >= graficosLista.length - 1 ? 0.35 : 1 }}>›</button>
                     </>
                   )}
                 </div>
                 <div className="cc-sicoe-hoja-media-actions" style={{ color:t.textMuted, background:t.bg }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:4 }}>
-                    <span style={{ fontWeight:700 }}>📐{graficosLista.length > 1 ? ` ${graficoIdx + 1}/${graficosLista.length}` : ''}</span>
-                    <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
-                      {editableFotoGrafico && (
-                        <button
-                          type="button"
-                          onClick={abrirEsquemaEditor}
-                          disabled={esquemaCargando || uploadingGraf}
-                          title="Editar con el editor de esquema"
-                          style={{ background:'transparent', border:'none', color:t.primary, fontWeight:'600', cursor: (esquemaCargando || uploadingGraf) ? 'wait' : 'pointer', padding:0 }}
-                        >
-                          {esquemaCargando ? '…' : '✎'}
-                        </button>
-                      )}
-                      {editableFotoGrafico && (
-                        <label style={{ cursor: uploadingGraf ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Añadir gráfico">
-                          +
-                          <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
-                            onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
-                        </label>
-                      )}
-                      {editableFotoGrafico && (
-                        <button type="button" onClick={eliminarGraficoActual} disabled={eliminandoGraf}
-                          title="Quitar gráfico"
-                          style={{ background:'transparent', border:'none', color:'#EF4444', fontWeight:'600', cursor: eliminandoGraf ? 'wait' : 'pointer', padding:0 }}>
-                          {eliminandoGraf ? '…' : '×'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {graficoActual && (
-                    <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, lineHeight:1.3 }}>
-                      {fmtFechaGrafico(graficoActual.creado_en)}
-                      {graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}
+                  <span style={{ fontWeight:700 }} title={graficoActual ? `${fmtFechaGrafico(graficoActual.creado_en)}${graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}` : 'Gráfico'}>
+                    📐{graficosLista.length > 1 ? ` ${graficoIdx + 1}/${graficosLista.length}` : ''}
+                  </span>
+                  {editableFotoGrafico && (
+                    <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={abrirEsquemaEditor}
+                        disabled={esquemaCargando || uploadingGraf}
+                        title="Editar esquema"
+                        style={{ background:'transparent', border:'none', color:t.primary, fontWeight:'600', cursor: (esquemaCargando || uploadingGraf) ? 'wait' : 'pointer', padding:0 }}
+                      >
+                        {esquemaCargando ? '…' : '✎'}
+                      </button>
+                      <label style={{ cursor: uploadingGraf ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Añadir gráfico">
+                        +
+                        <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
+                          onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
+                      </label>
+                      <button type="button" onClick={eliminarGraficoActual} disabled={eliminandoGraf}
+                        title="Quitar gráfico"
+                        style={{ background:'transparent', border:'none', color:'#EF4444', fontWeight:'600', cursor: eliminandoGraf ? 'wait' : 'pointer', padding:0 }}>
+                        {eliminandoGraf ? '…' : '×'}
+                      </button>
                     </div>
                   )}
                 </div>
               </>
             ) : (
-              <div style={{ ...mediaEmptyThumbStyle, opacity: editableFotoGrafico ? 1 : 0.65 }}>
+              <div style={{ ...mediaEmptyThumbStyle, opacity: editableFotoGrafico ? 1 : 0.65, gap:2, padding:'4px 2px' }}>
                 {uploadingGraf
-                  ? <span style={{ color:t.textMuted, fontSize:'var(--cc-caption)' }}>⏳…</span>
+                  ? <span style={{ color:t.textMuted, fontSize:9 }}>⏳</span>
                   : <>
-                      <span style={{ fontSize: excel ? 16 : 22 }}>📐</span>
-                      <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, textAlign:'center' }}>Gráfico</span>
+                      <span style={{ fontSize: excel ? 14 : 18 }}>📐</span>
                       {editableFotoGrafico && (
-                        <div style={{ display:'flex', flexWrap:'wrap', gap:4, justifyContent:'center', marginTop:2 }}>
+                        <div style={{ display:'flex', flexWrap:'wrap', gap:2, justifyContent:'center' }}>
                           <button
                             type="button"
                             onClick={abrirEsquemaEditor}
                             disabled={esquemaCargando}
                             title="Crear esquema"
                             style={{
-                              background:t.primary, color:'#fff', border:'none', borderRadius: excel ? 3 : 6,
-                              padding: '3px 8px', fontSize:'var(--cc-caption)', fontWeight:700,
+                              background:t.primary, color:'#fff', border:'none', borderRadius:3,
+                              padding: '2px 5px', fontSize:9, fontWeight:700,
                               cursor: esquemaCargando ? 'wait' : 'pointer',
                             }}
                           >
@@ -4833,7 +4818,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                           </button>
                           <label style={{
                             background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                            borderRadius: excel ? 3 : 6, padding: '3px 8px', fontSize:'var(--cc-caption)',
+                            borderRadius:3, padding: '2px 5px', fontSize:9,
                             cursor:'pointer', fontWeight:600,
                           }} title="Subir archivo">
                             +
@@ -4847,6 +4832,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </div>
             )}
           </div>
+        </div>
           {esquemaOpen && (
             <EsquemaEditorModal
               t={t}

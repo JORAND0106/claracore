@@ -1348,18 +1348,28 @@ select.cc-dashboard-acta-select--light option {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
-.cc-sicoe-hoja-detalle-grid.is-excel .cc-sicoe-hoja-detalle-media {
-  gap: 6px;
+/* Foto | Gráfico en la misma línea (mitad del 1/4 cada una) */
+.cc-sicoe-hoja-detalle-media-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px;
+  align-items: start;
+  min-width: 0;
+}
+
+.cc-sicoe-hoja-detalle-grid.is-excel .cc-sicoe-hoja-detalle-media-row {
+  gap: 3px;
 }
 
 .cc-sicoe-hoja-media-card {
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
   border: 1px solid var(--border, #334155);
   background: var(--bg, transparent);
+  min-width: 0;
 }
 
 .cc-sicoe-hoja-detalle-grid.is-excel .cc-sicoe-hoja-media-card {
@@ -1374,11 +1384,19 @@ select.cc-dashboard-acta-select--light option {
 }
 
 .cc-sicoe-hoja-media-actions {
-  padding: 4px 6px;
-  font-size: var(--cc-caption, 11px);
+  padding: 2px 3px;
+  font-size: 9px;
+  line-height: 1.25;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+}
+
+.cc-sicoe-hoja-media-actions a,
+.cc-sicoe-hoja-media-actions button,
+.cc-sicoe-hoja-media-actions label {
+  font-size: inherit;
+  line-height: inherit;
 }
 
 @media (max-width: 767px), (orientation: landscape) and (max-width: 932px) {
@@ -1387,11 +1405,14 @@ select.cc-dashboard-acta-select--light option {
     gap: 10px;
   }
 
-  /* En móvil: dos miniaturas cuadradas lado a lado bajo el formulario */
-  .cc-sicoe-hoja-detalle-media {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+  /* Móvil: form arriba; foto|gráfico siguen lado a lado (más ancho disponible) */
+  .cc-sicoe-hoja-detalle-media-row {
     gap: 8px;
+  }
+
+  .cc-sicoe-hoja-media-actions {
+    font-size: var(--cc-caption, 11px);
+    padding: 4px 6px;
   }
 }
 
