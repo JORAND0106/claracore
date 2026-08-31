@@ -161,6 +161,13 @@ import {
 } from './cache/dashboardVistaCache'
 import { sicoeEncolarGuardadoReporte } from './modules/sicoe-obra/sicoeGuardarCola'
 import { sicoeFetchWithRetry } from './modules/sicoe-obra/sicoeFetchRetry'
+import {
+  sicoeEsCreadorRegistro,
+  sicoeFormatearAlertaCantidad,
+  sicoePuedeEditarCamposDimensionales,
+  sicoePuedeEditarCamposFinancieros,
+  sicoeCantidadCambioSignificativo,
+} from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
@@ -2706,7 +2713,7 @@ function sicoeHojaRegistroSyncKey(reg) {
 }
 
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
-function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
+function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, puedeCrear = false, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
   mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion,
   esDeveloper = false, puedeEliminarRegistroReporte = false, onDevEliminarRegistro = null, devEliminando = false, onOptimisticValidacion = null,
   onOptimisticRegistroPatch = null,
@@ -2890,12 +2897,25 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     registro,
     nivelesContrato?.niveles_activos,
   )
-  const editableCampos = puedeEditar && !regSelladoMax
+  const esCreadorReg = sicoeEsCreadorRegistro(usuario, registro)
+  const editableCamposFinancieros = sicoePuedeEditarCamposFinancieros({
+    puedeEditar: !!puedeEditar,
+    selladoMax: regSelladoMax,
+  })
+  const editableCamposDimensionales = sicoePuedeEditarCamposDimensionales({
+    puedeEditar: !!puedeEditar,
+    puedeCrear: !!puedeCrear,
+    esCreador: esCreadorReg,
+    selladoMax: regSelladoMax,
+  })
+  /** Compat: ítem + dims juntos (solo quien tiene Editar completo). */
+  const editableCampos = editableCamposFinancieros
   const soloMetaSubSellado = puedeEditar && regSelladoMax
   const soloCorteNivel3 = soloMetaSubSellado // alias compat: sellado permite sub + corte
   const subIdEfectivo = registro.subcontratista_id || reporte.subcontratista_id || null
-  // Foto y gráfico: editables siempre que el usuario tenga permiso (no afectan valor ni cantidad)
+  // Foto y gráfico: editables siempre que el usuario tenga permiso Editar (no afectan valor ni cantidad)
   const editableFotoGrafico = puedeEditar
+  const alertaCantidadFmt = sicoeFormatearAlertaCantidad(registro)
 
   useEffect(() => {
     setCorteSel(registro.corte_id != null ? String(registro.corte_id) : '')
@@ -2971,7 +2991,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   /** Clic en plano → persiste coord_lat/coord_lng y localización en so_registros (sin mostrar GPS en UI). */
   const persistirLocalizacionGps = useCallback(async (loc) => {
-    if (!esLocMultiple || !editableCampos || !registro?.id) return
+    if (!esLocMultiple || !editableCamposDimensionales || !registro?.id) return
     const fields = localizacionToApiFields(loc)
     if (fields.coord_lat == null || fields.coord_lng == null) return
     try {
@@ -2987,7 +3007,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
   }, [
     esLocMultiple,
-    editableCampos,
+    editableCamposDimensionales,
     registro?.id,
     registro?.reporte_id,
     registro?.numero_registro,
@@ -3406,10 +3426,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   useEffect(() => {
     if (!contrato_id || listaSubs.length > 0) return
-    if (!editableCampos && !editandoSub && !soloMetaSubSellado) return
+    if (!editableCamposFinancieros && !editableCamposDimensionales && !editandoSub && !soloMetaSubSellado) return
     fetch(`${API}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setListaSubs(Array.isArray(d) ? d : [])).catch(() => {})
-  }, [contrato_id, editableCampos, editandoSub, soloMetaSubSellado, listaSubs.length, hdrs, API])
+  }, [contrato_id, editableCamposFinancieros, editableCamposDimensionales, editandoSub, soloMetaSubSellado, listaSubs.length, hdrs, API])
 
 
   const seleccionarItem = (item) => {
@@ -3441,7 +3461,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       alert('Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).')
       return
     }
-    if (esLocMultiple && editableCampos) {
+    if (!editableCamposDimensionales && !editableCamposFinancieros) {
+      alert('No tiene permiso para editar este registro.')
+      return
+    }
+    if (esLocMultiple && editableCamposDimensionales) {
       const { ok, errores } = validarLocalizacion(locRegistro)
       setErroresLocHoja(errores)
       if (!ok) {
@@ -3450,11 +3474,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
     }
 
+    const cantAnterior = Number(registro.cantidad_total || 0)
+    if (sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)) {
+      const okCambio = window.confirm(
+        `Cantidad anterior: ${cantAnterior.toFixed(2)} → Cantidad actual: ${cantTotal.toFixed(2)}\n\n` +
+        'Al cambiar la cantidad total se reiniciarán las validaciones de todos los niveles a «No Revisado» y quedará una alerta visible para los validadores. ¿Continuar?',
+      )
+      if (!okCambio) return
+    }
+
     await sicoeEncolarGuardadoReporte(registro.reporte_id, async () => {
       setGuardando(true)
       let guardadoOk = false
       try {
-        const locApi = esLocMultiple && editableCampos ? localizacionToApiFields(locRegistro) : {}
+        const locApi = esLocMultiple && editableCamposDimensionales ? localizacionToApiFields(locRegistro) : {}
         const patchOptimista = {
           longitud: longN,
           ancho: anchoN,
@@ -3465,7 +3498,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           ...locApi,
         }
 
-        if (idItem) {
+        // Ítem / financieros: solo con permiso Editar.
+        const puedeAsignarItem = editableCamposFinancieros && idItem
+        if (puedeAsignarItem) {
           if (!itemSel?.item_numero && !itemListadoId) {
             alert('Seleccione un ítem de la lista antes de guardar.')
             return
@@ -3518,27 +3553,66 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               espesor:         espeN,
               cantidad:        cantN,
               cantidad_total:  cantTotal,
-              ...( (itemSel?.item_numero || registro.item_numero) && vlrUnitario != null && !Number.isNaN(Number(vlrUnitario))
+              ...(editableCamposFinancieros && (itemSel?.item_numero || registro.item_numero) && vlrUnitario != null && !Number.isNaN(Number(vlrUnitario))
                 ? { costo_directo: Math.round(cantTotal * Number(vlrUnitario)) }
                 : {}),
               observacion:     observacion || null,
               ...locApi,
             }),
           })
-          if (!dimRes.ok) throw new Error(`Error guardando dimensiones: ${dimRes.status}`)
-          if (
+          if (!dimRes.ok) {
+            const err = await dimRes.json().catch(() => ({}))
+            const detail = err?.detail
+            throw new Error(typeof detail === 'string' ? detail : `Error guardando dimensiones: ${dimRes.status}`)
+          }
+          const dimData = await dimRes.json().catch(() => ({}))
+          if (dimData && typeof dimData === 'object') {
+            if (dimData.cantidad_alerta_anterior != null) {
+              patchOptimista.cantidad_alerta_anterior = dimData.cantidad_alerta_anterior
+              patchOptimista.cantidad_alerta_actual = dimData.cantidad_alerta_actual
+              patchOptimista.cantidad_alerta_en = dimData.cantidad_alerta_en
+              patchOptimista.cantidad_alerta_por = dimData.cantidad_alerta_por
+            }
+            for (const n of [1, 2, 3, 4, 5, 6]) {
+              const k = `nivel${n}_estado`
+              if (dimData[k] != null) patchOptimista[k] = dimData[k]
+              const ku = `nivel${n}_usuario_id`
+              const kf = `nivel${n}_fecha`
+              if (ku in dimData) patchOptimista[ku] = dimData[ku]
+              if (kf in dimData) patchOptimista[kf] = dimData[kf]
+            }
+            if ('bloqueado' in dimData) patchOptimista.bloqueado = dimData.bloqueado
+            if (dimData.costo_directo != null) patchOptimista.costo_directo = dimData.costo_directo
+          } else if (
+            editableCamposFinancieros &&
             (itemSel?.item_numero || registro.item_numero) &&
             vlrUnitario != null &&
             !Number.isNaN(Number(vlrUnitario))
           ) {
             patchOptimista.costo_directo = Math.round(cantTotal * Number(vlrUnitario))
           }
+          if (sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)) {
+            patchOptimista.cantidad_alerta_anterior = cantAnterior
+            patchOptimista.cantidad_alerta_actual = cantTotal
+            for (const n of (nivelesContrato?.niveles_activos || [1, 2, 3])) {
+              patchOptimista[`nivel${n}_estado`] = 'No Revisado'
+              patchOptimista[`nivel${n}_usuario_id`] = null
+              patchOptimista[`nivel${n}_fecha`] = null
+            }
+            patchOptimista.bloqueado = false
+          }
         }
 
         onOptimisticRegistroPatch?.(registro.id, patchOptimista)
         try { onRefrescarListadoSicoe?.() } catch { /* noop */ }
         try { invalidateDashboardVistaCache(contrato_id) } catch { /* noop */ }
-        setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
+        setToastMsg(
+          puedeAsignarItem && itemSel
+            ? `Ítem ${itemSel.item_numero} asignado correctamente`
+            : (sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)
+              ? 'Cambios guardados · validaciones reiniciadas'
+              : 'Cambios guardados'),
+        )
         guardadoOk = true
       } catch(e) {
         alert(`No se pudieron guardar los cambios: ${e.message}`)
@@ -4066,6 +4140,48 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       )}
 
+      {!regSelladoMax && alertaCantidadFmt && (
+        <div
+          role="status"
+          style={{
+            marginBottom: excel ? 6 : 12,
+            background: 'rgba(234,179,8,0.16)',
+            border: '2px solid rgba(234,179,8,0.65)',
+            borderRadius: excel ? 2 : 8,
+            padding: excel ? '6px 8px' : '10px 12px',
+            fontSize: excel ? 11 : 'var(--cc-sm)',
+            color: '#92400e',
+            fontWeight: 700,
+          }}
+        >
+          ⚠ Cambio de cantidad — validaciones reiniciadas.{' '}
+          <span style={{ fontWeight: 800 }}>{alertaCantidadFmt.texto}</span>
+          {esCreadorReg && !puedeEditar ? (
+            <span style={{ display: 'block', marginTop: 4, fontWeight: 600, opacity: 0.9 }}>
+              Editó el creador del registro (campos dimensionales). Historial disponible en Trazabilidad.
+            </span>
+          ) : (
+            <span style={{ display: 'block', marginTop: 4, fontWeight: 600, opacity: 0.9 }}>
+              Consulte el historial en el menú de acciones → Trazabilidad.
+            </span>
+          )}
+        </div>
+      )}
+
+      {!regSelladoMax && editableCamposDimensionales && !editableCamposFinancieros && (
+        <div style={{
+          marginBottom: excel ? 6 : 12,
+          background: 'rgba(37,99,235,0.08)',
+          border: '1px solid rgba(37,99,235,0.35)',
+          borderRadius: excel ? 2 : 8,
+          padding: excel ? '5px 8px' : '8px 12px',
+          fontSize: excel ? 11 : 'var(--cc-sm)',
+          color: t.text,
+        }}>
+          Como creador del registro puede editar dimensiones y localización. Capítulo, competencia e ítem requieren permiso «Editar».
+        </div>
+      )}
+
       {reversionBloqueadaN6 && (
         <div style={{ marginBottom: excel ? 6 : 12, background:'rgba(234,179,8,0.12)', border:'1px solid rgba(234,179,8,0.45)', borderRadius: excel ? 2 : 8, padding: excel ? '5px 8px' : '8px 12px', fontSize: excel ? 11 : 'var(--cc-sm)', color:'#92400e', fontWeight:'600' }}>
           Este registro tiene aprobación en Nivel 6 (funcionario / aprobación para pago). No admite reversión de cantidades.
@@ -4391,7 +4507,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       <div style={{ marginBottom: secMb }}>
         <div style={secTitleSt('#F59E0B')}>📏 Dimensiones y Cantidades</div>
         <div style={{ display:'grid', gridTemplateColumns: excel ? 'repeat(auto-fit, minmax(88px, 1fr))' : 'repeat(auto-fill, minmax(130px,1fr))', gap: excel ? 4 : 10 }}>
-          {editableCampos ? (
+          {editableCamposDimensionales ? (
             <>
               {[
                 ['Longitud', longitud, setLongitud, 'm'],
@@ -4429,7 +4545,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           )}
         </div>
         <div style={{ marginTop: excel ? 4 : 10 }}>
-          {editableCampos ? (
+          {editableCamposDimensionales ? (
             <div>
               <div style={labSt}>Observación</div>
               <textarea
@@ -4461,7 +4577,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {/* ─ Sección: Localización (solo si el reporte es multi-localización; en única está en Portada) ─ */}
       {esLocMultiple && (
       <div style={{ marginBottom: secMb }}>
-        {editableCampos ? (
+        {editableCamposDimensionales ? (
           <SicoeLocalizacionFields
             t={t}
             token={getToken()}
@@ -5015,7 +5131,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       )}
 
       {/* ─ Acciones finales ─ */}
-      {puedeEditar && (editableCampos || toastMsg) && (
+      {(puedeEditar || editableCamposDimensionales) && (editableCamposDimensionales || editableCamposFinancieros || toastMsg) && (
         <div style={{ display:'flex', justifyContent:'flex-end', paddingTop: excel ? 6 : 12, borderTop:`1px solid ${excel ? sheetGrid : C.borde}` }}>
           {toastMsg && (
             <div style={{
@@ -5037,7 +5153,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             </div>
           )}
           <style>{`@keyframes fadeUp { from { opacity:0; transform:translateX(-50%) translateY(12px) } to { opacity:1; transform:translateX(-50%) translateY(0) } }`}</style>
-          {editableCampos && (
+          {(editableCamposDimensionales || editableCamposFinancieros) && (
           <button onClick={guardarCambios} disabled={guardando} style={{
             background: t.primary, color:'#fff', border:'none',
             borderRadius: excel ? 4 : 8, padding: excel ? '5px 14px' : '8px 22px', fontSize: excel ? 12 : 'var(--cc-sm)', fontWeight:'700',
@@ -5398,6 +5514,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const perm        = permisoReporteCantidades(usuario)
   const puedeEditar = perm?.editar
+  const puedeCrear  = !!(perm?.crear)
   const puedeEditarCabecera = !!(perm?.editar || perm?.crear)
   const esDeveloper = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
   const puedeEliminarReporteCantidades = esUsuarioDesarrollador(usuario) || !!(perm?.eliminar)
@@ -7281,7 +7398,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         <HojaRegistro
                           key={sicoeHojaRegistroSyncKey(reg)} t={t} usuario={usuario} API_URL={API_URL}
                           contrato_id={contrato_id} reporte={reporte} registro={reg}
-                          puedeEditar={puedeEditar} actasList={actasList}
+                          puedeEditar={puedeEditar} puedeCrear={puedeCrear} actasList={actasList}
                           nivelesContrato={nivelesContrato}
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
@@ -7366,6 +7483,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     reporte={reporte}
                     registro={reg}
                     puedeEditar={puedeEditar}
+                    puedeCrear={puedeCrear}
                     actasList={actasList}
                     nivelesContrato={nivelesContrato}
                     seleccionado={seleccionados.includes(reg.id)}

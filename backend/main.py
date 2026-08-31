@@ -492,8 +492,12 @@ def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
         "id", "reporte_id", "contrato_id", "numero_registro", "capitulo", "competencia",
         "item_numero", "item_descripcion", "unidad", "vlr_unitario", "longitud", "ancho", "espesor",
         "cantidad", "cantidad_total", "costo_directo", "observacion", "corte_id",
+        "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen", "pk_id_id",
+        "civ", "tramo", "calzada", "ubicacion", "coord_lat", "coord_lng",
         "nivel1_estado", "nivel2_estado", "nivel3_estado", "nivel4_estado", "nivel5_estado", "nivel6_estado",
         "sub_estado", "bloqueado",
+        "cantidad_alerta_anterior", "cantidad_alerta_actual", "cantidad_alerta_en", "cantidad_alerta_por",
+        "creado_por_reg", "modificado_por_reg",
         "foto_url", "foto_numero", "grafico_url", "acta_rpo_id", "semana_id", "nivel2_objeto_pago_sub",
     )
     return _json_for_log({k: row.get(k) for k in keys})
@@ -1953,6 +1957,103 @@ def _cargo_permiso_editar_reporte_cantidades_user_id(
     return _cargo_permiso_reporte_cantidades_user_id(user_id, "editar", contrato_id)
 
 
+def _cargo_permiso_crear_reporte_cantidades_user_id(
+    user_id: int, contrato_id: Optional[int] = None
+) -> bool:
+    return _cargo_permiso_reporte_cantidades_user_id(user_id, "crear", contrato_id)
+
+
+# Campos dimensionales / localización: el creador con permiso Crear puede editarlos
+# hasta el sellado del último nivel (sin permiso Editar).
+_SICOE_CAMPOS_DIMENSIONALES = frozenset({
+    "longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion",
+    "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen",
+    "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
+    "coord_lat", "coord_lng",
+})
+# Campos financieros / clasificación: solo permiso Editar.
+_SICOE_CAMPOS_FINANCIEROS = frozenset({
+    "capitulo", "competencia", "item_numero", "item_descripcion", "unidad",
+    "vlr_unitario", "costo_directo", "acta_rpo_id", "semana_id", "item_listado_id",
+})
+# Identidad de fila que el cliente suele reenviar en PUT (sin cambio efectivo).
+_SICOE_CAMPOS_IDENTIDAD_PUT = frozenset({"reporte_id", "numero_registro", "contrato_id", "nombre", "descripcion"})
+# Meta/media: siguen las reglas de sellado existentes (editar).
+_SICOE_CAMPOS_META_MEDIA = frozenset({
+    "corte_id", "subcontratista_id",
+    "foto_url", "foto_numero", "foto_descripcion",
+    "grafico_url", "grafico_numero", "grafico_descripcion", "graficos_historial",
+})
+
+
+def _sicoe_uid_from_user(current_user) -> Optional[int]:
+    try:
+        return int(current_user.get("sub") or current_user.get("id") or 0) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _sicoe_es_creador_registro(prev_row: Optional[dict], uid: Optional[int]) -> bool:
+    if not prev_row or uid is None:
+        return False
+    try:
+        creador = prev_row.get("creado_por_reg")
+        if creador is None:
+            return False
+        return int(creador) == int(uid)
+    except (TypeError, ValueError):
+        return False
+
+
+def _sicoe_puede_editar_full_registro(current_user, contrato_id: int) -> bool:
+    if _es_desarrollador(current_user):
+        return True
+    uid = _sicoe_uid_from_user(current_user)
+    if uid is None:
+        return False
+    return _cargo_permiso_editar_reporte_cantidades_user_id(uid, contrato_id)
+
+
+def _sicoe_puede_editar_dims_como_creador(current_user, contrato_id: int, prev_row: dict) -> bool:
+    """Crear en matriz + es el creador del registro (y no desarrollador-only bypass via full edit)."""
+    if _es_desarrollador(current_user):
+        return True
+    uid = _sicoe_uid_from_user(current_user)
+    if uid is None or not _sicoe_es_creador_registro(prev_row, uid):
+        return False
+    return _cargo_permiso_crear_reporte_cantidades_user_id(uid, contrato_id)
+
+
+def _sicoe_reset_validaciones_activas(contrato_id: int, update: dict) -> List[int]:
+    """Reinicia estados de todos los niveles activos a «No Revisado» y quita el sello."""
+    activos = sorted({int(n) for n in _get_niveles_activos_contrato(contrato_id) if 1 <= int(n) <= 6})
+    if not activos:
+        activos = [1, 2, 3]
+    for n in activos:
+        update[f"nivel{n}_estado"] = "No Revisado"
+        update[f"nivel{n}_usuario_id"] = None
+        update[f"nivel{n}_fecha"] = None
+    update["bloqueado"] = False
+    return activos
+
+
+def _sicoe_aplicar_alerta_cantidad(
+    update: dict, cantidad_anterior: float, cantidad_nueva: float, uid: Optional[int]
+) -> None:
+    update["cantidad_alerta_anterior"] = round(float(cantidad_anterior), 2)
+    update["cantidad_alerta_actual"] = round(float(cantidad_nueva), 2)
+    update["cantidad_alerta_en"] = datetime.now(timezone.utc).isoformat()
+    if uid is not None:
+        update["cantidad_alerta_por"] = int(uid)
+
+
+def _sicoe_limpiar_alerta_cantidad(update: dict) -> None:
+    update["cantidad_alerta_anterior"] = None
+    update["cantidad_alerta_actual"] = None
+    update["cantidad_alerta_en"] = None
+    update["cantidad_alerta_por"] = None
+
+
 _INFORME_PERIODICO_SLOT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{4})$")
 
 
@@ -3309,6 +3410,8 @@ def _registro_nivel3_aprobado(row: Optional[Dict[str, Any]]) -> bool:
 def _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id: int, nivel: int, update: dict, estado: str) -> None:
     if estado == "Aprobado" and nivel == _get_nivel_numero_maximo_contrato(contrato_id):
         update["bloqueado"] = True
+        # Sellado final: la alerta de cambio de cantidad deja de ser operativa.
+        _sicoe_limpiar_alerta_cantidad(update)
 
 # Mismo catálogo que el desplegable de validación en frontend (ETIQUETAS_VALIDACION).
 SICOE_ETIQUETAS_VALIDACION = (
@@ -24466,7 +24569,17 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         elif k in _REGPUT_DIM_NULLABLE or k == "observacion" or k in _REGPUT_GRAFICO_NULLABLE:
             data[k] = None
 
-    if _registro_nivel_max_aprobado(prev_row, int(contrato_id)):
+    uid = _sicoe_uid_from_user(current_user)
+    sellado = _registro_nivel_max_aprobado(prev_row, int(contrato_id))
+    puede_editar_full = _sicoe_puede_editar_full_registro(current_user, int(contrato_id))
+    puede_dims_creador = (not sellado) and _sicoe_puede_editar_dims_como_creador(
+        current_user, int(contrato_id), prev_row
+    )
+    modo_solo_creador_dims = (not puede_editar_full) and puede_dims_creador
+    validaciones_reiniciadas: List[int] = []
+    cantidad_cambio_alerta = None
+
+    if sellado:
         # Campos siempre editables aunque el registro esté sellado en el nivel máximo
         _CAMPOS_N3_PERMITIDOS = {
             "corte_id", "subcontratista_id", "reporte_id", "numero_registro",
@@ -24474,6 +24587,11 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             "grafico_url", "grafico_numero", "grafico_descripcion",
             "graficos_historial",
         }
+        if not puede_editar_full:
+            raise HTTPException(
+                status_code=403,
+                detail="Registro sellado: se requiere permiso «Editar» en Reporte de Cantidades para ajustar subcontratista, corte o foto/gráfico.",
+            )
         otros = {k: v for k, v in data.items() if k not in _CAMPOS_N3_PERMITIDOS}
         if otros:
             raise HTTPException(
@@ -24503,10 +24621,42 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
                     data["corte_id"] = None
         if not data:
             return prev_row
-    elif prev_row.get("bloqueado"):
-        # Sello espurio (p. ej. bloqueado al aprobar N3 cuando el máx. del contrato es >3):
-        # sanear para que cantidades/ítem vuelvan a ser editables.
-        data["bloqueado"] = False
+    else:
+        if prev_row.get("bloqueado"):
+            # Sello espurio (p. ej. bloqueado al aprobar N3 cuando el máx. del contrato es >3):
+            # sanear para que cantidades/ítem vuelvan a ser editables.
+            data["bloqueado"] = False
+
+        client_keys = set(data.keys())
+        # Ignorar identidad reenviada sin cambio al evaluar permisos.
+        for ik in list(client_keys & _SICOE_CAMPOS_IDENTIDAD_PUT):
+            try:
+                if data.get(ik) is not None and prev_row.get(ik) is not None and int(data[ik]) == int(prev_row[ik]):
+                    client_keys.discard(ik)
+                    data.pop(ik, None)
+                elif data.get(ik) == prev_row.get(ik):
+                    client_keys.discard(ik)
+                    data.pop(ik, None)
+            except (TypeError, ValueError):
+                if data.get(ik) == prev_row.get(ik):
+                    client_keys.discard(ik)
+                    data.pop(ik, None)
+
+        if not puede_editar_full:
+            if not modo_solo_creador_dims:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Sin permiso para editar este registro. Se requiere «Editar» o ser el creador con «Crear» (solo campos dimensionales).",
+                )
+            prohibidos = client_keys - _SICOE_CAMPOS_DIMENSIONALES
+            if prohibidos:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Como creador solo puede editar campos dimensionales/localización "
+                        f"(no: {', '.join(sorted(prohibidos))}). Los financieros requieren permiso «Editar»."
+                    ),
+                )
 
     if data.keys() & _REGPUT_DIM_NULLABLE:
         def _dim_merged(k: str):
@@ -24523,7 +24673,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             data[dk] = round(float(data[dk]), 2)
     # `id_pol` existe en presupuesto, no en `so_registros`; un cliente antiguo no debe romper el UPDATE.
     data.pop("id_pol", None)
-    if "cantidad_total" in data:
+    if "cantidad_total" in data and data["cantidad_total"] is not None:
         data["cantidad_total"] = round(float(data["cantidad_total"]), 2)
     vlr_merged = (
         float(data["vlr_unitario"])
@@ -24535,30 +24685,83 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
     if "cantidad_total" in data and vlr_merged and float(vlr_merged) > 0:
         data["costo_directo"] = round(float(data["cantidad_total"]) * float(vlr_merged), 0)
     elif "costo_directo" in data and data["costo_directo"] is not None:
-        data["costo_directo"] = round(float(data["costo_directo"]), 0)
+        if modo_solo_creador_dims:
+            # El creador no envía costo a mano; se recalcula solo vía cantidad_total.
+            data.pop("costo_directo", None)
+        else:
+            data["costo_directo"] = round(float(data["costo_directo"]), 0)
+
+    # Cambio de cantidad total → reset de validaciones + alerta visible.
+    if not sellado and "cantidad_total" in data and data["cantidad_total"] is not None:
+        try:
+            prev_ct = round(float(prev_row.get("cantidad_total") or 0), 2)
+        except (TypeError, ValueError):
+            prev_ct = 0.0
+        new_ct = round(float(data["cantidad_total"]), 2)
+        if prev_ct != new_ct:
+            validaciones_reiniciadas = _sicoe_reset_validaciones_activas(int(contrato_id), data)
+            _sicoe_aplicar_alerta_cantidad(data, prev_ct, new_ct, uid)
+            cantidad_cambio_alerta = {"anterior": prev_ct, "actual": new_ct}
+
+    if uid is not None:
+        data["modificado_por_reg"] = int(uid)
 
     # Sello: si ya está aprobado en el nivel máximo del contrato, cada PUT conserva bloqueado=true
     # (corte/foto no deben poder quitar el sello; tampoco filas reparadas sin flag).
-    if _registro_nivel_max_aprobado(prev_row, int(contrato_id)):
+    if sellado:
         data["bloqueado"] = True
 
     def _upd():
         return supabase.table("so_registros").update(data)\
             .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
 
-    out = supabase_execute(_upd)
+    try:
+        out = supabase_execute(_upd)
+    except Exception as ex:
+        # Si la migración de alerta aún no está aplicada, reintentar sin esas columnas.
+        msg = str(ex).lower()
+        if "cantidad_alerta_" in msg or "column" in msg:
+            for k in (
+                "cantidad_alerta_anterior", "cantidad_alerta_actual",
+                "cantidad_alerta_en", "cantidad_alerta_por",
+            ):
+                data.pop(k, None)
+            out = supabase_execute(_upd)
+        else:
+            raise
     row = out[0] if out else {}
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
+        campos_mod = []
+        snap_prev = _so_registro_audit_snapshot(prev_row) or {}
+        snap_new = _so_registro_audit_snapshot(row) or {}
+        for k in sorted(set(snap_prev) | set(snap_new)):
+            if snap_prev.get(k) != snap_new.get(k):
+                campos_mod.append({
+                    "campo": k,
+                    "anterior": snap_prev.get(k),
+                    "nuevo": snap_new.get(k),
+                })
+        detalle_log = {
+            "reporte_id": row.get("reporte_id"),
+            "id_pol": row.get("id_pol"),
+            "modo": "creador_dimensional" if modo_solo_creador_dims else "edicion_completa",
+            "campos_modificados": campos_mod,
+        }
+        if cantidad_cambio_alerta:
+            detalle_log["cantidad_anterior"] = cantidad_cambio_alerta["anterior"]
+            detalle_log["cantidad_nueva"] = cantidad_cambio_alerta["actual"]
+            detalle_log["validaciones_reiniciadas"] = validaciones_reiniciadas
+            detalle_log["motivo"] = "cambio_cantidad_reset_validaciones"
         registrar_log(
             u_log,
             "EDITAR",
             "SICOE",
             "registro",
             str(registro_id),
-            {"reporte_id": row.get("reporte_id"), "id_pol": row.get("id_pol")},
-            valor_anterior=_so_registro_audit_snapshot(prev_row),
-            valor_nuevo=_so_registro_audit_snapshot(row),
+            detalle_log,
+            valor_anterior=snap_prev,
+            valor_nuevo=snap_new,
         )
     except Exception:
         pass
@@ -24567,6 +24770,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         "subcontratista_id", "corte_id", "cantidad_total", "costo_directo",
         "vlr_unitario", "item_numero", "capitulo", "longitud", "ancho", "espesor", "cantidad",
         "acta_rpo_id", "semana_id",
+        "nivel1_estado", "nivel2_estado", "nivel3_estado", "nivel4_estado", "nivel5_estado", "nivel6_estado",
     })
     if data.keys() & _CAMPOS_INVALIDAN_DASH:
         try:
@@ -25568,6 +25772,11 @@ class AsignarItemBody(BaseModel):
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/asignar-item")
 def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemBody, current_user=Depends(get_current_user)):
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(
+            status_code=403,
+            detail="Asignar ítem requiere permiso «Editar» en Reporte de Cantidades.",
+        )
     try:
         from datetime import date
         today = date.today().isoformat()
@@ -25582,7 +25791,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
 
         def _reg():
             return supabase.table("so_registros")\
-                .select(f"longitud, ancho, espesor, cantidad, cantidad_total, reporte_id, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")\
+                .select(f"longitud, ancho, espesor, cantidad, cantidad_total, reporte_id, contrato_id, creado_por_reg, {SICOE_SELECT_NIVELES_ESTADO}")\
                 .eq("id", registro_id).single().execute().data
         registro = supabase_execute(_reg)
         if not registro:
@@ -25592,6 +25801,11 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                 status_code=400,
                 detail="El registro está aprobado en el último nivel de validación: no puede reasignarse el ítem.",
             )
+
+        try:
+            prev_ct = round(float(registro.get("cantidad_total") or 0), 2)
+        except (TypeError, ValueError):
+            prev_ct = 0.0
 
         _pre_dim_keys = ("longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion")
         _pre_loc_keys = (
@@ -25678,11 +25892,31 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             "acta_rpo_id":      acta_rpo_id,
             "corte_id":         corte_id,
         }
+        if prev_ct != cant_total:
+            _sicoe_reset_validaciones_activas(int(contrato_id), upd_reg_payload)
+            _sicoe_aplicar_alerta_cantidad(
+                upd_reg_payload, prev_ct, cant_total, _sicoe_uid_from_user(current_user)
+            )
+        uid_asig = _sicoe_uid_from_user(current_user)
+        if uid_asig is not None:
+            upd_reg_payload["modificado_por_reg"] = int(uid_asig)
 
         def _upd_reg():
             return supabase.table("so_registros").update(upd_reg_payload)\
                 .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
-        supabase_execute(_upd_reg)
+        try:
+            supabase_execute(_upd_reg)
+        except Exception as ex:
+            msg = str(ex).lower()
+            if "cantidad_alerta_" in msg or "column" in msg:
+                for k in (
+                    "cantidad_alerta_anterior", "cantidad_alerta_actual",
+                    "cantidad_alerta_en", "cantidad_alerta_por",
+                ):
+                    upd_reg_payload.pop(k, None)
+                supabase_execute(_upd_reg)
+            else:
+                raise
 
         def _quedan_sin_item():
             rows = supabase.table("so_registros").select("item_numero")\

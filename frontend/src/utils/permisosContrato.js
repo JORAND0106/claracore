@@ -75,6 +75,13 @@ export function usuarioPuedeEditarRegistrosSicoe(usuario, contratoId) {
   return !!(p?.editar)
 }
 
+/** Creador con permiso Crear: puede editar dimensiones (no financieros). */
+export function usuarioPuedeCrearRegistrosSicoe(usuario, contratoId) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  const p = permisoReporteCantidades(usuario, contratoId)
+  return !!(p?.crear)
+}
+
 function _normTxt(txt) {
   return String(txt || '')
     .normalize('NFD')
