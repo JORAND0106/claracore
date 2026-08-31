@@ -18069,7 +18069,7 @@ def registros_bulk_offline(
         "subcontratista_id, numero_corte_subcontratista, "
         "foto_url, foto_numero, foto_descripcion, "
         "grafico_url, grafico_numero, grafico_descripcion, "
-        "created_at, updated_at"
+        "created_at, modificado_por_reg, creado_por_reg"
     )
     def _q():
         q = (
@@ -24637,6 +24637,25 @@ class MasivoCorteRegistrosBody(BaseModel):
     reporte_id: Optional[int] = None
 
 
+def _sicoe_patch_masivo_corte(
+    sub_id: int,
+    corte_id: int,
+    uid: Optional[int],
+) -> Dict[str, Any]:
+    """
+    Payload UPDATE para asignación masiva de corte en so_registros.
+    No incluir updated_at: esa columna no existe en so_registros (PGRST204).
+    Trazabilidad: modificado_por_reg + registrar_log.
+    """
+    patch: Dict[str, Any] = {
+        "subcontratista_id": int(sub_id),
+        "corte_id": int(corte_id),
+    }
+    if uid is not None:
+        patch["modificado_por_reg"] = int(uid)
+    return patch
+
+
 @app.put("/sicoe-obra/{contrato_id}/registros/masivo-corte")
 def actualizar_corte_registros_masivo(
     contrato_id: int,
@@ -24707,13 +24726,8 @@ def actualizar_corte_registros_masivo(
         )
 
     uid = _sicoe_uid_from_user(current_user)
-    patch = {
-        "subcontratista_id": sub_id,
-        "corte_id": vigente_id,
-        "modificado_por_reg": int(uid) if uid is not None else None,
-        "updated_at": "now()",
-    }
-    patch = {k: v for k, v in patch.items() if v is not None or k in ("subcontratista_id", "corte_id")}
+    # so_registros NO tiene columna updated_at (PGRST204). Trazabilidad: modificado_por_reg + logs.
+    patch = _sicoe_patch_masivo_corte(sub_id, vigente_id, uid)
 
     actualizados = 0
     omitidos = []
@@ -24740,10 +24754,10 @@ def actualizar_corte_registros_masivo(
         if not found:
             continue
 
-        def _upd(ids_ok=sorted(found)):
+        def _upd(ids_ok=sorted(found), p=patch):
             return (
                 supabase.table("so_registros")
-                .update(patch)
+                .update(p)
                 .eq("contrato_id", int(contrato_id))
                 .in_("id", ids_ok)
                 .execute()
