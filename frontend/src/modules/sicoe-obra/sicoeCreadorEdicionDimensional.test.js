@@ -7,6 +7,7 @@ import {
   sicoeEsCreadorRegistro,
   sicoeFormatearAlertaCantidad,
   sicoeNivelMaxAprobadoAlcanzado,
+  sicoePuedeAgregarRegistroEnReporte,
   sicoePuedeEditarCamposDimensionales,
   sicoePuedeEditarCamposFinancieros,
 } from './sicoeCreadorEdicionDimensional.js'
@@ -86,6 +87,21 @@ describe('sicoeCreadorEdicionDimensional', () => {
     const fmt = sicoeFormatearAlertaCantidad(base, [1, 2, 3])
     assert.equal(fmt.texto, 'Cantidad anterior: 10.00 → Cantidad actual: 20.00')
     assert.equal(fmt.nivelMaxPrevio, 2)
+  })
+
+  it('Crear o Editar habilitan + Nuevo Registro en reporte enviado', () => {
+    assert.equal(
+      sicoePuedeAgregarRegistroEnReporte({ puedeCrear: true, puedeEditar: false }),
+      true,
+    )
+    assert.equal(
+      sicoePuedeAgregarRegistroEnReporte({ puedeCrear: false, puedeEditar: true }),
+      true,
+    )
+    assert.equal(
+      sicoePuedeAgregarRegistroEnReporte({ puedeCrear: false, puedeEditar: false }),
+      false,
+    )
   })
 
   it('solo cambio de cantidad total es significativo', () => {
