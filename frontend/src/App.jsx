@@ -2703,6 +2703,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   /** Al montar (p. ej. desde tabla de ítems): abre el editor de esquema una vez. */
   autoAbrirEsquema = false,
   onEsquemaAutoAbierto = null,
+  /** Panel denso tipo Excel (menos scroll vertical). Default true en desktop. */
+  panelExcelCompact = true,
 }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
@@ -3786,6 +3788,56 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const C = { borde: t.border, label: t.textMuted }
   const fmtD = v => v != null ? formatCOP(v) : '—'
+  const sheetGrid = t.sheetGridBorder || '#94a3b8'
+  const excel = !!panelExcelCompact && !hojaCompact
+  const secMb = excel ? 6 : 16
+  const secPad = excel ? '6px 8px' : '16px'
+  const labSt = {
+    fontSize: excel ? 9 : 'var(--cc-caption)',
+    fontWeight: 700,
+    color: C.label,
+    letterSpacing: excel ? '0.03em' : '0.7px',
+    textTransform: 'uppercase',
+    marginBottom: excel ? 1 : 2,
+    lineHeight: 1.15,
+  }
+  const inpSt = {
+    width: '100%',
+    background: t.bg,
+    border: `1px solid ${excel ? sheetGrid : `${t.primary}55`}`,
+    borderRadius: excel ? 0 : 6,
+    padding: excel ? '3px 6px' : '6px 10px',
+    color: t.text,
+    fontSize: excel ? 12 : 'var(--cc-sm)',
+    boxSizing: 'border-box',
+    minHeight: excel ? 26 : (hojaCompact ? 44 : undefined),
+    height: excel ? 26 : undefined,
+  }
+  const roBoxSt = {
+    fontSize: excel ? 12 : 'var(--cc-sm)',
+    color: t.text,
+    fontWeight: 600,
+    background: t.bgCard,
+    borderRadius: excel ? 0 : 6,
+    padding: excel ? '3px 6px' : '6px 10px',
+    border: `1px solid ${excel ? sheetGrid : C.borde}`,
+    minHeight: excel ? 26 : undefined,
+    lineHeight: excel ? '20px' : undefined,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: excel ? 'nowrap' : undefined,
+  }
+  const secTitleSt = (color) => ({
+    fontSize: excel ? 10 : 'var(--cc-label)',
+    fontWeight: 800,
+    color: color || t.textMuted,
+    letterSpacing: excel ? '0.04em' : '1px',
+    textTransform: 'uppercase',
+    marginBottom: excel ? 4 : 12,
+    lineHeight: 1.2,
+  })
+  const mediaMaxH = excel ? 96 : 220
+  const mediaEmptyH = excel ? 88 : 160
 
   const uidLlave = usuario?.id != null ? Number(usuario.id) : NaN
   const arm2Llave = registro.reversion_arm_n2_usuario_id != null ? Number(registro.reversion_arm_n2_usuario_id) : null
@@ -3824,7 +3876,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     const openPopup = truncatedByWords && typeof onTruncateClick === 'function'
     return (
     <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>
+      <div style={labSt}>
         {labelShort ? (
           <>
             <span className="cc-sicoe-label-full">{label}</span>
@@ -3839,7 +3891,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         tabIndex={openPopup ? 0 : undefined}
         onClick={openPopup ? (e) => { e.stopPropagation(); onTruncateClick() } : undefined}
         onKeyDown={openPopup ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTruncateClick() } } : undefined}
-        style={{ fontSize:'var(--cc-sm)', color: color || t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}`, cursor: openPopup ? 'pointer' : undefined, ...(truncate || truncatedByWords ? { overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } : {}) }}
+        style={{ ...roBoxSt, color: color || t.text, cursor: openPopup ? 'pointer' : undefined, ...(truncate || truncatedByWords ? { overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } : {}) }}
       >
         {display ?? <span style={{ color:C.label, fontStyle:'italic' }}>—</span>}
       </div>
@@ -3849,20 +3901,26 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const CampoEdit = ({ label, value, onChange, placeholder }) => (
     <div>
-      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+      <div style={labSt}>{label}</div>
       <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder || ''}
-        style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+        style={inpSt} />
     </div>
   )
 
   return (
-    <div style={{
-      background: t.bgCard, borderRadius:'12px', border:`2px solid ${seleccionado ? '#8B5CF6' : C.borde}`,
-      padding:'20px', position:'relative', transition:'border 0.15s'
+    <div
+      className={excel ? 'cc-sicoe-hoja-excel' : undefined}
+      style={{
+      background: t.bgCard,
+      borderRadius: excel ? 4 : 12,
+      border: `${excel ? 1 : 2}px solid ${seleccionado ? '#8B5CF6' : (excel ? sheetGrid : C.borde)}`,
+      padding: excel ? '8px 10px' : '20px',
+      position:'relative',
+      transition:'border 0.15s',
     }}>
       {/* ─ Header de la hoja ─ */}
-      <div style={{ marginBottom:'16px' }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'8px' }}>
+      <div style={{ marginBottom: excel ? 6 : 16 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: excel ? 4 : 8 }}>
           <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
             {mostrarSeleccionValidacion && (
               <input type="checkbox" checked={!!seleccionadoValidacion} onChange={onToggleSeleccionValidacion}
@@ -3988,14 +4046,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       </div>
 
       {regSelladoMax && (
-        <div style={{ marginBottom:'12px', background:'#0d948818', border:'1px solid #0d948855', borderRadius:'8px', padding:'8px 12px', fontSize:'var(--cc-sm)', color:t.text }}>
+        <div style={{ marginBottom: excel ? 6 : 12, background:'#0d948818', border:'1px solid #0d948855', borderRadius: excel ? 2 : 8, padding: excel ? '5px 8px' : '8px 12px', fontSize: excel ? 11 : 'var(--cc-sm)', color:t.text }}>
           Sellado: el último nivel activo del contrato está aprobado ({encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'Nivel máximo'})
           {registro.bloqueado ? ' (sello de bloqueo en costos activo)' : ''}. No se pueden cambiar cantidades ni ítem; solo puede ajustarse el subcontratista, el corte (y foto/gráfico si aplica).
         </div>
       )}
 
       {reversionBloqueadaN6 && (
-        <div style={{ marginBottom:'12px', background:'rgba(234,179,8,0.12)', border:'1px solid rgba(234,179,8,0.45)', borderRadius:'8px', padding:'8px 12px', fontSize:'var(--cc-sm)', color:'#92400e', fontWeight:'600' }}>
+        <div style={{ marginBottom: excel ? 6 : 12, background:'rgba(234,179,8,0.12)', border:'1px solid rgba(234,179,8,0.45)', borderRadius: excel ? 2 : 8, padding: excel ? '5px 8px' : '8px 12px', fontSize: excel ? 11 : 'var(--cc-sm)', color:'#92400e', fontWeight:'600' }}>
           Este registro tiene aprobación en Nivel 6 (funcionario / aprobación para pago). No admite reversión de cantidades.
         </div>
       )}
@@ -4154,7 +4212,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Asignación de Ítem ─ */}
       {(editableCampos || nivelesValidablesReg.length > 0 || nivelInfo.nivelValidacionComentario) && (
-        <div style={{ background:t.bg, borderRadius:'10px', padding: (!hojaCompact || asignacionExpandida) ? '16px' : '10px 14px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
+        <div style={{ background:t.bg, borderRadius: excel ? 2 : 10, padding: (!hojaCompact || asignacionExpandida) ? secPad : '6px 10px', marginBottom: secMb, border:`1px solid ${excel ? sheetGrid : C.borde}` }}>
           {hojaCompact ? (
             <button
               type="button"
@@ -4188,31 +4246,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </span>
             </button>
           ) : (
-            <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
+            <div style={secTitleSt(t.primary)}>🔖 Asignación de Ítem</div>
           )}
           {(!hojaCompact || asignacionExpandida) && (
           <>
           <div
             className="cc-sicoe-asignacion-grid"
-            style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : '1fr 1fr 2fr', gap:'12px' }}
+            style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : (excel ? 'minmax(110px,0.9fr) minmax(120px,1fr) minmax(180px,2fr)' : '1fr 1fr 2fr'), gap: excel ? 4 : 12 }}
             onMouseDown={e => e.stopPropagation()}
             onClick={e => e.stopPropagation()}
           >
             {/* Capítulo */}
             <div>
-              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
+              <div style={labSt}>Capítulo</div>
               <select value={capituloHoja} onChange={e => { setCapituloHoja(e.target.value); setCompetencia(''); setItemSel(null); setItemBusqueda('') }}
                 disabled={!editableCampos}
                 onMouseDown={e => e.stopPropagation()}
                 onKeyDown={e => e.stopPropagation()}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65, minHeight: hojaCompact ? 44 : undefined }}>
+                style={{ ...inpSt, opacity: editableCampos ? 1 : 0.65 }}>
                 <option value="">— Selecciona —</option>
                 {listaCapitulos.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             {/* Competencia */}
             <div>
-              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Competencia</div>
+              <div style={labSt}>Competencia</div>
               <CompetenciaSelect
                 contratoId={contrato_id}
                 call={apiCallSicoe}
@@ -4222,12 +4280,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 placeholder="— Todas —"
                 allowEmpty
                 opciones={competencias}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65, boxSizing:'border-box', minHeight: hojaCompact ? 44 : undefined }}
+                style={{ ...inpSt, opacity: editableCampos ? 1 : 0.65 }}
               />
             </div>
             {/* Búsqueda de ítem */}
             <div style={{ position:'relative' }}>
-              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>
+              <div style={labSt}>
                 Ítem {buscando ? '⏳' : ''}
               </div>
               <input
@@ -4265,7 +4323,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 }}
                 placeholder="Buscar por número o descripción..."
                 disabled={!editableCampos}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', opacity: editableCampos ? 1 : 0.65, minHeight: hojaCompact ? 44 : undefined }}
+                style={{ ...inpSt, opacity: editableCampos ? 1 : 0.65 }}
               />
               {mostrarLista && itemsLista.length > 0 && (
                 <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
@@ -4289,7 +4347,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
           {/* Ítem seleccionado — info auto */}
           {itemSel && (
-            <div style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : '2fr 1fr 1fr', gap:'10px', marginTop:'12px' }}>
+            <div style={{ display:'grid', gridTemplateColumns: hojaCompact ? '1fr' : (excel ? 'minmax(0,2.2fr) minmax(70px,0.7fr) minmax(100px,0.9fr)' : '2fr 1fr 1fr'), gap: excel ? 4 : 10, marginTop: excel ? 4 : 12 }}>
               <CampoRO
                 label="Descripción"
                 labelShort="Descr."
@@ -4316,9 +4374,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       )}
 
       {/* ─ Sección: Dimensiones y Cantidades ─ */}
-      <div style={{ marginBottom:'16px' }}>
-        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📏 Dimensiones y Cantidades</div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(130px,1fr))', gap:'10px' }}>
+      <div style={{ marginBottom: secMb }}>
+        <div style={secTitleSt('#F59E0B')}>📏 Dimensiones y Cantidades</div>
+        <div style={{ display:'grid', gridTemplateColumns: excel ? 'repeat(auto-fit, minmax(88px, 1fr))' : 'repeat(auto-fill, minmax(130px,1fr))', gap: excel ? 4 : 10 }}>
           {editableCampos ? (
             <>
               {[
@@ -4328,14 +4386,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 ['Cantidad', cantidad, setCantidad, 'und'],
               ].map(([label, val, setter, ph]) => (
                 <div key={label}>
-                  <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                  <div style={labSt}>{label}</div>
                   <input
                     value={val}
                     onChange={e => setter(e.target.value)}
                     placeholder={ph}
                     type="number"
                     step="any"
-                    style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }}
+                    style={inpSt}
                   />
                 </div>
               ))}
@@ -4348,23 +4406,36 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <CampoRO label="Cantidad"  valor={registro.cantidad} />
             </>
           )}
-          <CampoRO label="Cantidad Total"  valor={cantTotal.toFixed(2)} color={t.primary} />
+          <CampoRO label="Cant. Total" labelShort="Cant. Tot." valor={cantTotal.toFixed(2)} color={t.primary} />
           {nivelInfo.verValoresEconomicos && (
-            <CampoRO label="Vlr. Unitario"   valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
+            <CampoRO label="Vlr. Unitario" labelShort="Vlr. Un." valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
           )}
           {nivelInfo.verValoresEconomicos && (
-            <CampoRO label="Costo Directo"   valor={costoDirecto ? fmtD(costoDirecto) : null} color='#10B981' />
+            <CampoRO label="Costo Directo" labelShort="Costo Dir." valor={costoDirecto ? fmtD(costoDirecto) : null} color='#10B981' />
           )}
         </div>
-        <div style={{ marginTop:'10px' }}>
+        <div style={{ marginTop: excel ? 4 : 10 }}>
           {editableCampos ? (
             <div>
-              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Observación</div>
+              <div style={labSt}>Observación</div>
               <textarea
                 value={observacion}
                 onChange={e => setObservacion(e.target.value)}
-                rows={2}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', resize:'vertical' }}
+                rows={1}
+                onInput={(e) => {
+                  const el = e.currentTarget
+                  el.style.height = '26px'
+                  el.style.height = `${Math.min(96, Math.max(26, el.scrollHeight))}px`
+                }}
+                style={{
+                  ...inpSt,
+                  height: 'auto',
+                  minHeight: excel ? 26 : 44,
+                  maxHeight: 96,
+                  resize: 'vertical',
+                  lineHeight: 1.35,
+                  overflowY: 'auto',
+                }}
               />
             </div>
           ) : (
@@ -4375,7 +4446,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Localización (solo si el reporte es multi-localización; en única está en Portada) ─ */}
       {esLocMultiple && (
-      <div style={{ marginBottom:'16px' }}>
+      <div style={{ marginBottom: secMb }}>
         {editableCampos ? (
           <SicoeLocalizacionFields
             t={t}
@@ -4403,8 +4474,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Coordenadas Topográficas (solo multi-loc; en única viven en Portada) ─ */}
       {esLocMultiple && (
-      <div style={{ marginBottom:'16px' }}>
-        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'8px' }}>📐 Coordenadas Topográficas</div>
+      <div style={{ marginBottom: secMb }}>
+        <div style={secTitleSt('#F59E0B')}>📐 Coordenadas Topográficas</div>
         {!tieneCoordenadas ? (
           <div style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600' }}>
             {exigeTopoAprobarN2
@@ -4438,15 +4509,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       </div>
       )}
       {!esLocMultiple && !tieneCoordenadas && exigeTopoAprobarN2 && (
-        <div style={{ marginBottom:'16px', background:'#EF444415', border:'1px solid #EF444444', borderRadius:'8px', padding:'10px 14px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600' }}>
+        <div style={{ marginBottom: secMb, background:'#EF444415', border:'1px solid #EF444444', borderRadius:'8px', padding: excel ? '6px 10px' : '10px 14px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600' }}>
           ⚠️ Sin coordenadas topográficas en la Portada — necesarias para aprobar en Nivel 2.
         </div>
       )}
 
       {/* ─ Sección: Registros Fotográficos ─ */}
-      <div style={{ marginBottom:'16px' }}>
-        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>📷 Registros Fotográficos</div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+      <div style={{ marginBottom: secMb }}>
+        <div style={secTitleSt(t.primary)}>📷 Registros Fotográficos</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: excel ? 6 : 12 }}>
           {/* Foto de obra */}
           <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
             {fotoVista ? (
@@ -4474,7 +4545,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                       e.currentTarget.click()
                     }
                   }}
-                  style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }}
+                  style={{ width:'100%', maxHeight: mediaMaxH, objectFit:'cover', display:'block' }}
                   onLoad={() => setFotoImgError(false)}
                   onError={() => setFotoImgError(true)}
                 />
@@ -4494,11 +4565,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     <a href={fotoVista} target="_blank" rel="noreferrer" style={{ color:t.primary, fontWeight:700 }}>Abrir enlace</a>
                   </div>
                 )}
-                <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div style={{ padding: excel ? '3px 6px' : '6px 10px', fontSize: excel ? 10 : 'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center', gap:6, flexWrap:'wrap' }}>
                   <span>📷 {strRefCarpeta ? <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>#{strRefCarpeta}</span> : '—'}</span>
                   {editableFotoGrafico && (
-                    <div style={{ display:'flex', gap:'8px' }}>
-                      <label style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
+                    <div style={{ display:'flex', gap: excel ? 6 : 8 }}>
+                      <label style={{ cursor:'pointer', color:t.primary, fontSize: excel ? 10 : 'var(--cc-label)', fontWeight:'600' }}>
                         Cambiar
                         <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
                       </label>
@@ -4506,22 +4577,22 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         setGaleriaHojaRefreshKey((k) => k + 1)
                         setModalGaleriaHoja(true)
                       }}
-                        style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', background:'none', border:'none', padding:0 }}>
-                        📷 Galería
+                        style={{ cursor:'pointer', color:t.primary, fontSize: excel ? 10 : 'var(--cc-label)', fontWeight:'600', background:'none', border:'none', padding:0 }}>
+                        Galería
                       </button>
                     </div>
                   )}
                 </div>
               </>
             ) : (
-              <div style={{ display:'flex', flexDirection:'column', background:t.bg, borderRadius:'8px', overflow:'hidden', height:'160px' }}>
-                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:'6px', borderBottom:`1px solid ${t.border}`, cursor: editableFotoGrafico ? 'pointer' : 'default', opacity: editableFotoGrafico ? 1 : 0.65 }}>
+              <div style={{ display:'flex', flexDirection:'column', background:t.bg, borderRadius: excel ? 2 : 8, overflow:'hidden', height: mediaEmptyH }}>
+                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap: excel ? 2 : 6, borderBottom:`1px solid ${t.border}`, cursor: editableFotoGrafico ? 'pointer' : 'default', opacity: editableFotoGrafico ? 1 : 0.65 }}>
                   {uploadingFoto
                     ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo...</span>
                     : <>
-                        <span style={{ fontSize:'28px' }}>📷</span>
-                        <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>Nueva foto</span>
-                        <span style={{ fontSize:'var(--cc-label)', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
+                        <span style={{ fontSize: excel ? 18 : 28 }}>📷</span>
+                        <span style={{ fontSize: excel ? 10 : 'var(--cc-label)', color:t.textMuted }}>Nueva foto</span>
+                        <span style={{ fontSize: excel ? 10 : 'var(--cc-label)', color:t.primary, fontWeight:'600' }}>Cargar</span>
                       </>
                   }
                   <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableFotoGrafico}
@@ -4532,8 +4603,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   setGaleriaHojaRefreshKey((k) => k + 1)
                   setModalGaleriaHoja(true)
                 }}
-                  style={{ padding:'8px', background:'transparent', border:'none', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>
-                  🖼️ Usar foto de la galería
+                  style={{ padding: excel ? '4px' : '8px', background:'transparent', border:'none', color:t.primary, fontSize: excel ? 10 : 'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>
+                  Galería
                 </button>
                 )}
                 {!fotoVista && strRefCarpeta && (
@@ -4583,7 +4654,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         e.currentTarget.click()
                       }
                     }}
-                    style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }}
+                    style={{ width:'100%', maxHeight: mediaMaxH, objectFit:'cover', display:'block' }}
                   />
                   {graficosLista.length > 1 && (
                     <>
@@ -4594,23 +4665,23 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     </>
                   )}
                 </div>
-                <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', flexDirection:'column', gap:'4px' }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'6px' }}>
-                    <span>📐 Gráfico / Plano{graficosLista.length > 1 ? ` (${graficoIdx + 1}/${graficosLista.length})` : ''}</span>
-                    <div style={{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap' }}>
+                <div style={{ padding: excel ? '3px 6px' : '6px 10px', fontSize: excel ? 10 : 'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', flexDirection:'column', gap: excel ? 2 : 4 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap: excel ? 4 : 6 }}>
+                    <span>📐 Gráfico{graficosLista.length > 1 ? ` (${graficoIdx + 1}/${graficosLista.length})` : ''}</span>
+                    <div style={{ display:'flex', gap: excel ? 6 : 8, alignItems:'center', flexWrap:'wrap' }}>
                       {editableFotoGrafico && (
                         <button
                           type="button"
                           onClick={abrirEsquemaEditor}
                           disabled={esquemaCargando || uploadingGraf}
                           title="Editar con el editor de esquema (lápiz, figuras, hatch, texto, tabla…)"
-                          style={{ background:'transparent', border:'none', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', cursor: (esquemaCargando || uploadingGraf) ? 'wait' : 'pointer', padding:0 }}
+                          style={{ background:'transparent', border:'none', color:t.primary, fontSize: excel ? 10 : 'var(--cc-label)', fontWeight:'600', cursor: (esquemaCargando || uploadingGraf) ? 'wait' : 'pointer', padding:0 }}
                         >
-                          {esquemaCargando ? '…' : '✎ Editar esquema'}
+                          {esquemaCargando ? '…' : '✎ Esquema'}
                         </button>
                       )}
                       {editableFotoGrafico && (
-                        <label style={{ cursor: uploadingGraf ? 'wait' : 'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
+                        <label style={{ cursor: uploadingGraf ? 'wait' : 'pointer', color:t.primary, fontSize: excel ? 10 : 'var(--cc-label)', fontWeight:'600' }}>
                           + Añadir
                           <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
                             onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
@@ -4618,8 +4689,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                       )}
                       {editableFotoGrafico && (
                         <button type="button" onClick={eliminarGraficoActual} disabled={eliminandoGraf}
-                          style={{ background:'transparent', border:'none', color:'#EF4444', fontSize:'var(--cc-label)', fontWeight:'600', cursor: eliminandoGraf ? 'wait' : 'pointer' }}>
-                          {eliminandoGraf ? '…' : '🗑️ Quitar gráfico'}
+                          style={{ background:'transparent', border:'none', color:'#EF4444', fontSize: excel ? 10 : 'var(--cc-label)', fontWeight:'600', cursor: eliminandoGraf ? 'wait' : 'pointer' }}>
+                          {eliminandoGraf ? '…' : 'Quitar'}
                         </button>
                       )}
                     </div>
@@ -4633,36 +4704,38 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </div>
               </>
             ) : (
-              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:'160px', background:t.bg, gap:'8px', padding:'12px 10px', opacity: editableFotoGrafico ? 1 : 0.65 }}>
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight: mediaEmptyH, background:t.bg, gap: excel ? 4 : 8, padding: excel ? '6px 8px' : '12px 10px', opacity: editableFotoGrafico ? 1 : 0.65 }}>
                 {uploadingGraf
                   ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo plano...</span>
                   : <>
-                      <span style={{ fontSize:'32px' }}>📐</span>
-                      <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'center' }}>Gráfico del registro</span>
+                      <span style={{ fontSize: excel ? 18 : 32 }}>📐</span>
+                      <span style={{ fontSize: excel ? 10 : 'var(--cc-sm)', color:t.textMuted, textAlign:'center' }}>Gráfico / plano</span>
+                      {!excel && (
                       <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, textAlign:'center', padding:'0 8px', lineHeight:1.35 }}>
                         Dibuje con el editor de esquema, o se genera al localizar en el mapa
                       </span>
+                      )}
                       {editableFotoGrafico && (
-                        <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', justifyContent:'center', marginTop:'4px' }}>
+                        <div style={{ display:'flex', flexWrap:'wrap', gap: excel ? 4 : 8, justifyContent:'center', marginTop: excel ? 0 : 4 }}>
                           <button
                             type="button"
                             onClick={abrirEsquemaEditor}
                             disabled={esquemaCargando}
                             title="Crear esquema a mano (mismo editor que Seguimiento)"
                             style={{
-                              background:t.primary, color:'#fff', border:'none', borderRadius:'6px',
-                              padding:'6px 14px', fontSize:'var(--cc-label)', fontWeight:700,
+                              background:t.primary, color:'#fff', border:'none', borderRadius: excel ? 3 : 6,
+                              padding: excel ? '3px 8px' : '6px 14px', fontSize: excel ? 10 : 'var(--cc-label)', fontWeight:700,
                               cursor: esquemaCargando ? 'wait' : 'pointer',
                             }}
                           >
-                            {esquemaCargando ? '⏳…' : '✎ Crear esquema'}
+                            {esquemaCargando ? '⏳…' : '✎ Esquema'}
                           </button>
                           <label style={{
                             background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                            borderRadius:'6px', padding:'6px 12px', fontSize:'var(--cc-label)',
+                            borderRadius: excel ? 3 : 6, padding: excel ? '3px 8px' : '6px 12px', fontSize: excel ? 10 : 'var(--cc-label)',
                             cursor:'pointer', fontWeight:600,
                           }}>
-                            + Adjuntar archivo
+                            + Archivo
                             <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
                               onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
                           </label>
@@ -4744,9 +4817,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           ...(nv === 2 ? [{ estado: 'No Objeto de Cobro', icon: '🚫', color: '#374151' }] : []),
         ]
         return (
-          <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
+          <div style={{ marginBottom: secMb, background:t.bg, borderRadius: excel ? 2 : 10, padding: secPad, border:`1px solid ${excel ? sheetGrid : C.borde}` }}>
             {esSelectorNivelAmplio && nivelesValidablesReg.length > 1 && (
-              <div style={{ marginBottom:'12px', display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
+              <div style={{ marginBottom: excel ? 6 : 12, display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
                 <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted }}>Validar en:</span>
                 <select
                   value={nivelTargetValidacion ?? ''}
@@ -4759,7 +4832,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </select>
               </div>
             )}
-            <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
+            <div style={{ ...secTitleSt(), marginBottom: excel ? 4 : 12 }}>
               🚦 Validación · {titNv}
               {bloqueado && <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>🔒 Bloqueado</span>}
               {sinItemAsignado && !bloqueado && (
@@ -4773,7 +4846,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 Asigna un ítem de presupuesto a este registro antes de poder validar (Aprobado / Pendiente / Rechazado).
               </div>
             )}
-            <div className="cc-sicoe-validacion-btns" style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+            <div className="cc-sicoe-validacion-btns" style={{ display:'flex', gap: excel ? 4 : 8, flexWrap:'wrap' }}>
               {BTNS.map(({ estado, icon, color }) => {
                 const activo = estadoActual === estado || (estado === 'No Objeto de Cobro' && estadoActual === 'Rechazado' && registro.nivel2_objeto_pago_sub === false)
                 return (
@@ -4781,10 +4854,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     title={sinItemAsignado ? 'Asigna un ítem antes de validar' : (bloqueado ? 'Registro bloqueado' : undefined)}
                     onClick={() => ejecutarValidacion(estado)}
                     style={{
-                      padding: '8px 16px', borderRadius: '8px', fontSize: 'var(--cc-sm)', fontWeight: '700',
+                      padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: excel ? 11 : 'var(--cc-sm)', fontWeight: '700',
                       cursor: validacionDeshabilitada ? 'not-allowed' : 'pointer', opacity: validacionDeshabilitada ? 0.5 : 1,
                       background: activo ? `${color}22` : 'transparent',
-                      color, border: activo ? `2.5px solid ${color}` : `1.5px solid ${color}55`,
+                      color, border: activo ? `2px solid ${color}` : `1px solid ${color}55`,
                       transition: 'all 0.15s',
                     }}>
                     {icon} {estado}
@@ -4793,7 +4866,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               })}
             </div>
             {nv === 2 && (
-              <div style={{ marginTop:'12px', display:'flex', alignItems:'center', gap:'8px' }}>
+              <div style={{ marginTop: excel ? 6 : 12, display:'flex', alignItems:'center', gap:'8px' }}>
                 <input type="checkbox" id={`obj-pago-sub-${registro.id}`}
                   checked={!!registro.nivel2_objeto_pago_sub}
                   disabled={bloqueado || sinItemAsignado}
@@ -4811,18 +4884,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Solo comentar (sin validar) ─ */}
       {nivelInfo.nivelValidacionComentario && !nivelInfo.puedeValidar && (nivelInfo.esSoloComentarista || nivelInfo.esApoyoTecnico) && (
-        <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
-          <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
-            💬 Comentarios de validación · Nivel {nivelInfo.nivelValidacionComentario}
+        <div style={{ marginBottom: secMb, background:t.bg, borderRadius: excel ? 2 : 10, padding: secPad, border:`1px solid ${excel ? sheetGrid : C.borde}` }}>
+          <div style={{ ...secTitleSt(), marginBottom: excel ? 4 : 10 }}>
+            💬 Comentarios · Nivel {nivelInfo.nivelValidacionComentario}
           </div>
+          {!excel && (
           <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:'10px' }}>
             Este cargo no valida estados. Solo puede registrar comentarios dirigidos.
           </div>
+          )}
           <button
             onClick={() => { setMostrarPopupReversionN3(false); setEstadoValidando('Comentario'); setMostrarPopupValidacion(true) }}
             style={{
-              padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
-              cursor:'pointer', background:`${t.primary}22`, color:t.primary, border:`1.5px solid ${t.primary}66`,
+              padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: excel ? 11 : 'var(--cc-sm)', fontWeight:'700',
+              cursor:'pointer', background:`${t.primary}22`, color:t.primary, border:`1px solid ${t.primary}66`,
             }}
           >
             ✉️ Nuevo comentario
@@ -4856,31 +4931,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           }
         }
         return (
-          <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
-            <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#8B5CF6', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
+          <div style={{ marginBottom: secMb, background:t.bg, borderRadius: excel ? 2 : 10, padding: secPad, border:`1px solid ${excel ? sheetGrid : C.borde}` }}>
+            <div style={{ ...secTitleSt('#8B5CF6'), marginBottom: excel ? 4 : 10 }}>
               🔨 Mi Validación
               {bloqueado && !registro.nivel2_objeto_pago_sub && (
                 <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 8px', fontSize:'var(--cc-caption)' }}>No objeto de pago</span>
               )}
             </div>
-            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'12px' }}>
-              <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Estado actual:</span>
-              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'var(--cc-sm)', fontWeight:'700', color: COLOR_SUB[estadoActual] || '#3B82F6' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom: excel ? 6 : 12 }}>
+              <span style={{ fontSize: excel ? 11 : 'var(--cc-sm)', color:t.textMuted }}>Estado actual:</span>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: excel ? 11 : 'var(--cc-sm)', fontWeight:'700', color: COLOR_SUB[estadoActual] || '#3B82F6' }}>
                 <span style={{ width:'10px', height:'10px', borderRadius:'50%', background: COLOR_SUB[estadoActual] || '#3B82F6' }} />
                 {estadoActual}
               </span>
             </div>
             {registro.nivel2_objeto_pago_sub ? (
-              <div className="cc-sicoe-validacion-btns" style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+              <div className="cc-sicoe-validacion-btns" style={{ display:'flex', gap: excel ? 4 : 8, flexWrap:'wrap' }}>
                 {BTNS_SUB.map(({ estado, icon, color }) => {
                   const activo = estadoActual === estado
                   return (
                     <button key={estado} type="button"
                       onClick={() => ejecutarValidacionSub(estado)}
                       style={{
-                        padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
+                        padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: excel ? 11 : 'var(--cc-sm)', fontWeight:'700',
                         cursor:'pointer', background: activo ? `${color}22` : 'transparent',
-                        color, border: activo ? `2.5px solid ${color}` : `1.5px solid ${color}55`,
+                        color, border: activo ? `2px solid ${color}` : `1px solid ${color}55`,
                       }}>
                       {icon} {estado}
                     </button>
@@ -4888,7 +4963,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 })}
               </div>
             ) : (
-              <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontStyle:'italic' }}>
+              <div style={{ fontSize: excel ? 11 : 'var(--cc-sm)', color:t.textMuted, fontStyle:'italic' }}>
                 Este registro no está marcado como objeto de pago al subcontratista.
               </div>
             )}
@@ -4925,7 +5000,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Acciones finales ─ */}
       {puedeEditar && (editableCampos || toastMsg) && (
-        <div style={{ display:'flex', justifyContent:'flex-end', paddingTop:'12px', borderTop:`1px solid ${C.borde}` }}>
+        <div style={{ display:'flex', justifyContent:'flex-end', paddingTop: excel ? 6 : 12, borderTop:`1px solid ${excel ? sheetGrid : C.borde}` }}>
           {toastMsg && (
             <div style={{
               position:'fixed', top:'50%', left:'50%',
@@ -4949,7 +5024,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           {editableCampos && (
           <button onClick={guardarCambios} disabled={guardando} style={{
             background: t.primary, color:'#fff', border:'none',
-            borderRadius:'8px', padding:'8px 22px', fontSize:'var(--cc-sm)', fontWeight:'700',
+            borderRadius: excel ? 4 : 8, padding: excel ? '5px 14px' : '8px 22px', fontSize: excel ? 12 : 'var(--cc-sm)', fontWeight:'700',
             cursor: guardando ? 'not-allowed' : 'pointer', opacity: guardando ? 0.6 : 1
           }}>{guardando ? 'Guardando...' : '💾 Guardar Cambios'}</button>
           )}
