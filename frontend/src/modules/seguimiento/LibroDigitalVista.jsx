@@ -4,6 +4,7 @@ import { MSG_ACTA_ACCESO_RESTRINGIDO } from './ActasRepositorio'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
 import { accesoBitacora } from './bitacoraPermisos'
 import { labelClima, labelEventoTipo } from './bitacoraConstants'
+import { labelTramoBitacora } from './bitacoraTramoHelpers'
 import { isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import { createSeguimientoApi } from './seguimientoApi'
 import {
@@ -101,6 +102,7 @@ function DiarioPage({ page, palette, api, onZoomPhoto }) {
         eyebrow="Bitácora"
         title={fmtFecha(page.fecha)}
         subtitle={[
+          `Tramo: ${labelTramoBitacora(d.tramo ?? page.tramo)}`,
           d.hora_inicio_labores ? `Inicio de labores ${String(d.hora_inicio_labores).slice(0, 5)}` : null,
           d.created_by_nombre ? `Elaborado por ${d.created_by_nombre}` : null,
           d.estado ? `Estado: ${d.estado}` : null,

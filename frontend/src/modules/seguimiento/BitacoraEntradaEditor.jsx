@@ -32,6 +32,8 @@ import {
 } from './bitacoraConstants'
 import { debeUsarGrillaDiarioCompacta } from './bitacoraDiarioMobile'
 import { bitacoraSheetCssVars, bitacoraSheetStyles } from './bitacoraSheetStyles'
+import { labelTramoBitacora, normalizeTramoValue } from './bitacoraTramoHelpers'
+import { API_BASE } from '../../apiBase'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import {
   seguimientoModalOverlayStyle,
@@ -182,6 +184,8 @@ export default function BitacoraEntradaEditor({
   entrada = null,
   /** Fecha YYYY-MM-DD al crear desde el calendario (día seleccionado). */
   fechaInicial = null,
+  /** Tramo al crear desde el selector del día. */
+  tramoInicial = null,
   onClose,
   onSaved,
   viewportCompact: viewportCompactProp,
@@ -206,6 +210,10 @@ export default function BitacoraEntradaEditor({
   const [fecha, setFecha] = useState(
     entrada?.fecha || (fechaInicial ? String(fechaInicial).slice(0, 10) : '') || hoyISOBogota(),
   )
+  const [tramo, setTramo] = useState(
+    () => normalizeTramoValue(entrada?.tramo ?? tramoInicial) || '',
+  )
+  const [tramosCatalogo, setTramosCatalogo] = useState([])
   const [horaInicio, setHoraInicio] = useState(
     String(entrada?.hora_inicio_labores || '').slice(0, 5) || horaActualBogota(),
   )
@@ -274,6 +282,27 @@ export default function BitacoraEntradaEditor({
     return () => { cancelled = true }
   }, [api, tipo])
 
+  // Catálogo de tramos (mismo maestro PK que Materiales / Presupuesto).
+  useEffect(() => {
+    if (tipo !== 'diario' || !contratoId || !token) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/presupuesto/${contratoId}/maestro-ubicacion-pk`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        )
+        if (!res.ok || cancelled) return
+        const data = await res.json()
+        const list = (Array.isArray(data?.tramos) ? data.tramos : [])
+          .map((x) => String(x || '').trim())
+          .filter(Boolean)
+        if (!cancelled) setTramosCatalogo(list)
+      } catch { /* ignore */ }
+    })()
+    return () => { cancelled = true }
+  }, [tipo, contratoId, token])
+
   // Resumen de cargos siempre derivado de asistencia (solo Activos).
   useEffect(() => {
     if (tipo !== 'diario') return
@@ -314,7 +343,10 @@ export default function BitacoraEntradaEditor({
     setPdfBusy(true)
     setError('')
     try {
-      const blob = await api.exportBitacoraPdfBlob(fecha)
+      const blob = await api.exportBitacoraPdfBlob(fecha, {
+        tramo: normalizeTramoValue(tramo) || undefined,
+        entradaId: localId || undefined,
+      })
       if (pdfUrl) URL.revokeObjectURL(pdfUrl)
       const url = URL.createObjectURL(blob)
       setPdfUrl(url)
@@ -324,7 +356,7 @@ export default function BitacoraEntradaEditor({
       } else {
         const a = document.createElement('a')
         a.href = url
-        a.download = `bitacora_${fecha}.pdf`
+        a.download = `bitacora_${fecha}${tramo ? `_${String(tramo).replace(/\s+/g, '_')}` : ''}.pdf`
         a.rel = 'noopener'
         document.body.appendChild(a)
         a.click()
@@ -418,6 +450,7 @@ export default function BitacoraEntradaEditor({
         }))
       const payload = {
         fecha,
+        tramo: normalizeTramoValue(tramo),
         hora_inicio_labores: horaInicio || null,
         ...clima,
         personal: personalPayload,
@@ -426,6 +459,9 @@ export default function BitacoraEntradaEditor({
         materiales: materialesPayload,
         cuerpo_html: cuerpoHtml,
         eventos: eventosParaPayload(eventos),
+      }
+      if (!payload.tramo) {
+        throw new Error('Debe seleccionar un Tramo para guardar el Reporte Diario.')
       }
       let row
       const tNet0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
@@ -474,17 +510,21 @@ export default function BitacoraEntradaEditor({
 
   const autocompletarDesdeAnterior = async () => {
     if (!esNuevo || tipo !== 'diario' || !editable) return
+    if (!normalizeTramoValue(tramo)) {
+      setError('Seleccione el Tramo antes de autocompletar desde el día anterior.')
+      return
+    }
     setAutoBusy(true)
     setError('')
     setOkMsg('')
     try {
-      const data = await api.plantillaAutocompletarDiario()
+      const data = await api.plantillaAutocompletarDiario(tramo)
       const prevAsist = asistenciaFromEntrada(data)
       if (!data || (!prevAsist.length && !data.personal?.length && !data.equipos_uso?.length)) {
-        setError('No hay una Bitácora anterior para autocompletar.')
+        setError('No hay una Bitácora anterior del mismo tramo para autocompletar.')
         return
       }
-      // No tocar fecha / hora / clima ni materiales
+      // No tocar fecha / hora / clima / tramo ni materiales
       if (prevAsist.length) {
         setAsistencia(prevAsist)
       } else if (Array.isArray(data.personal)) {
@@ -495,8 +535,14 @@ export default function BitacoraEntradaEditor({
       }
       // Materiales siempre vacíos al autocompletar (movimientos del día)
       setMateriales([emptyMaterial()])
-      const fuente = data.fuente_fecha ? ` (${data.fuente_fecha})` : ''
-      setOkMsg(`Asistencia y maquinaria cargadas desde el reporte anterior${fuente}. Materiales quedan vacíos. Fecha, hora y clima no se modificaron.`)
+      const fuente = [
+        data.fuente_fecha ? data.fuente_fecha : null,
+        data.fuente_tramo ? labelTramoBitacora(data.fuente_tramo) : null,
+      ].filter(Boolean).join(' · ')
+      setOkMsg(
+        `Asistencia y maquinaria cargadas desde el reporte anterior${fuente ? ` (${fuente})` : ''}. `
+        + 'Materiales quedan vacíos. Fecha, hora, clima y tramo no se modificaron.',
+      )
     } catch (e) {
       setError(e.message || 'No se pudo autocompletar')
     } finally {
@@ -698,7 +744,7 @@ export default function BitacoraEntradaEditor({
             }}>{okMsg}</div>
           )}
 
-          {/* Panel superior: fecha | hora | clima */}
+          {/* Panel superior: fecha | tramo | hora | clima */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'stretch' }}>
             <div style={{ ...ui.sheetWrap, width: 168, minWidth: 168, flexShrink: 0 }}>
               <table style={ui.sheetTable}>
@@ -718,6 +764,40 @@ export default function BitacoraEntradaEditor({
                 </tbody>
               </table>
             </div>
+            {tipo === 'diario' && (
+              <div style={{ ...ui.sheetWrap, flex: '1 1 200px', minWidth: 180 }}>
+                <table style={ui.sheetTable}>
+                  <thead>
+                    <tr><th style={ui.th}>Tramo *</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style={ui.td}>
+                        {editable || esNuevo ? (
+                          <select
+                            value={tramo}
+                            onChange={(e) => setTramo(e.target.value)}
+                            style={{ ...ui.cellInp, height: 28 }}
+                            required
+                            title="Obligatorio: un Reporte Diario por tramo y fecha"
+                          >
+                            <option value="">Seleccione tramo…</option>
+                            {tramosCatalogo.map((tr) => (
+                              <option key={tr} value={tr}>{tr}</option>
+                            ))}
+                            {tramo && !tramosCatalogo.includes(tramo) ? (
+                              <option value={tramo}>{tramo}</option>
+                            ) : null}
+                          </select>
+                        ) : (
+                          <div style={ui.cellRo}>{labelTramoBitacora(tramo || entrada?.tramo)}</div>
+                        )}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
             {tipo === 'diario' && (
               <div style={{ ...ui.sheetWrap, width: 110, flexShrink: 0 }}>
                 <table style={ui.sheetTable}>
