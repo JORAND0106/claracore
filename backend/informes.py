@@ -1444,27 +1444,53 @@ def inf_cortes(contrato_id: int, sub_id: int, current_user=Depends(_get_user)):
     )
     return rows or []
 
+# Query CC-SUB: por defecto solo registros con sub_estado=Aprobado (comportamiento histórico).
+_SOLO_APROBADOS_SUB_Q = Query(
+    True,
+    description=(
+        "true = solo registros aprobados por el subcontratista (default). "
+        "false = todos los registros del corte sin filtrar por sub_estado."
+    ),
+)
+
+
+def _apply_filtro_sub_estado(q, *, solo_aprobados: bool = True):
+    """Aplica filtro sub_estado=Aprobado cuando corresponde (toggle Todo | Aprobado)."""
+    if solo_aprobados:
+        return q.eq("sub_estado", "Aprobado")
+    return q
+
+
 @router.get("/{contrato_id}/items-corte/{corte_id}")
-def inf_items_corte(contrato_id: int, corte_id: int, current_user=Depends(_get_user)):
-    """Ítems únicos aprobados por el sub en un corte dado."""
+def inf_items_corte(
+    contrato_id: int,
+    corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
+    current_user=Depends(_get_user),
+):
+    """Ítems únicos del corte (por defecto solo aprobados por el sub)."""
     _perm_informes_ccd(current_user, "ver")
     try:
-        rows = _sb.table("so_registros")\
-            .select("item_numero, item_descripcion, unidad, capitulo")\
-            .eq("contrato_id", contrato_id)\
-            .eq("corte_id", corte_id)\
-            .eq("sub_estado", "Aprobado")\
-            .execute().data or []
+        q = (
+            _sb.table("so_registros")
+            .select("item_numero, item_descripcion, unidad, capitulo")
+            .eq("contrato_id", contrato_id)
+            .eq("corte_id", corte_id)
+        )
+        q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+        rows = q.execute().data or []
     except Exception as e0:
         err = str(e0).lower()
         if "capitulo" in err or "column" in err or "schema cache" in err:
             _log.warning("so_registros sin columna capitulo (items-corte); reintento sin ella: %s", e0)
-            rows = _sb.table("so_registros")\
-                .select("item_numero, item_descripcion, unidad")\
-                .eq("contrato_id", contrato_id)\
-                .eq("corte_id", corte_id)\
-                .eq("sub_estado", "Aprobado")\
-                .execute().data or []
+            q = (
+                _sb.table("so_registros")
+                .select("item_numero, item_descripcion, unidad")
+                .eq("contrato_id", contrato_id)
+                .eq("corte_id", corte_id)
+            )
+            q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+            rows = q.execute().data or []
         else:
             raise
     seen = {}
@@ -1477,7 +1503,13 @@ def inf_items_corte(contrato_id: int, corte_id: int, current_user=Depends(_get_u
     return out
 
 
-def _contexto_corte_sub(contrato_id: int, corte_id: int, current_user: dict) -> Dict[str, Any]:
+def _contexto_corte_sub(
+    contrato_id: int,
+    corte_id: int,
+    current_user: dict,
+    *,
+    solo_aprobados: bool = True,
+) -> Dict[str, Any]:
     """Datos compartidos por vista previa (JSON) y PDF."""
     if not isinstance(current_user, dict):
         try:
@@ -1509,27 +1541,37 @@ def _contexto_corte_sub(contrato_id: int, corte_id: int, current_user: dict) -> 
 
     try:
         try:
-            registros = _sb.table("so_registros")\
-                .select("item_numero, item_descripcion, unidad, cantidad_total, vlr_unitario_subcontratista, capitulo")\
-                .eq("contrato_id", contrato_id)\
-                .eq("corte_id", corte_id)\
-                .eq("sub_estado", "Aprobado")\
-                .execute().data or []
+            q = (
+                _sb.table("so_registros")
+                .select(
+                    "item_numero, item_descripcion, unidad, cantidad_total, "
+                    "vlr_unitario_subcontratista, capitulo"
+                )
+                .eq("contrato_id", contrato_id)
+                .eq("corte_id", corte_id)
+            )
+            q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+            registros = q.execute().data or []
         except Exception as e0:
             err = str(e0).lower()
             if "capitulo" in err or "column" in err or "schema cache" in err:
                 _log.warning("so_registros sin columna capitulo; reintento sin ella: %s", e0)
-                registros = _sb.table("so_registros")\
-                    .select("item_numero, item_descripcion, unidad, cantidad_total, vlr_unitario_subcontratista")\
-                    .eq("contrato_id", contrato_id)\
-                    .eq("corte_id", corte_id)\
-                    .eq("sub_estado", "Aprobado")\
-                    .execute().data or []
+                q = (
+                    _sb.table("so_registros")
+                    .select(
+                        "item_numero, item_descripcion, unidad, cantidad_total, "
+                        "vlr_unitario_subcontratista"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .eq("corte_id", corte_id)
+                )
+                q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+                registros = q.execute().data or []
             else:
                 raise
     except Exception as e:
         _log.exception("so_registros corte sub")
-        raise HTTPException(503, f"No se pudieron leer las cantidades aprobadas: {e!s}") from e
+        raise HTTPException(503, f"No se pudieron leer las cantidades del corte: {e!s}") from e
 
     items_map = {}
     for r in registros:
@@ -1575,6 +1617,7 @@ def _contexto_corte_sub(contrato_id: int, corte_id: int, current_user: dict) -> 
         "total_costo": total_costo,
         "usuario_nombre": usuario_nombre,
         "usuario_cargo": usuario_cargo,
+        "solo_aprobados": bool(solo_aprobados),
     }
 
 
@@ -1585,6 +1628,7 @@ def _contexto_memoria_item(
     current_user: dict,
     *,
     item_exacto: bool = False,
+    solo_aprobados: bool = True,
 ) -> Dict[str, Any]:
     if not isinstance(current_user, dict):
         try:
@@ -1621,8 +1665,8 @@ def _contexto_memoria_item(
         )
         .eq("contrato_id", contrato_id)
         .eq("corte_id", corte_id)
-        .eq("sub_estado", "Aprobado")
     )
+    q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
     if item_exacto:
         q = q.eq("item_numero", (item_numero or "").strip())
     else:
@@ -1630,7 +1674,9 @@ def _contexto_memoria_item(
     registros = q.order("numero_registro").execute().data or []
 
     if not registros:
-        raise HTTPException(404, "No hay registros aprobados para este ítem en el corte")
+        if solo_aprobados:
+            raise HTTPException(404, "No hay registros aprobados para este ítem en el corte")
+        raise HTTPException(404, "No hay registros para este ítem en el corte")
 
     item_info = {
         "item_numero":      registros[0].get("item_numero", item_numero),
@@ -1652,38 +1698,37 @@ def _contexto_memoria_item(
     }
 
 
-def _list_item_numeros_memoria_corte(contrato_id: int, corte_id: int) -> List[str]:
-    """Ítems distintos con al menos un registro aprobado en el corte.
+def _list_item_numeros_memoria_corte(
+    contrato_id: int,
+    corte_id: int,
+    *,
+    solo_aprobados: bool = True,
+) -> List[str]:
+    """Ítems distintos con al menos un registro del corte (por defecto solo aprobados).
 
     Orden: capítulo (número inicial) ascendente, luego código de ítem (orden natural), alineado a CC-SUB-001.
     """
     try:
-        rows = (
+        q = (
             _sb.table("so_registros")
             .select("item_numero, capitulo")
             .eq("contrato_id", contrato_id)
             .eq("corte_id", corte_id)
-            .eq("sub_estado", "Aprobado")
-            .order("numero_registro")
-            .execute()
-            .data
-            or []
         )
+        q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+        rows = q.order("numero_registro").execute().data or []
     except Exception as e0:
         err = str(e0).lower()
         if "capitulo" in err or "column" in err or "schema cache" in err:
             _log.warning("so_registros sin columna capitulo (memoria ítems); reintento sin ella: %s", e0)
-            rows = (
+            q = (
                 _sb.table("so_registros")
                 .select("item_numero")
                 .eq("contrato_id", contrato_id)
                 .eq("corte_id", corte_id)
-                .eq("sub_estado", "Aprobado")
-                .order("numero_registro")
-                .execute()
-                .data
-                or []
             )
+            q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+            rows = q.order("numero_registro").execute().data or []
         else:
             raise
     seen: set[str] = set()
@@ -1705,13 +1750,30 @@ def _list_item_numeros_memoria_corte(contrato_id: int, corte_id: int) -> List[st
 
 # ── CC-SUB-001 : Corte Subcontratista ─────────────────────────────────────────
 
-def _respuesta_json_corte(contrato_id: int, corte_id: int, current_user: dict) -> Dict[str, Any]:
-    ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
+def _respuesta_json_corte(
+    contrato_id: int,
+    corte_id: int,
+    current_user: dict,
+    *,
+    solo_aprobados: bool = True,
+) -> Dict[str, Any]:
+    ctx = _contexto_corte_sub(
+        contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+    )
     return {"formato": "CC-SUB-001", **ctx}
 
 
-def _respuesta_json_memoria(contrato_id: int, corte_id: int, item_numero: str, current_user: dict) -> Dict[str, Any]:
-    ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
+def _respuesta_json_memoria(
+    contrato_id: int,
+    corte_id: int,
+    item_numero: str,
+    current_user: dict,
+    *,
+    solo_aprobados: bool = True,
+) -> Dict[str, Any]:
+    ctx = _contexto_memoria_item(
+        contrato_id, corte_id, item_numero, current_user, solo_aprobados=solo_aprobados
+    )
     return {"formato": "CC-SUB-002", **ctx}
 
 
@@ -1899,24 +1961,27 @@ def _snapshot_to_firma_cfg(snap: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _fetch_registros_integridad_corte(contrato_id: int, corte_id: int) -> List[Dict[str, Any]]:
-    """Mismos registros base que alimentan CC-SUB-001/002 (sub_estado Aprobado)."""
+def _fetch_registros_integridad_corte(
+    contrato_id: int,
+    corte_id: int,
+    *,
+    solo_aprobados: bool = True,
+) -> List[Dict[str, Any]]:
+    """Registros base que alimentan CC-SUB-001/002 (por defecto sub_estado Aprobado)."""
     sel = (
         "id, item_numero, item_descripcion, unidad, capitulo, cantidad_total, "
         "vlr_unitario_subcontratista, sub_estado, foto_url, foto_numero, "
         "grafico_url, grafico_numero, abs_inicio, abs_final"
     )
     try:
-        return (
+        q = (
             _sb.table("so_registros")
             .select(sel)
             .eq("contrato_id", contrato_id)
             .eq("corte_id", corte_id)
-            .eq("sub_estado", "Aprobado")
-            .execute()
-            .data
-            or []
         )
+        q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+        return q.execute().data or []
     except Exception as e:
         _log.warning("integridad corte: %s", e)
         return []
@@ -5282,11 +5347,18 @@ def _html_pagina_sello_firma_claracore(
 
 
 @router.get("/{contrato_id}/pdf/corte-subcontratista/{corte_id}", dependencies=[])
-def pdf_corte_sub(contrato_id: int, corte_id: int, current_user: dict = Depends(_get_user)):
+def pdf_corte_sub(
+    contrato_id: int,
+    corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
+    current_user: dict = Depends(_get_user),
+):
     _perm_informes_ccd(current_user, "ver")
     try:
         try:
-            ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
+            ctx = _contexto_corte_sub(
+                contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -5315,6 +5387,7 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user: dict = Depends(
 def pdf_corte_sub_con_sello_firma(
     contrato_id: int,
     corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
     current_user: dict = Depends(_get_user),
 ):
     """
@@ -5324,7 +5397,9 @@ def pdf_corte_sub_con_sello_firma(
     """
     _perm_informes_ccd(current_user, "ver")
     try:
-        ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
+        ctx = _contexto_corte_sub(
+            contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+        )
         pdf_main = _generar_pdf_bytes_corte_sub_desde_ctx(ctx, contrato_id, corte_id, current_user)
         contrato = ctx["contrato"]
         corte = ctx["corte"]
@@ -5353,11 +5428,14 @@ def pdf_memoria_item(
     contrato_id: int,
     corte_id:    int,
     item_numero: str = Query(...),
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
     current_user=Depends(_get_user)
 ):
     _perm_informes_ccd(current_user, "ver")
     try:
-        ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
+        ctx = _contexto_memoria_item(
+            contrato_id, corte_id, item_numero, current_user, solo_aprobados=solo_aprobados
+        )
         contrato = ctx["contrato"]
         sub = ctx["sub"]
         corte = ctx["corte"]
@@ -5419,16 +5497,23 @@ def pdf_memoria_item(
 def pdf_memoria_corte_completo(
     contrato_id: int,
     corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
     current_user=Depends(_get_user),
 ):
     """Un solo PDF CC-SUB-002: todos los ítems del corte (mismo formato que por ítem, separados con salto de página)."""
     _perm_informes_ccd(current_user, "ver")
     try:
-        numeros = _list_item_numeros_memoria_corte(contrato_id, corte_id)
+        numeros = _list_item_numeros_memoria_corte(
+            contrato_id, corte_id, solo_aprobados=solo_aprobados
+        )
         if not numeros:
             raise HTTPException(
                 status_code=404,
-                detail="No hay registros aprobados en este corte para generar memorias",
+                detail=(
+                    "No hay registros aprobados en este corte para generar memorias"
+                    if solo_aprobados
+                    else "No hay registros en este corte para generar memorias"
+                ),
             )
 
         firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002, corte_id=corte_id)
@@ -5456,6 +5541,7 @@ def pdf_memoria_corte_completo(
                 item_numero,
                 current_user,
                 item_exacto=True,
+                solo_aprobados=solo_aprobados,
             )
             contrato = ctx["contrato"]
             sub = ctx["sub"]
@@ -7006,11 +7092,14 @@ def excel_memoria_item(
     contrato_id: int,
     corte_id: int,
     item_numero: str = Query(...),
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
     current_user=Depends(_get_user),
 ):
     _perm_informes_ccd(current_user, "exportar")
     try:
-        ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
+        ctx = _contexto_memoria_item(
+            contrato_id, corte_id, item_numero, current_user, solo_aprobados=solo_aprobados
+        )
         firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002, corte_id=corte_id)
         xbytes = _memoria_item_excel_bytes(
             ctx["contrato"],
@@ -7039,20 +7128,32 @@ def excel_memoria_item(
 def excel_memoria_corte_completo(
     contrato_id: int,
     corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
     current_user=Depends(_get_user),
 ):
     """Un libro con una hoja por ítem (orden ascendente por código, igual que el PDF completo)."""
     _perm_informes_ccd(current_user, "exportar")
     try:
-        numeros = _list_item_numeros_memoria_corte(contrato_id, corte_id)
+        numeros = _list_item_numeros_memoria_corte(
+            contrato_id, corte_id, solo_aprobados=solo_aprobados
+        )
         if not numeros:
             raise HTTPException(
                 status_code=404,
-                detail="No hay registros aprobados en este corte para generar memorias",
+                detail=(
+                    "No hay registros aprobados en este corte para generar memorias"
+                    if solo_aprobados
+                    else "No hay registros en este corte para generar memorias"
+                ),
             )
         firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002, corte_id=corte_id)
         xbytes = _memoria_corte_completo_excel_bytes(
-            contrato_id, corte_id, numeros, current_user, firma_cfg
+            contrato_id,
+            corte_id,
+            numeros,
+            current_user,
+            firma_cfg,
+            solo_aprobados=solo_aprobados,
         )
         corte_row = _row("subcontratista_cortes", "consecutivo", id=corte_id) or {}
         cons = corte_row.get("consecutivo", "")
@@ -7073,12 +7174,15 @@ def excel_memoria_corte_completo(
 def excel_corte_subcontratista(
     contrato_id: int,
     corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
     current_user=Depends(_get_user),
 ):
     """Excel CC-SUB-001: mismo contenido lógico que el informe de corte (PDF)."""
     _perm_informes_ccd(current_user, "exportar")
     try:
-        ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
+        ctx = _contexto_corte_sub(
+            contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+        )
         firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_001, corte_id=corte_id)
         xbytes = _corte_sub_001_excel_bytes(
             ctx["contrato"],
@@ -11226,12 +11330,19 @@ def _memoria_corte_completo_excel_bytes(
     numeros: List[str],
     current_user: dict,
     firma_cfg: Optional[Dict[str, Any]],
+    *,
+    solo_aprobados: bool = True,
 ) -> bytes:
     wb = Workbook()
     first = True
     for item_numero in numeros:
         ctx = _contexto_memoria_item(
-            contrato_id, corte_id, item_numero, current_user, item_exacto=True
+            contrato_id,
+            corte_id,
+            item_numero,
+            current_user,
+            item_exacto=True,
+            solo_aprobados=solo_aprobados,
         )
         contrato = ctx["contrato"]
         sub = ctx["sub"]

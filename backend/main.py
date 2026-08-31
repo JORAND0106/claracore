@@ -2933,7 +2933,7 @@ from presupuesto_papelera import (
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
-from informes import _perm_informes_ccd, _respuesta_json_corte, _respuesta_json_memoria
+from informes import _perm_informes_ccd, _respuesta_json_corte, _respuesta_json_memoria, _SOLO_APROBADOS_SUB_Q
 from ccd_conciliacion import (
     matriz_params_contrato,
     rpo_conciliacion_por_contrato,
@@ -2943,15 +2943,29 @@ from ccd_conciliacion import (
 
 
 @app.get("/informes/{contrato_id}/datos/corte-subcontratista/{corte_id}")
-def informes_datos_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(get_current_user)):
+def informes_datos_corte_sub(
+    contrato_id: int,
+    corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
+    current_user=Depends(get_current_user),
+):
     _perm_informes_ccd(current_user, "ver")
-    return _respuesta_json_corte(contrato_id, corte_id, current_user)
+    return _respuesta_json_corte(
+        contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+    )
 
 
 @app.get("/informes/{contrato_id}/vista-json/corte-sub/{corte_id}")
-def informes_vista_json_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(get_current_user)):
+def informes_vista_json_corte_sub(
+    contrato_id: int,
+    corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
+    current_user=Depends(get_current_user),
+):
     _perm_informes_ccd(current_user, "ver")
-    return _respuesta_json_corte(contrato_id, corte_id, current_user)
+    return _respuesta_json_corte(
+        contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+    )
 
 
 @app.get("/informes/{contrato_id}/datos/memoria-item/{corte_id}")
@@ -2959,10 +2973,13 @@ def informes_datos_memoria_item(
     contrato_id: int,
     corte_id: int,
     item_numero: str = Query(...),
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
     current_user=Depends(get_current_user),
 ):
     _perm_informes_ccd(current_user, "ver")
-    return _respuesta_json_memoria(contrato_id, corte_id, item_numero, current_user)
+    return _respuesta_json_memoria(
+        contrato_id, corte_id, item_numero, current_user, solo_aprobados=solo_aprobados
+    )
 
 
 @app.get("/informes/{contrato_id}/vista-json/memoria/{corte_id}")
@@ -2970,10 +2987,13 @@ def informes_vista_json_memoria(
     contrato_id: int,
     corte_id: int,
     item_numero: str = Query(...),
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
     current_user=Depends(get_current_user),
 ):
     _perm_informes_ccd(current_user, "ver")
-    return _respuesta_json_memoria(contrato_id, corte_id, item_numero, current_user)
+    return _respuesta_json_memoria(
+        contrato_id, corte_id, item_numero, current_user, solo_aprobados=solo_aprobados
+    )
 
 
 # ── Mapa de cargo_id → campo de validación en so_registros ───────────────────
