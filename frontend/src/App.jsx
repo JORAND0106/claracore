@@ -2732,6 +2732,8 @@ function sicoeHojaRegistroSyncKey(reg) {
     reg.observacion,
     reg.competencia,
     reg.capitulo,
+    reg.subcontratista_id,
+    reg.corte_id,
   ]
     .map((x) => (x == null ? '' : String(x)))
     .join('|')
