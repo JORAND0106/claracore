@@ -167,6 +167,7 @@ import {
   sicoePuedeAgregarRegistroEnReporte,
   sicoePuedeEditarCamposDimensionales,
   sicoePuedeEditarCamposFinancieros,
+  sicoePuedeEditarGraficoRegistro,
   sicoeCantidadCambioSignificativo,
 } from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
 import {
@@ -2945,8 +2946,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     reporte,
     listaSubs,
   }) || 'Sin subcontratista'
-  // Foto y gráfico: editables siempre que el usuario tenga permiso Editar (no afectan valor ni cantidad)
-  const editableFotoGrafico = puedeEditar
+  // Foto: solo permiso Editar (incluido post-sello). Gráfico: Editar o Crear+creador hasta sellado.
+  const editableFoto = !!puedeEditar
+  const editableGrafico = sicoePuedeEditarGraficoRegistro({
+    puedeEditar: !!puedeEditar,
+    puedeCrear: !!puedeCrear,
+    esCreador: esCreadorReg,
+    selladoMax: regSelladoMax,
+  })
   const alertaCantidadFmt = sicoeFormatearAlertaCantidad(
     registro,
     nivelesContrato?.niveles_activos,
@@ -3303,6 +3310,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   // Subir gráfico (manual o pantallazo del plano)
   const subirGrafico = async (file, opts = {}) => {
+    if (!editableGrafico && !autoAbrirEsquema) return
     const { origen = 'manual' } = opts
     setUploadingGraf(true)
     try {
@@ -3325,7 +3333,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const guardarGraficoDesdeMapa = async (dataUrl) => {
-    if (!editableFotoGrafico || !dataUrl) return
+    if (!editableGrafico || !dataUrl) return
     try {
       const resp = await fetch(dataUrl)
       const blob = await resp.blob()
@@ -3344,7 +3352,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   /** Abre el editor de esquema (mismo que Seguimiento / wizard) asociado a este registro. */
   const abrirEsquemaEditor = async () => {
-    if ((!editableFotoGrafico && !autoAbrirEsquema) || esquemaCargando || uploadingGraf) return
+    if ((!editableGrafico && !autoAbrirEsquema) || esquemaCargando || uploadingGraf) return
     setEsquemaCargando(true)
     try {
       const base = grafVista || null
@@ -3388,7 +3396,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const eliminarGraficoActual = async () => {
-    if (!editableFotoGrafico || !graficosLista.length) return
+    if (!editableGrafico || !graficosLista.length) return
     if (!window.confirm('¿Eliminar este gráfico del registro? (La foto no se modifica)')) return
     setEliminandoGraf(true)
     try {
@@ -4714,7 +4722,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   <span style={{ fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={strRefCarpeta || 'Foto'}>
                     📷{strRefCarpeta ? ` #${strRefCarpeta}` : ''}
                   </span>
-                  {editableFotoGrafico && (
+                  {editableFoto && (
                     <div style={{ display:'flex', flexDirection:'column', gap:1, alignItems:'flex-start' }}>
                       <label style={{ cursor:'pointer', color:t.primary, fontWeight:'600' }} title="Cambiar foto">
                         Cambiar
@@ -4733,19 +4741,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </div>
               </>
             ) : (
-              <div style={{ ...mediaEmptyThumbStyle, opacity: editableFotoGrafico ? 1 : 0.65, borderRadius: excel ? 2 : 6, overflow:'hidden', gap:2, padding:'4px 2px' }}>
-                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:2, cursor: editableFotoGrafico ? 'pointer' : 'default', width:'100%', height:'100%' }}>
+              <div style={{ ...mediaEmptyThumbStyle, opacity: editableFoto ? 1 : 0.65, borderRadius: excel ? 2 : 6, overflow:'hidden', gap:2, padding:'4px 2px' }}>
+                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:2, cursor: editableFoto ? 'pointer' : 'default', width:'100%', height:'100%' }}>
                   {uploadingFoto
                     ? <span style={{ color:t.textMuted, fontSize:9 }}>⏳</span>
                     : <>
                         <span style={{ fontSize: excel ? 14 : 18 }}>📷</span>
-                        {editableFotoGrafico && <span style={{ fontSize:9, color:t.primary, fontWeight:'600' }}>Cargar</span>}
+                        {editableFoto && <span style={{ fontSize:9, color:t.primary, fontWeight:'600' }}>Cargar</span>}
                       </>
                   }
-                  <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableFotoGrafico}
+                  <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableFoto}
                     onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
                 </label>
-                {editableFotoGrafico && (
+                {editableFoto && (
                 <button type="button" onClick={() => {
                   setGaleriaHojaRefreshKey((k) => k + 1)
                   setModalGaleriaHoja(true)
@@ -4812,7 +4820,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   <span style={{ fontWeight:700 }} title={graficoActual ? `${fmtFechaGrafico(graficoActual.creado_en)}${graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}` : 'Gráfico'}>
                     📐{graficosLista.length > 1 ? ` ${graficoIdx + 1}/${graficosLista.length}` : ''}
                   </span>
-                  {editableFotoGrafico && (
+                  {editableGrafico && (
                     <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
                       <button
                         type="button"
@@ -4838,12 +4846,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </div>
               </>
             ) : (
-              <div style={{ ...mediaEmptyThumbStyle, opacity: editableFotoGrafico ? 1 : 0.65, gap:2, padding:'4px 2px' }}>
+              <div style={{ ...mediaEmptyThumbStyle, opacity: editableGrafico ? 1 : 0.65, gap:2, padding:'4px 2px' }}>
                 {uploadingGraf
                   ? <span style={{ color:t.textMuted, fontSize:9 }}>⏳</span>
                   : <>
                       <span style={{ fontSize: excel ? 14 : 18 }}>📐</span>
-                      {editableFotoGrafico && (
+                      {editableGrafico && (
                         <div style={{ display:'flex', flexWrap:'wrap', gap:2, justifyContent:'center' }}>
                           <button
                             type="button"

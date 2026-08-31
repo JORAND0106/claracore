@@ -25,6 +25,14 @@ export const SICOE_CAMPOS_DIMENSIONALES = Object.freeze([
   'coord_lng',
 ])
 
+/** Gráfico/plano: mismo alcance post-envío que dims para Crear (no afecta Cantidad Total). */
+export const SICOE_CAMPOS_GRAFICO = Object.freeze([
+  'grafico_url',
+  'grafico_numero',
+  'grafico_descripcion',
+  'graficos_historial',
+])
+
 export const SICOE_CAMPOS_FINANCIEROS = Object.freeze([
   'capitulo',
   'competencia',
@@ -67,6 +75,27 @@ export function sicoePuedeEditarCamposDimensionales({
   if (puedeEditar) return true
   // Crear (mixto): solo dims del registro propio.
   return !!(puedeCrear && esCreador)
+}
+
+/**
+ * Gráfico/plano tras envío:
+ * - Editar: siempre (incluida franja post-sello, igual que foto).
+ * - Crear (creador): misma ventana que dims (hasta sellado del último nivel).
+ * Foto no usa este helper: sigue solo con Editar.
+ */
+export function sicoePuedeEditarGraficoRegistro({
+  puedeEditar = false,
+  puedeCrear = false,
+  esCreador = false,
+  selladoMax = false,
+} = {}) {
+  if (puedeEditar) return true
+  return sicoePuedeEditarCamposDimensionales({
+    puedeEditar: false,
+    puedeCrear,
+    esCreador,
+    selladoMax,
+  })
 }
 
 /** Capítulos / ítem / valores: solo permiso Editar y no sellado. */

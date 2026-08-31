@@ -499,7 +499,8 @@ def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
         "cantidad_alerta_anterior", "cantidad_alerta_actual", "cantidad_alerta_en", "cantidad_alerta_por",
         "cantidad_alerta_nivel_max_previo",
         "creado_por_reg", "modificado_por_reg",
-        "foto_url", "foto_numero", "grafico_url", "acta_rpo_id", "semana_id", "nivel2_objeto_pago_sub",
+        "foto_url", "foto_numero", "grafico_url", "grafico_numero", "graficos_historial",
+        "acta_rpo_id", "semana_id", "nivel2_objeto_pago_sub",
     )
     return _json_for_log({k: row.get(k) for k in keys})
 
@@ -24928,8 +24929,8 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
                     status_code=403,
                     detail=(
                         "Como creador solo puede editar campos dimensionales/localización "
-                        f"(no: {', '.join(sorted(prohibidos))}). "
-                        "Ítem, capítulo, competencia y corte requieren permiso «Editar»."
+                        f"y gráfico/plano (no: {', '.join(sorted(prohibidos))}). "
+                        "Ítem, capítulo, competencia, corte y foto requieren permiso «Editar»."
                     ),
                 )
 

@@ -13,6 +13,12 @@ SICOE_CAMPOS_DIMENSIONALES = frozenset({
     "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
     "coord_lat", "coord_lng",
 })
+# Gráfico/plano: mismo alcance que dims para el creador (no afecta Cantidad Total).
+# La foto sigue fuera de este set (solo permiso Editar).
+SICOE_CAMPOS_GRAFICO = frozenset({
+    "grafico_url", "grafico_numero", "grafico_descripcion", "graficos_historial",
+})
+SICOE_CAMPOS_PERMITIDOS_CREADOR = SICOE_CAMPOS_DIMENSIONALES | SICOE_CAMPOS_GRAFICO
 # Campos financieros / clasificación: solo permiso Editar.
 SICOE_CAMPOS_FINANCIEROS = frozenset({
     "capitulo", "competencia", "item_numero", "item_descripcion", "unidad",
@@ -22,7 +28,8 @@ SICOE_CAMPOS_FINANCIEROS = frozenset({
 SICOE_CAMPOS_IDENTIDAD_PUT = frozenset({
     "reporte_id", "numero_registro", "contrato_id", "nombre", "descripcion",
 })
-# Meta/media: siguen las reglas de sellado existentes (editar).
+# Meta/media: foto + corte/sub requieren Editar; gráfico también listado aquí por
+# compat (sellado/N3), pero en modo creador se permite vía SICOE_CAMPOS_GRAFICO.
 SICOE_CAMPOS_META_MEDIA = frozenset({
     "corte_id", "subcontratista_id",
     "foto_url", "foto_numero", "foto_descripcion",
@@ -56,7 +63,7 @@ def sicoe_put_keys_prohibidas_creador_dims(
     prev_row: dict,
 ) -> set:
     """
-    Claves que un usuario solo-Crear (dims del propio registro) no puede modificar.
+    Claves que un usuario solo-Crear (dims + gráfico del propio registro) no puede modificar.
     Ignora eco sin cambio de identidad / financieros / meta (mismo valor que prev).
     Mutates `data` al descartar ecos.
     """
@@ -65,4 +72,4 @@ def sicoe_put_keys_prohibidas_creador_dims(
         if sicoe_valores_put_equivalentes(data.get(ik), prev_row.get(ik)):
             keys.discard(ik)
             data.pop(ik, None)
-    return keys - SICOE_CAMPOS_DIMENSIONALES
+    return keys - SICOE_CAMPOS_PERMITIDOS_CREADOR

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from sicoe_creador_permisos import (
     SICOE_CAMPOS_DIMENSIONALES,
+    SICOE_CAMPOS_GRAFICO,
+    SICOE_CAMPOS_PERMITIDOS_CREADOR,
     sicoe_put_keys_prohibidas_creador_dims,
     sicoe_valores_put_equivalentes,
 )
@@ -42,6 +44,33 @@ def test_dims_permitidos_completos():
     data = {k: 2 for k in ("longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion")}
     keys = set(data.keys())
     assert sicoe_put_keys_prohibidas_creador_dims(keys, data, prev) == set()
+
+
+def test_grafico_permitido_para_creador():
+    prev = {"grafico_url": "https://old", "grafico_numero": 1, "graficos_historial": []}
+    data = {
+        "grafico_url": "https://new",
+        "grafico_numero": 2,
+        "graficos_historial": [{"url": "https://new", "numero": 2}],
+    }
+    keys = set(data.keys())
+    assert sicoe_put_keys_prohibidas_creador_dims(keys, data, prev) == set()
+    assert data["grafico_url"] == "https://new"
+
+
+def test_foto_sigue_prohibida_para_creador():
+    prev = {"foto_url": "https://old", "grafico_url": "https://g1"}
+    data = {"foto_url": "https://new", "grafico_url": "https://g2"}
+    keys = set(data.keys())
+    prohibidos = sicoe_put_keys_prohibidas_creador_dims(keys, data, prev)
+    assert "foto_url" in prohibidos
+    assert "grafico_url" not in prohibidos
+
+
+def test_permitidos_creador_incluye_grafico_no_foto():
+    assert SICOE_CAMPOS_GRAFICO <= SICOE_CAMPOS_PERMITIDOS_CREADOR
+    assert "foto_url" not in SICOE_CAMPOS_PERMITIDOS_CREADOR
+    assert "foto_numero" not in SICOE_CAMPOS_PERMITIDOS_CREADOR
 
 
 def test_equivalencia_null_y_vacio():
