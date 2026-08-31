@@ -31,7 +31,7 @@ import {
   personalPlantillaVacia,
 } from './bitacoraConstants'
 import { debeUsarGrillaDiarioCompacta } from './bitacoraDiarioMobile'
-import { bitacoraSheetStyles } from './bitacoraSheetStyles'
+import { bitacoraSheetCssVars, bitacoraSheetStyles } from './bitacoraSheetStyles'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import {
   seguimientoModalOverlayStyle,
@@ -190,6 +190,7 @@ export default function BitacoraEntradaEditor({
   const viewportCompact = viewportCompactProp ?? viewportCompactHook
   const grillaCompacta = debeUsarGrillaDiarioCompacta(viewportCompact)
   const ui = bitacoraSheetStyles(t)
+  const sheetCssVars = bitacoraSheetCssVars(t)
   const esNuevo = !entrada?.id
   // Unificación: solo Reporte Diario; eventos viven como bloques internos.
   const tipo = 'diario'
@@ -641,6 +642,7 @@ export default function BitacoraEntradaEditor({
         }
         style={{
           ...seguimientoModalSheetStyle(viewportCompact, { wide: true }),
+          ...sheetCssVars,
           background: t.bgCard,
           border: viewportCompact ? 'none' : `1px solid ${t.border}`,
           boxShadow: t.shadow || '0 20px 50px rgba(0,0,0,0.2)',
@@ -1264,7 +1266,7 @@ export default function BitacoraEntradaEditor({
                   justifyContent: 'space-between', marginBottom: 6,
                 }}>
                   <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>
-                    Texto del reporte
+                    Reporte
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', overflowX: 'auto' }}>
                     {(editable || esNuevo) && (

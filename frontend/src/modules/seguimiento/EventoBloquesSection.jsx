@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import ActividadesEventoGrid from './ActividadesEventoGrid'
 import BitacoraAdjuntos from './BitacoraAdjuntos'
+import IdeaClaraModal from './IdeaClaraModal'
 import TemaRichEditor from './TemaRichEditor'
 import VisitantesEventoGrid, { emptyVisitanteRow } from './VisitantesEventoGrid'
 import {
@@ -13,6 +15,7 @@ import {
   eventosFromEntrada,
   eventosParaPayload,
 } from './eventoBloquesHelpers'
+import { htmlToPlainText, plainTextToHtml } from './richTextUtils'
 
 export {
   emptyEventoBloque,
@@ -35,6 +38,9 @@ export default function EventoBloquesSection({
   onPickMapActividad,
 }) {
   const list = Array.isArray(eventos) ? eventos : []
+  /** @type {[null|string, Function]} id del bloque con Clara abierta */
+  const [claraBloqueId, setClaraBloqueId] = useState(null)
+  const claraBloque = list.find((b) => b.id === claraBloqueId) || null
 
   const btnGhost = {
     border: `1px solid ${t.border}`,
@@ -43,7 +49,7 @@ export default function EventoBloquesSection({
     borderRadius: 8,
     padding: '6px 10px',
     fontWeight: 700,
-    fontSize: 12,
+    fontSize: 'var(--cc-xs)',
     cursor: disabled ? 'default' : 'pointer',
   }
 
@@ -105,7 +111,7 @@ export default function EventoBloquesSection({
 
       {list.length === 0 ? (
         <div style={{
-          fontSize: 12,
+          fontSize: 'var(--cc-xs)',
           color: t.textMuted,
           padding: '10px 8px',
           border: `1px dashed ${t.border}`,
@@ -216,7 +222,7 @@ export default function EventoBloquesSection({
                           ['acciones_inmediatas', 'Acciones inmediatas'],
                         ].map(([key, lab]) => (
                           <tr key={key}>
-                            <td style={{ ...(ui?.td || {}), width: '22%', fontWeight: 600, fontSize: 12 }}>{lab}</td>
+                            <td style={{ ...(ui?.td || {}), width: '22%', fontWeight: 600, fontSize: 'var(--cc-xs)' }}>{lab}</td>
                             <td style={ui?.td}>
                               <input
                                 disabled={disabled}
@@ -228,7 +234,7 @@ export default function EventoBloquesSection({
                           </tr>
                         ))}
                         <tr>
-                          <td style={{ ...(ui?.td || {}), fontWeight: 600, fontSize: 12 }}>Gravedad</td>
+                          <td style={{ ...(ui?.td || {}), fontWeight: 600, fontSize: 'var(--cc-xs)' }}>Gravedad</td>
                           <td style={ui?.td}>
                             <select
                               disabled={disabled}
@@ -270,7 +276,7 @@ export default function EventoBloquesSection({
                           ['motivo', 'Motivo'],
                         ].map(([key, lab]) => (
                           <tr key={key}>
-                            <td style={{ ...(ui?.td || {}), width: '22%', fontWeight: 600, fontSize: 12 }}>{lab}</td>
+                            <td style={{ ...(ui?.td || {}), width: '22%', fontWeight: 600, fontSize: 'var(--cc-xs)' }}>{lab}</td>
                             <td style={ui?.td}>
                               <input
                                 disabled={disabled}
@@ -303,8 +309,22 @@ export default function EventoBloquesSection({
                     />
                   </div>
                   <div className="cc-bitacora-evento-stack__texto">
-                    <div style={{ ...(ui?.sectionTitle || {}), marginBottom: 6 }}>
-                      Texto del reporte
+                    <div style={{
+                      display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+                      justifyContent: 'space-between', marginBottom: 6,
+                    }}>
+                      <div style={{ ...(ui?.sectionTitle || {}), marginBottom: 0 }}>
+                        Reporte
+                      </div>
+                      {!disabled && (
+                        <button
+                          type="button"
+                          onClick={() => setClaraBloqueId(bloque.id)}
+                          style={btnGhost}
+                        >
+                          Redactar con Clara
+                        </button>
+                      )}
                     </div>
                     <TemaRichEditor
                       t={t}
@@ -330,6 +350,24 @@ export default function EventoBloquesSection({
             )
           })}
         </div>
+      )}
+
+      {claraBloque && (
+        <IdeaClaraModal
+          t={t}
+          api={api}
+          textoInicial={htmlToPlainText(claraBloque.cuerpo_html || '')}
+          onClose={() => setClaraBloqueId(null)}
+          aplicarLabel="Aplicar al reporte"
+          subtitulo="Mejore la redacción del reporte del evento con Clara."
+          textoLabel="Reporte"
+          modo="redaccion"
+          zIndex={14000}
+          onEnviarAlActa={(texto) => {
+            patchBloque(claraBloque.id, { cuerpo_html: plainTextToHtml(texto) })
+            setClaraBloqueId(null)
+          }}
+        />
       )}
     </div>
   )

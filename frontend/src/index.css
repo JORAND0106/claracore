@@ -2816,6 +2816,8 @@ select.cc-dashboard-acta-select--light option {
   box-sizing: border-box;
   /* Fondo de la celda de captura (visible aunque el input sea transparente/vacío) */
   background: var(--cc-input-bg, #f8fafc);
+  color: var(--cc-text, inherit);
+  font-size: var(--cc-sm);
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td:last-child {
@@ -2825,7 +2827,7 @@ select.cc-dashboard-acta-select--light option {
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td::before {
   content: attr(data-label);
   font-weight: 800;
-  font-size: 10px;
+  font-size: var(--cc-caption);
   color: var(--cc-primary, #0077B6);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -2839,7 +2841,10 @@ select.cc-dashboard-acta-select--light option {
   margin: 0;
   border: none;
   border-right: 1.5px solid var(--cc-sheet-grid-border, #94a3b8);
-  background: color-mix(in srgb, var(--cc-primary, #0077B6) 14%, #ffffff);
+  background: var(
+    --cc-bitacora-header-bg,
+    color-mix(in srgb, var(--cc-primary, #0077B6) 14%, var(--cc-bg-card, #ffffff))
+  );
   border-radius: 0;
 }
 
@@ -2875,20 +2880,20 @@ select.cc-dashboard-acta-select--light option {
   height: auto !important;
   margin: 0;
   padding: 8px 10px !important;
-  font-size: 16px; /* evita zoom iOS */
+  font-size: max(16px, var(--cc-input, 16px)); /* evita zoom iOS; sigue A A A si es mayor */
   border: none !important;
   border-radius: 0 !important;
   outline: none;
-  background: #ffffff !important;
+  background: var(--cc-bg-card, #ffffff) !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-sheet-grid-border, #94a3b8) 55%, transparent);
-  color: inherit;
+  color: var(--cc-text, inherit);
   box-sizing: border-box;
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) input:focus,
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) select:focus,
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) textarea:focus {
-  background: #ffffff !important;
+  background: var(--cc-bg-card, #ffffff) !important;
   box-shadow: inset 0 0 0 2px var(--cc-primary, #0077B6);
 }
 
@@ -2899,16 +2904,18 @@ select.cc-dashboard-acta-select--light option {
   align-items: center;
   min-height: 44px;
   padding: 8px 10px;
-  background: #ffffff;
+  background: var(--cc-bg-card, #ffffff);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-sheet-grid-border, #94a3b8) 55%, transparent);
   box-sizing: border-box;
+  color: var(--cc-text, inherit);
+  font-size: var(--cc-sm);
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) > button {
   justify-content: center;
   width: 100%;
   cursor: pointer;
-  font-size: 16px;
+  font-size: max(16px, var(--cc-sm, 16px));
 }
 
 /* Wrappers (catálogo equipo/material, clip adjuntos): el input interno lleva el borde */
@@ -2932,7 +2939,7 @@ select.cc-dashboard-acta-select--light option {
   align-items: center;
   justify-content: center;
   padding: 6px 8px;
-  background: #ffffff;
+  background: var(--cc-bg-card, #ffffff);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-sheet-grid-border, #94a3b8) 55%, transparent);
 }
 
@@ -2940,7 +2947,7 @@ select.cc-dashboard-acta-select--light option {
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table select,
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table button {
   min-height: 44px;
-  font-size: 16px; /* evita zoom iOS */
+  font-size: max(16px, var(--cc-sm, 16px)); /* evita zoom iOS */
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-personal-table td[data-label="Cant."] > input,
