@@ -15,6 +15,39 @@ NormItemFn = Callable[[Optional[str]], str]
 NormCapFn = Callable[[Optional[str]], str]
 
 
+def merge_listado_ficha_prefer_newer(prev: Optional[dict], new: Optional[dict]) -> dict:
+    """Combina fichas duplicadas (mismo cap+ítem).
+
+    Alineado con SQL ``_dash_listado_vu`` (``ORDER BY lp.id DESC LIMIT 1``):
+    gana la fila de mayor ``id``. Campos vacíos se rellenan desde la otra fila
+    (p. ej. competencia solo en una de las copias).
+    """
+    if not prev and not new:
+        return {}
+    if not prev:
+        return dict(new or {})
+    if not new:
+        return dict(prev)
+    try:
+        id_prev = int(prev.get("id") or 0)
+    except (TypeError, ValueError):
+        id_prev = 0
+    try:
+        id_new = int(new.get("id") or 0)
+    except (TypeError, ValueError):
+        id_new = 0
+    if id_new >= id_prev:
+        base, other = dict(new), prev
+    else:
+        base, other = dict(prev), new
+    for field in ("descripcion", "unidad", "item_numero", "competencia", "capitulo"):
+        if not str(base.get(field) or "").strip() and str(other.get(field) or "").strip():
+            base[field] = other.get(field)
+    if base.get("precio_unitario") in (None, "") and other.get("precio_unitario") not in (None, ""):
+        base["precio_unitario"] = other.get("precio_unitario")
+    return base
+
+
 def listado_meta_for_cap_item(
     cap_key: str,
     item_key: str,
@@ -25,7 +58,18 @@ def listado_meta_for_cap_item(
     if not full_listado_by_cap_item or not item_key:
         return None
     row = full_listado_by_cap_item.get((cap_key or "", item_key))
-    return row if isinstance(row, dict) else None
+    if isinstance(row, dict):
+        return row
+    # Filas sin capítulo (p. ej. selects de Informes): si el ítem es único en el índice, usarlo.
+    if (cap_key or "") in ("", "Sin capítulo"):
+        hits = [
+            v
+            for (ck, ik), v in full_listado_by_cap_item.items()
+            if ik == item_key and isinstance(v, dict)
+        ]
+        if len(hits) == 1:
+            return hits[0]
+    return None
 
 
 def overlay_presupuesto_row(

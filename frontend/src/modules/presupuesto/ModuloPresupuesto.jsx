@@ -65,6 +65,7 @@ import { pptoFormatoNodos } from './pptoFormatoNodos'
 import { pptoConstruirTramosUnicos, pptoFilasDeTramo } from './pptoTramoBusqueda'
 import { pptoPopVistaAnterior, pptoTotalesSeleccion } from './pptoNavegacionVista'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
+import { CC_LISTADO_META_CHANGED } from '../../cache/listadoMetaEvents'
 import { useModulo } from '../../context/ModuloContext'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroUbicacionCacheKey, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
 import { fetchPptoPanelValidacion, pptoBuildPanelValidacionParams } from './pptoPanelValidacionApi'
@@ -1261,6 +1262,17 @@ useEffect(() => {
     _pptoCapitulosListaCacheRef.current = {}
     if (contratoId) invalidateVistaModulo('presupuesto', contratoId)
   }
+  useEffect(() => {
+    if (!contratoId || typeof window === 'undefined') return undefined
+    const onMeta = (ev) => {
+      const cid = ev?.detail?.contratoId
+      if (cid != null && Number(cid) !== Number(contratoId)) return
+      invalidarCachePresupuestoContrato()
+      _lastWriteAtRef.current = Date.now()
+    }
+    window.addEventListener(CC_LISTADO_META_CHANGED, onMeta)
+    return () => window.removeEventListener(CC_LISTADO_META_CHANGED, onMeta)
+  }, [contratoId])
   const invalidarCachePanelPresupuesto = () => {
     _pptoPanelCacheRef.current = {}
     _pptoCapitulosListaCacheRef.current = {}

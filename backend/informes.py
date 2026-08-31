@@ -27,6 +27,32 @@ _GERENCIA_PDF_CACHE_LOCK = threading.Lock()
 _GERENCIA_PDF_CACHE_TTL_SEC = 600
 
 
+def invalidate_caches_dependientes_listado(contrato_id: int) -> None:
+    """Limpia caches de Informes que embeben ficha de ítem tras editar listado_precios."""
+    cid = int(contrato_id)
+    with _GERENCIA_MATRIZ_CACHE_LOCK:
+        dead_m = [k for k in _GERENCIA_MATRIZ_CACHE if len(k) >= 3 and k[2] == cid]
+        for k in dead_m:
+            _GERENCIA_MATRIZ_CACHE.pop(k, None)
+    with _GERENCIA_PDF_CACHE_LOCK:
+        dead_p = [k for k in _GERENCIA_PDF_CACHE if len(k) >= 3 and k[2] == cid]
+        for k in dead_p:
+            _GERENCIA_PDF_CACHE.pop(k, None)
+
+
+def _aplicar_meta_vivo_listado_sicoe(contrato_id: int, rows: list) -> list:
+    """Resuelve item_numero / item_descripcion / unidad desde listado_precios (en vivo)."""
+    if not rows:
+        return rows
+    try:
+        from main import _overlay_sicoe_meta_vivo
+
+        return _overlay_sicoe_meta_vivo(int(contrato_id), rows)
+    except Exception as exc:
+        _log.warning("meta_vivo listado overlay falló contrato=%s: %s", contrato_id, exc)
+        return rows
+
+
 def _gerencia_matriz_cache_key(contrato_id: int, acta_presente_override: Optional[int]) -> tuple:
     ap = int(acta_presente_override) if acta_presente_override is not None else None
     # v5: col.2/3 = nivel máximo activo del contrato (no solo N3 fijo)
@@ -1493,6 +1519,7 @@ def inf_items_corte(
             rows = q.execute().data or []
         else:
             raise
+    rows = _aplicar_meta_vivo_listado_sicoe(contrato_id, rows)
     seen = {}
     for r in rows:
         k = r.get("item_numero")
@@ -7654,7 +7681,7 @@ def _fo_eo_04_fetch_registros_acta(contrato_id: int, acta_id: int) -> List[Dict[
         len(rows_rep),
         len(rows),
     )
-    return rows
+    return _aplicar_meta_vivo_listado_sicoe(cid, rows)
 
 
 def _fo_eo_04_norm_item_key(item_numero: str, capitulo: str = "") -> tuple:
@@ -7907,7 +7934,7 @@ def _fo_eo_04_fetch_registros_actas_ids(
         len(item_numeros or []),
         len(rows),
     )
-    return rows
+    return _aplicar_meta_vivo_listado_sicoe(cid, rows)
 
 
 def _fo_eo_04_registro_aprobado_nivel_max(

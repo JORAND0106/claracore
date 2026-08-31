@@ -20,6 +20,7 @@ import { useClaraViewport } from "./useClaraViewport";
 import { esDesarrolladorUsuario } from "./utils/permisosContrato";
 import { PERMISOS_ADMIN_TODOS } from "./admin/catalogoInsumosPermisos";
 import SeccionAlmacenamientoAzure from "./admin/SeccionAlmacenamientoAzure";
+import { notifyListadoMetaChanged } from "./cache/listadoMetaEvents";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -4705,6 +4706,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       });
       setMetaImpacto(null);
       if (freshStats) setStats(freshStats);
+      if (contratoId) notifyListadoMetaChanged(contratoId);
     } catch (e) {
       const detail = e?.detail || e?.response?.data?.detail;
       if (detail?.code === "confirm_meta_required" && detail?.impacto) {
@@ -4839,6 +4841,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         }).filter(r=>r.descripcion||r.item_numero);
         await call("POST",`/listado-precios/${contratoId}/bulk`,parsed);
         setMsg({type:"success",text:`✅ ${parsed.length} ítems cargados correctamente.`});
+        if (contratoId) notifyListadoMetaChanged(contratoId);
         void cargar({ silent: false, completo: true });
       } catch(ex){setMsg({type:"error",text:ex.message});}
     };
@@ -4900,6 +4903,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       setShowCrear(false);
       setCrearForm({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"",tipo_calculo:"",agrupador_id:"" });
       setUModoCustomC(false); setUCustomC("");
+      if (contratoId) notifyListadoMetaChanged(contratoId);
       void cargar({ silent: false, completo: true });
     } catch(e){ setMsg({ type:"error", text:e.message }); }
     finally { setCreating(false); }

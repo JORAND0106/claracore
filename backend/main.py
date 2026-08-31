@@ -9628,6 +9628,7 @@ def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=
         for item in items:
             rows.append(_listado_precio_row(contrato_id, item))
         supabase.table("listado_precios").insert(rows).execute()
+    _dash_agg_cache_invalidate_listado(int(contrato_id))
     registrar_log(current_user, "IMPORTAR", "PRECIOS", "listado_precios", str(contrato_id),
                   {"cantidad": len(items)})
     return {"mensaje": f"{len(items)} items cargados"}
@@ -9769,6 +9770,7 @@ def crear_precio(contrato_id: int, body: ListadoPrecioItem, current_user=Depends
     row = _listado_precio_row(contrato_id, body)
     result = supabase.table("listado_precios").insert(row).execute()
     nuevo = result.data[0] if result.data else {}
+    _dash_agg_cache_invalidate_listado(int(contrato_id))
     registrar_log(current_user, "CREAR", "PRECIOS", "listado_precios", str(nuevo.get("id", "")),
                   {"item_numero": row.get("item_numero"), "descripcion": row.get("descripcion"),
                    "tipo_precio": row.get("tipo_precio"), "estado_precio": row.get("estado_precio")})
@@ -29172,14 +29174,18 @@ def _dashboard_pkid_colores_liquidacion(
 _DASH_AGG_CACHE: Dict[str, Tuple[float, Any]] = {}
 _DASH_AGG_CACHE_LOCK = threading.Lock()
 _DASH_AGG_CACHE_TTL_SEC = 300
+# Índice listado (V.U. + meta ítem/desc/unidad): TTL corto porque con
+# WEB_CONCURRENCY>1 la invalidación en PUT solo limpia el worker local.
+_LISTADO_VU_CACHE_TTL_SEC = 15
 
 
-def _dash_agg_cache_get(kind: str, contrato_id: int):
+def _dash_agg_cache_get(kind: str, contrato_id: int, *, ttl_sec: Optional[float] = None):
     key = f"{kind}:{int(contrato_id)}"
     now = time.time()
+    ttl = _DASH_AGG_CACHE_TTL_SEC if ttl_sec is None else float(ttl_sec)
     with _DASH_AGG_CACHE_LOCK:
         hit = _DASH_AGG_CACHE.get(key)
-        if hit and now - hit[0] < _DASH_AGG_CACHE_TTL_SEC:
+        if hit and now - hit[0] < ttl:
             return hit[1]
     return None
 
@@ -32143,8 +32149,17 @@ def _dash_listado_vu_resolved(
 
 
 def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], Dict[str, Any]]:
-    """(capítulo_norm, ítem_norm) → fila listado_precios (V.U. y metadatos)."""
-    cached = _dash_agg_cache_get("listado_precios_vu_idx_v3", contrato_id)
+    """(capítulo_norm, ítem_norm) → fila listado_precios (V.U. y metadatos).
+
+    Duplicados (mismo cap+ítem): gana mayor ``id`` (igual que SQL ``_dash_listado_vu``).
+    """
+    from listado_precios_meta import merge_listado_ficha_prefer_newer
+
+    cached = _dash_agg_cache_get(
+        "listado_precios_vu_idx_v4",
+        contrato_id,
+        ttl_sec=_LISTADO_VU_CACHE_TTL_SEC,
+    )
     if cached is not None:
         return cached
     idx: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -32154,8 +32169,11 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
         def _b(o=off):
             return (
                 supabase.table("listado_precios")
-                .select("capitulo, item_numero, precio_unitario, unidad, descripcion, competencia")
+                .select(
+                    "id, capitulo, item_numero, precio_unitario, unidad, descripcion, competencia"
+                )
                 .eq("contrato_id", contrato_id)
+                .order("id")
                 .range(o, o + 999)
                 .execute()
                 .data
@@ -32171,26 +32189,37 @@ def _listado_precios_vu_by_cap_item(contrato_id: int) -> Dict[Tuple[str, str], D
             if k not in idx:
                 idx[k] = r
             else:
-                # Preferir ficha con competencia no vacía si la primera llegada venía vacía.
-                prev = idx[k]
-                if not (prev.get("competencia") or "").strip() and (r.get("competencia") or "").strip():
-                    idx[k] = {**prev, "competencia": r.get("competencia")}
+                idx[k] = merge_listado_ficha_prefer_newer(idx[k], r)
         if len(batch) < 1000:
             break
         off += 1000
-    _dash_agg_cache_set("listado_precios_vu_idx_v3", contrato_id, idx)
+    _dash_agg_cache_set("listado_precios_vu_idx_v4", contrato_id, idx)
     return idx
 
 
 def _dash_agg_cache_invalidate_listado(contrato_id: int) -> None:
     """Invalida índices de listado tras editar ficha (ítem/desc/unidad/V.U.)."""
-    key = f"listado_precios_vu_idx_v3:{int(contrato_id)}"
-    key_legacy = f"listado_precios_vu_idx_v2:{int(contrato_id)}"
-    key2 = f"listado_precios_tipo_idx:{int(contrato_id)}"
+    cid = int(contrato_id)
+    suffix = f":{cid}"
     with _DASH_AGG_CACHE_LOCK:
-        _DASH_AGG_CACHE.pop(key, None)
-        _DASH_AGG_CACHE.pop(key_legacy, None)
-        _DASH_AGG_CACHE.pop(key2, None)
+        dead = [
+            k
+            for k in _DASH_AGG_CACHE
+            if k.endswith(suffix)
+            and (
+                k.startswith("listado_precios_")
+                or k.startswith("resumen_caps_")
+                or k.startswith("sicoe_by_item_")
+            )
+        ]
+        for k in dead:
+            _DASH_AGG_CACHE.pop(k, None)
+    try:
+        from informes import invalidate_caches_dependientes_listado
+
+        invalidate_caches_dependientes_listado(cid)
+    except Exception:
+        pass
 
 
 def _overlay_presupuesto_meta_vivo(contrato_id: int, rows: list) -> list:
