@@ -81,6 +81,7 @@ const CAMPO_ETIQUETAS = {
   cantidad_alerta_actual: 'Cant. alerta (actual)',
   cantidad_alerta_en: 'Cant. alerta (fecha)',
   cantidad_alerta_por: 'Cant. alerta (usuario)',
+  cantidad_alerta_nivel_max_previo: 'Cant. alerta (nivel máx. previo)',
   creado_por_reg: 'Creado por (registro)',
   modificado_por_reg: 'Modificado por (registro)',
   nivel1_estado: 'Estado N1',

@@ -2915,7 +2915,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const subIdEfectivo = registro.subcontratista_id || reporte.subcontratista_id || null
   // Foto y gráfico: editables siempre que el usuario tenga permiso Editar (no afectan valor ni cantidad)
   const editableFotoGrafico = puedeEditar
-  const alertaCantidadFmt = sicoeFormatearAlertaCantidad(registro)
+  const alertaCantidadFmt = sicoeFormatearAlertaCantidad(
+    registro,
+    nivelesContrato?.niveles_activos,
+  )
 
   useEffect(() => {
     setCorteSel(registro.corte_id != null ? String(registro.corte_id) : '')
@@ -3572,6 +3575,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               patchOptimista.cantidad_alerta_actual = dimData.cantidad_alerta_actual
               patchOptimista.cantidad_alerta_en = dimData.cantidad_alerta_en
               patchOptimista.cantidad_alerta_por = dimData.cantidad_alerta_por
+              if (dimData.cantidad_alerta_nivel_max_previo != null) {
+                patchOptimista.cantidad_alerta_nivel_max_previo = dimData.cantidad_alerta_nivel_max_previo
+              }
             }
             for (const n of [1, 2, 3, 4, 5, 6]) {
               const k = `nivel${n}_estado`
@@ -3592,14 +3598,24 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             patchOptimista.costo_directo = Math.round(cantTotal * Number(vlrUnitario))
           }
           if (sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)) {
-            patchOptimista.cantidad_alerta_anterior = cantAnterior
-            patchOptimista.cantidad_alerta_actual = cantTotal
-            for (const n of (nivelesContrato?.niveles_activos || [1, 2, 3])) {
-              patchOptimista[`nivel${n}_estado`] = 'No Revisado'
-              patchOptimista[`nivel${n}_usuario_id`] = null
-              patchOptimista[`nivel${n}_fecha`] = null
+            const activos = nivelesContrato?.niveles_activos || [1, 2, 3]
+            let maxPrev = null
+            for (const n of activos) {
+              if ((registro[`nivel${n}_estado`] || '').trim() === 'Aprobado') maxPrev = n
             }
-            patchOptimista.bloqueado = false
+            if (maxPrev != null) {
+              patchOptimista.cantidad_alerta_anterior = cantAnterior
+              patchOptimista.cantidad_alerta_actual = cantTotal
+              patchOptimista.cantidad_alerta_nivel_max_previo = maxPrev
+              for (const n of activos) {
+                if (n <= maxPrev) {
+                  patchOptimista[`nivel${n}_estado`] = 'No Revisado'
+                  patchOptimista[`nivel${n}_usuario_id`] = null
+                  patchOptimista[`nivel${n}_fecha`] = null
+                }
+              }
+              patchOptimista.bloqueado = false
+            }
           }
         }
 
@@ -4154,17 +4170,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             fontWeight: 700,
           }}
         >
-          ⚠ Cambio de cantidad — validaciones reiniciadas.{' '}
+          ⚠ Cambio de cantidad — validaciones reiniciadas hasta Nivel {alertaCantidadFmt.nivelMaxPrevio}.{' '}
           <span style={{ fontWeight: 800 }}>{alertaCantidadFmt.texto}</span>
-          {esCreadorReg && !puedeEditar ? (
-            <span style={{ display: 'block', marginTop: 4, fontWeight: 600, opacity: 0.9 }}>
-              Editó el creador del registro (campos dimensionales). Historial disponible en Trazabilidad.
-            </span>
-          ) : (
-            <span style={{ display: 'block', marginTop: 4, fontWeight: 600, opacity: 0.9 }}>
-              Consulte el historial en el menú de acciones → Trazabilidad.
-            </span>
-          )}
+          <span style={{ display: 'block', marginTop: 4, fontWeight: 600, opacity: 0.9 }}>
+            Visible al revalidar N1…N{alertaCantidadFmt.nivelMaxPrevio}. Se oculta al superar ese nivel. Historial en Trazabilidad.
+          </span>
         </div>
       )}
 
@@ -4178,7 +4188,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           fontSize: excel ? 11 : 'var(--cc-sm)',
           color: t.text,
         }}>
-          Como creador del registro puede editar dimensiones y localización. Capítulo, competencia e ítem requieren permiso «Editar».
+          Permiso «Crear» (mixto): puede editar dimensiones y localización de este registro. Capítulo, competencia e ítem requieren el permiso «Editar» (independiente).
         </div>
       )}
 

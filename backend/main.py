@@ -497,6 +497,7 @@ def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
         "nivel1_estado", "nivel2_estado", "nivel3_estado", "nivel4_estado", "nivel5_estado", "nivel6_estado",
         "sub_estado", "bloqueado",
         "cantidad_alerta_anterior", "cantidad_alerta_actual", "cantidad_alerta_en", "cantidad_alerta_por",
+        "cantidad_alerta_nivel_max_previo",
         "creado_por_reg", "modificado_por_reg",
         "foto_url", "foto_numero", "grafico_url", "acta_rpo_id", "semana_id", "nivel2_objeto_pago_sub",
     )
@@ -2015,13 +2016,31 @@ def _sicoe_puede_editar_full_registro(current_user, contrato_id: int) -> bool:
 
 
 def _sicoe_puede_editar_dims_como_creador(current_user, contrato_id: int, prev_row: dict) -> bool:
-    """Crear en matriz + es el creador del registro (y no desarrollador-only bypass via full edit)."""
-    if _es_desarrollador(current_user):
-        return True
+    """
+    Permiso mixto «Crear» (Reporte de Cantidades): creación + edición dimensional
+    del registro propio. Independiente del permiso «Editar» (sin dependencia cruzada).
+    """
     uid = _sicoe_uid_from_user(current_user)
     if uid is None or not _sicoe_es_creador_registro(prev_row, uid):
         return False
+    # Desarrollador: se gobierna por edición completa; aquí solo matriz Crear.
+    if _es_desarrollador(current_user):
+        return True
     return _cargo_permiso_crear_reporte_cantidades_user_id(uid, contrato_id)
+
+
+def _sicoe_nivel_max_aprobado_alcanzado(row: Optional[dict], contrato_id: int) -> Optional[int]:
+    """Mayor nivel activo con estado Aprobado (None si ninguno)."""
+    if not row:
+        return None
+    activos = sorted({int(n) for n in _get_niveles_activos_contrato(contrato_id) if 1 <= int(n) <= 6})
+    if not activos:
+        activos = [1, 2, 3]
+    max_n = None
+    for n in activos:
+        if (row.get(f"nivel{n}_estado") or "").strip() == "Aprobado":
+            max_n = n
+    return max_n
 
 
 def _sicoe_reset_validaciones_activas(contrato_id: int, update: dict) -> List[int]:
@@ -2037,14 +2056,49 @@ def _sicoe_reset_validaciones_activas(contrato_id: int, update: dict) -> List[in
     return activos
 
 
+def _sicoe_reset_validaciones_por_cambio_cantidad(
+    contrato_id: int, prev_row: dict, update: dict
+) -> Tuple[List[int], Optional[int]]:
+    """
+    Al cambiar cantidad_total: reinicia niveles ya alcanzados (hasta el máx. Aprobado)
+    y devuelve (niveles_reiniciados, nivel_max_previo).
+    Si nadie había aprobado, no reinicia ni hay alerta de nivel.
+    """
+    max_prev = _sicoe_nivel_max_aprobado_alcanzado(prev_row, contrato_id)
+    if max_prev is None:
+        update["bloqueado"] = False
+        return [], None
+    activos = sorted({int(n) for n in _get_niveles_activos_contrato(contrato_id) if 1 <= int(n) <= 6})
+    if not activos:
+        activos = [1, 2, 3]
+    reiniciados: List[int] = []
+    for n in activos:
+        st = (prev_row.get(f"nivel{n}_estado") or "").strip()
+        if n <= max_prev or st == "Aprobado":
+            update[f"nivel{n}_estado"] = "No Revisado"
+            update[f"nivel{n}_usuario_id"] = None
+            update[f"nivel{n}_fecha"] = None
+            reiniciados.append(n)
+    update["bloqueado"] = False
+    return reiniciados, max_prev
+
+
 def _sicoe_aplicar_alerta_cantidad(
-    update: dict, cantidad_anterior: float, cantidad_nueva: float, uid: Optional[int]
+    update: dict,
+    cantidad_anterior: float,
+    cantidad_nueva: float,
+    uid: Optional[int],
+    nivel_max_previo: Optional[int] = None,
 ) -> None:
     update["cantidad_alerta_anterior"] = round(float(cantidad_anterior), 2)
     update["cantidad_alerta_actual"] = round(float(cantidad_nueva), 2)
     update["cantidad_alerta_en"] = datetime.now(timezone.utc).isoformat()
     if uid is not None:
         update["cantidad_alerta_por"] = int(uid)
+    if nivel_max_previo is not None:
+        update["cantidad_alerta_nivel_max_previo"] = int(nivel_max_previo)
+    else:
+        update["cantidad_alerta_nivel_max_previo"] = None
 
 
 def _sicoe_limpiar_alerta_cantidad(update: dict) -> None:
@@ -2052,6 +2106,36 @@ def _sicoe_limpiar_alerta_cantidad(update: dict) -> None:
     update["cantidad_alerta_actual"] = None
     update["cantidad_alerta_en"] = None
     update["cantidad_alerta_por"] = None
+    update["cantidad_alerta_nivel_max_previo"] = None
+
+
+def _sicoe_limpiar_alerta_si_supera_nivel_previo(
+    update: dict,
+    nivel: int,
+    estado: str,
+    row_con_alerta: Optional[dict] = None,
+) -> bool:
+    """
+    Apaga la alerta cuando el registro vuelve a superar el nivel máximo
+    que tenía aprobado antes del cambio de cantidad (p. ej. max_prev=2 →
+    al aprobar N2 de nuevo se limpia; N3 ya no la ve).
+    """
+    if (estado or "").strip() != "Aprobado":
+        return False
+    max_prev = None
+    if row_con_alerta is not None:
+        try:
+            raw = row_con_alerta.get("cantidad_alerta_nivel_max_previo")
+            if raw is not None and str(raw).strip() != "":
+                max_prev = int(raw)
+        except (TypeError, ValueError):
+            max_prev = None
+    if max_prev is None:
+        return False
+    if int(nivel) >= int(max_prev):
+        _sicoe_limpiar_alerta_cantidad(update)
+        return True
+    return False
 
 
 _INFORME_PERIODICO_SLOT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{4})$")
@@ -24691,7 +24775,8 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         else:
             data["costo_directo"] = round(float(data["costo_directo"]), 0)
 
-    # Cambio de cantidad total → reset de validaciones + alerta visible.
+    # Solo cambio de cantidad_total → reset de niveles ya alcanzados + alerta (N1..max_prev).
+    # Otras ediciones dimensionales (p. ej. solo localización) se guardan sin alerta ni reset.
     if not sellado and "cantidad_total" in data and data["cantidad_total"] is not None:
         try:
             prev_ct = round(float(prev_row.get("cantidad_total") or 0), 2)
@@ -24699,9 +24784,23 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             prev_ct = 0.0
         new_ct = round(float(data["cantidad_total"]), 2)
         if prev_ct != new_ct:
-            validaciones_reiniciadas = _sicoe_reset_validaciones_activas(int(contrato_id), data)
-            _sicoe_aplicar_alerta_cantidad(data, prev_ct, new_ct, uid)
-            cantidad_cambio_alerta = {"anterior": prev_ct, "actual": new_ct}
+            validaciones_reiniciadas, nivel_max_prev = _sicoe_reset_validaciones_por_cambio_cantidad(
+                int(contrato_id), prev_row, data
+            )
+            if nivel_max_prev is not None:
+                _sicoe_aplicar_alerta_cantidad(data, prev_ct, new_ct, uid, nivel_max_prev)
+                cantidad_cambio_alerta = {
+                    "anterior": prev_ct,
+                    "actual": new_ct,
+                    "nivel_max_previo": nivel_max_prev,
+                }
+            else:
+                # Nadie había aprobado: se guarda la cantidad sin alerta de revalidación.
+                cantidad_cambio_alerta = {
+                    "anterior": prev_ct,
+                    "actual": new_ct,
+                    "nivel_max_previo": None,
+                }
 
     if uid is not None:
         data["modificado_por_reg"] = int(uid)
@@ -24724,6 +24823,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             for k in (
                 "cantidad_alerta_anterior", "cantidad_alerta_actual",
                 "cantidad_alerta_en", "cantidad_alerta_por",
+                "cantidad_alerta_nivel_max_previo",
             ):
                 data.pop(k, None)
             out = supabase_execute(_upd)
@@ -24752,6 +24852,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             detalle_log["cantidad_anterior"] = cantidad_cambio_alerta["anterior"]
             detalle_log["cantidad_nueva"] = cantidad_cambio_alerta["actual"]
             detalle_log["validaciones_reiniciadas"] = validaciones_reiniciadas
+            detalle_log["nivel_max_previo"] = cantidad_cambio_alerta.get("nivel_max_previo")
             detalle_log["motivo"] = "cambio_cantidad_reset_validaciones"
         registrar_log(
             u_log,
@@ -25893,10 +25994,17 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             "corte_id":         corte_id,
         }
         if prev_ct != cant_total:
-            _sicoe_reset_validaciones_activas(int(contrato_id), upd_reg_payload)
-            _sicoe_aplicar_alerta_cantidad(
-                upd_reg_payload, prev_ct, cant_total, _sicoe_uid_from_user(current_user)
+            reiniciados, nivel_max_prev = _sicoe_reset_validaciones_por_cambio_cantidad(
+                int(contrato_id), registro, upd_reg_payload
             )
+            # `registro` ya tiene pre_patch; recuperar estados originales de niveles vía select fresco
+            # si el merge perdió los estados — el select inicial sí traía SICOE_SELECT_NIVELES_ESTADO.
+            if nivel_max_prev is not None:
+                _sicoe_aplicar_alerta_cantidad(
+                    upd_reg_payload, prev_ct, cant_total, _sicoe_uid_from_user(current_user), nivel_max_prev
+                )
+            elif reiniciados:
+                pass
         uid_asig = _sicoe_uid_from_user(current_user)
         if uid_asig is not None:
             upd_reg_payload["modificado_por_reg"] = int(uid_asig)
@@ -25912,6 +26020,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                 for k in (
                     "cantidad_alerta_anterior", "cantidad_alerta_actual",
                     "cantidad_alerta_en", "cantidad_alerta_por",
+                    "cantidad_alerta_nivel_max_previo",
                 ):
                     upd_reg_payload.pop(k, None)
                 supabase_execute(_upd_reg)
@@ -26519,7 +26628,7 @@ def _put_validar_nivel_sicoe_alto(
         def _get():
             return (
                 supabase.table("so_registros")
-                .select(f"item_numero,{prev_f},{campo}")
+                .select(f"item_numero,{prev_f},{campo},cantidad_alerta_nivel_max_previo")
                 .eq("id", registro_id)
                 .eq("contrato_id", contrato_id)
                 .limit(1)
@@ -26550,6 +26659,7 @@ def _put_validar_nivel_sicoe_alto(
             u_key: autor_id,
             f_key: datetime.utcnow().isoformat(),
         }
+        _sicoe_limpiar_alerta_si_supera_nivel_previo(update, nivel, body.estado, r0)
         _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id, nivel, update, body.estado)
 
         def _upd():
@@ -26779,7 +26889,7 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
         _require_sicoe_puede_validar_nivel(current_user, autor_id, 1, contrato_id)
         def _get_n3():
             return supabase.table("so_registros").select(
-                f"contrato_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id"
+                f"contrato_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id,cantidad_alerta_nivel_max_previo"
             ).eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
         n3rows = supabase_execute(_get_n3)
         if not n3rows:
@@ -26796,6 +26906,8 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
             "nivel1_usuario_id": autor_id,
             "nivel1_fecha":      datetime.utcnow().isoformat(),
         }
+        _sicoe_limpiar_alerta_si_supera_nivel_previo(update, 1, body.estado, n3rows[0])
+        _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id, 1, update, body.estado)
         # Actualizar modificado_por en so_reportes para reflejar la validación
         try:
             def _get_rep_id():
@@ -26932,7 +27044,7 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         # Verificar nivel1
         def _get():
             return supabase.table("so_registros")\
-                .select(f"contrato_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id").eq("id", registro_id)\
+                .select(f"contrato_id,item_numero,{SICOE_SELECT_NIVELES_ESTADO},reporte_id,cantidad_alerta_nivel_max_previo").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
         if not rows:
@@ -26974,6 +27086,8 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         }
         if body.objeto_pago_sub is not None:
             update["nivel2_objeto_pago_sub"] = body.objeto_pago_sub
+        _sicoe_limpiar_alerta_si_supera_nivel_previo(update, 2, estado_real, rows[0])
+        _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id, 2, update, estado_real)
 
         def _upd():
             return supabase.table("so_registros")\
