@@ -1,6 +1,6 @@
 /**
- * Edición dimensional por el creador del registro (permiso Crear),
- * independiente del permiso Editar (campos financieros/clasificación).
+ * Permiso mixto «Crear» (Reporte de Cantidades): creación + edición dimensional
+ * del registro propio. Independiente del permiso «Editar» (financieros/clasificación).
  */
 
 export const SICOE_CAMPOS_DIMENSIONALES = Object.freeze([
@@ -46,8 +46,8 @@ export function sicoeEsCreadorRegistro(usuario, registro) {
 }
 
 /**
- * Dimensiones editables si no está sellado y (tiene Editar O es creador con Crear).
- * @param {{ puedeEditar?: boolean, puedeCrear?: boolean, esCreador?: boolean, selladoMax?: boolean }} opts
+ * Dimensiones vía permiso mixto Crear (creador) O vía permiso Editar (alcance completo).
+ * Sin dependencia cruzada: Crear no consulta Editar y Editar no depende de Crear.
  */
 export function sicoePuedeEditarCamposDimensionales({
   puedeEditar = false,
@@ -56,7 +56,9 @@ export function sicoePuedeEditarCamposDimensionales({
   selladoMax = false,
 } = {}) {
   if (selladoMax) return false
+  // Editar: alcance propio (incluye dims + financieros).
   if (puedeEditar) return true
+  // Crear (mixto): solo dims del registro propio.
   return !!(puedeCrear && esCreador)
 }
 
@@ -85,17 +87,50 @@ export function sicoeCantidadCambioSignificativo(anterior, actual) {
   return a !== b
 }
 
-export function sicoeFormatearAlertaCantidad(registro) {
-  if (registro == null) return null
+export function sicoeNivelMaxAprobadoAlcanzado(registro, nivelesActivos) {
+  const activos = (Array.isArray(nivelesActivos) && nivelesActivos.length
+    ? nivelesActivos
+    : [1, 2, 3]
+  )
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 6)
+    .sort((a, b) => a - b)
+  let maxN = null
+  for (const n of activos) {
+    if ((registro?.[`nivel${n}_estado`] || '').trim() === 'Aprobado') maxN = n
+  }
+  return maxN
+}
+
+/**
+ * Alerta visible desde N1 hasta cantidad_alerta_nivel_max_previo (inclusive).
+ * Se oculta cuando el mayor nivel re-aprobado es >= ese máximo previo
+ * (p. ej. max_prev=2 → tras re-aprobar N2; N3 ya no la ve).
+ */
+export function sicoeAlertaCantidadVisible(registro, nivelesActivos) {
+  if (registro == null) return false
   const ant = registro.cantidad_alerta_anterior
   const act = registro.cantidad_alerta_actual
-  if (ant == null || act == null) return null
-  const a = Number(ant)
-  const b = Number(act)
+  if (ant == null || act == null) return false
+  let maxPrev = registro.cantidad_alerta_nivel_max_previo
+  if (maxPrev == null || String(maxPrev).trim() === '') return false
+  maxPrev = Number(maxPrev)
+  if (!Number.isFinite(maxPrev) || maxPrev < 1) return false
+  const maxAprobadoAhora = sicoeNivelMaxAprobadoAlcanzado(registro, nivelesActivos)
+  if (maxAprobadoAhora != null && maxAprobadoAhora >= maxPrev) return false
+  return true
+}
+
+export function sicoeFormatearAlertaCantidad(registro, nivelesActivos) {
+  if (!sicoeAlertaCantidadVisible(registro, nivelesActivos)) return null
+  const a = Number(registro.cantidad_alerta_anterior)
+  const b = Number(registro.cantidad_alerta_actual)
   if (Number.isNaN(a) || Number.isNaN(b)) return null
+  const maxPrev = Number(registro.cantidad_alerta_nivel_max_previo)
   return {
     anterior: a,
     actual: b,
+    nivelMaxPrevio: maxPrev,
     texto: `Cantidad anterior: ${a.toFixed(2)} → Cantidad actual: ${b.toFixed(2)}`,
   }
 }

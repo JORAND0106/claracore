@@ -1,54 +1,59 @@
-"""Tests de helpers de edición dimensional por creador (SicoeObra)."""
+"""Helpers: reset/alerta de cantidad SicoeObra (creador / Cantidad Total)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+
+def _nivel_max_aprobado(row: dict, activos: list[int]) -> int | None:
+    max_n = None
+    for n in sorted(activos):
+        if (row.get(f"nivel{n}_estado") or "").strip() == "Aprobado":
+            max_n = n
+    return max_n
 
 
-def test_reset_validaciones_shape():
-    # Replica la lógica de _sicoe_reset_validaciones_activas sin importar main.
-    activos = [1, 2, 4]
-    update: dict = {}
+def _reset_hasta_max(row: dict, activos: list[int]) -> tuple[list[int], int | None]:
+    max_prev = _nivel_max_aprobado(row, activos)
+    if max_prev is None:
+        return [], None
+    reiniciados = []
+    update = {}
     for n in activos:
-        update[f"nivel{n}_estado"] = "No Revisado"
-        update[f"nivel{n}_usuario_id"] = None
-        update[f"nivel{n}_fecha"] = None
-    update["bloqueado"] = False
-    assert update["nivel1_estado"] == "No Revisado"
-    assert update["nivel4_estado"] == "No Revisado"
-    assert "nivel3_estado" not in update
-    assert update["bloqueado"] is False
+        st = (row.get(f"nivel{n}_estado") or "").strip()
+        if n <= max_prev or st == "Aprobado":
+            update[f"nivel{n}_estado"] = "No Revisado"
+            reiniciados.append(n)
+    return reiniciados, max_prev
 
 
-def test_alerta_cantidad_fields():
-    update: dict = {}
-    anterior, nueva, uid = 10.5, 18.0, 42
-    update["cantidad_alerta_anterior"] = round(float(anterior), 2)
-    update["cantidad_alerta_actual"] = round(float(nueva), 2)
-    update["cantidad_alerta_en"] = datetime.now(timezone.utc).isoformat()
-    update["cantidad_alerta_por"] = int(uid)
-    assert update["cantidad_alerta_anterior"] == 10.5
-    assert update["cantidad_alerta_actual"] == 18.0
-    assert update["cantidad_alerta_por"] == 42
+def _alerta_visible(max_prev: int | None, max_aprobado_ahora: int | None) -> bool:
+    if max_prev is None:
+        return False
+    if max_aprobado_ahora is not None and max_aprobado_ahora >= max_prev:
+        return False
+    return True
 
 
-def test_campos_dimensionales_vs_financieros():
-    dim = {
-        "longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion",
-        "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen",
-        "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
-        "coord_lat", "coord_lng",
+def test_reset_solo_hasta_nivel_max_previo():
+    row = {
+        "nivel1_estado": "Aprobado",
+        "nivel2_estado": "Aprobado",
+        "nivel3_estado": "No Revisado",
     }
-    fin = {
-        "capitulo", "competencia", "item_numero", "item_descripcion", "unidad",
-        "vlr_unitario", "costo_directo", "acta_rpo_id", "semana_id", "item_listado_id",
-    }
-    assert not (dim & fin)
-    assert "longitud" in dim
-    assert "capitulo" in fin
+    reiniciados, max_prev = _reset_hasta_max(row, [1, 2, 3])
+    assert max_prev == 2
+    assert reiniciados == [1, 2]
+    assert 3 not in reiniciados
 
 
-def test_creador_match():
-    assert int(7) == int("7")
-    prev = {"creado_por_reg": 7}
-    uid = 7
-    assert int(prev["creado_por_reg"]) == int(uid)
+def test_sin_aprobados_no_reset_ni_alerta():
+    row = {"nivel1_estado": "No Revisado", "nivel2_estado": "Pendiente"}
+    reiniciados, max_prev = _reset_hasta_max(row, [1, 2, 3])
+    assert max_prev is None
+    assert reiniciados == []
+    assert _alerta_visible(None, None) is False
+
+
+def test_alerta_se_apaga_al_reaprobar_max_prev():
+    assert _alerta_visible(2, None) is True
+    assert _alerta_visible(2, 1) is True
+    assert _alerta_visible(2, 2) is False
+    assert _alerta_visible(2, 3) is False
