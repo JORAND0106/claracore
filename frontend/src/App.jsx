@@ -2402,6 +2402,8 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
                                      estadoValidando, nivelValidacion, obligatorio,
                                      modoConversacion = false, zIndexOverlay = 2000,
                                      tituloModal = null,
+                                     /** Si false (default en validación), el clic en el fondo no cierra el modal. */
+                                     cerrarAlClicOverlay = false,
                                      onConfirmar, onCancelar }) {
   const [usuarios,      setUsuarios]      = useState([])
   const [destinatarios, setDestinatarios] = useState([])
@@ -2488,11 +2490,23 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
     onConfirmar(null)
   }
 
+  const onOverlayClick = (e) => {
+    // Evita que un padre (p. ej. overlay de carpeta) reciba el clic.
+    e.stopPropagation()
+    if (cerrarAlClicOverlay) onCancelar?.()
+  }
+
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: zIndexOverlay,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }} onClick={onCancelar}>
+    <div
+      data-testid="popup-comentario-validacion-overlay"
+      data-cerrar-al-clic-overlay={cerrarAlClicOverlay ? 'true' : 'false'}
+      data-estado-validando={estadoValidando || ''}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: zIndexOverlay,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      onClick={onOverlayClick}
+    >
       <div style={{
         background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '20px',
         width: '520px', maxWidth: '96vw', maxHeight: '90vh', overflowY: 'auto',
@@ -4979,6 +4993,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           estadoValidando={estadoValidando}
           nivelValidacion={nivelInfo.puedeValidar ? (esSelectorNivelAmplio ? nivelTargetValidacion : nivelInfo.nivelValidacion) : nivelInfo.nivelValidacionComentario}
           obligatorio={!nivelInfo.puedeValidar || estadoValidando !== 'Aprobado'}
+          cerrarAlClicOverlay={false}
+          zIndexOverlay={10500}
           onConfirmar={confirmarValidacion}
           onCancelar={() => setMostrarPopupValidacion(false)}
         />
@@ -7505,6 +7521,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           nivelValidacion={nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario ?? 1}
           obligatorio={true}
           modoConversacion={true}
+          cerrarAlClicOverlay={true}
           zIndexOverlay={10400}
           onConfirmar={async (comentarioData) => {
             if (!comentarioData) return
@@ -7561,6 +7578,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           estadoValidando={popupMasivo.estado}
           nivelValidacion={nvMasivo}
           obligatorio={true}
+          cerrarAlClicOverlay={false}
+          zIndexOverlay={10500}
           onConfirmar={comentarioData => ejecutarMasivoSeleccion(popupMasivo.estado, comentarioData, popupMasivo.idsOverride ?? null)}
           onCancelar={() => setPopupMasivo(null)}
         />
@@ -13214,6 +13233,7 @@ function ModuloSicoeObra({
           estadoValidando={popupMasivoFiltro.marcar_estado}
           nivelValidacion={nvMasivoPanelGrilla}
           obligatorio={popupMasivoFiltro.marcar_estado !== 'Aprobado'}
+          cerrarAlClicOverlay={false}
           zIndexOverlay={10600}
           tituloModal="Comentario · validación masiva"
           onConfirmar={(comentarioData) =>
