@@ -179,6 +179,11 @@ import {
 } from './modules/sicoe-obra/sicoeNuevoReporteDraft'
 import { sicoeEstadoAlEnviarReporte } from './modules/sicoe-obra/sicoeEstadoAlEnviarReporte'
 import { sicoeCortesSoloVigente } from './modules/sicoe-obra/sicoeCorteVigente'
+import {
+  sicoeCorteNumeroDeRegistro,
+  sicoeNombreSubcontratistaRegistro,
+  sicoeSubcontratistaIdDeRegistro,
+} from './modules/sicoe-obra/sicoeRegistroSubcontratista'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
@@ -2932,7 +2937,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const editableCampos = editableCamposFinancieros
   const soloMetaSubSellado = puedeEditar && regSelladoMax
   const soloCorteNivel3 = soloMetaSubSellado // alias compat: sellado permite sub + corte
-  const subIdEfectivo = registro.subcontratista_id || reporte.subcontratista_id || null
+  const subIdEfectivo = sicoeSubcontratistaIdDeRegistro(registro, reporte)
+  const nombreSubcontratistaHoja = sicoeNombreSubcontratistaRegistro({
+    registro,
+    reporte,
+    listaSubs,
+  }) || 'Sin subcontratista'
   // Foto y gráfico: editables siempre que el usuario tenga permiso Editar (no afectan valor ni cantidad)
   const editableFotoGrafico = puedeEditar
   const alertaCantidadFmt = sicoeFormatearAlertaCantidad(
@@ -3452,11 +3462,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }, [itemBusqueda, todosLosItems, competencia, editableCamposFinancieros, itemSel])
 
   useEffect(() => {
+    // Lista necesaria también en solo-lectura para resolver el nombre tras masivo-corte.
     if (!contrato_id || listaSubs.length > 0) return
-    if (!editableCamposFinancieros && !editableCamposDimensionales && !editandoSub && !soloMetaSubSellado) return
     fetch(`${API}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setListaSubs(Array.isArray(d) ? d : [])).catch(() => {})
-  }, [contrato_id, editableCamposFinancieros, editableCamposDimensionales, editandoSub, soloMetaSubSellado, listaSubs.length, hdrs, API])
+  }, [contrato_id, listaSubs.length, hdrs, API])
 
 
   const seleccionarItem = (item) => {
@@ -4117,7 +4127,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
           {(() => {
             const actaNum = reporte.acta_rpo_numero ?? actasList.find(a => a.id === registro.acta_rpo_id)?.numero_rpo ?? null
-            const corteNum = reporte.corte_numero ?? listaCortes.find(c => c.id === registro.corte_id)?.consecutivo ?? registro.corte_id ?? null
+            const corteNum = sicoeCorteNumeroDeRegistro({
+              registro,
+              reporte,
+              listaCortes,
+            })
             return (<>
               <span style={{ display:'flex', alignItems:'center', gap:'5px', background: actaNum ? `${t.primary}15` : '#EF444415', border:`1px solid ${actaNum ? t.primary+'33' : '#EF444433'}`, borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color: actaNum ? t.primary : '#EF4444' }}>
                 📋 {actaNum ? `RPO #${actaNum}` : 'Sin Acta RPO'}
@@ -4178,14 +4192,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </span>
             ) : (
               <span onClick={() => setEditandoSub(true)} style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#8B5CF6', cursor:'pointer' }}>
-                🏢 {(listaSubs.find(s => String(s.id) === String(subIdEfectivo))?.razon_social)
-                  || reporte.subcontratista_nombre
-                  || 'Sin subcontratista'} ✏️
+                🏢 {nombreSubcontratistaHoja} ✏️
               </span>
             )
           ) : (
             <span style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#8B5CF6' }}>
-              🏢 {reporte.subcontratista_nombre || 'Sin subcontratista'}
+              🏢 {nombreSubcontratistaHoja}
             </span>
           )}
         </div>
@@ -6253,14 +6265,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const ejecutarCorteMasivo = async () => {
     if (seleccionados.length === 0 || !corteMasivoSubId || !corteMasivoVigente?.id) return
     setGuardandoCorteMasivo(true)
+    const idsMasivo = [...seleccionados]
+    const sidMasivo = parseInt(corteMasivoSubId, 10)
+    const cidMasivo = Number(corteMasivoVigente.id)
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/masivo-corte`, {
         method: 'PUT',
         headers: { ...hdrs, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          registro_ids: seleccionados,
-          subcontratista_id: parseInt(corteMasivoSubId, 10),
-          corte_id: Number(corteMasivoVigente.id),
+          registro_ids: idsMasivo,
+          subcontratista_id: sidMasivo,
+          corte_id: cidMasivo,
           reporte_id: reporte?.id ?? null,
         }),
       })
@@ -6270,7 +6285,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         throw new Error(typeof detail === 'string' ? detail : `Error ${res.status}`)
       }
       const data = await res.json().catch(() => ({}))
-      const n = data?.actualizados ?? seleccionados.length
+      const n = data?.actualizados ?? idsMasivo.length
+      // Optimistic: detalle del registro debe reflejar sub/corte del masivo (no el del reporte).
+      const idSet = new Set(idsMasivo.map((x) => String(x)))
+      setRegistros((prev) => prev.map((r) => (
+        idSet.has(String(r.id))
+          ? { ...r, subcontratista_id: sidMasivo, corte_id: cidMasivo }
+          : r
+      )))
       setMsgMasivo(`Corte #${corteMasivoVigente.consecutivo ?? corteMasivoVigente.id} asignado a ${n} registro(s).`)
       setModalCorteMasivo(false)
       setSeleccionados([])
