@@ -24924,8 +24924,9 @@ def reemplazar_registros_nuevo_reporte(
     contrato_id: int, reporte_id: int, body: ReemplazarRegistrosNuevoReporteBody, current_user=Depends(get_current_user)
 ):
     """
-    Un solo ida y vuelta: borra so_registros del reporte e inserta las líneas nuevas.
-    Sustituye N×(next-registro+POST) para evitar “Failed to fetch” en móviles (timeout / cierre de conexión).
+    Un solo ida y vuelta: inserta las líneas nuevas y luego borra las anteriores.
+    Orden insert-then-delete: si el insert falla, los registros previos se conservan
+    (evita reporte vacío tras delete-first + fallo de red/insert — pérdida de datos en campo).
     """
     def _get_rep():
         return supabase.table("so_reportes").select(
@@ -24937,12 +24938,22 @@ def reemplazar_registros_nuevo_reporte(
     if not rep_rows:
         raise HTTPException(status_code=404, detail="Reporte no encontrado en este contrato")
     rep = rep_rows[0]
-    def _del():
-        return supabase.table("so_registros").delete()\
+
+    # Capturar IDs previos ANTES de insertar; solo esos se eliminan al final.
+    def _list_old():
+        return supabase.table("so_registros").select("id")\
             .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
-    supabase_execute(_del)
+    old_rows = supabase_execute(_list_old) or []
+    old_ids = [r["id"] for r in old_rows if r.get("id") is not None]
+
     uid = int(current_user.get("sub") or current_user.get("id", 0))
     if not body.registros:
+        # Vaciar: borrar previos (comportamiento explícito de lista vacía).
+        if old_ids:
+            def _del_empty():
+                return supabase.table("so_registros").delete()\
+                    .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+            supabase_execute(_del_empty)
         return {"ok": True, "insertados": 0}
 
     def _parse_numero_registro_raw(raw) -> int:
@@ -25037,6 +25048,18 @@ def reemplazar_registros_nuevo_reporte(
             return supabase.table("so_registros").insert(chunk).execute().data
         supabase_execute(_ins)
         total += len(chunk)
+
+    # Solo después de insert exitoso: eliminar filas previas (por id capturado).
+    if old_ids:
+        _DEL_BATCH = 200
+        for i in range(0, len(old_ids), _DEL_BATCH):
+            chunk_ids = old_ids[i : i + _DEL_BATCH]
+            def _del_old(ids=chunk_ids):
+                return supabase.table("so_registros").delete()\
+                    .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id)\
+                    .in_("id", ids).execute().data
+            supabase_execute(_del_old)
+
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
@@ -25045,7 +25068,7 @@ def reemplazar_registros_nuevo_reporte(
             "SICOE",
             "registro",
             f"reporte_{reporte_id}_lote",
-            {"reporte_id": reporte_id, "reemplazar_registros_masivo": True, "insertados": total},
+            {"reporte_id": reporte_id, "reemplazar_registros_masivo": True, "insertados": total, "eliminados_previos": len(old_ids)},
             valor_anterior=None,
             valor_nuevo={"insertados": total},
         )
