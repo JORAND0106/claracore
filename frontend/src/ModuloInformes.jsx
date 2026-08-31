@@ -8,6 +8,7 @@ import {
   vistaPreviaEsHtmlIdu,
 } from './informesVistaPreviaPdf'
 import { decidirPollEstadoJobPdf } from './informesPdfJobPoll'
+import { pathConFiltroSubAprobacion } from './informesSubAprobacionFiltro'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -498,6 +499,8 @@ export default function ModuloInformes({
   const [subId,       setSubId]       = useState('')
   const [cortes,      setCortes]      = useState([])
   const [corteId,     setCorteId]     = useState('')
+  /** Toggle Formatos Subcontratista: 'aprobado' (default) | 'todo'. */
+  const [filtroSubAprobacion, setFiltroSubAprobacion] = useState('aprobado')
   const [items,       setItems]       = useState([])
   const [cargandoSub, setCargandoSub] = useState(false)
   const [cargandoCor, setCargandoCor] = useState(false)
@@ -1422,18 +1425,37 @@ export default function ModuloInformes({
     const id = e.target.value
     setCorteId(id); setItems([]); setError(null)
     if (!id) return
+    cargarItemsCorte(id, filtroSubAprobacion)
+  }
+
+  function cargarItemsCorte(id, filtro = filtroSubAprobacion) {
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada. Ingresa de nuevo para generar informes.')
       return
     }
     setCargandoIt(true)
-    fetchConFallback(`/informes/${contratoId}/items-corte/${id}`,
-      { headers: { Authorization: `Bearer ${authToken}` } })
+    const qs = pathConFiltroSubAprobacion('', filtro).replace(/^\?/, '')
+    const url = `/informes/${contratoId}/items-corte/${id}${qs ? `?${qs}` : ''}`
+    fetchConFallback(url, { headers: { Authorization: `Bearer ${authToken}` } })
       .then(r => r.json())
       .then(d => setItems(Array.isArray(d) ? d : []))
       .catch(() => setError('Error cargando ítems'))
       .finally(() => setCargandoIt(false))
+  }
+
+  function onFiltroSubAprobacionChange(next) {
+    if (next === filtroSubAprobacion) return
+    setFiltroSubAprobacion(next)
+    if (corteId) {
+      setItems([])
+      setError(null)
+      cargarItemsCorte(corteId, next)
+    }
+  }
+
+  function pathSubConFiltro(path, extraParams) {
+    return pathConFiltroSubAprobacion(path, filtroSubAprobacion, extraParams)
   }
 
   function detenerTimerFoEo04() {
@@ -1493,7 +1515,7 @@ export default function ModuloInformes({
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
     const cid = encodeURIComponent(contratoId)
     const cor = encodeURIComponent(corteId)
-    const pathPdf = `/informes/${cid}/pdf/corte-subcontratista/${cor}`
+    const pathPdf = pathSubConFiltro(`/informes/${cid}/pdf/corte-subcontratista/${cor}`)
     try {
       const r = await fetchConFallback(pathPdf, opts)
       if (!r || !r.ok) {
@@ -1519,7 +1541,7 @@ export default function ModuloInformes({
         pdfBlob: blob,
         mimeTipo: 'application/pdf',
         nombreArchivo,
-        rutaSello: `/informes/${cid}/pdf/corte-subcontratista/${cor}/con-sello-firma`,
+        rutaSello: pathSubConFiltro(`/informes/${cid}/pdf/corte-subcontratista/${cor}/con-sello-firma`),
         nombreArchivoSello: asegurarNombreArchivoPdf(nombreArchivo.replace(/\.pdf$/i, '') + '_firmado.pdf'),
       })
     } catch (e) {
@@ -1544,7 +1566,7 @@ export default function ModuloInformes({
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
     const cid = encodeURIComponent(contratoId)
     const cor = encodeURIComponent(corteId)
-    const pathPdf = `/informes/${cid}/pdf/corte-subcontratista/${cor}/con-sello-firma`
+    const pathPdf = pathSubConFiltro(`/informes/${cid}/pdf/corte-subcontratista/${cor}/con-sello-firma`)
     try {
       const r = await fetchConFallback(pathPdf, opts)
       if (!r || !r.ok) {
@@ -1632,11 +1654,10 @@ export default function ModuloInformes({
       return { fase: 'cargando', tipo: 'memoria', itemNumero }
     })
     setError(null)
-    const q = encodeURIComponent(itemNumero)
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
     const cid = encodeURIComponent(contratoId)
     const cor = encodeURIComponent(corteId)
-    const pathPdf = `/informes/${cid}/pdf/memoria-item/${cor}?item_numero=${q}`
+    const pathPdf = pathSubConFiltro(`/informes/${cid}/pdf/memoria-item/${cor}`, { item_numero: itemNumero })
     try {
       const r = await fetchConFallback(pathPdf, opts)
       if (!r || !r.ok) {
@@ -1678,7 +1699,7 @@ export default function ModuloInformes({
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
     const cid = encodeURIComponent(contratoId)
     const cor = encodeURIComponent(corteId)
-    const pathPdf = `/informes/${cid}/pdf/memoria-corte-completo/${cor}`
+    const pathPdf = pathSubConFiltro(`/informes/${cid}/pdf/memoria-corte-completo/${cor}`)
     try {
       const r = await fetchConFallback(pathPdf, opts)
       if (!r || !r.ok) {
@@ -2393,7 +2414,7 @@ export default function ModuloInformes({
     setError(null)
     const cid = encodeURIComponent(contratoId)
     const cor = encodeURIComponent(corteId)
-    const path = `/informes/${cid}/excel/memoria-corte-completo/${cor}`
+    const path = pathSubConFiltro(`/informes/${cid}/excel/memoria-corte-completo/${cor}`)
     try {
       const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
       if (!r || !r.ok) {
@@ -2433,10 +2454,9 @@ export default function ModuloInformes({
     }
     setExcelBusy(itemNumero)
     setError(null)
-    const q = encodeURIComponent(itemNumero)
     const cid = encodeURIComponent(contratoId)
     const cor = encodeURIComponent(corteId)
-    const path = `/informes/${cid}/excel/memoria-item/${cor}?item_numero=${q}`
+    const path = pathSubConFiltro(`/informes/${cid}/excel/memoria-item/${cor}`, { item_numero: itemNumero })
     try {
       const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
       if (!r || !r.ok) {
@@ -2478,7 +2498,7 @@ export default function ModuloInformes({
     setError(null)
     const cid = encodeURIComponent(contratoId)
     const cor = encodeURIComponent(corteId)
-    const path = `/informes/${cid}/excel/corte-subcontratista/${cor}`
+    const path = pathSubConFiltro(`/informes/${cid}/excel/corte-subcontratista/${cor}`)
     try {
       const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
       if (!r || !r.ok) {
@@ -4181,6 +4201,59 @@ export default function ModuloInformes({
           </div>
         )}
 
+        {subId && (
+          <div style={{ marginBottom: ui.gap + 'px' }}>
+            <label style={labelSub}>Registros del corte</label>
+            <div
+              role="group"
+              aria-label="Filtro de aprobación del subcontratista"
+              style={{
+                display: 'inline-flex',
+                border: `1px solid ${t.border}`,
+                borderRadius: '8px',
+                overflow: 'hidden',
+                background: t.bgCard || t.bg,
+              }}
+            >
+              {[
+                { id: 'todo', label: 'Todo' },
+                { id: 'aprobado', label: 'Aprobado' },
+              ].map((opt) => {
+                const activo = filtroSubAprobacion === opt.id
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    aria-pressed={activo}
+                    onClick={() => onFiltroSubAprobacionChange(opt.id)}
+                    style={{
+                      padding: '7px 14px',
+                      border: 'none',
+                      borderRight: opt.id === 'todo' ? `1px solid ${t.border}` : 'none',
+                      background: activo ? t.primary : 'transparent',
+                      color: activo ? '#fff' : t.text,
+                      fontWeight: activo ? 800 : 600,
+                      fontSize: ui.body + 'px',
+                      cursor: 'pointer',
+                      minWidth: 88,
+                    }}
+                    title={
+                      opt.id === 'todo'
+                        ? 'Mostrar todos los registros del corte (aprobados y no aprobados)'
+                        : 'Solo registros ya aprobados por el subcontratista'
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '4px', lineHeight: 1.35 }}>
+              Por defecto «Aprobado». «Todo» incluye registros pendientes o no aprobados del mismo corte.
+            </div>
+          </div>
+        )}
+
         {corteId && (
           <div
             style={{
@@ -4350,7 +4423,9 @@ export default function ModuloInformes({
                     <div style={{ color: t.textMuted, fontSize: ui.body + 'px' }}>Cargando ítems...</div>
                   ) : items.length === 0 ? (
                     <div style={{ color: t.textMuted, fontSize: ui.body + 'px' }}>
-                      No hay registros aprobados por el subcontratista en este corte.
+                      {filtroSubAprobacion === 'todo'
+                        ? 'No hay registros en este corte.'
+                        : 'No hay registros aprobados por el subcontratista en este corte.'}
                     </div>
                   ) : (
                     <>
