@@ -119,4 +119,6 @@ ANALYZE public.so_reportes;
 --
 -- -- Probar UPDATE (debe ser < 100 ms; antes 3–8 s):
 -- EXPLAIN ANALYZE
--- UPDATE so_registros SET updated_at = now() WHERE id = (SELECT id FROM so_registros LIMIT 1);
+-- UPDATE so_registros SET modificado_por_reg = modificado_por_reg
+-- WHERE id = (SELECT id FROM so_registros LIMIT 1);
+-- Nota: so_registros no tiene columna updated_at (usar modificado_por_reg / logs).
