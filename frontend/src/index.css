@@ -2784,15 +2784,18 @@ select.cc-dashboard-acta-select--light option {
   display: none;
 }
 
-/* Móvil: mismo contraste de grilla Excel que escritorio (#94a3b8 + headers primary).
-   Aplica a Personal, Resumen por cargos, Maquinaria, Materiales (y Actividades compact). */
+/* Móvil: grilla Excel 2 columnas (etiqueta | captura) con celdas delimitadas.
+   Aplica a Personal, Resumen por cargos, Maquinaria, Materiales (y Actividades compact).
+   Escritorio usa bordes en td; aquí cellInp es transparente → la celda de captura
+   debe llevar borde/fondo propios para que el campo vacío sea tocable a simple vista. */
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table tbody tr {
   display: block;
-  margin: 0 0 10px;
-  padding: 10px;
+  margin: 0 0 12px;
+  padding: 0;
   border: 1.5px solid var(--cc-sheet-grid-border, #94a3b8);
   border-radius: 8px;
   background: var(--cc-bg-card, #fff);
+  overflow: hidden;
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table tbody tr:last-child {
@@ -2801,16 +2804,18 @@ select.cc-dashboard-acta-select--light option {
 
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td {
   display: flex;
-  justify-content: space-between;
+  justify-content: stretch;
   align-items: stretch;
   gap: 0;
   width: 100%;
   height: auto !important;
-  min-height: 40px;
-  padding: 6px 0 !important;
+  min-height: 44px;
+  padding: 0 !important;
   border: none !important;
-  border-bottom: 1px solid var(--cc-sheet-grid-border, #94a3b8);
+  border-bottom: 1px solid var(--cc-sheet-grid-border, #94a3b8) !important;
   box-sizing: border-box;
+  /* Fondo de la celda de captura (visible aunque el input sea transparente/vacío) */
+  background: var(--cc-input-bg, #f8fafc);
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td:last-child {
@@ -2830,11 +2835,12 @@ select.cc-dashboard-acta-select--light option {
   display: flex;
   align-items: center;
   box-sizing: border-box;
-  padding: 4px 8px 4px 6px;
-  margin-right: 10px;
+  padding: 8px 8px 8px 10px;
+  margin: 0;
+  border: none;
   border-right: 1.5px solid var(--cc-sheet-grid-border, #94a3b8);
   background: color-mix(in srgb, var(--cc-primary, #0077B6) 14%, #ffffff);
-  border-radius: 4px 0 0 4px;
+  border-radius: 0;
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label=""]::before,
@@ -2842,17 +2848,98 @@ select.cc-dashboard-acta-select--light option {
   content: none;
 }
 
+/* Filas de acciones (sin etiqueta): no simular celda de captura */
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label=""],
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td:not([data-label]) {
+  background: var(--cc-bg-card, #fff);
+  padding: 8px 10px !important;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table td > * {
   flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
-  align-self: center;
+  align-self: stretch;
+  box-sizing: border-box;
+}
+
+/* Campos de captura: borde y fondo propios (anulan cellInp transparente de escritorio) */
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) input,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) select,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) textarea {
+  width: 100%;
+  min-height: 44px !important;
+  height: auto !important;
+  margin: 0;
+  padding: 8px 10px !important;
+  font-size: 16px; /* evita zoom iOS */
+  border: none !important;
+  border-radius: 0 !important;
+  outline: none;
+  background: #ffffff !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-sheet-grid-border, #94a3b8) 55%, transparent);
+  color: inherit;
+  box-sizing: border-box;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) input:focus,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) select:focus,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) textarea:focus {
+  background: #ffffff !important;
+  box-shadow: inset 0 0 0 2px var(--cc-primary, #0077B6);
+}
+
+/* Texto / botones / pickers dentro de la celda de captura */
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) > span,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) > button {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 10px;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-sheet-grid-border, #94a3b8) 55%, transparent);
+  box-sizing: border-box;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) > button {
+  justify-content: center;
+  width: 100%;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+/* Wrappers (catálogo equipo/material, clip adjuntos): el input interno lleva el borde */
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: stretch;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) > div > input,
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) > div > select {
+  flex: 1 1 auto;
+}
+
+/* Clip / controles sin input: ocupan la celda con borde visible */
+.cc-bitacora-entrada--compact .cc-bitacora-responsive-table td[data-label]:not([data-label=""]) > div:not(:has(input)):not(:has(select)) {
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-sheet-grid-border, #94a3b8) 55%, transparent);
 }
 
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table input,
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table select,
 .cc-bitacora-entrada--compact .cc-bitacora-responsive-table button {
-  min-height: 40px;
+  min-height: 44px;
   font-size: 16px; /* evita zoom iOS */
 }
 
@@ -2860,8 +2947,6 @@ select.cc-dashboard-acta-select--light option {
 .cc-bitacora-entrada--compact .cc-bitacora-maquinaria-table td[data-label="Cant."] > input,
 .cc-bitacora-entrada--compact .cc-bitacora-materiales-table td[data-label="Cant."] > input {
   text-align: right;
-  max-width: 120px;
-  margin-left: auto;
 }
 
 /* Checklist de tareas — grilla Excel */
