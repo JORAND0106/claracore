@@ -14282,6 +14282,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         try {
           sicoeNuevoReporteDraftClear(contrato_id, userIdDraft, borradorId || reporteInicial?.id || null)
         } catch { /* noop */ }
+        // No fingir escritura en Supabase: solo cola local.
+        alert(
+          'Reporte guardado en este dispositivo (modo sin conexión). '
+          + 'Se enviará a la base de datos al recuperar red. No borre datos de la app hasta sincronizar.',
+        )
         onGuardado()
       } catch (e) {
         try { flushDraftLocal() } catch { /* noop */ }
