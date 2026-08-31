@@ -155,3 +155,11 @@ export function eventosParaPayload(eventos) {
     })
     .filter(Boolean)
 }
+
+/**
+ * Observaciones a nivel de día solo cuando no hay bloques de Evento.
+ * El contenido de cuerpo_html se conserva en estado/payload aunque la UI esté oculta.
+ */
+export function debeMostrarObservacionesDia(eventos) {
+  return !(Array.isArray(eventos) && eventos.length > 0)
+}
