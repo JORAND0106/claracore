@@ -178,6 +178,7 @@ import {
   SICOE_NUEVO_REPORTE_FLUSH_EVENT,
 } from './modules/sicoe-obra/sicoeNuevoReporteDraft'
 import { sicoeEstadoAlEnviarReporte } from './modules/sicoe-obra/sicoeEstadoAlEnviarReporte'
+import { sicoeCortesSoloVigente } from './modules/sicoe-obra/sicoeCorteVigente'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
@@ -5417,6 +5418,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     }, 300)
   }, [repoProp?._autoRegistro])
   const [modalMover, setModalMover]               = useState(false)
+  const [modalCorteMasivo, setModalCorteMasivo]   = useState(false)
+  const [corteMasivoSubId, setCorteMasivoSubId]   = useState('')
+  const [corteMasivoVigente, setCorteMasivoVigente] = useState(null)
+  const [corteMasivoCargando, setCorteMasivoCargando] = useState(false)
+  const [guardandoCorteMasivo, setGuardandoCorteMasivo] = useState(false)
   const [reportesDisponibles, setReportesDisponibles] = useState([])
   const [reporteDestino, setReporteDestino]       = useState('')
   const [moviendoReg, setMoviendoReg]             = useState(false)
@@ -6174,6 +6180,82 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const toggleSeleccion = (rid) => {
     setSeleccionados(prev => prev.includes(rid) ? prev.filter(x => x !== rid) : [...prev, rid])
+  }
+
+  const abrirModalCorteMasivo = () => {
+    if (seleccionados.length === 0) return
+    setCorteMasivoSubId('')
+    setCorteMasivoVigente(null)
+    setModalCorteMasivo(true)
+    // Asegura listado de subcontratistas (mismo endpoint que portada/hoja).
+    if (!listaSubs.length && contrato_id) {
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
+        .then((r) => r.json())
+        .then((d) => { if (Array.isArray(d)) setListaSubs(d) })
+        .catch(() => {})
+    }
+  }
+
+  useEffect(() => {
+    if (!modalCorteMasivo || !corteMasivoSubId) {
+      setCorteMasivoVigente(null)
+      return
+    }
+    let cancelled = false
+    setCorteMasivoCargando(true)
+    setCorteMasivoVigente(null)
+    const auth = { Authorization: `Bearer ${getToken()}` }
+    fetch(`${API_URL}/subcontratistas/${corteMasivoSubId}/corte-vigente`, { headers: auth })
+      .then(async (r) => {
+        if (!r.ok) {
+          // Fallback: listar todos y filtrar vigente en cliente
+          const r2 = await fetch(`${API_URL}/subcontratistas/${corteMasivoSubId}/cortes`, { headers: auth })
+          const all = r2.ok ? await r2.json() : []
+          return { corte: sicoeCortesSoloVigente(Array.isArray(all) ? all : [])[0] || null }
+        }
+        return r.json()
+      })
+      .then((d) => {
+        if (cancelled) return
+        setCorteMasivoVigente(d?.corte || null)
+      })
+      .catch(() => { if (!cancelled) setCorteMasivoVigente(null) })
+      .finally(() => { if (!cancelled) setCorteMasivoCargando(false) })
+    return () => { cancelled = true }
+  }, [modalCorteMasivo, corteMasivoSubId, API_URL])
+
+  const ejecutarCorteMasivo = async () => {
+    if (seleccionados.length === 0 || !corteMasivoSubId || !corteMasivoVigente?.id) return
+    setGuardandoCorteMasivo(true)
+    try {
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/masivo-corte`, {
+        method: 'PUT',
+        headers: { ...hdrs, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          registro_ids: seleccionados,
+          subcontratista_id: parseInt(corteMasivoSubId, 10),
+          corte_id: Number(corteMasivoVigente.id),
+          reporte_id: reporte?.id ?? null,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const detail = err?.detail
+        throw new Error(typeof detail === 'string' ? detail : `Error ${res.status}`)
+      }
+      const data = await res.json().catch(() => ({}))
+      const n = data?.actualizados ?? seleccionados.length
+      setMsgMasivo(`Corte #${corteMasivoVigente.consecutivo ?? corteMasivoVigente.id} asignado a ${n} registro(s).`)
+      setModalCorteMasivo(false)
+      setSeleccionados([])
+      setCorteMasivoSubId('')
+      setCorteMasivoVigente(null)
+      await recargar()
+      try { onRefrescarListadoSicoe?.() } catch { /* noop */ }
+    } catch (e) {
+      alert(e?.message || String(e))
+    }
+    setGuardandoCorteMasivo(false)
   }
 
   const ejecutarMasivoSeleccion = async (estado, comentarioData, idsOverride = null) => {
@@ -6960,6 +7042,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
           {/* Botones de acción */}
           <div style={{ marginLeft:'auto', display:'flex', gap:'8px', paddingBottom:'8px', flexShrink:0 }}>
+            {puedeEditar && seleccionados.length > 0 && (
+              <button type="button" onClick={abrirModalCorteMasivo} style={{
+                background:'#0d9488', color:'#fff', border:'none', borderRadius:'8px',
+                padding: carpetaCompact ? '10px 14px' : '6px 14px', minHeight: carpetaCompact ? 44 : undefined, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
+              }}>📄 Corte ({seleccionados.length})</button>
+            )}
             {puedeEditar && seleccionados.length > 0 && (
               <button type="button" onClick={() => { cargarReportesParaMover(); setModalMover(true) }} style={{
                 background:'#8B5CF6', color:'#fff', border:'none', borderRadius:'8px',
@@ -7751,6 +7839,90 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             <div style={{ display:'flex', gap:'10px' }}>
               <button onClick={() => setModalMover(false)} style={{ flex:1, background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>Cancelar</button>
               <button onClick={ejecutarMover} disabled={!reporteDestino || moviendoReg} style={{ flex:1, background:'#8B5CF6', color:'#fff', border:'none', borderRadius:'8px', padding:'10px', fontWeight:'700', cursor:'pointer', opacity: !reporteDestino || moviendoReg ? 0.6 : 1 }}>{moviendoReg ? 'Moviendo...' : 'Confirmar Mover'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─ Modal edición masiva de Corte subcontratista ─ */}
+      {modalCorteMasivo && (
+        <div
+          style={{ position:'fixed', inset:0, zIndex:10000, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => !guardandoCorteMasivo && setModalCorteMasivo(false)}
+        >
+          <div
+            style={{ background:t.bgCard, borderRadius:16, padding:28, width:'min(440px, 100%)', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Asignar corte de subcontratista"
+          >
+            <div style={{ fontSize:'var(--cc-lg)', fontWeight:800, color:t.text, marginBottom:8 }}>
+              📄 Corte subcontratista · {seleccionados.length} registro(s)
+            </div>
+            <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:16, lineHeight:1.45 }}>
+              Solo se ofrece el <strong>corte vigente</strong> (abierto) del subcontratista. No se pueden asignar cortes cerrados.
+            </div>
+
+            <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:6, fontWeight:700 }}>Subcontratista</div>
+            <select
+              value={corteMasivoSubId}
+              onChange={(e) => setCorteMasivoSubId(e.target.value)}
+              style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:8, padding:10, color:t.text, fontSize:'var(--cc-sm)', marginBottom:14, boxSizing:'border-box' }}
+            >
+              <option value="">— Selecciona subcontratista —</option>
+              {listaSubs.map((s) => (
+                <option key={s.id} value={String(s.id)}>{labelSubcontratistaOpt(s)}</option>
+              ))}
+            </select>
+
+            <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:6, fontWeight:700 }}>Número de corte (vigente)</div>
+            <select
+              value={corteMasivoVigente?.id != null ? String(corteMasivoVigente.id) : ''}
+              onChange={() => { /* único valor posible */ }}
+              disabled={!corteMasivoSubId || corteMasivoCargando || !corteMasivoVigente}
+              style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:8, padding:10, color:t.text, fontSize:'var(--cc-sm)', marginBottom:8, boxSizing:'border-box', opacity: (!corteMasivoSubId || corteMasivoCargando) ? 0.7 : 1 }}
+            >
+              {!corteMasivoSubId && <option value="">— Elija subcontratista primero —</option>}
+              {corteMasivoSubId && corteMasivoCargando && <option value="">Cargando corte vigente…</option>}
+              {corteMasivoSubId && !corteMasivoCargando && !corteMasivoVigente && (
+                <option value="">Sin corte vigente abierto</option>
+              )}
+              {corteMasivoVigente && (
+                <option value={String(corteMasivoVigente.id)}>
+                  Corte #{corteMasivoVigente.consecutivo ?? corteMasivoVigente.id}
+                  {corteMasivoVigente.fecha_inicio && corteMasivoVigente.fecha_fin
+                    ? ` · ${String(corteMasivoVigente.fecha_inicio).slice(0, 10)} → ${String(corteMasivoVigente.fecha_fin).slice(0, 10)}`
+                    : ''}
+                </option>
+              )}
+            </select>
+            {corteMasivoSubId && !corteMasivoCargando && !corteMasivoVigente && (
+              <div style={{ fontSize:'var(--cc-caption)', color:'#b45309', marginBottom:12 }}>
+                Este subcontratista no tiene un corte vigente. Revise la gestión de cortes antes de asignar.
+              </div>
+            )}
+
+            <div style={{ display:'flex', gap:10, marginTop:12 }}>
+              <button
+                type="button"
+                onClick={() => setModalCorteMasivo(false)}
+                disabled={guardandoCorteMasivo}
+                style={{ flex:1, background:t.bg, border:`1px solid ${t.border}`, borderRadius:8, padding:10, color:t.textMuted, cursor:'pointer', fontWeight:600 }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={ejecutarCorteMasivo}
+                disabled={!corteMasivoSubId || !corteMasivoVigente?.id || guardandoCorteMasivo}
+                style={{
+                  flex:1, background:'#0d9488', color:'#fff', border:'none', borderRadius:8, padding:10, fontWeight:700, cursor:'pointer',
+                  opacity: (!corteMasivoSubId || !corteMasivoVigente?.id || guardandoCorteMasivo) ? 0.6 : 1,
+                }}
+              >
+                {guardandoCorteMasivo ? 'Guardando…' : 'Guardar'}
+              </button>
             </div>
           </div>
         </div>

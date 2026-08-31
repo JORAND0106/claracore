@@ -17839,6 +17839,16 @@ def toggle_activo_subcontratista(sub_id: int, current_user=Depends(get_current_u
     return {"activo": nuevo_estado}
 
 # ── Cortes ──────────────────────────────────────────────────
+@app.get("/subcontratistas/{sub_id}/corte-vigente")
+def obtener_corte_vigente(sub_id: int, current_user=Depends(get_current_user)):
+    """Único corte abierto que cubre hoy (genera siguientes si el último ya venció)."""
+    _require_acceso_cortes_subcontratista(current_user, sub_id, escribir=False)
+    vigente = _asegurar_corte_vigente_subcontratista(int(sub_id))
+    if not vigente:
+        return {"corte": None}
+    return {"corte": vigente}
+
+
 @app.get("/subcontratistas/{sub_id}/cortes")
 def listar_cortes(sub_id: int, current_user=Depends(get_current_user)):
     _require_acceso_cortes_subcontratista(current_user, sub_id, escribir=False)
@@ -24630,6 +24640,170 @@ def _pydantic_dump_exclude_unset(model: BaseModel) -> dict:
 # Dimensiones SICOE: el cliente envía `null` para borrar un campo; no filtrar esos None o la BD nunca se actualiza.
 _REGPUT_DIM_NULLABLE = frozenset({"longitud", "ancho", "espesor", "cantidad"})
 _REGPUT_GRAFICO_NULLABLE = frozenset({"grafico_url", "grafico_numero", "grafico_descripcion"})
+
+
+class MasivoCorteRegistrosBody(BaseModel):
+    registro_ids: List[int]
+    subcontratista_id: int
+    corte_id: int
+    reporte_id: Optional[int] = None
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/masivo-corte")
+def actualizar_corte_registros_masivo(
+    contrato_id: int,
+    body: MasivoCorteRegistrosBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Asigna subcontratista + corte vigente a varios registros.
+    Solo admite el corte abierto actual del sub (vía _asegurar_corte_vigente_subcontratista).
+    """
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(
+            status_code=403,
+            detail="Se requiere permiso «Editar» en Reporte de Cantidades para asignar corte de subcontratista.",
+        )
+    ids: List[int] = []
+    seen = set()
+    for x in body.registro_ids or []:
+        try:
+            xi = int(x)
+        except (TypeError, ValueError):
+            continue
+        if xi in seen:
+            continue
+        seen.add(xi)
+        ids.append(xi)
+    if not ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+
+    try:
+        sub_id = int(body.subcontratista_id)
+        corte_id = int(body.corte_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="subcontratista_id o corte_id inválido")
+
+    # Validar que el sub pertenece al contrato
+    def _sub():
+        return (
+            supabase.table("subcontratistas")
+            .select("id, contrato_id")
+            .eq("id", sub_id)
+            .eq("contrato_id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+    sub_rows = supabase_execute(_sub) or []
+    if not sub_rows:
+        raise HTTPException(status_code=404, detail="Subcontratista no encontrado en este contrato")
+
+    vigente = _asegurar_corte_vigente_subcontratista(sub_id)
+    if not vigente or vigente.get("id") is None:
+        raise HTTPException(
+            status_code=400,
+            detail="El subcontratista no tiene un corte vigente abierto. Genere o revise los cortes antes de asignar.",
+        )
+    try:
+        vigente_id = int(vigente["id"])
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=500, detail="Corte vigente inválido")
+    if vigente_id != corte_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Solo se permite el corte vigente (#{vigente.get('consecutivo') or vigente_id}). "
+                "No se pueden asignar cortes cerrados o anteriores."
+            ),
+        )
+
+    uid = _sicoe_uid_from_user(current_user)
+    patch = {
+        "subcontratista_id": sub_id,
+        "corte_id": vigente_id,
+        "modificado_por_reg": int(uid) if uid is not None else None,
+        "updated_at": "now()",
+    }
+    patch = {k: v for k, v in patch.items() if v is not None or k in ("subcontratista_id", "corte_id")}
+
+    actualizados = 0
+    omitidos = []
+    _CHUNK = 80
+    for i in range(0, len(ids), _CHUNK):
+        chunk = ids[i : i + _CHUNK]
+
+        def _get(c=chunk):
+            q = (
+                supabase.table("so_registros")
+                .select("id, reporte_id")
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", c)
+            )
+            if body.reporte_id is not None:
+                q = q.eq("reporte_id", int(body.reporte_id))
+            return q.execute().data
+
+        rows = supabase_execute(_get) or []
+        found = {int(r["id"]) for r in rows if r.get("id") is not None}
+        for rid in chunk:
+            if rid not in found:
+                omitidos.append({"id": rid, "motivo": "no_encontrado"})
+        if not found:
+            continue
+
+        def _upd(ids_ok=sorted(found)):
+            return (
+                supabase.table("so_registros")
+                .update(patch)
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", ids_ok)
+                .execute()
+                .data
+            )
+
+        out = supabase_execute(_upd) or []
+        actualizados += len(out) if out else len(found)
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "SICOE",
+            "registro",
+            "masivo_corte",
+            {
+                "edicion_masiva": True,
+                "subcontratista_id": sub_id,
+                "corte_id": vigente_id,
+                "corte_consecutivo": vigente.get("consecutivo"),
+                "registro_ids": ids,
+                "actualizados": actualizados,
+                "omitidos": omitidos[:40],
+                "reporte_id": body.reporte_id,
+            },
+            valor_anterior=None,
+            valor_nuevo={"corte_id": vigente_id, "subcontratista_id": sub_id},
+        )
+    except Exception:
+        pass
+    try:
+        _invalidate_dashboard_financial_caches(int(contrato_id))
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "actualizados": actualizados,
+        "omitidos": omitidos,
+        "corte": {
+            "id": vigente_id,
+            "consecutivo": vigente.get("consecutivo"),
+            "fecha_inicio": vigente.get("fecha_inicio"),
+            "fecha_fin": vigente.get("fecha_fin"),
+        },
+        "subcontratista_id": sub_id,
+    }
 
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}")
