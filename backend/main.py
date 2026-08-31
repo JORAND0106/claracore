@@ -1964,27 +1964,15 @@ def _cargo_permiso_crear_reporte_cantidades_user_id(
     return _cargo_permiso_reporte_cantidades_user_id(user_id, "crear", contrato_id)
 
 
-# Campos dimensionales / localización: el creador con permiso Crear puede editarlos
-# hasta el sellado del último nivel (sin permiso Editar).
-_SICOE_CAMPOS_DIMENSIONALES = frozenset({
-    "longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion",
-    "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen",
-    "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
-    "coord_lat", "coord_lng",
-})
-# Campos financieros / clasificación: solo permiso Editar.
-_SICOE_CAMPOS_FINANCIEROS = frozenset({
-    "capitulo", "competencia", "item_numero", "item_descripcion", "unidad",
-    "vlr_unitario", "costo_directo", "acta_rpo_id", "semana_id", "item_listado_id",
-})
-# Identidad de fila que el cliente suele reenviar en PUT (sin cambio efectivo).
-_SICOE_CAMPOS_IDENTIDAD_PUT = frozenset({"reporte_id", "numero_registro", "contrato_id", "nombre", "descripcion"})
-# Meta/media: siguen las reglas de sellado existentes (editar).
-_SICOE_CAMPOS_META_MEDIA = frozenset({
-    "corte_id", "subcontratista_id",
-    "foto_url", "foto_numero", "foto_descripcion",
-    "grafico_url", "grafico_numero", "grafico_descripcion", "graficos_historial",
-})
+from sicoe_creador_permisos import (  # noqa: E402
+    SICOE_CAMPOS_BLOQUEADOS_SOLO_CREAR as _SICOE_CAMPOS_BLOQUEADOS_SOLO_CREAR,
+    SICOE_CAMPOS_DIMENSIONALES as _SICOE_CAMPOS_DIMENSIONALES,
+    SICOE_CAMPOS_FINANCIEROS as _SICOE_CAMPOS_FINANCIEROS,
+    SICOE_CAMPOS_IDENTIDAD_PUT as _SICOE_CAMPOS_IDENTIDAD_PUT,
+    SICOE_CAMPOS_META_MEDIA as _SICOE_CAMPOS_META_MEDIA,
+    sicoe_put_keys_prohibidas_creador_dims as _sicoe_put_keys_prohibidas_creador_dims,
+    sicoe_valores_put_equivalentes as _sicoe_valores_put_equivalentes,
+)
 
 
 def _sicoe_uid_from_user(current_user) -> Optional[int]:
@@ -24886,19 +24874,11 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             data["bloqueado"] = False
 
         client_keys = set(data.keys())
-        # Ignorar identidad reenviada sin cambio al evaluar permisos.
-        for ik in list(client_keys & _SICOE_CAMPOS_IDENTIDAD_PUT):
-            try:
-                if data.get(ik) is not None and prev_row.get(ik) is not None and int(data[ik]) == int(prev_row[ik]):
-                    client_keys.discard(ik)
-                    data.pop(ik, None)
-                elif data.get(ik) == prev_row.get(ik):
-                    client_keys.discard(ik)
-                    data.pop(ik, None)
-            except (TypeError, ValueError):
-                if data.get(ik) == prev_row.get(ik):
-                    client_keys.discard(ik)
-                    data.pop(ik, None)
+        # Ignorar identidad / financieros / meta reenviados sin cambio al evaluar permisos.
+        for ik in list(client_keys & (_SICOE_CAMPOS_IDENTIDAD_PUT | _SICOE_CAMPOS_BLOQUEADOS_SOLO_CREAR)):
+            if _sicoe_valores_put_equivalentes(data.get(ik), prev_row.get(ik)):
+                client_keys.discard(ik)
+                data.pop(ik, None)
 
         if not puede_editar_full:
             if not modo_solo_creador_dims:
@@ -24906,13 +24886,14 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
                     status_code=403,
                     detail="Sin permiso para editar este registro. Se requiere «Editar» o ser el creador con «Crear» (solo campos dimensionales).",
                 )
-            prohibidos = client_keys - _SICOE_CAMPOS_DIMENSIONALES
+            prohibidos = _sicoe_put_keys_prohibidas_creador_dims(client_keys, data, prev_row)
             if prohibidos:
                 raise HTTPException(
                     status_code=403,
                     detail=(
                         "Como creador solo puede editar campos dimensionales/localización "
-                        f"(no: {', '.join(sorted(prohibidos))}). Los financieros requieren permiso «Editar»."
+                        f"(no: {', '.join(sorted(prohibidos))}). "
+                        "Ítem, capítulo, competencia y corte requieren permiso «Editar»."
                     ),
                 )
 

@@ -54,9 +54,27 @@ describe('sicoeCreadorEdicionDimensional', () => {
     )
   })
 
-  it('financieros solo con Editar', () => {
+  it('financieros solo con Editar (Crear no desbloquea Ítem/Capítulo/Competencia)', () => {
     assert.equal(sicoePuedeEditarCamposFinancieros({ puedeEditar: true, selladoMax: false }), true)
     assert.equal(sicoePuedeEditarCamposFinancieros({ puedeEditar: false, selladoMax: false }), false)
+    // Operativo típico: Crear + creador → dims sí, financieros no
+    assert.equal(
+      sicoePuedeEditarCamposDimensionales({
+        puedeCrear: true,
+        esCreador: true,
+        puedeEditar: false,
+        selladoMax: false,
+      }),
+      true,
+    )
+    assert.equal(
+      sicoePuedeEditarCamposFinancieros({ puedeEditar: false, selladoMax: false }),
+      false,
+    )
+    assert.equal(
+      sicoePuedeEditarCamposFinancieros({ puedeEditar: true, selladoMax: true }),
+      false,
+    )
   })
 
   it('alerta visible en N1..max_prev y se apaga al re-aprobar max_prev', () => {
