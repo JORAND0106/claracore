@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS public.seguimiento_bitacora_entrada (
   clima_descripcion     text,
   clima_editado_manual  boolean NOT NULL DEFAULT false,
   personal              jsonb NOT NULL DEFAULT '[]'::jsonb,
+  tramo                 text,
   evento_tipo           text
                         CHECK (
                           evento_tipo IS NULL
@@ -131,9 +132,9 @@ COMMENT ON COLUMN public.seguimiento_bitacora_entrada.personal IS
 COMMENT ON COLUMN public.seguimiento_bitacora_entrada.imagenes IS
   'Máx. 4 fotos/gráficos [{nombre, blob_path, mime_type, content_hash, origen, created_at}].';
 
--- Un solo Reporte Diario por fecha por contrato.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_seg_bitacora_diario_contrato_fecha
-  ON public.seguimiento_bitacora_entrada (contrato_id, fecha)
+-- Un solo Reporte Diario por fecha por tramo por contrato.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_seg_bitacora_diario_contrato_fecha_tramo
+  ON public.seguimiento_bitacora_entrada (contrato_id, fecha, (COALESCE(tramo, '')))
   WHERE tipo = 'diario';
 
 CREATE INDEX IF NOT EXISTS idx_seg_bitacora_entrada_contrato_fecha

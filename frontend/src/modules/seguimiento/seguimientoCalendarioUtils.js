@@ -178,9 +178,8 @@ export function bitacoraToEvent(entrada) {
   if (String(entrada.tipo || '') === 'evento') return null
   const kind = 'bitacora_diario'
   const meta = CALENDARIO_KIND[kind]
-  const start = buildStart(entrada.fecha, entrada.hora_inicio_labores || null)
+  const start = buildStart(entrada.fecha, null) // agrupación por día (all-day)
   if (!start) return null
-  const allDay = !entrada.hora_inicio_labores
   const elaborador = String(entrada.created_by_nombre || '').trim()
   const nEv = Array.isArray(entrada.eventos)
     ? entrada.eventos.length
@@ -191,7 +190,7 @@ export function bitacoraToEvent(entrada) {
     id: `bitacora-${entrada.id}`,
     title: titleWithIcon(meta.icon, texto),
     start,
-    allDay,
+    allDay: true,
     backgroundColor: meta.color,
     borderColor: nEv > 0 ? (CALENDARIO_KIND.bitacora_evento?.color || meta.color) : meta.color,
     textColor: meta.textColor,
@@ -202,7 +201,51 @@ export function bitacoraToEvent(entrada) {
       label: meta.label,
       elaborador,
       eventosCount: nEv,
+      tramo: entrada.tramo ?? null,
+      diarios: [entrada],
       raw: entrada,
+    },
+  }
+}
+
+/**
+ * Agrupa varios diarios de la misma fecha en un único evento «Bitácora».
+ * @param {object[]} diarios
+ * @returns {object|null}
+ */
+export function bitacoraGroupToEvent(diarios) {
+  const list = (Array.isArray(diarios) ? diarios : []).filter((d) => d?.id)
+  if (!list.length) return null
+  if (list.length === 1) return bitacoraToEvent(list[0])
+  const meta = CALENDARIO_KIND.bitacora_diario
+  const fecha = String(list[0].fecha || '').slice(0, 10)
+  const start = buildStart(fecha, null)
+  if (!start) return null
+  const nTramos = list.length
+  const nEv = list.reduce((acc, d) => {
+    const n = Array.isArray(d.eventos) ? d.eventos.length : (Number(d.eventos_count) || 0)
+    return acc + n
+  }, 0)
+  let texto = `Bitácora · ${nTramos} tramo${nTramos === 1 ? '' : 's'}`
+  if (nEv > 0) texto += ` · ${nEv} evento${nEv === 1 ? '' : 's'}`
+  return {
+    id: `bitacora-dia-${fecha}`,
+    title: titleWithIcon(meta.icon, texto),
+    start,
+    allDay: true,
+    backgroundColor: meta.color,
+    borderColor: nEv > 0 ? (CALENDARIO_KIND.bitacora_evento?.color || meta.color) : meta.color,
+    textColor: meta.textColor,
+    extendedProps: {
+      kind: 'bitacora_diario',
+      sourceId: list[0].id,
+      icon: meta.icon,
+      label: meta.label,
+      eventosCount: nEv,
+      tramosCount: nTramos,
+      diarios: list,
+      grouped: true,
+      raw: list[0],
     },
   }
 }
@@ -218,8 +261,17 @@ export function buildCalendarioEvents(bandejaRows = [], actasRows = [], bitacora
     const ev = actaToEvent(row)
     if (ev) out.push(ev)
   }
+  // Bitácora: una entrada de calendario por fecha (agrupa tramos).
+  const byFecha = new Map()
   for (const row of bitacoraRows || []) {
-    const ev = bitacoraToEvent(row)
+    if (!row?.id || String(row.tipo || '') === 'evento') continue
+    const f = String(row.fecha || '').slice(0, 10)
+    if (!f) continue
+    if (!byFecha.has(f)) byFecha.set(f, [])
+    byFecha.get(f).push(row)
+  }
+  for (const [, list] of byFecha) {
+    const ev = bitacoraGroupToEvent(list)
     if (ev) out.push(ev)
   }
   return out
@@ -312,7 +364,12 @@ export function summarizeDayCounts(events, dateStr) {
     if (kind === 'tarea') tareas += 1
     else if (kind === 'compromiso') compromisos += 1
     else if (kind === 'acta') actas += 1
-    else if (kind === 'bitacora_diario') diarios += 1
+    else if (kind === 'bitacora_diario') {
+      const n = Number(ev?.extendedProps?.tramosCount)
+        || (Array.isArray(ev?.extendedProps?.diarios) ? ev.extendedProps.diarios.length : 0)
+        || 1
+      diarios += n
+    }
     else if (kind === 'bitacora_evento') eventosBit += 1
   }
   return {
@@ -333,7 +390,9 @@ export function formatDayCountLabel({
   if (tareas > 0) parts.push(`${tareas} tarea${tareas === 1 ? '' : 's'}`)
   if (compromisos > 0) parts.push(`${compromisos} compromiso${compromisos === 1 ? '' : 's'}`)
   if (actas > 0) parts.push(`${actas} acta${actas === 1 ? '' : 's'}`)
-  if (diarios > 0) parts.push(`${diarios} bitácora${diarios === 1 ? '' : 's'}`)
+  if (diarios > 0) {
+    parts.push(diarios === 1 ? '1 bitácora' : `Bitácora · ${diarios} tramos`)
+  }
   if (eventosBit > 0) parts.push(`${eventosBit} evento${eventosBit === 1 ? '' : 's'}`)
   return parts.join(' · ')
 }

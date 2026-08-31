@@ -42,7 +42,31 @@ EVENTO_TIPOS = frozenset({
     "novedades",
 })
 
+# Etiqueta UI para diarios legados sin tramo (columna NULL).
+TRAMO_NO_ESPECIFICADO_LABEL = "Tramo no especificado"
+
 _log = logging.getLogger("claracore.bitacora")
+
+
+def _normalize_tramo(value: Any) -> Optional[str]:
+    """Trim; vacío → None (legado / no especificado)."""
+    s = str(value or "").strip()
+    return s or None
+
+
+def _label_tramo(value: Any) -> str:
+    n = _normalize_tramo(value)
+    return n or TRAMO_NO_ESPECIFICADO_LABEL
+
+
+def _require_tramo_nuevo(value: Any) -> str:
+    """Tramo obligatorio al crear un Reporte Diario nuevo."""
+    n = _normalize_tramo(value)
+    if not n:
+        raise ValueError(
+            "Debe seleccionar un Tramo para crear el Reporte Diario."
+        )
+    return n
 
 
 @contextmanager
@@ -1987,6 +2011,7 @@ def _strip_para_autocompletar(entrada: dict) -> dict:
     return {
         "fuente_id": entrada.get("id"),
         "fuente_fecha": entrada.get("fecha"),
+        "fuente_tramo": entrada.get("tramo"),
         "personal": personal,
         "asistencia_colaboradores": asistencia,
         "equipos_uso": usos,
@@ -1994,36 +2019,38 @@ def _strip_para_autocompletar(entrada: dict) -> dict:
     }
 
 
-def plantilla_autocompletar_diario(sb, contrato_id: int) -> Optional[dict]:
+def plantilla_autocompletar_diario(
+    sb, contrato_id: int, *, tramo: Optional[str] = None,
+) -> Optional[dict]:
     """
-    Último Reporte Diario del contrato (preferir cerrado; si no, el más reciente).
+    Último Reporte Diario del mismo Tramo (preferir cerrado; si no, el más reciente).
+    Si no hay del mismo tramo, no inventa otro tramo.
     No incluye fecha/hora/clima.
     """
-    # Preferir cerrado más reciente
-    rows = (
-        sb.table("seguimiento_bitacora_entrada")
-        .select("*")
-        .eq("contrato_id", int(contrato_id))
-        .eq("tipo", "diario")
-        .eq("estado", "cerrado")
-        .order("fecha", desc=True)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if not rows:
-        rows = (
+    tramo_n = _normalize_tramo(tramo)
+
+    def _query(estado: Optional[str] = None):
+        q = (
             sb.table("seguimiento_bitacora_entrada")
             .select("*")
             .eq("contrato_id", int(contrato_id))
             .eq("tipo", "diario")
             .order("fecha", desc=True)
             .limit(1)
-            .execute()
-            .data
-            or []
         )
+        if estado:
+            q = q.eq("estado", estado)
+        if tramo_n is None:
+            # Sin tramo pedido: comportamiento previo (cualquier diario).
+            pass
+        else:
+            q = q.eq("tramo", tramo_n)
+        return q.execute().data or []
+
+    rows = _query("cerrado")
+    if not rows:
+        rows = _query(None)
+    # Si se pidió tramo concreto y no hay, no caer a otro tramo.
     if not rows:
         return None
     enriched = _enrich_entrada(sb, rows[0])
@@ -2418,7 +2445,28 @@ def get_entrada(sb, contrato_id: int, entrada_id: int) -> dict:
     return _enrich_entrada(sb, row)
 
 
+def _diario_existe_fecha_tramo(
+    sb, contrato_id: int, fecha_iso: str, tramo: Optional[str],
+) -> bool:
+    """¿Ya hay un diario para (fecha, tramo)? tramo None = legado no especificado."""
+    tramo_n = _normalize_tramo(tramo)
+    q = (
+        sb.table("seguimiento_bitacora_entrada")
+        .select("id")
+        .eq("contrato_id", int(contrato_id))
+        .eq("tipo", "diario")
+        .eq("fecha", str(fecha_iso)[:10])
+    )
+    if tramo_n is None:
+        q = q.is_("tramo", "null")
+    else:
+        q = q.eq("tramo", tramo_n)
+    rows = q.limit(1).execute().data or []
+    return bool(rows)
+
+
 def _diario_existe_fecha(sb, contrato_id: int, fecha_iso: str) -> bool:
+    """Compat: ¿hay algún diario en esa fecha (cualquier tramo)?"""
     rows = (
         sb.table("seguimiento_bitacora_entrada")
         .select("id")
@@ -2433,23 +2481,55 @@ def _diario_existe_fecha(sb, contrato_id: int, fecha_iso: str) -> bool:
     return bool(rows)
 
 
-def get_diario_por_fecha(sb, contrato_id: int, fecha: str) -> Optional[dict]:
-    f = _parse_fecha(fecha)
+def list_diarios_por_fecha(sb, contrato_id: int, fecha: str) -> List[dict]:
+    """Todos los Reportes Diarios del contrato en una fecha (uno por tramo)."""
+    f = _parse_fecha(fecha).isoformat()
     rows = (
         sb.table("seguimiento_bitacora_entrada")
         .select("*")
         .eq("contrato_id", int(contrato_id))
         .eq("tipo", "diario")
-        .eq("fecha", f.isoformat())
-        .limit(1)
+        .eq("fecha", f)
+        .order("tramo")
+        .order("id")
         .execute()
         .data
         or []
     )
+    out = []
+    for row in rows:
+        row = asegurar_autocierre_entrada(sb, row)
+        out.append(_enrich_entrada(sb, row))
+    return out
+
+
+def get_diario_por_fecha_tramo(
+    sb, contrato_id: int, fecha: str, tramo: Optional[str],
+) -> Optional[dict]:
+    f = _parse_fecha(fecha)
+    tramo_n = _normalize_tramo(tramo)
+    q = (
+        sb.table("seguimiento_bitacora_entrada")
+        .select("*")
+        .eq("contrato_id", int(contrato_id))
+        .eq("tipo", "diario")
+        .eq("fecha", f.isoformat())
+    )
+    if tramo_n is None:
+        q = q.is_("tramo", "null")
+    else:
+        q = q.eq("tramo", tramo_n)
+    rows = q.limit(1).execute().data or []
     if not rows:
         return None
     row = asegurar_autocierre_entrada(sb, rows[0])
     return _enrich_entrada(sb, row)
+
+
+def get_diario_por_fecha(sb, contrato_id: int, fecha: str) -> Optional[dict]:
+    """Compat: primer diario de la fecha (preferir con tramo, luego legado)."""
+    items = list_diarios_por_fecha(sb, contrato_id, fecha)
+    return items[0] if items else None
 
 
 def crear_reporte_diario(
@@ -2475,10 +2555,12 @@ def crear_reporte_diario(
                 "(fecha del reporte o el día siguiente, hasta las 23:59:59). "
                 "Solo el rol Desarrollador puede crear fechas ya cerradas."
             )
-        if _diario_existe_fecha(sb, contrato_id, fecha.isoformat()):
+        tramo = _require_tramo_nuevo(data.get("tramo"))
+        if _diario_existe_fecha_tramo(sb, contrato_id, fecha.isoformat(), tramo):
             raise ValueError(
-                f"Ya existe un Reporte Diario para el {fecha.isoformat()}. "
-                "Ábralo para complementar mientras esté dentro de la ventana de gracia."
+                f"Ya existe un Reporte Diario para el {fecha.isoformat()} "
+                f"en el tramo «{tramo}». Ábralo para complementar mientras "
+                "esté dentro de la ventana de gracia."
             )
 
     with _stage_timer(stages, "usuario_meta"):
@@ -2503,6 +2585,7 @@ def crear_reporte_diario(
             "contrato_id": int(contrato_id),
             "tipo": "diario",
             "fecha": fecha.isoformat(),
+            "tramo": tramo,
             "estado": "abierto",
             "hora_inicio_labores": hora_inicio,
             "clima_codigo": clima_codigo,
@@ -2551,7 +2634,14 @@ def crear_reporte_diario(
             except Exception as exc2:
                 _log.warning("bitacora.crear_diario insert sin asistencia falló: %s", exc2)
                 payload.pop("materiales", None)
-                inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+                # Si la columna tramo aún no existe en el esquema remoto, reintentar sin ella
+                # (migración pendiente) — la unicidad antigua por fecha puede fallar.
+                try:
+                    inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
+                except Exception as exc3:
+                    _log.warning("bitacora.crear_diario insert sin materiales: %s", exc3)
+                    payload.pop("tramo", None)
+                    inserted = sb.table("seguimiento_bitacora_entrada").insert(payload).execute().data or []
         if not inserted:
             raise ValueError("No se pudo crear el Reporte Diario")
         entrada = inserted[0]
@@ -2686,6 +2776,17 @@ def update_entrada(
         patch["cuerpo_html"] = str(data.get("cuerpo_html") or "")
 
     if tipo == "diario":
+        if "tramo" in data:
+            nuevo_tramo = _require_tramo_nuevo(data.get("tramo"))
+            actual = _normalize_tramo(entrada.get("tramo"))
+            if nuevo_tramo != actual:
+                if _diario_existe_fecha_tramo(
+                    sb, contrato_id, str(entrada.get("fecha") or "")[:10], nuevo_tramo,
+                ):
+                    raise ValueError(
+                        f"Ya existe un Reporte Diario para esta fecha en el tramo «{nuevo_tramo}»."
+                    )
+                patch["tramo"] = nuevo_tramo
         if "hora_inicio_labores" in data:
             patch["hora_inicio_labores"] = _parse_hora(data.get("hora_inicio_labores"))
         if "clima_codigo" in data:
@@ -3384,15 +3485,44 @@ def clear_clima_slots_cache_for_tests() -> None:
         _CLIMA_SLOTS_CACHE.clear()
 
 
-def list_entradas_del_dia(sb, contrato_id: int, fecha: str) -> Dict[str, Any]:
-    """Diario del día (con eventos embebidos) para exportación PDF."""
+def list_entradas_del_dia(
+    sb,
+    contrato_id: int,
+    fecha: str,
+    *,
+    tramo: Optional[str] = None,
+    entrada_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Diario del día (con eventos embebidos) para exportación PDF — un tramo/entrada."""
     f = _parse_fecha(fecha).isoformat()
     try:
         migrar_eventos_legacy_contrato(sb, contrato_id)
     except Exception:
         pass
     rows = list_entradas(sb, contrato_id, fecha_desde=f, fecha_hasta=f, tipo="diario")
-    diario = next((r for r in rows if str(r.get("tipo") or "") == "diario"), None)
+    diario = None
+    if entrada_id is not None:
+        eid = int(entrada_id)
+        diario = next((r for r in rows if int(r.get("id") or 0) == eid), None)
+        if diario is None:
+            raise ValueError("No se encontró el Reporte Diario indicado para esa fecha")
+    elif tramo is not None and str(tramo).strip() != "":
+        tramo_n = _normalize_tramo(tramo)
+        diario = next(
+            (r for r in rows if _normalize_tramo(r.get("tramo")) == tramo_n),
+            None,
+        )
+        if diario is None:
+            raise ValueError(
+                f"No hay Reporte Diario del tramo «{tramo_n}» para el {f}"
+            )
+    else:
+        if len(rows) > 1:
+            raise ValueError(
+                "Hay varios Reportes Diarios esa fecha (distintos tramos). "
+                "Indique el tramo o el id de la entrada para exportar el PDF."
+            )
+        diario = rows[0] if rows else None
     eventos = []
     if diario and isinstance(diario.get("eventos"), list):
         for b in diario["eventos"]:

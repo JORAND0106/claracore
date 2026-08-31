@@ -99,13 +99,16 @@ const diario = bitacoraToEvent({
   fecha: '2026-08-14',
   hora_inicio_labores: '07:00',
   created_by_nombre: 'Ana Pérez',
+  tramo: 'Tramo A',
 })
 assert(diario.id === 'bitacora-40', 'id bitácora diario')
-assert(diario.start === '2026-08-14T07:00:00', 'start diario con hora')
+assert(diario.start === '2026-08-14', 'start diario all-day agrupado')
+assert(diario.allDay === true, 'allDay diario')
 assert(diario.extendedProps.kind === 'bitacora_diario', 'kind diario')
 assert(diario.backgroundColor === CALENDARIO_KIND.bitacora_diario.color, 'color diario')
 assert(diario.title.includes('Ana Pérez'), 'elaborador en título diario')
 assert(diario.extendedProps.elaborador === 'Ana Pérez', 'elaborador prop')
+assert(diario.extendedProps.tramo === 'Tramo A', 'tramo prop')
 
 const diarioConEv = bitacoraToEvent({
   id: 42,
@@ -135,9 +138,16 @@ const events = buildCalendarioEvents(
     { id: 2, origen: 'compromiso', titulo: 'C', fecha_vencimiento: '2026-08-02' },
   ],
   [{ id: 9, consecutivo: 1, fecha_reunion: '2026-08-03' }],
-  [{ id: 7, tipo: 'diario', fecha: '2026-08-04', created_by_nombre: 'X' }],
+  [
+    { id: 7, tipo: 'diario', fecha: '2026-08-04', created_by_nombre: 'X', tramo: 'A' },
+    { id: 8, tipo: 'diario', fecha: '2026-08-04', created_by_nombre: 'Y', tramo: 'B' },
+  ],
 )
-assert(events.length === 4, 'build une bandeja+actas+bitácora')
+assert(events.length === 4, 'build une bandeja+actas+bitácora agrupada')
+const bitGroup = events.find((e) => e.extendedProps?.kind === 'bitacora_diario')
+assert(bitGroup?.id === 'bitacora-dia-2026-08-04', 'agrupa tramos en un evento')
+assert(bitGroup?.title.includes('2 tramos'), 'título con contador de tramos')
+assert(bitGroup?.extendedProps?.diarios?.length === 2, 'diarios en extendedProps')
 assert(filterEventsByOrigen(events, 'acta').length === 1, 'filtro origen acta')
 assert(filterEventsByOrigen(events, 'tarea').length === 1, 'filtro origen tarea')
 assert(filterEventsByOrigen(events, 'bitacora_diario').length === 1, 'filtro bitácora diario')
@@ -147,11 +157,11 @@ const daySum = summarizeDayCounts([
   { start: '2026-08-10', extendedProps: { kind: 'tarea' } },
   { start: '2026-08-10T09:00:00', extendedProps: { kind: 'tarea' } },
   { start: '2026-08-10', extendedProps: { kind: 'acta' } },
-  { start: '2026-08-10', extendedProps: { kind: 'bitacora_diario' } },
+  { start: '2026-08-10', extendedProps: { kind: 'bitacora_diario', tramosCount: 3, diarios: [{}, {}, {}] } },
   { start: '2026-08-11', extendedProps: { kind: 'compromiso' } },
 ], '2026-08-10')
-assert(daySum.tareas === 2 && daySum.actas === 1 && daySum.diarios === 1 && daySum.total === 4, 'conteo día')
-assert(daySum.label === '2 tareas · 1 acta · 1 bitácora', 'label día')
+assert(daySum.tareas === 2 && daySum.actas === 1 && daySum.diarios === 3 && daySum.total === 6, 'conteo día con tramos')
+assert(daySum.label === '2 tareas · 1 acta · Bitácora · 3 tramos', 'label día tramos')
 assert(formatDayCountLabel({ compromisos: 1 }) === '1 compromiso', 'label singular')
 assert(formatDayCountLabelShort({ tareas: 2, actas: 1, diarios: 1 }) === '2T · 1A · 1B', 'label corto widget')
 

@@ -191,16 +191,17 @@ export default function SeguimientoCalendario({
     setReloadTick((n) => n + 1)
   }, [])
 
-  const openBitacoraEntry = useCallback((sourceId) => {
+  const openBitacoraEntry = useCallback((sourceId, meta) => {
     setAccesoMsg('')
-    onAbrirBitacora?.(sourceId)
+    onAbrirBitacora?.(sourceId, meta)
   }, [onAbrirBitacora])
 
   const handleEventClick = useCallback((info) => {
     info.jsEvent?.preventDefault?.()
     info.jsEvent?.stopPropagation?.()
     setDayMenu(null)
-    const { kind, sourceId, accesoRestringido } = info.event.extendedProps || {}
+    const xp = info.event.extendedProps || {}
+    const { kind, sourceId, accesoRestringido } = xp
     if (kind === 'acta') {
       if (accesoRestringido) {
         setAccesoMsg(MSG_ACTA_ACCESO_RESTRINGIDO)
@@ -211,7 +212,12 @@ export default function SeguimientoCalendario({
       return
     }
     if (kind === 'bitacora_diario' || kind === 'bitacora_evento') {
-      openBitacoraEntry(sourceId)
+      const fecha = toDateOnly(info.event.start) || toDateOnly(xp.raw?.fecha)
+      openBitacoraEntry(sourceId, {
+        fecha,
+        diarios: Array.isArray(xp.diarios) ? xp.diarios : null,
+        grouped: Boolean(xp.grouped) || (Array.isArray(xp.diarios) && xp.diarios.length > 1),
+      })
       return
     }
     if (sourceId != null) setDetalleId(sourceId)
@@ -276,7 +282,8 @@ export default function SeguimientoCalendario({
   }, [dayMenu, events])
 
   const openDayEvent = useCallback((ev) => {
-    const { kind, sourceId, accesoRestringido } = ev?.extendedProps || {}
+    const xp = ev?.extendedProps || {}
+    const { kind, sourceId, accesoRestringido } = xp
     setDayMenu(null)
     if (kind === 'acta') {
       if (accesoRestringido) {
@@ -288,11 +295,16 @@ export default function SeguimientoCalendario({
       return
     }
     if (kind === 'bitacora_diario' || kind === 'bitacora_evento') {
-      openBitacoraEntry(sourceId)
+      const fecha = toDateOnly(ev?.start) || toDateOnly(xp.raw?.fecha) || dayMenu?.dateStr
+      openBitacoraEntry(sourceId, {
+        fecha,
+        diarios: Array.isArray(xp.diarios) ? xp.diarios : null,
+        grouped: Boolean(xp.grouped) || (Array.isArray(xp.diarios) && xp.diarios.length > 1),
+      })
       return
     }
     if (sourceId != null) setDetalleId(sourceId)
-  }, [onAbrirActa, openBitacoraEntry])
+  }, [onAbrirActa, openBitacoraEntry, dayMenu?.dateStr])
 
   const canCreateSeguimiento = Boolean(permisos?.crear)
   const canCreateBitacora = Boolean(permisosBitacora?.crear)
@@ -301,10 +313,25 @@ export default function SeguimientoCalendario({
 
   const exportPdfDia = async (dateStr, { preview = false } = {}) => {
     if (!api?.exportBitacoraPdfBlob || !dateStr) return
+    const dayBit = eventsForDate(events, dateStr).find(
+      (ev) => ev?.extendedProps?.kind === 'bitacora_diario',
+    )
+    const diarios = Array.isArray(dayBit?.extendedProps?.diarios)
+      ? dayBit.extendedProps.diarios
+      : []
+    if (diarios.length > 1) {
+      setDayMenu(null)
+      openBitacoraEntry(diarios[0]?.id, { fecha: dateStr, diarios, grouped: true })
+      setError('Hay varios tramos ese día: abra el reporte del tramo y use Vista previa / Descargar ahí.')
+      return
+    }
     setPdfBusy(true)
     setError('')
     try {
-      const blob = await api.exportBitacoraPdfBlob(dateStr)
+      const opts = diarios.length === 1
+        ? { entradaId: diarios[0].id, tramo: diarios[0].tramo }
+        : {}
+      const blob = await api.exportBitacoraPdfBlob(dateStr, opts)
       const url = URL.createObjectURL(blob)
       if (preview) {
         window.open(url, '_blank', 'noopener,noreferrer')

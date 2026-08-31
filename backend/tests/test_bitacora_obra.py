@@ -404,7 +404,7 @@ def test_crear_diario_no_relee_ni_descarga(monkeypatch):
     monkeypatch.setattr(svc, "_usuario_row", lambda *_a, **_k: {"nombre": "Ana", "apellidos": "P"})
     monkeypatch.setattr(svc, "_rol_nombre", lambda *_a, **_k: "Residente")
     monkeypatch.setattr(svc, "sync_cargos_desde_personal", lambda *_a, **_k: None)
-    monkeypatch.setattr(svc, "_diario_existe_fecha", lambda *_a, **_k: False)
+    monkeypatch.setattr(svc, "_diario_existe_fecha_tramo", lambda *_a, **_k: False)
 
     def no_get(*_a, **_k):
         raise AssertionError("crear no debe llamar get_entrada")
@@ -414,12 +414,20 @@ def test_crear_diario_no_relee_ni_descarga(monkeypatch):
     out = svc.crear_reporte_diario(
         FakeSb(),
         1,
-        {"fecha": hoy, "hora_inicio_labores": "07:00", "personal": [], "materiales": [], "cuerpo_html": ""},
+        {
+            "fecha": hoy,
+            "tramo": "Tramo Norte",
+            "hora_inicio_labores": "07:00",
+            "personal": [],
+            "materiales": [],
+            "cuerpo_html": "",
+        },
         10,
         current_user={"nombre": "Ana", "rol_nombre": "Residente"},
     )
     assert out["id"] == 77
     assert out["tipo"] == "diario"
+    assert out.get("tramo") == "Tramo Norte"
     assert isinstance(out.get("_perf_ms"), dict)
     assert out["_perf_ms"].get("total", 99999) < 5000
     assert "insert_db" in out["_perf_ms"]

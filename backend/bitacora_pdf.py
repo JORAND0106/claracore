@@ -782,12 +782,21 @@ def clear_pdf_caches_for_tests() -> None:
         _PDF_BYTES_CACHE.clear()
 
 
-def generar_pdf_bitacora_dia(sb, contrato_id: int, fecha: str) -> bytes:
-    """Genera PDF landscape del día de bitácora para el contrato."""
+def generar_pdf_bitacora_dia(
+    sb,
+    contrato_id: int,
+    fecha: str,
+    *,
+    tramo: Optional[str] = None,
+    entrada_id: Optional[int] = None,
+) -> bytes:
+    """Genera PDF landscape de un Reporte Diario (un tramo / una fecha)."""
     t0 = time.perf_counter()
     contrato = contrato_meta_bitacora(sb, contrato_id)
     pal = _palette(contrato)
-    dia = list_entradas_del_dia(sb, contrato_id, fecha)
+    dia = list_entradas_del_dia(
+        sb, contrato_id, fecha, tramo=tramo, entrada_id=entrada_id,
+    )
     diario = dia.get("diario")
     eventos = [e for e in (dia.get("eventos") or []) if isinstance(e, dict)]
     fecha_iso = dia.get("fecha") or str(fecha)[:10]

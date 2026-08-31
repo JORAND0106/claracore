@@ -67,6 +67,8 @@ export function buildBitacoraPages(entradas) {
     const fa = String(a?.fecha || '').slice(0, 10)
     const fb = String(b?.fecha || '').slice(0, 10)
     if (fa !== fb) return fa.localeCompare(fb)
+    const ta = String(a?.tramo || '').localeCompare(String(b?.tramo || ''), 'es')
+    if (ta !== 0) return ta
     const ca = String(a?.created_at || '')
     const cb = String(b?.created_at || '')
     if (ca !== cb) return ca.localeCompare(cb)
@@ -79,11 +81,13 @@ export function buildBitacoraPages(entradas) {
       kind: 'diario',
       id: `diario-${d.id}`,
       fecha,
+      tramo: d?.tramo ?? null,
       meta: {
         estado: d?.estado,
         hora_inicio_labores: d?.hora_inicio_labores,
         created_by_nombre: d?.created_by_nombre,
         eventos_count: nEv,
+        tramo: d?.tramo ?? null,
       },
       data: d,
       sourceId: d?.id,

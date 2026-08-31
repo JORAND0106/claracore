@@ -190,7 +190,18 @@ export function createSeguimientoApi(contratoId, token) {
       return get(`/seguimiento/${cid}/bitacora${qs ? `?${qs}` : ''}`)
     },
     getBitacoraEntrada: (entradaId) => get(`/seguimiento/${cid}/bitacora/${entradaId}`),
-    getBitacoraDiario: (fecha) => get(`/seguimiento/${cid}/bitacora/diario?fecha=${encodeURIComponent(fecha)}`),
+    /**
+     * Listado de diarios de una fecha (uno por tramo).
+     * Respuesta: { fecha, diarios: [...] }
+     */
+    getBitacoraDiariosFecha: (fecha) =>
+      get(`/seguimiento/${cid}/bitacora/diario?fecha=${encodeURIComponent(fecha)}`),
+    /** Un diario concreto por fecha+tramo (o {} si no existe). */
+    getBitacoraDiario: (fecha, tramo) => {
+      const q = new URLSearchParams({ fecha: String(fecha).slice(0, 10) })
+      if (tramo != null && String(tramo).trim() !== '') q.set('tramo', String(tramo).trim())
+      return get(`/seguimiento/${cid}/bitacora/diario?${q.toString()}`)
+    },
     createBitacoraDiario: (body) => send('POST', `/seguimiento/${cid}/bitacora/diario`, body),
     createBitacoraEvento: (body) => send('POST', `/seguimiento/${cid}/bitacora/evento`, body),
     updateBitacoraEntrada: (entradaId, body) =>
@@ -229,7 +240,12 @@ export function createSeguimientoApi(contratoId, token) {
     upsertBitacoraColaborador: (body) =>
       send('POST', `/seguimiento/${cid}/bitacora/colaboradores`, body),
     listSubcontratistasActivos: () => get(`/sicoe-obra/${cid}/subcontratistas-activos`),
-    plantillaAutocompletarDiario: () => get(`/seguimiento/${cid}/bitacora/plantilla-autocompletar`),
+    plantillaAutocompletarDiario: (tramo) => {
+      const q = tramo != null && String(tramo).trim() !== ''
+        ? `?tramo=${encodeURIComponent(String(tramo).trim())}`
+        : ''
+      return get(`/seguimiento/${cid}/bitacora/plantilla-autocompletar${q}`)
+    },
     listBitacoraGaleria: (q = '') => {
       const qs = q ? `?q=${encodeURIComponent(q)}` : ''
       return get(`/seguimiento/${cid}/bitacora/galeria${qs}`)
@@ -255,14 +271,21 @@ export function createSeguimientoApi(contratoId, token) {
         throw mapNetworkError(e)
       }
     },
-    /** PDF landscape del día (Diario + Eventos + fotos). */
-    exportBitacoraPdfBlob: async (fecha) => {
+    /** PDF de un Reporte Diario (fecha + tramo o entrada_id). */
+    exportBitacoraPdfBlob: async (fecha, opts = {}) => {
       const f = String(fecha || '').slice(0, 10)
       if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) throw new Error('Fecha inválida para exportar')
+      const q = new URLSearchParams({ fecha: f })
+      if (opts?.tramo != null && String(opts.tramo).trim() !== '') {
+        q.set('tramo', String(opts.tramo).trim())
+      }
+      if (opts?.entradaId != null && Number(opts.entradaId) > 0) {
+        q.set('entrada_id', String(Number(opts.entradaId)))
+      }
       const sig = apiFetchSignal(45000)
       try {
         const res = await fetch(
-          `${API_BASE}/seguimiento/${cid}/bitacora/export/pdf?fecha=${encodeURIComponent(f)}`,
+          `${API_BASE}/seguimiento/${cid}/bitacora/export/pdf?${q.toString()}`,
           {
             headers: authHeaders(t, false),
             ...(sig ? { signal: sig } : {}),

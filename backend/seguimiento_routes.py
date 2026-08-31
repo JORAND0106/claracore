@@ -915,10 +915,12 @@ from bitacora_service import (  # noqa: E402
     crear_reporte_evento,
     eliminar_entrada,
     get_diario_por_fecha,
+    get_diario_por_fecha_tramo,
     get_entrada,
     leer_media_bitacora,
     list_cargos_custom,
     list_colaboradores,
+    list_diarios_por_fecha,
     list_entradas,
     list_equipos,
     list_galeria,
@@ -940,6 +942,7 @@ from bitacora_permissions import require_permiso_bitacora  # noqa: E402
 
 class BitacoraDiarioBody(BaseModel):
     fecha: Optional[str] = None
+    tramo: Optional[str] = None
     hora_inicio_labores: Optional[str] = None
     clima_codigo: Optional[int] = None
     clima_temp_c: Optional[float] = None
@@ -950,6 +953,7 @@ class BitacoraDiarioBody(BaseModel):
     equipos_uso: Optional[List[Dict[str, Any]]] = None
     materiales: Optional[List[Dict[str, Any]]] = None
     cuerpo_html: Optional[str] = None
+    eventos: Optional[List[Dict[str, Any]]] = None
 
 
 class BitacoraEventoBody(BaseModel):
@@ -962,6 +966,7 @@ class BitacoraEventoBody(BaseModel):
 
 
 class BitacoraUpdateBody(BaseModel):
+    tramo: Optional[str] = None
     hora_inicio_labores: Optional[str] = None
     clima_codigo: Optional[int] = None
     clima_temp_c: Optional[float] = None
@@ -972,6 +977,7 @@ class BitacoraUpdateBody(BaseModel):
     equipos_uso: Optional[List[Dict[str, Any]]] = None
     materiales: Optional[List[Dict[str, Any]]] = None
     cuerpo_html: Optional[str] = None
+    eventos: Optional[List[Dict[str, Any]]] = None
     evento_tipo: Optional[str] = None
     evento_detalle: Optional[Dict[str, Any]] = None
     dirigido_a: Optional[str] = None
@@ -1043,15 +1049,67 @@ def route_list_bitacora(
 def route_get_diario_fecha(
     contrato_id: int,
     fecha: str = Query(..., min_length=8),
+    tramo: Optional[str] = Query(None, description="Tramo concreto; si se omite, lista todos"),
     current_user=Depends(get_current_user),
 ):
+    """
+    Sin `tramo`: { fecha, diarios: [...] } — listado para el selector del día.
+    Con `tramo`: un diario o {} si no existe.
+    """
     require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
-        row = get_diario_por_fecha(supabase, contrato_id, fecha)
-        return row or {}
+        if tramo is not None and str(tramo).strip() != "":
+            row = get_diario_por_fecha_tramo(supabase, contrato_id, fecha, tramo)
+            return row or {}
+        items = list_diarios_por_fecha(supabase, contrato_id, fecha)
+        return {"fecha": str(fecha)[:10], "diarios": items}
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/bitacora/plantilla-autocompletar")
+def route_plantilla_autocompletar(
+    contrato_id: int,
+    tramo: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_bitacora(current_user, "crear", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    data = plantilla_autocompletar_diario(supabase, contrato_id, tramo=tramo)
+    return data or {}
+
+
+@router.get("/{contrato_id}/bitacora/export/pdf")
+def route_bitacora_export_pdf(
+    contrato_id: int,
+    fecha: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    tramo: Optional[str] = Query(None),
+    entrada_id: Optional[int] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """PDF de un Reporte Diario (un tramo / una fecha)."""
+    require_permiso_bitacora(current_user, "exportar", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    try:
+        pdf = generar_pdf_bitacora_dia(
+            supabase, contrato_id, fecha, tramo=tramo, entrada_id=entrada_id,
+        )
+        suffix = f"_{tramo}" if tramo else (f"_id{entrada_id}" if entrada_id else "")
+        fname = f"bitacora_{contrato_id}_{str(fecha)[:10]}{suffix}.pdf"
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "no-store",
+            },
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        logging.getLogger("claracore.bitacora").exception("export pdf bitácora: %s", exc)
+        raise HTTPException(status_code=500, detail="No se pudo generar el PDF de bitácora") from exc
 
 
 @router.get("/{contrato_id}/bitacora/equipos")
@@ -1208,14 +1266,6 @@ def route_upsert_bitacora_colaborador(
     return row or {"ok": False, "detail": "Colaborador no registrado (nombre vacío)"}
 
 
-@router.get("/{contrato_id}/bitacora/plantilla-autocompletar")
-def route_plantilla_autocompletar(contrato_id: int, current_user=Depends(get_current_user)):
-    require_permiso_bitacora(current_user, "crear", contrato_id)
-    _check_contrato(current_user, contrato_id)
-    data = plantilla_autocompletar_diario(supabase, contrato_id)
-    return data or {}
-
-
 @router.post("/{contrato_id}/bitacora/equipos")
 def route_upsert_bitacora_equipo(
     contrato_id: int,
@@ -1267,33 +1317,6 @@ def route_bitacora_media(
         raise _http_value_error(exc) from exc
 
 
-@router.get("/{contrato_id}/bitacora/export/pdf")
-def route_bitacora_export_pdf(
-    contrato_id: int,
-    fecha: str = Query(..., min_length=8, description="YYYY-MM-DD"),
-    current_user=Depends(get_current_user),
-):
-    """PDF landscape del día: Diario + Eventos + fotografías (encabezado 3 logos)."""
-    require_permiso_bitacora(current_user, "exportar", contrato_id)
-    _check_contrato(current_user, contrato_id)
-    try:
-        pdf = generar_pdf_bitacora_dia(supabase, contrato_id, fecha)
-        fname = f"bitacora_{contrato_id}_{str(fecha)[:10]}.pdf"
-        return Response(
-            content=pdf,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f'attachment; filename="{fname}"',
-                "Cache-Control": "no-store",
-            },
-        )
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-    except Exception as exc:
-        logging.getLogger("claracore.bitacora").exception("export pdf bitácora: %s", exc)
-        raise HTTPException(status_code=500, detail="No se pudo generar el PDF de bitácora") from exc
-
-
 @router.post("/{contrato_id}/bitacora/diario")
 def route_crear_diario(
     contrato_id: int,
@@ -1312,7 +1335,11 @@ def route_crear_diario(
         )
         registrar_log(
             current_user, "CREAR", "BITACORA", "seguimiento_bitacora_entrada",
-            str(row.get("id")), {"tipo": "diario", "fecha": row.get("fecha")},
+            str(row.get("id")), {
+                "tipo": "diario",
+                "fecha": row.get("fecha"),
+                "tramo": row.get("tramo"),
+            },
         )
         return row
     except ValueError as exc:
