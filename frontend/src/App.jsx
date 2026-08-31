@@ -177,6 +177,7 @@ import {
   sicoeNuevoReporteRequestFlush,
   SICOE_NUEVO_REPORTE_FLUSH_EVENT,
 } from './modules/sicoe-obra/sicoeNuevoReporteDraft'
+import { sicoeEstadoAlEnviarReporte } from './modules/sicoe-obra/sicoeEstadoAlEnviarReporte'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
@@ -14224,8 +14225,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const agregarPunto = () => setPuntos(prev => [...prev, {punto:'', norte:'', este:'', cota:'', descripcion:''}])
 
   const guardarReporte = async () => {
-    if (!validarTab1()) { setTabActivo(0); return }
-    if (!validarTabLocalizacion()) { setTabActivo(2); return }
+    if (!validarTab1()) {
+      setTabActivo(0)
+      alert('Complete los campos obligatorios de Info General (descripción, subcontratista, inspector y capítulo) antes de enviar.')
+      return
+    }
+    if (!validarTabLocalizacion()) {
+      setTabActivo(2)
+      alert('Complete la localización del reporte antes de enviar.')
+      return
+    }
     if (registros.length === 0) { alert('Debe tener al menos un registro'); setTabActivo(3); return }
     if (tipoLocalizacion === 'multiple') {
       for (let i = 0; i < registros.length; i++) {
@@ -14364,9 +14373,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         enlace_soporte: enlacesMerged.length ? JSON.stringify(enlacesMerged) : null,
         ...locRepApi,
       }
-      const estadoGuardar = modoEdicion
-        ? (reporteInicial?.estado || body.estado || 'Borrador')
-        : 'Sin Asignar Ítem'
+      // «Guardar y Enviar» debe sacar el reporte de Borrador. Conservar estado
+      // cuando modoEdicion + estado===Borrador dejaba el clic sin efecto visible
+      // (commit 4f6f53e7 «correccion reportes editados»).
+      const estadoGuardar = sicoeEstadoAlEnviarReporte(reporteInicial?.estado, {
+        esEdicion: modoEdicion,
+      })
       const rUpd = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
         method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body, estado: estadoGuardar })
