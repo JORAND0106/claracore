@@ -10,6 +10,7 @@ import {
   sicoePuedeAgregarRegistroEnReporte,
   sicoePuedeEditarCamposDimensionales,
   sicoePuedeEditarCamposFinancieros,
+  sicoePuedeEditarGraficoRegistro,
 } from './sicoeCreadorEdicionDimensional.js'
 
 describe('sicoeCreadorEdicionDimensional', () => {
@@ -126,5 +127,44 @@ describe('sicoeCreadorEdicionDimensional', () => {
     assert.equal(sicoeCalcCantidadTotal(2, 3, 4, 1), 24)
     assert.equal(sicoeCantidadCambioSignificativo(10, 10), false)
     assert.equal(sicoeCantidadCambioSignificativo(10, 12), true)
+  })
+
+  it('Gráfico editable con Crear+creador hasta sellado; Editar también post-sello', () => {
+    assert.equal(
+      sicoePuedeEditarGraficoRegistro({
+        puedeCrear: true,
+        esCreador: true,
+        puedeEditar: false,
+        selladoMax: false,
+      }),
+      true,
+    )
+    assert.equal(
+      sicoePuedeEditarGraficoRegistro({
+        puedeCrear: true,
+        esCreador: true,
+        puedeEditar: false,
+        selladoMax: true,
+      }),
+      false,
+    )
+    assert.equal(
+      sicoePuedeEditarGraficoRegistro({
+        puedeCrear: false,
+        esCreador: false,
+        puedeEditar: true,
+        selladoMax: true,
+      }),
+      true,
+    )
+    assert.equal(
+      sicoePuedeEditarGraficoRegistro({
+        puedeCrear: true,
+        esCreador: false,
+        puedeEditar: false,
+        selladoMax: false,
+      }),
+      false,
+    )
   })
 })
