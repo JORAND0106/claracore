@@ -164,6 +164,7 @@ import { sicoeFetchWithRetry } from './modules/sicoe-obra/sicoeFetchRetry'
 import {
   sicoeEsCreadorRegistro,
   sicoeFormatearAlertaCantidad,
+  sicoePuedeAgregarRegistroEnReporte,
   sicoePuedeEditarCamposDimensionales,
   sicoePuedeEditarCamposFinancieros,
   sicoeCantidadCambioSignificativo,
@@ -5526,6 +5527,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const puedeEditar = perm?.editar
   const puedeCrear  = !!(perm?.crear)
   const puedeEditarCabecera = !!(perm?.editar || perm?.crear)
+  const puedeAgregarRegistro = sicoePuedeAgregarRegistroEnReporte({
+    puedeCrear,
+    puedeEditar: !!puedeEditar,
+  })
   const esDeveloper = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
   const puedeEliminarReporteCantidades = esUsuarioDesarrollador(usuario) || !!(perm?.eliminar)
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
@@ -6943,7 +6948,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 padding: carpetaCompact ? '10px 14px' : '6px 14px', minHeight: carpetaCompact ? 44 : undefined, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
               }}>↗ Mover ({seleccionados.length})</button>
             )}
-            {puedeEditar && (
+            {puedeAgregarRegistro && (
               <button type="button" onClick={crearNuevoRegistro} disabled={creandoReg} style={{
                 background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
                 padding: carpetaCompact ? '10px 14px' : '6px 14px', minHeight: carpetaCompact ? 44 : undefined, fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: creandoReg ? 0.6 : 1

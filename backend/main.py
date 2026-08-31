@@ -26082,17 +26082,137 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
 # ─── SICOE OBRA: Nuevo registro en blanco dentro de un reporte existente ─────
 @app.post("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/nuevo-registro")
 def nuevo_registro_en_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    """
+    Agrega un registro en blanco a un reporte ya creado/enviado.
+    Permiso: «Crear» (mixto operativo) o «Editar». No altera validaciones de otras líneas.
+    El registro nace pendiente (No Revisado); el sellado aplica luego a esa línea.
+    """
+    uid = _sicoe_uid_from_user(current_user)
+    puede_editar = _sicoe_puede_editar_full_registro(current_user, int(contrato_id))
+    puede_crear = False
+    if uid is not None:
+        puede_crear = _es_desarrollador(current_user) or _cargo_permiso_crear_reporte_cantidades_user_id(
+            uid, contrato_id
+        )
+    if not puede_editar and not puede_crear:
+        raise HTTPException(
+            status_code=403,
+            detail="Se requiere permiso «Crear» o «Editar» en Reporte de Cantidades para agregar un registro.",
+        )
+
+    def _rep():
+        return (
+            supabase.table("so_reportes")
+            .select(
+                "id,estado,pk_id_id,civ,tramo,infraestructura,calzada,ubicacion,"
+                "coord_lat,coord_lng,abs_inicio,abs_final,nodo_ini,nodo_fin,margen,"
+                "subcontratista_id,inspector_id,corte_id,semana_id,acta_rpo_id,capitulo"
+            )
+            .eq("id", reporte_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rep_rows = supabase_execute(_rep)
+    if not rep_rows:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    rep = rep_rows[0]
+
     def _num():
         return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
+
     numero = supabase_execute(_num)
+    uid_ins = int(uid or 0)
+    payload: Dict[str, Any] = {
+        "contrato_id": contrato_id,
+        "reporte_id": reporte_id,
+        "numero_registro": numero,
+        "creado_por_reg": uid_ins or None,
+        "modificado_por_reg": uid_ins or None,
+        "bloqueado": False,
+    }
+    # Contexto del reporte (mismo criterio que POST /registros).
+    for campo in (
+        "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
+        "coord_lat", "coord_lng", "abs_inicio", "abs_final", "nodo_ini", "nodo_fin",
+        "margen", "subcontratista_id", "inspector_id",
+    ):
+        if rep.get(campo) is not None:
+            payload[campo] = rep[campo]
+    # Corte / semana / acta: preferir los del reporte; si faltan, resolver vigentes.
+    if rep.get("corte_id") is not None:
+        payload["corte_id"] = rep["corte_id"]
+    if rep.get("semana_id") is not None:
+        payload["semana_id"] = rep["semana_id"]
+    if rep.get("acta_rpo_id") is not None:
+        payload["acta_rpo_id"] = rep["acta_rpo_id"]
+    if payload.get("corte_id") is None or payload.get("semana_id") is None or payload.get("acta_rpo_id") is None:
+        try:
+            acta_rpo_id, semana_id, corte_id = _sicoe_resolver_acta_semana_corte(
+                int(contrato_id),
+                rep.get("subcontratista_id"),
+            )
+            if payload.get("acta_rpo_id") is None and acta_rpo_id is not None:
+                payload["acta_rpo_id"] = acta_rpo_id
+            if payload.get("semana_id") is None and semana_id is not None:
+                payload["semana_id"] = semana_id
+            if payload.get("corte_id") is None and corte_id is not None:
+                payload["corte_id"] = corte_id
+        except Exception:
+            pass
+
+    # Pendiente de validación en todos los niveles activos (no toca otras filas).
+    for n in _get_niveles_activos_contrato(int(contrato_id)) or [1, 2, 3]:
+        try:
+            ni = int(n)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= ni <= 6:
+            payload[f"nivel{ni}_estado"] = "No Revisado"
+            payload[f"nivel{ni}_usuario_id"] = None
+            payload[f"nivel{ni}_fecha"] = None
+
+    _so_registro_normalizar_graficos_historial(payload)
+
     def _ins():
-        return supabase.table("so_registros").insert({
-            "contrato_id":    contrato_id,
-            "reporte_id":     reporte_id,
-            "numero_registro": numero,
-        }).execute().data
+        return supabase.table("so_registros").insert(payload).execute().data
+
     result = supabase_execute(_ins)
     row = result[0] if result else {}
+
+    # Cabecera: si hay líneas sin ítem, alinear estado (no cambia validaciones de otras líneas).
+    try:
+        def _sin_item():
+            return (
+                supabase.table("so_registros")
+                .select("id,item_numero")
+                .eq("reporte_id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+
+        pendientes = [
+            r for r in (supabase_execute(_sin_item) or [])
+            if not _sicoe_registro_tiene_item_asignado(r)
+        ]
+        if pendientes and (rep.get("estado") or "") not in ("Borrador",):
+            def _upd_rep():
+                return (
+                    supabase.table("so_reportes")
+                    .update({"estado": "Sin Asignar Ítem", "updated_at": "now()"})
+                    .eq("id", reporte_id)
+                    .eq("contrato_id", contrato_id)
+                    .execute()
+                    .data
+                )
+
+            supabase_execute(_upd_rep)
+    except Exception:
+        pass
+
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
@@ -26101,7 +26221,14 @@ def nuevo_registro_en_reporte(contrato_id: int, reporte_id: int, current_user=De
             "SICOE",
             "registro",
             str(row.get("id") or ""),
-            {"reporte_id": reporte_id, "numero_registro": row.get("numero_registro")},
+            {
+                "reporte_id": reporte_id,
+                "numero_registro": row.get("numero_registro"),
+                "origen": "nuevo_registro_en_reporte",
+                "modo": "crear" if (puede_crear and not puede_editar) else "editar_o_crear",
+            },
+            valor_anterior=None,
+            valor_nuevo=_so_registro_audit_snapshot(row),
         )
     except Exception:
         pass

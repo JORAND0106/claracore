@@ -70,6 +70,18 @@ export function sicoePuedeEditarCamposFinancieros({
   return !!(puedeEditar && !selladoMax)
 }
 
+/**
+ * «+ Nuevo Registro» dentro de un reporte ya enviado.
+ * Disponible con Crear (mixto) o Editar. No depende del sellado de otras líneas:
+ * el registro nuevo nace pendiente; el sellado aplica a cada línea por separado.
+ */
+export function sicoePuedeAgregarRegistroEnReporte({
+  puedeCrear = false,
+  puedeEditar = false,
+} = {}) {
+  return !!(puedeCrear || puedeEditar)
+}
+
 export function sicoeCalcCantidadTotal(longitud, ancho, espesor, cantidad) {
   const isEmpty = (v) => v === '' || v === null || v === undefined
   if (isEmpty(longitud) && isEmpty(ancho) && isEmpty(espesor) && isEmpty(cantidad)) return 0
