@@ -19370,6 +19370,31 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
         except Exception:
             insp_map = {}
 
+    # Número de corte del subcontratista (consecutivo), desde corte_id del registro.
+    corte_ids: List[int] = []
+    for r in rows:
+        cid = _as_int_id(r.get("corte_id"))
+        if cid is not None:
+            corte_ids.append(cid)
+    corte_ids = list(set(corte_ids))
+    corte_map: Dict[int, Any] = {}
+    if corte_ids:
+        try:
+            cc = supabase_execute(
+                lambda: supabase.table("subcontratista_cortes")
+                .select("id, consecutivo")
+                .in_("id", corte_ids)
+                .execute()
+                .data
+            )
+            corte_map = {
+                int(c["id"]): c.get("consecutivo")
+                for c in (cc or [])
+                if c.get("id") is not None
+            }
+        except Exception:
+            corte_map = {}
+
     for r in rows:
         rep = rep_map.get(r.get("reporte_id")) or {}
         acta_id_raw = r.get("acta_rpo_id") or rep.get("acta_rpo_id")
@@ -19385,6 +19410,8 @@ def _sicoe_enriquecer_registros_export(rows: List[dict]) -> List[dict]:
         r["pk_id_valor"] = r.get("pk_id") or pk_map.get(pk_id_id)
         r["subcontratista_nombre"] = sub_map.get(sub_id)
         r["inspector_nombre"] = insp_map.get(insp_id)
+        cid = _as_int_id(r.get("corte_id"))
+        r["corte_numero"] = corte_map.get(cid) if cid is not None else None
     return rows
 
 
@@ -19400,6 +19427,7 @@ _SICOE_XLSX_SKIP_KEYS = frozenset({
     "pk_id_valor",
     "subcontratista_nombre",
     "inspector_nombre",
+    # corte_numero se conserva como columna legible (no se vuelca sobre corte_id).
 })
 
 _SICOE_XLSX_FK_A_VALOR = {
@@ -19418,6 +19446,7 @@ def _sicoe_registros_xlsx_sin_ids_internos(rows: List[dict]) -> List[dict]:
     - numero_registro permanece (en lugar del id interno de fila).
     - semana_id / acta_rpo_id / subcontratista_id / inspector_id / reporte_id muestran
       número de semana, acta, nombre, inspector y reporte respectivamente.
+    - corte_id se omite; se exporta corte_numero (consecutivo del corte de subcontratista).
     """
     if not rows:
         return []
@@ -20353,13 +20382,17 @@ def exportar_registros_sicoe(
     campos_solicitados = [c for c in body.campos if _seguro_campo(c)]
     if not campos_solicitados:
         raise HTTPException(status_code=400, detail="Campos inválidos.")
-    campos_virtuales = {"reporte_numero", "acta_rpo_numero", "semana_numero", "pk_id_valor", "subcontratista_nombre"}
+    campos_virtuales = {
+        "reporte_numero", "acta_rpo_numero", "semana_numero",
+        "pk_id_valor", "subcontratista_nombre", "corte_numero",
+    }
     campos = [c for c in campos_solicitados if c not in campos_virtuales]
     if not campos:
         # Permitir exportar solo virtuales; internamente se consulta llaves mínimas.
         campos = []
+    # corte_id siempre: permite resolver Número de Corte del registro (incl. asignación masiva).
     campos_aux = _sicoe_campos_registro_sin_fantasmas(
-        list(dict.fromkeys(campos + ["reporte_id", "acta_rpo_id", "semana_id"]))
+        list(dict.fromkeys(campos + ["reporte_id", "acta_rpo_id", "semana_id", "corte_id"]))
     )
 
     consulta_directa_identificador = (
