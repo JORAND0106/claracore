@@ -75,6 +75,12 @@ import {
   SICOE_EXPORT_MODULO,
 } from './modules/sicoe-obra/exportPlantillasApi'
 import {
+  SICOE_CAMPOS_VIRTUALES_EXPORT,
+  SICOE_EXPORT_CAMPOS_DEFAULT,
+  SICOE_LABELS_EXPORT,
+  sicoePrettyCampoExport,
+} from './modules/sicoe-obra/sicoeExportCampos'
+import {
   sicoeLocVacia,
   sicoeLocFromRegistro,
   sicoePkRowFromRegistro,
@@ -10670,28 +10676,12 @@ function ModuloSicoeObra({
     'acta_rpo_id',
     'semana_id',
     'subcontratista_id',
+    'corte_id',
     'reporte',
   ])
-  const CAMPOS_VIRTUALES_EXPORT = ['reporte_numero', 'acta_rpo_numero', 'semana_numero', 'pk_id_valor', 'subcontratista_nombre']
-  const LABELS_EXPORT = {
-    reporte_numero: 'Reporte',
-    acta_rpo_numero: 'Acta RPO',
-    semana_numero: 'Semana',
-    pk_id_valor: 'PK_ID',
-    subcontratista_nombre: 'Subcontratista',
-    vlr_unitario: 'Valor unitario',
-    cantidad_total: 'Cantidad total',
-    item_numero: 'Item',
-    item_descripcion: 'Descripcion',
-    nivel1_estado: 'Estado nivel 1',
-    nivel2_estado: 'Estado nivel 2',
-    nivel3_estado: 'Estado nivel 3',
-    nivel4_estado: 'Estado nivel 4',
-    nivel5_estado: 'Estado nivel 5',
-    nivel6_estado: 'Estado nivel 6',
-    sub_estado: 'Estado sub',
-  }
-  const prettyCampo = (c) => LABELS_EXPORT[c] || String(c || '').replace(/_/g, ' ').replace(/\bid\b/gi, 'ID').toUpperCase()
+  const CAMPOS_VIRTUALES_EXPORT = SICOE_CAMPOS_VIRTUALES_EXPORT
+  const LABELS_EXPORT = SICOE_LABELS_EXPORT
+  const prettyCampo = (c) => sicoePrettyCampoExport(c, LABELS_EXPORT)
 
   const cargarExportPlantillas = async () => {
     const token = getToken()
@@ -10842,28 +10832,7 @@ function ModuloSicoeObra({
         setExportMetaContrato(null)
       }
 
-      const DEFAULT = [
-        'reporte_numero',
-        'acta_rpo_numero',
-        'semana_numero',
-        'numero_registro',
-        'capitulo',
-        'item_numero',
-        'item_descripcion',
-        'unidad',
-        'vlr_unitario',
-        'longitud',
-        'ancho',
-        'espesor',
-        'cantidad_total',
-        'costo_directo',
-        'pk_id_valor',
-        'tramo',
-        'margen',
-        'nivel1_estado',
-        'nivel2_estado',
-        'nivel3_estado',
-      ]
+      const DEFAULT = [...SICOE_EXPORT_CAMPOS_DEFAULT]
       const naEx = nivelesContrato?.niveles_activos
       const colsExtra = [4, 5, 6]
         .filter((n) => Array.isArray(naEx) && naEx.includes(n))
