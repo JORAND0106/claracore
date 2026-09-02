@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { formatCOP } from '../../utils/formatCOP'
 import { downloadVersionCompareExcel, fetchVersionCompareTramosData } from './presupuestoVersionCompareExportExcel'
 
@@ -413,7 +414,8 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
           overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div
           style={{
             padding: '14px 18px',

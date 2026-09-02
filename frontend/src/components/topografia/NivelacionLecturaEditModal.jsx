@@ -3,6 +3,7 @@
  * (mismo patrón visual que PoligonalPuntoEditModal).
  */
 import { useEffect, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import {
   ABSCISA_NUMERICA_MSG,
   bloqueVacio,
@@ -231,7 +232,8 @@ export default function NivelacionLecturaEditModal({
           borderRadius: 14,
           boxShadow: t.shadow || '0 24px 64px rgba(0,0,0,0.28)',
         }}
-      >
+      >        <CcModalBrandHeader theme={theme} />
+
         <div
           style={{
             padding: '14px 18px',

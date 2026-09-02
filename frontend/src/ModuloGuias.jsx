@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { API_BASE, API_FALLBACK } from './apiBase'
 import { prepararImagenParaUpload } from './comprimirImagen'
 
@@ -985,7 +986,8 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
               boxShadow: `0 24px 64px rgba(0,0,0,0.22), 0 0 0 1px ${t.primary}18, 0 -2px 24px ${t.primaryLight || t.primary}22`,
             }}
             onClick={(e) => e.stopPropagation()}
-          >
+          >            <CcModalBrandHeader theme={t} />
+
             {cargandoDetalle && (
               <div
                 style={{

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { API_BASE } from '../../apiBase'
 import {
   labelTramoBitacora,
@@ -109,7 +110,8 @@ export default function BitacoraTramoDiaModal({
           display: 'flex',
           flexDirection: 'column',
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{
           padding: '12px 14px', borderBottom: `1px solid ${t.border}`,
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,

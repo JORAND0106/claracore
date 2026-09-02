@@ -1,3 +1,4 @@
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 /** Modal de exportación Excel — tipografía vía `--cc-*` (Pequeña / Mediana / Grande). */
 const cc = {
   caption: 'var(--cc-caption)',
@@ -86,7 +87,8 @@ export default function PptoExportExcelModal({
           fontSize: 'inherit',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div
           style={{
             padding: `${cc.pad} 20px ${cc.padSm}`,

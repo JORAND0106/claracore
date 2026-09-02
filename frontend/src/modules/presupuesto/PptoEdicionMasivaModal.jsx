@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { formatCOP } from '../../utils/formatCOP'
 import { preIntervLiberadoParaInterventoria } from './pptoRolesValidacion'
 import PptoEdicionMasivaTramosPanel from './PptoEdicionMasivaTramosPanel'
@@ -698,7 +699,8 @@ export default function PptoEdicionMasivaModal({
           fontSize: 'inherit',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div
           style={{
             padding: `${cc.pad} 22px ${cc.padSm}`,

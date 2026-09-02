@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import IdeaClaraModal from './IdeaClaraModal'
 import { nombreUser } from './UserSearchSelect'
 import { numeroActaLabel } from './seguimientoTheme'
@@ -215,7 +216,8 @@ export default function CompromisoFormModal({
           border: viewportCompact ? 'none' : `1px solid ${t.border}`,
           boxShadow: t.shadow,
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div className={viewportCompact ? 'cc-seguim-compromiso-form cc-seguim-compromiso-form--compact' : 'cc-seguim-compromiso-form'}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>

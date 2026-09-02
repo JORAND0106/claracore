@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import IdeaClaraModal from './IdeaClaraModal'
 import TemaRichEditor from './TemaRichEditor'
 import BitacoraAdjuntos, { BitacoraClipAdjuntos } from './BitacoraAdjuntos'
@@ -695,7 +696,8 @@ export default function BitacoraEntradaEditor({
           width: viewportCompact ? '100%' : 'min(1180px, 100%)',
           maxHeight: viewportCompact ? '96dvh' : '94vh',
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{
           position: 'sticky', top: 0, zIndex: 3,
           display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',

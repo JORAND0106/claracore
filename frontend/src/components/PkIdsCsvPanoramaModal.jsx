@@ -2,6 +2,7 @@
  * Panorama maestro PK-ID: vínculos SICOE / Presupuesto y eliminación segura.
  */
 import { useMemo, useState } from "react";
+import CcModalBrandHeader from './CcModalBrandHeader'
 import CcConfirmModal from "./CcConfirmModal";
 
 const ESTADO_LABEL = {
@@ -214,7 +215,8 @@ export default function PkIdsCsvPanoramaModal({
             color: text,
             overflow: "hidden",
           }}
-        >
+        >          <CcModalBrandHeader theme={theme} />
+
           <div
             style={{
               padding: "16px 20px 12px",

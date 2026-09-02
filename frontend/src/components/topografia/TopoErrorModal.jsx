@@ -1,6 +1,8 @@
 /**
  * Modal de error del sistema para Topografia (mensajes claros al usuario).
  */
+import CcModalBrandHeader from '../CcModalBrandHeader'
+
 export default function TopoErrorModal({
   theme,
   titulo = 'No se pudo completar',
@@ -39,6 +41,7 @@ export default function TopoErrorModal({
           overflow: 'hidden',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             padding: '16px 20px 12px',

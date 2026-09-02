@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { fmtCant, fmtFechaAlmacenSolo, fmtMoney, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
 export default function ExpedienteCompraModal({ ocId, token, onClose }) {
@@ -69,6 +70,7 @@ export default function ExpedienteCompraModal({ ocId, token, onClose }) {
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={ui.t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
           <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>
             📁 Expediente de compra — OC #{oc?.numero_oc || '…'}

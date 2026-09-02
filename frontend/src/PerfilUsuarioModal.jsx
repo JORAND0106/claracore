@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { prepararImagenParaUpload } from './comprimirImagen'
 
 /**
@@ -124,7 +125,8 @@ export default function PerfilUsuarioModal({ t, apiBase, token, usuario, onClose
           boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{ fontSize: '20px', fontWeight: '800', color: t.primary, marginBottom: '4px' }}>Tu perfil</div>
         <div style={{ fontSize: '13px', color: t.textMuted, marginBottom: '20px', lineHeight: 1.45 }}>
           Nombre, cumpleaños, foto e imagen de firma se guardan en tu cuenta.

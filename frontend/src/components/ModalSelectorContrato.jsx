@@ -1,4 +1,5 @@
 import { useClaraViewport, CLARA_BP } from '../useClaraViewport'
+import CcModalBrandHeader from './CcModalBrandHeader'
 import { logosContratoParaTarjeta } from '../utils/usuarioLogosContrato'
 
 function columnasSelector(width) {
@@ -48,7 +49,8 @@ export default function ModalSelectorContrato({ t, contratos = [], onSelect }) {
           animation: 'modalIn 0.25s ease',
           boxSizing: 'border-box',
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div
           id="selector-contrato-titulo"
           style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.primary, marginBottom: 6 }}

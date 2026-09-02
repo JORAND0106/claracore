@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { X, Download, FileText, GitCompare, FileCode } from 'lucide-react'
 import {
   LineChart,
@@ -361,7 +362,8 @@ export default function ProgObraCurvaSModal({
           overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div
           style={{
             display: 'flex',

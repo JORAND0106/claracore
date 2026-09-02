@@ -3,6 +3,7 @@
  * Permite editar/agregar/eliminar puntos sin salir del contexto de la armada.
  */
 import { useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import TopoAngularInput from './TopoAngularInput'
 import { fmtNum, validarGms } from '../../utils/topografia_angular'
 
@@ -234,7 +235,8 @@ export default function PoligonalArmadaEditModal({
           borderRadius: 14,
           boxShadow: t.shadow || '0 24px 64px rgba(0,0,0,0.28)',
         }}
-      >
+      >        <CcModalBrandHeader theme={theme} />
+
         <div
           style={{
             padding: '14px 18px',

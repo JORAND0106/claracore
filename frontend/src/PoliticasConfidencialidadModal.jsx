@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 
 /**
  * Bloqueo de sesión hasta aceptar políticas de confidencialidad y tratamiento de datos.
@@ -57,7 +58,8 @@ export default function PoliticasConfidencialidadModal({ t, apiBase, token, vers
           border: `1.5px solid ${t.border || 'rgba(0,175,197,0.35)'}`,
           background: t.bgCard || t.bg || '#0f2942',
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div
           style={{
             padding: '20px 22px 14px',

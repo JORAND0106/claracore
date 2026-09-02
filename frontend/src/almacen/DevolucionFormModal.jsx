@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import CcConfirmModal from '../components/CcConfirmModal'
 import DevolucionForm from './DevolucionForm'
 import {
@@ -53,7 +54,8 @@ export default function DevolucionFormModal({
           className={`cc-almacen-form-modal cc-almacen-solicitud-form-modal${compact ? ' cc-almacen-modal-sheet' : ''}`}
           onClick={(e) => e.stopPropagation()}
           style={almacenFormModalDialogStyle({ width: MODAL_WIDTH, compact })}
-        >
+        >          <CcModalBrandHeader theme={t} />
+
           <div className="cc-almacen-form-modal__header cc-almacen-solicitud-form-modal__header cc-almacen-solicitud-form-modal__header--compact">
             <div style={{ minWidth: 0, flex: 1 }}>
               <div id="devolucion-form-modal-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>

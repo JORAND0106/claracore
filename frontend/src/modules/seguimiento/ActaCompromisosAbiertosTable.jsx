@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import { textoCompromisoCelda } from './compromisoTextoCelda'
@@ -664,7 +665,8 @@ function ActionPanel({
           border: viewportCompact ? 'none' : `1px solid ${t.border}`,
           boxShadow: t.shadow,
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <div style={{ fontWeight: 700, fontSize: 'var(--cc-title)', color: t.text }}>{title}</div>
           <button type="button" onClick={onClose} style={ghost(t)}>Cerrar</button>

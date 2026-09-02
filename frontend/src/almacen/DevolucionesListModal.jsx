@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import CcConfirmModal from '../components/CcConfirmModal'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 import DevolucionFormModal from './DevolucionFormModal'
@@ -116,7 +117,8 @@ export default function DevolucionesListModal({
             padding: 0,
           }}
           onClick={(e) => e.stopPropagation()}
-        >
+        >          <CcModalBrandHeader theme={t} />
+
           <div
             style={{
               display: 'flex',

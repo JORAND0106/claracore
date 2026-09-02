@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { useClaraViewport } from '../useClaraViewport'
 import { createCatalogoInsumosApi, fmtMoney } from './catalogoInsumosApi'
 import { esDesarrolladorUsuario } from '../utils/permisosContrato'
@@ -384,7 +385,8 @@ function TributoModalShell({ open, title, onClose, onSave, t, children }) {
           color: t.text,
           boxShadow: '0 16px 40px rgba(0,0,0,0.25)',
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', marginBottom: 12, color: t.primary }}>
           {title}
         </div>

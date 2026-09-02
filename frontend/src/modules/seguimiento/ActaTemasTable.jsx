@@ -1,4 +1,5 @@
 import { htmlToPlainText, isRichTextEmpty } from './richTextUtils'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 
 function iconSvgProps(size = 16) {
@@ -252,7 +253,8 @@ export function TemaAdjuntosPanel({ t, imagenes = [], onClose, viewportCompact =
         padding: 16,
         boxShadow: t.shadow,
       }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div style={{ fontWeight: 700, color: t.text }}>Adjuntos del tema</div>
           <button type="button" onClick={onClose} style={ghost(t)}>Cerrar</button>

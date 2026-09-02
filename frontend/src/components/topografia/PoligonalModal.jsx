@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import TopoAngularInput from './TopoAngularInput'
 import TopoErrorModal from './TopoErrorModal'
 import TopoConfirmModal from './TopoConfirmModal'
@@ -1061,7 +1062,8 @@ export default function PoligonalModal({
   return (
     <>
       <div style={overlay} onClick={onClose}>
-        <div style={panel} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div style={panel} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">          <CcModalBrandHeader theme={t} />
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)' }}>

@@ -3,6 +3,7 @@
  */
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { X, ChevronRight, Globe, GitFork, Play, Eye, AlertTriangle } from 'lucide-react'
 
 const TEAL = {
@@ -255,6 +256,7 @@ export default function ProgObraDepAyuda({ open, onClose, t }) {
           overflow: 'hidden',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             display: 'flex',

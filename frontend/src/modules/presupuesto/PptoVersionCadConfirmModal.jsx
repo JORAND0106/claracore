@@ -1,3 +1,4 @@
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 /**
  * Modal de confirmación antes de importar desde ClaraCAD en modo biblioteca de versión.
  */
@@ -39,7 +40,8 @@ export default function PptoVersionCadConfirmModal({
           overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{ padding: '18px 20px', background: '#F59E0B18', borderBottom: '1px solid #F59E0B55' }}>
           <div style={{ fontSize: 'var(--cc-body)', fontWeight: 900, color: '#B45309' }}>
             ⚠ Importación ClaraCAD en versión de biblioteca

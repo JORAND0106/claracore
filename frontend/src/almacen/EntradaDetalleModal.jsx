@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
 import { puedeVerAlertasEntrada } from './almacenPermisos'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
@@ -122,7 +123,8 @@ export default function EntradaDetalleModal({
       role="dialog"
       aria-modal="true"
     >
-      <div style={modal} className={compact ? 'cc-almacen-modal-sheet' : ''} onClick={(e) => e.stopPropagation()}>
+      <div style={modal} className={compact ? 'cc-almacen-modal-sheet' : ''} onClick={(e) => e.stopPropagation()}>        <CcModalBrandHeader theme={theme} />
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>

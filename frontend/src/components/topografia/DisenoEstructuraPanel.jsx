@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import TopoExcelSheet from './TopoExcelSheet'
 import { topoSheetStyles } from './topoSheetStyles'
 import { PermisoAviso, puede, useTopoTheme } from './topografiaShared'
@@ -364,7 +365,8 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
           padding: '18px 22px',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <h3 style={{ margin: '0 0 6px', color: ui.text, fontSize: 'var(--cc-base)' }}>
           Nueva estructura de vía
         </h3>

@@ -1,6 +1,8 @@
 /**
  * Confirmación modal del sistema (reemplaza window.confirm en flujos ClaraCore).
  */
+import CcModalBrandHeader from './CcModalBrandHeader'
+
 function mixWithSurface(color, surface, pct = 14) {
   return `color-mix(in srgb, ${color} ${pct}%, ${surface})`
 }
@@ -67,6 +69,7 @@ export default function CcConfirmModal({
           color: text,
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             padding: '16px 20px 12px',

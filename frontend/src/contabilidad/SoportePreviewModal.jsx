@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 
 export default function SoportePreviewModal({
   t,
@@ -88,7 +89,8 @@ export default function SoportePreviewModal({
           boxShadow: '0 16px 48px rgba(0,0,0,0.25)',
           position: 'relative',
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <button
           type="button"
           aria-label="Cerrar"

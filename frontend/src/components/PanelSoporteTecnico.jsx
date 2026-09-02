@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import CcModalBrandHeader from './CcModalBrandHeader'
 import { createPortal } from 'react-dom'
 import { Copy, Headset, Trash2, Wand2 } from 'lucide-react'
 import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL } from '../apiBase'
@@ -900,7 +901,8 @@ export function PanelSoporteTecnico({ t, usuario, token, onOpenChange, fullWidth
           padding: soporteMobile ? 0 : undefined,
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div
           className={soporteMobile ? 'cc-soporte-detalle-header' : undefined}
           style={{

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import PptoFiltroCampo from './PptoFiltroCampo'
 import {
   PPTO_FILTRO_CATEGORIAS,
@@ -321,7 +322,8 @@ export default function PptoFiltroModal({
           boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{ padding: `${cc.pad} 20px ${cc.padSm}`, borderBottom: `1px solid ${t.border}` }}>
           <div style={{ fontSize: cc.md, fontWeight: 800, color: t.primary }}>Filtros de búsqueda</div>
           <div style={{ fontSize: cc.sm, color: t.textMuted, marginTop: 4 }}>

@@ -2,6 +2,7 @@
  * Modal de programación de obra (~90% × 85%): tabs PK, tabla con capítulos colapsables, Gantt Excel.
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { createPortal } from 'react-dom'
 import { flushSync } from 'react-dom'
 import { RefreshCw, RotateCcw, Save } from 'lucide-react'
@@ -3069,7 +3070,8 @@ export default function ProgObraProgramacionModal({
           fontSize: 'var(--cc-sm)',
         }}
         onClick={(e) => e.stopPropagation()}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: `1px solid ${t.border}`, flexShrink: 0, gap: 12 }}>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: t.primary }}>

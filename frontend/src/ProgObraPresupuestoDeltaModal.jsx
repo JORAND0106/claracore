@@ -1,4 +1,5 @@
 import { fmtCOP, fmtCant } from './progObraFormat'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 
 function fmtDeltaMoney(n) {
   if (n == null || Number.isNaN(Number(n))) return '—'
@@ -103,7 +104,8 @@ export default function ProgObraPresupuestoDeltaModal({ open, delta, onClose, t,
         boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
       }}
       onClick={(e) => e.stopPropagation()}
-    >
+    >      <CcModalBrandHeader theme={t} />
+
       <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: '#b45309', marginBottom: 8 }}>⚠ {titulo}</div>
 
       {delta.snapshot_ausente && delta.alerta ? (

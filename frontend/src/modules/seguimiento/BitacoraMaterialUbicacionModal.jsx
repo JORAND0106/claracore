@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import PptoFiltroMapaPk from '../presupuesto/PptoFiltroMapaPk'
 import { API_BASE } from '../../apiBase'
 import { identificarUbicacionMaterial } from './bitacoraMaterialUbicacion'
@@ -125,7 +126,8 @@ export default function BitacoraMaterialUbicacionModal({
           border: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column',
           overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           padding: '10px 14px', borderBottom: `1px solid ${t.border}`,

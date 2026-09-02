@@ -1,3 +1,4 @@
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 /**
  * Shell compartido para modales de filtros de Almacén.
  */
@@ -50,7 +51,8 @@ export default function AlmacenFiltrosModal({
           overflow: 'hidden',
           color: text,
         }}
-      >
+      >        <CcModalBrandHeader theme={theme} />
+
         <div
           style={{
             padding: '14px 18px',

@@ -2,6 +2,7 @@
  * Popup de edición completa de un registro de Cartera de cálculo.
  */
 import { useEffect, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import TopoAngularInput from './TopoAngularInput'
 import { fmtNum, validarGms } from '../../utils/topografia_angular'
 
@@ -138,7 +139,8 @@ export default function PoligonalPuntoEditModal({
           borderRadius: 14,
           boxShadow: t.shadow || '0 24px 64px rgba(0,0,0,0.28)',
         }}
-      >
+      >        <CcModalBrandHeader theme={theme} />
+
         <div
           style={{
             padding: '14px 18px',

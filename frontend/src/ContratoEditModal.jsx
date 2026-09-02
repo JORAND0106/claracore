@@ -2,6 +2,7 @@
  * Modal de edición / creación de contrato con pestañas.
  */
 import { useEffect, useMemo, useState } from "react";
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { ContratoDocumentosPanel } from "./ContratoDocumentosContractuales";
 import { ContratoOrdenesPagoPanel } from "./ContratoOrdenesPago";
 import { formatCOP } from "./utils/formatCOP";
@@ -157,7 +158,8 @@ export default function ContratoEditModal({
           fontSize: font.body,
           lineHeight: 1.35,
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div
           style={{
             padding: compact ? "12px 14px 10px" : "16px 20px 12px",
@@ -459,6 +461,7 @@ export default function ContratoEditModal({
                   color: confirmTheme.text,
                 }}
               >
+                <CcModalBrandHeader theme={confirmTheme} />
                 <div
                   style={{
                     padding: "16px 20px 12px",

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { API_BASE } from '../apiBase'
 import { contabGet, contabSend } from './contabilidadApi'
 import { prepareSoporteConPeso } from './contabilidadImageCompress'
@@ -41,7 +42,8 @@ function DocModalForm({ title, onSubmit, onClose, t, busy, btnGhost, btnPrimary,
           background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 14,
           width: 'min(520px, 96vw)', maxHeight: '90vh', overflow: 'auto', padding: 20,
         }}
-      >
+      >        <CcModalBrandHeader theme={t} />
+
         <div style={{ fontWeight: 800, color: t.primary, marginBottom: 16, fontSize: 'var(--cc-md)' }}>
           {title}
         </div>

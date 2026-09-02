@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import {
   almacenFormModalDialogStyle,
@@ -70,7 +71,8 @@ export default function OcSolicitudUbicacionModal({
         className={`cc-almacen-form-modal cc-almacen-solicitud-form-modal${compact ? ' cc-almacen-modal-sheet' : ''}`}
         onClick={(e) => e.stopPropagation()}
         style={almacenFormModalDialogStyle({ width: 'min(720px, 100%)', compact })}
-      >
+      >        <CcModalBrandHeader theme={theme} />
+
         <div className="cc-almacen-form-modal__header cc-almacen-solicitud-form-modal__header cc-almacen-solicitud-form-modal__header--compact">
           <div style={{ minWidth: 0, flex: 1 }}>
             <div id="oc-ubicacion-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>
