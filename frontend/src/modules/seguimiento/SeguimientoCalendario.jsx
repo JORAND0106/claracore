@@ -714,8 +714,8 @@ export default function SeguimientoCalendario({
               flexDirection: 'column',
               overflow: 'hidden',
             }}
-          >            <CcModalBrandHeader theme={t} />
-
+          >
+            <CcModalBrandHeader theme={t} />
             <div style={{
               display: 'flex',
               alignItems: 'center',

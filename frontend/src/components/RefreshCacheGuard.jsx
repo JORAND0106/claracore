@@ -114,8 +114,8 @@ export default function RefreshCacheGuard({ theme, active = false }) {
           boxShadow: t.shadow || '0 28px 80px rgba(0,0,0,0.28)',
           overflow: 'hidden',
         }}
-      >        <CcModalBrandHeader theme={theme} />
-
+      >
+        <CcModalBrandHeader theme={theme} />
         <div style={{ padding: '32px 36px 20px', textAlign: 'center' }}>
           <div
             style={{

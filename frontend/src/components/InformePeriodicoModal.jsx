@@ -146,8 +146,8 @@ export default function InformePeriodicoModal({
           overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             padding: '28px 32px 24px',

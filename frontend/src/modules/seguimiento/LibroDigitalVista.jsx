@@ -887,8 +887,8 @@ export default function LibroDigitalVista({
           linear-gradient(180deg, color-mix(in srgb, ${palette.bg} 70%, #0a1628), color-mix(in srgb, ${palette.bg} 40%, #0a1628))
         `,
       }}
-    >      <CcModalBrandHeader theme={t} />
-
+    >
+      <CcModalBrandHeader theme={t} />
       <div className="cc-libro-topbar" style={{ background: palette.headerBar }}>
         <div className="cc-libro-brand">
           <img src={LOGO_SRC} alt="ClaraCore" className="cc-libro-logo" />

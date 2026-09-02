@@ -87,8 +87,8 @@ export default function PptoExportExcelModal({
           fontSize: 'inherit',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             padding: `${cc.pad} 20px ${cc.padSm}`,

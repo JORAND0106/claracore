@@ -357,8 +357,8 @@ export default function DespachadorModal({
       aria-modal="true"
       aria-labelledby="despachador-title"
     >
-      <div style={modal} className={compact ? 'cc-almacen-modal-sheet' : ''}>        <CcModalBrandHeader theme={theme} />
-
+      <div style={modal} className={compact ? 'cc-almacen-modal-sheet' : ''}>
+        <CcModalBrandHeader theme={theme} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
           <div>
             <div id="despachador-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>

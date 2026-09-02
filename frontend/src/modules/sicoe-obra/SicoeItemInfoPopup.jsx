@@ -40,8 +40,8 @@ export default function SicoeItemInfoPopup({
       aria-modal="true"
       aria-label={title}
       onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}
-    >      <CcModalBrandHeader theme={t} />
-
+    >
+      <CcModalBrandHeader theme={t} />
       <div
         className="cc-sicoe-item-info-panel"
         style={{

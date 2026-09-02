@@ -120,8 +120,8 @@ export default function ProgObraAlcanceExportModal({
           fontSize: 'var(--cc-sm)',
           color: t.text,
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div id="prog-alcance-title" style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: t.primary, marginBottom: 4 }}>
           {title}
         </div>

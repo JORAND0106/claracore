@@ -777,13 +777,15 @@ function Modal({ t, onClose, children, width = '460px', closeOnBackdrop = true }
     }} onClick={closeOnBackdrop ? onClose : undefined}>
       <div style={{
         background: t.bgCard, border: `1px solid ${t.border}`,
-        borderRadius: '20px', padding: '40px', width, maxWidth: '95vw',
-        maxHeight: '90vh', overflowY: 'auto',
+        borderRadius: '20px', padding: 0, width, maxWidth: '95vw',
+        maxHeight: '90vh', overflowY: 'auto', overflowX: 'hidden',
         boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
         animation: 'modalIn 0.25s ease'
       }} onClick={e => e.stopPropagation()}>
         <CcModalBrandHeader theme={t} />
-        {children}
+        <div style={{ padding: '28px 40px 40px' }}>
+          {children}
+        </div>
       </div>
     </div>
   )
@@ -7922,8 +7924,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             role="dialog"
             aria-modal="true"
             aria-label="Asignar corte de subcontratista"
-          >            <CcModalBrandHeader theme={t} />
-
+          >
+            <CcModalBrandHeader theme={t} />
             <div style={{ fontSize:'var(--cc-lg)', fontWeight:800, color:t.text, marginBottom:8 }}>
               📄 Corte subcontratista · {seleccionados.length} registro(s)
             </div>
@@ -14718,7 +14720,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         maxHeight:'90vh', display:'flex', flexDirection:'column', overflow:'hidden',
         boxShadow:'0 25px 60px rgba(0,0,0,0.4)' }}>
         <CcModalBrandHeader theme={t} />
-
         {/* Header */}
         <div style={{ padding:'20px 24px', borderBottom:`1px solid ${t.border}`,
           display:'flex', alignItems:'center', justifyContent:'space-between' }}>

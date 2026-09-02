@@ -215,8 +215,8 @@ export default function PkIdsCsvPanoramaModal({
             color: text,
             overflow: "hidden",
           }}
-        >          <CcModalBrandHeader theme={theme} />
-
+        >
+          <CcModalBrandHeader theme={theme} />
           <div
             style={{
               padding: "16px 20px 12px",

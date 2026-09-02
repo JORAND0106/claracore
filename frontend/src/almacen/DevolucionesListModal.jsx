@@ -117,8 +117,8 @@ export default function DevolucionesListModal({
             padding: 0,
           }}
           onClick={(e) => e.stopPropagation()}
-        >          <CcModalBrandHeader theme={t} />
-
+        >
+          <CcModalBrandHeader theme={t} />
           <div
             style={{
               display: 'flex',

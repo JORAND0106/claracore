@@ -139,8 +139,8 @@ export default function PoligonalPuntoEditModal({
           borderRadius: 14,
           boxShadow: t.shadow || '0 24px 64px rgba(0,0,0,0.28)',
         }}
-      >        <CcModalBrandHeader theme={theme} />
-
+      >
+        <CcModalBrandHeader theme={theme} />
         <div
           style={{
             padding: '14px 18px',

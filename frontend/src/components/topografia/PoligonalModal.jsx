@@ -1062,8 +1062,8 @@ export default function PoligonalModal({
   return (
     <>
       <div style={overlay} onClick={onClose}>
-        <div style={panel} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">          <CcModalBrandHeader theme={t} />
-
+        <div style={panel} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+          <CcModalBrandHeader theme={t} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 'var(--cc-lg)' }}>

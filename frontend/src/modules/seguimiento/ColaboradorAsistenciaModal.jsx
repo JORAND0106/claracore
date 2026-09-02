@@ -315,8 +315,8 @@ export default function ColaboradorAsistenciaModal({
           padding: 0,
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{
           flexShrink: 0,
           display: 'flex',

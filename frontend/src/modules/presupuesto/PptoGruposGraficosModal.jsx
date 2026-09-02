@@ -358,8 +358,8 @@ export default function PptoGruposGraficosModal({
             boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
             padding: 22,
           }}
-        >          <CcModalBrandHeader theme={t} />
-
+        >
+          <CcModalBrandHeader theme={t} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
             <div>
               <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: t.text }}>

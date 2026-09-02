@@ -325,8 +325,8 @@ export default function TrazabilidadRegistroModal({
       }}
       onClick={onClose}
     >
-      <div style={sx.shell} onClick={(e) => e.stopPropagation()}>        <CcModalBrandHeader theme={theme} />
-
+      <div style={sx.shell} onClick={(e) => e.stopPropagation()}>
+        <CcModalBrandHeader theme={theme} />
         <div
           style={{
             display: 'flex',

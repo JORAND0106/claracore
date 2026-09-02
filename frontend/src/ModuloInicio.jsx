@@ -474,8 +474,8 @@ function BandejaNovedadesInicio({
           <div
             onClick={(e) => e.stopPropagation()}
             style={{ maxWidth: 'min(1040px, 96vw)', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}
-          >            <CcModalBrandHeader theme={t} />
-
+          >
+            <CcModalBrandHeader theme={t} />
             <TarjetaNovedad novedad={detalle} t={t} fs={fs} delay={0} sinEntrada />
             <div style={{ textAlign: 'right', marginTop: '8px' }}>
               <button

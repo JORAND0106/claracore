@@ -286,8 +286,8 @@ export default function TareaFormModal({
           boxShadow: t.shadow,
           padding: viewportCompact ? undefined : '28px 28px 22px',
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div className={viewportCompact ? 'cc-seguim-tarea-form cc-seguim-tarea-form--compact' : 'cc-seguim-tarea-form'}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
             <div>

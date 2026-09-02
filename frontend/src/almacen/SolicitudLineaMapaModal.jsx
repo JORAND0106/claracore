@@ -54,8 +54,8 @@ export default function SolicitudLineaMapaModal({
         className={compact ? 'cc-almacen-modal-sheet' : ''}
         onClick={(e) => e.stopPropagation()}
         style={almacenFormModalDialogStyle({ width: 'min(680px, 100%)', compact })}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',

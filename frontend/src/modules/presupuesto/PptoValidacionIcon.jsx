@@ -110,8 +110,8 @@ export default function PptoValidacionIcon({
           boxSizing: 'border-box',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>
           {labelEje}
         </div>

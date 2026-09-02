@@ -292,8 +292,8 @@ export function PanelCalculadoraFloat({ anchor = 'panel' }) {
         animation: 'ccPanelCalcIn 200ms ease',
       }}
       onClick={(e) => e.stopPropagation()}
-    >      <CcModalBrandHeader theme={t} />
-
+    >
+      <CcModalBrandHeader theme={t} />
       <div
         style={{
           display: 'flex',

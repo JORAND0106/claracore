@@ -6194,8 +6194,8 @@ export default function ModuloInformes({
               boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)',
               overflow: 'hidden',
             }}
-          >            <CcModalBrandHeader theme={t} />
-
+          >
+            <CcModalBrandHeader theme={t} />
             <div
               style={{
                 display: 'flex',

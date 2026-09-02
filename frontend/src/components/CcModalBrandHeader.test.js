@@ -9,9 +9,9 @@ import {
   claraCoreBrandTextColor,
   resolveModalThemeIsDark,
   ccModalBrandHeaderStyle,
-} from './CcModalBrandHeader.jsx'
+} from './ccModalBrandTheme.js'
 
-describe('CcModalBrandHeader', () => {
+describe('CcModalBrandHeader theme', () => {
   it('usa el favicon público (ícono sin texto)', () => {
     assert.match(CC_MODAL_FAVICON_SRC, /\/favicon\.png/)
     assert.equal(CC_MODAL_BRAND_NAME, 'ClaraCore')

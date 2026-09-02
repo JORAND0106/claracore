@@ -50,8 +50,8 @@ export default function TemaEditorModal({
           border: viewportCompact ? 'none' : `1px solid ${t.border}`,
           boxShadow: t.shadow,
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 700, fontSize: 'var(--cc-title)', color: t.text }}>
             Tema {(idea?.orden != null ? Number(idea.orden) : ideaIdx) + 1}

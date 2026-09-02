@@ -49,8 +49,8 @@ export default function ModalSelectorContrato({ t, contratos = [], onSelect }) {
           animation: 'modalIn 0.25s ease',
           boxSizing: 'border-box',
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div
           id="selector-contrato-titulo"
           style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.primary, marginBottom: 6 }}

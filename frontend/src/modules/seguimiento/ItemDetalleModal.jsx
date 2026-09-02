@@ -855,8 +855,8 @@ function Overlay({ t, onClose, children, wide = false, viewportCompact = false, 
           border: viewportCompact ? 'none' : `1px solid ${t.border}`,
           boxShadow: t.shadow || '0 12px 40px rgba(0,0,0,0.2)',
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         {children}
       </div>
     </div>

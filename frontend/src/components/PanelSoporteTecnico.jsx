@@ -901,8 +901,8 @@ export function PanelSoporteTecnico({ t, usuario, token, onOpenChange, fullWidth
           padding: soporteMobile ? 0 : undefined,
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div
           className={soporteMobile ? 'cc-soporte-detalle-header' : undefined}
           style={{

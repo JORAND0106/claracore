@@ -365,8 +365,8 @@ export function DisenoNuevaEstructuraModal({ open, onSave, onClose, saving }) {
           padding: '18px 22px',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <h3 style={{ margin: '0 0 6px', color: ui.text, fontSize: 'var(--cc-base)' }}>
           Nueva estructura de vía
         </h3>

@@ -304,8 +304,8 @@ export default function PptoSincroSicoeLoteModal({
             boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
             padding: 22,
           }}
-        >          <CcModalBrandHeader theme={t} />
-
+        >
+          <CcModalBrandHeader theme={t} />
           <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: '#15803D', marginBottom: 8 }}>
             ✓ Gráfico asociado al lote
           </div>

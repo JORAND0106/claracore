@@ -131,8 +131,8 @@ function NodoDetallePopup({ detalle, style, onClose }) {
         fontFamily: 'inherit',
         ...style,
       }}
-    >      <CcModalBrandHeader theme={t} />
-
+    >
+      <CcModalBrandHeader theme={t} />
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ fontWeight: 800, fontSize: 13, color: '#1e3a8a' }}>{detalle.nombre}</div>
         <button

@@ -163,8 +163,8 @@ export default function ProgObraComparacionGlobalModal({
           boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             display: 'flex',

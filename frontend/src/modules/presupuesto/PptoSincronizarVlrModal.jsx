@@ -45,8 +45,8 @@ export default function PptoSincronizarVlrModal({
           overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{ padding: '18px 20px', color: t.text, fontSize: 'var(--cc-sm)', lineHeight: 1.5 }}>
           {isResult ? (
             <p style={{ margin: 0, fontWeight: 600 }}>

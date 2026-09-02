@@ -84,8 +84,8 @@ export default function PptoSicoeGaleriaPicker({
           padding: 18,
           boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: t.text }}>Galería del contrato</div>
           <button

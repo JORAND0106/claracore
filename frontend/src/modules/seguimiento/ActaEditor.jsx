@@ -1793,8 +1793,8 @@ export default function ActaEditor({
             boxShadow: t.shadow,
             width: viewportCompact ? '100%' : 'min(1416px, 98vw)',
           }}
-        >          <CcModalBrandHeader theme={t} />
-
+        >
+          <CcModalBrandHeader theme={t} />
           {body}
         </div>
       </div>

@@ -268,8 +268,8 @@ export default function BitacoraAdjuntos({
             padding: 16,
             boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
           }}
-          >            <CcModalBrandHeader theme={t} />
-
+          >
+            <CcModalBrandHeader theme={t} />
             <div style={{ fontWeight: 800, color: t.text, marginBottom: 10, fontSize: 'var(--cc-sm)' }}>
               Vista previa
             </div>

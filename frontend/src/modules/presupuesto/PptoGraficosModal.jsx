@@ -299,8 +299,8 @@ export default function PptoGraficosModal({
             boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
             padding: 22,
           }}
-        >          <CcModalBrandHeader theme={t} />
-
+        >
+          <CcModalBrandHeader theme={t} />
           <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: '#15803D', marginBottom: 8 }}>
             ✓ Gráfico asociado correctamente
           </div>

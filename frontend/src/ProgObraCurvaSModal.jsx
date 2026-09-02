@@ -362,8 +362,8 @@ export default function ProgObraCurvaSModal({
           overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             display: 'flex',

@@ -262,8 +262,8 @@ export default function SolicitudLineaRevisionModal({
           boxShadow: '0 24px 64px rgba(15, 23, 42, 0.28)',
           padding: compact ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))' : '22px 24px 24px',
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <header style={{
           display: 'flex',
           justifyContent: 'space-between',

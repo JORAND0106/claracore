@@ -699,8 +699,8 @@ export default function PptoEdicionMasivaModal({
           fontSize: 'inherit',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             padding: `${cc.pad} 22px ${cc.padSm}`,

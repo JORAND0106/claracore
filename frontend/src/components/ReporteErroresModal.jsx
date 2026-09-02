@@ -596,8 +596,8 @@ export function ReporteErroresBtn({ t, usuario, token, onOpenChange, fullWidthTr
           padding: reporteMobile ? 0 : undefined,
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <ModalHeader
           t={t}
           icon="🛟"

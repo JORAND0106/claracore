@@ -9,6 +9,7 @@ import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
 import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
 import { addMapboxGeolocateControl } from "./mapboxSafe";
 import CompetenciaSelect from "./components/CompetenciaSelect";
+import CcModalBrandHeader from "./components/CcModalBrandHeader";
 import { RefreshCw } from "lucide-react";
 import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
 import { comprimirImagenADataUrl, prepararImagenParaUpload } from "./comprimirImagen";
@@ -5278,8 +5279,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       {popup && (
         <div style={overlayStyle} onClick={e => e.target===e.currentTarget && setPopup(null)}>
           <div style={modalStyle(1100)}>
-
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div>
                 <div style={{ fontSize:10,color:col.textSecondary,letterSpacing:1,textTransform:"uppercase",marginBottom:3 }}>Detalle del Precio</div>
                 <div style={{ fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif" }}>
@@ -5569,7 +5570,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
           onClick={(e) => e.target === e.currentTarget && !saving && setMetaImpacto(null)}
         >
           <div style={{ ...modalStyle(560), padding: 0 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{
+            <CcModalBrandHeader theme={theme} />
+<div style={{
               ...modalHead,
               background: isDarkMode(theme) ? "rgba(180,83,9,0.18)" : "rgba(254,243,199,0.95)",
               borderBottom: `1px solid ${isDarkMode(theme) ? "rgba(245,158,11,0.35)" : "#f59e0b"}`,
@@ -5695,8 +5697,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       {showCrear && (
         <div style={overlayStyle} onClick={e => e.target===e.currentTarget && setShowCrear(false)}>
           <div style={modalStyle(760)}>
-
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div>
                 <div style={{ fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif" }}>Crear Nuevo Precio</div>
                 <div style={{ fontSize:11,color:col.textSecondary,marginTop:2 }}>Complete los campos para agregar un precio al listado</div>
@@ -5829,7 +5831,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       {showAgrupador && (
         <div style={overlayStyle} onClick={e => e.target===e.currentTarget && cerrarAgrupadorModal()}>
           <div style={modalStyle(MODAL_AGRUPADOR_ANCHO_CREAR)} onClick={e => e.stopPropagation()}>
-            <form onSubmit={(e) => e.preventDefault()}>
+            <CcModalBrandHeader theme={theme} />
+<form onSubmit={(e) => e.preventDefault()}>
             <div style={modalHead}>
               <div>
                 <div style={agTypo.modalTitle}>
@@ -6086,7 +6089,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       {eliminarAgConfirm && (
         <div style={overlayStyle} onClick={e => e.target === e.currentTarget && !eliminandoAg && (setEliminarAgConfirm(null), setEliminarAgPreview(null))}>
           <div style={{ ...modalStyle(480), padding: 0 }} onClick={e => e.stopPropagation()}>
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div style={agTypo.modalTitle}>Eliminar agrupador</div>
               <button type="button" style={S.closeBtn(theme)} onClick={() => !eliminandoAg && (setEliminarAgConfirm(null), setEliminarAgPreview(null))} disabled={eliminandoAg}>✕</button>
             </div>
@@ -7886,7 +7890,8 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {showCrear&&(
         <div className="cc-admin-modal-overlay-fs" style={overlayStyle} onClick={e=>e.target===e.currentTarget&&setShowCrear(false)}>
           <div className="cc-admin-modal-fs" style={modalStyle(660)}>
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Crear Subcontratista</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>Ingresa los datos del nuevo subcontratista</div>
@@ -7937,7 +7942,8 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {detalle&&(
         <div className="cc-admin-modal-overlay-fs" style={overlayStyle} onClick={e=>e.target===e.currentTarget&&setDetalle(null)}>
           <div className="cc-admin-modal-fs" style={modalStyle(900)}>
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
                 <div>
                   <div style={{fontSize:10,color:col.textSecondary,letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>Subcontratista</div>
@@ -8079,7 +8085,8 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {showCrearCorte&&(
         <div style={{...overlayStyle,zIndex:10002}} onClick={e=>e.target===e.currentTarget&&setShowCrearCorte(false)}>
           <div style={{...modalStyle(540), minHeight:"min(620px,88vh)"}}>
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Crear Nuevo Corte</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>{detalle?.razon_social}</div>
@@ -8128,7 +8135,8 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {corteDetalle&&(
         <div style={{...overlayStyle,zIndex:10002}} onClick={e=>e.target===e.currentTarget&&setCorteDetalle(null)}>
           <div style={modalStyle(460)}>
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Corte #{corteDetalle.consecutivo}</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>{detalle?.razon_social} · {corteDetalle.tipo_periodo}</div>
@@ -8164,7 +8172,8 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {showAgregarItem&&(
         <div style={{...overlayStyle,zIndex:10002}} onClick={e=>e.target===e.currentTarget&&setShowAgregarItem(false)}>
           <div style={modalStyle(660)}>
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Agregar Ítem de Cobro</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>Subcontratista: {detalle?.razon_social}</div>
@@ -8234,7 +8243,8 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {precioEdit&&(
         <div style={{...overlayStyle,zIndex:10002}} onClick={e=>e.target===e.currentTarget&&setPrecioEdit(null)}>
           <div style={modalStyle(500)}>
-            <div style={modalHead}>
+            <CcModalBrandHeader theme={theme} />
+<div style={modalHead}>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>{precioEdit.item_numero} — {(precioEdit.descripcion||"").substring(0,38)}{(precioEdit.descripcion||"").length>38?"...":""}</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>{detalle?.razon_social}</div>

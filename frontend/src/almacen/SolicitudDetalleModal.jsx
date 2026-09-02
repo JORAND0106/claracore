@@ -209,8 +209,8 @@ export default function SolicitudDetalleModal({
           display: 'flex',
           flexDirection: 'column',
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{
           padding: compact ? '16px 16px 0' : '20px 20px 0',
           flexShrink: 0,

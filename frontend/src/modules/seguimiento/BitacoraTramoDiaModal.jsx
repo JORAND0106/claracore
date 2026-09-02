@@ -110,8 +110,8 @@ export default function BitacoraTramoDiaModal({
           display: 'flex',
           flexDirection: 'column',
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{
           padding: '12px 14px', borderBottom: `1px solid ${t.border}`,
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,

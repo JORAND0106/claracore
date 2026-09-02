@@ -414,8 +414,8 @@ export default function PptoVersionCompareModal({ open, onClose, versions = [], 
           overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             padding: '14px 18px',

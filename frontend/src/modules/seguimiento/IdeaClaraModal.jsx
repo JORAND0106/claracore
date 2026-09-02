@@ -107,8 +107,8 @@ export default function IdeaClaraModal({
           boxShadow: t.shadow || '0 12px 40px rgba(0,0,0,0.2)',
           padding: 20,
         }}
-      >        <CcModalBrandHeader theme={t} />
-
+      >
+        <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>Redacción con Clara</div>
