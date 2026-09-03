@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 
 const CAMPO_ETIQUETAS = {
   id: 'ID',
@@ -325,6 +326,7 @@ export default function TrazabilidadRegistroModal({
       onClick={onClose}
     >
       <div style={sx.shell} onClick={(e) => e.stopPropagation()}>
+        <CcModalBrandHeader theme={theme} />
         <div
           style={{
             display: 'flex',

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { createPortal } from 'react-dom'
 import {
   DOCUMENTO_TIPOS,
@@ -315,6 +316,7 @@ export default function ColaboradorAsistenciaModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{
           flexShrink: 0,
           display: 'flex',

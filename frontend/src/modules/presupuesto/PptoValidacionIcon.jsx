@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { createPortal } from 'react-dom'
 import { PPTO_SEMAFORO_ESTADOS, pptoEstadoValidacionColor } from './pptoEstadosValidacion'
 
@@ -110,6 +111,7 @@ export default function PptoValidacionIcon({
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>
           {labelEje}
         </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from './CcModalBrandHeader'
 import { createPortal } from 'react-dom'
 import { API_BASE } from '../apiBase'
 import { useModulo } from '../context/ModuloContext'
@@ -596,6 +597,7 @@ export function ReporteErroresBtn({ t, usuario, token, onOpenChange, fullWidthTr
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={t} />
         <ModalHeader
           t={t}
           icon="🛟"

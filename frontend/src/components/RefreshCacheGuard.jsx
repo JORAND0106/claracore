@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from './CcModalBrandHeader'
 import { useModulo } from '../context/ModuloContext'
 
 function isRefreshShortcut(e) {
@@ -114,6 +115,7 @@ export default function RefreshCacheGuard({ theme, active = false }) {
           overflow: 'hidden',
         }}
       >
+        <CcModalBrandHeader theme={theme} />
         <div style={{ padding: '32px 36px 20px', textAlign: 'center' }}>
           <div
             style={{

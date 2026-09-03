@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import ActaCompromisosAbiertosTable from './ActaCompromisosAbiertosTable'
 import ActaTemasTable, { TemaAdjuntosPanel } from './ActaTemasTable'
@@ -1793,6 +1794,7 @@ export default function ActaEditor({
             width: viewportCompact ? '100%' : 'min(1416px, 98vw)',
           }}
         >
+          <CcModalBrandHeader theme={t} />
           {body}
         </div>
       </div>

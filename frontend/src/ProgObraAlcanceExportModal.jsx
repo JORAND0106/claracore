@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 
 const EXPORT_FORMATS = [
   { id: 'xml', label: 'MS Project (XML)' },
@@ -120,6 +121,7 @@ export default function ProgObraAlcanceExportModal({
           color: t.text,
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div id="prog-alcance-title" style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: t.primary, marginBottom: 4 }}>
           {title}
         </div>

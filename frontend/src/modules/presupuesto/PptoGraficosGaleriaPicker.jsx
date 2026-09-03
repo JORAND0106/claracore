@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { aplanarImagenesGaleriaGraficos } from './pptoGraficosGaleria.js'
 
 /**
@@ -80,6 +81,7 @@ export default function PptoGraficosGaleriaPicker({
           boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <div>
             <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', color: t.text }}>

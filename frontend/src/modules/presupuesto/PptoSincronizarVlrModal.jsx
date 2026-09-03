@@ -1,3 +1,4 @@
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 /**
  * Modal confirmación + resultado: sincronizar V.U. con listado de precios
  * (Desarrollador o permiso «editar registros presupuesto» crear/editar).
@@ -45,6 +46,7 @@ export default function PptoSincronizarVlrModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ padding: '18px 20px', color: t.text, fontSize: 'var(--cc-sm)', lineHeight: 1.5 }}>
           {isResult ? (
             <p style={{ margin: 0, fontWeight: 600 }}>

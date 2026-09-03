@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, Fragment } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { X, Download, ChevronDown, ChevronRight } from 'lucide-react'
 import { fetchComparar, sortNodosByDesviacion, COMPARE_LABELS } from './progObraCompare'
 import { fmtCOP, fmtDateHuman } from './progObraFormat'
@@ -163,6 +164,7 @@ export default function ProgObraComparacionGlobalModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             display: 'flex',

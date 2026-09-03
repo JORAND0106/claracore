@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { fetchConFallback, formatFetchError } from './fetchConFallback'
 import { parseFoacExcelBuffer } from './foacExcelParse'
 import { downloadAuditorExcelIndividual, downloadAuditorExcelLote } from './auditorExportExcel'
@@ -1302,6 +1303,7 @@ function ModalResultadoAuditor({
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.text }}>{nombre}</div>

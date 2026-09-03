@@ -5,6 +5,7 @@ import {
   useMemo,
   useState,
 } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import { Calculator, X, Delete } from 'lucide-react'
 import {
   PANEL_CALC_OPS,
@@ -292,6 +293,7 @@ export function PanelCalculadoraFloat({ anchor = 'panel' }) {
       }}
       onClick={(e) => e.stopPropagation()}
     >
+      <CcModalBrandHeader theme={t} />
       <div
         style={{
           display: 'flex',

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react"
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { flushSync } from "react-dom"
 import { Flame } from "lucide-react"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
@@ -5923,6 +5924,7 @@ async function darDeBaja(id) {
             className="cc-ppto-modal-sheet cc-ppto-detalle-sheet"
             style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'min(1040px, 100%)',maxWidth:'100%',maxHeight:'min(80vh, 700px)',overflowY:'auto',WebkitOverflowScrolling:'touch',boxShadow:'0 20px 60px rgba(0,0,0,0.4)',display:'flex',flexDirection:'column',boxSizing:'border-box' }}
             onClick={e => e.stopPropagation()}>
+            <CcModalBrandHeader theme={t} />
             <div className="cc-ppto-detalle-header" style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px', gap:'10px', flexWrap:'wrap', flexShrink:0 }}>
               <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize:'var(--cc-md)',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>

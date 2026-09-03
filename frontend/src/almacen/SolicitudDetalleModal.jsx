@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import CcConfirmModal from '../components/CcConfirmModal'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
@@ -209,6 +210,7 @@ export default function SolicitudDetalleModal({
           flexDirection: 'column',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{
           padding: compact ? '16px 16px 0' : '20px 20px 0',
           flexShrink: 0,

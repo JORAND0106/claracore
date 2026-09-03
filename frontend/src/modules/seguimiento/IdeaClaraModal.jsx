@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 
 /**
  * Ventana de redacción asistida con Clara.
@@ -107,6 +108,7 @@ export default function IdeaClaraModal({
           padding: 20,
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>Redacción con Clara</div>

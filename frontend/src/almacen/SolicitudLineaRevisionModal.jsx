@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import InsumoSearchTable from './InsumoSearchTable'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
@@ -262,6 +263,7 @@ export default function SolicitudLineaRevisionModal({
           padding: compact ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))' : '22px 24px 24px',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <header style={{
           display: 'flex',
           justifyContent: 'space-between',

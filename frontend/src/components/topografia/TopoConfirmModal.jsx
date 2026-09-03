@@ -2,6 +2,8 @@
  * Modal de confirmacion propio de la plataforma (diseño y colores corporativos).
  * Reemplaza al window.confirm nativo del navegador.
  */
+import CcModalBrandHeader from '../CcModalBrandHeader'
+
 export default function TopoConfirmModal({
   theme,
   titulo = 'Confirmar accion',
@@ -49,6 +51,7 @@ export default function TopoConfirmModal({
           overflow: 'hidden',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             padding: '16px 20px',

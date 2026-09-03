@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 
 import { useTopoTheme } from './topografiaShared'
 
@@ -223,7 +224,7 @@ export default function DisenoImportConfigModal({ open, nombreArchivo, onConfirm
         onClick={(e) => e.stopPropagation()}
 
       >
-
+        <CcModalBrandHeader theme={t} />
         <h3 style={{ margin: '0 0 6px', color: ui.text, fontSize: 'var(--cc-base)' }}>
 
           Configuración del diseño transversal

@@ -1,6 +1,8 @@
 /**
  * Aviso modal discreto del sistema (reemplaza window.alert en flujos ClaraCore).
  */
+import CcModalBrandHeader from './CcModalBrandHeader'
+
 export default function CcAvisoModal({
   theme,
   titulo = 'Aviso',
@@ -45,6 +47,7 @@ export default function CcAvisoModal({
           overflow: 'hidden',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ padding: '18px 20px 14px', background: palette.bg, borderBottom: `1px solid ${t.border || '#E2E8F0'}` }}>
           <div id="cc-aviso-title" style={{ fontSize: 'var(--cc-body)', fontWeight: 800, color: palette.accent }}>
             {titulo}

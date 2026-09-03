@@ -1,4 +1,5 @@
 import { useState, useEffect, useId, useRef } from 'react'
+import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { API_BASE as API, API_FALLBACK } from './apiBase'
 import { formatCOP } from './utils/formatCOP'
 import {
@@ -6194,6 +6195,7 @@ export default function ModuloInformes({
               overflow: 'hidden',
             }}
           >
+            <CcModalBrandHeader theme={t} />
             <div
               style={{
                 display: 'flex',

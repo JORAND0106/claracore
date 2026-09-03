@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import { useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
 import { useTopoViewportGestures } from './useTopoViewportGestures'
@@ -131,6 +132,7 @@ function NodoDetallePopup({ detalle, style, onClose }) {
         ...style,
       }}
     >
+      <CcModalBrandHeader theme={t} />
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ fontWeight: 800, fontSize: 13, color: '#1e3a8a' }}>{detalle.nombre}</div>
         <button

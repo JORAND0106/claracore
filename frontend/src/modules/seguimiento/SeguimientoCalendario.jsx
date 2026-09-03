@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { createPortal } from 'react-dom'
 import FullCalendar from '@fullcalendar/react'
 import dayGridPlugin from '@fullcalendar/daygrid'
@@ -714,6 +715,7 @@ export default function SeguimientoCalendario({
               overflow: 'hidden',
             }}
           >
+            <CcModalBrandHeader theme={t} />
             <div style={{
               display: 'flex',
               alignItems: 'center',

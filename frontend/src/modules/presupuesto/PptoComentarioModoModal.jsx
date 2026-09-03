@@ -3,6 +3,7 @@ import {
   PPTO_COMENTARIO_MODO_REPLACE,
   pptoTextoModoHistorial,
 } from './pptoComentarioModo'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 
 /**
  * Confirmación al crear comentario/observación sobre registros con historial previo.
@@ -43,6 +44,7 @@ export default function PptoComentarioModoModal({ open, onCancel, onAppend, onRe
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ padding: '18px 20px', background: '#F59E0B18', borderBottom: '1px solid #F59E0B55' }}>
           <div style={{ fontSize: 'var(--cc-body)', fontWeight: 900, color: '#B45309' }}>
             ⚠ {titulo}

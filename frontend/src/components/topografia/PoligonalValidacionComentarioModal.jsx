@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import { API_BASE } from '../../apiBase'
 import { ETIQUETAS_VALIDACION_TOPO, useTopoTheme } from './topografiaShared'
 
@@ -102,6 +103,7 @@ export default function PoligonalValidacionComentarioModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={ui.t} />
         <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', marginBottom: 4 }}>
           Validación nivel {nivel} — <span style={{ color: colorEstado }}>{estado}</span>
         </div>

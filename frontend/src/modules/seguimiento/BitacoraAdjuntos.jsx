@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
 import { MAX_FOTOS_BITACORA } from './bitacoraConstants'
@@ -268,6 +269,7 @@ export default function BitacoraAdjuntos({
             boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
           }}
           >
+            <CcModalBrandHeader theme={t} />
             <div style={{ fontWeight: 800, color: t.text, marginBottom: 10, fontSize: 'var(--cc-sm)' }}>
               Vista previa
             </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { formatCOP } from '../../utils/formatCOP'
 import {
   calcularBuscarObjetivo,
@@ -392,6 +393,7 @@ export default function PptoBuscarObjetivoModal({
           boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div style={{ fontSize: 'var(--cc-md)', fontWeight: 700, color: t.primary }}>
             🎯 Buscar objetivo

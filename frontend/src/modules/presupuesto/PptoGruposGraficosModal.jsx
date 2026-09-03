@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
@@ -358,6 +359,7 @@ export default function PptoGruposGraficosModal({
             padding: 22,
           }}
         >
+          <CcModalBrandHeader theme={t} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 }}>
             <div>
               <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: t.text }}>

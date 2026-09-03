@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { BookOpen, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { MSG_ACTA_ACCESO_RESTRINGIDO } from './ActasRepositorio'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
@@ -887,6 +888,7 @@ export default function LibroDigitalVista({
         `,
       }}
     >
+      <CcModalBrandHeader theme={t} />
       <div className="cc-libro-topbar" style={{ background: palette.headerBar }}>
         <div className="cc-libro-brand">
           <img src={LOGO_SRC} alt="ClaraCore" className="cc-libro-logo" />

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from '../CcModalBrandHeader'
 import {
   createHatchRegionFromClick,
   drawHatchRegion,
@@ -1100,6 +1101,7 @@ export default function EsquemaEditorModal({
           overflow: 'hidden',
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
           padding: '10px 14px', borderBottom: `1px solid ${t.border}`, flexShrink: 0,

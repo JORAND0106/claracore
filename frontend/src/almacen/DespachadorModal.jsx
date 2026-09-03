@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import ProveedorSelector from './ProveedorSelector'
 import PlacaTransportadorFields from './PlacaTransportadorFields'
 import InsumoPorProveedorSelect from './InsumoPorProveedorSelect'
@@ -357,6 +358,7 @@ export default function DespachadorModal({
       aria-labelledby="despachador-title"
     >
       <div style={modal} className={compact ? 'cc-almacen-modal-sheet' : ''}>
+        <CcModalBrandHeader theme={theme} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
           <div>
             <div id="despachador-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>

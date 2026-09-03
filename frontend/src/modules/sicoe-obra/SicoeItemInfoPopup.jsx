@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 
 /**
  * Popup ClaraCore con datos del ítem (sin imagen).
@@ -40,6 +41,7 @@ export default function SicoeItemInfoPopup({
       aria-label={title}
       onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}
     >
+      <CcModalBrandHeader theme={t} />
       <div
         className="cc-sicoe-item-info-panel"
         style={{

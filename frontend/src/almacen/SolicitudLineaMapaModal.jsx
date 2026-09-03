@@ -1,4 +1,5 @@
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { fmtAbscisasLinea, fmtNodosLinea, nodosLineaSolicitud } from './solicitudDetalleHelpers'
 import {
   almacenFormModalDialogStyle,
@@ -54,6 +55,7 @@ export default function SolicitudLineaMapaModal({
         onClick={(e) => e.stopPropagation()}
         style={almacenFormModalDialogStyle({ width: 'min(680px, 100%)', compact })}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',

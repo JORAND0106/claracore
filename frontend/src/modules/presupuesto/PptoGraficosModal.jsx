@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
@@ -299,6 +300,7 @@ export default function PptoGraficosModal({
             padding: 22,
           }}
         >
+          <CcModalBrandHeader theme={t} />
           <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: '#15803D', marginBottom: 8 }}>
             ✓ Gráfico asociado correctamente
           </div>

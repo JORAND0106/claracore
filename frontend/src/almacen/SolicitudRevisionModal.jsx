@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { btnSuccessStyle } from '../theme/adminPanelTheme'
 import CcConfirmModal from '../components/CcConfirmModal'
 import ExpedienteCompraModal from './ExpedienteCompraModal'
@@ -135,6 +136,7 @@ export default function SolicitudRevisionModal({
           padding: compact ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))' : 20,
         }}
       >
+        <CcModalBrandHeader theme={t} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>

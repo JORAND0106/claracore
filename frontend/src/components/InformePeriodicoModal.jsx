@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import CcModalBrandHeader from './CcModalBrandHeader'
 import { createPortal } from 'react-dom'
 import { Copy, Check, Download } from 'lucide-react'
 import { getDashTypoUI } from '../typographyScale'
@@ -146,6 +147,7 @@ export default function InformePeriodicoModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <CcModalBrandHeader theme={t} />
         <div
           style={{
             padding: '28px 32px 24px',
