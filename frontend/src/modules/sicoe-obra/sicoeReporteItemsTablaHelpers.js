@@ -61,6 +61,16 @@ export function sicoeItemFilaAbierta(itemExpandido, itemNum) {
   return !!(a && b && a === b)
 }
 
+/** Columnas de la fila de ítem (outer table). */
+export function sicoeItemsOuterColCount(verValoresEconomicos) {
+  return verValoresEconomicos ? 6 : 5
+}
+
+/** Columnas de la subtabla de registros (checkbox…acciones). */
+export function sicoeItemsSubColCount(verValoresEconomicos) {
+  return verValoresEconomicos ? 12 : 11
+}
+
 /** Estado de validación del nivel del usuario (no consolidado). */
 export function estadoNivelUsuarioRegistro(reg, nivelValidacion) {
   const nv = Number(nivelValidacion)

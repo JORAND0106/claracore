@@ -14,6 +14,8 @@ import {
   puedeValidacionMasivaPorRol,
   normalizarItemNumSicoe,
   sicoeItemFilaAbierta,
+  sicoeItemsOuterColCount,
+  sicoeItemsSubColCount,
 } from './sicoeReporteItemsTablaHelpers.js'
 
 describe('sortItemKeysSicoe', () => {
@@ -125,5 +127,14 @@ describe('puedeValidacionMasivaPorRol', () => {
     assert.equal(puedeValidacionMasivaPorRol({ puedeValidar: true, esOperativoContratista: false, esOperativoInterventoria: true }), false)
     assert.equal(puedeValidacionMasivaPorRol({ puedeValidar: true, esOperativoContratista: false, esOperativoInterventoria: false }), true)
     assert.equal(puedeValidacionMasivaPorRol({ puedeValidar: false, esOperativoContratista: false, esOperativoInterventoria: false }), false)
+  })
+})
+
+describe('sicoeItemsOuterColCount / sicoeItemsSubColCount', () => {
+  it('al ocultar CD (operativo interventoria) reduce columnas sin romper colspan', () => {
+    assert.equal(sicoeItemsOuterColCount(true), 6)
+    assert.equal(sicoeItemsOuterColCount(false), 5)
+    assert.equal(sicoeItemsSubColCount(true), 12)
+    assert.equal(sicoeItemsSubColCount(false), 11)
   })
 })
