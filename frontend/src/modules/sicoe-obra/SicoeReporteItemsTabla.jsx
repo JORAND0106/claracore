@@ -1054,7 +1054,6 @@ function FragmentItem({
                   {fila.regs.map((reg) => {
                     const estado = estadoMiNivel?.(reg) || 'No Revisado'
                     const pastel = pastelDeEstadoValidacion(estado)
-                    const expandido =
                     const expandido = sicoeRegistroFilaExpandida(registroExpandido, reg)
                     const media = mediaItemsDeRegistro(reg, reporte)
                     const tieneFoto = !!String(reg.foto_url || '').trim()
