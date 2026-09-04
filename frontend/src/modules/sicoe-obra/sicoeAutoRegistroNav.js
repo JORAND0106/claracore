@@ -2,9 +2,10 @@
  * Resolución de `_autoRegistro` al abrir carpeta SICOE (panel / deep-link / notif).
  * El valor puede ser id interno o numero_registro; a veces llega antes que `registros[]`.
  *
- * Interventoría abre con frecuencia desde cola/panel con `_autoRegistro` mientras el
- * detalle aún tiene `registros: []`. Forzar «sin_asignar» en ese instante rompe el
- * despliegue de Ítems/registros (Desarrollador/Operativo suelen abrir sin ese path).
+ * Evidencia rol Interventoría: abre con frecuencia desde cola/panel con `_autoRegistro`
+ * mientras el detalle aún tiene `registros: []`. Forzar «sin_asignar» en ese instante
+ * (y no reintentar) deja la carpeta en el tab equivocado; Desarrollador/Operativo suelen
+ * abrir el reporte desde la grilla sin ese path → mismo componente, distinto síntoma.
  */
 import { normalizarItemNumSicoe } from './sicoeReporteItemsTablaHelpers.js'
 

@@ -18,6 +18,7 @@ import {
   sumatoriaCantidadFilasItem,
   normalizarItemNumSicoe,
   sicoeItemFilaAbierta,
+  sicoeRegistroFilaExpandida,
   sicoeItemsOuterColCount,
   sicoeItemsSubColCount,
 } from './sicoeReporteItemsTablaHelpers'
@@ -191,14 +192,24 @@ export default function SicoeReporteItemsTabla({
   const [lightbox, setLightbox] = useState(null)
   const [estadoFiltroMasivo, setEstadoFiltroMasivo] = useState(null) // 'Aprobado'|'Pendiente'|...
   const lastForcedRegExpRef = useRef(null)
+  const lastInicialKeyRef = useRef(normalizarItemNumSicoe(itemExpandidoInicial))
+  /** Tras un clic del usuario, no dejar que sync/_autoRegistro vuelva a pisar el expand. */
+  const userTouchedItemRef = useRef(false)
 
   useEffect(() => {
     const key = normalizarItemNumSicoe(itemExpandidoInicial)
-    if (key) setItemExpandido(key)
+    if (!key) return
+    if (lastInicialKeyRef.current !== key) {
+      lastInicialKeyRef.current = key
+      userTouchedItemRef.current = false
+      setItemExpandido(key)
+      return
+    }
+    if (!userTouchedItemRef.current) setItemExpandido(key)
   }, [itemExpandidoInicial])
 
   // Abrir el ítem del registro expandido solo cuando cambia el registro (p. ej. _autoRegistro),
-  // no en cada re-render del padre (registros=[] nuevo por .filter() inline), para no pisar el clic del usuario.
+  // no en cada re-render del padre, y sin pisar un clic manual del usuario.
   useEffect(() => {
     if (registroExpandido == null) {
       lastForcedRegExpRef.current = null
@@ -206,9 +217,14 @@ export default function SicoeReporteItemsTabla({
     }
     const token = String(registroExpandido)
     if (lastForcedRegExpRef.current === token) return
-    const reg = registros.find((r) => String(r.id) === token)
+    let reg = registros.find((r) => String(r.id) === token)
+    if (!reg) {
+      // Deep-link a veces pasa numero_registro en lugar del id interno
+      reg = registros.find((r) => String(r.numero_registro) === token)
+    }
     const key = normalizarItemNumSicoe(reg?.item_numero)
     if (!key) return
+    if (userTouchedItemRef.current) return
     lastForcedRegExpRef.current = token
     setItemExpandido(key)
   }, [registroExpandido, registros])
@@ -256,6 +272,7 @@ export default function SicoeReporteItemsTabla({
 
   const toggleItem = useCallback((itemNum) => {
     const key = normalizarItemNumSicoe(itemNum)
+    userTouchedItemRef.current = true
     setItemExpandido((prev) => (sicoeItemFilaAbierta(prev, key) ? null : key))
     setMenuGraf(null)
     setMenuVal(null)
@@ -790,7 +807,7 @@ function MobileItemCard({
           {fila.regs.map((reg) => {
             const estado = estadoMiNivel?.(reg) || 'No Revisado'
             const pastel = pastelDeEstadoValidacion(estado)
-            const expandido = registroExpandido != null && String(registroExpandido) === String(reg.id)
+            const expandido = sicoeRegistroFilaExpandida(registroExpandido, reg)
             const media = mediaItemsDeRegistro(reg, reporte)
             const tieneFoto = !!String(reg.foto_url || '').trim()
             const tieneGraf = media.some((m) => String(m.label || '').startsWith('Gráfico'))
@@ -1037,8 +1054,7 @@ function FragmentItem({
                   {fila.regs.map((reg) => {
                     const estado = estadoMiNivel?.(reg) || 'No Revisado'
                     const pastel = pastelDeEstadoValidacion(estado)
-                    const expandido =
-                      registroExpandido != null && String(registroExpandido) === String(reg.id)
+                    const expandido = sicoeRegistroFilaExpandida(registroExpandido, reg)
                     const media = mediaItemsDeRegistro(reg, reporte)
                     const tieneFoto = !!String(reg.foto_url || '').trim()
                     const tieneGraf = media.some((m) => String(m.label || '').startsWith('Gráfico'))

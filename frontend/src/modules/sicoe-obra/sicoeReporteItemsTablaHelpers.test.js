@@ -16,6 +16,8 @@ import {
   sicoeItemFilaAbierta,
   sicoeItemsOuterColCount,
   sicoeItemsSubColCount,
+  sicoeSimularSyncTrasClic,
+  sicoeRegistroFilaExpandida,
 } from './sicoeReporteItemsTablaHelpers.js'
 
 describe('sortItemKeysSicoe', () => {
@@ -131,10 +133,28 @@ describe('puedeValidacionMasivaPorRol', () => {
 })
 
 describe('sicoeItemsOuterColCount / sicoeItemsSubColCount', () => {
-  it('al ocultar CD (operativo interventoria) reduce columnas sin romper colspan', () => {
+  it('al ocultar CD reduce columnas sin romper colspan', () => {
     assert.equal(sicoeItemsOuterColCount(true), 6)
     assert.equal(sicoeItemsOuterColCount(false), 5)
     assert.equal(sicoeItemsSubColCount(true), 12)
     assert.equal(sicoeItemsSubColCount(false), 11)
+  })
+})
+
+describe('overwrite sync Interventoría (_autoRegistro / registroExpandido)', () => {
+  it('sin normalizar el sync deja el ítem cerrado; con normalizar queda abierto', () => {
+    const r = sicoeSimularSyncTrasClic({
+      itemNumFila: '1.01',
+      itemNumeroCrudoTrasSync: ' 1.01 ',
+    })
+    assert.equal(r.abiertoSinNormalizar, false)
+    assert.equal(r.abiertoConNormalizar, true)
+  })
+
+  it('detalle se abre por id o por numero_registro (deep-link)', () => {
+    const reg = { id: 100, numero_registro: 7 }
+    assert.equal(sicoeRegistroFilaExpandida(100, reg), true)
+    assert.equal(sicoeRegistroFilaExpandida('7', reg), true)
+    assert.equal(sicoeRegistroFilaExpandida(999, reg), false)
   })
 })
