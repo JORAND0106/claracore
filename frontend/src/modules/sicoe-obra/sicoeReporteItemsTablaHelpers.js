@@ -61,6 +61,15 @@ export function sicoeItemFilaAbierta(itemExpandido, itemNum) {
   return !!(a && b && a === b)
 }
 
+/** ¿La fila de registro debe mostrarse expandida? Acepta id o numero_registro. */
+export function sicoeRegistroFilaExpandida(registroExpandido, reg) {
+  if (registroExpandido == null || !reg) return false
+  const token = String(registroExpandido)
+  if (String(reg.id) === token) return true
+  if (reg.numero_registro != null && String(reg.numero_registro) === token) return true
+  return false
+}
+
 /** Columnas de la fila de ítem (outer table). */
 export function sicoeItemsOuterColCount(verValoresEconomicos) {
   return verValoresEconomicos ? 6 : 5
@@ -69,6 +78,26 @@ export function sicoeItemsOuterColCount(verValoresEconomicos) {
 /** Columnas de la subtabla de registros (checkbox…acciones). */
 export function sicoeItemsSubColCount(verValoresEconomicos) {
   return verValoresEconomicos ? 12 : 11
+}
+
+/**
+ * Simula el overwrite que Interventoría sufría al tener registroExpandido +
+ * re-renders del padre: sin normalizar, el ítem queda «cerrado» tras el clic.
+ */
+export function sicoeSimularSyncTrasClic({
+  itemNumFila,
+  itemNumeroCrudoTrasSync,
+  clicAbreConNormalizar = true,
+}) {
+  const afterClick = clicAbreConNormalizar
+    ? normalizarItemNumSicoe(itemNumFila)
+    : itemNumFila
+  const afterSync = itemNumeroCrudoTrasSync
+  return {
+    abiertoSinNormalizar: afterSync === itemNumFila,
+    abiertoConNormalizar: sicoeItemFilaAbierta(afterSync, itemNumFila),
+    afterClick,
+  }
 }
 
 /** Estado de validación del nivel del usuario (no consolidado). */

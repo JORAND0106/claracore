@@ -121,6 +121,7 @@ import {
   sicoeAutoRegistroNavState,
   sicoeMatchRegistroAuto,
 } from './modules/sicoe-obra/sicoeAutoRegistroNav.js'
+import { normalizarItemNumSicoe } from './modules/sicoe-obra/sicoeReporteItemsTablaHelpers.js'
 import {
   sicoeAppendFSicoeToSearchParams,
   sicoeBundleFromAppState,
@@ -7687,7 +7688,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 }))}
                 nivelUsuario={nvMasivo || nivelInfo.nivelValidacion}
                 onPedirEsquema={(reg) => {
-                  const itemKey = String(reg.item_numero || '').trim() || null
+                  const itemKey = normalizarItemNumSicoe(reg.item_numero)
                   setItemExpandidoNav(itemKey)
                   setEsquemaPendienteRegId(reg.id)
                   setRegistroExpandido(reg.id)
