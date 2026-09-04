@@ -18,7 +18,10 @@ import {
   sumatoriaCantidadFilasItem,
   normalizarItemNumSicoe,
   sicoeItemFilaAbierta,
+  sicoeItemsOuterColCount,
+  sicoeItemsSubColCount,
 } from './sicoeReporteItemsTablaHelpers'
+import { SicoeHojaRegistroErrorBoundary } from './SicoeHojaRegistroErrorBoundary.jsx'
 
 const COLOR_PUNTO = {
   Aprobado: '#10B981',
@@ -873,7 +876,11 @@ function MobileItemCard({
                 </div>
                 {expandido && (
                   <div style={{ marginTop: 8, borderTop: `2px solid ${t.primary}`, overflow: 'hidden', borderRadius: '0 0 6px 6px' }}>
-                    {renderHojaRegistro?.(reg)}
+                    {typeof renderHojaRegistro === 'function' ? (
+                      <SicoeHojaRegistroErrorBoundary resetKey={reg?.id} t={t}>
+                        {renderHojaRegistro(reg)}
+                      </SicoeHojaRegistroErrorBoundary>
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -915,7 +922,7 @@ function FragmentItem({
   nivelesIndicadores,
   nivelUsuario,
 }) {
-  const colSpan = verValoresEconomicos ? 6 : 5
+  const colSpan = sicoeItemsOuterColCount(verValoresEconomicos)
   const itemRowBg = abierto ? `${t.primary}18` : t.bgCard
 
   return (
@@ -1036,7 +1043,7 @@ function FragmentItem({
                     const tieneFoto = !!String(reg.foto_url || '').trim()
                     const tieneGraf = media.some((m) => String(m.label || '').startsWith('Gráfico'))
                     const rapido = puedeValidarRapido?.(reg)
-                    const subCols = verValoresEconomicos ? 12 : 11
+                    const subCols = sicoeItemsSubColCount(verValoresEconomicos)
 
                     return (
                       <FragmentReg
@@ -1269,7 +1276,11 @@ function FragmentReg({
         <tr>
           <td colSpan={subCols} style={{ padding: 0, border: `1px solid ${t.border}` }}>
             <div style={{ borderTop: `2px solid ${t.primary}`, overflow: 'hidden', background: t.bgCard }}>
-              {renderHojaRegistro?.(reg)}
+              {typeof renderHojaRegistro === 'function' ? (
+                <SicoeHojaRegistroErrorBoundary resetKey={reg?.id} t={t}>
+                  {renderHojaRegistro(reg)}
+                </SicoeHojaRegistroErrorBoundary>
+              ) : null}
             </div>
           </td>
         </tr>

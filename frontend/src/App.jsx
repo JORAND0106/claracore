@@ -118,6 +118,10 @@ import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import SicoeReporteItemsTabla from './modules/sicoe-obra/SicoeReporteItemsTabla'
 import {
+  sicoeAutoRegistroNavState,
+  sicoeMatchRegistroAuto,
+} from './modules/sicoe-obra/sicoeAutoRegistroNav.js'
+import {
   sicoeAppendFSicoeToSearchParams,
   sicoeBundleFromAppState,
   sicoeBundleTieneCriteriosUsuario,
@@ -5458,24 +5462,41 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [itemInfoPopup, setItemInfoPopup] = useState(null)
   const [itemExpandidoNav, setItemExpandidoNav] = useState(null)
   const [esquemaPendienteRegId, setEsquemaPendienteRegId] = useState(null)
+  const autoRegNavAplicadoRef = useRef(null)
 
+  // Panel/notif/deep-link: resolver _autoRegistro cuando ya hay registros (no forzar sin_asignar en race).
   useEffect(() => {
-    if (!repoProp?._autoRegistro) return
-    const id = Number(repoProp._autoRegistro)
-    setRegistroExpandido(repoProp._autoRegistro)
-    const reg = (repoProp.registros || []).find(r => String(r.id) === String(id))
-    const itemKey = reg?.item_numero != null ? String(reg.item_numero).trim() : ''
-    if (itemKey) {
+    if (!repoProp?._autoRegistro) {
+      autoRegNavAplicadoRef.current = null
+      return
+    }
+    const regsFuente =
+      Array.isArray(registros) && registros.length > 0
+        ? registros
+        : (Array.isArray(repoProp.registros) ? repoProp.registros : [])
+    const nav = sicoeAutoRegistroNavState(regsFuente, repoProp._autoRegistro)
+    if (!nav.ready) return
+
+    const applyKey = `${String(repoProp._autoRegistro)}:${nav.registroId ?? 'x'}:${nav.tab || ''}:${nav.itemKey || ''}`
+    if (autoRegNavAplicadoRef.current === applyKey) return
+    autoRegNavAplicadoRef.current = applyKey
+
+    if (nav.registroId != null) setRegistroExpandido(nav.registroId)
+    else setRegistroExpandido(repoProp._autoRegistro)
+
+    if (nav.tab === 'items' && nav.itemKey) {
       setTabActiva('items')
-      setItemExpandidoNav(itemKey)
-    } else {
+      setItemExpandidoNav(nav.itemKey)
+    } else if (nav.tab === 'sin_asignar') {
       setTabActiva('sin_asignar')
     }
+
+    const scrollId = nav.registroId != null ? nav.registroId : repoProp._autoRegistro
     setTimeout(() => {
-      const el = document.getElementById(`registro-${id}`)
+      const el = document.getElementById(`registro-${scrollId}`)
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 300)
-  }, [repoProp?._autoRegistro])
+  }, [repoProp?._autoRegistro, repoProp?.registros, registros])
   const [modalMover, setModalMover]               = useState(false)
   const [modalCorteMasivo, setModalCorteMasivo]   = useState(false)
   const [corteMasivoSubId, setCorteMasivoSubId]   = useState('')
@@ -8429,7 +8450,14 @@ function ModuloSicoeObra({
     void fetchDetalleReporteSicoe(navReporteId)
       .then((data) => {
         if (data?.id) {
-          setReporteSeleccionado({ ...data, _cargandoDetalle: false, _autoRegistro: navRegistroNumero })
+          const match = sicoeMatchRegistroAuto(data.registros, navRegistroNumero)
+          setReporteSeleccionado({
+            ...data,
+            _cargandoDetalle: false,
+            ...(navRegistroNumero != null
+              ? { _autoRegistro: match?.id ?? navRegistroNumero }
+              : {}),
+          })
         } else {
           setReporteSeleccionado((prev) =>
             prev && prev.id === navReporteId ? { ...prev, _cargandoDetalle: false } : prev,
