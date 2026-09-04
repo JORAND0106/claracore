@@ -2,7 +2,7 @@
  * TAB «Ítems y registros»: tabla tipo hoja de cálculo, expansión por clic en fila,
  * menús flotantes (portal) e indicadores de validación por nivel/rol.
  */
-import { useMemo, useState, useCallback, useEffect } from 'react'
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { listaGraficosRegistro } from './sicoeGraficosHelpers'
 import SicoeMediaLightbox from './SicoeMediaLightbox'
@@ -16,6 +16,8 @@ import {
   idsRegistrosEnEstado,
   sumatoriaCostoDirectoFilasItem,
   sumatoriaCantidadFilasItem,
+  normalizarItemNumSicoe,
+  sicoeItemFilaAbierta,
 } from './sicoeReporteItemsTablaHelpers'
 
 const COLOR_PUNTO = {
@@ -180,22 +182,32 @@ export default function SicoeReporteItemsTabla({
   nivelesIndicadores = [],
   nivelUsuario = null,
 }) {
-  const [itemExpandido, setItemExpandido] = useState(itemExpandidoInicial)
+  const [itemExpandido, setItemExpandido] = useState(() => normalizarItemNumSicoe(itemExpandidoInicial))
   const [menuGraf, setMenuGraf] = useState(null) // { regId, anchor }
   const [menuVal, setMenuVal] = useState(null)
   const [lightbox, setLightbox] = useState(null)
   const [estadoFiltroMasivo, setEstadoFiltroMasivo] = useState(null) // 'Aprobado'|'Pendiente'|...
+  const lastForcedRegExpRef = useRef(null)
 
   useEffect(() => {
-    if (itemExpandidoInicial != null && itemExpandidoInicial !== '') {
-      setItemExpandido(itemExpandidoInicial)
-    }
+    const key = normalizarItemNumSicoe(itemExpandidoInicial)
+    if (key) setItemExpandido(key)
   }, [itemExpandidoInicial])
 
+  // Abrir el ítem del registro expandido solo cuando cambia el registro (p. ej. _autoRegistro),
+  // no en cada re-render del padre (registros=[] nuevo por .filter() inline), para no pisar el clic del usuario.
   useEffect(() => {
-    if (registroExpandido == null) return
-    const reg = registros.find((r) => String(r.id) === String(registroExpandido))
-    if (reg?.item_numero) setItemExpandido(reg.item_numero)
+    if (registroExpandido == null) {
+      lastForcedRegExpRef.current = null
+      return
+    }
+    const token = String(registroExpandido)
+    if (lastForcedRegExpRef.current === token) return
+    const reg = registros.find((r) => String(r.id) === token)
+    const key = normalizarItemNumSicoe(reg?.item_numero)
+    if (!key) return
+    lastForcedRegExpRef.current = token
+    setItemExpandido(key)
   }, [registroExpandido, registros])
 
   useEffect(() => {
@@ -240,7 +252,8 @@ export default function SicoeReporteItemsTabla({
   const totalCd = useMemo(() => sumatoriaCostoDirectoFilasItem(filasItem), [filasItem])
 
   const toggleItem = useCallback((itemNum) => {
-    setItemExpandido((prev) => (prev === itemNum ? null : itemNum))
+    const key = normalizarItemNumSicoe(itemNum)
+    setItemExpandido((prev) => (sicoeItemFilaAbierta(prev, key) ? null : key))
     setMenuGraf(null)
     setMenuVal(null)
   }, [])
@@ -425,7 +438,7 @@ export default function SicoeReporteItemsTabla({
       {carpetaCompact ? (
         <div className="cc-sicoe-items-mobile" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {filasItem.map((fila) => {
-              const abierto = itemExpandido === fila.itemNum
+              const abierto = sicoeItemFilaAbierta(itemExpandido, fila.itemNum)
               const selIds = idsSeleccionadosEnItem(fila.regs)
               const mostrarMasiva = puedeMasivaNivel && selIds.length > 0
               return (
@@ -527,7 +540,7 @@ export default function SicoeReporteItemsTabla({
           </thead>
           <tbody>
             {filasItem.map((fila) => {
-              const abierto = itemExpandido === fila.itemNum
+              const abierto = sicoeItemFilaAbierta(itemExpandido, fila.itemNum)
               const selIds = idsSeleccionadosEnItem(fila.regs)
               const mostrarMasiva = puedeMasivaNivel && selIds.length > 0
               return (

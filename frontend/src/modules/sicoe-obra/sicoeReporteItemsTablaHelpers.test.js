@@ -12,11 +12,31 @@ import {
   sumatoriaCantidadFilasItem,
   normalizarEstadoParaConteo,
   puedeValidacionMasivaPorRol,
+  normalizarItemNumSicoe,
+  sicoeItemFilaAbierta,
 } from './sicoeReporteItemsTablaHelpers.js'
 
 describe('sortItemKeysSicoe', () => {
   it('ordena ítems con orden natural numérico', () => {
     assert.deepEqual(sortItemKeysSicoe(['10.1', '2.1', '2.10', '2.2']), ['2.1', '2.2', '2.10', '10.1'])
+  })
+})
+
+describe('normalizarItemNumSicoe / sicoeItemFilaAbierta', () => {
+  it('descarta zoom como causa: solo igualdad de claves (espacios / número)', () => {
+    // Simula viewport 100%: el fallo era === estricto, no layout/zoom.
+    assert.equal(normalizarItemNumSicoe(' 1.01 '), '1.01')
+    assert.equal(normalizarItemNumSicoe(1.01), '1.01')
+    assert.equal(sicoeItemFilaAbierta(' 1.01 ', '1.01'), true)
+    assert.equal(sicoeItemFilaAbierta(1.01, '1.01'), true)
+    assert.equal(sicoeItemFilaAbierta('1.01', '1.02'), false)
+    // Caso Interventoría: _autoRegistro escribe crudo; tabla agrupa trim → sin normalizar fallaba.
+    const filas = agruparRegistrosPorItem([
+      { id: 9, item_numero: ' 2.1 ', numero_registro: 1, cantidad_total: 1, costo_directo: 0 },
+    ])
+    assert.equal(filas[0].itemNum, '2.1')
+    assert.equal(sicoeItemFilaAbierta(' 2.1 ', filas[0].itemNum), true)
+    assert.equal((' 2.1 ' === filas[0].itemNum), false)
   })
 })
 

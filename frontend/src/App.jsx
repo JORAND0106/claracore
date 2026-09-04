@@ -5464,9 +5464,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     const id = Number(repoProp._autoRegistro)
     setRegistroExpandido(repoProp._autoRegistro)
     const reg = (repoProp.registros || []).find(r => String(r.id) === String(id))
-    if (reg?.item_numero) {
+    const itemKey = reg?.item_numero != null ? String(reg.item_numero).trim() : ''
+    if (itemKey) {
       setTabActiva('items')
-      setItemExpandidoNav(reg.item_numero)
+      setItemExpandidoNav(itemKey)
     } else {
       setTabActiva('sin_asignar')
     }
@@ -5773,11 +5774,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   // Ítems asignados únicos — cada uno genera un tab (solo desde registros de la vista actual).
   const itemsAsignados = useMemo(
-    () => [...new Set(registrosVisibles.filter((r) => r.item_numero).map((r) => r.item_numero))],
+    () => [...new Set(
+      registrosVisibles
+        .map((r) => String(r?.item_numero || '').trim())
+        .filter(Boolean),
+    )],
     [registrosVisibles],
   )
   const regsSinAsignar = useMemo(
     () => registrosVisibles.filter((r) => !String(r?.item_numero || '').trim()),
+    [registrosVisibles],
+  )
+  const registrosConItem = useMemo(
+    () => registrosVisibles.filter((r) => String(r?.item_numero || '').trim()),
     [registrosVisibles],
   )
 
@@ -7078,7 +7087,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           {(() => {
             const tienePendienteItems = capasF && itemsAsignados.some((it) =>
               registrosDominioValidacion.some((r) => {
-                if (r.item_numero !== it) return false
+                if (String(r.item_numero || '').trim() !== String(it || '').trim()) return false
                 return capasF.some((capa) => {
                   const fld = campoDeCapa(capa)
                   if (!fld) return false
@@ -7617,7 +7626,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               <SicoeReporteItemsTabla
                 t={t}
                 reporte={reporte}
-                registros={registrosVisibles.filter((r) => String(r?.item_numero || '').trim())}
+                registros={registrosConItem}
                 verValoresEconomicos={nivelInfo.verValoresEconomicos}
                 carpetaCompact={carpetaCompact}
                 estadoMiNivel={estadoMiNivelRegistro}
@@ -7657,7 +7666,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 }))}
                 nivelUsuario={nvMasivo || nivelInfo.nivelValidacion}
                 onPedirEsquema={(reg) => {
-                  setItemExpandidoNav(reg.item_numero || null)
+                  const itemKey = String(reg.item_numero || '').trim() || null
+                  setItemExpandidoNav(itemKey)
                   setEsquemaPendienteRegId(reg.id)
                   setRegistroExpandido(reg.id)
                 }}

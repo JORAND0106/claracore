@@ -8,6 +8,16 @@ export const PASTEL_ESTADO_VALIDACION = {
   'No Revisado': { bg: 'transparent', border: 'transparent', color: null },
 }
 
+/**
+ * Clave de expansión de ítem: siempre string trim.
+ * Evita que `itemExpandido === fila.itemNum` falle cuando el panel/_autoRegistro
+ * escribe el `item_numero` crudo (espacios, número) y la tabla agrupa con String().trim().
+ */
+export function normalizarItemNumSicoe(v) {
+  const s = String(v ?? '').trim()
+  return s || null
+}
+
 export function sortItemKeysSicoe(keys) {
   return [...keys].sort((a, b) =>
     String(a).localeCompare(String(b), 'es', { numeric: true, sensitivity: 'base' }),
@@ -18,7 +28,7 @@ export function sortItemKeysSicoe(keys) {
 export function agruparRegistrosPorItem(registros) {
   const map = new Map()
   for (const r of registros || []) {
-    const key = String(r?.item_numero || '').trim()
+    const key = normalizarItemNumSicoe(r?.item_numero)
     if (!key) continue
     if (!map.has(key)) map.set(key, [])
     map.get(key).push(r)
@@ -39,6 +49,16 @@ export function agruparRegistrosPorItem(registros) {
       regs,
     }
   })
+}
+
+/**
+ * ¿El ítem aparece expandido? Compara con la misma normalización que el agrupado.
+ * Independiente del zoom del navegador (solo igualdad de claves).
+ */
+export function sicoeItemFilaAbierta(itemExpandido, itemNum) {
+  const a = normalizarItemNumSicoe(itemExpandido)
+  const b = normalizarItemNumSicoe(itemNum)
+  return !!(a && b && a === b)
 }
 
 /** Estado de validación del nivel del usuario (no consolidado). */
