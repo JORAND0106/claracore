@@ -99,10 +99,19 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
       valor_no_previsto: '1800',
       cotizacion_fecha: '2026-01-15',
       cotizacion_vigencia: '30 días',
-    }, [])
+      cotizacion_fecha_np: '2026-01-20',
+      cotizacion_vigencia_np: '45 días',
+    }, [], {
+      impuestoEtiqueta: 'IVA 19%',
+      impuestoEtiquetaNp: 'AIU',
+    })
     assert.equal(pares.length, 1)
     assert.equal(pares[0].es_ganadora, true)
     assert.equal(pares[0].no_previsto.valor, '1800')
+    assert.equal(pares[0].insumo.fecha, '2026-01-15')
+    assert.equal(pares[0].no_previsto.fecha, '2026-01-20')
+    assert.equal(pares[0].insumo.impuesto_etiqueta, 'IVA 19%')
+    assert.equal(pares[0].no_previsto.impuesto_etiqueta, 'AIU')
     const legacy = syncLegacyFromGanadora(pares)
     assert.equal(legacy.cotizacion_numero, 'COT-001')
     const payload = cotizacionesPayloadForSave(pares)
