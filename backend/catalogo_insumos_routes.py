@@ -79,6 +79,7 @@ class InsumoCatalogoJsonBody(BaseModel):
     cotizacion_numero: Optional[str] = None
     cotizacion_fecha: Optional[str] = None
     cotizacion_vigencia: Optional[str] = None
+    cotizaciones_detalle: Optional[List[Dict[str, Any]]] = None
     force_update_id: Optional[int] = None
 
 
@@ -218,6 +219,7 @@ async def route_create_insumo(
     cotizacion_numero: Optional[str] = Form(None),
     cotizacion_fecha: Optional[str] = Form(None),
     cotizacion_vigencia: Optional[str] = Form(None),
+    cotizaciones_detalle: Optional[str] = Form(None),
     requiere_cotizacion: Optional[str] = Form("true"),
     cantidad_negociada: Optional[float] = Form(None),
     valor_negociado_total: Optional[float] = Form(None),
@@ -246,6 +248,7 @@ async def route_create_insumo(
         "cotizacion_numero": cotizacion_numero,
         "cotizacion_fecha": cotizacion_fecha,
         "cotizacion_vigencia": cotizacion_vigencia,
+        "cotizaciones_detalle": cotizaciones_detalle,
         "requiere_cotizacion": requiere_cotizacion,
         "cantidad_negociada": cantidad_negociada,
         "valor_negociado_total": valor_negociado_total,
@@ -312,6 +315,7 @@ async def route_update_insumo(
     cotizacion_numero: Optional[str] = Form(None),
     cotizacion_fecha: Optional[str] = Form(None),
     cotizacion_vigencia: Optional[str] = Form(None),
+    cotizaciones_detalle: Optional[str] = Form(None),
     requiere_cotizacion: Optional[str] = Form("true"),
     cantidad_negociada: Optional[float] = Form(None),
     valor_negociado_total: Optional[float] = Form(None),
@@ -339,6 +343,7 @@ async def route_update_insumo(
         "cotizacion_numero": cotizacion_numero,
         "cotizacion_fecha": cotizacion_fecha,
         "cotizacion_vigencia": cotizacion_vigencia,
+        "cotizaciones_detalle": cotizaciones_detalle,
         "requiere_cotizacion": requiere_cotizacion,
         "cantidad_negociada": cantidad_negociada,
         "valor_negociado_total": valor_negociado_total,
