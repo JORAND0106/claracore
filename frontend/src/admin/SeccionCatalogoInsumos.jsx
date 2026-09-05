@@ -24,13 +24,14 @@ import { UnidadSelector } from '../utils/unidadesListadoPrecios'
 import CcConfirmModal from '../components/CcConfirmModal'
 import CatalogoProveedorAutocomplete from './CatalogoProveedorAutocomplete'
 import {
+  collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
   detalleVisibleDesdeInsumoRow,
   ganadoraDesdeInsumoRow,
-  newCotizacionRow,
+  newCotizacionPar,
   otrasCotizaciones,
   pickGanadora,
-  seedCotizacionesForm,
+  seedCotizacionPares,
   syncLegacyFromGanadora,
 } from './catalogoInsumosCotizaciones'
 
@@ -53,8 +54,6 @@ const EMPTY_FORM = {
   cotizacion_vigencia: '',
   cotizaciones_detalle: [],
   requiere_cotizacion: true,
-  ganadora_pdf: null,
-  soportes_pdf: [],
 }
 
 function snapshotForm(f) {
@@ -77,8 +76,6 @@ function snapshotForm(f) {
     cotizacion_vigencia: f.cotizacion_vigencia || '',
     cotizaciones_detalle: cotizacionesPayloadForSave(f.cotizaciones_detalle || []),
     requiere_cotizacion: !!f.requiere_cotizacion,
-    ganadora_pdf: f.ganadora_pdf?.name || '',
-    soportes_pdf: (f.soportes_pdf || []).map((x) => x.name).join('|'),
   })
 }
 
@@ -129,6 +126,68 @@ function sheetCellInput(inputStyle, extra = {}) {
 /** Vista previa: valor después de AIU/IVA (solo lectura). */
 function computeTotal(costo, impuestoForm) {
   return computeValorDespuesAiuIva(costo, impuestoForm || EMPTY_IMPUESTO, { valoresEnDecimal: true })
+}
+
+function IconPaperclip() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+    </svg>
+  )
+}
+
+function CotizacionClipBtn({ file, fileName, onPick, t, disabled }) {
+  const inputRef = useRef(null)
+  const label = file?.name || fileName || ''
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%' }}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,image/*"
+        style={{ display: 'none' }}
+        onChange={(e) => onPick(e.target.files?.[0] || null)}
+      />
+      <button
+        type="button"
+        title={label ? `Adjunto: ${label}` : 'Adjuntar cotización (PDF)'}
+        aria-label={label ? `Adjunto: ${label}` : 'Adjuntar cotización'}
+        disabled={disabled}
+        onClick={() => inputRef.current?.click()}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 28,
+          height: 28,
+          padding: 0,
+          borderRadius: 6,
+          border: `1px solid ${label ? t.primary : t.border}`,
+          background: label ? `${t.primary}18` : t.inputBg,
+          color: label ? t.primary : t.textMuted,
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          flexShrink: 0,
+        }}
+      >
+        <IconPaperclip />
+      </button>
+      {label ? (
+        <span
+          style={{
+            fontSize: 'var(--cc-xs)',
+            color: t.textMuted,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            maxWidth: 72,
+          }}
+          title={label}
+        >
+          {label}
+        </span>
+      ) : null}
+    </div>
+  )
 }
 
 function Field({ label, children, hint }) {
@@ -579,7 +638,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [cotMinimas, setCotMinimas] = useState(3)
   const csvRef = useRef(null)
   const csvProvRef = useRef(null)
-  const ocrCamRef = useRef(null)
   const [csvPending, setCsvPending] = useState(null) // { file, kind: 'insumos'|'proveedores' }
   const [csvModo, setCsvModo] = useState('agregar')
   const [unidadModoCustom, setUnidadModoCustom] = useState(false)
@@ -694,6 +752,12 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
   useEffect(() => {
     if (!api || !canVer) return
+    // Precarga directorio para que la pestaña Proveedores y el autocompletar tengan datos listos.
+    loadProveedores()
+  }, [api, canVer, loadProveedores])
+
+  useEffect(() => {
+    if (!api || !canVer) return
     api.getConfig()
       .then((c) => {
         const n = Number(c?.cotizaciones_minimas)
@@ -714,7 +778,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
   const openNew = async () => {
     setEditId(null)
-    const cotizaciones = seedCotizacionesForm({ minInsumo: cotMinimas, minNoPrevisto: 2 })
+    const cotizaciones = seedCotizacionPares({ minPares: cotMinimas })
     const nextForm = { ...EMPTY_FORM, cotizaciones_detalle: cotizaciones }
     setForm(nextForm)
     setUnidadModoCustom(false)
@@ -741,10 +805,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const openEdit = (row) => {
     setEditId(row.insumo_id || row.id)
     const trib = seedTributosDesdeLegado(row)
-    const cotizaciones = seedCotizacionesForm({
+    const cotizaciones = seedCotizacionPares({
       existing: row.cotizaciones_detalle,
-      minInsumo: cotMinimas,
-      minNoPrevisto: 2,
+      minPares: cotMinimas,
       legacy: {
         cotizacion_numero: row.cotizacion_numero,
         cotizacion_fecha: row.cotizacion_fecha,
@@ -785,52 +848,60 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     setModalOpen(true)
   }
 
-  const patchCotizacion = (id, patch) => {
+  const patchParLado = (pairId, lado, patch) => {
     setForm((f) => {
-      let list = (f.cotizaciones_detalle || []).map((r) => (
-        r.id === id ? { ...r, ...patch } : r
-      ))
-      if (patch.es_ganadora) {
-        list = list.map((r) => (
-          r.id === id
-            ? { ...r, es_ganadora: true, tipo: 'insumo' }
-            : { ...r, es_ganadora: r.tipo === 'insumo' ? false : r.es_ganadora }
-        ))
-      }
+      const list = (f.cotizaciones_detalle || []).map((p) => {
+        if (p.id !== pairId) return p
+        return {
+          ...p,
+          [lado]: { ...(p[lado] || {}), ...patch },
+        }
+      })
       const legacy = syncLegacyFromGanadora(list)
       return { ...f, cotizaciones_detalle: list, ...legacy }
     })
   }
 
-  const addCotizacionRow = (tipo) => {
+  const setParGanadora = (pairId) => {
+    setForm((f) => {
+      const list = (f.cotizaciones_detalle || []).map((p) => ({
+        ...p,
+        es_ganadora: p.id === pairId,
+      }))
+      const legacy = syncLegacyFromGanadora(list)
+      return { ...f, cotizaciones_detalle: list, ...legacy }
+    })
+  }
+
+  const addCotizacionPar = () => {
     setForm((f) => ({
       ...f,
-      cotizaciones_detalle: [...(f.cotizaciones_detalle || []), newCotizacionRow(tipo)],
+      cotizaciones_detalle: [...(f.cotizaciones_detalle || []), newCotizacionPar()],
     }))
   }
 
-  const runOcr = async () => {
-    if (!form.ganadora_pdf || !api) return
+  const runOcr = async (pairId) => {
+    const par = (form.cotizaciones_detalle || []).find((p) => p.id === pairId)
+    const pdf = par?.insumo?.pdf
+    if (!pdf || !api) return
     setOcrBusy(true)
     try {
-      const r = await api.ocrCotizacion(form.ganadora_pdf)
+      const r = await api.ocrCotizacion(pdf)
       const c = r.campos_catalogo || {}
       setForm((f) => {
-        let list = [...(f.cotizaciones_detalle || [])]
-        const ganIdx = list.findIndex((r) => r.tipo === 'insumo' && r.es_ganadora)
-        const idx = ganIdx >= 0 ? ganIdx : list.findIndex((r) => r.tipo === 'insumo')
-        if (idx >= 0) {
-          list[idx] = {
-            ...list[idx],
-            proveedor: c.razon_social || list[idx].proveedor,
-            fecha: c.cotizacion_fecha || list[idx].fecha,
-            valor: c.costo_base != null ? String(c.costo_base) : list[idx].valor,
+        let list = (f.cotizaciones_detalle || []).map((p) => {
+          if (p.id !== pairId) return p
+          return {
+            ...p,
             es_ganadora: true,
+            insumo: {
+              ...p.insumo,
+              proveedor: c.razon_social || p.insumo.proveedor,
+              fecha: c.cotizacion_fecha || p.insumo.fecha,
+              valor: c.costo_base != null ? String(c.costo_base) : p.insumo.valor,
+            },
           }
-          list = list.map((r, i) => (
-            r.tipo === 'insumo' ? { ...r, es_ganadora: i === idx } : r
-          ))
-        }
+        }).map((p) => ({ ...p, es_ganadora: p.id === pairId }))
         const legacy = syncLegacyFromGanadora(list)
         return {
           ...f,
@@ -896,8 +967,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fd.append('requiere_cotizacion', form.requiere_cotizacion ? 'true' : 'false')
     if (form.cantidad_negociada !== '') fd.append('cantidad_negociada', String(form.cantidad_negociada))
     if (forceUpdateId) fd.append('force_update_id', String(forceUpdateId))
-    if (form.ganadora_pdf) fd.append('cotizacion_ganadora_pdf', form.ganadora_pdf)
-    ;(form.soportes_pdf || []).forEach((f) => fd.append('cotizaciones_soporte', f))
+    const { ganadora, soportes } = collectPdfFilesFromPares(form.cotizaciones_detalle || [])
+    if (ganadora) fd.append('cotizacion_ganadora_pdf', ganadora)
+    soportes.forEach((f) => fd.append('cotizaciones_soporte', f))
     return fd
   }
 
@@ -917,11 +989,12 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
     if (form.requiere_cotizacion && !editId) {
       const gan = pickGanadora(form.cotizaciones_detalle || [])
-      const hasGanadora = form.ganadora_pdf
+      const { ganadora: ganPdf } = collectPdfFilesFromPares(form.cotizaciones_detalle || [])
+      const hasGanadora = ganPdf
         || (form.cotizacion_numero || '').trim()
-        || (gan && ((gan.numero || '').trim() || gan.valor !== '' && gan.valor != null))
+        || (gan && (((gan.numero || '').trim()) || (gan.valor !== '' && gan.valor != null)))
       if (!hasGanadora) {
-        setMsg({ type: 'error', text: 'Registre la cotización ganadora (datos en la hoja o PDF).' })
+        setMsg({ type: 'error', text: 'Registre la cotización ganadora (datos en la hoja o PDF con clip).' })
         return
       }
     }
@@ -1245,7 +1318,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <tr>
                       <td colSpan={12} style={{ ...td, background: ui.cardSubtle, padding: 10 }}>
                         <div style={{ fontWeight: 700, fontSize: 'var(--cc-caption)', color: t.primary, marginBottom: 6 }}>
-                          Otras cotizaciones (soporte y No Previstos)
+                          Otras cotizaciones — comparación Insumo | No Previsto
                         </div>
                         {otras.length === 0 ? (
                           <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
@@ -1261,17 +1334,19 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                 <th style={thHeader}>Fecha</th>
                                 <th style={thHeader}>Vigencia</th>
                                 <th style={{ ...thHeader, textAlign: 'right' }}>Valor</th>
+                                <th style={thHeader}>PDF</th>
                               </tr>
                             </thead>
                             <tbody>
                               {otras.map((c, j) => (
                                 <tr key={c.id || j} style={{ background: sheetZebra(ui, j) }}>
-                                  <td style={tdMuted}>{c.tipo === 'no_previsto' ? 'No Previstos' : 'Insumo'}</td>
+                                  <td style={tdMuted}>{c.tipo === 'no_previsto' ? 'No Previsto' : 'Insumo'}</td>
                                   <td style={td}>{c.proveedor || '—'}</td>
                                   <td style={tdMuted}>{c.numero || '—'}</td>
                                   <td style={tdMuted}>{c.fecha || '—'}</td>
                                   <td style={tdMuted}>{c.vigencia || '—'}</td>
                                   <td style={tdNum}>{c.valor != null && c.valor !== '' ? fmtMoney(c.valor) : '—'}</td>
+                                  <td style={tdMuted}>{c.pdf_nombre || '—'}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -1302,8 +1377,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               {provTotal} proveedor(es)
             </span>
           </div>
-          <div style={{ ...sheetWrap, minWidth: 0 }}>
-            <table style={{ ...sheetTable, minWidth: 720 }}>
+          <div style={{ ...sheetWrap, minWidth: 0, width: '100%' }} className="cc-almacen-table-scroll cc-catalogo-proveedores-sheet">
+            <table style={{ ...sheetTable, minWidth: 720, width: '100%', tableLayout: 'auto' }}>
               <thead>
                 <tr>
                   <th style={thHeader}>Razón social</th>
@@ -1360,7 +1435,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
       {modalOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 10002, background: ui.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 0' }}>
-          <div style={{ width: 'min(1100px, 96vw)', maxHeight: '94vh', overflow: 'auto', ...modalPanelStyle, padding: '18px 22px' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ width: 'min(1540px, 98vw)', maxHeight: '94vh', overflow: 'auto', ...modalPanelStyle, padding: '18px 22px' }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0, marginBottom: 12, color: t.text }}>{editId ? 'Editar insumo' : 'Nuevo insumo'}</h3>
 
             {dupAlert && (
@@ -1382,11 +1457,29 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             )}
 
             <SheetSectionTitle t={t} ui={ui}>1. Proveedor</SheetSectionTitle>
-            <div style={{ ...sheetWrap, marginBottom: 8 }}>
+            <Field label="Buscar en directorio de proveedores" hint="Autocompleta razón social, NIT y contacto. Los proveedores no se duplican por NIT.">
+              <div style={{ position: 'relative', zIndex: 5, overflow: 'visible' }}>
+                <CatalogoProveedorAutocomplete
+                  api={api}
+                  t={t}
+                  inputStyle={inputStyle}
+                  disabled={busy}
+                  value={{
+                    proveedor_id: form.proveedor_id,
+                    razon_social: form.razon_social,
+                    nit: form.nit,
+                    contacto_email: form.contacto_email,
+                    contacto_nombre: form.contacto_nombre,
+                    contacto_telefono: form.contacto_telefono,
+                  }}
+                  onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+                />
+              </div>
+            </Field>
+            <div style={{ ...sheetWrap, marginBottom: 8, overflow: 'visible' }}>
               <table style={{ ...sheetTable, minWidth: 0, tableLayout: 'auto' }}>
                 <thead>
                   <tr>
-                    <th style={{ ...thHeader, width: '28%' }}>Directorio</th>
                     <th style={thHeader}>Razón social</th>
                     <th style={{ ...thHeader, width: '14%' }}>NIT</th>
                     <th style={thHeader}>Correo</th>
@@ -1396,23 +1489,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 </thead>
                 <tbody>
                   <tr style={{ background: sheetZebra(ui, 0) }}>
-                    <td style={td}>
-                      <CatalogoProveedorAutocomplete
-                        api={api}
-                        t={t}
-                        inputStyle={cellInp}
-                        disabled={busy}
-                        value={{
-                          proveedor_id: form.proveedor_id,
-                          razon_social: form.razon_social,
-                          nit: form.nit,
-                          contacto_email: form.contacto_email,
-                          contacto_nombre: form.contacto_nombre,
-                          contacto_telefono: form.contacto_telefono,
-                        }}
-                        onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
-                      />
-                    </td>
                     <td style={td}>
                       <input style={cellInp} value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value, proveedor_id: '' })} />
                     </td>
@@ -1549,79 +1625,101 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             {form.requiere_cotizacion ? (
               <>
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
-                  Hoja editable: complete proveedor, valor, número, fecha y vigencia. Marque la ganadora en «Cotizaciones insumo».
-                  Las filas «No Previstos» sustentan el valor ante la entidad y no se mezclan con las del proveedor.
+                  Cada fila compara en la misma línea el precio <strong>Insumo</strong> (pactado con el proveedor) y el de <strong>No Previsto</strong> (sustento ante la entidad).
+                  Use el clip para adjuntar el PDF de esa cotización. Marque la ganadora en la columna izquierda.
                 </div>
                 <div style={{ ...sheetWrap, marginBottom: 8, overflowX: 'auto' }}>
-                  <table style={{ ...sheetTable, minWidth: 920, tableLayout: 'auto' }}>
+                  <table style={{ ...sheetTable, minWidth: 1280, tableLayout: 'auto' }}>
                     <thead>
                       <tr>
-                        <th style={{ ...thHeader, width: 110 }}>Sección</th>
-                        <th style={{ ...thHeader, width: 72 }}>Ganadora</th>
-                        <th style={thHeader}>Proveedor cotizante</th>
-                        <th style={{ ...thHeader, width: 110 }}>Valor</th>
-                        <th style={{ ...thHeader, width: 100 }}>Nº cotización</th>
-                        <th style={{ ...thHeader, width: 120 }}>Fecha</th>
-                        <th style={{ ...thHeader, width: 110 }}>Vigencia</th>
+                        <th style={{ ...thHeader, width: 56 }} rowSpan={2}>Gan.</th>
+                        <th style={{ ...thHeader, textAlign: 'center', background: ui.dark ? 'rgba(0,180,198,0.28)' : 'rgba(0,119,182,0.16)' }} colSpan={6}>
+                          Cotización insumo
+                        </th>
+                        <th style={{ ...thHeader, textAlign: 'center', background: ui.dark ? 'rgba(251,191,36,0.22)' : 'rgba(217,119,6,0.14)' }} colSpan={6}>
+                          Cotización No Previsto
+                        </th>
+                      </tr>
+                      <tr>
+                        <th style={thHeader}>Proveedor</th>
+                        <th style={{ ...thHeader, width: 96 }}>Valor</th>
+                        <th style={{ ...thHeader, width: 88 }}>Nº</th>
+                        <th style={{ ...thHeader, width: 108 }}>Fecha</th>
+                        <th style={{ ...thHeader, width: 88 }}>Vigencia</th>
+                        <th style={{ ...thHeader, width: 72 }}>PDF</th>
+                        <th style={thHeader}>Proveedor</th>
+                        <th style={{ ...thHeader, width: 96 }}>Valor</th>
+                        <th style={{ ...thHeader, width: 88 }}>Nº</th>
+                        <th style={{ ...thHeader, width: 108 }}>Fecha</th>
+                        <th style={{ ...thHeader, width: 88 }}>Vigencia</th>
+                        <th style={{ ...thHeader, width: 72 }}>PDF</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(form.cotizaciones_detalle || []).map((row, idx) => (
-                        <tr key={row.id} style={{ background: sheetZebra(ui, idx) }}>
-                          <td style={{ ...tdMuted, fontWeight: 700, whiteSpace: 'nowrap' }}>
-                            {row.tipo === 'no_previsto' ? 'No Previstos' : 'Insumo'}
-                          </td>
+                      {(form.cotizaciones_detalle || []).map((par, idx) => (
+                        <tr key={par.id} style={{ background: sheetZebra(ui, idx) }}>
                           <td style={{ ...td, textAlign: 'center' }}>
-                            {row.tipo === 'insumo' ? (
-                              <input
-                                type="radio"
-                                name="cot-ganadora"
-                                checked={!!row.es_ganadora}
-                                onChange={() => patchCotizacion(row.id, { es_ganadora: true })}
-                                title="Cotización ganadora"
+                            <input
+                              type="radio"
+                              name="cot-ganadora"
+                              checked={!!par.es_ganadora}
+                              onChange={() => setParGanadora(par.id)}
+                              title="Cotización ganadora (lado insumo)"
+                            />
+                          </td>
+                          <td style={td}>
+                            <input style={cellInp} value={par.insumo?.proveedor || ''} onChange={(e) => patchParLado(par.id, 'insumo', { proveedor: e.target.value })} />
+                          </td>
+                          <td style={td}>
+                            <input style={cellInp} type="number" min="0" step="0.01" value={par.insumo?.valor ?? ''} onChange={(e) => patchParLado(par.id, 'insumo', { valor: e.target.value })} />
+                          </td>
+                          <td style={td}>
+                            <input style={cellInp} value={par.insumo?.numero || ''} onChange={(e) => patchParLado(par.id, 'insumo', { numero: e.target.value })} />
+                          </td>
+                          <td style={td}>
+                            <input style={cellInp} type="date" value={par.insumo?.fecha || ''} onChange={(e) => patchParLado(par.id, 'insumo', { fecha: e.target.value })} />
+                          </td>
+                          <td style={td}>
+                            <input style={cellInp} value={par.insumo?.vigencia || ''} placeholder="15 días" onChange={(e) => patchParLado(par.id, 'insumo', { vigencia: e.target.value })} />
+                          </td>
+                          <td style={td}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                              <CotizacionClipBtn
+                                t={t}
+                                disabled={busy}
+                                file={par.insumo?.pdf}
+                                fileName={par.insumo?.pdf_nombre}
+                                onPick={(file) => patchParLado(par.id, 'insumo', { pdf: file, pdf_nombre: file?.name || '' })}
                               />
-                            ) : (
-                              <span style={{ color: t.textMuted }}>—</span>
-                            )}
+                              {par.es_ganadora && par.insumo?.pdf && (
+                                <IconActionBtn title={ocrBusy ? 'OCR…' : 'OCR sobre PDF ganador'} disabled={ocrBusy || busy} t={t} onClick={() => runOcr(par.id)}>
+                                  <IconOcrScan />
+                                </IconActionBtn>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ ...td, borderLeft: `2px solid ${t.border}` }}>
+                            <input style={cellInp} value={par.no_previsto?.proveedor || ''} onChange={(e) => patchParLado(par.id, 'no_previsto', { proveedor: e.target.value })} />
                           </td>
                           <td style={td}>
-                            <input
-                              style={cellInp}
-                              value={row.proveedor || ''}
-                              onChange={(e) => patchCotizacion(row.id, { proveedor: e.target.value })}
-                            />
+                            <input style={cellInp} type="number" min="0" step="0.01" value={par.no_previsto?.valor ?? ''} onChange={(e) => patchParLado(par.id, 'no_previsto', { valor: e.target.value })} />
                           </td>
                           <td style={td}>
-                            <input
-                              style={cellInp}
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={row.valor}
-                              onChange={(e) => patchCotizacion(row.id, { valor: e.target.value })}
-                            />
+                            <input style={cellInp} value={par.no_previsto?.numero || ''} onChange={(e) => patchParLado(par.id, 'no_previsto', { numero: e.target.value })} />
                           </td>
                           <td style={td}>
-                            <input
-                              style={cellInp}
-                              value={row.numero || ''}
-                              onChange={(e) => patchCotizacion(row.id, { numero: e.target.value })}
-                            />
+                            <input style={cellInp} type="date" value={par.no_previsto?.fecha || ''} onChange={(e) => patchParLado(par.id, 'no_previsto', { fecha: e.target.value })} />
                           </td>
                           <td style={td}>
-                            <input
-                              style={cellInp}
-                              type="date"
-                              value={row.fecha || ''}
-                              onChange={(e) => patchCotizacion(row.id, { fecha: e.target.value })}
-                            />
+                            <input style={cellInp} value={par.no_previsto?.vigencia || ''} placeholder="15 días" onChange={(e) => patchParLado(par.id, 'no_previsto', { vigencia: e.target.value })} />
                           </td>
                           <td style={td}>
-                            <input
-                              style={cellInp}
-                              value={row.vigencia || ''}
-                              placeholder="Ej. 15 días"
-                              onChange={(e) => patchCotizacion(row.id, { vigencia: e.target.value })}
+                            <CotizacionClipBtn
+                              t={t}
+                              disabled={busy}
+                              file={par.no_previsto?.pdf}
+                              fileName={par.no_previsto?.pdf_nombre}
+                              onPick={(file) => patchParLado(par.id, 'no_previsto', { pdf: file, pdf_nombre: file?.name || '' })}
                             />
                           </td>
                         </tr>
@@ -1630,54 +1728,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   </table>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-                  <button type="button" style={btnSecondary} onClick={() => addCotizacionRow('insumo')}>+ Fila cotización insumo</button>
-                  <button type="button" style={btnSecondary} onClick={() => addCotizacionRow('no_previsto')}>+ Fila No Previstos</button>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: compactCatalog ? '1fr' : '1fr 1fr', gap: 12 }}>
-                  <div style={{ padding: 10, border: `1px solid ${t.border}`, background: ui.cardSubtle }}>
-                    <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', marginBottom: 6, color: t.primary }}>PDF cotización ganadora (opcional / OCR)</div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      {compactCatalog && (
-                        <>
-                          <input
-                            ref={ocrCamRef}
-                            type="file"
-                            accept="image/*"
-                            capture="environment"
-                            style={{ display: 'none' }}
-                            onChange={(e) => setForm({ ...form, ganadora_pdf: e.target.files?.[0] || null })}
-                          />
-                          <button type="button" style={btnPrimary} onClick={() => ocrCamRef.current?.click()}>📷 Fotografiar</button>
-                        </>
-                      )}
-                      <input
-                        type="file"
-                        accept="application/pdf,image/*"
-                        onChange={(e) => setForm({ ...form, ganadora_pdf: e.target.files?.[0] || null })}
-                      />
-                      {form.ganadora_pdf && <span style={{ fontSize: 'var(--cc-xs)' }}>{form.ganadora_pdf.name}</span>}
-                      <IconActionBtn title={ocrBusy ? 'Leyendo…' : 'OCR'} disabled={!form.ganadora_pdf || ocrBusy} t={t} onClick={runOcr}>
-                        <IconOcrScan />
-                      </IconActionBtn>
-                    </div>
-                  </div>
-                  <div style={{ padding: 10, border: `1px dashed ${ui.dashedBorder}`, background: t.inputBg }}>
-                    <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', marginBottom: 6, color: t.textMuted }}>PDFs de soporte (opcionales)</div>
-                    <input
-                      type="file"
-                      accept="application/pdf"
-                      multiple
-                      onChange={(e) => setForm({ ...form, soportes_pdf: Array.from(e.target.files || []) })}
-                    />
-                    {(form.soportes_pdf || []).length > 0 && (
-                      <ul style={{ fontSize: 'var(--cc-xs)', margin: '6px 0 0', paddingLeft: 18 }}>
-                        {form.soportes_pdf.map((f) => (
-                          <li key={f.name + f.size}>{f.name}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
+                  <button type="button" style={btnSecondary} onClick={addCotizacionPar}>+ Fila comparativa (Insumo | No Previsto)</button>
                 </div>
               </>
             ) : (
