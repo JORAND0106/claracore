@@ -75,7 +75,7 @@ export default function CatalogoProveedorAutocomplete({
         <div
           style={{
             position: 'absolute',
-            zIndex: 20,
+            zIndex: 10050,
             left: 0,
             right: 0,
             top: '100%',

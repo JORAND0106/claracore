@@ -282,6 +282,7 @@ def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
         es_ganadora = bool(item.get("es_ganadora")) and tipo == "insumo"
         row = {
             "id": str(item.get("id") or f"c-{i}"),
+            "pair_id": str(item["pair_id"]) if item.get("pair_id") else None,
             "tipo": tipo,
             "es_ganadora": es_ganadora,
             "proveedor": proveedor,
@@ -289,6 +290,7 @@ def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
             "numero": numero,
             "fecha": fecha,
             "vigencia": vigencia,
+            "pdf_nombre": (item.get("pdf_nombre") or "").strip() or None,
         }
         if not any(
             [
@@ -298,6 +300,7 @@ def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
                 fecha,
                 vigencia,
                 valor is not None,
+                row["pdf_nombre"],
             ]
         ):
             continue
