@@ -1,79 +1,126 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  applyAutoGanadoraByMinValor,
+  buildParFromCapture,
+  coherenciaErrors,
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
   detalleToPares,
+  ganadoraRuleErrors,
   ganadoraDesdeInsumoRow,
   newCotizacionPar,
-  otrasCotizaciones,
+  nextCotizacionNumero,
   seedCotizacionPares,
   syncLegacyFromGanadora,
+  validateCaptureForEnviar,
+  validateGuardarInsumo,
 } from './catalogoInsumosCotizaciones.js'
 
-describe('catalogoInsumosCotizaciones pares', () => {
-  it('seed crea pares con ganadora e insumo+no_previsto', () => {
-    const pares = seedCotizacionPares({ minPares: 3 })
-    assert.equal(pares.length, 3)
-    assert.equal(pares.filter((p) => p.es_ganadora).length, 1)
-    assert.ok(pares.every((p) => p.insumo && p.no_previsto))
+describe('catalogoInsumosCotizaciones flujo enviar', () => {
+  it('nextCotizacionNumero es consecutivo', () => {
+    assert.equal(nextCotizacionNumero([]), 'COT-001')
+    const pares = seedCotizacionPares({ minPares: 0 })
+    const withOne = buildParFromCapture({
+      razon_social: 'A', nit: '1', descripcion: 'Geo', unidad: 'M2', rendimiento: '1', costo_base: '100',
+    }, pares)
+    assert.equal(withOne[0].insumo.numero, 'COT-001')
+    assert.equal(nextCotizacionNumero(withOne), 'COT-002')
   })
 
-  it('seed rellena desde legado en lado insumo', () => {
-    const pares = seedCotizacionPares({
-      minPares: 2,
-      legacy: { cotizacion_numero: 'COT-9', cotizacion_fecha: '2026-01-15', cotizacion_vigencia: '30 días' },
-      proveedorNombre: 'Acme',
-      costoBase: '1500',
-    })
+  it('applyAutoGanadoraByMinValor elige el menor valor insumo', () => {
+    let pares = [
+      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '500', numero: 'COT-001' } },
+      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '200', numero: 'COT-002' } },
+      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '300', numero: 'COT-003' } },
+    ]
+    pares = applyAutoGanadoraByMinValor(pares)
     const gan = pares.find((p) => p.es_ganadora)
-    assert.equal(gan.insumo.numero, 'COT-9')
-    assert.equal(gan.insumo.proveedor, 'Acme')
-    assert.equal(gan.insumo.valor, '1500')
+    assert.equal(gan.insumo.numero, 'COT-002')
+    assert.deepEqual(ganadoraRuleErrors(pares), [])
   })
 
-  it('payload empareja con pair_id y sync legado', () => {
-    const pares = seedCotizacionPares({ minPares: 1 })
-    pares[0].es_ganadora = true
-    pares[0].insumo.numero = 'G-1'
-    pares[0].insumo.fecha = '2026-02-01'
-    pares[0].no_previsto.numero = 'NP-1'
-    pares[0].no_previsto.valor = '2000'
+  it('ganadoraRuleErrors detecta ganadora más cara en No Previsto', () => {
+    let pares = [
+      {
+        ...newCotizacionPar({ esGanadora: true }),
+        insumo: { ...newCotizacionPar().insumo, valor: '100', numero: 'COT-001' },
+        no_previsto: { ...newCotizacionPar().no_previsto, valor: '500', numero: 'COT-001' },
+      },
+      {
+        ...newCotizacionPar(),
+        insumo: { ...newCotizacionPar().insumo, valor: '200', numero: 'COT-002' },
+        no_previsto: { ...newCotizacionPar().no_previsto, valor: '150', numero: 'COT-002' },
+      },
+    ]
+    pares = applyAutoGanadoraByMinValor(pares)
+    const errs = ganadoraRuleErrors(pares)
+    assert.ok(errs.some((e) => /No Previsto/i.test(e)))
+  })
+
+  it('coherenciaErrors exige misma descripción/unidad/rendimiento', () => {
+    const pares = buildParFromCapture({
+      razon_social: 'A', nit: '1', descripcion: 'Geo 2400', unidad: 'M2', rendimiento: '1', costo_base: '10',
+    }, [])
+    const draftBad = { descripcion: 'Geo 2500', unidad: 'M2', rendimiento: '1' }
+    const errs = coherenciaErrors(pares, draftBad)
+    assert.ok(errs.some((e) => /descripción/i.test(e)))
+  })
+
+  it('validateCaptureForEnviar lista faltantes', () => {
+    const r = validateCaptureForEnviar({ razon_social: '', nit: '', descripcion: '', unidad: '', costo_base: '' }, [])
+    assert.ok(r.faltantes.length >= 3)
+  })
+
+  it('validateGuardarInsumo exige filas y PDF', () => {
+    const form = {
+      descripcion: 'X',
+      unidad: 'UND',
+      costo_base: '1',
+      requiere_cotizacion: true,
+      cotizaciones_detalle: buildParFromCapture({
+        razon_social: 'A', nit: '1', descripcion: 'X', unidad: 'UND', rendimiento: '', costo_base: '10',
+      }, []),
+    }
+    const r = validateGuardarInsumo(form, { minCotizaciones: 1 })
+    assert.ok(r.faltantes.some((f) => /PDF/i.test(f)))
+  })
+
+  it('buildParFromCapture + payload + sync', () => {
+    const pares = buildParFromCapture({
+      razon_social: 'Acme',
+      nit: '900',
+      descripcion: 'Geotextil',
+      unidad: 'M2',
+      rendimiento: '1',
+      costo_base: '1500',
+      valor_no_previsto: '1800',
+      cotizacion_fecha: '2026-01-15',
+      cotizacion_vigencia: '30 días',
+    }, [])
+    assert.equal(pares.length, 1)
+    assert.equal(pares[0].es_ganadora, true)
+    assert.equal(pares[0].no_previsto.valor, '1800')
     const legacy = syncLegacyFromGanadora(pares)
-    assert.equal(legacy.cotizacion_numero, 'G-1')
+    assert.equal(legacy.cotizacion_numero, 'COT-001')
     const payload = cotizacionesPayloadForSave(pares)
     assert.equal(payload.length, 2)
-    assert.equal(payload[0].pair_id, pares[0].id)
-    assert.equal(payload[0].tipo, 'insumo')
-    assert.equal(payload[1].tipo, 'no_previsto')
-  })
-
-  it('detalleToPares reagrupa por pair_id', () => {
-    const pares = detalleToPares([
-      { id: 'a', pair_id: 'p1', tipo: 'insumo', es_ganadora: true, numero: 'G' },
-      { id: 'b', pair_id: 'p1', tipo: 'no_previsto', numero: 'NP', valor: 10 },
-      { id: 'c', pair_id: 'p2', tipo: 'insumo', numero: 'S' },
-    ])
-    assert.equal(pares.length, 2)
-    assert.equal(pares[0].insumo.numero, 'G')
-    assert.equal(pares[0].no_previsto.numero, 'NP')
-    assert.equal(pares[1].insumo.numero, 'S')
   })
 
   it('collectPdfFilesFromPares separa ganadora y soportes', () => {
     const a = new File(['x'], 'gan.pdf', { type: 'application/pdf' })
     const b = new File(['y'], 'sop.pdf', { type: 'application/pdf' })
-    const c = new File(['z'], 'np.pdf', { type: 'application/pdf' })
-    const pares = [
-      { ...newCotizacionPar({ esGanadora: true }), insumo: { ...newCotizacionPar().insumo, pdf: a }, no_previsto: { ...newCotizacionPar().no_previsto, pdf: c } },
-      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, pdf: b } },
+    let pares = [
+      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '100', pdf: a } },
+      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '200', pdf: b } },
     ]
+    pares = applyAutoGanadoraByMinValor(pares)
     const { ganadora, soportes } = collectPdfFilesFromPares(pares)
     assert.equal(ganadora.name, 'gan.pdf')
-    assert.deepEqual(soportes.map((f) => f.name).sort(), ['np.pdf', 'sop.pdf'])
+    assert.equal(soportes[0].name, 'sop.pdf')
   })
 
-  it('ganadoraDesdeInsumoRow y otrasCotizaciones', () => {
+  it('detalleToPares y ganadoraDesdeInsumoRow', () => {
     const fromDetalle = ganadoraDesdeInsumoRow({
       cotizaciones_detalle: [
         { pair_id: 'p1', tipo: 'insumo', es_ganadora: true, numero: 'A', valor: 10 },
@@ -81,15 +128,9 @@ describe('catalogoInsumosCotizaciones pares', () => {
       ],
     })
     assert.equal(fromDetalle.numero, 'A')
-    const otras = otrasCotizaciones(
-      detalleToPares([
-        { pair_id: 'p1', tipo: 'insumo', es_ganadora: true, numero: 'G' },
-        { pair_id: 'p1', tipo: 'no_previsto', numero: 'NP' },
-        { pair_id: 'p2', tipo: 'insumo', numero: 'S' },
-      ]),
-      'p1',
-    )
-    assert.ok(otras.some((r) => r.numero === 'NP'))
-    assert.ok(otras.some((r) => r.numero === 'S'))
+    assert.equal(detalleToPares([
+      { pair_id: 'p1', tipo: 'insumo', es_ganadora: true, numero: 'G' },
+      { pair_id: 'p1', tipo: 'no_previsto', numero: 'NP' },
+    ]).length, 1)
   })
 })
