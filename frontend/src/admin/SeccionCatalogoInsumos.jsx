@@ -25,10 +25,12 @@ import CcConfirmModal from '../components/CcConfirmModal'
 import CatalogoProveedorAutocomplete from './CatalogoProveedorAutocomplete'
 import {
   applyAutoGanadoraByMinValor,
+  applyPdfReplace,
   buildParFromCapture,
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
   detalleVisibleDesdeInsumoRow,
+  fileFromDataTransfer,
   ganadoraDesdeInsumoRow,
   ganadoraRuleErrors,
   otrasCotizaciones,
@@ -200,22 +202,56 @@ function AttachmentPreviewModal({ file, fileName, onClose, ui, t }) {
   )
 }
 
-function CotizacionClipBtn({ file, fileName, onPick, onPreview, t, disabled }) {
+function CotizacionClipBtn({ file, fileName, pdfHistorial, onPick, onPreview, t, disabled, dropHint }) {
   const inputRef = useRef(null)
+  const [dragOver, setDragOver] = useState(false)
   const label = file?.name || fileName || ''
+  const histCount = Array.isArray(pdfHistorial) ? pdfHistorial.length : 0
+
+  const acceptFile = (f) => {
+    if (!f || disabled) return
+    onPick?.(f)
+  }
+
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%' }}>
+    <div
+      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); if (!disabled) setDragOver(true) }}
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (!disabled) setDragOver(true) }}
+      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false) }}
+      onDrop={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setDragOver(false)
+        acceptFile(e.dataTransfer?.files?.[0])
+      }}
+      title={dropHint || (label ? `Vigente: ${label}. Reemplace o arrastre otro PDF.` : 'Adjunte o arrastre el PDF aquí')}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        maxWidth: '100%',
+        minHeight: 32,
+        padding: '2px 4px',
+        borderRadius: 6,
+        border: `1.5px ${dragOver ? 'dashed' : 'solid'} ${dragOver ? t.primary : 'transparent'}`,
+        background: dragOver ? `${t.primary}14` : 'transparent',
+        transition: 'background 0.12s, border-color 0.12s',
+      }}
+    >
       <input
         ref={inputRef}
         type="file"
         accept="application/pdf,image/*"
         style={{ display: 'none' }}
-        onChange={(e) => onPick(e.target.files?.[0] || null)}
+        onChange={(e) => {
+          acceptFile(e.target.files?.[0] || null)
+          e.target.value = ''
+        }}
       />
       <button
         type="button"
-        title={label ? `Adjuntar / reemplazar: ${label}` : 'Adjuntar cotización (PDF)'}
-        aria-label={label ? `Adjunto: ${label}` : 'Adjuntar cotización'}
+        title={label ? `Reemplazar PDF vigente (${label})` : 'Adjuntar cotización (PDF)'}
+        aria-label={label ? `Reemplazar adjunto: ${label}` : 'Adjuntar cotización'}
         disabled={disabled}
         onClick={() => inputRef.current?.click()}
         style={{
@@ -238,7 +274,7 @@ function CotizacionClipBtn({ file, fileName, onPick, onPreview, t, disabled }) {
       {label ? (
         <button
           type="button"
-          title="Ver adjunto (sin descargar)"
+          title="Ver adjunto vigente (sin descargar)"
           aria-label="Ver adjunto"
           disabled={disabled || !file}
           onClick={() => onPreview?.({ file, fileName: label })}
@@ -261,21 +297,33 @@ function CotizacionClipBtn({ file, fileName, onPick, onPreview, t, disabled }) {
           <IconEye />
         </button>
       ) : null}
-      {label ? (
-        <span
-          style={{
-            fontSize: 'var(--cc-xs)',
-            color: t.textMuted,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            maxWidth: 64,
-          }}
-          title={label}
-        >
-          {label}
-        </span>
-      ) : null}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        {label ? (
+          <div
+            style={{
+              fontSize: 'var(--cc-xs)',
+              color: t.textMuted,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: 90,
+            }}
+            title={label}
+          >
+            {label}
+          </div>
+        ) : (
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, opacity: 0.75 }}>Arrastre PDF</div>
+        )}
+        {histCount > 0 && (
+          <div
+            style={{ fontSize: 10, color: t.textMuted, opacity: 0.8 }}
+            title={(pdfHistorial || []).map((h) => h.nombre).join(' → ')}
+          >
+            {histCount} reemplazo(s)
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -980,6 +1028,30 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     })
   }
 
+  const assignPdfToLado = (pairId, lado, file) => {
+    setForm((f) => {
+      let list = (f.cotizaciones_detalle || []).map((p) => {
+        if (p.id !== pairId) return p
+        return {
+          ...p,
+          [lado]: applyPdfReplace(p[lado] || {}, file),
+        }
+      })
+      list = applyAutoGanadoraByMinValor(list)
+      const legacy = syncLegacyFromGanadora(list)
+      setModalRuleErrors(ganadoraRuleErrors(list))
+      return { ...f, cotizaciones_detalle: list, ...legacy }
+    })
+  }
+
+  const onRowDropPdf = (pairId, lado, e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (busy) return
+    const file = fileFromDataTransfer(e.dataTransfer)
+    if (file) assignPdfToLado(pairId, lado, file)
+  }
+
   const enviarCotizacionFila = () => {
     const { faltantes, coherencia } = validateCaptureForEnviar(form, form.cotizaciones_detalle || [])
     const all = [...faltantes, ...coherencia]
@@ -988,7 +1060,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       setModalRuleErrors([])
       return
     }
-    const list = buildParFromCapture(form, form.cotizaciones_detalle || [])
+    const list = buildParFromCapture(form, form.cotizaciones_detalle || [], {
+      impuestoEtiqueta: etiquetaTributos(tributosPayloadDesdeForm(form.impuesto || EMPTY_IMPUESTO)),
+    })
     const legacy = syncLegacyFromGanadora(list)
     const gan = pickGanadora(list)
     setModalFaltantes([])
@@ -1819,72 +1893,155 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             {form.requiere_cotizacion ? (
               <>
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
-                  La ganadora se marca automáticamente por <strong>menor valor insumo</strong> (resaltada).
-                  Debe ser también la de menor valor No Previsto. Use el ojo para previsualizar el adjunto.
+                  Cada bloque distingue <strong>datos del insumo</strong> (iguales en todas las filas) y <strong>datos de costo</strong> (varían).
+                  La ganadora es la de menor costo. Arrastre el PDF sobre la fila/celda o use el clip; al reemplazar queda vigente la última versión.
                 </div>
                 <div style={{ ...sheetWrap, marginBottom: 8, overflowX: 'auto' }}>
-                  <table style={{ ...sheetTable, minWidth: 1280, tableLayout: 'auto' }}>
+                  <table style={{ ...sheetTable, minWidth: 1480, tableLayout: 'auto' }}>
                     <thead>
                       <tr>
-                        <th style={{ ...thHeader, width: 64 }} rowSpan={2}>Ganadora</th>
-                        <th style={{ ...thHeader, textAlign: 'center', background: ui.dark ? 'rgba(0,180,198,0.28)' : 'rgba(0,119,182,0.16)' }} colSpan={6}>
+                        <th style={{ ...thHeader, width: 64 }} rowSpan={3}>Ganadora</th>
+                        <th
+                          style={{
+                            ...thHeader,
+                            textAlign: 'center',
+                            background: ui.dark ? 'rgba(0,180,198,0.28)' : ui.rest ? 'rgba(14,116,144,0.18)' : 'rgba(0,119,182,0.16)',
+                          }}
+                          colSpan={8}
+                        >
                           Cotización insumo
                         </th>
-                        <th style={{ ...thHeader, textAlign: 'center', background: ui.dark ? 'rgba(251,191,36,0.22)' : 'rgba(217,119,6,0.14)' }} colSpan={6}>
+                        <th
+                          style={{
+                            ...thHeader,
+                            textAlign: 'center',
+                            background: ui.dark ? 'rgba(245,158,11,0.22)' : ui.rest ? 'rgba(180,120,40,0.16)' : 'rgba(217,119,6,0.14)',
+                          }}
+                          colSpan={8}
+                        >
                           Cotización No Previsto
                         </th>
                       </tr>
                       <tr>
-                        <th style={thHeader}>Proveedor</th>
-                        <th style={{ ...thHeader, width: 96 }}>Valor</th>
-                        <th style={{ ...thHeader, width: 88 }}>Nº</th>
-                        <th style={{ ...thHeader, width: 108 }}>Fecha</th>
-                        <th style={{ ...thHeader, width: 88 }}>Vigencia</th>
-                        <th style={{ ...thHeader, width: 90 }}>PDF</th>
-                        <th style={thHeader}>Proveedor</th>
-                        <th style={{ ...thHeader, width: 96 }}>Valor</th>
-                        <th style={{ ...thHeader, width: 88 }}>Nº</th>
-                        <th style={{ ...thHeader, width: 108 }}>Fecha</th>
-                        <th style={{ ...thHeader, width: 88 }}>Vigencia</th>
-                        <th style={{ ...thHeader, width: 90 }}>PDF</th>
+                        <th
+                          style={{
+                            ...thHeader,
+                            textAlign: 'center',
+                            background: ui.dark ? 'rgba(148,163,184,0.18)' : 'rgba(148,163,184,0.14)',
+                          }}
+                          colSpan={3}
+                        >
+                          Datos del insumo
+                        </th>
+                        <th
+                          style={{
+                            ...thHeader,
+                            textAlign: 'center',
+                            background: ui.dark ? 'rgba(0,180,198,0.18)' : 'rgba(0,119,182,0.10)',
+                          }}
+                          colSpan={5}
+                        >
+                          Datos de costo
+                        </th>
+                        <th
+                          style={{
+                            ...thHeader,
+                            textAlign: 'center',
+                            background: ui.dark ? 'rgba(148,163,184,0.18)' : 'rgba(148,163,184,0.14)',
+                          }}
+                          colSpan={3}
+                        >
+                          Datos del insumo
+                        </th>
+                        <th
+                          style={{
+                            ...thHeader,
+                            textAlign: 'center',
+                            background: ui.dark ? 'rgba(245,158,11,0.16)' : 'rgba(217,119,6,0.10)',
+                          }}
+                          colSpan={5}
+                        >
+                          Datos de costo
+                        </th>
+                      </tr>
+                      <tr>
+                        <th style={thHeader}>Descripción</th>
+                        <th style={{ ...thHeader, width: 56 }}>Und</th>
+                        <th style={{ ...thHeader, width: 64 }}>Rend.</th>
+                        <th style={{ ...thHeader, width: 92 }}>Costo</th>
+                        <th style={{ ...thHeader, width: 100 }}>IVA / AIU</th>
+                        <th style={{ ...thHeader, width: 80 }}>Nº</th>
+                        <th style={{ ...thHeader, width: 100 }}>Fecha</th>
+                        <th style={{ ...thHeader, width: 100 }}>PDF</th>
+                        <th style={thHeader}>Descripción</th>
+                        <th style={{ ...thHeader, width: 56 }}>Und</th>
+                        <th style={{ ...thHeader, width: 64 }}>Rend.</th>
+                        <th style={{ ...thHeader, width: 92 }}>Costo</th>
+                        <th style={{ ...thHeader, width: 100 }}>IVA / AIU</th>
+                        <th style={{ ...thHeader, width: 80 }}>Nº</th>
+                        <th style={{ ...thHeader, width: 100 }}>Fecha</th>
+                        <th style={{ ...thHeader, width: 100 }}>PDF</th>
                       </tr>
                     </thead>
                     <tbody>
                       {(form.cotizaciones_detalle || []).length === 0 ? (
                         <tr>
-                          <td colSpan={13} style={{ ...td, color: t.textMuted }}>
+                          <td colSpan={17} style={{ ...td, color: t.textMuted }}>
                             Sin cotizaciones enviadas. Complete proveedor e insumo y pulse «Enviar cotización a la tabla».
                           </td>
                         </tr>
                       ) : (form.cotizaciones_detalle || []).map((par, idx) => {
                         const win = !!par.es_ganadora
+                        const coh = par.coherencia || {
+                          descripcion: form.descripcion,
+                          unidad: form.unidad,
+                          rendimiento: form.rendimiento,
+                        }
+                        const insTint = ui.dark ? 'rgba(0,180,198,0.08)' : ui.rest ? 'rgba(14,116,144,0.06)' : 'rgba(0,119,182,0.05)'
+                        const npTint = ui.dark ? 'rgba(245,158,11,0.10)' : ui.rest ? 'rgba(180,120,40,0.08)' : 'rgba(217,119,6,0.06)'
                         const rowBg = win
-                          ? (ui.dark ? 'rgba(34,197,94,0.18)' : 'rgba(34,197,94,0.12)')
+                          ? (ui.dark ? 'rgba(34,197,94,0.16)' : 'rgba(34,197,94,0.10)')
                           : sheetZebra(ui, idx)
+                        const tdIns = { ...td, background: win ? undefined : insTint }
+                        const tdNp = { ...td, background: win ? undefined : npTint, borderLeft: idx === 0 ? undefined : undefined }
                         return (
-                          <tr key={par.id} style={{ background: rowBg, outline: win ? `2px solid ${ui.successText || '#047857'}` : undefined }}>
+                          <tr
+                            key={par.id}
+                            style={{ background: rowBg, outline: win ? `2px solid ${ui.successText || '#047857'}` : undefined }}
+                            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
+                            onDrop={(e) => onRowDropPdf(par.id, 'insumo', e)}
+                            title="Arrastre un PDF sobre la fila (lado insumo) o sobre la celda PDF de No Previsto"
+                          >
                             <td style={{ ...td, textAlign: 'center', fontWeight: 800, color: win ? (ui.successText || '#047857') : t.textMuted }}>
                               {win ? '✓ Menor' : '—'}
                             </td>
-                            <td style={td}>{par.insumo?.proveedor || '—'}</td>
-                            <td style={td}>
+                            <td style={{ ...tdIns, fontSize: 'var(--cc-xs)' }} title={coh.descripcion}>{coh.descripcion || '—'}</td>
+                            <td style={{ ...tdIns, whiteSpace: 'nowrap' }}>{coh.unidad || '—'}</td>
+                            <td style={tdIns}>{coh.rendimiento !== '' && coh.rendimiento != null ? coh.rendimiento : '—'}</td>
+                            <td style={tdIns}>
                               <input style={cellInp} type="number" min="0" step="0.01" value={par.insumo?.valor ?? ''} onChange={(e) => patchParLado(par.id, 'insumo', { valor: e.target.value })} />
                             </td>
-                            <td style={{ ...tdMuted, fontVariantNumeric: 'tabular-nums' }}>{par.insumo?.numero || '—'}</td>
-                            <td style={td}>
+                            <td style={tdIns}>
+                              <input
+                                style={cellInp}
+                                value={par.insumo?.impuesto_etiqueta ?? ''}
+                                placeholder="IVA / AIU"
+                                onChange={(e) => patchParLado(par.id, 'insumo', { impuesto_etiqueta: e.target.value })}
+                              />
+                            </td>
+                            <td style={{ ...tdIns, fontVariantNumeric: 'tabular-nums', color: t.textMuted }}>{par.insumo?.numero || '—'}</td>
+                            <td style={tdIns}>
                               <input style={cellInp} type="date" value={par.insumo?.fecha || ''} onChange={(e) => patchParLado(par.id, 'insumo', { fecha: e.target.value })} />
                             </td>
-                            <td style={td}>
-                              <input style={cellInp} value={par.insumo?.vigencia || ''} onChange={(e) => patchParLado(par.id, 'insumo', { vigencia: e.target.value })} />
-                            </td>
-                            <td style={td}>
+                            <td style={tdIns} onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }} onDrop={(e) => onRowDropPdf(par.id, 'insumo', e)}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                                 <CotizacionClipBtn
                                   t={t}
                                   disabled={busy}
                                   file={par.insumo?.pdf}
                                   fileName={par.insumo?.pdf_nombre}
-                                  onPick={(file) => patchParLado(par.id, 'insumo', { pdf: file, pdf_nombre: file?.name || '' })}
+                                  pdfHistorial={par.insumo?.pdf_historial}
+                                  onPick={(file) => assignPdfToLado(par.id, 'insumo', file)}
                                   onPreview={setPreviewAdjunto}
                                 />
                                 {win && par.insumo?.pdf && (
@@ -1894,25 +2051,33 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                 )}
                               </div>
                             </td>
-                            <td style={{ ...td, borderLeft: `2px solid ${t.border}` }}>{par.no_previsto?.proveedor || '—'}</td>
-                            <td style={td}>
+                            <td style={{ ...td, ...tdNp, borderLeft: `2px solid ${t.border}`, fontSize: 'var(--cc-xs)' }} title={coh.descripcion}>{coh.descripcion || '—'}</td>
+                            <td style={{ ...tdNp, whiteSpace: 'nowrap' }}>{coh.unidad || '—'}</td>
+                            <td style={tdNp}>{coh.rendimiento !== '' && coh.rendimiento != null ? coh.rendimiento : '—'}</td>
+                            <td style={tdNp}>
                               <input style={cellInp} type="number" min="0" step="0.01" value={par.no_previsto?.valor ?? ''} onChange={(e) => patchParLado(par.id, 'no_previsto', { valor: e.target.value })} />
                             </td>
-                            <td style={{ ...tdMuted, fontVariantNumeric: 'tabular-nums' }}>{par.no_previsto?.numero || '—'}</td>
-                            <td style={td}>
+                            <td style={{ ...tdNp, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                              {par.no_previsto?.impuesto_etiqueta || tributosResumen || '—'}
+                            </td>
+                            <td style={{ ...tdNp, fontVariantNumeric: 'tabular-nums', color: t.textMuted }}>{par.no_previsto?.numero || '—'}</td>
+                            <td style={tdNp}>
                               <input style={cellInp} type="date" value={par.no_previsto?.fecha || ''} onChange={(e) => patchParLado(par.id, 'no_previsto', { fecha: e.target.value })} />
                             </td>
-                            <td style={td}>
-                              <input style={cellInp} value={par.no_previsto?.vigencia || ''} onChange={(e) => patchParLado(par.id, 'no_previsto', { vigencia: e.target.value })} />
-                            </td>
-                            <td style={td}>
+                            <td
+                              style={tdNp}
+                              onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
+                              onDrop={(e) => onRowDropPdf(par.id, 'no_previsto', e)}
+                            >
                               <CotizacionClipBtn
                                 t={t}
                                 disabled={busy}
                                 file={par.no_previsto?.pdf}
                                 fileName={par.no_previsto?.pdf_nombre}
-                                onPick={(file) => patchParLado(par.id, 'no_previsto', { pdf: file, pdf_nombre: file?.name || '' })}
+                                pdfHistorial={par.no_previsto?.pdf_historial}
+                                onPick={(file) => assignPdfToLado(par.id, 'no_previsto', file)}
                                 onPreview={setPreviewAdjunto}
+                                dropHint="Arrastre el PDF de No Previsto aquí"
                               />
                             </td>
                           </tr>

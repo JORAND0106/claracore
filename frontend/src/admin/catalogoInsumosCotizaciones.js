@@ -13,8 +13,10 @@ export function emptyLado() {
     numero: '',
     fecha: '',
     vigencia: '',
+    impuesto_etiqueta: '',
     pdf: null,
     pdf_nombre: '',
+    pdf_historial: [],
   }
 }
 
@@ -69,14 +71,22 @@ function rowHasData(r) {
 }
 
 function normalizeLado(item = {}) {
+  const historial = Array.isArray(item?.pdf_historial)
+    ? item.pdf_historial.map((h) => ({
+      nombre: String(h?.nombre || ''),
+      replaced_at: h?.replaced_at || null,
+    })).filter((h) => h.nombre)
+    : []
   return {
     proveedor: item?.proveedor != null ? String(item.proveedor) : '',
     valor: item?.valor != null && item.valor !== '' ? String(item.valor) : '',
     numero: item?.numero != null ? String(item.numero) : '',
     fecha: item?.fecha ? String(item.fecha).slice(0, 10) : '',
     vigencia: item?.vigencia != null ? String(item.vigencia) : '',
+    impuesto_etiqueta: item?.impuesto_etiqueta != null ? String(item.impuesto_etiqueta) : '',
     pdf: item?.pdf || null,
     pdf_nombre: item?.pdf_nombre != null ? String(item.pdf_nombre) : '',
+    pdf_historial: historial,
   }
 }
 
@@ -249,7 +259,9 @@ function ladoPayload(lado) {
     numero: (lado.numero || '').trim() || null,
     fecha: lado.fecha || null,
     vigencia: (lado.vigencia || '').trim() || null,
+    impuesto_etiqueta: (lado.impuesto_etiqueta || '').trim() || null,
     pdf_nombre: (lado.pdf?.name || lado.pdf_nombre || '').trim() || null,
+    pdf_historial: Array.isArray(lado.pdf_historial) ? lado.pdf_historial : [],
   }
 }
 
@@ -507,8 +519,10 @@ export function coherenciaErrors(pares, draft = null) {
 /**
  * Construye un par desde el formulario de captura y lo agrega a la lista.
  * El nº de cotización se autogenera.
+ * @param {object} [opts]
+ * @param {string} [opts.impuestoEtiqueta]
  */
-export function buildParFromCapture(form, paresExistentes = []) {
+export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
   const numero = nextCotizacionNumero(paresExistentes)
   const proveedorNombre = (form.razon_social || '').trim()
   const valorIns = form.costo_base
@@ -517,6 +531,7 @@ export function buildParFromCapture(form, paresExistentes = []) {
     : form.costo_base
   const fecha = form.cotizacion_fecha || ''
   const vigencia = form.cotizacion_vigencia || ''
+  const impuestoEtiqueta = (opts.impuestoEtiqueta || form.impuesto_etiqueta || '').trim()
   const par = {
     ...newCotizacionPar({ esGanadora: false }),
     proveedor_id: form.proveedor_id || '',
@@ -536,6 +551,7 @@ export function buildParFromCapture(form, paresExistentes = []) {
       numero,
       fecha,
       vigencia,
+      impuesto_etiqueta: impuestoEtiqueta,
     },
     no_previsto: {
       ...emptyLado(),
@@ -544,9 +560,47 @@ export function buildParFromCapture(form, paresExistentes = []) {
       numero,
       fecha,
       vigencia,
+      impuesto_etiqueta: impuestoEtiqueta,
     },
   }
   return applyAutoGanadoraByMinValor([...(paresExistentes || []), par])
+}
+
+/**
+ * Reemplaza el PDF de un lado: archiva el nombre previo y deja vigente el nuevo.
+ */
+export function applyPdfReplace(lado, file) {
+  const prev = { ...(lado || emptyLado()) }
+  const prevName = (prev.pdf?.name || prev.pdf_nombre || '').trim()
+  const historial = Array.isArray(prev.pdf_historial) ? [...prev.pdf_historial] : []
+  if (prevName && file && prevName !== file.name) {
+    historial.push({ nombre: prevName, replaced_at: new Date().toISOString() })
+  } else if (prevName && !file) {
+    historial.push({ nombre: prevName, replaced_at: new Date().toISOString() })
+  }
+  return {
+    ...prev,
+    pdf: file || null,
+    pdf_nombre: file?.name || '',
+    pdf_historial: historial.slice(-20),
+  }
+}
+
+/** Extrae el primer archivo válido de un DataTransfer (drag & drop). */
+export function fileFromDataTransfer(dt) {
+  if (!dt) return null
+  const files = dt.files
+  if (files && files.length > 0) return files[0]
+  const items = dt.items
+  if (items && items.length) {
+    for (let i = 0; i < items.length; i += 1) {
+      if (items[i].kind === 'file') {
+        const f = items[i].getAsFile()
+        if (f) return f
+      }
+    }
+  }
+  return null
 }
 
 export function validateCaptureForEnviar(form, paresExistentes = []) {
