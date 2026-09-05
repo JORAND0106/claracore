@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 import unicodedata
 from datetime import date, datetime
-from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
 
 from almacen_insumos_service import (
@@ -253,10 +253,96 @@ def _norm_desc(text: str) -> str:
     return s
 
 
-def _similarity(a: str, b: str) -> float:
-    if not a or not b:
-        return 0.0
-    return SequenceMatcher(None, a, b).ratio()
+def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
+    """Filas de cotización (insumo | no_previsto) para la hoja editable."""
+    if raw is None or raw == "":
+        return []
+    data = raw
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+    if not isinstance(data, list):
+        return []
+    out: List[dict] = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            continue
+        tipo = (item.get("tipo") or "insumo").strip().lower()
+        if tipo not in ("insumo", "no_previsto"):
+            tipo = "insumo"
+        proveedor = (item.get("proveedor") or "").strip() or None
+        numero = (item.get("numero") or "").strip() or None
+        vigencia = (item.get("vigencia") or "").strip() or None
+        fecha = _parse_fecha(item.get("fecha")) if item.get("fecha") not in (None, "") else None
+        valor = None
+        if item.get("valor") not in (None, ""):
+            valor = _to_float(item.get("valor"))
+        es_ganadora = bool(item.get("es_ganadora")) and tipo == "insumo"
+        row = {
+            "id": str(item.get("id") or f"c-{i}"),
+            "tipo": tipo,
+            "es_ganadora": es_ganadora,
+            "proveedor": proveedor,
+            "valor": valor,
+            "numero": numero,
+            "fecha": fecha,
+            "vigencia": vigencia,
+        }
+        if not any(
+            [
+                es_ganadora,
+                proveedor,
+                numero,
+                fecha,
+                vigencia,
+                valor is not None,
+            ]
+        ):
+            continue
+        out.append(row)
+    seen_ganadora = False
+    for row in out:
+        if row.get("es_ganadora"):
+            if seen_ganadora:
+                row["es_ganadora"] = False
+            else:
+                seen_ganadora = True
+    return out
+
+
+def cotizaciones_detalle_from_row(row: dict) -> List[dict]:
+    """Detalle guardado o, si vacío, síntesis desde campos legados de ganadora."""
+    detalle = normalize_cotizaciones_detalle(row.get("cotizaciones_detalle"))
+    if detalle:
+        return detalle
+    if row.get("cotizacion_numero") or row.get("cotizacion_fecha") or row.get("cotizacion_vigencia"):
+        return [
+            {
+                "id": "legacy-ganadora",
+                "tipo": "insumo",
+                "es_ganadora": True,
+                "proveedor": None,
+                "valor": _to_float(row.get("costo_base")) if row.get("costo_base") is not None else None,
+                "numero": (row.get("cotizacion_numero") or "").strip() or None,
+                "fecha": _parse_fecha(row.get("cotizacion_fecha")) if row.get("cotizacion_fecha") else None,
+                "vigencia": (row.get("cotizacion_vigencia") or "").strip() or None,
+            }
+        ]
+    return []
+
+
+def _sync_legacy_cotizacion_from_detalle(payload: dict, detalle: List[dict]) -> None:
+    gan = next((r for r in detalle if r.get("es_ganadora") and r.get("tipo") == "insumo"), None)
+    if not gan:
+        return
+    if gan.get("numero"):
+        payload["cotizacion_numero"] = gan["numero"]
+    if gan.get("fecha"):
+        payload["cotizacion_fecha"] = gan["fecha"]
+    if gan.get("vigencia"):
+        payload["cotizacion_vigencia"] = gan["vigencia"]
 
 
 def get_almacen_config(contrato_id: int) -> dict:
@@ -348,6 +434,7 @@ def list_catalogo_insumos(
         item["cotizacion_numero"] = row.get("cotizacion_numero")
         item["cotizacion_fecha"] = row.get("cotizacion_fecha")
         item["cotizacion_vigencia"] = row.get("cotizacion_vigencia")
+        item["cotizaciones_detalle"] = cotizaciones_detalle_from_row(row)
         item["cantidad_negociada"] = row.get("cantidad_negociada")
         item["valor_negociado_total"] = row.get("valor_negociado_total")
         if row.get("cantidad_negociada") is not None and _to_float(row.get("cantidad_negociada")) > 0:
@@ -444,6 +531,12 @@ def find_duplicados(
     exclude_insumo_id: Optional[int] = None,
     umbral: float = 0.82,
 ) -> List[dict]:
+    """Duplicado solo si la descripción normalizada es exactamente igual (mismo proveedor).
+
+    `umbral` se conserva por compatibilidad de firma y no se usa: nunca se alerta
+    por similitud parcial ni por subcadena.
+    """
+    del umbral
     if not proveedor_id or not (descripcion or "").strip():
         return []
     sb = _sb()
@@ -463,21 +556,21 @@ def find_duplicados(
         if exclude_insumo_id and int(row["id"]) == int(exclude_insumo_id):
             continue
         desc = _norm_desc(row.get("descripcion") or "")
-        sim = _similarity(target, desc)
-        if sim >= umbral or target in desc or desc in target:
-            prov = (
-                sb.table("almacen_proveedor")
-                .select("razon_social, nit")
-                .eq("id", proveedor_id)
-                .limit(1)
-                .execute()
-                .data
-                or [{}]
-            )[0]
-            item = _row_from_almacen_insumo(row, prov.get("razon_social") or "—")
-            item["similitud"] = round(sim, 3)
-            out.append(item)
-    out.sort(key=lambda x: x.get("similitud") or 0, reverse=True)
+        if desc != target:
+            continue
+        prov = (
+            sb.table("almacen_proveedor")
+            .select("razon_social, nit")
+            .eq("id", proveedor_id)
+            .limit(1)
+            .execute()
+            .data
+            or [{}]
+        )[0]
+        item = _row_from_almacen_insumo(row, prov.get("razon_social") or "—")
+        item["similitud"] = 1.0
+        item["cotizaciones_detalle"] = cotizaciones_detalle_from_row(row)
+        out.append(item)
     return out
 
 
@@ -541,6 +634,14 @@ def _count_cotizaciones_insumo(
         )
     if body and (body.get("cotizacion_numero") or "").strip():
         tiene_ganadora = True
+    if body:
+        detalle = normalize_cotizaciones_detalle(body.get("cotizaciones_detalle"))
+        if any(r.get("es_ganadora") and (r.get("numero") or r.get("valor") is not None) for r in detalle):
+            tiene_ganadora = True
+        elif existing_row:
+            detalle_ex = cotizaciones_detalle_from_row(existing_row)
+            if any(r.get("es_ganadora") and (r.get("numero") or r.get("valor") is not None) for r in detalle_ex):
+                tiene_ganadora = True
     n_sop = len(soporte_pdfs or [])
     if insumo_id:
         n_sop += len(
@@ -638,7 +739,7 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
     if proveedor_id:
         from almacen_insumos_service import sync_proveedor_contacto
         sync_proveedor_contacto(int(proveedor_id), body)
-    return {
+    payload = {
         "contrato_id": contrato_id,
         "listado_precio_id": body.get("listado_precio_id"),
         "proveedor_id": int(proveedor_id) if proveedor_id else None,
@@ -659,6 +760,12 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
         "cantidad_negociada": cantidad_negociada,
         "valor_negociado_total": valor_negociado_total,
     }
+    # Solo persistir cotizaciones_detalle si viene en el body (evita borrar en CSV/update parcial).
+    if "cotizaciones_detalle" in body:
+        detalle = normalize_cotizaciones_detalle(body.get("cotizaciones_detalle"))
+        payload["cotizaciones_detalle"] = detalle
+        _sync_legacy_cotizacion_from_detalle(payload, detalle)
+    return payload
 
 
 def _save_ganadora_pdf(contrato_id: int, insumo_id: int, data: bytes, nombre: str, mime: str) -> dict:

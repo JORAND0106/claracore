@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { useClaraViewport } from '../useClaraViewport'
 import { createCatalogoInsumosApi, fmtMoney } from './catalogoInsumosApi'
@@ -23,6 +23,16 @@ import { buildContratoUiTheme } from '../theme/adminPanelTheme'
 import { UnidadSelector } from '../utils/unidadesListadoPrecios'
 import CcConfirmModal from '../components/CcConfirmModal'
 import CatalogoProveedorAutocomplete from './CatalogoProveedorAutocomplete'
+import {
+  cotizacionesPayloadForSave,
+  detalleVisibleDesdeInsumoRow,
+  ganadoraDesdeInsumoRow,
+  newCotizacionRow,
+  otrasCotizaciones,
+  pickGanadora,
+  seedCotizacionesForm,
+  syncLegacyFromGanadora,
+} from './catalogoInsumosCotizaciones'
 
 const EMPTY_FORM = {
   proveedor_id: '',
@@ -41,6 +51,7 @@ const EMPTY_FORM = {
   cotizacion_numero: '',
   cotizacion_fecha: '',
   cotizacion_vigencia: '',
+  cotizaciones_detalle: [],
   requiere_cotizacion: true,
   ganadora_pdf: null,
   soportes_pdf: [],
@@ -64,6 +75,7 @@ function snapshotForm(f) {
     cotizacion_numero: f.cotizacion_numero || '',
     cotizacion_fecha: f.cotizacion_fecha || '',
     cotizacion_vigencia: f.cotizacion_vigencia || '',
+    cotizaciones_detalle: cotizacionesPayloadForSave(f.cotizaciones_detalle || []),
     requiere_cotizacion: !!f.requiere_cotizacion,
     ganadora_pdf: f.ganadora_pdf?.name || '',
     soportes_pdf: (f.soportes_pdf || []).map((x) => x.name).join('|'),
@@ -74,6 +86,45 @@ const MAIN_CATALOG_TABS = [
   { id: 'insumos', label: 'Insumos' },
   { id: 'proveedores', label: 'Proveedores' },
 ]
+
+function sheetZebra(ui, index) {
+  if (index % 2 === 0) return ui.tok.bgCard
+  if (ui.dark) return 'rgba(30, 58, 95, 0.28)'
+  if (ui.rest) return 'rgba(201, 184, 164, 0.22)'
+  return 'rgba(241, 245, 249, 0.92)'
+}
+
+function SheetSectionTitle({ children, t, ui }) {
+  return (
+    <div style={{
+      fontWeight: 800,
+      fontSize: 'var(--cc-sm)',
+      color: t.primary,
+      letterSpacing: '0.04em',
+      textTransform: 'uppercase',
+      margin: '14px 0 8px',
+      padding: '6px 8px',
+      background: ui.cardSubtle,
+      border: `1px solid ${t.border}`,
+    }}
+    >
+      {children}
+    </div>
+  )
+}
+
+function sheetCellInput(inputStyle, extra = {}) {
+  return {
+    ...inputStyle,
+    borderRadius: 0,
+    border: 'none',
+    background: 'transparent',
+    padding: '4px 6px',
+    minHeight: 28,
+    width: '100%',
+    ...extra,
+  }
+}
 
 /** Vista previa: valor después de AIU/IVA (solo lectura). */
 function computeTotal(costo, impuestoForm) {
@@ -133,12 +184,6 @@ function ModalTabs({ tabs, active, onChange, ui }) {
     </div>
   )
 }
-
-const MODAL_TABS = [
-  { id: 'proveedor', label: 'Datos del proveedor' },
-  { id: 'insumo', label: 'Datos del insumo' },
-  { id: 'cotizaciones', label: 'Cotizaciones' },
-]
 
 function IconActionBtn({ title, onClick, disabled, children, t, variant = 'ghost' }) {
   const isPrimary = variant === 'primary'
@@ -501,12 +546,22 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     tableLayout: 'fixed',
     minWidth: 980,
   }
+  const thHeader = {
+    ...th,
+    background: ui.dark
+      ? 'rgba(0, 180, 198, 0.18)'
+      : ui.rest
+        ? 'rgba(14, 116, 144, 0.14)'
+        : 'rgba(0, 119, 182, 0.10)',
+    color: t.text,
+  }
   const modalPanelStyle = {
     background: t.bgCard,
     borderRadius: 12,
     border: `1px solid ${t.border}`,
     color: t.text,
   }
+  const cellInp = sheetCellInput(inputStyle)
 
   const [q, setQ] = useState('')
   const [rows, setRows] = useState([])
@@ -520,6 +575,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [ocrBusy, setOcrBusy] = useState(false)
   const [dupAlert, setDupAlert] = useState(null)
   const [historial, setHistorial] = useState(null)
+  const [expandedId, setExpandedId] = useState(null)
+  const [cotMinimas, setCotMinimas] = useState(3)
   const csvRef = useRef(null)
   const csvProvRef = useRef(null)
   const ocrCamRef = useRef(null)
@@ -527,7 +584,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [csvModo, setCsvModo] = useState('agregar')
   const [unidadModoCustom, setUnidadModoCustom] = useState(false)
   const [unidadCustom, setUnidadCustom] = useState('')
-  const [modalTab, setModalTab] = useState('proveedor')
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [deleteProvConfirm, setDeleteProvConfirm] = useState(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
@@ -636,6 +692,16 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     return () => clearTimeout(tmr)
   }, [load])
 
+  useEffect(() => {
+    if (!api || !canVer) return
+    api.getConfig()
+      .then((c) => {
+        const n = Number(c?.cotizaciones_minimas)
+        if (n > 0) setCotMinimas(n)
+      })
+      .catch(() => { /* default 3 */ })
+  }, [api, canVer])
+
   const refreshActiveTab = useCallback(() => {
     if (mainTab === 'proveedores') {
       loadProveedores()
@@ -648,15 +714,16 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
   const openNew = async () => {
     setEditId(null)
-    setForm(EMPTY_FORM)
+    const cotizaciones = seedCotizacionesForm({ minInsumo: cotMinimas, minNoPrevisto: 2 })
+    const nextForm = { ...EMPTY_FORM, cotizaciones_detalle: cotizaciones }
+    setForm(nextForm)
     setUnidadModoCustom(false)
     setUnidadCustom('')
     setDupAlert(null)
     setConsumoNegociado(null)
-    setModalTab('proveedor')
     setMainTab('insumos')
     setModalOpen(true)
-    formBaselineRef.current = snapshotForm(EMPTY_FORM)
+    formBaselineRef.current = snapshotForm(nextForm)
     if (api) {
       try {
         const r = await api.getNextCodigo()
@@ -674,6 +741,19 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const openEdit = (row) => {
     setEditId(row.insumo_id || row.id)
     const trib = seedTributosDesdeLegado(row)
+    const cotizaciones = seedCotizacionesForm({
+      existing: row.cotizaciones_detalle,
+      minInsumo: cotMinimas,
+      minNoPrevisto: 2,
+      legacy: {
+        cotizacion_numero: row.cotizacion_numero,
+        cotizacion_fecha: row.cotizacion_fecha,
+        cotizacion_vigencia: row.cotizacion_vigencia,
+      },
+      proveedorNombre: row.proveedor_nombre || '',
+      costoBase: row.costo ?? row.costo_base ?? '',
+    })
+    const legacySync = syncLegacyFromGanadora(cotizaciones)
     const nextForm = {
       ...EMPTY_FORM,
       proveedor_id: row.proveedor_id || '',
@@ -689,9 +769,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       costo_base: row.costo ?? row.costo_base ?? '',
       cantidad_negociada: row.cantidad_negociada ?? '',
       impuesto: formImpuestoDesdeTributos(trib),
-      cotizacion_numero: row.cotizacion_numero || '',
-      cotizacion_fecha: row.cotizacion_fecha || '',
-      cotizacion_vigencia: row.cotizacion_vigencia || '',
+      cotizacion_numero: legacySync.cotizacion_numero || row.cotizacion_numero || '',
+      cotizacion_fecha: legacySync.cotizacion_fecha || row.cotizacion_fecha || '',
+      cotizacion_vigencia: legacySync.cotizacion_vigencia || row.cotizacion_vigencia || '',
+      cotizaciones_detalle: cotizaciones,
       requiere_cotizacion: row.requiere_cotizacion !== false,
     }
     setForm(nextForm)
@@ -700,9 +781,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     setUnidadModoCustom(false)
     setUnidadCustom('')
     setDupAlert(null)
-    setModalTab('proveedor')
     setMainTab('insumos')
     setModalOpen(true)
+  }
+
+  const patchCotizacion = (id, patch) => {
+    setForm((f) => {
+      let list = (f.cotizaciones_detalle || []).map((r) => (
+        r.id === id ? { ...r, ...patch } : r
+      ))
+      if (patch.es_ganadora) {
+        list = list.map((r) => (
+          r.id === id
+            ? { ...r, es_ganadora: true, tipo: 'insumo' }
+            : { ...r, es_ganadora: r.tipo === 'insumo' ? false : r.es_ganadora }
+        ))
+      }
+      const legacy = syncLegacyFromGanadora(list)
+      return { ...f, cotizaciones_detalle: list, ...legacy }
+    })
+  }
+
+  const addCotizacionRow = (tipo) => {
+    setForm((f) => ({
+      ...f,
+      cotizaciones_detalle: [...(f.cotizaciones_detalle || []), newCotizacionRow(tipo)],
+    }))
   }
 
   const runOcr = async () => {
@@ -711,21 +815,41 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     try {
       const r = await api.ocrCotizacion(form.ganadora_pdf)
       const c = r.campos_catalogo || {}
-      setForm((f) => ({
-        ...f,
-        razon_social: c.razon_social || f.razon_social,
-        nit: c.nit || f.nit,
-        cotizacion_fecha: c.cotizacion_fecha || f.cotizacion_fecha,
-        costo_base: c.costo_base != null ? String(c.costo_base) : f.costo_base,
-        impuesto: (c.impuesto_porcentaje != null || c.tipo_impuesto === 'iva')
-          ? {
-              ...f.impuesto,
-              iva: c.impuesto_porcentaje != null
-                ? String(Number(c.impuesto_porcentaje) / 100)
-                : f.impuesto?.iva,
-            }
-          : f.impuesto,
-      }))
+      setForm((f) => {
+        let list = [...(f.cotizaciones_detalle || [])]
+        const ganIdx = list.findIndex((r) => r.tipo === 'insumo' && r.es_ganadora)
+        const idx = ganIdx >= 0 ? ganIdx : list.findIndex((r) => r.tipo === 'insumo')
+        if (idx >= 0) {
+          list[idx] = {
+            ...list[idx],
+            proveedor: c.razon_social || list[idx].proveedor,
+            fecha: c.cotizacion_fecha || list[idx].fecha,
+            valor: c.costo_base != null ? String(c.costo_base) : list[idx].valor,
+            es_ganadora: true,
+          }
+          list = list.map((r, i) => (
+            r.tipo === 'insumo' ? { ...r, es_ganadora: i === idx } : r
+          ))
+        }
+        const legacy = syncLegacyFromGanadora(list)
+        return {
+          ...f,
+          razon_social: c.razon_social || f.razon_social,
+          nit: c.nit || f.nit,
+          cotizacion_fecha: c.cotizacion_fecha || f.cotizacion_fecha,
+          costo_base: c.costo_base != null ? String(c.costo_base) : f.costo_base,
+          cotizaciones_detalle: list,
+          ...legacy,
+          impuesto: (c.impuesto_porcentaje != null || c.tipo_impuesto === 'iva')
+            ? {
+                ...f.impuesto,
+                iva: c.impuesto_porcentaje != null
+                  ? String(Number(c.impuesto_porcentaje) / 100)
+                  : f.impuesto?.iva,
+              }
+            : f.impuesto,
+        }
+      })
       setMsg({ type: 'success', text: r.mensaje || 'OCR completado. Revise los campos.' })
     } catch (e) {
       setMsg({ type: 'error', text: e.message })
@@ -768,6 +892,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     if (form.cotizacion_numero) fd.append('cotizacion_numero', form.cotizacion_numero.trim())
     if (form.cotizacion_fecha) fd.append('cotizacion_fecha', form.cotizacion_fecha)
     if (form.cotizacion_vigencia) fd.append('cotizacion_vigencia', form.cotizacion_vigencia.trim())
+    fd.append('cotizaciones_detalle', JSON.stringify(cotizacionesPayloadForSave(form.cotizaciones_detalle || [])))
     fd.append('requiere_cotizacion', form.requiere_cotizacion ? 'true' : 'false')
     if (form.cantidad_negociada !== '') fd.append('cantidad_negociada', String(form.cantidad_negociada))
     if (forceUpdateId) fd.append('force_update_id', String(forceUpdateId))
@@ -791,9 +916,12 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       return
     }
     if (form.requiere_cotizacion && !editId) {
-      const hasGanadora = form.ganadora_pdf || (form.cotizacion_numero || '').trim()
+      const gan = pickGanadora(form.cotizaciones_detalle || [])
+      const hasGanadora = form.ganadora_pdf
+        || (form.cotizacion_numero || '').trim()
+        || (gan && ((gan.numero || '').trim() || gan.valor !== '' && gan.valor != null))
       if (!hasGanadora) {
-        setMsg({ type: 'error', text: 'Registre la cotización ganadora (PDF o número de cotización).' })
+        setMsg({ type: 'error', text: 'Registre la cotización ganadora (datos en la hoja o PDF).' })
         return
       }
     }
@@ -1041,64 +1169,120 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       </div>
 
       <div style={sheetWrap} className="cc-almacen-table-scroll cc-catalogo-insumos-sheet">
-        <table style={sheetTable}>
+        <table style={{ ...sheetTable, minWidth: 1180 }}>
           <thead>
             <tr>
-              <th style={th}>Proveedor</th>
-              <th style={{ ...th, width: 120 }}>Código</th>
-              <th style={th}>Descripción</th>
-              <th style={{ ...th, width: 64 }}>Und</th>
-              <th style={{ ...th, textAlign: 'right', width: 72 }}>Rend.</th>
-              <th style={{ ...th, textAlign: 'right', width: 120 }}>Antes AIU/IVA</th>
-              <th style={th}>Tributos</th>
-              <th style={{ ...th, textAlign: 'right', width: 130 }}>Después AIU/IVA</th>
-              <th style={{ ...th, width: 108 }} />
+              <th style={thHeader}>Proveedor</th>
+              <th style={{ ...thHeader, width: 110 }}>Código</th>
+              <th style={thHeader}>Descripción</th>
+              <th style={{ ...thHeader, width: 56 }}>Und</th>
+              <th style={{ ...thHeader, textAlign: 'right', width: 64 }}>Rend.</th>
+              <th style={{ ...thHeader, textAlign: 'right', width: 110 }}>Antes AIU/IVA</th>
+              <th style={thHeader}>Tributos</th>
+              <th style={{ ...thHeader, textAlign: 'right', width: 110 }}>Después AIU/IVA</th>
+              <th style={{ ...thHeader, width: 90 }}>Cot. Nº</th>
+              <th style={{ ...thHeader, width: 92 }}>Cot. fecha</th>
+              <th style={{ ...thHeader, textAlign: 'right', width: 100 }}>Cot. valor</th>
+              <th style={{ ...thHeader, width: 108 }} />
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={9} style={td}>Cargando…</td></tr>
+              <tr><td colSpan={12} style={td}>Cargando…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={9} style={{ ...td, color: t.textMuted }}>Sin insumos en el catálogo.</td></tr>
-            ) : rows.map((r) => (
-              <tr
-                key={r.insumo_id || r.id}
-                onMouseEnter={(e) => { e.currentTarget.style.background = ui.cardSubtle || `${t.primary}14` }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-              >
-                <td style={tdMuted}>{r.proveedor_nombre || '—'}</td>
-                <td style={tdCodigo}>{r.codigo}</td>
-                <td style={tdDesc}>{r.descripcion}</td>
-                <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{r.unidad}</td>
-                <td style={tdNum}>{r.rendimiento ?? '—'}</td>
-                <td style={tdMoney}>{fmtMoney(r.costo)}</td>
-                <td style={tdMuted}>{r.impuesto_etiqueta || '—'}</td>
-                <td style={tdTotal}>{fmtMoney(r.costo_total)}</td>
-                <td style={td}>
-                  <div style={{ display: 'inline-flex', gap: 4 }}>
-                    <IconActionBtn title="Historial de precios" t={t} onClick={() => showHistorial(r)}>
-                      <IconHistory />
-                    </IconActionBtn>
-                    {canEditar && (
-                      <IconActionBtn title="Editar insumo" t={t} onClick={() => openEdit(r)}>
-                        <IconEditRow />
-                      </IconActionBtn>
-                    )}
-                    {canEliminar && (
-                      <IconActionBtn
-                        title="Eliminar insumo"
-                        t={t}
-                        variant="danger"
-                        disabled={busy}
-                        onClick={() => setDeleteConfirm(r)}
-                      >
-                        <IconDeleteRow />
-                      </IconActionBtn>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
+              <tr><td colSpan={12} style={{ ...td, color: t.textMuted }}>Sin insumos en el catálogo.</td></tr>
+            ) : rows.map((r, idx) => {
+              const rid = r.insumo_id || r.id
+              const gan = ganadoraDesdeInsumoRow(r)
+              const expanded = expandedId === rid
+              const zebra = sheetZebra(ui, idx)
+              const otras = otrasCotizaciones(detalleVisibleDesdeInsumoRow(r), gan?.id)
+              return (
+                <Fragment key={rid}>
+                  <tr
+                    onClick={() => setExpandedId(expanded ? null : rid)}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = ui.cardSubtle || `${t.primary}14` }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = zebra }}
+                    style={{ background: expanded ? ui.cardSubtle : zebra, cursor: 'pointer' }}
+                    title="Clic para ver otras cotizaciones"
+                  >
+                    <td style={tdMuted}>{r.proveedor_nombre || '—'}</td>
+                    <td style={tdCodigo}>{r.codigo}</td>
+                    <td style={tdDesc}>{r.descripcion}</td>
+                    <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{r.unidad}</td>
+                    <td style={tdNum}>{r.rendimiento ?? '—'}</td>
+                    <td style={tdMoney}>{fmtMoney(r.costo)}</td>
+                    <td style={tdMuted}>{r.impuesto_etiqueta || '—'}</td>
+                    <td style={tdTotal}>{fmtMoney(r.costo_total)}</td>
+                    <td style={tdMuted}>{gan?.numero || r.cotizacion_numero || '—'}</td>
+                    <td style={tdMuted}>{gan?.fecha || r.cotizacion_fecha || '—'}</td>
+                    <td style={tdNum}>{gan?.valor != null && gan.valor !== '' ? fmtMoney(gan.valor) : '—'}</td>
+                    <td style={td} onClick={(e) => e.stopPropagation()}>
+                      <div style={{ display: 'inline-flex', gap: 4 }}>
+                        <IconActionBtn title="Historial de precios" t={t} onClick={() => showHistorial(r)}>
+                          <IconHistory />
+                        </IconActionBtn>
+                        {canEditar && (
+                          <IconActionBtn title="Editar insumo" t={t} onClick={() => openEdit(r)}>
+                            <IconEditRow />
+                          </IconActionBtn>
+                        )}
+                        {canEliminar && (
+                          <IconActionBtn
+                            title="Eliminar insumo"
+                            t={t}
+                            variant="danger"
+                            disabled={busy}
+                            onClick={() => setDeleteConfirm(r)}
+                          >
+                            <IconDeleteRow />
+                          </IconActionBtn>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                  {expanded && (
+                    <tr>
+                      <td colSpan={12} style={{ ...td, background: ui.cardSubtle, padding: 10 }}>
+                        <div style={{ fontWeight: 700, fontSize: 'var(--cc-caption)', color: t.primary, marginBottom: 6 }}>
+                          Otras cotizaciones (soporte y No Previstos)
+                        </div>
+                        {otras.length === 0 ? (
+                          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                            No hay cotizaciones adicionales registradas. La ganadora se muestra en la fila.
+                          </div>
+                        ) : (
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-xs)' }}>
+                            <thead>
+                              <tr>
+                                <th style={thHeader}>Sección</th>
+                                <th style={thHeader}>Proveedor</th>
+                                <th style={thHeader}>Nº</th>
+                                <th style={thHeader}>Fecha</th>
+                                <th style={thHeader}>Vigencia</th>
+                                <th style={{ ...thHeader, textAlign: 'right' }}>Valor</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {otras.map((c, j) => (
+                                <tr key={c.id || j} style={{ background: sheetZebra(ui, j) }}>
+                                  <td style={tdMuted}>{c.tipo === 'no_previsto' ? 'No Previstos' : 'Insumo'}</td>
+                                  <td style={td}>{c.proveedor || '—'}</td>
+                                  <td style={tdMuted}>{c.numero || '—'}</td>
+                                  <td style={tdMuted}>{c.fecha || '—'}</td>
+                                  <td style={tdMuted}>{c.vigencia || '—'}</td>
+                                  <td style={tdNum}>{c.valor != null && c.valor !== '' ? fmtMoney(c.valor) : '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -1122,13 +1306,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             <table style={{ ...sheetTable, minWidth: 720 }}>
               <thead>
                 <tr>
-                  <th style={th}>Razón social</th>
-                  <th style={{ ...th, width: 110 }}>NIT</th>
-                  <th style={th}>Contacto</th>
-                  <th style={th}>Correo</th>
-                  <th style={{ ...th, width: 110 }}>Teléfono</th>
-                  <th style={{ ...th, textAlign: 'right', width: 80 }}>Insumos</th>
-                  <th style={{ ...th, width: 52 }} />
+                  <th style={thHeader}>Razón social</th>
+                  <th style={{ ...thHeader, width: 110 }}>NIT</th>
+                  <th style={thHeader}>Contacto</th>
+                  <th style={thHeader}>Correo</th>
+                  <th style={{ ...thHeader, width: 110 }}>Teléfono</th>
+                  <th style={{ ...thHeader, textAlign: 'right', width: 80 }}>Insumos</th>
+                  <th style={{ ...thHeader, width: 52 }} />
                 </tr>
               </thead>
               <tbody>
@@ -1136,8 +1320,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   <tr><td colSpan={7} style={td}>Cargando…</td></tr>
                 ) : proveedores.length === 0 ? (
                   <tr><td colSpan={7} style={{ ...td, color: t.textMuted }}>Sin proveedores registrados.</td></tr>
-                ) : proveedores.map((p) => (
-                  <tr key={p.id}>
+                ) : proveedores.map((p, idx) => (
+                  <tr key={p.id} style={{ background: sheetZebra(ui, idx) }}>
                     <td style={tdDesc}>{p.razon_social}</td>
                     <td style={tdCodigo}>{p.nit}</td>
                     <td style={tdMuted}>{p.contacto_nombre || '—'}</td>
@@ -1176,8 +1360,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
       {modalOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 10002, background: ui.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 0' }}>
-          <div style={{ width: 'min(1020px, 96vw)', maxHeight: '94vh', overflow: 'auto', ...modalPanelStyle, padding: '22px 26px' }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, color: t.text }}>{editId ? 'Editar insumo' : 'Nuevo insumo'}</h3>
+          <div style={{ width: 'min(1100px, 96vw)', maxHeight: '94vh', overflow: 'auto', ...modalPanelStyle, padding: '18px 22px' }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0, marginBottom: 12, color: t.text }}>{editId ? 'Editar insumo' : 'Nuevo insumo'}</h3>
 
             {dupAlert && (
               <div style={{ background: ui.warnBg, color: ui.warnText, padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 'var(--cc-sm)' }}>
@@ -1197,337 +1381,315 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               </div>
             )}
 
-            <ModalTabs tabs={MODAL_TABS} active={modalTab} onChange={setModalTab} ui={ui} />
+            <SheetSectionTitle t={t} ui={ui}>1. Proveedor</SheetSectionTitle>
+            <div style={{ ...sheetWrap, marginBottom: 8 }}>
+              <table style={{ ...sheetTable, minWidth: 0, tableLayout: 'auto' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thHeader, width: '28%' }}>Directorio</th>
+                    <th style={thHeader}>Razón social</th>
+                    <th style={{ ...thHeader, width: '14%' }}>NIT</th>
+                    <th style={thHeader}>Correo</th>
+                    <th style={thHeader}>Contacto</th>
+                    <th style={{ ...thHeader, width: '14%' }}>Teléfono</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style={{ background: sheetZebra(ui, 0) }}>
+                    <td style={td}>
+                      <CatalogoProveedorAutocomplete
+                        api={api}
+                        t={t}
+                        inputStyle={cellInp}
+                        disabled={busy}
+                        value={{
+                          proveedor_id: form.proveedor_id,
+                          razon_social: form.razon_social,
+                          nit: form.nit,
+                          contacto_email: form.contacto_email,
+                          contacto_nombre: form.contacto_nombre,
+                          contacto_telefono: form.contacto_telefono,
+                        }}
+                        onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+                      />
+                    </td>
+                    <td style={td}>
+                      <input style={cellInp} value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value, proveedor_id: '' })} />
+                    </td>
+                    <td style={td}>
+                      <input style={cellInp} value={form.nit} onChange={(e) => setForm({ ...form, nit: e.target.value, proveedor_id: '' })} />
+                    </td>
+                    <td style={td}>
+                      <input style={cellInp} type="email" value={form.contacto_email} onChange={(e) => setForm({ ...form, contacto_email: e.target.value })} />
+                    </td>
+                    <td style={td}>
+                      <input style={cellInp} value={form.contacto_nombre} onChange={(e) => setForm({ ...form, contacto_nombre: e.target.value })} />
+                    </td>
+                    <td style={td}>
+                      <input style={cellInp} type="tel" value={form.contacto_telefono} onChange={(e) => setForm({ ...form, contacto_telefono: e.target.value })} />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
-            {modalTab === 'proveedor' && (
-              <div role="tabpanel">
-                <Field label="Buscar en directorio de proveedores">
-                  <CatalogoProveedorAutocomplete
-                    api={api}
-                    t={t}
-                    inputStyle={inputStyle}
-                    disabled={busy}
-                    value={{
-                      proveedor_id: form.proveedor_id,
-                      razon_social: form.razon_social,
-                      nit: form.nit,
-                      contacto_email: form.contacto_email,
-                      contacto_nombre: form.contacto_nombre,
-                      contacto_telefono: form.contacto_telefono,
-                    }}
-                    onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
-                  />
-                </Field>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 0.8fr)', gap: '0 16px' }}>
-                  <Field label="Proveedor (razón social)">
-                    <input style={inputStyle} value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value, proveedor_id: '' })} />
-                  </Field>
-                  <Field label="NIT proveedor">
-                    <input style={inputStyle} value={form.nit} onChange={(e) => setForm({ ...form, nit: e.target.value, proveedor_id: '' })} />
-                  </Field>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0 16px' }}>
-                  <Field label="Correo contacto proveedor">
-                    <input style={inputStyle} type="email" value={form.contacto_email} onChange={(e) => setForm({ ...form, contacto_email: e.target.value })} />
-                  </Field>
-                  <Field label="Nombre comercial / contacto">
-                    <input style={inputStyle} value={form.contacto_nombre} onChange={(e) => setForm({ ...form, contacto_nombre: e.target.value })} />
-                  </Field>
-                  <Field label="Teléfono contacto">
-                    <input style={inputStyle} type="tel" value={form.contacto_telefono} onChange={(e) => setForm({ ...form, contacto_telefono: e.target.value })} />
-                  </Field>
-                </div>
-              </div>
-            )}
-
-            {modalTab === 'insumo' && (
-              <div role="tabpanel">
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: '0 16px' }}>
-                  <Field label="Código" hint={editId ? 'El código no se modifica al editar.' : 'Asignado automáticamente por contrato (CC-NNNN-NNN).'}>
-                    <input
-                      style={{ ...inputStyle, opacity: 0.85 }}
-                      value={form.codigo || (editId ? '—' : 'Generando…')}
-                      readOnly
-                      disabled
-                    />
-                  </Field>
-                  <Field label="Unidad *">
-                    <UnidadSelector
-                      value={form.unidad}
-                      onChange={(v) => setForm({ ...form, unidad: v })}
-                      selectStyle={inputStyle}
-                      inputStyle={inputStyle}
-                      btnPrimary={btnPrimary}
-                      btnSecondary={btnSecondary}
-                      modoCustom={unidadModoCustom}
-                      setModoCustom={setUnidadModoCustom}
-                      uCustom={unidadCustom}
-                      setUCustom={setUnidadCustom}
-                    />
-                  </Field>
-                  <Field label="Rendimiento">
-                    <input style={inputStyle} value={form.rendimiento} onChange={(e) => setForm({ ...form, rendimiento: e.target.value })} />
-                  </Field>
-                </div>
-                <Field label="Descripción *">
-                  <input style={inputStyle} value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} />
-                </Field>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 16px' }}>
-                  <Field
-                    label="Valor antes de AIU o IVA *"
-                    hint="Costo base del insumo (sin A, Í, U ni IVA)."
-                  >
-                    <input style={inputStyle} type="number" min="0" step="0.01" value={form.costo_base} onChange={(e) => setForm({ ...form, costo_base: e.target.value })} />
-                  </Field>
-                  <Field
-                    label="Valor después de AIU o IVA"
-                    hint="Calculado automáticamente según A, Í, U e IVA (no editable)."
-                  >
-                    <input style={{ ...inputStyle, opacity: 0.9, fontWeight: 700 }} readOnly value={fmtMoney(totalPreview)} />
-                  </Field>
-                </div>
-                <div style={{
-                  marginTop: 4,
-                  padding: '12px 14px',
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  background: ui.cardSubtle,
-                }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', color: t.primary, marginBottom: 8 }}>
-                    Impuesto del insumo
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
-                    <button
-                      type="button"
-                      title="A · Í · U · IVA"
-                      onClick={() => {
-                        setDraftImpuesto({ ...(form.impuesto || EMPTY_IMPUESTO) })
-                        setModalImpuestoOpen(true)
-                      }}
-                      style={{
-                        ...btnSecondary,
-                        borderColor: impuestoTieneDatos(form.impuesto) ? t.primary : t.border,
-                        color: impuestoTieneDatos(form.impuesto) ? t.primary : t.text,
-                        fontWeight: 700,
-                      }}
-                    >
-                      A · Í · U · IVA{impuestoTieneDatos(form.impuesto) ? ' ✓' : ''}
-                    </button>
-                    <span style={{
-                      fontSize: 'var(--cc-caption)',
-                      fontWeight: 700,
-                      color: tipoImpuestoInferido ? t.primary : t.textMuted,
-                      padding: '4px 10px',
-                      borderRadius: 6,
-                      border: `1px solid ${tipoImpuestoInferido ? t.primary : t.border}`,
-                      background: t.bgCard,
-                    }}
-                    >
-                      Tipo: {labelTipoImpuesto(tipoImpuestoInferido)}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-                    {tributosResumen === '—'
-                      ? 'Sin impuesto diligenciado. Capture A, Í, U e IVA en un solo formulario; el tipo se infiere automáticamente.'
-                      : tributosResumen}
-                  </div>
-                </div>
-                <div style={{
-                  marginTop: 8,
-                  padding: '12px 14px',
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  background: ui.cardSubtle,
-                }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', color: t.primary, marginBottom: 8 }}>
-                    Negociación con proveedor
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0 16px' }}>
-                    <Field label="Cantidad negociada" hint="Volumen total pactado con el proveedor (ej. 1000 m³).">
-                      <input style={inputStyle} type="number" min="0" step="any" value={form.cantidad_negociada} onChange={(e) => setForm({ ...form, cantidad_negociada: e.target.value })} />
-                    </Field>
-                    <Field label="Valor total negociado" hint="Se calcula automáticamente: cantidad negociada × valor después de AIU/IVA.">
-                      <div style={{
-                        ...inputStyle,
-                        background: ui.cardSubtle,
-                        color: valorNegociadoPreview != null ? t.text : t.textMuted,
-                        fontWeight: valorNegociadoPreview != null ? 600 : 400,
-                      }}
-                      >
+            <SheetSectionTitle t={t} ui={ui}>2. Insumo</SheetSectionTitle>
+            <div style={{ ...sheetWrap, marginBottom: 8 }}>
+              <table style={{ ...sheetTable, minWidth: 0, tableLayout: 'auto' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thHeader, width: 120 }}>Código</th>
+                    <th style={{ ...thHeader, width: 140 }}>Unidad *</th>
+                    <th style={{ ...thHeader, width: 100 }}>Rendimiento</th>
+                    <th style={thHeader}>Descripción *</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style={{ background: sheetZebra(ui, 0) }}>
+                    <td style={td}>
+                      <input style={{ ...cellInp, opacity: 0.85 }} value={form.codigo || (editId ? '—' : 'Generando…')} readOnly disabled />
+                    </td>
+                    <td style={td}>
+                      <UnidadSelector
+                        value={form.unidad}
+                        onChange={(v) => setForm({ ...form, unidad: v })}
+                        selectStyle={cellInp}
+                        inputStyle={cellInp}
+                        btnPrimary={btnPrimary}
+                        btnSecondary={btnSecondary}
+                        modoCustom={unidadModoCustom}
+                        setModoCustom={setUnidadModoCustom}
+                        uCustom={unidadCustom}
+                        setUCustom={setUnidadCustom}
+                      />
+                    </td>
+                    <td style={td}>
+                      <input style={cellInp} value={form.rendimiento} onChange={(e) => setForm({ ...form, rendimiento: e.target.value })} />
+                    </td>
+                    <td style={td}>
+                      <input style={cellInp} value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} />
+                    </td>
+                  </tr>
+                  <tr style={{ background: sheetZebra(ui, 1) }}>
+                    <td style={{ ...thHeader, fontWeight: 700 }} colSpan={1}>Antes AIU/IVA *</td>
+                    <td style={td} colSpan={1}>
+                      <input style={cellInp} type="number" min="0" step="0.01" value={form.costo_base} onChange={(e) => setForm({ ...form, costo_base: e.target.value })} />
+                    </td>
+                    <td style={{ ...thHeader, fontWeight: 700 }}>Después AIU/IVA</td>
+                    <td style={td}>
+                      <input style={{ ...cellInp, fontWeight: 700 }} readOnly value={fmtMoney(totalPreview)} />
+                    </td>
+                  </tr>
+                  <tr style={{ background: sheetZebra(ui, 0) }}>
+                    <td style={{ ...thHeader, fontWeight: 700 }}>Impuesto</td>
+                    <td style={td} colSpan={3}>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          title="A · Í · U · IVA"
+                          onClick={() => {
+                            setDraftImpuesto({ ...(form.impuesto || EMPTY_IMPUESTO) })
+                            setModalImpuestoOpen(true)
+                          }}
+                          style={{
+                            ...btnSecondary,
+                            borderColor: impuestoTieneDatos(form.impuesto) ? t.primary : t.border,
+                            color: impuestoTieneDatos(form.impuesto) ? t.primary : t.text,
+                            fontWeight: 700,
+                          }}
+                        >
+                          A · Í · U · IVA{impuestoTieneDatos(form.impuesto) ? ' ✓' : ''}
+                        </button>
+                        <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: tipoImpuestoInferido ? t.primary : t.textMuted }}>
+                          Tipo: {labelTipoImpuesto(tipoImpuestoInferido)}
+                        </span>
+                        <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                          {tributosResumen === '—' ? 'Sin impuesto diligenciado.' : tributosResumen}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr style={{ background: sheetZebra(ui, 1) }}>
+                    <td style={{ ...thHeader, fontWeight: 700 }}>Cant. negociada</td>
+                    <td style={td}>
+                      <input style={cellInp} type="number" min="0" step="any" value={form.cantidad_negociada} onChange={(e) => setForm({ ...form, cantidad_negociada: e.target.value })} />
+                    </td>
+                    <td style={{ ...thHeader, fontWeight: 700 }}>Valor negociado</td>
+                    <td style={td}>
+                      <div style={{ ...cellInp, fontWeight: valorNegociadoPreview != null ? 600 : 400, color: valorNegociadoPreview != null ? t.text : t.textMuted }}>
                         {valorNegociadoPreview != null ? fmtMoney(valorNegociadoPreview) : '—'}
-                        {totalPreview > 0 && (
-                          <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginLeft: 8, fontWeight: 400 }}>
-                            ({fmtMoney(totalPreview)} / unidad)
-                          </span>
-                        )}
                       </div>
-                    </Field>
-                  </div>
-                  {consumoNegociado?.tiene_negociado && (
-                    <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 6 }}>
-                      Consumido en solicitudes: <strong style={{ color: consumoNegociado.supera_negociado ? ui.errorText : t.text }}>{consumoNegociado.cantidad_consumida_acumulada}</strong>
-                      {' '}{consumoNegociado.unidad} de {consumoNegociado.cantidad_negociada} negociados
-                      {consumoNegociado.supera_negociado && (
-                        <span style={{ color: ui.errorText, fontWeight: 600 }}> — supera lo negociado</span>
-                      )}
-                    </div>
-                  )}
-                </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {consumoNegociado?.tiene_negociado && (
+              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+                Consumido en solicitudes: <strong style={{ color: consumoNegociado.supera_negociado ? ui.errorText : t.text }}>{consumoNegociado.cantidad_consumida_acumulada}</strong>
+                {' '}{consumoNegociado.unidad} de {consumoNegociado.cantidad_negociada} negociados
+                {consumoNegociado.supera_negociado && (
+                  <span style={{ color: ui.errorText, fontWeight: 600 }}> — supera lo negociado</span>
+                )}
               </div>
             )}
 
-            {modalTab === 'cotizaciones' && (
-              <div role="tabpanel">
-                <Field label="¿Requiere cotización?" hint="Si está activo, debe registrar la cotización ganadora (PDF o número). Las cotizaciones de soporte/comparativas son opcionales.">
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 'var(--cc-sm)' }}>
-                    <input
-                      type="checkbox"
-                      checked={!!form.requiere_cotizacion}
-                      onChange={(e) => setForm({ ...form, requiere_cotizacion: e.target.checked })}
-                    />
-                    <span>{form.requiere_cotizacion ? 'Sí, exige cotización ganadora' : 'No requiere cotizaciones'}</span>
-                  </label>
-                </Field>
+            <SheetSectionTitle t={t} ui={ui}>3. Cotizaciones</SheetSectionTitle>
+            <Field label="¿Requiere cotización?">
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 'var(--cc-sm)' }}>
+                <input
+                  type="checkbox"
+                  checked={!!form.requiere_cotizacion}
+                  onChange={(e) => setForm({ ...form, requiere_cotizacion: e.target.checked })}
+                />
+                <span>{form.requiere_cotizacion ? 'Sí, exige cotización ganadora' : 'No requiere cotizaciones'}</span>
+              </label>
+            </Field>
 
-                {form.requiere_cotizacion ? (
-                  <>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0 16px', marginBottom: 16 }}>
-                      <Field label="Nº cotización">
-                        <input style={inputStyle} value={form.cotizacion_numero} onChange={(e) => setForm({ ...form, cotizacion_numero: e.target.value })} />
-                      </Field>
-                      <Field label="Fecha cotización">
-                        <input style={inputStyle} type="date" value={form.cotizacion_fecha} onChange={(e) => setForm({ ...form, cotizacion_fecha: e.target.value })} />
-                      </Field>
-                      <Field label="Vigencia (texto del proveedor)">
-                        <input style={inputStyle} value={form.cotizacion_vigencia} onChange={(e) => setForm({ ...form, cotizacion_vigencia: e.target.value })} placeholder="Ej. 15 días" />
-                      </Field>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
-                      <div style={{
-                        padding: 14,
-                        borderRadius: 10,
-                        border: `2px solid ${t.primary}`,
-                        background: ui.cardSubtle,
-                      }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                          <span style={{
-                            fontSize: 'var(--cc-xs)',
-                            fontWeight: 700,
-                            letterSpacing: '0.04em',
-                            textTransform: 'uppercase',
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            background: t.primary,
-                            color: '#fff',
-                          }}
-                          >
-                            Cotización ganadora
-                          </span>
-                          <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                            Documento principal — OCR y datos de precio
-                          </span>
-                        </div>
-                        <Field label="PDF cotización ganadora" hint="Adjunte el PDF y use OCR para autocompletar proveedor, costo e impuestos. Sin firma certificada se comprime al cargar; el peso final cuenta en la cuota del contrato.">
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flexDirection: compactCatalog ? 'column' : 'row' }}>
-                            {compactCatalog && (
-                              <>
-                                <input
-                                  ref={ocrCamRef}
-                                  type="file"
-                                  accept="image/*"
-                                  capture="environment"
-                                  style={{ display: 'none' }}
-                                  onChange={(e) => setForm({ ...form, ganadora_pdf: e.target.files?.[0] || null })}
-                                />
-                                <button
-                                  type="button"
-                                  style={{ ...btnPrimary, width: '100%' }}
-                                  onClick={() => ocrCamRef.current?.click()}
-                                >
-                                  📷 Fotografiar cotización
-                                </button>
-                              </>
+            {form.requiere_cotizacion ? (
+              <>
+                <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
+                  Hoja editable: complete proveedor, valor, número, fecha y vigencia. Marque la ganadora en «Cotizaciones insumo».
+                  Las filas «No Previstos» sustentan el valor ante la entidad y no se mezclan con las del proveedor.
+                </div>
+                <div style={{ ...sheetWrap, marginBottom: 8, overflowX: 'auto' }}>
+                  <table style={{ ...sheetTable, minWidth: 920, tableLayout: 'auto' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...thHeader, width: 110 }}>Sección</th>
+                        <th style={{ ...thHeader, width: 72 }}>Ganadora</th>
+                        <th style={thHeader}>Proveedor cotizante</th>
+                        <th style={{ ...thHeader, width: 110 }}>Valor</th>
+                        <th style={{ ...thHeader, width: 100 }}>Nº cotización</th>
+                        <th style={{ ...thHeader, width: 120 }}>Fecha</th>
+                        <th style={{ ...thHeader, width: 110 }}>Vigencia</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(form.cotizaciones_detalle || []).map((row, idx) => (
+                        <tr key={row.id} style={{ background: sheetZebra(ui, idx) }}>
+                          <td style={{ ...tdMuted, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                            {row.tipo === 'no_previsto' ? 'No Previstos' : 'Insumo'}
+                          </td>
+                          <td style={{ ...td, textAlign: 'center' }}>
+                            {row.tipo === 'insumo' ? (
+                              <input
+                                type="radio"
+                                name="cot-ganadora"
+                                checked={!!row.es_ganadora}
+                                onChange={() => patchCotizacion(row.id, { es_ganadora: true })}
+                                title="Cotización ganadora"
+                              />
+                            ) : (
+                              <span style={{ color: t.textMuted }}>—</span>
                             )}
+                          </td>
+                          <td style={td}>
                             <input
-                              type="file"
-                              accept="application/pdf,image/*"
-                              style={compactCatalog ? { width: '100%' } : undefined}
-                              onChange={(e) => setForm({ ...form, ganadora_pdf: e.target.files?.[0] || null })}
+                              style={cellInp}
+                              value={row.proveedor || ''}
+                              onChange={(e) => patchCotizacion(row.id, { proveedor: e.target.value })}
                             />
-                            {form.ganadora_pdf && (
-                              <span style={{ fontSize: 'var(--cc-xs)', opacity: 0.85 }}>{form.ganadora_pdf.name}</span>
-                            )}
-                            <IconActionBtn
-                              title={ocrBusy ? 'Leyendo documento…' : 'Ejecutar OCR'}
-                              disabled={!form.ganadora_pdf || ocrBusy}
-                              t={t}
-                              onClick={runOcr}
-                            >
-                              <IconOcrScan />
-                            </IconActionBtn>
-                          </div>
-                        </Field>
-                      </div>
+                          </td>
+                          <td style={td}>
+                            <input
+                              style={cellInp}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={row.valor}
+                              onChange={(e) => patchCotizacion(row.id, { valor: e.target.value })}
+                            />
+                          </td>
+                          <td style={td}>
+                            <input
+                              style={cellInp}
+                              value={row.numero || ''}
+                              onChange={(e) => patchCotizacion(row.id, { numero: e.target.value })}
+                            />
+                          </td>
+                          <td style={td}>
+                            <input
+                              style={cellInp}
+                              type="date"
+                              value={row.fecha || ''}
+                              onChange={(e) => patchCotizacion(row.id, { fecha: e.target.value })}
+                            />
+                          </td>
+                          <td style={td}>
+                            <input
+                              style={cellInp}
+                              value={row.vigencia || ''}
+                              placeholder="Ej. 15 días"
+                              onChange={(e) => patchCotizacion(row.id, { vigencia: e.target.value })}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                  <button type="button" style={btnSecondary} onClick={() => addCotizacionRow('insumo')}>+ Fila cotización insumo</button>
+                  <button type="button" style={btnSecondary} onClick={() => addCotizacionRow('no_previsto')}>+ Fila No Previstos</button>
+                </div>
 
-                      <div style={{
-                        padding: 14,
-                        borderRadius: 10,
-                        border: `1px dashed ${ui.dashedBorder}`,
-                        background: t.inputBg,
-                      }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                          <span style={{
-                            fontSize: 'var(--cc-xs)',
-                            fontWeight: 700,
-                            letterSpacing: '0.04em',
-                            textTransform: 'uppercase',
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            background: t.textMuted,
-                            color: t.bgCard,
-                          }}
-                          >
-                            Cotizaciones de soporte
-                          </span>
-                          <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                            Comparativas adicionales (opcionales) — solo archivo PDF
-                          </span>
-                        </div>
-                        <Field label="PDFs de soporte (opcionales)" hint="Útiles cuando hay varias cotizaciones. En proveedor único puede dejarlo vacío.">
+                <div style={{ display: 'grid', gridTemplateColumns: compactCatalog ? '1fr' : '1fr 1fr', gap: 12 }}>
+                  <div style={{ padding: 10, border: `1px solid ${t.border}`, background: ui.cardSubtle }}>
+                    <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', marginBottom: 6, color: t.primary }}>PDF cotización ganadora (opcional / OCR)</div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {compactCatalog && (
+                        <>
                           <input
+                            ref={ocrCamRef}
                             type="file"
-                            accept="application/pdf"
-                            multiple
-                            onChange={(e) => setForm({ ...form, soportes_pdf: Array.from(e.target.files || []) })}
+                            accept="image/*"
+                            capture="environment"
+                            style={{ display: 'none' }}
+                            onChange={(e) => setForm({ ...form, ganadora_pdf: e.target.files?.[0] || null })}
                           />
-                          {(form.soportes_pdf || []).length > 0 && (
-                            <ul style={{ fontSize: 'var(--cc-xs)', margin: '6px 0 0', paddingLeft: 18, opacity: 0.9 }}>
-                              {form.soportes_pdf.map((f) => (
-                                <li key={f.name + f.size}>{f.name}</li>
-                              ))}
-                            </ul>
-                          )}
-                        </Field>
-                      </div>
+                          <button type="button" style={btnPrimary} onClick={() => ocrCamRef.current?.click()}>📷 Fotografiar</button>
+                        </>
+                      )}
+                      <input
+                        type="file"
+                        accept="application/pdf,image/*"
+                        onChange={(e) => setForm({ ...form, ganadora_pdf: e.target.files?.[0] || null })}
+                      />
+                      {form.ganadora_pdf && <span style={{ fontSize: 'var(--cc-xs)' }}>{form.ganadora_pdf.name}</span>}
+                      <IconActionBtn title={ocrBusy ? 'Leyendo…' : 'OCR'} disabled={!form.ganadora_pdf || ocrBusy} t={t} onClick={runOcr}>
+                        <IconOcrScan />
+                      </IconActionBtn>
                     </div>
-                  </>
-                ) : (
-                  <div style={{
-                    padding: 12,
-                    borderRadius: 8,
-                    border: `1px dashed ${ui.dashedBorder}`,
-                    fontSize: 'var(--cc-xs)',
-                    color: t.textMuted,
-                  }}
-                  >
-                    Este insumo quedará disponible para solicitudes sin registrar cotización ganadora ni PDFs de soporte.
                   </div>
-                )}
+                  <div style={{ padding: 10, border: `1px dashed ${ui.dashedBorder}`, background: t.inputBg }}>
+                    <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', marginBottom: 6, color: t.textMuted }}>PDFs de soporte (opcionales)</div>
+                    <input
+                      type="file"
+                      accept="application/pdf"
+                      multiple
+                      onChange={(e) => setForm({ ...form, soportes_pdf: Array.from(e.target.files || []) })}
+                    />
+                    {(form.soportes_pdf || []).length > 0 && (
+                      <ul style={{ fontSize: 'var(--cc-xs)', margin: '6px 0 0', paddingLeft: 18 }}>
+                        {form.soportes_pdf.map((f) => (
+                          <li key={f.name + f.size}>{f.name}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{
+                padding: 12,
+                border: `1px dashed ${ui.dashedBorder}`,
+                fontSize: 'var(--cc-xs)',
+                color: t.textMuted,
+                marginBottom: 8,
+              }}
+              >
+                Este insumo quedará disponible sin registrar cotizaciones.
               </div>
             )}
 
