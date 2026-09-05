@@ -15,6 +15,8 @@ import {
   syncLegacyFromGanadora,
   validateCaptureForEnviar,
   validateGuardarInsumo,
+  applyPdfReplace,
+  fileFromDataTransfer,
 } from './catalogoInsumosCotizaciones.js'
 
 describe('catalogoInsumosCotizaciones flujo enviar', () => {
@@ -118,6 +120,17 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     const { ganadora, soportes } = collectPdfFilesFromPares(pares)
     assert.equal(ganadora.name, 'gan.pdf')
     assert.equal(soportes[0].name, 'sop.pdf')
+  })
+
+
+  it('applyPdfReplace archiva previo y deja vigente el nuevo', () => {
+    const lado0 = { pdf_nombre: 'a.pdf', pdf: null, pdf_historial: [] }
+    const f = new File(['x'], 'b.pdf', { type: 'application/pdf' })
+    const next = applyPdfReplace(lado0, f)
+    assert.equal(next.pdf_nombre, 'b.pdf')
+    assert.equal(next.pdf.name, 'b.pdf')
+    assert.equal(next.pdf_historial.length, 1)
+    assert.equal(next.pdf_historial[0].nombre, 'a.pdf')
   })
 
   it('detalleToPares y ganadoraDesdeInsumoRow', () => {
