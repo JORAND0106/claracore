@@ -163,7 +163,7 @@ export function detalleToPares(raw) {
  */
 export function seedCotizacionPares({
   existing = [],
-  minPares = 3,
+  minPares = 0,
   legacy = {},
   proveedorNombre = '',
   costoBase = '',
@@ -176,20 +176,19 @@ export function seedCotizacionPares({
       ...emptyLado(),
       proveedor: proveedorNombre || '',
       valor: costoBase !== '' && costoBase != null ? String(costoBase) : '',
-      numero: legacy.cotizacion_numero || '',
+      numero: legacy.cotizacion_numero || nextCotizacionNumero([]),
       fecha: legacy.cotizacion_fecha ? String(legacy.cotizacion_fecha).slice(0, 10) : '',
       vigencia: legacy.cotizacion_vigencia || '',
     }
+    par.no_previsto = { ...emptyLado(), proveedor: proveedorNombre || '', numero: par.insumo.numero }
+    par.coherencia = { descripcion: '', unidad: '', rendimiento: '' }
     pares = [par]
   }
 
-  while (pares.length < Math.max(1, minPares)) {
+  while (minPares > 0 && pares.length < Math.max(1, minPares)) {
     pares.push(newCotizacionPar({ esGanadora: pares.length === 0 }))
   }
-  if (!pares.some((p) => p.es_ganadora)) {
-    pares = [{ ...pares[0], es_ganadora: true }, ...pares.slice(1)]
-  }
-  return pares
+  return applyAutoGanadoraByMinValor(pares)
 }
 
 /** @deprecated Use seedCotizacionPares */
@@ -379,4 +378,227 @@ export function collectPdfFilesFromPares(pares) {
     if (npPdf) soportes.push(npPdf)
   }
   return { ganadora, soportes }
+}
+
+export function toNumValor(v) {
+  if (v === '' || v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Consecutivo de nº cotización (COT-001, COT-002, …) según filas ya enviadas. */
+export function nextCotizacionNumero(pares) {
+  let max = 0
+  for (const p of pares || []) {
+    for (const lado of [p.insumo, p.no_previsto]) {
+      const m = String(lado?.numero || '').trim().match(/(\d+)\s*$/)
+      if (m) max = Math.max(max, parseInt(m[1], 10))
+    }
+  }
+  return `COT-${String(max + 1).padStart(3, '0')}`
+}
+
+/** Marca como ganadora la fila con menor valor insumo (empate: primera). */
+export function applyAutoGanadoraByMinValor(pares) {
+  const list = pares || []
+  const ranked = list
+    .map((p) => ({ id: p.id, v: toNumValor(p.insumo?.valor) }))
+    .filter((x) => x.v != null)
+  if (!ranked.length) {
+    return list.map((p, i) => ({ ...p, es_ganadora: i === 0 && list.length === 1 }))
+  }
+  const min = Math.min(...ranked.map((x) => x.v))
+  const winId = ranked.find((x) => x.v === min)?.id
+  return list.map((p) => ({ ...p, es_ganadora: p.id === winId }))
+}
+
+/**
+ * Errores de regla: la ganadora no puede superar otras en valor insumo ni No Previsto.
+ * También avisa si el mínimo No Previsto cae en otra fila.
+ */
+export function ganadoraRuleErrors(pares) {
+  const list = pares || []
+  const errors = []
+  const gan = list.find((p) => p.es_ganadora)
+  if (!gan) return errors
+
+  const ganIns = toNumValor(gan.insumo?.valor)
+  const ganNp = toNumValor(gan.no_previsto?.valor)
+  const numLabel = gan.insumo?.numero || gan.id
+
+  for (const p of list) {
+    if (p.id === gan.id) continue
+    const vi = toNumValor(p.insumo?.valor)
+    if (ganIns != null && vi != null && ganIns > vi + 1e-9) {
+      errors.push(
+        `Cotización ganadora (${numLabel}) tiene valor insumo mayor que ${p.insumo?.numero || p.id} (${vi}). Debe ser la de menor valor.`,
+      )
+    }
+    const vn = toNumValor(p.no_previsto?.valor)
+    if (ganNp != null && vn != null && ganNp > vn + 1e-9) {
+      errors.push(
+        `Cotización ganadora (${numLabel}) tiene valor No Previsto mayor que ${p.insumo?.numero || p.id} (${vn}). Debe ser la de menor valor.`,
+      )
+    }
+  }
+
+  const npRanked = list
+    .map((p) => ({ id: p.id, v: toNumValor(p.no_previsto?.valor), num: p.insumo?.numero }))
+    .filter((x) => x.v != null)
+  if (npRanked.length && ganNp != null) {
+    const minNp = Math.min(...npRanked.map((x) => x.v))
+    const minNpRow = npRanked.find((x) => x.v === minNp)
+    if (minNpRow && minNpRow.id !== gan.id && minNp + 1e-9 < ganNp) {
+      errors.push(
+        `El menor valor No Previsto está en ${minNpRow.num || minNpRow.id}, no en la ganadora. Ajuste valores o use el mismo proveedor ganador.`,
+      )
+    }
+  }
+  return errors
+}
+
+export function normCoherencia(s) {
+  return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+/** Descripción, unidad y rendimiento idénticos entre filas del mismo insumo. */
+export function coherenciaErrors(pares, draft = null) {
+  const list = pares || []
+  if (!list.length && !draft) return []
+  const first = list[0]
+  const base = first
+    ? {
+      descripcion: first.coherencia?.descripcion ?? '',
+      unidad: first.coherencia?.unidad ?? '',
+      rendimiento: first.coherencia?.rendimiento ?? '',
+    }
+    : {
+      descripcion: draft?.descripcion || '',
+      unidad: draft?.unidad || '',
+      rendimiento: draft?.rendimiento || '',
+    }
+  const errors = []
+  for (const p of list) {
+    const c = p.coherencia || {}
+    if (normCoherencia(c.descripcion) !== normCoherencia(base.descripcion)) {
+      errors.push(`La descripción de ${p.insumo?.numero || p.id} no coincide con la del grupo.`)
+    }
+    if (normCoherencia(c.unidad) !== normCoherencia(base.unidad)) {
+      errors.push(`La unidad de ${p.insumo?.numero || p.id} no coincide con la del grupo.`)
+    }
+    if (normCoherencia(String(c.rendimiento ?? '')) !== normCoherencia(String(base.rendimiento ?? ''))) {
+      errors.push(`El rendimiento de ${p.insumo?.numero || p.id} no coincide con la del grupo.`)
+    }
+  }
+  if (draft && list.length) {
+    if (normCoherencia(draft.descripcion) !== normCoherencia(base.descripcion)) {
+      errors.push('La descripción del borrador no coincide con las cotizaciones ya enviadas.')
+    }
+    if (normCoherencia(draft.unidad) !== normCoherencia(base.unidad)) {
+      errors.push('La unidad del borrador no coincide con las cotizaciones ya enviadas.')
+    }
+    if (normCoherencia(String(draft.rendimiento ?? '')) !== normCoherencia(String(base.rendimiento ?? ''))) {
+      errors.push('El rendimiento del borrador no coincide con las cotizaciones ya enviadas.')
+    }
+  }
+  return errors
+}
+
+/**
+ * Construye un par desde el formulario de captura y lo agrega a la lista.
+ * El nº de cotización se autogenera.
+ */
+export function buildParFromCapture(form, paresExistentes = []) {
+  const numero = nextCotizacionNumero(paresExistentes)
+  const proveedorNombre = (form.razon_social || '').trim()
+  const valorIns = form.costo_base
+  const valorNp = form.valor_no_previsto !== '' && form.valor_no_previsto != null
+    ? form.valor_no_previsto
+    : form.costo_base
+  const fecha = form.cotizacion_fecha || ''
+  const vigencia = form.cotizacion_vigencia || ''
+  const par = {
+    ...newCotizacionPar({ esGanadora: false }),
+    proveedor_id: form.proveedor_id || '',
+    nit: (form.nit || '').trim(),
+    contacto_email: (form.contacto_email || '').trim(),
+    contacto_nombre: (form.contacto_nombre || '').trim(),
+    contacto_telefono: (form.contacto_telefono || '').trim(),
+    coherencia: {
+      descripcion: (form.descripcion || '').trim(),
+      unidad: (form.unidad || '').trim(),
+      rendimiento: form.rendimiento ?? '',
+    },
+    insumo: {
+      ...emptyLado(),
+      proveedor: proveedorNombre,
+      valor: valorIns !== '' && valorIns != null ? String(valorIns) : '',
+      numero,
+      fecha,
+      vigencia,
+    },
+    no_previsto: {
+      ...emptyLado(),
+      proveedor: proveedorNombre,
+      valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
+      numero,
+      fecha,
+      vigencia,
+    },
+  }
+  return applyAutoGanadoraByMinValor([...(paresExistentes || []), par])
+}
+
+export function validateCaptureForEnviar(form, paresExistentes = []) {
+  const faltantes = []
+  if (!(form.razon_social || '').trim() && !form.proveedor_id) faltantes.push('Proveedor (razón social)')
+  if (!form.proveedor_id && !(form.nit || '').trim()) faltantes.push('NIT del proveedor')
+  if (!(form.descripcion || '').trim()) faltantes.push('Descripción del insumo')
+  if (!(form.unidad || '').trim()) faltantes.push('Unidad')
+  if (form.costo_base === '' || form.costo_base == null || Number(form.costo_base) < 0) {
+    faltantes.push('Valor / costo antes de AIU o IVA')
+  }
+  const coh = coherenciaErrors(paresExistentes, form)
+  return { faltantes, coherencia: coh }
+}
+
+export function validateGuardarInsumo(form, { minCotizaciones = 1, editId = null } = {}) {
+  const faltantes = []
+  const pares = form.cotizaciones_detalle || []
+  if (!(form.descripcion || '').trim()) faltantes.push('Descripción del insumo')
+  if (!(form.unidad || '').trim()) faltantes.push('Unidad')
+
+  const gan = pickGanadora(pares)
+  const costo = gan?.valor != null && gan.valor !== ''
+    ? gan.valor
+    : form.costo_base
+  if (costo === '' || costo == null || Number(costo) < 0) {
+    faltantes.push('Costo base (valor de la cotización ganadora)')
+  }
+
+  if (form.requiere_cotizacion !== false) {
+    const minReq = Math.max(1, Number(minCotizaciones) || 1)
+    if (pares.length < minReq) {
+      faltantes.push(`Al menos ${minReq} cotización(es) enviada(s) a la tabla (hoy: ${pares.length})`)
+    }
+    for (const p of pares) {
+      const hasPdfIns = !!(p.insumo?.pdf || (p.insumo?.pdf_nombre || '').trim())
+      if (!hasPdfIns) {
+        faltantes.push(`PDF de soporte de la cotización ${p.insumo?.numero || p.id} (lado insumo)`)
+      }
+    }
+    if (!editId) {
+      const hasGan = gan && (
+        (gan.numero || '').trim()
+        || (gan.valor !== '' && gan.valor != null)
+        || gan.pdf
+        || (gan.pdf_nombre || '').trim()
+      )
+      if (!hasGan) faltantes.push('Cotización ganadora (menor valor) con datos')
+    }
+  }
+
+  faltantes.push(...coherenciaErrors(pares))
+  const ruleErrs = ganadoraRuleErrors(pares)
+  return { faltantes, ruleErrors: ruleErrs }
 }
