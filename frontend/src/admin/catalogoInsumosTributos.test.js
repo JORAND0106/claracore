@@ -198,4 +198,21 @@ describe('catalogoInsumosTributos — impuesto unificado', () => {
       11300,
     )
   })
+
+  it('tipoTributoCorto y valorTributarioLabel para grilla', () => {
+    assert.equal(
+      tipoTributoCortoDesdeRow({ tributos: { iva: { porcentaje: 19 } } }),
+      'IVA',
+    )
+    assert.equal(
+      tipoTributoCortoDesdeRow({
+        tributos: { administracion: 5, imprevistos: 3, utilidad: 5 },
+      }),
+      'AIU',
+    )
+    assert.match(
+      valorTributarioLabelDesdeRow({ tributos: { iva: { porcentaje: 19 } } }),
+      /19/,
+    )
+  })
 })
