@@ -230,6 +230,7 @@ def route_suggest_cotizaciones(
     q: str = "",
     proveedor_id: Optional[int] = None,
     razon_social: str = "",
+    nit: str = "",
     limit: int = 25,
     current_user=Depends(get_current_user),
 ):
@@ -240,6 +241,7 @@ def route_suggest_cotizaciones(
         q=q,
         proveedor_id=proveedor_id,
         razon_social=razon_social,
+        nit=nit,
         limit=limit,
     )
 

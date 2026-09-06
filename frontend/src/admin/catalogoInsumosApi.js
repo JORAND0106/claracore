@@ -55,12 +55,13 @@ export function createCatalogoInsumosApi(contratoId, token) {
         headers: headers(token),
       }).then(parseJson),
 
-    suggestCotizaciones: ({ q = '', proveedor_id, razon_social = '', limit = 25 } = {}) => {
+    suggestCotizaciones: ({ q = '', proveedor_id, razon_social = '', nit = '', limit = 25 } = {}) => {
       const params = new URLSearchParams()
       params.set('q', q || '')
       params.set('limit', String(limit))
       if (proveedor_id) params.set('proveedor_id', String(proveedor_id))
       if (razon_social) params.set('razon_social', razon_social)
+      if (nit) params.set('nit', nit)
       return fetch(`${base}/cotizaciones/suggest?${params}`, { headers: headers(token) }).then(parseJson)
     },
 

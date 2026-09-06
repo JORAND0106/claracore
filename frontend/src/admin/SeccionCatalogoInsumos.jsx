@@ -866,7 +866,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     ...td,
     padding: '1px 4px',
     fontSize: 'var(--cc-xs)',
-    overflow: 'hidden',
+    overflow: 'visible',
     minWidth: 0,
   }
   const costCellInp = sheetCellInput(inputStyle, {
@@ -2372,7 +2372,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               <div style={{
                 ...sheetWrap,
                 marginBottom: 0,
-                overflow: 'hidden',
+                overflow: 'visible',
                 borderColor: ui.dark ? 'rgba(0,180,198,0.45)' : ui.rest ? 'rgba(14,116,144,0.35)' : 'rgba(0,119,182,0.35)',
                 background: ui.dark ? 'rgba(0,180,198,0.08)' : ui.rest ? 'rgba(14,116,144,0.06)' : 'rgba(0,119,182,0.04)',
               }}
@@ -2426,6 +2426,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                           value={form.cotizacion_numero}
                           proveedorId={form.proveedor_id}
                           razonSocial={form.razon_social}
+                          nit={form.nit}
                           disabled={busy}
                           onChange={(v) => updateCapture({
                             cotizacion_numero: v,
@@ -2476,7 +2477,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               <div style={{
                 ...sheetWrap,
                 marginBottom: 0,
-                overflow: 'hidden',
+                overflow: 'visible',
                 borderColor: ui.dark ? 'rgba(245,158,11,0.45)' : ui.rest ? 'rgba(180,120,40,0.35)' : 'rgba(217,119,6,0.35)',
                 background: ui.dark ? 'rgba(245,158,11,0.10)' : ui.rest ? 'rgba(180,120,40,0.08)' : 'rgba(217,119,6,0.05)',
               }}
@@ -2530,6 +2531,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                           value={form.cotizacion_numero_np}
                           proveedorId={form.proveedor_id}
                           razonSocial={form.razon_social}
+                          nit={form.nit}
                           disabled={busy}
                           placeholder="Número No Previsto del proveedor"
                           onChange={(v) => updateCapture({

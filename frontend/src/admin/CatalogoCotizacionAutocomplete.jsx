@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 /**
  * Autocompletar de N° de cotización filtrado por proveedor.
- * Sugiere números ya registrados para ese proveedor.
+ * Requiere proveedor seleccionado; sugiere solo cotizaciones de ese proveedor.
  * Al elegir (o al salir con coincidencia exacta) dispara onPick para autocargar.
  */
 export default function CatalogoCotizacionAutocomplete({
@@ -12,6 +12,7 @@ export default function CatalogoCotizacionAutocomplete({
   onPick,
   proveedorId,
   razonSocial,
+  nit,
   disabled,
   inputStyle,
   t,
@@ -19,28 +20,68 @@ export default function CatalogoCotizacionAutocomplete({
 }) {
   const [options, setOptions] = useState([])
   const [open, setOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState(null)
+  const [loading, setLoading] = useState(false)
   const timer = useRef(null)
   const lastPicked = useRef('')
+  const rootRef = useRef(null)
+  const inputRef = useRef(null)
+
+  const hasProveedor = !!(proveedorId || String(razonSocial || '').trim())
+
+  const updateMenuPos = useCallback(() => {
+    const el = inputRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setMenuPos({
+      top: r.bottom + 4,
+      left: r.left,
+      width: Math.max(r.width, 220),
+    })
+  }, [])
 
   const search = useCallback((q) => {
     if (!api) return Promise.resolve([])
+    if (!(proveedorId || String(razonSocial || '').trim())) {
+      setOptions([])
+      return Promise.resolve([])
+    }
+    setLoading(true)
     return api.suggestCotizaciones({
       q: q || '',
       proveedor_id: proveedorId || undefined,
       razon_social: razonSocial || '',
-      limit: 20,
+      nit: nit || '',
+      limit: 40,
     }).then((rows) => {
-      setOptions(rows || [])
-      return rows || []
+      const list = Array.isArray(rows) ? rows : []
+      setOptions(list)
+      return list
     }).catch(() => {
       setOptions([])
       return []
-    })
-  }, [api, proveedorId, razonSocial])
+    }).finally(() => setLoading(false))
+  }, [api, proveedorId, razonSocial, nit])
 
   useEffect(() => {
-    if (open) search(value)
-  }, [open, search, value])
+    if (open && hasProveedor) search(value)
+    if (open && !hasProveedor) setOptions([])
+  }, [open, search, value, hasProveedor])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPos(null)
+      return undefined
+    }
+    updateMenuPos()
+    const onScroll = () => updateMenuPos()
+    window.addEventListener('resize', onScroll)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('resize', onScroll)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open, options.length, updateMenuPos])
 
   const pick = (item, { force = false } = {}) => {
     const numero = String(item.numero || '').toUpperCase()
@@ -57,7 +98,7 @@ export default function CatalogoCotizacionAutocomplete({
 
   const tryExactMatch = async (raw) => {
     const v = String(raw || '').trim().toUpperCase()
-    if (!v || !api) return
+    if (!v || !api || !hasProveedor) return
     const rows = options.length
       ? options
       : await search(v)
@@ -74,15 +115,23 @@ export default function CatalogoCotizacionAutocomplete({
     timer.current = setTimeout(() => search(v), 220)
   }
 
+  const showMenu = open && !disabled && hasProveedor && menuPos
+  const showEmpty = showMenu && !loading && options.length === 0 && !(value || '').trim()
+  const showList = showMenu && options.length > 0
+
   return (
-    <div style={{ position: 'relative' }}>
+    <div ref={rootRef} style={{ position: 'relative', overflow: 'visible' }}>
       <input
+        ref={inputRef}
         style={{ ...inputStyle, textTransform: 'uppercase' }}
-        placeholder={placeholder}
+        placeholder={hasProveedor ? placeholder : 'Seleccione primero el proveedor'}
         value={value || ''}
         disabled={disabled}
         onChange={onInput}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          setOpen(true)
+          updateMenuPos()
+        }}
         onBlur={() => {
           setTimeout(() => {
             tryExactMatch(value)
@@ -91,23 +140,37 @@ export default function CatalogoCotizacionAutocomplete({
         }}
         autoComplete="off"
       />
-      {open && !disabled && options.length > 0 && (
+      {!hasProveedor && (
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4 }}>
+          Elija el proveedor para ver cotizaciones existentes.
+        </div>
+      )}
+      {(showList || showEmpty || (showMenu && loading)) && menuPos && (
         <div
           style={{
-            position: 'absolute',
-            zIndex: 10050,
-            left: 0,
-            right: 0,
-            top: '100%',
-            marginTop: 4,
+            position: 'fixed',
+            zIndex: 100060,
+            top: menuPos.top,
+            left: menuPos.left,
+            width: menuPos.width,
             background: t.bgCard,
             border: `1px solid ${t.border}`,
             borderRadius: 8,
-            maxHeight: 220,
+            maxHeight: 240,
             overflow: 'auto',
-            boxShadow: t.shadow || '0 8px 24px rgba(0,0,0,0.15)',
+            boxShadow: t.shadow || '0 8px 24px rgba(0,0,0,0.18)',
           }}
         >
+          {loading && options.length === 0 && (
+            <div style={{ padding: '8px 10px', color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+              Buscando cotizaciones…
+            </div>
+          )}
+          {showEmpty && (
+            <div style={{ padding: '8px 10px', color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
+              Sin cotizaciones previas para este proveedor. Digite un número nuevo.
+            </div>
+          )}
           {options.map((item) => (
             <button
               key={item.numero}

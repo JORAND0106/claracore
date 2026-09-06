@@ -49,6 +49,15 @@ def test_find_incongruencia_numero_entre_proveedores():
     assert bad["proveedor_registrado"] == "PAVCO"
 
 
+def test_same_proveedor_ref_por_id_o_nombre():
+    from catalogo_insumos_cotizaciones_lib import same_proveedor_ref
+    ref = {"proveedor": "Pavco S.A.", "proveedor_id": 7, "nit": "900"}
+    assert same_proveedor_ref(ref, proveedor_id=7, razon_social="")
+    assert same_proveedor_ref(ref, proveedor_id=None, razon_social="PAVCO S.A.")
+    assert same_proveedor_ref(ref, proveedor_id=99, razon_social="pavco s.a.")
+    assert not same_proveedor_ref(ref, proveedor_id=99, razon_social="GEOMATRIX")
+
+
 def test_pick_best_cotizacion_ref_prefiere_tipo_y_pdf():
     refs = [
         {
