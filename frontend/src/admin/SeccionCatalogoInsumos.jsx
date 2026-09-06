@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { useClaraViewport } from '../useClaraViewport'
 import { createCatalogoInsumosApi, fmtMoney } from './catalogoInsumosApi'
@@ -32,11 +32,9 @@ import {
   buildParFromCapture,
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
-  detalleVisibleDesdeInsumoRow,
   fileFromDataTransfer,
   ganadoraDesdeInsumoRow,
   ganadoraRuleErrors,
-  otrasCotizaciones,
   pickGanadora,
   sanitizeRendimientoInput,
   seedCotizacionPares,
@@ -114,7 +112,7 @@ function sheetZebra(ui, index) {
   return 'rgba(241, 245, 249, 0.92)'
 }
 
-function SheetSectionTitle({ children, t, ui }) {
+function SheetSectionTitle({ children, t, ui, helpTitle }) {
   return (
     <div style={{
       fontWeight: 800,
@@ -126,9 +124,30 @@ function SheetSectionTitle({ children, t, ui }) {
       padding: '6px 8px',
       background: ui.cardSubtle,
       border: `1px solid ${t.border}`,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
     }}
     >
-      {children}
+      <span>{children}</span>
+      {helpTitle ? (
+        <span
+          title={helpTitle}
+          style={{
+            fontWeight: 700,
+            color: t.primary,
+            cursor: 'help',
+            fontSize: 'var(--cc-caption)',
+            letterSpacing: 0,
+            textTransform: 'none',
+            lineHeight: 1,
+          }}
+          aria-label={helpTitle}
+        >
+          (?)
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -853,7 +872,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [ocrBusy, setOcrBusy] = useState(false)
   const [dupAlert, setDupAlert] = useState(null)
   const [historial, setHistorial] = useState(null)
-  const [expandedId, setExpandedId] = useState(null)
   const [cotMinimas, setCotMinimas] = useState(3)
   const [modalFaltantes, setModalFaltantes] = useState([])
   const [modalRuleErrors, setModalRuleErrors] = useState([])
@@ -1198,6 +1216,28 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     impuestoEtiquetaNp: etiquetaTributos(tributosPayloadDesdeForm(f.impuesto_np || EMPTY_IMPUESTO)),
   })
 
+  /** Limpia proveedor y paneles de costo; conserva descripción/unidad/rendimiento/código. */
+  const clearCaptureAfterSend = () => ({
+    proveedor_id: '',
+    razon_social: '',
+    nit: '',
+    contacto_email: '',
+    contacto_nombre: '',
+    contacto_telefono: '',
+    costo_base: '',
+    valor_no_previsto: '',
+    cantidad_negociada: '',
+    cantidad_negociada_np: '',
+    cotizacion_numero: '',
+    cotizacion_fecha: '',
+    cotizacion_vigencia: '',
+    cotizacion_numero_np: '',
+    cotizacion_fecha_np: '',
+    cotizacion_vigencia_np: '',
+    impuesto: { ...EMPTY_IMPUESTO },
+    impuesto_np: { ...EMPTY_IMPUESTO },
+  })
+
   const enviarOActualizarCotizacion = () => {
     const pares = form.cotizaciones_detalle || []
     const { faltantes, coherencia } = validateCaptureForEnviar(form, pares)
@@ -1215,7 +1255,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       ))
       list = applyAutoGanadoraByMinValor(list)
       const legacy = syncLegacyFromGanadora(list)
-      const gan = pickGanadora(list)
       setModalFaltantes([])
       setModalRuleErrors(ganadoraRuleErrors(list))
       setSelectedParId(null)
@@ -1223,31 +1262,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         ...f,
         cotizaciones_detalle: list,
         ...legacy,
-        // Reiniciar captura para una nueva cotización
-        proveedor_id: '',
-        razon_social: '',
-        nit: '',
-        contacto_email: '',
-        contacto_nombre: '',
-        contacto_telefono: '',
-        costo_base: gan?.valor != null && gan.valor !== '' ? String(gan.valor) : '',
-        valor_no_previsto: '',
-        cotizacion_numero: '',
-        cotizacion_fecha: '',
-        cotizacion_vigencia: '',
-        cotizacion_numero_np: '',
-        cotizacion_fecha_np: '',
-        cotizacion_vigencia_np: '',
-        cantidad_negociada_np: '',
-        impuesto: { ...EMPTY_IMPUESTO },
-        impuesto_np: { ...EMPTY_IMPUESTO },
+        ...clearCaptureAfterSend(),
       }))
       return
     }
 
     const list = buildParFromCapture(form, pares, opts)
     const legacy = syncLegacyFromGanadora(list)
-    const gan = pickGanadora(list)
     setModalFaltantes([])
     setModalRuleErrors(ganadoraRuleErrors(list))
     setSelectedParId(null)
@@ -1255,22 +1276,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       ...f,
       cotizaciones_detalle: list,
       ...legacy,
-      // Preparar siguiente cotización: otro proveedor, mismos desc/unidad/rendimiento
-      proveedor_id: '',
-      razon_social: '',
-      nit: '',
-      contacto_email: '',
-      contacto_nombre: '',
-      contacto_telefono: '',
-      costo_base: gan?.valor != null && gan.valor !== '' ? String(gan.valor) : '',
-      valor_no_previsto: '',
-      cotizacion_numero: '',
-      cotizacion_fecha: '',
-      cotizacion_vigencia: '',
-      cotizacion_numero_np: '',
-      cotizacion_fecha_np: '',
-      cotizacion_vigencia_np: '',
-      cantidad_negociada_np: '',
+      ...clearCaptureAfterSend(),
     }))
   }
 
@@ -1688,20 +1694,19 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             ) : rows.map((r, idx) => {
               const rid = r.insumo_id || r.id
               const gan = ganadoraDesdeInsumoRow(r)
-              const expanded = expandedId === rid
               const zebra = sheetZebra(ui, idx)
-              const otras = otrasCotizaciones(detalleVisibleDesdeInsumoRow(r), gan?.id)
               const tipoTrib = tipoTributoCortoDesdeRow(r)
               const vtLabel = valorTributarioLabelDesdeRow(r)
+              const openOnClick = canEditar
               return (
-                <Fragment key={rid}>
-                  <tr
-                    onClick={() => setExpandedId(expanded ? null : rid)}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = ui.cardSubtle || `${t.primary}14` }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = zebra }}
-                    style={{ background: expanded ? ui.cardSubtle : zebra, cursor: 'pointer' }}
-                    title="Clic para ver otras cotizaciones"
-                  >
+                <tr
+                  key={rid}
+                  onClick={() => { if (openOnClick) openEdit(r) }}
+                  onMouseEnter={(e) => { if (openOnClick) e.currentTarget.style.background = ui.cardSubtle || `${t.primary}14` }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = zebra }}
+                  style={{ background: zebra, cursor: openOnClick ? 'pointer' : 'default' }}
+                  title={openOnClick ? 'Clic para editar el insumo y sus cotizaciones' : undefined}
+                >
                     <td style={{ ...tdMuted, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.proveedor_nombre || ''}>{r.proveedor_nombre || '—'}</td>
                     <td style={tdCodigo} title={r.codigo || ''}>{r.codigo}</td>
                     <td style={tdDesc} title={r.descripcion || ''}>{r.descripcion}</td>
@@ -1736,49 +1741,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         )}
                       </div>
                     </td>
-                  </tr>
-                  {expanded && (
-                    <tr>
-                      <td colSpan={12} style={{ ...td, background: ui.cardSubtle, padding: 10 }}>
-                        <div style={{ fontWeight: 700, fontSize: 'var(--cc-caption)', color: t.primary, marginBottom: 6 }}>
-                          Otras cotizaciones — comparación Insumo | No Previsto
-                        </div>
-                        {otras.length === 0 ? (
-                          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                            No hay cotizaciones adicionales registradas. La ganadora se muestra en la fila.
-                          </div>
-                        ) : (
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-xs)' }}>
-                            <thead>
-                              <tr>
-                                <th style={thHeader}>Sección</th>
-                                <th style={thHeader}>Proveedor</th>
-                                <th style={thHeader}>Nº</th>
-                                <th style={thHeader}>Fecha</th>
-                                <th style={thHeader}>Vigencia</th>
-                                <th style={{ ...thHeader, textAlign: 'right' }}>Valor</th>
-                                <th style={thHeader}>PDF</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {otras.map((c, j) => (
-                                <tr key={c.id || j} style={{ background: sheetZebra(ui, j) }}>
-                                  <td style={tdMuted}>{c.tipo === 'no_previsto' ? 'No Previsto' : 'Insumo'}</td>
-                                  <td style={td}>{c.proveedor || '—'}</td>
-                                  <td style={tdMuted}>{c.numero || '—'}</td>
-                                  <td style={tdMuted}>{c.fecha || '—'}</td>
-                                  <td style={tdMuted}>{c.vigencia || '—'}</td>
-                                  <td style={tdNum}>{c.valor != null && c.valor !== '' ? fmtMoney(c.valor) : '—'}</td>
-                                  <td style={tdMuted}>{c.pdf_nombre || '—'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
+                </tr>
               )
             })}
           </tbody>
@@ -2245,7 +2208,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               </span>
             </div>
 
-            <SheetSectionTitle t={t} ui={ui}>3. Tabla comparativa de cotizaciones</SheetSectionTitle>
+            <SheetSectionTitle
+              t={t}
+              ui={ui}
+              helpTitle="Descripción, unidad y rendimiento son comunes a la fila. Cada grupo conserva solo sus columnas de costo. Pulse una fila para cargarla en los paneles de costos. La ganadora es la de menor costo de insumo. Arrastre el PDF o use el clip."
+            >
+              3. Tabla comparativa de cotizaciones
+            </SheetSectionTitle>
             <Field label="¿Requiere cotización?">
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 'var(--cc-sm)' }}>
                 <input
@@ -2259,10 +2228,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
             {form.requiere_cotizacion ? (
               <>
-                <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
-                  Descripción, unidad y rendimiento son comunes a la fila. Cada grupo conserva solo sus columnas de costo.
-                  Pulse una fila para cargarla en los paneles de costos. La ganadora es la de menor costo de insumo. Arrastre el PDF o use el clip.
-                </div>
                 <div style={{ ...sheetWrap, marginBottom: 8, overflowX: 'auto' }}>
                   <table style={{ ...sheetTable, minWidth: 1100, tableLayout: 'auto' }}>
                     <thead>
