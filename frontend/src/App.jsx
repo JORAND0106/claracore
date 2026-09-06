@@ -23275,6 +23275,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <AlmacenMain
               key={`almacen-${usuario?.contrato_id ?? 'x'}`}
               t={t}
+              activeTheme={activeTheme}
               token={getToken()}
               usuario={usuario}
               permisos={{

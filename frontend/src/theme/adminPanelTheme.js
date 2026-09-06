@@ -92,6 +92,30 @@ export function tFrom(modeOrTheme, t) {
   return ADMIN_THEME.light;
 }
 
+/** Estima si un color de fondo es oscuro (para inferir tema cuando falta el mode). */
+export function isLikelyDarkBackground(color) {
+  const s = String(color || '').trim().toLowerCase()
+  if (!s) return false
+  const hex = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+  if (hex) {
+    let h = hex[1]
+    if (h.length === 3) h = h.split('').map((c) => c + c).join('')
+    const n = parseInt(h, 16)
+    const r = (n >> 16) & 255
+    const g = (n >> 8) & 255
+    const b = n & 255
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.45
+  }
+  const rgb = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/)
+  if (rgb) {
+    const r = Number(rgb[1])
+    const g = Number(rgb[2])
+    const b = Number(rgb[3])
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.45
+  }
+  return false
+}
+
 export function isDarkMode(m) {
   return m === "dark";
 }
@@ -128,8 +152,23 @@ export function mapboxStyleForTheme(activeTheme) {
 /** Estilos reutilizables del modal de contratos y paneles anidados. */
 export function buildContratoUiTheme(activeTheme, tProp) {
   const tok = tFrom(activeTheme, tProp);
-  const dark = isDarkMode(activeTheme);
-  const rest = isRestMode(activeTheme);
+  let dark = isDarkMode(activeTheme);
+  let rest = isRestMode(activeTheme);
+  // Si el modo no llega (p. ej. theme=null desde Almacén) pero los tokens sí son oscuros/descanso.
+  if (!activeTheme && tok) {
+    if (rest) {
+      /* keep */
+    } else if (isLikelyDarkBackground(tok.bgCard || tok.bg || tok.inputBg)) {
+      dark = true
+      rest = false
+    } else if (
+      String(tok.bgCard || '').toLowerCase().includes('f2ede4')
+      || String(tok.bg || '').toLowerCase().includes('e8e0d5')
+    ) {
+      rest = true
+      dark = false
+    }
+  }
   const font = CC_TYPO;
   return {
     tok,

@@ -22,7 +22,7 @@ const TABS = [
   { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Gráficos comparativos: presupuesto, entradas, salidas y cobro SICOE.' },
 ]
 
-function AlmacenLayout({ permisos, token, t, compact, usuario }) {
+function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = null }) {
   const ui = useAlmacenTheme()
   const api = useAlmacenApi()
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
@@ -130,7 +130,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
           token={token}
           user={usuario}
           perms={catalogoPerms}
-          theme={null}
+          theme={activeTheme}
           t={theme}
           embedded
         />
@@ -257,7 +257,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario }) {
   )
 }
 
-export default function AlmacenMain({ t, token, permisos, usuario }) {
+export default function AlmacenMain({ t, token, permisos, usuario, activeTheme = null }) {
   const { isCompact } = useAlmacenViewport()
   const contratoId = permisos?.contratoId
   if (!contratoId) {
@@ -276,6 +276,7 @@ export default function AlmacenMain({ t, token, permisos, usuario }) {
         t={t}
         compact={isCompact}
         usuario={usuario || { contrato_id: contratoId }}
+        activeTheme={activeTheme}
       />
     </AlmacenProviders>
   )
