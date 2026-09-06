@@ -39,6 +39,7 @@ from catalogo_insumos_cotizaciones_lib import (
     norm_numero_cotizacion as _norm_numero_cotizacion,
     norm_proveedor_key as _norm_proveedor_key,
     pick_best_cotizacion_ref,
+    same_proveedor_ref,
 )
 from catalogo_insumos_cotizaciones_lib import _norm_text
 
@@ -424,12 +425,22 @@ def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[
             if not num:
                 continue
             nombre = (item.get("proveedor") or "").strip() or legacy_nombre or None
-            item_pid = item.get("proveedor_id") or (pid if item.get("es_ganadora") else None)
+            item_pid = item.get("proveedor_id")
+            if item_pid in (None, ""):
+                # Heredar proveedor del insumo cuando es ganadora o el nombre coincide.
+                if item.get("es_ganadora") and pid:
+                    item_pid = pid
+                elif pid and nombre and _norm_text(nombre) == _norm_text(legacy_nombre):
+                    item_pid = pid
             refs.append({
                 "numero": num,
                 "proveedor": nombre,
                 "proveedor_id": int(item_pid) if item_pid not in (None, "") else None,
-                "nit": prov.get("nit") if item_pid and int(item_pid or 0) == int(pid or 0) else None,
+                "nit": (
+                    prov.get("nit")
+                    if item_pid and pid and int(item_pid) == int(pid)
+                    else None
+                ),
                 "valor": item.get("valor"),
                 "fecha": item.get("fecha"),
                 "vigencia": item.get("vigencia"),
@@ -544,37 +555,62 @@ def suggest_cotizaciones_numero(
     q: str = "",
     proveedor_id: Optional[int] = None,
     razon_social: str = "",
+    nit: str = "",
     limit: int = 25,
 ) -> List[dict]:
+    """
+    Sugiere números de cotización ya registrados para un proveedor del contrato.
+    Requiere proveedor_id y/o razón social; sin proveedor no se listan sugerencias.
+    """
+    want_pid = int(proveedor_id) if proveedor_id not in (None, "") else None
+    want_name = (razon_social or "").strip()
+    want_nit = (nit or "").strip()
+    if not want_pid and not want_name:
+        return []
+
+    # Enriquecer razón social / NIT desde el directorio si solo viene el id.
+    if want_pid and (not want_name or not want_nit):
+        sb = _sb()
+        provs = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social, nit")
+            .eq("id", want_pid)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if provs:
+            if not want_name:
+                want_name = (provs[0].get("razon_social") or "").strip()
+            if not want_nit:
+                want_nit = (provs[0].get("nit") or "").strip()
+
     refs = _load_cotizacion_refs(contrato_id)
     qn = _norm_numero_cotizacion(q)
-    want_pid = int(proveedor_id) if proveedor_id not in (None, "") else None
-    want_name = _norm_text(razon_social)
     by_num: Dict[str, dict] = {}
     for ref in refs:
         num = ref["numero"]
         if qn and qn not in num:
             continue
+        if not same_proveedor_ref(
+            ref,
+            proveedor_id=want_pid,
+            razon_social=want_name,
+            nit=want_nit,
+        ):
+            continue
         ref_pid = int(ref["proveedor_id"]) if ref.get("proveedor_id") not in (None, "") else None
-        ref_name = _norm_text(ref.get("proveedor"))
-        if want_pid or want_name:
-            match = False
-            if want_pid and ref_pid and want_pid == ref_pid:
-                match = True
-            elif want_name and ref_name and want_name == ref_name:
-                match = True
-            if not match:
-                continue
         if num not in by_num:
             by_num[num] = {
                 "numero": num,
-                "proveedor": ref.get("proveedor"),
-                "proveedor_id": ref_pid,
+                "proveedor": ref.get("proveedor") or want_name or None,
+                "proveedor_id": ref_pid or want_pid,
                 "fecha": ref.get("fecha"),
                 "vigencia": ref.get("vigencia"),
                 "pdf_nombre": ref.get("pdf_nombre"),
                 "has_pdf": bool(ref.get("has_pdf_ganadora") or ref.get("pdf_nombre")),
-                "nit": ref.get("nit"),
+                "nit": ref.get("nit") or want_nit or None,
                 "contacto_email": ref.get("contacto_email"),
                 "contacto_nombre": ref.get("contacto_nombre"),
                 "contacto_telefono": ref.get("contacto_telefono"),
