@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { AlmacenFieldLabel, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 import { itemLabelFull, sortNatural } from './solicitudFormHelpers'
 
@@ -21,7 +22,9 @@ export default function PresupuestoItemSelector({
   const [loadingItems, setLoadingItems] = useState(false)
   const [itemQuery, setItemQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState(null)
   const blurTimer = useRef(null)
+  const itemWrapRef = useRef(null)
   const excel = variant === 'excel'
 
   useEffect(() => {
@@ -36,13 +39,22 @@ export default function PresupuestoItemSelector({
       setOpen(false)
       return
     }
+    let cancelled = false
     setLoadingItems(true)
-    if (!excel) setOpen(true)
+    setOpen(true)
     api.getListadoItems(capitulo)
-      .then((rows) => setItemsCap([...(rows || [])].sort((a, b) => sortNatural(a.item, b.item))))
-      .catch(() => setItemsCap([]))
-      .finally(() => setLoadingItems(false))
-  }, [api, capitulo, excel])
+      .then((rows) => {
+        if (cancelled) return
+        setItemsCap([...(rows || [])].sort((a, b) => sortNatural(a.item, b.item)))
+      })
+      .catch(() => {
+        if (!cancelled) setItemsCap([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingItems(false)
+      })
+    return () => { cancelled = true }
+  }, [api, capitulo])
 
   const selectedRow = useMemo(
     () => itemsCap.find((p) => normPptoItem(p.item) === normPptoItem(item)),
@@ -61,12 +73,38 @@ export default function PresupuestoItemSelector({
 
   const filtered = useMemo(() => {
     const q = itemQuery.trim().toLowerCase()
-    if (!q) return itemsCap.slice(0, 50)
+    if (!q) return itemsCap.slice(0, 80)
     return itemsCap.filter((p) => {
       const hay = `${p.item} ${p.descripcion || ''}`.toLowerCase()
       return hay.includes(q)
-    }).slice(0, 50)
+    }).slice(0, 80)
   }, [itemsCap, itemQuery])
+
+  const updateMenuPos = () => {
+    const el = itemWrapRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setMenuPos({
+      top: r.bottom + 2,
+      left: r.left,
+      width: Math.max(r.width, excel ? 220 : r.width),
+    })
+  }
+
+  useEffect(() => {
+    if (!open || !excel) {
+      setMenuPos(null)
+      return undefined
+    }
+    updateMenuPos()
+    const onScroll = () => updateMenuPos()
+    window.addEventListener('resize', onScroll)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('resize', onScroll)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open, excel, filtered.length, loadingItems, capitulo])
 
   const pickItem = (p) => {
     onChange?.({ capitulo, item: p.item })
@@ -77,7 +115,7 @@ export default function PresupuestoItemSelector({
   const onCapChange = (cap) => {
     onChange?.({ capitulo: cap, item: '' })
     setItemQuery('')
-    setOpen(!!cap && !excel)
+    setOpen(!!cap)
   }
 
   const inputStyle = {
@@ -90,73 +128,89 @@ export default function PresupuestoItemSelector({
     height: excel ? 28 : undefined,
   }
 
-  const dropdown = open && !disabled && capitulo && (
+  const dropdownBody = open && !disabled && capitulo ? (
     filtered.length === 0 && !loadingItems ? (
-      <div style={{
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        top: '100%',
-        marginTop: 2,
-        zIndex: 40,
-        padding: '8px 10px',
-        background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
-        color: ui.textMuted,
-        border: `1px solid ${ui.textMuted}44`,
-        borderRadius: 6,
-        fontSize: 'var(--cc-xs)',
-      }}
-      >
+      <div style={{ padding: '8px 10px', color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
         No hay ítems de cobro para este capítulo en el listado de precios.
       </div>
     ) : filtered.length > 0 ? (
-      <div style={{
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        top: '100%',
-        marginTop: 2,
-        zIndex: 40,
-        maxHeight: 200,
-        overflowY: 'auto',
-        background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
-        color: ui.text,
-        border: `1px solid ${ui.textMuted}44`,
-        borderRadius: 6,
-        boxShadow: '0 4px 12px #0002',
-      }}
-      >
-        {filtered.map((p) => {
-          const label = itemLabelFull(p)
-          return (
-            <button
-              key={normPptoItem(p.item)}
-              type="button"
-              title={label}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => pickItem(p)}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                padding: '6px 8px',
-                border: 'none',
-                borderBottom: `1px solid ${ui.textMuted}22`,
-                background: normPptoItem(p.item) === normPptoItem(item) ? `${ui.accentSoft}` : 'transparent',
-                color: ui.text,
-                cursor: 'pointer',
-                fontSize: 'var(--cc-xs)',
-                whiteSpace: 'normal',
-                wordBreak: 'break-word',
-              }}
-            >
-              {label}
-            </button>
-          )
-        })}
+      filtered.map((p) => {
+        const label = itemLabelFull(p)
+        return (
+          <button
+            key={normPptoItem(p.item)}
+            type="button"
+            title={label}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => pickItem(p)}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '6px 8px',
+              border: 'none',
+              borderBottom: `1px solid ${ui.textMuted}22`,
+              background: normPptoItem(p.item) === normPptoItem(item) ? `${ui.accentSoft}` : 'transparent',
+              color: ui.text,
+              cursor: 'pointer',
+              fontSize: 'var(--cc-xs)',
+              whiteSpace: 'normal',
+              wordBreak: 'break-word',
+            }}
+          >
+            {label}
+          </button>
+        )
+      })
+    ) : loadingItems ? (
+      <div style={{ padding: '8px 10px', color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+        Cargando ítems…
       </div>
     ) : null
-  )
+  ) : null
+
+  const dropdownPanelStyle = {
+    zIndex: 100070,
+    maxHeight: 220,
+    overflowY: 'auto',
+    background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
+    color: ui.text,
+    border: `1px solid ${ui.textMuted}44`,
+    borderRadius: 6,
+    boxShadow: '0 8px 24px #0003',
+  }
+
+  const dropdown = excel && open && menuPos && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        style={{
+          ...dropdownPanelStyle,
+          position: 'fixed',
+          top: menuPos.top,
+          left: menuPos.left,
+          width: menuPos.width,
+        }}
+        data-testid="presupuesto-item-dropdown"
+      >
+        {dropdownBody}
+      </div>,
+      document.body,
+    )
+    : (!excel && open && !disabled && capitulo ? (
+      <div
+        style={{
+          ...dropdownPanelStyle,
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: '100%',
+          marginTop: 2,
+          zIndex: 40,
+        }}
+      >
+        {dropdownBody}
+      </div>
+    ) : null)
 
   const capSelect = (
     <select
@@ -174,7 +228,7 @@ export default function PresupuestoItemSelector({
   )
 
   const itemField = (
-    <div style={{ position: 'relative', minWidth: 0, width: '100%' }}>
+    <div ref={itemWrapRef} style={{ position: 'relative', minWidth: 0, width: '100%' }}>
       <input
         style={inputStyle}
         value={itemQuery}
@@ -189,7 +243,7 @@ export default function PresupuestoItemSelector({
         onFocus={() => setOpen(true)}
         onBlur={() => {
           clearTimeout(blurTimer.current)
-          blurTimer.current = setTimeout(() => setOpen(false), 160)
+          blurTimer.current = setTimeout(() => setOpen(false), 180)
         }}
       />
       {dropdown}
