@@ -517,15 +517,65 @@ export function coherenciaErrors(pares, draft = null) {
 }
 
 /**
+ * ¿Hay algún dato diligenciado en el panel Costos — No Previsto?
+ */
+export function panelNoPrevistoTouched(form) {
+  if (!form) return false
+  if (form.valor_no_previsto !== '' && form.valor_no_previsto != null) return true
+  if (String(form.cotizacion_numero_np || '').trim()) return true
+  if (String(form.cotizacion_fecha_np || '').trim()) return true
+  if (String(form.cotizacion_vigencia_np || '').trim()) return true
+  const imp = form.impuesto_np
+  if (imp && typeof imp === 'object') {
+    const keys = ['a', 'i', 'u', 'iva']
+    if (keys.some((k) => imp[k] !== '' && imp[k] != null && Number(imp[k]) !== 0)) return true
+  }
+  return false
+}
+
+/**
+ * ¿Hay algún dato diligenciado en el panel Costos — Insumo?
+ */
+export function panelInsumoTouched(form) {
+  if (!form) return false
+  if (form.costo_base !== '' && form.costo_base != null) return true
+  if (String(form.cotizacion_numero || '').trim()) return true
+  if (String(form.cotizacion_fecha || '').trim()) return true
+  if (String(form.cotizacion_vigencia || '').trim()) return true
+  if (form.cantidad_negociada !== '' && form.cantidad_negociada != null) return true
+  const imp = form.impuesto
+  if (imp && typeof imp === 'object') {
+    const keys = ['a', 'i', 'u', 'iva']
+    if (keys.some((k) => imp[k] !== '' && imp[k] != null && Number(imp[k]) !== 0)) return true
+  }
+  return false
+}
+
+export function toUpperTrim(s) {
+  return String(s || '').trim().toUpperCase()
+}
+
+/** Solo dígitos y un separador decimal (punto o coma). */
+export function sanitizeRendimientoInput(raw) {
+  let s = String(raw ?? '').replace(/[^\d.,]/g, '')
+  s = s.replace(/,/g, '.')
+  const first = s.indexOf('.')
+  if (first !== -1) {
+    s = s.slice(0, first + 1) + s.slice(first + 1).replace(/\./g, '')
+  }
+  return s
+}
+
+/**
  * Construye un par desde el formulario de captura y lo agrega a la lista.
- * El nº de cotización es manual (obligatorio en validateCaptureForEnviar).
+ * El nº de cotización es manual; mayúsculas en números y descripción.
  * @param {object} [opts]
  * @param {string} [opts.impuestoEtiqueta]
  * @param {string} [opts.impuestoEtiquetaNp]
  */
 export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
-  const numeroIns = String(form.cotizacion_numero || '').trim()
-  const numeroNp = String(form.cotizacion_numero_np || '').trim()
+  const numeroIns = toUpperTrim(form.cotizacion_numero)
+  const numeroNp = toUpperTrim(form.cotizacion_numero_np)
   const proveedorNombre = (form.razon_social || '').trim()
   const valorIns = form.costo_base
   const valorNp = form.valor_no_previsto !== '' && form.valor_no_previsto != null
@@ -549,9 +599,9 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
     contacto_nombre: (form.contacto_nombre || '').trim(),
     contacto_telefono: (form.contacto_telefono || '').trim(),
     coherencia: {
-      descripcion: (form.descripcion || '').trim(),
+      descripcion: toUpperTrim(form.descripcion),
       unidad: (form.unidad || '').trim(),
-      rendimiento: form.rendimiento ?? '',
+      rendimiento: sanitizeRendimientoInput(form.rendimiento ?? ''),
     },
     insumo: {
       ...emptyLado(),
@@ -572,6 +622,10 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
       impuesto_etiqueta: impuestoEtiquetaNp,
     },
   }
+  // Si el panel NP no se usó, dejar el lado vacío (sin número ni proveedor fantasma)
+  if (!panelNoPrevistoTouched(form)) {
+    par.no_previsto = emptyLado()
+  }
   return applyAutoGanadoraByMinValor([...(paresExistentes || []), par])
 }
 
@@ -579,40 +633,54 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
  * Aplica los campos de captura sobre un par existente (Actualizar tabla).
  */
 export function applyCaptureToPar(par, form, opts = {}) {
-  const numeroIns = String(form.cotizacion_numero || '').trim()
-  const numeroNp = String(form.cotizacion_numero_np || '').trim()
+  const numeroIns = toUpperTrim(form.cotizacion_numero)
+  const numeroNp = toUpperTrim(form.cotizacion_numero_np)
   const valorIns = form.costo_base
   const valorNp = form.valor_no_previsto !== '' && form.valor_no_previsto != null
     ? form.valor_no_previsto
     : ''
   const impuestoEtiqueta = (opts.impuestoEtiqueta || form.impuesto_etiqueta || '').trim()
   const impuestoEtiquetaNp = (opts.impuestoEtiquetaNp || form.impuesto_etiqueta_np || '').trim()
-  return {
+  const proveedorNombre = (form.razon_social || '').trim() || par.insumo?.proveedor || ''
+  const next = {
     ...par,
     proveedor_id: form.proveedor_id || par.proveedor_id || '',
     nit: (form.nit || '').trim(),
     contacto_email: (form.contacto_email || '').trim(),
     contacto_nombre: (form.contacto_nombre || '').trim(),
     contacto_telefono: (form.contacto_telefono || '').trim(),
+    coherencia: {
+      ...(par.coherencia || {}),
+      descripcion: toUpperTrim(form.descripcion || par.coherencia?.descripcion),
+      unidad: (form.unidad || par.coherencia?.unidad || '').trim(),
+      rendimiento: sanitizeRendimientoInput(
+        form.rendimiento !== undefined && form.rendimiento !== null
+          ? form.rendimiento
+          : (par.coherencia?.rendimiento ?? ''),
+      ),
+    },
     insumo: {
       ...(par.insumo || emptyLado()),
-      proveedor: (form.razon_social || '').trim() || par.insumo?.proveedor || '',
+      proveedor: proveedorNombre,
       valor: valorIns !== '' && valorIns != null ? String(valorIns) : '',
       numero: numeroIns || par.insumo?.numero || '',
       fecha: form.cotizacion_fecha || '',
       vigencia: form.cotizacion_vigencia || '',
       impuesto_etiqueta: impuestoEtiqueta || par.insumo?.impuesto_etiqueta || '',
     },
-    no_previsto: {
-      ...(par.no_previsto || emptyLado()),
-      proveedor: (form.razon_social || '').trim() || par.no_previsto?.proveedor || '',
-      valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
-      numero: numeroNp || par.no_previsto?.numero || '',
-      fecha: form.cotizacion_fecha_np || '',
-      vigencia: form.cotizacion_vigencia_np || '',
-      impuesto_etiqueta: impuestoEtiquetaNp || par.no_previsto?.impuesto_etiqueta || '',
-    },
+    no_previsto: panelNoPrevistoTouched(form)
+      ? {
+        ...(par.no_previsto || emptyLado()),
+        proveedor: proveedorNombre,
+        valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
+        numero: numeroNp || par.no_previsto?.numero || '',
+        fecha: form.cotizacion_fecha_np || '',
+        vigencia: form.cotizacion_vigencia_np || '',
+        impuesto_etiqueta: impuestoEtiquetaNp || par.no_previsto?.impuesto_etiqueta || '',
+      }
+      : { ...emptyLado(), proveedor: proveedorNombre, pdf: par.no_previsto?.pdf || null, pdf_nombre: par.no_previsto?.pdf_nombre || '', pdf_historial: par.no_previsto?.pdf_historial || [] },
   }
+  return next
 }
 
 /**
@@ -658,11 +726,32 @@ export function validateCaptureForEnviar(form, paresExistentes = []) {
   if (!form.proveedor_id && !(form.nit || '').trim()) faltantes.push('NIT del proveedor')
   if (!(form.descripcion || '').trim()) faltantes.push('Descripción del insumo')
   if (!(form.unidad || '').trim()) faltantes.push('Unidad')
-  if (form.costo_base === '' || form.costo_base == null || Number(form.costo_base) < 0) {
-    faltantes.push('Valor / costo antes de AIU o IVA')
+
+  const rend = sanitizeRendimientoInput(form.rendimiento ?? '')
+  if (String(form.rendimiento ?? '').trim() && rend === '') {
+    faltantes.push('Rendimiento (solo numérico)')
+  } else if (rend !== '' && Number.isNaN(Number(rend))) {
+    faltantes.push('Rendimiento (solo numérico)')
   }
-  if (!(form.cotizacion_numero || '').trim()) faltantes.push('Nº de cotización (Insumo)')
-  if (!(form.cotizacion_numero_np || '').trim()) faltantes.push('Nº de cotización (No Previsto)')
+
+  const insumoTouched = panelInsumoTouched(form)
+  const npTouched = panelNoPrevistoTouched(form)
+
+  if (!insumoTouched && !npTouched) {
+    faltantes.push('Diligencie al menos el panel Costos — Insumo')
+  }
+
+  if (insumoTouched) {
+    if (form.costo_base === '' || form.costo_base == null || Number(form.costo_base) < 0) {
+      faltantes.push('Valor (Insumo)')
+    }
+    if (!(form.cotizacion_numero || '').trim()) faltantes.push('Nº de cotización (Insumo)')
+  }
+
+  if (npTouched) {
+    if (!(form.cotizacion_numero_np || '').trim()) faltantes.push('Nº de cotización (No Previsto)')
+  }
+
   const coh = coherenciaErrors(paresExistentes, form)
   return { faltantes, coherencia: coh }
 }
