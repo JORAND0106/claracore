@@ -41,7 +41,7 @@ export default function PresupuestoItemSelector({
     }
     let cancelled = false
     setLoadingItems(true)
-    setOpen(true)
+    // No abrir el dropdown automáticamente al hidratar una línea ya guardada.
     api.getListadoItems(capitulo)
       .then((rows) => {
         if (cancelled) return
@@ -73,12 +73,19 @@ export default function PresupuestoItemSelector({
 
   const filtered = useMemo(() => {
     const q = itemQuery.trim().toLowerCase()
-    if (!q) return itemsCap.slice(0, 80)
+    // Si el input muestra la etiqueta del ítem ya seleccionado, no filtrar (evita
+    // "No hay ítems" al editar porque "1.01 — Desc" no coincide con "1.01 Desc").
+    if (!q || (selectedLabel && q === selectedLabel.trim().toLowerCase())) {
+      return itemsCap.slice(0, 80)
+    }
+    const qNorm = q.replace(/[—–-]/g, ' ').replace(/\s+/g, ' ').trim()
     return itemsCap.filter((p) => {
-      const hay = `${p.item} ${p.descripcion || ''}`.toLowerCase()
-      return hay.includes(q)
+      const hay = `${p.item} ${p.descripcion || ''} ${itemLabelFull(p)}`.toLowerCase()
+        .replace(/[—–-]/g, ' ')
+        .replace(/\s+/g, ' ')
+      return hay.includes(q) || hay.includes(qNorm) || String(p.item || '').toLowerCase().includes(qNorm)
     }).slice(0, 80)
-  }, [itemsCap, itemQuery])
+  }, [itemsCap, itemQuery, selectedLabel])
 
   const updateMenuPos = () => {
     const el = itemWrapRef.current
@@ -129,11 +136,19 @@ export default function PresupuestoItemSelector({
   }
 
   const dropdownBody = open && !disabled && capitulo ? (
-    filtered.length === 0 && !loadingItems ? (
+    loadingItems ? (
+      <div style={{ padding: '8px 10px', color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+        Cargando ítems…
+      </div>
+    ) : itemsCap.length === 0 ? (
       <div style={{ padding: '8px 10px', color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
         No hay ítems de cobro para este capítulo en el listado de precios.
       </div>
-    ) : filtered.length > 0 ? (
+    ) : filtered.length === 0 ? (
+      <div style={{ padding: '8px 10px', color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+        Sin coincidencias para «{itemQuery.trim()}».
+      </div>
+    ) : (
       filtered.map((p) => {
         const label = itemLabelFull(p)
         return (
@@ -162,11 +177,7 @@ export default function PresupuestoItemSelector({
           </button>
         )
       })
-    ) : loadingItems ? (
-      <div style={{ padding: '8px 10px', color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
-        Cargando ítems…
-      </div>
-    ) : null
+    )
   ) : null
 
   const dropdownPanelStyle = {

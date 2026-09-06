@@ -5,7 +5,9 @@ import InsumoSearchTable from './InsumoSearchTable'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import {
+  agregarRentabilidadPorItem,
   descripcionItemPresupuesto,
+  hermanosMismoPresupuestoItem,
   itemPuedeCorregirInsumoPostOc,
   itemPuedeValidar,
   puedeAbrirRevisionLinea,
@@ -127,34 +129,38 @@ export default function SolicitudLineaRevisionModal({
     if (!item) return null
     const raw = item.analisis_rentabilidad || item.preview?.analisis_rentabilidad
     if (raw) return raw
-    const analisis = item.analisis_valor || item.preview?.analisis_valor
-    if (analisis) {
-      return rentabilidadDesdeAnalisis(analisis, {
-        numeroOc: sol?.orden_compra?.numero_oc ?? item.numero_oc ?? null,
-        consecutivo: sol?.consecutivo,
-      })
-    }
-    const cant = Number(draft.cantidad)
-    const vuCobro = Number(draft.vlr_unitario_cobro)
-    const vuCosto = Number(draft.valor_compra_unitario)
-    if (!(cant > 0)) return null
-    if (!(vuCobro > 0) && !(vuCosto > 0)) return null
-    const cobroLinea = cant * (vuCobro > 0 ? vuCobro : 0)
-    const costoLinea = cant * (vuCosto > 0 ? vuCosto : 0)
-    return rentabilidadDesdeAnalisis({
-      cantidad: cant,
-      valor_cobro_unitario: vuCobro > 0 ? vuCobro : 0,
-      valor_cobro_linea: cobroLinea,
-      costo_insumo_unitario: vuCosto > 0 ? vuCosto : 0,
-      costo_insumo_linea: costoLinea,
-      utilidad_estimada_linea: cobroLinea - costoLinea,
-      rentabilidad_pct: cobroLinea > 0 ? ((cobroLinea - costoLinea) / cobroLinea) * 100 : null,
-      tiene_precio_compra: vuCosto > 0,
-    }, {
-      numeroOc: sol?.orden_compra?.numero_oc ?? null,
+    const meta = {
+      numeroOc: sol?.orden_compra?.numero_oc ?? item.numero_oc ?? null,
       consecutivo: sol?.consecutivo,
-    })
-  }, [item, draft.cantidad, draft.vlr_unitario_cobro, draft.valor_compra_unitario, sol?.consecutivo, sol?.orden_compra?.numero_oc])
+    }
+    const hermanos = hermanosMismoPresupuestoItem(sol?.items || [], item)
+    const override = {
+      id: item.id,
+      cantidad: draft.cantidad !== '' && draft.cantidad != null
+        ? Number(draft.cantidad)
+        : item.cantidad,
+      vlr_unitario_cobro: draft.vlr_unitario_cobro !== '' && draft.vlr_unitario_cobro != null
+        ? Number(draft.vlr_unitario_cobro)
+        : item.vlr_unitario_cobro,
+      valor_compra_unitario: draft.valor_compra_unitario !== '' && draft.valor_compra_unitario != null
+        ? Number(draft.valor_compra_unitario)
+        : item.valor_compra_unitario,
+      es_principal: item.es_principal,
+    }
+    const agregado = agregarRentabilidadPorItem(hermanos, override, meta)
+    if (agregado) return agregado
+    const analisis = item.analisis_valor || item.preview?.analisis_valor
+    if (analisis) return rentabilidadDesdeAnalisis(analisis, meta)
+    return null
+  }, [
+    item,
+    draft.cantidad,
+    draft.vlr_unitario_cobro,
+    draft.valor_compra_unitario,
+    sol?.consecutivo,
+    sol?.orden_compra?.numero_oc,
+    sol?.items,
+  ])
 
   if (!puedeAbrir || !item || !sol) return null
 

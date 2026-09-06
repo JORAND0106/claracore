@@ -115,6 +115,86 @@ export function rentabilidadDesdeAnalisis(analisis, meta = {}) {
   return { filas: [fila] }
 }
 
+/**
+ * Hermanos del mismo ítem de presupuesto dentro de la solicitud
+ * (principal + asociados) para agregar rentabilidad.
+ */
+export function hermanosMismoPresupuestoItem(items, item) {
+  if (!item || !Array.isArray(items) || !items.length) return item ? [item] : []
+  const pid = item.presupuesto_id
+  if (pid != null && pid !== '') {
+    const same = items.filter((r) => Number(r.presupuesto_id) === Number(pid))
+    return same.length ? same : [item]
+  }
+  const cap = String(item.capitulo || item.presupuesto_capitulo || '').trim()
+  const itm = String(item.item || item.presupuesto_item || '').trim().replace(/\.+$/, '')
+  if (!cap || !itm) return [item]
+  const same = items.filter((r) => {
+    const c = String(r.capitulo || r.presupuesto_capitulo || '').trim()
+    const i = String(r.item || r.presupuesto_item || '').trim().replace(/\.+$/, '')
+    return c === cap && i === itm
+  })
+  return same.length ? same : [item]
+}
+
+/**
+ * Agrega cobro/costo de todas las líneas del mismo ítem (principal + asociados).
+ * overrideDraft: valores de la línea abierta en el modal (cantidad/VU).
+ */
+export function agregarRentabilidadPorItem(hermanos, overrideDraft = null, meta = {}) {
+  const rows = (hermanos || []).map((r) => ({ ...r }))
+  if (overrideDraft && rows.length) {
+    const oid = overrideDraft.id != null ? Number(overrideDraft.id) : null
+    const idx = oid != null
+      ? rows.findIndex((r) => Number(r.id) === oid)
+      : 0
+    const target = idx >= 0 ? idx : 0
+    rows[target] = { ...rows[target], ...overrideDraft }
+  } else if (overrideDraft && !rows.length) {
+    rows.push(overrideDraft)
+  }
+
+  let cobroLinea = 0
+  let costoLinea = 0
+  let tieneCosto = false
+  let cantCobro = 0
+  for (const r of rows) {
+    const cant = Number(r.cantidad)
+    const vlr = Number(r.vlr_unitario_cobro)
+    const vc = Number(r.valor_compra_unitario)
+    if (cant > 0 && vlr > 0) {
+      cobroLinea += cant * vlr
+      cantCobro += cant
+    }
+    if (cant > 0 && vc > 0) {
+      costoLinea += cant * vc
+      tieneCosto = true
+    }
+  }
+  if (!(cantCobro > 0)) {
+    const principal = rows.find((r) => r.es_principal !== false) || rows[0]
+    cantCobro = Number(principal?.cantidad) || 0
+  }
+  if (!(cantCobro > 0) && !(cobroLinea > 0) && !tieneCosto) return null
+
+  const util = (cobroLinea > 0 || tieneCosto)
+    ? (cobroLinea || 0) - (tieneCosto ? costoLinea : 0)
+    : null
+  const analisis = {
+    cantidad: cantCobro,
+    valor_cobro_unitario: cantCobro > 0 && cobroLinea > 0 ? cobroLinea / cantCobro : 0,
+    valor_cobro_linea: cobroLinea || 0,
+    costo_insumo_unitario: tieneCosto && cantCobro > 0 ? costoLinea / cantCobro : 0,
+    costo_insumo_linea: tieneCosto ? costoLinea : 0,
+    utilidad_estimada_linea: tieneCosto ? ((cobroLinea || 0) - costoLinea) : null,
+    rentabilidad_pct: cobroLinea > 0 && tieneCosto
+      ? (((cobroLinea - costoLinea) / cobroLinea) * 100)
+      : null,
+    tiene_precio_compra: tieneCosto,
+  }
+  return rentabilidadDesdeAnalisis(analisis, meta)
+}
+
 function formatAbscisaValor(val) {
   if (val == null || val === '') return ''
   const s = String(val).trim()
