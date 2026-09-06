@@ -2,6 +2,7 @@ from catalogo_insumos_cotizaciones_lib import (
     apply_auto_ganadora_detalle,
     build_biblioteca_cotizaciones,
     find_incongruencia_numero_cotizacion,
+    pick_best_cotizacion_ref,
 )
 
 
@@ -46,3 +47,50 @@ def test_find_incongruencia_numero_entre_proveedores():
     )
     assert bad is not None
     assert bad["proveedor_registrado"] == "PAVCO"
+
+
+def test_pick_best_cotizacion_ref_prefiere_tipo_y_pdf():
+    refs = [
+        {
+            "numero": "COT-9",
+            "proveedor": "ACME",
+            "proveedor_id": 1,
+            "tipo": "insumo",
+            "fecha": "2026-01-01",
+            "vigencia": "30 días",
+            "insumo_id": 1,
+        },
+        {
+            "numero": "COT-9",
+            "proveedor": "ACME",
+            "proveedor_id": 1,
+            "tipo": "no_previsto",
+            "fecha": "2026-02-01",
+            "vigencia": "10 días",
+            "pdf_nombre": "np.pdf",
+            "insumo_id": 2,
+        },
+        {
+            "numero": "COT-9",
+            "proveedor": "ACME",
+            "proveedor_id": 1,
+            "tipo": "insumo",
+            "fecha": "2026-03-01",
+            "vigencia": "15 días",
+            "has_pdf_ganadora": True,
+            "pdf_nombre": "gan.pdf",
+            "insumo_id": 3,
+        },
+    ]
+    best_ins = pick_best_cotizacion_ref(
+        refs, "cot-9", proveedor_id=1, razon_social="ACME", tipo="insumo",
+    )
+    assert best_ins["insumo_id"] == 3
+    assert best_ins["pdf_nombre"] == "gan.pdf"
+    best_np = pick_best_cotizacion_ref(
+        refs, "COT-9", proveedor_id=1, tipo="no_previsto",
+    )
+    assert best_np["insumo_id"] == 2
+    assert best_np["tipo"] == "no_previsto"
+    none = pick_best_cotizacion_ref(refs, "COT-9", proveedor_id=99, razon_social="OTRO")
+    assert none is None

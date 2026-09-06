@@ -656,6 +656,36 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
   ).trim()
   const impuestoIns = cloneImpuestoLado(opts.impuesto || form.impuesto)
   const impuestoNp = cloneImpuestoLado(opts.impuestoNp || form.impuesto_np)
+  let ladoIns = {
+    ...emptyLado(),
+    proveedor: proveedorNombre,
+    valor: valorIns !== '' && valorIns != null ? String(valorIns) : '',
+    numero: numeroIns,
+    fecha,
+    vigencia,
+    impuesto_etiqueta: impuestoEtiqueta,
+    impuesto: impuestoIns,
+  }
+  if (form.cotizacion_pdf) {
+    ladoIns = applyPdfReplace(ladoIns, form.cotizacion_pdf)
+  } else if ((form.cotizacion_pdf_nombre || '').trim()) {
+    ladoIns.pdf_nombre = String(form.cotizacion_pdf_nombre).trim()
+  }
+  let ladoNp = {
+    ...emptyLado(),
+    proveedor: proveedorNombre,
+    valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
+    numero: numeroNp,
+    fecha: fechaNp,
+    vigencia: vigenciaNp,
+    impuesto_etiqueta: impuestoEtiquetaNp,
+    impuesto: impuestoNp,
+  }
+  if (form.cotizacion_pdf_np) {
+    ladoNp = applyPdfReplace(ladoNp, form.cotizacion_pdf_np)
+  } else if ((form.cotizacion_pdf_nombre_np || '').trim()) {
+    ladoNp.pdf_nombre = String(form.cotizacion_pdf_nombre_np).trim()
+  }
   const par = {
     ...newCotizacionPar({ esGanadora: false }),
     proveedor_id: form.proveedor_id || '',
@@ -668,26 +698,8 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
       unidad: (form.unidad || '').trim(),
       rendimiento: sanitizeRendimientoInput(form.rendimiento ?? ''),
     },
-    insumo: {
-      ...emptyLado(),
-      proveedor: proveedorNombre,
-      valor: valorIns !== '' && valorIns != null ? String(valorIns) : '',
-      numero: numeroIns,
-      fecha,
-      vigencia,
-      impuesto_etiqueta: impuestoEtiqueta,
-      impuesto: impuestoIns,
-    },
-    no_previsto: {
-      ...emptyLado(),
-      proveedor: proveedorNombre,
-      valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
-      numero: numeroNp,
-      fecha: fechaNp,
-      vigencia: vigenciaNp,
-      impuesto_etiqueta: impuestoEtiquetaNp,
-      impuesto: impuestoNp,
-    },
+    insumo: ladoIns,
+    no_previsto: ladoNp,
   }
   // Si el panel NP no se usó, dejar el lado vacío (sin número ni proveedor fantasma)
   if (!panelNoPrevistoTouched(form)) {
@@ -711,6 +723,48 @@ export function applyCaptureToPar(par, form, opts = {}) {
   const impuestoIns = cloneImpuestoLado(opts.impuesto || form.impuesto)
   const impuestoNpForm = cloneImpuestoLado(opts.impuestoNp || form.impuesto_np)
   const proveedorNombre = (form.razon_social || '').trim() || par.insumo?.proveedor || ''
+  let ladoIns = {
+    ...(par.insumo || emptyLado()),
+    proveedor: proveedorNombre,
+    valor: valorIns !== '' && valorIns != null ? String(valorIns) : '',
+    numero: numeroIns || par.insumo?.numero || '',
+    fecha: form.cotizacion_fecha || '',
+    vigencia: form.cotizacion_vigencia || '',
+    impuesto_etiqueta: impuestoEtiqueta,
+    impuesto: impuestoIns,
+  }
+  if (form.cotizacion_pdf) {
+    ladoIns = applyPdfReplace(ladoIns, form.cotizacion_pdf)
+  } else if ((form.cotizacion_pdf_nombre || '').trim() && !ladoHasPdf(ladoIns)) {
+    ladoIns.pdf_nombre = String(form.cotizacion_pdf_nombre).trim()
+  }
+  let ladoNp = panelNoPrevistoTouched(form)
+    ? {
+      ...(par.no_previsto || emptyLado()),
+      proveedor: proveedorNombre,
+      valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
+      numero: numeroNp || par.no_previsto?.numero || '',
+      fecha: form.cotizacion_fecha_np || '',
+      vigencia: form.cotizacion_vigencia_np || '',
+      impuesto_etiqueta: impuestoEtiquetaNp,
+      impuesto: impuestoNpForm,
+    }
+    : {
+      ...emptyLado(),
+      proveedor: proveedorNombre,
+      pdf: par.no_previsto?.pdf || null,
+      pdf_nombre: par.no_previsto?.pdf_nombre || '',
+      pdf_historial: par.no_previsto?.pdf_historial || [],
+    }
+  if (panelNoPrevistoTouched(form) && form.cotizacion_pdf_np) {
+    ladoNp = applyPdfReplace(ladoNp, form.cotizacion_pdf_np)
+  } else if (
+    panelNoPrevistoTouched(form)
+    && (form.cotizacion_pdf_nombre_np || '').trim()
+    && !ladoHasPdf(ladoNp)
+  ) {
+    ladoNp.pdf_nombre = String(form.cotizacion_pdf_nombre_np).trim()
+  }
   const next = {
     ...par,
     proveedor_id: form.proveedor_id || par.proveedor_id || '',
@@ -728,34 +782,8 @@ export function applyCaptureToPar(par, form, opts = {}) {
           : (par.coherencia?.rendimiento ?? ''),
       ),
     },
-    insumo: {
-      ...(par.insumo || emptyLado()),
-      proveedor: proveedorNombre,
-      valor: valorIns !== '' && valorIns != null ? String(valorIns) : '',
-      numero: numeroIns || par.insumo?.numero || '',
-      fecha: form.cotizacion_fecha || '',
-      vigencia: form.cotizacion_vigencia || '',
-      impuesto_etiqueta: impuestoEtiqueta,
-      impuesto: impuestoIns,
-    },
-    no_previsto: panelNoPrevistoTouched(form)
-      ? {
-        ...(par.no_previsto || emptyLado()),
-        proveedor: proveedorNombre,
-        valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
-        numero: numeroNp || par.no_previsto?.numero || '',
-        fecha: form.cotizacion_fecha_np || '',
-        vigencia: form.cotizacion_vigencia_np || '',
-        impuesto_etiqueta: impuestoEtiquetaNp,
-        impuesto: impuestoNpForm,
-      }
-      : {
-        ...emptyLado(),
-        proveedor: proveedorNombre,
-        pdf: par.no_previsto?.pdf || null,
-        pdf_nombre: par.no_previsto?.pdf_nombre || '',
-        pdf_historial: par.no_previsto?.pdf_historial || [],
-      },
+    insumo: ladoIns,
+    no_previsto: ladoNp,
   }
   return next
 }

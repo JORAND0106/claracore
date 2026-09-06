@@ -10,7 +10,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from catalogo_insumos_permissions import require_permiso_catalogo_insumos
@@ -19,6 +19,7 @@ from catalogo_insumos_service import (
     create_insumo_catalogo,
     delete_insumo_catalogo,
     delete_proveedor_catalogo,
+    download_cotizacion_pdf,
     find_duplicados,
     get_almacen_config,
     get_csv_template,
@@ -32,6 +33,7 @@ from catalogo_insumos_service import (
     list_proveedores_catalogo,
     map_ocr_to_cotizacion,
     next_codigo_insumo,
+    resolve_cotizacion_by_numero,
     suggest_cotizaciones_numero,
     update_insumo_catalogo,
 )
@@ -240,6 +242,59 @@ def route_suggest_cotizaciones(
         razon_social=razon_social,
         limit=limit,
     )
+
+
+@router.get("/{contrato_id}/cotizaciones/by-numero")
+def route_cotizacion_by_numero(
+    contrato_id: int,
+    numero: str = "",
+    proveedor_id: Optional[int] = None,
+    razon_social: str = "",
+    nit: str = "",
+    tipo: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    """Autocarga de metadatos/PDF de una cotización ya registrada (mismo proveedor)."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    try:
+        return resolve_cotizacion_by_numero(
+            contrato_id,
+            numero,
+            proveedor_id=proveedor_id,
+            razon_social=razon_social,
+            nit=nit,
+            tipo=tipo,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/cotizaciones/pdf")
+def route_download_cotizacion_pdf(
+    contrato_id: int,
+    kind: str,
+    source_insumo_id: int,
+    soporte_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    """Descarga el PDF ya adjunto a una cotización registrada (para reutilizarlo)."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    try:
+        data, mime, nombre = download_cotizacion_pdf(
+            contrato_id,
+            kind=kind,
+            source_insumo_id=source_insumo_id,
+            soporte_id=soporte_id,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    headers = {
+        "Content-Disposition": f'inline; filename="{nombre}"',
+        "X-Filename": nombre,
+    }
+    return StreamingResponse(io.BytesIO(data), media_type=mime or "application/pdf", headers=headers)
 
 
 @router.post("/{contrato_id}/cotizaciones/check-numero")

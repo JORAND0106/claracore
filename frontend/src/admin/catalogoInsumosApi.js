@@ -64,6 +64,38 @@ export function createCatalogoInsumosApi(contratoId, token) {
       return fetch(`${base}/cotizaciones/suggest?${params}`, { headers: headers(token) }).then(parseJson)
     },
 
+    getCotizacionByNumero: ({
+      numero = '',
+      proveedor_id,
+      razon_social = '',
+      nit = '',
+      tipo,
+    } = {}) => {
+      const params = new URLSearchParams()
+      params.set('numero', numero || '')
+      if (proveedor_id) params.set('proveedor_id', String(proveedor_id))
+      if (razon_social) params.set('razon_social', razon_social)
+      if (nit) params.set('nit', nit)
+      if (tipo) params.set('tipo', tipo)
+      return fetch(`${base}/cotizaciones/by-numero?${params}`, { headers: headers(token) }).then(parseJson)
+    },
+
+    downloadCotizacionPdf: async ({ kind, source_insumo_id, soporte_id, nombre } = {}) => {
+      const params = new URLSearchParams()
+      params.set('kind', kind || '')
+      params.set('source_insumo_id', String(source_insumo_id || ''))
+      if (soporte_id) params.set('soporte_id', String(soporte_id))
+      const res = await fetch(`${base}/cotizaciones/pdf?${params}`, { headers: headers(token) })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || data.message || `Error ${res.status}`)
+      }
+      const blob = await res.blob()
+      const headerName = res.headers.get('X-Filename') || nombre || 'cotizacion.pdf'
+      const mime = blob.type || 'application/pdf'
+      return new File([blob], headerName, { type: mime })
+    },
+
     listBibliotecaCotizaciones: ({ proveedor_id, q = '' } = {}) => {
       const params = new URLSearchParams()
       if (q) params.set('q', q)
