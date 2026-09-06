@@ -2304,7 +2304,7 @@ def resolve_insumo_for_solicitud(
         "unidad": insumo.get("unidad") or ppto.get("und") or "UND",
         "cantidad": cant,
         "es_recurrente": bool(raw.get("es_recurrente")),
-        "es_principal": bool(raw.get("es_principal", True)),
+        "es_principal": _item_es_principal(raw),
         "cant_presupuestada": cant_presupuestada,
         "valor_compra_unitario": valor_compra,
         "tiene_precio_compra": valor_compra is not None and valor_compra > 0,

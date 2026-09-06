@@ -159,7 +159,20 @@ def _item_for_db_insert(item: dict) -> dict:
     row = {k: v for k, v in item.items() if k in SOLICITUD_ITEM_DB_COLUMNS}
     if row.get("pk_id") is not None:
         row["pk_id"] = _norm_pk_id(row.get("pk_id")) or None
+    # Persistir siempre el booleano explícito (evita perder asociados por omisión/default).
+    row["es_principal"] = _coerce_es_principal(item.get("es_principal"), default=True)
     return row
+
+
+def _coerce_es_principal(v, default: bool = True) -> bool:
+    """Normaliza es_principal desde JSON/PostgREST/CSV a bool Python."""
+    if v is None:
+        return bool(default)
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "0", "f", "no", "n", "off", "")
+    if isinstance(v, (int, float)):
+        return v != 0
+    return bool(v)
 
 
 def _sync_solicitud_items(
@@ -205,7 +218,7 @@ def _sync_solicitud_items(
                 prev = existing_estado.get(iid)
                 if prev:
                     row["estado_validacion"] = prev
-            sb.table("almacen_solicitud_item").update(row).eq("id", iid).execute()
+            _update_solicitud_item_row(sb, iid, row)
         else:
             if estado in ("enviada", "rechazada") and not row.get("estado_validacion"):
                 row["estado_validacion"] = "pendiente"
@@ -398,6 +411,14 @@ def _humanize_solicitud_db_error(exc: BaseException) -> str:
             "backend/sql/almacen_solicitud_descripcion_solicitada.sql "
             "(ADD COLUMN + NOTIFY pgrst, 'reload schema') y reintente."
         )
+    if col == "es_principal":
+        return (
+            "Falta la columna es_principal en almacen_solicitud_item "
+            "(principal vs asociado). Ejecute en Supabase SQL Editor el script "
+            "backend/sql/almacen_solicitud_es_principal.sql "
+            "(ADD COLUMN + NOTIFY pgrst, 'reload schema') y reintente. "
+            "Sin esa migración la clasificación no se puede guardar."
+        )
     if col:
         return (
             f"La base de datos no reconoce la columna «{col}» en la solicitud "
@@ -411,8 +432,17 @@ def _humanize_solicitud_db_error(exc: BaseException) -> str:
     return "No se pudo guardar la solicitud en la base de datos (error desconocido)."
 
 
+# Columnas críticas: si faltan en el esquema, NO omitir en silencio (rompe funcionalidad).
+_SOLICITUD_ITEM_CRITICAL_COLUMNS = frozenset({
+    "es_principal",
+})
+
+
 def _insert_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) -> None:
-    """Inserta ítems; si PostgREST reporta columna ausente, la omite y reintenta (migración pendiente)."""
+    """Inserta ítems; si PostgREST reporta columna ausente no crítica, la omite y reintenta.
+
+    ``es_principal`` y otras columnas críticas NO se omiten: fallan con mensaje de migración.
+    """
     if not rows:
         return
     omitted: set[str] = set()
@@ -427,6 +457,8 @@ def _insert_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) ->
                 col = _pgrst_unknown_column(exc)
                 if not col or col in omitted:
                     raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+                if col in _SOLICITUD_ITEM_CRITICAL_COLUMNS:
+                    raise ValueError(_humanize_solicitud_db_error(exc)) from exc
                 omitted.add(col)
                 _log.warning(
                     "almacen_solicitud_item: omitiendo columna ausente %s al insertar (migración pendiente)",
@@ -438,6 +470,33 @@ def _insert_solicitud_items_batch(sb, rows: List[dict], chunk_size: int = 80) ->
             raise ValueError(
                 "No se pudieron insertar los ítems de la solicitud: demasiadas columnas ausentes en el esquema."
             )
+
+
+def _update_solicitud_item_row(sb, item_id: int, row: dict) -> None:
+    """Actualiza una línea; omite columnas ausentes no críticas; falla si falta es_principal."""
+    payload = dict(row)
+    omitted: set[str] = set()
+    strips = 0
+    while strips <= 16:
+        try:
+            body = {k: v for k, v in payload.items() if k not in omitted}
+            sb.table("almacen_solicitud_item").update(body).eq("id", int(item_id)).execute()
+            return
+        except Exception as exc:
+            col = _pgrst_unknown_column(exc)
+            if not col or col in omitted:
+                raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+            if col in _SOLICITUD_ITEM_CRITICAL_COLUMNS:
+                raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+            omitted.add(col)
+            _log.warning(
+                "almacen_solicitud_item: omitiendo columna ausente %s al actualizar (migración pendiente)",
+                col,
+            )
+            strips += 1
+    raise ValueError(
+        "No se pudo actualizar el ítem de la solicitud: demasiadas columnas ausentes en el esquema."
+    )
 
 
 def _cotizaciones_catalogo_batch(sb, insumo_ids: List[int]) -> Dict[int, dict]:
@@ -1078,7 +1137,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
                 "unidad": (raw.get("unidad") or ppto.get("und") or "UND").strip(),
                 "cantidad": cant,
                 "es_recurrente": bool(raw.get("es_recurrente")),
-                "es_principal": bool(raw.get("es_principal", True)),
+                "es_principal": _coerce_es_principal(raw.get("es_principal"), default=True),
                 "cant_presupuestada": _to_float(ppto.get("cant_total")),
                 "valor_compra_unitario": None,
                 "vlr_unitario_cobro": 0,
@@ -1128,7 +1187,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             "unidad": (raw.get("unidad") or ppto.get("und") or "UND").strip(),
             "cantidad": cant,
             "es_recurrente": bool(raw.get("es_recurrente")),
-            "es_principal": bool(raw.get("es_principal", True)),
+            "es_principal": _coerce_es_principal(raw.get("es_principal"), default=True),
             "cant_presupuestada": _to_float(ppto.get("cant_total")),
             "valor_compra_unitario": _to_float(raw.get("valor_compra_unitario")) or None,
             "vlr_unitario_cobro": 0,
@@ -1215,7 +1274,9 @@ def mapear_item_solicitud_gerencial(
         "pk_id_id": existing.get("pk_id_id"),
         "cantidad": cantidad,
         "es_recurrente": bool(body.get("es_recurrente", existing.get("es_recurrente"))),
-        "es_principal": existing.get("es_principal") if existing.get("es_principal") is not None else True,
+        "es_principal": (
+            _coerce_es_principal(existing.get("es_principal"), default=True)
+        ),
         "exclude_solicitud_id": solicitud_id,
         "tramo": existing.get("tramo"),
         "costado": existing.get("costado"),
@@ -1261,6 +1322,10 @@ def mapear_item_solicitud_gerencial(
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
         "supera_negociado": resolved.get("supera_negociado", False),
         "es_recurrente": bool(body.get("es_recurrente", existing.get("es_recurrente"))),
+        "es_principal": _coerce_es_principal(
+            resolved.get("es_principal", existing.get("es_principal")),
+            default=True,
+        ),
     }
     if patch["valor_compra_unitario"] is not None and _to_float(patch["valor_compra_unitario"]) < 0:
         raise ValueError("El costo de compra no puede ser negativo.")
@@ -1342,7 +1407,7 @@ def corregir_insumo_item_post_oc(
         "pk_id_id": existing.get("pk_id_id"),
         "cantidad": cantidad,
         "es_recurrente": bool(body.get("es_recurrente", existing.get("es_recurrente"))),
-        "es_principal": existing.get("es_principal") if existing.get("es_principal") is not None else True,
+        "es_principal": _coerce_es_principal(existing.get("es_principal"), default=True),
         "exclude_solicitud_id": solicitud_id,
         "tramo": existing.get("tramo"),
         "costado": existing.get("costado"),
@@ -1388,6 +1453,10 @@ def corregir_insumo_item_post_oc(
         ),
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
         "supera_negociado": resolved.get("supera_negociado", False),
+        "es_principal": _coerce_es_principal(
+            resolved.get("es_principal", existing.get("es_principal")),
+            default=True,
+        ),
         # Conservar aprobación: quien corrige tiene autoridad de aprobar.
         "estado_validacion": existing.get("estado_validacion") or "aprobado",
     }

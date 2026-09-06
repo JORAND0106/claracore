@@ -17,11 +17,11 @@ describe('insumo principal / asociado', () => {
     const helpers = readFileSync(join(dir, 'solicitudFormHelpers.js'), 'utf8')
     assert.match(excel, /abbr: 'Principal'/)
     assert.match(excel, /onPrincipalChange/)
-    assert.match(excel, /checked=\{it\.es_principal !== false\}/)
+    assert.match(excel, /checked=\{coerceEsPrincipal\(it\.es_principal\)\}/)
     assert.match(form, /es_principal: true/)
-    assert.match(form, /es_principal: it\.es_principal !== false/)
+    assert.match(form, /es_principal: coerceEsPrincipal\(it\.es_principal\)/)
     assert.match(form, /cantBorradorPrincipales/)
-    assert.match(helpers, /it\.es_principal !== false && it\.preview\?\.supera_presupuesto/)
+    assert.match(helpers, /coerceEsPrincipal\(it\.es_principal\) && it\.preview\?\.supera_presupuesto/)
   })
 
   it('backend persiste es_principal y excluye asociados del acumulado', () => {
