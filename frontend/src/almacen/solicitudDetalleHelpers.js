@@ -242,6 +242,7 @@ export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, 
   let cobroTotal = null
   let vuCobroTotal = null
   let cantPrincipal = null
+  let cobroMotivoTotal = null
 
   for (const r of rows) {
     const cant = Number(r.cantidad)
@@ -255,6 +256,7 @@ export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, 
 
     let vuCobro = null
     let cobroLinea = null
+    let cobroMotivo = null
     if (esPrincipal) {
       const vlr = Number(r.vlr_unitario_cobro)
       if (vlr > 0 && cant > 0) {
@@ -265,6 +267,10 @@ export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, 
         cantPrincipal = cant
       } else if (cant > 0) {
         cantPrincipal = cant
+        cobroMotivo = r.cobro_motivo
+          || r.analisis_valor?.cobro_motivo
+          || 'sin_valor_listado'
+        cobroMotivoTotal = cobroMotivoTotal || cobroMotivo
       }
     }
 
@@ -280,6 +286,7 @@ export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, 
       cantidad: cant > 0 ? cant : null,
       valor_cobro_unitario: vuCobro,
       valor_cobro_linea: cobroLinea,
+      cobro_motivo: cobroMotivo,
       costo_insumo_unitario: vc > 0 ? vc : null,
       costo_insumo_linea: costoLinea,
       utilidad_estimada_linea: null,
@@ -303,6 +310,7 @@ export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, 
     cantidad: cantPrincipal,
     valor_cobro_unitario: vuCobroTotal,
     valor_cobro_linea: cobroTotal,
+    cobro_motivo: cobroTotal == null ? cobroMotivoTotal : null,
     costo_insumo_unitario: null,
     costo_insumo_linea: costoTotal,
     utilidad_estimada_linea: util,

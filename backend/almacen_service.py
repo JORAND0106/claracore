@@ -777,8 +777,34 @@ def _enrich_solicitud(
             items,
             exclude_solicitud_id=None,
             descontar_linea_actual=False,
-            refresh_listado=False,
+            # Si hay líneas mapeadas sin cobro usable, reconsultar listado (caché TTL).
+            refresh_listado=any(
+                it.get("insumo_id")
+                and (it.get("es_principal") is not False)
+                and _to_float(it.get("vlr_unitario_cobro")) <= 0
+                for it in items
+            ),
         )
+
+        # Persistir cobros sanados (p. ej. NP-01 con mismatch de capítulo) para no repetir el fallo.
+        for it in items:
+            iid = it.get("id")
+            if not iid or not it.get("insumo_id"):
+                continue
+            if it.get("es_principal") is False:
+                continue
+            vlr = _to_float(it.get("vlr_unitario_cobro"))
+            if vlr <= 0:
+                continue
+            # Solo actualizar si venía vacío/cero en BD y ahora hay valor.
+            # apply_saldo_flags_batch muta in-place; marcamos con flag interno.
+            if it.pop("_cobro_sanado", None):
+                try:
+                    sb.table("almacen_solicitud_item").update({
+                        "vlr_unitario_cobro": vlr,
+                    }).eq("id", int(iid)).execute()
+                except Exception:
+                    pass
 
         for it in items:
             insumo_id = it.get("insumo_id")
@@ -816,10 +842,14 @@ def _enrich_solicitud(
             vc = _to_float(it.get("valor_compra_unitario"))
             vlr = _to_float(it.get("vlr_unitario_cobro"))
             cant = _to_float(it.get("cantidad"))
+            motivo = it.get("cobro_motivo") if vlr <= 0 else None
+            if vlr <= 0 and it.get("es_principal") is False:
+                motivo = "insumo_asociado"
             it["analisis_valor"] = _build_analisis_valor(
                 cant,
                 vc if vc > 0 else None,
                 vlr,
+                cobro_motivo=motivo,
             )
             if not ver_economicos:
                 _strip_economics_item(it)
@@ -1297,8 +1327,9 @@ def mapear_item_solicitud_gerencial(
         [resolved],
         exclude_solicitud_id=solicitud_id,
         descontar_linea_actual=True,
-        # Solo escanear listado si el cobro aún no está definido (None).
-        refresh_listado=resolved.get("vlr_unitario_cobro") is None,
+        # Reintentar listado si el cobro quedó en 0/None (mismatch de capítulo/ítem).
+        refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0
+        and body.get("vlr_unitario_cobro") is None,
     )
 
     patch = {
@@ -1426,7 +1457,8 @@ def corregir_insumo_item_post_oc(
         [resolved],
         exclude_solicitud_id=solicitud_id,
         descontar_linea_actual=True,
-        refresh_listado=resolved.get("vlr_unitario_cobro") is None,
+        refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0
+        and body.get("vlr_unitario_cobro") is None,
     )
 
     vu = (
