@@ -26,6 +26,7 @@ async function fetchPkMaestro(contratoId, token) {
  * - autoOpen: abre el mapa al montar / al volverse true
  * - hideTrigger: oculta el botón «PK mapa»
  * - initialBasemap: p. ej. `satelite`
+ * - showBasemapToggle: control calle / relieve / satélite
  * - onMapClose: al cerrar sin/ tras selección
  */
 export default function AlmacenPkMapaSelector({
@@ -40,6 +41,7 @@ export default function AlmacenPkMapaSelector({
   autoOpen = false,
   hideTrigger = false,
   initialBasemap = null,
+  showBasemapToggle = false,
   onMapClose,
 }) {
   const [mapaOpen, setMapaOpen] = useState(false)
@@ -169,7 +171,7 @@ export default function AlmacenPkMapaSelector({
         >
           <div
             style={{
-              width: 'min(560px, 96vw)',
+              width: compact ? 'min(560px, 96vw)' : 'min(720px, 96vw)',
               height: '100%',
               background: t.bgCard,
               borderLeft: `1px solid ${t.border}`,
@@ -182,7 +184,7 @@ export default function AlmacenPkMapaSelector({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text }}>
                 Plano · selección PK
-                {initialBasemap === 'satelite' ? ' · Satélite' : ''}
+                {initialBasemap === 'satelite' || showBasemapToggle ? ' · Satélite' : ''}
               </div>
               <button type="button" onClick={cerrarMapa} style={btnSec}>
                 Cerrar
@@ -209,6 +211,7 @@ export default function AlmacenPkMapaSelector({
                   height="100%"
                   hideCaption
                   initialBasemap={initialBasemap || undefined}
+                  showBasemapToggle={showBasemapToggle}
                 />
               </div>
             )}

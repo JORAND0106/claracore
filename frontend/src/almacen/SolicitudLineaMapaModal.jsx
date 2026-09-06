@@ -8,7 +8,7 @@ import {
 } from './almacenShared'
 
 /**
- * Modal liviano: mapa de ubicación con Abs. Ini/Fin y Nodo Ini/Fin.
+ * Modal de ubicación de línea: grilla Excel + mapa interactivo (táctil + satélite).
  */
 export default function SolicitudLineaMapaModal({
   item,
@@ -33,6 +33,32 @@ export default function SolicitudLineaMapaModal({
     bgCard: ui.card?.background || '#fff',
   }
 
+  const th = {
+    ...ui.th,
+    fontSize: 'var(--cc-xs)',
+    padding: '6px 8px',
+    whiteSpace: 'nowrap',
+  }
+  const td = {
+    ...ui.td,
+    fontSize: 'var(--cc-sm)',
+    padding: '6px 8px',
+    fontWeight: 600,
+  }
+
+  const filas = [
+    { campo: 'PK-ID', valor: pkLabel || '—' },
+    { campo: 'Tramo', valor: item.tramo || '—' },
+    { campo: 'Costado', valor: item.costado || '—' },
+    { campo: 'Abs. Ini — Fin', valor: absTxt },
+    {
+      campo: 'Nodo Ini — Fin',
+      valor: (nodos.inicio || nodos.final) ? nodosTxt : '—',
+    },
+  ]
+
+  const mapHeight = compact ? 300 : 420
+
   return (
     <div
       className={compact ? 'cc-almacen-modal-overlay cc-almacen-modal-overlay--compact' : 'cc-almacen-modal-overlay'}
@@ -53,7 +79,10 @@ export default function SolicitudLineaMapaModal({
         aria-label="Ubicación de la línea"
         className={compact ? 'cc-almacen-modal-sheet' : ''}
         onClick={(e) => e.stopPropagation()}
-        style={almacenFormModalDialogStyle({ width: 'min(680px, 100%)', compact })}
+        style={almacenFormModalDialogStyle({
+          width: compact ? '100%' : 'min(1000px, 100%)',
+          compact,
+        })}
       >
         <CcModalBrandHeader theme={t} />
         <div style={{
@@ -62,6 +91,7 @@ export default function SolicitudLineaMapaModal({
           alignItems: 'flex-start',
           gap: 12,
           marginBottom: 12,
+          padding: compact ? '0 4px' : 0,
         }}
         >
           <div style={{ minWidth: 0 }}>
@@ -78,62 +108,57 @@ export default function SolicitudLineaMapaModal({
           </button>
         </div>
 
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: compact ? '1fr' : '1fr 1fr',
-          gap: 8,
-          marginBottom: 12,
-          padding: '10px 12px',
-          borderRadius: 8,
-          border: `1px solid ${ui.textMuted}33`,
-          background: `${ui.accentSoft}`,
-          fontSize: 'var(--cc-sm)',
-        }}
+        <div
+          style={{ ...ui.sheetWrap, marginBottom: 12 }}
+          className="cc-almacen-table-scroll"
         >
-          <div>
-            <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.textMuted, marginBottom: 2 }}>
-              Abs. Ini — Fin
-            </div>
-            <div style={{ fontWeight: 600 }}>{absTxt}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.textMuted, marginBottom: 2 }}>
-              Nodo Ini — Fin
-            </div>
-            <div style={{ fontWeight: 600 }} title={nodosTxt}>
-              {nodos.inicio || nodos.final ? nodosTxt : '—'}
-            </div>
-          </div>
+          <table
+            className="cc-almacen-destino-excel"
+            style={{ ...ui.sheetTable, width: '100%', borderCollapse: 'collapse' }}
+          >
+            <thead>
+              <tr>
+                <th style={{ ...th, width: compact ? '40%' : 150 }}>Campo</th>
+                <th style={th}>Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, idx) => (
+                <tr
+                  key={f.campo}
+                  style={{ background: idx % 2 === 0 ? 'transparent' : `${ui.textMuted}08` }}
+                >
+                  <td style={{ ...td, fontWeight: 700, color: ui.textMuted }}>{f.campo}</td>
+                  <td style={td}>{f.valor}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
         {pkLabel ? (
-          <div style={{ position: 'relative' }}>
+          <div>
+            <div style={{
+              fontSize: 'var(--cc-xs)',
+              fontWeight: 700,
+              color: ui.textMuted,
+              marginBottom: 6,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+            }}
+            >
+              Mapa · gestos táctiles · capa satelital
+            </div>
             <AlmacenItemMapaPreview
               t={theme}
               token={token}
               contratoId={contratoId}
               pkLabel={pkLabel}
-              height={compact ? 280 : 360}
+              height={mapHeight}
+              interactive
+              showBasemapToggle
+              initialBasemap="satelite"
             />
-            <div style={{
-              position: 'absolute',
-              left: 8,
-              right: 8,
-              bottom: 8,
-              padding: '8px 10px',
-              borderRadius: 8,
-              background: 'color-mix(in srgb, var(--cc-almacen-bg-card, #fff) 92%, transparent)',
-              border: `1px solid ${ui.textMuted}33`,
-              fontSize: 'var(--cc-xs)',
-              color: ui.text,
-              boxShadow: '0 4px 12px rgba(15, 23, 42, 0.12)',
-              pointerEvents: 'none',
-            }}
-            >
-              <strong>Abs:</strong> {absTxt}
-              {' · '}
-              <strong>Nodos:</strong> {nodosTxt}
-            </div>
           </div>
         ) : (
           <div style={{ color: ui.textMuted, fontSize: 'var(--cc-sm)', padding: 16 }}>

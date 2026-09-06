@@ -329,7 +329,7 @@ export default function DespachadorModal({
   const modal = {
     ...ui.card,
     width: '100%',
-    maxWidth: compact ? '100%' : 640,
+    maxWidth: compact ? '100%' : 1180,
     maxHeight: compact ? '96dvh' : '92vh',
     overflow: 'auto',
     boxShadow: compact ? 'var(--cc-almacen-shadow-sheet)' : 'var(--cc-almacen-shadow-modal)',
@@ -349,6 +349,36 @@ export default function DespachadorModal({
     color: ui.text,
   })
 
+  const th = {
+    ...ui.th,
+    fontSize: 'var(--cc-xs)',
+    padding: '6px 8px',
+    whiteSpace: 'nowrap',
+  }
+  const td = {
+    ...ui.td,
+    fontSize: 'var(--cc-xs)',
+    padding: '6px 8px',
+    verticalAlign: 'middle',
+  }
+  const cellInput = {
+    ...ui.input,
+    margin: 0,
+    padding: '6px 8px',
+    fontSize: 'var(--cc-xs)',
+    minHeight: compact ? 40 : 32,
+    width: '100%',
+  }
+  const sectionLabel = {
+    fontSize: 'var(--cc-xs)',
+    fontWeight: 800,
+    color: ui.accent,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    marginBottom: 6,
+    marginTop: 4,
+  }
+
   return (
     <div
       style={overlay}
@@ -357,23 +387,28 @@ export default function DespachadorModal({
       aria-modal="true"
       aria-labelledby="despachador-title"
     >
-      <div style={modal} className={compact ? 'cc-almacen-modal-sheet' : ''}>
+      <div
+        style={modal}
+        className={`cc-almacen-form-root${compact ? ' cc-almacen-modal-sheet' : ''}`}
+      >
         <CcModalBrandHeader theme={theme} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
           <div>
             <div id="despachador-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>
               🚚 Despachador
             </div>
-            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
-              Registro de llegada de material a obra contra orden de compra.
-            </div>
+            {!compact && (
+              <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
+                Registro de llegada de material a obra contra orden de compra.
+              </div>
+            )}
           </div>
           <button type="button" style={{ ...ui.btnSecondary, padding: '4px 10px' }} onClick={onClose} aria-label="Cerrar">
             ✕
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
           <button type="button" style={toggleBtn(tipo === 'disposicion')} onClick={() => setTipo('disposicion')}>
             Disposición
           </button>
@@ -398,46 +433,78 @@ export default function DespachadorModal({
           </div>
         )}
 
-        <AlmacenFieldLabel
-          icon="🔢"
-          label="Número de documento"
-          ayuda={tipo === 'disposicion'
-            ? 'Consecutivo autogenerado de 5 dígitos al guardar.'
-            : 'Número de remisión del proveedor. Puede autodiligenciarse con OCR al adjuntar el documento.'}
-        />
-        {tipo === 'disposicion' ? (
-          <input
-            style={{ ...ui.input, marginBottom: 12, background: `${ui.accentSoft}` }}
-            value={proximoDisposicion ? `Autogenerado al guardar (${proximoDisposicion})` : 'Autogenerado al guardar'}
-            readOnly
-            disabled
-          />
-        ) : (
-          <input
-            style={{ ...ui.input, marginBottom: 12 }}
-            value={numeroDoc}
-            onChange={(e) => {
-              numeroDocRef.current = e.target.value
-              setNumeroDoc(e.target.value)
+        {/* Documento — Excel */}
+        <div style={sectionLabel}>Documento</div>
+        <div style={{ ...ui.sheetWrap, marginBottom: 12 }} className="cc-almacen-table-scroll">
+          <table
+            className="cc-almacen-despachador-excel"
+            style={{
+              ...ui.sheetTable,
+              width: '100%',
+              borderCollapse: 'collapse',
+              minWidth: compact ? 520 : 720,
             }}
-            placeholder="Número de remisión…"
-          />
-        )}
+          >
+            <thead>
+              <tr>
+                <th style={th}>Tipo</th>
+                <th style={th}>N.º documento</th>
+                <th style={th}>Fecha</th>
+                <th style={th}>Usuario</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={td}>
+                  <strong>{tipo === 'disposicion' ? 'Disposición' : 'Recibo'}</strong>
+                </td>
+                <td style={td}>
+                  {tipo === 'disposicion' ? (
+                    <input
+                      style={{ ...cellInput, background: `${ui.accentSoft}` }}
+                      value={proximoDisposicion ? `Autogenerado (${proximoDisposicion})` : 'Autogenerado al guardar'}
+                      readOnly
+                      disabled
+                    />
+                  ) : (
+                    <input
+                      style={cellInput}
+                      value={numeroDoc}
+                      onChange={(e) => {
+                        numeroDocRef.current = e.target.value
+                        setNumeroDoc(e.target.value)
+                      }}
+                      placeholder="Número de remisión…"
+                      aria-label="Número de remisión"
+                    />
+                  )}
+                </td>
+                <td style={td}>
+                  <input
+                    style={cellInput}
+                    type="date"
+                    value={fecha}
+                    onChange={(e) => setFecha(e.target.value)}
+                    aria-label="Fecha"
+                  />
+                </td>
+                <td style={td}>
+                  <input
+                    style={{ ...cellInput, background: `${ui.accentSoft}` }}
+                    value={sessionUser?.label || '—'}
+                    readOnly
+                    disabled
+                    aria-label="Usuario"
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
-        <AlmacenFieldLabel icon="📅" label="Fecha" />
-        <input
-          style={{ ...ui.input, marginBottom: 12 }}
-          type="date"
-          value={fecha}
-          onChange={(e) => setFecha(e.target.value)}
-        />
-
-        <div style={{ marginBottom: 12 }}>
-          <AlmacenFieldLabel
-            icon="🗺️"
-            label="PK-ID — ubicación de descargue"
-            ayuda="Seleccione primero el sector en el mapa. Las órdenes de compra se filtrarán por este PK-ID."
-          />
+        {/* Ubicación */}
+        <div style={sectionLabel}>Ubicación de descargue</div>
+        <div style={{ marginBottom: 8 }}>
           <AlmacenPkMapaSelector
             t={theme}
             token={token}
@@ -456,8 +523,13 @@ export default function DespachadorModal({
               setInsumo(null)
             }}
             compact
+            initialBasemap="satelite"
+            showBasemapToggle
           />
+        </div>
+        <div style={{ marginBottom: 12 }}>
           <UbicacionSolicitudFields
+            variant="excel"
             pkId={pkLabel || pkId}
             tramo={tramo}
             costado={costado}
@@ -470,185 +542,262 @@ export default function DespachadorModal({
               if (patch.abscisa_final != null) setAbscisaFinal(patch.abscisa_final)
             }}
           />
-        </div>
-
-        <div style={{ marginBottom: 12 }}>
-          <AlmacenFieldLabel
-            icon="📄"
-            label="Orden de compra"
-            ayuda="Solo órdenes aprobadas con saldo para el PK-ID seleccionado. Si no hay OC vigente, puede registrar igualmente con proveedor e insumo."
-          />
           {!(pkLabel || pkId)?.trim() && (
-            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 8 }}>
-              Seleccione un PK-ID para ver las órdenes de compra del sector.
+            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 6 }}>
+              Seleccione un PK-ID en el mapa para ver órdenes de compra del sector.
             </div>
           )}
-          {loadingOc && (
-            <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 8 }}>Buscando OC…</div>
-          )}
-          {!loadingOc && (pkLabel || pkId)?.trim() && ocs.length === 0 && (
-            <div style={{
-              padding: 10,
-              borderRadius: 8,
-              background: '#eff6ff',
-              color: '#1e40af',
-              fontSize: 'var(--cc-sm)',
-              marginBottom: 8,
-            }}
-            >
-              {pkContext?.oc_consumida
-                ? 'La Orden de Compra de este sector ya se consumió. Puede registrar la disposición seleccionando proveedor e insumo manualmente.'
-                : 'No hay Orden de Compra vigente con saldo para este sector. Puede registrar la disposición seleccionando proveedor e insumo manualmente.'}
-            </div>
-          )}
-          {ocs.map((oc) => {
-            const active = ocSel?.orden_compra_item_id === oc.orden_compra_item_id
-            return (
-              <button
-                key={oc.orden_compra_item_id}
-                type="button"
-                onClick={() => onOcSelect(oc)}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: 10,
-                  marginBottom: 6,
-                  borderRadius: 8,
-                  border: active ? `2px solid ${ui.accent}` : `1px solid ${ui.textMuted}33`,
-                  background: active ? `${ui.accentSoft}` : 'transparent',
-                  cursor: 'pointer',
-                  fontSize: 'var(--cc-sm)',
-                  color: ui.text,
-                }}
-              >
-                <div style={{ fontWeight: 700 }}>
-                  OC #
-                  {oc.numero_oc}
-                  {' · '}
-                  {oc.material_descripcion}
-                </div>
-                <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
-                  {oc.proveedor_nombre && `${oc.proveedor_nombre} · `}
-                  Saldo: {fmtCant(oc.saldo_cantidad)} {oc.unidad}
-                  {' · '}
-                  {fmtMoney(oc.saldo_valor)}
-                </div>
-              </button>
-            )
-          })}
         </div>
 
-        <ProveedorSelector
-          value={proveedor}
-          onChange={onProveedorChange}
-          insumoId={insumo?.insumo_id}
-          allowCreate={false}
-          disabled={!!ocSel?.proveedor_id}
-        />
-
-        <div style={{ marginTop: 12 }}>
-          <InsumoPorProveedorSelect
-            proveedorId={proveedor?.proveedor_id}
-            value={insumo}
-            onChange={onInsumoChange}
-            disabled={!proveedor?.proveedor_id || !!ocSel?.insumo_id}
-          />
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <AlmacenFieldLabel icon="📦" label="Cantidad recibida" />
-          <input
+        {/* Órdenes de compra — Excel */}
+        <div style={sectionLabel}>Orden de compra</div>
+        <div style={{ ...ui.sheetWrap, marginBottom: 12 }} className="cc-almacen-table-scroll">
+          <table
+            className="cc-almacen-despachador-excel"
             style={{
-              ...ui.input,
-              marginBottom: superaSaldo ? 4 : ocSel ? 4 : 12,
-              borderColor: superaSaldo ? '#dc2626' : undefined,
+              ...ui.sheetTable,
+              width: '100%',
+              borderCollapse: 'collapse',
+              minWidth: compact ? 560 : 780,
             }}
-            type="number"
-            min="0"
-            step="any"
-            value={cantidad}
-            onChange={(e) => setCantidad(e.target.value)}
-            disabled={!puedeCantidad}
-          />
-          {ocSel && (
-            <div style={{
-              fontSize: 'var(--cc-xs)',
-              color: superaSaldo ? '#dc2626' : ui.textMuted,
-              marginBottom: 12,
-            }}
-            >
-              Saldo OC actual: {fmtCant(ocSel.saldo_cantidad)} {ocSel.unidad}
-              {' · '}
-              {fmtMoney(ocSel.saldo_valor)}
-              {Number.isFinite(cantNum) && cantNum > 0 && (
-                <>
-                  {' → '}
-                  Restante: <strong>{fmtCant(saldoRestCant)} {ocSel.unidad}</strong>
-                  {' · '}
-                  <strong>{fmtMoney(saldoRestVal)}</strong>
-                </>
+          >
+            <thead>
+              <tr>
+                <th style={{ ...th, width: 44 }} />
+                <th style={th}>OC</th>
+                <th style={th}>Material</th>
+                <th style={th}>Proveedor</th>
+                <th style={{ ...th, textAlign: 'right' }}>Saldo</th>
+                <th style={{ ...th, textAlign: 'right' }}>Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingOc && (
+                <tr>
+                  <td colSpan={6} style={{ ...td, color: ui.textMuted, textAlign: 'center' }}>
+                    Buscando OC…
+                  </td>
+                </tr>
               )}
-            </div>
-          )}
-          {superaSaldo && (
-            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 12 }}>
-              ⚠ Supera el saldo disponible en la OC.
-            </div>
-          )}
+              {!loadingOc && (pkLabel || pkId)?.trim() && ocs.length === 0 && (
+                <tr>
+                  <td colSpan={6} style={{ ...td, color: '#1e40af', background: '#eff6ff' }}>
+                    {pkContext?.oc_consumida
+                      ? 'La Orden de Compra de este sector ya se consumió. Puede registrar con proveedor e insumo manualmente.'
+                      : 'No hay OC vigente con saldo para este sector. Puede registrar con proveedor e insumo manualmente.'}
+                  </td>
+                </tr>
+              )}
+              {!loadingOc && !(pkLabel || pkId)?.trim() && (
+                <tr>
+                  <td colSpan={6} style={{ ...td, color: ui.textMuted, textAlign: 'center' }}>
+                    Seleccione un PK-ID para listar órdenes de compra.
+                  </td>
+                </tr>
+              )}
+              {ocs.map((oc) => {
+                const active = ocSel?.orden_compra_item_id === oc.orden_compra_item_id
+                return (
+                  <tr
+                    key={oc.orden_compra_item_id}
+                    onClick={() => onOcSelect(oc)}
+                    style={{
+                      cursor: 'pointer',
+                      background: active ? `${ui.accentSoft}` : 'transparent',
+                    }}
+                  >
+                    <td style={{ ...td, textAlign: 'center' }}>
+                      <input
+                        type="radio"
+                        name="oc-sel"
+                        checked={active}
+                        onChange={() => onOcSelect(oc)}
+                        aria-label={`Seleccionar OC ${oc.numero_oc}`}
+                      />
+                    </td>
+                    <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap' }}>#{oc.numero_oc}</td>
+                    <td style={td}>{oc.material_descripcion}</td>
+                    <td style={td}>{oc.proveedor_nombre || '—'}</td>
+                    <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                      {fmtCant(oc.saldo_cantidad)} {oc.unidad}
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                      {fmtMoney(oc.saldo_valor)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: compact ? '1fr' : '1fr 1fr', gap: 8, marginBottom: 12 }}>
-          <PlacaTransportadorFields
-            placa={placa}
-            transportador={transportador}
-            setPlaca={setPlaca}
-            setTransportador={setTransportador}
-            onClearMsg={() => setTransportadorMsg('')}
-          />
+        {/* Material — Excel */}
+        <div style={sectionLabel}>Material recibido</div>
+        <div style={{ ...ui.sheetWrap, marginBottom: 12 }} className="cc-almacen-table-scroll">
+          <table
+            className="cc-almacen-despachador-excel"
+            style={{
+              ...ui.sheetTable,
+              width: '100%',
+              borderCollapse: 'collapse',
+              minWidth: compact ? 520 : 700,
+            }}
+          >
+            <thead>
+              <tr>
+                <th style={th}>Proveedor</th>
+                <th style={th}>Insumo</th>
+                <th style={{ ...th, width: compact ? 110 : 140 }}>Cantidad</th>
+                <th style={th}>Saldo OC</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ ...td, minWidth: 160 }}>
+                  <ProveedorSelector
+                    value={proveedor}
+                    onChange={onProveedorChange}
+                    insumoId={insumo?.insumo_id}
+                    allowCreate={false}
+                    disabled={!!ocSel?.proveedor_id}
+                  />
+                </td>
+                <td style={{ ...td, minWidth: 160 }}>
+                  <InsumoPorProveedorSelect
+                    proveedorId={proveedor?.proveedor_id}
+                    value={insumo}
+                    onChange={onInsumoChange}
+                    disabled={!proveedor?.proveedor_id || !!ocSel?.insumo_id}
+                  />
+                </td>
+                <td style={td}>
+                  <input
+                    style={{
+                      ...cellInput,
+                      borderColor: superaSaldo ? '#dc2626' : undefined,
+                    }}
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={cantidad}
+                    onChange={(e) => setCantidad(e.target.value)}
+                    disabled={!puedeCantidad}
+                    aria-label="Cantidad recibida"
+                  />
+                  {superaSaldo && (
+                    <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 4 }}>
+                      ⚠ Supera saldo OC
+                    </div>
+                  )}
+                </td>
+                <td style={{ ...td, fontSize: 'var(--cc-xs)', color: superaSaldo ? '#dc2626' : ui.textMuted }}>
+                  {ocSel ? (
+                    <>
+                      {fmtCant(ocSel.saldo_cantidad)} {ocSel.unidad}
+                      {' · '}
+                      {fmtMoney(ocSel.saldo_valor)}
+                      {Number.isFinite(cantNum) && cantNum > 0 && (
+                        <>
+                          <br />
+                          Restante: <strong style={{ color: ui.text }}>{fmtCant(saldoRestCant)} {ocSel.unidad}</strong>
+                          {' · '}
+                          <strong style={{ color: ui.text }}>{fmtMoney(saldoRestVal)}</strong>
+                        </>
+                      )}
+                    </>
+                  ) : '—'}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        {transportadorMsg && (
-          <div style={{ fontSize: 'var(--cc-xs)', color: '#16a34a', marginBottom: 12 }}>
-            {transportadorMsg}
-          </div>
-        )}
 
-        <div style={{ marginBottom: 12 }}>
-          <AlmacenFieldLabel icon="🧑‍💼" label="Usuario" ayuda="Tomado de la sesión activa en ClaraCore." />
-          <input
-            style={{ ...ui.input, background: `${ui.accentSoft}` }}
-            value={sessionUser?.label || '—'}
-            readOnly
-            disabled
-          />
+        {/* Transporte — Excel */}
+        <div style={sectionLabel}>Transporte</div>
+        <div style={{ ...ui.sheetWrap, marginBottom: 12 }} className="cc-almacen-table-scroll">
+          <table
+            className="cc-almacen-despachador-excel"
+            style={{
+              ...ui.sheetTable,
+              width: '100%',
+              borderCollapse: 'collapse',
+              minWidth: compact ? 420 : 520,
+            }}
+          >
+            <thead>
+              <tr>
+                <th style={th}>Placa</th>
+                <th style={th}>Transportador</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={td} colSpan={2}>
+                  <div style={{ display: 'grid', gridTemplateColumns: compact ? '1fr' : '1fr 1fr', gap: 8 }}>
+                    <PlacaTransportadorFields
+                      placa={placa}
+                      transportador={transportador}
+                      setPlaca={setPlaca}
+                      setTransportador={setTransportador}
+                      onClearMsg={() => setTransportadorMsg('')}
+                    />
+                  </div>
+                  {transportadorMsg && (
+                    <div style={{ fontSize: 'var(--cc-xs)', color: '#16a34a', marginTop: 6 }}>
+                      {transportadorMsg}
+                    </div>
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
         {tipo === 'recibo' && (
           <>
-            <AlmacenFieldLabel
-              icon="📷"
-              label="Remisión del proveedor"
-              ayuda="Adjunte foto o PDF; máximo 300 KB. El OCR puede autocompletar número y fecha."
-            />
-            <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', flexDirection: compact ? 'column' : 'row' }}>
-              <input ref={fileRef} type="file" accept="image/*,application/pdf" style={{ display: 'none' }} onChange={onFile} />
-              <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFile} />
-              <button type="button" style={{ ...ui.btnPrimary, width: compact ? '100%' : undefined }} disabled={ocrBusy || soporteBusy} onClick={() => camRef.current?.click()}>
-                📷 {compact ? 'Tomar foto de remisión' : 'Tomar foto'}
-              </button>
-              <button type="button" style={{ ...ui.btnSecondary, width: compact ? '100%' : undefined }} disabled={ocrBusy || soporteBusy} onClick={() => fileRef.current?.click()}>
-                📁 Cargar archivo
-              </button>
-              {remision && (
-                <span style={{ fontSize: 'var(--cc-sm)', alignSelf: 'center' }}>
-                  {remision.name} · {fmtSoporteBytes(remisionBytes)}
-                </span>
+            <div style={sectionLabel}>Remisión del proveedor</div>
+            <div style={{
+              ...ui.sheetWrap,
+              marginBottom: 12,
+              padding: 10,
+            }}
+            >
+              <AlmacenFieldLabel
+                icon="📷"
+                label="Soporte (obligatorio)"
+                ayuda="Adjunte foto o PDF; máximo 300 KB. El OCR puede autocompletar número y fecha."
+              />
+              <div style={{
+                display: 'flex',
+                gap: 8,
+                marginTop: 6,
+                flexWrap: 'wrap',
+                flexDirection: compact ? 'column' : 'row',
+              }}
+              >
+                <input ref={fileRef} type="file" accept="image/*,application/pdf" style={{ display: 'none' }} onChange={onFile} />
+                <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFile} />
+                <button type="button" style={{ ...ui.btnPrimary, width: compact ? '100%' : undefined }} disabled={ocrBusy || soporteBusy} onClick={() => camRef.current?.click()}>
+                  📷 {compact ? 'Tomar foto de remisión' : 'Tomar foto'}
+                </button>
+                <button type="button" style={{ ...ui.btnSecondary, width: compact ? '100%' : undefined }} disabled={ocrBusy || soporteBusy} onClick={() => fileRef.current?.click()}>
+                  📁 Cargar archivo
+                </button>
+                {remision && (
+                  <span style={{ fontSize: 'var(--cc-sm)', alignSelf: 'center' }}>
+                    {remision.name} · {fmtSoporteBytes(remisionBytes)}
+                  </span>
+                )}
+                {(ocrBusy || soporteBusy) && (
+                  <span style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+                    {soporteBusy ? 'Preparando soporte…' : 'Analizando OCR…'}
+                  </span>
+                )}
+              </div>
+              {ocrMsg && (
+                <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 8 }}>{ocrMsg}</div>
               )}
-              {(ocrBusy || soporteBusy) && <span style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>{soporteBusy ? 'Preparando soporte…' : 'Analizando OCR…'}</span>}
             </div>
-            {ocrMsg && (
-              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 12 }}>{ocrMsg}</div>
-            )}
           </>
         )}
 
