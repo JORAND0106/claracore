@@ -65,6 +65,15 @@ def fmt_fecha_bogota(raw) -> str:
     return "—"
 
 
+def format_solicitud_titulo(consecutivo, created_at=None) -> str:
+    """Título automático: «Solicitud #3 - 13/07/2026» (fecha en America/Bogota)."""
+    fecha = fmt_fecha_bogota(created_at) if created_at else "—"
+    if fecha == "—":
+        fecha = datetime.now(BOGOTA).strftime("%d/%m/%Y")
+    num = consecutivo if consecutivo is not None and consecutivo != "" else "…"
+    return f"Solicitud #{num} - {fecha}"
+
+
 def fmt_fecha_hora_entrada(created_at, fecha_entrada) -> str:
     """Preferir timestamp de registro; si no hay hora, usar solo fecha de entrada."""
     if created_at:

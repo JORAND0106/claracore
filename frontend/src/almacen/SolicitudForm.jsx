@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import CcConfirmModal from '../components/CcConfirmModal'
-import PresupuestoItemSelector from './PresupuestoItemSelector'
-import PresupuestoRegistroGrid from './PresupuestoRegistroGrid'
-import UbicacionSolicitudFields from './UbicacionSolicitudFields'
-import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
+import SolicitudFormExcelTable from './SolicitudFormExcelTable'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import LineaResumenEconomico from './LineaResumenEconomico'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import {
+  formatSolicitudTituloAuto,
   lineasSuperanPresupuesto,
   lineasSuperanNegociado,
   mapSolicitudItemsFromServer,
@@ -16,7 +14,6 @@ import {
   validateSolicitudItems,
 } from './solicitudFormHelpers'
 import {
-  AlmacenFieldLabel,
   buildAlmacenConfirmTheme,
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
@@ -150,17 +147,16 @@ export default function SolicitudForm({
   const [okMsg, setOkMsg] = useState('')
   const [modalExitoEnvio, setModalExitoEnvio] = useState(null)
   const [sol, setSol] = useState(null)
-  const [titulo, setTitulo] = useState('')
   const [confirmAnular, setConfirmAnular] = useState(false)
 
   const editable = solicitudAlmacenEditable(sol) && (
     solicitudId ? Boolean(permisos?.editar) : Boolean(permisos?.crear)
   )
   const verEconomicos = permisos?.verEconomicos !== false
+  const tituloAuto = formatSolicitudTituloAuto(sol?.consecutivo, sol?.created_at)
 
   const aplicarSolicitudServidor = (s) => {
     setSol(s)
-    setTitulo(s?.titulo || '')
     const mapped = mapSolicitudItemsFromServer(s)
     setItems(mapped.length ? mapped : [emptyItem()])
     onEstadoChange?.(s?.estado || null)
@@ -356,13 +352,23 @@ export default function SolicitudForm({
     })
   }
 
+  const addItemAt = (idx) => {
+    markDirty()
+    setItems((prev) => {
+      const next = [...prev]
+      next.splice(idx + 1, 0, emptyItem())
+      return next
+    })
+  }
+
   const buildPayload = () => {
     const validation = validateSolicitudItems(items)
     if (!validation.ok) {
       throw new Error(validation.message)
     }
     return {
-      titulo: titulo.trim() || undefined,
+      // El backend regenera el título automático; se envía para compatibilidad.
+      titulo: formatSolicitudTituloAuto(sol?.consecutivo, sol?.created_at),
       items: items.map((it) => {
         const base = {
           cantidad: Number(it.cantidad),
@@ -515,7 +521,7 @@ export default function SolicitudForm({
       <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <span>
           {solicitudId
-            ? (titulo.trim() || sol?.titulo?.trim() || `Solicitud #${sol?.consecutivo || '…'}`)
+            ? (sol?.titulo?.trim() || tituloAuto || `Solicitud #${sol?.consecutivo || '…'}`)
             : 'Nueva solicitud de insumos'}
           {sol?.estado && (
             <span style={{
@@ -537,20 +543,30 @@ export default function SolicitudForm({
 
       {editable && (
         <div className="cc-almacen-form-section" style={{ marginBottom: embedded ? 8 : 14 }}>
-          <AlmacenFieldLabel icon="📝" label="Título de la solicitud" ayuda="Nombre descriptivo para identificarla en el listado." />
-          <input
-            style={ui.input}
-            value={titulo}
-            disabled={busy}
-            placeholder="Ej.: Materiales muro PK-12 tramo norte"
-            onChange={(e) => { markDirty(); setTitulo(e.target.value) }}
-          />
+          <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 4, fontWeight: 600 }}>
+            Título de la solicitud (automático)
+          </div>
+          <div
+            style={{
+              ...ui.input,
+              display: 'flex',
+              alignItems: 'center',
+              minHeight: 36,
+              background: `${ui.accentSoft}`,
+              color: ui.text,
+              fontWeight: 700,
+              cursor: 'default',
+            }}
+            title="Se genera con el número de solicitud y la fecha de creación (Bogotá)."
+          >
+            {tituloAuto}
+          </div>
         </div>
       )}
 
-      {!editable && sol?.titulo?.trim() && (
+      {!editable && (sol?.titulo?.trim() || sol?.consecutivo) && (
         <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 14 }}>
-          Título: <strong style={{ color: ui.text }}>{sol.titulo}</strong>
+          Título: <strong style={{ color: ui.text }}>{sol?.titulo?.trim() || tituloAuto}</strong>
         </div>
       )}
 
@@ -638,196 +654,67 @@ export default function SolicitudForm({
         />
       ))}
 
-      {editable && items.map((it, idx) => (
-        <div
-          key={it.id ?? idx}
-          className="cc-almacen-form-section cc-almacen-form-linea"
-          style={{
-            border: `1px solid ${ui.textMuted}28`,
-            borderRadius: embedded ? 8 : 6,
-            padding: embedded ? 10 : 8,
-            marginBottom: embedded ? 8 : 8,
-            background: embedded ? `${ui.accentSoft}66` : `${ui.accentSoft}55`,
-            position: 'relative',
-          }}
-        >
-          {(sol?.consecutivo || solicitudId) && (
-            <div style={{
-              fontSize: 'var(--cc-xs)',
-              fontWeight: 700,
-              color: ui.accent,
-              marginBottom: 6,
-              letterSpacing: '0.03em',
-            }}
-            >
-              {formatSolicitudLinea(sol?.consecutivo, it.numero_linea ?? idx + 1)}
-            </div>
-          )}
-          {editable && (
-            <button
-              type="button"
-              title="Eliminar material de la solicitud"
-              onClick={() => removeItem(idx)}
-              style={{
-                position: 'absolute',
-                top: 6,
-                right: 6,
-                ...ui.btnSecondary,
-                padding: '3px 8px',
-                color: '#dc2626',
-                borderColor: '#dc262666',
-                fontSize: 'var(--cc-xs)',
-                lineHeight: 1.2,
-                fontWeight: 600,
-              }}
-            >
-              Eliminar línea
-            </button>
-          )}
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: embedded ? 4 : 6, paddingRight: editable ? 118 : 0 }}>
-            <PresupuestoItemSelector
-              capitulo={it.presupuesto_capitulo}
-              item={it.presupuesto_item}
-              disabled={!editable}
-              onChange={(sel) => onPptoChange(idx, sel)}
-            />
-
-            <div>
-              <AlmacenFieldLabel
-                icon="📝"
-                label="Descripción del material"
-                compact
-                ayuda="Describa el material que necesita. El Contratista Gerencial seleccionará el insumo del catálogo al aprobar."
-              />
-              <textarea
-                style={{
-                  ...ui.input,
-                  padding: '8px 10px',
-                  fontSize: 'var(--cc-sm)',
-                  minHeight: 64,
-                  resize: 'vertical',
-                  width: '100%',
-                  boxSizing: 'border-box',
-                }}
-                value={it.descripcion_solicitada || ''}
-                disabled={!editable}
-                placeholder="Ej.: Cemento gris tipo I, bultos de 50 kg…"
-                onChange={(e) => onDescripcionChange(idx, e.target.value)}
-              />
-            </div>
-
-            <div>
-              <AlmacenFieldLabel icon="🗺️" label="Ubicación PK-ID" compact ayuda="Seleccione en el mapa el sector." />
-              <AlmacenPkMapaSelector
-                t={theme}
-                token={token}
-                contratoId={contratoId}
-                pkIdSeleccionado={it.pk_id_id ? String(it.pk_id_id) : ''}
-                pkLabel={it.pk_label || it.pk_id}
-                onSeleccionar={(sel) => onPkSelect(idx, sel)}
-                onLimpiar={() => { markDirty(); updateItem(idx, {
-                  pk_id: '', pk_label: '', pk_id_id: null, ...clearUbicacionPresupuesto(),
-                }) }}
-                compact
-              />
-              <PresupuestoRegistroGrid
-                capitulo={it.presupuesto_capitulo}
-                item={it.presupuesto_item}
-                pkId={it.pk_id}
-                presupuestoId={it.presupuesto_id}
-                excludeSolicitudId={solicitudId || undefined}
-                disabled={!editable}
-                onSelect={(reg) => onRegistroSelect(idx, reg)}
-              />
-              <UbicacionSolicitudFields
-                pkId={it.pk_label || it.pk_id}
-                tramo={it.tramo}
-                costado={it.costado}
-                abscisaInicial={it.abscisa_inicial}
-                abscisaFinal={it.abscisa_final}
-                absInicioDisplay={it.abs_inicio_display}
-                absFinalDisplay={it.abs_final_display}
-                nodoInicio={it.nodo_inicio}
-                nodoFinal={it.nodo_final}
-                abscisasEditable={editable}
-                disabled={!editable}
-                onChange={(patch) => onUbicacionChange(idx, patch)}
-              />
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(80px, 120px) auto 1fr', gap: 8, alignItems: 'end' }}>
-              <div>
-                <AlmacenFieldLabel icon="🔢" label="Cantidad" compact />
-                <input
-                  style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={it.cantidad}
-                  onChange={(e) => onCantidadChange(idx, e.target.value)}
-                  disabled={!editable}
-                />
-              </div>
-              <label style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                fontSize: 'var(--cc-xs)',
-                cursor: editable ? 'pointer' : 'default',
-                paddingBottom: 6,
-                whiteSpace: 'nowrap',
-              }}
-              >
-                <input
-                  type="checkbox"
-                  checked={!!it.es_recurrente}
-                  onChange={(e) => { markDirty(); updateItem(idx, { es_recurrente: e.target.checked }) }}
-                  disabled={!editable}
-                />
-                Recurrente
-              </label>
-              <div>
-                <AlmacenFieldLabel icon="💬" label="Observaciones" compact ayuda="Notas de esta línea." />
-                <input
-                  style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
-                  value={it.observacion_residente || ''}
-                  disabled={!editable}
-                  placeholder="Opcional…"
-                  onChange={(e) => { markDirty(); updateItem(idx, { observacion_residente: e.target.value }) }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {it.preview?.error && (
-            <div style={{ color: '#dc2626', fontSize: 'var(--cc-sm)', marginTop: 8 }}>{it.preview.error}</div>
-          )}
-          <PresupuestoContextBox
-            ctx={it.preview?.contexto_presupuesto}
-            analisis={it.preview?.analisis_valor}
-            supera={it.preview?.supera_presupuesto}
-            superaNegociado={it.preview?.supera_negociado}
-            ctxNeg={it.preview?.contexto_negociado}
-            sinPrecio={false}
-            verEconomicos={verEconomicos}
-            ui={ui}
-          />
-
-        </div>
-      ))}
-
       {editable && (
-        <button
-          type="button"
-          style={{ ...ui.btnSecondary, marginBottom: 12, padding: '6px 12px', fontSize: 'var(--cc-sm)' }}
-          onClick={() => { markDirty(); setItems((p) => [...p, emptyItem()]) }}
-        >
-          + Agregar material
-        </button>
+        <>
+          <SolicitudFormExcelTable
+            items={items}
+            busy={busy}
+            t={theme}
+            token={token}
+            contratoId={contratoId}
+            solicitudId={solicitudId}
+            onPptoChange={onPptoChange}
+            onDescripcionChange={onDescripcionChange}
+            onCantidadChange={onCantidadChange}
+            onObservacionChange={(idx, val) => { markDirty(); updateItem(idx, { observacion_residente: val }) }}
+            onPkSelect={onPkSelect}
+            onPkClear={(idx) => {
+              markDirty()
+              setItems((prev) => {
+                const next = prev.map((it, i) => (i === idx ? {
+                  ...it,
+                  pk_id: '',
+                  pk_label: '',
+                  pk_id_id: null,
+                  ...clearUbicacionPresupuesto(),
+                } : it))
+                triggerPreview(idx, next)
+                return next
+              })
+            }}
+            onRegistroSelect={onRegistroSelect}
+            onUbicacionChange={onUbicacionChange}
+            onAddRow={addItemAt}
+            onRemoveRow={removeItem}
+          />
+          {items.map((it, idx) => (
+            (it.preview?.error || it.preview?.contexto_presupuesto || it.preview?.contexto_negociado?.tiene_negociado) ? (
+              <div key={`prev-${it.id ?? idx}`} style={{ marginTop: 6, marginBottom: 4 }}>
+                {items.length > 1 && (
+                  <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 2 }}>
+                    {formatSolicitudLinea(sol?.consecutivo, it.numero_linea ?? idx + 1)}
+                  </div>
+                )}
+                {it.preview?.error && (
+                  <div style={{ color: '#dc2626', fontSize: 'var(--cc-sm)' }}>{it.preview.error}</div>
+                )}
+                <PresupuestoContextBox
+                  ctx={it.preview?.contexto_presupuesto}
+                  analisis={it.preview?.analisis_valor}
+                  supera={it.preview?.supera_presupuesto}
+                  superaNegociado={it.preview?.supera_negociado}
+                  ctxNeg={it.preview?.contexto_negociado}
+                  sinPrecio={false}
+                  verEconomicos={verEconomicos}
+                  ui={ui}
+                />
+              </div>
+            ) : null
+          ))}
+        </>
       )}
 
-      <div className={`cc-almacen-form-actions${embedded ? ' cc-almacen-form-actions--embedded' : ''}`} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <div className={`cc-almacen-form-actions${embedded ? ' cc-almacen-form-actions--embedded' : ''}`} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: editable ? 12 : 0 }}>
         {editable && (solicitudId ? permisos?.editar : permisos?.crear) && (
           <>
             <button type="button" style={ui.btnPrimary} disabled={busy} onClick={guardar}>
