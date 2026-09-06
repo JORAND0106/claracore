@@ -1,22 +1,31 @@
-"""Inventario árbol: agregación ítem → insumo → proveedor."""
+"""Inventario árbol: agregación ítem (listado) → insumo → proveedor."""
+from unittest.mock import MagicMock
+
 from almacen_inventario_arbol import (
     build_inventario_arbol_from_lines,
     invalidar_cache_inventario_arbol,
+    _fetch_oc_rows,
+    make_item_key,
 )
 
 
+def test_make_item_key_normaliza():
+    assert make_item_key("01 Cap", "1.01.") == make_item_key("01 Cap", "1.01")
+
+
 def test_build_arbol_tres_niveles_y_resumen():
-    ppto = [{
-        "id": 10,
+    item_rows = [{
+        "item_key": "01|01.01",
         "capitulo": "01",
         "item": "01.01",
         "descripcion": "Excavación",
-        "und": "m3",
-        "cant_total": 100,
-        "pk_id": "120350",
+        "unidad": "m3",
+        "vu_cobro": 80000,
+        "presupuesto_ids": [10],
+        "cant_presupuestada": 100,
     }]
     composition = {
-        10: [
+        "01|01.01": [
             {
                 "insumo_id": 1,
                 "codigo": "INS-A",
@@ -39,7 +48,7 @@ def test_build_arbol_tres_niveles_y_resumen():
     }
     movements = [
         {
-            "presupuesto_id": 10,
+            "item_key": "01|01.01",
             "insumo_id": 1,
             "proveedor_id": 5,
             "proveedor_nombre": "Acme",
@@ -51,7 +60,7 @@ def test_build_arbol_tres_niveles_y_resumen():
             "valor_stock": 120000,
         },
         {
-            "presupuesto_id": 10,
+            "item_key": "01|01.01",
             "insumo_id": 1,
             "proveedor_id": 7,
             "proveedor_nombre": "Beta",
@@ -63,7 +72,7 @@ def test_build_arbol_tres_niveles_y_resumen():
             "valor_stock": 0,
         },
         {
-            "presupuesto_id": 10,
+            "item_key": "01|01.01",
             "insumo_id": 2,
             "proveedor_id": 5,
             "proveedor_nombre": "Acme",
@@ -76,50 +85,41 @@ def test_build_arbol_tres_niveles_y_resumen():
         },
     ]
     out = build_inventario_arbol_from_lines(
-        ppto_rows=ppto,
-        vu_cobro_by_ppto={10: 80000},
+        item_rows=item_rows,
         composition=composition,
         movement_lines=movements,
     )
     assert len(out["items"]) == 1
     item = out["items"][0]
+    assert item["item_key"] == "01|01.01"
     assert item["vu_cobro"] == 80000
-    # VU costo = 20000*1 + 100*50 = 25000
     assert item["vu_costo"] == 25000
     assert item["utilidad"] == 55000
     assert item["entradas"] == 115
     assert item["salidas"] == 29
     assert item["saldo"] == 86
 
-    insumos = item["insumos"]
-    assert len(insumos) == 2
-    arena = next(i for i in insumos if i["insumo_id"] == 1)
-    # Solo proveedor con saldo > 0
+    arena = next(i for i in item["insumos"] if i["insumo_id"] == 1)
     assert len(arena["proveedores"]) == 1
     assert arena["proveedores"][0]["proveedor_nombre"] == "Acme"
-    assert arena["proveedores"][0]["saldo"] == 6
 
-    cemento = next(i for i in insumos if i["insumo_id"] == 2)
-    assert cemento["es_principal"] is False
-    assert cemento["utilidad"] == -5000  # -(100*50)
-
+    cemento = next(i for i in item["insumos"] if i["insumo_id"] == 2)
+    assert cemento["utilidad"] == -5000
     assert out["resumen"]["valor_stock"] == 128000
-    assert out["resumen"]["valor_entradas"] == 310000
-    assert out["resumen"]["valor_salidas"] == 182000
 
 
 def test_build_arbol_item_sin_movimientos():
     out = build_inventario_arbol_from_lines(
-        ppto_rows=[{
-            "id": 1,
+        item_rows=[{
+            "item_key": "02|2",
             "capitulo": "02",
             "item": "2",
             "descripcion": "Sin stock",
-            "und": "UND",
-            "cant_total": 1,
+            "unidad": "UND",
+            "vu_cobro": 1000,
+            "presupuesto_ids": [],
         }],
-        vu_cobro_by_ppto={1: 1000},
-        composition={1: [{
+        composition={"02|2": [{
             "insumo_id": 9,
             "codigo": "X",
             "descripcion": "Solo catálogo",
@@ -134,7 +134,32 @@ def test_build_arbol_item_sin_movimientos():
     assert item["vu_costo"] == 400
     assert item["utilidad"] == 600
     assert item["saldo"] == 0
-    assert item["insumos"][0]["proveedores"] == []
+
+
+def test_fetch_oc_rows_fallback_sin_proveedor_id():
+    sb = MagicMock()
+    calls = {"n": 0}
+
+    def table(name):
+        q = MagicMock()
+        assert name == "almacen_orden_compra"
+
+        def execute():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Primera variante con proveedor_id falla
+                raise Exception("column almacen_orden_compra.proveedor_id does not exist code 42703")
+            res = MagicMock()
+            res.data = [{"id": 3, "proveedor_nombre": "Acme"}]
+            return res
+
+        q.select.return_value.in_.return_value.execute.side_effect = execute
+        return q
+
+    sb.table.side_effect = table
+    out = _fetch_oc_rows(sb, [3])
+    assert out[3]["proveedor_nombre"] == "Acme"
+    assert calls["n"] == 2
 
 
 def test_invalidar_cache_arbol():

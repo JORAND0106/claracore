@@ -1,5 +1,5 @@
 /**
- * Inventario — tabla Excel con drill-down ítem/insumo/proveedor.
+ * Inventario — correcciones listado, filtro y gráfico por selección.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -9,52 +9,32 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-describe('Inventario Excel drill-down', () => {
-  it('panel usa árbol y deja de usar los 3 gráficos comparativos', () => {
+describe('Inventario — listado, filtro y gráfico dinámico', () => {
+  it('panel filtra por capítulo/ítem y selecciona ítem para el gráfico', () => {
     const src = readFileSync(join(__dirname, 'InventarioPanel.jsx'), 'utf8')
-    assert.match(src, /getInventarioArbol/)
-    assert.match(src, /cc-almacen-inventario-excel/)
-    assert.match(src, /inventario-resumen-chart/)
-    assert.match(src, /Valor stock/)
-    assert.match(src, /toggleItem/)
-    assert.match(src, /toggleInsumo/)
-    assert.doesNotMatch(src, /getInventarioGraficos/)
-    assert.doesNotMatch(src, /Valor del ítem vs\. Costo de insumos/)
-    assert.doesNotMatch(src, /Salidas vs\. Cobro/)
+    assert.match(src, /PresupuestoItemSelector/)
+    assert.match(src, /itemMatchesFiltro/)
+    assert.match(src, /selectedKey/)
+    assert.match(src, /chartResumen/)
+    assert.match(src, /Resumen del ítem/)
+    assert.match(src, /Resumen general del contrato/)
+    assert.match(src, /selectItem/)
+    assert.match(src, /Ver todo el listado/)
   })
 
-  it('muestra columnas de nivel 1 y drill-down', () => {
-    const src = readFileSync(join(__dirname, 'InventarioPanel.jsx'), 'utf8')
-    for (const needle of [
-      'VU Cobro',
-      'VU Costo',
-      'Rendimiento',
-      'Utilidad',
-      'Entradas',
-      'Salidas',
-      'Saldo',
-      'proveedores',
-      'expandedItems',
-      'Filas contraídas por defecto',
-    ]) {
-      assert.match(src, new RegExp(needle))
-    }
-  })
-
-  it('API expone getInventarioArbol', () => {
-    const src = readFileSync(join(__dirname, 'almacenApi.js'), 'utf8')
-    assert.match(src, /getInventarioArbol/)
-    assert.match(src, /inventario\/arbol/)
-  })
-
-  it('backend tiene ruta y agregador de árbol', () => {
-    const routes = readFileSync(join(__dirname, '../../../backend/almacen_routes.py'), 'utf8')
-    assert.match(routes, /inventario\/arbol/)
-    assert.match(routes, /list_inventario_arbol/)
+  it('backend carga listado de precios y tolera OC sin proveedor_id', () => {
     const arbol = readFileSync(join(__dirname, '../../../backend/almacen_inventario_arbol.py'), 'utf8')
-    assert.match(arbol, /def build_inventario_arbol_from_lines/)
-    assert.match(arbol, /def list_inventario_arbol/)
-    assert.match(arbol, /Nivel 3: solo proveedores con stock/)
-    assert.ok(arbol.includes('["proveedores"].append'))
+    assert.match(arbol, /_fetch_all_listado_rows/)
+    assert.match(arbol, /def _fetch_oc_rows/)
+    assert.match(arbol, /proveedor_id does not exist|select_variants|proveedor_nombre/)
+    assert.match(arbol, /item_key/)
+    assert.ok(arbol.includes('listado de precios') || arbol.includes('listado_precios') || arbol.includes('_fetch_all_listado_rows'))
+  })
+
+  it('conserva drill-down Excel', () => {
+    const src = readFileSync(join(__dirname, 'InventarioPanel.jsx'), 'utf8')
+    assert.match(src, /cc-almacen-inventario-excel/)
+    assert.match(src, /getInventarioArbol/)
+    assert.match(src, /toggleInsumo/)
   })
 })
