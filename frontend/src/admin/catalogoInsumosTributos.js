@@ -461,3 +461,31 @@ export function seedTributosDesdeLegado(row) {
   }
   return normalizarTributos(row?.tributos)
 }
+
+/** Etiqueta corta para grilla: IVA | AIU | — */
+export function tipoTributoCortoDesdeRow(row) {
+  const trib = seedTributosDesdeLegado(row)
+  const form = formImpuestoDesdeTributos(trib)
+  const tipo = inferirTipoImpuesto(form, { valoresEnDecimal: true })
+  if (!tipo) {
+    const leg = String(row?.tipo_impuesto || '').toLowerCase()
+    if (leg === 'iva') return 'IVA'
+    if (leg === 'aiu') return 'AIU'
+    return '—'
+  }
+  if (tipo === TIPO_IMPUESTO.IVA_PLENO) return 'IVA'
+  return 'AIU'
+}
+
+/**
+ * Valor tributario para grilla: % de IVA, o sumatoria AIU (según tipo).
+ */
+export function valorTributarioLabelDesdeRow(row) {
+  const trib = seedTributosDesdeLegado(row)
+  const form = formImpuestoDesdeTributos(trib)
+  const pts = sumatoriaAiuPuntosPct(form)
+  if (pts != null) return `${formatPuntosPctExacto(pts)}%`
+  const pct = Number(row?.impuesto_porcentaje)
+  if (Number.isFinite(pct) && pct > 0) return `${formatPuntosPctExacto(pct)}%`
+  return '—'
+}

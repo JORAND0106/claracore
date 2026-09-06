@@ -13,9 +13,11 @@ import {
   puntosPctADecimal,
   seedTributosDesdeLegado,
   sumatoriaAiuPuntosPct,
+  tipoTributoCortoDesdeRow,
   TIPO_IMPUESTO,
   tributosPayloadDesdeForm,
   computeValorDespuesAiuIva,
+  valorTributarioLabelDesdeRow,
 } from './catalogoInsumosTributos.js'
 
 describe('catalogoInsumosTributos — impuesto unificado', () => {
