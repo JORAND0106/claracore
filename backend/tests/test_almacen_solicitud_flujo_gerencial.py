@@ -24,8 +24,9 @@ def test_rol_excluido_interventoria():
     assert rol_excluido_almacen({"rol_nombre": "Interventoría Gerencial"}) is True
 
 
-def test_valores_economicos_contratista():
-    assert puede_ver_valores_economicos_almacen({"rol_nombre": "Contratista"}) is True
+def test_valores_economicos_solo_gerencial():
+    assert puede_ver_valores_economicos_almacen({"rol_nombre": "Contratista"}) is False
+    assert puede_ver_valores_economicos_almacen({"rol_nombre": "Operativo Contratista"}) is False
     assert puede_ver_valores_economicos_almacen({"rol_nombre": "Contratista Gerencial"}) is True
 
 

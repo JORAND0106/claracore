@@ -42,20 +42,8 @@ def rol_excluido_almacen(current_user) -> bool:
 
 
 def puede_ver_valores_economicos_almacen(current_user) -> bool:
-    """Contratista y gerencial contratista ven costos/cobros; roles operativos no."""
-    try:
-        from main import _es_desarrollador
-
-        if _es_desarrollador(current_user):
-            return True
-    except Exception:
-        pass
-    rol = _norm_rol(current_user)
-    if rol in ("contratista", "operativo contratista"):
-        return True
-    if "contrat" in rol and "gerencial" in rol and "intervent" not in rol:
-        return True
-    return False
+    """Solo Contratista Gerencial (y Desarrollador) ven costos/cobros/rentabilidad."""
+    return es_contratista_gerencial(current_user)
 
 
 def es_contratista_gerencial(current_user) -> bool:

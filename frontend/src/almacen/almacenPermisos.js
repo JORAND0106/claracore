@@ -38,13 +38,9 @@ export function rolExcluidoAlmacen(usuario) {
   return false
 }
 
-/** Contratista y gerencial contratista ven valores económicos; operativos no. */
+/** Solo Contratista Gerencial (o Desarrollador) ve costos, cobros y rentabilidad. */
 export function puedeVerValoresEconomicosAlmacen(usuario) {
-  if (esDesarrolladorUsuario(usuario)) return true
-  const rol = normRol(usuario?.rol_nombre || usuario?.rol)
-  if (rol === 'contratista' || rol === 'operativo contratista') return true
-  if (rol.includes('contrat') && rol.includes('gerencial') && !rol.includes('intervent')) return true
-  return false
+  return esContratistaGerencialUsuario(usuario)
 }
 
 /** Solo Contratista Gerencial (o Desarrollador) mapea insumo y aprueba. */

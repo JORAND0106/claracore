@@ -6,6 +6,7 @@ import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import {
   descripcionItemPresupuesto,
+  itemPuedeCorregirInsumoPostOc,
   itemPuedeValidar,
   puedeAbrirRevisionLinea,
   rentabilidadDesdeAnalisis,
@@ -78,7 +79,9 @@ export default function SolicitudLineaRevisionModal({
     vlr_unitario_cobro: '',
   })
 
-  const puedeEditar = itemPuedeValidar(item, sol, permisos)
+  const puedeValidarLinea = itemPuedeValidar(item, sol, permisos)
+  const puedeCorregirPostOc = itemPuedeCorregirInsumoPostOc(item, sol, permisos)
+  const puedeEditar = puedeValidarLinea || puedeCorregirPostOc
   const verEconomicos = permisos?.verEconomicos !== false
   const puedeAbrir = puedeAbrirRevisionLinea(permisos)
 
@@ -198,11 +201,14 @@ export default function SolicitudLineaRevisionModal({
     if (draft.vlr_unitario_cobro !== '') {
       body.vlr_unitario_cobro = Number(draft.vlr_unitario_cobro)
     }
+    if (puedeCorregirPostOc && !puedeValidarLinea) {
+      return api.corregirInsumoItemPostOc(sol.id, item.id, body)
+    }
     return api.mapearItemSolicitud(sol.id, item.id, body)
   }
 
   const validar = async (accion) => {
-    if (!puedeEditar) return
+    if (!puedeValidarLinea) return
     if (accion === 'rechazar' && !motivo.trim()) {
       setError('Indique el motivo del rechazo del ítem.')
       return
@@ -212,7 +218,11 @@ export default function SolicitudLineaRevisionModal({
     try {
       if (accion === 'aprobar') {
         const mapped = await guardarMapeo()
-        if (!mapped) return
+        if (!mapped) {
+          setBusy(false)
+          return
+        }
+        // mapear ya devolvió la solicitud actualizada; validar en seguida (respuesta ligera).
       }
       const r = await api.validarItemSolicitud(sol.id, item.id, {
         accion,
@@ -233,7 +243,10 @@ export default function SolicitudLineaRevisionModal({
     setError('')
     try {
       const r = await guardarMapeo()
-      if (r) onUpdated?.(r)
+      if (r) {
+        onUpdated?.(r)
+        if (puedeCorregirPostOc && !puedeValidarLinea) onClose?.()
+      }
     } catch (e) {
       setError(e.message || 'No se pudo guardar el mapeo.')
     } finally {
@@ -476,6 +489,23 @@ export default function SolicitudLineaRevisionModal({
               />
             </div>
 
+            {puedeCorregirPostOc && !puedeValidarLinea && (
+              <div style={{
+                marginBottom: 10,
+                padding: '8px 10px',
+                borderRadius: 8,
+                background: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                color: '#1e3a8a',
+                fontSize: 'var(--cc-xs)',
+                lineHeight: 1.4,
+              }}
+              >
+                Corrección excepcional: puede cambiar el insumo y se actualizará la OC.
+                Deja de estar disponible cuando exista una entrada registrada.
+              </div>
+            )}
+
             <div style={{
               display: 'flex',
               gap: 10,
@@ -490,24 +520,30 @@ export default function SolicitudLineaRevisionModal({
                 disabled={busy}
                 onClick={() => { void soloGuardar() }}
               >
-                {busy ? 'Guardando…' : 'Guardar mapeo'}
+                {busy
+                  ? 'Guardando…'
+                  : (puedeCorregirPostOc && !puedeValidarLinea ? 'Corregir insumo y actualizar OC' : 'Guardar mapeo')}
               </button>
-              <button
-                type="button"
-                style={{ ...btnSuccessStyle(ui.btnPrimary), padding: '10px 18px' }}
-                disabled={busy}
-                onClick={() => { void validar('aprobar') }}
-              >
-                ✓ Aprobar ítem
-              </button>
-              <button
-                type="button"
-                style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
-                disabled={busy}
-                onClick={() => { void validar('rechazar') }}
-              >
-                ✕ Rechazar ítem
-              </button>
+              {puedeValidarLinea && (
+                <>
+                  <button
+                    type="button"
+                    style={{ ...btnSuccessStyle(ui.btnPrimary), padding: '10px 18px' }}
+                    disabled={busy}
+                    onClick={() => { void validar('aprobar') }}
+                  >
+                    ✓ Aprobar ítem
+                  </button>
+                  <button
+                    type="button"
+                    style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
+                    disabled={busy}
+                    onClick={() => { void validar('rechazar') }}
+                  >
+                    ✕ Rechazar ítem
+                  </button>
+                </>
+              )}
             </div>
           </>
         ) : (
