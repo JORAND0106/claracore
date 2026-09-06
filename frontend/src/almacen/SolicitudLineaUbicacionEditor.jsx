@@ -1,28 +1,22 @@
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
-import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import PresupuestoRegistroGrid from './PresupuestoRegistroGrid'
 import UbicacionSolicitudFields from './UbicacionSolicitudFields'
 import {
-  AlmacenFieldLabel,
   almacenFormModalDialogStyle,
   useAlmacenCompact,
   useAlmacenTheme,
 } from './almacenShared'
 
 /**
- * Editor de ubicación de una línea de solicitud (mapa PK, registro de presupuesto,
- * tramo, costado y abscisas). Se abre desde el botón de mapa de la fila Excel.
+ * Popup de finalización de ubicación (tras elegir PK en el mapa satelital):
+ * registro de presupuesto, tramo, costado y abscisas.
  */
 export default function SolicitudLineaUbicacionEditor({
   item,
   lineIndex,
   t,
-  token,
-  contratoId,
   solicitudId,
   busy,
-  onPkSelect,
-  onPkClear,
   onRegistroSelect,
   onUbicacionChange,
   onClose,
@@ -30,14 +24,6 @@ export default function SolicitudLineaUbicacionEditor({
   const ui = useAlmacenTheme()
   const compact = useAlmacenCompact()
   if (!item) return null
-
-  const theme = t || {
-    primary: ui.accent,
-    border: '#e2e8f0',
-    text: ui.text,
-    textMuted: ui.textMuted,
-    bgCard: ui.card?.background || '#fff',
-  }
 
   const pkLabel = item.pk_label || item.pk_id || ''
 
@@ -74,11 +60,13 @@ export default function SolicitudLineaUbicacionEditor({
         >
           <div style={{ minWidth: 0 }}>
             <div id="solicitud-linea-ubicacion-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>
-              🗺️ Ubicación
+              📍 Completar ubicación
               {lineIndex != null ? ` · Línea ${lineIndex}` : ''}
             </div>
             <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2, lineHeight: 1.35 }}>
-              Seleccione PK-ID, registro de presupuesto, tramo, costado y abscisas.
+              PK-ID <strong style={{ color: ui.text }}>{pkLabel || '—'}</strong>
+              {item.tramo ? <> · Tramo <strong style={{ color: ui.text }}>{item.tramo}</strong></> : null}
+              {' · '}Seleccione el registro de presupuesto, costado y abscisas.
             </div>
           </div>
           <button type="button" style={{ ...ui.btnSecondary, padding: '6px 12px' }} onClick={onClose} aria-label="Cerrar">
@@ -87,20 +75,6 @@ export default function SolicitudLineaUbicacionEditor({
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div>
-            <AlmacenFieldLabel icon="🗺️" label="Ubicación PK-ID" compact ayuda="Seleccione en el mapa el sector." />
-            <AlmacenPkMapaSelector
-              t={theme}
-              token={token}
-              contratoId={contratoId}
-              pkIdSeleccionado={item.pk_id_id ? String(item.pk_id_id) : ''}
-              pkLabel={pkLabel}
-              onSeleccionar={onPkSelect}
-              onLimpiar={onPkClear}
-              compact
-            />
-          </div>
-
           <PresupuestoRegistroGrid
             capitulo={item.presupuesto_capitulo}
             item={item.presupuesto_item}

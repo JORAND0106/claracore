@@ -33,12 +33,15 @@ export function resolverPkMaestroAlmacen(pkVal, pkList, properties) {
   if (!row || row.id == null) {
     return { ok: false, error: `No se encontró «${codigo}» en el maestro PK del contrato.` }
   }
+  const tramoProps = properties && typeof properties === 'object'
+    ? (properties.tramo || properties.Tramo || properties.TRAMO || '')
+    : ''
   return {
     ok: true,
     row,
     codigo,
     pk_id_id: String(row.id),
     pk_label: String(row.pk_id || row.civ || codigo),
-    tramo: row.tramo || '',
+    tramo: String(row.tramo || tramoProps || '').trim(),
   }
 }
