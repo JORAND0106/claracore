@@ -5,7 +5,18 @@
 import { fmtMetrosAbscisa, parseAbscisaMetros } from './almacenAbscisa'
 
 export function solicitudTieneOrdenCompra(sol) {
-  return Boolean(sol?.tiene_orden_compra || sol?.orden_compra?.id)
+  if (sol?.tiene_orden_compra) return true
+  if (Array.isArray(sol?.ordenes_compra) && sol.ordenes_compra.some((o) => o?.id)) return true
+  return Boolean(sol?.orden_compra?.id)
+}
+
+/** Lista de OCs de una solicitud (compat: orden_compra única → array). */
+export function solicitudOrdenesCompra(sol) {
+  if (Array.isArray(sol?.ordenes_compra) && sol.ordenes_compra.length) {
+    return sol.ordenes_compra.filter((o) => o?.id)
+  }
+  if (sol?.orden_compra?.id) return [sol.orden_compra]
+  return []
 }
 
 /** Líneas nuevas post-OC aún no incluidas en la orden (pendientes o listas para sumar). */

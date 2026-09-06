@@ -11,7 +11,9 @@ export const EMPTY_SOLICITUDES_FILTROS = {
 }
 
 function solicitudTieneOc(sol) {
-  return Boolean(sol?.tiene_orden_compra || sol?.orden_compra?.id)
+  if (sol?.tiene_orden_compra) return true
+  if (Array.isArray(sol?.ordenes_compra) && sol.ordenes_compra.some((o) => o?.id)) return true
+  return Boolean(sol?.orden_compra?.id)
 }
 
 export function countSolicitudesFiltrosActivos(filtros) {
@@ -36,8 +38,11 @@ export function matchSolicitudFiltros(sol, filtros) {
   if (f.con_oc === 'no' && tieneOc) return false
 
   if (f.numero_oc) {
-    const num = sol?.orden_compra?.numero_oc
-    if (num == null || !includesTxt(String(num), f.numero_oc)) return false
+    const ocs = Array.isArray(sol?.ordenes_compra) && sol.ordenes_compra.length
+      ? sol.ordenes_compra
+      : (sol?.orden_compra?.id ? [sol.orden_compra] : [])
+    const hit = ocs.some((oc) => includesTxt(String(oc?.numero_oc ?? ''), f.numero_oc))
+    if (!hit) return false
   }
 
   return true

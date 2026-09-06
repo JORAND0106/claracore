@@ -7,6 +7,7 @@ import CcConfirmModal from '../components/CcConfirmModal'
 import {
   solicitudPuedeReabrirOc,
   solicitudPuedeValidar,
+  solicitudOrdenesCompra,
   solicitudTieneOrdenCompra,
 } from './solicitudDetalleHelpers'
 import {
@@ -239,9 +240,24 @@ export default function SolicitudesPanel({
                     {fmtFechaAlmacenCorta(s.created_at)}
                   </td>
                   <td style={ui.td} data-label="OC" onClick={(e) => e.stopPropagation()}>
-                    {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && s.orden_compra?.id && permisos?.exportar ? (
-                      <OrdenCompraPdfClip ordenCompra={s.orden_compra} compact puedeExportar />
-                    ) : '—'}
+                    {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && permisos?.exportar
+                      && solicitudOrdenesCompra(s).length > 0 ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {solicitudOrdenesCompra(s).map((oc) => (
+                            <OrdenCompraPdfClip
+                              key={oc.id}
+                              ordenCompra={oc}
+                              compact
+                              puedeExportar
+                              title={
+                                oc.proveedor_nombre
+                                  ? `OC #${oc.numero_oc} · ${oc.proveedor_nombre}`
+                                  : undefined
+                              }
+                            />
+                          ))}
+                        </div>
+                      ) : '—'}
                   </td>
                   <td style={ui.td} data-label="Acciones" onClick={(e) => e.stopPropagation()}>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -267,7 +283,7 @@ export default function SolicitudesPanel({
                         <button
                           type="button"
                           style={{ ...ui.btnPrimary, padding: '4px 8px', fontSize: 'var(--cc-caption)', minHeight: 0 }}
-                          title="Agregar insumos adicionales a la misma Orden de Compra"
+                          title="Agregar insumos adicionales. Si el proveedor es distinto, se genera otra OC."
                           data-testid="reabrir-oc-grid"
                           onClick={() => abrirReabrirOc(s)}
                         >

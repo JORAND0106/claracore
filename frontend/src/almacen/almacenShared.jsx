@@ -499,14 +499,16 @@ export function formatOcRecepcionLabel(oc) {
 export function formatOcOpcionEntrada(oc) {
   const num = oc?.numero_oc ?? '—'
   const recv = formatOcRecepcionLabel(oc)
+  const prov = (oc?.proveedor_nombre || '').trim()
   const saldo = Number(oc?.saldo_cantidad_pendiente)
   const un = oc?.saldo_unidad
     || (Array.isArray(oc?.saldo_unidades) && oc.saldo_unidades.length === 1 ? oc.saldo_unidades[0] : '')
+  const base = prov ? `OC #${num} · ${prov} · ${recv}` : `OC #${num} · ${recv}`
   if (Number.isFinite(saldo) && saldo > 0.0001) {
     const saldoTxt = `${fmtCant(saldo)}${un ? ` ${un}` : ''}`
-    return `OC #${num} · ${recv} (falta: ${saldoTxt})`
+    return `${base} (falta: ${saldoTxt})`
   }
-  return `OC #${num} · ${recv}`
+  return base
 }
 
 export function formatEntradaCantidadGrilla(entrada) {

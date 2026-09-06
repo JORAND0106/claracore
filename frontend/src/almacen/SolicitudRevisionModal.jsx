@@ -74,9 +74,11 @@ export default function SolicitudRevisionModal({
       const r = await api.aprobarSolicitud(sol.id, {})
       setConfirmAprobar(false)
       onUpdated?.(r)
-      const oc = r.orden_compra_generada || r.orden_compra
-      if (oc?.id) {
-        setExpedienteOcId(oc.id)
+      const ocs = Array.isArray(r.ordenes_compra_generadas) && r.ordenes_compra_generadas.length
+        ? r.ordenes_compra_generadas
+        : (r.orden_compra_generada || r.orden_compra ? [r.orden_compra_generada || r.orden_compra] : [])
+      if (ocs[0]?.id) {
+        setExpedienteOcId(ocs[0].id)
       } else {
         onClose?.()
       }

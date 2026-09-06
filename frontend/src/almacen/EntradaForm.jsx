@@ -14,6 +14,19 @@ import {
 } from './almacenShared'
 import { fmtSoporteBytes, prepareRemisionSoporte, REMISION_SOPORTE_MAX_BYTES } from './almacenRemisionSoporte'
 
+function sortKeyInsumoCodigo(codigo) {
+  const raw = String(codigo || '').trim()
+  if (!raw) return [1, '']
+  return [0, raw.toLowerCase()]
+}
+
+function codigoInsumoOcItem(it) {
+  return it?.insumo_codigo
+    || it?.almacen_solicitud_item?.insumo_codigo
+    || ''
+}
+
+/** Popup de nueva entrada en formato hoja de cálculo. */
 export default function EntradaForm({
   onSaved,
   onCancel,
@@ -50,18 +63,24 @@ export default function EntradaForm({
     const sid = ocItem?.solicitud_item_id
     if (!sid) return
     setUbicacionItemId(Number(sid))
-    setUbicacionInsumoCodigo(
-      ocItem?.insumo_codigo || ocItem?.almacen_solicitud_item?.insumo_codigo || null,
-    )
+    setUbicacionInsumoCodigo(codigoInsumoOcItem(ocItem) || null)
     setUbicacionOpen(true)
   }
 
-  const lineasPendientes = useMemo(() => (
-    (ocDetail?.items || []).filter((it) => {
+  const lineasPendientes = useMemo(() => {
+    const rows = (ocDetail?.items || []).filter((it) => {
       const pend = Number(it.cantidad) - Number(it.cantidad_recibida || 0)
       return pend > 0 && it.solicitud_item_id
     })
-  ), [ocDetail])
+    return [...rows].sort((a, b) => {
+      const ka = sortKeyInsumoCodigo(codigoInsumoOcItem(a))
+      const kb = sortKeyInsumoCodigo(codigoInsumoOcItem(b))
+      if (ka[0] !== kb[0]) return ka[0] - kb[0]
+      if (ka[1] < kb[1]) return -1
+      if (ka[1] > kb[1]) return 1
+      return Number(a.id || 0) - Number(b.id || 0)
+    })
+  }, [ocDetail])
 
   const unicaLineaPendiente = lineasPendientes.length === 1 ? lineasPendientes[0] : null
 
@@ -200,7 +219,29 @@ export default function EntradaForm({
     ? { color: ui.text }
     : ui.card
 
-  const gridCols = embedded && compact ? '1fr' : '1fr 1fr 1fr'
+  const thStyle = {
+    ...ui.th,
+    fontSize: 'var(--cc-xs)',
+    padding: '6px 8px',
+    whiteSpace: 'nowrap',
+    background: ui.accentSoft || `${ui.accent}18`,
+    borderBottom: `1px solid ${ui.textMuted}33`,
+  }
+  const tdStyle = {
+    ...ui.td,
+    fontSize: 'var(--cc-xs)',
+    padding: '6px 8px',
+    verticalAlign: 'middle',
+    borderBottom: `1px solid ${ui.textMuted}22`,
+  }
+  const cellInput = {
+    ...ui.input,
+    margin: 0,
+    padding: '4px 6px',
+    fontSize: 'var(--cc-xs)',
+    minHeight: 32,
+    width: '100%',
+  }
 
   return (
     <div style={rootStyle} className={embedded ? 'cc-almacen-form-root cc-almacen-form-root--embedded' : undefined}>
@@ -217,26 +258,47 @@ export default function EntradaForm({
 
       {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
 
-      <AlmacenFieldLabel
-        icon="📄"
-        label="Orden de compra"
-        ayuda="Órdenes de compra aprobadas con material pendiente por recibir. El estado indica el avance de la recepción, no la aprobación."
-      />
-      <select
-        style={{ ...ui.input, marginBottom: fieldErrors.oc ? 4 : (embedded ? 10 : 16), ...inputErrorStyle('oc') }}
-        value={ocId}
-        onChange={(e) => {
-          setOcId(e.target.value)
-          clearFieldError('oc')
-        }}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: compact ? '1fr' : 'minmax(280px, 1.4fr) minmax(160px, 0.6fr)',
+        gap: 10,
+        marginBottom: 10,
+        alignItems: 'end',
+      }}
       >
-        <option value="">Seleccione OC…</option>
-        {ocs.map((o) => (
-          <option key={o.id} value={o.id}>{formatOcOpcionEntrada(o)}</option>
-        ))}
-      </select>
+        <div>
+          <AlmacenFieldLabel
+            icon="📄"
+            label="Orden de compra"
+            ayuda="Órdenes de compra aprobadas con material pendiente por recibir. Una OC corresponde a un solo proveedor."
+          />
+          <select
+            style={{ ...ui.input, marginBottom: 0, ...inputErrorStyle('oc') }}
+            value={ocId}
+            onChange={(e) => {
+              setOcId(e.target.value)
+              clearFieldError('oc')
+            }}
+          >
+            <option value="">Seleccione OC…</option>
+            {ocs.map((o) => (
+              <option key={o.id} value={o.id}>{formatOcOpcionEntrada(o)}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <AlmacenFieldLabel icon="📅" label="Fecha de entrada" />
+          <input
+            style={{ ...ui.input, marginBottom: 0 }}
+            type="date"
+            value={fecha}
+            onChange={(e) => setFecha(e.target.value)}
+            disabled={!ocId}
+          />
+        </div>
+      </div>
       {fieldErrors.oc && (
-        <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 12 }}>{fieldErrors.oc}</div>
+        <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 10 }}>{fieldErrors.oc}</div>
       )}
 
       {ocDetail && (
@@ -244,12 +306,19 @@ export default function EntradaForm({
           <div style={{
             fontSize: 'var(--cc-xs)',
             color: ui.textMuted,
-            marginBottom: embedded ? 8 : 12,
+            marginBottom: 10,
             padding: '8px 10px',
-            borderRadius: 8,
-            background: `${ui.textMuted}11`,
+            borderRadius: 6,
+            border: `1px solid ${ui.textMuted}33`,
+            background: `${ui.textMuted}0d`,
           }}
           >
+            {ocDetail.proveedor_nombre && (
+              <span style={{ marginRight: 8 }}>
+                Proveedor: <strong style={{ color: ui.text }}>{ocDetail.proveedor_nombre}</strong>
+                {' · '}
+              </span>
+            )}
             {ocDetail.solicitud_id && unicaLineaPendiente && (
               <span style={{ marginRight: 8 }}>
                 Destino:{' '}
@@ -260,22 +329,23 @@ export default function EntradaForm({
                   onClick={() => abrirUbicacion(unicaLineaPendiente)}
                 >
                   OC {formatNumeroOcDisplay(ocDetail.numero_oc)}
-                  {(unicaLineaPendiente.insumo_codigo || unicaLineaPendiente.almacen_solicitud_item?.insumo_codigo)
-                    ? ` · ${unicaLineaPendiente.insumo_codigo || unicaLineaPendiente.almacen_solicitud_item?.insumo_codigo}`
+                  {codigoInsumoOcItem(unicaLineaPendiente)
+                    ? ` · ${codigoInsumoOcItem(unicaLineaPendiente)}`
                     : ''}
                 </button>
+                {' · '}
               </span>
             )}
             {ocDetail.solicitud_id && !unicaLineaPendiente && lineasPendientes.length > 1 && (
               <span style={{ marginRight: 8 }}>
                 OC {formatNumeroOcDisplay(ocDetail.numero_oc)}
-                {' · '}
-                Use «Ver destino» en cada línea para consultar la ubicación.
+                {' · Use «Destino» en cada fila · '}
               </span>
             )}
             {!ocDetail.solicitud_id && ocDetail.numero_oc && (
               <span style={{ marginRight: 8 }}>
                 OC {formatNumeroOcDisplay(ocDetail.numero_oc)}
+                {' · '}
               </span>
             )}
             Recepción: <strong style={{ color: ui.text }}>{formatOcRecepcionLabel(ocDetail)}</strong>
@@ -291,142 +361,182 @@ export default function EntradaForm({
             )}
           </div>
 
-          <AlmacenFieldLabel icon="📅" label="Fecha de entrada" />
-          <input
-            style={{ ...ui.input, marginBottom: embedded ? 10 : 12 }}
-            type="date"
-            value={fecha}
-            onChange={(e) => setFecha(e.target.value)}
-          />
-
-          <div style={{ fontWeight: 600, marginBottom: embedded ? 4 : 8, fontSize: 'var(--cc-sm)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 'var(--cc-sm)' }}>
             Cantidades recibidas
           </div>
           {fieldErrors.cantidad && (
             <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 8 }}>{fieldErrors.cantidad}</div>
           )}
-          {(ocDetail.items || []).map((it) => {
-            const pend = Number(it.cantidad) - Number(it.cantidad_recibida || 0)
-            if (pend <= 0) return null
-            const ln = lineas[it.id] || {}
-            return (
-              <div
-                key={it.id}
-                style={{
-                  marginBottom: embedded ? 8 : 12,
-                  padding: embedded ? 8 : 10,
-                  border: `1px solid ${ui.textMuted}33`,
-                  borderRadius: 8,
-                }}
-              >
-                <div style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>
-                  {it.material_descripcion}
-                  {ocDetail.solicitud_id && (
-                    <button
-                      type="button"
-                      style={{ ...almacenLinkButtonStyle(ui), marginLeft: 8, fontSize: 'var(--cc-xs)', fontWeight: 600 }}
-                      title="Ver dónde se solicitó este material"
-                      onClick={() => abrirUbicacion(it)}
-                    >
-                      📍 Ver destino
-                    </button>
-                  )}
-                </div>
-                <div style={{ fontSize: 'var(--cc-caption)', color: ui.textMuted }}>
-                  Pendiente: {fmtCant(pend)} {it.unidad}
-                  {it.proveedor_nombre ? ` · ${it.proveedor_nombre}` : ''}
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 8, marginTop: 8 }}>
-                  <div>
-                    <AlmacenFieldLabel icon="🔢" label="Cant. recibida" />
-                    <input
-                      style={{ ...ui.input, ...inputErrorStyle('cantidad') }}
-                      type="number"
-                      min="0"
-                      max={pend}
-                      step="any"
-                      value={ln.cantidad_recibida ?? ''}
-                      onChange={(e) => setLinea(it.id, 'cantidad_recibida', e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <AlmacenFieldLabel icon="🏷️" label="Lote" ayuda="Opcional. Para cemento, aditivos, etc." />
-                    <input
-                      style={ui.input}
-                      value={ln.lote || ''}
-                      onChange={(e) => setLinea(it.id, 'lote', e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <AlmacenFieldLabel icon="⏳" label="Vencimiento" ayuda="Fecha de vencimiento del lote, si aplica." />
-                    <input
-                      style={ui.input}
-                      type="date"
-                      value={ln.fecha_vencimiento || ''}
-                      onChange={(e) => setLinea(it.id, 'fecha_vencimiento', e.target.value)}
-                    />
-                  </div>
-                </div>
-              </div>
-            )
-          })}
 
-          <AlmacenFieldLabel
-            icon="🔢"
-            label="Número de remisión del proveedor"
-            ayuda="Número impreso en la remisión. Es distinto del lote del material."
-          />
-          <input
+          <div
+            className="cc-almacen-table-scroll"
             style={{
-              ...ui.input,
-              marginBottom: fieldErrors.numeroRemision ? 4 : (embedded ? 10 : 12),
-              ...inputErrorStyle('numeroRemision'),
-              textTransform: 'uppercase',
+              marginBottom: 12,
+              borderRadius: 6,
+              border: `1px solid ${ui.textMuted}33`,
+              overflow: 'auto',
             }}
-            value={numeroRemision}
-            placeholder="Ej. REM-123456"
-            onChange={(e) => {
-              setNumeroRemision(e.target.value.toUpperCase())
-              clearFieldError('numeroRemision')
-            }}
-          />
-          {fieldErrors.numeroRemision && (
-            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 12 }}>{fieldErrors.numeroRemision}</div>
-          )}
+          >
+            <table
+              className="cc-almacen-entrada-excel"
+              style={{ width: '100%', borderCollapse: 'collapse', minWidth: compact ? 640 : 860 }}
+            >
+              <thead>
+                <tr>
+                  <th style={{ ...thStyle, textAlign: 'left', minWidth: 110 }}>Insumo</th>
+                  <th style={{ ...thStyle, textAlign: 'left', minWidth: 180 }}>Descripción</th>
+                  <th style={{ ...thStyle, textAlign: 'right', minWidth: 88 }}>Pendiente</th>
+                  <th style={{ ...thStyle, textAlign: 'left', minWidth: 96 }}>Cant. recibida</th>
+                  <th style={{ ...thStyle, textAlign: 'left', minWidth: 90 }}>Lote</th>
+                  <th style={{ ...thStyle, textAlign: 'left', minWidth: 110 }}>Vencimiento</th>
+                  <th style={{ ...thStyle, textAlign: 'center', minWidth: 72 }}>Destino</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lineasPendientes.map((it, idx) => {
+                  const pend = Number(it.cantidad) - Number(it.cantidad_recibida || 0)
+                  const ln = lineas[it.id] || {}
+                  const codigo = codigoInsumoOcItem(it) || '—'
+                  return (
+                    <tr
+                      key={it.id}
+                      style={{ background: idx % 2 === 0 ? 'transparent' : `${ui.textMuted}08` }}
+                    >
+                      <td style={{ ...tdStyle, fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        {codigo}
+                      </td>
+                      <td style={tdStyle}>
+                        <div style={{ fontWeight: 600, lineHeight: 1.3 }}>{it.material_descripcion}</div>
+                        {it.proveedor_nombre && (
+                          <div style={{ color: ui.textMuted, marginTop: 2 }}>{it.proveedor_nombre}</div>
+                        )}
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        {fmtCant(pend)} {it.unidad}
+                      </td>
+                      <td style={tdStyle}>
+                        <input
+                          style={{ ...cellInput, ...inputErrorStyle('cantidad') }}
+                          type="number"
+                          min="0"
+                          max={pend}
+                          step="any"
+                          value={ln.cantidad_recibida ?? ''}
+                          onChange={(e) => setLinea(it.id, 'cantidad_recibida', e.target.value)}
+                          aria-label={`Cantidad recibida ${codigo}`}
+                        />
+                      </td>
+                      <td style={tdStyle}>
+                        <input
+                          style={cellInput}
+                          value={ln.lote || ''}
+                          onChange={(e) => setLinea(it.id, 'lote', e.target.value)}
+                          placeholder="Opcional"
+                          aria-label={`Lote ${codigo}`}
+                        />
+                      </td>
+                      <td style={tdStyle}>
+                        <input
+                          style={cellInput}
+                          type="date"
+                          value={ln.fecha_vencimiento || ''}
+                          onChange={(e) => setLinea(it.id, 'fecha_vencimiento', e.target.value)}
+                          aria-label={`Vencimiento ${codigo}`}
+                        />
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>
+                        {ocDetail.solicitud_id ? (
+                          <button
+                            type="button"
+                            style={{ ...almacenLinkButtonStyle(ui), fontSize: 'var(--cc-xs)', fontWeight: 600 }}
+                            title="Ver dónde se solicitó este material"
+                            onClick={() => abrirUbicacion(it)}
+                          >
+                            📍 Destino
+                          </button>
+                        ) : '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+                {!lineasPendientes.length && (
+                  <tr>
+                    <td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: ui.textMuted }}>
+                      No hay líneas pendientes de recepción en esta OC.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
-          <AlmacenFieldLabel
-            icon="📷"
-            label="Soporte de remisión (obligatorio)"
-            ayuda={`Foto o PDF de la remisión. Tamaño máximo ${fmtSoporteBytes(REMISION_SOPORTE_MAX_BYTES)}.`}
-          />
           <div style={{
-            display: 'flex',
-            gap: 8,
-            marginBottom: fieldErrors.remision ? 4 : (embedded ? 10 : 12),
-            flexWrap: 'wrap',
-            flexDirection: compact ? 'column' : 'row',
+            display: 'grid',
+            gridTemplateColumns: compact ? '1fr' : '1fr 1fr',
+            gap: 10,
+            marginBottom: 10,
+            alignItems: 'start',
           }}
           >
-            <input ref={fileRef} type="file" accept="image/*,application/pdf" style={{ display: 'none' }} onChange={onFile} />
-            <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFile} />
-            <button type="button" style={{ ...ui.btnSecondary, width: compact ? '100%' : undefined }} disabled={soporteBusy} onClick={() => fileRef.current?.click()}>
-              📁 Cargar archivo
-            </button>
-            <button type="button" style={{ ...ui.btnSecondary, width: compact ? '100%' : undefined }} disabled={soporteBusy} onClick={() => camRef.current?.click()}>
-              📷 Tomar foto
-            </button>
-            {remision && (
-              <span style={{ fontSize: 'var(--cc-sm)', alignSelf: 'center', color: ui.textMuted }}>
-                {remision.name} · {fmtSoporteBytes(remisionBytes)}
-              </span>
-            )}
-            {soporteBusy && (
-              <span style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, alignSelf: 'center' }}>Preparando soporte…</span>
-            )}
+            <div>
+              <AlmacenFieldLabel
+                icon="🔢"
+                label="Número de remisión del proveedor"
+                ayuda="Número impreso en la remisión. Es distinto del lote del material."
+              />
+              <input
+                style={{
+                  ...ui.input,
+                  marginBottom: fieldErrors.numeroRemision ? 4 : 0,
+                  ...inputErrorStyle('numeroRemision'),
+                  textTransform: 'uppercase',
+                }}
+                value={numeroRemision}
+                placeholder="Ej. REM-123456"
+                onChange={(e) => {
+                  setNumeroRemision(e.target.value.toUpperCase())
+                  clearFieldError('numeroRemision')
+                }}
+              />
+              {fieldErrors.numeroRemision && (
+                <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 4 }}>{fieldErrors.numeroRemision}</div>
+              )}
+            </div>
+            <div>
+              <AlmacenFieldLabel
+                icon="📷"
+                label="Soporte de remisión (obligatorio)"
+                ayuda={`Foto o PDF de la remisión. Tamaño máximo ${fmtSoporteBytes(REMISION_SOPORTE_MAX_BYTES)}.`}
+              />
+              <div style={{
+                display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
+                flexDirection: compact ? 'column' : 'row',
+              }}
+              >
+                <input ref={fileRef} type="file" accept="image/*,application/pdf" style={{ display: 'none' }} onChange={onFile} />
+                <input ref={camRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={onFile} />
+                <button type="button" style={{ ...ui.btnSecondary, width: compact ? '100%' : undefined }} disabled={soporteBusy} onClick={() => fileRef.current?.click()}>
+                  📁 Cargar archivo
+                </button>
+                <button type="button" style={{ ...ui.btnSecondary, width: compact ? '100%' : undefined }} disabled={soporteBusy} onClick={() => camRef.current?.click()}>
+                  📷 Tomar foto
+                </button>
+              </div>
+              {remision && (
+                <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 6 }}>
+                  {remision.name} · {fmtSoporteBytes(remisionBytes)}
+                </div>
+              )}
+              {soporteBusy && (
+                <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 6 }}>Preparando soporte…</div>
+              )}
+              {fieldErrors.remision && (
+                <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 4 }}>{fieldErrors.remision}</div>
+              )}
+            </div>
           </div>
-          {fieldErrors.remision && (
-            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 12 }}>{fieldErrors.remision}</div>
-          )}
 
           <AlmacenFieldLabel icon="📝" label="Observaciones" />
           <textarea

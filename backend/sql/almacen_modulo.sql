@@ -103,7 +103,7 @@ END $$;
 -- ── Órdenes de compra (generadas al aprobar solicitud) ───────────────────────
 CREATE TABLE IF NOT EXISTS public.almacen_orden_compra (
   id                  bigserial PRIMARY KEY,
-  solicitud_id        bigint NOT NULL UNIQUE REFERENCES public.almacen_solicitud(id),
+  solicitud_id        bigint NOT NULL REFERENCES public.almacen_solicitud(id),
   contrato_id         integer NOT NULL REFERENCES public.contratos(id) ON DELETE CASCADE,
   numero_oc           integer NOT NULL,
   estado              text NOT NULL DEFAULT 'aprobada'
@@ -114,8 +114,17 @@ CREATE TABLE IF NOT EXISTS public.almacen_orden_compra (
   factura_mime        text,
   created_at          timestamptz NOT NULL DEFAULT now(),
   aprobada_por        integer REFERENCES public.usuarios(id) ON DELETE SET NULL,
+  proveedor_id        bigint REFERENCES public.almacen_proveedor(id) ON DELETE SET NULL,
+  proveedor_nombre    text,
   CONSTRAINT almacen_orden_compra_numero_uq UNIQUE (contrato_id, numero_oc)
 );
+
+-- Una solicitud puede tener varias OCs (una por proveedor).
+CREATE INDEX IF NOT EXISTS idx_almacen_oc_solicitud
+  ON public.almacen_orden_compra (solicitud_id);
+
+CREATE INDEX IF NOT EXISTS idx_almacen_oc_solicitud_proveedor
+  ON public.almacen_orden_compra (solicitud_id, proveedor_id);
 
 CREATE INDEX IF NOT EXISTS idx_almacen_oc_contrato
   ON public.almacen_orden_compra (contrato_id);

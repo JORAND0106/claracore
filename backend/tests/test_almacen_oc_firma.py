@@ -72,6 +72,9 @@ def test_usuario_firma_url_desde_perfil(monkeypatch):
 
 def test_aprobar_solicitud_sin_firma_perfil_falla(monkeypatch):
     class FakeTable:
+        def __init__(self, name):
+            self.name = name
+
         def select(self, *_a, **_k):
             return self
 
@@ -81,32 +84,49 @@ def test_aprobar_solicitud_sin_firma_perfil_falla(monkeypatch):
         def limit(self, *_a, **_k):
             return self
 
+        def order(self, *_a, **_k):
+            return self
+
+        def in_(self, *_a, **_k):
+            return self
+
+        def is_(self, *_a, **_k):
+            return self
+
+        def update(self, _row):
+            return self
+
         def execute(self):
+            if self.name == "almacen_solicitud_item":
+                return type("R", (), {"data": [{
+                    "id": 9,
+                    "estado_validacion": "aprobado",
+                    "insumo_id": 1,
+                    "material_descripcion": "Arena",
+                    "cantidad": 1,
+                    "unidad": "UND",
+                    "es_recurrente": True,
+                    "valor_compra_unitario": 1000,
+                    "presupuesto_id": 1,
+                }]})()
             return type("R", (), {"data": []})()
 
     class FakeSB:
-        def table(self, _name):
-            return FakeTable()
+        def table(self, name):
+            return FakeTable(name)
 
     monkeypatch.setattr("almacen_service._sb", lambda: FakeSB())
     monkeypatch.setattr(
-        "almacen_service.get_solicitud",
+        "almacen_service._fetch_solicitud_head",
         lambda *_a, **_k: {
             "id": 1,
             "contrato_id": 10,
             "estado": "enviada",
             "created_by": 2,
-            "items": [{
-                "id": 9,
-                "estado_validacion": "aprobado",
-                "insumo_id": 1,
-                "material_descripcion": "Arena",
-                "cantidad": 1,
-                "es_recurrente": True,
-                "valor_compra_unitario": 1000,
-            }],
+            "consecutivo": 1,
         },
     )
+    monkeypatch.setattr("almacen_service._fetch_ocs_de_solicitud", lambda *_a, **_k: [])
     monkeypatch.setattr(
         "almacen_service._usuario_firma_url",
         lambda _sb, uid: None if uid == 7 else "https://cdn.test/sol.png",
@@ -136,17 +156,26 @@ def test_aprobar_solicitud_orden_compra_null_no_attribute_error(monkeypatch):
     class FakeTable:
         def __init__(self, name):
             self.name = name
+            self._did_insert = False
+            self._filters = {}
 
         def select(self, *_a, **_k):
             return self
 
-        def eq(self, *_a, **_k):
+        def eq(self, key, val):
+            self._filters[key] = val
             return self
 
         def limit(self, *_a, **_k):
             return self
 
+        def order(self, *_a, **_k):
+            return self
+
         def in_(self, *_a, **_k):
+            return self
+
+        def is_(self, *_a, **_k):
             return self
 
         def update(self, _row):
@@ -154,11 +183,27 @@ def test_aprobar_solicitud_orden_compra_null_no_attribute_error(monkeypatch):
 
         def insert(self, _row):
             self._did_insert = True
+            self._inserted = _row
             return self
 
         def execute(self):
-            if self.name == "almacen_orden_compra" and getattr(self, "_did_insert", False):
+            if self.name == "almacen_solicitud_item" and not self._did_insert:
+                # Ítems aprobados para generar OC
+                return type("R", (), {"data": [{
+                    "id": 9,
+                    "estado_validacion": "aprobado",
+                    "insumo_id": 1,
+                    "material_descripcion": "Arena",
+                    "cantidad": 1,
+                    "unidad": "UND",
+                    "es_recurrente": True,
+                    "valor_compra_unitario": 1000,
+                    "presupuesto_id": 1,
+                }]})()
+            if self.name == "almacen_orden_compra" and self._did_insert:
                 return type("R", (), {"data": [{"id": 99}]})()
+            if self.name == "almacen_orden_compra":
+                return type("R", (), {"data": []})()
             return type("R", (), {"data": []})()
 
     class FakeSB:
@@ -181,11 +226,22 @@ def test_aprobar_solicitud_orden_compra_null_no_attribute_error(monkeypatch):
             "unidad": "UND",
             "es_recurrente": True,
             "valor_compra_unitario": 1000,
-            "presupuesto_id": None,
+            "presupuesto_id": 1,
         }],
     }
 
     monkeypatch.setattr("almacen_service._sb", lambda: FakeSB())
+    monkeypatch.setattr(
+        "almacen_service._fetch_solicitud_head",
+        lambda *_a, **_k: {
+            "id": 1,
+            "contrato_id": 10,
+            "estado": "enviada",
+            "created_by": 2,
+            "consecutivo": 1,
+        },
+    )
+    monkeypatch.setattr("almacen_service._fetch_ocs_de_solicitud", lambda *_a, **_k: [])
     monkeypatch.setattr("almacen_service.get_solicitud", lambda *_a, **kw: dict(sol))
     monkeypatch.setattr(
         "almacen_service._usuario_firma_url",
@@ -195,9 +251,12 @@ def test_aprobar_solicitud_orden_compra_null_no_attribute_error(monkeypatch):
     monkeypatch.setattr("almacen_service._now_iso", lambda: "2026-01-01T00:00:00+00:00")
     monkeypatch.setattr("almacen_service._enrich_solicitud_usuarios", lambda _sb, s, **_k: s)
     monkeypatch.setattr("almacen_service.generar_y_guardar_pdf_oc", lambda *_a, **_k: None)
+    monkeypatch.setattr("almacen_service._lanzar_pdfs_oc", lambda *_a, **_k: None)
 
     result = aprobar_solicitud(10, 1, 7, {"aprobar_todos_pendientes": False})
     assert result["orden_compra_generada"]["id"] == 99
+    assert len(result["ordenes_compra_generadas"]) == 1
+    assert result["ordenes_compra_generadas"][0]["proveedor_nombre"] == "Compra recurrente"
 
 
 def test_generar_pdf_oc_con_firma_data_uri(monkeypatch):
