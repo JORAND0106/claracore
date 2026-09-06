@@ -1974,7 +1974,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   (?)
                 </span>
               </th>
-              <th style={thGrid} title="Con AIU/IVA">Con IVA/AIU</th>
+              <th style={thGridNowrap} title="Cantidad negociada con el proveedor">Cant. neg.</th>
               <th style={thGridNowrap} title="Nº cotización">Nº</th>
               <th style={thGridNowrap} title="Fecha cotización">Fecha</th>
               <th style={{ ...thGridNowrap, textAlign: 'center' }} title="Valor cotización ganadora con IVA/AIU">Valor</th>
@@ -1994,6 +1994,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               const tipoTrib = tipoTributoCortoDesdeRow(r)
               const vtLabel = valorTributarioLabelDesdeRow(r)
               const openOnClick = canEditar
+              const cantNeg = r.cantidad_negociada
               return (
                 <tr
                   key={rid}
@@ -2010,7 +2011,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <td style={{ ...tdNum, textAlign: 'center' }}>{r.rendimiento ?? '—'}</td>
                     <td style={{ ...tdMuted, textAlign: 'center', whiteSpace: 'nowrap' }}>{tipoTrib}</td>
                     <td style={{ ...tdNum, textAlign: 'center', whiteSpace: 'nowrap' }} title="Valor tributario">{vtLabel}</td>
-                    <td style={{ ...tdTotal, textAlign: 'center' }}>{fmtMoney(r.costo_total)}</td>
+                    <td style={{ ...tdNum, textAlign: 'center' }} title="Cantidad negociada">
+                      {cantNeg != null && cantNeg !== '' ? cantNeg : '—'}
+                    </td>
                     <td style={{ ...tdMuted, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis' }} title={gan?.numero || r.cotizacion_numero || ''}>{gan?.numero || r.cotizacion_numero || '—'}</td>
                     <td style={{ ...tdMuted, textAlign: 'center', whiteSpace: 'nowrap' }}>{gan?.fecha || r.cotizacion_fecha || '—'}</td>
                     <td style={{ ...tdNum, textAlign: 'center' }}>{valorGan != null ? fmtMoney(valorGan) : '—'}</td>

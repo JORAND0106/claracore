@@ -612,6 +612,104 @@ def _fila_rentabilidad_oc(
     }
 
 
+def _columna_rentabilidad_desde_totales(
+    cantidad: float,
+    cobro_linea: float,
+    costo_linea: Optional[float],
+) -> dict:
+    """Columna de rentabilidad a partir de totales agregados (varios insumos del ítem)."""
+    cant_f = _to_float(cantidad)
+    cobro = round(_to_float(cobro_linea), 2) if cobro_linea else None
+    costo = round(_to_float(costo_linea), 2) if costo_linea is not None else None
+    if costo is not None and costo <= 0 and cobro is None:
+        costo = None
+    vu_cobro = round(cobro / cant_f, 4) if cobro and cant_f > 0 else None
+    vu_costo = round(costo / cant_f, 4) if costo is not None and cant_f > 0 else None
+    util = (
+        round(cobro - costo, 2)
+        if cobro is not None and costo is not None
+        else None
+    )
+    pct = (
+        round((util / cobro) * 100, 2)
+        if util is not None and cobro and cobro > 0
+        else None
+    )
+    return {
+        "cantidad": cant_f,
+        "valor_cobro_unitario": vu_cobro,
+        "valor_cobro_linea": cobro,
+        "costo_insumo_unitario": vu_costo,
+        "costo_insumo_linea": costo,
+        "utilidad_estimada_linea": util,
+        "rentabilidad_pct": pct,
+    }
+
+
+def _agregar_lineas_rentabilidad_item(
+    rows: list,
+    *,
+    override_actual: Optional[dict] = None,
+) -> dict:
+    """
+    Agrega cobro/costo de todas las líneas (principal + asociados) del mismo ítem.
+    Cantidad de referencia = suma de líneas con cobro > 0, o la principal.
+    override_actual: sustituye/añade la línea que se está editando (draft).
+    """
+    by_id: Dict[int, dict] = {}
+    for r in rows:
+        rid = int(r.get("id") or 0)
+        if rid:
+            by_id[rid] = r
+        else:
+            by_id[id(r)] = r
+    if override_actual:
+        oid = int(override_actual.get("id") or 0)
+        if oid and oid in by_id:
+            by_id[oid] = {**by_id[oid], **override_actual}
+        elif oid:
+            by_id[oid] = override_actual
+        else:
+            by_id[id(override_actual)] = override_actual
+
+    merged = list(by_id.values())
+    cobro_linea = 0.0
+    costo_linea = 0.0
+    tiene_costo = False
+    cant_cobro = 0.0
+    for r in merged:
+        cant = _to_float(r.get("cantidad"))
+        vlr = _to_float(r.get("vlr_unitario_cobro"))
+        vc = _to_float(r.get("valor_compra_unitario"))
+        if vlr > 0 and cant > 0:
+            cobro_linea += cant * vlr
+            cant_cobro += cant
+        if vc > 0 and cant > 0:
+            costo_linea += cant * vc
+            tiene_costo = True
+
+    if cant_cobro <= 0:
+        principals = [r for r in merged if r.get("es_principal") is not False]
+        src = principals[0] if principals else (merged[0] if merged else None)
+        cant_cobro = _to_float(src.get("cantidad")) if src else 0.0
+
+    return _columna_rentabilidad_desde_totales(
+        cant_cobro,
+        cobro_linea,
+        costo_linea if tiene_costo else None,
+    )
+
+
+def _etiqueta_fila_rentabilidad(es_actual: bool, sol: dict, oc: Optional[dict]) -> str:
+    consec = sol.get("consecutivo") if sol else None
+    num_oc = oc.get("numero_oc") if oc else None
+    if es_actual:
+        return "Esta solicitud"
+    if num_oc is not None:
+        return f"Sol. #{consec}" if consec else "Anterior"
+    return f"Sol. #{consec} (sin OC)" if consec else "Sin OC"
+
+
 def get_analisis_rentabilidad_por_oc(
     contrato_id: int,
     *,
@@ -624,58 +722,76 @@ def get_analisis_rentabilidad_por_oc(
     valor_compra_unitario: Optional[float],
     valor_cobro_unitario: float,
     solicitud_consecutivo: Optional[int] = None,
+    presupuesto_id: Optional[int] = None,
 ) -> dict:
     """
-    Rentabilidad desglosada por OC / solicitud para mismo insumo + ítem de cobro.
-    Una fila por cada solicitud histórica con OC (o sin OC) + fila de la solicitud actual.
+    Rentabilidad desglosada por OC / solicitud a nivel de ítem de presupuesto.
+
+    Agrega el costo de todos los insumos (principal + asociados) vinculados al
+    mismo presupuesto_id (o mismo capítulo/ítem) dentro de cada solicitud.
+    El resultado es idéntico sin importar desde qué línea del ítem se consulte.
     """
     sb = _sb()
     cap = (capitulo or "").strip()
     itm = _norm_item_key(item_cobro)
+    pid = int(presupuesto_id) if presupuesto_id else None
 
-    if not insumo_id:
-        col = _columna_rentabilidad(
-            cantidad_presente,
-            valor_cobro_unitario,
-            valor_compra_unitario,
-        )
-        oc_row = (
-            sb.table("almacen_orden_compra")
-            .select("numero_oc")
-            .eq("solicitud_id", int(solicitud_id))
-            .limit(1)
+    select_cols = (
+        "id, cantidad, valor_compra_unitario, vlr_unitario_cobro, "
+        "solicitud_id, insumo_id, capitulo, item, presupuesto_id, es_principal"
+    )
+
+    hist_rows: list = []
+    if pid:
+        hist_rows = (
+            sb.table("almacen_solicitud_item")
+            .select(select_cols)
+            .eq("presupuesto_id", pid)
             .execute()
             .data
             or []
         )
-        num_oc = oc_row[0].get("numero_oc") if oc_row else None
-        return {
-            "filas": [{
-                **col,
-                "numero_oc": num_oc,
-                "etiqueta_fila": "Esta solicitud",
-                "es_actual": True,
-                "solicitud_consecutivo": solicitud_consecutivo,
-                "solicitud_id": solicitud_id,
-            }],
-        }
-
-    hist_rows = (
-        sb.table("almacen_solicitud_item")
-        .select(
-            "id, cantidad, valor_compra_unitario, vlr_unitario_cobro, "
-            "solicitud_id, insumo_id, capitulo, item"
+    elif cap and itm:
+        # Fallback sin presupuesto_id: todas las líneas del mismo ítem de cobro.
+        hist_rows = (
+            sb.table("almacen_solicitud_item")
+            .select(select_cols)
+            .eq("capitulo", cap)
+            .execute()
+            .data
+            or []
         )
-        .eq("insumo_id", int(insumo_id))
-        .execute()
-        .data
-        or []
-    )
-    hist_rows = [
-        r for r in hist_rows
-        if (r.get("capitulo") or "").strip() == cap
-        and _norm_item_key(r.get("item")) == itm
-    ]
+        hist_rows = [
+            r for r in hist_rows
+            if _norm_item_key(r.get("item")) == itm
+        ]
+    elif insumo_id:
+        # Legacy: un solo insumo + ítem (compatibilidad).
+        hist_rows = (
+            sb.table("almacen_solicitud_item")
+            .select(select_cols)
+            .eq("insumo_id", int(insumo_id))
+            .execute()
+            .data
+            or []
+        )
+        hist_rows = [
+            r for r in hist_rows
+            if (r.get("capitulo") or "").strip() == cap
+            and _norm_item_key(r.get("item")) == itm
+        ]
+
+    override_actual = {
+        "id": int(solicitud_item_id),
+        "cantidad": cantidad_presente,
+        "vlr_unitario_cobro": valor_cobro_unitario,
+        "valor_compra_unitario": valor_compra_unitario,
+        "solicitud_id": int(solicitud_id),
+        "es_principal": True,
+    }
+
+    if not hist_rows and not (cantidad_presente > 0):
+        return {"filas": []}
 
     sol_ids = list({int(r["solicitud_id"]) for r in hist_rows if r.get("solicitud_id")})
     if int(solicitud_id) not in sol_ids:
@@ -704,62 +820,75 @@ def get_analisis_rentabilidad_por_oc(
     )
     oc_map = {int(o["solicitud_id"]): o for o in oc_rows if o.get("solicitud_id")}
 
-    otras: list = []
-    actual_tuple = None
+    # Agrupar líneas por solicitud (ítem = suma de todos los insumos).
+    by_sol: Dict[int, list] = {}
     for r in hist_rows:
         sid = int(r.get("solicitud_id") or 0)
+        if sid not in sol_map and sid != int(solicitud_id):
+            continue
+        by_sol.setdefault(sid, []).append(r)
+
+    if int(solicitud_id) not in by_sol:
+        by_sol[int(solicitud_id)] = []
+
+    otras_sids = []
+    for sid, rows in by_sol.items():
+        if sid == int(solicitud_id):
+            continue
         sol = sol_map.get(sid)
         if not sol:
             continue
-        es_actual = int(r.get("id") or 0) == int(solicitud_item_id)
-        tup = (r, sol, oc_map.get(sid))
-        if es_actual:
-            actual_tuple = tup
-        elif sol.get("estado") in ("enviada", "aprobada"):
-            otras.append(tup)
+        if sol.get("estado") not in ("enviada", "aprobada"):
+            continue
+        otras_sids.append(sid)
 
-    def _sort_key(t):
-        _r, sol, oc = t
+    def _sort_sid(sid: int):
+        sol = sol_map.get(sid) or {}
+        oc = oc_map.get(sid)
         n = int(oc.get("numero_oc") or 0) if oc else 0
         return (n, int(sol.get("consecutivo") or 0))
 
-    otras.sort(key=_sort_key)
+    otras_sids.sort(key=_sort_sid)
 
     filas = []
-    for r, sol, oc in otras:
-        filas.append(_fila_rentabilidad_oc(
-            r,
-            es_actual=False,
-            sol=sol,
-            oc=oc,
-            vu_cobro_default=valor_cobro_unitario,
-            vc_default=valor_compra_unitario,
-        ))
+    for sid in otras_sids:
+        sol = sol_map[sid]
+        oc = oc_map.get(sid)
+        col = _agregar_lineas_rentabilidad_item(by_sol.get(sid) or [])
+        filas.append({
+            **col,
+            "numero_oc": oc.get("numero_oc") if oc else None,
+            "etiqueta_fila": _etiqueta_fila_rentabilidad(False, sol, oc),
+            "es_actual": False,
+            "solicitud_consecutivo": sol.get("consecutivo"),
+            "solicitud_id": sid,
+        })
 
-    if actual_tuple:
-        r, sol, oc = actual_tuple
-        filas.append(_fila_rentabilidad_oc(
-            r,
-            es_actual=True,
-            sol=sol,
-            oc=oc,
-            vu_cobro_default=valor_cobro_unitario,
-            vc_default=valor_compra_unitario,
-        ))
-    else:
-        col = _columna_rentabilidad(
+    sol_act = sol_map.get(int(solicitud_id)) or {
+        "id": int(solicitud_id),
+        "consecutivo": solicitud_consecutivo,
+        "estado": "borrador",
+    }
+    oc_act = oc_map.get(int(solicitud_id))
+    col_act = _agregar_lineas_rentabilidad_item(
+        by_sol.get(int(solicitud_id)) or [],
+        override_actual=override_actual,
+    )
+    # Si no había hermanos ni override útil, caer a la columna simple.
+    if not col_act.get("cantidad") and not col_act.get("valor_cobro_linea") and not col_act.get("costo_insumo_linea"):
+        col_act = _columna_rentabilidad(
             cantidad_presente,
             valor_cobro_unitario,
             valor_compra_unitario,
         )
-        filas.append({
-            **col,
-            "numero_oc": oc_map.get(int(solicitud_id), {}).get("numero_oc"),
-            "etiqueta_fila": "Esta solicitud",
-            "es_actual": True,
-            "solicitud_consecutivo": solicitud_consecutivo,
-            "solicitud_id": solicitud_id,
-        })
+    filas.append({
+        **col_act,
+        "numero_oc": oc_act.get("numero_oc") if oc_act else None,
+        "etiqueta_fila": _etiqueta_fila_rentabilidad(True, sol_act, oc_act),
+        "es_actual": True,
+        "solicitud_consecutivo": sol_act.get("consecutivo") or solicitud_consecutivo,
+        "solicitud_id": int(solicitud_id),
+    })
 
     return {"filas": filas}
 

@@ -1,5 +1,6 @@
-"""Rentabilidad por OC — insumo + ítem de cobro."""
+"""Rentabilidad por OC — agregada a nivel de ítem de presupuesto."""
 from almacen_insumos_service import (
+    _agregar_lineas_rentabilidad_item,
     _columna_rentabilidad,
     _fila_rentabilidad_oc,
     _merge_columnas_rentabilidad,
@@ -54,3 +55,57 @@ def test_analisis_sin_insumo_id_solo_fila_actual():
     assert r["presente"]["cantidad"] == 2
     assert r["acumulado_anterior"]["cantidad"] == 0
     assert r["actual"]["cantidad"] == 2
+
+
+def test_agregar_lineas_principal_mas_asociados():
+    """Geocelda (principal) + pines + geotextil bajo el mismo ítem → costo sumado."""
+    rows = [
+        {
+            "id": 1,
+            "cantidad": 100,
+            "vlr_unitario_cobro": 50,
+            "valor_compra_unitario": 30,
+            "es_principal": True,
+        },
+        {
+            "id": 2,
+            "cantidad": 200,
+            "vlr_unitario_cobro": 0,
+            "valor_compra_unitario": 2,
+            "es_principal": False,
+        },
+        {
+            "id": 3,
+            "cantidad": 100,
+            "vlr_unitario_cobro": 0,
+            "valor_compra_unitario": 5,
+            "es_principal": False,
+        },
+    ]
+    col = _agregar_lineas_rentabilidad_item(rows)
+    # Cantidad de cobro = solo la principal (vlr > 0)
+    assert col["cantidad"] == 100
+    assert col["valor_cobro_linea"] == 5000  # 100 * 50
+    # Costo = 100*30 + 200*2 + 100*5 = 3000 + 400 + 500 = 3900
+    assert col["costo_insumo_linea"] == 3900
+    assert col["utilidad_estimada_linea"] == 1100
+    assert col["rentabilidad_pct"] == 22.0
+
+
+def test_agregar_lineas_override_actual_no_duplica():
+    rows = [
+        {"id": 10, "cantidad": 10, "vlr_unitario_cobro": 100, "valor_compra_unitario": 40, "es_principal": True},
+        {"id": 11, "cantidad": 5, "vlr_unitario_cobro": 0, "valor_compra_unitario": 20, "es_principal": False},
+    ]
+    col = _agregar_lineas_rentabilidad_item(
+        rows,
+        override_actual={
+            "id": 10,
+            "cantidad": 12,
+            "vlr_unitario_cobro": 100,
+            "valor_compra_unitario": 40,
+        },
+    )
+    assert col["cantidad"] == 12
+    assert col["valor_cobro_linea"] == 1200
+    assert col["costo_insumo_linea"] == 12 * 40 + 5 * 20

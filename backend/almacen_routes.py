@@ -599,6 +599,7 @@ def route_get_solicitud(
             solicitud_id,
             ver_economicos=ver_eco if not ligera else False,
             ligera=ligera,
+            include_rentabilidad=bool(ver_eco and not ligera),
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

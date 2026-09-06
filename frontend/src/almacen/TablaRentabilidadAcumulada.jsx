@@ -16,7 +16,7 @@ const METRIC_COLS = [
   {
     id: 'cantidad',
     label: 'Cant.',
-    ayuda: 'Cantidad de insumo en esta línea.',
+    ayuda: 'Cantidad de cobro del ítem (líneas con valor de cobro; principal + asociados agregados).',
     render: (col) => fmtCant(col?.cantidad),
   },
   {
@@ -44,7 +44,7 @@ const METRIC_COLS = [
   {
     id: 'total_costo',
     label: 'Tot. costo',
-    ayuda: 'Total de costo del insumo: cantidad × valor unitario de compra.',
+    ayuda: 'Total de costo de todos los insumos (principal y asociados) del ítem: suma de cantidad × valor unitario de compra.',
     render: (col) => {
       if (!col?.costo_insumo_unitario && col?.costo_insumo_linea == null) return { sinPrecio: true }
       return { text: fmtMoney(col?.costo_insumo_linea) }

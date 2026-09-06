@@ -762,24 +762,45 @@ def _enrich_solicitud(
                 vc if vc > 0 else None,
                 vlr,
             )
-            if include_rentabilidad and ver_economicos and it.get("id"):
+            if not ver_economicos:
+                _strip_economics_item(it)
+
+        # Una tabla de rentabilidad por ítem de presupuesto (agrega principal + asociados).
+        rent_cache: Dict[str, dict] = {}
+        if include_rentabilidad and ver_economicos:
+            for it in items:
+                if not it.get("id"):
+                    continue
+                pid = it.get("presupuesto_id")
+                cache_key = (
+                    f"p:{int(pid)}"
+                    if pid
+                    else f"c:{(it.get('capitulo') or '').strip()}|{(it.get('item') or '').strip()}"
+                )
+                if cache_key in rent_cache:
+                    it["analisis_rentabilidad"] = rent_cache[cache_key]
+                    continue
                 try:
-                    it["analisis_rentabilidad"] = get_analisis_rentabilidad_por_oc(
+                    vc = _to_float(it.get("valor_compra_unitario"))
+                    vlr = _to_float(it.get("vlr_unitario_cobro"))
+                    cant = _to_float(it.get("cantidad"))
+                    ar = get_analisis_rentabilidad_por_oc(
                         int(sol["contrato_id"]),
                         solicitud_item_id=int(it["id"]),
                         solicitud_id=int(sid),
-                        insumo_id=int(insumo_id) if insumo_id else None,
+                        insumo_id=int(it["insumo_id"]) if it.get("insumo_id") else None,
                         capitulo=it.get("capitulo") or "",
                         item_cobro=it.get("item") or "",
                         cantidad_presente=cant,
                         valor_compra_unitario=vc if vc > 0 else None,
                         valor_cobro_unitario=vlr,
                         solicitud_consecutivo=sol.get("consecutivo"),
+                        presupuesto_id=int(pid) if pid else None,
                     )
+                    rent_cache[cache_key] = ar
+                    it["analisis_rentabilidad"] = ar
                 except Exception:
                     pass
-            if not ver_economicos:
-                _strip_economics_item(it)
         sol["items"] = items
 
     oc = (
@@ -1367,6 +1388,8 @@ def corregir_insumo_item_post_oc(
         ),
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
         "supera_negociado": resolved.get("supera_negociado", False),
+        # Conservar aprobación: quien corrige tiene autoridad de aprobar.
+        "estado_validacion": existing.get("estado_validacion") or "aprobado",
     }
     sb.table("almacen_solicitud_item").update(patch).eq("id", int(item_id)).execute()
 
