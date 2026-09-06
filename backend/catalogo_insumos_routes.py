@@ -31,6 +31,7 @@ from catalogo_insumos_service import (
     list_cotizaciones_soporte,
     list_precio_historial,
     list_proveedores_catalogo,
+    get_insumo_catalogo,
     map_ocr_to_cotizacion,
     next_codigo_insumo,
     resolve_cotizacion_by_numero,
@@ -165,6 +166,16 @@ def route_list_insumos(
     require_permiso_catalogo_insumos(current_user, "ver")
     rows, total = list_catalogo_insumos(contrato_id, q, min(limit, 100), max(offset, 0))
     return {"items": rows, "total": total}
+
+
+@router.get("/{contrato_id}/insumos/{insumo_id}")
+def route_get_insumo(contrato_id: int, insumo_id: int, current_user=Depends(get_current_user)):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    try:
+        return get_insumo_catalogo(contrato_id, insumo_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
 
 
 @router.get("/{contrato_id}/insumos/{insumo_id}/historial")
