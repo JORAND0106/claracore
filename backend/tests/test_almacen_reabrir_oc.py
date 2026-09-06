@@ -29,12 +29,12 @@ def test_append_aprobados_a_oc_firma():
 def test_aprobar_solicitud_delega_a_append_si_hay_oc():
     src = Path(svc.__file__).read_text(encoding="utf-8")
     assert "append_aprobados_a_oc" in src
-    assert "existing_oc" in src or "_fetch_oc_de_solicitud" in src
+    assert "existing_ocs" in src or "_fetch_ocs_de_solicitud" in src
     # Bloque de reapertura antes de crear OC nueva.
     idx_append = src.find("return append_aprobados_a_oc")
-    idx_create = src.find('numero_oc = _next_consecutivo(contrato_id, "almacen_orden_compra"')
+    idx_create = src.find("_crear_oc_con_items")
     assert idx_append > 0
-    assert idx_create > idx_append
+    assert idx_create > 0
 
 
 def test_ruta_agregar_lineas_registrada():

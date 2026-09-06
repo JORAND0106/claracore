@@ -9,7 +9,7 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 
-const MODAL_WIDTH = 'min(960px, 100%)'
+const MODAL_WIDTH = 'min(1180px, 100%)'
 
 /** Popup dedicado para registrar una nueva entrada contra OC. */
 export default function EntradaFormModal({

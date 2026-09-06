@@ -90,6 +90,39 @@ def _split_line_tax(unit_total: float, insumo: Optional[dict]) -> tuple[float, f
     return unit_total, 0.0, ""
 
 
+def _insumo_codigo_sort_key(codigo: Optional[str]) -> tuple:
+    """Clave de orden ascendente por código de insumo (p. ej. CC-1614-001)."""
+    raw = (codigo or "").strip()
+    if not raw:
+        return (1, "")
+    return (0, raw.casefold())
+
+
+def _ordenar_items_oc_por_insumo(
+    items: List[dict],
+    solicitud_items: Optional[Dict[int, dict]] = None,
+    insumo_map: Optional[Dict[int, dict]] = None,
+) -> List[dict]:
+    sol_map = solicitud_items or {}
+    ins_map = insumo_map or {}
+
+    def _codigo(it: dict) -> str:
+        if it.get("insumo_codigo"):
+            return str(it.get("insumo_codigo") or "")
+        sid = it.get("solicitud_item_id")
+        sol_it = sol_map.get(int(sid)) if sid else {}
+        if sol_it.get("insumo_codigo"):
+            return str(sol_it.get("insumo_codigo") or "")
+        ins_id = sol_it.get("insumo_id") if sol_it else None
+        if ins_id and int(ins_id) in ins_map:
+            return str(ins_map[int(ins_id)].get("codigo") or "")
+        return ""
+
+    indexed = list(enumerate(items or []))
+    indexed.sort(key=lambda pair: (_insumo_codigo_sort_key(_codigo(pair[1])), pair[0]))
+    return [it for _, it in indexed]
+
+
 def _lineas_y_totales(
     items: List[dict],
     solicitud_items: Optional[Dict[int, dict]] = None,
@@ -101,7 +134,9 @@ def _lineas_y_totales(
     sol_map = solicitud_items or {}
     ins_map = insumo_map or {}
 
-    for i, it in enumerate(items, start=1):
+    ordered = _ordenar_items_oc_por_insumo(items, sol_map, ins_map)
+
+    for i, it in enumerate(ordered, start=1):
         sid = it.get("solicitud_item_id")
         sol_it = sol_map.get(int(sid)) if sid else {}
         ins_id = sol_it.get("insumo_id")
@@ -111,12 +146,18 @@ def _lineas_y_totales(
         vu_base, tax_unit, tax_label = _split_line_tax(vu_total, insumo)
         line_sub = round(cant * vu_base, 2)
         line_tax = round(cant * tax_unit, 2)
-        line_total = round(cant * vu_total, 2)
         subtotal += line_sub
         if tax_label:
             impuestos[tax_label] = impuestos.get(tax_label, 0.0) + line_tax
 
+        codigo = (
+            (it.get("insumo_codigo") or "").strip()
+            or (sol_it.get("insumo_codigo") or "").strip()
+            or (insumo.get("codigo") or "").strip()
+        )
         desc = it.get("material_descripcion") or "—"
+        if codigo:
+            desc = f"{codigo} — {desc}"
         pk = sol_it.get("pk_id")
         tramo = sol_it.get("tramo")
         extra = []
@@ -127,13 +168,14 @@ def _lineas_y_totales(
         if extra:
             desc = f"{desc} ({', '.join(extra)})"
 
+        # Precio unit. y Total de línea: valores antes de IVA.
         rows.append(
             f"<tr class=\"{'even' if i % 2 == 0 else ''}\">"
             f"<td class=\"num\">{_fmt_cant(cant)}</td>"
             f"<td>{_esc(it.get('unidad') or '')}</td>"
             f"<td>{_esc(desc)}</td>"
             f"<td class=\"num\">{_fmt_money(vu_base)}</td>"
-            f"<td class=\"num\">{_fmt_money(line_total)}</td>"
+            f"<td class=\"num\">{_fmt_money(line_sub)}</td>"
             f"</tr>"
         )
 
@@ -143,17 +185,17 @@ def _lineas_y_totales(
     for label, amt in sorted(impuestos.items()):
         if amt:
             imp_rows += (
-                f"<tr><td colspan=\"4\" class=\"tot-lbl\">{ _esc(label) }</td>"
+                f"<tr><td colspan=\"4\" class=\"tot-lbl\">{_esc(label)}</td>"
                 f"<td class=\"num\">{_fmt_money(amt)}</td></tr>"
             )
     totales_html = f"""
 <tr class="subtotal-row">
-  <td colspan="4" class="tot-lbl">Subtotal</td>
+  <td colspan="4" class="tot-lbl">Subtotal (antes de IVA)</td>
   <td class="num">{_fmt_money(subtotal)}</td>
 </tr>
 {imp_rows}
 <tr class="grand-row">
-  <td colspan="4" class="tot-lbl">Total</td>
+  <td colspan="4" class="tot-lbl">Total (IVA incluido)</td>
   <td class="num">{_fmt_money(grand)}</td>
 </tr>"""
     return "\n".join(rows), {"rows_html": totales_html, "subtotal": subtotal, "total": grand}
@@ -353,8 +395,8 @@ body {{ font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; color: #111
     <th style="width:9%">Cantidad</th>
     <th style="width:8%">Und.</th>
     <th style="width:45%">Descripción</th>
-    <th style="width:19%">Precio unit.</th>
-    <th style="width:19%">Total</th>
+    <th style="width:19%">Precio unit. (sin IVA)</th>
+    <th style="width:19%">Total (sin IVA)</th>
   </tr></thead>
   <tbody>
     {lineas}

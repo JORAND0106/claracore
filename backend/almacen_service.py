@@ -892,56 +892,48 @@ def _enrich_solicitud(
                     pass
         sol["items"] = items
 
-    oc = (
-        sb.table("almacen_orden_compra")
-        .select("id, numero_oc, estado, created_at, pdf_blob_path, pdf_nombre, solicitud_id")
-        .eq("solicitud_id", sid)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if oc:
-        oc_row = oc[0]
-        oc_row["tiene_pdf_oc"] = bool(oc_row.get("pdf_blob_path"))
-        sol["orden_compra"] = oc_row
+    oc_rows = _fetch_ocs_de_solicitud(sb, int(sol["contrato_id"]), sid)
+    if oc_rows:
+        for oc_row in oc_rows:
+            oc_row["tiene_pdf_oc"] = bool(oc_row.get("pdf_blob_path"))
+        sol["ordenes_compra"] = oc_rows
+        sol["orden_compra"] = oc_rows[0]
         sol["tiene_orden_compra"] = True
         if sol.get("estado") != "aprobada":
             sb.table("almacen_solicitud").update({
                 "estado": "aprobada",
             }).eq("id", sid).execute()
             sol["estado"] = "aprobada"
-        oci_rows = (
-            sb.table("almacen_orden_compra_item")
-            .select("solicitud_item_id")
-            .eq("orden_compra_id", oc_row["id"])
-            .execute()
-            .data
-            or []
-        )
-        oc_item_ids = {int(r["solicitud_item_id"]) for r in oci_rows if r.get("solicitud_item_id")}
+        oc_item_ids = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in oc_rows])
         for it in sol["items"]:
             if int(it.get("id") or 0) in oc_item_ids:
                 it["en_orden_compra"] = True
                 it["estado_validacion"] = "aprobado"
     else:
+        sol["ordenes_compra"] = []
         sol["orden_compra"] = None
         sol["tiene_orden_compra"] = False
 
-    # Flag de corrección post-OC: disponible si hay OC sin entradas.
-    if sol.get("orden_compra") and sol["orden_compra"].get("id"):
-        oc_id = int(sol["orden_compra"]["id"])
-        ent = (
-            sb.table("almacen_entrada")
-            .select("id")
-            .eq("orden_compra_id", oc_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        sol["orden_compra"]["tiene_entradas"] = bool(ent)
-        sol["puede_corregir_insumo_post_oc"] = not bool(ent)
+    # Flag de corrección post-OC: disponible si alguna OC con líneas aún no tiene entradas.
+    if sol.get("ordenes_compra"):
+        alguna_sin_entrada = False
+        for oc_row in sol["ordenes_compra"]:
+            oc_id = int(oc_row["id"])
+            ent = (
+                sb.table("almacen_entrada")
+                .select("id")
+                .eq("orden_compra_id", oc_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            oc_row["tiene_entradas"] = bool(ent)
+            if not ent:
+                alguna_sin_entrada = True
+        if sol.get("orden_compra"):
+            sol["orden_compra"]["tiene_entradas"] = bool(sol["ordenes_compra"][0].get("tiene_entradas"))
+        sol["puede_corregir_insumo_post_oc"] = alguna_sin_entrada
     else:
         sol["puede_corregir_insumo_post_oc"] = False
 
@@ -953,6 +945,10 @@ def _enrich_solicitud(
 def _solicitud_tiene_orden_compra(sol: dict) -> bool:
     """True si la solicitud ya tiene OC (orden_compra puede ser null explícito)."""
     if sol.get("tiene_orden_compra"):
+        return True
+    if isinstance(sol.get("ordenes_compra"), list) and any(
+        isinstance(o, dict) and o.get("id") for o in sol["ordenes_compra"]
+    ):
         return True
     oc = sol.get("orden_compra")
     return bool(isinstance(oc, dict) and oc.get("id"))
@@ -1039,22 +1035,27 @@ def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[di
             if sid in item_counts:
                 item_counts[sid] += 1
 
-    oc_by_sol: Dict[int, dict] = {}
+    oc_by_sol: Dict[int, List[dict]] = {}
     if ids:
         oc_rows = (
             sb.table("almacen_orden_compra")
-            .select("id, numero_oc, estado, created_at, pdf_blob_path, pdf_nombre, solicitud_id")
+            .select(
+                "id, numero_oc, estado, created_at, pdf_blob_path, pdf_nombre, "
+                "solicitud_id, proveedor_id, proveedor_nombre"
+            )
             .in_("solicitud_id", ids)
+            .order("numero_oc")
             .execute()
             .data
             or []
         )
         for oc in oc_rows:
             sid = int(oc.get("solicitud_id") or 0)
-            if sid and sid not in oc_by_sol:
-                oc = dict(oc)
-                oc["tiene_pdf_oc"] = bool(oc.get("pdf_blob_path"))
-                oc_by_sol[sid] = oc
+            if not sid:
+                continue
+            oc = dict(oc)
+            oc["tiene_pdf_oc"] = bool(oc.get("pdf_blob_path"))
+            oc_by_sol.setdefault(sid, []).append(oc)
 
     user_ids = []
     for r in rows:
@@ -1073,13 +1074,15 @@ def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[di
         sid = int(sol["id"])
         sol["items_count"] = item_counts.get(sid, 0)
         sol["items"] = []  # grilla usa items_count; detalle carga enrich completo
-        oc = oc_by_sol.get(sid)
-        if oc:
-            sol["orden_compra"] = oc
+        oc_list = oc_by_sol.get(sid) or []
+        if oc_list:
+            sol["ordenes_compra"] = oc_list
+            sol["orden_compra"] = oc_list[0]
             sol["tiene_orden_compra"] = True
             if sol.get("estado") != "aprobada":
                 sol["estado"] = "aprobada"
         else:
+            sol["ordenes_compra"] = []
             sol["orden_compra"] = None
             sol["tiene_orden_compra"] = False
         if sol.get("created_by"):
@@ -1262,15 +1265,15 @@ def mapear_item_solicitud_gerencial(
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] not in ("enviada", "borrador", "rechazada", "aprobada"):
         raise ValueError("No se puede mapear ítems en el estado actual de la solicitud.")
-    oc = _fetch_oc_de_solicitud(sb, contrato_id, solicitud_id)
-    if oc and sol["estado"] == "aprobada":
-        en_oc = _solicitud_item_ids_en_oc(sb, int(oc["id"]))
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    if ocs and sol["estado"] == "aprobada":
+        en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs])
         if int(item_id) in en_oc:
             raise ValueError(
                 "Esta línea ya forma parte de la Orden de Compra y no se puede remapear. "
                 "Use la corrección de insumo post-OC si aplica."
             )
-    elif oc and sol["estado"] != "aprobada":
+    elif ocs and sol["estado"] != "aprobada":
         raise ValueError("Esta solicitud ya tiene Orden de Compra generada.")
 
     item_rows = (
@@ -1380,19 +1383,20 @@ def corregir_insumo_item_post_oc(
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] != "aprobada":
         raise ValueError("Solo se pueden corregir insumos de solicitudes aprobadas con OC.")
-    oc_rows = (
-        sb.table("almacen_orden_compra")
-        .select("id, numero_oc")
-        .eq("solicitud_id", solicitud_id)
-        .eq("contrato_id", contrato_id)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if not oc_rows:
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    if not ocs:
         raise ValueError("No hay Orden de Compra asociada a esta solicitud.")
-    oc_id = int(oc_rows[0]["id"])
+
+    # Localizar la OC que contiene esta línea (puede haber varias por proveedor).
+    oc_id = None
+    for oc in ocs:
+        en = _solicitud_item_ids_en_oc(sb, int(oc["id"]))
+        if int(item_id) in en:
+            oc_id = int(oc["id"])
+            break
+    if oc_id is None:
+        raise ValueError("Esta línea no forma parte de ninguna Orden de Compra de la solicitud.")
+
     entradas = (
         sb.table("almacen_entrada")
         .select("id")
@@ -1605,34 +1609,65 @@ def _solicitud_item_ids_en_oc(sb, oc_id: int) -> set:
     return {int(r["solicitud_item_id"]) for r in rows if r.get("solicitud_item_id")}
 
 
-def _fetch_oc_de_solicitud(sb, contrato_id: int, solicitud_id: int) -> Optional[dict]:
+def _solicitud_item_ids_en_ocs(sb, oc_ids: List[int]) -> set:
+    ids = [int(x) for x in oc_ids if x]
+    if not ids:
+        return set()
     rows = (
-        sb.table("almacen_orden_compra")
-        .select("id, numero_oc, estado, solicitud_id")
-        .eq("solicitud_id", int(solicitud_id))
-        .eq("contrato_id", int(contrato_id))
-        .limit(1)
+        sb.table("almacen_orden_compra_item")
+        .select("solicitud_item_id")
+        .in_("orden_compra_id", ids)
         .execute()
         .data
         or []
     )
+    return {int(r["solicitud_item_id"]) for r in rows if r.get("solicitud_item_id")}
+
+
+def _fetch_ocs_de_solicitud(sb, contrato_id: int, solicitud_id: int) -> List[dict]:
+    rows = (
+        sb.table("almacen_orden_compra")
+        .select(
+            "id, numero_oc, estado, solicitud_id, proveedor_id, proveedor_nombre, "
+            "pdf_blob_path, pdf_nombre, created_at"
+        )
+        .eq("solicitud_id", int(solicitud_id))
+        .eq("contrato_id", int(contrato_id))
+        .order("numero_oc")
+        .execute()
+        .data
+        or []
+    )
+    out = []
+    for r in rows:
+        row = dict(r)
+        row["tiene_pdf_oc"] = bool(row.get("pdf_blob_path"))
+        out.append(row)
+    return out
+
+
+def _fetch_oc_de_solicitud(sb, contrato_id: int, solicitud_id: int) -> Optional[dict]:
+    """Compat: primera OC de la solicitud (orden por numero_oc)."""
+    rows = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
     return rows[0] if rows else None
 
 
-def _insertar_items_en_oc(
+def _proveedor_meta_batch(
     sb,
-    contrato_id: int,
-    oc_id: int,
-    items_aprobados: List[dict],
-) -> None:
-    """Inserta líneas de solicitud ya aprobadas como ítems de una OC existente o nueva."""
+    items: List[dict],
+) -> tuple[Dict[int, dict], Dict[int, str]]:
+    """Catálogo + nombres de proveedor para un lote de ítems de solicitud."""
     insumo_ids = sorted({
-        int(it["insumo_id"]) for it in items_aprobados
+        int(it["insumo_id"]) for it in items
         if it.get("insumo_id") and not it.get("es_recurrente")
     })
     cat_map = _cotizaciones_catalogo_batch(sb, insumo_ids)
     prov_ids: set = set()
     for cat in cat_map.values():
+        if cat.get("proveedor_id"):
+            prov_ids.add(int(cat["proveedor_id"]))
+    for it in items:
+        cat = it.get("cotizaciones_catalogo") or {}
         if cat.get("proveedor_id"):
             prov_ids.add(int(cat["proveedor_id"]))
     prov_nombres: Dict[int, str] = {}
@@ -1645,7 +1680,146 @@ def _insertar_items_en_oc(
             .data
             or []
         ):
-            prov_nombres[int(r["id"])] = r.get("razon_social") or ""
+            prov_nombres[int(r["id"])] = (r.get("razon_social") or "").strip()
+    return cat_map, prov_nombres
+
+
+def _proveedor_de_item(
+    it: dict,
+    cat_map: Dict[int, dict],
+    prov_nombres: Dict[int, str],
+) -> tuple[str, Optional[int], str]:
+    """
+    Clave de agrupación + id + nombre de proveedor para un ítem de solicitud.
+    Una OC = un proveedor; recurrentes van juntos bajo clave 'recurrente'.
+    """
+    if it.get("es_recurrente"):
+        return "recurrente", None, "Compra recurrente"
+    cat = it.get("cotizaciones_catalogo") or {}
+    if not cat and it.get("insumo_id"):
+        cat = cat_map.get(int(it["insumo_id"])) or {}
+    pid = cat.get("proveedor_id")
+    if pid:
+        pid_i = int(pid)
+        nombre = (
+            prov_nombres.get(pid_i)
+            or (it.get("proveedor_catalogo") or "").strip()
+            or "Proveedor catálogo"
+        )
+        return f"id:{pid_i}", pid_i, nombre
+    nombre = (it.get("proveedor_catalogo") or "").strip() or "Proveedor catálogo"
+    return f"nombre:{nombre.casefold()}", None, nombre
+
+
+def _agrupar_items_por_proveedor(
+    sb,
+    items: List[dict],
+) -> List[dict]:
+    """
+    Agrupa ítems aprobados por proveedor.
+    Retorna lista de {key, proveedor_id, proveedor_nombre, items}.
+    """
+    if not items:
+        return []
+    cat_map, prov_nombres = _proveedor_meta_batch(sb, items)
+    grupos: Dict[str, dict] = {}
+    orden: List[str] = []
+    for it in items:
+        key, pid, nombre = _proveedor_de_item(it, cat_map, prov_nombres)
+        if key not in grupos:
+            grupos[key] = {
+                "key": key,
+                "proveedor_id": pid,
+                "proveedor_nombre": nombre,
+                "items": [],
+                "_cat_map": cat_map,
+                "_prov_nombres": prov_nombres,
+            }
+            orden.append(key)
+        grupos[key]["items"].append(it)
+    return [grupos[k] for k in orden]
+
+
+def _oc_match_proveedor(oc: dict, key: str, proveedor_id: Optional[int], proveedor_nombre: str) -> bool:
+    """True si la OC existente corresponde al mismo proveedor del grupo."""
+    oc_pid = oc.get("proveedor_id")
+    if proveedor_id is not None and oc_pid is not None:
+        try:
+            return int(oc_pid) == int(proveedor_id)
+        except (TypeError, ValueError):
+            pass
+    oc_nombre = (oc.get("proveedor_nombre") or "").strip()
+    if key == "recurrente":
+        return oc_nombre.casefold() == "compra recurrente" or oc.get("_key") == "recurrente"
+    if oc_pid is None and oc_nombre and proveedor_nombre:
+        return oc_nombre.casefold() == proveedor_nombre.casefold()
+    if oc.get("_key") and oc.get("_key") == key:
+        return True
+    return False
+
+
+def _enrich_oc_proveedor_keys(sb, ocs: List[dict]) -> List[dict]:
+    """Deriva clave de proveedor en OCs legacy sin proveedor_id en encabezado."""
+    if not ocs:
+        return []
+    need = [oc for oc in ocs if oc.get("proveedor_id") is None and not (oc.get("proveedor_nombre") or "").strip()]
+    if not need:
+        for oc in ocs:
+            pid = oc.get("proveedor_id")
+            if pid is not None:
+                oc["_key"] = f"id:{int(pid)}"
+            else:
+                nom = (oc.get("proveedor_nombre") or "").strip()
+                if nom.casefold() == "compra recurrente":
+                    oc["_key"] = "recurrente"
+                elif nom:
+                    oc["_key"] = f"nombre:{nom.casefold()}"
+        return ocs
+
+    oc_ids = [int(oc["id"]) for oc in need]
+    item_rows = (
+        sb.table("almacen_orden_compra_item")
+        .select("orden_compra_id, proveedor_nombre, solicitud_item_id")
+        .in_("orden_compra_id", oc_ids)
+        .execute()
+        .data
+        or []
+    )
+    by_oc: Dict[int, List[dict]] = {}
+    for r in item_rows:
+        by_oc.setdefault(int(r["orden_compra_id"]), []).append(r)
+
+    for oc in ocs:
+        pid = oc.get("proveedor_id")
+        if pid is not None:
+            oc["_key"] = f"id:{int(pid)}"
+            continue
+        nom = (oc.get("proveedor_nombre") or "").strip()
+        if not nom:
+            rows = by_oc.get(int(oc["id"])) or []
+            if rows:
+                nom = (rows[0].get("proveedor_nombre") or "").strip()
+                if nom and not oc.get("proveedor_nombre"):
+                    oc["proveedor_nombre"] = nom
+        if nom.casefold() == "compra recurrente":
+            oc["_key"] = "recurrente"
+        elif nom:
+            oc["_key"] = f"nombre:{nom.casefold()}"
+    return ocs
+
+
+def _insertar_items_en_oc(
+    sb,
+    contrato_id: int,
+    oc_id: int,
+    items_aprobados: List[dict],
+    *,
+    cat_map: Optional[Dict[int, dict]] = None,
+    prov_nombres: Optional[Dict[int, str]] = None,
+) -> None:
+    """Inserta líneas de solicitud ya aprobadas como ítems de una OC existente o nueva."""
+    if cat_map is None or prov_nombres is None:
+        cat_map, prov_nombres = _proveedor_meta_batch(sb, items_aprobados)
 
     for it in items_aprobados:
         iid = int(it["id"])
@@ -1662,10 +1836,7 @@ def _insertar_items_en_oc(
                 raise ValueError(
                     f"«{it.get('material_descripcion')}» no tiene precio de compra en el catálogo."
                 )
-            proveedor = it.get("proveedor_catalogo") or "Proveedor catálogo"
-            pid = cat.get("proveedor_id")
-            if pid:
-                proveedor = prov_nombres.get(int(pid)) or proveedor
+            _key, _pid, proveedor = _proveedor_de_item(it, cat_map, prov_nombres)
             cot_sel_id = None
         sb.table("almacen_orden_compra_item").insert({
             "orden_compra_id": oc_id,
@@ -1678,6 +1849,87 @@ def _insertar_items_en_oc(
             "valor_unitario": vu,
             "presupuesto_id": it["presupuesto_id"],
         }).execute()
+
+
+def _crear_oc_con_items(
+    sb,
+    *,
+    contrato_id: int,
+    solicitud_id: int,
+    user_id: int,
+    sol: dict,
+    body: Optional[dict],
+    items: List[dict],
+    proveedor_id: Optional[int],
+    proveedor_nombre: str,
+    cat_map: Optional[Dict[int, dict]] = None,
+    prov_nombres: Optional[Dict[int, str]] = None,
+) -> dict:
+    """Crea una OC nueva (un proveedor) e inserta sus líneas."""
+    numero_oc = _next_consecutivo(contrato_id, "almacen_orden_compra", "numero_oc")
+    aprobador_firma = _usuario_firma_url(sb, user_id)
+    if not aprobador_firma:
+        raise ValueError(
+            "Configure la imagen de firma en su perfil de usuario antes de aprobar y generar la Orden de Compra."
+        )
+    solicitante_firma = _usuario_firma_url(sb, sol.get("created_by"))
+    oc_row = {
+        "solicitud_id": solicitud_id,
+        "contrato_id": contrato_id,
+        "numero_oc": numero_oc,
+        "estado": "aprobada",
+        "fecha_compromiso": (body or {}).get("fecha_compromiso") if body else None,
+        "aprobada_por": user_id,
+        "aprobador_firma_imagen_url": aprobador_firma,
+        "solicitante_firma_imagen_url": solicitante_firma,
+        "proveedor_nombre": proveedor_nombre,
+    }
+    if proveedor_id is not None:
+        oc_row["proveedor_id"] = int(proveedor_id)
+    oc_ins = sb.table("almacen_orden_compra").insert(oc_row).execute().data
+    if not oc_ins:
+        raise ValueError("No se pudo generar la orden de compra.")
+    oc_id = int(oc_ins[0]["id"])
+    _insertar_items_en_oc(
+        sb, contrato_id, oc_id, items,
+        cat_map=cat_map, prov_nombres=prov_nombres,
+    )
+    return {
+        "id": oc_id,
+        "numero_oc": numero_oc,
+        "estado": "aprobada",
+        "solicitud_id": solicitud_id,
+        "proveedor_id": proveedor_id,
+        "proveedor_nombre": proveedor_nombre,
+        "tiene_pdf_oc": False,
+        "pdf_generando": True,
+        "lineas": len(items),
+    }
+
+
+def _lanzar_pdfs_oc(
+    contrato_id: int,
+    solicitud_id: int,
+    user_id: int,
+    ocs: List[dict],
+) -> None:
+    """Regenera PDF de una o varias OC en segundo plano."""
+    oc_ids = [int(o["id"]) for o in ocs if o.get("id")]
+
+    def _run() -> None:
+        try:
+            sol_pdf = get_solicitud(contrato_id, solicitud_id, ligera=True)
+            for oc_id in oc_ids:
+                try:
+                    oc_full = get_orden_compra(contrato_id, oc_id)
+                    generar_y_guardar_pdf_oc(contrato_id, oc_id, oc_full, sol_pdf, user_id)
+                except Exception as exc:
+                    _log.warning("PDF OC %s no generado: %s", oc_id, exc)
+        except Exception as exc:
+            _log.warning("PDF OCs solicitud %s: %s", solicitud_id, exc)
+
+    if oc_ids:
+        threading.Thread(target=_run, daemon=True).start()
 
 
 def agregar_lineas_post_oc(
@@ -1694,8 +1946,8 @@ def agregar_lineas_post_oc(
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol.get("estado") != "aprobada":
         raise ValueError("Solo se pueden agregar líneas a solicitudes con OC generada (aprobadas).")
-    oc = _fetch_oc_de_solicitud(sb, contrato_id, solicitud_id)
-    if not oc:
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    if not ocs:
         raise ValueError("No hay Orden de Compra asociada a esta solicitud.")
 
     raw_items = body.get("items") or []
@@ -1753,19 +2005,18 @@ def append_aprobados_a_oc(
     aprobar_pendientes: bool = True,
 ) -> dict:
     """
-    Suma a la OC existente las líneas aprobadas que aún no están en ella.
-    Conserva intactas las líneas ya incluidas en la OC.
+    Suma líneas aprobadas pendientes a la(s) OC de la solicitud.
+    Misma proveedor → misma OC; proveedor distinto → nueva OC.
     """
     sb = _sb()
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
-    oc = _fetch_oc_de_solicitud(sb, contrato_id, solicitud_id)
-    if not oc:
+    ocs = _enrich_oc_proveedor_keys(sb, _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id))
+    if not ocs:
         raise ValueError("No hay Orden de Compra asociada a esta solicitud.")
-    oc_id = int(oc["id"])
-    en_oc = _solicitud_item_ids_en_oc(sb, oc_id)
+    oc_ids = [int(o["id"]) for o in ocs]
+    en_oc = _solicitud_item_ids_en_ocs(sb, oc_ids)
 
     if aprobar_pendientes:
-        # Solo ítems fuera de la OC.
         pending = (
             sb.table("almacen_solicitud_item")
             .select("id")
@@ -1836,7 +2087,71 @@ def append_aprobados_a_oc(
     if not items_nuevos:
         raise ValueError("No hay líneas nuevas aprobadas pendientes de agregar a la OC.")
 
-    _insertar_items_en_oc(sb, contrato_id, oc_id, items_nuevos)
+    grupos = _agrupar_items_por_proveedor(sb, items_nuevos)
+    ocs_afectadas: List[dict] = []
+    ocs_creadas: List[dict] = []
+    lineas_total = 0
+
+    for g in grupos:
+        key = g["key"]
+        pid = g["proveedor_id"]
+        pname = g["proveedor_nombre"]
+        items_g = g["items"]
+        cat_map = g.get("_cat_map")
+        prov_nombres = g.get("_prov_nombres")
+        match = next(
+            (oc for oc in ocs if _oc_match_proveedor(oc, key, pid, pname)),
+            None,
+        )
+        if match:
+            _insertar_items_en_oc(
+                sb, contrato_id, int(match["id"]), items_g,
+                cat_map=cat_map, prov_nombres=prov_nombres,
+            )
+            # Completar encabezado si era legacy sin proveedor.
+            if match.get("proveedor_id") is None and pid is not None:
+                sb.table("almacen_orden_compra").update({
+                    "proveedor_id": int(pid),
+                    "proveedor_nombre": pname,
+                }).eq("id", int(match["id"])).execute()
+                match["proveedor_id"] = pid
+                match["proveedor_nombre"] = pname
+            elif not (match.get("proveedor_nombre") or "").strip() and pname:
+                sb.table("almacen_orden_compra").update({
+                    "proveedor_nombre": pname,
+                }).eq("id", int(match["id"])).execute()
+                match["proveedor_nombre"] = pname
+            summary = {
+                "id": int(match["id"]),
+                "numero_oc": match.get("numero_oc"),
+                "estado": match.get("estado") or "aprobada",
+                "solicitud_id": solicitud_id,
+                "proveedor_id": match.get("proveedor_id") or pid,
+                "proveedor_nombre": match.get("proveedor_nombre") or pname,
+                "tiene_pdf_oc": False,
+                "pdf_generando": True,
+                "lineas_agregadas_oc": len(items_g),
+            }
+            ocs_afectadas.append(summary)
+        else:
+            created = _crear_oc_con_items(
+                sb,
+                contrato_id=contrato_id,
+                solicitud_id=solicitud_id,
+                user_id=user_id,
+                sol=sol,
+                body=None,
+                items=items_g,
+                proveedor_id=pid,
+                proveedor_nombre=pname,
+                cat_map=cat_map,
+                prov_nombres=prov_nombres,
+            )
+            created["lineas_agregadas_oc"] = len(items_g)
+            ocs_creadas.append(created)
+            ocs_afectadas.append(created)
+            ocs.append({**created, "_key": key})
+        lineas_total += len(items_g)
 
     sb.table("almacen_solicitud").update({
         "estado": "aprobada",
@@ -1846,25 +2161,40 @@ def append_aprobados_a_oc(
     }).eq("id", solicitud_id).execute()
 
     result = get_solicitud(contrato_id, solicitud_id, ligera=True)
-    result["orden_compra_generada"] = {
-        "id": oc_id,
-        "numero_oc": oc.get("numero_oc"),
-        "estado": oc.get("estado") or "aprobada",
-        "solicitud_id": solicitud_id,
-        "tiene_pdf_oc": False,
-        "pdf_generando": True,
-        "lineas_agregadas_oc": len(items_nuevos),
-    }
+    primaria = ocs_afectadas[0]
+    result["orden_compra_generada"] = primaria
+    result["ordenes_compra_generadas"] = ocs_afectadas
+    result["ocs_creadas"] = ocs_creadas
+    result["lineas_agregadas_oc"] = lineas_total
 
-    def _pdf_en_segundo_plano() -> None:
-        try:
-            oc_full = get_orden_compra(contrato_id, oc_id)
-            sol_pdf = get_solicitud(contrato_id, solicitud_id, ligera=True)
-            generar_y_guardar_pdf_oc(contrato_id, oc_id, oc_full, sol_pdf, user_id)
-        except Exception as exc:
-            _log.warning("PDF OC %s (append) no regenerado: %s", oc_id, exc)
+    _lanzar_pdfs_oc(contrato_id, solicitud_id, user_id, ocs_afectadas)
+    return result
 
-    threading.Thread(target=_pdf_en_segundo_plano, daemon=True).start()
+
+def _marcar_solicitud_aprobada_y_respuesta_ocs(
+    contrato_id: int,
+    solicitud_id: int,
+    user_id: int,
+    items_aprobados: List[dict],
+    ocs_creadas: List[dict],
+) -> dict:
+    sb = _sb()
+    sb.table("almacen_solicitud").update({
+        "estado": "aprobada",
+        "validada_at": _now_iso(),
+        "validada_by": user_id,
+        "motivo_rechazo": None,
+    }).eq("id", solicitud_id).execute()
+
+    sb.table("almacen_solicitud_item").update({
+        "estado_validacion": "aprobado",
+    }).eq("solicitud_id", solicitud_id).in_("id", [int(it["id"]) for it in items_aprobados]).execute()
+
+    result = get_solicitud(contrato_id, solicitud_id, ligera=True)
+    primaria = ocs_creadas[0]
+    result["orden_compra_generada"] = primaria
+    result["ordenes_compra_generadas"] = ocs_creadas
+    _lanzar_pdfs_oc(contrato_id, solicitud_id, user_id, ocs_creadas)
     return result
 
 
@@ -2367,9 +2697,9 @@ def validar_item_solicitud(
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] not in ("enviada", "aprobada"):
         raise ValueError("Solo se pueden validar ítems de solicitudes enviadas o reabiertas.")
-    oc = _fetch_oc_de_solicitud(sb, contrato_id, solicitud_id)
-    if oc:
-        en_oc = _solicitud_item_ids_en_oc(sb, int(oc["id"]))
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    if ocs:
+        en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs])
         if int(item_id) in en_oc:
             raise ValueError("Esta línea ya forma parte de la Orden de Compra.")
         if sol["estado"] != "aprobada" and sol["estado"] != "enviada":
@@ -2405,8 +2735,8 @@ def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: 
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
     if sol["estado"] not in ("enviada", "aprobada"):
         raise ValueError("Solo aplica a solicitudes enviadas o reabiertas.")
-    oc = _fetch_oc_de_solicitud(sb, contrato_id, solicitud_id)
-    en_oc = _solicitud_item_ids_en_oc(sb, int(oc["id"])) if oc else set()
+    ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
+    en_oc = _solicitud_item_ids_en_ocs(sb, [int(o["id"]) for o in ocs]) if ocs else set()
 
     pending = (
         sb.table("almacen_solicitud_item")
@@ -2438,10 +2768,10 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
     sb = _sb()
     body = body or {}
     sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
-    existing_oc = _fetch_oc_de_solicitud(sb, contrato_id, solicitud_id)
+    existing_ocs = _fetch_ocs_de_solicitud(sb, contrato_id, solicitud_id)
 
-    # Reapertura: OC ya existe → agregar solo líneas nuevas aprobadas.
-    if existing_oc:
+    # Reapertura: ya hay OC(s) → agregar líneas nuevas (misma OC por proveedor o nueva).
+    if existing_ocs:
         if sol["estado"] not in ("enviada", "aprobada"):
             raise ValueError("Solo se pueden agregar líneas a la OC en solicitudes enviadas o aprobadas.")
         return append_aprobados_a_oc(
@@ -2505,61 +2835,28 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
     if not items_aprobados:
         raise ValueError("Debe aprobar al menos un ítem antes de generar la Orden de Compra.")
 
-    numero_oc = _next_consecutivo(contrato_id, "almacen_orden_compra", "numero_oc")
-    aprobador_firma = _usuario_firma_url(sb, user_id)
-    if not aprobador_firma:
-        raise ValueError(
-            "Configure la imagen de firma en su perfil de usuario antes de aprobar y generar la Orden de Compra."
+    # Una OC independiente por proveedor involucrado.
+    grupos = _agrupar_items_por_proveedor(sb, items_aprobados)
+    ocs_creadas: List[dict] = []
+    for g in grupos:
+        created = _crear_oc_con_items(
+            sb,
+            contrato_id=contrato_id,
+            solicitud_id=solicitud_id,
+            user_id=user_id,
+            sol=sol,
+            body=body,
+            items=g["items"],
+            proveedor_id=g["proveedor_id"],
+            proveedor_nombre=g["proveedor_nombre"],
+            cat_map=g.get("_cat_map"),
+            prov_nombres=g.get("_prov_nombres"),
         )
-    solicitante_firma = _usuario_firma_url(sb, sol.get("created_by"))
-    oc_row = {
-        "solicitud_id": solicitud_id,
-        "contrato_id": contrato_id,
-        "numero_oc": numero_oc,
-        "estado": "aprobada",
-        "fecha_compromiso": body.get("fecha_compromiso") if body else None,
-        "aprobada_por": user_id,
-        "aprobador_firma_imagen_url": aprobador_firma,
-        "solicitante_firma_imagen_url": solicitante_firma,
-    }
-    oc_ins = sb.table("almacen_orden_compra").insert(oc_row).execute().data
-    if not oc_ins:
-        raise ValueError("No se pudo generar la orden de compra.")
-    oc_id = oc_ins[0]["id"]
+        ocs_creadas.append(created)
 
-    _insertar_items_en_oc(sb, contrato_id, oc_id, items_aprobados)
-
-    sb.table("almacen_solicitud").update({
-        "estado": "aprobada",
-        "validada_at": _now_iso(),
-        "validada_by": user_id,
-        "motivo_rechazo": None,
-    }).eq("id", solicitud_id).execute()
-
-    sb.table("almacen_solicitud_item").update({
-        "estado_validacion": "aprobado",
-    }).eq("solicitud_id", solicitud_id).in_("id", [int(it["id"]) for it in items_aprobados]).execute()
-
-    result = get_solicitud(contrato_id, solicitud_id, ligera=True)
-    result["orden_compra_generada"] = {
-        "id": oc_id,
-        "numero_oc": numero_oc,
-        "estado": "aprobada",
-        "solicitud_id": solicitud_id,
-        "tiene_pdf_oc": False,
-        "pdf_generando": True,
-    }
-
-    def _pdf_en_segundo_plano() -> None:
-        try:
-            oc_full = get_orden_compra(contrato_id, oc_id)
-            sol_pdf = get_solicitud(contrato_id, solicitud_id, ligera=True)
-            generar_y_guardar_pdf_oc(contrato_id, oc_id, oc_full, sol_pdf, user_id)
-        except Exception as exc:
-            _log.warning("PDF OC %s no generado: %s", oc_id, exc)
-
-    threading.Thread(target=_pdf_en_segundo_plano, daemon=True).start()
-    return result
+    return _marcar_solicitud_aprobada_y_respuesta_ocs(
+        contrato_id, solicitud_id, user_id, items_aprobados, ocs_creadas,
+    )
 
 
 def rechazar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, motivo: str) -> dict:
@@ -2760,6 +3057,14 @@ def get_orden_compra(contrato_id: int, oc_id: int, *, incluir_entradas: bool = T
             it["almacen_solicitud_item"] = sol_item_map[int(sid)]
             if sol_item_map[int(sid)].get("insumo_codigo"):
                 it["insumo_codigo"] = sol_item_map[int(sid)]["insumo_codigo"]
+    # Orden ascendente por código de insumo (misma regla del PDF).
+    oc["items"].sort(
+        key=lambda it: (
+            0 if (it.get("insumo_codigo") or "").strip() else 1,
+            (it.get("insumo_codigo") or "").strip().casefold(),
+            int(it.get("id") or 0),
+        )
+    )
     if incluir_entradas:
         entradas = (
             sb.table("almacen_entrada")
@@ -2817,7 +3122,7 @@ def generar_y_guardar_pdf_oc(
     if insumo_ids:
         ins_rows = (
             sb.table("almacen_insumo")
-            .select("id, tipo_impuesto, impuesto_porcentaje, costo_base, proveedor_id, cotizacion_vigencia")
+            .select("id, codigo, tipo_impuesto, impuesto_porcentaje, costo_base, proveedor_id, cotizacion_vigencia")
             .in_("id", insumo_ids)
             .execute()
             .data
@@ -3022,7 +3327,7 @@ def _enriquecer_ocs_con_saldo_recepcion(sb, rows: List[dict]) -> List[dict]:
     oc_ids = [int(r["id"]) for r in rows]
     all_items = (
         sb.table("almacen_orden_compra_item")
-        .select("orden_compra_id, cantidad, cantidad_recibida, valor_unitario, valor_recibido, unidad")
+        .select("orden_compra_id, cantidad, cantidad_recibida, valor_unitario, valor_recibido, unidad, proveedor_nombre")
         .in_("orden_compra_id", oc_ids)
         .execute()
         .data
@@ -3034,7 +3339,12 @@ def _enriquecer_ocs_con_saldo_recepcion(sb, rows: List[dict]) -> List[dict]:
         items_by_oc.setdefault(oid, []).append(it)
     for r in rows:
         oid = int(r["id"])
-        r.update(_oc_recepcion_resumen(items_by_oc.get(oid, []), r.get("estado")))
+        items = items_by_oc.get(oid, [])
+        r.update(_oc_recepcion_resumen(items, r.get("estado")))
+        if not (r.get("proveedor_nombre") or "").strip() and items:
+            nom = (items[0].get("proveedor_nombre") or "").strip()
+            if nom:
+                r["proveedor_nombre"] = nom
     return rows
 
 

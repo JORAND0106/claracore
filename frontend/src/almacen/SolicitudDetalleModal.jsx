@@ -13,6 +13,7 @@ import { solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPerm
 import {
   estadoValidacionItem,
   puedeAbrirRevisionLinea,
+  solicitudOrdenesCompra,
   solicitudPuedeReabrirOc,
   solicitudPuedeRechazarCompleta,
   solicitudPuedeValidar,
@@ -187,9 +188,11 @@ export default function SolicitudDetalleModal({
       const r = await api.aprobarSolicitud(sol.id, { aprobar_todos_pendientes: aprobarTodosPendientes })
       setConfirmAprobar(false)
       onUpdated?.(r)
-      const oc = r.orden_compra_generada || r.orden_compra
-      if (oc?.id) {
-        setExpedienteOcId(oc.id)
+      const ocs = Array.isArray(r.ordenes_compra_generadas) && r.ordenes_compra_generadas.length
+        ? r.ordenes_compra_generadas
+        : (r.orden_compra_generada || r.orden_compra ? [r.orden_compra_generada || r.orden_compra] : [])
+      if (ocs[0]?.id) {
+        setExpedienteOcId(ocs[0].id)
         setSol(r)
       } else {
         onClose?.()
@@ -292,7 +295,12 @@ export default function SolicitudDetalleModal({
               <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 2 }}>
                 {sol?.consecutivo ? `#${sol.consecutivo}` : ''}
                 {sol?.estado ? ` · ${ESTADO_SOLICITUD_LABEL[sol.estado]}` : ''}
-                {tieneOc && sol?.orden_compra?.numero_oc ? ` · OC #${sol.orden_compra.numero_oc}` : ''}
+                {tieneOc && (() => {
+                  const ocs = solicitudOrdenesCompra(sol)
+                  if (ocs.length === 1) return ` · OC #${ocs[0].numero_oc}`
+                  if (ocs.length > 1) return ` · ${ocs.length} OCs`
+                  return ''
+                })()}
               </div>
               {puedeEditarTitulo ? (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -403,11 +411,20 @@ export default function SolicitudDetalleModal({
                 </div>
               )}
 
-              {(tieneOc || (sol.estado === 'aprobada' && sol.orden_compra?.id && permisos?.exportar)) && (
+              {(tieneOc || (sol.estado === 'aprobada' && solicitudOrdenesCompra(sol).length > 0 && permisos?.exportar)) && (
                 <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                  {sol.estado === 'aprobada' && sol.orden_compra?.id && permisos?.exportar && (
-                    <OrdenCompraPdfClip ordenCompra={sol.orden_compra} puedeExportar />
-                  )}
+                  {sol.estado === 'aprobada' && permisos?.exportar && solicitudOrdenesCompra(sol).map((oc) => (
+                    <OrdenCompraPdfClip
+                      key={oc.id}
+                      ordenCompra={oc}
+                      puedeExportar
+                      title={
+                        oc.proveedor_nombre
+                          ? `OC #${oc.numero_oc} · ${oc.proveedor_nombre}`
+                          : undefined
+                      }
+                    />
+                  ))}
                   {tieneOc && (
                     <span style={{
                       padding: '4px 10px',
@@ -418,7 +435,9 @@ export default function SolicitudDetalleModal({
                       fontWeight: 600,
                     }}
                     >
-                      ✓ OC #{sol.orden_compra?.numero_oc} generada
+                      {solicitudOrdenesCompra(sol).length > 1
+                        ? `✓ ${solicitudOrdenesCompra(sol).length} OCs generadas (una por proveedor)`
+                        : `✓ OC #${solicitudOrdenesCompra(sol)[0]?.numero_oc} generada`}
                     </span>
                   )}
                   {puedeReabrir && (
@@ -427,7 +446,7 @@ export default function SolicitudDetalleModal({
                       style={{ ...ui.btnPrimary, padding: '6px 12px', fontSize: 'var(--cc-sm)' }}
                       disabled={busy}
                       onClick={() => onReabrirOc?.(sol)}
-                      title="Agregar insumos adicionales a la misma Orden de Compra"
+                      title="Agregar insumos adicionales. Si el proveedor es distinto, se genera otra OC."
                       data-testid="reabrir-oc-header"
                     >
                       🔓 Reabrir OC

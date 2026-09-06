@@ -26,6 +26,7 @@ import {
 } from './almacenShared'
 import { solicitudAlmacenEditable } from './almacenPermisos'
 import { parseAbscisaMetros } from './almacenAbscisa'
+import { solicitudOrdenesCompra } from './solicitudDetalleHelpers'
 
 const emptyItem = () => ({
   descripcion_solicitada: '',
@@ -487,7 +488,7 @@ export default function SolicitudForm({
         aplicarSolicitudServidor(result)
         setOkMsg(
           `Se agregaron ${result?.lineas_agregadas || nuevas.length} línea(s). `
-          + 'Quedan pendientes de revisión y se sumarán a la misma OC al aprobarse.',
+          + 'Quedan pendientes de revisión. Al aprobarse se suman a la OC del mismo proveedor o se crea una OC nueva.',
         )
         onDirtyChange?.(false)
         onSaved?.(result)
@@ -592,8 +593,21 @@ export default function SolicitudForm({
             </span>
           )}
         </span>
-        {sol?.estado === 'aprobada' && sol?.orden_compra?.id && permisos?.exportar && (
-          <OrdenCompraPdfClip ordenCompra={sol.orden_compra} puedeExportar />
+        {sol?.estado === 'aprobada' && solicitudOrdenesCompra(sol).length > 0 && permisos?.exportar && (
+          <div style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, marginLeft: 8 }}>
+            {solicitudOrdenesCompra(sol).map((oc) => (
+              <OrdenCompraPdfClip
+                key={oc.id}
+                ordenCompra={oc}
+                puedeExportar
+                title={
+                  oc.proveedor_nombre
+                    ? `OC #${oc.numero_oc} · ${oc.proveedor_nombre}`
+                    : undefined
+                }
+              />
+            ))}
+          </div>
         )}
       </div>
       )}
@@ -610,9 +624,14 @@ export default function SolicitudForm({
         }}
         >
           <strong>Reabrir OC</strong>
-          {sol?.orden_compra?.numero_oc ? ` #${sol.orden_compra.numero_oc}` : ''}
-          : las líneas ya incluidas en la orden quedan bloqueadas.
-          Agregue solo materiales nuevos; pasarán por el flujo de aprobación y se sumarán a la misma OC.
+          {solicitudOrdenesCompra(sol).length === 1 && sol?.orden_compra?.numero_oc
+            ? ` #${sol.orden_compra.numero_oc}`
+            : solicitudOrdenesCompra(sol).length > 1
+              ? ` (${solicitudOrdenesCompra(sol).length} OCs)`
+              : ''}
+          : las líneas ya incluidas en una orden quedan bloqueadas.
+          Agregue solo materiales nuevos; al aprobarse se suman a la OC del mismo proveedor
+          o se genera una OC nueva si el proveedor es distinto.
         </div>
       )}
 
