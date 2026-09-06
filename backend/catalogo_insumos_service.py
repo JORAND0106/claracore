@@ -27,6 +27,11 @@ from almacen_insumos_service import (
     tributos_tienen_datos,
 )
 from almacen_service import _sb, _to_float, _upload_soporte, download_soporte
+from catalogo_insumos_codigo_lib import (
+    codigo_insumo_patron,
+    codigo_liberado_para_baja as _codigo_liberado_para_baja,
+    compute_next_codigo_insumo,
+)
 from catalogo_insumos_cotizaciones_lib import (
     apply_auto_ganadora_detalle,
     build_biblioteca_cotizaciones,
@@ -156,10 +161,6 @@ def contrato_codigo_segment(contrato_id: int) -> str:
     return str(contrato_id)
 
 
-def codigo_insumo_patron(segment: str) -> re.Pattern:
-    return re.compile(rf"^CC-{re.escape(segment)}-(\d{{3,}})$", re.IGNORECASE)
-
-
 def validar_codigo_insumo_contrato(codigo: str, contrato_id: int) -> str:
     seg = contrato_codigo_segment(contrato_id)
     cod = (codigo or "").strip().upper()
@@ -173,7 +174,10 @@ def validar_codigo_insumo_contrato(codigo: str, contrato_id: int) -> str:
 
 
 def next_codigo_insumo(contrato_id: int) -> str:
-    """Genera el siguiente código CC-{segmento_contrato}-NNN único dentro del contrato."""
+    """
+    Genera CC-{segmento}-NNN como (máximo consecutivo de insumos activos) + 1.
+    No rellena huecos. Catálogo vacío (sin activos) → …-001.
+    """
     seg = contrato_codigo_segment(contrato_id)
     prefix = f"CC-{seg}-"
     sb = _sb()
@@ -181,18 +185,34 @@ def next_codigo_insumo(contrato_id: int) -> str:
         sb.table("almacen_insumo")
         .select("codigo")
         .eq("contrato_id", contrato_id)
+        .eq("activo", True)
         .ilike("codigo", f"{prefix}%")
         .execute()
         .data
         or []
     )
-    pat = codigo_insumo_patron(seg)
-    max_n = 0
+    return compute_next_codigo_insumo([r.get("codigo") for r in rows], seg)
+
+
+def _asegurar_codigo_disponible(sb, contrato_id: int, codigo: str) -> None:
+    """Si un insumo inactivo retiene el código, lo libera para permitir el alta."""
+    cod = (codigo or "").strip().upper()
+    if not cod:
+        return
+    rows = (
+        sb.table("almacen_insumo")
+        .select("id, codigo")
+        .eq("contrato_id", int(contrato_id))
+        .eq("codigo", cod)
+        .eq("activo", False)
+        .execute()
+        .data
+        or []
+    )
     for row in rows:
-        m = pat.match((row.get("codigo") or "").strip().upper())
-        if m:
-            max_n = max(max_n, int(m.group(1)))
-    return f"{prefix}{max_n + 1:03d}"
+        liberated = _codigo_liberado_para_baja(row)
+        if liberated != (row.get("codigo") or "").strip():
+            sb.table("almacen_insumo").update({"codigo": liberated}).eq("id", int(row["id"])).execute()
 
 
 def _resolve_codigo_insumo(body: dict, contrato_id: int, *, codigo_fijo: Optional[str] = None) -> str:
@@ -1269,6 +1289,7 @@ def create_insumo_catalogo(
         soporte_pdfs=soporte_pdfs,
     )
     payload["created_by"] = user_id
+    _asegurar_codigo_disponible(sb, contrato_id, payload.get("codigo") or "")
     ins = sb.table("almacen_insumo").insert(payload).execute().data
     if not ins:
         raise ValueError("No se pudo crear el insumo (¿código duplicado?).")
@@ -1384,7 +1405,7 @@ def _insumo_en_solicitudes_abiertas(sb, contrato_id: int, insumo_id: int) -> boo
 
 
 def delete_insumo_catalogo(contrato_id: int, insumo_id: int) -> dict:
-    """Desactiva un insumo del catálogo (soft delete)."""
+    """Desactiva un insumo del catálogo (soft delete) y libera su código."""
     sb = _sb()
     rows = (
         sb.table("almacen_insumo")
@@ -1405,16 +1426,20 @@ def delete_insumo_catalogo(contrato_id: int, insumo_id: int) -> dict:
         raise ValueError(
             "No se puede eliminar: el insumo está en solicitudes en borrador o enviadas."
         )
-    sb.table("almacen_insumo").update({"activo": False}).eq("id", insumo_id).execute()
-    return {"ok": True, "insumo_id": insumo_id, "codigo": row.get("codigo")}
+    codigo_original = row.get("codigo")
+    sb.table("almacen_insumo").update({
+        "activo": False,
+        "codigo": _codigo_liberado_para_baja(row),
+    }).eq("id", insumo_id).execute()
+    return {"ok": True, "insumo_id": insumo_id, "codigo": codigo_original}
 
 
 def clear_catalogo_insumos(contrato_id: int) -> int:
-    """Desactiva todos los insumos del catálogo del contrato (reemplazo CSV)."""
+    """Desactiva todos los insumos del catálogo del contrato (reemplazo CSV) y libera códigos."""
     sb = _sb()
     rows = (
         sb.table("almacen_insumo")
-        .select("id")
+        .select("id, codigo")
         .eq("contrato_id", contrato_id)
         .eq("activo", True)
         .execute()
@@ -1423,7 +1448,11 @@ def clear_catalogo_insumos(contrato_id: int) -> int:
     )
     if not rows:
         return 0
-    sb.table("almacen_insumo").update({"activo": False}).eq("contrato_id", contrato_id).eq("activo", True).execute()
+    for row in rows:
+        sb.table("almacen_insumo").update({
+            "activo": False,
+            "codigo": _codigo_liberado_para_baja(row),
+        }).eq("id", int(row["id"])).execute()
     return len(rows)
 
 
