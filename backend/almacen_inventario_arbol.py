@@ -461,8 +461,6 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         _cache_set(contrato_id, out)
         return out
 
-    ppto_ids = list(ppto_to_key.keys())
-
     # ── 2. Movimientos vía entradas ─────────────────────────────────────────
     ent_rows = (
         sb.table("almacen_entrada")
