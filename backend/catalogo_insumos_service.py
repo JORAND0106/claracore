@@ -26,14 +26,16 @@ from almacen_insumos_service import (
     sync_proveedor_contacto,
     tributos_tienen_datos,
 )
-from almacen_service import _sb, _to_float, _upload_soporte
+from almacen_service import _sb, _to_float, _upload_soporte, download_soporte
 from catalogo_insumos_cotizaciones_lib import (
     apply_auto_ganadora_detalle,
     build_biblioteca_cotizaciones,
     find_incongruencia_numero_cotizacion,
     norm_numero_cotizacion as _norm_numero_cotizacion,
     norm_proveedor_key as _norm_proveedor_key,
+    pick_best_cotizacion_ref,
 )
+from catalogo_insumos_cotizaciones_lib import _norm_text
 
 # Límite fijo de 200 KB eliminado: rige la cuota por contrato (+ tope técnico en pdf_prepare).
 
@@ -416,6 +418,7 @@ def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[
                 "codigo": codigo,
                 "descripcion": descripcion,
                 "es_ganadora": bool(item.get("es_ganadora")),
+                "pdf_nombre": (item.get("pdf_nombre") or "").strip() or None,
             })
     return refs
 
@@ -426,7 +429,8 @@ def _load_cotizacion_refs(contrato_id: int) -> List[dict]:
         sb.table("almacen_insumo")
         .select(
             "id, codigo, descripcion, proveedor_id, costo_base, cotizacion_numero, "
-            "cotizacion_fecha, cotizacion_vigencia, cotizaciones_detalle"
+            "cotizacion_fecha, cotizacion_vigencia, cotizaciones_detalle, "
+            "soporte_pdf_blob_path, soporte_pdf_nombre"
         )
         .eq("contrato_id", contrato_id)
         .eq("activo", True)
@@ -439,14 +443,40 @@ def _load_cotizacion_refs(contrato_id: int) -> List[dict]:
     if pids:
         provs = (
             sb.table("almacen_proveedor")
-            .select("id, razon_social, nit")
+            .select("id, razon_social, nit, contacto_email, contacto_nombre, contacto_telefono")
             .in_("id", list(pids))
             .execute()
             .data
             or []
         )
         prov_map = {int(p["id"]): p for p in provs}
-    return collect_cotizacion_refs_from_rows(rows, prov_map)
+    refs = collect_cotizacion_refs_from_rows(rows, prov_map)
+    # Anexar metadatos de PDF ganadora cuando el número coincide con el legado.
+    by_id = {int(r["id"]): r for r in rows if r.get("id") is not None}
+    for ref in refs:
+        row = by_id.get(int(ref["insumo_id"] or 0))
+        if not row:
+            continue
+        legacy_num = _norm_numero_cotizacion(row.get("cotizacion_numero"))
+        if ref.get("es_ganadora") or (legacy_num and legacy_num == ref.get("numero")):
+            if row.get("soporte_pdf_blob_path") and not ref.get("pdf_nombre"):
+                ref["pdf_nombre"] = (row.get("soporte_pdf_nombre") or "").strip() or None
+            if row.get("soporte_pdf_blob_path"):
+                ref["has_pdf_ganadora"] = True
+                ref["source_insumo_id"] = int(row["id"])
+        # Enriquecer nit/contacto desde proveedor map
+        pid = ref.get("proveedor_id") or row.get("proveedor_id")
+        if pid and not ref.get("nit"):
+            prov = prov_map.get(int(pid), {})
+            ref["nit"] = prov.get("nit")
+            ref["contacto_email"] = prov.get("contacto_email")
+            ref["contacto_nombre"] = prov.get("contacto_nombre")
+            ref["contacto_telefono"] = prov.get("contacto_telefono")
+            if not ref.get("proveedor"):
+                ref["proveedor"] = prov.get("razon_social")
+            if not ref.get("proveedor_id"):
+                ref["proveedor_id"] = int(pid)
+    return refs
 
 
 def list_biblioteca_cotizaciones(
@@ -522,6 +552,12 @@ def suggest_cotizaciones_numero(
                 "proveedor_id": ref_pid,
                 "fecha": ref.get("fecha"),
                 "vigencia": ref.get("vigencia"),
+                "pdf_nombre": ref.get("pdf_nombre"),
+                "has_pdf": bool(ref.get("has_pdf_ganadora") or ref.get("pdf_nombre")),
+                "nit": ref.get("nit"),
+                "contacto_email": ref.get("contacto_email"),
+                "contacto_nombre": ref.get("contacto_nombre"),
+                "contacto_telefono": ref.get("contacto_telefono"),
                 "usos": 0,
             }
         by_num[num]["usos"] += 1
@@ -529,8 +565,177 @@ def suggest_cotizaciones_numero(
             by_num[num]["fecha"] = ref.get("fecha")
         if ref.get("vigencia") and not by_num[num].get("vigencia"):
             by_num[num]["vigencia"] = ref.get("vigencia")
+        if ref.get("pdf_nombre") and not by_num[num].get("pdf_nombre"):
+            by_num[num]["pdf_nombre"] = ref.get("pdf_nombre")
+        if ref.get("has_pdf_ganadora") or ref.get("pdf_nombre"):
+            by_num[num]["has_pdf"] = True
+        if ref.get("nit") and not by_num[num].get("nit"):
+            by_num[num]["nit"] = ref.get("nit")
+        for ck in ("contacto_email", "contacto_nombre", "contacto_telefono"):
+            if ref.get(ck) and not by_num[num].get(ck):
+                by_num[num][ck] = ref.get(ck)
     out = sorted(by_num.values(), key=lambda x: (-x["usos"], x["numero"]))
     return out[: max(1, min(int(limit or 25), 50))]
+
+
+def _locate_pdf_for_ref(ref: dict) -> Optional[dict]:
+    """Localiza blob de PDF (ganadora o soporte) asociado a una ref de cotización."""
+    if not ref:
+        return None
+    sb = _sb()
+    source_id = ref.get("source_insumo_id") or ref.get("insumo_id")
+    pdf_nombre = (ref.get("pdf_nombre") or "").strip() or None
+
+    if source_id and (ref.get("has_pdf_ganadora") or ref.get("es_ganadora")):
+        rows = (
+            sb.table("almacen_insumo")
+            .select("id, soporte_pdf_blob_path, soporte_pdf_nombre")
+            .eq("id", int(source_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if rows and rows[0].get("soporte_pdf_blob_path"):
+            return {
+                "kind": "ganadora",
+                "source_insumo_id": int(rows[0]["id"]),
+                "soporte_id": None,
+                "nombre": (rows[0].get("soporte_pdf_nombre") or pdf_nombre or "cotizacion.pdf"),
+                "has_pdf": True,
+            }
+
+    if source_id and pdf_nombre:
+        soportes = (
+            sb.table("almacen_insumo_cotizacion_soporte")
+            .select("id, insumo_id, nombre, blob_path")
+            .eq("insumo_id", int(source_id))
+            .execute()
+            .data
+            or []
+        )
+        match = next(
+            (s for s in soportes if (s.get("nombre") or "").strip() == pdf_nombre),
+            None,
+        )
+        if not match and len(soportes) == 1:
+            match = soportes[0]
+        if match and match.get("blob_path"):
+            return {
+                "kind": "soporte",
+                "source_insumo_id": int(match["insumo_id"]),
+                "soporte_id": int(match["id"]),
+                "nombre": (match.get("nombre") or pdf_nombre or "cotizacion.pdf"),
+                "has_pdf": True,
+            }
+
+    if pdf_nombre:
+        return {
+            "kind": None,
+            "source_insumo_id": int(source_id) if source_id else None,
+            "soporte_id": None,
+            "nombre": pdf_nombre,
+            "has_pdf": False,
+        }
+    return None
+
+
+def resolve_cotizacion_by_numero(
+    contrato_id: int,
+    numero: str,
+    *,
+    proveedor_id: Any = None,
+    razon_social: str = "",
+    nit: str = "",
+    tipo: Optional[str] = None,
+) -> dict:
+    """
+    Resuelve metadatos (y localizador de PDF) de una cotización ya registrada
+    para el mismo proveedor — usado al autocargar en captura Insumo / No Previsto.
+    """
+    refs = _load_cotizacion_refs(contrato_id)
+    best = pick_best_cotizacion_ref(
+        refs,
+        numero,
+        proveedor_id=proveedor_id,
+        razon_social=razon_social,
+        nit=nit,
+        tipo=tipo,
+    )
+    if not best:
+        return {"found": False, "numero": _norm_numero_cotizacion(numero) or None}
+    pdf = _locate_pdf_for_ref(best)
+    fecha = best.get("fecha")
+    if fecha is not None:
+        fecha = str(fecha)[:10]
+    return {
+        "found": True,
+        "numero": best.get("numero"),
+        "tipo": best.get("tipo") or "insumo",
+        "fecha": fecha,
+        "vigencia": best.get("vigencia"),
+        "proveedor": best.get("proveedor"),
+        "proveedor_id": best.get("proveedor_id"),
+        "nit": best.get("nit"),
+        "contacto_email": best.get("contacto_email"),
+        "contacto_nombre": best.get("contacto_nombre"),
+        "contacto_telefono": best.get("contacto_telefono"),
+        "pdf": pdf,
+        "source_insumo_id": best.get("insumo_id"),
+    }
+
+
+def download_cotizacion_pdf(
+    contrato_id: int,
+    *,
+    kind: str,
+    source_insumo_id: int,
+    soporte_id: Optional[int] = None,
+) -> Tuple[bytes, str, str]:
+    """Descarga bytes del PDF de una cotización registrada (ganadora o soporte)."""
+    sb = _sb()
+    kind_n = (kind or "").strip().lower()
+    insumo_id = int(source_insumo_id)
+    # Validar que el insumo pertenece al contrato.
+    rows = (
+        sb.table("almacen_insumo")
+        .select("id, contrato_id, soporte_pdf_blob_path, soporte_pdf_nombre")
+        .eq("id", insumo_id)
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Insumo de origen del PDF no encontrado.")
+    row = rows[0]
+    if kind_n == "ganadora":
+        path = row.get("soporte_pdf_blob_path")
+        if not path:
+            raise ValueError("La cotización no tiene PDF ganadora adjunto.")
+        data, mime = download_soporte(path)
+        nombre = (row.get("soporte_pdf_nombre") or "cotizacion.pdf").strip() or "cotizacion.pdf"
+        return data, mime or "application/pdf", nombre
+    if kind_n == "soporte":
+        if soporte_id in (None, ""):
+            raise ValueError("Falta identificador del PDF de soporte.")
+        sop = (
+            sb.table("almacen_insumo_cotizacion_soporte")
+            .select("id, insumo_id, blob_path, nombre")
+            .eq("id", int(soporte_id))
+            .eq("insumo_id", insumo_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not sop or not sop[0].get("blob_path"):
+            raise ValueError("PDF de soporte no encontrado.")
+        data, mime = download_soporte(sop[0]["blob_path"])
+        nombre = (sop[0].get("nombre") or "cotizacion.pdf").strip() or "cotizacion.pdf"
+        return data, mime or "application/pdf", nombre
+    raise ValueError("Tipo de PDF no válido (use ganadora o soporte).")
 
 
 def check_cotizacion_numero_incongruencia(

@@ -112,6 +112,84 @@ def build_biblioteca_cotizaciones(refs: List[dict]) -> List[dict]:
     return out
 
 
+def same_proveedor_ref(
+    ref: dict,
+    *,
+    proveedor_id: Any = None,
+    razon_social: str = "",
+    nit: str = "",
+) -> bool:
+    """True si la ref coincide con el proveedor indicado (id y/o razón social/NIT)."""
+    want_pid = int(proveedor_id) if proveedor_id not in (None, "") else None
+    want_key = norm_proveedor_key(razon_social, nit)
+    want_name = _norm_text(razon_social)
+    ref_pid = int(ref["proveedor_id"]) if ref.get("proveedor_id") not in (None, "") else None
+    ref_key = norm_proveedor_key(ref.get("proveedor"), ref.get("nit"))
+    ref_name = _norm_text(ref.get("proveedor"))
+    if want_pid and ref_pid and want_pid == ref_pid:
+        return True
+    if want_key and ref_key and want_key == ref_key:
+        return True
+    if want_name and ref_name and want_name == ref_name:
+        return True
+    return False
+
+
+def pick_best_cotizacion_ref(
+    refs: List[dict],
+    numero: str,
+    *,
+    proveedor_id: Any = None,
+    razon_social: str = "",
+    nit: str = "",
+    tipo: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Elige la mejor referencia para autocargar una cotización ya registrada.
+    Prefiere el mismo tipo (insumo|no_previsto), luego la que tenga PDF/fecha/vigencia.
+    """
+    num = norm_numero_cotizacion(numero)
+    if not num:
+        return None
+    matches = [r for r in (refs or []) if norm_numero_cotizacion(r.get("numero")) == num]
+    want_prov = (
+        proveedor_id not in (None, "")
+        or (razon_social or "").strip()
+        or (nit or "").strip()
+    )
+    if want_prov:
+        matches = [
+            r
+            for r in matches
+            if same_proveedor_ref(
+                r,
+                proveedor_id=proveedor_id,
+                razon_social=razon_social,
+                nit=nit,
+            )
+        ]
+    if not matches:
+        return None
+    tipo_n = (tipo or "").strip().lower()
+    if tipo_n in ("insumo", "no_previsto"):
+        typed = [r for r in matches if (r.get("tipo") or "insumo") == tipo_n]
+        if typed:
+            matches = typed
+
+    def _score(r: dict) -> tuple:
+        has_pdf = bool(r.get("has_pdf_ganadora") or (r.get("pdf_nombre") or "").strip())
+        return (
+            1 if has_pdf else 0,
+            1 if r.get("fecha") else 0,
+            1 if r.get("vigencia") else 0,
+            1 if r.get("proveedor_id") else 0,
+            1 if (r.get("proveedor") or "").strip() else 0,
+            int(r.get("insumo_id") or 0),
+        )
+
+    return max(matches, key=_score)
+
+
 def find_incongruencia_numero_cotizacion(
     refs: List[dict],
     numero: str,
@@ -126,7 +204,6 @@ def find_incongruencia_numero_cotizacion(
     if not num:
         return None
     want_pid = int(proveedor_id) if proveedor_id not in (None, "") else None
-    want_key = norm_proveedor_key(razon_social, nit)
     excl = int(exclude_insumo_id) if exclude_insumo_id not in (None, "") else None
     for ref in refs or []:
         if norm_numero_cotizacion(ref.get("numero")) != num:
@@ -134,15 +211,12 @@ def find_incongruencia_numero_cotizacion(
         if excl is not None and ref.get("insumo_id") is not None and int(ref["insumo_id"]) == excl:
             continue
         ref_pid = int(ref["proveedor_id"]) if ref.get("proveedor_id") not in (None, "") else None
-        ref_key = norm_proveedor_key(ref.get("proveedor"), ref.get("nit"))
-        same = False
-        if want_pid and ref_pid and want_pid == ref_pid:
-            same = True
-        elif want_key and ref_key and want_key == ref_key:
-            same = True
-        elif want_key and ref_key and _norm_text(razon_social) and _norm_text(ref.get("proveedor")) == _norm_text(razon_social):
-            same = True
-        if same:
+        if same_proveedor_ref(
+            ref,
+            proveedor_id=proveedor_id,
+            razon_social=razon_social,
+            nit=nit,
+        ):
             continue
         if ref_pid or (ref.get("proveedor") or "").strip():
             if want_pid or (razon_social or "").strip():

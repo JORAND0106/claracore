@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 /**
  * Autocompletar de N° de cotización filtrado por proveedor.
  * Sugiere números ya registrados para ese proveedor.
+ * Al elegir (o al salir con coincidencia exacta) dispara onPick para autocargar.
  */
 export default function CatalogoCotizacionAutocomplete({
   api,
@@ -19,30 +20,54 @@ export default function CatalogoCotizacionAutocomplete({
   const [options, setOptions] = useState([])
   const [open, setOpen] = useState(false)
   const timer = useRef(null)
+  const lastPicked = useRef('')
 
   const search = useCallback((q) => {
-    if (!api) return
-    api.suggestCotizaciones({
+    if (!api) return Promise.resolve([])
+    return api.suggestCotizaciones({
       q: q || '',
       proveedor_id: proveedorId || undefined,
       razon_social: razonSocial || '',
       limit: 20,
-    }).then(setOptions).catch(() => setOptions([]))
+    }).then((rows) => {
+      setOptions(rows || [])
+      return rows || []
+    }).catch(() => {
+      setOptions([])
+      return []
+    })
   }, [api, proveedorId, razonSocial])
 
   useEffect(() => {
     if (open) search(value)
   }, [open, search, value])
 
-  const pick = (item) => {
+  const pick = (item, { force = false } = {}) => {
     const numero = String(item.numero || '').toUpperCase()
+    if (!force && lastPicked.current === numero && String(value || '').toUpperCase() === numero) {
+      onChange?.(numero)
+      setOpen(false)
+      return
+    }
+    lastPicked.current = numero
     onChange?.(numero)
     onPick?.(item)
     setOpen(false)
   }
 
+  const tryExactMatch = async (raw) => {
+    const v = String(raw || '').trim().toUpperCase()
+    if (!v || !api) return
+    const rows = options.length
+      ? options
+      : await search(v)
+    const exact = (rows || []).find((o) => String(o.numero || '').toUpperCase() === v)
+    if (exact) pick(exact)
+  }
+
   const onInput = (e) => {
     const v = String(e.target.value || '').toUpperCase()
+    if (v !== lastPicked.current) lastPicked.current = ''
     onChange?.(v)
     setOpen(true)
     clearTimeout(timer.current)
@@ -58,7 +83,12 @@ export default function CatalogoCotizacionAutocomplete({
         disabled={disabled}
         onChange={onInput}
         onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 180)}
+        onBlur={() => {
+          setTimeout(() => {
+            tryExactMatch(value)
+            setOpen(false)
+          }, 180)
+        }}
         autoComplete="off"
       />
       {open && !disabled && options.length > 0 && (
@@ -83,7 +113,7 @@ export default function CatalogoCotizacionAutocomplete({
               key={item.numero}
               type="button"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => pick(item)}
+              onClick={() => pick(item, { force: true })}
               style={{
                 display: 'block',
                 width: '100%',
@@ -101,6 +131,7 @@ export default function CatalogoCotizacionAutocomplete({
               <span style={{ color: t.textMuted, marginLeft: 8 }}>
                 {item.usos > 1 ? `${item.usos} usos` : '1 uso'}
                 {item.fecha ? ` · ${String(item.fecha).slice(0, 10)}` : ''}
+                {item.has_pdf ? ' · PDF' : ''}
               </span>
             </button>
           ))}

@@ -355,4 +355,30 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     pares = applyAutoGanadoraByMinValor(pares)
     assert.equal(pares.find((p) => p.es_ganadora)?.insumo.numero, 'NEW')
   })
+
+  it('buildParFromCapture y applyCaptureToPar adjuntan PDF autocargado por lado', () => {
+    const pdfIns = new File([new Uint8Array([1, 2, 3])], 'cot-ins.pdf', { type: 'application/pdf' })
+    const pdfNp = new File([new Uint8Array([4, 5])], 'cot-np.pdf', { type: 'application/pdf' })
+    const pares = buildParFromCapture({
+      ...baseCapture,
+      cotizacion_pdf: pdfIns,
+      cotizacion_pdf_np: pdfNp,
+    }, [])
+    assert.equal(pares[0].insumo.pdf?.name, 'cot-ins.pdf')
+    assert.equal(pares[0].no_previsto.pdf?.name, 'cot-np.pdf')
+    const { ganadora, soportes } = collectPdfFilesFromPares(pares)
+    assert.equal(ganadora?.name, 'cot-ins.pdf')
+    assert.ok(soportes.some((f) => f.name === 'cot-np.pdf'))
+
+    const updated = applyCaptureToPar(pares[0], {
+      ...baseCapture,
+      costo_base: '99',
+      cotizacion_numero: 'PV-100',
+      cotizacion_numero_np: 'PV-100-NP',
+      cotizacion_pdf: pdfIns,
+      cotizacion_pdf_np: pdfNp,
+    })
+    assert.equal(updated.insumo.pdf?.name, 'cot-ins.pdf')
+    assert.equal(updated.no_previsto.pdf?.name, 'cot-np.pdf')
+  })
 })

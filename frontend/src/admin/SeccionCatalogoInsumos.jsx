@@ -72,6 +72,10 @@ const EMPTY_FORM = {
   cotizacion_numero_np: '',
   cotizacion_fecha_np: '',
   cotizacion_vigencia_np: '',
+  cotizacion_pdf: null,
+  cotizacion_pdf_nombre: '',
+  cotizacion_pdf_np: null,
+  cotizacion_pdf_nombre_np: '',
   cotizaciones_detalle: [],
   requiere_cotizacion: true,
 }
@@ -100,6 +104,8 @@ function snapshotForm(f) {
     cotizacion_numero_np: f.cotizacion_numero_np || '',
     cotizacion_fecha_np: f.cotizacion_fecha_np || '',
     cotizacion_vigencia_np: f.cotizacion_vigencia_np || '',
+    cotizacion_pdf_nombre: f.cotizacion_pdf?.name || f.cotizacion_pdf_nombre || '',
+    cotizacion_pdf_nombre_np: f.cotizacion_pdf_np?.name || f.cotizacion_pdf_nombre_np || '',
     cotizaciones_detalle: cotizacionesPayloadForSave(f.cotizaciones_detalle || []),
     requiere_cotizacion: !!f.requiere_cotizacion,
   })
@@ -1206,6 +1212,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       cotizacion_numero_np: np.numero || '',
       cotizacion_fecha_np: np.fecha || '',
       cotizacion_vigencia_np: np.vigencia || '',
+      cotizacion_pdf: ins.pdf || null,
+      cotizacion_pdf_nombre: ins.pdf?.name || ins.pdf_nombre || '',
+      cotizacion_pdf_np: np.pdf || null,
+      cotizacion_pdf_nombre_np: np.pdf?.name || np.pdf_nombre || '',
       impuesto: cloneImpuestoLado(ins.impuesto),
       impuesto_np: cloneImpuestoLado(np.impuesto),
     }
@@ -1219,6 +1229,90 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
     setSelectedParId(par.id)
     setForm((f) => ({ ...f, ...captureFieldsFromPar(par) }))
+  }
+
+  /** Autocarga proveedor/fecha/vigencia/PDF de una cotización ya registrada (por lado). */
+  const autofillCotizacionLado = async (lado, item) => {
+    if (!api || !item?.numero) return
+    const tipo = lado === 'np' ? 'no_previsto' : 'insumo'
+    let detail = null
+    try {
+      detail = await api.getCotizacionByNumero({
+        numero: item.numero,
+        proveedor_id: form.proveedor_id || item.proveedor_id || undefined,
+        razon_social: form.razon_social || item.proveedor || '',
+        nit: form.nit || item.nit || '',
+        tipo,
+      })
+    } catch {
+      detail = null
+    }
+    const src = detail?.found ? detail : item
+    if (!src || !(src.numero || item.numero)) return
+
+    const patch = {}
+    if (lado === 'np') {
+      patch.cotizacion_numero_np = String(src.numero || item.numero).toUpperCase()
+      if (src.fecha) patch.cotizacion_fecha_np = String(src.fecha).slice(0, 10)
+      if (src.vigencia) patch.cotizacion_vigencia_np = src.vigencia
+    } else {
+      patch.cotizacion_numero = String(src.numero || item.numero).toUpperCase()
+      if (src.fecha) patch.cotizacion_fecha = String(src.fecha).slice(0, 10)
+      if (src.vigencia) patch.cotizacion_vigencia = src.vigencia
+    }
+
+    // Proveedor: rellenar si vacío; enriquecer contactos si coincide.
+    const sameProv = (
+      (form.proveedor_id && src.proveedor_id && String(form.proveedor_id) === String(src.proveedor_id))
+      || (
+        (form.razon_social || '').trim()
+        && (src.proveedor || '').trim()
+        && (form.razon_social || '').trim().toLowerCase() === (src.proveedor || '').trim().toLowerCase()
+      )
+    )
+    if (!form.proveedor_id && !((form.razon_social || '').trim())) {
+      if (src.proveedor_id) patch.proveedor_id = src.proveedor_id
+      if (src.proveedor) patch.razon_social = src.proveedor
+      if (src.nit) patch.nit = src.nit
+      if (src.contacto_email) patch.contacto_email = src.contacto_email
+      if (src.contacto_nombre) patch.contacto_nombre = src.contacto_nombre
+      if (src.contacto_telefono) patch.contacto_telefono = src.contacto_telefono
+    } else if (sameProv || !((form.razon_social || '').trim())) {
+      if (src.proveedor_id && !form.proveedor_id) patch.proveedor_id = src.proveedor_id
+      if (src.proveedor && !(form.razon_social || '').trim()) patch.razon_social = src.proveedor
+      if (src.nit && !(form.nit || '').trim()) patch.nit = src.nit
+      if (src.contacto_email && !(form.contacto_email || '').trim()) patch.contacto_email = src.contacto_email
+      if (src.contacto_nombre && !(form.contacto_nombre || '').trim()) patch.contacto_nombre = src.contacto_nombre
+      if (src.contacto_telefono && !(form.contacto_telefono || '').trim()) patch.contacto_telefono = src.contacto_telefono
+    }
+
+    updateCapture(patch)
+
+    const pdfMeta = detail?.pdf
+    if (pdfMeta?.has_pdf && pdfMeta.kind && pdfMeta.source_insumo_id) {
+      try {
+        const file = await api.downloadCotizacionPdf({
+          kind: pdfMeta.kind,
+          source_insumo_id: pdfMeta.source_insumo_id,
+          soporte_id: pdfMeta.soporte_id || undefined,
+          nombre: pdfMeta.nombre,
+        })
+        if (lado === 'np') {
+          updateCapture({ cotizacion_pdf_np: file, cotizacion_pdf_nombre_np: file.name })
+        } else {
+          updateCapture({ cotizacion_pdf: file, cotizacion_pdf_nombre: file.name })
+        }
+      } catch {
+        if (pdfMeta.nombre) {
+          if (lado === 'np') updateCapture({ cotizacion_pdf_nombre_np: pdfMeta.nombre })
+          else updateCapture({ cotizacion_pdf_nombre: pdfMeta.nombre })
+        }
+      }
+    } else if (src.pdf_nombre || pdfMeta?.nombre) {
+      const nom = src.pdf_nombre || pdfMeta?.nombre
+      if (lado === 'np') updateCapture({ cotizacion_pdf_nombre_np: nom })
+      else updateCapture({ cotizacion_pdf_nombre: nom })
+    }
   }
 
   /** Actualiza solo el borrador de captura (sin tocar la tabla hasta Enviar/Actualizar). */
@@ -1302,6 +1396,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     cotizacion_numero_np: '',
     cotizacion_fecha_np: '',
     cotizacion_vigencia_np: '',
+    cotizacion_pdf: null,
+    cotizacion_pdf_nombre: '',
+    cotizacion_pdf_np: null,
+    cotizacion_pdf_nombre_np: '',
     impuesto: { ...EMPTY_IMPUESTO },
     impuesto_np: { ...EMPTY_IMPUESTO },
   })
@@ -2329,14 +2427,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                           proveedorId={form.proveedor_id}
                           razonSocial={form.razon_social}
                           disabled={busy}
-                          onChange={(v) => updateCapture({ cotizacion_numero: v })}
-                          onPick={(item) => {
-                            const patch = { cotizacion_numero: item.numero }
-                            if (item.fecha && !form.cotizacion_fecha) patch.cotizacion_fecha = String(item.fecha).slice(0, 10)
-                            if (item.vigencia && !form.cotizacion_vigencia) patch.cotizacion_vigencia = item.vigencia
-                            updateCapture(patch)
-                          }}
+                          onChange={(v) => updateCapture({
+                            cotizacion_numero: v,
+                            cotizacion_pdf: null,
+                            cotizacion_pdf_nombre: '',
+                          })}
+                          onPick={(item) => { void autofillCotizacionLado('insumo', item) }}
                         />
+                        {(form.cotizacion_pdf || form.cotizacion_pdf_nombre) && (
+                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4 }}>
+                            PDF autocargado: {form.cotizacion_pdf?.name || form.cotizacion_pdf_nombre}
+                          </div>
+                        )}
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 1) }}>
@@ -2430,14 +2532,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                           razonSocial={form.razon_social}
                           disabled={busy}
                           placeholder="Número No Previsto del proveedor"
-                          onChange={(v) => updateCapture({ cotizacion_numero_np: v })}
-                          onPick={(item) => {
-                            const patch = { cotizacion_numero_np: item.numero }
-                            if (item.fecha && !form.cotizacion_fecha_np) patch.cotizacion_fecha_np = String(item.fecha).slice(0, 10)
-                            if (item.vigencia && !form.cotizacion_vigencia_np) patch.cotizacion_vigencia_np = item.vigencia
-                            updateCapture(patch)
-                          }}
+                          onChange={(v) => updateCapture({
+                            cotizacion_numero_np: v,
+                            cotizacion_pdf_np: null,
+                            cotizacion_pdf_nombre_np: '',
+                          })}
+                          onPick={(item) => { void autofillCotizacionLado('np', item) }}
                         />
+                        {(form.cotizacion_pdf_np || form.cotizacion_pdf_nombre_np) && (
+                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4 }}>
+                            PDF autocargado: {form.cotizacion_pdf_np?.name || form.cotizacion_pdf_nombre_np}
+                          </div>
+                        )}
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 1) }}>
