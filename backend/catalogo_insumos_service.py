@@ -401,6 +401,11 @@ def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[
         pid = row.get("proveedor_id")
         prov = prov_map.get(int(pid or 0), {}) if pid else {}
         legacy_nombre = prov.get("razon_social") or row.get("proveedor_nombre") or ""
+        cantidad_negociada = (
+            _to_float(row.get("cantidad_negociada"))
+            if row.get("cantidad_negociada") not in (None, "")
+            else None
+        )
         detalle = normalize_cotizaciones_detalle(row.get("cotizaciones_detalle"))
         if not detalle:
             num = _norm_numero_cotizacion(row.get("cotizacion_numero"))
@@ -411,6 +416,7 @@ def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[
                     "proveedor_id": int(pid) if pid else None,
                     "nit": prov.get("nit"),
                     "valor": _to_float(row.get("costo_base")),
+                    "cantidad_negociada": cantidad_negociada,
                     "fecha": row.get("cotizacion_fecha"),
                     "vigencia": row.get("cotizacion_vigencia"),
                     "tipo": "insumo",
@@ -442,6 +448,7 @@ def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[
                     else None
                 ),
                 "valor": item.get("valor"),
+                "cantidad_negociada": cantidad_negociada,
                 "fecha": item.get("fecha"),
                 "vigencia": item.get("vigencia"),
                 "tipo": item.get("tipo") or "insumo",
@@ -459,8 +466,8 @@ def _load_cotizacion_refs(contrato_id: int) -> List[dict]:
     rows = (
         sb.table("almacen_insumo")
         .select(
-            "id, codigo, descripcion, proveedor_id, costo_base, cotizacion_numero, "
-            "cotizacion_fecha, cotizacion_vigencia, cotizaciones_detalle, "
+            "id, codigo, descripcion, proveedor_id, costo_base, cantidad_negociada, "
+            "cotizacion_numero, cotizacion_fecha, cotizacion_vigencia, cotizaciones_detalle, "
             "soporte_pdf_blob_path, soporte_pdf_nombre"
         )
         .eq("contrato_id", contrato_id)

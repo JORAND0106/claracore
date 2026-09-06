@@ -2100,7 +2100,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                       <th style={thHeader}>Nº cotización</th>
                                       <th style={thHeader}>Fecha</th>
                                       <th style={thHeader}>Vigencia</th>
-                                      <th style={{ ...thHeader, textAlign: 'right' }}>Valor</th>
+                                      <th style={{ ...thHeader, textAlign: 'right' }}>Valor total</th>
                                       <th style={thHeader}>Insumos</th>
                                     </tr>
                                   </thead>

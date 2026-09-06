@@ -20,18 +20,33 @@ def test_apply_auto_ganadora_detalle_elige_menor():
 
 def test_build_biblioteca_acumula_por_proveedor_y_numero():
     refs = [
-        {"numero": "BO-1", "proveedor": "PAVCO", "valor": 100, "insumo_id": 1, "codigo": "I1"},
-        {"numero": "BO-1", "proveedor": "PAVCO", "valor": 50, "insumo_id": 2, "codigo": "I2"},
-        {"numero": "BO-2", "proveedor": "PAVCO", "valor": 30, "insumo_id": 3, "codigo": "I3"},
-        {"numero": "BO-1", "proveedor": "GEOMATRIX", "valor": 80, "insumo_id": 4, "codigo": "I4"},
+        {"numero": "BO-1", "proveedor": "PAVCO", "valor": 100, "cantidad_negociada": 2, "insumo_id": 1, "codigo": "I1"},
+        {"numero": "BO-1", "proveedor": "PAVCO", "valor": 50, "cantidad_negociada": 1, "insumo_id": 2, "codigo": "I2"},
+        {"numero": "BO-2", "proveedor": "PAVCO", "valor": 30, "cantidad_negociada": 3, "insumo_id": 3, "codigo": "I3"},
+        {"numero": "BO-1", "proveedor": "GEOMATRIX", "valor": 80, "cantidad_negociada": 2, "insumo_id": 4, "codigo": "I4"},
     ]
     bib = build_biblioteca_cotizaciones(refs)
     assert len(bib) == 2
     pavco = next(p for p in bib if p["razon_social"] == "PAVCO")
-    assert pavco["total_acumulado"] == 180
+    # BO-1: 100*2 + 50*1 = 250; BO-2: 30*3 = 90 → total 340
+    assert pavco["total_acumulado"] == 340
     cot = next(c for c in pavco["cotizaciones"] if c["numero"] == "BO-1")
-    assert cot["valor_total"] == 150
+    assert cot["valor_total"] == 250
     assert len(cot["items"]) == 2
+    assert cot["items"][0]["valor_linea"] == 200
+    geo = next(p for p in bib if p["razon_social"] == "GEOMATRIX")
+    assert geo["total_acumulado"] == 160
+
+
+def test_build_biblioteca_sin_cantidad_negociada_no_usa_solo_unitario():
+    refs = [
+        {"numero": "X-1", "proveedor": "ACME", "valor": 500, "insumo_id": 1, "codigo": "A"},
+        {"numero": "X-1", "proveedor": "ACME", "valor": 100, "cantidad_negociada": 0, "insumo_id": 2, "codigo": "B"},
+    ]
+    bib = build_biblioteca_cotizaciones(refs)
+    acme = bib[0]
+    assert acme["total_acumulado"] == 0
+    assert acme["cotizaciones"][0]["valor_total"] == 0
 
 
 def test_find_incongruencia_numero_entre_proveedores():
