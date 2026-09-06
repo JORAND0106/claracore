@@ -81,9 +81,9 @@ describe('Corrección post-OC — conserva aprobación', () => {
 describe('Rentabilidad agregada por ítem', () => {
   it('backend agrega por presupuesto_id y ruta incluye rentabilidad', () => {
     const insumos = readFileSync(join(dir, '../../../backend/almacen_insumos_service.py'), 'utf8')
-    assert.match(insumos, /def _agregar_lineas_rentabilidad_item/)
+    assert.match(insumos, /def filas_rentabilidad_por_insumo/)
     assert.match(insumos, /presupuesto_id: Optional\[int\] = None/)
-    assert.match(insumos, /Agrega el costo de todos los insumos/)
+    assert.match(insumos, /una fila por insumo/)
     const routes = readFileSync(join(dir, '../../../backend/almacen_routes.py'), 'utf8')
     assert.match(routes, /include_rentabilidad=bool\(ver_eco and not ligera\)/)
     const svc = readFileSync(join(dir, '../../../backend/almacen_service.py'), 'utf8')
@@ -94,7 +94,7 @@ describe('Rentabilidad agregada por ítem', () => {
   it('helpers FE agrupan y suman principal + asociados', () => {
     const helpers = readFileSync(join(dir, 'solicitudDetalleHelpers.js'), 'utf8')
     assert.match(helpers, /export function hermanosMismoPresupuestoItem/)
-    assert.match(helpers, /export function agregarRentabilidadPorItem/)
+    assert.match(helpers, /export function construirRentabilidadPorInsumos/)
     const items = [
       { id: 1, presupuesto_id: 50, cantidad: 100, vlr_unitario_cobro: 50, valor_compra_unitario: 30, es_principal: true },
       { id: 2, presupuesto_id: 50, cantidad: 200, vlr_unitario_cobro: 0, valor_compra_unitario: 2, es_principal: false },
@@ -109,9 +109,9 @@ describe('Rentabilidad agregada por ítem', () => {
     assert.equal(t.costoLinea, 3900)
   })
 
-  it('modal usa hermanos y agregarRentabilidadPorItem', () => {
+  it('modal usa hermanos y construirRentabilidadPorInsumos', () => {
     const modal = readFileSync(join(dir, 'SolicitudLineaRevisionModal.jsx'), 'utf8')
     assert.match(modal, /hermanosMismoPresupuestoItem/)
-    assert.match(modal, /agregarRentabilidadPorItem/)
+    assert.match(modal, /construirRentabilidadPorInsumos/)
   })
 })
