@@ -191,6 +191,12 @@ def _insumos_desde_composicion(comp_list: List[dict]) -> List[dict]:
             "entradas": 0.0,
             "salidas": 0.0,
             "saldo": 0.0,
+            "valor_negociado_total": (
+                _round2(_f(c.get("valor_negociado_total")))
+                if c.get("valor_negociado_total") is not None
+                else None
+            ),
+            "saldo_por_consumir": None,
             "ordenes_compra": [],
         })
     out.sort(key=lambda r: (
@@ -420,8 +426,24 @@ def build_inventario_arbol_from_lines(
                 "valor_salidas": bucket["valor_salidas"],
                 "valor_stock": bucket["valor_stock"],
                 "stock": bucket["valor_stock"],
+                "valor_negociado_total": None,
+                "saldo_por_consumir": None,
                 "ordenes_compra": bucket.get("ordenes_compra") or [],
             })
+
+        # Saldo por consumir = valor negociado acumulado − valor entradas (por fila)
+        from almacen_insumo_liquidacion import calcular_saldo_por_consumir
+        saldo_insumos = 0.0
+        tiene_saldo = False
+        for ins in insumos:
+            spc = calcular_saldo_por_consumir(
+                ins.get("valor_negociado_total"),
+                ins.get("valor_entradas") or 0.0,
+            )
+            ins["saldo_por_consumir"] = spc
+            if spc is not None:
+                saldo_insumos = _round2(saldo_insumos + spc)
+                tiene_saldo = True
 
         insumos.sort(key=lambda r: (
             0 if r.get("es_principal") else 1,
@@ -475,6 +497,7 @@ def build_inventario_arbol_from_lines(
             "valor_entradas": v_ent,
             "valor_salidas": v_sal,
             "valor_stock": v_stk,
+            "saldo_por_consumir": saldo_insumos if tiene_saldo else None,
             "insumos": insumos,
             "ordenes_compra": [],
         })
@@ -505,6 +528,8 @@ def build_inventario_arbol_from_lines(
                 "entradas": 0.0,
                 "salidas": 0.0,
                 "saldo": 0.0,
+                "saldo_por_consumir": 0.0,
+                "_tiene_saldo_consumir": False,
                 "items": [],
             }
             by_cap[ckey] = bucket
@@ -516,11 +541,19 @@ def build_inventario_arbol_from_lines(
         bucket["entradas"] = _round4(bucket["entradas"] + _f(it.get("entradas")))
         bucket["salidas"] = _round4(bucket["salidas"] + _f(it.get("salidas")))
         bucket["saldo"] = _round4(bucket["saldo"] + _f(it.get("saldo")))
+        if it.get("saldo_por_consumir") is not None:
+            bucket["saldo_por_consumir"] = _round2(
+                bucket["saldo_por_consumir"] + _f(it.get("saldo_por_consumir"))
+            )
+            bucket["_tiene_saldo_consumir"] = True
 
     capitulos = sorted(
         by_cap.values(),
         key=lambda c: _natural_sort_key_local(c.get("capitulo")),
     )
+    for cap in capitulos:
+        if not cap.pop("_tiene_saldo_consumir", False):
+            cap["saldo_por_consumir"] = None
 
     return {
         "capitulos": capitulos,
@@ -876,6 +909,9 @@ def _enrich_inventario_movimientos(
     for chunk in _chunks(sorted(insumo_ids)):
         for select in (
             "id, codigo, descripcion, unidad, rendimiento, "
+            "valor_compra_referencia, costo_base, proveedor_id, "
+            "cantidad_negociada, valor_negociado_total",
+            "id, codigo, descripcion, unidad, rendimiento, "
             "valor_compra_referencia, costo_base, proveedor_id",
             "id, codigo, descripcion, unidad, rendimiento, "
             "valor_compra_referencia, costo_base",
@@ -1155,6 +1191,11 @@ def _enrich_inventario_movimientos(
             "es_principal": es_principal,
             "rendimiento": _f(rend) if rend is not None else None,
             "vu_costo": vu_f,
+            "valor_negociado_total": (
+                _round2(_f(meta.get("valor_negociado_total")))
+                if meta.get("valor_negociado_total") is not None
+                else None
+            ),
             "_cantidad": _f(row.get("cantidad")),
         })
 

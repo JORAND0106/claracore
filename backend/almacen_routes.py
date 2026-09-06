@@ -1634,6 +1634,7 @@ def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_us
             it["valor_salidas"] = None
             it["valor_stock"] = None
             it["stock"] = None
+            it["saldo_por_consumir"] = None
             for ins in it.get("insumos") or []:
                 ins["vu_costo"] = None
                 ins["costo_contribucion"] = None
@@ -1641,6 +1642,8 @@ def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_us
                 ins["valor_salidas"] = None
                 ins["valor_stock"] = None
                 ins["stock"] = None
+                ins["valor_negociado_total"] = None
+                ins["saldo_por_consumir"] = None
                 for oc in ins.get("ordenes_compra") or []:
                     oc["valor_unitario"] = None
                     oc["valor_entradas"] = None
@@ -1656,6 +1659,7 @@ def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_us
             cap["valor_salidas"] = None
             cap["valor_stock"] = None
             cap["stock"] = None
+            cap["saldo_por_consumir"] = None
             for it in cap.get("items") or []:
                 it["vu_cobro"] = None
                 it["vu_costo"] = None
@@ -1665,6 +1669,7 @@ def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_us
                 it["valor_salidas"] = None
                 it["valor_stock"] = None
                 it["stock"] = None
+                it["saldo_por_consumir"] = None
                 for ins in it.get("insumos") or []:
                     ins["vu_costo"] = None
                     ins["costo_contribucion"] = None
@@ -1672,6 +1677,8 @@ def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_us
                     ins["valor_salidas"] = None
                     ins["valor_stock"] = None
                     ins["stock"] = None
+                    ins["valor_negociado_total"] = None
+                    ins["saldo_por_consumir"] = None
                     for oc in ins.get("ordenes_compra") or []:
                         oc["valor_unitario"] = None
                         oc["valor_entradas"] = None
