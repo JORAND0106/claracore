@@ -29,6 +29,9 @@ export function createCatalogoInsumosApi(contratoId, token) {
         headers: headers(token),
       }).then(parseJson),
 
+    getInsumo: (insumoId) =>
+      fetch(`${base}/insumos/${insumoId}`, { headers: headers(token) }).then(parseJson),
+
     checkDuplicado: (body) =>
       fetch(`${base}/check-duplicado`, {
         method: 'POST',

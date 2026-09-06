@@ -874,6 +874,26 @@ def _snapshot_historial(
     }).execute()
 
 
+def _enrich_insumo_catalogo_row(row: dict, prov: Optional[dict] = None) -> dict:
+    """Normaliza una fila de almacen_insumo al shape del listado/detalle del catálogo."""
+    prov = prov or {}
+    item = _row_from_almacen_insumo(row, prov.get("razon_social") or "—")
+    item["proveedor_nit"] = prov.get("nit")
+    item["contacto_email"] = prov.get("contacto_email")
+    item["contacto_nombre"] = prov.get("contacto_nombre")
+    item["contacto_telefono"] = prov.get("contacto_telefono")
+    item["cotizacion_numero"] = row.get("cotizacion_numero")
+    item["cotizacion_fecha"] = row.get("cotizacion_fecha")
+    item["cotizacion_vigencia"] = row.get("cotizacion_vigencia")
+    item["cotizaciones_detalle"] = cotizaciones_detalle_from_row(row)
+    item["cantidad_negociada"] = row.get("cantidad_negociada")
+    item["valor_negociado_total"] = row.get("valor_negociado_total")
+    if row.get("cantidad_negociada") is not None and _to_float(row.get("cantidad_negociada")) > 0:
+        ctx_neg = get_contexto_negociado_insumo(int(row["contrato_id"]), int(row["id"]), 0, None, 0)
+        item["consumo_negociado"] = ctx_neg
+    return item
+
+
 def list_catalogo_insumos(
     contrato_id: int,
     q: str = "",
@@ -898,7 +918,7 @@ def list_catalogo_insumos(
     total = resp.count if resp.count is not None else len(rows)
 
     prov_ids = {r.get("proveedor_id") for r in rows if r.get("proveedor_id")}
-    prov_map: Dict[int, str] = {}
+    prov_map: Dict[int, dict] = {}
     if prov_ids:
         provs = (
             sb.table("almacen_proveedor")
@@ -914,22 +934,41 @@ def list_catalogo_insumos(
     for row in rows:
         pid = row.get("proveedor_id")
         prov = prov_map.get(int(pid or 0), {})
-        item = _row_from_almacen_insumo(row, prov.get("razon_social") or "—")
-        item["proveedor_nit"] = prov.get("nit")
-        item["contacto_email"] = prov.get("contacto_email")
-        item["contacto_nombre"] = prov.get("contacto_nombre")
-        item["contacto_telefono"] = prov.get("contacto_telefono")
-        item["cotizacion_numero"] = row.get("cotizacion_numero")
-        item["cotizacion_fecha"] = row.get("cotizacion_fecha")
-        item["cotizacion_vigencia"] = row.get("cotizacion_vigencia")
-        item["cotizaciones_detalle"] = cotizaciones_detalle_from_row(row)
-        item["cantidad_negociada"] = row.get("cantidad_negociada")
-        item["valor_negociado_total"] = row.get("valor_negociado_total")
-        if row.get("cantidad_negociada") is not None and _to_float(row.get("cantidad_negociada")) > 0:
-            ctx_neg = get_contexto_negociado_insumo(contrato_id, int(row["id"]), 0, None, 0)
-            item["consumo_negociado"] = ctx_neg
-        out.append(item)
+        out.append(_enrich_insumo_catalogo_row(row, prov))
     return out, total
+
+
+def get_insumo_catalogo(contrato_id: int, insumo_id: int) -> dict:
+    """Detalle de un insumo activo del catálogo (mismo shape que el listado)."""
+    sb = _sb()
+    rows = (
+        sb.table("almacen_insumo")
+        .select("*")
+        .eq("id", int(insumo_id))
+        .eq("contrato_id", int(contrato_id))
+        .eq("activo", True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Insumo no encontrado.")
+    row = rows[0]
+    prov = {}
+    if row.get("proveedor_id"):
+        provs = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social, nit, contacto_email, contacto_nombre, contacto_telefono")
+            .eq("id", int(row["proveedor_id"]))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if provs:
+            prov = provs[0]
+    return _enrich_insumo_catalogo_row(row, prov)
 
 
 def list_proveedores_catalogo(

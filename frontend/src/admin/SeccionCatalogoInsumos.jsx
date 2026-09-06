@@ -1194,6 +1194,39 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     setModalOpen(true)
   }
 
+  /** Abre el popup de edición desde un ítem de cotización en la pestaña Proveedores. */
+  const openInsumoDesdeCotizacion = async (item) => {
+    const id = item?.insumo_id
+    if (!id || busy) return
+    const fromRows = (rows || []).find((r) => Number(r.insumo_id || r.id) === Number(id))
+    if (fromRows) {
+      openEdit(fromRows)
+      return
+    }
+    if (!api) return
+    setBusy(true)
+    try {
+      const row = await api.getInsumo(id)
+      openEdit(row)
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'No se pudo abrir el insumo.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const uniqueInsumosCotizacion = (items) => {
+    const seen = new Set()
+    const out = []
+    for (const it of items || []) {
+      const key = it.insumo_id != null ? `id:${it.insumo_id}` : `c:${it.codigo || ''}|${it.descripcion || ''}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(it)
+    }
+    return out
+  }
+
   const captureFieldsFromPar = (par) => {
     const ins = par?.insumo || {}
     const np = par?.no_previsto || {}
@@ -2013,7 +2046,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             </span>
           </div>
           <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
-            Pulse una fila para ver el detalle de cotizaciones del proveedor. El valor total acumula los Nº de cotización referenciados en el catálogo.
+            Pulse una fila para ver las cotizaciones del proveedor y los insumos de cada una. Clic en un insumo abre su detalle de edición.
           </div>
           <div style={{ ...sheetWrap, minWidth: 0, width: '100%' }} className="cc-almacen-table-scroll cc-catalogo-proveedores-sheet">
             <table style={{ ...sheetTable, minWidth: 820, width: '100%', tableLayout: 'auto' }}>
@@ -2094,33 +2127,99 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                 <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: t.primary, marginBottom: 8 }}>
                                   Cotizaciones ({nCot}) · Total {fmtMoney(totalVal)}
                                 </div>
-                                <table style={{ ...sheetTable, minWidth: 0, width: '100%', tableLayout: 'auto' }}>
-                                  <thead>
-                                    <tr>
-                                      <th style={thHeader}>Nº cotización</th>
-                                      <th style={thHeader}>Fecha</th>
-                                      <th style={thHeader}>Vigencia</th>
-                                      <th style={{ ...thHeader, textAlign: 'right' }}>Valor total</th>
-                                      <th style={thHeader}>Insumos</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {(bib.cotizaciones || []).map((c, cIdx) => (
-                                      <tr key={c.numero} style={{ background: sheetZebra(ui, cIdx) }}>
-                                        <td style={{ ...td, fontWeight: 700 }}>{c.numero}</td>
-                                        <td style={tdMuted}>{c.fecha ? String(c.fecha).slice(0, 10) : '—'}</td>
-                                        <td style={tdMuted}>{c.vigencia || '—'}</td>
-                                        <td style={{ ...tdMoney, textAlign: 'right' }}>{fmtMoney(c.valor_total)}</td>
-                                        <td style={tdMuted} title={(c.items || []).map((i) => i.codigo || i.descripcion).join(', ')}>
-                                          {(c.items || []).length}
-                                          {(c.items || []).length
-                                            ? ` · ${(c.items || []).slice(0, 3).map((i) => i.codigo || i.descripcion || '—').join(', ')}${(c.items || []).length > 3 ? '…' : ''}`
-                                            : ''}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                  {(bib.cotizaciones || []).map((c) => {
+                                    const insumosCot = uniqueInsumosCotizacion(c.items)
+                                    return (
+                                      <div
+                                        key={c.numero}
+                                        style={{
+                                          border: `1px solid ${t.border}`,
+                                          borderRadius: 8,
+                                          background: t.bgCard,
+                                          overflow: 'hidden',
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            display: 'grid',
+                                            gridTemplateColumns: 'minmax(120px, 1.2fr) minmax(90px, 0.8fr) minmax(90px, 0.8fr) minmax(100px, 0.7fr)',
+                                            gap: 8,
+                                            padding: '8px 10px',
+                                            background: ui.dark ? 'rgba(0,180,198,0.12)' : (ui.rest ? 'rgba(14,116,144,0.08)' : 'rgba(0,119,182,0.06)'),
+                                            borderBottom: `1px solid ${t.border}`,
+                                            fontSize: 'var(--cc-xs)',
+                                            alignItems: 'center',
+                                          }}
+                                        >
+                                          <div>
+                                            <div style={{ color: t.textMuted, fontWeight: 600 }}>Nº cotización</div>
+                                            <div style={{ fontWeight: 800, color: t.text }}>{c.numero}</div>
+                                          </div>
+                                          <div>
+                                            <div style={{ color: t.textMuted, fontWeight: 600 }}>Fecha</div>
+                                            <div>{c.fecha ? String(c.fecha).slice(0, 10) : '—'}</div>
+                                          </div>
+                                          <div>
+                                            <div style={{ color: t.textMuted, fontWeight: 600 }}>Vigencia</div>
+                                            <div>{c.vigencia || '—'}</div>
+                                          </div>
+                                          <div style={{ textAlign: 'right' }}>
+                                            <div style={{ color: t.textMuted, fontWeight: 600 }}>Valor total</div>
+                                            <div style={{ fontWeight: 800, color: 'var(--cc-color-positive)' }}>{fmtMoney(c.valor_total)}</div>
+                                          </div>
+                                        </div>
+                                        <div style={{ padding: '8px 10px' }}>
+                                          <div style={{ fontWeight: 700, fontSize: 'var(--cc-caption)', color: t.primary, marginBottom: 6 }}>
+                                            Insumos en esta cotización ({insumosCot.length})
+                                          </div>
+                                          {insumosCot.length === 0 ? (
+                                            <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>Sin insumos asociados.</div>
+                                          ) : (
+                                            <table style={{ ...sheetTable, minWidth: 0, width: '100%', tableLayout: 'auto' }}>
+                                              <thead>
+                                                <tr>
+                                                  <th style={thHeader}>Código</th>
+                                                  <th style={thHeader}>Descripción</th>
+                                                  <th style={{ ...thHeader, textAlign: 'right' }}>Cant. neg.</th>
+                                                  <th style={{ ...thHeader, textAlign: 'right' }}>P. oferta</th>
+                                                  <th style={{ ...thHeader, textAlign: 'right' }}>Valor línea</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {insumosCot.map((it, iIdx) => (
+                                                  <tr
+                                                    key={`${c.numero}-${it.insumo_id || it.codigo || iIdx}`}
+                                                    style={{
+                                                      background: sheetZebra(ui, iIdx),
+                                                      cursor: it.insumo_id ? 'pointer' : 'default',
+                                                    }}
+                                                    title={it.insumo_id ? 'Abrir detalle del insumo' : undefined}
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
+                                                      if (it.insumo_id) void openInsumoDesdeCotizacion(it)
+                                                    }}
+                                                  >
+                                                    <td style={{ ...tdCodigo, color: t.primary, fontWeight: 700 }}>
+                                                      {it.codigo || '—'}
+                                                    </td>
+                                                    <td style={tdDesc}>{it.descripcion || '—'}</td>
+                                                    <td style={tdNum}>{it.cantidad_negociada != null ? it.cantidad_negociada : '—'}</td>
+                                                    <td style={{ ...tdMoney, textAlign: 'right' }}>{fmtMoney(it.valor)}</td>
+                                                    <td style={{ ...tdMoney, textAlign: 'right' }}>{fmtMoney(it.valor_linea)}</td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          )}
+                                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 6 }}>
+                                            Clic en un insumo para abrir su detalle (mismo formulario de edición del catálogo).
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
                               </div>
                             )}
                           </td>
