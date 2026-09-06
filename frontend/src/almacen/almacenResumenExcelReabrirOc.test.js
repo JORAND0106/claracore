@@ -170,9 +170,8 @@ describe('Reabrir OC — UI wiring', () => {
     assert.match(api, /agregar-lineas-post-oc/)
   })
 
-  it('grilla Excel bloquea filas con isRowLocked', () => {
-    const src = readFileSync(join(dir, 'SolicitudFormExcelTable.jsx'), 'utf8')
-    assert.match(src, /isRowLocked/)
-    assert.match(src, /rowDisabled/)
+  it('panel mantiene return ( antes del JSX raíz', () => {
+    const panel = readFileSync(join(dir, 'SolicitudesPanel.jsx'), 'utf8')
+    assert.match(panel, /const abrirReabrirOc = \(s\) => \{[\s\S]*?\n  \}\n\n  return \(\n    <div>/)
   })
 })

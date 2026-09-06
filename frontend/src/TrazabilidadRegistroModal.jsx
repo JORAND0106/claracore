@@ -76,7 +76,6 @@ const CAMPO_ETIQUETAS = {
   salida_id: 'Salida',
   cantidad: 'Cantidad',
   longitud: 'Longitud',
-  espesor: 'Espesor',
   cantidad_total: 'Cant. total',
   cantidad_alerta_anterior: 'Cant. alerta (anterior)',
   cantidad_alerta_actual: 'Cant. alerta (actual)',

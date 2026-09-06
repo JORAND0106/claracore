@@ -147,6 +147,8 @@ export default function SolicitudesPanel({
     setReabrirOc(true)
     setEditId(s.id)
   }
+
+  return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
