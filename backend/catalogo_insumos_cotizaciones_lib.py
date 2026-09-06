@@ -50,7 +50,10 @@ def apply_auto_ganadora_detalle(detalle: List[dict]) -> List[dict]:
 
 
 def build_biblioteca_cotizaciones(refs: List[dict]) -> List[dict]:
-    """Agrupa por proveedor → cotizaciones (número), con valor total y acumulado."""
+    """
+    Agrupa por proveedor → cotizaciones (número), con valor total y acumulado.
+    Valor de cada ítem = cantidad_negociada del insumo × precio de la oferta (unitario).
+    """
     by_prov: Dict[str, dict] = {}
     for ref in refs or []:
         nombre = (ref.get("proveedor") or "").strip() or "Sin proveedor"
@@ -84,13 +87,22 @@ def build_biblioteca_cotizaciones(refs: List[dict]) -> List[dict]:
             cot["fecha"] = ref.get("fecha")
         if ref.get("vigencia") and not cot.get("vigencia"):
             cot["vigencia"] = ref.get("vigencia")
-        valor = float(ref.get("valor") or 0)
-        cot["valor_total"] = float(round(cot["valor_total"] + valor))
+        unitario = float(ref.get("valor") or 0)
+        try:
+            cant = float(ref["cantidad_negociada"]) if ref.get("cantidad_negociada") not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            cant = 0.0
+        if cant < 0:
+            cant = 0.0
+        linea = float(round(cant * unitario))
+        cot["valor_total"] = float(round(cot["valor_total"] + linea))
         cot["items"].append({
             "insumo_id": ref.get("insumo_id"),
             "codigo": ref.get("codigo"),
             "descripcion": ref.get("descripcion"),
-            "valor": ref.get("valor"),
+            "valor": unitario,
+            "cantidad_negociada": cant if cant else None,
+            "valor_linea": linea,
             "tipo": ref.get("tipo") or "insumo",
             "es_ganadora": bool(ref.get("es_ganadora")),
         })
