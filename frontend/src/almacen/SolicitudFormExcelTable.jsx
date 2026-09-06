@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import PresupuestoItemSelector from './PresupuestoItemSelector'
 import SolicitudLineaUbicacionEditor from './SolicitudLineaUbicacionEditor'
 import { AlmacenHelpIcon, useAlmacenTheme } from './almacenShared'
@@ -62,6 +63,7 @@ function ubicacionResumen(it) {
 
 /**
  * Grilla editable tipo Excel de líneas de solicitud (nueva / editar).
+ * Ubicación: mapa satelital directo → popup de finalización (registro/tramo/costado/abscisas).
  */
 export default function SolicitudFormExcelTable({
   items,
@@ -82,7 +84,8 @@ export default function SolicitudFormExcelTable({
   onRemoveRow,
 }) {
   const ui = useAlmacenTheme()
-  const [ubicacionIdx, setUbicacionIdx] = useState(null)
+  /** { idx, phase: 'mapa' | 'detalle' } */
+  const [ubicacionFlow, setUbicacionFlow] = useState(null)
   const thBase = { ...ui.th, fontSize: 'var(--cc-xs)' }
   const minWidth = COLS.reduce((acc, c) => acc + c.width, 0)
   const cellInp = {
@@ -111,142 +114,179 @@ export default function SolicitudFormExcelTable({
     ...extra,
   })
 
+  const flowIdx = ubicacionFlow?.idx
+  const flowItem = flowIdx != null ? items[flowIdx] : null
+  const theme = t || {
+    primary: ui.accent,
+    border: '#e2e8f0',
+    text: ui.text,
+    textMuted: ui.textMuted,
+    bgCard: ui.card?.background || '#fff',
+  }
+
   return (
     <>
-      <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
-        <table style={{ ...ui.sheetTable, minWidth, tableLayout: 'fixed' }}>
-          <colgroup>
-            {COLS.map((c) => (
-              <col key={c.key} style={{ width: c.width }} />
-            ))}
-          </colgroup>
-          <thead>
-            <tr>
+      <div
+        style={{ ...ui.sheetWrap, overflow: 'visible' }}
+        className="cc-almacen-table-scroll cc-almacen-items-sheet cc-almacen-solicitud-excel-sheet"
+      >
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ ...ui.sheetTable, minWidth, tableLayout: 'fixed' }}>
+            <colgroup>
               {COLS.map((c) => (
-                <ColHeader
-                  key={c.key}
-                  abbr={c.abbr}
-                  tip={c.tip}
-                  style={thBase}
-                  align={c.key === 'cant' || c.key === 'acc' || c.key === 'ubi' ? 'center' : 'left'}
-                />
+                <col key={c.key} style={{ width: c.width }} />
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it, idx) => (
-              <tr key={it.id ?? `new-${idx}`}>
-                <PresupuestoItemSelector
-                  variant="excel"
-                  capitulo={it.presupuesto_capitulo}
-                  item={it.presupuesto_item}
-                  disabled={busy}
-                  onChange={(sel) => onPptoChange(idx, sel)}
-                />
-                <td style={{ ...tdBase, overflow: 'visible' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-                    <input
-                      style={{ ...cellInp, flex: 1 }}
-                      value={it.descripcion_solicitada || ''}
-                      disabled={busy}
-                      placeholder="Describa el material…"
-                      title={it.descripcion_solicitada || ''}
-                      onChange={(e) => onDescripcionChange(idx, e.target.value)}
-                    />
-                    <AlmacenHelpIcon ayuda={MATERIAL_HELP} />
-                  </div>
-                </td>
-                <td style={{ ...tdBase, textAlign: 'center' }}>
-                  <button
-                    type="button"
-                    title={ubicacionResumen(it)}
-                    disabled={busy}
-                    onClick={() => setUbicacionIdx(idx)}
-                    style={{
-                      ...iconBtn({
-                        background: it.pk_id ? `${ui.accent}18` : undefined,
-                        borderColor: it.pk_id ? ui.accent : undefined,
-                        color: it.pk_id ? ui.accent : undefined,
-                        maxWidth: '100%',
-                      }),
-                    }}
-                  >
-                    <span aria-hidden>🗺️</span>
-                    <span style={{
-                      display: 'inline-block',
-                      maxWidth: 72,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      verticalAlign: 'middle',
-                      marginLeft: 4,
-                    }}
-                    >
-                      {it.pk_label || it.pk_id || 'PK'}
-                    </span>
-                  </button>
-                </td>
-                <td style={{ ...tdBase, textAlign: 'center' }}>
-                  <input
-                    style={{ ...cellInp, textAlign: 'right' }}
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={it.cantidad}
-                    disabled={busy}
-                    onChange={(e) => onCantidadChange(idx, e.target.value)}
+            </colgroup>
+            <thead>
+              <tr>
+                {COLS.map((c) => (
+                  <ColHeader
+                    key={c.key}
+                    abbr={c.abbr}
+                    tip={c.tip}
+                    style={thBase}
+                    align={c.key === 'cant' || c.key === 'acc' || c.key === 'ubi' ? 'center' : 'left'}
                   />
-                </td>
-                <td style={tdBase}>
-                  <input
-                    style={cellInp}
-                    value={it.observacion_residente || ''}
-                    disabled={busy}
-                    placeholder="Opcional…"
-                    title={it.observacion_residente || ''}
-                    onChange={(e) => onObservacionChange(idx, e.target.value)}
-                  />
-                </td>
-                <td style={{ ...tdBase, textAlign: 'center', whiteSpace: 'nowrap' }}>
-                  <button
-                    type="button"
-                    title="Agregar fila"
-                    disabled={busy}
-                    onClick={() => onAddRow(idx)}
-                    style={iconBtn({ marginRight: 4 })}
-                  >
-                    +
-                  </button>
-                  <button
-                    type="button"
-                    title="Eliminar fila"
-                    disabled={busy}
-                    onClick={() => onRemoveRow(idx)}
-                    style={iconBtn({ color: '#dc2626', borderColor: '#dc262666' })}
-                  >
-                    −
-                  </button>
-                </td>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((it, idx) => (
+                <tr key={it.id ?? `new-${idx}`}>
+                  <PresupuestoItemSelector
+                    variant="excel"
+                    capitulo={it.presupuesto_capitulo}
+                    item={it.presupuesto_item}
+                    disabled={busy}
+                    onChange={(sel) => onPptoChange(idx, sel)}
+                  />
+                  <td style={{ ...tdBase, overflow: 'visible' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                      <input
+                        style={{ ...cellInp, flex: 1 }}
+                        value={it.descripcion_solicitada || ''}
+                        disabled={busy}
+                        placeholder="Describa el material…"
+                        title={it.descripcion_solicitada || ''}
+                        onChange={(e) => onDescripcionChange(idx, e.target.value)}
+                      />
+                      <AlmacenHelpIcon ayuda={MATERIAL_HELP} />
+                    </div>
+                  </td>
+                  <td style={{ ...tdBase, textAlign: 'center' }}>
+                    <button
+                      type="button"
+                      title={ubicacionResumen(it)}
+                      disabled={busy}
+                      onClick={() => setUbicacionFlow({ idx, phase: 'mapa' })}
+                      style={{
+                        ...iconBtn({
+                          background: it.pk_id ? `${ui.accent}18` : undefined,
+                          borderColor: it.pk_id ? ui.accent : undefined,
+                          color: it.pk_id ? ui.accent : undefined,
+                          maxWidth: '100%',
+                        }),
+                      }}
+                    >
+                      <span aria-hidden>🗺️</span>
+                      <span style={{
+                        display: 'inline-block',
+                        maxWidth: 72,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        verticalAlign: 'middle',
+                        marginLeft: 4,
+                      }}
+                      >
+                        {it.pk_label || it.pk_id || 'PK'}
+                      </span>
+                    </button>
+                  </td>
+                  <td style={{ ...tdBase, textAlign: 'center' }}>
+                    <input
+                      style={{ ...cellInp, textAlign: 'right' }}
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={it.cantidad}
+                      disabled={busy}
+                      onChange={(e) => onCantidadChange(idx, e.target.value)}
+                    />
+                  </td>
+                  <td style={tdBase}>
+                    <input
+                      style={cellInp}
+                      value={it.observacion_residente || ''}
+                      disabled={busy}
+                      placeholder="Opcional…"
+                      title={it.observacion_residente || ''}
+                      onChange={(e) => onObservacionChange(idx, e.target.value)}
+                    />
+                  </td>
+                  <td style={{ ...tdBase, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    <button
+                      type="button"
+                      title="Agregar fila"
+                      disabled={busy}
+                      onClick={() => onAddRow(idx)}
+                      style={iconBtn({ marginRight: 4 })}
+                    >
+                      +
+                    </button>
+                    <button
+                      type="button"
+                      title="Eliminar fila"
+                      disabled={busy}
+                      onClick={() => onRemoveRow(idx)}
+                      style={iconBtn({ color: '#dc2626', borderColor: '#dc262666' })}
+                    >
+                      −
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {ubicacionIdx != null && items[ubicacionIdx] && (
-        <SolicitudLineaUbicacionEditor
-          item={items[ubicacionIdx]}
-          lineIndex={ubicacionIdx + 1}
-          t={t}
+      {ubicacionFlow?.phase === 'mapa' && flowItem && (
+        <AlmacenPkMapaSelector
+          t={theme}
           token={token}
           contratoId={contratoId}
+          pkIdSeleccionado={flowItem.pk_id_id ? String(flowItem.pk_id_id) : ''}
+          pkLabel={flowItem.pk_label || flowItem.pk_id}
+          autoOpen
+          hideTrigger
+          initialBasemap="satelite"
+          onSeleccionar={(sel) => {
+            onPkSelect(flowIdx, sel)
+            setUbicacionFlow({ idx: flowIdx, phase: 'detalle' })
+          }}
+          onLimpiar={() => onPkClear(flowIdx)}
+          onMapClose={() => {
+            // Si ya había PK y el usuario cierra el mapa, permitir completar detalle.
+            if (flowItem.pk_id) {
+              setUbicacionFlow({ idx: flowIdx, phase: 'detalle' })
+            } else {
+              setUbicacionFlow(null)
+            }
+          }}
+        />
+      )}
+
+      {ubicacionFlow?.phase === 'detalle' && flowItem && (
+        <SolicitudLineaUbicacionEditor
+          item={flowItem}
+          lineIndex={flowIdx + 1}
+          t={t}
           solicitudId={solicitudId}
           busy={busy}
-          onPkSelect={(sel) => onPkSelect(ubicacionIdx, sel)}
-          onPkClear={() => onPkClear(ubicacionIdx)}
-          onRegistroSelect={(reg) => onRegistroSelect(ubicacionIdx, reg)}
-          onUbicacionChange={(patch) => onUbicacionChange(ubicacionIdx, patch)}
-          onClose={() => setUbicacionIdx(null)}
+          onRegistroSelect={(reg) => onRegistroSelect(flowIdx, reg)}
+          onUbicacionChange={(patch) => onUbicacionChange(flowIdx, patch)}
+          onClose={() => setUbicacionFlow(null)}
         />
       )}
     </>

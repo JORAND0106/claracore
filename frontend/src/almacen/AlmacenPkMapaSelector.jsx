@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import PptoFiltroMapaPk from '../modules/presupuesto/PptoFiltroMapaPk'
 import { API_BASE } from '../apiBase'
 import { resolverPkMaestroAlmacen } from './almacenPkResolver'
@@ -21,6 +21,12 @@ async function fetchPkMaestro(contratoId, token) {
 /**
  * Selector de PK-ID para solicitudes de Almacén.
  * Consume el plano compartido (PptoFiltroMapaPk) con resolución propia del maestro PK.
+ *
+ * Props de control para el flujo Excel (mapa directo):
+ * - autoOpen: abre el mapa al montar / al volverse true
+ * - hideTrigger: oculta el botón «PK mapa»
+ * - initialBasemap: p. ej. `satelite`
+ * - onMapClose: al cerrar sin/ tras selección
  */
 export default function AlmacenPkMapaSelector({
   t,
@@ -31,6 +37,10 @@ export default function AlmacenPkMapaSelector({
   onSeleccionar,
   onLimpiar,
   compact = false,
+  autoOpen = false,
+  hideTrigger = false,
+  initialBasemap = null,
+  onMapClose,
 }) {
   const [mapaOpen, setMapaOpen] = useState(false)
   const [pkMapaAviso, setPkMapaAviso] = useState('')
@@ -53,18 +63,33 @@ export default function AlmacenPkMapaSelector({
     }
   }, [contratoId, token])
 
-  const pkDisplay = pkLabel || (pkIdSeleccionado && pkList.length
-    ? (pkList.find((p) => String(p.id) === String(pkIdSeleccionado))?.pk_id || pkLabel || `ID ${pkIdSeleccionado}`)
-    : '')
+  const cerrarMapa = useCallback(() => {
+    setMapaOpen(false)
+    onMapClose?.()
+  }, [onMapClose])
 
-  const abrirMapa = async () => {
+  const abrirMapa = useCallback(async () => {
     setPkMapaAviso('')
     setMapaOpen(true)
     const rows = await cargarMaestro()
     if (!rows.length) {
       setPkMapaAviso('No hay PK-ID registrados para este contrato. Verifique el maestro PK en SICOE Obra.')
     }
-  }
+  }, [cargarMaestro])
+
+  useEffect(() => {
+    if (!autoOpen) return undefined
+    let cancelled = false
+    ;(async () => {
+      if (cancelled) return
+      await abrirMapa()
+    })()
+    return () => { cancelled = true }
+  }, [autoOpen, abrirMapa])
+
+  const pkDisplay = pkLabel || (pkIdSeleccionado && pkList.length
+    ? (pkList.find((p) => String(p.id) === String(pkIdSeleccionado))?.pk_id || pkLabel || `ID ${pkIdSeleccionado}`)
+    : '')
 
   const resolverPkId = (pkVal, meta) => {
     if (meta?.screenshotOnly) return
@@ -78,7 +103,7 @@ export default function AlmacenPkMapaSelector({
       pk_id_id: result.pk_id_id,
       pk_label: result.pk_label,
       pk_id: result.pk_label,
-      tramo: result.tramo || '',
+      tramo: result.tramo || meta?.properties?.tramo || '',
       coordLat: meta?.lat ?? null,
       coordLng: meta?.lng ?? null,
     })
@@ -100,29 +125,31 @@ export default function AlmacenPkMapaSelector({
 
   return (
     <div style={compact ? { display: 'inline-flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 } : undefined}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: compact ? 0 : 8 }}>
-        <button
-          type="button"
-          onClick={abrirMapa}
-          disabled={!contratoId || pkLoading}
-          style={{ ...btnSec, background: `${t.primary}18`, borderColor: t.primary, color: t.primary, fontWeight: 700, opacity: pkLoading ? 0.6 : 1 }}
-        >
-          🗺️ {compact ? 'PK mapa' : 'Seleccionar PK en mapa'}
-        </button>
-        {seleccionado ? (
-          <>
-            <span style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 700 }}>{pkDisplay || pkLabel}</span>
-            <button
-              type="button"
-              onClick={() => { onLimpiar?.(); setMapaOpen(false); setPkMapaAviso('') }}
-              style={{ ...btnSec, color: '#ef4444', borderColor: '#ef444466', padding: '4px 8px' }}
-            >
-              ×
-            </button>
-          </>
-        ) : null}
-      </div>
-      {!compact && !pkDisplay && !pkLabel ? (
+      {!hideTrigger && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: compact ? 0 : 8 }}>
+          <button
+            type="button"
+            onClick={abrirMapa}
+            disabled={!contratoId || pkLoading}
+            style={{ ...btnSec, background: `${t.primary}18`, borderColor: t.primary, color: t.primary, fontWeight: 700, opacity: pkLoading ? 0.6 : 1 }}
+          >
+            🗺️ {compact ? 'PK mapa' : 'Seleccionar PK en mapa'}
+          </button>
+          {seleccionado ? (
+            <>
+              <span style={{ fontSize: 'var(--cc-sm)', color: t.primary, fontWeight: 700 }}>{pkDisplay || pkLabel}</span>
+              <button
+                type="button"
+                onClick={() => { onLimpiar?.(); setMapaOpen(false); setPkMapaAviso('') }}
+                style={{ ...btnSec, color: '#ef4444', borderColor: '#ef444466', padding: '4px 8px' }}
+              >
+                ×
+              </button>
+            </>
+          ) : null}
+        </div>
+      )}
+      {!hideTrigger && !compact && !pkDisplay && !pkLabel ? (
         <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
           Pulse el botón y haga clic en el polígono del plano para elegir la ubicación.
         </div>
@@ -132,16 +159,17 @@ export default function AlmacenPkMapaSelector({
           style={{
             position: 'fixed',
             inset: 0,
-            zIndex: 4600,
+            // Por encima del popup de solicitud (~100008) y del editor de ubicación.
+            zIndex: 100060,
             background: 'rgba(0,0,0,0.45)',
             display: 'flex',
             justifyContent: 'flex-end',
           }}
-          onClick={() => setMapaOpen(false)}
+          onClick={cerrarMapa}
         >
           <div
             style={{
-              width: 'min(520px, 94vw)',
+              width: 'min(560px, 96vw)',
               height: '100%',
               background: t.bgCard,
               borderLeft: `1px solid ${t.border}`,
@@ -152,8 +180,11 @@ export default function AlmacenPkMapaSelector({
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text }}>Plano · selección PK</div>
-              <button type="button" onClick={() => setMapaOpen(false)} style={btnSec}>
+              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text }}>
+                Plano · selección PK
+                {initialBasemap === 'satelite' ? ' · Satélite' : ''}
+              </div>
+              <button type="button" onClick={cerrarMapa} style={btnSec}>
                 Cerrar
               </button>
             </div>
@@ -176,6 +207,8 @@ export default function AlmacenPkMapaSelector({
                   selectedPk={pkDisplay || pkLabel}
                   onClearSelection={onLimpiar}
                   height="100%"
+                  hideCaption
+                  initialBasemap={initialBasemap || undefined}
                 />
               </div>
             )}

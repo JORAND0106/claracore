@@ -18,7 +18,6 @@ import {
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
   fmtCant,
-  fmtMoney,
   formatSolicitudLinea,
   puedeAnularSolicitud,
   useAlmacenApi,
@@ -300,6 +299,8 @@ export default function SolicitudForm({
         pk_label: sel.pk_label || pkVal,
         pk_id_id: sel.pk_id_id ? Number(sel.pk_id_id) : null,
         ...clearUbicacionPresupuesto(),
+        // Conservar tramo del maestro/plano (clearUbicacionPresupuesto lo dejaba vacío).
+        tramo: String(sel.tramo || '').trim(),
       } : it))
       triggerPreview(idx, next)
       return next

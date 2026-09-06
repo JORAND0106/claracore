@@ -79,6 +79,8 @@ export default function PptoFiltroMapaPk({
   hideCaption = false,
   showBasemapToggle = false,
   showNivelacionLayerToggle = false,
+  /** Vista inicial del basemap (`satelite` | `calle` | `relieve` | …). No altera el default de Presupuesto. */
+  initialBasemap = null,
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -184,13 +186,13 @@ export default function PptoFiltroMapaPk({
       const isDark = typeof t?.bg === 'string' && (t.bg === '#0A1628' || t.bg.toLowerCase() === '#0a1628')
       let basemapMode = showBasemapToggle
         ? normalizarVistaBasemap(leerVistaBasemapGuardada())
-        : null
+        : (initialBasemap ? normalizarVistaBasemap(initialBasemap) : null)
       if (showBasemapToggle) {
         // Preferir Calle / Relieve / Satélite en Bitácora; migrar topográfico → calle.
         if (basemapMode === 'topografico') basemapMode = 'calle'
         if (!SICOE_MAPA_VISTAS_CALLE.includes(basemapMode)) basemapMode = 'calle'
       }
-      const initialStyle = showBasemapToggle
+      const initialStyle = basemapMode
         ? sicoeBasemapStyleUrl(basemapMode)
         : (isDark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11')
       const { map, error: mapErr } = crearMapboxMapSeguro(mapEl, {
@@ -542,7 +544,7 @@ export default function PptoFiltroMapaPk({
       }
       mapRef.current = null
     }
-  }, [contratoId, filtroKey, selKey, height, zoomToSelected, showBasemapToggle])
+  }, [contratoId, filtroKey, selKey, height, zoomToSelected, showBasemapToggle, initialBasemap])
 
   return (
     <div style={{ fontSize: 'var(--cc-body)', height: typeof height === 'number' ? `${height}px` : height, display: 'flex', flexDirection: 'column', position: 'relative' }}>
