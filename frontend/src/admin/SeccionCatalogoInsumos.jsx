@@ -39,6 +39,7 @@ import {
   ganadoraRuleErrors,
   impuestoGanadoraDesdePares,
   incongruenciaNumeroEntrePares,
+  ladoHasImpuesto,
   pickGanadora,
   sanitizeRendimientoInput,
   seedCotizacionPares,
@@ -112,8 +113,8 @@ const MAIN_CATALOG_TABS = [
 
 function sheetZebra(ui, index) {
   if (index % 2 === 0) return ui.tok.bgCard
-  if (ui.dark) return 'rgba(30, 58, 95, 0.28)'
-  if (ui.rest) return 'rgba(201, 184, 164, 0.22)'
+  if (ui.dark) return 'rgba(56, 90, 130, 0.45)'
+  if (ui.rest) return 'rgba(201, 184, 164, 0.28)'
   return 'rgba(241, 245, 249, 0.92)'
 }
 
@@ -738,7 +739,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     textAlign: 'left',
     fontSize: 'var(--cc-caption)',
     fontWeight: 800,
-    color: t.textMuted,
+    color: ui.dark ? (t.text || '#E0F2FE') : t.textMuted,
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
     whiteSpace: 'nowrap',
@@ -782,7 +783,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     textOverflow: 'ellipsis',
     maxWidth: 0,
   }
-  const tdMuted = { ...td, color: t.textMuted }
+  const tdMuted = {
+    ...td,
+    color: ui.dark ? (t.textMuted || '#9ecae8') : t.textMuted,
+  }
   const tdMoney = { ...tdNum, color: 'var(--cc-color-positive)' }
   const tdTotal = { ...tdNum, color: t.primary }
   const sheetWrap = {
@@ -790,21 +794,23 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     border: `1px solid ${grid}`,
     borderRadius: 4,
     background: t.bgCard,
+    color: t.text,
   }
   const sheetTable = {
     width: '100%',
     borderCollapse: 'collapse',
     tableLayout: 'fixed',
     minWidth: 980,
+    color: t.text,
   }
   const thHeader = {
     ...th,
     background: ui.dark
-      ? 'rgba(0, 180, 198, 0.18)'
+      ? 'rgba(0, 180, 198, 0.28)'
       : ui.rest
         ? 'rgba(14, 116, 144, 0.14)'
         : 'rgba(0, 119, 182, 0.10)',
-    color: t.text,
+    color: ui.dark ? (t.text || '#E0F2FE') : t.text,
   }
   /** Encabezados de la grilla principal: centrados y sin solapes con fuente grande. */
   const thGrid = {
@@ -830,7 +836,16 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     border: `1px solid ${t.border}`,
     color: t.text,
   }
-  const cellInp = sheetCellInput(inputStyle)
+  const cellInp = sheetCellInput(inputStyle, {
+    color: t.text,
+    WebkitTextFillColor: t.text,
+  })
+  const idBlockInp = {
+    ...cellInp,
+    fontWeight: 700,
+    color: t.text,
+    WebkitTextFillColor: t.text,
+  }
   const costTh = {
     ...thHeader,
     padding: '2px 6px',
@@ -855,6 +870,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fontSize: 'var(--cc-xs)',
     maxWidth: '100%',
     boxSizing: 'border-box',
+    color: t.text,
+    WebkitTextFillColor: t.text,
   })
   const costBtnCompact = {
     ...btnSecondary,
@@ -968,9 +985,19 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
   const valorNegociadoPreview = useMemo(() => {
     const cant = Number(form.cantidad_negociada)
-    if (!cant || cant <= 0 || !totalPreview) return null
-    return Math.round(cant * totalPreview)
-  }, [form.cantidad_negociada, totalPreview])
+    if (!cant || cant <= 0) return null
+    const pares = form.cotizaciones_detalle || []
+    const gan = pickGanadora(pares)
+    const costo = gan?.valor != null && gan.valor !== ''
+      ? gan.valor
+      : form.costo_base
+    const imp = (gan && ladoHasImpuesto(gan))
+      ? gan.impuesto
+      : (form.impuesto || EMPTY_IMPUESTO)
+    const unit = computeTotal(costo, imp)
+    if (unit == null || !Number.isFinite(unit) || unit <= 0) return null
+    return Math.round(cant * unit)
+  }, [form.cantidad_negociada, form.cotizaciones_detalle, form.costo_base, form.impuesto])
 
   const permsEfectivos = useMemo(
     () => (esDesarrolladorUsuario(user) ? permisosCatalogoInsumos(user, user?.contrato_id) : (perms || {})),
@@ -1253,7 +1280,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     impuestoNp: f.impuesto_np || EMPTY_IMPUESTO,
   })
 
-  /** Limpia proveedor y paneles de costo; conserva descripción/unidad/rendimiento/código. */
+  /** Limpia proveedor y paneles de costo; conserva identificación (código/unidad/rend/desc/cant. negociada). */
   const clearCaptureAfterSend = () => ({
     proveedor_id: '',
     razon_social: '',
@@ -1263,7 +1290,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     contacto_telefono: '',
     costo_base: '',
     valor_no_previsto: '',
-    cantidad_negociada: '',
     cantidad_negociada_np: '',
     cotizacion_numero: '',
     cotizacion_fecha: '',
@@ -2135,30 +2161,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               marginBottom: 8,
               overflowX: 'auto',
               background: ui.dark
-                ? 'rgba(30, 58, 95, 0.42)'
+                ? 'rgba(30, 58, 95, 0.55)'
                 : ui.rest
                   ? 'rgba(201, 184, 164, 0.38)'
                   : 'rgba(226, 232, 240, 0.95)',
               borderColor: ui.dark
-                ? 'rgba(0, 180, 198, 0.35)'
+                ? 'rgba(0, 180, 198, 0.45)'
                 : ui.rest
                   ? 'rgba(14, 116, 144, 0.28)'
                   : 'rgba(0, 119, 182, 0.22)',
             }}
             >
-              <table style={{ ...sheetTable, minWidth: 520, tableLayout: 'fixed' }}>
+              <table style={{ ...sheetTable, minWidth: 720, tableLayout: 'fixed' }}>
                 <thead>
                   <tr>
-                    <th style={{ ...thHeader, width: '18%' }}>Código</th>
-                    <th style={{ ...thHeader, width: '22%' }}>Unidad *</th>
-                    <th style={{ ...thHeader, width: '14%' }}>Rend.</th>
-                    <th style={thHeader}>Descripción *</th>
+                    <th style={{ ...thHeader, width: '14%' }}>Código</th>
+                    <th style={{ ...thHeader, width: '14%' }}>Unidad *</th>
+                    <th style={{ ...thHeader, width: '10%' }}>Rend.</th>
+                    <th style={{ ...thHeader, width: '28%' }}>Descripción *</th>
+                    <th style={{ ...thHeader, width: '14%' }} title="Cantidad negociada con el proveedor (propiedad del insumo)">Cant. neg.</th>
+                    <th style={{ ...thHeader, width: '20%' }} title="Cantidad × valor unitario de la cotización ganadora vigente">Vlr. negociado</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr style={{
                     background: ui.dark
-                      ? 'rgba(15, 30, 50, 0.55)'
+                      ? 'rgba(15, 30, 50, 0.72)'
                       : ui.rest
                         ? 'rgba(180, 165, 145, 0.28)'
                         : 'rgba(203, 213, 225, 0.55)',
@@ -2166,7 +2194,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   >
                     <td style={{ ...td, overflow: 'hidden' }}>
                       <input
-                        style={{ ...cellInp, opacity: 0.85, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                        style={{ ...idBlockInp, opacity: 0.9, overflow: 'hidden', textOverflow: 'ellipsis' }}
                         value={form.codigo || (editId ? '—' : 'Generando…')}
                         title={form.codigo || ''}
                         readOnly
@@ -2175,13 +2203,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     </td>
                     <td style={{ ...td, overflow: 'hidden', minWidth: 0 }}>
                       {(form.cotizaciones_detalle || []).length > 0 ? (
-                        <input style={{ ...cellInp, opacity: 0.85 }} value={form.unidad} readOnly />
+                        <input style={{ ...idBlockInp, opacity: 0.9 }} value={form.unidad} readOnly />
                       ) : (
                         <UnidadSelector
                           value={form.unidad}
                           onChange={(v) => setForm({ ...form, unidad: v })}
-                          selectStyle={cellInp}
-                          inputStyle={cellInp}
+                          selectStyle={idBlockInp}
+                          inputStyle={idBlockInp}
                           btnPrimary={btnPrimary}
                           btnSecondary={btnSecondary}
                           modoCustom={unidadModoCustom}
@@ -2193,7 +2221,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     </td>
                     <td style={{ ...td, overflow: 'hidden' }}>
                       <input
-                        style={cellInp}
+                        style={idBlockInp}
                         inputMode="decimal"
                         value={form.rendimiento}
                         readOnly={(form.cotizaciones_detalle || []).length > 0}
@@ -2204,11 +2232,37 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     </td>
                     <td style={{ ...td, overflow: 'hidden', minWidth: 0 }}>
                       <input
-                        style={{ ...cellInp, textTransform: 'uppercase' }}
+                        style={{ ...idBlockInp, textTransform: 'uppercase' }}
                         value={form.descripcion}
                         readOnly={(form.cotizaciones_detalle || []).length > 0}
                         onChange={(e) => setForm({ ...form, descripcion: e.target.value.toUpperCase() })}
                       />
+                    </td>
+                    <td style={{ ...td, overflow: 'hidden' }}>
+                      <input
+                        style={idBlockInp}
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={form.cantidad_negociada}
+                        placeholder="0"
+                        title="Editable en cualquier momento; el valor negociado se recalcula con la ganadora vigente"
+                        onChange={(e) => setForm({ ...form, cantidad_negociada: e.target.value })}
+                      />
+                    </td>
+                    <td style={{ ...td, overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          ...idBlockInp,
+                          display: 'flex',
+                          alignItems: 'center',
+                          color: valorNegociadoPreview != null ? t.text : t.textMuted,
+                          WebkitTextFillColor: valorNegociadoPreview != null ? t.text : t.textMuted,
+                        }}
+                        title="Cantidad negociada × precio unitario (con AIU/IVA) de la cotización ganadora vigente"
+                      >
+                        {valorNegociadoPreview != null ? fmtMoney(valorNegociadoPreview) : '—'}
+                      </div>
                     </td>
                   </tr>
                 </tbody>
@@ -2315,18 +2369,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                               ? ((form.cotizaciones_detalle || []).find((p) => p.id === selectedParId)?.insumo?.impuesto_etiqueta || 'Sin impuesto.')
                               : tributosResumen}
                           </span>
-                        </div>
-                      </td>
-                    </tr>
-                    <tr style={{ background: sheetZebra(ui, 0) }}>
-                      <td style={costTh} title="Cantidad negociada">Cant. neg.</td>
-                      <td style={costTd}>
-                        <input style={costCellInp} type="number" min="0" step="any" value={form.cantidad_negociada} onChange={(e) => updateCapture({ cantidad_negociada: e.target.value })} />
-                      </td>
-                      <td style={costTh} title="Valor negociado">Vlr. negociado</td>
-                      <td style={costTd}>
-                        <div style={{ ...costCellInp, fontWeight: valorNegociadoPreview != null ? 600 : 400, color: valorNegociadoPreview != null ? t.text : t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {valorNegociadoPreview != null ? fmtMoney(valorNegociadoPreview) : '—'}
                         </div>
                       </td>
                     </tr>
@@ -2561,18 +2603,19 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                           unidad: form.unidad,
                           rendimiento: form.rendimiento,
                         }
-                        const insTint = ui.dark ? 'rgba(0,180,198,0.08)' : ui.rest ? 'rgba(14,116,144,0.06)' : 'rgba(0,119,182,0.05)'
-                        const npTint = ui.dark ? 'rgba(245,158,11,0.10)' : ui.rest ? 'rgba(180,120,40,0.08)' : 'rgba(217,119,6,0.06)'
+                        const insTint = ui.dark ? 'rgba(0,180,198,0.14)' : ui.rest ? 'rgba(14,116,144,0.06)' : 'rgba(0,119,182,0.05)'
+                        const npTint = ui.dark ? 'rgba(245,158,11,0.16)' : ui.rest ? 'rgba(180,120,40,0.08)' : 'rgba(217,119,6,0.06)'
                         const rowBg = selected
-                          ? (ui.dark ? 'rgba(0,180,198,0.22)' : 'rgba(0,119,182,0.14)')
+                          ? (ui.dark ? 'rgba(0,180,198,0.28)' : 'rgba(0,119,182,0.14)')
                           : win
-                            ? (ui.dark ? 'rgba(34,197,94,0.16)' : 'rgba(34,197,94,0.10)')
+                            ? (ui.dark ? 'rgba(34,197,94,0.22)' : 'rgba(34,197,94,0.10)')
                             : sheetZebra(ui, idx)
-                        const tdIns = { ...td, background: (win || selected) ? undefined : insTint }
-                        const tdNp = { ...td, background: (win || selected) ? undefined : npTint }
+                        const tdIns = { ...td, background: (win || selected) ? undefined : insTint, color: t.text }
+                        const tdNp = { ...td, background: (win || selected) ? undefined : npTint, color: t.text }
                         const tdShared = {
                           ...td,
-                          background: (win || selected) ? undefined : (ui.dark ? 'rgba(148,163,184,0.10)' : 'rgba(148,163,184,0.08)'),
+                          color: t.text,
+                          background: (win || selected) ? undefined : (ui.dark ? 'rgba(148,163,184,0.16)' : 'rgba(148,163,184,0.08)'),
                         }
                         return (
                           <tr
@@ -2591,7 +2634,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                             onDrop={(e) => onRowDropPdf(par.id, 'insumo', e)}
                             title="Pulse para cargar costos en los paneles. Arrastre un PDF sobre la fila o la celda PDF de No Previsto."
                           >
-                            <td style={{ ...td, textAlign: 'center', fontWeight: 800, color: selected ? t.primary : (win ? (ui.successText || '#047857') : t.textMuted) }}>
+                            <td style={{ ...td, textAlign: 'center', fontWeight: 800, color: selected ? t.primary : (win ? (ui.dark ? '#4ade80' : (ui.successText || '#047857')) : t.textMuted) }}>
                               {win ? '✓ Menor' : (selected ? '●' : '—')}
                             </td>
                             <td style={{ ...tdShared, fontSize: 'var(--cc-xs)' }} title={coh.descripcion}>{coh.descripcion || '—'}</td>
