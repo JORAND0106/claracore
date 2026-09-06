@@ -872,7 +872,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [ocrBusy, setOcrBusy] = useState(false)
   const [dupAlert, setDupAlert] = useState(null)
   const [historial, setHistorial] = useState(null)
-  const [cotMinimas, setCotMinimas] = useState(3)
   const [modalFaltantes, setModalFaltantes] = useState([])
   const [modalRuleErrors, setModalRuleErrors] = useState([])
   const [previewAdjunto, setPreviewAdjunto] = useState(null) // { file, fileName }
@@ -1389,7 +1388,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const save = async (forceUpdateId = null) => {
     if (!api) return
     const { faltantes, ruleErrors } = validateGuardarInsumo(form, {
-      minCotizaciones: form.requiere_cotizacion === false ? 0 : cotMinimas,
       editId,
     })
     setModalFaltantes(faltantes)
@@ -2204,7 +2202,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
                 {selectedParId
                   ? `Editando ${(form.cotizaciones_detalle || []).find((p) => p.id === selectedParId)?.insumo?.numero || 'fila'} — pulse «Actualizar tabla» para guardar los cambios de los paneles en esa fila.`
-                  : `Agrega una fila comparativa (Insumo | No Previsto). Indique el Nº real de cada cotización. Luego adjunte el PDF en la fila.${(form.requiere_cotizacion !== false) ? ` Mínimo ${cotMinimas} cotización(es).` : ''}`}
+                  : 'Agrega una fila comparativa (Insumo | No Previsto). Indique el Nº real de cada cotización. Adjunte el PDF en cada lado con datos. Basta la ganadora y su soporte para guardar.'}
               </span>
             </div>
 
@@ -2262,12 +2260,44 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         <th style={{ ...thHeader, width: 100 }}>IVA / AIU</th>
                         <th style={{ ...thHeader, width: 80 }}>Nº</th>
                         <th style={{ ...thHeader, width: 100 }}>Fecha</th>
-                        <th style={{ ...thHeader, width: 100 }}>PDF</th>
+                        <th style={{ ...thHeader, width: 110 }} title="PDF cotización Insumo">
+                          PDF
+                          <span
+                            title="El PDF es obligatorio para cada lado (Insumo o No Previsto) que tenga datos diligenciados. Basta con la cotización ganadora y su soporte para guardar el insumo. Arrastre el archivo sobre la fila o use el clip."
+                            style={{
+                              marginLeft: 4,
+                              fontWeight: 700,
+                              color: t.primary,
+                              cursor: 'help',
+                              fontSize: 'var(--cc-caption)',
+                              letterSpacing: 0,
+                              textTransform: 'none',
+                            }}
+                          >
+                            (?)
+                          </span>
+                        </th>
                         <th style={{ ...thHeader, width: 92 }}>Costo</th>
                         <th style={{ ...thHeader, width: 100 }}>IVA / AIU</th>
                         <th style={{ ...thHeader, width: 80 }}>Nº</th>
                         <th style={{ ...thHeader, width: 100 }}>Fecha</th>
-                        <th style={{ ...thHeader, width: 100 }}>PDF</th>
+                        <th style={{ ...thHeader, width: 110 }} title="PDF cotización No Previsto">
+                          PDF
+                          <span
+                            title="El PDF es obligatorio para cada lado (Insumo o No Previsto) que tenga datos diligenciados. Basta con la cotización ganadora y su soporte para guardar el insumo. Arrastre el archivo sobre la fila o use el clip."
+                            style={{
+                              marginLeft: 4,
+                              fontWeight: 700,
+                              color: t.primary,
+                              cursor: 'help',
+                              fontSize: 'var(--cc-caption)',
+                              letterSpacing: 0,
+                              textTransform: 'none',
+                            }}
+                          >
+                            (?)
+                          </span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
