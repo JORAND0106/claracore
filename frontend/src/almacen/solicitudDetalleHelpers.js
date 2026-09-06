@@ -177,9 +177,6 @@ export function agregarRentabilidadPorItem(hermanos, overrideDraft = null, meta 
   }
   if (!(cantCobro > 0) && !(cobroLinea > 0) && !tieneCosto) return null
 
-  const util = (cobroLinea > 0 || tieneCosto)
-    ? (cobroLinea || 0) - (tieneCosto ? costoLinea : 0)
-    : null
   const analisis = {
     cantidad: cantCobro,
     valor_cobro_unitario: cantCobro > 0 && cobroLinea > 0 ? cobroLinea / cantCobro : 0,
