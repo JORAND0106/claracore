@@ -531,7 +531,15 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
     : form.costo_base
   const fecha = form.cotizacion_fecha || ''
   const vigencia = form.cotizacion_vigencia || ''
+  const fechaNp = form.cotizacion_fecha_np || fecha
+  const vigenciaNp = form.cotizacion_vigencia_np || vigencia
   const impuestoEtiqueta = (opts.impuestoEtiqueta || form.impuesto_etiqueta || '').trim()
+  const impuestoEtiquetaNp = (
+    opts.impuestoEtiquetaNp
+    || form.impuesto_etiqueta_np
+    || impuestoEtiqueta
+    || ''
+  ).trim()
   const par = {
     ...newCotizacionPar({ esGanadora: false }),
     proveedor_id: form.proveedor_id || '',
@@ -558,9 +566,9 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
       proveedor: proveedorNombre,
       valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
       numero,
-      fecha,
-      vigencia,
-      impuesto_etiqueta: impuestoEtiqueta,
+      fecha: fechaNp,
+      vigencia: vigenciaNp,
+      impuesto_etiqueta: impuestoEtiquetaNp,
     },
   }
   return applyAutoGanadoraByMinValor([...(paresExistentes || []), par])

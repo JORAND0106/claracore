@@ -55,10 +55,14 @@ const EMPTY_FORM = {
   costo_base: '',
   valor_no_previsto: '',
   cantidad_negociada: '',
+  cantidad_negociada_np: '',
   impuesto: { ...EMPTY_IMPUESTO },
+  impuesto_np: { ...EMPTY_IMPUESTO },
   cotizacion_numero: '',
   cotizacion_fecha: '',
   cotizacion_vigencia: '',
+  cotizacion_fecha_np: '',
+  cotizacion_vigencia_np: '',
   cotizaciones_detalle: [],
   requiere_cotizacion: true,
 }
@@ -78,10 +82,14 @@ function snapshotForm(f) {
     costo_base: String(f.costo_base ?? ''),
     valor_no_previsto: String(f.valor_no_previsto ?? ''),
     cantidad_negociada: String(f.cantidad_negociada ?? ''),
+    cantidad_negociada_np: String(f.cantidad_negociada_np ?? ''),
     impuesto: f.impuesto || EMPTY_IMPUESTO,
+    impuesto_np: f.impuesto_np || EMPTY_IMPUESTO,
     cotizacion_numero: f.cotizacion_numero || '',
     cotizacion_fecha: f.cotizacion_fecha || '',
     cotizacion_vigencia: f.cotizacion_vigencia || '',
+    cotizacion_fecha_np: f.cotizacion_fecha_np || '',
+    cotizacion_vigencia_np: f.cotizacion_vigencia_np || '',
     cotizaciones_detalle: cotizacionesPayloadForSave(f.cotizaciones_detalle || []),
     requiere_cotizacion: !!f.requiere_cotizacion,
   })
@@ -794,6 +802,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [provLoading, setProvLoading] = useState(false)
   const [consumoNegociado, setConsumoNegociado] = useState(null)
   const [modalImpuestoOpen, setModalImpuestoOpen] = useState(false)
+  const [impuestoModalTarget, setImpuestoModalTarget] = useState('insumo')
   const [draftImpuesto, setDraftImpuesto] = useState({ ...EMPTY_IMPUESTO })
 
   const formHasChanges = useCallback(() => snapshotForm(form) !== formBaselineRef.current, [form])
@@ -823,14 +832,30 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     [form.costo_base, form.impuesto],
   )
 
-  const draftValorDespues = useMemo(
-    () => computeTotal(form.costo_base, draftImpuesto),
-    [form.costo_base, draftImpuesto],
-  )
+  const totalPreviewNp = useMemo(() => {
+    const base = form.valor_no_previsto !== '' && form.valor_no_previsto != null
+      ? form.valor_no_previsto
+      : form.costo_base
+    return computeTotal(base, form.impuesto_np)
+  }, [form.valor_no_previsto, form.costo_base, form.impuesto_np])
+
+  const draftValorDespues = useMemo(() => {
+    const base = impuestoModalTarget === 'np'
+      ? (form.valor_no_previsto !== '' && form.valor_no_previsto != null
+        ? form.valor_no_previsto
+        : form.costo_base)
+      : form.costo_base
+    return computeTotal(base, draftImpuesto)
+  }, [form.costo_base, form.valor_no_previsto, draftImpuesto, impuestoModalTarget])
 
   const tributosResumen = useMemo(
     () => etiquetaTributos(tributosPayloadDesdeForm(form.impuesto || EMPTY_IMPUESTO)),
     [form.impuesto],
+  )
+
+  const tributosResumenNp = useMemo(
+    () => etiquetaTributos(tributosPayloadDesdeForm(form.impuesto_np || EMPTY_IMPUESTO)),
+    [form.impuesto_np],
   )
 
   const tipoImpuestoInferido = useMemo(
@@ -848,6 +873,12 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     if (!cant || cant <= 0 || !totalPreview) return null
     return Math.round(cant * totalPreview)
   }, [form.cantidad_negociada, totalPreview])
+
+  const valorNegociadoPreviewNp = useMemo(() => {
+    const cant = Number(form.cantidad_negociada_np)
+    if (!cant || cant <= 0 || !totalPreviewNp) return null
+    return Math.round(cant * totalPreviewNp)
+  }, [form.cantidad_negociada_np, totalPreviewNp])
 
   const permsEfectivos = useMemo(
     () => (esDesarrolladorUsuario(user) ? permisosCatalogoInsumos(user, user?.contrato_id) : (perms || {})),
@@ -1062,6 +1093,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
     const list = buildParFromCapture(form, form.cotizaciones_detalle || [], {
       impuestoEtiqueta: etiquetaTributos(tributosPayloadDesdeForm(form.impuesto || EMPTY_IMPUESTO)),
+      impuestoEtiquetaNp: etiquetaTributos(tributosPayloadDesdeForm(form.impuesto_np || EMPTY_IMPUESTO)),
     })
     const legacy = syncLegacyFromGanadora(list)
     const gan = pickGanadora(list)
@@ -1082,6 +1114,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       valor_no_previsto: '',
       cotizacion_fecha: '',
       cotizacion_vigencia: '',
+      cotizacion_fecha_np: '',
+      cotizacion_vigencia_np: '',
+      cantidad_negociada_np: '',
     }))
   }
 
@@ -1797,70 +1832,192 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       />
                     </td>
                   </tr>
-                  <tr style={{ background: sheetZebra(ui, 1) }}>
-                    <td style={{ ...thHeader, fontWeight: 700 }}>Valor insumo *</td>
-                    <td style={td}>
-                      <input style={cellInp} type="number" min="0" step="0.01" value={form.costo_base} onChange={(e) => setForm({ ...form, costo_base: e.target.value })} />
-                    </td>
-                    <td style={{ ...thHeader, fontWeight: 700 }}>Valor No Previsto</td>
-                    <td style={td}>
-                      <input style={cellInp} type="number" min="0" step="0.01" value={form.valor_no_previsto} placeholder="Igual al insumo si vacío" onChange={(e) => setForm({ ...form, valor_no_previsto: e.target.value })} />
-                    </td>
-                  </tr>
-                  <tr style={{ background: sheetZebra(ui, 0) }}>
-                    <td style={{ ...thHeader, fontWeight: 700 }}>Después AIU/IVA</td>
-                    <td style={td}>
-                      <input style={{ ...cellInp, fontWeight: 700 }} readOnly value={fmtMoney(totalPreview)} />
-                    </td>
-                    <td style={{ ...thHeader, fontWeight: 700 }}>Fecha</td>
-                    <td style={td}>
-                      <input style={cellInp} type="date" value={form.cotizacion_fecha} onChange={(e) => setForm({ ...form, cotizacion_fecha: e.target.value })} />
-                    </td>
-                  </tr>
-                  <tr style={{ background: sheetZebra(ui, 1) }}>
-                    <td style={{ ...thHeader, fontWeight: 700 }}>Vigencia</td>
-                    <td style={td}>
-                      <input style={cellInp} value={form.cotizacion_vigencia} placeholder="Ej. 15 días" onChange={(e) => setForm({ ...form, cotizacion_vigencia: e.target.value })} />
-                    </td>
-                    <td style={{ ...thHeader, fontWeight: 700 }}>Impuesto</td>
-                    <td style={td}>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                        <button
-                          type="button"
-                          title="A · Í · U · IVA"
-                          onClick={() => {
-                            setDraftImpuesto({ ...(form.impuesto || EMPTY_IMPUESTO) })
-                            setModalImpuestoOpen(true)
-                          }}
-                          style={{
-                            ...btnSecondary,
-                            borderColor: impuestoTieneDatos(form.impuesto) ? t.primary : t.border,
-                            color: impuestoTieneDatos(form.impuesto) ? t.primary : t.text,
-                            fontWeight: 700,
-                          }}
-                        >
-                          A · Í · U · IVA{impuestoTieneDatos(form.impuesto) ? ' ✓' : ''}
-                        </button>
-                        <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                          {tributosResumen === '—' ? 'Sin impuesto.' : tributosResumen}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                  <tr style={{ background: sheetZebra(ui, 0) }}>
-                    <td style={{ ...thHeader, fontWeight: 700 }}>Cant. negociada</td>
-                    <td style={td}>
-                      <input style={cellInp} type="number" min="0" step="any" value={form.cantidad_negociada} onChange={(e) => setForm({ ...form, cantidad_negociada: e.target.value })} />
-                    </td>
-                    <td style={{ ...thHeader, fontWeight: 700 }}>Valor negociado</td>
-                    <td style={td}>
-                      <div style={{ ...cellInp, fontWeight: valorNegociadoPreview != null ? 600 : 400, color: valorNegociadoPreview != null ? t.text : t.textMuted }}>
-                        {valorNegociadoPreview != null ? fmtMoney(valorNegociadoPreview) : '—'}
-                      </div>
-                    </td>
-                  </tr>
                 </tbody>
               </table>
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+              gap: 10,
+              marginBottom: 8,
+            }}
+            >
+              <div style={{
+                ...sheetWrap,
+                marginBottom: 0,
+                borderColor: ui.dark ? 'rgba(0,180,198,0.45)' : ui.rest ? 'rgba(14,116,144,0.35)' : 'rgba(0,119,182,0.35)',
+                background: ui.dark ? 'rgba(0,180,198,0.08)' : ui.rest ? 'rgba(14,116,144,0.06)' : 'rgba(0,119,182,0.04)',
+              }}
+              >
+                <div style={{
+                  fontWeight: 800,
+                  fontSize: 'var(--cc-xs)',
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  color: t.primary,
+                  padding: '8px 10px 4px',
+                }}
+                >
+                  Costos — Insumo
+                </div>
+                <table style={{ ...sheetTable, minWidth: 0, tableLayout: 'fixed' }}>
+                  <tbody>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={{ ...thHeader, fontWeight: 700, width: '42%' }}>Valor *</td>
+                      <td style={td}>
+                        <input style={cellInp} type="number" min="0" step="0.01" value={form.costo_base} onChange={(e) => setForm({ ...form, costo_base: e.target.value })} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 1) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Después AIU/IVA</td>
+                      <td style={td}>
+                        <input style={{ ...cellInp, fontWeight: 700 }} readOnly value={fmtMoney(totalPreview)} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Fecha</td>
+                      <td style={td}>
+                        <input style={cellInp} type="date" value={form.cotizacion_fecha} onChange={(e) => setForm({ ...form, cotizacion_fecha: e.target.value })} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 1) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Vigencia</td>
+                      <td style={td}>
+                        <input style={cellInp} value={form.cotizacion_vigencia} placeholder="Ej. 15 días" onChange={(e) => setForm({ ...form, cotizacion_vigencia: e.target.value })} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Impuesto</td>
+                      <td style={td}>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            title="A · Í · U · IVA"
+                            onClick={() => {
+                              setImpuestoModalTarget('insumo')
+                              setDraftImpuesto({ ...(form.impuesto || EMPTY_IMPUESTO) })
+                              setModalImpuestoOpen(true)
+                            }}
+                            style={{
+                              ...btnSecondary,
+                              borderColor: impuestoTieneDatos(form.impuesto) ? t.primary : t.border,
+                              color: impuestoTieneDatos(form.impuesto) ? t.primary : t.text,
+                              fontWeight: 700,
+                            }}
+                          >
+                            A · Í · U · IVA{impuestoTieneDatos(form.impuesto) ? ' ✓' : ''}
+                          </button>
+                          <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                            {tributosResumen === '—' ? 'Sin impuesto.' : tributosResumen}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 1) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Cant. negociada</td>
+                      <td style={td}>
+                        <input style={cellInp} type="number" min="0" step="any" value={form.cantidad_negociada} onChange={(e) => setForm({ ...form, cantidad_negociada: e.target.value })} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Valor negociado</td>
+                      <td style={td}>
+                        <div style={{ ...cellInp, fontWeight: valorNegociadoPreview != null ? 600 : 400, color: valorNegociadoPreview != null ? t.text : t.textMuted }}>
+                          {valorNegociadoPreview != null ? fmtMoney(valorNegociadoPreview) : '—'}
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div style={{
+                ...sheetWrap,
+                marginBottom: 0,
+                borderColor: ui.dark ? 'rgba(245,158,11,0.45)' : ui.rest ? 'rgba(180,120,40,0.35)' : 'rgba(217,119,6,0.35)',
+                background: ui.dark ? 'rgba(245,158,11,0.10)' : ui.rest ? 'rgba(180,120,40,0.08)' : 'rgba(217,119,6,0.05)',
+              }}
+              >
+                <div style={{
+                  fontWeight: 800,
+                  fontSize: 'var(--cc-xs)',
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  color: t.primary,
+                  padding: '8px 10px 4px',
+                }}
+                >
+                  Costos — No Previsto
+                </div>
+                <table style={{ ...sheetTable, minWidth: 0, tableLayout: 'fixed' }}>
+                  <tbody>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={{ ...thHeader, fontWeight: 700, width: '42%' }}>Valor</td>
+                      <td style={td}>
+                        <input style={cellInp} type="number" min="0" step="0.01" value={form.valor_no_previsto} placeholder="Igual al insumo si vacío" onChange={(e) => setForm({ ...form, valor_no_previsto: e.target.value })} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 1) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Después AIU/IVA</td>
+                      <td style={td}>
+                        <input style={{ ...cellInp, fontWeight: 700 }} readOnly value={fmtMoney(totalPreviewNp)} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Fecha</td>
+                      <td style={td}>
+                        <input style={cellInp} type="date" value={form.cotizacion_fecha_np} onChange={(e) => setForm({ ...form, cotizacion_fecha_np: e.target.value })} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 1) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Vigencia</td>
+                      <td style={td}>
+                        <input style={cellInp} value={form.cotizacion_vigencia_np} placeholder="Ej. 15 días" onChange={(e) => setForm({ ...form, cotizacion_vigencia_np: e.target.value })} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Impuesto</td>
+                      <td style={td}>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            title="A · Í · U · IVA (No Previsto)"
+                            onClick={() => {
+                              setImpuestoModalTarget('np')
+                              setDraftImpuesto({ ...(form.impuesto_np || EMPTY_IMPUESTO) })
+                              setModalImpuestoOpen(true)
+                            }}
+                            style={{
+                              ...btnSecondary,
+                              borderColor: impuestoTieneDatos(form.impuesto_np) ? t.primary : t.border,
+                              color: impuestoTieneDatos(form.impuesto_np) ? t.primary : t.text,
+                              fontWeight: 700,
+                            }}
+                          >
+                            A · Í · U · IVA{impuestoTieneDatos(form.impuesto_np) ? ' ✓' : ''}
+                          </button>
+                          <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                            {tributosResumenNp === '—' ? 'Sin impuesto.' : tributosResumenNp}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 1) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Cant. negociada</td>
+                      <td style={td}>
+                        <input style={cellInp} type="number" min="0" step="any" value={form.cantidad_negociada_np} onChange={(e) => setForm({ ...form, cantidad_negociada_np: e.target.value })} />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={{ ...thHeader, fontWeight: 700 }}>Valor negociado</td>
+                      <td style={td}>
+                        <div style={{ ...cellInp, fontWeight: valorNegociadoPreviewNp != null ? 600 : 400, color: valorNegociadoPreviewNp != null ? t.text : t.textMuted }}>
+                          {valorNegociadoPreviewNp != null ? fmtMoney(valorNegociadoPreviewNp) : '—'}
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
             {consumoNegociado?.tiene_negociado && (
               <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
@@ -1893,14 +2050,14 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             {form.requiere_cotizacion ? (
               <>
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
-                  Cada bloque distingue <strong>datos del insumo</strong> (iguales en todas las filas) y <strong>datos de costo</strong> (varían).
-                  La ganadora es la de menor costo. Arrastre el PDF sobre la fila/celda o use el clip; al reemplazar queda vigente la última versión.
+                  Cada fila muestra cotización de <strong>Insumo</strong> y de <strong>No Previsto</strong> lado a lado.
+                  La ganadora es la de menor costo de insumo. Arrastre el PDF sobre la fila/celda o use el clip; al reemplazar queda vigente la última versión.
                 </div>
                 <div style={{ ...sheetWrap, marginBottom: 8, overflowX: 'auto' }}>
                   <table style={{ ...sheetTable, minWidth: 1480, tableLayout: 'auto' }}>
                     <thead>
                       <tr>
-                        <th style={{ ...thHeader, width: 64 }} rowSpan={3}>Ganadora</th>
+                        <th style={{ ...thHeader, width: 64 }} rowSpan={2}>Ganadora</th>
                         <th
                           style={{
                             ...thHeader,
@@ -1920,48 +2077,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                           colSpan={8}
                         >
                           Cotización No Previsto
-                        </th>
-                      </tr>
-                      <tr>
-                        <th
-                          style={{
-                            ...thHeader,
-                            textAlign: 'center',
-                            background: ui.dark ? 'rgba(148,163,184,0.18)' : 'rgba(148,163,184,0.14)',
-                          }}
-                          colSpan={3}
-                        >
-                          Datos del insumo
-                        </th>
-                        <th
-                          style={{
-                            ...thHeader,
-                            textAlign: 'center',
-                            background: ui.dark ? 'rgba(0,180,198,0.18)' : 'rgba(0,119,182,0.10)',
-                          }}
-                          colSpan={5}
-                        >
-                          Datos de costo
-                        </th>
-                        <th
-                          style={{
-                            ...thHeader,
-                            textAlign: 'center',
-                            background: ui.dark ? 'rgba(148,163,184,0.18)' : 'rgba(148,163,184,0.14)',
-                          }}
-                          colSpan={3}
-                        >
-                          Datos del insumo
-                        </th>
-                        <th
-                          style={{
-                            ...thHeader,
-                            textAlign: 'center',
-                            background: ui.dark ? 'rgba(245,158,11,0.16)' : 'rgba(217,119,6,0.10)',
-                          }}
-                          colSpan={5}
-                        >
-                          Datos de costo
                         </th>
                       </tr>
                       <tr>
@@ -2058,7 +2173,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                               <input style={cellInp} type="number" min="0" step="0.01" value={par.no_previsto?.valor ?? ''} onChange={(e) => patchParLado(par.id, 'no_previsto', { valor: e.target.value })} />
                             </td>
                             <td style={{ ...tdNp, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                              {par.no_previsto?.impuesto_etiqueta || tributosResumen || '—'}
+                              {par.no_previsto?.impuesto_etiqueta || '—'}
                             </td>
                             <td style={{ ...tdNp, fontVariantNumeric: 'tabular-nums', color: t.textMuted }}>{par.no_previsto?.numero || '—'}</td>
                             <td style={tdNp}>
@@ -2269,11 +2384,15 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
       <TributoModalShell
         open={modalImpuestoOpen}
-        title="Impuesto"
+        title={impuestoModalTarget === 'np' ? 'Impuesto — No Previsto' : 'Impuesto — Insumo'}
         t={t}
         onClose={() => setModalImpuestoOpen(false)}
         onSave={() => {
-          setForm((f) => ({ ...f, impuesto: { ...draftImpuesto } }))
+          setForm((f) => (
+            impuestoModalTarget === 'np'
+              ? { ...f, impuesto_np: { ...draftImpuesto } }
+              : { ...f, impuesto: { ...draftImpuesto } }
+          ))
           setModalImpuestoOpen(false)
         }}
       >
