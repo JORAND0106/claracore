@@ -280,6 +280,23 @@ def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
         if item.get("valor") not in (None, ""):
             valor = _to_float(item.get("valor"))
         es_ganadora = bool(item.get("es_ganadora")) and tipo == "insumo"
+        impuesto_etiqueta = (item.get("impuesto_etiqueta") or "").strip() or None
+        impuesto = item.get("impuesto")
+        if not isinstance(impuesto, dict):
+            impuesto = None
+        else:
+            # Conservar solo campos de form decimal (A/Í/U/IVA).
+            cleaned = {}
+            for key in ("administracion", "imprevistos", "utilidad", "iva"):
+                raw_v = impuesto.get(key)
+                if raw_v in (None, ""):
+                    cleaned[key] = ""
+                else:
+                    cleaned[key] = str(raw_v)
+            if not any(cleaned.get(k) not in (None, "", "0", "0.0") for k in cleaned):
+                impuesto = None
+            else:
+                impuesto = cleaned
         row = {
             "id": str(item.get("id") or f"c-{i}"),
             "pair_id": str(item["pair_id"]) if item.get("pair_id") else None,
@@ -290,6 +307,8 @@ def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
             "numero": numero,
             "fecha": fecha,
             "vigencia": vigencia,
+            "impuesto_etiqueta": impuesto_etiqueta,
+            "impuesto": impuesto,
             "pdf_nombre": (item.get("pdf_nombre") or "").strip() or None,
         }
         if not any(
@@ -300,6 +319,8 @@ def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
                 fecha,
                 vigencia,
                 valor is not None,
+                impuesto_etiqueta,
+                impuesto,
                 row["pdf_nombre"],
             ]
         ):

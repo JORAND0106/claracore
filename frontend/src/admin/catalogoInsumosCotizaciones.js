@@ -6,6 +6,27 @@ function uid(prefix = 'p') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+/** Copia el form de impuesto (decimales UI) en un lado de cotización. */
+export function cloneImpuestoLado(imp) {
+  if (!imp || typeof imp !== 'object') {
+    return { administracion: '', imprevistos: '', utilidad: '', iva: '' }
+  }
+  return {
+    administracion: imp.administracion != null && imp.administracion !== '' ? String(imp.administracion) : '',
+    imprevistos: imp.imprevistos != null && imp.imprevistos !== '' ? String(imp.imprevistos) : '',
+    utilidad: imp.utilidad != null && imp.utilidad !== '' ? String(imp.utilidad) : '',
+    iva: imp.iva != null && imp.iva !== '' ? String(imp.iva) : '',
+  }
+}
+
+export function ladoHasImpuesto(lado) {
+  const imp = lado?.impuesto
+  if (!imp || typeof imp !== 'object') return false
+  return ['administracion', 'imprevistos', 'utilidad', 'iva'].some(
+    (k) => imp[k] !== '' && imp[k] != null && Number(imp[k]) !== 0,
+  )
+}
+
 export function emptyLado() {
   return {
     proveedor: '',
@@ -14,6 +35,7 @@ export function emptyLado() {
     fecha: '',
     vigencia: '',
     impuesto_etiqueta: '',
+    impuesto: cloneImpuestoLado(null),
     pdf: null,
     pdf_nombre: '',
     pdf_historial: [],
@@ -49,6 +71,7 @@ function ladoHasData(lado) {
     || (lado.vigencia || '').trim()
     || (lado.valor !== '' && lado.valor != null)
     || (lado.impuesto_etiqueta || '').trim()
+    || ladoHasImpuesto(lado)
     || lado.pdf
     || (lado.pdf_nombre || '').trim()
   )
@@ -63,6 +86,7 @@ export function ladoHasCaptureData(lado) {
     || (lado.vigencia || '').trim()
     || (lado.valor !== '' && lado.valor != null)
     || (lado.impuesto_etiqueta || '').trim()
+    || ladoHasImpuesto(lado)
   )
 }
 
@@ -101,6 +125,7 @@ function normalizeLado(item = {}) {
     fecha: item?.fecha ? String(item.fecha).slice(0, 10) : '',
     vigencia: item?.vigencia != null ? String(item.vigencia) : '',
     impuesto_etiqueta: item?.impuesto_etiqueta != null ? String(item.impuesto_etiqueta) : '',
+    impuesto: cloneImpuestoLado(item?.impuesto),
     pdf: item?.pdf || null,
     pdf_nombre: item?.pdf_nombre != null ? String(item.pdf_nombre) : '',
     pdf_historial: historial,
@@ -270,6 +295,10 @@ export function syncLegacyFromGanadora(cotizacionesOrPares) {
 }
 
 function ladoPayload(lado) {
+  const impuesto = cloneImpuestoLado(lado?.impuesto)
+  const hasImp = ['administracion', 'imprevistos', 'utilidad', 'iva'].some(
+    (k) => impuesto[k] !== '' && impuesto[k] != null && Number(impuesto[k]) !== 0,
+  )
   return {
     proveedor: (lado.proveedor || '').trim() || null,
     valor: lado.valor !== '' && lado.valor != null ? Number(lado.valor) : null,
@@ -277,6 +306,7 @@ function ladoPayload(lado) {
     fecha: lado.fecha || null,
     vigencia: (lado.vigencia || '').trim() || null,
     impuesto_etiqueta: (lado.impuesto_etiqueta || '').trim() || null,
+    impuesto: hasImp ? impuesto : null,
     pdf_nombre: (lado.pdf?.name || lado.pdf_nombre || '').trim() || null,
     pdf_historial: Array.isArray(lado.pdf_historial) ? lado.pdf_historial : [],
   }
@@ -337,6 +367,13 @@ export function pickGanadora(cotizacionesOrPares) {
   return list.find((r) => r.tipo === 'insumo' && r.es_ganadora)
     || list.find((r) => r.tipo === 'insumo')
     || null
+}
+
+/** Impuesto (form decimal) de la cotización ganadora, si tiene datos. */
+export function impuestoGanadoraDesdePares(pares) {
+  const gan = pickGanadora(pares)
+  if (!gan || !ladoHasImpuesto(gan)) return null
+  return cloneImpuestoLado(gan.impuesto)
 }
 
 export function otrasCotizaciones(cotizaciones, ganadoraId) {
@@ -589,6 +626,8 @@ export function sanitizeRendimientoInput(raw) {
  * @param {object} [opts]
  * @param {string} [opts.impuestoEtiqueta]
  * @param {string} [opts.impuestoEtiquetaNp]
+ * @param {object} [opts.impuesto]
+ * @param {object} [opts.impuestoNp]
  */
 export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
   const numeroIns = toUpperTrim(form.cotizacion_numero)
@@ -608,6 +647,8 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
     || form.impuesto_etiqueta_np
     || ''
   ).trim()
+  const impuestoIns = cloneImpuestoLado(opts.impuesto || form.impuesto)
+  const impuestoNp = cloneImpuestoLado(opts.impuestoNp || form.impuesto_np)
   const par = {
     ...newCotizacionPar({ esGanadora: false }),
     proveedor_id: form.proveedor_id || '',
@@ -628,6 +669,7 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
       fecha,
       vigencia,
       impuesto_etiqueta: impuestoEtiqueta,
+      impuesto: impuestoIns,
     },
     no_previsto: {
       ...emptyLado(),
@@ -637,6 +679,7 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
       fecha: fechaNp,
       vigencia: vigenciaNp,
       impuesto_etiqueta: impuestoEtiquetaNp,
+      impuesto: impuestoNp,
     },
   }
   // Si el panel NP no se usó, dejar el lado vacío (sin número ni proveedor fantasma)
@@ -658,6 +701,8 @@ export function applyCaptureToPar(par, form, opts = {}) {
     : ''
   const impuestoEtiqueta = (opts.impuestoEtiqueta || form.impuesto_etiqueta || '').trim()
   const impuestoEtiquetaNp = (opts.impuestoEtiquetaNp || form.impuesto_etiqueta_np || '').trim()
+  const impuestoIns = cloneImpuestoLado(opts.impuesto || form.impuesto)
+  const impuestoNpForm = cloneImpuestoLado(opts.impuestoNp || form.impuesto_np)
   const proveedorNombre = (form.razon_social || '').trim() || par.insumo?.proveedor || ''
   const next = {
     ...par,
@@ -683,7 +728,8 @@ export function applyCaptureToPar(par, form, opts = {}) {
       numero: numeroIns || par.insumo?.numero || '',
       fecha: form.cotizacion_fecha || '',
       vigencia: form.cotizacion_vigencia || '',
-      impuesto_etiqueta: impuestoEtiqueta || par.insumo?.impuesto_etiqueta || '',
+      impuesto_etiqueta: impuestoEtiqueta,
+      impuesto: impuestoIns,
     },
     no_previsto: panelNoPrevistoTouched(form)
       ? {
@@ -693,9 +739,16 @@ export function applyCaptureToPar(par, form, opts = {}) {
         numero: numeroNp || par.no_previsto?.numero || '',
         fecha: form.cotizacion_fecha_np || '',
         vigencia: form.cotizacion_vigencia_np || '',
-        impuesto_etiqueta: impuestoEtiquetaNp || par.no_previsto?.impuesto_etiqueta || '',
+        impuesto_etiqueta: impuestoEtiquetaNp,
+        impuesto: impuestoNpForm,
       }
-      : { ...emptyLado(), proveedor: proveedorNombre, pdf: par.no_previsto?.pdf || null, pdf_nombre: par.no_previsto?.pdf_nombre || '', pdf_historial: par.no_previsto?.pdf_historial || [] },
+      : {
+        ...emptyLado(),
+        proveedor: proveedorNombre,
+        pdf: par.no_previsto?.pdf || null,
+        pdf_nombre: par.no_previsto?.pdf_nombre || '',
+        pdf_historial: par.no_previsto?.pdf_historial || [],
+      },
   }
   return next
 }

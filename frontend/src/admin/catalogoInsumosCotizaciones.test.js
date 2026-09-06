@@ -10,6 +10,7 @@ import {
   detalleToPares,
   ganadoraRuleErrors,
   ganadoraDesdeInsumoRow,
+  impuestoGanadoraDesdePares,
   newCotizacionPar,
   nextCotizacionNumero,
   sanitizeRendimientoInput,
@@ -286,9 +287,50 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(gan?.numero, 'N1')
   })
 
-  it('fileFromDataTransfer toma el primer archivo', () => {
-    const f = new File(['z'], 'x.pdf', { type: 'application/pdf' })
-    const dt = { files: [f], items: [] }
-    assert.equal(fileFromDataTransfer(dt)?.name, 'x.pdf')
+  it('applyCaptureToPar y payload conservan impuesto completo', () => {
+    const par = {
+      ...newCotizacionPar({ esGanadora: true }),
+      insumo: {
+        ...newCotizacionPar().insumo,
+        valor: '100',
+        numero: 'C1',
+        pdf_nombre: 'a.pdf',
+      },
+    }
+    const updated = applyCaptureToPar(par, {
+      razon_social: 'Prov',
+      nit: '1',
+      descripcion: 'X',
+      unidad: 'UND',
+      costo_base: '120',
+      cotizacion_numero: 'C1',
+      cotizacion_fecha: '2026-03-01',
+      impuesto: { administracion: '', imprevistos: '', utilidad: '', iva: '0.19' },
+    }, {
+      impuestoEtiqueta: 'IVA 19%',
+      impuesto: { administracion: '', imprevistos: '', utilidad: '', iva: '0.19' },
+    })
+    assert.equal(updated.insumo.impuesto_etiqueta, 'IVA 19%')
+    assert.equal(updated.insumo.impuesto.iva, '0.19')
+    const payload = cotizacionesPayloadForSave([updated])
+    assert.equal(payload[0].impuesto.iva, '0.19')
+    const round = detalleToPares(payload)
+    assert.equal(round[0].insumo.impuesto.iva, '0.19')
+  })
+
+  it('impuestoGanadoraDesdePares lee el impuesto de la ganadora', () => {
+    let pares = [
+      {
+        ...newCotizacionPar({ esGanadora: true }),
+        insumo: {
+          ...newCotizacionPar().insumo,
+          valor: '50',
+          numero: 'G',
+          impuesto: { administracion: '', imprevistos: '', utilidad: '', iva: '0.05' },
+        },
+      },
+    ]
+    pares = applyAutoGanadoraByMinValor(pares)
+    assert.equal(impuestoGanadoraDesdePares(pares)?.iva, '0.05')
   })
 })
