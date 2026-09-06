@@ -16,8 +16,10 @@ import {
   impuestoTieneDatos,
   labelTipoImpuesto,
   seedTributosDesdeLegado,
+  tipoTributoCortoDesdeRow,
   tooltipTotalPorcentaje,
   tributosPayloadDesdeForm,
+  valorTributarioLabelDesdeRow,
 } from './catalogoInsumosTributos'
 import { buildContratoUiTheme } from '../theme/adminPanelTheme'
 import { UnidadSelector } from '../utils/unidadesListadoPrecios'
@@ -739,8 +741,23 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fontWeight: 700,
     fontSize: 'var(--cc-xs)',
   }
-  const tdCodigo = { ...td, color: t.primaryLight || t.primary, fontWeight: 600, whiteSpace: 'nowrap' }
-  const tdDesc = { ...td, color: t.text, fontWeight: 500 }
+  const tdCodigo = {
+    ...td,
+    color: t.primaryLight || t.primary,
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    maxWidth: 0,
+  }
+  const tdDesc = {
+    ...td,
+    color: t.text,
+    fontWeight: 500,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    maxWidth: 0,
+  }
   const tdMuted = { ...td, color: t.textMuted }
   const tdMoney = { ...tdNum, color: 'var(--cc-color-positive)' }
   const tdTotal = { ...tdNum, color: t.primary }
@@ -765,7 +782,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         : 'rgba(0, 119, 182, 0.10)',
     color: t.text,
   }
-  /** Encabezados de la grilla principal: permiten wrap y evitan solapes con fuente grande. */
+  /** Encabezados de la grilla principal: centrados y sin solapes con fuente grande. */
   const thGrid = {
     ...thHeader,
     whiteSpace: 'normal',
@@ -774,7 +791,14 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     lineHeight: 1.15,
     letterSpacing: '0.02em',
     padding: '6px 5px',
-    verticalAlign: 'bottom',
+    verticalAlign: 'middle',
+    textAlign: 'center',
+  }
+  const thGridNowrap = {
+    ...thGrid,
+    whiteSpace: 'nowrap',
+    overflowWrap: 'normal',
+    wordBreak: 'normal',
   }
   const modalPanelStyle = {
     background: t.bgCard,
@@ -1191,9 +1215,33 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       ))
       list = applyAutoGanadoraByMinValor(list)
       const legacy = syncLegacyFromGanadora(list)
+      const gan = pickGanadora(list)
       setModalFaltantes([])
       setModalRuleErrors(ganadoraRuleErrors(list))
-      setForm((f) => ({ ...f, cotizaciones_detalle: list, ...legacy }))
+      setSelectedParId(null)
+      setForm((f) => ({
+        ...f,
+        cotizaciones_detalle: list,
+        ...legacy,
+        // Reiniciar captura para una nueva cotización
+        proveedor_id: '',
+        razon_social: '',
+        nit: '',
+        contacto_email: '',
+        contacto_nombre: '',
+        contacto_telefono: '',
+        costo_base: gan?.valor != null && gan.valor !== '' ? String(gan.valor) : '',
+        valor_no_previsto: '',
+        cotizacion_numero: '',
+        cotizacion_fecha: '',
+        cotizacion_vigencia: '',
+        cotizacion_numero_np: '',
+        cotizacion_fecha_np: '',
+        cotizacion_vigencia_np: '',
+        cantidad_negociada_np: '',
+        impuesto: { ...EMPTY_IMPUESTO },
+        impuesto_np: { ...EMPTY_IMPUESTO },
+      }))
       return
     }
 
@@ -1587,21 +1635,49 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       </div>
 
       <div style={sheetWrap} className="cc-almacen-table-scroll cc-catalogo-insumos-sheet">
-        <table style={{ ...sheetTable, minWidth: 980 }}>
+        <table style={{ ...sheetTable, minWidth: 920, tableLayout: 'fixed' }}>
+          <colgroup>
+            <col style={{ width: '11%' }} />
+            <col style={{ width: 108 }} />
+            <col style={{ width: '16%' }} />
+            <col style={{ width: 56 }} />
+            <col style={{ width: 64 }} />
+            <col style={{ width: 56 }} />
+            <col style={{ width: 72 }} />
+            <col style={{ width: 96 }} />
+            <col style={{ width: 72 }} />
+            <col style={{ width: 84 }} />
+            <col style={{ width: 88 }} />
+            <col style={{ width: 96 }} />
+          </colgroup>
           <thead>
             <tr>
-              <th style={{ ...thGrid, width: '12%' }} title="Proveedor">Prov.</th>
-              <th style={{ ...thGrid, width: 88 }} title="Código">Cód.</th>
+              <th style={thGrid} title="Proveedor">Prov.</th>
+              <th style={thGridNowrap} title="Código">Código</th>
               <th style={thGrid} title="Descripción">Desc.</th>
-              <th style={{ ...thGrid, width: 48 }} title="Unidad">Und</th>
-              <th style={{ ...thGrid, textAlign: 'right', width: 56 }} title="Rendimiento">Rend.</th>
-              <th style={{ ...thGrid, textAlign: 'right', width: 88 }} title="Antes de AIU/IVA">IVA/AIU</th>
-              <th style={{ ...thGrid, width: 72 }} title="Tributos">Trib.</th>
-              <th style={{ ...thGrid, textAlign: 'right', width: 96 }} title="Con AIU/IVA">Con IVA/AIU</th>
-              <th style={{ ...thGrid, width: 72 }} title="Nº cotización">Nº</th>
-              <th style={{ ...thGrid, width: 84 }} title="Fecha cotización">Fecha</th>
-              <th style={{ ...thGrid, textAlign: 'right', width: 88 }} title="Valor cotización">Valor</th>
-              <th style={{ ...thGrid, width: 96 }} />
+              <th style={thGridNowrap} title="Unidad">Und</th>
+              <th style={thGridNowrap} title="Rendimiento">Rend.</th>
+              <th style={thGridNowrap} title="Tipo de tributo (IVA o AIU)">Tipo</th>
+              <th style={thGridNowrap} title="Valor tributario">
+                V.T.
+                <span
+                  title="Valor tributario: porcentaje de IVA, o sumatoria del AIU, según el tipo"
+                  style={{
+                    marginLeft: 3,
+                    fontWeight: 700,
+                    color: t.primary,
+                    cursor: 'help',
+                    fontSize: 'var(--cc-caption)',
+                  }}
+                >
+                  (?)
+                </span>
+              </th>
+              <th style={thGrid} title="Con AIU/IVA">Con IVA/AIU</th>
+              <th style={thGridNowrap} title="Nº cotización">Nº</th>
+              <th style={thGridNowrap} title="Fecha cotización">Fecha</th>
+              <th style={{ ...thGridNowrap, textAlign: 'center' }} title="Valor cotización">Valor</th>
+              <th style={thGrid} />
             </tr>
           </thead>
           <tbody>
@@ -1615,6 +1691,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               const expanded = expandedId === rid
               const zebra = sheetZebra(ui, idx)
               const otras = otrasCotizaciones(detalleVisibleDesdeInsumoRow(r), gan?.id)
+              const tipoTrib = tipoTributoCortoDesdeRow(r)
+              const vtLabel = valorTributarioLabelDesdeRow(r)
               return (
                 <Fragment key={rid}>
                   <tr
@@ -1624,17 +1702,17 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     style={{ background: expanded ? ui.cardSubtle : zebra, cursor: 'pointer' }}
                     title="Clic para ver otras cotizaciones"
                   >
-                    <td style={tdMuted}>{r.proveedor_nombre || '—'}</td>
-                    <td style={tdCodigo}>{r.codigo}</td>
-                    <td style={tdDesc}>{r.descripcion}</td>
-                    <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{r.unidad}</td>
-                    <td style={tdNum}>{r.rendimiento ?? '—'}</td>
-                    <td style={tdMoney}>{fmtMoney(r.costo)}</td>
-                    <td style={tdMuted}>{r.impuesto_etiqueta || '—'}</td>
-                    <td style={tdTotal}>{fmtMoney(r.costo_total)}</td>
-                    <td style={tdMuted}>{gan?.numero || r.cotizacion_numero || '—'}</td>
-                    <td style={tdMuted}>{gan?.fecha || r.cotizacion_fecha || '—'}</td>
-                    <td style={tdNum}>{gan?.valor != null && gan.valor !== '' ? fmtMoney(gan.valor) : '—'}</td>
+                    <td style={{ ...tdMuted, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.proveedor_nombre || ''}>{r.proveedor_nombre || '—'}</td>
+                    <td style={tdCodigo} title={r.codigo || ''}>{r.codigo}</td>
+                    <td style={tdDesc} title={r.descripcion || ''}>{r.descripcion}</td>
+                    <td style={{ ...tdMuted, whiteSpace: 'nowrap', textAlign: 'center' }}>{r.unidad}</td>
+                    <td style={{ ...tdNum, textAlign: 'center' }}>{r.rendimiento ?? '—'}</td>
+                    <td style={{ ...tdMuted, textAlign: 'center', whiteSpace: 'nowrap' }}>{tipoTrib}</td>
+                    <td style={{ ...tdNum, textAlign: 'center', whiteSpace: 'nowrap' }} title="Valor tributario">{vtLabel}</td>
+                    <td style={{ ...tdTotal, textAlign: 'center' }}>{fmtMoney(r.costo_total)}</td>
+                    <td style={{ ...tdMuted, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis' }} title={gan?.numero || r.cotizacion_numero || ''}>{gan?.numero || r.cotizacion_numero || '—'}</td>
+                    <td style={{ ...tdMuted, textAlign: 'center', whiteSpace: 'nowrap' }}>{gan?.fecha || r.cotizacion_fecha || '—'}</td>
+                    <td style={{ ...tdNum, textAlign: 'center' }}>{gan?.valor != null && gan.valor !== '' ? fmtMoney(gan.valor) : '—'}</td>
                     <td style={td} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'inline-flex', gap: 4 }}>
                         <IconActionBtn title="Historial de precios" t={t} onClick={() => showHistorial(r)}>
