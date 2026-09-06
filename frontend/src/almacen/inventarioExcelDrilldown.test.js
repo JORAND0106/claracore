@@ -22,13 +22,15 @@ describe('Inventario — listado, filtro y gráfico dinámico', () => {
     assert.match(src, /Ver todo el listado/)
   })
 
-  it('backend carga listado de precios y tolera OC sin proveedor_id', () => {
+  it('backend usa razon_social y soft-fail de enriquecimiento', () => {
     const arbol = readFileSync(join(__dirname, '../../../backend/almacen_inventario_arbol.py'), 'utf8')
     assert.match(arbol, /_fetch_all_listado_rows/)
     assert.match(arbol, /def _fetch_oc_rows/)
-    assert.match(arbol, /proveedor_id does not exist|select_variants|proveedor_nombre/)
-    assert.match(arbol, /item_key/)
-    assert.ok(arbol.includes('listado de precios') || arbol.includes('listado_precios') || arbol.includes('_fetch_all_listado_rows'))
+    assert.match(arbol, /def _fetch_proveedor_map/)
+    assert.match(arbol, /razon_social/)
+    assert.doesNotMatch(arbol, /\.select\("id, nombre"\)/)
+    assert.match(arbol, /_enrich_inventario_movimientos/)
+    assert.match(arbol, /Se devuelve el listado de precios sin entradas/)
   })
 
   it('conserva drill-down Excel', () => {

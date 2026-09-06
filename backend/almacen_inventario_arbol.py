@@ -1,10 +1,12 @@
 """Inventario en árbol: ítem (listado) → insumo → proveedor (tab Inventario)."""
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Tuple
 
+_log = logging.getLogger(__name__)
 _CACHE: Dict[int, Tuple[float, dict]] = {}
 _CACHE_TTL_SEC = 90
 _IN_CHUNK = 200
@@ -363,6 +365,46 @@ def _fetch_oc_rows(sb, oc_ids: List[int]) -> Dict[int, dict]:
     return oc_map
 
 
+def _fetch_proveedor_map(sb, prov_ids: List[int]) -> Dict[int, str]:
+    """Mapa id → razón social. Columna real: razon_social (no 'nombre')."""
+    from almacen_service import _pgrst_unknown_column
+
+    out: Dict[int, str] = {}
+    if not prov_ids:
+        return out
+    select_variants = [
+        "id, razon_social",
+        "id",
+    ]
+    last_exc: Optional[BaseException] = None
+    for select in select_variants:
+        try:
+            out = {}
+            for chunk in _chunks(sorted(set(int(x) for x in prov_ids if x))):
+                for p in (
+                    sb.table("almacen_proveedor")
+                    .select(select)
+                    .in_("id", chunk)
+                    .execute()
+                    .data
+                    or []
+                ):
+                    pid = int(p["id"])
+                    nombre = (p.get("razon_social") or p.get("nombre") or "").strip()
+                    out[pid] = nombre or f"Proveedor #{pid}"
+            return out
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            col = _pgrst_unknown_column(exc)
+            msg = str(exc or "")
+            if col in ("razon_social", "nombre") or "razon_social" in msg or "nombre" in msg:
+                continue
+            raise
+    if last_exc:
+        _log.warning("No se pudo cargar almacen_proveedor: %s", last_exc)
+    return out
+
+
 def list_inventario_arbol(contrato_id: int) -> dict:
     """Árbol completo del inventario del contrato (con caché corta)."""
     cached = _cache_get(contrato_id)
@@ -373,7 +415,6 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         _fetch_all_listado_rows,
     )
     from almacen_service import (
-        _despacho_neto_por_entrada_item,
         _sb,
         list_presupuesto_items,
     )
@@ -461,15 +502,67 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         _cache_set(contrato_id, out)
         return out
 
-    # ── 2. Movimientos vía entradas ─────────────────────────────────────────
-    ent_rows = (
-        sb.table("almacen_entrada")
-        .select("id, proveedor_id, insumo_id")
-        .eq("contrato_id", int(contrato_id))
-        .execute()
-        .data
-        or []
+    # ── 2–3. Enriquecimiento (movimientos / composición) — no debe tumbar el listado ──
+    movement_lines: List[dict] = []
+    composition: Dict[str, List[dict]] = defaultdict(list)
+    try:
+        movement_lines, composition = _enrich_inventario_movimientos(
+            sb=sb,
+            contrato_id=int(contrato_id),
+            item_by_key=item_by_key,
+            ppto_to_key=ppto_to_key,
+        )
+    except Exception:
+        _log.exception(
+            "Inventario árbol: falló enriquecimiento de movimientos (contrato=%s). "
+            "Se devuelve el listado de precios sin entradas/salidas.",
+            contrato_id,
+        )
+        movement_lines = []
+        composition = defaultdict(list)
+
+    item_rows = list(item_by_key.values())
+    built = build_inventario_arbol_from_lines(
+        item_rows=item_rows,
+        composition=dict(composition),
+        movement_lines=movement_lines,
     )
+    built["generado_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    _cache_set(contrato_id, built)
+    return built
+
+
+def _enrich_inventario_movimientos(
+    *,
+    sb,
+    contrato_id: int,
+    item_by_key: Dict[str, dict],
+    ppto_to_key: Dict[int, str],
+) -> Tuple[List[dict], Dict[str, List[dict]]]:
+    """Carga entradas/salidas/composición. Puede lanzar; el caller hace soft-fail."""
+    from almacen_service import _despacho_neto_por_entrada_item
+
+    # Entradas del contrato (proveedor_id puede faltar en esquemas viejos)
+    ent_rows: List[dict] = []
+    for select in ("id, proveedor_id, insumo_id", "id, insumo_id", "id"):
+        try:
+            ent_rows = (
+                sb.table("almacen_entrada")
+                .select(select)
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+                or []
+            )
+            break
+        except Exception as exc:  # noqa: BLE001
+            from almacen_service import _pgrst_unknown_column
+            col = _pgrst_unknown_column(exc)
+            msg = str(exc or "")
+            if col in ("proveedor_id", "insumo_id") or "proveedor_id" in msg or "insumo_id" in msg:
+                continue
+            raise
+
     entrada_ids = [int(e["id"]) for e in ent_rows]
     ent_map = {int(e["id"]): e for e in ent_rows}
 
@@ -583,18 +676,30 @@ def list_inventario_arbol(contrato_id: int) -> dict:
 
     insumo_map: Dict[int, dict] = {}
     for chunk in _chunks(sorted(insumo_ids)):
-        for m in (
-            sb.table("almacen_insumo")
-            .select(
-                "id, codigo, descripcion, unidad, rendimiento, "
-                "valor_compra_referencia, costo_base, proveedor_id"
-            )
-            .in_("id", chunk)
-            .execute()
-            .data
-            or []
+        for select in (
+            "id, codigo, descripcion, unidad, rendimiento, "
+            "valor_compra_referencia, costo_base, proveedor_id",
+            "id, codigo, descripcion, unidad, rendimiento, "
+            "valor_compra_referencia, costo_base",
+            "id, codigo, descripcion, unidad",
         ):
-            insumo_map[int(m["id"])] = m
+            try:
+                for m in (
+                    sb.table("almacen_insumo")
+                    .select(select)
+                    .in_("id", chunk)
+                    .execute()
+                    .data
+                    or []
+                ):
+                    insumo_map[int(m["id"])] = m
+                break
+            except Exception as exc:  # noqa: BLE001
+                from almacen_service import _pgrst_unknown_column
+                col = _pgrst_unknown_column(exc)
+                if col or "does not exist" in str(exc).lower():
+                    continue
+                raise
 
     prov_ids = set()
     for e in ent_rows:
@@ -606,17 +711,7 @@ def list_inventario_arbol(contrato_id: int) -> dict:
     for m in insumo_map.values():
         if m.get("proveedor_id"):
             prov_ids.add(int(m["proveedor_id"]))
-    prov_map: Dict[int, str] = {}
-    for chunk in _chunks(sorted(prov_ids)):
-        for p in (
-            sb.table("almacen_proveedor")
-            .select("id, nombre")
-            .in_("id", chunk)
-            .execute()
-            .data
-            or []
-        ):
-            prov_map[int(p["id"])] = (p.get("nombre") or "").strip() or f"Proveedor #{p['id']}"
+    prov_map = _fetch_proveedor_map(sb, sorted(prov_ids))
 
     ei_ids = [int(ei["id"]) for ei in ei_rows if ei.get("id") is not None]
     despacho_map = _despacho_neto_por_entrada_item(sb, ei_ids) if ei_ids else {}
@@ -641,7 +736,6 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         if not ikey:
             continue
         if ikey not in item_by_key:
-            # Movimiento huérfano: crear fila mínima
             item_by_key[ikey] = {
                 "item_key": ikey,
                 "capitulo": (si or {}).get("capitulo"),
@@ -703,7 +797,6 @@ def list_inventario_arbol(contrato_id: int) -> dict:
             "valor_stock": valor_stk,
         })
 
-    # ── 3. Composición por ítem de listado ──────────────────────────────────
     composition: Dict[str, List[dict]] = defaultdict(list)
     seen_comp: Dict[str, set] = defaultdict(set)
 
@@ -777,14 +870,4 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         for r in rows:
             r.pop("_cantidad", None)
 
-    # Refrescar item_rows por si se agregaron huérfanos
-    item_rows = list(item_by_key.values())
-
-    built = build_inventario_arbol_from_lines(
-        item_rows=item_rows,
-        composition=dict(composition),
-        movement_lines=movement_lines,
-    )
-    built["generado_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    _cache_set(contrato_id, built)
-    return built
+    return movement_lines, dict(composition)

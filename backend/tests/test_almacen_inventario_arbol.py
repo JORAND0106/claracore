@@ -4,7 +4,9 @@ from unittest.mock import MagicMock
 from almacen_inventario_arbol import (
     build_inventario_arbol_from_lines,
     invalidar_cache_inventario_arbol,
+    list_inventario_arbol,
     _fetch_oc_rows,
+    _fetch_proveedor_map,
     make_item_key,
 )
 
@@ -160,6 +162,95 @@ def test_fetch_oc_rows_fallback_sin_proveedor_id():
     out = _fetch_oc_rows(sb, [3])
     assert out[3]["proveedor_nombre"] == "Acme"
     assert calls["n"] == 2
+
+
+def test_fetch_proveedor_map_usa_razon_social():
+    sb = MagicMock()
+
+    def table(name):
+        q = MagicMock()
+        assert name == "almacen_proveedor"
+        q.select.return_value.in_.return_value.execute.return_value.data = [
+            {"id": 9, "razon_social": "Pavco S.A."},
+        ]
+        return q
+
+    sb.table.side_effect = table
+    out = _fetch_proveedor_map(sb, [9])
+    assert out[9] == "Pavco S.A."
+
+
+def test_fetch_proveedor_map_fallback_sin_razon_social():
+    sb = MagicMock()
+    calls = {"n": 0}
+
+    def table(name):
+        q = MagicMock()
+
+        def execute():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise Exception("column almacen_proveedor.nombre does not exist code 42703")
+            # Second attempt uses id only after razon_social also fails — simulate
+            # first select is razon_social which succeeds in this test's second call path.
+            # Here we force first failure then success with razon_social on retry with "id".
+            res = MagicMock()
+            res.data = [{"id": 2}]
+            return res
+
+        q.select.return_value.in_.return_value.execute.side_effect = execute
+        return q
+
+    sb.table.side_effect = table
+    # First select variant is razon_social — fail as if column missing wrongly named;
+    # our code first tries razon_social. Adjust: fail on nombre-like message for first.
+    # Better: first call succeeds with razon_social — already tested.
+    # This test: fail first (simulate wrong), succeed with id-only.
+    out = _fetch_proveedor_map(sb, [2])
+    assert out[2] == "Proveedor #2"
+    assert calls["n"] == 2
+
+
+def test_list_inventario_arbol_devuelve_listado_si_enrich_falla(monkeypatch):
+    """Si falla el enriquecimiento, igual debe devolver ítems del listado."""
+    import almacen_inventario_arbol as mod
+
+    invalidar_cache_inventario_arbol()
+
+    monkeypatch.setattr(
+        "almacen_insumos_service._fetch_all_listado_rows",
+        lambda *_a, **_k: [
+            {
+                "capitulo": "01",
+                "item_numero": "01.01",
+                "descripcion": "Excavación",
+                "unidad": "m3",
+                "precio_unitario": 1000,
+            },
+            {
+                "capitulo": "01",
+                "item_numero": "01.02",
+                "descripcion": "Relleno",
+                "unidad": "m3",
+                "precio_unitario": 2000,
+            },
+        ],
+    )
+    monkeypatch.setattr("almacen_service.list_presupuesto_items", lambda *_a, **_k: [])
+    monkeypatch.setattr("almacen_service._sb", lambda: MagicMock())
+    monkeypatch.setattr(
+        mod,
+        "_enrich_inventario_movimientos",
+        lambda **_k: (_ for _ in ()).throw(
+            RuntimeError("column almacen_proveedor.nombre does not exist")
+        ),
+    )
+
+    out = list_inventario_arbol(1614)
+    assert len(out["items"]) == 2
+    assert out["items"][0]["vu_cobro"] == 1000
+    assert out["items"][1]["descripcion"] == "Relleno"
+    assert out["items"][0]["saldo"] == 0
 
 
 def test_invalidar_cache_arbol():
