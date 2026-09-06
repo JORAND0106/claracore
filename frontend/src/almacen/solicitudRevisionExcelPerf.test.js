@@ -26,9 +26,9 @@ describe('SolicitudDetalleModal — ancho + bloqueo OC', () => {
 })
 
 describe('SolicitudLineaRevisionModal — Excel', () => {
-  it('modal de línea ampliado (~1248px) y fila tipo Excel editable', () => {
+  it('modal de línea mismo ancho que detalle (1622px) y fila tipo Excel editable', () => {
     const src = readFileSync(join(dir, 'SolicitudLineaRevisionModal.jsx'), 'utf8')
-    assert.match(src, /LINEA_MODAL_WIDTH\s*=\s*'min\(1248px, 100%\)'/)
+    assert.match(src, /LINEA_MODAL_WIDTH\s*=\s*'min\(1622px, 100%\)'/)
     assert.match(src, /DESC\. CONTRATISTA/)
     assert.match(src, /ExcelHeader/)
     assert.match(src, /InsumoSearchTable/)

@@ -46,9 +46,9 @@ def test_listado_cache_evita_segunda_pasada(monkeypatch):
 
 def test_batch_cantidad_solicitada_una_query(monkeypatch):
     store_items = [
-        {"cantidad": 3, "solicitud_id": 1, "pk_id": "A", "presupuesto_id": 10},
-        {"cantidad": 2, "solicitud_id": 1, "pk_id": "B", "presupuesto_id": 10},
-        {"cantidad": 5, "solicitud_id": 2, "pk_id": "A", "presupuesto_id": 11},
+        {"cantidad": 3, "solicitud_id": 1, "pk_id": "A", "presupuesto_id": 10, "es_principal": True},
+        {"cantidad": 2, "solicitud_id": 1, "pk_id": "B", "presupuesto_id": 10, "es_principal": True},
+        {"cantidad": 5, "solicitud_id": 2, "pk_id": "A", "presupuesto_id": 11, "es_principal": True},
     ]
     store_sols = [
         {"id": 1, "estado": "enviada", "contrato_id": 7},
@@ -93,6 +93,90 @@ def test_batch_cantidad_solicitada_una_query(monkeypatch):
     assert totals[(10, "A")] == 3
     assert totals[(10, "B")] == 2
     assert totals[(11, "A")] == 0  # solicitud rechazada
+
+
+def test_batch_cantidad_excluye_asociados(monkeypatch):
+    """S.PPTO solo suma principales: asociado no descuenta (caso -6)."""
+    store_items = [
+        {"cantidad": 4, "solicitud_id": 1, "pk_id": "PK-1", "presupuesto_id": 10, "es_principal": True},
+        {"cantidad": 6, "solicitud_id": 1, "pk_id": "PK-1", "presupuesto_id": 10, "es_principal": False},
+        {"cantidad": 2, "solicitud_id": 1, "pk_id": "PK-1", "presupuesto_id": 10, "es_principal": "false"},
+    ]
+    store_sols = [{"id": 1, "estado": "enviada", "contrato_id": 7}]
+
+    class _Resp:
+        def __init__(self, data):
+            self.data = data
+
+    class _Q:
+        def __init__(self, table):
+            self.table = table
+            self._in = None
+
+        def select(self, *_a, **_k):
+            return self
+
+        def in_(self, col, vals):
+            self._in = (col, list(vals))
+            return self
+
+        def execute(self):
+            if self.table == "almacen_solicitud_item":
+                return _Resp([r for r in store_items if r["presupuesto_id"] in self._in[1]])
+            if self.table == "almacen_solicitud":
+                return _Resp(store_sols)
+            return _Resp([])
+
+    class _Sb:
+        def table(self, name):
+            return _Q(name)
+
+    totals = insumos.batch_cantidad_solicitada_acumulada(
+        _Sb(), 7, [(10, "PK-1")], exclude_solicitud_id=None
+    )
+    assert totals[(10, "PK-1")] == 4.0
+
+
+def test_apply_saldo_flags_asociado_no_rompe_sppto(monkeypatch):
+    monkeypatch.setattr(
+        insumos,
+        "batch_cantidad_solicitada_acumulada",
+        lambda *_a, **_k: {(10, "PK-1"): 4.0},
+    )
+    monkeypatch.setattr(insumos, "batch_cantidad_consumida_insumo", lambda *_a, **_k: {})
+    monkeypatch.setattr(insumos, "get_listado_precio_lookup", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no")))
+    monkeypatch.setattr(insumos, "_sb", lambda: MagicMock())
+
+    items = [
+        {
+            "presupuesto_id": 10,
+            "pk_id": "PK-1",
+            "capitulo": "1",
+            "item": "1.01",
+            "cantidad": 4,
+            "cant_presupuestada": 4,
+            "vlr_unitario_cobro": 1000,
+            "es_principal": True,
+        },
+        {
+            "presupuesto_id": 10,
+            "pk_id": "PK-1",
+            "capitulo": "1",
+            "item": "1.01",
+            "cantidad": 6,
+            "cant_presupuestada": 4,
+            "vlr_unitario_cobro": 1000,
+            "es_principal": False,
+        },
+    ]
+    insumos.apply_saldo_flags_batch(
+        1, items, descontar_linea_actual=False, refresh_listado=False,
+    )
+    assert items[0]["contexto_presupuesto"]["saldo_disponible_despues"] == 0.0
+    assert items[0]["supera_presupuesto"] is False
+    assert items[1]["contexto_presupuesto"]["saldo_disponible_despues"] == 0.0
+    assert items[1]["supera_presupuesto"] is False
+    assert items[1]["contexto_presupuesto"]["es_principal"] is False
 
 
 def test_insert_solicitud_items_batch_chunked():

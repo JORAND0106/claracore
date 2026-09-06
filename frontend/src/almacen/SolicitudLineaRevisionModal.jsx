@@ -20,7 +20,7 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 
-const LINEA_MODAL_WIDTH = 'min(1248px, 100%)'
+const LINEA_MODAL_WIDTH = 'min(1622px, 100%)'
 
 function ExcelHeader({ abbr, tip, style, align = 'left' }) {
   return (
@@ -268,6 +268,7 @@ export default function SolicitudLineaRevisionModal({
           ...almacenFormModalDialogStyle({ width: LINEA_MODAL_WIDTH, compact }),
           maxHeight: compact ? '94vh' : '92vh',
           overflow: 'auto',
+          overflowX: 'visible',
           border: dialogBorder,
           boxShadow: '0 24px 64px rgba(15, 23, 42, 0.28)',
           padding: compact ? '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))' : '22px 24px 24px',
@@ -348,7 +349,7 @@ export default function SolicitudLineaRevisionModal({
 
         {puedeEditar ? (
           <>
-            <div style={{ ...ui.sheetWrap, marginBottom: 12 }} className="cc-almacen-table-scroll">
+            <div style={{ ...ui.sheetWrap, overflow: 'visible', marginBottom: 12 }} className="cc-almacen-table-scroll">
               <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 920 : 640, tableLayout: 'fixed' }}>
                 <colgroup>
                   <col style={{ width: 220 }} />
@@ -392,6 +393,7 @@ export default function SolicitudLineaRevisionModal({
                         hideLabel
                         value={draft.insumo}
                         disabled={busy}
+                        suggestFrom={descContratista !== '—' ? descContratista : ''}
                         inputStyle={{ padding: '4px 6px', fontSize: 'var(--cc-xs)', height: 30 }}
                         onChange={(ins) => setDraft((d) => ({
                           ...d,

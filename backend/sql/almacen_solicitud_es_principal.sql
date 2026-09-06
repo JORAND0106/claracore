@@ -7,4 +7,9 @@ ALTER TABLE public.almacen_solicitud_item
 COMMENT ON COLUMN public.almacen_solicitud_item.es_principal IS
   'true = consume presupuesto del ítem; false = insumo asociado (no descuenta saldo ni alerta sobrepresupuesto).';
 
+-- Acumulados S.PPTO: solo líneas principales
+CREATE INDEX IF NOT EXISTS idx_almacen_solicitud_item_principal_pk
+  ON public.almacen_solicitud_item (presupuesto_id, pk_id)
+  WHERE es_principal IS DISTINCT FROM false;
+
 NOTIFY pgrst, 'reload schema';

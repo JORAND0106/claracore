@@ -108,7 +108,8 @@ def test_list_solicitudes_resumen_counts_and_oc(monkeypatch):
     assert a["items_count"] == 2
     assert a["items"] == []
     assert a["solicitante_nombre"] == "Ana Pérez"
-    assert a["validadores_pendientes"] == ["Validador X"]
+    # Grilla no carga validadores (caro); el detalle sí.
+    assert a.get("validadores_pendientes") == []
     assert a["tiene_orden_compra"] is False
     assert b["items_count"] == 1
     assert b["tiene_orden_compra"] is True
