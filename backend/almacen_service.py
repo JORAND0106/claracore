@@ -4898,7 +4898,9 @@ def get_entrada(
 def _invalidar_graficos_inventario(contrato_id: int) -> None:
     try:
         from almacen_inventario_graficos import invalidar_cache_inventario_graficos
+        from almacen_inventario_arbol import invalidar_cache_inventario_arbol
         invalidar_cache_inventario_graficos(contrato_id)
+        invalidar_cache_inventario_arbol(contrato_id)
     except Exception:
         pass
 

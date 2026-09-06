@@ -363,6 +363,9 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
     listInventario: () =>
       fetch(`${base}/inventario`, { headers: authHeaders() }).then(parseJsonList),
 
+    getInventarioArbol: () =>
+      fetch(`${base}/inventario/arbol`, { headers: authHeaders() }).then(parseJson),
+
     getInventarioGraficos: (capitulo, item) => {
       const params = new URLSearchParams()
       if (capitulo) params.set('capitulo', capitulo)

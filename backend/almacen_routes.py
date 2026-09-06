@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from almacen_export import build_inventario_xlsx
+from almacen_inventario_arbol import list_inventario_arbol
 from almacen_inventario_graficos import get_inventario_graficos
 from almacen_insumos_service import (
     create_insumo,
@@ -1614,6 +1615,41 @@ def route_inventario_graficos(
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "ver")
     return get_inventario_graficos(contrato_id, capitulo=capitulo, item=item)
+
+
+@router.get("/{contrato_id}/inventario/arbol")
+def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_user)):
+    """Tabla Excel del inventario: ítem → insumo → proveedor + resumen de valores."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "ver")
+    data = list_inventario_arbol(contrato_id)
+    if not puede_ver_valores_economicos_almacen(current_user):
+        # Ocultar montos unitarios / valores monetarios.
+        for it in data.get("items") or []:
+            it["vu_cobro"] = None
+            it["vu_costo"] = None
+            it["utilidad"] = None
+            it["valor_entradas"] = None
+            it["valor_salidas"] = None
+            it["valor_stock"] = None
+            for ins in it.get("insumos") or []:
+                ins["vu_costo"] = None
+                ins["utilidad"] = None
+                ins["valor_entradas"] = None
+                ins["valor_salidas"] = None
+                ins["valor_stock"] = None
+                for pr in ins.get("proveedores") or []:
+                    pr["valor_entradas"] = None
+                    pr["valor_salidas"] = None
+                    pr["valor_stock"] = None
+        data["resumen"] = {
+            **(data.get("resumen") or {}),
+            "valor_stock": None,
+            "valor_entradas": None,
+            "valor_salidas": None,
+            "economicos_ocultos": True,
+        }
+    return data
 
 
 @router.get("/{contrato_id}/inventario")
