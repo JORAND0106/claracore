@@ -105,14 +105,37 @@ export function rentabilidadDesdeAnalisis(analisis, meta = {}) {
     valor_cobro_linea: analisis.valor_cobro_linea,
     costo_insumo_unitario: analisis.costo_insumo_unitario,
     costo_insumo_linea: analisis.costo_insumo_linea,
-    utilidad_estimada_linea: analisis.utilidad_estimada_linea,
-    rentabilidad_pct: analisis.rentabilidad_pct,
+    utilidad_estimada_linea: null,
+    rentabilidad_pct: null,
     numero_oc: meta.numeroOc ?? null,
-    etiqueta_fila: meta.etiquetaFila ?? 'Esta solicitud',
+    etiqueta_fila: meta.etiquetaFila ?? (meta.material || 'Insumo'),
     es_actual: true,
+    es_principal: true,
+    es_total: false,
     solicitud_consecutivo: meta.consecutivo ?? null,
   }
-  return { filas: [fila] }
+  const cobro = Number(analisis.valor_cobro_linea)
+  const costo = Number(analisis.costo_insumo_linea)
+  const util = (Number.isFinite(cobro) && Number.isFinite(costo))
+    ? cobro - costo
+    : null
+  const pct = (util != null && cobro > 0) ? (util / cobro) * 100 : null
+  const total = {
+    etiqueta_fila: 'Total ítem',
+    numero_oc: meta.numeroOc ?? null,
+    solicitud_consecutivo: meta.consecutivo ?? null,
+    es_actual: true,
+    es_total: true,
+    es_principal: null,
+    cantidad: null,
+    valor_cobro_unitario: analisis.valor_cobro_unitario,
+    valor_cobro_linea: Number.isFinite(cobro) ? cobro : null,
+    costo_insumo_unitario: null,
+    costo_insumo_linea: Number.isFinite(costo) ? costo : null,
+    utilidad_estimada_linea: util,
+    rentabilidad_pct: pct,
+  }
+  return { filas: [fila, total], modo: 'por_insumo' }
 }
 
 /**
@@ -137,11 +160,19 @@ export function hermanosMismoPresupuestoItem(items, item) {
   return same.length ? same : [item]
 }
 
+function etiquetaInsumoRentabilidad(r) {
+  const mat = String(r?.material_descripcion || r?.insumo?.label || '').trim()
+  if (mat) return mat
+  const cod = String(r?.insumo_codigo || '').trim()
+  if (cod) return cod
+  return r?.es_principal === false ? 'Insumo asociado' : 'Insumo principal'
+}
+
 /**
- * Agrega cobro/costo de todas las líneas del mismo ítem (principal + asociados).
- * overrideDraft: valores de la línea abierta en el modal (cantidad/VU).
+ * Una fila por insumo (principal + asociados) + fila Total del ítem.
+ * Cobro solo del principal; utilidad/% solo en Total.
  */
-export function agregarRentabilidadPorItem(hermanos, overrideDraft = null, meta = {}) {
+export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, meta = {}) {
   const rows = (hermanos || []).map((r) => ({ ...r }))
   if (overrideDraft && rows.length) {
     const oid = overrideDraft.id != null ? Number(overrideDraft.id) : null
@@ -154,42 +185,92 @@ export function agregarRentabilidadPorItem(hermanos, overrideDraft = null, meta 
     rows.push(overrideDraft)
   }
 
-  let cobroLinea = 0
-  let costoLinea = 0
+  rows.sort((a, b) => {
+    const pa = a.es_principal === false ? 1 : 0
+    const pb = b.es_principal === false ? 1 : 0
+    if (pa !== pb) return pa - pb
+    return (Number(a.numero_linea) || 0) - (Number(b.numero_linea) || 0)
+  })
+
+  const filas = []
+  let sumCosto = 0
   let tieneCosto = false
-  let cantCobro = 0
+  let cobroTotal = null
+  let vuCobroTotal = null
+  let cantPrincipal = null
+
   for (const r of rows) {
     const cant = Number(r.cantidad)
-    const vlr = Number(r.vlr_unitario_cobro)
     const vc = Number(r.valor_compra_unitario)
-    if (cant > 0 && vlr > 0) {
-      cobroLinea += cant * vlr
-      cantCobro += cant
-    }
-    if (cant > 0 && vc > 0) {
-      costoLinea += cant * vc
+    const esPrincipal = r.es_principal !== false
+    const costoLinea = (cant > 0 && vc > 0) ? cant * vc : null
+    if (costoLinea != null) {
+      sumCosto += costoLinea
       tieneCosto = true
     }
-  }
-  if (!(cantCobro > 0)) {
-    const principal = rows.find((r) => r.es_principal !== false) || rows[0]
-    cantCobro = Number(principal?.cantidad) || 0
-  }
-  if (!(cantCobro > 0) && !(cobroLinea > 0) && !tieneCosto) return null
 
-  const analisis = {
-    cantidad: cantCobro,
-    valor_cobro_unitario: cantCobro > 0 && cobroLinea > 0 ? cobroLinea / cantCobro : 0,
-    valor_cobro_linea: cobroLinea || 0,
-    costo_insumo_unitario: tieneCosto && cantCobro > 0 ? costoLinea / cantCobro : 0,
-    costo_insumo_linea: tieneCosto ? costoLinea : 0,
-    utilidad_estimada_linea: tieneCosto ? ((cobroLinea || 0) - costoLinea) : null,
-    rentabilidad_pct: cobroLinea > 0 && tieneCosto
-      ? (((cobroLinea - costoLinea) / cobroLinea) * 100)
-      : null,
-    tiene_precio_compra: tieneCosto,
+    let vuCobro = null
+    let cobroLinea = null
+    if (esPrincipal) {
+      const vlr = Number(r.vlr_unitario_cobro)
+      if (vlr > 0 && cant > 0) {
+        vuCobro = vlr
+        cobroLinea = cant * vlr
+        cobroTotal = cobroLinea
+        vuCobroTotal = vuCobro
+        cantPrincipal = cant
+      } else if (cant > 0) {
+        cantPrincipal = cant
+      }
+    }
+
+    filas.push({
+      etiqueta_fila: etiquetaInsumoRentabilidad(r),
+      numero_oc: meta.numeroOc ?? null,
+      solicitud_consecutivo: meta.consecutivo ?? null,
+      solicitud_item_id: r.id,
+      insumo_id: r.insumo_id,
+      es_principal: esPrincipal,
+      es_actual: true,
+      es_total: false,
+      cantidad: cant > 0 ? cant : null,
+      valor_cobro_unitario: vuCobro,
+      valor_cobro_linea: cobroLinea,
+      costo_insumo_unitario: vc > 0 ? vc : null,
+      costo_insumo_linea: costoLinea,
+      utilidad_estimada_linea: null,
+      rentabilidad_pct: null,
+    })
   }
-  return rentabilidadDesdeAnalisis(analisis, meta)
+
+  if (!filas.length) return null
+
+  const costoTotal = tieneCosto ? sumCosto : null
+  const util = (cobroTotal != null && costoTotal != null) ? cobroTotal - costoTotal : null
+  const pct = (util != null && cobroTotal > 0) ? (util / cobroTotal) * 100 : null
+
+  filas.push({
+    etiqueta_fila: 'Total ítem',
+    numero_oc: meta.numeroOc ?? null,
+    solicitud_consecutivo: meta.consecutivo ?? null,
+    es_principal: null,
+    es_actual: true,
+    es_total: true,
+    cantidad: cantPrincipal,
+    valor_cobro_unitario: vuCobroTotal,
+    valor_cobro_linea: cobroTotal,
+    costo_insumo_unitario: null,
+    costo_insumo_linea: costoTotal,
+    utilidad_estimada_linea: util,
+    rentabilidad_pct: pct,
+  })
+
+  return { filas, modo: 'por_insumo' }
+}
+
+/** @deprecated Usar construirRentabilidadPorInsumos */
+export function agregarRentabilidadPorItem(hermanos, overrideDraft = null, meta = {}) {
+  return construirRentabilidadPorInsumos(hermanos, overrideDraft, meta)
 }
 
 function formatAbscisaValor(val) {

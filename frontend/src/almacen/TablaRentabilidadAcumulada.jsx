@@ -12,31 +12,46 @@ function fmtNumeroOc(n) {
   return s.startsWith('#') ? s : `#${s.padStart(5, '0')}`
 }
 
+/**
+ * Orden: N° OC | VU Cobro | Tot. Cobro | Cant. | VU Costo | Tot. Costo | Utilidad | % Rent.
+ */
 const METRIC_COLS = [
-  {
-    id: 'cantidad',
-    label: 'Cant.',
-    ayuda: 'Cantidad de cobro del ítem (líneas con valor de cobro; principal + asociados agregados).',
-    render: (col) => fmtCant(col?.cantidad),
-  },
   {
     id: 'vu_cobro',
     label: 'VU cobro',
-    ayuda: 'Valor unitario de cobro según el ítem del listado de precios.',
-    render: (col) => fmtMoney(col?.valor_cobro_unitario),
+    ayuda: 'Valor unitario de cobro del ítem (solo aplica al insumo principal).',
+    render: (col) => {
+      if (col?.es_total) return fmtMoney(col?.valor_cobro_unitario)
+      if (col?.es_principal === false) return '—'
+      return fmtMoney(col?.valor_cobro_unitario)
+    },
   },
   {
     id: 'total_cobro',
     label: 'Tot. cobro',
-    ayuda: 'Total de cobro: cantidad × valor unitario de cobro.',
-    render: (col) => fmtMoney(col?.valor_cobro_linea),
+    ayuda: 'Total de cobro del ítem: cantidad del principal × VU cobro. Los asociados no generan cobro.',
+    render: (col) => {
+      if (col?.es_total) return { text: fmtMoney(col?.valor_cobro_linea), strong: true }
+      if (col?.es_principal === false) return '—'
+      return { text: fmtMoney(col?.valor_cobro_linea), strong: true }
+    },
     strong: true,
+  },
+  {
+    id: 'cantidad',
+    label: 'Cant.',
+    ayuda: 'Cantidad solicitada de este insumo (principal y asociados tienen su propia cantidad).',
+    render: (col) => {
+      if (col?.es_total) return '—'
+      return fmtCant(col?.cantidad)
+    },
   },
   {
     id: 'vu_costo',
     label: 'VU costo',
     ayuda: 'Valor unitario de compra del insumo en catálogo (con impuestos, si aplica).',
     render: (col) => {
+      if (col?.es_total) return '—'
       if (!col?.costo_insumo_unitario) return { sinPrecio: true }
       return { text: fmtMoney(col.costo_insumo_unitario) }
     },
@@ -44,8 +59,12 @@ const METRIC_COLS = [
   {
     id: 'total_costo',
     label: 'Tot. costo',
-    ayuda: 'Total de costo de todos los insumos (principal y asociados) del ítem: suma de cantidad × valor unitario de compra.',
+    ayuda: 'Cantidad × VU costo de este insumo. En Total: suma de todos los insumos del ítem.',
     render: (col) => {
+      if (col?.es_total) {
+        if (col?.costo_insumo_linea == null) return { sinPrecio: true }
+        return { text: fmtMoney(col.costo_insumo_linea), strong: true }
+      }
       if (!col?.costo_insumo_unitario && col?.costo_insumo_linea == null) return { sinPrecio: true }
       return { text: fmtMoney(col?.costo_insumo_linea) }
     },
@@ -53,17 +72,23 @@ const METRIC_COLS = [
   {
     id: 'utilidad',
     label: 'Utilidad',
-    ayuda: 'Diferencia entre el total de cobro y el total de costo del insumo.',
-    render: (col) => ({
-      text: fmtMoney(col?.utilidad_estimada_linea),
-      util: col?.utilidad_estimada_linea,
-    }),
+    ayuda: 'Tot. cobro − suma de Tot. costo de todos los insumos (solo en la fila Total).',
+    render: (col) => {
+      if (!col?.es_total) return '—'
+      return {
+        text: fmtMoney(col?.utilidad_estimada_linea),
+        util: col?.utilidad_estimada_linea,
+      }
+    },
   },
   {
     id: 'rentabilidad',
     label: '% rent.',
-    ayuda: 'Porcentaje de utilidad sobre el total de cobro.',
-    render: (col) => ({ text: fmtPct(col?.rentabilidad_pct) }),
+    ayuda: 'Utilidad total / Tot. cobro del ítem (solo en la fila Total).',
+    render: (col) => {
+      if (!col?.es_total) return '—'
+      return { text: fmtPct(col?.rentabilidad_pct) }
+    },
   },
 ]
 
@@ -88,7 +113,7 @@ function renderValor(col, metric) {
     )
   }
   const style = {}
-  if (metric.strong) style.fontWeight = 700
+  if (metric.strong || out.strong) style.fontWeight = 700
   if (out.util != null) {
     style.color = out.util >= 0 ? 'var(--cc-color-success)' : 'var(--cc-color-danger)'
     style.fontWeight = 600
@@ -116,7 +141,7 @@ export function filasRentabilidad(analisisRentabilidad) {
 }
 
 /**
- * Tabla cobro / costo / rentabilidad — una fila por OC / solicitud.
+ * Tabla cobro / costo / rentabilidad — una fila por insumo + Total del ítem.
  */
 export default function TablaRentabilidadAcumulada({
   analisisRentabilidad,
@@ -168,12 +193,14 @@ export default function TablaRentabilidadAcumulada({
       {expanded && (
         <>
           <div className="cc-almacen-table-scroll" style={{ marginTop: 8 }}>
-            <table className="cc-almacen-rentabilidad-table cc-almacen-rentabilidad-table--transposed">
+            <table className="cc-almacen-rentabilidad-table">
               <thead>
                 <tr>
-                  <th style={{ ...ui.th, textAlign: 'left', minWidth: 108 }} />
-                  <th style={{ ...ui.th, textAlign: 'left', minWidth: 88, fontSize: 'var(--cc-xs)' }}>
-                    Nº OC
+                  <th style={{ ...ui.th, textAlign: 'left', minWidth: 120, fontSize: 'var(--cc-xs)' }}>
+                    Insumo
+                  </th>
+                  <th style={{ ...ui.th, textAlign: 'left', minWidth: 72, fontSize: 'var(--cc-xs)' }}>
+                    N° OC
                   </th>
                   {METRIC_COLS.map((metric) => (
                     <th key={metric.id} style={thMetric}>
@@ -185,15 +212,26 @@ export default function TablaRentabilidadAcumulada({
               <tbody>
                 {filas.map((fila, idx) => (
                   <tr
-                    key={`${fila.solicitud_id ?? 'r'}-${fila.numero_oc ?? 'x'}-${idx}`}
-                    style={fila.es_actual ? { background: `${ui.accentSoft}55` } : undefined}
+                    key={`${fila.solicitud_item_id ?? fila.etiqueta_fila ?? 'r'}-${idx}`}
+                    style={
+                      fila.es_total
+                        ? { background: `${ui.accentSoft}66`, fontWeight: 700 }
+                        : fila.es_actual
+                          ? { background: `${ui.accentSoft}33` }
+                          : undefined
+                    }
                   >
                     <td style={{
                       ...ui.td,
-                      fontWeight: fila.es_actual ? 700 : 600,
+                      fontWeight: fila.es_total || fila.es_principal !== false ? 700 : 600,
                       fontSize: 'var(--cc-xs)',
-                      color: fila.es_actual ? ui.accent : ui.text,
+                      color: fila.es_total ? ui.accent : ui.text,
+                      maxWidth: 220,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
                     }}
+                      title={fila.etiqueta_fila || ''}
                     >
                       {fila.etiqueta_fila || '—'}
                     </td>

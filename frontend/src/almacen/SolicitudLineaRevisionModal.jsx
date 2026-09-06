@@ -5,7 +5,7 @@ import InsumoSearchTable from './InsumoSearchTable'
 import SolicitudLineaMapaModal from './SolicitudLineaMapaModal'
 import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import {
-  agregarRentabilidadPorItem,
+  construirRentabilidadPorInsumos,
   descripcionItemPresupuesto,
   hermanosMismoPresupuestoItem,
   itemPuedeCorregirInsumoPostOc,
@@ -127,8 +127,6 @@ export default function SolicitudLineaRevisionModal({
 
   const tablaRentabilidad = useMemo(() => {
     if (!item) return null
-    const raw = item.analisis_rentabilidad || item.preview?.analisis_rentabilidad
-    if (raw) return raw
     const meta = {
       numeroOc: sol?.orden_compra?.numero_oc ?? item.numero_oc ?? null,
       consecutivo: sol?.consecutivo,
@@ -146,11 +144,24 @@ export default function SolicitudLineaRevisionModal({
         ? Number(draft.valor_compra_unitario)
         : item.valor_compra_unitario,
       es_principal: item.es_principal,
+      material_descripcion: item.material_descripcion,
+      insumo_codigo: item.insumo_codigo,
+      insumo_id: item.insumo_id,
+      numero_linea: item.numero_linea,
     }
-    const agregado = agregarRentabilidadPorItem(hermanos, override, meta)
-    if (agregado) return agregado
+    // Siempre reconstruir desde hermanos + draft para reflejar principal/asociados
+    // y los valores editados en vivo (no usar el payload agregado antiguo).
+    const porInsumo = construirRentabilidadPorInsumos(hermanos, override, meta)
+    if (porInsumo) return porInsumo
+    const raw = item.analisis_rentabilidad || item.preview?.analisis_rentabilidad
+    if (raw?.modo === 'por_insumo' && Array.isArray(raw.filas) && raw.filas.length) return raw
     const analisis = item.analisis_valor || item.preview?.analisis_valor
-    if (analisis) return rentabilidadDesdeAnalisis(analisis, meta)
+    if (analisis) {
+      return rentabilidadDesdeAnalisis(analisis, {
+        ...meta,
+        material: item.material_descripcion,
+      })
+    }
     return null
   }, [
     item,

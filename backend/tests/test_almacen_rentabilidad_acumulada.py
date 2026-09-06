@@ -1,9 +1,9 @@
-"""Rentabilidad por OC — agregada a nivel de ítem de presupuesto."""
+"""Rentabilidad por ítem — una fila por insumo + Total."""
 from almacen_insumos_service import (
-    _agregar_lineas_rentabilidad_item,
     _columna_rentabilidad,
     _fila_rentabilidad_oc,
     _merge_columnas_rentabilidad,
+    filas_rentabilidad_por_insumo,
     get_analisis_rentabilidad_acumulada,
 )
 
@@ -57,8 +57,8 @@ def test_analisis_sin_insumo_id_solo_fila_actual():
     assert r["actual"]["cantidad"] == 2
 
 
-def test_agregar_lineas_principal_mas_asociados():
-    """Geocelda (principal) + pines + geotextil bajo el mismo ítem → costo sumado."""
+def test_filas_por_insumo_principal_mas_asociados():
+    """Geocelda + pines + geotextil: filas por insumo; cobro solo principal; utilidad en Total."""
     rows = [
         {
             "id": 1,
@@ -66,6 +66,8 @@ def test_agregar_lineas_principal_mas_asociados():
             "vlr_unitario_cobro": 50,
             "valor_compra_unitario": 30,
             "es_principal": True,
+            "material_descripcion": "Geocelda",
+            "numero_linea": 1,
         },
         {
             "id": 2,
@@ -73,6 +75,8 @@ def test_agregar_lineas_principal_mas_asociados():
             "vlr_unitario_cobro": 0,
             "valor_compra_unitario": 2,
             "es_principal": False,
+            "material_descripcion": "Pines de fijación",
+            "numero_linea": 2,
         },
         {
             "id": 3,
@@ -80,32 +84,74 @@ def test_agregar_lineas_principal_mas_asociados():
             "vlr_unitario_cobro": 0,
             "valor_compra_unitario": 5,
             "es_principal": False,
+            "material_descripcion": "Geotextil",
+            "numero_linea": 3,
         },
     ]
-    col = _agregar_lineas_rentabilidad_item(rows)
-    # Cantidad de cobro = solo la principal (vlr > 0)
-    assert col["cantidad"] == 100
-    assert col["valor_cobro_linea"] == 5000  # 100 * 50
-    # Costo = 100*30 + 200*2 + 100*5 = 3000 + 400 + 500 = 3900
-    assert col["costo_insumo_linea"] == 3900
-    assert col["utilidad_estimada_linea"] == 1100
-    assert col["rentabilidad_pct"] == 22.0
+    out = filas_rentabilidad_por_insumo(rows, numero_oc=45, solicitud_id=9)
+    assert out["modo"] == "por_insumo"
+    filas = out["filas"]
+    assert len(filas) == 4  # 3 insumos + Total
+
+    principal = filas[0]
+    assert principal["etiqueta_fila"] == "Geocelda"
+    assert principal["es_principal"] is True
+    assert principal["es_total"] is False
+    assert principal["cantidad"] == 100
+    assert principal["valor_cobro_linea"] == 5000
+    assert principal["costo_insumo_linea"] == 3000
+    assert principal["utilidad_estimada_linea"] is None
+
+    pines = filas[1]
+    assert pines["etiqueta_fila"] == "Pines de fijación"
+    assert pines["es_principal"] is False
+    assert pines["valor_cobro_linea"] is None
+    assert pines["cantidad"] == 200
+    assert pines["costo_insumo_linea"] == 400
+
+    total = filas[-1]
+    assert total["es_total"] is True
+    assert total["etiqueta_fila"] == "Total ítem"
+    assert total["valor_cobro_linea"] == 5000
+    assert total["costo_insumo_linea"] == 3900  # 3000+400+500
+    assert total["utilidad_estimada_linea"] == 1100
+    assert total["rentabilidad_pct"] == 22.0
+    assert total["numero_oc"] == 45
 
 
-def test_agregar_lineas_override_actual_no_duplica():
+def test_filas_por_insumo_override_actual():
     rows = [
-        {"id": 10, "cantidad": 10, "vlr_unitario_cobro": 100, "valor_compra_unitario": 40, "es_principal": True},
-        {"id": 11, "cantidad": 5, "vlr_unitario_cobro": 0, "valor_compra_unitario": 20, "es_principal": False},
+        {
+            "id": 10,
+            "cantidad": 10,
+            "vlr_unitario_cobro": 100,
+            "valor_compra_unitario": 40,
+            "es_principal": True,
+            "material_descripcion": "Principal",
+        },
+        {
+            "id": 11,
+            "cantidad": 5,
+            "vlr_unitario_cobro": 0,
+            "valor_compra_unitario": 20,
+            "es_principal": False,
+            "material_descripcion": "Asociado",
+        },
     ]
-    col = _agregar_lineas_rentabilidad_item(
+    out = filas_rentabilidad_por_insumo(
         rows,
         override_actual={
             "id": 10,
             "cantidad": 12,
             "vlr_unitario_cobro": 100,
             "valor_compra_unitario": 40,
+            "es_principal": True,
+            "material_descripcion": "Principal",
         },
     )
-    assert col["cantidad"] == 12
-    assert col["valor_cobro_linea"] == 1200
-    assert col["costo_insumo_linea"] == 12 * 40 + 5 * 20
+    principal = out["filas"][0]
+    total = out["filas"][-1]
+    assert principal["cantidad"] == 12
+    assert principal["valor_cobro_linea"] == 1200
+    assert total["costo_insumo_linea"] == 12 * 40 + 5 * 20
+    assert total["utilidad_estimada_linea"] == 1200 - (480 + 100)
