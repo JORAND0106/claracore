@@ -40,6 +40,7 @@ SOLICITUD_ITEM_DB_COLUMNS = frozenset({
     "unidad",
     "cantidad",
     "es_recurrente",
+    "es_principal",
     "cant_presupuestada",
     "cotizacion_seleccionada_id",
     "insumo_id",
@@ -958,6 +959,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
                 "unidad": (raw.get("unidad") or ppto.get("und") or "UND").strip(),
                 "cantidad": cant,
                 "es_recurrente": bool(raw.get("es_recurrente")),
+                "es_principal": bool(raw.get("es_principal", True)),
                 "cant_presupuestada": _to_float(ppto.get("cant_total")),
                 "valor_compra_unitario": None,
                 "vlr_unitario_cobro": 0,
@@ -1007,6 +1009,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             "unidad": (raw.get("unidad") or ppto.get("und") or "UND").strip(),
             "cantidad": cant,
             "es_recurrente": bool(raw.get("es_recurrente")),
+            "es_principal": bool(raw.get("es_principal", True)),
             "cant_presupuestada": _to_float(ppto.get("cant_total")),
             "valor_compra_unitario": _to_float(raw.get("valor_compra_unitario")) or None,
             "vlr_unitario_cobro": 0,
@@ -2789,6 +2792,11 @@ def _resolve_numero_documento_entrada(contrato_id: int, tipo: str, numero_raw: O
 
 def preview_proximo_numero_disposicion(contrato_id: int) -> dict:
     return {"proximo": _next_numero_disposicion(contrato_id)}
+
+
+def preview_proximo_consecutivo_solicitud(contrato_id: int) -> dict:
+    """Próximo número de solicitud (para título automático antes del primer guardado)."""
+    return {"proximo": _next_consecutivo(contrato_id, "almacen_solicitud", "consecutivo")}
 
 
 def map_ocr_to_remision(ocr_result: dict) -> dict:

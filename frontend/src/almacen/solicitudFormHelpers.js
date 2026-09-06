@@ -103,6 +103,7 @@ export function mapSolicitudItemsFromServer(s) {
     unidad: it.unidad || '',
     material_descripcion: it.material_descripcion || '',
     es_recurrente: it.es_recurrente,
+    es_principal: it.es_principal !== false,
     preview: {
       contexto_presupuesto: it.contexto_presupuesto,
       analisis_valor: it.analisis_valor,
@@ -152,7 +153,7 @@ export function validateSolicitudItems(items) {
 }
 
 export function lineasSuperanPresupuesto(items) {
-  return items.filter((it) => it.preview?.supera_presupuesto)
+  return items.filter((it) => it.es_principal !== false && it.preview?.supera_presupuesto)
 }
 
 export function lineasSuperanNegociado(items) {

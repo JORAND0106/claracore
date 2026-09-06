@@ -1607,13 +1607,25 @@ def _cantidad_solicitada_acumulada(
     ).get(key, 0.0)
 
 
+def _item_es_principal(it: dict) -> bool:
+    """Insumo principal (default) consume presupuesto; asociado no."""
+    if it is None:
+        return True
+    if "es_principal" not in it or it.get("es_principal") is None:
+        return True
+    return bool(it.get("es_principal"))
+
+
 def batch_cantidad_solicitada_acumulada(
     sb,
     contrato_id: int,
     keys: Sequence[Tuple[int, str]],
     exclude_solicitud_id: Optional[int] = None,
 ) -> Dict[Tuple[int, str], float]:
-    """Acumulado de cantidades solicitadas por (presupuesto_id, pk_id) en una o dos queries."""
+    """Acumulado de cantidades solicitadas por (presupuesto_id, pk_id) en una o dos queries.
+
+    Solo suma líneas de insumo principal (``es_principal`` distinto de false).
+    """
     norm_keys: List[Tuple[int, str]] = []
     seen = set()
     for pid, pk in keys:
@@ -1625,17 +1637,31 @@ def batch_cantidad_solicitada_acumulada(
     if not norm_keys:
         return {}
     pids = list({k[0] for k in norm_keys})
-    items = (
-        sb.table("almacen_solicitud_item")
-        .select("cantidad, solicitud_id, pk_id, presupuesto_id")
-        .in_("presupuesto_id", pids)
-        .execute()
-        .data
-        or []
-    )
+    select_cols = "cantidad, solicitud_id, pk_id, presupuesto_id, es_principal"
+    try:
+        items = (
+            sb.table("almacen_solicitud_item")
+            .select(select_cols)
+            .in_("presupuesto_id", pids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        # Columna es_principal aún no migrada: tratar todas como principales.
+        items = (
+            sb.table("almacen_solicitud_item")
+            .select("cantidad, solicitud_id, pk_id, presupuesto_id")
+            .in_("presupuesto_id", pids)
+            .execute()
+            .data
+            or []
+        )
     want = set(norm_keys)
     filtered = []
     for it in items:
+        if not _item_es_principal(it):
+            continue
         k = (int(it.get("presupuesto_id") or 0), _norm_pk_id(it.get("pk_id")))
         if k in want:
             filtered.append((k, it))
@@ -1745,7 +1771,7 @@ def apply_saldo_flags_batch(
             lookup = get_listado_precio_lookup(contrato_id)
     batch_qty: dict = defaultdict(float)
     for it in items:
-        if it.get("presupuesto_id") and it.get("pk_id"):
+        if it.get("presupuesto_id") and it.get("pk_id") and _item_es_principal(it):
             key = (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
             batch_qty[key] += _to_float(it.get("cantidad"))
 
@@ -1770,6 +1796,26 @@ def apply_saldo_flags_batch(
         presupuestada = _to_float(it.get("cant_presupuestada"))
         acum = acum_map.get((key[0], _norm_pk_id(key[1])), 0.0)
         cant = _to_float(it.get("cantidad"))
+        # Asociados no descuentan ni generan alerta de sobrepresupuesto.
+        if not _item_es_principal(it):
+            it["supera_presupuesto"] = False
+            it["contexto_presupuesto"] = {
+                "presupuesto_id": key[0],
+                "pk_id": key[1],
+                "cant_presupuestada": presupuestada,
+                "cant_solicitada_acumulada": acum,
+                "cantidad_solicitada": cant,
+                "cantidad_borrador_adicional": 0,
+                "saldo_disponible_despues": presupuestada - acum - (
+                    batch_qty[key] if descontar_linea_actual else 0
+                ),
+                "vlr_unitario_cobro": it.get("vlr_unitario_cobro") or 0,
+                "supera_presupuesto": False,
+                "es_principal": False,
+                "capitulo": it.get("capitulo"),
+                "item": it.get("item"),
+            }
+            continue
         extra = batch_qty[key] - cant
         if descontar_linea_actual:
             saldo = presupuestada - acum - cant - extra
@@ -1786,6 +1832,7 @@ def apply_saldo_flags_batch(
             "saldo_disponible_despues": saldo,
             "vlr_unitario_cobro": it.get("vlr_unitario_cobro") or 0,
             "supera_presupuesto": it["supera_presupuesto"],
+            "es_principal": True,
             "capitulo": it.get("capitulo"),
             "item": it.get("item"),
         }
@@ -2052,6 +2099,7 @@ def resolve_insumo_for_solicitud(
         "unidad": insumo.get("unidad") or ppto.get("und") or "UND",
         "cantidad": cant,
         "es_recurrente": bool(raw.get("es_recurrente")),
+        "es_principal": bool(raw.get("es_principal", True)),
         "cant_presupuestada": cant_presupuestada,
         "valor_compra_unitario": valor_compra,
         "tiene_precio_compra": valor_compra is not None and valor_compra > 0,
