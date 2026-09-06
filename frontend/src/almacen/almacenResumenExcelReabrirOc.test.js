@@ -48,11 +48,11 @@ function solicitudPuedeRechazarCompleta(sol, permisos) {
 }
 
 function solicitudPuedeReabrirOc(sol, permisos) {
-  return Boolean(
-    permisos?.editar
-    && sol?.estado === 'aprobada'
-    && solicitudTieneOrdenCompra(sol),
-  )
+  if (!sol) return false
+  if (!(permisos?.editar || permisos?.crear)) return false
+  if (!solicitudTieneOrdenCompra(sol)) return false
+  const estado = String(sol.estado || '').toLowerCase()
+  return estado === 'aprobada' || Boolean(sol.orden_compra?.id || sol.tiene_orden_compra)
 }
 
 function estadoValidacionItem(item, sol) {
@@ -88,9 +88,13 @@ describe('LineaResumenExcelTable', () => {
 describe('Reabrir OC — helpers', () => {
   const gerencial = { validar: true, editar: true, esContratistaGerencial: true }
 
-  it('permite reabrir solo con OC + editar', () => {
+  it('permite reabrir con OC + editar o crear', () => {
     assert.equal(
       solicitudPuedeReabrirOc({ estado: 'aprobada', tiene_orden_compra: true, orden_compra: { id: 1 } }, gerencial),
+      true,
+    )
+    assert.equal(
+      solicitudPuedeReabrirOc({ estado: 'aprobada', tiene_orden_compra: true, orden_compra: { id: 1 } }, { crear: true }),
       true,
     )
     assert.equal(
@@ -98,7 +102,7 @@ describe('Reabrir OC — helpers', () => {
       false,
     )
     assert.equal(
-      solicitudPuedeReabrirOc({ estado: 'aprobada', tiene_orden_compra: true, orden_compra: { id: 1 } }, { editar: false }),
+      solicitudPuedeReabrirOc({ estado: 'aprobada', tiene_orden_compra: true, orden_compra: { id: 1 } }, { editar: false, crear: false }),
       false,
     )
   })
@@ -157,7 +161,9 @@ describe('Reabrir OC — UI wiring', () => {
     const api = readFileSync(join(dir, 'almacenApi.js'), 'utf8')
     assert.match(panel, /Reabrir OC/)
     assert.match(panel, /modoReabrirOc/)
+    assert.match(panel, /data-testid="reabrir-oc-grid"/)
     assert.match(detalle, /Reabrir OC/)
+    assert.match(detalle, /data-testid="reabrir-oc-header"/)
     assert.match(form, /modoReabrirOc/)
     assert.match(form, /agregarLineasPostOc/)
     assert.match(modal, /modoReabrirOc/)

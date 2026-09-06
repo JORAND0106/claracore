@@ -676,7 +676,12 @@ def route_agregar_lineas_post_oc(
 ):
     """Reabrir OC: agrega solo líneas nuevas; las ya en la OC quedan intactas."""
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    # Crear o editar: quien puede generar solicitudes puede agregar líneas post-OC.
+    if not (
+        tiene_permiso_almacen(current_user, "editar")
+        or tiene_permiso_almacen(current_user, "crear")
+    ):
+        require_permiso_almacen(current_user, "editar")
     try:
         prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = agregar_lineas_post_oc(

@@ -67,11 +67,12 @@ export function itemPuedeValidar(item, sol, permisos) {
 
 /** Puede reabrir OC para agregar insumos adicionales. */
 export function solicitudPuedeReabrirOc(sol, permisos) {
-  return Boolean(
-    permisos?.editar
-    && sol?.estado === 'aprobada'
-    && solicitudTieneOrdenCompra(sol),
-  )
+  if (!sol) return false
+  if (!(permisos?.editar || permisos?.crear)) return false
+  // Aprobada con OC, o cualquier solicitud que ya tenga OC asociada.
+  if (!solicitudTieneOrdenCompra(sol)) return false
+  const estado = String(sol.estado || '').toLowerCase()
+  return estado === 'aprobada' || Boolean(sol.orden_compra?.id || sol.tiene_orden_compra)
 }
 
 /**
