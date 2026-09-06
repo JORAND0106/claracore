@@ -518,26 +518,27 @@ export function coherenciaErrors(pares, draft = null) {
 
 /**
  * Construye un par desde el formulario de captura y lo agrega a la lista.
- * El nº de cotización se autogenera.
+ * El nº de cotización es manual (obligatorio en validateCaptureForEnviar).
  * @param {object} [opts]
  * @param {string} [opts.impuestoEtiqueta]
+ * @param {string} [opts.impuestoEtiquetaNp]
  */
 export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
-  const numero = nextCotizacionNumero(paresExistentes)
+  const numeroIns = String(form.cotizacion_numero || '').trim()
+  const numeroNp = String(form.cotizacion_numero_np || '').trim()
   const proveedorNombre = (form.razon_social || '').trim()
   const valorIns = form.costo_base
   const valorNp = form.valor_no_previsto !== '' && form.valor_no_previsto != null
     ? form.valor_no_previsto
-    : form.costo_base
+    : ''
   const fecha = form.cotizacion_fecha || ''
   const vigencia = form.cotizacion_vigencia || ''
-  const fechaNp = form.cotizacion_fecha_np || fecha
-  const vigenciaNp = form.cotizacion_vigencia_np || vigencia
+  const fechaNp = form.cotizacion_fecha_np || ''
+  const vigenciaNp = form.cotizacion_vigencia_np || ''
   const impuestoEtiqueta = (opts.impuestoEtiqueta || form.impuesto_etiqueta || '').trim()
   const impuestoEtiquetaNp = (
     opts.impuestoEtiquetaNp
     || form.impuesto_etiqueta_np
-    || impuestoEtiqueta
     || ''
   ).trim()
   const par = {
@@ -556,7 +557,7 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
       ...emptyLado(),
       proveedor: proveedorNombre,
       valor: valorIns !== '' && valorIns != null ? String(valorIns) : '',
-      numero,
+      numero: numeroIns,
       fecha,
       vigencia,
       impuesto_etiqueta: impuestoEtiqueta,
@@ -565,13 +566,53 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
       ...emptyLado(),
       proveedor: proveedorNombre,
       valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
-      numero,
+      numero: numeroNp,
       fecha: fechaNp,
       vigencia: vigenciaNp,
       impuesto_etiqueta: impuestoEtiquetaNp,
     },
   }
   return applyAutoGanadoraByMinValor([...(paresExistentes || []), par])
+}
+
+/**
+ * Aplica los campos de captura sobre un par existente (Actualizar tabla).
+ */
+export function applyCaptureToPar(par, form, opts = {}) {
+  const numeroIns = String(form.cotizacion_numero || '').trim()
+  const numeroNp = String(form.cotizacion_numero_np || '').trim()
+  const valorIns = form.costo_base
+  const valorNp = form.valor_no_previsto !== '' && form.valor_no_previsto != null
+    ? form.valor_no_previsto
+    : ''
+  const impuestoEtiqueta = (opts.impuestoEtiqueta || form.impuesto_etiqueta || '').trim()
+  const impuestoEtiquetaNp = (opts.impuestoEtiquetaNp || form.impuesto_etiqueta_np || '').trim()
+  return {
+    ...par,
+    proveedor_id: form.proveedor_id || par.proveedor_id || '',
+    nit: (form.nit || '').trim(),
+    contacto_email: (form.contacto_email || '').trim(),
+    contacto_nombre: (form.contacto_nombre || '').trim(),
+    contacto_telefono: (form.contacto_telefono || '').trim(),
+    insumo: {
+      ...(par.insumo || emptyLado()),
+      proveedor: (form.razon_social || '').trim() || par.insumo?.proveedor || '',
+      valor: valorIns !== '' && valorIns != null ? String(valorIns) : '',
+      numero: numeroIns || par.insumo?.numero || '',
+      fecha: form.cotizacion_fecha || '',
+      vigencia: form.cotizacion_vigencia || '',
+      impuesto_etiqueta: impuestoEtiqueta || par.insumo?.impuesto_etiqueta || '',
+    },
+    no_previsto: {
+      ...(par.no_previsto || emptyLado()),
+      proveedor: (form.razon_social || '').trim() || par.no_previsto?.proveedor || '',
+      valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
+      numero: numeroNp || par.no_previsto?.numero || '',
+      fecha: form.cotizacion_fecha_np || '',
+      vigencia: form.cotizacion_vigencia_np || '',
+      impuesto_etiqueta: impuestoEtiquetaNp || par.no_previsto?.impuesto_etiqueta || '',
+    },
+  }
 }
 
 /**
@@ -620,6 +661,8 @@ export function validateCaptureForEnviar(form, paresExistentes = []) {
   if (form.costo_base === '' || form.costo_base == null || Number(form.costo_base) < 0) {
     faltantes.push('Valor / costo antes de AIU o IVA')
   }
+  if (!(form.cotizacion_numero || '').trim()) faltantes.push('Nº de cotización (Insumo)')
+  if (!(form.cotizacion_numero_np || '').trim()) faltantes.push('Nº de cotización (No Previsto)')
   const coh = coherenciaErrors(paresExistentes, form)
   return { faltantes, coherencia: coh }
 }
