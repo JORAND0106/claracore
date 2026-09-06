@@ -536,12 +536,29 @@ def route_list_solicitudes(
     contrato_id: int,
     estado: Optional[str] = None,
     resumen: bool = Query(True),
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "ver")
     ver_eco = puede_ver_valores_economicos_almacen(current_user)
-    return list_solicitudes(contrato_id, estado, ver_economicos=ver_eco, resumen=resumen)
+    items = list_solicitudes(
+        contrato_id,
+        estado,
+        ver_economicos=ver_eco,
+        resumen=resumen,
+        limit=limit,
+        offset=offset,
+    )
+    total = count_solicitudes(contrato_id, estado)
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": (offset + len(items)) < total,
+    }
 
 
 @router.get("/{contrato_id}/solicitudes-count")

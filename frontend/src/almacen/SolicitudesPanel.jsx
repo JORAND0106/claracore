@@ -32,6 +32,9 @@ export default function SolicitudesPanel({
   const ui = useAlmacenTheme()
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [totalCount, setTotalCount] = useState(0)
   const [error, setError] = useState('')
   const [editId, setEditId] = useState(null)
   const [creating, setCreating] = useState(false)
@@ -44,6 +47,7 @@ export default function SolicitudesPanel({
   const [filtros, setFiltros] = useState(() => ({ ...EMPTY_SOLICITUDES_FILTROS }))
   const [filtrosOpen, setFiltrosOpen] = useState(false)
 
+  const PAGE_SIZE = 80
   const puedeEliminarDev = puedeEliminarSolicitudDesarrollador(permisos)
 
   const listaFiltrada = useMemo(
@@ -54,14 +58,36 @@ export default function SolicitudesPanel({
 
   const reload = useCallback(() => {
     setLoading(true)
-    return api.listSolicitudes()
-      .then((data) => setLista(Array.isArray(data) ? data : []))
+    setError('')
+    return api.listSolicitudes(undefined, { resumen: true, limit: PAGE_SIZE, offset: 0 })
+      .then((page) => {
+        setLista(page.items || [])
+        setHasMore(Boolean(page.has_more))
+        setTotalCount(Number(page.total) || (page.items || []).length)
+      })
       .catch((e) => setError(e.message))
       .finally(() => {
         setLoading(false)
         onDataLoaded?.()
       })
   }, [api, onDataLoaded])
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    api.listSolicitudes(undefined, { resumen: true, limit: PAGE_SIZE, offset: lista.length })
+      .then((page) => {
+        const next = page.items || []
+        setLista((prev) => {
+          const seen = new Set(prev.map((s) => s.id))
+          return [...prev, ...next.filter((s) => !seen.has(s.id))]
+        })
+        setHasMore(Boolean(page.has_more))
+        setTotalCount(Number(page.total) || 0)
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoadingMore(false))
+  }, [api, hasMore, lista.length, loadingMore])
 
   useEffect(() => { reload() }, [reload])
 
@@ -262,6 +288,25 @@ export default function SolicitudesPanel({
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {!loading && hasMore && !filtrosActivos && (
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+          <button
+            type="button"
+            style={ui.btnSecondary}
+            disabled={loadingMore}
+            onClick={loadMore}
+          >
+            {loadingMore ? 'Cargando…' : `Cargar más (${lista.length} de ${totalCount || '…'})`}
+          </button>
+        </div>
+      )}
+
+      {!loading && !hasMore && totalCount > PAGE_SIZE && !filtrosActivos && (
+        <div style={{ textAlign: 'center', marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+          Mostrando {lista.length} de {totalCount} solicitudes
         </div>
       )}
 

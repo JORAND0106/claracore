@@ -768,19 +768,37 @@ def _solicitud_tiene_orden_compra(sol: dict) -> bool:
     return bool(isinstance(oc, dict) and oc.get("id"))
 
 
+# Columnas mínimas para la grilla (evita payload * con observaciones/motivos).
+_SOLICITUD_LIST_SELECT = (
+    "id, contrato_id, consecutivo, titulo, estado, created_at, created_by, "
+    "validada_by, validada_at, enviada_at"
+)
+
+
 def list_solicitudes(
     contrato_id: int,
     estado: Optional[str] = None,
     *,
     ver_economicos: bool = True,
     resumen: bool = True,
+    limit: Optional[int] = 80,
+    offset: int = 0,
 ) -> List[dict]:
-    """Lista solicitudes. Por defecto ``resumen=True`` (rápido para grilla)."""
+    """Lista solicitudes. Por defecto ``resumen=True`` (rápido para grilla).
+
+    ``limit`` acota filas (None = sin tope, solo para usos internos/admin).
+    """
     sb = _sb()
-    q = sb.table("almacen_solicitud").select("*").eq("contrato_id", contrato_id)
+    select_cols = _SOLICITUD_LIST_SELECT if resumen else "*"
+    q = sb.table("almacen_solicitud").select(select_cols).eq("contrato_id", contrato_id)
     if estado:
         q = q.eq("estado", estado)
-    rows = q.order("created_at", desc=True).execute().data or []
+    q = q.order("created_at", desc=True)
+    if limit is not None:
+        lim = max(1, min(int(limit), 200))
+        off = max(0, int(offset or 0))
+        q = q.range(off, off + lim - 1)
+    rows = q.execute().data or []
     if resumen:
         return _list_solicitudes_resumen(sb, rows, contrato_id)
     validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
@@ -855,9 +873,9 @@ def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[di
         if r.get("validada_by"):
             user_ids.append(int(r["validada_by"]))
     names = _map_usuario_nombres(sb, user_ids)
-    validadores_pendientes = None
-    if any((r.get("estado") or "") == "enviada" for r in rows):
-        validadores_pendientes = _nombres_validadores_pendientes(sb, contrato_id)
+    # No resolver validadores aquí: _destinatarios_validadores_almacen hace N+1
+    # por usuario y ralentiza la grilla incluso con pocas solicitudes.
+    # El detalle (GET) sí carga la lista completa para trazabilidad.
 
     out: List[dict] = []
     for r in rows:
@@ -879,7 +897,7 @@ def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[di
         if sol.get("validada_by"):
             sol["validador_nombre"] = names.get(int(sol["validada_by"]))
         if sol.get("estado") == "enviada":
-            sol["validadores_pendientes"] = validadores_pendientes or []
+            sol["validadores_pendientes"] = []
         out.append(sol)
     return out
 
@@ -1087,6 +1105,7 @@ def mapear_item_solicitud_gerencial(
         "pk_id_id": existing.get("pk_id_id"),
         "cantidad": cantidad,
         "es_recurrente": bool(body.get("es_recurrente", existing.get("es_recurrente"))),
+        "es_principal": existing.get("es_principal") if existing.get("es_principal") is not None else True,
         "exclude_solicitud_id": solicitud_id,
         "tramo": existing.get("tramo"),
         "costado": existing.get("costado"),

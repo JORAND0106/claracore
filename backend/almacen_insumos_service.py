@@ -879,6 +879,66 @@ def search_insumos(contrato_id: int, q: str = "", limit: int = 30) -> List[dict]
     return rows
 
 
+def _tokenize_busqueda_insumo(q: str) -> List[str]:
+    """Tokens relevantes para ranking (ignora stopwords cortas)."""
+    raw = (q or "").strip().lower()
+    if not raw:
+        return []
+    parts = re.findall(r"[a-záéíóúñü0-9]+(?:[./-][a-záéíóúñü0-9]+)?", raw, flags=re.IGNORECASE)
+    stop = {
+        "de", "la", "el", "los", "las", "un", "una", "unos", "unas",
+        "y", "o", "en", "para", "con", "del", "al", "por", "tipo", "und",
+    }
+    out: List[str] = []
+    for p in parts:
+        t = p.lower()
+        if t in stop or len(t) < 2:
+            continue
+        out.append(t)
+    return out
+
+
+def score_insumo_contra_consulta(
+    query: str,
+    codigo: str = "",
+    descripcion: str = "",
+    proveedor: str = "",
+) -> float:
+    """Puntúa coincidencia semántica entre texto solicitado y un insumo del catálogo.
+
+    Números de producto (p. ej. 2400 vs 2500) pesan fuerte. Sin solapamiento de
+    palabras clave relevantes devuelve score negativo (descartable).
+    """
+    tokens = _tokenize_busqueda_insumo(query)
+    if not tokens:
+        return 0.0
+    hay = f"{codigo or ''} {descripcion or ''} {proveedor or ''}".lower()
+    hay_tokens = set(_tokenize_busqueda_insumo(hay))
+    score = 0.0
+    matched = 0
+    for t in tokens:
+        exact = t in hay_tokens
+        substr = t in hay
+        is_num = bool(re.search(r"\d", t))
+        if exact:
+            matched += 1
+            score += 45.0 if is_num else 28.0
+        elif substr:
+            matched += 1
+            score += 18.0 if is_num else 12.0
+        elif is_num:
+            score -= 40.0  # producto numéricamente distinto
+        else:
+            score -= 6.0
+    if matched == 0:
+        return -100.0
+    score += (matched / len(tokens)) * 35.0
+    phrase = " ".join(tokens)
+    if phrase and phrase in hay:
+        score += 20.0
+    return score
+
+
 def search_insumos_solo_catalogo(
     contrato_id: int,
     q: str = "",
@@ -886,7 +946,11 @@ def search_insumos_solo_catalogo(
     offset: int = 0,
 ) -> tuple[List[dict], int, int]:
     """Búsqueda para solicitudes: solo insumos activos del catálogo (almacen_insumo).
-    Retorna (filas, total_filtrado, total_catalogo_activo)."""
+    Retorna (filas, total_filtrado, total_catalogo_activo).
+
+    Con ``q`` no vacío prioriza coincidencias por palabras clave (números de
+    producto, términos distintivos) y omite insumos sin relación semántica.
+    """
     sb = _sb()
     q_raw = (q or "").strip()
     q_lower = q_raw.lower()
@@ -917,19 +981,30 @@ def search_insumos_solo_catalogo(
         )
         prov_map = {int(p["id"]): p.get("razon_social") or "—" for p in provs}
 
+    scored: List[Tuple[float, dict]] = []
     if q_lower:
-        filtered = []
         for r in rows:
             pname = prov_map.get(int(r.get("proveedor_id") or 0), "—")
             label = _insumo_label(r)
-            if (
-                q_lower in label.lower()
-                or q_lower in (r.get("codigo") or "").lower()
-                or q_lower in (r.get("descripcion") or "").lower()
-                or q_lower in pname.lower()
-            ):
-                filtered.append(r)
-        rows = filtered
+            sc = score_insumo_contra_consulta(
+                q_raw,
+                codigo=r.get("codigo") or "",
+                descripcion=r.get("descripcion") or "",
+                proveedor=pname if pname != "—" else "",
+            )
+            # Respaldo: coincidencia cruda de substring (código/proveedor) si score débil
+            # pero hay overlap literal del query completo.
+            if sc <= -50:
+                blob = f"{label} {r.get('codigo') or ''} {r.get('descripcion') or ''} {pname}".lower()
+                if q_lower in blob:
+                    sc = 5.0
+                else:
+                    continue
+            scored.append((sc, r))
+        scored.sort(key=lambda x: (-x[0], str(x[1].get("codigo") or "")))
+        rows = [r for _, r in scored]
+    else:
+        rows = list(rows)
 
     # Batch de soportes de cotización (1 query) en lugar de 1 por insumo.
     min_cot = _get_cotizaciones_minimas(contrato_id)
@@ -1608,12 +1683,20 @@ def _cantidad_solicitada_acumulada(
 
 
 def _item_es_principal(it: dict) -> bool:
-    """Insumo principal (default) consume presupuesto; asociado no."""
+    """Insumo principal (default) consume presupuesto; asociado no.
+
+    Acepta booleanos y strings típicos de PostgREST/CSV (``false``/``0``/``f``).
+    """
     if it is None:
         return True
     if "es_principal" not in it or it.get("es_principal") is None:
         return True
-    return bool(it.get("es_principal"))
+    v = it.get("es_principal")
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "0", "f", "no", "n", "off")
+    if isinstance(v, (int, float)):
+        return v != 0
+    return bool(v)
 
 
 def batch_cantidad_solicitada_acumulada(
@@ -1638,28 +1721,41 @@ def batch_cantidad_solicitada_acumulada(
         return {}
     pids = list({k[0] for k in norm_keys})
     select_cols = "cantidad, solicitud_id, pk_id, presupuesto_id, es_principal"
+    items: List[dict] = []
     try:
-        items = (
+        # Preferir excluir asociados en el servidor cuando la columna existe.
+        q = (
             sb.table("almacen_solicitud_item")
             .select(select_cols)
             .in_("presupuesto_id", pids)
-            .execute()
-            .data
-            or []
         )
+        if hasattr(q, "or_"):
+            q = q.or_("es_principal.eq.true,es_principal.is.null")
+        items = q.execute().data or []
     except Exception:
-        # Columna es_principal aún no migrada: tratar todas como principales.
-        items = (
-            sb.table("almacen_solicitud_item")
-            .select("cantidad, solicitud_id, pk_id, presupuesto_id")
-            .in_("presupuesto_id", pids)
-            .execute()
-            .data
-            or []
-        )
+        try:
+            items = (
+                sb.table("almacen_solicitud_item")
+                .select(select_cols)
+                .in_("presupuesto_id", pids)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            # Columna es_principal aún no migrada: tratar todas como principales.
+            items = (
+                sb.table("almacen_solicitud_item")
+                .select("cantidad, solicitud_id, pk_id, presupuesto_id")
+                .in_("presupuesto_id", pids)
+                .execute()
+                .data
+                or []
+            )
     want = set(norm_keys)
     filtered = []
     for it in items:
+        # Defensa en profundidad: aunque el filtro or_ falle / no aplique.
         if not _item_es_principal(it):
             continue
         k = (int(it.get("presupuesto_id") or 0), _norm_pk_id(it.get("pk_id")))
