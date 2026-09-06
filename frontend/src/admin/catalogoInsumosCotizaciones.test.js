@@ -143,22 +143,67 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(pares[0].no_previsto.valor, '')
   })
 
-  it('validateGuardarInsumo exige filas y PDF', () => {
+  it('validateGuardarInsumo exige ganadora y PDF por lado con datos', () => {
+    const pares = buildParFromCapture({
+      ...baseCapture,
+      descripcion: 'X',
+      unidad: 'UND',
+      rendimiento: '',
+      costo_base: '10',
+      valor_no_previsto: '',
+      cotizacion_numero_np: '',
+    }, [])
     const form = {
       descripcion: 'X',
       unidad: 'UND',
       costo_base: '1',
       requiere_cotizacion: true,
-      cotizaciones_detalle: buildParFromCapture({
-        ...baseCapture,
-        descripcion: 'X',
-        unidad: 'UND',
-        rendimiento: '',
-        costo_base: '10',
-      }, []),
+      cotizaciones_detalle: pares,
     }
-    const r = validateGuardarInsumo(form, { minCotizaciones: 1 })
-    assert.ok(r.faltantes.some((f) => /PDF/i.test(f)))
+    const r = validateGuardarInsumo(form)
+    assert.ok(r.faltantes.some((f) => /PDF.*Insumo/i.test(f)))
+    assert.ok(!r.faltantes.some((f) => /No Previsto/i.test(f)))
+    assert.ok(!r.faltantes.some((f) => /Al menos/i.test(f)))
+
+    const withNp = buildParFromCapture({
+      ...baseCapture,
+      descripcion: 'Y',
+      unidad: 'UND',
+      costo_base: '10',
+      valor_no_previsto: '12',
+      cotizacion_numero_np: 'NP-1',
+    }, [])
+    withNp[0].insumo.pdf_nombre = 'ins.pdf'
+    const r2 = validateGuardarInsumo({
+      descripcion: 'Y',
+      unidad: 'UND',
+      costo_base: '10',
+      requiere_cotizacion: true,
+      cotizaciones_detalle: withNp,
+    })
+    assert.ok(r2.faltantes.some((f) => /PDF.*No Previsto/i.test(f)))
+    assert.ok(!r2.faltantes.some((f) => /PDF.*Insumo/i.test(f)))
+  })
+
+  it('validateGuardarInsumo no exige mínimo de cotizaciones adicionales', () => {
+    const pares = buildParFromCapture({
+      ...baseCapture,
+      descripcion: 'Solo una',
+      unidad: 'UND',
+      costo_base: '50',
+      valor_no_previsto: '',
+      cotizacion_numero_np: '',
+    }, [])
+    pares[0].insumo.pdf = new File(['x'], 'g.pdf', { type: 'application/pdf' })
+    const r = validateGuardarInsumo({
+      descripcion: 'Solo una',
+      unidad: 'UND',
+      costo_base: '50',
+      requiere_cotizacion: true,
+      cotizaciones_detalle: pares,
+    })
+    assert.ok(!r.faltantes.some((f) => /Al menos/i.test(f)))
+    assert.deepEqual(r.faltantes.filter((f) => /PDF/i.test(f)), [])
   })
 
   it('buildParFromCapture + applyCaptureToPar + payload + sync', () => {

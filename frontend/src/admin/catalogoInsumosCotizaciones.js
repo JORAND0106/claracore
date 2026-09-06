@@ -48,9 +48,26 @@ function ladoHasData(lado) {
     || (lado.fecha || '').trim()
     || (lado.vigencia || '').trim()
     || (lado.valor !== '' && lado.valor != null)
+    || (lado.impuesto_etiqueta || '').trim()
     || lado.pdf
     || (lado.pdf_nombre || '').trim()
   )
+}
+
+/** Datos de captura en un lado (sin contar solo el PDF). */
+export function ladoHasCaptureData(lado) {
+  if (!lado) return false
+  return !!(
+    (lado.numero || '').trim()
+    || (lado.fecha || '').trim()
+    || (lado.vigencia || '').trim()
+    || (lado.valor !== '' && lado.valor != null)
+    || (lado.impuesto_etiqueta || '').trim()
+  )
+}
+
+function ladoHasPdf(lado) {
+  return !!(lado?.pdf || (lado?.pdf_nombre || '').trim())
 }
 
 function rowHasData(r) {
@@ -756,7 +773,7 @@ export function validateCaptureForEnviar(form, paresExistentes = []) {
   return { faltantes, coherencia: coh }
 }
 
-export function validateGuardarInsumo(form, { minCotizaciones = 1, editId = null } = {}) {
+export function validateGuardarInsumo(form, { editId = null } = {}) {
   const faltantes = []
   const pares = form.cotizaciones_detalle || []
   if (!(form.descripcion || '').trim()) faltantes.push('Descripción del insumo')
@@ -771,24 +788,24 @@ export function validateGuardarInsumo(form, { minCotizaciones = 1, editId = null
   }
 
   if (form.requiere_cotizacion !== false) {
-    const minReq = Math.max(1, Number(minCotizaciones) || 1)
-    if (pares.length < minReq) {
-      faltantes.push(`Al menos ${minReq} cotización(es) enviada(s) a la tabla (hoy: ${pares.length})`)
+    const hasGan = gan && (
+      (gan.numero || '').trim()
+      || (gan.valor !== '' && gan.valor != null)
+      || gan.pdf
+      || (gan.pdf_nombre || '').trim()
+    )
+    if (!hasGan) {
+      faltantes.push('Cotización ganadora (menor valor) con datos')
     }
+
     for (const p of pares) {
-      const hasPdfIns = !!(p.insumo?.pdf || (p.insumo?.pdf_nombre || '').trim())
-      if (!hasPdfIns) {
-        faltantes.push(`PDF de soporte de la cotización ${p.insumo?.numero || p.id} (lado insumo)`)
+      const numLabel = p.insumo?.numero || p.no_previsto?.numero || p.id
+      if (ladoHasCaptureData(p.insumo) && !ladoHasPdf(p.insumo)) {
+        faltantes.push(`PDF de soporte de la cotización ${numLabel} (lado Insumo)`)
       }
-    }
-    if (!editId) {
-      const hasGan = gan && (
-        (gan.numero || '').trim()
-        || (gan.valor !== '' && gan.valor != null)
-        || gan.pdf
-        || (gan.pdf_nombre || '').trim()
-      )
-      if (!hasGan) faltantes.push('Cotización ganadora (menor valor) con datos')
+      if (ladoHasCaptureData(p.no_previsto) && !ladoHasPdf(p.no_previsto)) {
+        faltantes.push(`PDF de soporte de la cotización ${numLabel} (lado No Previsto)`)
+      }
     }
   }
 
