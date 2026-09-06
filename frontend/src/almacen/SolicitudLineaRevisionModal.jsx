@@ -27,7 +27,8 @@ function Section({ ui, title, children, style }) {
         border: `1px solid ${ui.textMuted}33`,
         borderRadius: 10,
         padding: '14px 16px',
-        background: 'var(--cc-almacen-bg-card, #fff)',
+        background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
+        color: ui.text,
         ...style,
       }}
     >

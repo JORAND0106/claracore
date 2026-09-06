@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { useClaraViewport } from '../useClaraViewport'
 import { createCatalogoInsumosApi, fmtMoney } from './catalogoInsumosApi'
@@ -108,7 +108,6 @@ function snapshotForm(f) {
 const MAIN_CATALOG_TABS = [
   { id: 'insumos', label: 'Insumos' },
   { id: 'proveedores', label: 'Proveedores' },
-  { id: 'cotizaciones', label: 'Cotizaciones' },
 ]
 
 function sheetZebra(ui, index) {
@@ -912,10 +911,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [provTotal, setProvTotal] = useState(0)
   const [provQ, setProvQ] = useState('')
   const [provLoading, setProvLoading] = useState(false)
-  const [bibQ, setBibQ] = useState('')
-  const [bibProveedorId, setBibProveedorId] = useState('')
   const [bibLoading, setBibLoading] = useState(false)
   const [biblioteca, setBiblioteca] = useState([])
+  const [expandedProvId, setExpandedProvId] = useState(null)
   const [consumoNegociado, setConsumoNegociado] = useState(null)
   const [modalImpuestoOpen, setModalImpuestoOpen] = useState(false)
   const [impuestoModalTarget, setImpuestoModalTarget] = useState('insumo')
@@ -1024,26 +1022,20 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const loadBiblioteca = useCallback(() => {
     if (!api || !canVer) return
     setBibLoading(true)
-    api.listBibliotecaCotizaciones({
-      q: bibQ,
-      proveedor_id: bibProveedorId || undefined,
-    })
+    api.listBibliotecaCotizaciones({})
       .then((r) => setBiblioteca(r.proveedores || []))
       .catch((e) => setMsg({ type: 'error', text: e.message }))
       .finally(() => setBibLoading(false))
-  }, [api, canVer, bibQ, bibProveedorId])
+  }, [api, canVer])
 
   useEffect(() => {
     if (mainTab !== 'proveedores') return
-    const tmr = setTimeout(loadProveedores, 200)
+    const tmr = setTimeout(() => {
+      loadProveedores()
+      loadBiblioteca()
+    }, 200)
     return () => clearTimeout(tmr)
-  }, [mainTab, loadProveedores])
-
-  useEffect(() => {
-    if (mainTab !== 'cotizaciones') return
-    const tmr = setTimeout(loadBiblioteca, 200)
-    return () => clearTimeout(tmr)
-  }, [mainTab, loadBiblioteca])
+  }, [mainTab, loadProveedores, loadBiblioteca])
 
   const load = useCallback(() => {
     if (!api || !canVer) return
@@ -1081,18 +1073,31 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const refreshActiveTab = useCallback(() => {
     if (mainTab === 'proveedores') {
       loadProveedores()
-      return
-    }
-    if (mainTab === 'cotizaciones') {
       loadBiblioteca()
       return
     }
     load()
   }, [mainTab, load, loadProveedores, loadBiblioteca])
 
-  const isRefreshing = mainTab === 'proveedores'
-    ? provLoading
-    : (mainTab === 'cotizaciones' ? bibLoading : loading)
+  const isRefreshing = mainTab === 'proveedores' ? (provLoading || bibLoading) : loading
+
+  const bibByProv = useMemo(() => {
+    const byId = new Map()
+    const byName = new Map()
+    for (const b of biblioteca || []) {
+      if (b.proveedor_id != null) byId.set(Number(b.proveedor_id), b)
+      const name = String(b.razon_social || '').trim().toLowerCase()
+      if (name) byName.set(name, b)
+    }
+    return { byId, byName }
+  }, [biblioteca])
+
+  const bibForProveedor = useCallback((p) => {
+    if (!p) return null
+    if (p.id != null && bibByProv.byId.has(Number(p.id))) return bibByProv.byId.get(Number(p.id))
+    const name = String(p.razon_social || '').trim().toLowerCase()
+    return name ? (bibByProv.byName.get(name) || null) : null
+  }, [bibByProv])
 
   const openNew = async () => {
     setEditId(null)
@@ -1563,7 +1568,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       setDupAlert(null)
       load()
       loadProveedores()
-      if (mainTab === 'cotizaciones') loadBiblioteca()
+      if (mainTab === 'proveedores') loadBiblioteca()
     } catch (e) {
       setMsg({ type: 'error', text: e.message })
     } finally {
@@ -1687,8 +1692,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           <input ref={csvRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => onCsvSelect(e, 'insumos')} />
           <input ref={csvProvRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => onCsvSelect(e, 'proveedores')} />
           <ToolbarBtn
-            label={mainTab === 'proveedores' ? 'Actualizar' : (mainTab === 'cotizaciones' ? 'Actualizar biblioteca' : 'Actualizar insumos')}
-            title={mainTab === 'proveedores' ? 'Actualizar proveedores' : (mainTab === 'cotizaciones' ? 'Actualizar biblioteca de cotizaciones' : 'Actualizar insumos')}
+            label={mainTab === 'proveedores' ? 'Actualizar proveedores' : 'Actualizar insumos'}
+            title={mainTab === 'proveedores' ? 'Actualizar proveedores y cotizaciones' : 'Actualizar insumos'}
             disabled={busy || isRefreshing}
             t={t}
             iconColor={t.primary || TOOLBAR_ICON_COLORS.refresh}
@@ -1909,51 +1914,123 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               {provTotal} proveedor(es)
             </span>
           </div>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+            Pulse una fila para ver el detalle de cotizaciones del proveedor. El valor total acumula los Nº de cotización referenciados en el catálogo.
+          </div>
           <div style={{ ...sheetWrap, minWidth: 0, width: '100%' }} className="cc-almacen-table-scroll cc-catalogo-proveedores-sheet">
-            <table style={{ ...sheetTable, minWidth: 720, width: '100%', tableLayout: 'auto' }}>
+            <table style={{ ...sheetTable, minWidth: 820, width: '100%', tableLayout: 'auto' }}>
               <thead>
                 <tr>
+                  <th style={{ ...thHeader, width: 36 }} />
                   <th style={thHeader}>Razón social</th>
                   <th style={{ ...thHeader, width: 110 }}>NIT</th>
                   <th style={thHeader}>Contacto</th>
                   <th style={thHeader}>Correo</th>
                   <th style={{ ...thHeader, width: 110 }}>Teléfono</th>
                   <th style={{ ...thHeader, textAlign: 'right', width: 80 }}>Insumos</th>
+                  <th style={{ ...thHeader, textAlign: 'right', width: 120 }}>Valor total</th>
                   <th style={{ ...thHeader, width: 52 }} />
                 </tr>
               </thead>
               <tbody>
                 {provLoading ? (
-                  <tr><td colSpan={7} style={td}>Cargando…</td></tr>
+                  <tr><td colSpan={9} style={td}>Cargando…</td></tr>
                 ) : proveedores.length === 0 ? (
-                  <tr><td colSpan={7} style={{ ...td, color: t.textMuted }}>Sin proveedores registrados.</td></tr>
-                ) : proveedores.map((p, idx) => (
-                  <tr key={p.id} style={{ background: sheetZebra(ui, idx) }}>
-                    <td style={tdDesc}>{p.razon_social}</td>
-                    <td style={tdCodigo}>{p.nit}</td>
-                    <td style={tdMuted}>{p.contacto_nombre || '—'}</td>
-                    <td style={tdMuted}>{p.contacto_email || '—'}</td>
-                    <td style={tdMuted}>{p.contacto_telefono || '—'}</td>
-                    <td style={tdNum}>{p.insumos_activos ?? 0}</td>
-                    <td style={td}>
-                      {canEliminar && (
-                        <IconActionBtn
-                          title={
-                            (p.insumos_activos ?? 0) > 0
-                              ? 'No se puede eliminar: tiene insumos activos'
-                              : 'Eliminar proveedor'
-                          }
-                          t={t}
-                          variant="danger"
-                          disabled={busy || (p.insumos_activos ?? 0) > 0}
-                          onClick={() => setDeleteProvConfirm(p)}
-                        >
-                          <IconDeleteRow />
-                        </IconActionBtn>
+                  <tr><td colSpan={9} style={{ ...td, color: t.textMuted }}>Sin proveedores registrados.</td></tr>
+                ) : proveedores.map((p, idx) => {
+                  const bib = bibForProveedor(p)
+                  const expanded = expandedProvId === p.id
+                  const totalVal = bib?.total_acumulado
+                  const nCot = bib?.n_cotizaciones || (bib?.cotizaciones || []).length || 0
+                  return (
+                    <Fragment key={p.id}>
+                      <tr
+                        style={{
+                          background: expanded
+                            ? (ui.dark ? 'rgba(0,180,198,0.18)' : ui.cardSubtle)
+                            : sheetZebra(ui, idx),
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => setExpandedProvId(expanded ? null : p.id)}
+                        title="Clic para ver cotizaciones"
+                      >
+                        <td style={{ ...td, textAlign: 'center', color: t.primary, fontWeight: 800 }}>
+                          {expanded ? '▾' : '▸'}
+                        </td>
+                        <td style={tdDesc}>{p.razon_social}</td>
+                        <td style={tdCodigo}>{p.nit}</td>
+                        <td style={tdMuted}>{p.contacto_nombre || '—'}</td>
+                        <td style={tdMuted}>{p.contacto_email || '—'}</td>
+                        <td style={tdMuted}>{p.contacto_telefono || '—'}</td>
+                        <td style={tdNum}>{p.insumos_activos ?? 0}</td>
+                        <td style={{ ...tdMoney, textAlign: 'right' }}>
+                          {bibLoading && totalVal == null ? '…' : (totalVal != null ? fmtMoney(totalVal) : '—')}
+                        </td>
+                        <td style={td} onClick={(e) => e.stopPropagation()}>
+                          {canEliminar && (
+                            <IconActionBtn
+                              title={
+                                (p.insumos_activos ?? 0) > 0
+                                  ? 'No se puede eliminar: tiene insumos activos'
+                                  : 'Eliminar proveedor'
+                              }
+                              t={t}
+                              variant="danger"
+                              disabled={busy || (p.insumos_activos ?? 0) > 0}
+                              onClick={() => setDeleteProvConfirm(p)}
+                            >
+                              <IconDeleteRow />
+                            </IconActionBtn>
+                          )}
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr style={{ background: ui.dark ? 'rgba(15, 30, 50, 0.55)' : (ui.rest ? 'rgba(201,184,164,0.18)' : 'rgba(241,245,249,0.9)') }}>
+                          <td colSpan={9} style={{ ...td, padding: '10px 12px' }}>
+                            {!bib || nCot === 0 ? (
+                              <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+                                Sin cotizaciones registradas para este proveedor en el catálogo.
+                              </div>
+                            ) : (
+                              <div>
+                                <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: t.primary, marginBottom: 8 }}>
+                                  Cotizaciones ({nCot}) · Total {fmtMoney(totalVal)}
+                                </div>
+                                <table style={{ ...sheetTable, minWidth: 0, width: '100%', tableLayout: 'auto' }}>
+                                  <thead>
+                                    <tr>
+                                      <th style={thHeader}>Nº cotización</th>
+                                      <th style={thHeader}>Fecha</th>
+                                      <th style={thHeader}>Vigencia</th>
+                                      <th style={{ ...thHeader, textAlign: 'right' }}>Valor</th>
+                                      <th style={thHeader}>Insumos</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {(bib.cotizaciones || []).map((c, cIdx) => (
+                                      <tr key={c.numero} style={{ background: sheetZebra(ui, cIdx) }}>
+                                        <td style={{ ...td, fontWeight: 700 }}>{c.numero}</td>
+                                        <td style={tdMuted}>{c.fecha ? String(c.fecha).slice(0, 10) : '—'}</td>
+                                        <td style={tdMuted}>{c.vigencia || '—'}</td>
+                                        <td style={{ ...tdMoney, textAlign: 'right' }}>{fmtMoney(c.valor_total)}</td>
+                                        <td style={tdMuted} title={(c.items || []).map((i) => i.codigo || i.descripcion).join(', ')}>
+                                          {(c.items || []).length}
+                                          {(c.items || []).length
+                                            ? ` · ${(c.items || []).slice(0, 3).map((i) => i.codigo || i.descripcion || '—').join(', ')}${(c.items || []).length > 3 ? '…' : ''}`
+                                            : ''}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                  </tr>
-                ))}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -1962,87 +2039,6 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             No se duplican por NIT.
             {canEliminar && ' Solo puede eliminar proveedores sin insumos activos asociados.'}
           </div>
-        </div>
-      )}
-
-      {mainTab === 'cotizaciones' && (
-        <div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select
-              style={{ ...inputStyle, maxWidth: 320 }}
-              value={bibProveedorId}
-              onChange={(e) => setBibProveedorId(e.target.value)}
-            >
-              <option value="">Todos los proveedores</option>
-              {proveedores.map((p) => (
-                <option key={p.id} value={p.id}>{p.razon_social}</option>
-              ))}
-            </select>
-            <input
-              style={{ ...inputStyle, flex: 1, maxWidth: 360 }}
-              placeholder="Buscar por Nº cotización, proveedor o NIT…"
-              value={bibQ}
-              onChange={(e) => setBibQ(e.target.value)}
-            />
-            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600 }}>
-              {biblioteca.length} proveedor(es) con cotizaciones
-            </span>
-          </div>
-          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
-            Biblioteca de cotizaciones: el valor de cada Nº resume los insumos del catálogo que la referencian.
-            La ganadora de cada insumo es siempre la de menor valor; no altera solicitudes u OC ya generadas.
-          </div>
-          {bibLoading ? (
-            <div style={{ color: t.textMuted, padding: 12 }}>Cargando biblioteca…</div>
-          ) : biblioteca.length === 0 ? (
-            <div style={{ color: t.textMuted, padding: 12 }}>No hay cotizaciones registradas con ese filtro.</div>
-          ) : (
-            biblioteca.map((prov) => (
-              <div key={prov.proveedor_key || prov.razon_social || prov.proveedor_id} style={{ ...sheetWrap, marginBottom: 12, overflow: 'auto' }}>
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  flexWrap: 'wrap',
-                  padding: '8px 10px',
-                  background: ui.cardSubtle,
-                  borderBottom: `1px solid ${t.border}`,
-                  fontWeight: 700,
-                }}
-                >
-                  <span>{prov.razon_social || 'Sin proveedor'}{prov.nit ? ` · NIT ${prov.nit}` : ''}</span>
-                  <span style={{ color: t.primary }}>
-                    Total acumulado: {fmtMoney(prov.total_acumulado)} · {prov.n_cotizaciones} cotización(es)
-                  </span>
-                </div>
-                <table style={{ ...sheetTable, minWidth: 640, tableLayout: 'auto' }}>
-                  <thead>
-                    <tr>
-                      <th style={thHeader}>Nº cotización</th>
-                      <th style={thHeader}>Fecha</th>
-                      <th style={thHeader}>Vigencia</th>
-                      <th style={{ ...thHeader, textAlign: 'right' }}>Valor asociado</th>
-                      <th style={thHeader}>Insumos</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(prov.cotizaciones || []).map((c, idx) => (
-                      <tr key={c.numero} style={{ background: sheetZebra(ui, idx) }}>
-                        <td style={{ ...td, fontWeight: 700 }}>{c.numero}</td>
-                        <td style={tdMuted}>{c.fecha ? String(c.fecha).slice(0, 10) : '—'}</td>
-                        <td style={tdMuted}>{c.vigencia || '—'}</td>
-                        <td style={{ ...tdMoney, textAlign: 'right' }}>{fmtMoney(c.valor_total)}</td>
-                        <td style={tdMuted} title={(c.items || []).map((i) => i.codigo || i.descripcion).join(', ')}>
-                          {(c.items || []).length} · {(c.items || []).slice(0, 3).map((i) => i.codigo || i.descripcion || '—').join(', ')}
-                          {(c.items || []).length > 3 ? '…' : ''}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))
-          )}
         </div>
       )}
 
