@@ -309,14 +309,14 @@ export default function InventarioPanel({
   }
 
   const filtroActivo = Boolean(filtroCap || filtroItem || q.trim())
-  const colSpan = verEconomicos ? 8 : 4
+  const colSpan = verEconomicos ? 9 : 5
 
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📊 Inventario</div>
         <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
-          Capítulo → Ítem → Insumo → OC. Valores por insumo y trazabilidad OC → Entrada → Salida.
+          Capítulo → Ítem → Insumo → OC. Valores por insumo, trazabilidad y saldo por consumir.
         </div>
         {arbol?.generado_at && (
           <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
@@ -405,7 +405,7 @@ export default function InventarioPanel({
                 ...ui.sheetTable,
                 width: '100%',
                 borderCollapse: 'collapse',
-                minWidth: compact ? 820 : 1120,
+                minWidth: compact ? 900 : 1240,
                 tableLayout: 'fixed',
               }}
             >
@@ -421,6 +421,7 @@ export default function InventarioPanel({
                   <th style={{ ...th, textAlign: 'right' }}>Valor entradas</th>
                   <th style={{ ...th, textAlign: 'right' }}>Valor salidas</th>
                   <th style={{ ...th, textAlign: 'right' }}>Stock</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Saldo por consumir</th>
                 </tr>
               </thead>
               <tbody>
@@ -516,6 +517,7 @@ function FragmentCapitulo({
         <td style={{ ...num, fontWeight: 700 }}>
           {fmtMoneyOrDash(cap.valor_stock ?? cap.stock, hideEco)}
         </td>
+        <td style={num}>{fmtMoneyOrDash(cap.saldo_por_consumir, hideEco)}</td>
       </tr>
 
       {capOpen && items.map((it) => {
@@ -604,6 +606,7 @@ function FragmentItem({
         <td style={{ ...num, fontWeight: 700 }}>
           {fmtMoneyOrDash(it.valor_stock ?? it.stock, hideEco)}
         </td>
+        <td style={num}>{fmtMoneyOrDash(it.saldo_por_consumir, hideEco)}</td>
       </tr>
 
       {itemOpen && (it.insumos || []).map((ins) => {
@@ -705,6 +708,9 @@ function FragmentInsumo({
         <td style={{ ...num, fontWeight: 600 }}>
           {fmtMoneyOrDash(ins.valor_stock ?? ins.stock, hideEco)}
         </td>
+        <td style={{ ...num, fontWeight: 600 }}>
+          {fmtMoneyOrDash(ins.saldo_por_consumir, hideEco)}
+        </td>
       </tr>
 
       {insOpen && ocs.map((oc) => {
@@ -742,6 +748,7 @@ function FragmentInsumo({
             <td style={numOc}>{fmtMoneyOrDash(oc.valor_entradas, hideEco)}</td>
             <td style={numOc}>{fmtMoneyOrDash(oc.valor_salidas, hideEco)}</td>
             <td style={numOc}>{fmtMoneyOrDash(oc.valor_stock ?? oc.saldo, hideEco)}</td>
+            <td style={numOc}>—</td>
           </tr>
         )
       })}

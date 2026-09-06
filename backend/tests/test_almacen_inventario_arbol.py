@@ -58,6 +58,7 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
                 "es_principal": True,
                 "rendimiento": 1.0,
                 "vu_costo": 20000,
+                "valor_negociado_total": 500000,
             },
             {
                 "insumo_id": 2,
@@ -67,6 +68,7 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
                 "es_principal": False,
                 "rendimiento": 50,
                 "vu_costo": 100,
+                "valor_negociado_total": 25000,
             },
         ],
         "01|01.02": [{
@@ -77,6 +79,7 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
             "es_principal": True,
             "rendimiento": 1,
             "vu_costo": 15000,
+            "valor_negociado_total": 45000,
         }],
     }
     movements = [
@@ -200,6 +203,8 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     assert arena["valor_entradas"] == 300000
     assert arena["valor_salidas"] == 100000
     assert arena["valor_stock"] == 200000
+    assert arena["valor_negociado_total"] == 500000
+    assert arena["saldo_por_consumir"] == 200000  # 500000 - 300000
     assert len(arena["ordenes_compra"]) == 1
     oc_arena = arena["ordenes_compra"][0]
     assert oc_arena["numero_oc"] == 45
@@ -215,6 +220,9 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     assert cemento["valor_entradas"] == 10000
     assert cemento["valor_salidas"] == 2000
     assert cemento["valor_stock"] == 8000
+    assert cemento["valor_negociado_total"] == 25000
+    assert cemento["saldo_por_consumir"] == 15000  # 25000 - 10000
+    assert item["saldo_por_consumir"] == 215000  # 200000 + 15000
     assert len(cemento["ordenes_compra"]) == 2
     oc_con_mov = next(o for o in cemento["ordenes_compra"] if o["numero_oc"] == 46)
     assert oc_con_mov["tiene_entrada"] is True
@@ -230,9 +238,11 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     )
     assert tierra["valor_entradas"] == 30000
     assert tierra["valor_salidas"] == 0
+    assert tierra["saldo_por_consumir"] == 15000  # 45000 - 30000
     assert tierra["ordenes_compra"][0]["tiene_entrada"] is True
     assert tierra["ordenes_compra"][0]["tiene_salida"] is False
 
+    assert cap01["saldo_por_consumir"] == 230000  # 215000 + 15000
     assert all("Varios" not in (i.get("descripcion") or "") for i in item["insumos"])
     assert item["ordenes_compra"] == []
     assert out["resumen"]["valor_stock"] == 238000

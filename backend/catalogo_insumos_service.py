@@ -1466,9 +1466,43 @@ def update_insumo_catalogo(
         ganadora_pdf=ganadora_pdf,
         soporte_pdfs=soporte_pdfs,
     )
+    from almacen_insumo_liquidacion import (
+        aplicar_liquidacion_en_update,
+        persistir_liquidacion,
+    )
+    payload, liquidacion = aplicar_liquidacion_en_update(
+        sb,
+        contrato_id=contrato_id,
+        insumo_id=insumo_id,
+        user_id=user_id,
+        existing=existing,
+        payload=payload,
+        motivo=motivo or "cambio_ganadora",
+    )
     payload["updated_at"] = datetime.utcnow().isoformat()
     payload["updated_by"] = user_id
-    sb.table("almacen_insumo").update(payload).eq("id", insumo_id).execute()
+    try:
+        sb.table("almacen_insumo").update(payload).eq("id", insumo_id).execute()
+    except Exception as exc:
+        # Columnas de liquidación pueden no existir aún si la migración SQL no corrió.
+        from almacen_service import _pgrst_unknown_column
+        col = _pgrst_unknown_column(exc)
+        if col in ("valor_consumido_congelado", "cantidad_entradas_liquidada") or (
+            "valor_consumido_congelado" in str(exc) or "cantidad_entradas_liquidada" in str(exc)
+        ):
+            payload.pop("valor_consumido_congelado", None)
+            payload.pop("cantidad_entradas_liquidada", None)
+            sb.table("almacen_insumo").update(payload).eq("id", insumo_id).execute()
+            liquidacion = None
+        else:
+            raise
+    if liquidacion:
+        persistir_liquidacion(sb, liquidacion)
+        try:
+            from almacen_inventario_arbol import invalidar_cache_inventario_arbol
+            invalidar_cache_inventario_arbol(contrato_id)
+        except Exception:
+            pass
     if ganadora_pdf:
         _save_ganadora_pdf(contrato_id, insumo_id, *ganadora_pdf)
     if soporte_pdfs:

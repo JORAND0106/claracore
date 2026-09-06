@@ -19,13 +19,15 @@ describe('Inventario — Capítulo → Ítem → Insumo → OC', () => {
     assert.match(src, /rentabilidad_pct/)
     assert.match(src, /Valor entradas/)
     assert.match(src, /Valor salidas/)
+    assert.match(src, /Saldo por consumir/)
+    assert.match(src, /saldo_por_consumir/)
     assert.match(src, /Ver todo el listado/)
     assert.doesNotMatch(src, /GraficoResumenInventario/)
     assert.doesNotMatch(src, /from 'recharts'/)
     assert.doesNotMatch(src, /BarChart/)
   })
 
-  it('backend lista insumos con valores y OCs con trazabilidad', () => {
+  it('backend lista insumos con valores, OCs y saldo por consumir', () => {
     const arbol = readFileSync(join(__dirname, '../../../backend/almacen_inventario_arbol.py'), 'utf8')
     assert.match(arbol, /_fetch_all_listado_rows/)
     assert.match(arbol, /def _fetch_oc_rows/)
@@ -42,10 +44,12 @@ describe('Inventario — Capítulo → Ítem → Insumo → OC', () => {
     assert.match(arbol, /rentabilidad_pct/)
     assert.match(arbol, /capitulos/)
     assert.match(arbol, /OC → Entrada → Salida/)
+    assert.match(arbol, /saldo_por_consumir/)
+    assert.match(arbol, /valor_negociado_total/)
     assert.doesNotMatch(arbol, /material_descripcion"] = "Varios/)
   })
 
-  it('drill-down Excel muestra valores por insumo y OCs al expandir', () => {
+  it('drill-down Excel muestra valores por insumo, OCs y saldo por consumir', () => {
     const src = readFileSync(join(__dirname, 'InventarioPanel.jsx'), 'utf8')
     assert.match(src, /cc-almacen-inventario-excel/)
     assert.match(src, /getInventarioArbol/)
@@ -63,8 +67,26 @@ describe('Inventario — Capítulo → Ítem → Insumo → OC', () => {
     assert.match(src, /Sin salida/)
     assert.match(src, /ins\.valor_entradas/)
     assert.match(src, /ins\.valor_salidas/)
+    assert.match(src, /saldo_por_consumir/)
+    assert.match(src, /Saldo por consumir/)
     assert.match(src, /cc-almacen-inventario-trunc/)
     assert.match(src, /tableLayout: 'fixed'/)
     assert.doesNotMatch(src, /Ítem \/ Insumo \/ Proveedor/)
+  })
+
+  it('backend liquida valor negociado al cambiar cotización ganadora', () => {
+    const liq = readFileSync(join(__dirname, '../../../backend/almacen_insumo_liquidacion.py'), 'utf8')
+    assert.match(liq, /calcular_liquidacion_ganadora/)
+    assert.match(liq, /valor_consumido_congelado/)
+    assert.match(liq, /cantidad_entradas_liquidada/)
+    assert.match(liq, /calcular_saldo_por_consumir/)
+    const sql = readFileSync(
+      join(__dirname, '../../../backend/sql/almacen_insumo_liquidacion_ganadora.sql'),
+      'utf8',
+    )
+    assert.match(sql, /almacen_insumo_liquidacion_ganadora/)
+    assert.match(sql, /valor_consumido_congelado/)
+    const cat = readFileSync(join(__dirname, '../../../backend/catalogo_insumos_service.py'), 'utf8')
+    assert.match(cat, /aplicar_liquidacion_en_update/)
   })
 })
