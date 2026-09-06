@@ -10,6 +10,7 @@ import {
   formatNumeroOcDisplay,
   getAlmacenSessionUser,
   useAlmacenApi,
+  useAlmacenCompact,
   useAlmacenTheme,
   datetimeLocalColombiaToIsoUtc,
   nowDatetimeLocalColombia,
@@ -48,6 +49,22 @@ function clearDraft(contratoId) {
   } catch { /* ignore */ }
 }
 
+function newLinea(seed = null) {
+  return {
+    key: `ln-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    entradaItemId: seed?.entradaItemId ?? seed?.entrada_item_id ?? '',
+    cantidad: seed?.cantidad != null ? String(seed.cantidad) : '',
+  }
+}
+
+function parseCantidad(raw) {
+  const n = parseFloat(String(raw ?? '').replace(',', '.'))
+  return Number.isFinite(n) ? n : NaN
+}
+
+/**
+ * Formulario de salidas: encabezado + grilla Excel multi-fila.
+ */
 export default function SalidaForm({
   permisos,
   token,
@@ -60,6 +77,7 @@ export default function SalidaForm({
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
+  const compact = useAlmacenCompact()
   const sessionUser = getAlmacenSessionUser()
   const restoredRef = useRef(false)
   const initialDraft = useMemo(() => readDraft(contratoId), [contratoId])
@@ -76,9 +94,18 @@ export default function SalidaForm({
   const [abscisaInicial, setAbscisaInicial] = useState(() => initialDraft?.abscisaInicial || '')
   const [abscisaFinal, setAbscisaFinal] = useState(() => initialDraft?.abscisaFinal || '')
   const [entradasDisp, setEntradasDisp] = useState([])
-  const [entradaSel, setEntradaSel] = useState(null)
-  const [entradaItemIdDraft] = useState(() => initialDraft?.entradaItemId ?? null)
-  const [cantidad, setCantidad] = useState(() => initialDraft?.cantidad || '')
+  const [lineas, setLineas] = useState(() => {
+    if (Array.isArray(initialDraft?.lineas) && initialDraft.lineas.length) {
+      return initialDraft.lineas.map((ln) => newLinea(ln))
+    }
+    if (initialDraft?.entradaItemId) {
+      return [newLinea({
+        entradaItemId: initialDraft.entradaItemId,
+        cantidad: initialDraft.cantidad || '',
+      })]
+    }
+    return [newLinea()]
+  })
   const [observaciones, setObservaciones] = useState(() => initialDraft?.observaciones || '')
   const [loadingEntradas, setLoadingEntradas] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -86,14 +113,16 @@ export default function SalidaForm({
   const [fieldErrors, setFieldErrors] = useState({})
 
   const dirty = Boolean(
-    receptor || pkId || entradaSel || cantidad.trim() || observaciones.trim(),
+    receptor
+    || pkId
+    || observaciones.trim()
+    || lineas.some((ln) => ln.entradaItemId || String(ln.cantidad || '').trim()),
   )
 
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
 
-  // Persistir borrador ante cambio de pestaña / remount (token refresh, focus).
   useEffect(() => {
     if (!dirty && !pkId) {
       clearDraft(contratoId)
@@ -109,63 +138,77 @@ export default function SalidaForm({
       costado,
       abscisaInicial,
       abscisaFinal,
-      entradaItemId: entradaSel?.entrada_item_id ?? entradaItemIdDraft,
-      cantidad,
+      lineas: lineas.map((ln) => ({
+        entradaItemId: ln.entradaItemId || '',
+        cantidad: ln.cantidad || '',
+      })),
       observaciones,
     })
     return undefined
   }, [
     dirty, contratoId, receptor, fechaHora, pkId, pkLabel, pkIdId, tramo, costado,
-    abscisaInicial, abscisaFinal, entradaSel, entradaItemIdDraft, cantidad, observaciones,
+    abscisaInicial, abscisaFinal, lineas, observaciones,
   ])
 
-  const loadEntradas = useCallback((pk, { preferEntradaItemId = null } = {}) => {
+  const entradasById = useMemo(() => {
+    const map = new Map()
+    for (const op of entradasDisp) {
+      map.set(String(op.entrada_item_id), op)
+    }
+    return map
+  }, [entradasDisp])
+
+  const loadEntradas = useCallback((pk) => {
     const pkNorm = (pk || '').trim()
     if (!pkNorm) {
       setEntradasDisp([])
-      setEntradaSel(null)
       return
     }
     setLoadingEntradas(true)
     api.listEntradasDisponiblesPorPk(pkNorm)
       .then((rows) => {
         setEntradasDisp(rows)
-        let next = null
-        if (preferEntradaItemId != null) {
-          next = rows.find((r) => String(r.entrada_item_id) === String(preferEntradaItemId)) || null
-        }
-        // Auto-seleccionar para que "Cantidad a despachar" quede visible de inmediato
-        // (una sola entrada, o la primera si hay varias y no hay borrador).
-        if (!next && rows.length >= 1) next = rows[0]
-        if (next) {
-          const restored = preferEntradaItemId != null
-            && String(next.entrada_item_id) === String(preferEntradaItemId)
-          setEntradaSel(next)
-          if (!restored) setCantidad('')
-          if (next.tramo) setTramo(next.tramo)
-          if (next.costado) setCostado(next.costado)
-          if (next.abscisa_inicial) setAbscisaInicial(next.abscisa_inicial)
-          if (next.abscisa_final) setAbscisaFinal(next.abscisa_final)
-        } else {
-          setEntradaSel(null)
-          setCantidad('')
+        setLineas((prev) => {
+          if (!prev.length) return [newLinea()]
+          // Conservar selecciones válidas; si hay una sola entrada y la fila está vacía, autoasignar.
+          return prev.map((ln, idx) => {
+            if (ln.entradaItemId && rows.some((r) => String(r.entrada_item_id) === String(ln.entradaItemId))) {
+              return ln
+            }
+            if (!ln.entradaItemId && idx === 0 && rows.length === 1) {
+              const op = rows[0]
+              return {
+                ...ln,
+                entradaItemId: String(op.entrada_item_id),
+              }
+            }
+            if (ln.entradaItemId && !rows.some((r) => String(r.entrada_item_id) === String(ln.entradaItemId))) {
+              return { ...ln, entradaItemId: '', cantidad: '' }
+            }
+            return ln
+          })
+        })
+        if (rows[0]) {
+          const op = rows[0]
+          if (op.tramo) setTramo((t) => t || op.tramo)
+          if (op.costado) setCostado((c) => c || op.costado)
+          if (op.abscisa_inicial) setAbscisaInicial((a) => a || op.abscisa_inicial)
+          if (op.abscisa_final) setAbscisaFinal((a) => a || op.abscisa_final)
         }
       })
       .catch((e) => {
         setEntradasDisp([])
-        setEntradaSel(null)
         setError(e.message)
       })
       .finally(() => setLoadingEntradas(false))
   }, [api])
 
-  // Restaurar entradas tras remount si había PK en el borrador.
   useEffect(() => {
     if (restoredRef.current) return
     restoredRef.current = true
     if (!pkId) return
-    loadEntradas(pkId, { preferEntradaItemId: entradaItemIdDraft })
-  }, [pkId, entradaItemIdDraft, loadEntradas])
+    loadEntradas(pkId)
+  }, [pkId, loadEntradas])
 
   const onPkSeleccionar = (sel) => {
     setError('')
@@ -176,8 +219,7 @@ export default function SalidaForm({
     setCostado('')
     setAbscisaInicial('')
     setAbscisaFinal('')
-    setEntradaSel(null)
-    setCantidad('')
+    setLineas([newLinea()])
     loadEntradas(sel.pk_id || sel.pk_label)
   }
 
@@ -190,38 +232,67 @@ export default function SalidaForm({
     setAbscisaInicial('')
     setAbscisaFinal('')
     setEntradasDisp([])
-    setEntradaSel(null)
-    setCantidad('')
+    setLineas([newLinea()])
     clearDraft(contratoId)
   }
 
-  const cantidadNum = parseFloat(String(cantidad).replace(',', '.'))
-  const disponible = entradaSel ? Number(entradaSel.cantidad_disponible || 0) : 0
-  const cantidadInvalida = entradaSel && cantidad.trim() && (
-    !Number.isFinite(cantidadNum) || cantidadNum <= 0 || cantidadNum > disponible + 1e-9
-  )
-  const puedeRegistrar = Boolean(
-    entradaSel
-    && cantidad.trim()
-    && Number.isFinite(cantidadNum)
-    && cantidadNum > 0
-    && !cantidadInvalida,
-  )
+  const setLineaField = (key, patch) => {
+    setLineas((prev) => prev.map((ln) => (ln.key === key ? { ...ln, ...patch } : ln)))
+  }
 
-  const alertaProximidad = useMemo(() => {
-    if (!entradaSel) return null
-    if (entradaSel.alerta_proximidad_consumo) {
-      return 'Esta entrada tiene poco material disponible. Considere gestionar una nueva OC antes de agotarse.'
-    }
-    if (cantidad.trim() && Number.isFinite(cantidadNum) && cantidadNum > 0) {
-      const restante = disponible - cantidadNum
-      const recibida = Number(entradaSel.cantidad_recibida || 0)
-      if (recibida > 0 && restante <= recibida * 0.2) {
-        return 'Con esta salida el saldo disponible quedará muy bajo. Anticipe una nueva orden de compra.'
+  const addLinea = () => {
+    setLineas((prev) => [...prev, newLinea()])
+  }
+
+  const removeLinea = (key) => {
+    setLineas((prev) => (prev.length <= 1 ? [newLinea()] : prev.filter((ln) => ln.key !== key)))
+  }
+
+  const lineasValidas = useMemo(() => (
+    lineas.map((ln, idx) => {
+      const op = ln.entradaItemId ? entradasById.get(String(ln.entradaItemId)) : null
+      const cant = parseCantidad(ln.cantidad)
+      const disp = op ? Number(op.cantidad_disponible || 0) : 0
+      const excess = op && String(ln.cantidad || '').trim()
+        && (!Number.isFinite(cant) || cant <= 0 || cant > disp + 1e-9)
+      return {
+        ...ln,
+        idx,
+        op,
+        cant,
+        disp,
+        excess,
+        ok: Boolean(op && Number.isFinite(cant) && cant > 0 && !excess),
+      }
+    })
+  ), [lineas, entradasById])
+
+  const alertasProximidad = useMemo(() => {
+    const msgs = []
+    for (const ln of lineasValidas) {
+      if (!ln.op) continue
+      if (ln.op.alerta_proximidad_consumo) {
+        msgs.push(`${formatEntradaNumero(ln.op)}: poco material disponible. Considere gestionar una nueva OC.`)
+      } else if (ln.ok) {
+        const restante = ln.disp - ln.cant
+        const recibida = Number(ln.op.cantidad_recibida || 0)
+        if (recibida > 0 && restante <= recibida * 0.2) {
+          msgs.push(`${formatEntradaNumero(ln.op)}: el saldo quedará muy bajo tras esta salida.`)
+        }
       }
     }
-    return null
-  }, [entradaSel, cantidad, cantidadNum, disponible])
+    return [...new Set(msgs)]
+  }, [lineasValidas])
+
+  const puedeRegistrar = lineasValidas.some((ln) => ln.ok)
+    && lineasValidas.every((ln) => {
+      if (!ln.entradaItemId && !String(ln.cantidad || '').trim()) return true
+      return ln.ok
+    })
+
+  const entradasUsadas = useMemo(() => (
+    new Set(lineas.filter((ln) => ln.entradaItemId).map((ln) => String(ln.entradaItemId)))
+  ), [lineas])
 
   const clearFieldError = (key) => {
     setFieldErrors((prev) => {
@@ -240,16 +311,6 @@ export default function SalidaForm({
     const errs = {}
     if (!receptor?.id) errs.receptor = 'Seleccione quién recibe en obra.'
     if (!pkId.trim()) errs.pk = 'Seleccione la ubicación en el mapa PK-ID.'
-    if (!entradaSel) errs.entrada = 'Seleccione la entrada de material.'
-    if (!cantidad.trim() || !Number.isFinite(cantidadNum) || cantidadNum <= 0) {
-      errs.cantidad = 'Indique una cantidad válida.'
-    } else if (cantidadNum > disponible + 1e-9) {
-      errs.cantidad = mensajeExcesoCantidadDespachar(
-        cantidadNum,
-        disponible,
-        entradaSel?.unidad || '',
-      )
-    }
     if (
       String(abscisaInicial ?? '').trim() !== ''
       && String(abscisaFinal ?? '').trim() !== ''
@@ -257,6 +318,38 @@ export default function SalidaForm({
     ) {
       errs.abscisas = ABSCISA_RANGO_ERROR
     }
+
+    const items = []
+    const rowErrs = {}
+    for (const ln of lineasValidas) {
+      const empty = !ln.entradaItemId && !String(ln.cantidad || '').trim()
+      if (empty) continue
+      if (!ln.op) {
+        rowErrs[ln.key] = 'Seleccione la entrada de material.'
+        continue
+      }
+      if (!Number.isFinite(ln.cant) || ln.cant <= 0) {
+        rowErrs[ln.key] = 'Indique una cantidad válida.'
+        continue
+      }
+      if (ln.excess) {
+        rowErrs[ln.key] = mensajeExcesoCantidadDespachar(
+          ln.cant,
+          ln.disp,
+          ln.op.unidad || '',
+        )
+        continue
+      }
+      items.push({
+        entrada_item_id: Number(ln.op.entrada_item_id),
+        cantidad_salida: ln.cant,
+      })
+    }
+    if (!items.length) {
+      errs.lineas = 'Agregue al menos una línea con entrada y cantidad.'
+    }
+    if (Object.keys(rowErrs).length) errs.rows = rowErrs
+
     if (Object.keys(errs).length) {
       setFieldErrors(errs)
       return
@@ -273,8 +366,7 @@ export default function SalidaForm({
         costado: costado || null,
         abscisa_inicial: abscisaInicial || null,
         abscisa_final: abscisaFinal || null,
-        entrada_item_id: entradaSel.entrada_item_id,
-        cantidad_salida: cantidadNum,
+        items,
         observaciones: observaciones.trim() || null,
       }
       const saved = await api.createSalida(body)
@@ -287,55 +379,98 @@ export default function SalidaForm({
     }
   }
 
-  const btnRow = {
-    display: 'flex',
-    gap: 8,
-    justifyContent: 'flex-end',
-    flexWrap: 'wrap',
-    marginTop: embedded ? 12 : 16,
+  const th = {
+    ...ui.th,
+    fontSize: 'var(--cc-xs)',
+    padding: '6px 8px',
+    whiteSpace: 'nowrap',
+  }
+  const td = {
+    ...ui.td,
+    fontSize: 'var(--cc-xs)',
+    padding: '6px 8px',
+    verticalAlign: 'middle',
+  }
+  const cellInput = {
+    ...ui.input,
+    margin: 0,
+    padding: '6px 8px',
+    fontSize: 'var(--cc-xs)',
+    minHeight: compact ? 40 : 32,
+    width: '100%',
+  }
+  const sectionLabel = {
+    fontSize: 'var(--cc-xs)',
+    fontWeight: 800,
+    color: ui.accent,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    marginBottom: 6,
+    marginTop: 4,
   }
 
   return (
-    <form onSubmit={submit}>
+    <form onSubmit={submit} className={embedded ? 'cc-almacen-form-root cc-almacen-form-root--embedded' : undefined}>
       {error && <div style={{ color: '#dc2626', marginBottom: 12, fontSize: 'var(--cc-sm)' }}>{error}</div>}
 
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 12,
-        marginBottom: 12,
-        alignItems: 'flex-start',
-      }}
-      >
-        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
-          <AlmacenFieldLabel
-            icon="👤"
-            label="Quién recibe en obra"
-            ayuda="Solo usuarios con rol operativo, contratista o contratista gerencial del contrato."
-          />
-          <ReceptorObraSelector
-            value={receptor}
-            onChange={(v) => { setReceptor(v); clearFieldError('receptor') }}
-            disabled={busy}
-          />
-          {fieldErrors.receptor && (
-            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>{fieldErrors.receptor}</div>
-          )}
-        </div>
-        <div style={{ flex: '0 1 280px', minWidth: 220, maxWidth: 320 }}>
-          <AlmacenFieldLabel icon="🕐" label="Fecha y hora de salida" />
-          <input
-            type="datetime-local"
-            style={{ ...ui.input, width: '100%', boxSizing: 'border-box', ...inputErrorStyle('fecha') }}
-            value={fechaHora}
-            disabled={busy}
-            onChange={(e) => setFechaHora(e.target.value)}
-          />
-        </div>
+      <div style={sectionLabel}>Encabezado</div>
+      <div style={{ ...ui.sheetWrap, marginBottom: 12 }} className="cc-almacen-table-scroll">
+        <table
+          className="cc-almacen-salida-excel"
+          style={{
+            ...ui.sheetTable,
+            width: '100%',
+            borderCollapse: 'collapse',
+            minWidth: compact ? 520 : 720,
+          }}
+        >
+          <thead>
+            <tr>
+              <th style={th}>Quién recibe</th>
+              <th style={{ ...th, width: compact ? 150 : 180 }}>Fecha y hora</th>
+              <th style={{ ...th, width: compact ? 140 : 180 }}>Quién despacha</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={td}>
+                <ReceptorObraSelector
+                  value={receptor}
+                  onChange={(v) => { setReceptor(v); clearFieldError('receptor') }}
+                  disabled={busy}
+                />
+                {fieldErrors.receptor && (
+                  <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 4 }}>{fieldErrors.receptor}</div>
+                )}
+              </td>
+              <td style={td}>
+                <input
+                  type="datetime-local"
+                  style={{ ...cellInput, ...inputErrorStyle('fecha') }}
+                  value={fechaHora}
+                  disabled={busy}
+                  onChange={(e) => setFechaHora(e.target.value)}
+                  aria-label="Fecha y hora de salida"
+                />
+              </td>
+              <td style={td}>
+                <input
+                  style={{ ...cellInput, background: ui.accentSoft }}
+                  value={sessionUser?.label || '—'}
+                  readOnly
+                  disabled
+                  aria-label="Quién despacha"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
+
+      <div style={sectionLabel}>Ubicación</div>
       <AlmacenFieldLabel
         icon="📍"
-        label="Ubicación (PK-ID)"
+        label="PK-ID"
         ayuda="Seleccione el punto en el mapa. Al elegir PK-ID se cargan las entradas con saldo disponible."
       />
       <AlmacenPkMapaSelector
@@ -347,6 +482,8 @@ export default function SalidaForm({
         onSeleccionar={onPkSeleccionar}
         onLimpiar={onPkLimpiar}
         compact={embedded}
+        initialBasemap="satelite"
+        showBasemapToggle
       />
       {fieldErrors.pk && (
         <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 10 }}>{fieldErrors.pk}</div>
@@ -381,11 +518,19 @@ export default function SalidaForm({
 
       {pkId && (
         <>
-          <AlmacenFieldLabel
-            icon="📥"
-            label="Entrada de material"
-            ayuda="Seleccione la entrada registrada en este PK-ID con cantidad disponible."
-          />
+          <div style={{ ...sectionLabel, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span>Líneas a despachar</span>
+            <button
+              type="button"
+              style={{ ...ui.btnSecondary, padding: '4px 10px', fontSize: 'var(--cc-xs)', textTransform: 'none', letterSpacing: 0 }}
+              disabled={busy || loadingEntradas || !entradasDisp.length}
+              onClick={addLinea}
+              data-testid="salida-add-linea"
+            >
+              + Agregar fila
+            </button>
+          </div>
+
           {loadingEntradas ? (
             <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginBottom: 12 }}>Cargando entradas…</div>
           ) : entradasDisp.length === 0 ? (
@@ -393,223 +538,183 @@ export default function SalidaForm({
               No hay entradas con saldo disponible para este PK-ID.
             </div>
           ) : (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ ...ui.sheetWrap, marginTop: 0 }} className="cc-almacen-table-scroll" data-testid="entrada-material-table">
-                <table style={{ ...ui.sheetTable, minWidth: 640, width: '100%', tableLayout: 'fixed' }}>
-                  <colgroup>
-                    {[90, 72, 110, 200, 96, 96, 100].map((w, i) => (
-                      <col key={i} style={{ width: w }} />
-                    ))}
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      {[
-                        { key: 'ent', abbr: 'ENTRADA', tip: 'Número de entrada' },
-                        { key: 'oc', abbr: 'OC', tip: 'Orden de compra asociada' },
-                        { key: 'cod', abbr: 'CÓDIGO', tip: 'Código del insumo' },
-                        { key: 'desc', abbr: 'DESCRIPCIÓN', tip: 'Descripción del insumo' },
-                        { key: 'rec', abbr: 'RECIBIDO', tip: 'Cantidad recibida en esta entrada' },
-                        { key: 'disp', abbr: 'DISPONIBLE', tip: 'Disponible para salida' },
-                        { key: 'oca', abbr: 'OC AUTORIZA', tip: 'Cantidad autorizada en la OC' },
-                      ].map((c) => (
-                        <th
-                          key={c.key}
-                          title={c.tip}
-                          style={{
-                            ...ui.th,
-                            fontSize: 'var(--cc-xs)',
-                            padding: '6px 8px',
-                            height: 32,
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {c.abbr}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entradasDisp.map((op) => {
-                      const sel = entradaSel?.entrada_item_id === op.entrada_item_id
-                      const { codigo, descripcion } = splitInsumoCodigoDescripcion(
-                        op.insumo_codigo,
-                        op.material_descripcion,
-                      )
-                      const und = op.unidad || ''
-                      const tdBase = {
-                        ...ui.td,
-                        padding: '4px 6px',
-                        height: 36,
-                        verticalAlign: 'middle',
-                        cursor: busy ? 'default' : 'pointer',
-                        background: sel ? ui.accentSoft : 'transparent',
-                      }
-                      const tdNum = {
-                        ...ui.tdNum,
-                        padding: '4px 6px',
-                        height: 36,
-                        cursor: busy ? 'default' : 'pointer',
-                        background: sel ? ui.accentSoft : 'transparent',
-                      }
-                      const selectRow = () => {
-                        if (busy) return
-                        if (sel) return
-                        setEntradaSel(op)
-                        setCantidad('')
-                        if (op.tramo) setTramo(op.tramo)
-                        if (op.costado) setCostado(op.costado)
-                        if (op.abscisa_inicial) setAbscisaInicial(op.abscisa_inicial)
-                        if (op.abscisa_final) setAbscisaFinal(op.abscisa_final)
-                        clearFieldError('entrada')
-                        clearFieldError('cantidad')
-                      }
-                      return (
-                        <tr
-                          key={op.entrada_item_id}
-                          data-testid={`entrada-row-${op.entrada_item_id}`}
-                          aria-selected={sel}
-                          onClick={selectRow}
-                          onKeyDown={(e) => {
-                            if (busy || sel) return
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault()
-                              selectRow()
-                            }
-                          }}
-                          tabIndex={busy ? -1 : 0}
-                          style={{ outline: 'none' }}
-                        >
-                          <td style={{ ...tdBase, fontWeight: 700 }} title={formatEntradaNumero(op)}>
-                            {formatEntradaNumero(op)}
-                            {op.alerta_proximidad_consumo ? ' ⚠' : ''}
-                          </td>
-                          <td style={tdBase}>
-                            {op.numero_oc != null ? formatNumeroOcDisplay(op.numero_oc) : '—'}
-                          </td>
-                          <td style={{ ...tdBase, fontFamily: 'ui-monospace, Consolas, monospace' }}>
-                            {codigo || '—'}
-                          </td>
-                          <td style={tdBase} title={descripcion || undefined}>
-                            {descripcion || '—'}
-                          </td>
-                          <td style={tdNum}>
-                            {fmtCant(op.cantidad_recibida_entrada ?? op.cantidad_recibida)}
-                            {und ? ` ${und}` : ''}
-                          </td>
-                          <td style={{
-                            ...tdNum,
-                            color: Number(op.cantidad_disponible) > 0
-                              ? 'var(--cc-color-positive, #059669)'
-                              : '#dc2626',
-                          }}
+            <div style={{ ...ui.sheetWrap, marginBottom: 12 }} className="cc-almacen-table-scroll" data-testid="salida-lineas-table">
+              <table
+                className="cc-almacen-salida-excel"
+                style={{
+                  ...ui.sheetTable,
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  minWidth: compact ? 640 : 900,
+                }}
+              >
+                <thead>
+                  <tr>
+                    <th style={{ ...th, width: 36 }}>#</th>
+                    <th style={th}>Entrada / Insumo</th>
+                    <th style={{ ...th, width: 88 }}>Disponible</th>
+                    <th style={{ ...th, width: 110 }}>Cant. a despachar</th>
+                    <th style={{ ...th, width: 100 }}>Saldo después</th>
+                    <th style={{ ...th, width: 52 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {lineasValidas.map((ln) => {
+                    const und = ln.op?.unidad || ''
+                    const saldoTxt = ln.ok
+                      ? `${fmtCant(Math.max(0, ln.disp - ln.cant))}${und ? ` ${und}` : ''}`
+                      : '—'
+                    const rowErr = fieldErrors.rows?.[ln.key]
+                    return (
+                      <tr key={ln.key} data-testid={`salida-linea-${ln.idx}`}>
+                        <td style={{ ...td, fontWeight: 700, textAlign: 'center' }}>{ln.idx + 1}</td>
+                        <td style={td}>
+                          <select
+                            style={{ ...cellInput, ...(rowErr && !ln.op ? { borderColor: '#dc2626' } : {}) }}
+                            value={ln.entradaItemId || ''}
+                            disabled={busy}
+                            aria-label={`Entrada línea ${ln.idx + 1}`}
+                            onChange={(e) => {
+                              const id = e.target.value
+                              const op = id ? entradasById.get(String(id)) : null
+                              setLineaField(ln.key, { entradaItemId: id, cantidad: '' })
+                              if (op?.tramo) setTramo(op.tramo)
+                              if (op?.costado) setCostado(op.costado)
+                              if (op?.abscisa_inicial) setAbscisaInicial(op.abscisa_inicial)
+                              if (op?.abscisa_final) setAbscisaFinal(op.abscisa_final)
+                              clearFieldError('lineas')
+                              setFieldErrors((prev) => {
+                                if (!prev.rows?.[ln.key]) return prev
+                                const rows = { ...prev.rows }
+                                delete rows[ln.key]
+                                const next = { ...prev }
+                                if (Object.keys(rows).length) next.rows = rows
+                                else delete next.rows
+                                return next
+                              })
+                            }}
                           >
-                            {fmtCant(op.cantidad_disponible)}
-                            {und ? ` ${und}` : ''}
-                          </td>
-                          <td style={tdNum}>
-                            {op.cantidad_oc_autorizada != null
-                              ? `${fmtCant(op.cantidad_oc_autorizada)}${und ? ` ${und}` : ''}`
-                              : '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              {entradaSel && (() => {
-                const dispOp = Number(entradaSel.cantidad_disponible || 0)
-                const und = entradaSel.unidad || 'UND'
-                const cantOk = cantidad.trim()
-                  && Number.isFinite(cantidadNum)
-                  && cantidadNum > 0
-                  && cantidadNum <= dispOp + 1e-9
-                const saldoTxt = cantOk
-                  ? `${fmtCant(Math.max(0, dispOp - cantidadNum))} ${und}`
-                  : '—'
-                return (
-                  <div
-                    data-testid="cantidad-despachar-block"
-                    style={{ marginTop: 10 }}
-                  >
-                    <label
-                      htmlFor={`salida-cantidad-${entradaSel.entrada_item_id}`}
-                      style={{
-                        display: 'block',
-                        fontSize: 'var(--cc-sm)',
-                        fontWeight: 700,
-                        marginBottom: 6,
-                        color: ui.text,
-                      }}
-                    >
-                      Cantidad a despachar <span style={{ color: '#dc2626' }}>*</span>
-                    </label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 280 }}>
-                      <input
-                        id={`salida-cantidad-${entradaSel.entrada_item_id}`}
-                        data-testid="cantidad-despachar-input"
-                        type="text"
-                        inputMode="decimal"
-                        autoComplete="off"
-                        style={{
-                          ...ui.input,
-                          marginBottom: 0,
-                          flex: 1,
-                          fontSize: 'var(--cc-md, 1rem)',
-                          fontWeight: 600,
-                          ...inputErrorStyle('cantidad'),
-                          ...(cantidadInvalida ? { borderColor: '#dc2626' } : {}),
+                            <option value="">Seleccione entrada…</option>
+                            {entradasDisp.map((op) => {
+                              const used = entradasUsadas.has(String(op.entrada_item_id))
+                                && String(op.entrada_item_id) !== String(ln.entradaItemId)
+                              const { codigo, descripcion } = splitInsumoCodigoDescripcion(
+                                op.insumo_codigo,
+                                op.material_descripcion,
+                              )
+                              const label = [
+                                formatEntradaNumero(op),
+                                op.numero_oc != null ? `OC ${formatNumeroOcDisplay(op.numero_oc)}` : null,
+                                codigo || null,
+                                descripcion || null,
+                                `Disp. ${fmtCant(op.cantidad_disponible)}${op.unidad ? ` ${op.unidad}` : ''}`,
+                              ].filter(Boolean).join(' · ')
+                              return (
+                                <option
+                                  key={op.entrada_item_id}
+                                  value={op.entrada_item_id}
+                                  disabled={used}
+                                >
+                                  {used ? `(en otra fila) ${label}` : label}
+                                </option>
+                              )
+                            })}
+                          </select>
+                          {ln.op?.alerta_proximidad_consumo && (
+                            <div style={{ color: '#92400e', fontSize: 'var(--cc-xs)', marginTop: 4 }}>⚠ Poco saldo</div>
+                          )}
+                        </td>
+                        <td style={{
+                          ...td,
+                          textAlign: 'right',
+                          fontVariantNumeric: 'tabular-nums',
+                          color: ln.disp > 0 ? 'var(--cc-color-positive, #059669)' : ui.textMuted,
+                          whiteSpace: 'nowrap',
                         }}
-                        value={cantidad}
-                        disabled={busy}
-                        placeholder="Ej. 100"
-                        onChange={(e) => {
-                          setCantidad(e.target.value)
-                          clearFieldError('cantidad')
+                        >
+                          {ln.op ? `${fmtCant(ln.disp)}${und ? ` ${und}` : ''}` : '—'}
+                        </td>
+                        <td style={td}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              autoComplete="off"
+                              style={{
+                                ...cellInput,
+                                fontWeight: 600,
+                                ...(ln.excess || rowErr ? { borderColor: '#dc2626' } : {}),
+                              }}
+                              value={ln.cantidad}
+                              disabled={busy || !ln.op}
+                              placeholder="0"
+                              aria-label={`Cantidad línea ${ln.idx + 1}`}
+                              data-testid={`salida-cantidad-${ln.idx}`}
+                              onChange={(e) => {
+                                setLineaField(ln.key, { cantidad: e.target.value })
+                                clearFieldError('lineas')
+                                setFieldErrors((prev) => {
+                                  if (!prev.rows?.[ln.key]) return prev
+                                  const rows = { ...prev.rows }
+                                  delete rows[ln.key]
+                                  const next = { ...prev }
+                                  if (Object.keys(rows).length) next.rows = rows
+                                  else delete next.rows
+                                  return next
+                                })
+                              }}
+                            />
+                            {und ? (
+                              <span style={{ color: ui.textMuted, fontWeight: 600, whiteSpace: 'nowrap' }}>{und}</span>
+                            ) : null}
+                          </div>
+                          {(rowErr || (ln.excess && ln.op)) && (
+                            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 4 }}>
+                              {rowErr || mensajeExcesoCantidadDespachar(ln.cant, ln.disp, und)}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{
+                          ...td,
+                          textAlign: 'right',
+                          fontWeight: 700,
+                          color: ln.ok ? 'var(--cc-color-positive, #059669)' : ui.textMuted,
+                          whiteSpace: 'nowrap',
                         }}
-                      />
-                      <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: ui.textMuted }}>
-                        {und}
-                      </span>
-                    </div>
-                    <div
-                      data-testid="saldo-despues-salida"
-                      style={{
-                        marginTop: 10,
-                        fontSize: 'var(--cc-sm)',
-                        fontWeight: 600,
-                        color: cantOk
-                          ? 'var(--cc-color-positive, #059669)'
-                          : (cantidadInvalida ? '#dc2626' : ui.text),
-                        lineHeight: 1.4,
-                      }}
-                    >
-                      Saldo después de esta salida:{' '}
-                      <strong>{saldoTxt}</strong>
-                    </div>
-                    {fieldErrors.cantidad && (
-                      <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
-                        {fieldErrors.cantidad}
-                      </div>
-                    )}
-                    {cantidadInvalida && !fieldErrors.cantidad && (
-                      <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginTop: 6 }}>
-                        {mensajeExcesoCantidadDespachar(cantidadNum, dispOp, und)}
-                      </div>
-                    )}
-                  </div>
-                )
-              })()}
+                        >
+                          {saldoTxt}
+                        </td>
+                        <td style={{ ...td, textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            style={{
+                              ...ui.btnSecondary,
+                              padding: '4px 8px',
+                              fontSize: 'var(--cc-xs)',
+                              minHeight: 0,
+                            }}
+                            disabled={busy || lineas.length <= 1}
+                            onClick={() => removeLinea(ln.key)}
+                            aria-label={`Eliminar fila ${ln.idx + 1}`}
+                            title="Eliminar fila"
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
-          {fieldErrors.entrada && (
-            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 10 }}>{fieldErrors.entrada}</div>
+          {fieldErrors.lineas && (
+            <div style={{ color: '#dc2626', fontSize: 'var(--cc-xs)', marginBottom: 10 }}>{fieldErrors.lineas}</div>
           )}
         </>
       )}
 
-      {entradaSel && alertaProximidad && (
+      {alertasProximidad.length > 0 && (
         <div style={{
           background: '#fffbeb',
           border: '1px solid #fcd34d',
@@ -620,37 +725,38 @@ export default function SalidaForm({
           marginBottom: 12,
         }}
         >
-          ⚠ {alertaProximidad}
+          {alertasProximidad.map((m) => (
+            <div key={m}>⚠ {m}</div>
+          ))}
         </div>
       )}
 
-      <AlmacenFieldLabel icon="🚚" label="Quién despacha" ayuda="Usuario de la sesión activa." />
-      <input
-        style={{ ...ui.input, marginBottom: 12, background: ui.accentSoft }}
-        value={sessionUser?.label || '—'}
-        readOnly
-        disabled
-      />
-
       <AlmacenFieldLabel icon="📝" label="Observaciones (opcional)" />
       <textarea
-        style={{ ...ui.input, minHeight: 72, resize: 'vertical', marginBottom: 12 }}
+        style={{ ...ui.input, minHeight: 64, resize: 'vertical', marginBottom: 12 }}
         value={observaciones}
         disabled={busy}
         onChange={(e) => setObservaciones(e.target.value)}
         placeholder="Notas adicionales sobre la entrega…"
       />
 
-      <div style={btnRow}>
-        <button type="button" style={ui.btnSecondary} disabled={busy} onClick={onCancel}>
+      <div
+        className={embedded ? 'cc-almacen-form-actions cc-almacen-form-actions--embedded' : undefined}
+        style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', marginTop: embedded ? 8 : 12 }}
+      >
+        <button type="button" style={{ ...ui.btnSecondary, flex: embedded && compact ? 1 : undefined }} disabled={busy} onClick={onCancel}>
           Cancelar
         </button>
         <button
           type="submit"
-          style={ui.btnPrimary}
+          style={{ ...ui.btnPrimary, flex: embedded && compact ? 1 : undefined }}
           disabled={busy || !puedeRegistrar}
         >
-          {busy ? 'Registrando…' : 'Registrar salida'}
+          {busy
+            ? 'Registrando…'
+            : (lineasValidas.filter((l) => l.ok).length > 1
+              ? `Registrar ${lineasValidas.filter((l) => l.ok).length} salidas`
+              : 'Registrar salida')}
         </button>
       </div>
     </form>

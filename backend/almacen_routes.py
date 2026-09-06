@@ -1283,6 +1283,11 @@ def route_download_disposicion(contrato_id: int, entrada_id: int, current_user=D
         raise _http_value_error(exc) from exc
 
 
+class SalidaItemBody(BaseModel):
+    entrada_item_id: int
+    cantidad_salida: float = Field(..., gt=0)
+
+
 class SalidaCreateBody(BaseModel):
     receptor_usuario_id: int
     fecha_hora_salida: Optional[str] = None
@@ -1292,8 +1297,11 @@ class SalidaCreateBody(BaseModel):
     costado: Optional[str] = None
     abscisa_inicial: Optional[str] = None
     abscisa_final: Optional[str] = None
-    entrada_item_id: int
-    cantidad_salida: float = Field(..., gt=0)
+    # Compat: una sola línea.
+    entrada_item_id: Optional[int] = None
+    cantidad_salida: Optional[float] = Field(None, gt=0)
+    # Multi-línea: varias filas en un mismo registro.
+    items: Optional[List[SalidaItemBody]] = None
     observaciones: Optional[str] = None
 
 
@@ -1350,32 +1358,39 @@ def route_create_salida(contrato_id: int, body: SalidaCreateBody, current_user=D
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "crear")
     try:
-        result = create_salida(contrato_id, _uid(current_user), body.dict())
+        payload = body.dict()
+        if body.items:
+            payload["items"] = [it.dict() for it in body.items]
+        result = create_salida(contrato_id, _uid(current_user), payload)
         snap = snapshot_salida(result)
         log_almacen(
             current_user, "CREAR", "salida", result.get("id"),
             {
                 "numero_salida": result.get("numero_salida"),
                 "entrada_item_id": result.get("entrada_item_id"),
+                "salidas_creadas": result.get("salidas_creadas") or 1,
             },
             valor_anterior=None,
             valor_nuevo=snap,
         )
-        # Historial por línea de entrada asociada.
-        ei_id = result.get("entrada_item_id")
-        if ei_id is not None:
+        # Historial por línea de entrada asociada (una o varias del lote).
+        salidas_log = result.get("salidas") if isinstance(result.get("salidas"), list) else [result]
+        for sal in salidas_log:
+            ei_id = sal.get("entrada_item_id")
+            if ei_id is None:
+                continue
             log_almacen(
                 current_user, "DESPACHO", "entrada_item", ei_id,
                 {
-                    "salida_id": result.get("id"),
-                    "numero_salida": result.get("numero_salida"),
-                    "cantidad_salida": result.get("cantidad_salida"),
+                    "salida_id": sal.get("id"),
+                    "numero_salida": sal.get("numero_salida"),
+                    "cantidad_salida": sal.get("cantidad_salida"),
                 },
                 valor_anterior=None,
                 valor_nuevo={
-                    "salida_id": result.get("id"),
-                    "cantidad_salida": result.get("cantidad_salida"),
-                    "pk_id": result.get("pk_id"),
+                    "salida_id": sal.get("id"),
+                    "cantidad_salida": sal.get("cantidad_salida"),
+                    "pk_id": sal.get("pk_id") or result.get("pk_id"),
                 },
             )
         return result

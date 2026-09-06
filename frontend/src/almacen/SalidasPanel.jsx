@@ -152,7 +152,9 @@ export default function SalidasPanel({
     invalidateSalidasCache(contratoId)
     await reload({ force: true })
     notifySalidaMutated()
-    if (saved?.id && saved?.pdf_generando) {
+    const salidasLote = Array.isArray(saved?.salidas) ? saved.salidas : (saved?.id ? [saved] : [])
+    const pdfPendiente = salidasLote.some((s) => s?.pdf_generando)
+    if (pdfPendiente) {
       // Una sola revalidación diferida para marcar tiene_pdf_salida (sin doble reload inmediato).
       setTimeout(() => {
         invalidateSalidasCache(contratoId)
