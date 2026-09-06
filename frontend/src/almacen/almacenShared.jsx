@@ -540,6 +540,25 @@ export function fmtMoney(n) {
   return v.toLocaleString('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 })
 }
 
+/** Mensaje explícito cuando no hay VU/Tot. cobro (evita confundir con error silencioso). */
+export function labelCobroMotivo(motivo, { esPrincipal = true } = {}) {
+  if (esPrincipal === false || motivo === 'insumo_asociado') {
+    return 'Insumo asociado'
+  }
+  switch (motivo) {
+    case 'pendiente_aprobacion':
+      return 'Pendiente de aprobación'
+    case 'sin_valor_asignado':
+      return 'Sin valor asignado'
+    case 'sin_capitulo':
+    case 'sin_item':
+    case 'sin_valor_listado':
+      return 'Sin valor en listado'
+    default:
+      return motivo ? 'Sin valor en listado' : null
+  }
+}
+
 /** Etiqueta de línea interna: Solicitud #5 · Línea 2 */
 export function formatSolicitudLinea(consecutivo, numeroLinea) {
   if (consecutivo != null && numeroLinea != null) {

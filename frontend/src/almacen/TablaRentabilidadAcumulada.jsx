@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlmacenHelpIcon, fmtCant, fmtMoney, useAlmacenTheme } from './almacenShared'
+import { AlmacenHelpIcon, fmtCant, fmtMoney, labelCobroMotivo, useAlmacenTheme } from './almacenShared'
 
 function fmtPct(n) {
   if (n == null || Number.isNaN(Number(n))) return '—'
@@ -12,6 +12,17 @@ function fmtNumeroOc(n) {
   return s.startsWith('#') ? s : `#${s.padStart(5, '0')}`
 }
 
+function renderCobroVacio(col) {
+  if (col?.es_principal === false) {
+    return { text: '—', title: 'Insumo asociado — no genera cobro' }
+  }
+  const label = labelCobroMotivo(col?.cobro_motivo, { esPrincipal: col?.es_principal !== false })
+  if (label) {
+    return { sinCobro: true, text: label }
+  }
+  return { sinCobro: true, text: 'Sin valor en listado' }
+}
+
 /**
  * Orden: N° OC | VU Cobro | Tot. Cobro | Cant. | VU Costo | Tot. Costo | Utilidad | % Rent.
  */
@@ -21,9 +32,13 @@ const METRIC_COLS = [
     label: 'VU cobro',
     ayuda: 'Valor unitario de cobro del ítem (solo aplica al insumo principal).',
     render: (col) => {
-      if (col?.es_total) return fmtMoney(col?.valor_cobro_unitario)
+      if (col?.es_total) {
+        if (col?.valor_cobro_unitario) return fmtMoney(col.valor_cobro_unitario)
+        return renderCobroVacio(col)
+      }
       if (col?.es_principal === false) return '—'
-      return fmtMoney(col?.valor_cobro_unitario)
+      if (col?.valor_cobro_unitario) return fmtMoney(col.valor_cobro_unitario)
+      return renderCobroVacio(col)
     },
   },
   {
@@ -31,9 +46,17 @@ const METRIC_COLS = [
     label: 'Tot. cobro',
     ayuda: 'Total de cobro del ítem: cantidad del principal × VU cobro. Los asociados no generan cobro.',
     render: (col) => {
-      if (col?.es_total) return { text: fmtMoney(col?.valor_cobro_linea), strong: true }
+      if (col?.es_total) {
+        if (col?.valor_cobro_linea != null) {
+          return { text: fmtMoney(col.valor_cobro_linea), strong: true }
+        }
+        return { ...renderCobroVacio(col), strong: true }
+      }
       if (col?.es_principal === false) return '—'
-      return { text: fmtMoney(col?.valor_cobro_linea), strong: true }
+      if (col?.valor_cobro_linea != null) {
+        return { text: fmtMoney(col.valor_cobro_linea), strong: true }
+      }
+      return { ...renderCobroVacio(col), strong: true }
     },
     strong: true,
   },
@@ -109,6 +132,16 @@ function renderValor(col, metric) {
     return (
       <span style={{ fontStyle: 'italic', opacity: 0.85, fontSize: 'var(--cc-xs)' }}>
         Sin precio
+      </span>
+    )
+  }
+  if (out.sinCobro) {
+    return (
+      <span
+        style={{ fontStyle: 'italic', opacity: 0.9, fontSize: 'var(--cc-xs)', color: 'var(--cc-color-warning, #b45309)' }}
+        title={out.text}
+      >
+        {out.text}
       </span>
     )
   }

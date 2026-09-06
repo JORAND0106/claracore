@@ -12,7 +12,7 @@ from almacen_service import _sb, _to_float
 # Caché en proceso del listado de precios (escaneo paginado es costoso).
 _LISTADO_CACHE: Dict[Tuple[int, str], Tuple[float, List[dict]]] = {}
 _LISTADO_TTL_SEC = 90.0
-_LISTADO_LOOKUP_CACHE: Dict[int, Tuple[float, Dict[Tuple[str, str], float]]] = {}
+_LISTADO_LOOKUP_CACHE: Dict[int, Tuple[float, Dict[Tuple[str, str], dict]]] = {}
 
 
 def clear_listado_cache(contrato_id: Optional[int] = None) -> None:
@@ -31,6 +31,26 @@ def clear_listado_cache(contrato_id: Optional[int] = None) -> None:
 def _norm_item_key(item: Optional[str]) -> str:
     t = str(item or "").strip()
     return re.sub(r"\.+$", "", t)
+
+
+def _item_key_variants(item: Optional[str]) -> List[str]:
+    """
+    Variantes de código de ítem para emparejar listado ↔ presupuesto.
+    Ej.: NP-01 / NP.01 / NP 01 / np01.
+    """
+    base = _norm_item_key(item).lower()
+    if not base:
+        return []
+    variants = {base}
+    variants.add(re.sub(r"[-_\s]+", ".", base))
+    variants.add(re.sub(r"[.\s_]+", "-", base))
+    variants.add(re.sub(r"[-._\s]+", "", base))
+    # Mantener orden estable: base primero.
+    out = [base]
+    for v in variants:
+        if v and v not in out:
+            out.append(v)
+    return out
 
 
 def _natural_sort_key(text: Optional[str]) -> tuple:
@@ -319,28 +339,162 @@ def _fetch_all_listado_rows(contrato_id: int, select: str = "*") -> List[dict]:
     return out
 
 
-def get_listado_precio_lookup(contrato_id: int) -> Dict[Tuple[str, str], float]:
-    """Mapa (capitulo_norm, item_norm) → precio_unitario (una sola pasada cacheada)."""
+def get_listado_precio_meta_lookup(contrato_id: int) -> Dict[Tuple[str, str], dict]:
+    """
+    Mapa (capitulo_norm, item_norm) → {precio_unitario, estado_precio, item_numero, capitulo}.
+    Incluye variantes de ítem (NP-01 / NP.01) y capítulo literal en minúsculas.
+    """
     cid = int(contrato_id)
     now = time.monotonic()
     hit = _LISTADO_LOOKUP_CACHE.get(cid)
     if hit and hit[0] > now:
         return hit[1]
-    lookup: Dict[Tuple[str, str], float] = {}
-    for row in _fetch_all_listado_rows(cid, "capitulo, item_numero, precio_unitario"):
+    lookup: Dict[Tuple[str, str], dict] = {}
+    for row in _fetch_all_listado_rows(
+        cid, "capitulo, item_numero, precio_unitario, estado_precio",
+    ):
         raw_cap = (row.get("capitulo") or "").strip()
         if not raw_cap:
             continue
-        item_k = _norm_item_key(row.get("item_numero")).lower()
-        if not item_k:
+        item_raw = row.get("item_numero")
+        variants = _item_key_variants(item_raw)
+        if not variants:
             continue
         price = _to_float(row.get("precio_unitario"))
-        key = (_norm_capitulo_key(raw_cap), item_k)
-        # Primera coincidencia; también indexar por capitulo literal normalizado
-        lookup.setdefault(key, price)
-        lookup.setdefault((raw_cap.lower(), item_k), price)
+        estado = (row.get("estado_precio") or "").strip() or "Pendiente"
+        payload = {
+            "precio_unitario": price,
+            "estado_precio": estado,
+            "item_numero": (item_raw or "").strip(),
+            "capitulo": raw_cap,
+        }
+        cap_norm = _norm_capitulo_key(raw_cap)
+        for item_k in variants:
+            lookup.setdefault((cap_norm, item_k), payload)
+            lookup.setdefault((raw_cap.lower(), item_k), payload)
     _LISTADO_LOOKUP_CACHE[cid] = (now + _LISTADO_TTL_SEC, lookup)
     return lookup
+
+
+def get_listado_precio_lookup(contrato_id: int) -> Dict[Tuple[str, str], float]:
+    """Mapa (capitulo_norm, item_norm) → precio_unitario (compat)."""
+    meta = get_listado_precio_meta_lookup(contrato_id)
+    return {k: float(v.get("precio_unitario") or 0) for k, v in meta.items()}
+
+
+def _listado_item_only_index(
+    meta: Dict[Tuple[str, str], dict],
+) -> Dict[str, List[dict]]:
+    by_item: Dict[str, List[dict]] = {}
+    seen: set = set()
+    for (_cap, item_k), payload in meta.items():
+        ident = (
+            _norm_capitulo_key(payload.get("capitulo")),
+            _norm_item_key(payload.get("item_numero")).lower(),
+        )
+        if ident in seen:
+            continue
+        seen.add(ident)
+        by_item.setdefault(item_k, []).append(payload)
+    return by_item
+
+
+def _detalle_from_listado_hit(hit: dict, *, match: str) -> dict:
+    price = _to_float(hit.get("precio_unitario"))
+    estado = (hit.get("estado_precio") or "").strip() or "Pendiente"
+    if price > 0:
+        motivo = None
+    elif estado.lower() != "aprobado":
+        motivo = "pendiente_aprobacion"
+    else:
+        motivo = "sin_valor_asignado"
+    return {
+        "encontrado": True,
+        "precio_unitario": price if price > 0 else None,
+        "estado_precio": estado,
+        "motivo": motivo,
+        "match": match,
+        "capitulo_listado": hit.get("capitulo"),
+        "item_listado": hit.get("item_numero"),
+    }
+
+
+def lookup_listado_precio_detalle(
+    contrato_id: int,
+    capitulo: str,
+    item_numero: str,
+    *,
+    lookup: Optional[Dict[Tuple[str, str], float]] = None,
+) -> dict:
+    """
+    Resuelve cobro del listado con fallbacks robustos.
+    Retorna: encontrado, precio_unitario, estado_precio, motivo, match.
+    """
+    capitulo = (capitulo or "").strip()
+    item_numero = (item_numero or "").strip()
+    empty = {
+        "encontrado": False,
+        "precio_unitario": None,
+        "estado_precio": None,
+        "motivo": (
+            "sin_item" if not item_numero
+            else ("sin_capitulo" if not capitulo else "sin_valor_listado")
+        ),
+        "match": None,
+    }
+    if not item_numero:
+        return empty
+
+    meta = get_listado_precio_meta_lookup(contrato_id)
+    _ = lookup  # compat firma; meta es la fuente de verdad
+    variants = _item_key_variants(item_numero)
+    cap_keys = []
+    if capitulo:
+        cap_keys = [_norm_capitulo_key(capitulo), capitulo.lower()]
+
+    for cap_key in cap_keys:
+        for item_k in variants:
+            hit = meta.get((cap_key, item_k))
+            if hit is not None:
+                return _detalle_from_listado_hit(hit, match="capitulo_item")
+
+    by_item = _listado_item_only_index(meta)
+    candidates: List[dict] = []
+    seen_ids: set = set()
+    for item_k in variants:
+        for hit in by_item.get(item_k) or []:
+            ident = (
+                _norm_capitulo_key(hit.get("capitulo")),
+                _norm_item_key(hit.get("item_numero")).lower(),
+            )
+            if ident in seen_ids:
+                continue
+            seen_ids.add(ident)
+            candidates.append(hit)
+
+    if len(candidates) == 1:
+        return _detalle_from_listado_hit(candidates[0], match="item_unico")
+
+    if len(candidates) > 1 and capitulo:
+        cap_l = capitulo.lower()
+        scored = []
+        for hit in candidates:
+            hc = (hit.get("capitulo") or "").lower()
+            score = 0
+            if hc == cap_l or _norm_capitulo_key(hc) == _norm_capitulo_key(capitulo):
+                score = 3
+            elif cap_l in hc or hc in cap_l:
+                score = 2
+            elif any(tok and tok in hc for tok in re.split(r"\W+", cap_l) if len(tok) > 2):
+                score = 1
+            scored.append((score, hit))
+        scored.sort(key=lambda x: -x[0])
+        if scored and scored[0][0] > 0:
+            return _detalle_from_listado_hit(scored[0][1], match="item_capitulo_parcial")
+
+    if not capitulo:
+        empty["motivo"] = "sin_capitulo"
+    return empty
 
 
 def lookup_listado_precio(
@@ -349,17 +503,41 @@ def lookup_listado_precio(
     item_numero: str,
     lookup: Optional[Dict[Tuple[str, str], float]] = None,
 ) -> Optional[float]:
-    capitulo = (capitulo or "").strip()
-    item_numero = (item_numero or "").strip()
-    if not capitulo or not item_numero:
+    """Precio unitario; None si no hay coincidencia usable (>0) ni fila encontrada."""
+    det = lookup_listado_precio_detalle(
+        contrato_id, capitulo, item_numero, lookup=lookup,
+    )
+    if not det.get("encontrado"):
         return None
-    table = lookup if lookup is not None else get_listado_precio_lookup(contrato_id)
-    want_item = _norm_item_key(item_numero).lower()
-    for cap_key in (_norm_capitulo_key(capitulo), capitulo.lower()):
-        val = table.get((cap_key, want_item))
-        if val is not None:
-            return val
-    return None
+    # Compat: si la fila existe con precio 0, devolver 0 (antes setdefault guardaba 0).
+    precio = det.get("precio_unitario")
+    if precio is None:
+        return 0.0
+    return float(precio)
+
+
+def resolver_vlr_cobro_listado(
+    contrato_id: int,
+    capitulo: str,
+    item_numero: str,
+) -> dict:
+    """VU cobro usable o motivo explícito cuando no aplica."""
+    det = lookup_listado_precio_detalle(contrato_id, capitulo, item_numero)
+    precio = det.get("precio_unitario")
+    if precio is not None and _to_float(precio) > 0:
+        return {
+            "vlr_unitario_cobro": _to_float(precio),
+            "cobro_motivo": None,
+            "estado_precio": det.get("estado_precio"),
+            "match": det.get("match"),
+        }
+    motivo = det.get("motivo") or "sin_valor_listado"
+    return {
+        "vlr_unitario_cobro": 0.0,
+        "cobro_motivo": motivo,
+        "estado_precio": det.get("estado_precio"),
+        "match": det.get("match"),
+    }
 
 
 def list_listado_capitulos(contrato_id: int) -> List[str]:
@@ -411,6 +589,7 @@ def _build_analisis_valor(
     cant: float,
     valor_compra: Optional[float],
     vlr_cobro: float,
+    cobro_motivo: Optional[str] = None,
 ) -> dict:
     """Desglose económico de línea: cobro (listado), consumo (insumo), utilidad."""
     cant_f = _to_float(cant)
@@ -421,6 +600,7 @@ def _build_analisis_valor(
     cobro_linea = round(vlr * cant_f, 2) if vlr > 0 else None
     util = round(cobro_linea - costo_linea, 2) if cobro_linea is not None and costo_linea is not None else None
     pct = round((util / cobro_linea) * 100, 2) if util is not None and cobro_linea and cobro_linea > 0 else None
+    motivo = None if vlr > 0 else (cobro_motivo or "sin_valor_listado")
     return {
         "tiene_precio_compra": tiene,
         "cantidad": cant_f,
@@ -430,6 +610,7 @@ def _build_analisis_valor(
         "valor_cobro_linea": cobro_linea,
         "utilidad_estimada_linea": util,
         "rentabilidad_pct": pct,
+        "cobro_motivo": motivo,
     }
 
 
@@ -674,6 +855,7 @@ def filas_rentabilidad_por_insumo(
     cobro_total = None
     vu_cobro_total = None
     cant_principal = None
+    cobro_motivo_total = None
 
     for r in merged:
         cant = _to_float(r.get("cantidad"))
@@ -686,6 +868,7 @@ def filas_rentabilidad_por_insumo(
 
         vu_cobro = None
         cobro_linea = None
+        cobro_motivo = None
         if es_principal:
             vlr = _to_float(r.get("vlr_unitario_cobro"))
             if vlr > 0 and cant > 0:
@@ -696,6 +879,10 @@ def filas_rentabilidad_por_insumo(
                 cant_principal = cant
             elif cant > 0:
                 cant_principal = cant
+                cobro_motivo = r.get("cobro_motivo") or "sin_valor_listado"
+                cobro_motivo_total = cobro_motivo_total or cobro_motivo
+        else:
+            cobro_motivo = "insumo_asociado"
 
         filas.append({
             "etiqueta_fila": _etiqueta_insumo_rentabilidad(r),
@@ -710,6 +897,7 @@ def filas_rentabilidad_por_insumo(
             "cantidad": cant if cant > 0 else None,
             "valor_cobro_unitario": vu_cobro,
             "valor_cobro_linea": cobro_linea,
+            "cobro_motivo": cobro_motivo,
             "costo_insumo_unitario": vc if vc > 0 else None,
             "costo_insumo_linea": costo_linea,
             # Utilidad/% solo en Total (rentabilidad real del ítem).
@@ -739,6 +927,7 @@ def filas_rentabilidad_por_insumo(
         "cantidad": cant_principal,
         "valor_cobro_unitario": vu_cobro_total,
         "valor_cobro_linea": cobro_total,
+        "cobro_motivo": cobro_motivo_total if cobro_total is None else None,
         "costo_insumo_unitario": None,
         "costo_insumo_linea": costo_total,
         "utilidad_estimada_linea": util,
@@ -1966,10 +2155,11 @@ def apply_saldo_flags_batch(
     acum_map = batch_cantidad_solicitada_acumulada(sb, contrato_id, keys, exclude_solicitud_id)
     lookup = None
     if refresh_listado:
-        # Solo buscar precios cuando hay insumo mapeado y falta cobro real (None).
-        # Líneas de texto libre (vlr=0, sin insumo) no deben disparar full-scan de listado.
+        # Buscar precios cuando hay insumo mapeado y falta cobro usable (None o 0).
         needs_price = any(
-            it.get("insumo_id") and it.get("vlr_unitario_cobro") is None
+            it.get("insumo_id")
+            and _item_es_principal(it)
+            and _to_float(it.get("vlr_unitario_cobro")) <= 0
             for it in items
         )
         if needs_price:
@@ -1981,18 +2171,26 @@ def apply_saldo_flags_batch(
             batch_qty[key] += _to_float(it.get("cantidad"))
 
     for it in items:
-        if lookup is not None:
+        if lookup is not None and it.get("insumo_id") and _item_es_principal(it):
             cap = (it.get("capitulo") or "").strip()
             item_n = (it.get("item") or "").strip()
-            vlr = lookup_listado_precio(contrato_id, cap, item_n, lookup)
-            if vlr is not None:
-                # No pisar cobro manual del Gerencial si ya viene set con insumo
-                if it.get("vlr_unitario_cobro") in (None, 0) or not it.get("insumo_id"):
-                    it["vlr_unitario_cobro"] = vlr
-            elif it.get("vlr_unitario_cobro") is None:
-                it["vlr_unitario_cobro"] = 0
+            resolved = resolver_vlr_cobro_listado(contrato_id, cap, item_n)
+            vlr = _to_float(resolved.get("vlr_unitario_cobro"))
+            if vlr > 0 and _to_float(it.get("vlr_unitario_cobro")) <= 0:
+                prev = _to_float(it.get("vlr_unitario_cobro"))
+                it["vlr_unitario_cobro"] = vlr
+                it["cobro_motivo"] = None
+                if prev <= 0:
+                    it["_cobro_sanado"] = True
+            else:
+                if it.get("vlr_unitario_cobro") is None:
+                    it["vlr_unitario_cobro"] = 0
+                if _to_float(it.get("vlr_unitario_cobro")) <= 0:
+                    it["cobro_motivo"] = resolved.get("cobro_motivo") or "sin_valor_listado"
         elif it.get("vlr_unitario_cobro") is None:
             it["vlr_unitario_cobro"] = 0
+            if it.get("insumo_id") and _item_es_principal(it):
+                it.setdefault("cobro_motivo", "sin_valor_listado")
 
         if not it.get("pk_id") or not it.get("presupuesto_id"):
             it["supera_presupuesto"] = False
@@ -2158,8 +2356,8 @@ def get_presupuesto_context(
     combo_total = sum(_to_float(r.get("cant_total")) for r in combo_rows)
     cap_cobro = (capitulo_listado or row.get("capitulo") or "").strip()
     item_cobro = (item_listado or row.get("item") or "").strip()
-    vlr_listado = get_listado_precio_unitario(contrato_id, cap_cobro, item_cobro)
-    vlr_cobro = vlr_listado if vlr_listado is not None else 0.0
+    cobro_res = resolver_vlr_cobro_listado(contrato_id, cap_cobro, item_cobro)
+    vlr_cobro = _to_float(cobro_res.get("vlr_unitario_cobro"))
     return {
         "presupuesto_id": presupuesto_id,
         "pk_id": pk_id,
@@ -2175,6 +2373,7 @@ def get_presupuesto_context(
         "cantidad_borrador_adicional": extra if descontar_linea_actual else 0,
         "saldo_disponible_despues": saldo_despues,
         "vlr_unitario_cobro": vlr_cobro,
+        "cobro_motivo": cobro_res.get("cobro_motivo"),
         "supera_presupuesto": saldo_despues < -0.0001,
         "tramo": row.get("tramo"),
         "abs_inicio": row.get("abs_inicio"),
@@ -2269,16 +2468,18 @@ def resolve_insumo_for_solicitud(
         valor_compra = None
     if ctx is not None:
         vlr_cobro = ctx.get("vlr_unitario_cobro") or 0
+        cobro_motivo = ctx.get("cobro_motivo")
         cant_presupuestada = ctx.get("cant_presupuestada")
         supera_presupuesto = ctx.get("supera_presupuesto")
         supera_negociado = (ctx_neg or {}).get("supera_negociado")
     else:
-        vlr_lookup = get_listado_precio_unitario(
+        cobro_res = resolver_vlr_cobro_listado(
             contrato_id,
             capitulo_ppto or ppto.get("capitulo") or "",
             item_ppto or ppto.get("item") or "",
         )
-        vlr_cobro = vlr_lookup if vlr_lookup is not None else 0
+        vlr_cobro = _to_float(cobro_res.get("vlr_unitario_cobro"))
+        cobro_motivo = cobro_res.get("cobro_motivo")
         cant_presupuestada = _to_float(ppto.get("cant_total"))
         supera_presupuesto = False
         supera_negociado = False
@@ -2309,9 +2510,13 @@ def resolve_insumo_for_solicitud(
         "valor_compra_unitario": valor_compra,
         "tiene_precio_compra": valor_compra is not None and valor_compra > 0,
         "vlr_unitario_cobro": vlr_cobro,
+        "cobro_motivo": cobro_motivo if _to_float(vlr_cobro) <= 0 else None,
         "supera_presupuesto": supera_presupuesto,
         "supera_negociado": supera_negociado,
         "contexto_presupuesto": ctx,
         "contexto_negociado": ctx_neg,
-        "analisis_valor": _build_analisis_valor(cant, valor_compra, vlr_cobro),
+        "analisis_valor": _build_analisis_valor(
+            cant, valor_compra, vlr_cobro,
+            cobro_motivo=cobro_motivo if _to_float(vlr_cobro) <= 0 else None,
+        ),
     }

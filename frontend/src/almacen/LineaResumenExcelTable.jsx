@@ -27,7 +27,7 @@ export default function LineaResumenExcelTable({
     && vuInsumo != null
     && Number(vuInsumo) > 0
   const tieneCobro = cobroLinea != null && vuCobro != null && Number(vuCobro) > 0
-  const tieneEco = verEconomicos && analisis && (tieneCobro || tienePrecio || sinPrecio)
+  const tieneEco = verEconomicos && analisis && (tieneCobro || tienePrecio || sinPrecio || !esPrincipal || analisis?.cobro_motivo)
 
   if (!tienePpto && !tieneNeg && !tieneEco && esPrincipal) return null
 
@@ -214,12 +214,25 @@ export default function LineaResumenExcelTable({
             {tieneEco && (
               <>
                 {sectionTitle('Cobro, costo y utilidad', 'Valores económicos de esta línea (sin operaciones en texto).')}
-                {tieneCobro && (
+                {tieneCobro ? (
                   <tr>
                     <td style={td}>Cobro</td>
                     <td style={tdNum}>{fmtCant(cant)}</td>
                     <td style={tdNum}>{fmtMoney(vuCobro)}</td>
                     <td style={{ ...tdNum, fontWeight: 700 }}>{fmtMoney(cobroLinea)}</td>
+                  </tr>
+                ) : (
+                  <tr>
+                    <td style={td}>Cobro</td>
+                    <td colSpan={3} style={{ ...td, fontStyle: 'italic', opacity: 0.9, color: 'var(--cc-color-warning, #b45309)' }}>
+                      {esPrincipal === false
+                        ? 'Insumo asociado — no genera cobro'
+                        : (analisis?.cobro_motivo === 'pendiente_aprobacion'
+                          ? 'Pendiente de aprobación en listado de precios'
+                          : analisis?.cobro_motivo === 'sin_valor_asignado'
+                            ? 'Sin valor asignado en listado de precios'
+                            : 'Sin valor de cobro en listado de precios')}
+                    </td>
                   </tr>
                 )}
                 {tienePrecio ? (
