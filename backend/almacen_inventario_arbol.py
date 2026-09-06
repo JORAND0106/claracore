@@ -1,7 +1,8 @@
-"""Inventario en árbol: ítem (listado) → insumo → proveedor (tab Inventario)."""
+"""Inventario en árbol: capítulo → ítem (listado) → orden de compra (tab Inventario)."""
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -10,6 +11,36 @@ _log = logging.getLogger(__name__)
 _CACHE: Dict[int, Tuple[float, dict]] = {}
 _CACHE_TTL_SEC = 90
 _IN_CHUNK = 200
+
+
+def _norm_item_key_local(item: Optional[str]) -> str:
+    t = str(item or "").strip()
+    return re.sub(r"\.+$", "", t)
+
+
+def _norm_capitulo_key_local(s: Optional[str]) -> str:
+    if s is None:
+        return "Sin capítulo"
+    t = str(s).strip()
+    if not t:
+        return "Sin capítulo"
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"^(\d+\.)\s+", r"\1", t)
+    return t
+
+
+def _natural_sort_key_local(text: Optional[str]) -> tuple:
+    s = str(text or "").strip()
+    parts = re.split(r"(\d+)", s)
+    key: list = []
+    for part in parts:
+        if not part:
+            continue
+        if part.isdigit():
+            key.append((0, int(part)))
+        else:
+            key.append((1, part.lower()))
+    return tuple(key) if key else ((1, ""),)
 
 
 def invalidar_cache_inventario_arbol(contrato_id: Optional[int] = None) -> None:
@@ -68,10 +99,54 @@ def _unit_cost(qty: float, valor: Optional[float], vu_fallback: Optional[float] 
     return _f(vu_fallback)
 
 
+def _empty_resumen() -> dict:
+    return {
+        "valor_stock": 0.0,
+        "valor_entradas": 0.0,
+        "valor_salidas": 0.0,
+        "entradas": 0.0,
+        "salidas": 0.0,
+        "saldo": 0.0,
+    }
+
+
 def make_item_key(capitulo: Optional[str], item: Optional[str]) -> str:
     """Clave estable capítulo|ítem (misma lógica de normalización del listado)."""
-    from almacen_insumos_service import _norm_capitulo_key, _norm_item_key
-    return f"{_norm_capitulo_key(capitulo)}|{_norm_item_key(item)}"
+    return f"{_norm_capitulo_key_local(capitulo)}|{_norm_item_key_local(item)}"
+
+
+def make_capitulo_key(capitulo: Optional[str]) -> str:
+    return _norm_capitulo_key_local(capitulo)
+
+
+def _fmt_numero_oc(n) -> Optional[str]:
+    if n is None or n == "":
+        return None
+    try:
+        return f"#{int(n):05d}"
+    except (TypeError, ValueError):
+        s = str(n).strip()
+        return s if s.startswith("#") else f"#{s}"
+
+
+def _vu_costo_desde_composicion(comp_list: List[dict]) -> Tuple[Optional[float], Optional[float]]:
+    """VU costo del ítem = suma (vu_costo × rendimiento) de insumos asociados."""
+    sum_costo = 0.0
+    tiene = False
+    rend_item = None
+    principal = next((c for c in comp_list if c.get("es_principal") is not False), None)
+    if principal and principal.get("rendimiento") is not None:
+        rend_item = _f(principal.get("rendimiento")) or None
+    for c in comp_list:
+        vu = c.get("vu_costo")
+        vu_f = _f(vu) if vu is not None and _f(vu) > 0 else None
+        if vu_f is None:
+            continue
+        rend = c.get("rendimiento")
+        factor = _f(rend) if rend is not None and _f(rend) > 0 else 1.0
+        sum_costo += vu_f * factor
+        tiene = True
+    return (_round2(sum_costo) if tiene else None, rend_item)
 
 
 def build_inventario_arbol_from_lines(
@@ -81,36 +156,43 @@ def build_inventario_arbol_from_lines(
     movement_lines: List[dict],
 ) -> dict:
     """
-    Agrega el árbol a partir de datos ya resueltos (testeable sin Supabase).
+    Agrega el árbol Capítulo → Ítem → Orden de Compra (testeable sin Supabase).
 
     item_rows = [
       {item_key, capitulo, item, descripcion, unidad, vu_cobro, presupuesto_ids?}, ...
     ]
-    composition[item_key] = [ {insumo_id, codigo, descripcion, unidad, es_principal, rendimiento, vu_costo}, ... ]
+    composition[item_key] = [ {insumo_id, vu_costo, rendimiento, es_principal, ...}, ... ]
+      (solo para calcular VU costo del ítem; ya no es nivel de navegación)
     movement_lines = [
       {
-        item_key, insumo_id, proveedor_id, proveedor_nombre,
+        item_key, orden_compra_id, numero_oc, proveedor_nombre, estado,
+        material_descripcion, unidad, valor_unitario,
         entradas, salidas, saldo,
         valor_entradas, valor_salidas, valor_stock,
       }, ...
     ]
     """
-    mov_prov: Dict[Tuple[str, int, Optional[int], str], dict] = {}
+    mov_oc: Dict[Tuple[str, Optional[int], str], dict] = {}
     for ln in movement_lines:
         ikey = str(ln.get("item_key") or "")
         if not ikey:
             continue
-        iid = int(ln["insumo_id"]) if ln.get("insumo_id") is not None else 0
-        prid = int(ln["proveedor_id"]) if ln.get("proveedor_id") is not None else None
-        pname = (ln.get("proveedor_nombre") or "Sin proveedor").strip() or "Sin proveedor"
-        key = (ikey, iid, prid, pname.casefold())
-        acc = mov_prov.get(key)
+        oc_id = int(ln["orden_compra_id"]) if ln.get("orden_compra_id") is not None else None
+        num_raw = ln.get("numero_oc")
+        num_key = str(num_raw) if num_raw is not None else ""
+        key = (ikey, oc_id, num_key)
+        acc = mov_oc.get(key)
         if not acc:
             acc = {
                 "item_key": ikey,
-                "insumo_id": iid or None,
-                "proveedor_id": prid,
-                "proveedor_nombre": pname,
+                "orden_compra_id": oc_id,
+                "numero_oc": num_raw,
+                "numero_oc_fmt": _fmt_numero_oc(num_raw) or "Sin OC",
+                "proveedor_nombre": (ln.get("proveedor_nombre") or "Sin proveedor").strip() or "Sin proveedor",
+                "estado": (ln.get("estado") or "").strip() or None,
+                "material_descripcion": (ln.get("material_descripcion") or "").strip() or None,
+                "unidad": (ln.get("unidad") or "").strip() or None,
+                "valor_unitario": None,
                 "entradas": 0.0,
                 "salidas": 0.0,
                 "saldo": 0.0,
@@ -118,60 +200,49 @@ def build_inventario_arbol_from_lines(
                 "valor_salidas": 0.0,
                 "valor_stock": 0.0,
             }
-            mov_prov[key] = acc
+            mov_oc[key] = acc
+        else:
+            # Conservar primer material; si hay varios, marcar mezcla
+            mat = (ln.get("material_descripcion") or "").strip()
+            if mat and acc.get("material_descripcion") and mat.casefold() != str(acc["material_descripcion"]).casefold():
+                acc["material_descripcion"] = "Varios materiales"
+            elif mat and not acc.get("material_descripcion"):
+                acc["material_descripcion"] = mat
+            pname = (ln.get("proveedor_nombre") or "").strip()
+            if pname and (not acc.get("proveedor_nombre") or acc["proveedor_nombre"] == "Sin proveedor"):
+                acc["proveedor_nombre"] = pname
+
         acc["entradas"] = _round4(acc["entradas"] + _f(ln.get("entradas")))
         acc["salidas"] = _round4(acc["salidas"] + _f(ln.get("salidas")))
         acc["saldo"] = _round4(acc["saldo"] + _f(ln.get("saldo")))
         acc["valor_entradas"] = _round2(acc["valor_entradas"] + _f(ln.get("valor_entradas")))
         acc["valor_salidas"] = _round2(acc["valor_salidas"] + _f(ln.get("valor_salidas")))
         acc["valor_stock"] = _round2(acc["valor_stock"] + _f(ln.get("valor_stock")))
+        vu = ln.get("valor_unitario")
+        if vu is not None and _f(vu) > 0:
+            # Promedio ponderado aproximado por entradas
+            prev_vu = acc.get("valor_unitario")
+            if prev_vu is None:
+                acc["valor_unitario"] = _round2(_f(vu))
+            elif abs(_f(prev_vu) - _f(vu)) > 1e-6:
+                # Si difiere, dejar el de mayor volumen de entrada (ya acumulado)
+                pass
 
-    mov_insumo: Dict[Tuple[str, int], dict] = {}
-    for acc in mov_prov.values():
-        iid = int(acc["insumo_id"] or 0)
-        key = (str(acc["item_key"]), iid)
-        bucket = mov_insumo.get(key)
-        if not bucket:
-            bucket = {
-                "item_key": acc["item_key"],
-                "insumo_id": iid or None,
-                "entradas": 0.0,
-                "salidas": 0.0,
-                "saldo": 0.0,
-                "valor_entradas": 0.0,
-                "valor_salidas": 0.0,
-                "valor_stock": 0.0,
-                "proveedores": [],
-            }
-            mov_insumo[key] = bucket
-        bucket["entradas"] = _round4(bucket["entradas"] + acc["entradas"])
-        bucket["salidas"] = _round4(bucket["salidas"] + acc["salidas"])
-        bucket["saldo"] = _round4(bucket["saldo"] + acc["saldo"])
-        bucket["valor_entradas"] = _round2(bucket["valor_entradas"] + acc["valor_entradas"])
-        bucket["valor_salidas"] = _round2(bucket["valor_salidas"] + acc["valor_salidas"])
-        bucket["valor_stock"] = _round2(bucket["valor_stock"] + acc["valor_stock"])
-        # Nivel 3: solo proveedores con stock real
-        if acc["saldo"] > 1e-9:
-            bucket["proveedores"].append({
-                "proveedor_id": acc["proveedor_id"],
-                "proveedor_nombre": acc["proveedor_nombre"],
-                "entradas": acc["entradas"],
-                "salidas": acc["salidas"],
-                "saldo": acc["saldo"],
-                "valor_entradas": acc["valor_entradas"],
-                "valor_salidas": acc["valor_salidas"],
-                "valor_stock": acc["valor_stock"],
-            })
+    by_item_oc: Dict[str, List[dict]] = defaultdict(list)
+    for acc in mov_oc.values():
+        by_item_oc[str(acc["item_key"])].append(acc)
+
+    for ikey, rows in by_item_oc.items():
+        rows.sort(
+            key=lambda x: (
+                int(x["numero_oc"]) if x.get("numero_oc") is not None else 10**9,
+                str(x.get("proveedor_nombre") or "").lower(),
+                int(x.get("orden_compra_id") or 0),
+            ),
+        )
 
     items_out: List[dict] = []
-    resumen = {
-        "valor_stock": 0.0,
-        "valor_entradas": 0.0,
-        "valor_salidas": 0.0,
-        "entradas": 0.0,
-        "salidas": 0.0,
-        "saldo": 0.0,
-    }
+    resumen = _empty_resumen()
 
     for p in item_rows:
         ikey = str(p.get("item_key") or "")
@@ -182,105 +253,46 @@ def build_inventario_arbol_from_lines(
             vu_cobro = _f(vu_cobro) if _f(vu_cobro) > 0 else None
 
         comp_list = list(composition.get(ikey) or [])
-        seen_insumos = {
-            int(c["insumo_id"]) for c in comp_list if c.get("insumo_id") is not None
-        }
-        for (ik, iid), bucket in mov_insumo.items():
-            if ik != ikey or not iid or iid in seen_insumos:
-                continue
-            comp_list.append({
-                "insumo_id": iid,
-                "codigo": None,
-                "descripcion": f"Insumo #{iid}",
-                "unidad": None,
-                "es_principal": False,
-                "rendimiento": None,
-                "vu_costo": None,
-            })
-            seen_insumos.add(iid)
-
-        sum_costo_unit = 0.0
-        tiene_costo = False
-        rend_item = None
-        principal = next((c for c in comp_list if c.get("es_principal") is not False), None)
-        if principal and principal.get("rendimiento") is not None:
-            rend_item = _f(principal.get("rendimiento")) or None
-
-        insumos_out: List[dict] = []
-        for c in comp_list:
-            iid = int(c["insumo_id"]) if c.get("insumo_id") is not None else None
-            if iid is None:
-                continue
-            bucket = mov_insumo.get((ikey, iid), {
-                "entradas": 0.0,
-                "salidas": 0.0,
-                "saldo": 0.0,
-                "valor_entradas": 0.0,
-                "valor_salidas": 0.0,
-                "valor_stock": 0.0,
-                "proveedores": [],
-            })
-            rend = c.get("rendimiento")
-            rend_f = _f(rend) if rend is not None else None
-            vu_costo_i = c.get("vu_costo")
-            vu_costo_i = _f(vu_costo_i) if vu_costo_i is not None and _f(vu_costo_i) > 0 else None
-            if vu_costo_i is not None:
-                factor = rend_f if rend_f is not None and rend_f > 0 else 1.0
-                sum_costo_unit += vu_costo_i * factor
-                tiene_costo = True
-
-            es_principal = c.get("es_principal") is not False
-            costo_contrib = (
-                _round2(vu_costo_i * (rend_f if rend_f and rend_f > 0 else 1.0))
-                if vu_costo_i is not None
-                else None
-            )
-            if es_principal and vu_cobro is not None and costo_contrib is not None:
-                utilidad_i = _round2(vu_cobro - costo_contrib)
-            elif costo_contrib is not None:
-                utilidad_i = _round2(-costo_contrib)
-            else:
-                utilidad_i = None
-
-            proveedores = sorted(
-                bucket.get("proveedores") or [],
-                key=lambda x: (str(x.get("proveedor_nombre") or "").lower(), x.get("proveedor_id") or 0),
-            )
-            insumos_out.append({
-                "insumo_id": iid,
-                "codigo": c.get("codigo"),
-                "descripcion": c.get("descripcion") or "—",
-                "unidad": c.get("unidad"),
-                "es_principal": es_principal,
-                "rendimiento": rend_f,
-                "vu_costo": vu_costo_i,
-                "utilidad": utilidad_i,
-                "entradas": bucket["entradas"],
-                "salidas": bucket["salidas"],
-                "saldo": bucket["saldo"],
-                "valor_entradas": bucket["valor_entradas"],
-                "valor_salidas": bucket["valor_salidas"],
-                "valor_stock": bucket["valor_stock"],
-                "proveedores": proveedores,
-            })
-
-        insumos_out.sort(
-            key=lambda r: (0 if r.get("es_principal") else 1, str(r.get("descripcion") or "").lower()),
-        )
-
-        vu_costo = _round2(sum_costo_unit) if tiene_costo else None
+        vu_costo, rend_item = _vu_costo_desde_composicion(comp_list)
         utilidad = (
             _round2(_f(vu_cobro) - vu_costo)
             if vu_cobro is not None and vu_costo is not None
             else None
         )
 
-        ent = _round4(sum(_f(i["entradas"]) for i in insumos_out))
-        sal = _round4(sum(_f(i["salidas"]) for i in insumos_out))
-        saldo = _round4(sum(_f(i["saldo"]) for i in insumos_out))
-        v_ent = _round2(sum(_f(i["valor_entradas"]) for i in insumos_out))
-        v_sal = _round2(sum(_f(i["valor_salidas"]) for i in insumos_out))
-        v_stk = _round2(sum(_f(i["valor_stock"]) for i in insumos_out))
+        oc_rows = by_item_oc.get(ikey, [])
+        ordenes = []
+        for oc in oc_rows:
+            # Nivel 3: mostrar OCs con movimiento (entrada o salida), no solo saldo
+            if (
+                abs(_f(oc.get("entradas"))) < 1e-12
+                and abs(_f(oc.get("salidas"))) < 1e-12
+                and abs(_f(oc.get("saldo"))) < 1e-12
+            ):
+                continue
+            ordenes.append({
+                "orden_compra_id": oc.get("orden_compra_id"),
+                "numero_oc": oc.get("numero_oc"),
+                "numero_oc_fmt": oc.get("numero_oc_fmt") or "Sin OC",
+                "proveedor_nombre": oc.get("proveedor_nombre") or "Sin proveedor",
+                "estado": oc.get("estado"),
+                "material_descripcion": oc.get("material_descripcion"),
+                "unidad": oc.get("unidad"),
+                "valor_unitario": oc.get("valor_unitario"),
+                "entradas": oc["entradas"],
+                "salidas": oc["salidas"],
+                "saldo": oc["saldo"],
+                "valor_entradas": oc["valor_entradas"],
+                "valor_salidas": oc["valor_salidas"],
+                "valor_stock": oc["valor_stock"],
+            })
+
+        ent = _round4(sum(_f(o["entradas"]) for o in ordenes))
+        sal = _round4(sum(_f(o["salidas"]) for o in ordenes))
+        saldo = _round4(sum(_f(o["saldo"]) for o in ordenes))
+        v_ent = _round2(sum(_f(o["valor_entradas"]) for o in ordenes))
+        v_sal = _round2(sum(_f(o["valor_salidas"]) for o in ordenes))
+        v_stk = _round2(sum(_f(o["valor_stock"]) for o in ordenes))
 
         resumen["valor_entradas"] = _round2(resumen["valor_entradas"] + v_ent)
         resumen["valor_salidas"] = _round2(resumen["valor_salidas"] + v_sal)
@@ -292,6 +304,7 @@ def build_inventario_arbol_from_lines(
         pids = p.get("presupuesto_ids") or []
         items_out.append({
             "item_key": ikey,
+            "capitulo_key": make_capitulo_key(p.get("capitulo")),
             "presupuesto_id": int(pids[0]) if pids else None,
             "presupuesto_ids": [int(x) for x in pids],
             "capitulo": p.get("capitulo"),
@@ -307,26 +320,65 @@ def build_inventario_arbol_from_lines(
             "entradas": ent,
             "salidas": sal,
             "saldo": saldo,
+            "stock": saldo,
             "valor_entradas": v_ent,
             "valor_salidas": v_sal,
             "valor_stock": v_stk,
-            "insumos": insumos_out,
+            "ordenes_compra": ordenes,
         })
 
-    def _sort_key(it: dict):
+    def _item_sort_key(it: dict):
         return (
-            str(it.get("capitulo") or ""),
-            str(it.get("item") or ""),
+            _natural_sort_key_local(it.get("capitulo")),
+            _natural_sort_key_local(it.get("item")),
             str(it.get("descripcion") or ""),
             str(it.get("item_key") or ""),
         )
 
-    items_out.sort(key=_sort_key)
-    return {"items": items_out, "resumen": resumen}
+    items_out.sort(key=_item_sort_key)
+
+    # Agrupar por capítulo (nivel 1)
+    by_cap: Dict[str, dict] = {}
+    for it in items_out:
+        ckey = str(it.get("capitulo_key") or make_capitulo_key(it.get("capitulo")))
+        bucket = by_cap.get(ckey)
+        if not bucket:
+            bucket = {
+                "capitulo_key": ckey,
+                "capitulo": it.get("capitulo") or "Sin capítulo",
+                "valor_entradas": 0.0,
+                "valor_salidas": 0.0,
+                "valor_stock": 0.0,
+                "stock": 0.0,
+                "entradas": 0.0,
+                "salidas": 0.0,
+                "saldo": 0.0,
+                "items": [],
+            }
+            by_cap[ckey] = bucket
+        bucket["items"].append(it)
+        bucket["valor_entradas"] = _round2(bucket["valor_entradas"] + _f(it.get("valor_entradas")))
+        bucket["valor_salidas"] = _round2(bucket["valor_salidas"] + _f(it.get("valor_salidas")))
+        bucket["valor_stock"] = _round2(bucket["valor_stock"] + _f(it.get("valor_stock")))
+        bucket["stock"] = bucket["valor_stock"]
+        bucket["entradas"] = _round4(bucket["entradas"] + _f(it.get("entradas")))
+        bucket["salidas"] = _round4(bucket["salidas"] + _f(it.get("salidas")))
+        bucket["saldo"] = _round4(bucket["saldo"] + _f(it.get("saldo")))
+
+    capitulos = sorted(
+        by_cap.values(),
+        key=lambda c: _natural_sort_key_local(c.get("capitulo")),
+    )
+
+    return {
+        "capitulos": capitulos,
+        "items": items_out,
+        "resumen": resumen,
+    }
 
 
 def _fetch_oc_rows(sb, oc_ids: List[int]) -> Dict[int, dict]:
-    """Carga OCs tolerando esquemas sin proveedor_id / proveedor_nombre."""
+    """Carga OCs tolerando esquemas sin proveedor_id / proveedor_nombre / estado."""
     from almacen_service import _pgrst_unknown_column
 
     oc_map: Dict[int, dict] = {}
@@ -334,8 +386,11 @@ def _fetch_oc_rows(sb, oc_ids: List[int]) -> Dict[int, dict]:
         return oc_map
 
     select_variants = [
-        "id, proveedor_id, proveedor_nombre",
-        "id, proveedor_nombre",
+        "id, numero_oc, estado, proveedor_id, proveedor_nombre",
+        "id, numero_oc, proveedor_id, proveedor_nombre",
+        "id, numero_oc, estado, proveedor_nombre",
+        "id, numero_oc, proveedor_nombre",
+        "id, numero_oc",
         "id",
     ]
     last_exc: Optional[BaseException] = None
@@ -357,7 +412,9 @@ def _fetch_oc_rows(sb, oc_ids: List[int]) -> Dict[int, dict]:
             last_exc = exc
             col = _pgrst_unknown_column(exc)
             msg = str(exc or "")
-            if col in ("proveedor_id", "proveedor_nombre") or "proveedor_id" in msg or "proveedor_nombre" in msg:
+            if col in ("proveedor_id", "proveedor_nombre", "estado", "numero_oc") or any(
+                x in msg for x in ("proveedor_id", "proveedor_nombre", "estado", "numero_oc")
+            ):
                 continue
             raise
     if last_exc:
@@ -434,7 +491,6 @@ def list_inventario_arbol(contrato_id: int) -> dict:
             continue
         ikey = make_item_key(raw_cap, raw_item)
         if ikey in item_by_key:
-            # Conservar primer precio > 0 / descripción más completa
             prev = item_by_key[ikey]
             price = _f(row.get("precio_unitario"))
             if (prev.get("vu_cobro") is None or prev.get("vu_cobro") <= 0) and price > 0:
@@ -455,7 +511,6 @@ def list_inventario_arbol(contrato_id: int) -> dict:
             "pk_id": None,
         }
 
-    # Vincular filas de presupuesto vivo (movimientos / composición)
     ppto_rows = list_presupuesto_items(contrato_id)
     ppto_to_key: Dict[int, str] = {}
     for p in ppto_rows:
@@ -463,7 +518,6 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         ikey = make_item_key(p.get("capitulo"), p.get("item"))
         ppto_to_key[pid] = ikey
         if ikey not in item_by_key:
-            # Ítem en presupuesto sin fila en listado: incluirlo igualmente
             item_by_key[ikey] = {
                 "item_key": ikey,
                 "capitulo": (p.get("capitulo") or "").strip() or None,
@@ -488,21 +542,14 @@ def list_inventario_arbol(contrato_id: int) -> dict:
     item_rows = list(item_by_key.values())
     if not item_rows:
         out = {
+            "capitulos": [],
             "items": [],
-            "resumen": {
-                "valor_stock": 0.0,
-                "valor_entradas": 0.0,
-                "valor_salidas": 0.0,
-                "entradas": 0.0,
-                "salidas": 0.0,
-                "saldo": 0.0,
-            },
+            "resumen": _empty_resumen(),
             "generado_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         _cache_set(contrato_id, out)
         return out
 
-    # ── 2–3. Enriquecimiento (movimientos / composición) — no debe tumbar el listado ──
     movement_lines: List[dict] = []
     composition: Dict[str, List[dict]] = defaultdict(list)
     try:
@@ -542,7 +589,6 @@ def _enrich_inventario_movimientos(
     """Carga entradas/salidas/composición. Puede lanzar; el caller hace soft-fail."""
     from almacen_service import _despacho_neto_por_entrada_item
 
-    # Entradas del contrato (proveedor_id puede faltar en esquemas viejos)
     ent_rows: List[dict] = []
     for select in ("id, proveedor_id, insumo_id", "id, insumo_id", "id"):
         try:
@@ -748,27 +794,23 @@ def _enrich_inventario_movimientos(
                 "pk_id": None,
             }
 
-        insumo_id = None
-        if si and si.get("insumo_id"):
-            insumo_id = int(si["insumo_id"])
-        elif ent.get("insumo_id"):
-            insumo_id = int(ent["insumo_id"])
-        if insumo_id is None:
-            insumo_id = 0
-
+        oc_id = None
+        numero_oc = None
+        estado = None
         proveedor_id = None
         proveedor_nombre = None
-        if ent.get("proveedor_id"):
+        if oci and oci.get("orden_compra_id"):
+            oc_id = int(oci["orden_compra_id"])
+            oc = oc_map.get(oc_id, {})
+            numero_oc = oc.get("numero_oc")
+            estado = (oc.get("estado") or "").strip() or None
+            if oc.get("proveedor_id"):
+                proveedor_id = int(oc["proveedor_id"])
+            proveedor_nombre = (oc.get("proveedor_nombre") or "").strip() or None
+        if ent.get("proveedor_id") and proveedor_id is None:
             proveedor_id = int(ent["proveedor_id"])
-        if oci:
-            if not proveedor_nombre:
-                proveedor_nombre = (oci.get("proveedor_nombre") or "").strip() or None
-            if oci.get("orden_compra_id"):
-                oc = oc_map.get(int(oci["orden_compra_id"]), {})
-                if oc.get("proveedor_id") and proveedor_id is None:
-                    proveedor_id = int(oc["proveedor_id"])
-                if not proveedor_nombre:
-                    proveedor_nombre = (oc.get("proveedor_nombre") or "").strip() or None
+        if oci and not proveedor_nombre:
+            proveedor_nombre = (oci.get("proveedor_nombre") or "").strip() or None
         if proveedor_id and not proveedor_nombre:
             proveedor_nombre = prov_map.get(proveedor_id)
         if not proveedor_nombre:
@@ -786,9 +828,13 @@ def _enrich_inventario_movimientos(
 
         movement_lines.append({
             "item_key": ikey,
-            "insumo_id": insumo_id,
-            "proveedor_id": proveedor_id,
+            "orden_compra_id": oc_id,
+            "numero_oc": numero_oc,
             "proveedor_nombre": proveedor_nombre,
+            "estado": estado,
+            "material_descripcion": (oci or {}).get("material_descripcion") or (si or {}).get("material_descripcion"),
+            "unidad": (oci or {}).get("unidad") or (si or {}).get("unidad"),
+            "valor_unitario": _round2(vu) if vu else ((oci or {}).get("valor_unitario")),
             "entradas": qty_in,
             "salidas": qty_out,
             "saldo": saldo,

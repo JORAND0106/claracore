@@ -52,28 +52,54 @@ function itemMatchesFiltro(it, filtroCap, filtroItem, q) {
   if (!needle) return true
   const hay = [
     it.capitulo, it.item, it.descripcion, it.pk_id, it.item_key,
-    ...(it.insumos || []).flatMap((ins) => [ins.codigo, ins.descripcion]),
+    ...(it.ordenes_compra || []).flatMap((oc) => [
+      oc.numero_oc_fmt, oc.numero_oc, oc.proveedor_nombre, oc.material_descripcion,
+    ]),
   ].filter(Boolean).join(' ').toLowerCase()
   return hay.includes(needle)
 }
 
+function capituloMatchesFiltro(cap, filtroCap, filtroItem, q, itemsFiltrados) {
+  if (filtroCap) {
+    const capOk = normCap(cap.capitulo) === normCap(filtroCap)
+      || normCap(cap.capitulo).includes(normCap(filtroCap))
+    if (!capOk) return false
+  }
+  // Si hay filtro de ítem o texto, el capítulo queda solo si tiene ítems coincidentes
+  if (filtroItem || String(q || '').trim()) {
+    return itemsFiltrados.length > 0
+  }
+  return true
+}
+
 function itemLabel(it) {
-  const parts = [it.capitulo, it.item].filter(Boolean)
-  const code = parts.length ? parts.join(' · ') : null
+  const parts = [it.item].filter(Boolean)
+  const code = parts.length ? String(parts[0]) : null
   const desc = (it.descripcion || '').trim()
   if (code && desc) return `${code} — ${desc}`
   return code || desc || it.item_key || `Ítem #${it.presupuesto_id}`
 }
 
-function insumoLabel(ins) {
-  const code = (ins.codigo || '').trim()
-  const desc = (ins.descripcion || '').trim()
-  if (code && desc) return `${code} — ${desc}`
-  return code || desc || `Insumo #${ins.insumo_id}`
+function ocLabel(oc) {
+  const num = oc.numero_oc_fmt || (oc.numero_oc != null ? `#${oc.numero_oc}` : 'Sin OC')
+  const prov = (oc.proveedor_nombre || '').trim()
+  const mat = (oc.material_descripcion || '').trim()
+  const parts = [num]
+  if (prov) parts.push(prov)
+  if (mat) parts.push(mat)
+  return parts.join(' · ')
 }
 
-function rowKey(it) {
-  return it.item_key || String(it.presupuesto_id || '')
+function TruncLabel({ children, title }) {
+  const text = typeof children === 'string' ? children : undefined
+  return (
+    <span
+      className="cc-almacen-inventario-trunc"
+      title={title || text}
+    >
+      {children}
+    </span>
+  )
 }
 
 function ToggleCell({ open, onToggle, label, depth = 0, disabled = false }) {
@@ -86,20 +112,11 @@ function ToggleCell({ open, onToggle, label, depth = 0, disabled = false }) {
       }}
       disabled={disabled}
       aria-expanded={open}
+      className="cc-almacen-inventario-toggle"
       style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        border: 'none',
-        background: 'transparent',
-        padding: 0,
-        margin: 0,
+        fontWeight: depth === 0 ? 700 : (depth === 1 ? 600 : 500),
         cursor: disabled ? 'default' : 'pointer',
-        font: 'inherit',
-        fontWeight: depth === 0 ? 700 : 600,
-        color: 'inherit',
-        textAlign: 'left',
-        maxWidth: '100%',
+        opacity: disabled ? 0.85 : 1,
       }}
     >
       <span
@@ -114,7 +131,7 @@ function ToggleCell({ open, onToggle, label, depth = 0, disabled = false }) {
       >
         {disabled ? '·' : (open ? '▾' : '▸')}
       </span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+      <TruncLabel title={label}>{label}</TruncLabel>
     </button>
   )
 }
@@ -182,8 +199,9 @@ export default function InventarioPanel({
   const [filtroCap, setFiltroCap] = useState('')
   const [filtroItem, setFiltroItem] = useState('')
   const [selectedKey, setSelectedKey] = useState(null)
+  const [selectedKind, setSelectedKind] = useState(null) // 'capitulo' | 'item'
+  const [expandedCaps, setExpandedCaps] = useState(() => new Set())
   const [expandedItems, setExpandedItems] = useState(() => new Set())
-  const [expandedInsumos, setExpandedInsumos] = useState(() => new Set())
 
   const reload = useCallback(() => {
     setLoading(true)
@@ -210,17 +228,36 @@ export default function InventarioPanel({
   }, [refreshSignal, reload])
 
   const hideEco = !verEconomicos || Boolean(arbol?.resumen?.economicos_ocultos)
+  const capitulos = arbol?.capitulos || []
   const items = arbol?.items || []
 
-  const filtered = useMemo(
-    () => items.filter((it) => itemMatchesFiltro(it, filtroCap, filtroItem, q)),
-    [items, filtroCap, filtroItem, q],
+  const filteredCaps = useMemo(() => {
+    return capitulos
+      .map((cap) => {
+        const itemsFiltrados = (cap.items || []).filter((it) => (
+          itemMatchesFiltro(it, filtroCap, filtroItem, q)
+        ))
+        return { cap, itemsFiltrados }
+      })
+      .filter(({ cap, itemsFiltrados }) => (
+        capituloMatchesFiltro(cap, filtroCap, filtroItem, q, itemsFiltrados)
+      ))
+  }, [capitulos, filtroCap, filtroItem, q])
+
+  const filteredItemCount = useMemo(
+    () => filteredCaps.reduce((n, row) => n + row.itemsFiltrados.length, 0),
+    [filteredCaps],
   )
 
+  const selectedCap = useMemo(() => {
+    if (selectedKind !== 'capitulo' || !selectedKey) return null
+    return capitulos.find((c) => (c.capitulo_key || c.capitulo) === selectedKey) || null
+  }, [capitulos, selectedKey, selectedKind])
+
   const selectedItem = useMemo(() => {
-    if (!selectedKey) return null
-    return items.find((it) => rowKey(it) === selectedKey) || null
-  }, [items, selectedKey])
+    if (selectedKind !== 'item' || !selectedKey) return null
+    return items.find((it) => (it.item_key || String(it.presupuesto_id || '')) === selectedKey) || null
+  }, [items, selectedKey, selectedKind])
 
   const chartResumen = selectedItem
     ? {
@@ -228,11 +265,28 @@ export default function InventarioPanel({
       valor_entradas: selectedItem.valor_entradas,
       valor_salidas: selectedItem.valor_salidas,
     }
-    : (arbol?.resumen || {})
+    : selectedCap
+      ? {
+        valor_stock: selectedCap.valor_stock,
+        valor_entradas: selectedCap.valor_entradas,
+        valor_salidas: selectedCap.valor_salidas,
+      }
+      : (arbol?.resumen || {})
 
   const chartTitulo = selectedItem
     ? `Resumen del ítem: ${itemLabel(selectedItem)}`
-    : 'Resumen general del contrato'
+    : selectedCap
+      ? `Resumen del capítulo: ${selectedCap.capitulo}`
+      : 'Resumen general del contrato'
+
+  const toggleCap = (key) => {
+    setExpandedCaps((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   const toggleItem = (key) => {
     setExpandedItems((prev) => {
@@ -243,18 +297,14 @@ export default function InventarioPanel({
     })
   }
 
-  const toggleInsumo = (key) => {
-    setExpandedInsumos((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+  const selectCapitulo = (cap) => {
+    setSelectedKind('capitulo')
+    setSelectedKey(cap.capitulo_key || cap.capitulo)
   }
 
   const selectItem = (it) => {
-    const key = rowKey(it)
-    setSelectedKey(key)
+    setSelectedKind('item')
+    setSelectedKey(it.item_key || String(it.presupuesto_id || ''))
   }
 
   const onFiltroChange = ({ capitulo, item }) => {
@@ -268,6 +318,23 @@ export default function InventarioPanel({
     setQ('')
   }
 
+  // Auto-expand chapters when filtering narrows the tree
+  useEffect(() => {
+    if (!filtroCap && !filtroItem && !q.trim()) return
+    const keys = filteredCaps.map(({ cap }) => cap.capitulo_key || cap.capitulo)
+    setExpandedCaps((prev) => {
+      let changed = false
+      const next = new Set(prev)
+      keys.forEach((k) => {
+        if (!next.has(k)) {
+          next.add(k)
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [filtroCap, filtroItem, q, filteredCaps])
+
   const th = {
     ...ui.th,
     fontSize: 'var(--cc-xs)',
@@ -280,8 +347,18 @@ export default function InventarioPanel({
   const td = {
     ...ui.td,
     fontSize: 'var(--cc-xs)',
-    padding: '7px 10px',
+    padding: '6px 10px',
     verticalAlign: 'middle',
+    height: 36,
+    maxHeight: 36,
+    lineHeight: '22px',
+  }
+  const tdLabel = {
+    ...td,
+    minWidth: compact ? 280 : 420,
+    maxWidth: compact ? 420 : 640,
+    width: compact ? '36%' : '42%',
+    overflow: 'hidden',
   }
   const num = {
     ...td,
@@ -291,13 +368,14 @@ export default function InventarioPanel({
   }
 
   const filtroActivo = Boolean(filtroCap || filtroItem || q.trim())
+  const colSpan = verEconomicos ? 9 : 6
 
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📊 Inventario</div>
         <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
-          Listado de precios del contrato en tabla Excel. Clic en un ítem para ver su resumen en el gráfico.
+          Jerarquía Capítulo → Ítem → Orden de compra. Clic en un capítulo o ítem para ver su resumen en el gráfico.
         </div>
         {arbol?.generado_at && (
           <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
@@ -374,8 +452,14 @@ export default function InventarioPanel({
               )}
             </div>
             <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 8 }}>
-              Mostrando {filtered.length} de {items.length} ítem{items.length === 1 ? '' : 's'}
-              {selectedItem ? ` · Gráfico: ${itemLabel(selectedItem)}` : ' · Gráfico: total del contrato'}
+              Mostrando {filteredCaps.length} capítulo{filteredCaps.length === 1 ? '' : 's'}
+              {' · '}
+              {filteredItemCount} ítem{filteredItemCount === 1 ? '' : 's'}
+              {selectedItem
+                ? ` · Gráfico: ${itemLabel(selectedItem)}`
+                : selectedCap
+                  ? ` · Gráfico: ${selectedCap.capitulo}`
+                  : ' · Gráfico: total del contrato'}
             </div>
           </div>
 
@@ -390,59 +474,64 @@ export default function InventarioPanel({
                 ...ui.sheetTable,
                 width: '100%',
                 borderCollapse: 'collapse',
-                minWidth: compact ? 760 : 1100,
+                minWidth: compact ? 860 : 1180,
+                tableLayout: 'fixed',
               }}
             >
               <thead>
                 <tr>
-                  <th style={{ ...th, textAlign: 'left', minWidth: 220 }}>Ítem / Insumo / Proveedor</th>
+                  <th style={{ ...th, textAlign: 'left', width: compact ? '34%' : '40%' }}>
+                    Capítulo / Ítem / OC
+                  </th>
                   {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>VU Cobro</th>}
                   {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>VU Costo</th>}
-                  <th style={{ ...th, textAlign: 'right' }}>Rendimiento</th>
                   {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>Utilidad</th>}
+                  {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>Valor entradas</th>}
+                  {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>Valor salidas</th>}
                   <th style={{ ...th, textAlign: 'right' }}>Entradas</th>
                   <th style={{ ...th, textAlign: 'right' }}>Salidas</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Saldo</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Stock</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 ? (
+                {filteredCaps.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={verEconomicos ? 8 : 5}
+                      colSpan={colSpan}
                       style={{ ...td, color: ui.textMuted, textAlign: 'center', padding: 24 }}
                     >
                       {items.length === 0
                         ? 'No hay ítems en el listado de precios de este contrato.'
-                        : 'Ningún ítem coincide con el filtro.'}
+                        : 'Ningún capítulo/ítem coincide con el filtro.'}
                     </td>
                   </tr>
-                ) : filtered.map((it) => {
-                  const key = rowKey(it)
-                  const itemOpen = expandedItems.has(key)
-                  const hasInsumos = (it.insumos || []).length > 0
-                  const isSelected = selectedKey === key
-                  const utilColor = it.utilidad == null
-                    ? undefined
-                    : (Number(it.utilidad) >= 0 ? 'var(--cc-color-success, #059669)' : 'var(--cc-color-danger, #dc2626)')
+                ) : filteredCaps.map(({ cap, itemsFiltrados }) => {
+                  const capKey = cap.capitulo_key || cap.capitulo
+                  const capOpen = expandedCaps.has(capKey)
+                  const hasItems = itemsFiltrados.length > 0
+                  const isSelected = selectedKind === 'capitulo' && selectedKey === capKey
                   return (
-                    <FragmentItem
-                      key={key}
-                      it={it}
-                      rowId={key}
-                      itemOpen={itemOpen}
-                      hasInsumos={hasInsumos}
+                    <FragmentCapitulo
+                      key={capKey}
+                      cap={cap}
+                      items={itemsFiltrados}
+                      capKey={capKey}
+                      capOpen={capOpen}
+                      hasItems={hasItems}
                       isSelected={isSelected}
+                      selectCapitulo={selectCapitulo}
                       selectItem={selectItem}
+                      toggleCap={toggleCap}
                       toggleItem={toggleItem}
-                      toggleInsumo={toggleInsumo}
-                      expandedInsumos={expandedInsumos}
+                      expandedItems={expandedItems}
+                      selectedKey={selectedKey}
+                      selectedKind={selectedKind}
                       td={td}
+                      tdLabel={tdLabel}
                       num={num}
                       ui={ui}
                       verEconomicos={verEconomicos}
                       hideEco={hideEco}
-                      utilColor={utilColor}
                     />
                   )
                 })}
@@ -455,17 +544,109 @@ export default function InventarioPanel({
   )
 }
 
+function FragmentCapitulo({
+  cap,
+  items,
+  capKey,
+  capOpen,
+  hasItems,
+  isSelected,
+  selectCapitulo,
+  selectItem,
+  toggleCap,
+  toggleItem,
+  expandedItems,
+  selectedKey,
+  selectedKind,
+  td,
+  tdLabel,
+  num,
+  ui,
+  verEconomicos,
+  hideEco,
+}) {
+  return (
+    <>
+      <tr
+        data-testid={`inventario-cap-${capKey}`}
+        onClick={() => selectCapitulo(cap)}
+        style={{
+          background: isSelected
+            ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.12))'
+            : (capOpen ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.06))' : undefined),
+          cursor: 'pointer',
+          outline: isSelected ? '2px solid var(--cc-almacen-accent, #0077B6)' : undefined,
+          outlineOffset: -2,
+        }}
+      >
+        <td style={tdLabel}>
+          <ToggleCell
+            open={capOpen}
+            onToggle={() => {
+              selectCapitulo(cap)
+              toggleCap(capKey)
+            }}
+            label={cap.capitulo || 'Sin capítulo'}
+            depth={0}
+            disabled={!hasItems}
+          />
+        </td>
+        {verEconomicos && <td style={num}>—</td>}
+        {verEconomicos && <td style={num}>—</td>}
+        {verEconomicos && <td style={num}>—</td>}
+        {verEconomicos && <td style={num}>{fmtMoneyOrDash(cap.valor_entradas, hideEco)}</td>}
+        {verEconomicos && <td style={num}>{fmtMoneyOrDash(cap.valor_salidas, hideEco)}</td>}
+        <td style={num}>{fmtNum(cap.entradas)}</td>
+        <td style={num}>{fmtNum(cap.salidas)}</td>
+        <td style={{ ...num, fontWeight: 700 }}>
+          {verEconomicos && !hideEco
+            ? fmtMoneyOrDash(cap.valor_stock ?? cap.stock, hideEco)
+            : fmtNum(cap.saldo)}
+        </td>
+      </tr>
+
+      {capOpen && items.map((it) => {
+        const itemKey = it.item_key || String(it.presupuesto_id || '')
+        const itemOpen = expandedItems.has(itemKey)
+        const hasOc = (it.ordenes_compra || []).length > 0
+        const isItemSelected = selectedKind === 'item' && selectedKey === itemKey
+        const utilColor = it.utilidad == null
+          ? undefined
+          : (Number(it.utilidad) >= 0 ? 'var(--cc-color-success, #059669)' : 'var(--cc-color-danger, #dc2626)')
+        return (
+          <FragmentItem
+            key={itemKey}
+            it={it}
+            itemKey={itemKey}
+            itemOpen={itemOpen}
+            hasOc={hasOc}
+            isSelected={isItemSelected}
+            selectItem={selectItem}
+            toggleItem={toggleItem}
+            td={td}
+            tdLabel={tdLabel}
+            num={num}
+            ui={ui}
+            verEconomicos={verEconomicos}
+            hideEco={hideEco}
+            utilColor={utilColor}
+          />
+        )
+      })}
+    </>
+  )
+}
+
 function FragmentItem({
   it,
-  rowId,
+  itemKey,
   itemOpen,
-  hasInsumos,
+  hasOc,
   isSelected,
   selectItem,
   toggleItem,
-  toggleInsumo,
-  expandedInsumos,
   td,
+  tdLabel,
   num,
   ui,
   verEconomicos,
@@ -475,139 +656,66 @@ function FragmentItem({
   return (
     <>
       <tr
-        data-testid={`inventario-item-${rowId}`}
+        data-testid={`inventario-item-${itemKey}`}
         onClick={() => selectItem(it)}
         style={{
           background: isSelected
-            ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.12))'
-            : (itemOpen ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.06))' : undefined),
+            ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.10))'
+            : 'var(--cc-almacen-input-bg, rgba(0,0,0,0.02))',
           cursor: 'pointer',
           outline: isSelected ? '2px solid var(--cc-almacen-accent, #0077B6)' : undefined,
           outlineOffset: -2,
         }}
       >
-        <td style={td}>
+        <td style={{ ...tdLabel, paddingLeft: 22 }}>
           <ToggleCell
             open={itemOpen}
             onToggle={() => {
               selectItem(it)
-              toggleItem(rowId)
+              toggleItem(itemKey)
             }}
             label={itemLabel(it)}
-            depth={0}
-            disabled={!hasInsumos}
+            depth={1}
+            disabled={!hasOc}
           />
         </td>
         {verEconomicos && <td style={num}>{fmtMoneyOrDash(it.vu_cobro, hideEco)}</td>}
         {verEconomicos && <td style={num}>{fmtMoneyOrDash(it.vu_costo, hideEco)}</td>}
-        <td style={num}>{fmtNum(it.rendimiento)}</td>
         {verEconomicos && (
           <td style={{ ...num, color: utilColor, fontWeight: utilColor ? 700 : undefined }}>
             {fmtMoneyOrDash(it.utilidad, hideEco)}
           </td>
         )}
+        {verEconomicos && <td style={num}>{fmtMoneyOrDash(it.valor_entradas, hideEco)}</td>}
+        {verEconomicos && <td style={num}>{fmtMoneyOrDash(it.valor_salidas, hideEco)}</td>}
         <td style={num}>{fmtNum(it.entradas)}</td>
         <td style={num}>{fmtNum(it.salidas)}</td>
-        <td style={{ ...num, fontWeight: 700 }}>{fmtNum(it.saldo)}</td>
+        <td style={{ ...num, fontWeight: 700 }}>{fmtNum(it.saldo ?? it.stock)}</td>
       </tr>
 
-      {itemOpen && (it.insumos || []).map((ins) => {
-        const ikey = `${rowId}:${ins.insumo_id}`
-        const insOpen = expandedInsumos.has(ikey)
-        const hasProv = (ins.proveedores || []).length > 0
-        const utilI = ins.utilidad == null
-          ? undefined
-          : (Number(ins.utilidad) >= 0 ? 'var(--cc-color-success, #059669)' : 'var(--cc-color-danger, #dc2626)')
-        return (
-          <FragmentInsumo
-            key={ikey}
-            ins={ins}
-            ikey={ikey}
-            insOpen={insOpen}
-            hasProv={hasProv}
-            toggleInsumo={toggleInsumo}
-            td={td}
-            num={num}
-            ui={ui}
-            verEconomicos={verEconomicos}
-            hideEco={hideEco}
-            utilI={utilI}
-          />
-        )
-      })}
-    </>
-  )
-}
-
-function FragmentInsumo({
-  ins,
-  ikey,
-  insOpen,
-  hasProv,
-  toggleInsumo,
-  td,
-  num,
-  ui,
-  verEconomicos,
-  hideEco,
-  utilI,
-}) {
-  return (
-    <>
-      <tr
-        data-testid={`inventario-insumo-${ikey}`}
-        style={{ background: 'var(--cc-almacen-input-bg, rgba(0,0,0,0.02))' }}
-      >
-        <td style={{ ...td, paddingLeft: 28 }}>
-          <ToggleCell
-            open={insOpen}
-            onToggle={() => toggleInsumo(ikey)}
-            label={insumoLabel(ins)}
-            depth={1}
-            disabled={!hasProv}
-          />
-          {ins.es_principal === false && (
-            <span style={{
-              marginLeft: 8,
-              fontSize: 10,
-              color: ui.textMuted,
-              fontWeight: 600,
-              textTransform: 'uppercase',
-            }}
-            >
-              asociado
-            </span>
-          )}
-        </td>
-        {verEconomicos && <td style={num}>—</td>}
-        {verEconomicos && <td style={num}>{fmtMoneyOrDash(ins.vu_costo, hideEco)}</td>}
-        <td style={num}>{fmtNum(ins.rendimiento)}</td>
-        {verEconomicos && (
-          <td style={{ ...num, color: utilI, fontWeight: utilI ? 600 : undefined }}>
-            {fmtMoneyOrDash(ins.utilidad, hideEco)}
-          </td>
-        )}
-        <td style={num}>{fmtNum(ins.entradas)}</td>
-        <td style={num}>{fmtNum(ins.salidas)}</td>
-        <td style={{ ...num, fontWeight: 700 }}>{fmtNum(ins.saldo)}</td>
-      </tr>
-
-      {insOpen && (ins.proveedores || []).map((pr) => (
+      {itemOpen && (it.ordenes_compra || []).map((oc) => (
         <tr
-          key={`${ikey}:${pr.proveedor_id ?? pr.proveedor_nombre}`}
-          data-testid={`inventario-prov-${ikey}-${pr.proveedor_id ?? 'x'}`}
+          key={`${itemKey}:oc:${oc.orden_compra_id ?? oc.numero_oc ?? oc.numero_oc_fmt}`}
+          data-testid={`inventario-oc-${itemKey}-${oc.orden_compra_id ?? oc.numero_oc ?? 'x'}`}
         >
-          <td style={{ ...td, paddingLeft: 48, color: ui.textMuted }}>
-            <span style={{ fontWeight: 600 }}>{pr.proveedor_nombre || 'Sin proveedor'}</span>
+          <td style={{ ...tdLabel, paddingLeft: 44, color: ui.textMuted }}>
+            <TruncLabel title={ocLabel(oc)}>
+              <span style={{ fontWeight: 600 }}>{oc.numero_oc_fmt || 'Sin OC'}</span>
+              {oc.proveedor_nombre ? ` · ${oc.proveedor_nombre}` : ''}
+              {oc.material_descripcion ? ` · ${oc.material_descripcion}` : ''}
+            </TruncLabel>
           </td>
           {verEconomicos && <td style={num}>—</td>}
+          {verEconomicos && (
+            <td style={num}>{fmtMoneyOrDash(oc.valor_unitario, hideEco)}</td>
+          )}
           {verEconomicos && <td style={num}>—</td>}
-          <td style={num}>—</td>
-          {verEconomicos && <td style={num}>—</td>}
-          <td style={num}>{fmtNum(pr.entradas)}</td>
-          <td style={num}>{fmtNum(pr.salidas)}</td>
+          {verEconomicos && <td style={num}>{fmtMoneyOrDash(oc.valor_entradas, hideEco)}</td>}
+          {verEconomicos && <td style={num}>{fmtMoneyOrDash(oc.valor_salidas, hideEco)}</td>}
+          <td style={num}>{fmtNum(oc.entradas)}</td>
+          <td style={num}>{fmtNum(oc.salidas)}</td>
           <td style={{ ...num, fontWeight: 700, color: 'var(--cc-color-success, #059669)' }}>
-            {fmtNum(pr.saldo)}
+            {fmtNum(oc.saldo)}
           </td>
         </tr>
       ))}

@@ -1,4 +1,4 @@
-"""Inventario árbol: agregación ítem (listado) → insumo → proveedor."""
+"""Inventario árbol: agregación capítulo → ítem → orden de compra."""
 from unittest.mock import MagicMock
 
 from almacen_inventario_arbol import (
@@ -7,25 +7,47 @@ from almacen_inventario_arbol import (
     list_inventario_arbol,
     _fetch_oc_rows,
     _fetch_proveedor_map,
+    make_capitulo_key,
     make_item_key,
 )
 
 
 def test_make_item_key_normaliza():
     assert make_item_key("01 Cap", "1.01.") == make_item_key("01 Cap", "1.01")
+    assert make_capitulo_key("01 Cap") == make_capitulo_key("01  Cap")
 
 
-def test_build_arbol_tres_niveles_y_resumen():
-    item_rows = [{
-        "item_key": "01|01.01",
-        "capitulo": "01",
-        "item": "01.01",
-        "descripcion": "Excavación",
-        "unidad": "m3",
-        "vu_cobro": 80000,
-        "presupuesto_ids": [10],
-        "cant_presupuestada": 100,
-    }]
+def test_build_arbol_capitulo_item_oc_y_resumen():
+    item_rows = [
+        {
+            "item_key": "01|01.01",
+            "capitulo": "01",
+            "item": "01.01",
+            "descripcion": "Excavación",
+            "unidad": "m3",
+            "vu_cobro": 80000,
+            "presupuesto_ids": [10],
+            "cant_presupuestada": 100,
+        },
+        {
+            "item_key": "01|01.02",
+            "capitulo": "01",
+            "item": "01.02",
+            "descripcion": "Relleno",
+            "unidad": "m3",
+            "vu_cobro": 50000,
+            "presupuesto_ids": [11],
+        },
+        {
+            "item_key": "02|02.01",
+            "capitulo": "02",
+            "item": "02.01",
+            "descripcion": "Otro cap",
+            "unidad": "UND",
+            "vu_cobro": 1000,
+            "presupuesto_ids": [12],
+        },
+    ]
     composition = {
         "01|01.01": [
             {
@@ -47,13 +69,26 @@ def test_build_arbol_tres_niveles_y_resumen():
                 "vu_costo": 100,
             },
         ],
+        "01|01.02": [{
+            "insumo_id": 3,
+            "codigo": "INS-C",
+            "descripcion": "Tierra",
+            "unidad": "m3",
+            "es_principal": True,
+            "rendimiento": 1,
+            "vu_costo": 15000,
+        }],
     }
     movements = [
         {
             "item_key": "01|01.01",
-            "insumo_id": 1,
-            "proveedor_id": 5,
+            "orden_compra_id": 100,
+            "numero_oc": 45,
             "proveedor_nombre": "Acme",
+            "estado": "parcial",
+            "material_descripcion": "Arena",
+            "unidad": "m3",
+            "valor_unitario": 20000,
             "entradas": 10,
             "salidas": 4,
             "saldo": 6,
@@ -63,21 +98,29 @@ def test_build_arbol_tres_niveles_y_resumen():
         },
         {
             "item_key": "01|01.01",
-            "insumo_id": 1,
-            "proveedor_id": 7,
-            "proveedor_nombre": "Beta",
+            "orden_compra_id": 100,
+            "numero_oc": 45,
+            "proveedor_nombre": "Acme",
+            "estado": "parcial",
+            "material_descripcion": "Arena fina",
+            "unidad": "m3",
+            "valor_unitario": 20000,
             "entradas": 5,
-            "salidas": 5,
-            "saldo": 0,
+            "salidas": 1,
+            "saldo": 4,
             "valor_entradas": 100000,
-            "valor_salidas": 100000,
-            "valor_stock": 0,
+            "valor_salidas": 20000,
+            "valor_stock": 80000,
         },
         {
             "item_key": "01|01.01",
-            "insumo_id": 2,
-            "proveedor_id": 5,
-            "proveedor_nombre": "Acme",
+            "orden_compra_id": 200,
+            "numero_oc": 46,
+            "proveedor_nombre": "Beta",
+            "estado": "completa",
+            "material_descripcion": "Cemento",
+            "unidad": "kg",
+            "valor_unitario": 100,
             "entradas": 100,
             "salidas": 20,
             "saldo": 80,
@@ -85,29 +128,49 @@ def test_build_arbol_tres_niveles_y_resumen():
             "valor_salidas": 2000,
             "valor_stock": 8000,
         },
+        {
+            "item_key": "01|01.02",
+            "orden_compra_id": 100,
+            "numero_oc": 45,
+            "proveedor_nombre": "Acme",
+            "estado": "parcial",
+            "material_descripcion": "Tierra",
+            "unidad": "m3",
+            "valor_unitario": 15000,
+            "entradas": 2,
+            "salidas": 0,
+            "saldo": 2,
+            "valor_entradas": 30000,
+            "valor_salidas": 0,
+            "valor_stock": 30000,
+        },
     ]
     out = build_inventario_arbol_from_lines(
         item_rows=item_rows,
         composition=composition,
         movement_lines=movements,
     )
-    assert len(out["items"]) == 1
-    item = out["items"][0]
-    assert item["item_key"] == "01|01.01"
+    assert len(out["capitulos"]) == 2
+    cap01 = next(c for c in out["capitulos"] if c["capitulo"] == "01")
+    assert len(cap01["items"]) == 2
+    assert cap01["valor_entradas"] == 340000
+    assert cap01["valor_salidas"] == 102000
+    assert cap01["valor_stock"] == 238000
+
+    item = next(i for i in cap01["items"] if i["item"] == "01.01")
     assert item["vu_cobro"] == 80000
-    assert item["vu_costo"] == 25000
+    assert item["vu_costo"] == 25000  # 20000*1 + 100*50
     assert item["utilidad"] == 55000
     assert item["entradas"] == 115
-    assert item["salidas"] == 29
-    assert item["saldo"] == 86
-
-    arena = next(i for i in item["insumos"] if i["insumo_id"] == 1)
-    assert len(arena["proveedores"]) == 1
-    assert arena["proveedores"][0]["proveedor_nombre"] == "Acme"
-
-    cemento = next(i for i in item["insumos"] if i["insumo_id"] == 2)
-    assert cemento["utilidad"] == -5000
-    assert out["resumen"]["valor_stock"] == 128000
+    assert item["salidas"] == 25
+    assert item["saldo"] == 90
+    assert len(item["ordenes_compra"]) == 2
+    oc45 = next(o for o in item["ordenes_compra"] if o["numero_oc"] == 45)
+    assert oc45["numero_oc_fmt"] == "#00045"
+    assert oc45["entradas"] == 15
+    assert oc45["material_descripcion"] == "Varios materiales"
+    assert out["resumen"]["valor_stock"] == 238000
+    assert "insumos" not in item
 
 
 def test_build_arbol_item_sin_movimientos():
@@ -132,10 +195,12 @@ def test_build_arbol_item_sin_movimientos():
         }]},
         movement_lines=[],
     )
-    item = out["items"][0]
+    assert len(out["capitulos"]) == 1
+    item = out["capitulos"][0]["items"][0]
     assert item["vu_costo"] == 400
     assert item["utilidad"] == 600
     assert item["saldo"] == 0
+    assert item["ordenes_compra"] == []
 
 
 def test_fetch_oc_rows_fallback_sin_proveedor_id():
@@ -149,10 +214,9 @@ def test_fetch_oc_rows_fallback_sin_proveedor_id():
         def execute():
             calls["n"] += 1
             if calls["n"] == 1:
-                # Primera variante con proveedor_id falla
                 raise Exception("column almacen_orden_compra.proveedor_id does not exist code 42703")
             res = MagicMock()
-            res.data = [{"id": 3, "proveedor_nombre": "Acme"}]
+            res.data = [{"id": 3, "numero_oc": 9, "proveedor_nombre": "Acme"}]
             return res
 
         q.select.return_value.in_.return_value.execute.side_effect = execute
@@ -191,9 +255,6 @@ def test_fetch_proveedor_map_fallback_sin_razon_social():
             calls["n"] += 1
             if calls["n"] == 1:
                 raise Exception("column almacen_proveedor.nombre does not exist code 42703")
-            # Second attempt uses id only after razon_social also fails — simulate
-            # first select is razon_social which succeeds in this test's second call path.
-            # Here we force first failure then success with razon_social on retry with "id".
             res = MagicMock()
             res.data = [{"id": 2}]
             return res
@@ -202,17 +263,13 @@ def test_fetch_proveedor_map_fallback_sin_razon_social():
         return q
 
     sb.table.side_effect = table
-    # First select variant is razon_social — fail as if column missing wrongly named;
-    # our code first tries razon_social. Adjust: fail on nombre-like message for first.
-    # Better: first call succeeds with razon_social — already tested.
-    # This test: fail first (simulate wrong), succeed with id-only.
     out = _fetch_proveedor_map(sb, [2])
     assert out[2] == "Proveedor #2"
     assert calls["n"] == 2
 
 
 def test_list_inventario_arbol_devuelve_listado_si_enrich_falla(monkeypatch):
-    """Si falla el enriquecimiento, igual debe devolver ítems del listado."""
+    """Si falla el enriquecimiento, igual debe devolver ítems del listado por capítulo."""
     import almacen_inventario_arbol as mod
 
     invalidar_cache_inventario_arbol()
@@ -248,9 +305,12 @@ def test_list_inventario_arbol_devuelve_listado_si_enrich_falla(monkeypatch):
 
     out = list_inventario_arbol(1614)
     assert len(out["items"]) == 2
+    assert len(out["capitulos"]) == 1
+    assert out["capitulos"][0]["capitulo"] == "01"
     assert out["items"][0]["vu_cobro"] == 1000
     assert out["items"][1]["descripcion"] == "Relleno"
     assert out["items"][0]["saldo"] == 0
+    assert out["items"][0]["ordenes_compra"] == []
 
 
 def test_invalidar_cache_arbol():
