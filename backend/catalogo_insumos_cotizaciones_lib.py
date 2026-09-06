@@ -25,6 +25,42 @@ def norm_proveedor_key(nombre: Any, nit: Any = None) -> str:
     return f"{base}|{nit_n}" if nit_n else base
 
 
+def decimal_field_to_puntos(raw: Any) -> Optional[float]:
+    """Convierte campo de form decimal (0.19) o puntos (19) a puntos %."""
+    if raw is None or raw == "":
+        return None
+    try:
+        n = float(str(raw).strip().replace("%", "").replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    if n < 0:
+        return None
+    if n <= 1.0:
+        return round(n * 100.0, 4)
+    return round(n, 4)
+
+
+def impuesto_lado_as_tributos_payload(impuesto: Any) -> Optional[dict]:
+    """
+    Shape de impuesto por cotización (decimales UI) → payload de puntos %
+    para normalize_tributos. None si no hay datos.
+    """
+    if not isinstance(impuesto, dict):
+        return None
+    administracion = decimal_field_to_puntos(impuesto.get("administracion"))
+    imprevistos = decimal_field_to_puntos(impuesto.get("imprevistos"))
+    utilidad = decimal_field_to_puntos(impuesto.get("utilidad"))
+    iva = decimal_field_to_puntos(impuesto.get("iva"))
+    if all(v is None for v in (administracion, imprevistos, utilidad, iva)):
+        return None
+    return {
+        "administracion": administracion,
+        "imprevistos": imprevistos,
+        "utilidad": utilidad,
+        "iva": iva,
+    }
+
+
 def apply_auto_ganadora_detalle(detalle: List[dict]) -> List[dict]:
     """Marca como ganadora la cotización tipo insumo de menor valor (absoluto)."""
     rows = list(detalle or [])

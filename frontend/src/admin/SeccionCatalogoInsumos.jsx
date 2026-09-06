@@ -181,6 +181,19 @@ function computeTotal(costo, impuestoForm) {
   return computeValorDespuesAiuIva(costo, impuestoForm || EMPTY_IMPUESTO, { valoresEnDecimal: true })
 }
 
+/** Valor de cotización ganadora después de IVA/AIU (columna Valor de la grilla). */
+function valorGanadoraDespuesImpuesto(gan, row) {
+  if (!gan || gan.valor == null || gan.valor === '') return null
+  if (ladoHasImpuesto(gan) || impuestoTieneDatos(gan.impuesto)) {
+    return computeTotal(gan.valor, gan.impuesto)
+  }
+  if (row?.costo_total != null && row.costo_total !== '') return Number(row.costo_total)
+  if (row?.tributos) {
+    return computeValorDespuesAiuIva(gan.valor, row.tributos)
+  }
+  return computeTotal(gan.valor, EMPTY_IMPUESTO)
+}
+
 function IconPaperclip() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -1964,7 +1977,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               <th style={thGrid} title="Con AIU/IVA">Con IVA/AIU</th>
               <th style={thGridNowrap} title="Nº cotización">Nº</th>
               <th style={thGridNowrap} title="Fecha cotización">Fecha</th>
-              <th style={{ ...thGridNowrap, textAlign: 'center' }} title="Valor cotización">Valor</th>
+              <th style={{ ...thGridNowrap, textAlign: 'center' }} title="Valor cotización ganadora con IVA/AIU">Valor</th>
               <th style={thGrid} />
             </tr>
           </thead>
@@ -1976,6 +1989,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             ) : rows.map((r, idx) => {
               const rid = r.insumo_id || r.id
               const gan = ganadoraDesdeInsumoRow(r)
+              const valorGan = valorGanadoraDespuesImpuesto(gan, r)
               const zebra = sheetZebra(ui, idx)
               const tipoTrib = tipoTributoCortoDesdeRow(r)
               const vtLabel = valorTributarioLabelDesdeRow(r)
@@ -1999,7 +2013,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <td style={{ ...tdTotal, textAlign: 'center' }}>{fmtMoney(r.costo_total)}</td>
                     <td style={{ ...tdMuted, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis' }} title={gan?.numero || r.cotizacion_numero || ''}>{gan?.numero || r.cotizacion_numero || '—'}</td>
                     <td style={{ ...tdMuted, textAlign: 'center', whiteSpace: 'nowrap' }}>{gan?.fecha || r.cotizacion_fecha || '—'}</td>
-                    <td style={{ ...tdNum, textAlign: 'center' }}>{gan?.valor != null && gan.valor !== '' ? fmtMoney(gan.valor) : '—'}</td>
+                    <td style={{ ...tdNum, textAlign: 'center' }}>{valorGan != null ? fmtMoney(valorGan) : '—'}</td>
                     <td style={td} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'inline-flex', gap: 4 }}>
                         <IconActionBtn title="Historial de precios" t={t} onClick={() => showHistorial(r)}>
@@ -2205,8 +2219,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                                                     </td>
                                                     <td style={tdDesc}>{it.descripcion || '—'}</td>
                                                     <td style={tdNum}>{it.cantidad_negociada != null ? it.cantidad_negociada : '—'}</td>
-                                                    <td style={{ ...tdMoney, textAlign: 'right' }}>{fmtMoney(it.valor)}</td>
-                                                    <td style={{ ...tdMoney, textAlign: 'right' }}>{fmtMoney(it.valor_linea)}</td>
+                                                    <td style={{ ...tdMoney, textAlign: 'right' }} title="Precio unitario con IVA/AIU">{fmtMoney(it.valor)}</td>
+                                                    <td style={{ ...tdMoney, textAlign: 'right' }} title="Cantidad negociada × precio con IVA/AIU">{fmtMoney(it.valor_linea)}</td>
                                                   </tr>
                                                 ))}
                                               </tbody>
