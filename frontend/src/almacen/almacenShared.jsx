@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useClaraViewport } from '../useClaraViewport'
+import { isLikelyDarkBackground } from '../theme/adminPanelTheme'
 import { createAlmacenApi } from './almacenApi'
 
 export function almacenStyles(t, compact = false) {
@@ -140,15 +141,15 @@ export function buildAlmacenCssVars(t) {
   if (!t) return {}
   const primary = t.primary || '#2563eb'
   const bgCard = t.bgCard || '#ffffff'
-  const isDark = bgCard === '#0F2038'
+  const isDark = isLikelyDarkBackground(bgCard) || bgCard === '#0F2038'
   return {
     '--cc-almacen-bg': t.bg || bgCard,
     '--cc-almacen-bg-card': bgCard,
     '--cc-almacen-bg-header': t.headerBg || bgCard,
-    '--cc-almacen-input-bg': t.inputBg || '#f8fafc',
-    '--cc-almacen-text': t.text || '#0f172a',
-    '--cc-almacen-text-muted': t.textMuted || '#64748b',
-    '--cc-almacen-border': t.border || '#e2e8f0',
+    '--cc-almacen-input-bg': t.inputBg || (isDark ? '#0A1628' : '#f8fafc'),
+    '--cc-almacen-text': t.text || (isDark ? '#E0F2FE' : '#0f172a'),
+    '--cc-almacen-text-muted': t.textMuted || (isDark ? '#7FB3D3' : '#64748b'),
+    '--cc-almacen-border': t.border || (isDark ? '#1E3A5F' : '#e2e8f0'),
     '--cc-almacen-accent': primary,
     '--cc-almacen-accent-soft': `${primary}22`,
     '--cc-almacen-overlay': t.overlay || (isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(15, 23, 42, 0.52)'),
