@@ -94,6 +94,7 @@ from almacen_service import (
     mapear_item_solicitud_gerencial,
     ocr_remision_entrada,
     preview_proximo_numero_disposicion,
+    preview_proximo_consecutivo_solicitud,
     rechazar_solicitud,
     search_transportadores,
     update_config,
@@ -158,6 +159,7 @@ class SolicitudItemBody(BaseModel):
     valor_compra_unitario: Optional[float] = None
     vlr_unitario_cobro: Optional[float] = None
     es_recurrente: bool = False
+    es_principal: bool = True
 
 
 class MapearItemGerencialBody(BaseModel):
@@ -552,6 +554,14 @@ def route_count_solicitudes(
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "ver")
     return {"count": count_solicitudes(contrato_id, estado)}
+
+
+@router.get("/{contrato_id}/solicitudes/proximo-consecutivo")
+def route_proximo_consecutivo_solicitud(contrato_id: int, current_user=Depends(get_current_user)):
+    """Próximo consecutivo para el título automático antes del primer guardado."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "crear")
+    return preview_proximo_consecutivo_solicitud(contrato_id)
 
 
 @router.get("/{contrato_id}/solicitudes/{solicitud_id}")

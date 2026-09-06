@@ -170,6 +170,11 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         .then((r) => Number(r?.count) || 0)
     },
 
+    getProximoConsecutivoSolicitud: () =>
+      fetch(`${base}/solicitudes/proximo-consecutivo`, { headers: authHeaders() })
+        .then(parseJson)
+        .then((r) => Number(r?.proximo) || null),
+
     getSolicitud: (id, { ligera = false } = {}) => {
       const q = ligera ? '?ligera=1' : ''
       return fetchJson(`${base}/solicitudes/${id}${q}`, { headers: authHeaders() })

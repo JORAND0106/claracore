@@ -47,8 +47,24 @@ const emptyItem = () => ({
   cantidad: '',
   valor_compra_unitario: '',
   es_recurrente: false,
+  es_principal: true,
   preview: null,
 })
+
+function itemEsPrincipal(it) {
+  return it?.es_principal !== false
+}
+
+/** Otras líneas principales del mismo presupuesto_id (para preview de saldo). */
+function cantBorradorPrincipales(draftItems, idx, presupuestoId) {
+  return draftItems.reduce((acc, row, i) => {
+    if (i === idx) return acc
+    if (!itemEsPrincipal(row)) return acc
+    if (!row.cantidad || Number(row.cantidad) <= 0) return acc
+    if (Number(row.presupuesto_id) !== Number(presupuestoId)) return acc
+    return acc + Number(row.cantidad)
+  }, 0)
+}
 
 function abscisaPayload(val) {
   if (val === '' || val == null) return undefined
@@ -67,7 +83,7 @@ function ubicacionPayload(it) {
   }
 }
 
-function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg, ui, sinPrecio, verEconomicos = true }) {
+function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg, ui, sinPrecio, verEconomicos = true, esPrincipal = true }) {
   if (!ctx && !ctxNeg?.tiene_negociado) return null
   const alertStyle = supera || superaNegociado
     ? { background: '#fef2f2', border: '1px solid #dc2626', color: '#991b1b' }
@@ -77,6 +93,11 @@ function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg,
 
   return (
     <div style={{ ...alertStyle, borderRadius: 6, padding: '6px 8px', marginTop: 6, fontSize: 'var(--cc-xs)' }}>
+      {!esPrincipal && (
+        <div style={{ fontWeight: 600, color: ui.textMuted, marginBottom: 4 }}>
+          Insumo asociado — no descuenta presupuesto del ítem
+        </div>
+      )}
       {supera && (
         <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 4 }}>
           ⚠ Supera presupuesto en este PK-ID
@@ -147,15 +168,20 @@ export default function SolicitudForm({
   const [modalExitoEnvio, setModalExitoEnvio] = useState(null)
   const [sol, setSol] = useState(null)
   const [confirmAnular, setConfirmAnular] = useState(false)
+  const [proximoConsecutivo, setProximoConsecutivo] = useState(null)
 
   const editable = solicitudAlmacenEditable(sol) && (
     solicitudId ? Boolean(permisos?.editar) : Boolean(permisos?.crear)
   )
   const verEconomicos = permisos?.verEconomicos !== false
-  const tituloAuto = formatSolicitudTituloAuto(sol?.consecutivo, sol?.created_at)
+  const tituloAuto = formatSolicitudTituloAuto(
+    sol?.consecutivo ?? proximoConsecutivo,
+    sol?.created_at,
+  )
 
   const aplicarSolicitudServidor = (s) => {
     setSol(s)
+    if (s?.consecutivo != null) setProximoConsecutivo(s.consecutivo)
     const mapped = mapSolicitudItemsFromServer(s)
     setItems(mapped.length ? mapped : [emptyItem()])
     onEstadoChange?.(s?.estado || null)
@@ -166,6 +192,17 @@ export default function SolicitudForm({
     api.getSolicitud(solicitudId, { ligera: true }).then((s) => {
       aplicarSolicitudServidor(s)
     }).catch((e) => setError(parseSolicitudApiError(e)))
+  }, [api, solicitudId])
+
+  useEffect(() => {
+    if (solicitudId) return undefined
+    let cancelled = false
+    api.getProximoConsecutivoSolicitud()
+      .then((n) => {
+        if (!cancelled && n != null) setProximoConsecutivo(n)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
   }, [api, solicitudId])
 
   const updateItem = (idx, patch) => {
@@ -181,26 +218,30 @@ export default function SolicitudForm({
       return
     }
     const ins = it.insumo
-    // Sin insumo (flujo Contratista): solo contexto presupuestal.
-    if (!ins?.insumo_id && !ins?.listado_precio_id) {
+    const esPrincipal = itemEsPrincipal(it)
+    const cantBorradorAdicional = cantBorradorPrincipales(draftItems, idx, it.presupuesto_id)
+    // Asociado: no descuenta su cantidad. Principal: descuenta la propia + otras principales del borrador.
+    const cantidadParaSaldo = esPrincipal ? Number(it.cantidad) : 0
+
+    // Sin insumo, o asociado: solo contexto presupuestal (asociado nunca alerta sobrepresupuesto).
+    if ((!ins?.insumo_id && !ins?.listado_precio_id) || !esPrincipal) {
       try {
-        const cantBorradorAdicional = draftItems.reduce((acc, row, i) => {
-          if (i === idx) return acc
-          if (!row.cantidad || Number(row.cantidad) <= 0) return acc
-          if (Number(row.presupuesto_id) !== Number(it.presupuesto_id)) return acc
-          return acc + Number(row.cantidad)
-        }, 0)
         const ctx = await api.getPresupuestoContext(
           it.presupuesto_id,
           it.pk_id,
-          Number(it.cantidad) + cantBorradorAdicional,
+          cantidadParaSaldo + cantBorradorAdicional,
           solicitudId || undefined,
         )
         setItems((prev) => prev.map((row, i) => (i === idx ? {
           ...row,
           preview: {
-            contexto_presupuesto: ctx,
-            supera_presupuesto: ctx?.supera_presupuesto,
+            contexto_presupuesto: {
+              ...ctx,
+              es_principal: esPrincipal,
+              cantidad_solicitada: Number(it.cantidad),
+              supera_presupuesto: esPrincipal ? ctx?.supera_presupuesto : false,
+            },
+            supera_presupuesto: esPrincipal ? Boolean(ctx?.supera_presupuesto) : false,
             presupuesto_id: it.presupuesto_id,
           },
         } : row)))
@@ -210,12 +251,6 @@ export default function SolicitudForm({
       return
     }
     try {
-      const cantBorradorAdicional = draftItems.reduce((acc, row, i) => {
-        if (i === idx) return acc
-        if (!row.cantidad || Number(row.cantidad) <= 0) return acc
-        if (Number(row.presupuesto_id) !== Number(it.presupuesto_id)) return acc
-        return acc + Number(row.cantidad)
-      }, 0)
       const cantBorradorInsumo = draftItems.reduce((acc, row, i) => {
         if (i === idx) return acc
         if (!row.cantidad || Number(row.cantidad) <= 0) return acc
@@ -341,6 +376,28 @@ export default function SolicitudForm({
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? { ...it, cantidad: val } : it))
       triggerPreview(idx, next)
+      // Recalcular otras principales del mismo presupuesto (borrador adicional).
+      next.forEach((row, i) => {
+        if (i === idx) return
+        if (!itemEsPrincipal(row)) return
+        if (Number(row.presupuesto_id) !== Number(next[idx].presupuesto_id)) return
+        triggerPreview(i, next)
+      })
+      return next
+    })
+  }
+
+  const onPrincipalChange = (idx, checked) => {
+    markDirty()
+    setItems((prev) => {
+      const next = prev.map((it, i) => (i === idx ? { ...it, es_principal: !!checked } : it))
+      // Recalcular esta línea y todas las del mismo presupuesto_id.
+      const pid = next[idx]?.presupuesto_id
+      next.forEach((row, i) => {
+        if (i === idx || (pid && Number(row.presupuesto_id) === Number(pid))) {
+          triggerPreview(i, next)
+        }
+      })
       return next
     })
   }
@@ -369,11 +426,12 @@ export default function SolicitudForm({
     }
     return {
       // El backend regenera el título automático; se envía para compatibilidad.
-      titulo: formatSolicitudTituloAuto(sol?.consecutivo, sol?.created_at),
+      titulo: formatSolicitudTituloAuto(sol?.consecutivo ?? proximoConsecutivo, sol?.created_at),
       items: items.map((it) => {
         const base = {
           cantidad: Number(it.cantidad),
           es_recurrente: !!it.es_recurrente,
+          es_principal: it.es_principal !== false,
           pk_id: String(it.pk_id || '').trim(),
           presupuesto_capitulo: it.presupuesto_capitulo,
           presupuesto_item: it.presupuesto_item,
@@ -667,6 +725,7 @@ export default function SolicitudForm({
             onPptoChange={onPptoChange}
             onDescripcionChange={onDescripcionChange}
             onCantidadChange={onCantidadChange}
+            onPrincipalChange={onPrincipalChange}
             onObservacionChange={(idx, val) => { markDirty(); updateItem(idx, { observacion_residente: val }) }}
             onPkSelect={onPkSelect}
             onPkClear={(idx) => {
@@ -707,6 +766,7 @@ export default function SolicitudForm({
                   ctxNeg={it.preview?.contexto_negociado}
                   sinPrecio={false}
                   verEconomicos={verEconomicos}
+                  esPrincipal={it.es_principal !== false}
                   ui={ui}
                 />
               </div>
