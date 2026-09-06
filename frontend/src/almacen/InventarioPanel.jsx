@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
+import PresupuestoItemSelector, { normPptoItem } from './PresupuestoItemSelector'
 import {
   fmtCant,
   fmtFechaAlmacenCorta,
@@ -32,12 +33,36 @@ function fmtMoneyOrDash(v, hideEco) {
   return fmtMoney(n)
 }
 
+function normCap(cap) {
+  return String(cap || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function itemMatchesFiltro(it, filtroCap, filtroItem, q) {
+  if (filtroCap) {
+    const capOk = normCap(it.capitulo) === normCap(filtroCap)
+      || normCap(it.capitulo).includes(normCap(filtroCap))
+    if (!capOk) return false
+  }
+  if (filtroItem) {
+    const want = normPptoItem(filtroItem).toLowerCase()
+    const got = normPptoItem(it.item).toLowerCase()
+    if (got !== want && !got.includes(want) && !want.includes(got)) return false
+  }
+  const needle = String(q || '').trim().toLowerCase()
+  if (!needle) return true
+  const hay = [
+    it.capitulo, it.item, it.descripcion, it.pk_id, it.item_key,
+    ...(it.insumos || []).flatMap((ins) => [ins.codigo, ins.descripcion]),
+  ].filter(Boolean).join(' ').toLowerCase()
+  return hay.includes(needle)
+}
+
 function itemLabel(it) {
   const parts = [it.capitulo, it.item].filter(Boolean)
   const code = parts.length ? parts.join(' · ') : null
   const desc = (it.descripcion || '').trim()
   if (code && desc) return `${code} — ${desc}`
-  return code || desc || `Ítem #${it.presupuesto_id}`
+  return code || desc || it.item_key || `Ítem #${it.presupuesto_id}`
 }
 
 function insumoLabel(ins) {
@@ -47,11 +72,18 @@ function insumoLabel(ins) {
   return code || desc || `Insumo #${ins.insumo_id}`
 }
 
+function rowKey(it) {
+  return it.item_key || String(it.presupuesto_id || '')
+}
+
 function ToggleCell({ open, onToggle, label, depth = 0, disabled = false }) {
   return (
     <button
       type="button"
-      onClick={onToggle}
+      onClick={(e) => {
+        e.stopPropagation()
+        onToggle()
+      }}
       disabled={disabled}
       aria-expanded={open}
       style={{
@@ -87,10 +119,10 @@ function ToggleCell({ open, onToggle, label, depth = 0, disabled = false }) {
   )
 }
 
-function GraficoResumenInventario({ resumen, ui, hideEco }) {
+function GraficoResumenInventario({ resumen, titulo, ui, hideEco }) {
   const chartData = useMemo(() => ([
     {
-      nombre: 'Contrato',
+      nombre: 'Valores',
       valor_stock: Number(resumen?.valor_stock || 0),
       valor_entradas: Number(resumen?.valor_entradas || 0),
       valor_salidas: Number(resumen?.valor_salidas || 0),
@@ -108,7 +140,7 @@ function GraficoResumenInventario({ resumen, ui, hideEco }) {
   return (
     <div style={{ ...ui.card, marginBottom: 16 }} data-testid="inventario-resumen-chart">
       <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 'var(--cc-sm)' }}>
-        Resumen general del inventario
+        {titulo || 'Resumen del inventario'}
       </div>
       <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 12 }}>
         Stock: {fmtMoney(resumen?.valor_stock)} · Entradas: {fmtMoney(resumen?.valor_entradas)} · Salidas: {fmtMoney(resumen?.valor_salidas)}
@@ -147,6 +179,9 @@ export default function InventarioPanel({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [q, setQ] = useState('')
+  const [filtroCap, setFiltroCap] = useState('')
+  const [filtroItem, setFiltroItem] = useState('')
+  const [selectedKey, setSelectedKey] = useState(null)
   const [expandedItems, setExpandedItems] = useState(() => new Set())
   const [expandedInsumos, setExpandedInsumos] = useState(() => new Set())
 
@@ -177,23 +212,33 @@ export default function InventarioPanel({
   const hideEco = !verEconomicos || Boolean(arbol?.resumen?.economicos_ocultos)
   const items = arbol?.items || []
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase()
-    if (!needle) return items
-    return items.filter((it) => {
-      const hay = [
-        it.capitulo, it.item, it.descripcion, it.pk_id,
-        ...(it.insumos || []).flatMap((ins) => [ins.codigo, ins.descripcion]),
-      ].filter(Boolean).join(' ').toLowerCase()
-      return hay.includes(needle)
-    })
-  }, [items, q])
+  const filtered = useMemo(
+    () => items.filter((it) => itemMatchesFiltro(it, filtroCap, filtroItem, q)),
+    [items, filtroCap, filtroItem, q],
+  )
 
-  const toggleItem = (presupuestoId) => {
+  const selectedItem = useMemo(() => {
+    if (!selectedKey) return null
+    return items.find((it) => rowKey(it) === selectedKey) || null
+  }, [items, selectedKey])
+
+  const chartResumen = selectedItem
+    ? {
+      valor_stock: selectedItem.valor_stock,
+      valor_entradas: selectedItem.valor_entradas,
+      valor_salidas: selectedItem.valor_salidas,
+    }
+    : (arbol?.resumen || {})
+
+  const chartTitulo = selectedItem
+    ? `Resumen del ítem: ${itemLabel(selectedItem)}`
+    : 'Resumen general del contrato'
+
+  const toggleItem = (key) => {
     setExpandedItems((prev) => {
       const next = new Set(prev)
-      if (next.has(presupuestoId)) next.delete(presupuestoId)
-      else next.add(presupuestoId)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
@@ -205,6 +250,22 @@ export default function InventarioPanel({
       else next.add(key)
       return next
     })
+  }
+
+  const selectItem = (it) => {
+    const key = rowKey(it)
+    setSelectedKey(key)
+  }
+
+  const onFiltroChange = ({ capitulo, item }) => {
+    setFiltroCap(capitulo || '')
+    setFiltroItem(item || '')
+  }
+
+  const limpiarFiltro = () => {
+    setFiltroCap('')
+    setFiltroItem('')
+    setQ('')
   }
 
   const th = {
@@ -229,12 +290,14 @@ export default function InventarioPanel({
     whiteSpace: 'nowrap',
   }
 
+  const filtroActivo = Boolean(filtroCap || filtroItem || q.trim())
+
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📊 Inventario</div>
         <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
-          Tabla tipo Excel con drill-down por ítem, insumo y proveedor. Filas contraídas por defecto.
+          Listado de precios del contrato en tabla Excel. Clic en un ítem para ver su resumen en el gráfico.
         </div>
         {arbol?.generado_at && (
           <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
@@ -267,26 +330,52 @@ export default function InventarioPanel({
         <div style={{ color: ui.textMuted }}>Cargando inventario…</div>
       ) : (
         <>
-          <GraficoResumenInventario resumen={arbol?.resumen} ui={ui} hideEco={hideEco} />
+          <GraficoResumenInventario
+            resumen={chartResumen}
+            titulo={chartTitulo}
+            ui={ui}
+            hideEco={hideEco}
+          />
 
-          <div style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            alignItems: 'center',
-            marginBottom: 10,
-          }}
-          >
-            <input
-              type="search"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar capítulo, ítem, insumo…"
-              aria-label="Buscar en inventario"
-              style={{ ...ui.input, flex: '1 1 240px', margin: 0, maxWidth: 420 }}
-            />
-            <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-              {filtered.length} ítem{filtered.length === 1 ? '' : 's'}
+          <div style={{ ...ui.card, marginBottom: 12 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 'var(--cc-sm)' }}>
+              Filtro por capítulo e ítem
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+              <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+                <PresupuestoItemSelector
+                  capitulo={filtroCap}
+                  item={filtroItem}
+                  onChange={onFiltroChange}
+                />
+              </div>
+              <input
+                type="search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Buscar texto libre…"
+                aria-label="Buscar en inventario"
+                data-testid="inventario-busqueda"
+                style={{ ...ui.input, flex: '1 1 200px', margin: 0, maxWidth: 280 }}
+              />
+              {filtroActivo && (
+                <button
+                  type="button"
+                  onClick={limpiarFiltro}
+                  style={{
+                    ...ui.btnSecondary,
+                    padding: '8px 12px',
+                    fontSize: 'var(--cc-sm)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Ver todo el listado
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 8 }}>
+              Mostrando {filtered.length} de {items.length} ítem{items.length === 1 ? '' : 's'}
+              {selectedItem ? ` · Gráfico: ${itemLabel(selectedItem)}` : ' · Gráfico: total del contrato'}
             </div>
           </div>
 
@@ -323,25 +412,31 @@ export default function InventarioPanel({
                       colSpan={verEconomicos ? 8 : 5}
                       style={{ ...td, color: ui.textMuted, textAlign: 'center', padding: 24 }}
                     >
-                      No hay ítems para mostrar.
+                      {items.length === 0
+                        ? 'No hay ítems en el listado de precios de este contrato.'
+                        : 'Ningún ítem coincide con el filtro.'}
                     </td>
                   </tr>
                 ) : filtered.map((it) => {
-                  const itemOpen = expandedItems.has(it.presupuesto_id)
+                  const key = rowKey(it)
+                  const itemOpen = expandedItems.has(key)
                   const hasInsumos = (it.insumos || []).length > 0
+                  const isSelected = selectedKey === key
                   const utilColor = it.utilidad == null
                     ? undefined
                     : (Number(it.utilidad) >= 0 ? 'var(--cc-color-success, #059669)' : 'var(--cc-color-danger, #dc2626)')
                   return (
                     <FragmentItem
-                      key={it.presupuesto_id}
+                      key={key}
                       it={it}
+                      rowId={key}
                       itemOpen={itemOpen}
                       hasInsumos={hasInsumos}
+                      isSelected={isSelected}
+                      selectItem={selectItem}
                       toggleItem={toggleItem}
                       toggleInsumo={toggleInsumo}
                       expandedInsumos={expandedInsumos}
-                      th={th}
                       td={td}
                       num={num}
                       ui={ui}
@@ -362,8 +457,11 @@ export default function InventarioPanel({
 
 function FragmentItem({
   it,
+  rowId,
   itemOpen,
   hasInsumos,
+  isSelected,
+  selectItem,
   toggleItem,
   toggleInsumo,
   expandedInsumos,
@@ -377,13 +475,24 @@ function FragmentItem({
   return (
     <>
       <tr
-        data-testid={`inventario-item-${it.presupuesto_id}`}
-        style={{ background: itemOpen ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.06))' : undefined }}
+        data-testid={`inventario-item-${rowId}`}
+        onClick={() => selectItem(it)}
+        style={{
+          background: isSelected
+            ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.12))'
+            : (itemOpen ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.06))' : undefined),
+          cursor: 'pointer',
+          outline: isSelected ? '2px solid var(--cc-almacen-accent, #0077B6)' : undefined,
+          outlineOffset: -2,
+        }}
       >
         <td style={td}>
           <ToggleCell
             open={itemOpen}
-            onToggle={() => toggleItem(it.presupuesto_id)}
+            onToggle={() => {
+              selectItem(it)
+              toggleItem(rowId)
+            }}
             label={itemLabel(it)}
             depth={0}
             disabled={!hasInsumos}
@@ -403,7 +512,7 @@ function FragmentItem({
       </tr>
 
       {itemOpen && (it.insumos || []).map((ins) => {
-        const ikey = `${it.presupuesto_id}:${ins.insumo_id}`
+        const ikey = `${rowId}:${ins.insumo_id}`
         const insOpen = expandedInsumos.has(ikey)
         const hasProv = (ins.proveedores || []).length > 0
         const utilI = ins.utilidad == null
@@ -412,7 +521,6 @@ function FragmentItem({
         return (
           <FragmentInsumo
             key={ikey}
-            it={it}
             ins={ins}
             ikey={ikey}
             insOpen={insOpen}
@@ -432,7 +540,6 @@ function FragmentItem({
 }
 
 function FragmentInsumo({
-  it,
   ins,
   ikey,
   insOpen,
