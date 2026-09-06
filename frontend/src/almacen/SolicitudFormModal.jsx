@@ -9,7 +9,7 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 
-const MODAL_WIDTH = 'min(1248px, 100%)'
+const MODAL_WIDTH = 'min(1560px, 100%)'
 
 /**
  * Popup dedicado para crear o editar una solicitud de insumos.
@@ -78,8 +78,8 @@ export default function SolicitudFormModal({
               {!compact && (
                 <div style={{ fontSize: 'var(--cc-xs)', color: 'var(--cc-almacen-text-muted)', marginTop: 2, lineHeight: 1.35 }}>
                   {isNew
-                    ? 'Describa el material, PK-ID y control presupuestal por línea.'
-                    : 'Actualice título, descripción del material y ubicaciones.'}
+                    ? 'Complete capítulo, ítem, material, ubicación y cantidad por fila. El título se genera automáticamente.'
+                    : 'Actualice materiales y ubicaciones. El título se genera automáticamente.'}
                 </div>
               )}
             </div>

@@ -1,5 +1,40 @@
 import { validateAbscisaRango } from './almacenAbscisa'
+import { ALMACEN_TIMEZONE, fmtFechaAlmacenSolo, parseIsoAlmacen } from './almacenDatetime'
 import { abscisasLineaSolicitud } from './solicitudDetalleHelpers'
+
+/**
+ * Título automático de solicitud: «Solicitud #3 - 13/07/2026»
+ * (consecutivo + fecha de creación en America/Bogota).
+ */
+export function formatSolicitudTituloAuto(consecutivo, createdAt) {
+  let fecha = '—'
+  if (createdAt) {
+    const d = parseIsoAlmacen(createdAt)
+    if (d) {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: ALMACEN_TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(d)
+      const get = (type) => parts.find((p) => p.type === type)?.value || ''
+      fecha = `${get('day')}/${get('month')}/${get('year')}`
+    } else {
+      fecha = fmtFechaAlmacenSolo(String(createdAt).slice(0, 10))
+    }
+  } else {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: ALMACEN_TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date())
+    const get = (type) => parts.find((p) => p.type === type)?.value || ''
+    fecha = `${get('day')}/${get('month')}/${get('year')}`
+  }
+  const num = consecutivo != null && consecutivo !== '' ? String(consecutivo) : '…'
+  return `Solicitud #${num} - ${fecha}`
+}
 
 /** Orden natural para capítulos e ítems (1, 2, 3 … 10, 11). */
 export function naturalSortKey(text) {

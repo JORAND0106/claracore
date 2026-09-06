@@ -11,6 +11,8 @@ export default function PresupuestoItemSelector({
   item,
   onChange,
   disabled,
+  /** `excel`: dos celdas <td> (Capítulo / Ítem) para filas tipo hoja de cálculo. */
+  variant = 'form',
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -20,6 +22,7 @@ export default function PresupuestoItemSelector({
   const [itemQuery, setItemQuery] = useState('')
   const [open, setOpen] = useState(false)
   const blurTimer = useRef(null)
+  const excel = variant === 'excel'
 
   useEffect(() => {
     api.getListadoCapitulos()
@@ -34,12 +37,12 @@ export default function PresupuestoItemSelector({
       return
     }
     setLoadingItems(true)
-    setOpen(true)
+    if (!excel) setOpen(true)
     api.getListadoItems(capitulo)
       .then((rows) => setItemsCap([...(rows || [])].sort((a, b) => sortNatural(a.item, b.item))))
       .catch(() => setItemsCap([]))
       .finally(() => setLoadingItems(false))
-  }, [api, capitulo])
+  }, [api, capitulo, excel])
 
   const selectedRow = useMemo(
     () => itemsCap.find((p) => normPptoItem(p.item) === normPptoItem(item)),
@@ -74,119 +77,149 @@ export default function PresupuestoItemSelector({
   const onCapChange = (cap) => {
     onChange?.({ capitulo: cap, item: '' })
     setItemQuery('')
-    setOpen(!!cap)
+    setOpen(!!cap && !excel)
   }
 
   const inputStyle = {
     ...ui.input,
-    padding: '6px 8px',
-    fontSize: 'var(--cc-sm)',
+    padding: excel ? '4px 6px' : '6px 8px',
+    fontSize: excel ? 'var(--cc-xs)' : 'var(--cc-sm)',
     width: '100%',
+    minWidth: 0,
     boxSizing: 'border-box',
+    height: excel ? 28 : undefined,
+  }
+
+  const dropdown = open && !disabled && capitulo && (
+    filtered.length === 0 && !loadingItems ? (
+      <div style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: '100%',
+        marginTop: 2,
+        zIndex: 40,
+        padding: '8px 10px',
+        background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
+        color: ui.textMuted,
+        border: `1px solid ${ui.textMuted}44`,
+        borderRadius: 6,
+        fontSize: 'var(--cc-xs)',
+      }}
+      >
+        No hay ítems de cobro para este capítulo en el listado de precios.
+      </div>
+    ) : filtered.length > 0 ? (
+      <div style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: '100%',
+        marginTop: 2,
+        zIndex: 40,
+        maxHeight: 200,
+        overflowY: 'auto',
+        background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
+        color: ui.text,
+        border: `1px solid ${ui.textMuted}44`,
+        borderRadius: 6,
+        boxShadow: '0 4px 12px #0002',
+      }}
+      >
+        {filtered.map((p) => {
+          const label = itemLabelFull(p)
+          return (
+            <button
+              key={normPptoItem(p.item)}
+              type="button"
+              title={label}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pickItem(p)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '6px 8px',
+                border: 'none',
+                borderBottom: `1px solid ${ui.textMuted}22`,
+                background: normPptoItem(p.item) === normPptoItem(item) ? `${ui.accentSoft}` : 'transparent',
+                color: ui.text,
+                cursor: 'pointer',
+                fontSize: 'var(--cc-xs)',
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+              }}
+            >
+              {label}
+            </button>
+          )
+        })}
+      </div>
+    ) : null
+  )
+
+  const capSelect = (
+    <select
+      style={inputStyle}
+      value={capitulo || ''}
+      disabled={disabled}
+      title={capitulo || 'Seleccione capítulo'}
+      onChange={(e) => onCapChange(e.target.value)}
+    >
+      <option value="">Capítulo…</option>
+      {capitulos.map((c) => (
+        <option key={c} value={c} title={c}>{c}</option>
+      ))}
+    </select>
+  )
+
+  const itemField = (
+    <div style={{ position: 'relative', minWidth: 0, width: '100%' }}>
+      <input
+        style={inputStyle}
+        value={itemQuery}
+        disabled={disabled || !capitulo || loadingItems}
+        placeholder={!capitulo ? 'Elija capítulo' : loadingItems ? 'Cargando…' : 'Buscar ítem…'}
+        title={selectedLabel || itemQuery || 'Ítem de cobro'}
+        onChange={(e) => {
+          setItemQuery(e.target.value)
+          setOpen(true)
+          if (!e.target.value.trim()) onChange?.({ capitulo, item: '' })
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          clearTimeout(blurTimer.current)
+          blurTimer.current = setTimeout(() => setOpen(false), 160)
+        }}
+      />
+      {dropdown}
+    </div>
+  )
+
+  if (excel) {
+    const tdStyle = {
+      ...ui.td,
+      padding: '4px 6px',
+      verticalAlign: 'middle',
+      overflow: 'visible',
+    }
+    return (
+      <>
+        <td style={tdStyle}>{capSelect}</td>
+        <td style={tdStyle}>{itemField}</td>
+      </>
+    )
   }
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(200px, 2fr)', gap: 8, width: '100%' }}>
       <div style={{ minWidth: 0 }}>
         <AlmacenFieldLabel icon="📂" label="Capítulo" compact />
-        <select
-          style={inputStyle}
-          value={capitulo || ''}
-          disabled={disabled}
-          title={capitulo || 'Seleccione capítulo'}
-          onChange={(e) => onCapChange(e.target.value)}
-        >
-          <option value="">Capítulo…</option>
-          {capitulos.map((c) => (
-            <option key={c} value={c} title={c}>{c}</option>
-          ))}
-        </select>
+        {capSelect}
       </div>
       <div style={{ position: 'relative', minWidth: 0 }}>
         <AlmacenFieldLabel icon="📋" label="Ítem de cobro" compact ayuda="Escriba número o descripción del ítem." />
-        <input
-          style={inputStyle}
-          value={itemQuery}
-          disabled={disabled || !capitulo || loadingItems}
-          placeholder={!capitulo ? 'Elija capítulo' : loadingItems ? 'Cargando…' : 'Buscar ítem…'}
-          title={selectedLabel || itemQuery || 'Ítem de cobro'}
-          onChange={(e) => {
-            setItemQuery(e.target.value)
-            setOpen(true)
-            if (!e.target.value.trim()) onChange?.({ capitulo, item: '' })
-          }}
-          onFocus={() => setOpen(true)}
-          onBlur={() => {
-            clearTimeout(blurTimer.current)
-            blurTimer.current = setTimeout(() => setOpen(false), 160)
-          }}
-        />
-        {open && !disabled && capitulo && !loadingItems && filtered.length === 0 && (
-          <div style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: '100%',
-            marginTop: 2,
-            zIndex: 30,
-            padding: '8px 10px',
-            background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
-            color: ui.textMuted,
-            border: `1px solid ${ui.textMuted}44`,
-            borderRadius: 6,
-            fontSize: 'var(--cc-xs)',
-          }}
-          >
-            No hay ítems de cobro para este capítulo en el listado de precios.
-          </div>
-        )}
-        {open && !disabled && capitulo && filtered.length > 0 && (
-          <div style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: '100%',
-            marginTop: 2,
-            zIndex: 30,
-            maxHeight: 200,
-            overflowY: 'auto',
-            background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
-            color: ui.text,
-            border: `1px solid ${ui.textMuted}44`,
-            borderRadius: 6,
-            boxShadow: '0 4px 12px #0002',
-          }}
-          >
-            {filtered.map((p) => {
-              const label = itemLabelFull(p)
-              return (
-                <button
-                  key={normPptoItem(p.item)}
-                  type="button"
-                  title={label}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => pickItem(p)}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '6px 8px',
-                    border: 'none',
-                    borderBottom: `1px solid ${ui.textMuted}22`,
-                    background: normPptoItem(p.item) === normPptoItem(item) ? `${ui.accentSoft}` : 'transparent',
-                    color: ui.text,
-                    cursor: 'pointer',
-                    fontSize: 'var(--cc-xs)',
-                    whiteSpace: 'normal',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </div>
-        )}
+        {itemField}
       </div>
     </div>
   )

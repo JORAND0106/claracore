@@ -10,7 +10,7 @@ import threading
 import unicodedata
 from datetime import date, datetime, timezone
 
-from almacen_datetime import normalize_fecha_hora_bogota_to_utc_iso
+from almacen_datetime import format_solicitud_titulo, normalize_fecha_hora_bogota_to_utc_iso
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -1144,7 +1144,8 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
         "contrato_id": contrato_id,
         "consecutivo": consecutivo,
         "estado": "borrador",
-        "titulo": (body.get("titulo") or "").strip() or None,
+        # Título automático (consecutivo + fecha Bogotá); no es editable por el usuario.
+        "titulo": format_solicitud_titulo(consecutivo),
         "observaciones": (body.get("observaciones") or "").strip() or None,
         "created_by": user_id,
     }
@@ -1165,6 +1166,13 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
     if not ins:
         raise ValueError("No se pudo crear la solicitud.")
     sid = ins[0]["id"]
+    # Alinear título con created_at real de la BD (Bogotá).
+    try:
+        titulo_final = format_solicitud_titulo(consecutivo, ins[0].get("created_at"))
+        if titulo_final != sol_row.get("titulo"):
+            sb.table("almacen_solicitud").update({"titulo": titulo_final}).eq("id", sid).execute()
+    except Exception:
+        _log.exception("No se pudo alinear título automático de solicitud %s", sid)
     rows = []
     for i, it in enumerate(items, start=1):
         row = _item_for_db_insert(it)
@@ -1188,7 +1196,7 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
     sb = _sb()
     head = (
         sb.table("almacen_solicitud")
-        .select("id, estado")
+        .select("id, estado, consecutivo, created_at")
         .eq("id", solicitud_id)
         .eq("contrato_id", contrato_id)
         .limit(1)
@@ -1202,19 +1210,17 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
     aprobada = estado == "aprobada"
     if aprobada:
         if "items" in body:
-            raise ValueError("La solicitud aprobada solo permite editar el título.")
-        upd = {}
-        if "titulo" in body:
-            upd["titulo"] = (body.get("titulo") or "").strip() or None
-        if not upd:
-            raise ValueError("La solicitud aprobada solo permite editar el título.")
-        sb.table("almacen_solicitud").update(upd).eq("id", solicitud_id).execute()
+            raise ValueError("La solicitud aprobada no permite editar ítems.")
+        # El título ya no es editable (se genera automáticamente); no hay cambios en aprobada.
         return get_solicitud(contrato_id, solicitud_id, ligera=True)
     if not _solicitud_editable(estado):
         raise ValueError("La solicitud ya fue aprobada y no puede editarse.")
-    upd = {}
-    if "titulo" in body:
-        upd["titulo"] = (body.get("titulo") or "").strip() or None
+    upd = {
+        "titulo": format_solicitud_titulo(
+            head[0].get("consecutivo"),
+            head[0].get("created_at"),
+        ),
+    }
     if "observaciones" in body:
         upd["observaciones"] = (body.get("observaciones") or "").strip() or None
     if upd:
