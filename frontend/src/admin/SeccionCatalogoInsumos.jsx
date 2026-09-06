@@ -36,8 +36,10 @@ import {
   ganadoraRuleErrors,
   otrasCotizaciones,
   pickGanadora,
+  sanitizeRendimientoInput,
   seedCotizacionPares,
   syncLegacyFromGanadora,
+  toUpperTrim,
   validateCaptureForEnviar,
   validateGuardarInsumo,
 } from './catalogoInsumosCotizaciones'
@@ -763,6 +765,17 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         : 'rgba(0, 119, 182, 0.10)',
     color: t.text,
   }
+  /** Encabezados de la grilla principal: permiten wrap y evitan solapes con fuente grande. */
+  const thGrid = {
+    ...thHeader,
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    lineHeight: 1.15,
+    letterSpacing: '0.02em',
+    padding: '6px 5px',
+    verticalAlign: 'bottom',
+  }
   const modalPanelStyle = {
     background: t.bgCard,
     borderRadius: 12,
@@ -1274,7 +1287,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     if (!pid) return null
     const r = await api.checkDuplicado({
       proveedor_id: pid,
-      descripcion: form.descripcion.trim(),
+      descripcion: toUpperTrim(form.descripcion),
       exclude_insumo_id: editId || undefined,
     })
     return r.hay_duplicado ? r.duplicados[0] : null
@@ -1286,10 +1299,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     const costo = gan?.valor != null && gan.valor !== '' ? gan.valor : form.costo_base
     const fd = new FormData()
     fd.append('codigo', (form.codigo || '').trim())
-    fd.append('descripcion', form.descripcion.trim())
+    fd.append('descripcion', toUpperTrim(form.descripcion))
     fd.append('unidad', form.unidad || 'UND')
     fd.append('costo_base', String(costo))
-    if (form.rendimiento !== '') fd.append('rendimiento', String(form.rendimiento))
+    if (form.rendimiento !== '') fd.append('rendimiento', sanitizeRendimientoInput(form.rendimiento))
     fd.append('tributos', JSON.stringify(tributosPayloadDesdeForm(form.impuesto || EMPTY_IMPUESTO)))
     const ganPar = pares.find((p) => p.es_ganadora) || pares[0]
     if (ganPar?.proveedor_id) fd.append('proveedor_id', String(ganPar.proveedor_id))
@@ -1574,21 +1587,21 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       </div>
 
       <div style={sheetWrap} className="cc-almacen-table-scroll cc-catalogo-insumos-sheet">
-        <table style={{ ...sheetTable, minWidth: 1180 }}>
+        <table style={{ ...sheetTable, minWidth: 980 }}>
           <thead>
             <tr>
-              <th style={thHeader}>Proveedor</th>
-              <th style={{ ...thHeader, width: 110 }}>Código</th>
-              <th style={thHeader}>Descripción</th>
-              <th style={{ ...thHeader, width: 56 }}>Und</th>
-              <th style={{ ...thHeader, textAlign: 'right', width: 64 }}>Rend.</th>
-              <th style={{ ...thHeader, textAlign: 'right', width: 110 }}>Antes AIU/IVA</th>
-              <th style={thHeader}>Tributos</th>
-              <th style={{ ...thHeader, textAlign: 'right', width: 110 }}>Después AIU/IVA</th>
-              <th style={{ ...thHeader, width: 90 }}>Cot. Nº</th>
-              <th style={{ ...thHeader, width: 92 }}>Cot. fecha</th>
-              <th style={{ ...thHeader, textAlign: 'right', width: 100 }}>Cot. valor</th>
-              <th style={{ ...thHeader, width: 108 }} />
+              <th style={{ ...thGrid, width: '12%' }} title="Proveedor">Prov.</th>
+              <th style={{ ...thGrid, width: 88 }} title="Código">Cód.</th>
+              <th style={thGrid} title="Descripción">Desc.</th>
+              <th style={{ ...thGrid, width: 48 }} title="Unidad">Und</th>
+              <th style={{ ...thGrid, textAlign: 'right', width: 56 }} title="Rendimiento">Rend.</th>
+              <th style={{ ...thGrid, textAlign: 'right', width: 88 }} title="Antes de AIU/IVA">IVA/AIU</th>
+              <th style={{ ...thGrid, width: 72 }} title="Tributos">Trib.</th>
+              <th style={{ ...thGrid, textAlign: 'right', width: 96 }} title="Con AIU/IVA">Con IVA/AIU</th>
+              <th style={{ ...thGrid, width: 72 }} title="Nº cotización">Nº</th>
+              <th style={{ ...thGrid, width: 84 }} title="Fecha cotización">Fecha</th>
+              <th style={{ ...thGrid, textAlign: 'right', width: 88 }} title="Valor cotización">Valor</th>
+              <th style={{ ...thGrid, width: 96 }} />
             </tr>
           </thead>
           <tbody>
@@ -1917,17 +1930,20 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <td style={{ ...td, overflow: 'hidden' }}>
                       <input
                         style={cellInp}
+                        inputMode="decimal"
                         value={form.rendimiento}
                         readOnly={(form.cotizaciones_detalle || []).length > 0}
-                        onChange={(e) => setForm({ ...form, rendimiento: e.target.value })}
+                        placeholder="0"
+                        title="Solo numérico"
+                        onChange={(e) => setForm({ ...form, rendimiento: sanitizeRendimientoInput(e.target.value) })}
                       />
                     </td>
                     <td style={{ ...td, overflow: 'hidden', minWidth: 0 }}>
                       <input
-                        style={cellInp}
+                        style={{ ...cellInp, textTransform: 'uppercase' }}
                         value={form.descripcion}
                         readOnly={(form.cotizaciones_detalle || []).length > 0}
-                        onChange={(e) => setForm({ ...form, descripcion: e.target.value })}
+                        onChange={(e) => setForm({ ...form, descripcion: e.target.value.toUpperCase() })}
                       />
                     </td>
                   </tr>
@@ -1992,10 +2008,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       <td style={costTh} title="Número de cotización del proveedor">Nº cot. *</td>
                       <td style={costTd} colSpan={3}>
                         <input
-                          style={costCellInp}
+                          style={{ ...costCellInp, textTransform: 'uppercase' }}
                           value={form.cotizacion_numero}
                           placeholder="Número asignado por el proveedor"
-                          onChange={(e) => updateCapture({ cotizacion_numero: e.target.value })}
+                          onChange={(e) => updateCapture({ cotizacion_numero: e.target.value.toUpperCase() })}
                         />
                       </td>
                     </tr>
@@ -2094,10 +2110,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       <td style={costTh} title="Número de cotización del proveedor (No Previsto)">Nº cot. *</td>
                       <td style={costTd} colSpan={3}>
                         <input
-                          style={costCellInp}
+                          style={{ ...costCellInp, textTransform: 'uppercase' }}
                           value={form.cotizacion_numero_np}
                           placeholder="Número asignado por el proveedor"
-                          onChange={(e) => updateCapture({ cotizacion_numero_np: e.target.value })}
+                          onChange={(e) => updateCapture({ cotizacion_numero_np: e.target.value.toUpperCase() })}
                         />
                       </td>
                     </tr>

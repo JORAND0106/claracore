@@ -12,8 +12,10 @@ import {
   ganadoraDesdeInsumoRow,
   newCotizacionPar,
   nextCotizacionNumero,
+  sanitizeRendimientoInput,
   seedCotizacionPares,
   syncLegacyFromGanadora,
+  toUpperTrim,
   validateCaptureForEnviar,
   validateGuardarInsumo,
   applyPdfReplace,
@@ -85,12 +87,60 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.ok(errs.some((e) => /descripción/i.test(e)))
   })
 
-  it('validateCaptureForEnviar exige números de cotización', () => {
-    const r = validateCaptureForEnviar({
-      razon_social: 'A', nit: '1', descripcion: 'X', unidad: 'UND', costo_base: '10',
+  it('validateCaptureForEnviar exige Nº Insumo; NP solo si el panel tiene datos', () => {
+    const soloInsumo = validateCaptureForEnviar({
+      razon_social: 'A',
+      nit: '1',
+      descripcion: 'X',
+      unidad: 'UND',
+      costo_base: '10',
+      cotizacion_numero: '',
     }, [])
-    assert.ok(r.faltantes.some((f) => /Nº de cotización \(Insumo\)/i.test(f)))
-    assert.ok(r.faltantes.some((f) => /Nº de cotización \(No Previsto\)/i.test(f)))
+    assert.ok(soloInsumo.faltantes.some((f) => /Nº de cotización \(Insumo\)/i.test(f)))
+    assert.ok(!soloInsumo.faltantes.some((f) => /No Previsto/i.test(f)))
+
+    const conNp = validateCaptureForEnviar({
+      razon_social: 'A',
+      nit: '1',
+      descripcion: 'X',
+      unidad: 'UND',
+      costo_base: '10',
+      cotizacion_numero: 'A-1',
+      valor_no_previsto: '12',
+      cotizacion_numero_np: '',
+    }, [])
+    assert.ok(conNp.faltantes.some((f) => /Nº de cotización \(No Previsto\)/i.test(f)))
+
+    const ok = validateCaptureForEnviar({
+      razon_social: 'A',
+      nit: '1',
+      descripcion: 'X',
+      unidad: 'UND',
+      costo_base: '10',
+      cotizacion_numero: 'A-1',
+    }, [])
+    assert.deepEqual(ok.faltantes, [])
+  })
+
+  it('toUpperTrim y sanitizeRendimientoInput', () => {
+    assert.equal(toUpperTrim('  abc-1 '), 'ABC-1')
+    assert.equal(sanitizeRendimientoInput('12.5m'), '12.5')
+    assert.equal(sanitizeRendimientoInput('1,25'), '1.25')
+    assert.equal(sanitizeRendimientoInput('ab'), '')
+  })
+
+  it('buildParFromCapture guarda descripción y números en mayúsculas; NP vacío sin copiar', () => {
+    const pares = buildParFromCapture({
+      ...baseCapture,
+      descripcion: 'geotextil',
+      cotizacion_numero: 'pv-100',
+      cotizacion_numero_np: '',
+      valor_no_previsto: '',
+    }, [])
+    assert.equal(pares[0].coherencia.descripcion, 'GEOTEXTIL')
+    assert.equal(pares[0].insumo.numero, 'PV-100')
+    assert.equal(pares[0].no_previsto.numero, '')
+    assert.equal(pares[0].no_previsto.valor, '')
   })
 
   it('validateGuardarInsumo exige filas y PDF', () => {
