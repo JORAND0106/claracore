@@ -107,8 +107,48 @@ export default function SolicitudDetalleModal({
     return counts
   }, [items, sol])
 
+  const itemsSinInsumo = useMemo(
+    () => (items || []).filter((it) => !it.es_recurrente && !String(it.insumo_id || '').trim()),
+    [items],
+  )
+
+  const mensajeFaltaInsumoOc = useMemo(() => {
+    if (!itemsSinInsumo.length) return ''
+    const detalle = itemsSinInsumo
+      .slice(0, 12)
+      .map((it) => {
+        const n = it.numero_linea != null ? `#${it.numero_linea}` : (it.id != null ? `id ${it.id}` : '—')
+        const mat = String(it.descripcion_solicitada || it.material_descripcion || it.descripcion || '').trim()
+          || 'Sin descripción'
+        return `• Línea ${n}: ${mat}`
+      })
+      .join('\n')
+    const extra = itemsSinInsumo.length > 12
+      ? `\n• (+${itemsSinInsumo.length - 12} más)`
+      : ''
+    return (
+      `No se puede generar la Orden de Compra: faltan insumos del catálogo en ${itemsSinInsumo.length} material(es).\n\n` +
+      `${detalle}${extra}\n\nAsigne el insumo en la revisión de cada línea antes de aprobar.`
+    )
+  }, [itemsSinInsumo])
+
+  const intentarAprobarOc = () => {
+    if (mensajeFaltaInsumoOc) {
+      setConfirmAprobar(false)
+      setError(mensajeFaltaInsumoOc)
+      return
+    }
+    setError('')
+    setConfirmAprobar(true)
+  }
+
   const ejecutarAprobar = async (aprobarTodosPendientes = true) => {
     if (!sol) return
+    if (mensajeFaltaInsumoOc) {
+      setConfirmAprobar(false)
+      setError(mensajeFaltaInsumoOc)
+      return
+    }
     setBusy(true)
     setOcProgreso('Generando orden de compra…')
     setError('')
@@ -204,7 +244,7 @@ export default function SolicitudDetalleModal({
         className={compact ? 'cc-almacen-modal-sheet' : ''}
         onClick={(e) => e.stopPropagation()}
         style={{
-          ...almacenFormModalDialogStyle({ width: 'min(1248px, 100%)', compact }),
+          ...almacenFormModalDialogStyle({ width: 'min(1622px, 100%)', compact }),
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
@@ -274,7 +314,22 @@ export default function SolicitudDetalleModal({
         }}
         >
           {loading && <div style={{ color: ui.textMuted, marginBottom: 12 }}>Cargando…</div>}
-          {error && <div style={{ color: '#dc2626', marginBottom: 12 }}>{error}</div>}
+          {error && (
+            <div style={{
+              color: '#991b1b',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: 8,
+              padding: '10px 12px',
+              marginBottom: 12,
+              fontSize: 'var(--cc-sm)',
+              whiteSpace: 'pre-wrap',
+              lineHeight: 1.45,
+            }}
+            >
+              {error}
+            </div>
+          )}
 
           {!loading && sol && (
             <>
@@ -388,7 +443,7 @@ export default function SolicitudDetalleModal({
                       type="button"
                       style={btnSuccessStyle(ui.btnPrimary)}
                       disabled={busy}
-                      onClick={() => setConfirmAprobar(true)}
+                      onClick={intentarAprobarOc}
                     >
                       ✓ Aprobar y generar OC
                     </button>

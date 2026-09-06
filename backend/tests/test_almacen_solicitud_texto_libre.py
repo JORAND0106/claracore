@@ -25,14 +25,14 @@ def test_validate_items_payload_texto_libre_sin_insumo():
         "contrato_id": 1,
     }
 
-    def _flags(contrato_id, items, exclude_solicitud_id=None, descontar_linea_actual=True):
+    def _flags(contrato_id, items, exclude_solicitud_id=None, descontar_linea_actual=True, **_kw):
         for it in items:
             it["vlr_unitario_cobro"] = 12000
             it["supera_presupuesto"] = False
             it["supera_negociado"] = False
 
     with patch.object(svc, "_fetch_ppto_rows_batch", return_value={11: ppto}), \
-         patch("almacen_insumos_service.apply_saldo_flags_batch", side_effect=_flags):
+         patch("almacen_insumos_service.apply_saldo_flags_batch", side_effect=_flags) as flags_mock:
         out = svc._validate_items_payload(raw, contrato_id=1, user_id=7)
     assert len(out) == 1
     assert out[0]["descripcion_solicitada"] == "Arena de río lavada"
@@ -41,6 +41,7 @@ def test_validate_items_payload_texto_libre_sin_insumo():
     assert out[0]["cantidad"] == 4
     assert out[0]["valor_compra_unitario"] is None
     assert out[0]["vlr_unitario_cobro"] == 12000
+    assert flags_mock.call_args.kwargs.get("refresh_listado") is False
 
 
 def test_validate_items_payload_exige_descripcion_minima():
@@ -91,8 +92,9 @@ def test_validate_items_payload_alto_volumen_una_pasada_batch():
         calls["flags"] += 1
 
     with patch.object(svc, "_fetch_ppto_rows_batch", return_value=ppto_map) as batch_ppto, \
-         patch("almacen_insumos_service.apply_saldo_flags_batch", side_effect=_flags):
+         patch("almacen_insumos_service.apply_saldo_flags_batch", side_effect=_flags) as flags_mock:
         out = svc._validate_items_payload(raw, contrato_id=1, user_id=7)
     assert len(out) == 50
     assert batch_ppto.call_count == 1
     assert calls["flags"] == 1
+    assert flags_mock.call_args.kwargs.get("refresh_listado") is False

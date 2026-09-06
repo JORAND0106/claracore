@@ -5,6 +5,10 @@
 CREATE INDEX IF NOT EXISTS idx_almacen_solicitud_item_presupuesto
   ON public.almacen_solicitud_item (presupuesto_id);
 
+-- Acumulados por (presupuesto_id, pk_id) — filtro compuesto
+CREATE INDEX IF NOT EXISTS idx_almacen_solicitud_item_presupuesto_pk
+  ON public.almacen_solicitud_item (presupuesto_id, pk_id);
+
 -- Ítems por solicitud (get / list resumen / delete-replace)
 CREATE INDEX IF NOT EXISTS idx_almacen_solicitud_item_solicitud
   ON public.almacen_solicitud_item (solicitud_id);

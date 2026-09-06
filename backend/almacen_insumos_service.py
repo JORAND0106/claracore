@@ -1763,8 +1763,10 @@ def apply_saldo_flags_batch(
     acum_map = batch_cantidad_solicitada_acumulada(sb, contrato_id, keys, exclude_solicitud_id)
     lookup = None
     if refresh_listado:
+        # Solo buscar precios cuando hay insumo mapeado y falta cobro real (None).
+        # Líneas de texto libre (vlr=0, sin insumo) no deben disparar full-scan de listado.
         needs_price = any(
-            (it.get("vlr_unitario_cobro") in (None, 0) or not it.get("insumo_id"))
+            it.get("insumo_id") and it.get("vlr_unitario_cobro") is None
             for it in items
         )
         if needs_price:

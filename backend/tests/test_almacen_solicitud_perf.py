@@ -202,3 +202,122 @@ def test_download_pdf_oc_reutiliza_blob(monkeypatch):
     data, fname = svc.download_pdf_oc(1, 9, 7)
     assert data == b"%PDF-ok"
     assert fname == "OC-3.pdf"
+
+
+def test_apply_saldo_flags_texto_libre_vlr0_no_escanea_listado(monkeypatch):
+    """Guardar borrador con texto libre (vlr=0, sin insumo) no debe full-scan listado."""
+    calls = {"lookup": 0}
+
+    def _boom(*_a, **_k):
+        calls["lookup"] += 1
+        raise AssertionError("no debe escanear listado para líneas sin insumo")
+
+    monkeypatch.setattr(insumos, "get_listado_precio_lookup", _boom)
+    monkeypatch.setattr(
+        insumos,
+        "batch_cantidad_solicitada_acumulada",
+        lambda *_a, **_k: {(10, "PK-1"): 0.0},
+    )
+    monkeypatch.setattr(insumos, "batch_cantidad_consumida_insumo", lambda *_a, **_k: {})
+    monkeypatch.setattr(insumos, "_sb", lambda: MagicMock())
+
+    items = [{
+        "presupuesto_id": 10,
+        "pk_id": "PK-1",
+        "capitulo": "1",
+        "item": "1.01",
+        "cantidad": 2,
+        "cant_presupuestada": 50,
+        "vlr_unitario_cobro": 0,
+        "insumo_id": None,
+    }]
+    # refresh_listado=True simula el default antiguo; needs_price ya no dispara.
+    insumos.apply_saldo_flags_batch(
+        1, items, descontar_linea_actual=True, refresh_listado=True,
+    )
+    assert calls["lookup"] == 0
+    assert items[0]["vlr_unitario_cobro"] == 0
+
+
+def test_aprobar_solicitud_bloquea_si_falta_insumo(monkeypatch):
+    """No generar OC si hay líneas aprobadas sin insumo del catálogo."""
+    class _Resp:
+        def __init__(self, data):
+            self.data = data
+
+    class _Q:
+        def __init__(self, table, store):
+            self.table = table
+            self.store = store
+            self._filters = {}
+
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, col, val):
+            self._filters[col] = val
+            return self
+
+        def is_(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def update(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            if self.table == "almacen_solicitud":
+                return _Resp([{
+                    "id": 1,
+                    "contrato_id": 10,
+                    "estado": "enviada",
+                    "consecutivo": 5,
+                    "created_by": 3,
+                }])
+            if self.table == "almacen_orden_compra":
+                return _Resp([])
+            if self.table == "almacen_solicitud_item":
+                return _Resp([
+                    {
+                        "id": 101,
+                        "numero_linea": 1,
+                        "estado_validacion": "aprobado",
+                        "insumo_id": None,
+                        "es_recurrente": False,
+                        "valor_compra_unitario": 1000,
+                        "cantidad": 2,
+                    },
+                    {
+                        "id": 102,
+                        "numero_linea": 2,
+                        "estado_validacion": "aprobado",
+                        "insumo_id": 55,
+                        "es_recurrente": False,
+                        "valor_compra_unitario": 2000,
+                        "cantidad": 1,
+                    },
+                ])
+            return _Resp([])
+
+    class _Sb:
+        def __init__(self):
+            self.store = {}
+
+        def table(self, name):
+            return _Q(name, self.store)
+
+    monkeypatch.setattr(svc, "_sb", lambda: _Sb())
+    monkeypatch.setattr(svc, "_fetch_solicitud_head", lambda *_a, **_k: {
+        "id": 1, "contrato_id": 10, "estado": "enviada", "consecutivo": 5, "created_by": 3,
+    })
+
+    try:
+        svc.aprobar_solicitud(10, 1, 7, {"aprobar_todos_pendientes": False})
+        raise AssertionError("debía fallar por falta de insumo")
+    except ValueError as exc:
+        msg = str(exc)
+        assert "No se puede generar la Orden de Compra" in msg
+        assert "faltan insumos" in msg.lower()
+        assert "#1" in msg

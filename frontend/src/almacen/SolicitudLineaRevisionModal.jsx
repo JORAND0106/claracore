@@ -12,7 +12,7 @@ import {
   textoLibreSolicitudItem,
 } from './solicitudDetalleHelpers'
 import {
-  AlmacenFieldLabel,
+  AlmacenHelpIcon,
   almacenFormModalDialogStyle,
   fmtCant,
   useAlmacenApi,
@@ -20,41 +20,39 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 
-function Section({ ui, title, children, style }) {
+const LINEA_MODAL_WIDTH = 'min(1248px, 100%)'
+
+function ExcelHeader({ abbr, tip, style, align = 'left' }) {
   return (
-    <section
+    <th
       style={{
-        border: `1px solid ${ui.textMuted}33`,
-        borderRadius: 10,
-        padding: '14px 16px',
-        background: ui.card?.background || 'var(--cc-almacen-bg-card, #fff)',
-        color: ui.text,
         ...style,
+        padding: '6px 8px',
+        height: 34,
+        whiteSpace: 'nowrap',
+        textAlign: align,
+        verticalAlign: 'middle',
       }}
+      title={tip}
     >
-      {title && (
-        <div style={{
-          fontSize: 'var(--cc-xs)',
-          fontWeight: 800,
-          letterSpacing: '0.04em',
-          textTransform: 'uppercase',
-          color: ui.textMuted,
-          marginBottom: 10,
-          paddingBottom: 8,
-          borderBottom: `1px solid ${ui.textMuted}22`,
-        }}
-        >
-          {title}
-        </div>
-      )}
-      {children}
-    </section>
+      <span style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        justifyContent: align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start',
+        width: '100%',
+      }}
+      >
+        <span style={{ fontWeight: 700, letterSpacing: '0.02em' }}>{abbr}</span>
+        {tip ? <AlmacenHelpIcon ayuda={tip} /> : null}
+      </span>
+    </th>
   )
 }
 
 /**
  * Modal enfocado en la revisión Gerencial de una línea.
- * Ancho amplio y bloques separados por bordes definidos.
+ * Campos editables en fila tipo Excel; descripción del ítem en bloque propio.
  */
 export default function SolicitudLineaRevisionModal({
   sol,
@@ -133,7 +131,6 @@ export default function SolicitudLineaRevisionModal({
         consecutivo: sol?.consecutivo,
       })
     }
-    // Provisional mientras el Gerencial ajusta cantidad/costos (antes de guardar).
     const cant = Number(draft.cantidad)
     const vuCobro = Number(draft.vlr_unitario_cobro)
     const vuCosto = Number(draft.valor_compra_unitario)
@@ -156,7 +153,6 @@ export default function SolicitudLineaRevisionModal({
     })
   }, [item, draft.cantidad, draft.vlr_unitario_cobro, draft.valor_compra_unitario, sol?.consecutivo, sol?.orden_compra?.numero_oc])
 
-  // Exclusivo Contratista Gerencial (o Desarrollador): sin acceso ni en lectura.
   if (!puedeAbrir || !item || !sol) return null
 
   const theme = t || {
@@ -166,6 +162,18 @@ export default function SolicitudLineaRevisionModal({
     textMuted: ui.textMuted,
     bgCard: ui.card?.background || '#fff',
   }
+
+  const cellInp = {
+    ...ui.input,
+    width: '100%',
+    minWidth: 0,
+    padding: '4px 6px',
+    fontSize: 'var(--cc-xs)',
+    height: 30,
+    boxSizing: 'border-box',
+  }
+  const td = { ...ui.td, padding: '4px 6px', verticalAlign: 'middle' }
+  const th = { ...ui.th, fontSize: 'var(--cc-xs)' }
 
   const guardarMapeo = async () => {
     if (!draft.insumo?.insumo_id) {
@@ -234,6 +242,7 @@ export default function SolicitudLineaRevisionModal({
   }
 
   const dialogBorder = `1px solid ${ui.textMuted}40`
+  const descContratista = textoLibreSolicitudItem(item) || '—'
 
   return (
     <div
@@ -256,7 +265,7 @@ export default function SolicitudLineaRevisionModal({
         className={compact ? 'cc-almacen-modal-sheet' : ''}
         onClick={(e) => e.stopPropagation()}
         style={{
-          ...almacenFormModalDialogStyle({ width: 'min(960px, 100%)', compact }),
+          ...almacenFormModalDialogStyle({ width: LINEA_MODAL_WIDTH, compact }),
           maxHeight: compact ? '94vh' : '92vh',
           overflow: 'auto',
           border: dialogBorder,
@@ -269,8 +278,8 @@ export default function SolicitudLineaRevisionModal({
           display: 'flex',
           justifyContent: 'space-between',
           gap: 12,
-          marginBottom: 16,
-          paddingBottom: 14,
+          marginBottom: 14,
+          paddingBottom: 12,
           borderBottom: `1px solid ${ui.textMuted}33`,
         }}
         >
@@ -290,6 +299,10 @@ export default function SolicitudLineaRevisionModal({
                 color: ui.text,
                 marginTop: 6,
                 lineHeight: 1.4,
+                padding: '8px 10px',
+                borderRadius: 6,
+                background: `${ui.accentSoft}`,
+                border: `1px solid ${ui.textMuted}22`,
               }}
               >
                 {descItem}
@@ -333,64 +346,77 @@ export default function SolicitudLineaRevisionModal({
           </div>
         )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <Section ui={ui} title="Descripción del Contratista">
-            <div style={{
-              fontSize: 'var(--cc-sm)',
-              whiteSpace: 'pre-wrap',
-              lineHeight: 1.45,
-              minHeight: 48,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: `${ui.accentSoft}`,
-              border: `1px solid ${ui.textMuted}22`,
-            }}
-            >
-              {textoLibreSolicitudItem(item) || '—'}
-            </div>
-          </Section>
-
-          {puedeEditar ? (
-            <>
-              <Section ui={ui} title="Insumo del catálogo">
-                <InsumoSearchTable
-                  value={draft.insumo}
-                  disabled={busy}
-                  onChange={(ins) => setDraft((d) => ({
-                    ...d,
-                    insumo: ins,
-                    valor_compra_unitario: ins?.tiene_precio_compra
-                      ? String(ins.valor_compra_referencia ?? '')
-                      : d.valor_compra_unitario,
-                  }))}
-                />
-              </Section>
-
-              <Section ui={ui} title="Cantidad y costos">
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: compact ? '1fr' : (verEconomicos ? 'repeat(3, minmax(0, 1fr))' : '1fr'),
-                  gap: 14,
-                }}
-                >
-                  <div>
-                    <AlmacenFieldLabel icon="🔢" label="Cantidad" compact />
-                    <input
-                      style={{ ...ui.input, padding: '10px 12px', fontSize: 'var(--cc-sm)' }}
-                      type="number"
-                      min="0"
-                      step="any"
-                      value={draft.cantidad}
-                      disabled={busy}
-                      onChange={(e) => setDraft((d) => ({ ...d, cantidad: e.target.value }))}
-                    />
-                  </div>
-                  {verEconomicos && (
-                    <>
-                      <div>
-                        <AlmacenFieldLabel icon="💵" label="Costo de compra" compact ayuda="Valor unitario de adquisición." />
+        {puedeEditar ? (
+          <>
+            <div style={{ ...ui.sheetWrap, marginBottom: 12 }} className="cc-almacen-table-scroll">
+              <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 920 : 640, tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: 220 }} />
+                  <col style={{ width: 280 }} />
+                  <col style={{ width: 88 }} />
+                  {verEconomicos && <col style={{ width: 110 }} />}
+                  {verEconomicos && <col style={{ width: 110 }} />}
+                </colgroup>
+                <thead>
+                  <tr>
+                    <ExcelHeader abbr="DESC. CONTRATISTA" tip="Descripción del material solicitada por el Contratista" style={th} />
+                    <ExcelHeader abbr="INSUMO" tip="Insumo del catálogo administrativo" style={th} />
+                    <ExcelHeader abbr="CANT." tip="Cantidad solicitada" style={th} align="right" />
+                    {verEconomicos && (
+                      <ExcelHeader abbr="COSTO" tip="Costo de compra unitario" style={th} align="right" />
+                    )}
+                    {verEconomicos && (
+                      <ExcelHeader abbr="COBRO" tip="Valor unitario de cobro" style={th} align="right" />
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={td}>
+                      <div
+                        title={descContratista}
+                        style={{
+                          fontSize: 'var(--cc-xs)',
+                          lineHeight: 1.35,
+                          maxHeight: 64,
+                          overflow: 'auto',
+                          whiteSpace: 'pre-wrap',
+                          padding: '4px 2px',
+                        }}
+                      >
+                        {descContratista}
+                      </div>
+                    </td>
+                    <td style={{ ...td, overflow: 'visible' }}>
+                      <InsumoSearchTable
+                        hideLabel
+                        value={draft.insumo}
+                        disabled={busy}
+                        inputStyle={{ padding: '4px 6px', fontSize: 'var(--cc-xs)', height: 30 }}
+                        onChange={(ins) => setDraft((d) => ({
+                          ...d,
+                          insumo: ins,
+                          valor_compra_unitario: ins?.tiene_precio_compra
+                            ? String(ins.valor_compra_referencia ?? '')
+                            : d.valor_compra_unitario,
+                        }))}
+                      />
+                    </td>
+                    <td style={td}>
+                      <input
+                        style={{ ...cellInp, textAlign: 'right' }}
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={draft.cantidad}
+                        disabled={busy}
+                        onChange={(e) => setDraft((d) => ({ ...d, cantidad: e.target.value }))}
+                      />
+                    </td>
+                    {verEconomicos && (
+                      <td style={td}>
                         <input
-                          style={{ ...ui.input, padding: '10px 12px', fontSize: 'var(--cc-sm)' }}
+                          style={{ ...cellInp, textAlign: 'right' }}
                           type="number"
                           min="0"
                           step="any"
@@ -398,11 +424,12 @@ export default function SolicitudLineaRevisionModal({
                           disabled={busy}
                           onChange={(e) => setDraft((d) => ({ ...d, valor_compra_unitario: e.target.value }))}
                         />
-                      </div>
-                      <div>
-                        <AlmacenFieldLabel icon="💰" label="Valor de cobro" compact ayuda="Valor unitario a cobrar." />
+                      </td>
+                    )}
+                    {verEconomicos && (
+                      <td style={td}>
                         <input
-                          style={{ ...ui.input, padding: '10px 12px', fontSize: 'var(--cc-sm)' }}
+                          style={{ ...cellInp, textAlign: 'right' }}
                           type="number"
                           min="0"
                           step="any"
@@ -410,105 +437,132 @@ export default function SolicitudLineaRevisionModal({
                           disabled={busy}
                           onChange={(e) => setDraft((d) => ({ ...d, vlr_unitario_cobro: e.target.value }))}
                         />
-                      </div>
-                    </>
-                  )}
-                </div>
-                {verEconomicos && tablaRentabilidad && (
-                  <div style={{ marginTop: 12 }}>
-                    <TablaRentabilidadAcumulada
-                      analisisRentabilidad={tablaRentabilidad}
-                      proveedorCatalogo={item.proveedor_catalogo}
-                      verEconomicos={verEconomicos}
-                      defaultExpanded={false}
-                    />
-                  </div>
-                )}
-              </Section>
+                      </td>
+                    )}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
 
-              <Section ui={ui} title="Comentarios">
-                <textarea
-                  style={{
-                    ...ui.input,
-                    minHeight: 110,
-                    resize: 'vertical',
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    fontSize: 'var(--cc-sm)',
-                    padding: '12px 14px',
-                    lineHeight: 1.45,
-                  }}
-                  placeholder="Motivo si rechaza este ítem…"
-                  value={motivo}
-                  disabled={busy}
-                  onChange={(e) => setMotivo(e.target.value)}
+            {verEconomicos && tablaRentabilidad && (
+              <div style={{ marginBottom: 12 }}>
+                <TablaRentabilidadAcumulada
+                  analisisRentabilidad={tablaRentabilidad}
+                  proveedorCatalogo={item.proveedor_catalogo}
+                  verEconomicos={verEconomicos}
+                  defaultExpanded={false}
                 />
-              </Section>
-
-              <section style={{
-                border: `1px solid ${ui.textMuted}33`,
-                borderRadius: 10,
-                padding: '14px 16px',
-                background: `${ui.accentSoft}55`,
-                display: 'flex',
-                gap: 10,
-                flexWrap: 'wrap',
-                alignItems: 'center',
-              }}
-              >
-                <button
-                  type="button"
-                  style={{ ...ui.btnSecondary, padding: '10px 16px' }}
-                  disabled={busy}
-                  onClick={() => { void soloGuardar() }}
-                >
-                  {busy ? 'Guardando…' : 'Guardar mapeo'}
-                </button>
-                <button
-                  type="button"
-                  style={{ ...btnSuccessStyle(ui.btnPrimary), padding: '10px 18px' }}
-                  disabled={busy}
-                  onClick={() => { void validar('aprobar') }}
-                >
-                  ✓ Aprobar ítem
-                </button>
-                <button
-                  type="button"
-                  style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
-                  disabled={busy}
-                  onClick={() => { void validar('rechazar') }}
-                >
-                  ✕ Rechazar ítem
-                </button>
-              </section>
-            </>
-          ) : (
-            <Section ui={ui} title="Resumen">
-              <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, lineHeight: 1.5 }}>
-                <div style={{ marginBottom: 10 }}>
-                  Insumo: <strong style={{ color: ui.text }}>{item.material_descripcion || '—'}</strong>
-                </div>
-                <div style={{ marginBottom: 10 }}>
-                  Cantidad: <strong style={{ color: ui.text }}>{fmtCant(item.cantidad)} {item.unidad || ''}</strong>
-                </div>
-                {verEconomicos && (
-                  <div style={{ marginBottom: 10 }}>
-                    Costo: {fmtCant(item.valor_compra_unitario)} · Cobro: {fmtCant(item.vlr_unitario_cobro)}
-                  </div>
-                )}
-                <div style={{ marginBottom: 10 }}>Esta línea ya no admite revisión (aprobada, rechazada o con OC).</div>
-                {verEconomicos && tablaRentabilidad && (
-                  <TablaRentabilidadAcumulada
-                    analisisRentabilidad={tablaRentabilidad}
-                    proveedorCatalogo={item.proveedor_catalogo}
-                    verEconomicos={verEconomicos}
-                    defaultExpanded={false}
-                  />
-                )}
               </div>
-            </Section>
-          )}
-        </div>
+            )}
+
+            <div style={{ marginBottom: 12 }}>
+              <textarea
+                style={{
+                  ...ui.input,
+                  minHeight: 72,
+                  resize: 'vertical',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  fontSize: 'var(--cc-sm)',
+                  padding: '10px 12px',
+                  lineHeight: 1.45,
+                }}
+                placeholder="Motivo si rechaza este ítem…"
+                value={motivo}
+                disabled={busy}
+                onChange={(e) => setMotivo(e.target.value)}
+              />
+            </div>
+
+            <div style={{
+              display: 'flex',
+              gap: 10,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              paddingTop: 4,
+            }}
+            >
+              <button
+                type="button"
+                style={{ ...ui.btnSecondary, padding: '10px 16px' }}
+                disabled={busy}
+                onClick={() => { void soloGuardar() }}
+              >
+                {busy ? 'Guardando…' : 'Guardar mapeo'}
+              </button>
+              <button
+                type="button"
+                style={{ ...btnSuccessStyle(ui.btnPrimary), padding: '10px 18px' }}
+                disabled={busy}
+                onClick={() => { void validar('aprobar') }}
+              >
+                ✓ Aprobar ítem
+              </button>
+              <button
+                type="button"
+                style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666', padding: '10px 16px' }}
+                disabled={busy}
+                onClick={() => { void validar('rechazar') }}
+              >
+                ✕ Rechazar ítem
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ ...ui.sheetWrap, marginBottom: 10 }} className="cc-almacen-table-scroll">
+              <table style={{ ...ui.sheetTable, minWidth: verEconomicos ? 560 : 360, tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: 280 }} />
+                  <col style={{ width: 100 }} />
+                  {verEconomicos && <col style={{ width: 100 }} />}
+                  {verEconomicos && <col style={{ width: 100 }} />}
+                </colgroup>
+                <thead>
+                  <tr>
+                    <ExcelHeader abbr="INSUMO" tip="Insumo asignado" style={th} />
+                    <ExcelHeader abbr="CANT." tip="Cantidad" style={th} align="right" />
+                    {verEconomicos && <ExcelHeader abbr="COSTO" tip="Costo de compra" style={th} align="right" />}
+                    {verEconomicos && <ExcelHeader abbr="COBRO" tip="Valor de cobro" style={th} align="right" />}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={td}>
+                      <span title={item.material_descripcion || ''} style={{ fontSize: 'var(--cc-xs)' }}>
+                        {item.material_descripcion || '—'}
+                      </span>
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      {fmtCant(item.cantidad)}{item.unidad ? ` ${item.unidad}` : ''}
+                    </td>
+                    {verEconomicos && (
+                      <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                        {fmtCant(item.valor_compra_unitario)}
+                      </td>
+                    )}
+                    {verEconomicos && (
+                      <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                        {fmtCant(item.vlr_unitario_cobro)}
+                      </td>
+                    )}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 10 }}>
+              Esta línea ya no admite revisión (aprobada, rechazada o con OC).
+            </div>
+            {verEconomicos && tablaRentabilidad && (
+              <TablaRentabilidadAcumulada
+                analisisRentabilidad={tablaRentabilidad}
+                proveedorCatalogo={item.proveedor_catalogo}
+                verEconomicos={verEconomicos}
+                defaultExpanded={false}
+              />
+            )}
+          </>
+        )}
       </div>
 
       {mapaOpen && (
