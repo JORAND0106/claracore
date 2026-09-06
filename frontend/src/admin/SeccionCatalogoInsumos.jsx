@@ -25,6 +25,7 @@ import CcConfirmModal from '../components/CcConfirmModal'
 import CatalogoProveedorAutocomplete from './CatalogoProveedorAutocomplete'
 import {
   applyAutoGanadoraByMinValor,
+  applyCaptureToPar,
   applyPdfReplace,
   buildParFromCapture,
   collectPdfFilesFromPares,
@@ -61,6 +62,7 @@ const EMPTY_FORM = {
   cotizacion_numero: '',
   cotizacion_fecha: '',
   cotizacion_vigencia: '',
+  cotizacion_numero_np: '',
   cotizacion_fecha_np: '',
   cotizacion_vigencia_np: '',
   cotizaciones_detalle: [],
@@ -88,6 +90,7 @@ function snapshotForm(f) {
     cotizacion_numero: f.cotizacion_numero || '',
     cotizacion_fecha: f.cotizacion_fecha || '',
     cotizacion_vigencia: f.cotizacion_vigencia || '',
+    cotizacion_numero_np: f.cotizacion_numero_np || '',
     cotizacion_fecha_np: f.cotizacion_fecha_np || '',
     cotizacion_vigencia_np: f.cotizacion_vigencia_np || '',
     cotizaciones_detalle: cotizacionesPayloadForSave(f.cotizaciones_detalle || []),
@@ -868,19 +871,16 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   )
 
   const totalPreviewNp = useMemo(() => {
-    const base = form.valor_no_previsto !== '' && form.valor_no_previsto != null
-      ? form.valor_no_previsto
-      : form.costo_base
-    return computeTotal(base, form.impuesto_np)
-  }, [form.valor_no_previsto, form.costo_base, form.impuesto_np])
+    if (form.valor_no_previsto === '' || form.valor_no_previsto == null) return null
+    return computeTotal(form.valor_no_previsto, form.impuesto_np)
+  }, [form.valor_no_previsto, form.impuesto_np])
 
   const draftValorDespues = useMemo(() => {
-    const base = impuestoModalTarget === 'np'
-      ? (form.valor_no_previsto !== '' && form.valor_no_previsto != null
-        ? form.valor_no_previsto
-        : form.costo_base)
-      : form.costo_base
-    return computeTotal(base, draftImpuesto)
+    if (impuestoModalTarget === 'np') {
+      if (form.valor_no_previsto === '' || form.valor_no_previsto == null) return null
+      return computeTotal(form.valor_no_previsto, draftImpuesto)
+    }
+    return computeTotal(form.costo_base, draftImpuesto)
   }, [form.costo_base, form.valor_no_previsto, draftImpuesto, impuestoModalTarget])
 
   const tributosResumen = useMemo(
@@ -1080,42 +1080,12 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       contacto_telefono: par.contacto_telefono || '',
       costo_base: ins.valor != null && ins.valor !== '' ? String(ins.valor) : '',
       valor_no_previsto: np.valor != null && np.valor !== '' ? String(np.valor) : '',
+      cotizacion_numero: ins.numero || '',
       cotizacion_fecha: ins.fecha || '',
       cotizacion_vigencia: ins.vigencia || '',
+      cotizacion_numero_np: np.numero || '',
       cotizacion_fecha_np: np.fecha || '',
       cotizacion_vigencia_np: np.vigencia || '',
-    }
-  }
-
-  const syncParFromCapture = (par, f) => {
-    const valorNp = f.valor_no_previsto !== '' && f.valor_no_previsto != null
-      ? f.valor_no_previsto
-      : f.costo_base
-    const etiqIns = etiquetaTributos(tributosPayloadDesdeForm(f.impuesto || EMPTY_IMPUESTO))
-    const etiqNp = etiquetaTributos(tributosPayloadDesdeForm(f.impuesto_np || EMPTY_IMPUESTO))
-    return {
-      ...par,
-      proveedor_id: f.proveedor_id || par.proveedor_id || '',
-      nit: (f.nit || '').trim(),
-      contacto_email: (f.contacto_email || '').trim(),
-      contacto_nombre: (f.contacto_nombre || '').trim(),
-      contacto_telefono: (f.contacto_telefono || '').trim(),
-      insumo: {
-        ...(par.insumo || {}),
-        proveedor: (f.razon_social || '').trim() || par.insumo?.proveedor || '',
-        valor: f.costo_base !== '' && f.costo_base != null ? String(f.costo_base) : '',
-        fecha: f.cotizacion_fecha || '',
-        vigencia: f.cotizacion_vigencia || '',
-        impuesto_etiqueta: etiqIns !== '—' ? etiqIns : (par.insumo?.impuesto_etiqueta || ''),
-      },
-      no_previsto: {
-        ...(par.no_previsto || {}),
-        proveedor: (f.razon_social || '').trim() || par.no_previsto?.proveedor || '',
-        valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
-        fecha: f.cotizacion_fecha_np || f.cotizacion_fecha || '',
-        vigencia: f.cotizacion_vigencia_np || f.cotizacion_vigencia || '',
-        impuesto_etiqueta: etiqNp !== '—' ? etiqNp : (par.no_previsto?.impuesto_etiqueta || ''),
-      },
     }
   }
 
@@ -1129,19 +1099,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     setForm((f) => ({ ...f, ...captureFieldsFromPar(par) }))
   }
 
-  /** Actualiza campos de captura; si hay fila seleccionada, sincroniza esa cotización. */
+  /** Actualiza solo el borrador de captura (sin tocar la tabla hasta Enviar/Actualizar). */
   const updateCapture = (patch) => {
-    setForm((f) => {
-      const next = { ...f, ...patch }
-      if (!selectedParId) return next
-      let list = (next.cotizaciones_detalle || []).map((p) => (
-        p.id === selectedParId ? syncParFromCapture(p, next) : p
-      ))
-      list = applyAutoGanadoraByMinValor(list)
-      const legacy = syncLegacyFromGanadora(list)
-      setModalRuleErrors(ganadoraRuleErrors(list))
-      return { ...next, cotizaciones_detalle: list, ...legacy }
-    })
+    setForm((f) => ({ ...f, ...patch }))
   }
 
   const patchParLado = (pairId, lado, patch) => {
@@ -1196,18 +1156,35 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     if (file) assignPdfToLado(pairId, lado, file)
   }
 
-  const enviarCotizacionFila = () => {
-    const { faltantes, coherencia } = validateCaptureForEnviar(form, form.cotizaciones_detalle || [])
+  const impuestoOptsFromForm = (f) => ({
+    impuestoEtiqueta: etiquetaTributos(tributosPayloadDesdeForm(f.impuesto || EMPTY_IMPUESTO)),
+    impuestoEtiquetaNp: etiquetaTributos(tributosPayloadDesdeForm(f.impuesto_np || EMPTY_IMPUESTO)),
+  })
+
+  const enviarOActualizarCotizacion = () => {
+    const pares = form.cotizaciones_detalle || []
+    const { faltantes, coherencia } = validateCaptureForEnviar(form, pares)
     const all = [...faltantes, ...coherencia]
     if (all.length) {
       setModalFaltantes(all)
       setModalRuleErrors([])
       return
     }
-    const list = buildParFromCapture(form, form.cotizaciones_detalle || [], {
-      impuestoEtiqueta: etiquetaTributos(tributosPayloadDesdeForm(form.impuesto || EMPTY_IMPUESTO)),
-      impuestoEtiquetaNp: etiquetaTributos(tributosPayloadDesdeForm(form.impuesto_np || EMPTY_IMPUESTO)),
-    })
+    const opts = impuestoOptsFromForm(form)
+
+    if (selectedParId) {
+      let list = pares.map((p) => (
+        p.id === selectedParId ? applyCaptureToPar(p, form, opts) : p
+      ))
+      list = applyAutoGanadoraByMinValor(list)
+      const legacy = syncLegacyFromGanadora(list)
+      setModalFaltantes([])
+      setModalRuleErrors(ganadoraRuleErrors(list))
+      setForm((f) => ({ ...f, cotizaciones_detalle: list, ...legacy }))
+      return
+    }
+
+    const list = buildParFromCapture(form, pares, opts)
     const legacy = syncLegacyFromGanadora(list)
     const gan = pickGanadora(list)
     setModalFaltantes([])
@@ -1226,8 +1203,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       contacto_telefono: '',
       costo_base: gan?.valor != null && gan.valor !== '' ? String(gan.valor) : '',
       valor_no_previsto: '',
+      cotizacion_numero: '',
       cotizacion_fecha: '',
       cotizacion_vigencia: '',
+      cotizacion_numero_np: '',
       cotizacion_fecha_np: '',
       cotizacion_vigencia_np: '',
       cantidad_negociada_np: '',
@@ -2010,6 +1989,17 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={costTh} title="Número de cotización del proveedor">Nº cot. *</td>
+                      <td style={costTd} colSpan={3}>
+                        <input
+                          style={costCellInp}
+                          value={form.cotizacion_numero}
+                          placeholder="Número asignado por el proveedor"
+                          onChange={(e) => updateCapture({ cotizacion_numero: e.target.value })}
+                        />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 1) }}>
                       <td style={costTh}>Impuesto</td>
                       <td style={costTd} colSpan={3}>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2038,7 +2028,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         </div>
                       </td>
                     </tr>
-                    <tr style={{ background: sheetZebra(ui, 1) }}>
+                    <tr style={{ background: sheetZebra(ui, 0) }}>
                       <td style={costTh} title="Cantidad negociada">Cant. neg.</td>
                       <td style={costTd}>
                         <input style={costCellInp} type="number" min="0" step="any" value={form.cantidad_negociada} onChange={(e) => updateCapture({ cantidad_negociada: e.target.value })} />
@@ -2083,7 +2073,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <tr style={{ background: sheetZebra(ui, 0) }}>
                       <td style={costTh}>Valor</td>
                       <td style={costTd}>
-                        <input style={costCellInp} type="number" min="0" step="0.01" value={form.valor_no_previsto} placeholder="Igual al insumo si vacío" onChange={(e) => updateCapture({ valor_no_previsto: e.target.value })} />
+                        <input style={costCellInp} type="number" min="0" step="0.01" value={form.valor_no_previsto} onChange={(e) => updateCapture({ valor_no_previsto: e.target.value })} />
                       </td>
                       <td style={costTh} title="Con AIU/IVA">Con AIU/IVA</td>
                       <td style={costTd}>
@@ -2101,6 +2091,17 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 0) }}>
+                      <td style={costTh} title="Número de cotización del proveedor (No Previsto)">Nº cot. *</td>
+                      <td style={costTd} colSpan={3}>
+                        <input
+                          style={costCellInp}
+                          value={form.cotizacion_numero_np}
+                          placeholder="Número asignado por el proveedor"
+                          onChange={(e) => updateCapture({ cotizacion_numero_np: e.target.value })}
+                        />
+                      </td>
+                    </tr>
+                    <tr style={{ background: sheetZebra(ui, 1) }}>
                       <td style={costTh}>Impuesto</td>
                       <td style={costTd} colSpan={3}>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2140,13 +2141,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
               </div>
             )}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-              <button type="button" style={btnPrimary} disabled={busy} onClick={enviarCotizacionFila}>
-                Enviar cotización a la tabla
+              <button type="button" style={btnPrimary} disabled={busy} onClick={enviarOActualizarCotizacion}>
+                {selectedParId ? 'Actualizar tabla' : 'Enviar cotización a la tabla'}
               </button>
               <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>
                 {selectedParId
-                  ? `Editando ${(form.cotizaciones_detalle || []).find((p) => p.id === selectedParId)?.insumo?.numero || 'fila'} — los cambios en los paneles se reflejan en la fila. Pulse de nuevo la fila para deseleccionar.`
-                  : `Agrega una fila comparativa (Insumo | No Previsto). El Nº se genera automáticamente. Luego adjunte el PDF en la fila.${(form.requiere_cotizacion !== false) ? ` Mínimo ${cotMinimas} cotización(es).` : ''}`}
+                  ? `Editando ${(form.cotizaciones_detalle || []).find((p) => p.id === selectedParId)?.insumo?.numero || 'fila'} — pulse «Actualizar tabla» para guardar los cambios de los paneles en esa fila.`
+                  : `Agrega una fila comparativa (Insumo | No Previsto). Indique el Nº real de cada cotización. Luego adjunte el PDF en la fila.${(form.requiere_cotizacion !== false) ? ` Mínimo ${cotMinimas} cotización(es).` : ''}`}
               </span>
             </div>
 
