@@ -90,6 +90,8 @@ export default function SolicitudFormExcelTable({
   onUbicacionChange,
   onAddRow,
   onRemoveRow,
+  /** Si true, la fila no se edita ni elimina (líneas ya en OC). */
+  isRowLocked,
 }) {
   const ui = useAlmacenTheme()
   /** { idx, phase: 'mapa' | 'detalle' } */
@@ -121,6 +123,8 @@ export default function SolicitudFormExcelTable({
     minWidth: 30,
     ...extra,
   })
+
+  const rowLocked = (idx) => Boolean(isRowLocked?.(items[idx], idx))
 
   const flowIdx = ubicacionFlow?.idx
   const flowItem = flowIdx != null ? items[flowIdx] : null
@@ -159,13 +163,20 @@ export default function SolicitudFormExcelTable({
               </tr>
             </thead>
             <tbody>
-              {items.map((it, idx) => (
-                <tr key={it.id ?? `new-${idx}`}>
+              {items.map((it, idx) => {
+                const locked = rowLocked(idx)
+                const rowDisabled = busy || locked
+                return (
+                <tr
+                  key={it.id ?? `new-${idx}`}
+                  title={locked ? 'Línea ya incluida en la Orden de Compra — no editable' : undefined}
+                  style={locked ? { opacity: 0.72, background: `${ui.textMuted}0a` } : undefined}
+                >
                   <PresupuestoItemSelector
                     variant="excel"
                     capitulo={it.presupuesto_capitulo}
                     item={it.presupuesto_item}
-                    disabled={busy}
+                    disabled={rowDisabled}
                     onChange={(sel) => onPptoChange(idx, sel)}
                   />
                   <td style={{ ...tdBase, overflow: 'visible' }}>
@@ -173,7 +184,7 @@ export default function SolicitudFormExcelTable({
                       <input
                         style={{ ...cellInp, flex: 1 }}
                         value={it.descripcion_solicitada || ''}
-                        disabled={busy}
+                        disabled={rowDisabled}
                         placeholder="Describa el material…"
                         title={it.descripcion_solicitada || ''}
                         onChange={(e) => onDescripcionChange(idx, e.target.value)}
@@ -190,7 +201,7 @@ export default function SolicitudFormExcelTable({
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: 4,
-                        cursor: busy ? 'default' : 'pointer',
+                        cursor: rowDisabled ? 'default' : 'pointer',
                         fontSize: 'var(--cc-xs)',
                         fontWeight: 600,
                         color: coerceEsPrincipal(it.es_principal) ? ui.accent : ui.textMuted,
@@ -199,7 +210,7 @@ export default function SolicitudFormExcelTable({
                       <input
                         type="checkbox"
                         checked={coerceEsPrincipal(it.es_principal)}
-                        disabled={busy}
+                        disabled={rowDisabled}
                         onChange={(e) => onPrincipalChange?.(idx, e.target.checked)}
                         aria-label="Insumo principal del ítem"
                       />
@@ -208,8 +219,8 @@ export default function SolicitudFormExcelTable({
                   <td style={{ ...tdBase, textAlign: 'center' }}>
                     <button
                       type="button"
-                      title={ubicacionResumen(it)}
-                      disabled={busy}
+                      title={locked ? 'Línea bloqueada (en OC)' : ubicacionResumen(it)}
+                      disabled={rowDisabled}
                       onClick={() => setUbicacionFlow({ idx, phase: 'mapa' })}
                       style={{
                         ...iconBtn({
@@ -242,7 +253,7 @@ export default function SolicitudFormExcelTable({
                       min="0"
                       step="any"
                       value={it.cantidad}
-                      disabled={busy}
+                      disabled={rowDisabled}
                       onChange={(e) => onCantidadChange(idx, e.target.value)}
                     />
                   </td>
@@ -250,7 +261,7 @@ export default function SolicitudFormExcelTable({
                     <input
                       style={cellInp}
                       value={it.observacion_residente || ''}
-                      disabled={busy}
+                      disabled={rowDisabled}
                       placeholder="Opcional…"
                       title={it.observacion_residente || ''}
                       onChange={(e) => onObservacionChange(idx, e.target.value)}
@@ -268,8 +279,8 @@ export default function SolicitudFormExcelTable({
                     </button>
                     <button
                       type="button"
-                      title="Eliminar fila"
-                      disabled={busy}
+                      title={locked ? 'No se puede eliminar: ya está en la OC' : 'Eliminar fila'}
+                      disabled={rowDisabled || items.length <= 1}
                       onClick={() => onRemoveRow(idx)}
                       style={iconBtn({ color: '#dc2626', borderColor: '#dc262666' })}
                     >
@@ -277,13 +288,14 @@ export default function SolicitudFormExcelTable({
                     </button>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
       </div>
 
-      {ubicacionFlow?.phase === 'mapa' && flowItem && (
+      {ubicacionFlow?.phase === 'mapa' && flowItem && !rowLocked(flowIdx) && (
         <AlmacenPkMapaSelector
           t={theme}
           token={token}
@@ -309,7 +321,7 @@ export default function SolicitudFormExcelTable({
         />
       )}
 
-      {ubicacionFlow?.phase === 'detalle' && flowItem && (
+      {ubicacionFlow?.phase === 'detalle' && flowItem && !rowLocked(flowIdx) && (
         <SolicitudLineaUbicacionEditor
           item={flowItem}
           lineIndex={flowIdx + 1}

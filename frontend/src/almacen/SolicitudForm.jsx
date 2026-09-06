@@ -3,7 +3,7 @@ import CcConfirmModal from '../components/CcConfirmModal'
 import SolicitudFormExcelTable from './SolicitudFormExcelTable'
 import SolicitudItemDetalleCard from './SolicitudItemDetalleCard'
 import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
-import LineaResumenEconomico from './LineaResumenEconomico'
+import LineaResumenExcelTable from './LineaResumenExcelTable'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import {
   coerceEsPrincipal,
@@ -85,65 +85,18 @@ function ubicacionPayload(it) {
 }
 
 function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg, ui, sinPrecio, verEconomicos = true, esPrincipal = true }) {
-  if (!ctx && !ctxNeg?.tiene_negociado) return null
-  const alertStyle = supera || superaNegociado
-    ? { background: '#fef2f2', border: '1px solid #dc2626', color: '#991b1b' }
-    : { background: `${ui.accentSoft}`, border: `1px solid ${ui.textMuted}22` }
-
-  const posColor = 'var(--cc-color-positive)'
-
+  if (!ctx && !ctxNeg?.tiene_negociado && !analisis && !sinPrecio) return null
   return (
-    <div style={{ ...alertStyle, borderRadius: 6, padding: '6px 8px', marginTop: 6, fontSize: 'var(--cc-xs)' }}>
-      {!esPrincipal && (
-        <div style={{ fontWeight: 600, color: ui.textMuted, marginBottom: 4 }}>
-          Insumo asociado — no descuenta presupuesto del ítem
-        </div>
-      )}
-      {supera && (
-        <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 4 }}>
-          ⚠ Supera presupuesto en este PK-ID
-        </div>
-      )}
-      {superaNegociado && ctxNeg?.tiene_negociado && (
-        <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 4 }}>
-          ⚠ Supera cantidad negociada con el proveedor ({fmtCant(ctxNeg.consumo_total_despues)} / {fmtCant(ctxNeg.cantidad_negociada)} {ctxNeg.unidad})
-        </div>
-      )}
-      {ctx && (
-        <>
-          <div style={{ fontWeight: 600, marginBottom: 2 }}>
-            {ctx.capitulo} · {ctx.item} — {ctx.descripcion}
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
-            <span>Ppto registro: <strong>{fmtCant(ctx.cant_presupuestada)}</strong> {ctx.unidad}</span>
-            {ctx.registros_combo_count > 1 && (
-              <span>
-                Total PK ({ctx.registros_combo_count} reg.):{' '}
-                <strong>{fmtCant(ctx.cant_presupuestada_combo)}</strong> {ctx.unidad}
-              </span>
-            )}
-            <span>Acum.: <strong>{fmtCant(ctx.cant_solicitada_acumulada)}</strong></span>
-            <span>Esta línea: <strong>{fmtCant(ctx.cantidad_solicitada)}</strong></span>
-            <span>Saldo después: <strong style={{ color: supera ? 'var(--cc-color-danger)' : posColor }}>{fmtCant(ctx.saldo_disponible_despues)}</strong></span>
-          </div>
-        </>
-      )}
-      {ctxNeg?.tiene_negociado && (
-        <div style={{ marginTop: ctx ? 6 : 0, display: 'flex', flexWrap: 'wrap', gap: '4px 10px' }}>
-          <span>Negociado: <strong>{fmtCant(ctxNeg.cantidad_negociada)}</strong> {ctxNeg.unidad}</span>
-          <span>Consumido (incl. esta línea): <strong style={{ color: superaNegociado ? 'var(--cc-color-danger)' : posColor }}>{fmtCant(ctxNeg.consumo_total_despues)}</strong></span>
-          <span>Saldo negociado: <strong style={{ color: superaNegociado ? 'var(--cc-color-danger)' : posColor }}>{fmtCant(ctxNeg.saldo_negociado_despues)}</strong></span>
-        </div>
-      )}
-      {sinPrecio && !analisis && (
-        <div style={{ marginTop: 4, fontStyle: 'italic', opacity: 0.85 }}>
-          Sin precio de compra registrado en el catálogo.
-        </div>
-      )}
-      {analisis && (
-        <LineaResumenEconomico analisis={analisis} color={alertStyle.color || ui.textMuted} verEconomicos={verEconomicos} />
-      )}
-    </div>
+    <LineaResumenExcelTable
+      ctx={ctx}
+      ctxNeg={ctxNeg}
+      analisis={analisis}
+      supera={supera}
+      superaNegociado={superaNegociado}
+      esPrincipal={esPrincipal}
+      sinPrecio={sinPrecio}
+      verEconomicos={verEconomicos}
+    />
   )
 }
 
@@ -159,6 +112,8 @@ export default function SolicitudForm({
   token,
   contratoId,
   embedded = false,
+  /** Reabrir OC: líneas existentes bloqueadas; solo se agregan nuevas. */
+  modoReabrirOc = false,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -171,8 +126,12 @@ export default function SolicitudForm({
   const [confirmAnular, setConfirmAnular] = useState(false)
   const [proximoConsecutivo, setProximoConsecutivo] = useState(null)
 
-  const editable = solicitudAlmacenEditable(sol) && (
+  const editableBase = solicitudAlmacenEditable(sol) && (
     solicitudId ? Boolean(permisos?.editar) : Boolean(permisos?.crear)
+  )
+  const editable = Boolean(
+    editableBase
+    || (modoReabrirOc && permisos?.editar && sol?.estado === 'aprobada'),
   )
   const verEconomicos = permisos?.verEconomicos !== false
   const tituloAuto = formatSolicitudTituloAuto(
@@ -184,7 +143,13 @@ export default function SolicitudForm({
     setSol(s)
     if (s?.consecutivo != null) setProximoConsecutivo(s.consecutivo)
     const mapped = mapSolicitudItemsFromServer(s)
-    setItems(mapped.length ? mapped : [emptyItem()])
+    if (modoReabrirOc) {
+      // Asegurar al menos una fila nueva editable al reabrir.
+      const hasNueva = mapped.some((it) => !it.id)
+      setItems(hasNueva ? mapped : [...(mapped.length ? mapped : []), emptyItem()])
+    } else {
+      setItems(mapped.length ? mapped : [emptyItem()])
+    }
     onEstadoChange?.(s?.estado || null)
   }
 
@@ -403,9 +368,19 @@ export default function SolicitudForm({
     })
   }
 
+  const isRowLocked = (it) => Boolean(modoReabrirOc && it?.id)
+
   const removeItem = (idx) => {
+    if (isRowLocked(items[idx])) return
     markDirty()
     setItems((prev) => {
+      if (modoReabrirOc) {
+        const next = prev.filter((_, i) => i !== idx)
+        const locked = next.filter((it) => isRowLocked(it))
+        const unlocked = next.filter((it) => !isRowLocked(it))
+        if (!unlocked.length) return [...locked, emptyItem()]
+        return next
+      }
       if (prev.length <= 1) return [emptyItem()]
       return prev.filter((_, i) => i !== idx)
     })
@@ -420,15 +395,16 @@ export default function SolicitudForm({
     })
   }
 
-  const buildPayload = () => {
-    const validation = validateSolicitudItems(items)
+  const buildPayload = ({ soloNuevas = false } = {}) => {
+    const sourceItems = soloNuevas ? items.filter((it) => !it.id) : items
+    const validation = validateSolicitudItems(sourceItems)
     if (!validation.ok) {
       throw new Error(validation.message)
     }
     return {
       // El backend regenera el título automático; se envía para compatibilidad.
       titulo: formatSolicitudTituloAuto(sol?.consecutivo ?? proximoConsecutivo, sol?.created_at),
-      items: items.map((it) => {
+      items: sourceItems.map((it) => {
         const base = {
           id: it.id || undefined,
           cantidad: Number(it.cantidad),
@@ -456,39 +432,34 @@ export default function SolicitudForm({
     }
   }
 
-  const confirmarSiSuperaPresupuesto = () => {
-    const lineas = lineasSuperanPresupuesto(items)
-    if (!lineas.length) return true
-    const detalle = lineas.slice(0, 3).map((it) => {
-      const ctx = it.preview?.contexto_presupuesto
-      return `• ${it.presupuesto_capitulo} · ${it.presupuesto_item} (PK ${it.pk_id}) — saldo ${fmtCant(ctx?.saldo_disponible_despues)} ${ctx?.unidad || ''}`
-    }).join('\n')
-    const extra = lineas.length > 3 ? `\n… y ${lineas.length - 3} línea(s) más.` : ''
-    return window.confirm(
-      `⚠ ADVERTENCIA — Supera presupuesto\n\n`
-      + `Una o más líneas dejan saldo negativo en su ítem/PK-ID:\n\n${detalle}${extra}\n\n`
-      + '¿Desea guardar la solicitud de todos modos?',
-    )
-  }
-
-  const confirmarSiSuperaNegociado = () => {
-    const lineas = lineasSuperanNegociado(items)
-    if (!lineas.length) return true
-    const detalle = lineas.slice(0, 3).map((it) => {
-      const ctx = it.preview?.contexto_negociado
-      return `• ${it.insumo?.label || 'Insumo'} — consumo ${fmtCant(ctx?.consumo_total_despues)} / ${fmtCant(ctx?.cantidad_negociada)} ${ctx?.unidad || ''}`
-    }).join('\n')
-    const extra = lineas.length > 3 ? `\n… y ${lineas.length - 3} línea(s) más.` : ''
-    return window.confirm(
-      `⚠ ADVERTENCIA — Supera cantidad negociada\n\n`
-      + `Una o más líneas superan el volumen pactado con el proveedor:\n\n${detalle}${extra}\n\n`
-      + '¿Desea continuar de todos modos?',
-    )
-  }
-
-  const confirmarAlertasLinea = () => {
-    if (!confirmarSiSuperaPresupuesto()) return false
-    if (!confirmarSiSuperaNegociado()) return false
+  const confirmarAlertasLinea = (opts = {}) => {
+    const pool = opts.soloNuevas ? items.filter((it) => !it.id) : items
+    const lineasP = lineasSuperanPresupuesto(pool)
+    if (lineasP.length) {
+      const detalle = lineasP.slice(0, 3).map((it) => {
+        const ctx = it.preview?.contexto_presupuesto
+        return `• ${it.presupuesto_capitulo} · ${it.presupuesto_item} (PK ${it.pk_id}) — saldo ${fmtCant(ctx?.saldo_disponible_despues)} ${ctx?.unidad || ''}`
+      }).join('\n')
+      const extra = lineasP.length > 3 ? `\n… y ${lineasP.length - 3} línea(s) más.` : ''
+      if (!window.confirm(
+        `⚠ ADVERTENCIA — Supera presupuesto\n\n`
+        + `Una o más líneas dejan saldo negativo en su ítem/PK-ID:\n\n${detalle}${extra}\n\n`
+        + '¿Desea guardar la solicitud de todos modos?',
+      )) return false
+    }
+    const lineasN = lineasSuperanNegociado(pool)
+    if (lineasN.length) {
+      const detalle = lineasN.slice(0, 3).map((it) => {
+        const ctx = it.preview?.contexto_negociado
+        return `• ${it.insumo?.label || 'Insumo'} — consumo ${fmtCant(ctx?.consumo_total_despues)} / ${fmtCant(ctx?.cantidad_negociada)} ${ctx?.unidad || ''}`
+      }).join('\n')
+      const extra = lineasN.length > 3 ? `\n… y ${lineasN.length - 3} línea(s) más.` : ''
+      if (!window.confirm(
+        `⚠ ADVERTENCIA — Supera cantidad negociada\n\n`
+        + `Una o más líneas superan el volumen pactado con el proveedor:\n\n${detalle}${extra}\n\n`
+        + '¿Desea continuar de todos modos?',
+      )) return false
+    }
     return true
   }
 
@@ -497,6 +468,29 @@ export default function SolicitudForm({
     setOkMsg('')
     setBusy(true)
     try {
+      if (modoReabrirOc) {
+        const nuevas = items.filter((it) => !it.id)
+        if (!nuevas.length) {
+          setError('Agregue al menos una línea nueva de material.')
+          setBusy(false)
+          return
+        }
+        const payload = buildPayload({ soloNuevas: true })
+        if (!confirmarAlertasLinea({ soloNuevas: true })) {
+          setBusy(false)
+          return
+        }
+        // Solo evaluar alertas sobre líneas nuevas.
+        const result = await api.agregarLineasPostOc(solicitudId, payload)
+        aplicarSolicitudServidor(result)
+        setOkMsg(
+          `Se agregaron ${result?.lineas_agregadas || nuevas.length} línea(s). `
+          + 'Quedan pendientes de revisión y se sumarán a la misma OC al aprobarse.',
+        )
+        onDirtyChange?.(false)
+        onSaved?.(result)
+        return
+      }
       const payload = buildPayload()
       if (!confirmarAlertasLinea()) {
         setBusy(false)
@@ -570,7 +564,7 @@ export default function SolicitudForm({
   }
 
   const theme = buildAlmacenConfirmTheme(t, ui)
-  const puedeReenviar = solicitudId && ['borrador', 'rechazada'].includes(sol?.estado) && permisos?.editar
+  const puedeReenviar = !modoReabrirOc && solicitudId && ['borrador', 'rechazada'].includes(sol?.estado) && permisos?.editar
 
   const rootStyle = embedded
     ? { padding: 0, border: 'none', boxShadow: 'none', background: 'transparent' }
@@ -600,6 +594,24 @@ export default function SolicitudForm({
           <OrdenCompraPdfClip ordenCompra={sol.orden_compra} puedeExportar />
         )}
       </div>
+      )}
+
+      {modoReabrirOc && (
+        <div style={{
+          fontSize: 'var(--cc-sm)',
+          color: ui.text,
+          background: `${ui.accent}14`,
+          border: `1px solid ${ui.accent}44`,
+          borderRadius: 8,
+          padding: '10px 12px',
+          marginBottom: 12,
+        }}
+        >
+          <strong>Reabrir OC</strong>
+          {sol?.orden_compra?.numero_oc ? ` #${sol.orden_compra.numero_oc}` : ''}
+          : las líneas ya incluidas en la orden quedan bloqueadas.
+          Agregue solo materiales nuevos; pasarán por el flujo de aprobación y se sumarán a la misma OC.
+        </div>
       )}
 
       {editable && (
@@ -748,6 +760,7 @@ export default function SolicitudForm({
             onUbicacionChange={onUbicacionChange}
             onAddRow={addItemAt}
             onRemoveRow={removeItem}
+            isRowLocked={(it) => isRowLocked(it)}
           />
           {items.map((it, idx) => (
             (it.preview?.error || it.preview?.contexto_presupuesto || it.preview?.contexto_negociado?.tiene_negociado) ? (
@@ -781,7 +794,11 @@ export default function SolicitudForm({
         {editable && (solicitudId ? permisos?.editar : permisos?.crear) && (
           <>
             <button type="button" style={ui.btnPrimary} disabled={busy} onClick={guardar}>
-              {busy ? 'Guardando…' : solicitudId && sol?.estado !== 'borrador' ? 'Guardar cambios' : 'Guardar borrador'}
+              {busy
+                ? 'Guardando…'
+                : modoReabrirOc
+                  ? 'Agregar líneas a la OC'
+                  : (solicitudId && sol?.estado !== 'borrador' ? 'Guardar cambios' : 'Guardar borrador')}
             </button>
             {puedeReenviar && (
               <button type="button" style={ui.btnPrimary} disabled={busy} onClick={solicitarAprobacion}>
@@ -790,7 +807,7 @@ export default function SolicitudForm({
             )}
           </>
         )}
-        {solicitudId && sol && puedeAnularSolicitud(sol, permisos) && (
+        {solicitudId && sol && !modoReabrirOc && puedeAnularSolicitud(sol, permisos) && (
           <button
             type="button"
             style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666' }}

@@ -5,6 +5,7 @@ import SolicitudesFiltrosModal from './SolicitudesFiltrosModal'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import CcConfirmModal from '../components/CcConfirmModal'
 import {
+  solicitudPuedeReabrirOc,
   solicitudPuedeValidar,
   solicitudTieneOrdenCompra,
 } from './solicitudDetalleHelpers'
@@ -38,6 +39,7 @@ export default function SolicitudesPanel({
   const [error, setError] = useState('')
   const [editId, setEditId] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [reabrirOc, setReabrirOc] = useState(false)
   const [detalleId, setDetalleId] = useState(null)
   const [detalleTab, setDetalleTab] = useState('portada')
   const [anularTarget, setAnularTarget] = useState(null)
@@ -133,7 +135,18 @@ export default function SolicitudesPanel({
 
   const formModalOpen = creating || editId
 
-  return (
+  const cerrarFormModal = () => {
+    setEditId(null)
+    setCreating(false)
+    setReabrirOc(false)
+  }
+
+  const abrirReabrirOc = (s) => {
+    setDetalleId(null)
+    setCreating(false)
+    setReabrirOc(true)
+    setEditId(s.id)
+  }
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
@@ -152,7 +165,7 @@ export default function SolicitudesPanel({
             🔎 Filtros{filtrosActivos > 0 ? ` (${filtrosActivos})` : ''}
           </button>
           {permisos?.crear && (
-            <button type="button" style={ui.btnPrimary} onClick={() => setCreating(true)}>
+            <button type="button" style={ui.btnPrimary} onClick={() => { setReabrirOc(false); setCreating(true) }}>
               + Nueva solicitud
             </button>
           )}
@@ -248,6 +261,16 @@ export default function SolicitudesPanel({
                           Revisar
                         </button>
                       )}
+                      {solicitudPuedeReabrirOc(s, permisos) && (
+                        <button
+                          type="button"
+                          style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: 'var(--cc-caption)', minHeight: 0 }}
+                          title="Agregar insumos adicionales a la misma Orden de Compra"
+                          onClick={() => abrirReabrirOc(s)}
+                        >
+                          Reabrir OC
+                        </button>
+                      )}
                       {puedeEliminarDev && (
                         <button
                           type="button"
@@ -329,16 +352,21 @@ export default function SolicitudesPanel({
           t={t}
           token={token}
           contratoId={contratoId}
-          onClose={() => { setEditId(null); setCreating(false) }}
+          modoReabrirOc={reabrirOc}
+          onClose={cerrarFormModal}
           onSaved={(result) => {
+            if (reabrirOc) {
+              cerrarFormModal()
+              reload()
+              return
+            }
             if (result?.estado === 'borrador' && result?.id) {
               setCreating(false)
               setEditId(result.id)
               reload()
               return
             }
-            setEditId(null)
-            setCreating(false)
+            cerrarFormModal()
             reload()
           }}
         />
@@ -360,9 +388,11 @@ export default function SolicitudesPanel({
           }}
           onEdit={(sol) => {
             setDetalleId(null)
+            setReabrirOc(false)
             setEditId(sol?.id || detalleId)
             setCreating(false)
           }}
+          onReabrirOc={(sol) => abrirReabrirOc(sol || { id: detalleId })}
         />
       )}
 

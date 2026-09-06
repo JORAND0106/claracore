@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import AlmacenItemMapaPreview from './AlmacenItemMapaPreview'
 import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
-import LineaResumenEconomico from './LineaResumenEconomico'
+import LineaResumenExcelTable from './LineaResumenExcelTable'
 import { rentabilidadDesdeAnalisis, fmtAbscisasLinea } from './solicitudDetalleHelpers'
 import {
   fmtCant,
@@ -175,36 +175,16 @@ export default function SolicitudItemDetalleCard({
         )}
       </div>
 
-      {ctxNeg?.tiene_negociado && (
-        <div style={{
-          fontSize: 'var(--cc-xs)',
-          color: superaNeg ? '#991b1b' : ui.textMuted,
-          padding: '8px 10px',
-          borderRadius: 6,
-          background: superaNeg ? '#fff' : `${ui.accentSoft}`,
-          marginBottom: analisis ? 6 : 0,
-        }}
-        >
-          Negociado: {fmtCant(ctxNeg.cantidad_negociada)} {ctxNeg.unidad} ·
-          Consumido: {fmtCant(ctxNeg.consumo_total_despues)} ·
-          Saldo: <strong>{fmtCant(ctxNeg.saldo_negociado_despues)}</strong>
-        </div>
-      )}
-
-      {ctx && (
-        <div style={{
-          fontSize: 'var(--cc-xs)',
-          color: supera ? '#991b1b' : ui.textMuted,
-          padding: '8px 10px',
-          borderRadius: 6,
-          background: supera ? '#fff' : `${ui.accentSoft}`,
-          marginBottom: analisis ? 6 : 0,
-        }}
-        >
-          Presupuestado: {fmtCant(ctx.cant_presupuestada)} ·
-          Solicitado acum.: {fmtCant(ctx.cant_solicitada_acumulada)} ·
-          Saldo: <strong>{fmtCant(ctx.saldo_disponible_despues)}</strong>
-        </div>
+      {(ctx || ctxNeg?.tiene_negociado || analisis) && (
+        <LineaResumenExcelTable
+          ctx={ctx}
+          ctxNeg={ctxNeg}
+          analisis={analisis}
+          supera={supera}
+          superaNegociado={superaNeg}
+          esPrincipal={item.es_principal !== false}
+          verEconomicos={verEconomicos && !tablaRentabilidad}
+        />
       )}
 
       {!accordion && tablaRentabilidad ? (
@@ -213,8 +193,6 @@ export default function SolicitudItemDetalleCard({
           proveedorCatalogo={item.proveedor_catalogo}
           verEconomicos={verEconomicos}
         />
-      ) : accordion && analisis ? (
-        <LineaResumenEconomico analisis={analisis} color={ui.textMuted} verEconomicos={verEconomicos} />
       ) : null}
 
       {accordion && !tablaRentabilidad && item.proveedor_catalogo && (

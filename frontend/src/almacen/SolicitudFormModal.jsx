@@ -12,7 +12,7 @@ import {
 const MODAL_WIDTH = 'min(1560px, 100%)'
 
 /**
- * Popup dedicado para crear o editar una solicitud de insumos.
+ * Popup dedicado para crear, editar o reabrir OC (agregar líneas nuevas).
  * Advierte al cerrar/cancelar si aún no se solicitó aprobación.
  */
 export default function SolicitudFormModal({
@@ -23,6 +23,7 @@ export default function SolicitudFormModal({
   contratoId,
   onClose,
   onSaved,
+  modoReabrirOc = false,
 }) {
   const ui = useAlmacenTheme()
   const compact = useAlmacenCompact()
@@ -33,7 +34,7 @@ export default function SolicitudFormModal({
   const [confirmClose, setConfirmClose] = useState(false)
   const [solEstado, setSolEstado] = useState(null)
 
-  const needsApprovalWarn = !approvalSent && (
+  const needsApprovalWarn = !modoReabrirOc && !approvalSent && (
     dirty
     || solEstado === 'borrador'
     || solEstado === 'rechazada'
@@ -73,13 +74,17 @@ export default function SolicitudFormModal({
           <div className="cc-almacen-form-modal__header cc-almacen-solicitud-form-modal__header cc-almacen-solicitud-form-modal__header--compact">
             <div style={{ minWidth: 0, flex: 1 }}>
               <div id="solicitud-form-modal-title" style={{ fontSize: 'var(--cc-title)', fontWeight: 800 }}>
-                {isNew ? '📋 Nueva solicitud de insumos' : '✏️ Editar solicitud'}
+                {modoReabrirOc
+                  ? '🔓 Reabrir OC — agregar insumos'
+                  : (isNew ? '📋 Nueva solicitud de insumos' : '✏️ Editar solicitud')}
               </div>
               {!compact && (
                 <div style={{ fontSize: 'var(--cc-xs)', color: 'var(--cc-almacen-text-muted)', marginTop: 2, lineHeight: 1.35 }}>
-                  {isNew
-                    ? 'Complete capítulo, ítem, material, ubicación y cantidad por fila. El título se genera automáticamente.'
-                    : 'Actualice materiales y ubicaciones. El título se genera automáticamente.'}
+                  {modoReabrirOc
+                    ? 'Las líneas ya aprobadas en la OC no se modifican. Solo las nuevas quedan pendientes de aprobación.'
+                    : (isNew
+                      ? 'Complete capítulo, ítem, material, ubicación y cantidad por fila. El título se genera automáticamente.'
+                      : 'Actualice materiales y ubicaciones. El título se genera automáticamente.')}
                 </div>
               )}
             </div>
@@ -101,6 +106,7 @@ export default function SolicitudFormModal({
               token={token}
               contratoId={contratoId}
               embedded
+              modoReabrirOc={modoReabrirOc}
               onDirtyChange={setDirty}
               onEstadoChange={setSolEstado}
               onApprovalSent={() => {
@@ -109,7 +115,7 @@ export default function SolicitudFormModal({
               }}
               onSaved={(result) => {
                 if (result?.estado) setSolEstado(result.estado)
-                if (result?.estado === 'enviada' || result?.estado === 'aprobada') {
+                if (result?.estado === 'enviada' || result?.estado === 'aprobada' || result?.oc_reabierta) {
                   setApprovalSent(true)
                   setDirty(false)
                 }

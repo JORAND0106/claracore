@@ -22,12 +22,14 @@ function esContratistaGerencialUsuario(usuario) {
 
 function solicitudPuedeValidar(sol, permisos) {
   const esGerencial = Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
-  return Boolean(
-    permisos?.validar
-    && esGerencial
-    && sol?.estado === 'enviada'
-    && !(sol?.tiene_orden_compra || sol?.orden_compra?.id),
-  )
+  if (!permisos?.validar || !esGerencial) return false
+  const tieneOc = Boolean(sol?.tiene_orden_compra || sol?.orden_compra?.id)
+  if (sol?.estado === 'enviada' && !tieneOc) return true
+  if (sol?.estado === 'aprobada' && tieneOc) {
+    const items = sol?.items || []
+    return items.some((it) => !it?.en_orden_compra && (it?.estado_validacion || 'pendiente') !== 'rechazado')
+  }
+  return false
 }
 
 function puedeAbrirRevisionLinea(permisos) {
@@ -67,6 +69,20 @@ describe('flujo solicitud por rol', () => {
     const sol = { estado: 'enviada' }
     assert.equal(solicitudPuedeValidar(sol, { validar: true, esContratistaGerencial: false }), false)
     assert.equal(solicitudPuedeValidar(sol, { validar: true, esContratistaGerencial: true }), true)
+  })
+
+  it('post-OC: gerencial valida líneas nuevas no incluidas en la OC', () => {
+    const sol = {
+      estado: 'aprobada',
+      tiene_orden_compra: true,
+      orden_compra: { id: 1 },
+      items: [
+        { id: 1, en_orden_compra: true, estado_validacion: 'aprobado' },
+        { id: 2, en_orden_compra: false, estado_validacion: 'pendiente' },
+      ],
+    }
+    assert.equal(solicitudPuedeValidar(sol, { validar: true, esContratistaGerencial: true }), true)
+    assert.equal(solicitudPuedeValidar({ ...sol, items: sol.items.slice(0, 1) }, { validar: true, esContratistaGerencial: true }), false)
   })
 
   it('modal revisión de línea solo Gerencial/Desarrollador (ni lectura a otros roles)', () => {
