@@ -1039,10 +1039,7 @@ def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[di
     if ids:
         oc_rows = (
             sb.table("almacen_orden_compra")
-            .select(
-                "id, numero_oc, estado, created_at, pdf_blob_path, pdf_nombre, "
-                "solicitud_id, proveedor_id, proveedor_nombre"
-            )
+            .select("*")
             .in_("solicitud_id", ids)
             .order("numero_oc")
             .execute()
@@ -1627,10 +1624,7 @@ def _solicitud_item_ids_en_ocs(sb, oc_ids: List[int]) -> set:
 def _fetch_ocs_de_solicitud(sb, contrato_id: int, solicitud_id: int) -> List[dict]:
     rows = (
         sb.table("almacen_orden_compra")
-        .select(
-            "id, numero_oc, estado, solicitud_id, proveedor_id, proveedor_nombre, "
-            "pdf_blob_path, pdf_nombre, created_at"
-        )
+        .select("*")
         .eq("solicitud_id", int(solicitud_id))
         .eq("contrato_id", int(contrato_id))
         .order("numero_oc")
