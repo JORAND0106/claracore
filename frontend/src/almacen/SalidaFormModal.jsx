@@ -9,7 +9,7 @@ import {
   useAlmacenTheme,
 } from './almacenShared'
 
-const MODAL_WIDTH = 'min(920px, 100%)'
+const MODAL_WIDTH = 'min(1180px, 100%)'
 
 export default function SalidaFormModal({
   permisos,
@@ -63,7 +63,7 @@ export default function SalidaFormModal({
               </div>
               {!compact && (
                 <div style={{ fontSize: 'var(--cc-xs)', color: 'var(--cc-almacen-text-muted)', marginTop: 2, lineHeight: 1.35 }}>
-                  Despacho hacia obra contra entradas registradas en el PK-ID seleccionado.
+                  Despacho hacia obra: varias líneas en un mismo registro, contra entradas del PK-ID.
                 </div>
               )}
             </div>

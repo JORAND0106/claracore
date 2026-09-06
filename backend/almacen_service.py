@@ -5732,7 +5732,70 @@ def _generar_pdf_salida(
     }).eq("id", salida_id).execute()
 
 
+def _normalize_salida_items(body: dict) -> List[dict]:
+    """Acepta items[] o el par legado entrada_item_id + cantidad_salida."""
+    raw = body.get("items")
+    if raw is not None:
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("Indique al menos una línea de salida.")
+        out = []
+        seen = set()
+        for i, it in enumerate(raw, start=1):
+            if not isinstance(it, dict):
+                raise ValueError(f"Línea #{i}: formato inválido.")
+            eid = it.get("entrada_item_id")
+            if not eid:
+                raise ValueError(f"Línea #{i}: seleccione la entrada de material.")
+            eid = int(eid)
+            if eid in seen:
+                raise ValueError(
+                    f"Línea #{i}: la misma entrada no puede repetirse en el mismo registro. "
+                    "Combine las cantidades en una sola fila."
+                )
+            seen.add(eid)
+            qty = _to_float(it.get("cantidad_salida"))
+            if qty <= 0:
+                raise ValueError(f"Línea #{i}: indique una cantidad de salida mayor a cero.")
+            out.append({"entrada_item_id": eid, "cantidad_salida": qty})
+        return out
+
+    entrada_item_id = body.get("entrada_item_id")
+    if not entrada_item_id:
+        raise ValueError("Seleccione la entrada de material a despachar.")
+    qty = _to_float(body.get("cantidad_salida"))
+    if qty <= 0:
+        raise ValueError("Indique una cantidad de salida mayor a cero.")
+    return [{"entrada_item_id": int(entrada_item_id), "cantidad_salida": qty}]
+
+
 def create_salida(contrato_id: int, user_id: int, body: dict) -> dict:
+    """
+    Registra una o varias salidas en un mismo envío.
+    Compat: entrada_item_id + cantidad_salida.
+    Multi: items=[{entrada_item_id, cantidad_salida}, ...].
+    """
+    items = _normalize_salida_items(body)
+    created: List[dict] = []
+    for it in items:
+        single = dict(body)
+        single.pop("items", None)
+        single["entrada_item_id"] = it["entrada_item_id"]
+        single["cantidad_salida"] = it["cantidad_salida"]
+        created.append(_create_salida_single(contrato_id, user_id, single))
+
+    if len(created) == 1:
+        return created[0]
+
+    primaria = dict(created[0])
+    primaria["salidas"] = created
+    primaria["salidas_creadas"] = len(created)
+    primaria["ids"] = [int(r["id"]) for r in created if r.get("id")]
+    primaria["numeros_salida"] = [r.get("numero_salida") for r in created]
+    primaria["multi_linea"] = True
+    return primaria
+
+
+def _create_salida_single(contrato_id: int, user_id: int, body: dict) -> dict:
     sb = _sb()
     pk_id = _norm_pk_id(body.get("pk_id"))
     if not pk_id:

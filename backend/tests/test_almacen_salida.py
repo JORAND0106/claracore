@@ -7,6 +7,7 @@ from almacen_permissions import es_rol_receptor_obra
 from almacen_service import (
     _alerta_proximidad_consumo,
     _disponible_entrada_item,
+    _normalize_salida_items,
     _pk_id_coincide,
     create_salida,
     entradas_disponibles_por_pk,
@@ -496,3 +497,73 @@ def test_get_salida_no_lista_todas(monkeypatch):
     assert out["codigo"] == "Sal-CC-00003"
     assert out["tiene_pdf_salida"] is False
     assert called["list"] == 0
+
+
+def test_normalize_salida_items_legado():
+    out = _normalize_salida_items({
+        "entrada_item_id": 10,
+        "cantidad_salida": 3.5,
+    })
+    assert out == [{"entrada_item_id": 10, "cantidad_salida": 3.5}]
+
+
+def test_normalize_salida_items_multi():
+    out = _normalize_salida_items({
+        "items": [
+            {"entrada_item_id": 1, "cantidad_salida": 2},
+            {"entrada_item_id": "4", "cantidad_salida": "1.5"},
+        ],
+    })
+    assert out == [
+        {"entrada_item_id": 1, "cantidad_salida": 2.0},
+        {"entrada_item_id": 4, "cantidad_salida": 1.5},
+    ]
+
+
+def test_normalize_salida_items_rechaza_vacio_y_duplicado():
+    with pytest.raises(ValueError, match="al menos una línea"):
+        _normalize_salida_items({"items": []})
+    with pytest.raises(ValueError, match="no puede repetirse"):
+        _normalize_salida_items({
+            "items": [
+                {"entrada_item_id": 1, "cantidad_salida": 1},
+                {"entrada_item_id": 1, "cantidad_salida": 2},
+            ],
+        })
+
+
+def test_create_salida_multi_linea_envuelve_respuesta(monkeypatch):
+    """Varias líneas → una respuesta con salidas[] y numeración individual."""
+    import almacen_service as svc
+
+    calls = {"n": 0}
+
+    def _fake_single(_contrato_id, _user_id, body):
+        calls["n"] += 1
+        n = calls["n"]
+        return {
+            "id": 100 + n,
+            "numero_salida": 10 + n,
+            "entrada_item_id": body["entrada_item_id"],
+            "cantidad_salida": body["cantidad_salida"],
+            "pk_id": body.get("pk_id"),
+            "pdf_generando": True,
+        }
+
+    monkeypatch.setattr(svc, "_create_salida_single", _fake_single)
+
+    out = create_salida(1, 99, {
+        "pk_id": "PK-001",
+        "receptor_usuario_id": 2,
+        "items": [
+            {"entrada_item_id": 10, "cantidad_salida": 1},
+            {"entrada_item_id": 11, "cantidad_salida": 2},
+        ],
+    })
+    assert out["multi_linea"] is True
+    assert out["salidas_creadas"] == 2
+    assert out["ids"] == [101, 102]
+    assert out["numeros_salida"] == [11, 12]
+    assert len(out["salidas"]) == 2
+    assert out["id"] == 101  # primaria = primera línea
+    assert out["entrada_item_id"] == 10
