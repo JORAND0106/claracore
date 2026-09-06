@@ -421,6 +421,33 @@ export default function SolicitudDetalleModal({
                       ✓ OC #{sol.orden_compra?.numero_oc} generada
                     </span>
                   )}
+                  {puedeReabrir && (
+                    <button
+                      type="button"
+                      style={{ ...ui.btnPrimary, padding: '6px 12px', fontSize: 'var(--cc-sm)' }}
+                      disabled={busy}
+                      onClick={() => onReabrirOc?.(sol)}
+                      title="Agregar insumos adicionales a la misma Orden de Compra"
+                      data-testid="reabrir-oc-header"
+                    >
+                      🔓 Reabrir OC
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Garantiza visibilidad aunque el bloque OC no se renderice por flags parciales. */}
+              {puedeReabrir && !(tieneOc || (sol.estado === 'aprobada' && sol.orden_compra?.id)) && (
+                <div style={{ marginBottom: 12 }}>
+                  <button
+                    type="button"
+                    style={ui.btnPrimary}
+                    disabled={busy}
+                    onClick={() => onReabrirOc?.(sol)}
+                    data-testid="reabrir-oc-fallback"
+                  >
+                    🔓 Reabrir OC
+                  </button>
                 </div>
               )}
 

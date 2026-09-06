@@ -131,7 +131,9 @@ export default function SolicitudForm({
   )
   const editable = Boolean(
     editableBase
-    || (modoReabrirOc && permisos?.editar && sol?.estado === 'aprobada'),
+    || (modoReabrirOc && (permisos?.editar || permisos?.crear) && (
+      sol?.estado === 'aprobada' || Boolean(sol?.tiene_orden_compra || sol?.orden_compra?.id)
+    )),
   )
   const verEconomicos = permisos?.verEconomicos !== false
   const tituloAuto = formatSolicitudTituloAuto(
@@ -791,7 +793,7 @@ export default function SolicitudForm({
       )}
 
       <div className={`cc-almacen-form-actions${embedded ? ' cc-almacen-form-actions--embedded' : ''}`} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: editable ? 12 : 0 }}>
-        {editable && (solicitudId ? permisos?.editar : permisos?.crear) && (
+        {editable && (solicitudId ? (permisos?.editar || permisos?.crear) : permisos?.crear) && (
           <>
             <button type="button" style={ui.btnPrimary} disabled={busy} onClick={guardar}>
               {busy

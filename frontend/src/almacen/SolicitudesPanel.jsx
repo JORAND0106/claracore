@@ -205,7 +205,7 @@ export default function SolicitudesPanel({
                 <th style={{ ...ui.th, textAlign: 'right', width: 88 }}>Ítems</th>
                 <th style={{ ...ui.th, width: 100 }}>Fecha</th>
                 <th style={{ ...ui.th, width: 72 }}>OC</th>
-                <th style={{ ...ui.th, width: 140 }} />
+                <th style={{ ...ui.th, width: 220 }} />
               </tr>
             </thead>
             <tbody>
@@ -264,8 +264,9 @@ export default function SolicitudesPanel({
                       {solicitudPuedeReabrirOc(s, permisos) && (
                         <button
                           type="button"
-                          style={{ ...ui.btnSecondary, padding: '4px 8px', fontSize: 'var(--cc-caption)', minHeight: 0 }}
+                          style={{ ...ui.btnPrimary, padding: '4px 8px', fontSize: 'var(--cc-caption)', minHeight: 0 }}
                           title="Agregar insumos adicionales a la misma Orden de Compra"
+                          data-testid="reabrir-oc-grid"
                           onClick={() => abrirReabrirOc(s)}
                         >
                           Reabrir OC
