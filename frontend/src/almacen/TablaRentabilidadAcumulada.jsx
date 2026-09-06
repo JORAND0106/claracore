@@ -213,19 +213,27 @@ export default function TablaRentabilidadAcumulada({
                 {filas.map((fila, idx) => (
                   <tr
                     key={`${fila.solicitud_item_id ?? fila.etiqueta_fila ?? 'r'}-${idx}`}
+                    className={fila.es_total ? 'cc-almacen-rentabilidad-total' : undefined}
                     style={
                       fila.es_total
-                        ? { background: `${ui.accentSoft}66`, fontWeight: 700 }
+                        ? {
+                          background: ui.accentSoft || `${ui.accent}22`,
+                          boxShadow: `inset 3px 0 0 ${ui.accent}`,
+                          borderTop: `1px solid ${ui.accent}55`,
+                          borderBottom: `1px solid ${ui.accent}40`,
+                        }
                         : fila.es_actual
-                          ? { background: `${ui.accentSoft}33` }
+                          ? { background: `${ui.accentSoft || `${ui.accent}14`}44` }
                           : undefined
                     }
                   >
                     <td style={{
                       ...ui.td,
-                      fontWeight: fila.es_total || fila.es_principal !== false ? 700 : 600,
+                      fontWeight: fila.es_total ? 800 : (fila.es_principal !== false ? 700 : 600),
                       fontSize: 'var(--cc-xs)',
                       color: fila.es_total ? ui.accent : ui.text,
+                      letterSpacing: fila.es_total ? '0.02em' : undefined,
+                      textTransform: fila.es_total ? 'uppercase' : undefined,
                       maxWidth: 220,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',

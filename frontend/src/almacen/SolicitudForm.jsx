@@ -6,6 +6,7 @@ import SolicitudTrazabilidadPanel from './SolicitudTrazabilidadPanel'
 import LineaResumenEconomico from './LineaResumenEconomico'
 import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import {
+  coerceEsPrincipal,
   formatSolicitudTituloAuto,
   lineasSuperanPresupuesto,
   lineasSuperanNegociado,
@@ -52,7 +53,7 @@ const emptyItem = () => ({
 })
 
 function itemEsPrincipal(it) {
-  return it?.es_principal !== false
+  return coerceEsPrincipal(it?.es_principal)
 }
 
 /** Otras líneas principales del mismo presupuesto_id (para preview de saldo). */
@@ -432,7 +433,7 @@ export default function SolicitudForm({
           id: it.id || undefined,
           cantidad: Number(it.cantidad),
           es_recurrente: !!it.es_recurrente,
-          es_principal: it.es_principal !== false,
+          es_principal: coerceEsPrincipal(it.es_principal),
           pk_id: String(it.pk_id || '').trim(),
           presupuesto_capitulo: it.presupuesto_capitulo,
           presupuesto_item: it.presupuesto_item,
@@ -767,7 +768,7 @@ export default function SolicitudForm({
                   ctxNeg={it.preview?.contexto_negociado}
                   sinPrecio={false}
                   verEconomicos={verEconomicos}
-                  esPrincipal={it.es_principal !== false}
+                  esPrincipal={coerceEsPrincipal(it.es_principal)}
                   ui={ui}
                 />
               </div>

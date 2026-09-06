@@ -36,6 +36,20 @@ export function formatSolicitudTituloAuto(consecutivo, createdAt) {
   return `Solicitud #${num} - ${fecha}`
 }
 
+/**
+ * Normaliza es_principal desde API/JSON (bool, 0/1, "false", etc.).
+ * Default: principal (true) si el valor es null/undefined.
+ */
+export function coerceEsPrincipal(v) {
+  if (v == null) return true
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    return !['false', '0', 'f', 'no', 'n', 'off', ''].includes(s)
+  }
+  if (typeof v === 'number') return v !== 0
+  return Boolean(v)
+}
+
 /** Orden natural para capítulos e ítems (1, 2, 3 … 10, 11). */
 export function naturalSortKey(text) {
   const s = String(text || '').trim()
@@ -103,7 +117,7 @@ export function mapSolicitudItemsFromServer(s) {
     unidad: it.unidad || '',
     material_descripcion: it.material_descripcion || '',
     es_recurrente: it.es_recurrente,
-    es_principal: it.es_principal !== false,
+    es_principal: coerceEsPrincipal(it.es_principal),
     preview: {
       contexto_presupuesto: it.contexto_presupuesto,
       analisis_valor: it.analisis_valor,
@@ -153,7 +167,7 @@ export function validateSolicitudItems(items) {
 }
 
 export function lineasSuperanPresupuesto(items) {
-  return items.filter((it) => it.es_principal !== false && it.preview?.supera_presupuesto)
+  return items.filter((it) => coerceEsPrincipal(it.es_principal) && it.preview?.supera_presupuesto)
 }
 
 export function lineasSuperanNegociado(items) {

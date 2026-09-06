@@ -3,6 +3,7 @@ import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import PresupuestoItemSelector from './PresupuestoItemSelector'
 import SolicitudLineaUbicacionEditor from './SolicitudLineaUbicacionEditor'
 import { AlmacenHelpIcon, useAlmacenTheme } from './almacenShared'
+import { coerceEsPrincipal } from './solicitudFormHelpers'
 
 const ROW_H = 40
 
@@ -182,7 +183,7 @@ export default function SolicitudFormExcelTable({
                   </td>
                   <td style={{ ...tdBase, textAlign: 'center' }}>
                     <label
-                      title={it.es_principal !== false
+                      title={coerceEsPrincipal(it.es_principal)
                         ? 'Insumo principal: descuenta presupuesto'
                         : 'Insumo asociado: no descuenta presupuesto'}
                       style={{
@@ -192,12 +193,12 @@ export default function SolicitudFormExcelTable({
                         cursor: busy ? 'default' : 'pointer',
                         fontSize: 'var(--cc-xs)',
                         fontWeight: 600,
-                        color: it.es_principal !== false ? ui.accent : ui.textMuted,
+                        color: coerceEsPrincipal(it.es_principal) ? ui.accent : ui.textMuted,
                       }}
                     >
                       <input
                         type="checkbox"
-                        checked={it.es_principal !== false}
+                        checked={coerceEsPrincipal(it.es_principal)}
                         disabled={busy}
                         onChange={(e) => onPrincipalChange?.(idx, e.target.checked)}
                         aria-label="Insumo principal del ítem"
