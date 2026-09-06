@@ -19,7 +19,7 @@ const TABS = [
   { id: 'solicitudes', label: 'Solicitudes', icon: '📋', ayuda: 'Crear, consultar y revisar solicitudes de materiales.' },
   { id: 'entradas', label: 'Entradas', icon: '📥', ayuda: 'Registrar ingreso de material contra OC.' },
   { id: 'salidas', label: 'Salidas', icon: '📤', ayuda: 'Despachar material hacia obra contra entradas por PK-ID.' },
-  { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Capítulo → Ítem → OC: stock, valores y resumen del almacén.' },
+  { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Capítulo → Ítem → Insumos: valores financieros y rentabilidad.' },
 ]
 
 function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = null }) {

@@ -1,4 +1,4 @@
-"""Inventario árbol: agregación capítulo → ítem → orden de compra."""
+"""Inventario árbol: agregación capítulo → ítem → insumos."""
 from unittest.mock import MagicMock
 
 from almacen_inventario_arbol import (
@@ -17,7 +17,7 @@ def test_make_item_key_normaliza():
     assert make_capitulo_key("01 Cap") == make_capitulo_key("01  Cap")
 
 
-def test_build_arbol_capitulo_item_oc_y_resumen():
+def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     item_rows = [
         {
             "item_key": "01|01.01",
@@ -153,27 +153,39 @@ def test_build_arbol_capitulo_item_oc_y_resumen():
     assert len(out["capitulos"]) == 2
     cap01 = next(c for c in out["capitulos"] if c["capitulo"] == "01")
     assert len(cap01["items"]) == 2
+    # Capítulos/ítems en valor financiero
     assert cap01["valor_entradas"] == 340000
     assert cap01["valor_salidas"] == 102000
     assert cap01["valor_stock"] == 238000
+    assert cap01["stock"] == 238000
 
     item = next(i for i in cap01["items"] if i["item"] == "01.01")
     assert item["vu_cobro"] == 80000
     assert item["vu_costo"] == 25000  # 20000*1 + 100*50
     assert item["utilidad"] == 55000
-    assert item["entradas"] == 115
-    assert item["salidas"] == 25
-    assert item["saldo"] == 90
-    assert len(item["ordenes_compra"]) == 2
-    oc45 = next(o for o in item["ordenes_compra"] if o["numero_oc"] == 45)
-    assert oc45["numero_oc_fmt"] == "#00045"
-    assert oc45["entradas"] == 15
-    assert oc45["material_descripcion"] == "Varios materiales"
+    assert item["rentabilidad_pct"] == 68.75  # 55000/80000*100
+    assert item["valor_entradas"] == 310000
+    assert item["valor_salidas"] == 102000
+    assert item["valor_stock"] == 208000
+    assert item["stock"] == 208000
+
+    # Nivel 3: insumos reales (no «Varios materiales»)
+    assert len(item["insumos"]) == 2
+    arena = next(i for i in item["insumos"] if i["insumo_id"] == 1)
+    assert arena["descripcion"] == "Arena"
+    assert arena["vu_costo"] == 20000
+    assert arena["es_principal"] is True
+    cemento = next(i for i in item["insumos"] if i["insumo_id"] == 2)
+    assert cemento["descripcion"] == "Cemento"
+    assert cemento["vu_costo"] == 100
+    assert cemento["es_principal"] is False
+    assert cemento["costo_contribucion"] == 5000
+    assert all("Varios" not in (i.get("descripcion") or "") for i in item["insumos"])
+    assert item["ordenes_compra"] == []
     assert out["resumen"]["valor_stock"] == 238000
-    assert "insumos" not in item
 
 
-def test_build_arbol_item_sin_movimientos():
+def test_build_arbol_item_sin_movimientos_con_insumos():
     out = build_inventario_arbol_from_lines(
         item_rows=[{
             "item_key": "02|2",
@@ -199,8 +211,10 @@ def test_build_arbol_item_sin_movimientos():
     item = out["capitulos"][0]["items"][0]
     assert item["vu_costo"] == 400
     assert item["utilidad"] == 600
-    assert item["saldo"] == 0
-    assert item["ordenes_compra"] == []
+    assert item["rentabilidad_pct"] == 60.0
+    assert item["valor_stock"] == 0
+    assert len(item["insumos"]) == 1
+    assert item["insumos"][0]["descripcion"] == "Solo catálogo"
 
 
 def test_fetch_oc_rows_fallback_sin_proveedor_id():
@@ -309,7 +323,8 @@ def test_list_inventario_arbol_devuelve_listado_si_enrich_falla(monkeypatch):
     assert out["capitulos"][0]["capitulo"] == "01"
     assert out["items"][0]["vu_cobro"] == 1000
     assert out["items"][1]["descripcion"] == "Relleno"
-    assert out["items"][0]["saldo"] == 0
+    assert out["items"][0]["valor_stock"] == 0
+    assert out["items"][0]["insumos"] == []
     assert out["items"][0]["ordenes_compra"] == []
 
 
