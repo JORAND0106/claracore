@@ -49,6 +49,7 @@ from catalogo_insumos_permissions import require_permiso_catalogo_insumos
 from catalogo_insumos_service import delete_insumo_catalogo
 from almacen_service import (
     add_cotizacion,
+    agregar_lineas_post_oc,
     alertas_vencimiento,
     anular_solicitud,
     aprobar_solicitud,
@@ -142,6 +143,7 @@ class ConfigUpdateBody(BaseModel):
 
 
 class SolicitudItemBody(BaseModel):
+    id: Optional[int] = None
     presupuesto_id: Optional[int] = None
     presupuesto_capitulo: Optional[str] = None
     presupuesto_item: Optional[str] = None
@@ -162,6 +164,7 @@ class SolicitudItemBody(BaseModel):
     vlr_unitario_cobro: Optional[float] = None
     es_recurrente: bool = False
     es_principal: bool = True
+    estado_validacion: Optional[str] = None
 
 
 class MapearItemGerencialBody(BaseModel):
@@ -656,6 +659,35 @@ def route_enviar_solicitud(contrato_id: int, solicitud_id: int, current_user=Dep
         log_almacen(
             current_user, "ENVIAR", "solicitud", solicitud_id,
             {"consecutivo": result.get("consecutivo") or prev.get("consecutivo")},
+            valor_anterior=snapshot_solicitud(prev),
+            valor_nuevo=snapshot_solicitud(result),
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/{contrato_id}/solicitudes/{solicitud_id}/agregar-lineas-post-oc")
+def route_agregar_lineas_post_oc(
+    contrato_id: int,
+    solicitud_id: int,
+    body: SolicitudCreateBody,
+    current_user=Depends(get_current_user),
+):
+    """Reabrir OC: agrega solo líneas nuevas; las ya en la OC quedan intactas."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    try:
+        prev = _fetch_solicitud_head(contrato_id, solicitud_id)
+        result = agregar_lineas_post_oc(
+            contrato_id, solicitud_id, _uid(current_user), body.model_dump(),
+        )
+        log_almacen(
+            current_user, "REABRIR_OC", "solicitud", solicitud_id,
+            {
+                "consecutivo": prev.get("consecutivo"),
+                "lineas_agregadas": result.get("lineas_agregadas"),
+            },
             valor_anterior=snapshot_solicitud(prev),
             valor_nuevo=snapshot_solicitud(result),
         )

@@ -8,14 +8,44 @@ export function solicitudTieneOrdenCompra(sol) {
   return Boolean(sol?.tiene_orden_compra || sol?.orden_compra?.id)
 }
 
+/** Líneas nuevas post-OC aún no incluidas en la orden (pendientes o listas para sumar). */
+export function solicitudTieneLineasPendientesPostOc(sol) {
+  if (!solicitudTieneOrdenCompra(sol)) return false
+  const items = sol?.items || []
+  if (!items.length) return false
+  return items.some((it) => {
+    if (it?.en_orden_compra) return false
+    const ev = it?.estado_validacion || 'pendiente'
+    return ev !== 'rechazado'
+  })
+}
+
+/**
+ * Gerencial puede validar:
+ * - solicitud enviada sin OC, o
+ * - solicitud con OC que tiene líneas nuevas (pendientes o aprobadas aún no sumadas).
+ */
 export function solicitudPuedeValidar(sol, permisos) {
   const esGerencial = Boolean(
     permisos?.esContratistaGerencial
     || permisos?.esDesarrollador,
   )
+  if (!permisos?.validar || !esGerencial) return false
+  if (sol?.estado === 'enviada' && !solicitudTieneOrdenCompra(sol)) return true
+  if (
+    sol?.estado === 'aprobada'
+    && solicitudTieneOrdenCompra(sol)
+    && solicitudTieneLineasPendientesPostOc(sol)
+  ) {
+    return true
+  }
+  return false
+}
+
+/** Rechazo completo de la solicitud: solo antes de generar OC. */
+export function solicitudPuedeRechazarCompleta(sol, permisos) {
   return Boolean(
-    permisos?.validar
-    && esGerencial
+    solicitudPuedeValidar(sol, permisos)
     && sol?.estado === 'enviada'
     && !solicitudTieneOrdenCompra(sol),
   )
@@ -32,6 +62,15 @@ export function itemPuedeValidar(item, sol, permisos) {
     && item?.id
     && !item?.en_orden_compra
     && (item?.estado_validacion || 'pendiente') !== 'aprobado',
+  )
+}
+
+/** Puede reabrir OC para agregar insumos adicionales. */
+export function solicitudPuedeReabrirOc(sol, permisos) {
+  return Boolean(
+    permisos?.editar
+    && sol?.estado === 'aprobada'
+    && solicitudTieneOrdenCompra(sol),
   )
 }
 
@@ -89,9 +128,13 @@ export function saldoPresupuestadoItem(item) {
 }
 
 export function estadoValidacionItem(item, sol) {
-  if (item?.en_orden_compra || item?.estado_validacion === 'aprobado') return 'aprobado'
+  if (item?.en_orden_compra) return 'aprobado'
   if (item?.estado_validacion) return item.estado_validacion
-  if (sol?.estado === 'aprobada' || solicitudTieneOrdenCompra(sol)) return 'aprobado'
+  // Líneas nuevas post-OC (aún no en la orden): pendientes de revisión.
+  if (solicitudTieneOrdenCompra(sol) && !item?.en_orden_compra) {
+    return 'pendiente'
+  }
+  if (sol?.estado === 'aprobada') return 'aprobado'
   if (sol?.estado === 'enviada') return 'pendiente'
   return null
 }

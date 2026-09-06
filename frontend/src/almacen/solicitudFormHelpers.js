@@ -118,6 +118,8 @@ export function mapSolicitudItemsFromServer(s) {
     material_descripcion: it.material_descripcion || '',
     es_recurrente: it.es_recurrente,
     es_principal: coerceEsPrincipal(it.es_principal),
+    en_orden_compra: Boolean(it.en_orden_compra),
+    estado_validacion: it.estado_validacion || null,
     preview: {
       contexto_presupuesto: it.contexto_presupuesto,
       analisis_valor: it.analisis_valor,

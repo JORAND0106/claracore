@@ -13,6 +13,8 @@ import { solicitudAlmacenEditable, solicitudTituloEditable } from './almacenPerm
 import {
   estadoValidacionItem,
   puedeAbrirRevisionLinea,
+  solicitudPuedeReabrirOc,
+  solicitudPuedeRechazarCompleta,
   solicitudPuedeValidar,
   solicitudTieneOrdenCompra,
 } from './solicitudDetalleHelpers'
@@ -38,6 +40,7 @@ export default function SolicitudDetalleModal({
   onClose,
   onUpdated,
   onEdit,
+  onReabrirOc,
 }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
@@ -108,6 +111,8 @@ export default function SolicitudDetalleModal({
   const editable = Boolean(permisos?.editar && solicitudAlmacenEditable(sol))
   const puedeEditarTitulo = solicitudTituloEditable(permisos)
   const puedeValidar = solicitudPuedeValidar(sol, permisos)
+  const puedeRechazarCompleta = solicitudPuedeRechazarCompleta(sol, permisos)
+  const puedeReabrir = solicitudPuedeReabrirOc(sol, permisos)
   const tieneOc = solicitudTieneOrdenCompra(sol)
   const esRolRevision = puedeAbrirRevisionLinea(permisos)
 
@@ -126,7 +131,12 @@ export default function SolicitudDetalleModal({
   }, [items, sol])
 
   const itemsSinInsumo = useMemo(
-    () => (items || []).filter((it) => !it.es_recurrente && !String(it.insumo_id || '').trim()),
+    () => (items || []).filter((it) => (
+      !it.en_orden_compra
+      && !it.es_recurrente
+      && !String(it.insumo_id || '').trim()
+      && (it.estado_validacion || 'pendiente') !== 'rechazado'
+    )),
     [items],
   )
 
@@ -144,11 +154,14 @@ export default function SolicitudDetalleModal({
     const extra = itemsSinInsumo.length > 12
       ? `\n• (+${itemsSinInsumo.length - 12} más)`
       : ''
+    const verbo = tieneOc
+      ? 'No se pueden agregar a la Orden de Compra'
+      : 'No se puede generar la Orden de Compra'
     return (
-      `No se puede generar la Orden de Compra: faltan insumos del catálogo en ${itemsSinInsumo.length} material(es).\n\n` +
+      `${verbo}: faltan insumos del catálogo en ${itemsSinInsumo.length} material(es).\n\n` +
       `${detalle}${extra}\n\nAsigne el insumo en la revisión de cada línea antes de aprobar.`
     )
-  }, [itemsSinInsumo])
+  }, [itemsSinInsumo, tieneOc])
 
   const intentarAprobarOc = () => {
     if (mensajeFaltaInsumoOc) {
@@ -168,7 +181,7 @@ export default function SolicitudDetalleModal({
       return
     }
     setBusy(true)
-    setOcProgreso('Generando orden de compra…')
+    setOcProgreso(tieneOc ? 'Agregando líneas a la Orden de Compra…' : 'Generando orden de compra…')
     setError('')
     try {
       const r = await api.aprobarSolicitud(sol.id, { aprobar_todos_pendientes: aprobarTodosPendientes })
@@ -462,6 +475,17 @@ export default function SolicitudDetalleModal({
                     ✏️ Editar / agregar materiales
                   </button>
                 )}
+                {puedeReabrir && (
+                  <button
+                    type="button"
+                    style={ui.btnPrimary}
+                    disabled={busy}
+                    onClick={() => onReabrirOc?.(sol)}
+                    title="Agregar insumos adicionales a la misma Orden de Compra"
+                  >
+                    🔓 Reabrir OC
+                  </button>
+                )}
                 {puedeValidar && (
                   <>
                     <button type="button" style={ui.btnSecondary} disabled={busy} onClick={aprobarTodosItems}>
@@ -473,13 +497,13 @@ export default function SolicitudDetalleModal({
                       disabled={busy}
                       onClick={intentarAprobarOc}
                     >
-                      ✓ Aprobar y generar OC
+                      {tieneOc ? '✓ Agregar a la OC' : '✓ Aprobar y generar OC'}
                     </button>
                   </>
                 )}
               </div>
 
-              {puedeValidar && (
+              {puedeRechazarCompleta && (
                 <>
                   <div style={{ marginTop: 16 }}>
                     <label style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
@@ -512,16 +536,17 @@ export default function SolicitudDetalleModal({
       {confirmAprobar && (
         <CcConfirmModal
           theme={modalTheme}
-          titulo="Aprobar solicitud"
+          titulo={tieneOc ? 'Agregar a la Orden de Compra' : 'Aprobar solicitud'}
           tipo="info"
-          confirmar="Aprobar y generar OC"
+          confirmar={tieneOc ? 'Agregar a la OC' : 'Aprobar y generar OC'}
           cancelar="Cancelar"
           procesando={busy}
           onCancel={() => !busy && setConfirmAprobar(false)}
           onConfirm={() => ejecutarAprobar(true)}
         >
-          ¿Generar la Orden de Compra con los ítems aprobados?
-          Los ítems pendientes se marcarán como aprobados; los rechazados no entrarán en la OC.
+          {tieneOc
+            ? '¿Sumar a la Orden de Compra existente las líneas nuevas ya aprobadas? Las líneas previas de la OC no se modifican.'
+            : '¿Generar la Orden de Compra con los ítems aprobados? Los ítems pendientes se marcarán como aprobados; los rechazados no entrarán en la OC.'}
         </CcConfirmModal>
       )}
 
