@@ -162,6 +162,66 @@ def _item_for_db_insert(item: dict) -> dict:
     return row
 
 
+def _sync_solicitud_items(
+    sb,
+    solicitud_id: int,
+    estado: str,
+    items: List[dict],
+) -> None:
+    """Upsert por id: actualiza existentes, inserta nuevos, elimina removidos.
+
+    Evita delete-all + reinsert (lento y rompe ids/cotizaciones/estado_validacion).
+    """
+    existing_rows = (
+        sb.table("almacen_solicitud_item")
+        .select("id, estado_validacion")
+        .eq("solicitud_id", solicitud_id)
+        .execute()
+        .data
+        or []
+    )
+    existing_ids = {int(r["id"]) for r in existing_rows if r.get("id")}
+    existing_estado = {
+        int(r["id"]): r.get("estado_validacion")
+        for r in existing_rows
+        if r.get("id")
+    }
+    keep_ids: set = set()
+    to_insert: List[dict] = []
+
+    for i, it in enumerate(items, start=1):
+        row = _item_for_db_insert(it)
+        row["solicitud_id"] = solicitud_id
+        row["numero_linea"] = i
+        raw_id = it.get("id")
+        try:
+            iid = int(raw_id) if raw_id is not None else None
+        except (TypeError, ValueError):
+            iid = None
+        if iid and iid in existing_ids:
+            keep_ids.add(iid)
+            # Conservar estado_validacion previo salvo que el payload lo traiga.
+            if "estado_validacion" not in row or row.get("estado_validacion") is None:
+                prev = existing_estado.get(iid)
+                if prev:
+                    row["estado_validacion"] = prev
+            sb.table("almacen_solicitud_item").update(row).eq("id", iid).execute()
+        else:
+            if estado in ("enviada", "rechazada") and not row.get("estado_validacion"):
+                row["estado_validacion"] = "pendiente"
+            to_insert.append(row)
+
+    to_delete = existing_ids - keep_ids
+    if to_delete:
+        # Borrar de a chunks por si hay muchas líneas removidas.
+        ids = sorted(to_delete)
+        for j in range(0, len(ids), 80):
+            chunk = ids[j: j + 80]
+            sb.table("almacen_solicitud_item").delete().in_("id", chunk).execute()
+    if to_insert:
+        _insert_solicitud_items_batch(sb, to_insert)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -757,7 +817,27 @@ def _enrich_solicitud(
     else:
         sol["orden_compra"] = None
         sol["tiene_orden_compra"] = False
-    return _enrich_solicitud_usuarios(sb, sol, validadores_pendientes)
+
+    # Flag de corrección post-OC: disponible si hay OC sin entradas.
+    if sol.get("orden_compra") and sol["orden_compra"].get("id"):
+        oc_id = int(sol["orden_compra"]["id"])
+        ent = (
+            sb.table("almacen_entrada")
+            .select("id")
+            .eq("orden_compra_id", oc_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        sol["orden_compra"]["tiene_entradas"] = bool(ent)
+        sol["puede_corregir_insumo_post_oc"] = not bool(ent)
+    else:
+        sol["puede_corregir_insumo_post_oc"] = False
+
+    # Ligera: no resolver validadores (N+1); el detalle completo sí puede.
+    vpend = [] if ligera else validadores_pendientes
+    return _enrich_solicitud_usuarios(sb, sol, vpend)
 
 
 def _solicitud_tiene_orden_compra(sol: dict) -> bool:
@@ -1043,6 +1123,15 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             descontar_linea_actual=True,
             refresh_listado=False,
         )
+    # Conservar id de línea (upsert) y estado_validacion si vienen del cliente.
+    for src, dst in zip(items, out):
+        if src.get("id") is not None:
+            try:
+                dst["id"] = int(src["id"])
+            except (TypeError, ValueError):
+                pass
+        if src.get("estado_validacion") and not dst.get("estado_validacion"):
+            dst["estado_validacion"] = src.get("estado_validacion")
     return out
 
 
@@ -1127,7 +1216,8 @@ def mapear_item_solicitud_gerencial(
         [resolved],
         exclude_solicitud_id=solicitud_id,
         descontar_linea_actual=True,
-        refresh_listado=resolved.get("vlr_unitario_cobro") in (None, 0),
+        # Solo escanear listado si el cobro aún no está definido (None).
+        refresh_listado=resolved.get("vlr_unitario_cobro") is None,
     )
 
     patch = {
@@ -1157,7 +1247,171 @@ def mapear_item_solicitud_gerencial(
         raise ValueError("El valor de cobro no puede ser negativo.")
 
     sb.table("almacen_solicitud_item").update(patch).eq("id", int(item_id)).execute()
-    return get_solicitud(contrato_id, solicitud_id)
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
+
+
+def corregir_insumo_item_post_oc(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    user_id: int,
+    body: dict,
+) -> dict:
+    """Excepción: corregir insumo de un ítem ya en OC, solo si la OC no tiene entradas."""
+    from almacen_insumos_service import apply_saldo_flags_batch, resolve_insumo_for_solicitud
+
+    sb = _sb()
+    sol = dict(_fetch_solicitud_head(contrato_id, solicitud_id))
+    if sol["estado"] != "aprobada":
+        raise ValueError("Solo se pueden corregir insumos de solicitudes aprobadas con OC.")
+    oc_rows = (
+        sb.table("almacen_orden_compra")
+        .select("id, numero_oc")
+        .eq("solicitud_id", solicitud_id)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not oc_rows:
+        raise ValueError("No hay Orden de Compra asociada a esta solicitud.")
+    oc_id = int(oc_rows[0]["id"])
+    entradas = (
+        sb.table("almacen_entrada")
+        .select("id")
+        .eq("orden_compra_id", oc_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if entradas:
+        raise ValueError(
+            "No se puede corregir el insumo: ya existe una entrada registrada contra esta Orden de Compra."
+        )
+
+    item_rows = (
+        sb.table("almacen_solicitud_item")
+        .select("*")
+        .eq("id", int(item_id))
+        .eq("solicitud_id", int(solicitud_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not item_rows:
+        raise ValueError("Ítem de solicitud no encontrado.")
+    existing = item_rows[0]
+
+    insumo_id = body.get("insumo_id")
+    if not insumo_id:
+        raise ValueError("Seleccione el insumo del catálogo.")
+    cantidad = _to_float(body.get("cantidad") if body.get("cantidad") is not None else existing.get("cantidad"))
+    if cantidad <= 0:
+        raise ValueError("La cantidad debe ser mayor a cero.")
+
+    raw = {
+        "insumo_id": int(insumo_id),
+        "presupuesto_id": existing.get("presupuesto_id"),
+        "presupuesto_capitulo": existing.get("capitulo"),
+        "presupuesto_item": existing.get("item"),
+        "pk_id": existing.get("pk_id"),
+        "pk_id_id": existing.get("pk_id_id"),
+        "cantidad": cantidad,
+        "es_recurrente": bool(body.get("es_recurrente", existing.get("es_recurrente"))),
+        "es_principal": existing.get("es_principal") if existing.get("es_principal") is not None else True,
+        "exclude_solicitud_id": solicitud_id,
+        "tramo": existing.get("tramo"),
+        "costado": existing.get("costado"),
+        "abscisa_inicial": existing.get("abscisa_inicial"),
+        "abscisa_final": existing.get("abscisa_final"),
+        "observacion_residente": existing.get("observacion_residente"),
+    }
+    if body.get("valor_compra_unitario") is not None:
+        raw["valor_compra_unitario"] = body.get("valor_compra_unitario")
+
+    resolved = resolve_insumo_for_solicitud(contrato_id, user_id, raw, skip_context=True)
+    desc_sol = (existing.get("descripcion_solicitada") or existing.get("material_descripcion") or "").strip()
+    if body.get("vlr_unitario_cobro") is not None:
+        resolved["vlr_unitario_cobro"] = _to_float(body["vlr_unitario_cobro"])
+    apply_saldo_flags_batch(
+        contrato_id,
+        [resolved],
+        exclude_solicitud_id=solicitud_id,
+        descontar_linea_actual=True,
+        refresh_listado=resolved.get("vlr_unitario_cobro") is None,
+    )
+
+    vu = (
+        _to_float(body["valor_compra_unitario"])
+        if body.get("valor_compra_unitario") is not None
+        else resolved.get("valor_compra_unitario")
+    )
+    if vu is None or _to_float(vu) <= 0:
+        raise ValueError("Defina el costo de compra unitario del insumo corregido.")
+
+    patch = {
+        "insumo_id": resolved.get("insumo_id"),
+        "listado_precio_id": resolved.get("listado_precio_id"),
+        "material_descripcion": resolved.get("material_descripcion"),
+        "descripcion_solicitada": desc_sol or resolved.get("material_descripcion"),
+        "unidad": resolved.get("unidad") or existing.get("unidad"),
+        "cantidad": cantidad,
+        "valor_compra_unitario": vu,
+        "vlr_unitario_cobro": (
+            _to_float(body["vlr_unitario_cobro"])
+            if body.get("vlr_unitario_cobro") is not None
+            else resolved.get("vlr_unitario_cobro")
+        ),
+        "supera_presupuesto": resolved.get("supera_presupuesto", False),
+        "supera_negociado": resolved.get("supera_negociado", False),
+    }
+    sb.table("almacen_solicitud_item").update(patch).eq("id", int(item_id)).execute()
+
+    oci = (
+        sb.table("almacen_orden_compra_item")
+        .select("id, proveedor_nombre")
+        .eq("orden_compra_id", oc_id)
+        .eq("solicitud_item_id", int(item_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if oci:
+        proveedor = oci[0].get("proveedor_nombre") or "Proveedor catálogo"
+        if resolved.get("insumo_id"):
+            cat = _cotizaciones_catalogo_insumo(sb, int(resolved["insumo_id"])) or {}
+            if cat.get("proveedor_id"):
+                prow = (
+                    sb.table("almacen_proveedor")
+                    .select("razon_social")
+                    .eq("id", int(cat["proveedor_id"]))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if prow and prow[0].get("razon_social"):
+                    proveedor = prow[0]["razon_social"]
+        sb.table("almacen_orden_compra_item").update({
+            "material_descripcion": patch["material_descripcion"],
+            "unidad": patch["unidad"],
+            "cantidad": cantidad,
+            "valor_unitario": _to_float(vu),
+            "proveedor_nombre": proveedor,
+        }).eq("id", int(oci[0]["id"])).execute()
+
+    try:
+        oc_full = get_orden_compra(contrato_id, oc_id)
+        sol_pdf = get_solicitud(contrato_id, solicitud_id, ligera=True)
+        generar_y_guardar_pdf_oc(contrato_id, oc_id, oc_full, sol_pdf, user_id)
+    except Exception:
+        _log.exception("No se pudo regenerar PDF de OC %s tras corrección de insumo", oc_id)
+
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
@@ -1250,17 +1504,8 @@ def update_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: di
     if upd:
         sb.table("almacen_solicitud").update(upd).eq("id", solicitud_id).execute()
     if "items" in body:
-        sb.table("almacen_solicitud_item").delete().eq("solicitud_id", solicitud_id).execute()
         items = _validate_items_payload(body["items"], contrato_id, user_id, exclude_solicitud_id=solicitud_id)
-        rows = []
-        for i, it in enumerate(items, start=1):
-            row = _item_for_db_insert(it)
-            row["solicitud_id"] = solicitud_id
-            row["numero_linea"] = i
-            if estado in ("enviada", "rechazada"):
-                row["estado_validacion"] = "pendiente"
-            rows.append(row)
-        _insert_solicitud_items_batch(sb, rows)
+        _sync_solicitud_items(sb, solicitud_id, estado, items)
     return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
@@ -1755,7 +2000,7 @@ def validar_item_solicitud(
         raise ValueError("Indique el motivo del rechazo del ítem.")
     upd = {"estado_validacion": nuevo}
     sb.table("almacen_solicitud_item").update(upd).eq("id", item_id).execute()
-    return get_solicitud(contrato_id, solicitud_id)
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: int) -> dict:
@@ -1781,7 +2026,7 @@ def aprobar_todos_items_solicitud(contrato_id: int, solicitud_id: int, user_id: 
     sb.table("almacen_solicitud_item").update({
         "estado_validacion": "aprobado",
     }).eq("solicitud_id", solicitud_id).is_("estado_validacion", "null").execute()
-    return get_solicitud(contrato_id, solicitud_id)
+    return get_solicitud(contrato_id, solicitud_id, ligera=True)
 
 
 def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: Optional[dict] = None) -> dict:

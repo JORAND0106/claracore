@@ -29,6 +29,7 @@ import {
  */
 export default function SolicitudDetalleModal({
   solicitudId,
+  initialSeed = null,
   initialTab = 'portada',
   permisos,
   token,
@@ -41,14 +42,15 @@ export default function SolicitudDetalleModal({
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const compact = useAlmacenCompact()
-  const [sol, setSol] = useState(null)
+  const [sol, setSol] = useState(() => (initialSeed ? { ...initialSeed, items: initialSeed.items || [] } : null))
   const [motivo, setMotivo] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmAprobar, setConfirmAprobar] = useState(false)
   const [expedienteOcId, setExpedienteOcId] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [tituloDraft, setTituloDraft] = useState('')
+  const [loading, setLoading] = useState(!initialSeed)
+  const [loadingSaldos, setLoadingSaldos] = useState(true)
+  const [tituloDraft, setTituloDraft] = useState(initialSeed?.titulo || '')
   const [guardandoTitulo, setGuardandoTitulo] = useState(false)
   const [materialesOpen, setMaterialesOpen] = useState(true)
   const [mapaItem, setMapaItem] = useState(null)
@@ -71,16 +73,32 @@ export default function SolicitudDetalleModal({
     textMuted: ui.textMuted,
   }), [ui])
 
-  const reload = useCallback(() => {
+  const reload = useCallback((opts = {}) => {
     if (!solicitudId) return Promise.resolve()
-    setLoading(true)
-    return api.getSolicitud(solicitudId)
-      .then(setSol)
+    const { silent = false, full = false } = opts
+    if (!silent) setLoading(true)
+    const ligera = !full
+    return api.getSolicitud(solicitudId, { ligera })
+      .then((data) => {
+        setSol(data)
+        if (!full) {
+          // Segunda pasada: saldos / contexto (no bloquea el popup).
+          setLoadingSaldos(true)
+          api.getSolicitud(solicitudId, { ligera: false })
+            .then((fullData) => setSol(fullData))
+            .catch(() => {})
+            .finally(() => setLoadingSaldos(false))
+        } else {
+          setLoadingSaldos(false)
+        }
+      })
       .catch((e) => setError(e.message))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!silent) setLoading(false)
+      })
   }, [api, solicitudId])
 
-  useEffect(() => { void reload() }, [reload])
+  useEffect(() => { void reload({ silent: Boolean(initialSeed) }) }, [reload]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setTituloDraft(sol?.titulo || '')
@@ -313,7 +331,12 @@ export default function SolicitudDetalleModal({
           padding: compact ? '12px 16px calc(16px + env(safe-area-inset-bottom, 0px))' : '12px 20px 20px',
         }}
         >
-          {loading && <div style={{ color: ui.textMuted, marginBottom: 12 }}>Cargando…</div>}
+          {loading && !sol && <div style={{ color: ui.textMuted, marginBottom: 12 }}>Cargando…</div>}
+          {loadingSaldos && sol && (
+            <div style={{ color: ui.textMuted, marginBottom: 8, fontSize: 'var(--cc-xs)' }}>
+              Actualizando saldos y contexto…
+            </div>
+          )}
           {error && (
             <div style={{
               color: '#991b1b',
@@ -331,8 +354,13 @@ export default function SolicitudDetalleModal({
             </div>
           )}
 
-          {!loading && sol && (
+          {sol && (
             <>
+              {loading && !(sol.items || []).length && (
+                <div style={{ color: ui.textMuted, marginBottom: 12, fontSize: 'var(--cc-sm)' }}>
+                  Cargando materiales…
+                </div>
+              )}
               {puedeValidar && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12, fontSize: 'var(--cc-xs)' }}>
                   <span style={{ padding: '3px 8px', borderRadius: 6, background: '#fef3c7', color: '#92400e' }}>

@@ -429,6 +429,7 @@ export default function SolicitudForm({
       titulo: formatSolicitudTituloAuto(sol?.consecutivo ?? proximoConsecutivo, sol?.created_at),
       items: items.map((it) => {
         const base = {
+          id: it.id || undefined,
           cantidad: Number(it.cantidad),
           es_recurrente: !!it.es_recurrente,
           es_principal: it.es_principal !== false,

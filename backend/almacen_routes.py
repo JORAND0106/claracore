@@ -30,6 +30,7 @@ from almacen_insumos_service import (
     search_proveedores,
 )
 from almacen_permissions import (
+    es_contratista_gerencial,
     puede_ver_valores_economicos_almacen,
     require_contratista_gerencial_almacen,
     require_editar_cantidad_salida_almacen,
@@ -92,6 +93,7 @@ from almacen_service import (
     list_usuarios_receptor_obra,
     salidas_devolvibles_por_pk,
     mapear_item_solicitud_gerencial,
+    corregir_insumo_item_post_oc,
     ocr_remision_entrada,
     preview_proximo_numero_disposicion,
     preview_proximo_consecutivo_solicitud,
@@ -706,6 +708,42 @@ def route_mapear_item_gerencial(
         )
         log_almacen(
             current_user, "MAPEAR_ITEM", "solicitud", solicitud_id,
+            {"item_id": item_id, **{k: payload.get(k) for k in ("insumo_id", "cantidad") if k in payload}},
+            valor_anterior={"item_id": item_id},
+            valor_nuevo={"item_id": item_id, **(payload or {})},
+        )
+        return result
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/{contrato_id}/solicitudes/{solicitud_id}/items/{item_id}/corregir-insumo")
+def route_corregir_insumo_post_oc(
+    contrato_id: int,
+    solicitud_id: int,
+    item_id: int,
+    body: MapearItemGerencialBody,
+    current_user=Depends(get_current_user),
+):
+    """Excepción post-OC: corregir insumo si no hay entradas (Gerencial + editar)."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
+    if not es_contratista_gerencial(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo Contratista Gerencial puede corregir el insumo de una OC.",
+        )
+    try:
+        payload = body.model_dump(exclude_none=True)
+        result = corregir_insumo_item_post_oc(
+            contrato_id,
+            solicitud_id,
+            item_id,
+            _uid(current_user),
+            payload,
+        )
+        log_almacen(
+            current_user, "CORREGIR_INSUMO_OC", "solicitud", solicitud_id,
             {"item_id": item_id, **{k: payload.get(k) for k in ("insumo_id", "cantidad") if k in payload}},
             valor_anterior={"item_id": item_id},
             valor_nuevo={"item_id": item_id, **(payload or {})},

@@ -243,6 +243,13 @@ export function createAlmacenApi(contratoId, tokenOrGetter) {
         body: JSON.stringify(body),
       }).then(parseJson),
 
+    corregirInsumoItemPostOc: (solicitudId, itemId, body) =>
+      fetch(`${base}/solicitudes/${solicitudId}/items/${itemId}/corregir-insumo`, {
+        method: 'PATCH',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }).then(parseJson),
+
     rechazarSolicitud: (id, motivo) =>
       fetch(`${base}/solicitudes/${id}/rechazar`, {
         method: 'POST',

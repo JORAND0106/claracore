@@ -35,6 +35,18 @@ export function itemPuedeValidar(item, sol, permisos) {
   )
 }
 
+/**
+ * Excepción post-OC: Gerencial + editar puede corregir insumo si la OC no tiene entradas.
+ */
+export function itemPuedeCorregirInsumoPostOc(item, sol, permisos) {
+  const esGerencial = Boolean(permisos?.esContratistaGerencial || permisos?.esDesarrollador)
+  if (!esGerencial || !permisos?.editar || !item?.id) return false
+  if (!solicitudTieneOrdenCompra(sol)) return false
+  if (sol?.puede_corregir_insumo_post_oc === false) return false
+  if (sol?.orden_compra?.tiene_entradas) return false
+  return true
+}
+
 export function labelPestañaInsumo(item, idx) {
   const codigo = (item?.insumo_codigo || '').trim()
   if (codigo) return codigo

@@ -347,6 +347,7 @@ export default function SolicitudesPanel({
       {detalleId && (
         <SolicitudDetalleModal
           solicitudId={detalleId}
+          initialSeed={lista.find((s) => String(s.id) === String(detalleId)) || null}
           initialTab={detalleTab}
           permisos={permisos}
           token={token}
