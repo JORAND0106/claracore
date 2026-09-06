@@ -68,3 +68,20 @@ def test_normalize_cotizaciones_detalle_secciones():
     assert out[0]["es_ganadora"] is True
     assert out[2]["tipo"] == "no_previsto"
     assert out[2]["es_ganadora"] is False  # no_previsto nunca ganadora
+
+
+def test_normalize_cotizaciones_detalle_conserva_impuesto():
+    raw = [
+        {
+            "tipo": "insumo",
+            "es_ganadora": True,
+            "numero": "G1",
+            "valor": "1000",
+            "impuesto_etiqueta": "IVA 19%",
+            "impuesto": {"administracion": "", "imprevistos": "", "utilidad": "", "iva": "0.19"},
+        },
+    ]
+    out = normalize_cotizaciones_detalle(raw)
+    assert len(out) == 1
+    assert out[0]["impuesto_etiqueta"] == "IVA 19%"
+    assert out[0]["impuesto"]["iva"] == "0.19"

@@ -30,11 +30,13 @@ import {
   applyCaptureToPar,
   applyPdfReplace,
   buildParFromCapture,
+  cloneImpuestoLado,
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
   fileFromDataTransfer,
   ganadoraDesdeInsumoRow,
   ganadoraRuleErrors,
+  impuestoGanadoraDesdePares,
   pickGanadora,
   sanitizeRendimientoInput,
   seedCotizacionPares,
@@ -1087,6 +1089,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     cotizaciones = applyAutoGanadoraByMinValor(cotizaciones)
     const legacySync = syncLegacyFromGanadora(cotizaciones)
     const gan = pickGanadora(cotizaciones)
+    const impuestoGan = impuestoGanadoraDesdePares(cotizaciones)
     const nextForm = {
       ...EMPTY_FORM,
       proveedor_id: row.proveedor_id || '',
@@ -1102,7 +1105,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       costo_base: gan?.valor != null && gan.valor !== '' ? String(gan.valor) : (row.costo ?? row.costo_base ?? ''),
       valor_no_previsto: '',
       cantidad_negociada: row.cantidad_negociada ?? '',
-      impuesto: formImpuestoDesdeTributos(trib),
+      impuesto: impuestoGan || formImpuestoDesdeTributos(trib),
       cotizacion_numero: legacySync.cotizacion_numero || row.cotizacion_numero || '',
       cotizacion_fecha: '',
       cotizacion_vigencia: '',
@@ -1140,6 +1143,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       cotizacion_numero_np: np.numero || '',
       cotizacion_fecha_np: np.fecha || '',
       cotizacion_vigencia_np: np.vigencia || '',
+      impuesto: cloneImpuestoLado(ins.impuesto),
+      impuesto_np: cloneImpuestoLado(np.impuesto),
     }
   }
 
@@ -1213,6 +1218,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const impuestoOptsFromForm = (f) => ({
     impuestoEtiqueta: etiquetaTributos(tributosPayloadDesdeForm(f.impuesto || EMPTY_IMPUESTO)),
     impuestoEtiquetaNp: etiquetaTributos(tributosPayloadDesdeForm(f.impuesto_np || EMPTY_IMPUESTO)),
+    impuesto: f.impuesto || EMPTY_IMPUESTO,
+    impuestoNp: f.impuesto_np || EMPTY_IMPUESTO,
   })
 
   /** Limpia proveedor y paneles de costo; conserva descripción/unidad/rendimiento/código. */
@@ -1237,7 +1244,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     impuesto_np: { ...EMPTY_IMPUESTO },
   })
 
-  const enviarOActualizarCotizacion = () => {
+  const enviarOActualizarCotizacion = async () => {
     const pares = form.cotizaciones_detalle || []
     const { faltantes, coherencia } = validateCaptureForEnviar(form, pares)
     const all = [...faltantes, ...coherencia]
@@ -1247,36 +1254,66 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       return
     }
     const opts = impuestoOptsFromForm(form)
+    const wasUpdate = !!selectedParId
 
+    let list
     if (selectedParId) {
-      let list = pares.map((p) => (
+      list = pares.map((p) => (
         p.id === selectedParId ? applyCaptureToPar(p, form, opts) : p
       ))
       list = applyAutoGanadoraByMinValor(list)
-      const legacy = syncLegacyFromGanadora(list)
-      setModalFaltantes([])
-      setModalRuleErrors(ganadoraRuleErrors(list))
-      setSelectedParId(null)
-      setForm((f) => ({
-        ...f,
-        cotizaciones_detalle: list,
-        ...legacy,
-        ...clearCaptureAfterSend(),
-      }))
-      return
+    } else {
+      list = buildParFromCapture(form, pares, opts)
     }
-
-    const list = buildParFromCapture(form, pares, opts)
     const legacy = syncLegacyFromGanadora(list)
     setModalFaltantes([])
     setModalRuleErrors(ganadoraRuleErrors(list))
     setSelectedParId(null)
-    setForm((f) => ({
-      ...f,
+    const cleared = clearCaptureAfterSend()
+    const nextForm = {
+      ...form,
       cotizaciones_detalle: list,
       ...legacy,
-      ...clearCaptureAfterSend(),
-    }))
+      ...cleared,
+    }
+    setForm(nextForm)
+
+    if (editId && api) {
+      const check = validateGuardarInsumo(nextForm, { editId })
+      if (check.faltantes.length || check.ruleErrors.length) {
+        setModalFaltantes(check.faltantes)
+        setModalRuleErrors(check.ruleErrors)
+        setMsg({
+          type: 'success',
+          text: wasUpdate
+            ? 'Tabla actualizada en el formulario. Complete los requisitos y pulse Guardar para persistir.'
+            : 'Cotización enviada a la tabla. Complete los requisitos y pulse Guardar para persistir.',
+        })
+        return
+      }
+      setBusy(true)
+      try {
+        const fd = buildFormData(null, nextForm)
+        await api.updateInsumoForm(editId, fd)
+        formBaselineRef.current = snapshotForm(nextForm)
+        setMsg({
+          type: 'success',
+          text: wasUpdate ? 'Cotización actualizada y guardada.' : 'Cotización enviada y guardada.',
+        })
+        load()
+        loadProveedores()
+      } catch (e) {
+        setMsg({ type: 'error', text: e.message })
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
+    setMsg({
+      type: 'success',
+      text: wasUpdate ? 'Tabla actualizada.' : 'Cotización enviada a la tabla.',
+    })
   }
 
   const runOcr = async (pairId) => {
@@ -1346,28 +1383,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     return r.hay_duplicado ? r.duplicados[0] : null
   }
 
-  const buildFormData = (forceUpdateId) => {
-    const pares = form.cotizaciones_detalle || []
+  const buildFormData = (forceUpdateId, formOverride = null) => {
+    const src = formOverride || form
+    const pares = src.cotizaciones_detalle || []
     const gan = pickGanadora(pares)
-    const costo = gan?.valor != null && gan.valor !== '' ? gan.valor : form.costo_base
+    const costo = gan?.valor != null && gan.valor !== '' ? gan.valor : src.costo_base
+    const impuestoSrc = impuestoGanadoraDesdePares(pares)
+      || (impuestoTieneDatos(src.impuesto) ? src.impuesto : null)
+      || EMPTY_IMPUESTO
     const fd = new FormData()
-    fd.append('codigo', (form.codigo || '').trim())
-    fd.append('descripcion', toUpperTrim(form.descripcion))
-    fd.append('unidad', form.unidad || 'UND')
+    fd.append('codigo', (src.codigo || '').trim())
+    fd.append('descripcion', toUpperTrim(src.descripcion))
+    fd.append('unidad', src.unidad || 'UND')
     fd.append('costo_base', String(costo))
-    if (form.rendimiento !== '') fd.append('rendimiento', sanitizeRendimientoInput(form.rendimiento))
-    fd.append('tributos', JSON.stringify(tributosPayloadDesdeForm(form.impuesto || EMPTY_IMPUESTO)))
+    if (src.rendimiento !== '') fd.append('rendimiento', sanitizeRendimientoInput(src.rendimiento))
+    fd.append('tributos', JSON.stringify(tributosPayloadDesdeForm(impuestoSrc)))
     const ganPar = pares.find((p) => p.es_ganadora) || pares[0]
     if (ganPar?.proveedor_id) fd.append('proveedor_id', String(ganPar.proveedor_id))
-    else if (form.proveedor_id) fd.append('proveedor_id', String(form.proveedor_id))
-    else if (ganPar?.insumo?.proveedor || form.razon_social) {
-      fd.append('razon_social', (ganPar?.insumo?.proveedor || form.razon_social || '').trim())
-      const nit = (ganPar?.nit || form.nit || '').trim()
+    else if (src.proveedor_id) fd.append('proveedor_id', String(src.proveedor_id))
+    else if (ganPar?.insumo?.proveedor || src.razon_social) {
+      fd.append('razon_social', (ganPar?.insumo?.proveedor || src.razon_social || '').trim())
+      const nit = (ganPar?.nit || src.nit || '').trim()
       if (nit) fd.append('nit', nit)
     }
-    const email = (ganPar?.contacto_email || form.contacto_email || '').trim()
-    const cnom = (ganPar?.contacto_nombre || form.contacto_nombre || '').trim()
-    const ctel = (ganPar?.contacto_telefono || form.contacto_telefono || '').trim()
+    const email = (ganPar?.contacto_email || src.contacto_email || '').trim()
+    const cnom = (ganPar?.contacto_nombre || src.contacto_nombre || '').trim()
+    const ctel = (ganPar?.contacto_telefono || src.contacto_telefono || '').trim()
     if (email) fd.append('contacto_email', email)
     if (cnom) fd.append('contacto_nombre', cnom)
     if (ctel) fd.append('contacto_telefono', ctel)
@@ -1376,8 +1417,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     if (legacy.cotizacion_fecha) fd.append('cotizacion_fecha', legacy.cotizacion_fecha)
     if (legacy.cotizacion_vigencia) fd.append('cotizacion_vigencia', legacy.cotizacion_vigencia)
     fd.append('cotizaciones_detalle', JSON.stringify(cotizacionesPayloadForSave(pares)))
-    fd.append('requiere_cotizacion', form.requiere_cotizacion ? 'true' : 'false')
-    if (form.cantidad_negociada !== '') fd.append('cantidad_negociada', String(form.cantidad_negociada))
+    fd.append('requiere_cotizacion', src.requiere_cotizacion ? 'true' : 'false')
+    if (src.cantidad_negociada !== '') fd.append('cantidad_negociada', String(src.cantidad_negociada))
     if (forceUpdateId) fd.append('force_update_id', String(forceUpdateId))
     const { ganadora, soportes } = collectPdfFilesFromPares(pares)
     if (ganadora) fd.append('cotizacion_ganadora_pdf', ganadora)
@@ -1927,7 +1968,22 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 Descripción, unidad y rendimiento quedan fijos según la primera cotización enviada. Cambie de proveedor y valores, luego pulse <strong>Enviar</strong>.
               </div>
             )}
-            <div style={{ ...sheetWrap, marginBottom: 8, overflowX: 'auto' }}>
+            <div style={{
+              ...sheetWrap,
+              marginBottom: 8,
+              overflowX: 'auto',
+              background: ui.dark
+                ? 'rgba(30, 58, 95, 0.42)'
+                : ui.rest
+                  ? 'rgba(201, 184, 164, 0.38)'
+                  : 'rgba(226, 232, 240, 0.95)',
+              borderColor: ui.dark
+                ? 'rgba(0, 180, 198, 0.35)'
+                : ui.rest
+                  ? 'rgba(14, 116, 144, 0.28)'
+                  : 'rgba(0, 119, 182, 0.22)',
+            }}
+            >
               <table style={{ ...sheetTable, minWidth: 520, tableLayout: 'fixed' }}>
                 <thead>
                   <tr>
@@ -1938,7 +1994,14 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   </tr>
                 </thead>
                 <tbody>
-                  <tr style={{ background: sheetZebra(ui, 0) }}>
+                  <tr style={{
+                    background: ui.dark
+                      ? 'rgba(15, 30, 50, 0.55)'
+                      : ui.rest
+                        ? 'rgba(180, 165, 145, 0.28)'
+                        : 'rgba(203, 213, 225, 0.55)',
+                  }}
+                  >
                     <td style={{ ...td, overflow: 'hidden' }}>
                       <input
                         style={{ ...cellInp, opacity: 0.85, overflow: 'hidden', textOverflow: 'ellipsis' }}
