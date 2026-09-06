@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from catalogo_insumos_permissions import require_permiso_catalogo_insumos
 from catalogo_insumos_service import (
+    check_cotizacion_numero_incongruencia,
     create_insumo_catalogo,
     delete_insumo_catalogo,
     delete_proveedor_catalogo,
@@ -24,12 +25,14 @@ from catalogo_insumos_service import (
     get_csv_template_proveedores,
     import_csv_insumos,
     import_csv_proveedores,
+    list_biblioteca_cotizaciones,
     list_catalogo_insumos,
     list_cotizaciones_soporte,
     list_precio_historial,
     list_proveedores_catalogo,
     map_ocr_to_cotizacion,
     next_codigo_insumo,
+    suggest_cotizaciones_numero,
     update_insumo_catalogo,
 )
 from almacen_insumos_service import normalize_tributos, search_proveedores
@@ -197,6 +200,64 @@ def route_check_duplicado(
         body.exclude_insumo_id,
     )
     return {"duplicados": dups, "hay_duplicado": len(dups) > 0}
+
+
+class CotizacionNumeroCheckBody(BaseModel):
+    numero: str
+    proveedor_id: Optional[int] = None
+    razon_social: Optional[str] = None
+    nit: Optional[str] = None
+    exclude_insumo_id: Optional[int] = None
+
+
+@router.get("/{contrato_id}/cotizaciones/biblioteca")
+def route_biblioteca_cotizaciones(
+    contrato_id: int,
+    proveedor_id: Optional[int] = None,
+    q: str = "",
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    return list_biblioteca_cotizaciones(contrato_id, proveedor_id=proveedor_id, q=q)
+
+
+@router.get("/{contrato_id}/cotizaciones/suggest")
+def route_suggest_cotizaciones(
+    contrato_id: int,
+    q: str = "",
+    proveedor_id: Optional[int] = None,
+    razon_social: str = "",
+    limit: int = 25,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "ver")
+    return suggest_cotizaciones_numero(
+        contrato_id,
+        q=q,
+        proveedor_id=proveedor_id,
+        razon_social=razon_social,
+        limit=limit,
+    )
+
+
+@router.post("/{contrato_id}/cotizaciones/check-numero")
+def route_check_cotizacion_numero(
+    contrato_id: int,
+    body: CotizacionNumeroCheckBody,
+    current_user=Depends(get_current_user),
+):
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "crear")
+    return check_cotizacion_numero_incongruencia(
+        contrato_id,
+        body.numero,
+        proveedor_id=body.proveedor_id,
+        razon_social=body.razon_social or "",
+        nit=body.nit or "",
+        exclude_insumo_id=body.exclude_insumo_id,
+    )
 
 
 @router.post("/{contrato_id}/insumos")

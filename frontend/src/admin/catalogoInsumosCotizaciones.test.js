@@ -11,6 +11,7 @@ import {
   ganadoraRuleErrors,
   ganadoraDesdeInsumoRow,
   impuestoGanadoraDesdePares,
+  incongruenciaNumeroEntrePares,
   newCotizacionPar,
   nextCotizacionNumero,
   sanitizeRendimientoInput,
@@ -318,19 +319,40 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(round[0].insumo.impuesto.iva, '0.19')
   })
 
-  it('impuestoGanadoraDesdePares lee el impuesto de la ganadora', () => {
+  it('incongruenciaNumeroEntrePares detecta mismo Nº con proveedores distintos', () => {
+    const pares = [
+      {
+        ...newCotizacionPar({ esGanadora: true }),
+        proveedor_id: 1,
+        insumo: { ...newCotizacionPar().insumo, proveedor: 'PAVCO', numero: 'BO-160-2026', valor: '100' },
+      },
+      {
+        ...newCotizacionPar(),
+        proveedor_id: 2,
+        insumo: { ...newCotizacionPar().insumo, proveedor: 'GEOMATRIX', numero: 'BO-160-2026', valor: '90' },
+      },
+    ]
+    const errs = incongruenciaNumeroEntrePares(pares)
+    assert.ok(errs.some((e) => /BO-160-2026/.test(e)))
+  })
+
+  it('applyAutoGanadoraByMinValor cambia ganadora al agregar menor valor', () => {
     let pares = [
       {
         ...newCotizacionPar({ esGanadora: true }),
-        insumo: {
-          ...newCotizacionPar().insumo,
-          valor: '50',
-          numero: 'G',
-          impuesto: { administracion: '', imprevistos: '', utilidad: '', iva: '0.05' },
-        },
+        insumo: { ...newCotizacionPar().insumo, valor: '500', numero: 'OLD' },
       },
     ]
     pares = applyAutoGanadoraByMinValor(pares)
-    assert.equal(impuestoGanadoraDesdePares(pares)?.iva, '0.05')
+    assert.equal(pares.find((p) => p.es_ganadora)?.insumo.numero, 'OLD')
+    pares = [
+      ...pares,
+      {
+        ...newCotizacionPar(),
+        insumo: { ...newCotizacionPar().insumo, valor: '200', numero: 'NEW' },
+      },
+    ]
+    pares = applyAutoGanadoraByMinValor(pares)
+    assert.equal(pares.find((p) => p.es_ganadora)?.insumo.numero, 'NEW')
   })
 })

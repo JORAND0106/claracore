@@ -55,6 +55,29 @@ export function createCatalogoInsumosApi(contratoId, token) {
         headers: headers(token),
       }).then(parseJson),
 
+    suggestCotizaciones: ({ q = '', proveedor_id, razon_social = '', limit = 25 } = {}) => {
+      const params = new URLSearchParams()
+      params.set('q', q || '')
+      params.set('limit', String(limit))
+      if (proveedor_id) params.set('proveedor_id', String(proveedor_id))
+      if (razon_social) params.set('razon_social', razon_social)
+      return fetch(`${base}/cotizaciones/suggest?${params}`, { headers: headers(token) }).then(parseJson)
+    },
+
+    listBibliotecaCotizaciones: ({ proveedor_id, q = '' } = {}) => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (proveedor_id) params.set('proveedor_id', String(proveedor_id))
+      return fetch(`${base}/cotizaciones/biblioteca?${params}`, { headers: headers(token) }).then(parseJson)
+    },
+
+    checkCotizacionNumero: (body) =>
+      fetch(`${base}/cotizaciones/check-numero`, {
+        method: 'POST',
+        headers: headers(token, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }).then(parseJson),
+
     deleteProveedor: (proveedorId) =>
       fetch(`${base}/proveedores/${proveedorId}`, { method: 'DELETE', headers: headers(token) }).then(parseJson),
 

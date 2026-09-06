@@ -120,6 +120,7 @@ function normalizeLado(item = {}) {
     : []
   return {
     proveedor: item?.proveedor != null ? String(item.proveedor) : '',
+    proveedor_id: item?.proveedor_id != null && item.proveedor_id !== '' ? item.proveedor_id : null,
     valor: item?.valor != null && item.valor !== '' ? String(item.valor) : '',
     numero: item?.numero != null ? String(item.numero) : '',
     fecha: item?.fecha ? String(item.fecha).slice(0, 10) : '',
@@ -174,11 +175,13 @@ export function detalleToPares(raw) {
         byPair.set(row.pair_id, {
           id: row.pair_id,
           es_ganadora: false,
+          proveedor_id: row.proveedor_id || '',
           insumo: emptyLado(),
           no_previsto: emptyLado(),
         })
       }
       const par = byPair.get(row.pair_id)
+      if (row.proveedor_id && !par.proveedor_id) par.proveedor_id = row.proveedor_id
       if (row.tipo === 'no_previsto') par.no_previsto = normalizeLado(row)
       else {
         par.insumo = normalizeLado(row)
@@ -294,13 +297,16 @@ export function syncLegacyFromGanadora(cotizacionesOrPares) {
   }
 }
 
-function ladoPayload(lado) {
+function ladoPayload(lado, extra = {}) {
   const impuesto = cloneImpuestoLado(lado?.impuesto)
   const hasImp = ['administracion', 'imprevistos', 'utilidad', 'iva'].some(
     (k) => impuesto[k] !== '' && impuesto[k] != null && Number(impuesto[k]) !== 0,
   )
   return {
     proveedor: (lado.proveedor || '').trim() || null,
+    proveedor_id: extra.proveedor_id != null && extra.proveedor_id !== ''
+      ? Number(extra.proveedor_id)
+      : (lado.proveedor_id != null && lado.proveedor_id !== '' ? Number(lado.proveedor_id) : null),
     valor: lado.valor !== '' && lado.valor != null ? Number(lado.valor) : null,
     numero: (lado.numero || '').trim() || null,
     fecha: lado.fecha || null,
@@ -320,13 +326,14 @@ export function cotizacionesPayloadForSave(cotizacionesOrPares) {
     for (const p of list) {
       if (!rowHasData(p)) continue
       const pairId = p.id || uid('pair')
+      const extra = { proveedor_id: p.proveedor_id || null }
       if (ladoHasData(p.insumo) || p.es_ganadora) {
         out.push({
           id: `${pairId}-insumo`,
           pair_id: pairId,
           tipo: 'insumo',
           es_ganadora: !!p.es_ganadora,
-          ...ladoPayload(p.insumo || emptyLado()),
+          ...ladoPayload(p.insumo || emptyLado(), extra),
         })
       }
       if (ladoHasData(p.no_previsto)) {
@@ -335,7 +342,7 @@ export function cotizacionesPayloadForSave(cotizacionesOrPares) {
           pair_id: pairId,
           tipo: 'no_previsto',
           es_ganadora: false,
-          ...ladoPayload(p.no_previsto || emptyLado()),
+          ...ladoPayload(p.no_previsto || emptyLado(), extra),
         })
       }
     }
@@ -866,3 +873,47 @@ export function validateGuardarInsumo(form, { editId = null } = {}) {
   const ruleErrs = ganadoraRuleErrors(pares)
   return { faltantes, ruleErrors: ruleErrs }
 }
+
+/** Normaliza Nº cotización para comparar / sugerir. */
+export function normNumeroCotizacion(n) {
+  return String(n || '').trim().replace(/\s+/g, ' ').toUpperCase()
+}
+
+/**
+ * Detecta el mismo número de cotización asociado a proveedores distintos
+ * dentro de los pares del formulario (alerta local).
+ */
+export function incongruenciaNumeroEntrePares(pares) {
+  const map = new Map()
+  for (const p of pares || []) {
+    const prov = (p.insumo?.proveedor || p.no_previsto?.proveedor || '').trim()
+    const pid = p.proveedor_id || ''
+    for (const lado of [p.insumo, p.no_previsto]) {
+      const num = normNumeroCotizacion(lado?.numero)
+      if (!num) continue
+      const key = num
+      const entry = map.get(key) || []
+      entry.push({
+        numero: num,
+        proveedor: prov,
+        proveedor_id: pid,
+        pair_id: p.id,
+      })
+      map.set(key, entry)
+    }
+  }
+  const errores = []
+  for (const [num, entries] of map.entries()) {
+    const keys = new Set(
+      entries.map((e) => `${e.proveedor_id || ''}|${String(e.proveedor || '').toLowerCase()}`),
+    )
+    if (keys.size > 1) {
+      const nombres = [...new Set(entries.map((e) => e.proveedor || '—').filter(Boolean))]
+      errores.push(
+        `El Nº de cotización ${num} está asociado a proveedores distintos (${nombres.join(' / ')}). Un mismo número no debe repetirse entre proveedores.`,
+      )
+    }
+  }
+  return errores
+}
+

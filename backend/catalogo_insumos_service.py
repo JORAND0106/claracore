@@ -27,6 +27,13 @@ from almacen_insumos_service import (
     tributos_tienen_datos,
 )
 from almacen_service import _sb, _to_float, _upload_soporte
+from catalogo_insumos_cotizaciones_lib import (
+    apply_auto_ganadora_detalle,
+    build_biblioteca_cotizaciones,
+    find_incongruencia_numero_cotizacion,
+    norm_numero_cotizacion as _norm_numero_cotizacion,
+    norm_proveedor_key as _norm_proveedor_key,
+)
 
 # Límite fijo de 200 KB eliminado: rige la cuota por contrato (+ tope técnico en pdf_prepare).
 
@@ -303,6 +310,7 @@ def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
             "tipo": tipo,
             "es_ganadora": es_ganadora,
             "proveedor": proveedor,
+            "proveedor_id": int(item["proveedor_id"]) if item.get("proveedor_id") not in (None, "") else None,
             "valor": valor,
             "numero": numero,
             "fecha": fecha,
@@ -355,6 +363,194 @@ def cotizaciones_detalle_from_row(row: dict) -> List[dict]:
             }
         ]
     return []
+
+
+def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[int, dict]] = None) -> List[dict]:
+    """
+    Extrae referencias planas número↔proveedor↔valor desde insumos (para biblioteca/suggest).
+    """
+    prov_map = prov_map or {}
+    refs: List[dict] = []
+    for row in rows or []:
+        insumo_id = row.get("id") or row.get("insumo_id")
+        codigo = row.get("codigo")
+        descripcion = row.get("descripcion")
+        pid = row.get("proveedor_id")
+        prov = prov_map.get(int(pid or 0), {}) if pid else {}
+        legacy_nombre = prov.get("razon_social") or row.get("proveedor_nombre") or ""
+        detalle = normalize_cotizaciones_detalle(row.get("cotizaciones_detalle"))
+        if not detalle:
+            num = _norm_numero_cotizacion(row.get("cotizacion_numero"))
+            if num:
+                refs.append({
+                    "numero": num,
+                    "proveedor": (legacy_nombre or "").strip() or None,
+                    "proveedor_id": int(pid) if pid else None,
+                    "nit": prov.get("nit"),
+                    "valor": _to_float(row.get("costo_base")),
+                    "fecha": row.get("cotizacion_fecha"),
+                    "vigencia": row.get("cotizacion_vigencia"),
+                    "tipo": "insumo",
+                    "insumo_id": insumo_id,
+                    "codigo": codigo,
+                    "descripcion": descripcion,
+                    "es_ganadora": True,
+                })
+            continue
+        for item in detalle:
+            num = _norm_numero_cotizacion(item.get("numero"))
+            if not num:
+                continue
+            nombre = (item.get("proveedor") or "").strip() or legacy_nombre or None
+            item_pid = item.get("proveedor_id") or (pid if item.get("es_ganadora") else None)
+            refs.append({
+                "numero": num,
+                "proveedor": nombre,
+                "proveedor_id": int(item_pid) if item_pid not in (None, "") else None,
+                "nit": prov.get("nit") if item_pid and int(item_pid or 0) == int(pid or 0) else None,
+                "valor": item.get("valor"),
+                "fecha": item.get("fecha"),
+                "vigencia": item.get("vigencia"),
+                "tipo": item.get("tipo") or "insumo",
+                "insumo_id": insumo_id,
+                "codigo": codigo,
+                "descripcion": descripcion,
+                "es_ganadora": bool(item.get("es_ganadora")),
+            })
+    return refs
+
+
+def _load_cotizacion_refs(contrato_id: int) -> List[dict]:
+    sb = _sb()
+    rows = (
+        sb.table("almacen_insumo")
+        .select(
+            "id, codigo, descripcion, proveedor_id, costo_base, cotizacion_numero, "
+            "cotizacion_fecha, cotizacion_vigencia, cotizaciones_detalle"
+        )
+        .eq("contrato_id", contrato_id)
+        .eq("activo", True)
+        .execute()
+        .data
+        or []
+    )
+    pids = {int(r["proveedor_id"]) for r in rows if r.get("proveedor_id")}
+    prov_map: Dict[int, dict] = {}
+    if pids:
+        provs = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social, nit")
+            .in_("id", list(pids))
+            .execute()
+            .data
+            or []
+        )
+        prov_map = {int(p["id"]): p for p in provs}
+    return collect_cotizacion_refs_from_rows(rows, prov_map)
+
+
+def list_biblioteca_cotizaciones(
+    contrato_id: int,
+    proveedor_id: Optional[int] = None,
+    q: str = "",
+) -> dict:
+    refs = _load_cotizacion_refs(contrato_id)
+    biblioteca = build_biblioteca_cotizaciones(refs)
+    qn = (q or "").strip().lower()
+    pid = int(proveedor_id) if proveedor_id not in (None, "") else None
+    name_key = None
+    if pid:
+        sb = _sb()
+        prov = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social, nit")
+            .eq("id", pid)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if prov:
+            name_key = _norm_proveedor_key(prov[0].get("razon_social"), prov[0].get("nit"))
+    filtered = []
+    for p in biblioteca:
+        if pid:
+            same_id = p.get("proveedor_id") and int(p["proveedor_id"]) == pid
+            same_name = name_key and _norm_proveedor_key(p.get("razon_social"), p.get("nit")) == name_key
+            if not (same_id or same_name):
+                continue
+        if qn:
+            hay = qn in (p.get("razon_social") or "").lower() or qn in (p.get("nit") or "").lower()
+            if not hay:
+                hay = any(qn in (c.get("numero") or "").lower() for c in p.get("cotizaciones") or [])
+            if not hay:
+                continue
+        filtered.append(p)
+    return {"proveedores": filtered, "total_proveedores": len(filtered)}
+
+
+def suggest_cotizaciones_numero(
+    contrato_id: int,
+    q: str = "",
+    proveedor_id: Optional[int] = None,
+    razon_social: str = "",
+    limit: int = 25,
+) -> List[dict]:
+    refs = _load_cotizacion_refs(contrato_id)
+    qn = _norm_numero_cotizacion(q)
+    want_pid = int(proveedor_id) if proveedor_id not in (None, "") else None
+    want_name = _norm_text(razon_social)
+    by_num: Dict[str, dict] = {}
+    for ref in refs:
+        num = ref["numero"]
+        if qn and qn not in num:
+            continue
+        ref_pid = int(ref["proveedor_id"]) if ref.get("proveedor_id") not in (None, "") else None
+        ref_name = _norm_text(ref.get("proveedor"))
+        if want_pid or want_name:
+            match = False
+            if want_pid and ref_pid and want_pid == ref_pid:
+                match = True
+            elif want_name and ref_name and want_name == ref_name:
+                match = True
+            if not match:
+                continue
+        if num not in by_num:
+            by_num[num] = {
+                "numero": num,
+                "proveedor": ref.get("proveedor"),
+                "proveedor_id": ref_pid,
+                "fecha": ref.get("fecha"),
+                "vigencia": ref.get("vigencia"),
+                "usos": 0,
+            }
+        by_num[num]["usos"] += 1
+        if ref.get("fecha") and not by_num[num].get("fecha"):
+            by_num[num]["fecha"] = ref.get("fecha")
+        if ref.get("vigencia") and not by_num[num].get("vigencia"):
+            by_num[num]["vigencia"] = ref.get("vigencia")
+    out = sorted(by_num.values(), key=lambda x: (-x["usos"], x["numero"]))
+    return out[: max(1, min(int(limit or 25), 50))]
+
+
+def check_cotizacion_numero_incongruencia(
+    contrato_id: int,
+    numero: str,
+    proveedor_id: Any = None,
+    razon_social: str = "",
+    nit: str = "",
+    exclude_insumo_id: Any = None,
+) -> dict:
+    refs = _load_cotizacion_refs(contrato_id)
+    conflicto = find_incongruencia_numero_cotizacion(
+        refs,
+        numero,
+        proveedor_id=proveedor_id,
+        razon_social=razon_social,
+        nit=nit,
+        exclude_insumo_id=exclude_insumo_id,
+    )
+    return {"incongruente": bool(conflicto), "conflicto": conflicto}
 
 
 def _sync_legacy_cotizacion_from_detalle(payload: dict, detalle: List[dict]) -> None:
@@ -787,8 +983,26 @@ def _build_insumo_payload(body: dict, contrato_id: int, user_id: int, *, codigo_
     # Solo persistir cotizaciones_detalle si viene en el body (evita borrar en CSV/update parcial).
     if "cotizaciones_detalle" in body:
         detalle = normalize_cotizaciones_detalle(body.get("cotizaciones_detalle"))
+        detalle = apply_auto_ganadora_detalle(detalle)
         payload["cotizaciones_detalle"] = detalle
         _sync_legacy_cotizacion_from_detalle(payload, detalle)
+        gan = next((r for r in detalle if r.get("es_ganadora") and r.get("tipo") == "insumo"), None)
+        if gan:
+            if gan.get("valor") is not None:
+                gan_costo = float(round(max(float(gan["valor"]), 0.0)))
+                payload["costo_base"] = gan_costo
+                if tributos_tienen_datos(tributos):
+                    payload["valor_compra_referencia"] = compute_valor_despues_aiu_iva(gan_costo, tributos)
+                else:
+                    payload["valor_compra_referencia"] = compute_costo_total_insumo(
+                        gan_costo, tipo_imp, imp_pct, impuestos
+                    )
+                if cantidad_negociada is not None and cantidad_negociada > 0 and payload["valor_compra_referencia"] > 0:
+                    payload["valor_negociado_total"] = float(
+                        round(cantidad_negociada * payload["valor_compra_referencia"])
+                    )
+            if gan.get("proveedor_id"):
+                payload["proveedor_id"] = int(gan["proveedor_id"])
     return payload
 
 
