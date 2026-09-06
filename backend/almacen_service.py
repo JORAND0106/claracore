@@ -1016,12 +1016,14 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             "supera_presupuesto": False,
         })
     if out:
-        # Una pasada: listado cacheado + acumulados en lote (sin N× get_presupuesto_context).
+        # Borrador/guardar: no escanear listado_precios (cobro se define al mapear Gerencial).
+        # Solo acumulados + flags de sobrepresupuesto — evita 5–40s de full-scan.
         apply_saldo_flags_batch(
             contrato_id,
             out,
             exclude_solicitud_id=exclude_solicitud_id,
             descontar_linea_actual=True,
+            refresh_listado=False,
         )
     return out
 
@@ -1800,23 +1802,36 @@ def aprobar_solicitud(contrato_id: int, solicitud_id: int, user_id: int, body: O
         or []
     )
     items_aprobados = []
+    faltan_insumo = []
+    faltan_costo = []
     for it in fresh_items:
         ev = it.get("estado_validacion") or "pendiente"
         if ev != "aprobado":
             continue
         merged = dict(it)
+        linea = merged.get("numero_linea") or merged.get("id")
         if not merged.get("insumo_id") and not merged.get("es_recurrente"):
-            raise ValueError(
-                f"Línea {merged.get('numero_linea') or merged.get('id')}: "
-                "el Contratista Gerencial debe seleccionar el insumo del catálogo antes de aprobar."
-            )
+            faltan_insumo.append(str(linea))
+            continue
         vu = _to_float(merged.get("valor_compra_unitario"))
         if vu <= 0 and not merged.get("es_recurrente"):
-            raise ValueError(
-                f"Línea {merged.get('numero_linea') or merged.get('id')}: "
-                "defina el costo de compra unitario antes de generar la OC."
-            )
+            faltan_costo.append(str(linea))
+            continue
         items_aprobados.append(merged)
+    if faltan_insumo:
+        detalle = ", ".join(f"#{n}" for n in faltan_insumo[:12])
+        extra = f" (+{len(faltan_insumo) - 12} más)" if len(faltan_insumo) > 12 else ""
+        raise ValueError(
+            "No se puede generar la Orden de Compra: faltan insumos del catálogo en "
+            f"{len(faltan_insumo)} línea(s) ({detalle}{extra}). "
+            "Asigne el insumo en la revisión de cada línea antes de aprobar."
+        )
+    if faltan_costo:
+        detalle = ", ".join(f"#{n}" for n in faltan_costo[:12])
+        raise ValueError(
+            "No se puede generar la Orden de Compra: falta el costo de compra unitario en "
+            f"línea(s) {detalle}. Defínalo en la revisión de línea antes de aprobar."
+        )
     if not items_aprobados:
         raise ValueError("Debe aprobar al menos un ítem antes de generar la Orden de Compra.")
 

@@ -613,7 +613,7 @@ def route_update_solicitud(
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "editar")
     try:
-        prev = get_solicitud(contrato_id, solicitud_id, ligera=True)
+        prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = update_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
         log_almacen(
             current_user, "EDITAR", "solicitud", solicitud_id,

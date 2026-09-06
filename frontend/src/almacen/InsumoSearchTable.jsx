@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlmacenFieldLabel, useAlmacenApi, useAlmacenTheme } from './almacenShared'
 
-export default function InsumoSearchTable({ value, onChange, disabled }) {
+export default function InsumoSearchTable({ value, onChange, disabled, hideLabel = false, inputStyle }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const [q, setQ] = useState('')
@@ -56,18 +56,21 @@ export default function InsumoSearchTable({ value, onChange, disabled }) {
   const sinCoincidencias = open && !loading && !catalogoVacio && q.trim().length >= 1 && rows.length === 0
 
   return (
-    <div style={{ position: 'relative' }}>
-      <AlmacenFieldLabel
-        icon="📦"
-        label="Insumo"
-        compact
-        ayuda="Solo insumos del catálogo administrativo. Si está vacío, cargue insumos en Panel admin → Catálogo de insumos."
-      />
+    <div style={{ position: 'relative', minWidth: 0, width: '100%' }}>
+      {!hideLabel && (
+        <AlmacenFieldLabel
+          icon="📦"
+          label="Insumo"
+          compact
+          ayuda="Solo insumos del catálogo administrativo. Si está vacío, cargue insumos en Panel admin → Catálogo de insumos."
+        />
+      )}
       <input
-        style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)' }}
+        style={{ ...ui.input, padding: '6px 8px', fontSize: 'var(--cc-sm)', width: '100%', boxSizing: 'border-box', ...(inputStyle || {}) }}
         placeholder={catalogoVacio ? 'Catálogo vacío — no hay insumos disponibles' : 'Código, descripción o proveedor…'}
         value={q}
         disabled={disabled || catalogoVacio}
+        title={q || 'Insumo del catálogo'}
         onChange={(e) => {
           setQ(e.target.value)
           setOpen(true)
