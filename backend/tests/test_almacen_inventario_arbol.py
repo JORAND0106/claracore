@@ -82,6 +82,7 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     movements = [
         {
             "item_key": "01|01.01",
+            "insumo_id": 1,
             "orden_compra_id": 100,
             "numero_oc": 45,
             "proveedor_nombre": "Acme",
@@ -98,6 +99,7 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
         },
         {
             "item_key": "01|01.01",
+            "insumo_id": 1,
             "orden_compra_id": 100,
             "numero_oc": 45,
             "proveedor_nombre": "Acme",
@@ -114,6 +116,7 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
         },
         {
             "item_key": "01|01.01",
+            "insumo_id": 2,
             "orden_compra_id": 200,
             "numero_oc": 46,
             "proveedor_nombre": "Beta",
@@ -129,7 +132,26 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
             "valor_stock": 8000,
         },
         {
+            # OC asociada al cemento sin entrada aún (trazabilidad incompleta)
+            "item_key": "01|01.01",
+            "insumo_id": 2,
+            "orden_compra_id": 201,
+            "numero_oc": 47,
+            "proveedor_nombre": "Gamma",
+            "estado": "aprobada",
+            "material_descripcion": "Cemento",
+            "unidad": "kg",
+            "valor_unitario": 100,
+            "entradas": 0,
+            "salidas": 0,
+            "saldo": 0,
+            "valor_entradas": 0,
+            "valor_salidas": 0,
+            "valor_stock": 0,
+        },
+        {
             "item_key": "01|01.02",
+            "insumo_id": 3,
             "orden_compra_id": 100,
             "numero_oc": 45,
             "proveedor_nombre": "Acme",
@@ -169,17 +191,48 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     assert item["valor_stock"] == 208000
     assert item["stock"] == 208000
 
-    # Nivel 3: insumos reales (no «Varios materiales»)
+    # Nivel 3: insumos reales con valores de entrada/salida
     assert len(item["insumos"]) == 2
     arena = next(i for i in item["insumos"] if i["insumo_id"] == 1)
     assert arena["descripcion"] == "Arena"
     assert arena["vu_costo"] == 20000
     assert arena["es_principal"] is True
+    assert arena["valor_entradas"] == 300000
+    assert arena["valor_salidas"] == 100000
+    assert arena["valor_stock"] == 200000
+    assert len(arena["ordenes_compra"]) == 1
+    oc_arena = arena["ordenes_compra"][0]
+    assert oc_arena["numero_oc"] == 45
+    assert oc_arena["tiene_entrada"] is True
+    assert oc_arena["tiene_salida"] is True
+    assert oc_arena["valor_entradas"] == 300000
+
     cemento = next(i for i in item["insumos"] if i["insumo_id"] == 2)
     assert cemento["descripcion"] == "Cemento"
     assert cemento["vu_costo"] == 100
     assert cemento["es_principal"] is False
     assert cemento["costo_contribucion"] == 5000
+    assert cemento["valor_entradas"] == 10000
+    assert cemento["valor_salidas"] == 2000
+    assert cemento["valor_stock"] == 8000
+    assert len(cemento["ordenes_compra"]) == 2
+    oc_con_mov = next(o for o in cemento["ordenes_compra"] if o["numero_oc"] == 46)
+    assert oc_con_mov["tiene_entrada"] is True
+    assert oc_con_mov["tiene_salida"] is True
+    oc_sin_ent = next(o for o in cemento["ordenes_compra"] if o["numero_oc"] == 47)
+    assert oc_sin_ent["tiene_entrada"] is False
+    assert oc_sin_ent["tiene_salida"] is False
+    assert oc_sin_ent["numero_oc_fmt"] == "#00047"
+
+    tierra = next(
+        i for i in next(x for x in cap01["items"] if x["item"] == "01.02")["insumos"]
+        if i["insumo_id"] == 3
+    )
+    assert tierra["valor_entradas"] == 30000
+    assert tierra["valor_salidas"] == 0
+    assert tierra["ordenes_compra"][0]["tiene_entrada"] is True
+    assert tierra["ordenes_compra"][0]["tiene_salida"] is False
+
     assert all("Varios" not in (i.get("descripcion") or "") for i in item["insumos"])
     assert item["ordenes_compra"] == []
     assert out["resumen"]["valor_stock"] == 238000

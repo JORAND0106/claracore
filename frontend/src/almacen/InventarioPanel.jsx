@@ -43,7 +43,16 @@ function itemMatchesFiltro(it, filtroCap, filtroItem, q) {
   if (!needle) return true
   const hay = [
     it.capitulo, it.item, it.descripcion, it.pk_id, it.item_key,
-    ...(it.insumos || []).flatMap((ins) => [ins.codigo, ins.descripcion]),
+    ...(it.insumos || []).flatMap((ins) => [
+      ins.codigo,
+      ins.descripcion,
+      ...((ins.ordenes_compra || []).flatMap((oc) => [
+        oc.numero_oc_fmt,
+        oc.numero_oc,
+        oc.proveedor_nombre,
+        oc.material_descripcion,
+      ])),
+    ]),
   ].filter(Boolean).join(' ').toLowerCase()
   return hay.includes(needle)
 }
@@ -72,6 +81,37 @@ function insumoLabel(ins) {
   const desc = (ins.descripcion || '').trim()
   if (code && desc) return `${code} — ${desc}`
   return code || desc || `Insumo #${ins.insumo_id}`
+}
+
+function ocLabel(oc) {
+  const num = (oc.numero_oc_fmt || '').trim()
+    || (oc.numero_oc != null && oc.numero_oc !== '' ? `#${oc.numero_oc}` : 'Sin OC')
+  const prov = (oc.proveedor_nombre || '').trim()
+  if (prov && prov !== 'Sin proveedor') return `${num} — ${prov}`
+  return num
+}
+
+function TraceBadge({ ok, labelOk, labelMiss }) {
+  return (
+    <span
+      title={ok ? labelOk : labelMiss}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: 0.02,
+        textTransform: 'uppercase',
+        color: ok ? 'var(--cc-color-success, #059669)' : 'var(--cc-color-danger, #dc2626)',
+        opacity: ok ? 0.95 : 1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span aria-hidden>{ok ? '✓' : '✗'}</span>
+      {ok ? labelOk : labelMiss}
+    </span>
+  )
 }
 
 function TruncLabel({ children, title }) {
@@ -134,6 +174,7 @@ export default function InventarioPanel({
   const [filtroItem, setFiltroItem] = useState('')
   const [expandedCaps, setExpandedCaps] = useState(() => new Set())
   const [expandedItems, setExpandedItems] = useState(() => new Set())
+  const [expandedInsumos, setExpandedInsumos] = useState(() => new Set())
 
   const reload = useCallback(() => {
     setLoading(true)
@@ -192,6 +233,15 @@ export default function InventarioPanel({
 
   const toggleItem = (key) => {
     setExpandedItems((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const toggleInsumo = (key) => {
+    setExpandedInsumos((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
@@ -266,7 +316,7 @@ export default function InventarioPanel({
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700 }}>📊 Inventario</div>
         <div style={{ fontSize: 'var(--cc-sm)', color: ui.textMuted, marginTop: 4 }}>
-          Capítulo → Ítem → Insumos. Entradas, salidas y stock en valor financiero.
+          Capítulo → Ítem → Insumo → OC. Valores por insumo y trazabilidad OC → Entrada → Salida.
         </div>
         {arbol?.generado_at && (
           <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
@@ -362,7 +412,7 @@ export default function InventarioPanel({
               <thead>
                 <tr>
                   <th style={{ ...th, textAlign: 'left', width: compact ? '34%' : '40%' }}>
-                    Capítulo / Ítem / Insumo
+                    Capítulo / Ítem / Insumo / OC
                   </th>
                   {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>VU Cobro</th>}
                   {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>VU Costo</th>}
@@ -399,7 +449,9 @@ export default function InventarioPanel({
                       hasItems={hasItems}
                       toggleCap={toggleCap}
                       toggleItem={toggleItem}
+                      toggleInsumo={toggleInsumo}
                       expandedItems={expandedItems}
+                      expandedInsumos={expandedInsumos}
                       td={td}
                       tdLabel={tdLabel}
                       num={num}
@@ -426,7 +478,9 @@ function FragmentCapitulo({
   hasItems,
   toggleCap,
   toggleItem,
+  toggleInsumo,
   expandedItems,
+  expandedInsumos,
   td,
   tdLabel,
   num,
@@ -482,6 +536,8 @@ function FragmentCapitulo({
             itemOpen={itemOpen}
             hasInsumos={hasInsumos}
             toggleItem={toggleItem}
+            toggleInsumo={toggleInsumo}
+            expandedInsumos={expandedInsumos}
             td={td}
             tdLabel={tdLabel}
             num={num}
@@ -503,6 +559,8 @@ function FragmentItem({
   itemOpen,
   hasInsumos,
   toggleItem,
+  toggleInsumo,
+  expandedInsumos,
   td,
   tdLabel,
   num,
@@ -548,37 +606,145 @@ function FragmentItem({
         </td>
       </tr>
 
-      {itemOpen && (it.insumos || []).map((ins) => (
-        <tr
-          key={`${itemKey}:ins:${ins.insumo_id}`}
-          data-testid={`inventario-insumo-${itemKey}-${ins.insumo_id}`}
-        >
-          <td style={{ ...tdLabel, paddingLeft: 44, color: ui.textMuted }}>
-            <TruncLabel title={insumoLabel(ins)}>
-              <span style={{ fontWeight: 600 }}>{insumoLabel(ins)}</span>
-              {ins.es_principal === false && (
-                <span style={{
-                  marginLeft: 8,
-                  fontSize: 10,
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  opacity: 0.85,
-                }}
-                >
-                  asociado
-                </span>
-              )}
-            </TruncLabel>
-          </td>
-          {verEconomicos && <td style={num}>—</td>}
-          {verEconomicos && <td style={num}>{fmtMoneyOrDash(ins.vu_costo, hideEco)}</td>}
-          {verEconomicos && <td style={num}>—</td>}
-          {verEconomicos && <td style={num}>—</td>}
-          <td style={num}>—</td>
-          <td style={num}>—</td>
-          <td style={num}>—</td>
-        </tr>
-      ))}
+      {itemOpen && (it.insumos || []).map((ins) => {
+        const insKey = `${itemKey}:ins:${ins.insumo_id}`
+        const insOpen = expandedInsumos.has(insKey)
+        const ocs = ins.ordenes_compra || []
+        const hasOcs = ocs.length > 0
+        return (
+          <FragmentInsumo
+            key={insKey}
+            ins={ins}
+            insKey={insKey}
+            insOpen={insOpen}
+            hasOcs={hasOcs}
+            toggleInsumo={toggleInsumo}
+            td={td}
+            tdLabel={tdLabel}
+            num={num}
+            ui={ui}
+            verEconomicos={verEconomicos}
+            hideEco={hideEco}
+          />
+        )
+      })}
+    </>
+  )
+}
+
+function FragmentInsumo({
+  ins,
+  insKey,
+  insOpen,
+  hasOcs,
+  toggleInsumo,
+  td,
+  tdLabel,
+  num,
+  ui,
+  verEconomicos,
+  hideEco,
+}) {
+  const ocs = ins.ordenes_compra || []
+  const tdOc = {
+    ...td,
+    height: 'auto',
+    maxHeight: 'none',
+    lineHeight: 1.35,
+    paddingTop: 8,
+    paddingBottom: 8,
+    verticalAlign: 'top',
+  }
+  const tdOcLabel = {
+    ...tdLabel,
+    ...tdOc,
+  }
+  const numOc = {
+    ...num,
+    ...tdOc,
+  }
+  return (
+    <>
+      <tr
+        data-testid={`inventario-insumo-${insKey}`}
+        style={{
+          background: insOpen
+            ? 'var(--cc-almacen-accent-soft, rgba(0,119,182,0.04))'
+            : undefined,
+        }}
+      >
+        <td style={{ ...tdLabel, paddingLeft: 44, color: ui.textMuted }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <ToggleCell
+              open={insOpen}
+              onToggle={() => toggleInsumo(insKey)}
+              label={insumoLabel(ins)}
+              depth={2}
+              disabled={!hasOcs}
+            />
+            {ins.es_principal === false && (
+              <span style={{
+                fontSize: 10,
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                opacity: 0.85,
+                flexShrink: 0,
+              }}
+              >
+                asociado
+              </span>
+            )}
+          </div>
+        </td>
+        {verEconomicos && <td style={num}>—</td>}
+        {verEconomicos && <td style={num}>{fmtMoneyOrDash(ins.vu_costo, hideEco)}</td>}
+        {verEconomicos && <td style={num}>—</td>}
+        {verEconomicos && <td style={num}>—</td>}
+        <td style={num}>{fmtMoneyOrDash(ins.valor_entradas, hideEco)}</td>
+        <td style={num}>{fmtMoneyOrDash(ins.valor_salidas, hideEco)}</td>
+        <td style={{ ...num, fontWeight: 600 }}>
+          {fmtMoneyOrDash(ins.valor_stock ?? ins.stock, hideEco)}
+        </td>
+      </tr>
+
+      {insOpen && ocs.map((oc) => {
+        const ocId = oc.orden_compra_id ?? oc.numero_oc ?? 'x'
+        return (
+          <tr
+            key={`${insKey}:oc:${ocId}`}
+            data-testid={`inventario-oc-${insKey}-${ocId}`}
+          >
+            <td style={{ ...tdOcLabel, paddingLeft: 66, color: ui.textMuted }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <TruncLabel title={ocLabel(oc)}>
+                  <span style={{ fontWeight: 600 }}>{ocLabel(oc)}</span>
+                </TruncLabel>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 10px' }}>
+                  <TraceBadge
+                    ok={Boolean(oc.tiene_entrada)}
+                    labelOk="Entrada"
+                    labelMiss="Sin entrada"
+                  />
+                  <TraceBadge
+                    ok={Boolean(oc.tiene_salida)}
+                    labelOk="Salida"
+                    labelMiss="Sin salida"
+                  />
+                </div>
+              </div>
+            </td>
+            {verEconomicos && <td style={numOc}>—</td>}
+            {verEconomicos && (
+              <td style={numOc}>{fmtMoneyOrDash(oc.valor_unitario, hideEco)}</td>
+            )}
+            {verEconomicos && <td style={numOc}>—</td>}
+            {verEconomicos && <td style={numOc}>—</td>}
+            <td style={numOc}>{fmtMoneyOrDash(oc.valor_entradas, hideEco)}</td>
+            <td style={numOc}>{fmtMoneyOrDash(oc.valor_salidas, hideEco)}</td>
+            <td style={numOc}>{fmtMoneyOrDash(oc.valor_stock ?? oc.saldo, hideEco)}</td>
+          </tr>
+        )
+      })}
     </>
   )
 }
