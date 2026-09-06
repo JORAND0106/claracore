@@ -11,6 +11,17 @@ import unicodedata
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from catalogo_insumos_cotizaciones_lib import (
+    apply_auto_ganadora_detalle,
+    build_biblioteca_cotizaciones,
+    find_incongruencia_numero_cotizacion,
+    impuesto_lado_as_tributos_payload,
+    norm_numero_cotizacion as _norm_numero_cotizacion,
+    norm_proveedor_key as _norm_proveedor_key,
+    pick_best_cotizacion_ref,
+    same_proveedor_ref,
+)
+from catalogo_insumos_cotizaciones_lib import _norm_text
 from almacen_insumos_service import (
     _impuesto_etiqueta,
     _insumo_label,
@@ -32,16 +43,6 @@ from catalogo_insumos_codigo_lib import (
     codigo_liberado_para_baja as _codigo_liberado_para_baja,
     compute_next_codigo_insumo,
 )
-from catalogo_insumos_cotizaciones_lib import (
-    apply_auto_ganadora_detalle,
-    build_biblioteca_cotizaciones,
-    find_incongruencia_numero_cotizacion,
-    norm_numero_cotizacion as _norm_numero_cotizacion,
-    norm_proveedor_key as _norm_proveedor_key,
-    pick_best_cotizacion_ref,
-    same_proveedor_ref,
-)
-from catalogo_insumos_cotizaciones_lib import _norm_text
 
 # Límite fijo de 200 KB eliminado: rige la cuota por contrato (+ tope técnico en pdf_prepare).
 
@@ -388,9 +389,37 @@ def cotizaciones_detalle_from_row(row: dict) -> List[dict]:
     return []
 
 
+def _valor_oferta_despues_impuesto(
+    valor_base: Any,
+    *,
+    impuesto_lado: Any = None,
+    tributos_row: Any = None,
+    tipo_impuesto: Any = None,
+    impuesto_porcentaje: Any = None,
+    impuestos: Any = None,
+) -> float:
+    """Precio unitario de la oferta después de IVA/AIU (pesos COP enteros)."""
+    base = max(_to_float(valor_base) if valor_base not in (None, "") else 0.0, 0.0)
+    payload = impuesto_lado_as_tributos_payload(impuesto_lado)
+    if payload:
+        trib = normalize_tributos(payload)
+        if tributos_tienen_datos(trib):
+            return compute_valor_despues_aiu_iva(base, trib)
+    trib_row = normalize_tributos(tributos_row)
+    if tributos_tienen_datos(trib_row):
+        return compute_valor_despues_aiu_iva(base, trib_row)
+    return compute_costo_total_insumo(
+        base,
+        tipo_impuesto,
+        _to_float(impuesto_porcentaje) if impuesto_porcentaje not in (None, "") else 0.0,
+        impuestos,
+    )
+
+
 def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[int, dict]] = None) -> List[dict]:
     """
     Extrae referencias planas número↔proveedor↔valor desde insumos (para biblioteca/suggest).
+    ``valor`` es el precio de oferta **después** de IVA/AIU.
     """
     prov_map = prov_map or {}
     refs: List[dict] = []
@@ -406,6 +435,10 @@ def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[
             if row.get("cantidad_negociada") not in (None, "")
             else None
         )
+        trib_row = row.get("tributos")
+        tipo_imp = row.get("tipo_impuesto")
+        imp_pct = row.get("impuesto_porcentaje")
+        impuestos = row.get("impuestos")
         detalle = normalize_cotizaciones_detalle(row.get("cotizaciones_detalle"))
         if not detalle:
             num = _norm_numero_cotizacion(row.get("cotizacion_numero"))
@@ -415,7 +448,13 @@ def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[
                     "proveedor": (legacy_nombre or "").strip() or None,
                     "proveedor_id": int(pid) if pid else None,
                     "nit": prov.get("nit"),
-                    "valor": _to_float(row.get("costo_base")),
+                    "valor": _valor_oferta_despues_impuesto(
+                        row.get("costo_base"),
+                        tributos_row=trib_row,
+                        tipo_impuesto=tipo_imp,
+                        impuesto_porcentaje=imp_pct,
+                        impuestos=impuestos,
+                    ),
                     "cantidad_negociada": cantidad_negociada,
                     "fecha": row.get("cotizacion_fecha"),
                     "vigencia": row.get("cotizacion_vigencia"),
@@ -447,7 +486,14 @@ def collect_cotizacion_refs_from_rows(rows: List[dict], prov_map: Optional[Dict[
                     if item_pid and pid and int(item_pid) == int(pid)
                     else None
                 ),
-                "valor": item.get("valor"),
+                "valor": _valor_oferta_despues_impuesto(
+                    item.get("valor"),
+                    impuesto_lado=item.get("impuesto"),
+                    tributos_row=trib_row,
+                    tipo_impuesto=tipo_imp,
+                    impuesto_porcentaje=imp_pct,
+                    impuestos=impuestos,
+                ),
                 "cantidad_negociada": cantidad_negociada,
                 "fecha": item.get("fecha"),
                 "vigencia": item.get("vigencia"),
@@ -467,6 +513,7 @@ def _load_cotizacion_refs(contrato_id: int) -> List[dict]:
         sb.table("almacen_insumo")
         .select(
             "id, codigo, descripcion, proveedor_id, costo_base, cantidad_negociada, "
+            "tributos, tipo_impuesto, impuesto_porcentaje, impuestos, "
             "cotizacion_numero, cotizacion_fecha, cotizacion_vigencia, cotizaciones_detalle, "
             "soporte_pdf_blob_path, soporte_pdf_nombre"
         )

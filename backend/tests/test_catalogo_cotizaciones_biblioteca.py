@@ -64,6 +64,24 @@ def test_find_incongruencia_numero_entre_proveedores():
     assert bad["proveedor_registrado"] == "PAVCO"
 
 
+def test_decimal_field_to_puntos_e_impuesto_lado():
+    from catalogo_insumos_cotizaciones_lib import (
+        decimal_field_to_puntos,
+        impuesto_lado_as_tributos_payload,
+    )
+    assert decimal_field_to_puntos("0.19") == 19.0
+    assert decimal_field_to_puntos(19) == 19.0
+    assert decimal_field_to_puntos("") is None
+    payload = impuesto_lado_as_tributos_payload({
+        "administracion": "",
+        "imprevistos": "",
+        "utilidad": "",
+        "iva": "0.19",
+    })
+    assert payload == {"administracion": None, "imprevistos": None, "utilidad": None, "iva": 19.0}
+    assert impuesto_lado_as_tributos_payload({}) is None
+
+
 def test_same_proveedor_ref_por_id_o_nombre():
     from catalogo_insumos_cotizaciones_lib import same_proveedor_ref
     ref = {"proveedor": "Pavco S.A.", "proveedor_id": 7, "nit": "900"}
