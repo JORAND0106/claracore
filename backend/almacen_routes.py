@@ -1619,7 +1619,7 @@ def route_inventario_graficos(
 
 @router.get("/{contrato_id}/inventario/arbol")
 def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_user)):
-    """Tabla Excel del inventario: ítem → insumo → proveedor + resumen de valores."""
+    """Tabla Excel del inventario: capítulo → ítem → orden de compra + resumen."""
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "ver")
     data = list_inventario_arbol(contrato_id)
@@ -1632,16 +1632,16 @@ def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_us
             it["valor_entradas"] = None
             it["valor_salidas"] = None
             it["valor_stock"] = None
-            for ins in it.get("insumos") or []:
-                ins["vu_costo"] = None
-                ins["utilidad"] = None
-                ins["valor_entradas"] = None
-                ins["valor_salidas"] = None
-                ins["valor_stock"] = None
-                for pr in ins.get("proveedores") or []:
-                    pr["valor_entradas"] = None
-                    pr["valor_salidas"] = None
-                    pr["valor_stock"] = None
+            for oc in it.get("ordenes_compra") or []:
+                oc["valor_unitario"] = None
+                oc["valor_entradas"] = None
+                oc["valor_salidas"] = None
+                oc["valor_stock"] = None
+        for cap in data.get("capitulos") or []:
+            cap["valor_entradas"] = None
+            cap["valor_salidas"] = None
+            cap["valor_stock"] = None
+            cap["stock"] = None
         data["resumen"] = {
             **(data.get("resumen") or {}),
             "valor_stock": None,
