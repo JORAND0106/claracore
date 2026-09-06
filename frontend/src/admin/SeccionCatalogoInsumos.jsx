@@ -25,6 +25,7 @@ import { buildContratoUiTheme } from '../theme/adminPanelTheme'
 import { UnidadSelector } from '../utils/unidadesListadoPrecios'
 import CcConfirmModal from '../components/CcConfirmModal'
 import CatalogoProveedorAutocomplete from './CatalogoProveedorAutocomplete'
+import CatalogoCotizacionAutocomplete from './CatalogoCotizacionAutocomplete'
 import {
   applyAutoGanadoraByMinValor,
   applyCaptureToPar,
@@ -37,6 +38,7 @@ import {
   ganadoraDesdeInsumoRow,
   ganadoraRuleErrors,
   impuestoGanadoraDesdePares,
+  incongruenciaNumeroEntrePares,
   pickGanadora,
   sanitizeRendimientoInput,
   seedCotizacionPares,
@@ -105,6 +107,7 @@ function snapshotForm(f) {
 const MAIN_CATALOG_TABS = [
   { id: 'insumos', label: 'Insumos' },
   { id: 'proveedores', label: 'Proveedores' },
+  { id: 'cotizaciones', label: 'Cotizaciones' },
 ]
 
 function sheetZebra(ui, index) {
@@ -892,6 +895,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [provTotal, setProvTotal] = useState(0)
   const [provQ, setProvQ] = useState('')
   const [provLoading, setProvLoading] = useState(false)
+  const [bibQ, setBibQ] = useState('')
+  const [bibProveedorId, setBibProveedorId] = useState('')
+  const [bibLoading, setBibLoading] = useState(false)
+  const [biblioteca, setBiblioteca] = useState([])
   const [consumoNegociado, setConsumoNegociado] = useState(null)
   const [modalImpuestoOpen, setModalImpuestoOpen] = useState(false)
   const [impuestoModalTarget, setImpuestoModalTarget] = useState('insumo')
@@ -987,11 +994,29 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       .finally(() => setProvLoading(false))
   }, [api, canVer, provQ])
 
+  const loadBiblioteca = useCallback(() => {
+    if (!api || !canVer) return
+    setBibLoading(true)
+    api.listBibliotecaCotizaciones({
+      q: bibQ,
+      proveedor_id: bibProveedorId || undefined,
+    })
+      .then((r) => setBiblioteca(r.proveedores || []))
+      .catch((e) => setMsg({ type: 'error', text: e.message }))
+      .finally(() => setBibLoading(false))
+  }, [api, canVer, bibQ, bibProveedorId])
+
   useEffect(() => {
     if (mainTab !== 'proveedores') return
     const tmr = setTimeout(loadProveedores, 200)
     return () => clearTimeout(tmr)
   }, [mainTab, loadProveedores])
+
+  useEffect(() => {
+    if (mainTab !== 'cotizaciones') return
+    const tmr = setTimeout(loadBiblioteca, 200)
+    return () => clearTimeout(tmr)
+  }, [mainTab, loadBiblioteca])
 
   const load = useCallback(() => {
     if (!api || !canVer) return
@@ -1031,10 +1056,16 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       loadProveedores()
       return
     }
+    if (mainTab === 'cotizaciones') {
+      loadBiblioteca()
+      return
+    }
     load()
-  }, [mainTab, load, loadProveedores])
+  }, [mainTab, load, loadProveedores, loadBiblioteca])
 
-  const isRefreshing = mainTab === 'proveedores' ? provLoading : loading
+  const isRefreshing = mainTab === 'proveedores'
+    ? provLoading
+    : (mainTab === 'cotizaciones' ? bibLoading : loading)
 
   const openNew = async () => {
     setEditId(null)
@@ -1278,6 +1309,16 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
     setForm(nextForm)
 
+    const incongruencias = await collectIncongruenciaNumeroAlerts(list)
+    if (incongruencias.length) {
+      setModalRuleErrors([...ganadoraRuleErrors(list), ...incongruencias])
+      setMsg({
+        type: 'error',
+        text: 'Hay incongruencia de Nº de cotización entre proveedores. Revise la alerta antes de guardar.',
+      })
+      return
+    }
+
     if (editId && api) {
       const check = validateGuardarInsumo(nextForm, { editId })
       if (check.faltantes.length || check.ruleErrors.length) {
@@ -1426,14 +1467,53 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     return fd
   }
 
+  const collectIncongruenciaNumeroAlerts = async (paresOverride = null) => {
+    const pares = paresOverride || form.cotizaciones_detalle || []
+    const local = incongruenciaNumeroEntrePares(pares)
+    const alerts = [...local]
+    if (!api) return alerts
+    const seen = new Set()
+    for (const p of pares) {
+      for (const lado of [p.insumo, p.no_previsto]) {
+        const numero = (lado?.numero || '').trim()
+        if (!numero) continue
+        const key = `${numero}|${p.proveedor_id || ''}|${(lado?.proveedor || p.insumo?.proveedor || '').trim()}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        try {
+          const r = await api.checkCotizacionNumero({
+            numero,
+            proveedor_id: p.proveedor_id ? Number(p.proveedor_id) : undefined,
+            razon_social: lado?.proveedor || form.razon_social || '',
+            nit: p.nit || form.nit || '',
+            exclude_insumo_id: editId || undefined,
+          })
+          if (r?.incongruente && r.conflicto) {
+            const c = r.conflicto
+            alerts.push(
+              `El Nº de cotización ${c.numero} ya está registrado con el proveedor «${c.proveedor_registrado || '—'}»`
+              + (c.codigo ? ` (insumo ${c.codigo})` : '')
+              + `. No debe asociarse a «${lado?.proveedor || form.razon_social || 'este proveedor'}».`,
+            )
+          }
+        } catch {
+          /* no bloquear por fallo de red en la alerta */
+        }
+      }
+    }
+    return [...new Set(alerts)]
+  }
+
   const save = async (forceUpdateId = null) => {
     if (!api) return
     const { faltantes, ruleErrors } = validateGuardarInsumo(form, {
       editId,
     })
+    const incongruencias = await collectIncongruenciaNumeroAlerts()
+    const allRules = [...ruleErrors, ...incongruencias]
     setModalFaltantes(faltantes)
-    setModalRuleErrors(ruleErrors)
-    if (faltantes.length || ruleErrors.length) {
+    setModalRuleErrors(allRules)
+    if (faltantes.length || allRules.length) {
       return
     }
     setBusy(true)
@@ -1457,6 +1537,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       setDupAlert(null)
       load()
       loadProveedores()
+      if (mainTab === 'cotizaciones') loadBiblioteca()
     } catch (e) {
       setMsg({ type: 'error', text: e.message })
     } finally {
@@ -1580,8 +1661,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           <input ref={csvRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => onCsvSelect(e, 'insumos')} />
           <input ref={csvProvRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={(e) => onCsvSelect(e, 'proveedores')} />
           <ToolbarBtn
-            label={mainTab === 'proveedores' ? 'Actualizar' : 'Actualizar insumos'}
-            title={mainTab === 'proveedores' ? 'Actualizar proveedores' : 'Actualizar insumos'}
+            label={mainTab === 'proveedores' ? 'Actualizar' : (mainTab === 'cotizaciones' ? 'Actualizar biblioteca' : 'Actualizar insumos')}
+            title={mainTab === 'proveedores' ? 'Actualizar proveedores' : (mainTab === 'cotizaciones' ? 'Actualizar biblioteca de cotizaciones' : 'Actualizar insumos')}
             disabled={busy || isRefreshing}
             t={t}
             iconColor={t.primary || TOOLBAR_ICON_COLORS.refresh}
@@ -1858,6 +1939,87 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         </div>
       )}
 
+      {mainTab === 'cotizaciones' && (
+        <div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select
+              style={{ ...inputStyle, maxWidth: 320 }}
+              value={bibProveedorId}
+              onChange={(e) => setBibProveedorId(e.target.value)}
+            >
+              <option value="">Todos los proveedores</option>
+              {proveedores.map((p) => (
+                <option key={p.id} value={p.id}>{p.razon_social}</option>
+              ))}
+            </select>
+            <input
+              style={{ ...inputStyle, flex: 1, maxWidth: 360 }}
+              placeholder="Buscar por Nº cotización, proveedor o NIT…"
+              value={bibQ}
+              onChange={(e) => setBibQ(e.target.value)}
+            />
+            <span style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, fontWeight: 600 }}>
+              {biblioteca.length} proveedor(es) con cotizaciones
+            </span>
+          </div>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+            Biblioteca de cotizaciones: el valor de cada Nº resume los insumos del catálogo que la referencian.
+            La ganadora de cada insumo es siempre la de menor valor; no altera solicitudes u OC ya generadas.
+          </div>
+          {bibLoading ? (
+            <div style={{ color: t.textMuted, padding: 12 }}>Cargando biblioteca…</div>
+          ) : biblioteca.length === 0 ? (
+            <div style={{ color: t.textMuted, padding: 12 }}>No hay cotizaciones registradas con ese filtro.</div>
+          ) : (
+            biblioteca.map((prov) => (
+              <div key={prov.proveedor_key || prov.razon_social || prov.proveedor_id} style={{ ...sheetWrap, marginBottom: 12, overflow: 'auto' }}>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  padding: '8px 10px',
+                  background: ui.cardSubtle,
+                  borderBottom: `1px solid ${t.border}`,
+                  fontWeight: 700,
+                }}
+                >
+                  <span>{prov.razon_social || 'Sin proveedor'}{prov.nit ? ` · NIT ${prov.nit}` : ''}</span>
+                  <span style={{ color: t.primary }}>
+                    Total acumulado: {fmtMoney(prov.total_acumulado)} · {prov.n_cotizaciones} cotización(es)
+                  </span>
+                </div>
+                <table style={{ ...sheetTable, minWidth: 640, tableLayout: 'auto' }}>
+                  <thead>
+                    <tr>
+                      <th style={thHeader}>Nº cotización</th>
+                      <th style={thHeader}>Fecha</th>
+                      <th style={thHeader}>Vigencia</th>
+                      <th style={{ ...thHeader, textAlign: 'right' }}>Valor asociado</th>
+                      <th style={thHeader}>Insumos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(prov.cotizaciones || []).map((c, idx) => (
+                      <tr key={c.numero} style={{ background: sheetZebra(ui, idx) }}>
+                        <td style={{ ...td, fontWeight: 700 }}>{c.numero}</td>
+                        <td style={tdMuted}>{c.fecha ? String(c.fecha).slice(0, 10) : '—'}</td>
+                        <td style={tdMuted}>{c.vigencia || '—'}</td>
+                        <td style={{ ...tdMoney, textAlign: 'right' }}>{fmtMoney(c.valor_total)}</td>
+                        <td style={tdMuted} title={(c.items || []).map((i) => i.codigo || i.descripcion).join(', ')}>
+                          {(c.items || []).length} · {(c.items || []).slice(0, 3).map((i) => i.codigo || i.descripcion || '—').join(', ')}
+                          {(c.items || []).length > 3 ? '…' : ''}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       {modalOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 10002, background: ui.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 0' }}>
           <div style={{ width: 'min(1540px, 98vw)', maxHeight: '94vh', overflow: 'auto', ...modalPanelStyle, padding: '18px 22px' }} onClick={(e) => e.stopPropagation()}>
@@ -2109,11 +2271,21 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <tr style={{ background: sheetZebra(ui, 0) }}>
                       <td style={costTh} title="Número de cotización del proveedor">Nº cot. *</td>
                       <td style={costTd} colSpan={3}>
-                        <input
-                          style={{ ...costCellInp, textTransform: 'uppercase' }}
+                        <CatalogoCotizacionAutocomplete
+                          api={api}
+                          t={t}
+                          inputStyle={costCellInp}
                           value={form.cotizacion_numero}
-                          placeholder="Número asignado por el proveedor"
-                          onChange={(e) => updateCapture({ cotizacion_numero: e.target.value.toUpperCase() })}
+                          proveedorId={form.proveedor_id}
+                          razonSocial={form.razon_social}
+                          disabled={busy}
+                          onChange={(v) => updateCapture({ cotizacion_numero: v })}
+                          onPick={(item) => {
+                            const patch = { cotizacion_numero: item.numero }
+                            if (item.fecha && !form.cotizacion_fecha) patch.cotizacion_fecha = String(item.fecha).slice(0, 10)
+                            if (item.vigencia && !form.cotizacion_vigencia) patch.cotizacion_vigencia = item.vigencia
+                            updateCapture(patch)
+                          }}
                         />
                       </td>
                     </tr>
@@ -2211,11 +2383,22 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                     <tr style={{ background: sheetZebra(ui, 0) }}>
                       <td style={costTh} title="Número de cotización del proveedor (No Previsto)">Nº cot. *</td>
                       <td style={costTd} colSpan={3}>
-                        <input
-                          style={{ ...costCellInp, textTransform: 'uppercase' }}
+                        <CatalogoCotizacionAutocomplete
+                          api={api}
+                          t={t}
+                          inputStyle={costCellInp}
                           value={form.cotizacion_numero_np}
-                          placeholder="Número asignado por el proveedor"
-                          onChange={(e) => updateCapture({ cotizacion_numero_np: e.target.value.toUpperCase() })}
+                          proveedorId={form.proveedor_id}
+                          razonSocial={form.razon_social}
+                          disabled={busy}
+                          placeholder="Número No Previsto del proveedor"
+                          onChange={(v) => updateCapture({ cotizacion_numero_np: v })}
+                          onPick={(item) => {
+                            const patch = { cotizacion_numero_np: item.numero }
+                            if (item.fecha && !form.cotizacion_fecha_np) patch.cotizacion_fecha_np = String(item.fecha).slice(0, 10)
+                            if (item.vigencia && !form.cotizacion_vigencia_np) patch.cotizacion_vigencia_np = item.vigencia
+                            updateCapture(patch)
+                          }}
                         />
                       </td>
                     </tr>
