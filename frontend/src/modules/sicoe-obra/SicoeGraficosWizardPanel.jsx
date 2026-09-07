@@ -286,6 +286,7 @@ export default function SicoeGraficosWizardPanel({
           t={t}
           title={actual ? 'Editar esquema · gráfico del registro' : 'Crear esquema · gráfico del registro'}
           initialDataUri={esquemaInitialDataUri}
+          contratoId={contrato_id}
           onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
           onSave={guardarEsquemaComoGrafico}
         />

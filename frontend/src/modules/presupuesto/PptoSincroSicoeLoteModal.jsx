@@ -609,6 +609,7 @@ export default function PptoSincroSicoeLoteModal({
         <EsquemaEditorModal
           t={t}
           title="Dibujar esquema · lote SicoeCAD"
+          contratoId={contratoId}
           onClose={() => setEsquemaOpen(false)}
           onSave={guardarEsquema}
         />

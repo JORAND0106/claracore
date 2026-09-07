@@ -4905,6 +4905,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 ? `Editar esquema · registro ${registro.numero_registro ?? ''}`
                 : `Crear esquema · registro ${registro.numero_registro ?? ''}`}
               initialDataUri={esquemaInitialDataUri}
+              contratoId={registro?.contrato_id}
               onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
               onSave={guardarEsquemaComoGrafico}
             />

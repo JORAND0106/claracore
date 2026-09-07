@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
-import TareaExcelLayout from './TareaExcelLayout'
+import TareaExcelLayout from './TareaExcelLayout.jsx'
 import { newChecklistItem } from './TareaChecklistEditor'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 import VencimientoIcon from './VencimientoIcon'

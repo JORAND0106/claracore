@@ -803,6 +803,7 @@ export default function PptoGruposGraficosModal({
         <EsquemaEditorModal
           t={t}
           title="Dibujar esquema · reemplazar imagen del grupo"
+          contratoId={contratoId}
           onClose={() => setEsquemaOpen(false)}
           onSave={guardarEsquemaReemplazo}
         />

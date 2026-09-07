@@ -649,6 +649,7 @@ export default function PptoGraficosModal({
         <EsquemaEditorModal
           t={t}
           title="Dibujar esquema · grupo de gráfico"
+          contratoId={contratoId}
           onClose={() => setEsquemaOpen(false)}
           onSave={guardarEsquema}
         />

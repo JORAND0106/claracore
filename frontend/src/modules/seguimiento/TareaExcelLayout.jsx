@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import TareaChecklistEditor from './TareaChecklistEditor'
 import { labelAvance } from './tareaAvance'
-import { debeMostrarChecklist, puedeExpandirChecklist } from './tareaExcelLayout'
+import { debeMostrarChecklist, puedeExpandirChecklist } from './tareaExcelLayout.js'
 import { tareaSheetStyles } from './tareaSheetStyles'
 
 /**
