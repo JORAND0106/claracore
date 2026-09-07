@@ -11659,7 +11659,18 @@ def get_maestro_ubicacion_pk_ids(contrato_id: int, current_user=Depends(get_curr
         rows = supabase_execute(_q) or []
     except Exception:
         rows = []
-    tramos = sorted({str(r["tramo"]).strip() for r in rows if r.get("tramo") and str(r.get("tramo", "")).strip()})
+    # Filtrar sentinel «0» / «Tramo 0»: el catálogo de tramos empieza en 1.
+    def _tramo_catalogo_ok(raw: Any) -> Optional[str]:
+        s = str(raw or "").strip()
+        if not s:
+            return None
+        if re.fullmatch(r"0+", s) or re.fullmatch(r"(?i)tramo[\s_-]*0+", s):
+            return None
+        return s
+
+    tramos = sorted({
+        t for t in (_tramo_catalogo_ok(r.get("tramo")) for r in rows) if t
+    })
     calzadas = sorted({str(r["calzada"]).strip() for r in rows if r.get("calzada") and str(r.get("calzada", "")).strip()})
     infraestructuras = sorted({str(r["infraestructura"]).strip() for r in rows if r.get("infraestructura") and str(r.get("infraestructura", "")).strip()})
     return {"tramos": tramos, "calzadas": calzadas, "infraestructuras": infraestructuras}
