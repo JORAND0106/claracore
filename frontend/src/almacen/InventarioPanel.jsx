@@ -1,12 +1,108 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import PresupuestoItemSelector, { normPptoItem } from './PresupuestoItemSelector'
 import {
+  AlmacenFieldLabel,
+  AlmacenHelpIcon,
   fmtFechaAlmacenCorta,
   fmtMoney,
   useAlmacenApi,
   useAlmacenCompact,
   useAlmacenTheme,
 } from './almacenShared'
+
+/** Encabezados abreviados con (?) — mismo criterio que otras tablas Excel del módulo. */
+const INVENTARIO_COLS = [
+  {
+    key: 'jerarquia',
+    abbr: 'CAP. / ÍTEM / INS. / OC',
+    tip: 'Capítulo / Ítem / Insumo / OC — Jerarquía expandible del inventario.',
+    align: 'left',
+    ecoOnly: false,
+  },
+  {
+    key: 'vu_cobro',
+    abbr: 'VU COBRO',
+    tip: 'VU Cobro — Valor unitario de cobro del ítem en el listado de precios.',
+    align: 'right',
+    ecoOnly: true,
+  },
+  {
+    key: 'vu_costo',
+    abbr: 'VU COSTO',
+    tip: 'VU Costo — Costo unitario del ítem (suma de insumos × rendimiento) o VU del insumo/OC.',
+    align: 'right',
+    ecoOnly: true,
+  },
+  {
+    key: 'utilidad',
+    abbr: 'UTIL.',
+    tip: 'Utilidad — VU Cobro − VU Costo del ítem.',
+    align: 'right',
+    ecoOnly: true,
+  },
+  {
+    key: 'rent',
+    abbr: '% RENT.',
+    tip: '% Rentabilidad — (Utilidad / VU Cobro) × 100.',
+    align: 'right',
+    ecoOnly: true,
+  },
+  {
+    key: 'v_ent',
+    abbr: 'V.ENT.',
+    tip: 'Valor entradas — Valor financiero de las entradas registradas al almacén.',
+    align: 'right',
+    ecoOnly: false,
+  },
+  {
+    key: 'v_sal',
+    abbr: 'V.SAL.',
+    tip: 'Valor salidas — Valor financiero despachado a obra (salidas netas de devoluciones).',
+    align: 'right',
+    ecoOnly: false,
+  },
+  {
+    key: 'stock',
+    abbr: 'STOCK',
+    tip: 'Stock — Valor financiero del saldo en almacén (entradas − salidas).',
+    align: 'right',
+    ecoOnly: false,
+  },
+  {
+    key: 's_cons',
+    abbr: 'S.CONS.',
+    tip: 'Saldo por consumir — Valor negociado acumulado − valor de entradas ya registradas.',
+    align: 'right',
+    ecoOnly: false,
+  },
+]
+
+function ColHeader({ abbr, tip, style, align = 'left' }) {
+  return (
+    <th
+      style={{
+        ...style,
+        whiteSpace: 'nowrap',
+        overflow: 'visible',
+        textAlign: align,
+        verticalAlign: 'middle',
+      }}
+    >
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+          width: '100%',
+        }}
+      >
+        <span style={{ fontWeight: 700, letterSpacing: '0.02em' }}>{abbr}</span>
+        {tip ? <AlmacenHelpIcon ayuda={tip} /> : null}
+      </span>
+    </th>
+  )
+}
 
 function fmtMoneyOrDash(v, hideEco) {
   if (hideEco) return '—'
@@ -349,48 +445,118 @@ export default function InventarioPanel({
         <div style={{ color: ui.textMuted }}>Cargando inventario…</div>
       ) : (
         <>
-          <div style={{ ...ui.card, marginBottom: 12 }}>
-            <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 'var(--cc-sm)' }}>
-              Filtro por capítulo e ítem
+          <div
+            style={{ ...ui.card, marginBottom: 12 }}
+            data-testid="inventario-filtros"
+          >
+            <div style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: 10,
+              marginBottom: 14,
+            }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', color: ui.text }}>
+                  Filtro por capítulo e ítem
+                </div>
+                <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2 }}>
+                  Elija capítulo e ítem de cobro, o use la búsqueda libre. Puede combinar ambos.
+                </div>
+              </div>
+              <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 10,
+                fontSize: 'var(--cc-xs)',
+                color: ui.textMuted,
+              }}
+              >
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: 'var(--cc-surface-2, #f1f5f9)',
+                  fontWeight: 600,
+                }}
+                >
+                  {filteredCaps.length} capítulo{filteredCaps.length === 1 ? '' : 's'}
+                  {' · '}
+                  {filteredItemCount} ítem{filteredItemCount === 1 ? '' : 's'}
+                  {' de '}
+                  {items.length}
+                </span>
+                {filtroActivo && (
+                  <button
+                    type="button"
+                    onClick={limpiarFiltro}
+                    style={{
+                      ...ui.btnSecondary,
+                      padding: '6px 10px',
+                      fontSize: 'var(--cc-xs)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Ver todo el listado
+                  </button>
+                )}
+              </div>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
-              <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: compact
+                ? '1fr'
+                : 'minmax(0, 1.45fr) minmax(200px, 0.85fr)',
+              gap: 12,
+              alignItems: 'stretch',
+            }}
+            >
+              <div style={{
+                minWidth: 0,
+                padding: 12,
+                borderRadius: 10,
+                border: `1px solid ${ui.border || '#e2e8f0'}`,
+                background: 'var(--cc-surface-2, #f8fafc)',
+              }}
+              >
                 <PresupuestoItemSelector
                   capitulo={filtroCap}
                   item={filtroItem}
                   onChange={onFiltroChange}
                 />
               </div>
-              <input
-                type="search"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Buscar texto libre…"
-                aria-label="Buscar en inventario"
-                data-testid="inventario-busqueda"
-                style={{ ...ui.input, flex: '1 1 200px', margin: 0, maxWidth: 280 }}
-              />
-              {filtroActivo && (
-                <button
-                  type="button"
-                  onClick={limpiarFiltro}
-                  style={{
-                    ...ui.btnSecondary,
-                    padding: '8px 12px',
-                    fontSize: 'var(--cc-sm)',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Ver todo el listado
-                </button>
-              )}
-            </div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 8 }}>
-              Mostrando {filteredCaps.length} capítulo{filteredCaps.length === 1 ? '' : 's'}
-              {' · '}
-              {filteredItemCount} ítem{filteredItemCount === 1 ? '' : 's'}
-              {' de '}
-              {items.length}
+              <div style={{
+                minWidth: 0,
+                padding: 12,
+                borderRadius: 10,
+                border: `1px solid ${ui.border || '#e2e8f0'}`,
+                background: 'var(--cc-surface-2, #f8fafc)',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'flex-end',
+              }}
+              >
+                <AlmacenFieldLabel
+                  icon="🔎"
+                  label="Búsqueda de texto"
+                  compact
+                  ayuda="Filtra por capítulo, ítem, insumo, unidad, código, OC o proveedor. Se combina con el filtro de capítulo/ítem."
+                />
+                <input
+                  type="search"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Ej. cemento, acero, capítulo…"
+                  aria-label="Buscar en inventario"
+                  data-testid="inventario-busqueda"
+                  style={{ ...ui.input, width: '100%', margin: 0, boxSizing: 'border-box' }}
+                />
+              </div>
             </div>
           </div>
 
@@ -405,23 +571,27 @@ export default function InventarioPanel({
                 ...ui.sheetTable,
                 width: '100%',
                 borderCollapse: 'collapse',
-                minWidth: compact ? 900 : 1240,
+                minWidth: compact ? 780 : 1080,
                 tableLayout: 'fixed',
               }}
             >
               <thead>
                 <tr>
-                  <th style={{ ...th, textAlign: 'left', width: compact ? '34%' : '40%' }}>
-                    Capítulo / Ítem / Insumo / OC
-                  </th>
-                  {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>VU Cobro</th>}
-                  {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>VU Costo</th>}
-                  {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>Utilidad</th>}
-                  {verEconomicos && <th style={{ ...th, textAlign: 'right' }}>% Rentabilidad</th>}
-                  <th style={{ ...th, textAlign: 'right' }}>Valor entradas</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Valor salidas</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Stock</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Saldo por consumir</th>
+                  {INVENTARIO_COLS.filter((c) => !c.ecoOnly || verEconomicos).map((col) => (
+                    <ColHeader
+                      key={col.key}
+                      abbr={col.abbr}
+                      tip={col.tip}
+                      align={col.align}
+                      style={{
+                        ...th,
+                        textAlign: col.align,
+                        width: col.key === 'jerarquia'
+                          ? (compact ? '34%' : '38%')
+                          : undefined,
+                      }}
+                    />
+                  ))}
                 </tr>
               </thead>
               <tbody>

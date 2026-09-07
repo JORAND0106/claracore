@@ -1,5 +1,5 @@
 /**
- * Inventario — Capítulo → Ítem → Insumo → OC, valores y trazabilidad.
+ * Inventario — encabezados abreviados, filtros y trazabilidad.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -25,6 +25,34 @@ describe('Inventario — Capítulo → Ítem → Insumo → OC', () => {
     assert.doesNotMatch(src, /GraficoResumenInventario/)
     assert.doesNotMatch(src, /from 'recharts'/)
     assert.doesNotMatch(src, /BarChart/)
+  })
+
+  it('encabezados abreviados con AlmacenHelpIcon y tip completo', () => {
+    const src = readFileSync(join(__dirname, 'InventarioPanel.jsx'), 'utf8')
+    assert.match(src, /AlmacenHelpIcon/)
+    assert.match(src, /function ColHeader/)
+    assert.match(src, /INVENTARIO_COLS/)
+    assert.match(src, /VU COBRO/)
+    assert.match(src, /VU COSTO/)
+    assert.match(src, /UTIL\./)
+    assert.match(src, /% RENT\./)
+    assert.match(src, /V\.ENT\./)
+    assert.match(src, /V\.SAL\./)
+    assert.match(src, /S\.CONS\./)
+    assert.match(src, /CAP\. \/ ÍTEM \/ INS\. \/ OC/)
+    assert.match(src, /VU Cobro —/)
+    assert.match(src, /Saldo por consumir —/)
+  })
+
+  it('panel de filtros reorganizado con búsqueda etiquetada', () => {
+    const src = readFileSync(join(__dirname, 'InventarioPanel.jsx'), 'utf8')
+    assert.match(src, /inventario-filtros/)
+    assert.match(src, /AlmacenFieldLabel/)
+    assert.match(src, /gridTemplateColumns/)
+    assert.match(src, /Filtro por capítulo e ítem/)
+    assert.match(src, /Búsqueda de texto/)
+    assert.match(src, /inventario-busqueda/)
+    assert.match(src, /cemento, acero/)
   })
 
   it('backend lista insumos con valores, OCs y saldo por consumir', () => {
