@@ -107,7 +107,9 @@ export default function SolicitudLineaRevisionModal({
       valor_compra_unitario: item.valor_compra_unitario != null && item.valor_compra_unitario !== ''
         ? String(item.valor_compra_unitario)
         : '',
-      vlr_unitario_cobro: item.vlr_unitario_cobro != null && item.vlr_unitario_cobro !== ''
+      vlr_unitario_cobro: item.vlr_unitario_cobro != null
+        && item.vlr_unitario_cobro !== ''
+        && Number(item.vlr_unitario_cobro) > 0
         ? String(item.vlr_unitario_cobro)
         : '',
     })
@@ -215,8 +217,13 @@ export default function SolicitudLineaRevisionModal({
       cantidad: cant,
       valor_compra_unitario: costo,
     }
-    if (draft.vlr_unitario_cobro !== '') {
-      body.vlr_unitario_cobro = Number(draft.vlr_unitario_cobro)
+    // Solo enviar VU cobro si el usuario ingresó un valor > 0.
+    // Enviar 0 bloqueaba la resolución automática desde el listado/presupuesto.
+    const cobroNum = draft.vlr_unitario_cobro !== '' && draft.vlr_unitario_cobro != null
+      ? Number(draft.vlr_unitario_cobro)
+      : NaN
+    if (Number.isFinite(cobroNum) && cobroNum > 0) {
+      body.vlr_unitario_cobro = cobroNum
     }
     if (puedeCorregirPostOc && !puedeValidarLinea) {
       return api.corregirInsumoItemPostOc(sol.id, item.id, body)

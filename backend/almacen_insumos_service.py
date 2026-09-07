@@ -36,7 +36,7 @@ def _norm_item_key(item: Optional[str]) -> str:
 def _item_key_variants(item: Optional[str]) -> List[str]:
     """
     Variantes de código de ítem para emparejar listado ↔ presupuesto.
-    Ej.: NP-01 / NP.01 / NP 01 / np01.
+    Ej.: NP-01 / NP.01 / NP 01 / np01 / 01↔1 / 1.01↔1.1.
     """
     base = _norm_item_key(item).lower()
     if not base:
@@ -45,7 +45,23 @@ def _item_key_variants(item: Optional[str]) -> List[str]:
     variants.add(re.sub(r"[-_\s]+", ".", base))
     variants.add(re.sub(r"[.\s_]+", "-", base))
     variants.add(re.sub(r"[-._\s]+", "", base))
-    # Mantener orden estable: base primero.
+
+    def _strip_leading_zeros(s: str) -> str:
+        return re.sub(r"(?<![0-9])0+(\d+)", r"\1", s)
+
+    for v in list(variants):
+        stripped = _strip_leading_zeros(v)
+        if stripped:
+            variants.add(stripped)
+
+    parts = re.split(r"[-._\s]+", base)
+    if len(parts) > 1:
+        norm_parts = [str(int(p)) if p.isdigit() else p for p in parts if p]
+        if norm_parts:
+            variants.add(".".join(norm_parts))
+            variants.add("-".join(norm_parts))
+            variants.add("".join(norm_parts))
+
     out = [base]
     for v in variants:
         if v and v not in out:
@@ -298,15 +314,15 @@ def _impuesto_etiqueta(tipo_impuesto: Optional[str], impuesto_porcentaje: float,
 
 
 def _norm_capitulo_key(s: Optional[str]) -> str:
-    """Alinea capítulos con distinto espaciado (misma lógica que dashboard/listado)."""
+    """Alinea capítulos con distinto espaciado/casing (misma lógica que dashboard/listado)."""
     if s is None:
-        return "Sin capítulo"
+        return "sin capítulo"
     t = str(s).strip()
     if not t:
-        return "Sin capítulo"
+        return "sin capítulo"
     t = re.sub(r"\s+", " ", t)
     t = re.sub(r"^(\d+\.)\s+", r"\1", t)
-    return t
+    return t.lower()
 
 
 def _fetch_all_listado_rows(contrato_id: int, select: str = "*") -> List[dict]:
@@ -450,7 +466,14 @@ def lookup_listado_precio_detalle(
     variants = _item_key_variants(item_numero)
     cap_keys = []
     if capitulo:
-        cap_keys = [_norm_capitulo_key(capitulo), capitulo.lower()]
+        cap_keys = [
+            _norm_capitulo_key(capitulo),
+            capitulo.lower().strip(),
+            re.sub(r"\s+", " ", capitulo.strip()).lower(),
+        ]
+        # Deduplicar preservando orden
+        seen_caps = set()
+        cap_keys = [c for c in cap_keys if c and not (c in seen_caps or seen_caps.add(c))]
 
     for cap_key in cap_keys:
         for item_k in variants:
@@ -2170,6 +2193,7 @@ def apply_saldo_flags_batch(
             key = (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
             batch_qty[key] += _to_float(it.get("cantidad"))
 
+    need_ppto_vu: List[int] = []
     for it in items:
         if lookup is not None and it.get("insumo_id") and _item_es_principal(it):
             cap = (it.get("capitulo") or "").strip()
@@ -2192,6 +2216,44 @@ def apply_saldo_flags_batch(
             if it.get("insumo_id") and _item_es_principal(it):
                 it.setdefault("cobro_motivo", "sin_valor_listado")
 
+        # Fallback: VU cobro desde presupuesto.vlr_unitario cuando listado no resolvió.
+        if (
+            it.get("insumo_id")
+            and _item_es_principal(it)
+            and _to_float(it.get("vlr_unitario_cobro")) <= 0
+            and it.get("presupuesto_id")
+        ):
+            need_ppto_vu.append(int(it["presupuesto_id"]))
+
+    ppto_vu_map: Dict[int, float] = {}
+    if need_ppto_vu:
+        uniq = sorted(set(need_ppto_vu))
+        try:
+            rows_p = (
+                sb.table("presupuesto")
+                .select("id, vlr_unitario")
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", uniq)
+                .execute()
+                .data
+                or []
+            )
+            for r in rows_p:
+                ppto_vu_map[int(r["id"])] = _to_float(r.get("vlr_unitario"))
+        except Exception:
+            ppto_vu_map = {}
+        for it in items:
+            if _to_float(it.get("vlr_unitario_cobro")) > 0:
+                continue
+            if not (it.get("insumo_id") and _item_es_principal(it) and it.get("presupuesto_id")):
+                continue
+            vu = ppto_vu_map.get(int(it["presupuesto_id"]), 0.0)
+            if vu > 0:
+                it["vlr_unitario_cobro"] = vu
+                it["cobro_motivo"] = None
+                it["_cobro_sanado"] = True
+
+    for it in items:
         if not it.get("pk_id") or not it.get("presupuesto_id"):
             it["supera_presupuesto"] = False
             continue
@@ -2358,6 +2420,14 @@ def get_presupuesto_context(
     item_cobro = (item_listado or row.get("item") or "").strip()
     cobro_res = resolver_vlr_cobro_listado(contrato_id, cap_cobro, item_cobro)
     vlr_cobro = _to_float(cobro_res.get("vlr_unitario_cobro"))
+    cobro_motivo = cobro_res.get("cobro_motivo")
+    # Fallback definitivo: VU del presupuesto (origen contractual del cobro del ítem).
+    if vlr_cobro <= 0:
+        ppto_vu = _to_float(row.get("vlr_unitario"))
+        if ppto_vu > 0:
+            vlr_cobro = ppto_vu
+            cobro_motivo = None
+            cobro_res = {**cobro_res, "match": "presupuesto_vlr_unitario", "cobro_motivo": None}
     return {
         "presupuesto_id": presupuesto_id,
         "pk_id": pk_id,
@@ -2373,7 +2443,7 @@ def get_presupuesto_context(
         "cantidad_borrador_adicional": extra if descontar_linea_actual else 0,
         "saldo_disponible_despues": saldo_despues,
         "vlr_unitario_cobro": vlr_cobro,
-        "cobro_motivo": cobro_res.get("cobro_motivo"),
+        "cobro_motivo": cobro_motivo,
         "supera_presupuesto": saldo_despues < -0.0001,
         "tramo": row.get("tramo"),
         "abs_inicio": row.get("abs_inicio"),
@@ -2480,6 +2550,11 @@ def resolve_insumo_for_solicitud(
         )
         vlr_cobro = _to_float(cobro_res.get("vlr_unitario_cobro"))
         cobro_motivo = cobro_res.get("cobro_motivo")
+        if vlr_cobro <= 0:
+            ppto_vu = _to_float(ppto.get("vlr_unitario"))
+            if ppto_vu > 0:
+                vlr_cobro = ppto_vu
+                cobro_motivo = None
         cant_presupuestada = _to_float(ppto.get("cant_total"))
         supera_presupuesto = False
         supera_negociado = False

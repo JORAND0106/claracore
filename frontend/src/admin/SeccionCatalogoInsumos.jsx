@@ -2523,13 +2523,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 1) }}>
-                      <td style={costTh}>Fecha</td>
-                      <td style={costTd}>
-                        <input style={costCellInp} type="date" value={form.cotizacion_fecha} onChange={(e) => updateCapture({ cotizacion_fecha: e.target.value })} />
-                      </td>
-                      <td style={costTh}>Vigencia</td>
-                      <td style={costTd}>
-                        <input style={costCellInp} value={form.cotizacion_vigencia} placeholder="Ej. 15 días" onChange={(e) => updateCapture({ cotizacion_vigencia: e.target.value })} />
+                      <td style={costTh}>Impuesto</td>
+                      <td style={costTd} colSpan={3}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            title="A · Í · U · IVA"
+                            onClick={() => {
+                              setImpuestoModalTarget('insumo')
+                              setDraftImpuesto({ ...(form.impuesto || EMPTY_IMPUESTO) })
+                              setModalImpuestoOpen(true)
+                            }}
+                            style={{
+                              ...costBtnCompact,
+                              borderColor: impuestoTieneDatos(form.impuesto) ? t.primary : t.border,
+                              color: impuestoTieneDatos(form.impuesto) ? t.primary : t.text,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {impuestoTieneDatos(form.impuesto) ? `A · Í · U · IVA ✓` : 'A · Í · U · IVA'}
+                          </button>
+                          <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, overflowWrap: 'anywhere' }}>
+                            {tributosResumen === '—'
+                              ? ((form.cotizaciones_detalle || []).find((p) => p.id === selectedParId)?.insumo?.impuesto_etiqueta || 'Sin impuesto.')
+                              : tributosResumen}
+                          </span>
+                        </div>
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 0) }}>
@@ -2559,32 +2578,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 1) }}>
-                      <td style={costTh}>Impuesto</td>
-                      <td style={costTd} colSpan={3}>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <button
-                            type="button"
-                            title="A · Í · U · IVA"
-                            onClick={() => {
-                              setImpuestoModalTarget('insumo')
-                              setDraftImpuesto({ ...(form.impuesto || EMPTY_IMPUESTO) })
-                              setModalImpuestoOpen(true)
-                            }}
-                            style={{
-                              ...costBtnCompact,
-                              borderColor: impuestoTieneDatos(form.impuesto) ? t.primary : t.border,
-                              color: impuestoTieneDatos(form.impuesto) ? t.primary : t.text,
-                              fontWeight: 700,
-                            }}
-                          >
-                            A · Í · U · IVA{impuestoTieneDatos(form.impuesto) ? ' ✓' : ''}
-                          </button>
-                          <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, overflowWrap: 'anywhere' }}>
-                            {tributosResumen === '—'
-                              ? ((form.cotizaciones_detalle || []).find((p) => p.id === selectedParId)?.insumo?.impuesto_etiqueta || 'Sin impuesto.')
-                              : tributosResumen}
-                          </span>
-                        </div>
+                      <td style={costTh}>Fecha</td>
+                      <td style={costTd}>
+                        <input style={costCellInp} type="date" value={form.cotizacion_fecha} onChange={(e) => updateCapture({ cotizacion_fecha: e.target.value })} />
+                      </td>
+                      <td style={costTh}>Vigencia</td>
+                      <td style={costTd}>
+                        <input style={costCellInp} value={form.cotizacion_vigencia} placeholder="Ej. 15 días" onChange={(e) => updateCapture({ cotizacion_vigencia: e.target.value })} />
                       </td>
                     </tr>
                   </tbody>
@@ -2628,13 +2628,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 1) }}>
-                      <td style={costTh}>Fecha</td>
-                      <td style={costTd}>
-                        <input style={costCellInp} type="date" value={form.cotizacion_fecha_np} onChange={(e) => updateCapture({ cotizacion_fecha_np: e.target.value })} />
-                      </td>
-                      <td style={costTh}>Vigencia</td>
-                      <td style={costTd}>
-                        <input style={costCellInp} value={form.cotizacion_vigencia_np} placeholder="Ej. 15 días" onChange={(e) => updateCapture({ cotizacion_vigencia_np: e.target.value })} />
+                      <td style={costTh}>Impuesto</td>
+                      <td style={costTd} colSpan={3}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            title="A · Í · U · IVA (No Previsto)"
+                            onClick={() => {
+                              setImpuestoModalTarget('np')
+                              setDraftImpuesto({ ...(form.impuesto_np || EMPTY_IMPUESTO) })
+                              setModalImpuestoOpen(true)
+                            }}
+                            style={{
+                              ...costBtnCompact,
+                              borderColor: impuestoTieneDatos(form.impuesto_np) ? t.primary : t.border,
+                              color: impuestoTieneDatos(form.impuesto_np) ? t.primary : t.text,
+                              fontWeight: 700,
+                            }}
+                          >
+                            A · Í · U · IVA{impuestoTieneDatos(form.impuesto_np) ? ' ✓' : ''}
+                          </button>
+                          <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, overflowWrap: 'anywhere' }}>
+                            {tributosResumenNp === '—'
+                              ? ((form.cotizaciones_detalle || []).find((p) => p.id === selectedParId)?.no_previsto?.impuesto_etiqueta || 'Sin impuesto.')
+                              : tributosResumenNp}
+                          </span>
+                        </div>
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 0) }}>
@@ -2665,32 +2684,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                       </td>
                     </tr>
                     <tr style={{ background: sheetZebra(ui, 1) }}>
-                      <td style={costTh}>Impuesto</td>
-                      <td style={costTd} colSpan={3}>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <button
-                            type="button"
-                            title="A · Í · U · IVA (No Previsto)"
-                            onClick={() => {
-                              setImpuestoModalTarget('np')
-                              setDraftImpuesto({ ...(form.impuesto_np || EMPTY_IMPUESTO) })
-                              setModalImpuestoOpen(true)
-                            }}
-                            style={{
-                              ...costBtnCompact,
-                              borderColor: impuestoTieneDatos(form.impuesto_np) ? t.primary : t.border,
-                              color: impuestoTieneDatos(form.impuesto_np) ? t.primary : t.text,
-                              fontWeight: 700,
-                            }}
-                          >
-                            A · Í · U · IVA{impuestoTieneDatos(form.impuesto_np) ? ' ✓' : ''}
-                          </button>
-                          <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, overflowWrap: 'anywhere' }}>
-                            {tributosResumenNp === '—'
-                              ? ((form.cotizaciones_detalle || []).find((p) => p.id === selectedParId)?.no_previsto?.impuesto_etiqueta || 'Sin impuesto.')
-                              : tributosResumenNp}
-                          </span>
-                        </div>
+                      <td style={costTh}>Fecha</td>
+                      <td style={costTd}>
+                        <input style={costCellInp} type="date" value={form.cotizacion_fecha_np} onChange={(e) => updateCapture({ cotizacion_fecha_np: e.target.value })} />
+                      </td>
+                      <td style={costTh}>Vigencia</td>
+                      <td style={costTd}>
+                        <input style={costCellInp} value={form.cotizacion_vigencia_np} placeholder="Ej. 15 días" onChange={(e) => updateCapture({ cotizacion_vigencia_np: e.target.value })} />
                       </td>
                     </tr>
                   </tbody>

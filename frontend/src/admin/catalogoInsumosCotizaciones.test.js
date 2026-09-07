@@ -336,6 +336,24 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.ok(errs.some((e) => /BO-160-2026/.test(e)))
   })
 
+  it('incongruenciaNumeroEntrePares no alerta mismo proveedor con/sin id', () => {
+    const pares = [
+      {
+        ...newCotizacionPar({ esGanadora: true }),
+        proveedor_id: 5,
+        insumo: { ...newCotizacionPar().insumo, proveedor: 'ACME', numero: 'COT-9', valor: '100' },
+        no_previsto: { ...newCotizacionPar().no_previsto, proveedor: 'ACME', numero: 'COT-9', valor: '80' },
+      },
+      {
+        ...newCotizacionPar(),
+        proveedor_id: '',
+        insumo: { ...newCotizacionPar().insumo, proveedor: 'ACME', numero: 'COT-9', valor: '70' },
+      },
+    ]
+    const errs = incongruenciaNumeroEntrePares(pares)
+    assert.equal(errs.length, 0)
+  })
+
   it('applyAutoGanadoraByMinValor cambia ganadora al agregar menor valor', () => {
     let pares = [
       {

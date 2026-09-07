@@ -3,7 +3,7 @@ import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import PresupuestoItemSelector from './PresupuestoItemSelector'
 import SolicitudLineaUbicacionEditor from './SolicitudLineaUbicacionEditor'
 import { AlmacenHelpIcon, useAlmacenTheme } from './almacenShared'
-import { coerceEsPrincipal } from './solicitudFormHelpers'
+import { coerceEsPrincipal, MIN_JUSTIFICACION_SUPERA_PPTO } from './solicitudFormHelpers'
 
 const ROW_H = 40
 
@@ -24,7 +24,12 @@ const COLS = [
   },
   { key: 'ubi', abbr: 'Ubicación', tip: 'PK-ID, registro de presupuesto, tramo, costado y abscisas', width: 110 },
   { key: 'cant', abbr: 'Cantidad', tip: 'Cantidad solicitada', width: 80 },
-  { key: 'obs', abbr: 'Observación', tip: 'Notas de esta línea', width: 140 },
+  {
+    key: 'obs',
+    abbr: 'Justificación',
+    tip: 'Obligatoria si la cantidad supera el presupuesto del PK-ID: explique el desfase. En otros casos es opcional.',
+    width: 160,
+  },
   { key: 'acc', abbr: '', tip: 'Agregar o eliminar fila', width: 80 },
 ]
 
@@ -258,14 +263,34 @@ export default function SolicitudFormExcelTable({
                     />
                   </td>
                   <td style={tdBase}>
-                    <input
-                      style={cellInp}
-                      value={it.observacion_residente || ''}
-                      disabled={rowDisabled}
-                      placeholder="Opcional…"
-                      title={it.observacion_residente || ''}
-                      onChange={(e) => onObservacionChange(idx, e.target.value)}
-                    />
+                    {(() => {
+                      const supera = coerceEsPrincipal(it.es_principal) && it.preview?.supera_presupuesto
+                      const justLen = String(it.observacion_residente || '').trim().length
+                      const falta = supera && justLen < MIN_JUSTIFICACION_SUPERA_PPTO
+                      return (
+                        <input
+                          style={{
+                            ...cellInp,
+                            ...(falta ? {
+                              borderColor: '#dc2626',
+                              background: '#fef2f2',
+                              boxShadow: '0 0 0 1px #fecaca',
+                            } : {}),
+                          }}
+                          value={it.observacion_residente || ''}
+                          disabled={rowDisabled}
+                          required={!!supera}
+                          placeholder={supera
+                            ? `Justifique el desfase (mín. ${MIN_JUSTIFICACION_SUPERA_PPTO} caracteres)…`
+                            : 'Opcional…'}
+                          title={supera
+                            ? (it.observacion_residente || `Obligatoria: explique por qué supera el presupuesto del PK-ID (mín. ${MIN_JUSTIFICACION_SUPERA_PPTO} caracteres).`)
+                            : (it.observacion_residente || '')}
+                          aria-invalid={falta || undefined}
+                          onChange={(e) => onObservacionChange(idx, e.target.value)}
+                        />
+                      )
+                    })()}
                   </td>
                   <td style={{ ...tdBase, textAlign: 'center', whiteSpace: 'nowrap' }}>
                     <button

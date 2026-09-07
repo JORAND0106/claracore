@@ -908,6 +908,29 @@ export function normNumeroCotizacion(n) {
 }
 
 /**
+ * Identidad de proveedor: mismo id O mismo nombre normalizado = mismo proveedor.
+ * Evita falso positivo cuando un par tiene proveedor_id y otro solo razón social.
+ */
+function proveedoresClaramenteDistintos(a, b) {
+  const pidA = a.proveedor_id != null && a.proveedor_id !== '' ? String(a.proveedor_id) : ''
+  const pidB = b.proveedor_id != null && b.proveedor_id !== '' ? String(b.proveedor_id) : ''
+  const nameA = String(a.proveedor || '').trim().toLowerCase()
+  const nameB = String(b.proveedor || '').trim().toLowerCase()
+  if (pidA && pidB && pidA === pidB) return false
+  if (nameA && nameB && nameA === nameB) return false
+  if (pidA && pidB && pidA !== pidB) {
+    // Ids distintos pero sin nombres que los reconcilien → distintos
+    if (!nameA || !nameB || nameA !== nameB) return true
+  }
+  if (nameA && nameB && nameA !== nameB) {
+    // Nombres distintos; si hay id compartido ya retornamos arriba
+    return true
+  }
+  // Un lado sin id/nombre suficiente → no afirmar incongruencia
+  return false
+}
+
+/**
  * Detecta el mismo número de cotización asociado a proveedores distintos
  * dentro de los pares del formulario (alerta local).
  */
@@ -919,23 +942,28 @@ export function incongruenciaNumeroEntrePares(pares) {
     for (const lado of [p.insumo, p.no_previsto]) {
       const num = normNumeroCotizacion(lado?.numero)
       if (!num) continue
-      const key = num
-      const entry = map.get(key) || []
+      const entry = map.get(num) || []
       entry.push({
         numero: num,
         proveedor: prov,
         proveedor_id: pid,
         pair_id: p.id,
       })
-      map.set(key, entry)
+      map.set(num, entry)
     }
   }
   const errores = []
   for (const [num, entries] of map.entries()) {
-    const keys = new Set(
-      entries.map((e) => `${e.proveedor_id || ''}|${String(e.proveedor || '').toLowerCase()}`),
-    )
-    if (keys.size > 1) {
+    let distinto = false
+    for (let i = 0; i < entries.length && !distinto; i++) {
+      for (let j = i + 1; j < entries.length; j++) {
+        if (proveedoresClaramenteDistintos(entries[i], entries[j])) {
+          distinto = true
+          break
+        }
+      }
+    }
+    if (distinto) {
       const nombres = [...new Set(entries.map((e) => e.proveedor || '—').filter(Boolean))]
       errores.push(
         `El Nº de cotización ${num} está asociado a proveedores distintos (${nombres.join(' / ')}). Un mismo número no debe repetirse entre proveedores.`,

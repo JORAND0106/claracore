@@ -9,7 +9,9 @@ import {
   coerceEsPrincipal,
   formatSolicitudTituloAuto,
   lineasSuperanPresupuesto,
+  lineasSinJustificacionSobrepresupuesto,
   lineasSuperanNegociado,
+  MIN_JUSTIFICACION_SUPERA_PPTO,
   mapSolicitudItemsFromServer,
   parseSolicitudApiError,
   validateSolicitudItems,
@@ -439,6 +441,20 @@ export default function SolicitudForm({
     const pool = opts.soloNuevas ? items.filter((it) => !it.id) : items
     const lineasP = lineasSuperanPresupuesto(pool)
     if (lineasP.length) {
+      const sinJust = lineasSinJustificacionSobrepresupuesto(pool)
+      if (sinJust.length) {
+        const detalle = sinJust.slice(0, 3).map((it) => (
+          `• ${it.presupuesto_capitulo || it.capitulo || '—'} · ${it.presupuesto_item || it.item || '—'} (PK ${it.pk_id || '—'})`
+        )).join('\n')
+        const extra = sinJust.length > 3 ? `\n… y ${sinJust.length - 3} línea(s) más.` : ''
+        window.alert(
+          `⚠ Justificación obligatoria — Supera presupuesto\n\n`
+          + `Una o más líneas superan el presupuesto del PK-ID y requieren explicar el desfase `
+          + `(mínimo ${MIN_JUSTIFICACION_SUPERA_PPTO} caracteres) en la columna «Justificación»:\n\n`
+          + `${detalle}${extra}`,
+        )
+        return false
+      }
       const detalle = lineasP.slice(0, 3).map((it) => {
         const ctx = it.preview?.contexto_presupuesto
         return `• ${it.presupuesto_capitulo} · ${it.presupuesto_item} (PK ${it.pk_id}) — saldo ${fmtCant(ctx?.saldo_disponible_despues)} ${ctx?.unidad || ''}`
@@ -447,7 +463,7 @@ export default function SolicitudForm({
       if (!window.confirm(
         `⚠ ADVERTENCIA — Supera presupuesto\n\n`
         + `Una o más líneas dejan saldo negativo en su ítem/PK-ID:\n\n${detalle}${extra}\n\n`
-        + '¿Desea guardar la solicitud de todos modos?',
+        + 'La justificación de cada línea ya está diligenciada. ¿Desea continuar?',
       )) return false
     }
     const lineasN = lineasSuperanNegociado(pool)
