@@ -64,6 +64,21 @@ def test_find_incongruencia_numero_entre_proveedores():
     assert bad["proveedor_registrado"] == "PAVCO"
 
 
+def test_find_incongruencia_no_falsa_id_vs_solo_nombre():
+    """Mismo proveedor: un lado con id, el otro solo razón social → no incongruencia."""
+    refs = [
+        {"numero": "COT-1", "proveedor": "ACME S.A.", "proveedor_id": None, "insumo_id": 3, "codigo": "A"},
+    ]
+    # Consulta con id pero sin nombre: no se puede afirmar que sea otro proveedor.
+    assert find_incongruencia_numero_cotizacion(
+        refs, "COT-1", proveedor_id=5, razon_social="",
+    ) is None
+    # Mismo nombre aunque el id no esté en la ref.
+    assert find_incongruencia_numero_cotizacion(
+        refs, "COT-1", proveedor_id=5, razon_social="ACME S.A.",
+    ) is None
+
+
 def test_decimal_field_to_puntos_e_impuesto_lado():
     from catalogo_insumos_cotizaciones_lib import (
         decimal_field_to_puntos,

@@ -1242,7 +1242,34 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
                 pass
         if src.get("estado_validacion") and not dst.get("estado_validacion"):
             dst["estado_validacion"] = src.get("estado_validacion")
+    _require_justificacion_sobrepresupuesto(out)
     return out
+
+
+_MIN_JUSTIFICACION_SUPERA_PPTO = 15
+
+
+def _require_justificacion_sobrepresupuesto(items: List[dict]) -> None:
+    """Exige comentario cuando la línea principal supera el presupuesto del PK-ID."""
+    faltantes = []
+    for it in items or []:
+        if not it.get("supera_presupuesto"):
+            continue
+        if it.get("es_principal") is False:
+            continue
+        obs = (it.get("observacion_residente") or "").strip()
+        if len(obs) < _MIN_JUSTIFICACION_SUPERA_PPTO:
+            cap = it.get("capitulo") or "—"
+            item_n = it.get("item") or "—"
+            faltantes.append(f"{cap} · {item_n} (PK {it.get('pk_id') or '—'})")
+    if faltantes:
+        detalle = "; ".join(faltantes[:5])
+        extra = f" y {len(faltantes) - 5} más" if len(faltantes) > 5 else ""
+        raise ValueError(
+            "Debe justificar el desfase cuando la cantidad supera el presupuesto del PK-ID "
+            f"(mínimo {_MIN_JUSTIFICACION_SUPERA_PPTO} caracteres en la observación/justificación). "
+            f"Líneas sin justificación: {detalle}{extra}."
+        )
 
 
 def mapear_item_solicitud_gerencial(
@@ -1320,16 +1347,26 @@ def mapear_item_solicitud_gerencial(
     resolved = resolve_insumo_for_solicitud(contrato_id, user_id, raw, skip_context=True)
     desc_sol = (existing.get("descripcion_solicitada") or existing.get("material_descripcion") or "").strip()
 
-    if body.get("vlr_unitario_cobro") is not None:
-        resolved["vlr_unitario_cobro"] = _to_float(body["vlr_unitario_cobro"])
+    # Solo un VU cobro > 0 enviado explícitamente cuenta como override manual.
+    # Enviar 0 (típico del draft con cobro vacío) NO debe bloquear la resolución del listado.
+    body_cobro = body.get("vlr_unitario_cobro", None)
+    override_cobro = None
+    if body_cobro is not None and body_cobro != "":
+        try:
+            override_cobro = float(body_cobro)
+        except (TypeError, ValueError):
+            override_cobro = None
+    if override_cobro is not None and override_cobro > 0:
+        resolved["vlr_unitario_cobro"] = override_cobro
+        resolved["cobro_motivo"] = None
+
     apply_saldo_flags_batch(
         contrato_id,
         [resolved],
         exclude_solicitud_id=solicitud_id,
         descontar_linea_actual=True,
-        # Reintentar listado si el cobro quedó en 0/None (mismatch de capítulo/ítem).
-        refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0
-        and body.get("vlr_unitario_cobro") is None,
+        # Siempre reintentar listado/presupuesto si el cobro quedó en 0/None.
+        refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0,
     )
 
     patch = {
@@ -1345,8 +1382,8 @@ def mapear_item_solicitud_gerencial(
             else resolved.get("valor_compra_unitario")
         ),
         "vlr_unitario_cobro": (
-            _to_float(body["vlr_unitario_cobro"])
-            if body.get("vlr_unitario_cobro") is not None
+            override_cobro
+            if override_cobro is not None and override_cobro > 0
             else resolved.get("vlr_unitario_cobro")
         ),
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
@@ -1451,15 +1488,22 @@ def corregir_insumo_item_post_oc(
 
     resolved = resolve_insumo_for_solicitud(contrato_id, user_id, raw, skip_context=True)
     desc_sol = (existing.get("descripcion_solicitada") or existing.get("material_descripcion") or "").strip()
-    if body.get("vlr_unitario_cobro") is not None:
-        resolved["vlr_unitario_cobro"] = _to_float(body["vlr_unitario_cobro"])
+    body_cobro = body.get("vlr_unitario_cobro", None)
+    override_cobro = None
+    if body_cobro is not None and body_cobro != "":
+        try:
+            override_cobro = float(body_cobro)
+        except (TypeError, ValueError):
+            override_cobro = None
+    if override_cobro is not None and override_cobro > 0:
+        resolved["vlr_unitario_cobro"] = override_cobro
+        resolved["cobro_motivo"] = None
     apply_saldo_flags_batch(
         contrato_id,
         [resolved],
         exclude_solicitud_id=solicitud_id,
         descontar_linea_actual=True,
-        refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0
-        and body.get("vlr_unitario_cobro") is None,
+        refresh_listado=_to_float(resolved.get("vlr_unitario_cobro")) <= 0,
     )
 
     vu = (
@@ -1479,8 +1523,8 @@ def corregir_insumo_item_post_oc(
         "cantidad": cantidad,
         "valor_compra_unitario": vu,
         "vlr_unitario_cobro": (
-            _to_float(body["vlr_unitario_cobro"])
-            if body.get("vlr_unitario_cobro") is not None
+            override_cobro
+            if override_cobro is not None and override_cobro > 0
             else resolved.get("vlr_unitario_cobro")
         ),
         "supera_presupuesto": resolved.get("supera_presupuesto", False),
@@ -1845,6 +1889,45 @@ def _insertar_items_en_oc(
         }).execute()
 
 
+def _update_orden_compra_proveedor(sb, oc_id: int, patch: dict) -> None:
+    """Actualiza proveedor en OC; omite columnas ausentes en el esquema PostgREST."""
+    data = dict(patch or {})
+    for _ in range(4):
+        if not data:
+            return
+        try:
+            sb.table("almacen_orden_compra").update(data).eq("id", int(oc_id)).execute()
+            return
+        except Exception as exc:
+            col = _pgrst_unknown_column(exc)
+            if col and col in data:
+                data.pop(col, None)
+                continue
+            raise
+
+
+def _insert_orden_compra_row(sb, oc_row: dict) -> List[dict]:
+    """Inserta encabezado de OC; si falta proveedor_id en el esquema, reintenta sin esa columna."""
+    try:
+        return sb.table("almacen_orden_compra").insert(oc_row).execute().data or []
+    except Exception as exc:
+        col = _pgrst_unknown_column(exc)
+        if col == "proveedor_id" and "proveedor_id" in oc_row:
+            row2 = {k: v for k, v in oc_row.items() if k != "proveedor_id"}
+            return sb.table("almacen_orden_compra").insert(row2).execute().data or []
+        if col == "proveedor_nombre" and "proveedor_nombre" in oc_row:
+            row2 = {k: v for k, v in oc_row.items() if k != "proveedor_nombre"}
+            try:
+                return sb.table("almacen_orden_compra").insert(row2).execute().data or []
+            except Exception as exc2:
+                col2 = _pgrst_unknown_column(exc2)
+                if col2 == "proveedor_id" and "proveedor_id" in row2:
+                    row3 = {k: v for k, v in row2.items() if k != "proveedor_id"}
+                    return sb.table("almacen_orden_compra").insert(row3).execute().data or []
+                raise
+        raise
+
+
 def _crear_oc_con_items(
     sb,
     *,
@@ -1880,7 +1963,7 @@ def _crear_oc_con_items(
     }
     if proveedor_id is not None:
         oc_row["proveedor_id"] = int(proveedor_id)
-    oc_ins = sb.table("almacen_orden_compra").insert(oc_row).execute().data
+    oc_ins = _insert_orden_compra_row(sb, oc_row)
     if not oc_ins:
         raise ValueError("No se pudo generar la orden de compra.")
     oc_id = int(oc_ins[0]["id"])
@@ -2104,16 +2187,16 @@ def append_aprobados_a_oc(
             )
             # Completar encabezado si era legacy sin proveedor.
             if match.get("proveedor_id") is None and pid is not None:
-                sb.table("almacen_orden_compra").update({
+                _update_orden_compra_proveedor(sb, int(match["id"]), {
                     "proveedor_id": int(pid),
                     "proveedor_nombre": pname,
-                }).eq("id", int(match["id"])).execute()
+                })
                 match["proveedor_id"] = pid
                 match["proveedor_nombre"] = pname
             elif not (match.get("proveedor_nombre") or "").strip() and pname:
-                sb.table("almacen_orden_compra").update({
+                _update_orden_compra_proveedor(sb, int(match["id"]), {
                     "proveedor_nombre": pname,
-                }).eq("id", int(match["id"])).execute()
+                })
                 match["proveedor_nombre"] = pname
             summary = {
                 "id": int(match["id"]),

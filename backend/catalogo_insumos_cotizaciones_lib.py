@@ -183,6 +183,45 @@ def same_proveedor_ref(
     return False
 
 
+def different_proveedor_ref(
+    ref: dict,
+    *,
+    proveedor_id: Any = None,
+    razon_social: str = "",
+    nit: str = "",
+) -> bool:
+    """
+    True solo cuando se puede demostrar que el proveedor es distinto.
+    Si falta información (p. ej. un lado solo tiene id y el otro solo nombre),
+    no se declara incongruencia — evita falsos positivos Insumo/No Previsto.
+    """
+    if same_proveedor_ref(
+        ref,
+        proveedor_id=proveedor_id,
+        razon_social=razon_social,
+        nit=nit,
+    ):
+        return False
+    want_pid = int(proveedor_id) if proveedor_id not in (None, "") else None
+    ref_pid = int(ref["proveedor_id"]) if ref.get("proveedor_id") not in (None, "") else None
+    want_name = _norm_text(razon_social)
+    ref_name = _norm_text(ref.get("proveedor"))
+    want_nit = re.sub(r"\D+", "", str(nit or ""))
+    ref_nit = re.sub(r"\D+", "", str(ref.get("nit") or ""))
+
+    # Ambos con id distinto → distintos.
+    if want_pid and ref_pid and want_pid != ref_pid:
+        # Si los nombres coinciden, same_proveedor_ref ya habría retornado True.
+        return True
+    # Ambos con nombre (y opcionalmente NIT) distintos → distintos.
+    if want_name and ref_name and want_name != ref_name:
+        if want_nit and ref_nit and want_nit == ref_nit:
+            return False
+        return True
+    # No se puede afirmar que sean distintos.
+    return False
+
+
 def pick_best_cotizacion_ref(
     refs: List[dict],
     numero: str,
@@ -259,7 +298,8 @@ def find_incongruencia_numero_cotizacion(
         if excl is not None and ref.get("insumo_id") is not None and int(ref["insumo_id"]) == excl:
             continue
         ref_pid = int(ref["proveedor_id"]) if ref.get("proveedor_id") not in (None, "") else None
-        if same_proveedor_ref(
+        # Solo alertar cuando hay evidencia clara de proveedores distintos.
+        if not different_proveedor_ref(
             ref,
             proveedor_id=proveedor_id,
             razon_social=razon_social,

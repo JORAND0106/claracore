@@ -42,6 +42,13 @@ def test_item_key_variants_np():
     assert "np01" in variants
 
 
+def test_item_key_variants_ceros_y_puntos():
+    v = insumos._item_key_variants("1.01")
+    assert "1.1" in v or "1.01" in v
+    v2 = insumos._item_key_variants("01")
+    assert "1" in v2
+
+
 def test_lookup_por_capitulo_item(monkeypatch):
     _mock_listado(monkeypatch, [
         {"capitulo": "9. NO PREVISTOS", "item_numero": "NP-01", "precio_unitario": 12500, "estado_precio": "Aprobado"},
@@ -75,6 +82,13 @@ def test_resolver_pendiente_aprobacion_sin_precio(monkeypatch):
     res = insumos.resolver_vlr_cobro_listado(1, "NP", "NP-01")
     assert res["vlr_unitario_cobro"] == 0
     assert res["cobro_motivo"] == "pendiente_aprobacion"
+
+
+def test_lookup_casing_capitulo(monkeypatch):
+    _mock_listado(monkeypatch, [
+        {"capitulo": "9. NO PREVISTOS", "item_numero": "NP-01", "precio_unitario": 5000, "estado_precio": "Aprobado"},
+    ])
+    assert insumos.get_listado_precio_unitario(1, "9. No Previstos", "NP-01") == 5000
 
 
 def test_analisis_valor_incluye_motivo():

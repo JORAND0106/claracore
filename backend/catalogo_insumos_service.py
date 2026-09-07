@@ -217,6 +217,57 @@ def _asegurar_codigo_disponible(sb, contrato_id: int, codigo: str) -> None:
             sb.table("almacen_insumo").update({"codigo": liberated}).eq("id", int(row["id"])).execute()
 
 
+def _is_duplicate_codigo_error(exc: BaseException) -> bool:
+    text = str(exc or "")
+    low = text.lower()
+    return (
+        "23505" in text
+        or "idx_almacen_insumo_codigo_activo_uq" in low
+        or ("duplicate key" in low and "codigo" in low)
+    )
+
+
+def _insert_insumo_con_codigo_seguro(sb, contrato_id: int, payload: dict, *, max_attempts: int = 8) -> dict:
+    """
+    Inserta el insumo regenerando el consecutivo ante colisión UNIQUE
+    (carreras entre altas casi simultáneas).
+    """
+    codigo_fijo = bool((payload.get("codigo") or "").strip()) and not payload.get("_auto_codigo")
+    last_exc: Optional[BaseException] = None
+    for attempt in range(max_attempts):
+        if attempt == 0:
+            if not (payload.get("codigo") or "").strip():
+                payload["codigo"] = next_codigo_insumo(contrato_id)
+                payload["_auto_codigo"] = True
+                codigo_fijo = False
+        else:
+            if codigo_fijo:
+                break
+            payload["codigo"] = next_codigo_insumo(contrato_id)
+        _asegurar_codigo_disponible(sb, contrato_id, payload.get("codigo") or "")
+        row = {k: v for k, v in payload.items() if not str(k).startswith("_")}
+        try:
+            ins = sb.table("almacen_insumo").insert(row).execute().data
+            if not ins:
+                raise ValueError("No se pudo crear el insumo (¿código duplicado?).")
+            return ins[0]
+        except Exception as exc:
+            last_exc = exc
+            if codigo_fijo or not _is_duplicate_codigo_error(exc):
+                if _is_duplicate_codigo_error(exc):
+                    raise ValueError(
+                        f"El código {payload.get('codigo')} ya existe para este contrato. "
+                        "Elija otro o deje el código vacío para asignarlo automáticamente."
+                    ) from exc
+                raise
+    if last_exc and _is_duplicate_codigo_error(last_exc):
+        raise ValueError(
+            "No se pudo asignar un código de insumo único tras varios intentos. "
+            "Reintente en unos segundos."
+        ) from last_exc
+    raise ValueError("No se pudo crear el insumo (¿código duplicado?).") from last_exc
+
+
 def _resolve_codigo_insumo(body: dict, contrato_id: int, *, codigo_fijo: Optional[str] = None) -> str:
     if codigo_fijo:
         return str(codigo_fijo).strip().upper()
@@ -1418,11 +1469,11 @@ def create_insumo_catalogo(
         soporte_pdfs=soporte_pdfs,
     )
     payload["created_by"] = user_id
-    _asegurar_codigo_disponible(sb, contrato_id, payload.get("codigo") or "")
-    ins = sb.table("almacen_insumo").insert(payload).execute().data
-    if not ins:
-        raise ValueError("No se pudo crear el insumo (¿código duplicado?).")
-    insumo_id = ins[0]["id"]
+    # Marcar auto-código si el body no traía código fijo, para permitir reintento ante carrera.
+    if not (body.get("codigo") or "").strip():
+        payload["_auto_codigo"] = True
+    ins_row = _insert_insumo_con_codigo_seguro(sb, contrato_id, payload)
+    insumo_id = ins_row["id"]
     if ganadora_pdf:
         _save_ganadora_pdf(contrato_id, insumo_id, *ganadora_pdf)
     if soporte_pdfs:

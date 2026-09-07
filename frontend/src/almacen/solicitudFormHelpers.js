@@ -172,6 +172,15 @@ export function lineasSuperanPresupuesto(items) {
   return items.filter((it) => coerceEsPrincipal(it.es_principal) && it.preview?.supera_presupuesto)
 }
 
+/** Mínimo de caracteres para justificar desfase vs presupuesto (mismo espíritu SICOE Obra). */
+export const MIN_JUSTIFICACION_SUPERA_PPTO = 15
+
+export function lineasSinJustificacionSobrepresupuesto(items) {
+  return lineasSuperanPresupuesto(items).filter(
+    (it) => String(it.observacion_residente || '').trim().length < MIN_JUSTIFICACION_SUPERA_PPTO,
+  )
+}
+
 export function lineasSuperanNegociado(items) {
   return items.filter((it) => it.preview?.supera_negociado)
 }
