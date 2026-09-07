@@ -6,6 +6,8 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   TRAMO_NO_ESPECIFICADO_LABEL,
+  SIN_TRAMO_ASIGNADO_LABEL,
+  isTramoSentinelInvalido,
   normalizeTramoValue,
   labelTramoBitacora,
   groupDiariosByFecha,
@@ -18,8 +20,32 @@ describe('bitacoraTramoHelpers', () => {
     assert.equal(normalizeTramoValue('  A  '), 'A')
     assert.equal(normalizeTramoValue(''), null)
     assert.equal(normalizeTramoValue(null), null)
-    assert.equal(labelTramoBitacora(null), TRAMO_NO_ESPECIFICADO_LABEL)
+    assert.equal(labelTramoBitacora(null), SIN_TRAMO_ASIGNADO_LABEL)
     assert.equal(labelTramoBitacora('Tramo 1'), 'Tramo 1')
+    assert.equal(SIN_TRAMO_ASIGNADO_LABEL, 'Sin tramo asignado')
+    assert.equal(TRAMO_NO_ESPECIFICADO_LABEL, SIN_TRAMO_ASIGNADO_LABEL)
+  })
+
+  it('trata Tramo 0 / 0 como sin asignar', () => {
+    assert.equal(isTramoSentinelInvalido('0'), true)
+    assert.equal(isTramoSentinelInvalido('Tramo 0'), true)
+    assert.equal(isTramoSentinelInvalido('TRAMO 0'), true)
+    assert.equal(isTramoSentinelInvalido('tramo_0'), true)
+    assert.equal(isTramoSentinelInvalido('Tramo 1'), false)
+    assert.equal(isTramoSentinelInvalido('10'), false)
+    assert.equal(isTramoSentinelInvalido('Tramo 10'), false)
+    assert.equal(normalizeTramoValue('0'), null)
+    assert.equal(normalizeTramoValue('Tramo 0'), null)
+    assert.equal(labelTramoBitacora('Tramo 0'), 'Sin tramo asignado')
+    assert.equal(labelTramoBitacora('0'), 'Sin tramo asignado')
+  })
+
+  it('excluye Tramo 0 del catálogo disponible', () => {
+    const avail = tramosDisponiblesParaNuevo(
+      ['0', 'Tramo 0', 'Tramo 1', 'Tramo 2'],
+      [{ tramo: 'Tramo 1' }],
+    )
+    assert.deepEqual(avail, ['Tramo 2'])
   })
 
   it('agrupa diarios por fecha e ignora eventos', () => {
