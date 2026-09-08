@@ -198,7 +198,9 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     assert len(item["insumos"]) == 2
     arena = next(i for i in item["insumos"] if i["insumo_id"] == 1)
     assert arena["descripcion"] == "Arena"
-    assert arena["vu_costo"] == 20000
+    assert arena["vu_costo"] == 20000  # contribución (= unitario × 1)
+    assert arena["vu_costo_unitario"] == 20000
+    assert arena["costo_contribucion"] == 20000
     assert arena["es_principal"] is True
     assert arena["valor_entradas"] == 300000
     assert arena["valor_salidas"] == 100000
@@ -214,9 +216,12 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
 
     cemento = next(i for i in item["insumos"] if i["insumo_id"] == 2)
     assert cemento["descripcion"] == "Cemento"
-    assert cemento["vu_costo"] == 100
+    assert cemento["vu_costo_unitario"] == 100
+    assert cemento["vu_costo"] == 5000  # 100 × rendimiento 50 — misma cifra que suma el ítem
     assert cemento["es_principal"] is False
     assert cemento["costo_contribucion"] == 5000
+    # Ítem VU = suma de contribuciones visibles en insumos
+    assert item["vu_costo"] == arena["vu_costo"] + cemento["vu_costo"]
     assert cemento["valor_entradas"] == 10000
     assert cemento["valor_salidas"] == 2000
     assert cemento["valor_stock"] == 8000
@@ -278,6 +283,39 @@ def test_build_arbol_item_sin_movimientos_con_insumos():
     assert item["valor_stock"] == 0
     assert len(item["insumos"]) == 1
     assert item["insumos"][0]["descripcion"] == "Solo catálogo"
+    assert item["insumos"][0]["vu_costo"] == item["vu_costo"]
+
+
+def test_vu_costo_item_coincide_con_unico_insumo_con_rendimiento():
+    """Caso Geotextil: ítem con un solo insumo — VU ítem = contribución (VU × rend)."""
+    out = build_inventario_arbol_from_lines(
+        item_rows=[{
+            "item_key": "NP-01.|1",
+            "capitulo": "NP-01.",
+            "item": "1",
+            "descripcion": "Suministro e instalación de Geotextil T 2400",
+            "unidad": "M2",
+            "vu_cobro": 5000,
+            "presupuesto_ids": [],
+        }],
+        composition={"NP-01.|1": [{
+            "insumo_id": 1614,
+            "codigo": "CC-1614-003",
+            "descripcion": "Geotextil Tejido 2400",
+            "unidad": "M2",
+            "es_principal": True,
+            "rendimiento": 1.1,
+            "vu_costo": 4066.0,
+        }]},
+        movement_lines=[],
+    )
+    item = out["items"][0]
+    ins = item["insumos"][0]
+    assert ins["vu_costo_unitario"] == 4066.0
+    assert ins["vu_costo"] == 4472.6  # 4066 × 1.1
+    assert ins["costo_contribucion"] == 4472.6
+    assert item["vu_costo"] == ins["vu_costo"]
+    assert item["vu_costo"] == 4472.6
 
 
 def test_fetch_oc_rows_fallback_sin_proveedor_id():
