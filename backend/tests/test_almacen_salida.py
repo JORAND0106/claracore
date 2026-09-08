@@ -294,7 +294,12 @@ def test_enriquecer_entradas_listado_multi_linea(monkeypatch):
 def test_es_rol_receptor_obra_contratista():
     assert es_rol_receptor_obra("Contratista") is True
     assert es_rol_receptor_obra("Operativo Contratista") is True
-    assert es_rol_receptor_obra("Contratista Gerencial") is True
+    assert es_rol_receptor_obra("Operativo del contratista") is True
+    # Contratista Gerencial ya no es receptor válido en Salidas
+    assert es_rol_receptor_obra("Contratista Gerencial") is False
+    assert es_rol_receptor_obra("Contratista Gerencial", 7) is False
+    assert es_rol_receptor_obra("Contratista", 3) is True
+    assert es_rol_receptor_obra("Operativo Contratista", 5) is True
 
 
 def test_es_rol_receptor_obra_excluye_interventoria():
@@ -302,6 +307,8 @@ def test_es_rol_receptor_obra_excluye_interventoria():
     assert es_rol_receptor_obra("Operativo Interventoría") is False
     assert es_rol_receptor_obra("Interventoría Gerencial") is False
     assert es_rol_receptor_obra("Supervisor Externo") is False
+    assert es_rol_receptor_obra("Interventoría", 2) is False
+    assert es_rol_receptor_obra("Operativo Interventoría", 4) is False
 
 
 def test_disponible_entrada_item():

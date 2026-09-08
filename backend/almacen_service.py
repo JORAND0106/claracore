@@ -5699,33 +5699,67 @@ def list_usuarios_receptor_obra(contrato_id: int, q: str = "", limit: int = 30) 
     sb = _sb()
     uc = sb.table("usuario_contratos").select("usuario_id").eq("contrato_id", contrato_id).execute().data or []
     ids_uc = [int(r["usuario_id"]) for r in uc if r.get("usuario_id")]
-    usuarios_principal = sb.table("usuarios").select("id").eq("contrato_id", contrato_id).eq("activo", True).execute().data or []
-    ids_principal = [int(u["id"]) for u in usuarios_principal]
-    todos_ids = sorted(set(ids_uc + ids_principal))
-    if not todos_ids:
-        return []
-
-    rows = (
+    usuarios_principal = (
         sb.table("usuarios")
-        .select("id, nombre, apellidos, email, rol_id, firma_imagen_url")
-        .in_("id", todos_ids)
+        .select("id")
+        .eq("contrato_id", contrato_id)
         .eq("activo", True)
         .execute()
         .data
         or []
     )
-    rol_ids = sorted({int(r["rol_id"]) for r in rows if r.get("rol_id")})
+    ids_principal = [int(u["id"]) for u in usuarios_principal]
+    todos_ids = sorted(set(ids_uc + ids_principal))
+    if not todos_ids:
+        return []
+
+    # Resolver roles permitidos por nombre (tolera renombres) + IDs canónicos 3/5.
+    roles_all = sb.table("roles").select("id, nombre").execute().data or []
     roles_map: Dict[int, str] = {}
-    if rol_ids:
-        rol_rows = sb.table("roles").select("id, nombre").in_("id", rol_ids).execute().data or []
-        for rr in rol_rows:
-            roles_map[int(rr["id"])] = rr.get("nombre") or ""
+    allowed_rol_ids: set = set()
+    for rr in roles_all:
+        try:
+            rid = int(rr["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        nom = rr.get("nombre") or ""
+        roles_map[rid] = nom
+        if es_rol_receptor_obra(nom, rid):
+            allowed_rol_ids.add(rid)
+    if not allowed_rol_ids:
+        allowed_rol_ids = {3, 5}
+
+    rows: List[dict] = []
+    # PostgREST limita el tamaño de .in_(); consultar por lotes.
+    chunk = 120
+    for i in range(0, len(todos_ids), chunk):
+        part = todos_ids[i:i + chunk]
+        batch = (
+            sb.table("usuarios")
+            .select("id, nombre, apellidos, email, rol_id, firma_imagen_url, activo, estado")
+            .in_("id", part)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(batch)
 
     q_norm = _norm_pk_id(q).lower()
     out: List[dict] = []
     for u in rows:
-        rol_nom = roles_map.get(int(u.get("rol_id") or 0), "")
-        if not es_rol_receptor_obra(rol_nom):
+        if u.get("activo") is False:
+            continue
+        estado = str(u.get("estado") or "").strip().lower()
+        if estado in ("rechazado", "inactivo", "bloqueado"):
+            continue
+        try:
+            rid = int(u["rol_id"]) if u.get("rol_id") not in (None, "") else None
+        except (TypeError, ValueError):
+            rid = None
+        rol_nom = roles_map.get(rid or 0, "")
+        if rid is not None and rid in allowed_rol_ids:
+            pass
+        elif not es_rol_receptor_obra(rol_nom, rid):
             continue
         label = f"{u.get('nombre') or ''} {u.get('apellidos') or ''}".strip()
         if not label:
@@ -5740,9 +5774,8 @@ def list_usuarios_receptor_obra(contrato_id: int, q: str = "", limit: int = 30) 
             "email": u.get("email"),
             "rol_nombre": rol_nom,
         })
-        if len(out) >= limit:
-            break
-    return out
+    out.sort(key=lambda x: (x.get("label") or "").lower())
+    return out[: max(1, min(int(limit or 30), 100))]
 
 
 def _validar_receptor_obra(sb, contrato_id: int, receptor_id: int) -> dict:
@@ -5765,7 +5798,7 @@ def _validar_receptor_obra(sb, contrato_id: int, receptor_id: int) -> dict:
         rol_rows = sb.table("roles").select("nombre").eq("id", int(u["rol_id"])).limit(1).execute().data or []
         if rol_rows:
             rol_nom = rol_rows[0].get("nombre") or ""
-    if not es_rol_receptor_obra(rol_nom):
+    if not es_rol_receptor_obra(rol_nom, u.get("rol_id")):
         raise ValueError("El usuario seleccionado no tiene un rol válido para recibir material en obra.")
 
     uid = int(u["id"])
