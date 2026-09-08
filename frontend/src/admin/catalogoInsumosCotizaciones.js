@@ -152,6 +152,10 @@ export function normalizeCotizacionesDetalle(raw) {
       pair_id: item?.pair_id ? String(item.pair_id) : null,
       tipo,
       es_ganadora: !!item?.es_ganadora && tipo === 'insumo',
+      nit: item?.nit != null ? String(item.nit) : '',
+      contacto_email: item?.contacto_email != null ? String(item.contacto_email) : '',
+      contacto_nombre: item?.contacto_nombre != null ? String(item.contacto_nombre) : '',
+      contacto_telefono: item?.contacto_telefono != null ? String(item.contacto_telefono) : '',
       ...normalizeLado(item),
     }
   })
@@ -176,12 +180,20 @@ export function detalleToPares(raw) {
           id: row.pair_id,
           es_ganadora: false,
           proveedor_id: row.proveedor_id || '',
+          nit: row.nit || '',
+          contacto_email: row.contacto_email || '',
+          contacto_nombre: row.contacto_nombre || '',
+          contacto_telefono: row.contacto_telefono || '',
           insumo: emptyLado(),
           no_previsto: emptyLado(),
         })
       }
       const par = byPair.get(row.pair_id)
       if (row.proveedor_id && !par.proveedor_id) par.proveedor_id = row.proveedor_id
+      if (row.nit && !par.nit) par.nit = row.nit
+      if (row.contacto_email && !par.contacto_email) par.contacto_email = row.contacto_email
+      if (row.contacto_nombre && !par.contacto_nombre) par.contacto_nombre = row.contacto_nombre
+      if (row.contacto_telefono && !par.contacto_telefono) par.contacto_telefono = row.contacto_telefono
       if (row.tipo === 'no_previsto') par.no_previsto = normalizeLado(row)
       else {
         par.insumo = normalizeLado(row)
@@ -202,6 +214,11 @@ export function detalleToPares(raw) {
     pares.push({
       id: uid('pair'),
       es_ganadora: !!(ins && ins.es_ganadora),
+      proveedor_id: (ins || np)?.proveedor_id || '',
+      nit: (ins || np)?.nit || '',
+      contacto_email: (ins || np)?.contacto_email || '',
+      contacto_nombre: (ins || np)?.contacto_nombre || '',
+      contacto_telefono: (ins || np)?.contacto_telefono || '',
       insumo: ins ? normalizeLado(ins) : emptyLado(),
       no_previsto: np ? normalizeLado(np) : emptyLado(),
     })
@@ -302,11 +319,19 @@ function ladoPayload(lado, extra = {}) {
   const hasImp = ['administracion', 'imprevistos', 'utilidad', 'iva'].some(
     (k) => impuesto[k] !== '' && impuesto[k] != null && Number(impuesto[k]) !== 0,
   )
+  const nit = String(extra.nit || lado?.nit || '').trim() || null
+  const contacto_email = String(extra.contacto_email || lado?.contacto_email || '').trim() || null
+  const contacto_nombre = String(extra.contacto_nombre || lado?.contacto_nombre || '').trim() || null
+  const contacto_telefono = String(extra.contacto_telefono || lado?.contacto_telefono || '').trim() || null
   return {
     proveedor: (lado.proveedor || '').trim() || null,
     proveedor_id: extra.proveedor_id != null && extra.proveedor_id !== ''
       ? Number(extra.proveedor_id)
       : (lado.proveedor_id != null && lado.proveedor_id !== '' ? Number(lado.proveedor_id) : null),
+    nit,
+    contacto_email,
+    contacto_nombre,
+    contacto_telefono,
     valor: lado.valor !== '' && lado.valor != null ? Number(lado.valor) : null,
     numero: (lado.numero || '').trim() || null,
     fecha: lado.fecha || null,
@@ -401,7 +426,13 @@ export function cotizacionesPayloadForSave(cotizacionesOrPares) {
     for (const p of list) {
       if (!rowHasData(p)) continue
       const pairId = p.id || uid('pair')
-      const extra = { proveedor_id: p.proveedor_id || null }
+      const extra = {
+        proveedor_id: p.proveedor_id || null,
+        nit: p.nit || '',
+        contacto_email: p.contacto_email || '',
+        contacto_nombre: p.contacto_nombre || '',
+        contacto_telefono: p.contacto_telefono || '',
+      }
       if (ladoHasData(p.insumo) || p.es_ganadora) {
         out.push({
           id: `${pairId}-insumo`,
@@ -430,7 +461,13 @@ export function cotizacionesPayloadForSave(cotizacionesOrPares) {
       pair_id: r.pair_id || null,
       tipo: r.tipo === 'no_previsto' ? 'no_previsto' : 'insumo',
       es_ganadora: !!r.es_ganadora && r.tipo !== 'no_previsto',
-      ...ladoPayload(r),
+      ...ladoPayload(r, {
+        proveedor_id: r.proveedor_id,
+        nit: r.nit,
+        contacto_email: r.contacto_email,
+        contacto_nombre: r.contacto_nombre,
+        contacto_telefono: r.contacto_telefono,
+      }),
     }))
 }
 

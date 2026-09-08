@@ -1208,12 +1208,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
     setSelectedParId(par.id)
     let fields = captureFieldsFromPar(par)
-    // Completar NIT/contactos desde directorio o API si la fila solo trae razón social.
-    if (fields.razon_social && proveedorContactsIncomplete(fields)) {
+    // Siempre completar bloque de proveedor (incl. perdedoras) desde directorio/API.
+    if (fields.razon_social || fields.proveedor_id || fields.nit) {
       let directorio = Array.isArray(proveedores) ? [...proveedores] : []
-      if (api) {
+      if (api && proveedorContactsIncomplete(fields)) {
         try {
-          const found = await api.searchProveedores(fields.nit || fields.razon_social, 25)
+          const q = fields.nit || fields.razon_social
+          const found = await api.searchProveedores(q, 25)
           if (Array.isArray(found) && found.length) directorio = [...directorio, ...found]
         } catch {
           /* ignore */
@@ -1228,7 +1229,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           contacto_nombre: fields.contacto_nombre,
           contacto_telefono: fields.contacto_telefono,
         },
-        [par],
+        // Pasar solo este par para no mezclar con la ganadora.
+        [{ ...par, es_ganadora: true }],
         directorio,
       )
       fields = { ...fields, ...prov }

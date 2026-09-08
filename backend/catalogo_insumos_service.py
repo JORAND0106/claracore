@@ -386,6 +386,10 @@ def normalize_cotizaciones_detalle(raw: Any) -> List[dict]:
             "es_ganadora": es_ganadora,
             "proveedor": proveedor,
             "proveedor_id": int(item["proveedor_id"]) if item.get("proveedor_id") not in (None, "") else None,
+            "nit": (item.get("nit") or "").strip() or None,
+            "contacto_email": (item.get("contacto_email") or "").strip() or None,
+            "contacto_nombre": (item.get("contacto_nombre") or "").strip() or None,
+            "contacto_telefono": (item.get("contacto_telefono") or "").strip() or None,
             "valor": valor,
             "numero": numero,
             "fecha": fecha,
@@ -1001,6 +1005,100 @@ def _backfill_proveedor_id_en_detalle(detalle: List[dict], proveedor_id: int) ->
         is_gan = bool(r.get("es_ganadora") and r.get("tipo") == "insumo")
         if (is_gan or same_pair) and not r.get("proveedor_id"):
             r["proveedor_id"] = int(proveedor_id)
+        out.append(r)
+    return out
+
+
+def _upsert_proveedores_desde_detalle(
+    contrato_id: int,
+    user_id: int,
+    detalle: List[dict],
+) -> List[dict]:
+    """
+    Registra en el directorio TODOS los proveedores del detalle (ganadora y perdedoras)
+    con deduplicación por NIT vía create_proveedor, y escribe proveedor_id en cada fila.
+    """
+    if not detalle:
+        return []
+    # Agrupar por pair_id (o id) para tomar el mejor set de datos de proveedor.
+    groups: Dict[str, dict] = {}
+    for row in detalle:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("pair_id") or row.get("id") or "")
+        if not key:
+            key = f"row-{id(row)}"
+        g = groups.get(key) or {
+            "proveedor": "",
+            "proveedor_id": None,
+            "nit": "",
+            "contacto_email": "",
+            "contacto_nombre": "",
+            "contacto_telefono": "",
+        }
+        nombre = (row.get("proveedor") or "").strip()
+        if nombre and not g["proveedor"]:
+            g["proveedor"] = nombre
+        if row.get("proveedor_id") not in (None, "") and not g["proveedor_id"]:
+            try:
+                g["proveedor_id"] = int(row["proveedor_id"])
+            except (TypeError, ValueError):
+                pass
+        for ck in ("nit", "contacto_email", "contacto_nombre", "contacto_telefono"):
+            val = (row.get(ck) or "").strip()
+            if val and not g[ck]:
+                g[ck] = val
+        groups[key] = g
+
+    resolved_by_key: Dict[str, int] = {}
+    for key, g in groups.items():
+        razon = (g.get("proveedor") or "").strip()
+        nit = (g.get("nit") or "").strip()
+        pid = g.get("proveedor_id")
+        if pid not in (None, ""):
+            try:
+                pid_i = int(pid)
+            except (TypeError, ValueError):
+                pid_i = None
+            if pid_i is not None:
+                # Actualizar contactos si vienen en el detalle.
+                if any(g.get(ck) for ck in ("contacto_email", "contacto_nombre", "contacto_telefono")):
+                    try:
+                        sync_proveedor_contacto(pid_i, {
+                            "contacto_email": g.get("contacto_email"),
+                            "contacto_nombre": g.get("contacto_nombre"),
+                            "contacto_telefono": g.get("contacto_telefono"),
+                        })
+                    except Exception:
+                        pass
+                resolved_by_key[key] = pid_i
+                continue
+        if razon and nit:
+            try:
+                prov = create_proveedor(contrato_id, user_id, {
+                    "razon_social": razon,
+                    "nit": nit,
+                    "contacto_email": g.get("contacto_email"),
+                    "contacto_nombre": g.get("contacto_nombre"),
+                    "contacto_telefono": g.get("contacto_telefono"),
+                })
+                if prov and prov.get("id") is not None:
+                    resolved_by_key[key] = int(prov["id"])
+                    continue
+            except Exception:
+                pass
+        if razon:
+            found = _lookup_proveedor_id_by_nombre(contrato_id, razon, nit=nit)
+            if found:
+                resolved_by_key[key] = int(found)
+
+    out = []
+    for row in detalle:
+        r = dict(row)
+        key = str(r.get("pair_id") or r.get("id") or "")
+        pid = resolved_by_key.get(key)
+        if pid is not None:
+            r["proveedor_id"] = int(pid)
         out.append(r)
     return out
 
@@ -1727,6 +1825,9 @@ def create_insumo_catalogo(
     sb = _sb()
     payload = _build_insumo_payload(body, contrato_id, user_id)
     detalle_for_resolve = payload.get("cotizaciones_detalle") or []
+    detalle_for_resolve = _upsert_proveedores_desde_detalle(
+        contrato_id, user_id, detalle_for_resolve,
+    )
     resolved_pid, detalle_fixed = _resolve_proveedor_id_for_payload(
         contrato_id=contrato_id,
         proveedor_id=payload.get("proveedor_id"),
@@ -1788,6 +1889,9 @@ def update_insumo_catalogo(
     detalle_for_resolve = payload.get("cotizaciones_detalle")
     if detalle_for_resolve is None:
         detalle_for_resolve = cotizaciones_detalle_from_row(existing)
+    detalle_for_resolve = _upsert_proveedores_desde_detalle(
+        contrato_id, user_id, detalle_for_resolve,
+    )
     resolved_pid, detalle_fixed = _resolve_proveedor_id_for_payload(
         contrato_id=contrato_id,
         proveedor_id=payload.get("proveedor_id"),
