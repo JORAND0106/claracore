@@ -266,12 +266,16 @@ export default function PolizasExcelBlock({
               Vista previa
             </button>
           )}
-          {d.archivo && <span style={{ fontSize: 11, color: ui.textMuted }}>{d.archivo.name}</span>}
+          {d.archivo && (
+            <span style={{ fontSize: 'var(--cc-caption)', color: ui.textMuted }}>{d.archivo.name}</span>
+          )}
         </div>
       </td>
       <td style={ui.td}>
         {d.replaces_id ? (
-          <span style={{ fontSize: 11, color: '#f59e0b' }}>Renueva #{d.replaces_id}</span>
+          <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: theme === 'dark' ? '#fbbf24' : '#B45309' }}>
+            Renueva #{d.replaces_id}
+          </span>
         ) : (
           <span style={{ color: ui.textMuted }}>—</span>
         )}
@@ -293,7 +297,7 @@ export default function PolizasExcelBlock({
         )}
       </div>
       {renovarDe && (
-        <div style={{ ...S.alert('warn'), fontSize: 12 }}>
+        <div style={{ ...S.alert('warn'), fontSize: 'var(--cc-body)' }}>
           Renovando póliza #{renovarDe.id} ({renovarDe.tipo_label || renovarDe.tipo}). La anterior quedará como histórico.
         </div>
       )}
@@ -386,12 +390,13 @@ export default function PolizasExcelBlock({
                 <td style={ui.td}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <span style={{
-                      fontSize: 11,
+                      fontSize: 'var(--cc-caption)',
                       fontWeight: 700,
-                      color: (p.estado_efectivo || p.estado) === 'vencida' ? '#ef4444'
+                      color: (p.estado_efectivo || p.estado) === 'vencida' ? 'var(--cc-color-danger, #DC2626)'
                         : p.estado === 'reemplazada' ? ui.textMuted
-                          : '#22c55e',
-                    }}>
+                          : 'var(--cc-color-success)',
+                    }}
+                    >
                       {p.estado === 'reemplazada' ? 'Histórico' : (p.estado_efectivo || p.estado || 'vigente')}
                     </span>
                     {canEdit && p.estado === 'vigente' && (

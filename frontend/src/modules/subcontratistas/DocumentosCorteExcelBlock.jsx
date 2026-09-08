@@ -305,7 +305,7 @@ export default function DocumentosCorteExcelBlock({
                     <span style={{
                       fontSize: 'var(--cc-caption)',
                       fontWeight: 700,
-                      color: isLocal ? '#f59e0b' : (r.vigente ? '#22c55e' : ui.textMuted),
+                      color: isLocal ? (theme === 'dark' ? '#fbbf24' : '#B45309') : (r.vigente ? 'var(--cc-color-success)' : ui.textMuted),
                     }}
                     >
                       {isLocal ? 'Por guardar' : (r.vigente ? 'Vigente' : 'Histórico')}
