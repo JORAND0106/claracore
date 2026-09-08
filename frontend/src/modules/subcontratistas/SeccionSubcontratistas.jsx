@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
-import { tFrom, isDarkMode, isRestMode } from '../../theme/adminPanelTheme'
+import { tFrom, isDarkMode, isRestMode, buildContratoUiTheme } from '../../theme/adminPanelTheme'
 import CorteSsBlock from './CorteSsBlock'
 import SubcontratistaFormSheet, { EMPTY_SUBCONTRATISTA_FORM } from './SubcontratistaFormSheet'
 import { uploadDocumento, uploadPoliza } from './subcontratistasApi'
@@ -14,6 +14,7 @@ import { subcontratistasSheetCssVars, subcontratistasSheetStyles, subUi } from '
 export default function SeccionSubcontratistas({ call, user, perms, theme, token }) {
   const contratoId = user?.contrato_id
   const tTok = tFrom(theme)
+  const uiTheme = buildContratoUiTheme(theme, tTok)
   const S = subUi(theme, tTok)
   const sheetUi = subcontratistasSheetStyles(tTok)
   const sheetCssVars = subcontratistasSheetCssVars(tTok)
@@ -24,6 +25,17 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     textTable: tTok.text,
   }
   const tdStyle = S.td
+  const warnHintStyle = {
+    fontSize: 'var(--cc-body)',
+    lineHeight: 1.45,
+    fontWeight: 600,
+    color: isDarkMode(theme) ? '#fcd34d' : (isRestMode(theme) ? '#78350F' : '#92400E'),
+    background: uiTheme.warnBg,
+    border: `1px solid ${isDarkMode(theme) ? 'rgba(252,211,77,0.35)' : 'rgba(146,64,14,0.35)'}`,
+    borderRadius: 8,
+    padding: '10px 12px',
+    marginBottom: 10,
+  }
 
   const [subs, setSubs] = useState([])
   const [loading, setLoading] = useState(false)
@@ -72,16 +84,16 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     cursor: 'pointer',
   }
   const overlayStyle = {
-    position: 'fixed', inset: 0, zIndex: 10001, background: 'rgba(5,12,18,0.92)',
+    position: 'fixed', inset: 0, zIndex: 10001, background: uiTheme.overlay,
     backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center',
   }
   const modalStyle = (w) => ({
-    width: `min(${w}px,96vw)`,
-    maxHeight: '92vh',
-    background: isDarkMode(theme) ? '#0b1920' : tTok.bg,
+    width: `min(${w}px, 98vw)`,
+    maxHeight: '94vh',
+    background: tTok.bgCard,
     borderRadius: 14,
     border: `1px solid ${tTok.border}`,
-    boxShadow: isRestMode(theme) ? '0 32px 56px rgba(42,35,24,0.2)' : '0 40px 100px rgba(0,0,0,0.7)',
+    boxShadow: uiTheme.shadow,
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
@@ -96,10 +108,10 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     color: col.textPrimary,
     fontFamily: 'inherit',
   }
-  const modalHeadBgS = isDarkMode(theme) ? '#081318' : (isRestMode(theme) ? tTok.headerBg : '#E0F2FE')
+  const modalHeadBgS = tTok.headerBg || tTok.bgCard
   const modalHead = {
     padding: '12px 20px 10px',
-    borderBottom: `1px solid ${isDarkMode(theme) ? 'rgba(0,175,197,0.12)' : tTok.border}`,
+    borderBottom: `1px solid ${tTok.border}`,
     background: modalHeadBgS,
     display: 'flex',
     justifyContent: 'space-between',
@@ -111,13 +123,15 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     overflowY: 'auto',
     padding: '14px 20px',
     scrollbarWidth: 'thin',
-    scrollbarColor: isDarkMode(theme) ? '#1e3a44 transparent' : `${tTok.border}44`,
-    background: isDarkMode(theme) ? 'transparent' : (isRestMode(theme) ? tTok.bgCard : '#F8FAFC'),
+    scrollbarColor: `${tTok.border} transparent`,
+    background: isDarkMode(theme) ? tTok.bg : (isRestMode(theme) ? tTok.bg : tTok.inputBg),
     WebkitOverflowScrolling: 'touch',
+    color: tTok.text,
+    fontSize: 'var(--cc-sm)',
   }
   const modalFoot = {
     padding: '10px 20px',
-    borderTop: `1px solid ${isDarkMode(theme) ? 'rgba(0,175,197,0.1)' : tTok.border}`,
+    borderTop: `1px solid ${tTok.border}`,
     background: modalHeadBgS,
     display: 'flex',
     justifyContent: 'flex-end',
@@ -127,6 +141,12 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
   const secTitle = {
     fontSize: 'var(--cc-caption)', color: tTok.primary, fontWeight: 700,
     letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8,
+  }
+  const cardSubtle = {
+    background: uiTheme.cardSubtle,
+    border: `1px solid ${tTok.border}`,
+    borderRadius: 10,
+    padding: '14px 18px',
   }
   const fmt = fmtMoneda
 
@@ -384,21 +404,23 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
           style={{ ...inputStyle, cursor: 'pointer', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}
         >
           <span>📅</span>
-          <span style={{ fontSize: 13, color: value ? col.textPrimary : col.textMuted }}>{disp(value)}</span>
+          <span style={{ fontSize: 'var(--cc-sm)', color: value ? col.textPrimary : col.textMuted }}>{disp(value)}</span>
         </div>
         {isOpen && (
           <div style={{
             position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 10010,
-            background: isDarkMode(theme) ? '#0b1920' : tTok.bgCard,
-            border: `1px solid ${isDarkMode(theme) ? 'rgba(0,175,197,0.3)' : tTok.border}`,
+            background: tTok.bgCard,
+            border: `1px solid ${tTok.border}`,
             borderRadius: 10, padding: 14,
-            boxShadow: isRestMode(theme) ? '0 16px 40px rgba(42,35,24,0.2)' : '0 20px 50px rgba(0,0,0,0.5)',
+            boxShadow: uiTheme.shadow,
             minWidth: 260,
+            color: tTok.text,
+            fontSize: 'var(--cc-sm)',
           }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <button type="button" style={{ ...S.btn('ghost', true), padding: '4px 10px' }} onClick={() => setVd(new Date(y, m - 1, 1))}>◄</button>
-              <span style={{ fontSize: 14, fontWeight: 700, color: col.textPrimary }}>
+              <span style={{ fontSize: 'var(--cc-md)', fontWeight: 700, color: col.textPrimary }}>
                 {MESES[m]} <span style={{ color: tTok.primary }}>{y}</span>
               </span>
               <button type="button" style={{ ...S.btn('ghost', true), padding: '4px 10px' }} onClick={() => setVd(new Date(y, m + 1, 1))}>►</button>
@@ -418,11 +440,11 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                     key={i}
                     onClick={() => { onChange(diso); onToggle() }}
                     style={{
-                      textAlign: 'center', padding: '5px 2px', borderRadius: 6, cursor: 'pointer', fontSize: 12,
+                      textAlign: 'center', padding: '5px 2px', borderRadius: 6, cursor: 'pointer', fontSize: 'var(--cc-sm)',
                       fontWeight: isSel ? 700 : 400,
-                      background: isSel ? '#00afc5' : isHoy ? 'rgba(0,175,197,0.15)' : 'transparent',
-                      color: isSel ? '#081318' : col.textPrimary,
-                      border: isHoy && !isSel ? '1px solid rgba(0,175,197,0.4)' : '1px solid transparent',
+                      background: isSel ? tTok.primary : isHoy ? uiTheme.cardSubtle : 'transparent',
+                      color: isSel ? (isDarkMode(theme) ? '#081318' : '#fff') : col.textPrimary,
+                      border: isHoy && !isSel ? `1px solid ${tTok.primary}66` : '1px solid transparent',
                     }}
                   >
                     {d}
@@ -430,10 +452,10 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                 )
               })}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(0,175,197,0.1)', paddingTop: 8 }}>
-              <button type="button" style={{ ...S.btn('ghost', true), fontSize: 10 }} onClick={() => { onChange(new Date().toISOString().slice(0, 10)); onToggle() }}>↖ hoy</button>
-              <button type="button" style={{ ...S.btn('danger', true), fontSize: 10 }} onClick={() => { onChange(''); onToggle() }}>— borrar</button>
-              <button type="button" style={{ ...S.btn('ghost', true), fontSize: 10 }} onClick={onToggle}>✕ cerrar</button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: `1px solid ${tTok.border}`, paddingTop: 8 }}>
+              <button type="button" style={{ ...S.btn('ghost', true), fontSize: 'var(--cc-caption)' }} onClick={() => { onChange(new Date().toISOString().slice(0, 10)); onToggle() }}>↖ hoy</button>
+              <button type="button" style={{ ...S.btn('danger', true), fontSize: 'var(--cc-caption)' }} onClick={() => { onChange(''); onToggle() }}>— borrar</button>
+              <button type="button" style={{ ...S.btn('ghost', true), fontSize: 'var(--cc-caption)' }} onClick={onToggle}>✕ cerrar</button>
             </div>
           </div>
         )}
@@ -497,25 +519,25 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
           </button>
         )}
         <input
-          style={{ ...S.input, padding: '10px 12px', fontSize: 16, flex: '1 1 180px', maxWidth: 300, minHeight: 44 }}
+          style={{ ...S.input, padding: '10px 12px', fontSize: 'var(--cc-input)', flex: '1 1 180px', maxWidth: 300, minHeight: 44 }}
           placeholder="Buscar razón social, NIT, contacto…"
           value={filtro}
           onChange={(e) => setFiltro(e.target.value)}
         />
         {subs.length > 0 && (
-          <span style={{ marginLeft: 'auto', fontSize: 12, color: col.textMuted }}>
+          <span style={{ marginLeft: 'auto', fontSize: 'var(--cc-caption)', color: col.textMuted }}>
             {subs.length.toLocaleString('es-CO')} subcontratistas
           </span>
         )}
       </div>
 
       {loading ? (
-        <div style={S.empty}><span style={{ color: '#00afc5' }}>Cargando...</span></div>
+        <div style={S.empty}><span style={{ color: tTok.primary }}>Cargando...</span></div>
       ) : subs.length === 0 ? (
         <div style={S.empty}>
           No hay subcontratistas registrados.
           <br />
-          <span style={{ fontSize: 12, color: col.textMuted }}>Usa &quot;Crear Subcontratista&quot; para agregar uno.</span>
+          <span style={{ fontSize: 'var(--cc-caption)', color: col.textMuted }}>Usa &quot;Crear Subcontratista&quot; para agregar uno.</span>
         </div>
       ) : (
         <div className="cc-admin-table-scroll">
@@ -540,7 +562,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   >
                     <td style={{ ...tdStyle, fontWeight: 600, color: col.textPrimary }}>{sub.razon_social}</td>
                     <td style={tdStyle}>{sub.nombre_contacto || '—'}</td>
-                    <td style={{ ...tdStyle, fontSize: 12, color: col.textSecondary }}>{sub.nit || '—'}</td>
+                    <td style={{ ...tdStyle, fontSize: 'var(--cc-caption)', color: col.textSecondary }}>{sub.nit || '—'}</td>
                     <td style={tdStyle}>
                       {badge.show ? (
                         <span style={{
@@ -556,7 +578,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                           {badge.label}
                         </span>
                       ) : (
-                        <span style={{ color: col.textMuted, fontSize: 11 }}>—</span>
+                        <span style={{ color: col.textMuted, fontSize: 'var(--cc-caption)' }}>—</span>
                       )}
                     </td>
                     <td style={tdStyle}>
@@ -575,7 +597,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
       {/* MODAL CREAR — Excel ancho (no cierra con clic fuera) */}
       {showCrear && (
         <div className="cc-admin-modal-overlay-fs" style={overlayStyle}>
-          <div className="cc-admin-modal-fs" style={modalStyle(1100)}>
+          <div className="cc-admin-modal-fs" style={modalStyle(1200)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
@@ -614,7 +636,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
       {/* DETALLE — no cierra con clic fuera */}
       {detalle && (
         <div className="cc-admin-modal-overlay-fs" style={overlayStyle}>
-          <div className="cc-admin-modal-fs" style={modalStyle(1100)}>
+          <div className="cc-admin-modal-fs" style={modalStyle(1200)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
@@ -656,7 +678,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
             <div style={{
               display: 'flex',
               borderBottom: `1px solid ${tTok.border}`,
-              background: isDarkMode(theme) ? '#081318' : (isRestMode(theme) ? tTok.headerBg : '#E0F2FE'),
+              background: modalHeadBgS,
               flexShrink: 0,
               overflowX: 'auto',
               WebkitOverflowScrolling: 'touch',
@@ -670,7 +692,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   onClick={() => setTabDetalle(id)}
                   style={{
                     padding: '10px 20px', minHeight: 44, border: 'none', background: 'transparent',
-                    cursor: 'pointer', fontSize: 13, fontWeight: tabDetalle === id ? 700 : 400,
+                    cursor: 'pointer', fontSize: 'var(--cc-sm)', fontWeight: tabDetalle === id ? 700 : 400,
                     color: tabDetalle === id ? tTok.primary : col.textSecondary,
                     borderBottom: tabDetalle === id ? `2px solid ${tTok.primary}` : '2px solid transparent',
                     transition: 'all 0.15s', whiteSpace: 'nowrap', flex: '0 0 auto',
@@ -840,36 +862,45 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                     )}
                   </div>
                   {preciosLoading ? (
-                    <div style={{ color: '#4a7a87', fontSize: 13 }}>Cargando...</div>
+                    <div style={{ color: col.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando...</div>
                   ) : preciosSub.length === 0 ? (
                     <div style={S.empty}>No hay ítems asignados.</div>
                   ) : (
-                    <table style={S.table}>
-                      <thead>
-                        <tr>
-                          {['Capítulo', 'Ítem', 'Descripción', 'Vlr. Referencia', 'Vlr. Subcontratista'].map((h) => (
-                            <th key={h} style={S.th}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {preciosSub.map((p) => (
-                          <tr
-                            key={p.id}
-                            onClick={() => { setPrecioEdit(p); setEditPrecioVal(String(p.precio_unitario_sub)) }}
-                            style={{ cursor: 'pointer' }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,175,197,0.05)' }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                          >
-                            <td style={{ ...tdStyle, fontSize: 12, color: col.textMuted }}>{p.capitulo || '—'}</td>
-                            <td style={{ ...tdStyle, fontWeight: 600, color: col.textSecondary, fontSize: 12 }}>{p.item_numero || '—'}</td>
-                            <td style={tdStyle}>{p.descripcion}</td>
-                            <td style={{ ...tdStyle, fontSize: 12, color: col.textMuted, textAlign: 'right' }}>{fmt(p.precio_unitario_ref)}</td>
-                            <td style={{ ...tdStyle, color: '#22c55e', fontWeight: 700, textAlign: 'right' }}>{fmt(p.precio_unitario_sub)}</td>
+                    <div style={{ ...sheetUi.sheetWrap, maxHeight: 'min(480px, 52vh)' }}>
+                      <table style={sheetUi.sheetTable}>
+                        <colgroup>
+                          <col style={{ width: '14%' }} />
+                          <col style={{ width: '10%' }} />
+                          <col style={{ width: '42%' }} />
+                          <col style={{ width: '17%' }} />
+                          <col style={{ width: '17%' }} />
+                        </colgroup>
+                        <thead>
+                          <tr>
+                            {['Capítulo', 'Ítem', 'Descripción', 'Vlr. Referencia', 'Vlr. Subcontratista'].map((h) => (
+                              <th key={h} style={sheetUi.th}>{h}</th>
+                            ))}
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {preciosSub.map((p) => (
+                            <tr
+                              key={p.id}
+                              onClick={() => { setPrecioEdit(p); setEditPrecioVal(String(p.precio_unitario_sub)) }}
+                              style={{ cursor: 'pointer' }}
+                              onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}12` }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                            >
+                              <td style={{ ...sheetUi.td, color: col.textMuted }}>{p.capitulo || '—'}</td>
+                              <td style={{ ...sheetUi.td, fontWeight: 700, color: tTok.primary }}>{p.item_numero || '—'}</td>
+                              <td style={sheetUi.td}>{p.descripcion}</td>
+                              <td style={{ ...sheetUi.td, color: col.textMuted, textAlign: 'right' }}>{fmt(p.precio_unitario_ref)}</td>
+                              <td style={{ ...sheetUi.td, color: 'var(--cc-color-success)', fontWeight: 700, textAlign: 'right' }}>{fmt(p.precio_unitario_sub)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               )}
@@ -885,7 +916,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
       {/* MODAL CREAR CORTE */}
       {showCrearCorte && (
         <div style={{ ...overlayStyle, zIndex: 10002 }}>
-          <div style={{ ...modalStyle(540), minHeight: 'min(620px,88vh)' }}>
+          <div style={{ ...modalStyle(780), minHeight: 'min(620px,88vh)' }}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
@@ -930,11 +961,12 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
               </div>
               {corteForm.fecha_inicio && corteForm.fecha_fin && (
                 <div style={{
-                  background: 'rgba(0,175,197,0.06)', border: '1px solid rgba(0,175,197,0.2)',
-                  borderRadius: 8, padding: '10px 14px', fontSize: 12, color: col.textSecondary,
+                  ...cardSubtle,
+                  fontSize: 'var(--cc-sm)',
+                  color: col.textSecondary,
                 }}
                 >
-                  Corte #{corteForm.consecutivo} · {corteForm.tipo_periodo} · del <strong>{corteForm.fecha_inicio}</strong> al <strong>{corteForm.fecha_fin}</strong>
+                  Corte #{corteForm.consecutivo} · {corteForm.tipo_periodo} · del <strong style={{ color: col.textPrimary }}>{corteForm.fecha_inicio}</strong> al <strong style={{ color: col.textPrimary }}>{corteForm.fecha_fin}</strong>
                 </div>
               )}
             </div>
@@ -951,7 +983,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
       {/* DETALLE CORTE + SS del período */}
       {corteDetalle && (
         <div style={{ ...overlayStyle, zIndex: 10002 }}>
-          <div style={modalStyle(640)}>
+          <div style={modalStyle(960)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
@@ -1000,7 +1032,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                 </table>
               </div>
               {perms?.editar && corteDetalle.id != null && (
-                <div style={{ fontSize: 'var(--cc-caption)', color: '#f59e0b', marginBottom: 8 }}>
+                <div style={warnHintStyle}>
                   Al cambiar la fecha fin, el corte siguiente se recalculará automáticamente.
                 </div>
               )}
@@ -1019,7 +1051,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                 />
               )}
               {corteDetalle.id == null && (
-                <div style={{ ...S.alert('warn'), marginTop: 8, fontSize: 'var(--cc-caption)' }}>
+                <div style={{ ...S.alert('warn'), marginTop: 8, fontSize: 'var(--cc-body)' }}>
                   Corte aún no generado. Puede adjuntar la planilla SS del período pendiente arriba;
                   al completar Contrato/Propuesta, la generación automática creará el corte sin romper la secuencia.
                 </div>
@@ -1040,7 +1072,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
       {/* AGREGAR ÍTEM */}
       {showAgregarItem && (
         <div style={{ ...overlayStyle, zIndex: 10002 }}>
-          <div style={modalStyle(660)}>
+          <div style={{ ...modalStyle(1040), minHeight: 'min(720px, 90vh)' }}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
@@ -1073,32 +1105,66 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                 </div>
               </div>
               {(busqTexto || busqCapitulo) && !itemSel && (
-                <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid rgba(0,175,197,0.2)', borderRadius: 8, marginBottom: 14 }}>
+                <div style={{
+                  maxHeight: 'min(320px, 36vh)',
+                  overflowY: 'auto',
+                  border: `1px solid ${sheetUi.border}`,
+                  borderRadius: 4,
+                  marginBottom: 14,
+                  background: tTok.bgCard,
+                }}
+                >
                   {itemsBusq.length === 0 ? (
-                    <div style={{ padding: 14, textAlign: 'center', color: col.textMuted, fontSize: 13 }}>Sin resultados</div>
-                  ) : itemsBusq.slice(0, 30).map((i) => (
+                    <div style={{ padding: 14, textAlign: 'center', color: col.textMuted, fontSize: 'var(--cc-sm)' }}>Sin resultados</div>
+                  ) : itemsBusq.slice(0, 40).map((i) => (
                     <div
                       key={i.id}
                       onClick={() => { setItemSel(i); setBusqTexto(i.descripcion) }}
-                      style={{ padding: '8px 14px', cursor: 'pointer', borderBottom: '1px solid rgba(0,175,197,0.08)', fontSize: 12 }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,175,197,0.07)' }}
+                      style={{
+                        padding: '10px 14px',
+                        cursor: 'pointer',
+                        borderBottom: `1px solid ${sheetUi.border}`,
+                        fontSize: 'var(--cc-sm)',
+                        color: tTok.text,
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}12` }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
                     >
-                      <span style={{ color: '#00afc5', fontWeight: 600, marginRight: 8 }}>{i.item_numero}</span>
+                      <span style={{ color: tTok.primary, fontWeight: 700, marginRight: 8 }}>{i.item_numero}</span>
                       <span style={{ color: col.textTable }}>{i.descripcion}</span>
-                      <span style={{ color: col.textMuted, marginLeft: 8, fontSize: 11 }}>[{i.unidad}]</span>
+                      <span style={{ color: col.textMuted, marginLeft: 8, fontSize: 'var(--cc-caption)' }}>[{i.unidad}]</span>
                     </div>
                   ))}
                 </div>
               )}
               {itemSel && (
-                <div style={{ background: 'rgba(0,175,197,0.06)', border: '1px solid rgba(0,175,197,0.2)', borderRadius: 10, padding: '14px 18px', marginBottom: 14 }}>
-                  <div style={{ fontSize: 9, color: '#00afc5', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 }}>Ítem seleccionado</div>
+                <div style={{ ...cardSubtle, marginBottom: 14 }}>
+                  <div style={{
+                    fontSize: 'var(--cc-caption)',
+                    color: tTok.primary,
+                    fontWeight: 700,
+                    letterSpacing: 1,
+                    textTransform: 'uppercase',
+                    marginBottom: 10,
+                  }}
+                  >
+                    Ítem seleccionado
+                  </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     {[['Ítem', itemSel.item_numero], ['Unidad', itemSel.unidad], ['Descripción', itemSel.descripcion], ['Vlr. Unitario Referencia', fmt(itemSel.precio_unitario)]].map(([l, v]) => (
                       <div key={l}>
-                        <div style={{ fontSize: 9, color: '#4a7a87', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 3 }}>{l}</div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: col.textPrimary }}>{v || '—'}</div>
+                        <div style={{
+                          fontSize: 'var(--cc-caption)',
+                          color: col.textMuted,
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.8,
+                          marginBottom: 3,
+                          fontWeight: 600,
+                        }}
+                        >
+                          {l}
+                        </div>
+                        <div style={{ fontSize: 'var(--cc-body)', fontWeight: 600, color: col.textPrimary }}>{v || '—'}</div>
                       </div>
                     ))}
                   </div>
@@ -1114,6 +1180,11 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   placeholder="Precio acordado con el subcontratista"
                 />
               </div>
+              {itemSel && (
+                <div style={{ ...warnHintStyle, marginTop: 12, marginBottom: 0 }}>
+                  El valor pactado es exclusivo de este subcontratista y no modifica el listado de precios del contrato.
+                </div>
+              )}
             </div>
             <div style={modalFoot}>
               <button type="button" style={S.btn('ghost')} onClick={() => setShowAgregarItem(false)}>Cancelar</button>
@@ -1128,12 +1199,12 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
       {/* DETALLE PRECIO */}
       {precioEdit && (
         <div style={{ ...overlayStyle, zIndex: 10002 }}>
-          <div style={modalStyle(500)}>
+          <div style={modalStyle(820)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
                 <div style={modalTitle}>
-                  {precioEdit.item_numero} — {(precioEdit.descripcion || '').substring(0, 38)}{(precioEdit.descripcion || '').length > 38 ? '...' : ''}
+                  {precioEdit.item_numero} — {(precioEdit.descripcion || '').substring(0, 48)}{(precioEdit.descripcion || '').length > 48 ? '...' : ''}
                 </div>
                 <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, marginTop: 2 }}>{detalle?.razon_social}</div>
               </div>
@@ -1142,9 +1213,19 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
             <div style={modalScroll}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
                 {[['Capítulo', precioEdit.capitulo], ['Competencia', precioEdit.competencia || '—'], ['Ítem', precioEdit.item_numero], ['Unidad', precioEdit.unidad]].map(([l, v]) => (
-                  <div key={l} style={{ background: 'rgba(0,175,197,0.04)', border: '1px solid rgba(0,175,197,0.1)', borderRadius: 8, padding: '10px 14px' }}>
-                    <div style={{ fontSize: 9, color: '#4a7a87', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>{l}</div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: col.textPrimary }}>{v}</div>
+                  <div key={l} style={cardSubtle}>
+                    <div style={{
+                      fontSize: 'var(--cc-caption)',
+                      color: col.textMuted,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.8,
+                      marginBottom: 4,
+                      fontWeight: 600,
+                    }}
+                    >
+                      {l}
+                    </div>
+                    <div style={{ fontSize: 'var(--cc-body)', fontWeight: 600, color: col.textPrimary }}>{v}</div>
                   </div>
                 ))}
               </div>
@@ -1158,7 +1239,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   {perms?.editar ? (
                     <input style={inputStyle} type="number" value={editPrecioVal} onChange={(e) => setEditPrecioVal(e.target.value)} />
                   ) : (
-                    <div style={{ ...inputStyle, opacity: 0.7, pointerEvents: 'none', color: '#22c55e', fontWeight: 700 }}>{fmt(precioEdit.precio_unitario_sub)}</div>
+                    <div style={{ ...inputStyle, opacity: 0.7, pointerEvents: 'none', color: 'var(--cc-color-success)', fontWeight: 700 }}>{fmt(precioEdit.precio_unitario_sub)}</div>
                   )}
                 </div>
               </div>

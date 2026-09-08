@@ -154,26 +154,27 @@ export function subcontratistasSheetStyles(t) {
 export function subUi(theme, tTok) {
   const dark = theme === 'dark'
   const rest = theme === 'rest'
+  const warnColor = dark ? '#fbbf24' : rest ? '#92400E' : '#B45309'
+  const successColor = 'var(--cc-color-success, #047857)'
+  const dangerColor = dark ? '#f87171' : rest ? '#991B1B' : '#DC2626'
   return {
     table: { width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', lineHeight: 1.3 },
     th: {
       textAlign: 'left',
       padding: '4px 8px',
-      background: rest ? '#2E2A25' : (dark ? '#020617' : '#081318'),
-      color: rest ? 'rgba(242,235,224,0.9)' : '#4a8a96',
+      background: rest ? '#2E2A25' : (dark ? tTok.headerBg || '#0F2038' : tTok.headerBg || '#E0F2FE'),
+      color: rest ? 'rgba(242,235,224,0.9)' : (dark ? tTok.textMuted : tTok.primary),
       fontSize: 'var(--cc-label)',
       fontWeight: 600,
       letterSpacing: 0.5,
       textTransform: 'uppercase',
-      borderBottom: dark ? '1px solid rgba(0,175,197,0.12)' : `1px solid ${tTok.border}`,
+      borderBottom: `1px solid ${tTok.border}`,
     },
     td: {
       padding: '5px 8px',
       fontSize: 'var(--cc-sm)',
       color: tTok.text,
-      borderBottom: dark
-        ? '1px solid rgba(255,255,255,0.04)'
-        : `1px solid ${rest ? 'rgba(201,184,164,0.45)' : '#E0F2FE'}`,
+      borderBottom: `1px solid ${tTok.border}`,
       verticalAlign: 'middle',
     },
     badge: (estado) => ({
@@ -185,9 +186,9 @@ export function subUi(theme, tTok) {
       background: estado === 'pendiente' ? 'rgba(245,158,11,0.15)'
         : estado === 'aprobado' ? 'rgba(34,197,94,0.15)'
           : 'rgba(239,68,68,0.15)',
-      color: estado === 'pendiente' ? '#f59e0b'
-        : estado === 'aprobado' ? '#22c55e'
-          : '#ef4444',
+      color: estado === 'pendiente' ? warnColor
+        : estado === 'aprobado' ? successColor
+          : dangerColor,
     }),
     btn: (variant = 'primary', sm = false) => {
       const primary = tTok?.primary || '#0077B6'
@@ -203,9 +204,9 @@ export function subUi(theme, tTok) {
         ...(variant === 'primary' ? {
           background: primary, borderColor: primary, color: dark ? '#081318' : '#fff',
         } : variant === 'success' ? {
-          background: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.4)', color: '#22c55e',
+          background: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.4)', color: successColor,
         } : variant === 'danger' ? {
-          background: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.4)', color: '#ef4444',
+          background: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.4)', color: dangerColor,
         } : variant === 'ghost' ? {
           background: 'transparent', borderColor: `${primary}55`, color: primary,
         } : {
@@ -213,17 +214,8 @@ export function subUi(theme, tTok) {
         }),
       }
     },
-    input: dark ? {
-      background: '#081318',
-      border: '1px solid rgba(0,175,197,0.2)',
-      borderRadius: 6,
-      color: '#c0dde3',
-      fontSize: 'var(--cc-input)',
-      padding: '5px 10px',
-      outline: 'none',
-      width: '100%',
-    } : {
-      background: tTok.inputBg,
+    input: {
+      background: tTok.inputBg || (dark ? '#081318' : '#F8FAFC'),
       border: `1px solid ${tTok.border}`,
       borderRadius: 6,
       color: tTok.text,
@@ -231,23 +223,25 @@ export function subUi(theme, tTok) {
       padding: '5px 10px',
       outline: 'none',
       width: '100%',
+      fontFamily: 'inherit',
     },
     alert: (type) => ({
-      padding: '8px 12px',
+      padding: '10px 12px',
       borderRadius: 6,
-      fontSize: 'var(--cc-sm)',
+      fontSize: 'var(--cc-body)',
+      lineHeight: 1.4,
       marginBottom: 12,
       background: type === 'success' ? 'rgba(34,197,94,0.1)'
-        : type === 'warn' ? 'rgba(245,158,11,0.12)'
+        : type === 'warn' ? (dark ? 'rgba(251,191,36,0.12)' : 'rgba(180,83,9,0.1)')
           : 'rgba(239,68,68,0.1)',
       border: `1px solid ${
         type === 'success' ? 'rgba(34,197,94,0.3)'
-          : type === 'warn' ? 'rgba(245,158,11,0.35)'
+          : type === 'warn' ? `${warnColor}55`
             : 'rgba(239,68,68,0.3)'
       }`,
-      color: type === 'success' ? '#22c55e'
-        : type === 'warn' ? '#d97706'
-          : '#ef4444',
+      color: type === 'success' ? successColor
+        : type === 'warn' ? warnColor
+          : dangerColor,
     }),
     empty: {
       textAlign: 'center',
