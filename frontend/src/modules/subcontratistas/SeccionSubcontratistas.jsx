@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { tFrom, isDarkMode, isRestMode } from '../../theme/adminPanelTheme'
-import DocumentosCorteExcelBlock from './DocumentosCorteExcelBlock'
+import CorteSsBlock from './CorteSsBlock'
 import SubcontratistaFormSheet, { EMPTY_SUBCONTRATISTA_FORM } from './SubcontratistaFormSheet'
 import { uploadDocumento, uploadPoliza } from './subcontratistasApi'
-import { fmtMoneda, nivelPolizaBadge } from './subcontratistasDocsHelpers'
-import { subUi } from './subcontratistasSheetStyles'
+import { fmtMoneda, nivelPolizaBadge, periodoFromCorte } from './subcontratistasDocsHelpers'
+import { subcontratistasSheetCssVars, subcontratistasSheetStyles, subUi } from './subcontratistasSheetStyles'
 
 /**
  * Sección completa de Subcontratistas (AdminPanel).
@@ -15,6 +15,8 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
   const contratoId = user?.contrato_id
   const tTok = tFrom(theme)
   const S = subUi(theme, tTok)
+  const sheetUi = subcontratistasSheetStyles(tTok)
+  const sheetCssVars = subcontratistasSheetCssVars(tTok)
   const col = {
     textPrimary: tTok.text,
     textSecondary: tTok.textMuted,
@@ -41,7 +43,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
   const [cortes, setCortes] = useState([])
   const [cortesLoading, setCortesLoading] = useState(false)
   const [genCorteEstado, setGenCorteEstado] = useState(null)
-  const [forceSsUpload, setForceSsUpload] = useState(false)
   const [showCrearCorte, setShowCrearCorte] = useState(false)
   const [corteForm, setCorteForm] = useState({ tipo_periodo: 'quincenal', consecutivo: 1, fecha_inicio: '', fecha_fin: '' })
   const [creatingCorte, setCreatingCorte] = useState(false)
@@ -84,7 +85,17 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+    ...sheetCssVars,
+    fontSize: 'var(--cc-sm)',
+    color: 'var(--cc-text)',
+    fontFamily: 'inherit',
   })
+  const modalTitle = {
+    fontSize: 'var(--cc-h2)',
+    fontWeight: 700,
+    color: col.textPrimary,
+    fontFamily: 'inherit',
+  }
   const modalHeadBgS = isDarkMode(theme) ? '#081318' : (isRestMode(theme) ? tTok.headerBg : '#E0F2FE')
   const modalHead = {
     padding: '12px 20px 10px',
@@ -167,7 +178,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     setEditando(false)
     setEditForm({ ...sub })
     setGenCorteEstado(null)
-    setForceSsUpload(false)
     cargarCortes(sub.id)
     cargarPreciosSub(sub.id)
   }
@@ -204,7 +214,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
           } catch { uploadErrors += 1 }
         }
         for (const d of stagedDocs) {
-          if (!d.archivo) continue
+          if (!d.archivo || d.tipo === 'seguridad_social') continue
           try {
             await uploadDocumento(newId, {
               tipo: d.tipo,
@@ -562,18 +572,16 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
         </div>
       )}
 
-      {/* MODAL CREAR — Excel ancho */}
+      {/* MODAL CREAR — Excel ancho (no cierra con clic fuera) */}
       {showCrear && (
-        <div className="cc-admin-modal-overlay-fs" style={overlayStyle} onClick={(e) => e.target === e.currentTarget && setShowCrear(false)}>
+        <div className="cc-admin-modal-overlay-fs" style={overlayStyle}>
           <div className="cc-admin-modal-fs" style={modalStyle(1100)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: col.textPrimary, fontFamily: "'Rajdhani',sans-serif" }}>
-                  Crear Subcontratista
-                </div>
-                <div style={{ fontSize: 11, color: col.textSecondary, marginTop: 2 }}>
-                  Datos, pólizas y documentos requeridos
+                <div style={modalTitle}>Crear Subcontratista</div>
+                <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, marginTop: 2 }}>
+                  Datos, pólizas y documentos contractuales
                 </div>
               </div>
               <button type="button" style={{ ...S.closeBtn, minWidth: 44, minHeight: 44 }} onClick={() => setShowCrear(false)}>✕</button>
@@ -603,16 +611,16 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
         </div>
       )}
 
-      {/* DETALLE */}
+      {/* DETALLE — no cierra con clic fuera */}
       {detalle && (
-        <div className="cc-admin-modal-overlay-fs" style={overlayStyle} onClick={(e) => e.target === e.currentTarget && setDetalle(null)}>
+        <div className="cc-admin-modal-overlay-fs" style={overlayStyle}>
           <div className="cc-admin-modal-fs" style={modalStyle(1100)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
                 <div>
-                  <div style={{ fontSize: 10, color: col.textSecondary, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 2 }}>Subcontratista</div>
-                  <div style={{ fontSize: 17, fontWeight: 700, color: col.textPrimary, fontFamily: "'Rajdhani',sans-serif" }}>{detalle.razon_social}</div>
+                  <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 2 }}>Subcontratista</div>
+                  <div style={modalTitle}>{detalle.razon_social}</div>
                 </div>
                 <span style={S.badge(detalle.activo ? 'aprobado' : 'rechazado')}>{detalle.activo ? 'Activo' : 'Inactivo'}</span>
                 {(() => {
@@ -663,9 +671,10 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   style={{
                     padding: '10px 20px', minHeight: 44, border: 'none', background: 'transparent',
                     cursor: 'pointer', fontSize: 13, fontWeight: tabDetalle === id ? 700 : 400,
-                    color: tabDetalle === id ? '#00afc5' : col.textSecondary,
-                    borderBottom: tabDetalle === id ? '2px solid #00afc5' : '2px solid transparent',
+                    color: tabDetalle === id ? tTok.primary : col.textSecondary,
+                    borderBottom: tabDetalle === id ? `2px solid ${tTok.primary}` : '2px solid transparent',
                     transition: 'all 0.15s', whiteSpace: 'nowrap', flex: '0 0 auto',
+                    fontFamily: 'inherit',
                   }}
                 >
                   {label}
@@ -702,12 +711,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                     readOnlyHint={!editando}
                     subId={detalle.id}
                     onMsg={setMsg}
-                    initialSsPeriodo={ssPeriodoPendiente}
-                    forceSsUpload={forceSsUpload}
-                    onSsUploaded={() => {
-                      setForceSsUpload(false)
-                      cargarGenCorteEstado(detalle.id)
-                    }}
                   />
                 </div>
               )}
@@ -717,7 +720,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   {genCorteEstado?.bloqueado && (
                     <div style={{ ...S.alert('warn'), marginBottom: 14 }}>
                       <div style={{ fontWeight: 700, marginBottom: 6 }}>Generación automática de corte bloqueada</div>
-                      <div style={{ fontSize: 12, marginBottom: 8 }}>
+                      <div style={{ fontSize: 'var(--cc-caption)', marginBottom: 8 }}>
                         Falta documentación
                         {faltantesLabels.length ? `: ${faltantesLabels.join(', ')}` : ''}
                         {ssPeriodoPendiente ? ` · Período SS: ${ssPeriodoPendiente}` : ''}
@@ -725,41 +728,40 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                           ? ` · Corte pendiente desde ${genCorteEstado.pendiente.fecha_inicio_pendiente}`
                           : ''}
                       </div>
+                      <div style={{ fontSize: 'var(--cc-caption)', color: col.textMuted }}>
+                        Complete Contrato/Propuesta en Datos. El pago de Seguridad Social se adjunta abriendo el corte correspondiente.
+                      </div>
                       {(faltantesLabels.includes('Pago de Seguridad Social')
+                        || faltantesLabels.includes('Pago Seguridad Social')
                         || (genCorteEstado?.pendiente?.checklist?.faltantes || []).includes('seguridad_social')) && (
                         <button
                           type="button"
-                          style={S.btn('primary', true)}
+                          style={{ ...S.btn('primary', true), marginTop: 8 }}
                           onClick={() => {
-                            setForceSsUpload(true)
-                            setTabDetalle('datos')
-                            setEditando(true)
-                            setEditForm({ ...detalle })
+                            const ultimo = cortes.length ? cortes[cortes.length - 1] : null
+                            const fi = genCorteEstado?.pendiente?.fecha_inicio_pendiente || ''
+                            const ff = genCorteEstado?.pendiente?.fecha_fin_pendiente || ''
+                            // Abrir último corte real si existe; si no, modal de período pendiente (SS sin corte_id)
+                            const target = ultimo && !fi
+                              ? ultimo
+                              : {
+                                  id: null,
+                                  consecutivo: 'pendiente',
+                                  tipo_periodo: ultimo?.tipo_periodo || 'quincenal',
+                                  fecha_inicio: fi || ultimo?.fecha_fin || '',
+                                  fecha_fin: ff || '',
+                                }
+                            setCorteDetalle(target)
+                            setEditCorteForm({ fecha_fin: target.fecha_fin || '' })
+                            setCalEditFf(false)
                           }}
                         >
-                          Cargar planilla SS {ssPeriodoPendiente ? `(${ssPeriodoPendiente})` : ''}
+                          Abrir corte / cargar planilla SS {ssPeriodoPendiente ? `(${ssPeriodoPendiente})` : ''}
                         </button>
                       )}
-                      <div style={{ marginTop: 10 }}>
-                        <DocumentosCorteExcelBlock
-                          theme={theme}
-                          token={token}
-                          subId={detalle.id}
-                          canEdit={!!perms?.editar || !!perms?.crear}
-                          mode="live"
-                          initialSsPeriodo={ssPeriodoPendiente}
-                          forceSsUpload={forceSsUpload}
-                          onMsg={setMsg}
-                          onSsUploaded={() => {
-                            setForceSsUpload(false)
-                            cargarGenCorteEstado(detalle.id)
-                            cargarCortes(detalle.id)
-                          }}
-                        />
-                      </div>
                     </div>
                   )}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <div style={secTitle}>Períodos de Facturación</div>
                     {perms?.crear && (
                       <button
@@ -777,35 +779,41 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                     )}
                   </div>
                   {cortesLoading ? (
-                    <div style={{ color: '#4a7a87', fontSize: 13 }}>Cargando...</div>
+                    <div style={{ color: col.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando...</div>
                   ) : cortes.length === 0 ? (
                     <div style={S.empty}>No hay cortes registrados.</div>
                   ) : (
-                    <table style={S.table}>
-                      <thead>
-                        <tr>{['N° Corte', 'Tipo', 'Fecha Inicio', 'Fecha Fin'].map((h) => <th key={h} style={S.th}>{h}</th>)}</tr>
-                      </thead>
-                      <tbody>
-                        {cortes.map((c) => (
-                          <tr
-                            key={c.id}
-                            onClick={() => {
-                              setCorteDetalle(c)
-                              setEditCorteForm({ fecha_fin: c.fecha_fin })
-                              setCalEditFf(false)
-                            }}
-                            style={{ cursor: 'pointer' }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,175,197,0.05)' }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                          >
-                            <td style={{ ...tdStyle, fontWeight: 700, color: '#00afc5' }}>#{c.consecutivo}</td>
-                            <td style={{ ...tdStyle, fontSize: 12 }}>{c.tipo_periodo === 'quincenal' ? 'Quincenal' : 'Mensual'}</td>
-                            <td style={tdStyle}>{c.fecha_inicio}</td>
-                            <td style={tdStyle}>{c.fecha_fin}</td>
+                    <div style={{ ...sheetUi.sheetWrap, maxHeight: 'min(420px, 48vh)' }}>
+                      <table style={sheetUi.sheetTable}>
+                        <thead>
+                          <tr>
+                            {['N° Corte', 'Tipo', 'Fecha Inicio', 'Fecha Fin'].map((h) => (
+                              <th key={h} style={sheetUi.th}>{h}</th>
+                            ))}
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {cortes.map((c) => (
+                            <tr
+                              key={c.id}
+                              onClick={() => {
+                                setCorteDetalle(c)
+                                setEditCorteForm({ fecha_fin: c.fecha_fin })
+                                setCalEditFf(false)
+                              }}
+                              style={{ cursor: 'pointer' }}
+                              onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}12` }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                            >
+                              <td style={{ ...sheetUi.td, fontWeight: 700, color: tTok.primary }}>#{c.consecutivo}</td>
+                              <td style={sheetUi.td}>{c.tipo_periodo === 'quincenal' ? 'Quincenal' : 'Mensual'}</td>
+                              <td style={sheetUi.td}>{c.fecha_inicio}</td>
+                              <td style={sheetUi.td}>{c.fecha_fin}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               )}
@@ -876,13 +884,13 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
 
       {/* MODAL CREAR CORTE */}
       {showCrearCorte && (
-        <div style={{ ...overlayStyle, zIndex: 10002 }} onClick={(e) => e.target === e.currentTarget && setShowCrearCorte(false)}>
+        <div style={{ ...overlayStyle, zIndex: 10002 }}>
           <div style={{ ...modalStyle(540), minHeight: 'min(620px,88vh)' }}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: col.textPrimary, fontFamily: "'Rajdhani',sans-serif" }}>Crear Nuevo Corte</div>
-                <div style={{ fontSize: 11, color: col.textSecondary, marginTop: 2 }}>{detalle?.razon_social}</div>
+                <div style={modalTitle}>Crear Nuevo Corte</div>
+                <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, marginTop: 2 }}>{detalle?.razon_social}</div>
               </div>
               <button type="button" style={S.closeBtn} onClick={() => setShowCrearCorte(false)}>✕</button>
             </div>
@@ -940,47 +948,86 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
         </div>
       )}
 
-      {/* DETALLE CORTE */}
+      {/* DETALLE CORTE + SS del período */}
       {corteDetalle && (
-        <div style={{ ...overlayStyle, zIndex: 10002 }} onClick={(e) => e.target === e.currentTarget && setCorteDetalle(null)}>
-          <div style={modalStyle(460)}>
+        <div style={{ ...overlayStyle, zIndex: 10002 }}>
+          <div style={modalStyle(640)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: col.textPrimary, fontFamily: "'Rajdhani',sans-serif" }}>Corte #{corteDetalle.consecutivo}</div>
-                <div style={{ fontSize: 11, color: col.textSecondary, marginTop: 2 }}>{detalle?.razon_social} · {corteDetalle.tipo_periodo}</div>
+                <div style={modalTitle}>
+                  {corteDetalle.id != null ? `Corte #${corteDetalle.consecutivo}` : 'Corte pendiente'}
+                </div>
+                <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, marginTop: 2 }}>
+                  {detalle?.razon_social} · {corteDetalle.tipo_periodo}
+                  {periodoFromCorte(corteDetalle) ? ` · SS ${periodoFromCorte(corteDetalle)}` : ''}
+                </div>
               </div>
               <button type="button" style={S.closeBtn} onClick={() => setCorteDetalle(null)}>✕</button>
             </div>
             <div style={modalScroll}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
-                <div>
-                  <div style={labelStyle}>Fecha Inicio (no editable)</div>
-                  <div style={{ ...inputStyle, opacity: 0.55, pointerEvents: 'none' }}>{corteDetalle.fecha_inicio}</div>
-                </div>
-                <div>
-                  <div style={labelStyle}>Fecha Fin {perms?.editar ? '(editable)' : ''}</div>
-                  {perms?.editar ? (
-                    <CalPicker
-                      value={editCorteForm.fecha_fin}
-                      onChange={(v) => setEditCorteForm((f) => ({ ...f, fecha_fin: v }))}
-                      isOpen={calEditFf}
-                      onToggle={() => setCalEditFf((o) => !o)}
-                    />
-                  ) : (
-                    <div style={{ ...inputStyle, opacity: 0.55, pointerEvents: 'none' }}>{corteDetalle.fecha_fin}</div>
-                  )}
-                </div>
+              <div style={{ ...sheetUi.sheetWrap, maxHeight: 'none', marginBottom: 14 }}>
+                <table style={sheetUi.sheetTable}>
+                  <thead>
+                    <tr>
+                      <th style={sheetUi.th}>Campo</th>
+                      <th style={sheetUi.th}>Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style={{ ...sheetUi.td, fontWeight: 700, color: col.textMuted }}>Fecha Inicio</td>
+                      <td style={sheetUi.td}>{corteDetalle.fecha_inicio || '—'}</td>
+                    </tr>
+                    <tr>
+                      <td style={{ ...sheetUi.td, fontWeight: 700, color: col.textMuted }}>
+                        Fecha Fin {perms?.editar && corteDetalle.id != null ? '(editable)' : ''}
+                      </td>
+                      <td style={sheetUi.td}>
+                        {perms?.editar && corteDetalle.id != null ? (
+                          <CalPicker
+                            value={editCorteForm.fecha_fin}
+                            onChange={(v) => setEditCorteForm((f) => ({ ...f, fecha_fin: v }))}
+                            isOpen={calEditFf}
+                            onToggle={() => setCalEditFf((o) => !o)}
+                          />
+                        ) : (
+                          corteDetalle.fecha_fin || '—'
+                        )}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
-              {perms?.editar && (
-                <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 4 }}>
+              {perms?.editar && corteDetalle.id != null && (
+                <div style={{ fontSize: 'var(--cc-caption)', color: '#f59e0b', marginBottom: 8 }}>
                   Al cambiar la fecha fin, el corte siguiente se recalculará automáticamente.
+                </div>
+              )}
+              {detalle?.id && (corteDetalle.id != null || periodoFromCorte(corteDetalle)) && (
+                <CorteSsBlock
+                  theme={theme}
+                  token={token}
+                  subId={detalle.id}
+                  corte={corteDetalle}
+                  canEdit={!!(perms?.editar || perms?.crear)}
+                  onMsg={setMsg}
+                  onUploaded={() => {
+                    cargarGenCorteEstado(detalle.id)
+                    cargarCortes(detalle.id)
+                  }}
+                />
+              )}
+              {corteDetalle.id == null && (
+                <div style={{ ...S.alert('warn'), marginTop: 8, fontSize: 'var(--cc-caption)' }}>
+                  Corte aún no generado. Puede adjuntar la planilla SS del período pendiente arriba;
+                  al completar Contrato/Propuesta, la generación automática creará el corte sin romper la secuencia.
                 </div>
               )}
             </div>
             <div style={modalFoot}>
               <button type="button" style={S.btn('ghost')} onClick={() => setCorteDetalle(null)}>Cerrar</button>
-              {perms?.editar && (
+              {perms?.editar && corteDetalle.id != null && (
                 <button type="button" style={S.btn('primary')} onClick={guardarCorteEdit} disabled={savingCorte}>
                   {savingCorte ? 'Guardando...' : 'Guardar'}
                 </button>
@@ -992,13 +1039,13 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
 
       {/* AGREGAR ÍTEM */}
       {showAgregarItem && (
-        <div style={{ ...overlayStyle, zIndex: 10002 }} onClick={(e) => e.target === e.currentTarget && setShowAgregarItem(false)}>
+        <div style={{ ...overlayStyle, zIndex: 10002 }}>
           <div style={modalStyle(660)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: col.textPrimary, fontFamily: "'Rajdhani',sans-serif" }}>Agregar Ítem de Cobro</div>
-                <div style={{ fontSize: 11, color: col.textSecondary, marginTop: 2 }}>Subcontratista: {detalle?.razon_social}</div>
+                <div style={modalTitle}>Agregar Ítem de Cobro</div>
+                <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, marginTop: 2 }}>Subcontratista: {detalle?.razon_social}</div>
               </div>
               <button type="button" style={S.closeBtn} onClick={() => setShowAgregarItem(false)}>✕</button>
             </div>
@@ -1080,15 +1127,15 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
 
       {/* DETALLE PRECIO */}
       {precioEdit && (
-        <div style={{ ...overlayStyle, zIndex: 10002 }} onClick={(e) => e.target === e.currentTarget && setPrecioEdit(null)}>
+        <div style={{ ...overlayStyle, zIndex: 10002 }}>
           <div style={modalStyle(500)}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: col.textPrimary, fontFamily: "'Rajdhani',sans-serif" }}>
+                <div style={modalTitle}>
                   {precioEdit.item_numero} — {(precioEdit.descripcion || '').substring(0, 38)}{(precioEdit.descripcion || '').length > 38 ? '...' : ''}
                 </div>
-                <div style={{ fontSize: 11, color: col.textSecondary, marginTop: 2 }}>{detalle?.razon_social}</div>
+                <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, marginTop: 2 }}>{detalle?.razon_social}</div>
               </div>
               <button type="button" style={S.closeBtn} onClick={() => setPrecioEdit(null)}>✕</button>
             </div>

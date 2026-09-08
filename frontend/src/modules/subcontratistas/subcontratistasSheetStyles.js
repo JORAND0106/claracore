@@ -189,26 +189,30 @@ export function subUi(theme, tTok) {
         : estado === 'aprobado' ? '#22c55e'
           : '#ef4444',
     }),
-    btn: (variant = 'primary', sm = false) => ({
-      padding: sm ? '4px 10px' : '6px 14px',
-      borderRadius: 6,
-      cursor: 'pointer',
-      fontSize: sm ? 'var(--cc-caption)' : 'var(--cc-sm)',
-      fontWeight: 600,
-      border: '1px solid',
-      transition: 'all 0.15s',
-      ...(variant === 'primary' ? {
-        background: '#00afc5', borderColor: '#00afc5', color: '#081318',
-      } : variant === 'success' ? {
-        background: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.4)', color: '#22c55e',
-      } : variant === 'danger' ? {
-        background: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.4)', color: '#ef4444',
-      } : variant === 'ghost' ? {
-        background: 'transparent', borderColor: 'rgba(0,175,197,0.2)', color: dark || rest ? '#8acdd8' : '#0077B6',
-      } : {
-        background: 'rgba(0,175,197,0.08)', borderColor: 'rgba(0,175,197,0.2)', color: '#00afc5',
-      }),
-    }),
+    btn: (variant = 'primary', sm = false) => {
+      const primary = tTok?.primary || '#0077B6'
+      return {
+        padding: sm ? '4px 10px' : '6px 14px',
+        borderRadius: 6,
+        cursor: 'pointer',
+        fontSize: sm ? 'var(--cc-caption)' : 'var(--cc-sm)',
+        fontWeight: 600,
+        border: '1px solid',
+        transition: 'all 0.15s',
+        fontFamily: 'inherit',
+        ...(variant === 'primary' ? {
+          background: primary, borderColor: primary, color: dark ? '#081318' : '#fff',
+        } : variant === 'success' ? {
+          background: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.4)', color: '#22c55e',
+        } : variant === 'danger' ? {
+          background: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.4)', color: '#ef4444',
+        } : variant === 'ghost' ? {
+          background: 'transparent', borderColor: `${primary}55`, color: primary,
+        } : {
+          background: `${primary}14`, borderColor: `${primary}44`, color: primary,
+        }),
+      }
+    },
     input: dark ? {
       background: '#081318',
       border: '1px solid rgba(0,175,197,0.2)',

@@ -100,3 +100,16 @@ export function polizaArchivoPath(subId, polizaId) {
 export function documentoArchivoPath(subId, docId) {
   return `/subcontratistas/${subId}/documentos/${docId}/archivo`
 }
+
+export async function deleteDocumento(subId, docId, token) {
+  const res = await fetch(`${API_BASE}/subcontratistas/${subId}/documentos/${docId}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) await parseError(res)
+  try {
+    return await res.json()
+  } catch {
+    return { ok: true }
+  }
+}
