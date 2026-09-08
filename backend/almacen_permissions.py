@@ -151,11 +151,25 @@ def require_acceso_almacen(current_user, accion: AlmacenAccion) -> None:
     require_permiso_almacen(current_user, accion)
 
 
-_ROLES_RECEPTOR_OBRA_IDS = frozenset({3, 5, 7})  # Contratista, Operativo Contratista, Contratista Gerencial
+# Roles canónicos (tabla roles): Contratista=3, Operativo Contratista=5.
+# Contratista Gerencial (7) NO es receptor de obra en Salidas.
+_ROLES_RECEPTOR_OBRA_IDS = frozenset({3, 5})
 
 
-def es_rol_receptor_obra(rol_nombre: str) -> bool:
-    """Solo operativo/contratista/contratista gerencial; nunca interventoría."""
+def es_rol_receptor_obra(rol_nombre: str, rol_id: int | None = None) -> bool:
+    """Solo operativo contratista / contratista. Nunca interventoría ni gerencial."""
+    if rol_id is not None:
+        try:
+            rid = int(rol_id)
+        except (TypeError, ValueError):
+            rid = None
+        else:
+            if rid in _ROLES_RECEPTOR_OBRA_IDS:
+                return True
+            # Gerencial / interventoría / supervisor por id conocido
+            if rid in (2, 4, 6, 7, 8):
+                return False
+
     rol = _norm(rol_nombre or "")
     if not rol:
         return False
@@ -163,13 +177,17 @@ def es_rol_receptor_obra(rol_nombre: str) -> bool:
         return False
     if "intervent" in rol:
         return False
+    if "gerencial" in rol:
+        return False
     if "supervis" in rol and "extern" in rol:
         return False
-    if rol in ("contratista", "operativo contratista", "contratista gerencial"):
+    if rol in ("contratista", "operativo contratista"):
         return True
-    if "operativo" in rol and "intervent" not in rol and "contrat" in rol:
+    # p.ej. "operativo del contratista"
+    if "operativo" in rol and "contrat" in rol:
         return True
-    if "contrat" in rol and "gerencial" in rol and "intervent" not in rol:
+    # "contratista" sin gerencial/interventoría (ya excluido arriba)
+    if rol == "contratista" or (rol.startswith("contratista") and "gerencial" not in rol):
         return True
     return False
 
