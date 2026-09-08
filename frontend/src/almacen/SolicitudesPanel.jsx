@@ -198,25 +198,33 @@ export default function SolicitudesPanel({
         </div>
       ) : (
         <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
-          <table className="cc-almacen-responsive-table" style={{ ...ui.sheetTable, minWidth: 1080 }}>
+          <table
+            className="cc-almacen-responsive-table"
+            style={{ ...ui.sheetTable, minWidth: 1180, tableLayout: 'fixed' }}
+          >
             <thead>
               <tr>
-                <th style={{ ...ui.th, width: 56 }}>#</th>
-                <th style={ui.th}>Título</th>
-                <th style={{ ...ui.th, width: 110 }}>Estado</th>
-                <th style={ui.th}>Solicitante</th>
-                <th style={ui.th}>Aprobación</th>
-                <th style={{ ...ui.th, textAlign: 'right', width: 88 }}>Ítems</th>
-                <th style={{ ...ui.th, width: 100 }}>Fecha</th>
-                <th style={{ ...ui.th, width: 72 }}>OC</th>
-                <th style={{ ...ui.th, width: 88 }} title="Entrada vs cantidad de la OC">Entrada</th>
-                <th style={{ ...ui.th, width: 88 }} title="Salida vs cantidad recibida en entrada">Salida</th>
-                <th style={{ ...ui.th, width: 220 }} />
+                <th style={{ ...ui.th, width: 44 }}>#</th>
+                <th style={{ ...ui.th, width: '16%' }}>Título</th>
+                <th style={{ ...ui.th, width: 96 }}>Estado</th>
+                <th style={{ ...ui.th, width: '12%' }}>Solicitante</th>
+                <th style={{ ...ui.th, width: '12%' }}>Aprobación</th>
+                <th style={{ ...ui.th, textAlign: 'right', width: 56 }}>Ítems</th>
+                <th style={{ ...ui.th, width: 96 }}>Fecha</th>
+                <th style={{ ...ui.th, width: 56 }}>OC</th>
+                <th style={{ ...ui.th, width: 92 }} title="Entrada vs cantidad de la OC">Entrada</th>
+                <th style={{ ...ui.th, width: 92 }} title="Salida vs cantidad recibida en entrada">Salida</th>
+                <th style={{ ...ui.th, width: 280 }}>Acciones</th>
               </tr>
             </thead>
             <tbody>
               {listaFiltrada.map((s) => {
                 const nItems = s.items_count != null ? s.items_count : (s.items || []).length
+                const cellEllipsis = {
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }
                 return (
                 <tr
                   key={s.id}
@@ -226,23 +234,43 @@ export default function SolicitudesPanel({
                   onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
                 >
                   <td style={ui.tdNum} data-label="#">{s.consecutivo}</td>
-                  <td style={{ ...ui.td, fontWeight: 600 }} data-label="Título">
+                  <td
+                    style={{ ...ui.td, fontWeight: 600, ...cellEllipsis }}
+                    data-label="Título"
+                    title={s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
+                  >
                     {s.titulo?.trim() || `Solicitud #${s.consecutivo}`}
                   </td>
-                  <td style={{ ...ui.td, color: ESTADO_SOLICITUD_COLOR[s.estado], fontWeight: 700 }} data-label="Estado">
+                  <td
+                    style={{
+                      ...ui.td,
+                      color: ESTADO_SOLICITUD_COLOR[s.estado],
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                    }}
+                    data-label="Estado"
+                  >
                     {ESTADO_SOLICITUD_LABEL[s.estado]}
                   </td>
-                  <td style={ui.td} data-label="Solicitante">
+                  <td
+                    style={{ ...ui.td, ...cellEllipsis }}
+                    data-label="Solicitante"
+                    title={s.solicitante_nombre || undefined}
+                  >
                     {s.solicitante_nombre || '—'}
                   </td>
-                  <td style={ui.td} data-label="Aprobación">
+                  <td
+                    style={{ ...ui.td, ...cellEllipsis }}
+                    data-label="Aprobación"
+                    title={textoAprobacionSolicitud(s) || undefined}
+                  >
                     {textoAprobacionSolicitud(s)}
                   </td>
                   <td style={ui.tdNum} data-label="Ítems">{nItems}</td>
                   <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="Fecha">
                     {fmtFechaAlmacenCorta(s.created_at)}
                   </td>
-                  <td style={ui.td} data-label="OC" onClick={(e) => e.stopPropagation()}>
+                  <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="OC" onClick={(e) => e.stopPropagation()}>
                     {(s.estado === 'aprobada' || solicitudTieneOrdenCompra(s)) && permisos?.exportar
                       && solicitudOrdenesCompra(s).length > 0 ? (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -266,6 +294,7 @@ export default function SolicitudesPanel({
                     style={{
                       ...ui.td,
                       fontWeight: s.estado_entrada ? 700 : 400,
+                      whiteSpace: 'nowrap',
                       color: s.estado_entrada === 'total'
                         ? '#15803d'
                         : s.estado_entrada === 'parcial'
@@ -281,6 +310,7 @@ export default function SolicitudesPanel({
                     style={{
                       ...ui.td,
                       fontWeight: s.estado_salida ? 700 : 400,
+                      whiteSpace: 'nowrap',
                       color: s.estado_salida === 'total'
                         ? '#15803d'
                         : s.estado_salida === 'parcial'
@@ -292,8 +322,8 @@ export default function SolicitudesPanel({
                   >
                     {formatEstadoOcMovimiento(s.estado_salida)}
                   </td>
-                  <td style={ui.td} data-label="Acciones" onClick={(e) => e.stopPropagation()}>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <td style={{ ...ui.td, whiteSpace: 'nowrap' }} data-label="Acciones" onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap', alignItems: 'center' }}>
                       <AlmacenTrazabilidadButton
                         token={token}
                         theme={t}
