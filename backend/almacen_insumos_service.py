@@ -861,6 +861,7 @@ def filas_rentabilidad_por_insumo(
     solicitud_id: Optional[int] = None,
     solicitud_consecutivo: Optional[int] = None,
     override_actual: Optional[dict] = None,
+    costo_mo: Optional[dict] = None,
 ) -> dict:
     """
     Una fila por insumo (principal + asociados) + fila Total del ítem.
@@ -868,6 +869,7 @@ def filas_rentabilidad_por_insumo(
     - Cant. / VU costo / Tot. costo: propios de cada insumo.
     - VU cobro / Tot. cobro: solo en el principal (los asociados no generan cobro).
     - Utilidad y % rent.: solo en la fila Total (cobro principal − suma de costos).
+    - Opcional: fila de mano de obra (costo directo, sin VU) antes del Total.
     """
     merged = _aplicar_override_lineas(rows, override_actual)
     if not merged:
@@ -916,6 +918,7 @@ def filas_rentabilidad_por_insumo(
             "solicitud_item_id": r.get("id"),
             "insumo_id": r.get("insumo_id"),
             "es_principal": es_principal,
+            "es_mo": False,
             "es_actual": True,
             "es_total": False,
             "cantidad": cant if cant > 0 else None,
@@ -928,6 +931,19 @@ def filas_rentabilidad_por_insumo(
             "utilidad_estimada_linea": None,
             "rentabilidad_pct": None,
         })
+
+    from almacen_mo_costo import fila_rentabilidad_mo
+
+    mo_fila = fila_rentabilidad_mo(
+        costo_mo or {},
+        numero_oc=numero_oc,
+        solicitud_id=solicitud_id,
+        solicitud_consecutivo=solicitud_consecutivo,
+    )
+    if mo_fila:
+        filas.append(mo_fila)
+        sum_costo += _to_float(mo_fila.get("costo_insumo_linea"))
+        tiene_costo = True
 
     costo_total = round(sum_costo, 2) if tiene_costo else None
     util = (
@@ -946,6 +962,7 @@ def filas_rentabilidad_por_insumo(
         "solicitud_id": solicitud_id,
         "solicitud_consecutivo": solicitud_consecutivo,
         "es_principal": None,
+        "es_mo": False,
         "es_actual": True,
         "es_total": True,
         "cantidad": cant_principal,
@@ -957,7 +974,7 @@ def filas_rentabilidad_por_insumo(
         "utilidad_estimada_linea": util,
         "rentabilidad_pct": pct,
     })
-    return {"filas": filas, "modo": "por_insumo"}
+    return {"filas": filas, "modo": "por_insumo", "costo_mo": mo_fila}
 
 
 def get_analisis_rentabilidad_por_oc(
@@ -973,12 +990,15 @@ def get_analisis_rentabilidad_por_oc(
     valor_cobro_unitario: float,
     solicitud_consecutivo: Optional[int] = None,
     presupuesto_id: Optional[int] = None,
+    pk_id: Optional[str] = None,
+    pk_id_id: Optional[int] = None,
 ) -> dict:
     """
     Rentabilidad del ítem de presupuesto en la solicitud actual:
     una fila por insumo (principal + asociados) + fila Total.
 
-    Cobro solo del principal; costo = suma de todos los insumos del ítem.
+    Cobro solo del principal; costo = suma de todos los insumos del ítem
+    + mano de obra N2 del PK-ID (si aplica).
     """
     sb = _sb()
     cap = (capitulo or "").strip()
@@ -988,7 +1008,7 @@ def get_analisis_rentabilidad_por_oc(
     select_cols = (
         "id, cantidad, valor_compra_unitario, vlr_unitario_cobro, "
         "solicitud_id, insumo_id, capitulo, item, presupuesto_id, "
-        "es_principal, material_descripcion, numero_linea"
+        "es_principal, material_descripcion, numero_linea, pk_id, pk_id_id"
     )
 
     # Solo líneas de la solicitud actual vinculadas al mismo ítem.
@@ -1075,12 +1095,51 @@ def get_analisis_rentabilidad_por_oc(
     if not rows and not (cantidad_presente > 0):
         return {"filas": [], "modo": "por_insumo"}
 
+    # PK de la línea (o de cualquier hermano) para acotar MO al PK-ID.
+    pk_ref = pk_id
+    pk_id_ref = int(pk_id_id) if pk_id_id else None
+    if existing:
+        if not pk_ref:
+            pk_ref = existing.get("pk_id")
+        if pk_id_ref is None and existing.get("pk_id_id") is not None:
+            try:
+                pk_id_ref = int(existing["pk_id_id"])
+            except (TypeError, ValueError):
+                pk_id_ref = None
+    if (not pk_ref or pk_id_ref is None) and rows:
+        for r in rows:
+            if not pk_ref and r.get("pk_id"):
+                pk_ref = r.get("pk_id")
+            if pk_id_ref is None and r.get("pk_id_id") is not None:
+                try:
+                    pk_id_ref = int(r["pk_id_id"])
+                except (TypeError, ValueError):
+                    pass
+            if pk_ref and pk_id_ref is not None:
+                break
+
+    costo_mo = None
+    try:
+        from almacen_mo_costo import calcular_costo_mo
+
+        costo_mo = calcular_costo_mo(
+            int(contrato_id),
+            capitulo=cap or ((existing or {}).get("capitulo") or ""),
+            item=itm or _norm_item_key((existing or {}).get("item")),
+            pk_id_id=pk_id_ref,
+            pk_id=pk_ref,
+            sb=sb,
+        )
+    except Exception:
+        costo_mo = None
+
     return filas_rentabilidad_por_insumo(
         rows,
         numero_oc=num_oc,
         solicitud_id=int(solicitud_id),
         solicitud_consecutivo=solicitud_consecutivo,
         override_actual=override_actual,
+        costo_mo=costo_mo,
     )
 
 

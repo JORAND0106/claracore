@@ -903,6 +903,8 @@ def _enrich_solicitud(
                         valor_cobro_unitario=vlr,
                         solicitud_consecutivo=sol.get("consecutivo"),
                         presupuesto_id=int(pid) if pid else None,
+                        pk_id=it.get("pk_id"),
+                        pk_id_id=int(it["pk_id_id"]) if it.get("pk_id_id") is not None else None,
                     )
                     rent_cache[cache_key] = ar
                     it["analisis_rentabilidad"] = ar

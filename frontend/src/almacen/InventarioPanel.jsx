@@ -36,14 +36,14 @@ const INVENTARIO_COLS = [
   {
     key: 'utilidad',
     abbr: 'UTIL.',
-    tip: 'Utilidad — VU Cobro − VU Costo del ítem.',
+    tip: 'Utilidad — VU Cobro − VU Costo del ítem (incluye mano de obra de subcontratistas cuando aplica).',
     align: 'right',
     ecoOnly: true,
   },
   {
     key: 'rent',
     abbr: '% RENT.',
-    tip: '% Rentabilidad — (Utilidad / VU Cobro) × 100.',
+    tip: '% Rentabilidad — (Utilidad / VU Cobro) × 100. Incluye costo de mano de obra validada N2.',
     align: 'right',
     ecoOnly: true,
   },
@@ -780,10 +780,12 @@ function FragmentItem({
       </tr>
 
       {itemOpen && (it.insumos || []).map((ins) => {
-        const insKey = `${itemKey}:ins:${ins.insumo_id}`
+        const insKey = ins.es_mo
+          ? `${itemKey}:mo`
+          : `${itemKey}:ins:${ins.insumo_id}`
         const insOpen = expandedInsumos.has(insKey)
         const ocs = ins.ordenes_compra || []
-        const hasOcs = ocs.length > 0
+        const hasOcs = !ins.es_mo && ocs.length > 0
         return (
           <FragmentInsumo
             key={insKey}
@@ -855,7 +857,19 @@ function FragmentInsumo({
               depth={2}
               disabled={!hasOcs}
             />
-            {ins.es_principal === false && (
+            {ins.es_mo && (
+              <span style={{
+                fontSize: 10,
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                opacity: 0.85,
+                flexShrink: 0,
+              }}
+              >
+                M.O.
+              </span>
+            )}
+            {!ins.es_mo && ins.es_principal === false && (
               <span style={{
                 fontSize: 10,
                 fontWeight: 600,
@@ -870,16 +884,29 @@ function FragmentInsumo({
           </div>
         </td>
         {verEconomicos && <td style={num}>—</td>}
-        {verEconomicos && <td style={num}>{fmtMoneyOrDash(ins.vu_costo, hideEco)}</td>}
+        {verEconomicos && (
+          <td
+            style={num}
+            title={ins.es_mo ? 'Costo total de mano de obra (sin VU unitario)' : undefined}
+          >
+            {ins.es_mo
+              ? fmtMoneyOrDash(ins.costo_contribucion, hideEco)
+              : fmtMoneyOrDash(ins.vu_costo, hideEco)}
+          </td>
+        )}
         {verEconomicos && <td style={num}>—</td>}
         {verEconomicos && <td style={num}>—</td>}
-        <td style={num}>{fmtMoneyOrDash(ins.valor_entradas, hideEco)}</td>
-        <td style={num}>{fmtMoneyOrDash(ins.valor_salidas, hideEco)}</td>
-        <td style={{ ...num, fontWeight: 600 }}>
-          {fmtMoneyOrDash(ins.valor_stock ?? ins.stock, hideEco)}
+        <td style={num}>
+          {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.valor_entradas, hideEco)}
+        </td>
+        <td style={num}>
+          {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.valor_salidas, hideEco)}
         </td>
         <td style={{ ...num, fontWeight: 600 }}>
-          {fmtMoneyOrDash(ins.saldo_por_consumir, hideEco)}
+          {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.valor_stock ?? ins.stock, hideEco)}
+        </td>
+        <td style={{ ...num, fontWeight: 600 }}>
+          {ins.es_mo ? 'N/A' : fmtMoneyOrDash(ins.saldo_por_consumir, hideEco)}
         </td>
       </tr>
 
