@@ -173,4 +173,38 @@ describe('buildEditFormFromInsumoRow y captureFieldsFromPar', () => {
     assert.equal(fields.cotizacion_numero_np, 'BO-160-2026-NP')
     assert.equal(fields.costo_base, '1000')
   })
+
+  it('captureFieldsFromPar autodiligencia contactos de una cotización perdedora', () => {
+    const fields = captureFieldsFromPar({
+      id: 'b',
+      es_ganadora: false,
+      proveedor_id: 99,
+      nit: '9002',
+      contacto_email: 'o@x.co',
+      contacto_nombre: 'Luis',
+      contacto_telefono: '310',
+      insumo: {
+        proveedor: 'OTRO SAS',
+        valor: '200',
+        numero: 'OT-1',
+        fecha: '2026-03-01',
+        vigencia: '30',
+        impuesto: { administracion: '', imprevistos: '', utilidad: '', iva: '' },
+      },
+      no_previsto: {
+        valor: '',
+        numero: '',
+        fecha: '',
+        vigencia: '',
+        impuesto: { administracion: '', imprevistos: '', utilidad: '', iva: '' },
+      },
+    })
+    assert.equal(fields.razon_social, 'OTRO SAS')
+    assert.equal(fields.nit, '9002')
+    assert.equal(fields.contacto_email, 'o@x.co')
+    assert.equal(fields.contacto_nombre, 'Luis')
+    assert.equal(fields.contacto_telefono, '310')
+    assert.equal(fields.proveedor_id, 99)
+    assert.equal(fields.costo_base, '200')
+  })
 })

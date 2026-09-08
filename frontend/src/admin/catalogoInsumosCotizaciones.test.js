@@ -498,6 +498,44 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(pares.find((p) => p.es_ganadora)?.insumo.numero, 'NEW')
   })
 
+  it('cotizacionesPayloadForSave conserva nit/contactos de perdedoras', () => {
+    const pares = [
+      {
+        id: 'a',
+        es_ganadora: true,
+        proveedor_id: 42,
+        nit: '8601',
+        contacto_email: 'a@p.co',
+        contacto_nombre: 'Ana',
+        contacto_telefono: '300',
+        insumo: { ...newCotizacionPar().insumo, proveedor: 'PAVCO', valor: '100', numero: 'BO-1' },
+        no_previsto: newCotizacionPar().no_previsto,
+      },
+      {
+        id: 'b',
+        es_ganadora: false,
+        proveedor_id: '',
+        nit: '9002',
+        contacto_email: 'o@x.co',
+        contacto_nombre: 'Luis',
+        contacto_telefono: '310',
+        insumo: { ...newCotizacionPar().insumo, proveedor: 'OTRO SAS', valor: '200', numero: 'OT-1' },
+        no_previsto: newCotizacionPar().no_previsto,
+      },
+    ]
+    const payload = cotizacionesPayloadForSave(pares)
+    const perd = payload.find((r) => r.pair_id === 'b' && r.tipo === 'insumo')
+    assert.ok(perd)
+    assert.equal(perd.nit, '9002')
+    assert.equal(perd.contacto_email, 'o@x.co')
+    assert.equal(perd.contacto_nombre, 'Luis')
+    assert.equal(perd.contacto_telefono, '310')
+    const round = detalleToPares(payload)
+    const perdPar = round.find((p) => p.id === 'b')
+    assert.equal(perdPar.nit, '9002')
+    assert.equal(perdPar.contacto_email, 'o@x.co')
+  })
+
   it('buildParFromCapture y applyCaptureToPar adjuntan PDF autocargado por lado', () => {
     const pdfIns = new File([new Uint8Array([1, 2, 3])], 'cot-ins.pdf', { type: 'application/pdf' })
     const pdfNp = new File([new Uint8Array([4, 5])], 'cot-np.pdf', { type: 'application/pdf' })
