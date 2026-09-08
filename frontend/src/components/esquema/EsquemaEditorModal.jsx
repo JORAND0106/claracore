@@ -80,7 +80,16 @@ import {
 } from './esquemaIa'
 import { canReorderZOrder, reorderZOrder } from './esquemaZOrder'
 import { canOffsetEntity, offsetEntity, signedOffsetDistance } from './esquemaOffset'
-import { cotaText, createCota, drawCota } from './esquemaCota'
+import {
+  cotaText,
+  createCota,
+  createCotaAngle,
+  createCotaDiametro,
+  createCotaFromSegments,
+  createCotaRadio,
+  drawCota,
+} from './esquemaCota'
+import { createAreaLabelFromClick, drawAreaLabel } from './esquemaArea'
 import { esquemaEntityInk, esquemaUiTheme, resolveEsquemaUi } from './esquemaTheme'
 
 const HATCHES = [
@@ -122,6 +131,7 @@ const TOOL_GROUPS = [
       { id: 'texto', label: 'Texto', Icon: IconTexto },
       { id: 'tabla', label: 'Tabla', Icon: IconTabla },
       { id: 'hatch', label: 'Relleno hatch (región)', Icon: IconHatch },
+      { id: 'area', label: 'Área de región cerrada', Icon: IconArea },
       { id: 'cota', label: 'Acotado (línea de cota)', Icon: IconCota },
     ],
   },
@@ -204,6 +214,35 @@ function uid() {
 
 function dist(a, b) {
   return Math.hypot(b.x - a.x, b.y - a.y)
+}
+
+function segmentFromEntity(obj, p) {
+  if (!obj) return null
+  if (obj.type === 'linea' || obj.type === 'flecha') {
+    return { a: { x: obj.x1, y: obj.y1 }, b: { x: obj.x2, y: obj.y2 } }
+  }
+  if (obj.type === 'polilinea' || obj.type === 'stroke') {
+    const pts = obj.points || []
+    let best = null
+    let bestD = Infinity
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      const a = pts[i]
+      const b = pts[i + 1]
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const len2 = dx * dx + dy * dy
+      let t = len2 < 1e-9 ? 0 : ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2
+      t = Math.max(0, Math.min(1, t))
+      const foot = { x: a.x + dx * t, y: a.y + dy * t }
+      const d = Math.hypot(p.x - foot.x, p.y - foot.y)
+      if (d < bestD) {
+        bestD = d
+        best = { a: { ...a }, b: { ...b } }
+      }
+    }
+    return best
+  }
+  return null
 }
 
 function cloneScene(objs) {
@@ -328,9 +367,12 @@ export default function EsquemaEditorModal({
   const [arrayDy, setArrayDy] = useState('1')
   const [arrayCount, setArrayCount] = useState('4')
   const [arrayAngle, setArrayAngle] = useState('360')
+  const [cotaMode, setCotaMode] = useState('linear')
   const rotatePivotRef = useRef(null)
   const mirrorAxisRef = useRef(null)
   const arrayModeRef = useRef('rect')
+  const cotaModeRef = useRef('linear')
+  const anglePickRef = useRef({ lines: [], points: [] })
   const selectModeRef = useRef('mover')
   const selectedIdRef = useRef(null)
   const selectedIdsRef = useRef(new Set())
@@ -348,6 +390,7 @@ export default function EsquemaEditorModal({
   joinSeqRef.current = joinSeq
   selectModeRef.current = selectMode
   arrayModeRef.current = arrayMode
+  cotaModeRef.current = cotaMode
 
   useEffect(() => {
     themeRef.current = ui
@@ -1005,6 +1048,70 @@ export default function EsquemaEditorModal({
     redraw()
   }
 
+  const commitCotaObj = (shape) => {
+    if (!shape) return false
+    pushHistory()
+    const placed = { ...shape, id: uid(), color: colorRef.current, width: Math.min(1.5, widthRef.current) }
+    placed.text = cotaText(placed)
+    objectsRef.current = [...objectsRef.current, placed]
+    selectOne(placed.id)
+    setDirty(true)
+    setLiveMeasure(placed.text)
+    anglePickRef.current = { lines: [], points: [] }
+    setToolHint('')
+    redraw()
+    return true
+  }
+
+  const placeSpecialCota = (p) => {
+    const mode = cotaModeRef.current
+    if (mode === 'radio' || mode === 'diametro') {
+      const hit = hitTest(p)
+      if (!hit || hit.type !== 'elipse') {
+        setToolHint(mode === 'radio' ? 'Seleccione un círculo o elipse' : 'Seleccione un círculo')
+        return false
+      }
+      const extras = { color: colorRef.current, width: Math.min(1.5, widthRef.current) }
+      const shape = mode === 'radio'
+        ? createCotaRadio(hit, p, extras)
+        : createCotaDiametro(hit, p, extras)
+      return commitCotaObj(shape)
+    }
+    if (mode === 'angle') {
+      const hit = hitTest(p)
+      const seg = segmentFromEntity(hit, p)
+      const pick = anglePickRef.current
+      if (seg) {
+        pick.lines = [...(pick.lines || []), { seg, pick: { x: p.x, y: p.y } }]
+        pick.points = []
+        if (pick.lines.length >= 2) {
+          const [a, b] = pick.lines
+          const shape = createCotaFromSegments(a.seg, b.seg, { pickA: a.pick, pickB: b.pick })
+          if (!shape) {
+            setToolHint('Las líneas no se intersectan')
+            pick.lines = []
+            return false
+          }
+          return commitCotaObj(shape)
+        }
+        setToolHint('Ángulo: seleccione la segunda línea (o tres puntos)')
+        return false
+      }
+      const snapped = snapWorldPoint(p)
+      pick.points = [...(pick.points || []), { x: snapped.x, y: snapped.y }]
+      pick.lines = []
+      if (pick.points.length >= 3) {
+        const [v, a, b] = pick.points
+        return commitCotaObj(createCotaAngle(v, a, b))
+      }
+      setToolHint(pick.points.length === 1
+        ? 'Ángulo: indique un punto sobre el primer rayo'
+        : 'Ángulo: indique un punto sobre el segundo rayo')
+      return false
+    }
+    return false
+  }
+
   const applyJoinLines = () => {
     const ids = [...selectedIdsRef.current]
     const selectedLines = objectsRef.current.filter((o) => (o.type === 'linea' || o.type === 'polilinea') && ids.includes(o.id))
@@ -1547,6 +1654,31 @@ export default function EsquemaEditorModal({
       return
     }
 
+    if (currentTool === 'area') {
+      const label = createAreaLabelFromClick(objectsRef.current, p.x, p.y, colorRef.current)
+      if (label) {
+        pushHistory()
+        const withId = { ...label, id: uid() }
+        objectsRef.current = [...objectsRef.current, withId]
+        selectOne(withId.id)
+        setDirty(true)
+        setLiveMeasure(withId.text)
+        setToolHint('')
+        redraw()
+      } else {
+        setToolHint('No hay una región cerrada bajo el clic')
+      }
+      drawing.current = false
+      return
+    }
+
+    if (currentTool === 'cota' && cotaModeRef.current !== 'linear') {
+      const placed = placeSpecialCota(p)
+      drawing.current = false
+      if (placed) redraw()
+      return
+    }
+
     if (currentTool === 'hatch') {
       // Flood-fill de la subregión cerrada bajo el clic (líneas/figuras = fronteras)
       const region = createHatchRegionFromClick(
@@ -1677,7 +1809,7 @@ export default function EsquemaEditorModal({
       } else {
         setHoverCursor(null)
       }
-      if (TWO_POINT_TOOLS.has(currentTool) || currentTool === 'polilinea' || currentTool === 'seleccion' || currentTool === 'nodo' || currentTool === 'offset' || currentTool === 'girar-escalar' || currentTool === 'espejo' || currentTool === 'matriz') {
+      if (TWO_POINT_TOOLS.has(currentTool) || currentTool === 'polilinea' || currentTool === 'seleccion' || currentTool === 'nodo' || currentTool === 'offset' || currentTool === 'girar-escalar' || currentTool === 'espejo' || currentTool === 'matriz' || currentTool === 'area') {
         const prevSnap = snapRef.current
         const lastPoly = (
           currentTool === 'polilinea'
@@ -2464,6 +2596,12 @@ export default function EsquemaEditorModal({
       redraw()
       return true
     }
+    if (anglePickRef.current.lines?.length || anglePickRef.current.points?.length) {
+      anglePickRef.current = { lines: [], points: [] }
+      setToolHint('')
+      redraw()
+      return true
+    }
     if (rotatePivotRef.current) {
       rotatePivotRef.current = null
       setRotatePivot(null)
@@ -2630,7 +2768,17 @@ export default function EsquemaEditorModal({
       ? 'Matriz polar: defina copias y ángulo, luego clic en el centro (snap activo).'
       : 'Matriz rectangular: defina filas, columnas y espaciado en metros, luego Aplicar.')
     : ''
-  const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || insertHint
+  const areaHint = tool === 'area'
+    ? 'Área: clic dentro de una región cerrada (rectas y curvas). El valor queda en m².'
+    : ''
+  const cotaKindHint = tool === 'cota' && cotaMode !== 'linear'
+    ? (cotaMode === 'angle'
+      ? 'Ángulo: dos líneas que se cruzan, o tres puntos (vértice y dos rayos).'
+      : cotaMode === 'radio'
+        ? 'Radio: clic en un círculo o elipse.'
+        : 'Diámetro: clic en un círculo o elipse.')
+    : ''
+  const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || areaHint || cotaKindHint || insertHint
 
   const pedirGuardar = () => {
     if (busy || !dirty) return
@@ -2715,6 +2863,7 @@ export default function EsquemaEditorModal({
                       clearDynBuffer()
                       mirrorAxisRef.current = null
                       setMirrorPrompt(null)
+                      anglePickRef.current = { lines: [], points: [] }
                       setTool(tb.id)
                     }}
                     style={iconBtn(t, tool === tb.id)}
@@ -2760,6 +2909,26 @@ export default function EsquemaEditorModal({
           ))}
           {tool === 'seleccion' ? (
             <SelectModeRadios t={t} value={selectMode} onChange={setSelectMode} />
+          ) : null}
+          {tool === 'cota' ? (
+            <SelectModeRadios
+              t={t}
+              value={cotaMode}
+              onChange={(id) => {
+                setCotaMode(id)
+                anglePickRef.current = { lines: [], points: [] }
+                setToolHint('')
+              }}
+              compact
+              name="cc-esquema-cota-mode"
+              ariaLabel="Tipo de acotado"
+              options={[
+                { id: 'linear', label: 'Lineal' },
+                { id: 'angle', label: 'Ángulo' },
+                { id: 'radio', label: 'Radio' },
+                { id: 'diametro', label: 'Diámetro' },
+              ]}
+            />
           ) : null}
           {tool === 'matriz' ? (
             <ArrayPanel
@@ -2977,7 +3146,7 @@ export default function EsquemaEditorModal({
                   : tool === 'seleccion' ? 'default'
                     : tool === 'girar-escalar' ? 'alias'
                       : tool === 'texto' ? 'text'
-                        : tool === 'hatch' || tool === 'tabla' ? 'cell'
+                        : tool === 'hatch' || tool === 'area' || tool === 'tabla' ? 'cell'
                           : 'crosshair'),
             }}
             onPointerDown={onPointerDown}
@@ -3427,6 +3596,7 @@ function entityTypeLabel(type) {
     elipse: 'Elipse / círculo',
     triangulo: 'Triángulo',
     cota: 'Línea de cota',
+    areaLabel: 'Área',
     polilinea: 'Polilínea',
     nodo: 'Nodo',
     stroke: 'Trazo',
@@ -3794,6 +3964,11 @@ function drawObject(ctx, obj, selected, opts = {}) {
     ctx.restore()
     return
   }
+  if (obj.type === 'areaLabel') {
+    drawAreaLabel(ctx, obj, selected, opts.zoom || 1, ui)
+    ctx.restore()
+    return
+  }
   if (obj.type === 'hatchRegion') {
     drawHatchRegion(ctx, obj, ui)
     if (selected) {
@@ -4125,6 +4300,7 @@ function objectCenter(obj) {
     const { w, h } = tablaSize(obj)
     return { x: (obj.x || 0) + w / 2, y: (obj.y || 0) + h / 2 }
   }
+  if (obj.type === 'areaLabel') return { x: obj.x || 0, y: obj.y || 0 }
   if (obj.type === 'texto' || obj.type === 'hatchRegion' || obj.type === 'bloque') {
     return { x: (obj.x || 0) + (obj.w || 0) / 2, y: (obj.y || 0) + (obj.h || 0) / 2 }
   }
@@ -4149,6 +4325,11 @@ function objectBounds(obj) {
     const { w, h } = tablaSize(obj)
     return { x: obj.x || 0, y: obj.y || 0, w, h }
   }
+  if (obj.type === 'areaLabel') {
+    const w = obj.w || 108
+    const h = obj.h || 24
+    return { x: (obj.x || 0) - w / 2, y: (obj.y || 0) - h / 2, w, h }
+  }
   if (obj.type === 'texto' || obj.type === 'hatchRegion' || obj.type === 'bloque') {
     return { x: obj.x || 0, y: obj.y || 0, w: obj.w || 0, h: obj.h || 0 }
   }
@@ -4168,7 +4349,7 @@ function pointInObject(p, obj) {
 }
 
 function translateObject(obj, dx, dy) {
-  if (obj.type === 'nodo') return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
+  if (obj.type === 'nodo' || obj.type === 'areaLabel') return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
   if (PATH_TYPES.has(obj.type)) {
     return { ...obj, points: (obj.points || []).map((p) => ({ x: p.x + dx, y: p.y + dy })) }
   }
@@ -4178,13 +4359,18 @@ function translateObject(obj, dx, dy) {
   if (obj.type === 'image') {
     return { ...obj, fit: false, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
   }
-  return {
+  const next = {
     ...obj,
     x1: obj.x1 + dx,
     y1: obj.y1 + dy,
     x2: obj.x2 + dx,
     y2: obj.y2 + dy,
   }
+  if (obj.x3 != null) {
+    next.x3 = obj.x3 + dx
+    next.y3 = (obj.y3 || 0) + dy
+  }
+  return next
 }
 
 function coordSheetStyles(t) {
@@ -4871,6 +5057,13 @@ function IconOffset() {
       <path d="M19 5v14" />
       <path d="m16 8 3-3 3 3" />
       <path d="m16 16 3 3 3-3" />
+    </svg>
+  )
+}
+function IconArea() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 16 8 6l6 4 6-6v16H4Z" />
     </svg>
   )
 }

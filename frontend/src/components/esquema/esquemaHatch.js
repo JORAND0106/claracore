@@ -5,7 +5,7 @@
 import { esquemaEntityInk } from './esquemaTheme.js'
 
 function strokeObjectEdges(ctx, obj) {
-  if (!obj || obj.type === 'hatchRegion' || obj.type === 'image' || obj.type === 'cota') return
+  if (!obj || obj.type === 'hatchRegion' || obj.type === 'image' || obj.type === 'cota' || obj.type === 'areaLabel') return
   ctx.save()
   const center = objectCenterApprox(obj)
   if (obj.rotation) {
@@ -132,7 +132,11 @@ export function hatchRasterScale(worldW, worldH, maxPixels = 4_000_000) {
   return Math.max(0.25, scale)
 }
 
-export function createHatchRegionFromClick(objects, worldX, worldY, hatchKind, color) {
+/**
+ * Misma detección de contorno que el hatch: rasteriza bordes y hace flood-fill
+ * desde el clic. No cambia el algoritmo; hatch y área lo reutilizan.
+ */
+export function detectClosedRegionFromClick(objects, worldX, worldY) {
   const bounds = expandBounds(objects, worldX, worldY, 32)
   const w = Math.max(1, bounds.maxX - bounds.minX)
   const h = Math.max(1, bounds.maxY - bounds.minY)
@@ -196,6 +200,14 @@ export function createHatchRegionFromClick(objects, worldX, worldY, hatchKind, c
 
   if (count < 8) return null
   if (count > rw * rh * 0.85) return null
+  return { count, scale, ox, oy, minX, maxX, minY, maxY, visited, rw, rh }
+}
+
+export function createHatchRegionFromClick(objects, worldX, worldY, hatchKind, color) {
+  const region = detectClosedRegionFromClick(objects, worldX, worldY)
+  if (!region) return null
+  const { count, scale, ox, oy, minX, maxX, minY, maxY, visited, rw } = region
+  if (count < 8) return null
 
   const bw = maxX - minX + 1
   const bh = maxY - minY + 1

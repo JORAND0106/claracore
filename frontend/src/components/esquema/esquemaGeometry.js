@@ -48,6 +48,80 @@ export function formatMeters(world, digits) {
   return `${m.toFixed(d)} m`
 }
 
+export function formatAreaM2(m2, digits = 2) {
+  const n = Number(m2)
+  if (!Number.isFinite(n)) return ''
+  return `${n.toFixed(digits)} m²`
+}
+
+/** Área en m² a partir del flood-fill raster del hatch: cada píxel = (1/scale)² mundo. */
+export function floodPixelsToM2(count, scale) {
+  const s = Number(scale)
+  const n = Number(count)
+  if (!Number.isFinite(n) || n < 0 || !Number.isFinite(s) || s <= 0) return 0
+  return (n / (s * s)) / (PX_PER_METER * PX_PER_METER)
+}
+
+export function polygonAreaWorld(points) {
+  const pts = (points || []).filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+  if (pts.length < 3) return 0
+  let acc = 0
+  for (let i = 0; i < pts.length; i += 1) {
+    const a = pts[i]
+    const b = pts[(i + 1) % pts.length]
+    acc += a.x * b.y - b.x * a.y
+  }
+  return Math.abs(acc) / 2
+}
+
+export function polygonAreaM2(points) {
+  return polygonAreaWorld(points) / (PX_PER_METER * PX_PER_METER)
+}
+
+export function lineLineIntersection(a1, a2, b1, b2) {
+  if (!a1 || !a2 || !b1 || !b2) return null
+  const dax = a2.x - a1.x
+  const day = a2.y - a1.y
+  const dbx = b2.x - b1.x
+  const dby = b2.y - b1.y
+  const den = dax * dby - day * dbx
+  if (Math.abs(den) < 1e-9) return null
+  const t = ((b1.x - a1.x) * dby - (b1.y - a1.y) * dbx) / den
+  return { x: a1.x + t * dax, y: a1.y + t * day }
+}
+
+export function angleDegBetween(v1, v2) {
+  const a = Math.atan2(v1?.y || 0, v1?.x || 0)
+  const b = Math.atan2(v2?.y || 0, v2?.x || 0)
+  let d = b - a
+  while (d <= -Math.PI) d += Math.PI * 2
+  while (d > Math.PI) d -= Math.PI * 2
+  return Math.abs(d) * (180 / Math.PI)
+}
+
+export function ellipseCenterRadii(obj) {
+  const cx = ((obj?.x1 || 0) + (obj?.x2 || 0)) / 2
+  const cy = ((obj?.y1 || 0) + (obj?.y2 || 0)) / 2
+  const rx = Math.max(0.5, Math.abs((obj?.x2 || 0) - (obj?.x1 || 0)) / 2)
+  const ry = Math.max(0.5, Math.abs((obj?.y2 || 0) - (obj?.y1 || 0)) / 2)
+  return { cx, cy, rx, ry }
+}
+
+/** Intersección elipse–rayo desde el centro hacia `toward` (coords locales, sin rotar). */
+export function pointOnEllipseToward(obj, toward) {
+  const { cx, cy, rx, ry } = ellipseCenterRadii(obj)
+  const dx = (toward?.x || cx + rx) - cx
+  const dy = (toward?.y || cy) - cy
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-9) return { x: cx + rx, y: cy }
+  const ux = dx / len
+  const uy = dy / len
+  const den = Math.hypot(ux * ry, uy * rx)
+  if (den < 1e-9) return { x: cx + rx, y: cy }
+  const t = (rx * ry) / den
+  return { x: cx + ux * t, y: cy + uy * t }
+}
+
 /** "2.5" | "2,5" | "3x2" | "3 x 1,20" → metros (no unidades internas). */
 export function parseDynMeasure(raw) {
   const s = String(raw ?? '').trim()
@@ -216,8 +290,35 @@ export function cotaArrowHeadLength(zoom = 1) {
   return snapMarkerWorldSize(zoom) * 0.85
 }
 
+export function cotaKindOf(obj) {
+  return obj?.kind || 'linear'
+}
+
+export const DEFAULT_ANGLE_RADIUS = 40
+
 /** Geometría de cota: puntos de medida, línea de cota, extensiones. */
 export function cotaLayout(obj) {
+  if (cotaKindOf(obj) === 'angle') {
+    const v = { x: obj?.x1 || 0, y: obj?.y1 || 0 }
+    const p1 = { x: obj?.x2 || 0, y: obj?.y2 || 0 }
+    const p2 = { x: obj?.x3 || 0, y: obj?.y3 || 0 }
+    const a1 = Math.atan2(p1.y - v.y, p1.x - v.x)
+    const a2 = Math.atan2(p2.y - v.y, p2.x - v.x)
+    let delta = a2 - a1
+    while (delta <= -Math.PI) delta += Math.PI * 2
+    while (delta > Math.PI) delta -= Math.PI * 2
+    const r = Math.abs(Number.isFinite(obj?.offset) ? obj.offset : DEFAULT_ANGLE_RADIUS) || DEFAULT_ANGLE_RADIUS
+    const midA = a1 + delta / 2
+    const d1 = { x: v.x + Math.cos(a1) * r, y: v.y + Math.sin(a1) * r }
+    const d2 = { x: v.x + Math.cos(a2) * r, y: v.y + Math.sin(a2) * r }
+    const mid = { x: v.x + Math.cos(midA) * r, y: v.y + Math.sin(midA) * r }
+    return {
+      a: v, b: v, d1, d2, mid,
+      ext1a: v, ext1b: d1, ext2a: v, ext2b: d2,
+      len: r, angle: midA, nx: Math.cos(midA), ny: Math.sin(midA),
+      offset: r, kind: 'angle', ang1: a1, ang2: a2, delta, vertex: v,
+    }
+  }
   const a = { x: obj?.x1 || 0, y: obj?.y1 || 0 }
   const b = { x: obj?.x2 || 0, y: obj?.y2 || 0 }
   const dx = b.x - a.x
@@ -261,6 +362,7 @@ export function getResizeHandles(obj) {
   if (!obj) return []
   if (obj.type === 'cota') {
     const L = cotaLayout(obj)
+    if (cotaKindOf(obj) !== 'linear') return [{ id: 'dim', x: L.mid.x, y: L.mid.y }]
     return [
       { id: 'a', x: L.a.x, y: L.a.y },
       { id: 'b', x: L.b.x, y: L.b.y },
@@ -347,9 +449,10 @@ export function nearestResizeHandle(p, obj) {
 export function applyResizeHandle(origin, handleId, point) {
   if (!origin || !handleId) return origin
   if (origin.type === 'cota') {
+    if (handleId === 'dim') return repositionCota(origin, point)
+    if (cotaKindOf(origin) !== 'linear') return origin
     if (handleId === 'a') return { ...origin, x1: point.x, y1: point.y }
     if (handleId === 'b') return { ...origin, x2: point.x, y2: point.y }
-    if (handleId === 'dim') return { ...origin, offset: cotaSignedOffset(origin, point) }
     return origin
   }
   if (LINE_TOOLS.has(origin.type)) {
@@ -444,6 +547,36 @@ export function snapResizePoint(cursor, origin, handleId, others, threshold = 12
 /** Reposiciona la línea de cota sin alterar los puntos medidos ni el texto. */
 export function repositionCota(obj, point) {
   if (!obj || obj.type !== 'cota' || !point) return obj
+  const kind = cotaKindOf(obj)
+  if (kind === 'angle') {
+    const v = { x: obj.x1 || 0, y: obj.y1 || 0 }
+    const r = Math.max(12, Math.hypot(point.x - v.x, point.y - v.y))
+    return { ...obj, offset: r, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2, x3: obj.x3, y3: obj.y3 }
+  }
+  if (kind === 'radio') {
+    const c = { x: obj.x1 || 0, y: obj.y1 || 0 }
+    const len = Math.hypot((obj.x2 || 0) - c.x, (obj.y2 || 0) - c.y)
+    const ang = Math.atan2(point.y - c.y, point.x - c.x)
+    return {
+      ...obj,
+      x1: c.x,
+      y1: c.y,
+      x2: c.x + Math.cos(ang) * len,
+      y2: c.y + Math.sin(ang) * len,
+    }
+  }
+  if (kind === 'diametro') {
+    const c = { x: ((obj.x1 || 0) + (obj.x2 || 0)) / 2, y: ((obj.y1 || 0) + (obj.y2 || 0)) / 2 }
+    const half = Math.hypot((obj.x2 || 0) - c.x, (obj.y2 || 0) - c.y)
+    const ang = Math.atan2(point.y - c.y, point.x - c.x)
+    return {
+      ...obj,
+      x1: c.x - Math.cos(ang) * half,
+      y1: c.y - Math.sin(ang) * half,
+      x2: c.x + Math.cos(ang) * half,
+      y2: c.y + Math.sin(ang) * half,
+    }
+  }
   const offset = cotaSignedOffset(obj, point)
   return { ...obj, offset, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2 }
 }
@@ -976,7 +1109,8 @@ export function ellipseFromCenter(cx, cy, px, py, {
 
 export function objectCenterOf(obj) {
   if (!obj) return { x: 0, y: 0 }
-  if (obj.type === 'nodo') return { x: obj.x || 0, y: obj.y || 0 }
+  if (obj.type === 'nodo' || obj.type === 'areaLabel') return { x: obj.x || 0, y: obj.y || 0 }
+  if (obj.type === 'cota' && cotaKindOf(obj) === 'angle') return { x: obj.x1 || 0, y: obj.y1 || 0 }
   if (Array.isArray(obj.points) && obj.points.length) {
     const sx = obj.points.reduce((s, p) => s + (p.x || 0), 0)
     const sy = obj.points.reduce((s, p) => s + (p.y || 0), 0)
@@ -1112,6 +1246,11 @@ export function drawSelectionMarquee(ctx, from, to, zoom = 1, ui) {
 
 export function objectBoundsOf(obj) {
   if (!obj) return null
+  if (obj.type === 'areaLabel') {
+    const w = obj.w || 108
+    const h = obj.h || 24
+    return { x: (obj.x || 0) - w / 2, y: (obj.y || 0) - h / 2, w, h }
+  }
   if (obj.type === 'nodo') {
     return { x: (obj.x || 0) - 6, y: (obj.y || 0) - 6, w: 12, h: 12 }
   }
@@ -1369,7 +1508,12 @@ export function shiftObject(obj, dx, dy) {
     return { ...obj, points: obj.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
   }
   if (obj.x1 != null && obj.x2 != null) {
-    return { ...obj, x1: obj.x1 + dx, y1: obj.y1 + dy, x2: obj.x2 + dx, y2: obj.y2 + dy }
+    const next = { ...obj, x1: obj.x1 + dx, y1: obj.y1 + dy, x2: obj.x2 + dx, y2: obj.y2 + dy }
+    if (obj.x3 != null) {
+      next.x3 = obj.x3 + dx
+      next.y3 = (obj.y3 || 0) + dy
+    }
+    return next
   }
   return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
 }
