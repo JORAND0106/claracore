@@ -170,6 +170,181 @@ def _vu_costo_desde_insumos_materiales(insumos: List[dict]) -> Optional[float]:
     return _round2(sum_costo) if tiene else None
 
 
+def _vu_desde_meta_insumo(meta: dict) -> Optional[float]:
+    """Precio unitario de catálogo: referencia → costo_base+AIU/IVA → costo_base."""
+    if not meta:
+        return None
+    ref = meta.get("valor_compra_referencia")
+    if ref is not None and _f(ref) > 0:
+        return _round2(_f(ref))
+    costo = meta.get("costo_base")
+    if costo is not None and _f(costo) > 0:
+        try:
+            from almacen_insumos_service import compute_costo_total_insumo
+            total = compute_costo_total_insumo(
+                _f(costo),
+                impuestos=meta.get("tributos") or meta.get("impuestos"),
+            )
+            if total and total > 0:
+                return _round2(total)
+        except Exception:
+            pass
+        return _round2(_f(costo))
+    return None
+
+
+def _backfill_vu_costo_composition(
+    composition: Dict[str, List[dict]],
+    movement_lines: List[dict],
+) -> None:
+    """Rellena vu_costo faltante en composición con VU de OC/entrada (sin inventar)."""
+    vu_by_ins: Dict[Tuple[str, int], float] = {}
+    for ln in movement_lines or []:
+        ikey = str(ln.get("item_key") or "")
+        if not ikey or ln.get("insumo_id") is None:
+            continue
+        vu = ln.get("valor_unitario")
+        if vu is None or _f(vu) <= 0:
+            continue
+        key = (ikey, int(ln["insumo_id"]))
+        if key not in vu_by_ins:
+            vu_by_ins[key] = _round2(_f(vu))
+
+    for ikey, rows in (composition or {}).items():
+        for r in rows:
+            if r.get("vu_costo") is not None and _f(r.get("vu_costo")) > 0:
+                continue
+            iid = r.get("insumo_id")
+            if iid is None:
+                continue
+            vu = vu_by_ins.get((str(ikey), int(iid)))
+            if vu is not None and vu > 0:
+                r["vu_costo"] = vu
+
+
+def _load_composicion_ligera(
+    *,
+    sb,
+    contrato_id: int,
+    item_by_key: Dict[str, dict],
+    ppto_to_key: Dict[int, str],
+) -> Dict[str, List[dict]]:
+    """
+    Composición ítem→insumo solo desde solicitudes (sin movimientos).
+    Permite recuperar VU costo aunque falle el enrich de entradas/salidas.
+    """
+    sol_ids = [
+        int(r["id"])
+        for r in (
+            sb.table("almacen_solicitud")
+            .select("id")
+            .eq("contrato_id", int(contrato_id))
+            .in_("estado", ["enviada", "aprobada"])
+            .execute()
+            .data
+            or []
+        )
+    ]
+    si_rows: List[dict] = []
+    for chunk in _chunks(sol_ids):
+        si_rows.extend(
+            sb.table("almacen_solicitud_item")
+            .select(
+                "id, insumo_id, presupuesto_id, es_principal, cantidad, "
+                "valor_compra_unitario, material_descripcion, unidad, capitulo, item"
+            )
+            .in_("solicitud_id", chunk)
+            .execute()
+            .data
+            or []
+        )
+
+    insumo_ids = sorted({
+        int(s["insumo_id"]) for s in si_rows if s.get("insumo_id") is not None
+    })
+    insumo_map: Dict[int, dict] = {}
+    for chunk in _chunks(insumo_ids):
+        for select in (
+            "id, codigo, descripcion, unidad, rendimiento, "
+            "valor_compra_referencia, costo_base",
+            "id, codigo, descripcion, unidad, "
+            "valor_compra_referencia, costo_base",
+            "id, codigo, descripcion, unidad",
+        ):
+            try:
+                for m in (
+                    sb.table("almacen_insumo")
+                    .select(select)
+                    .in_("id", chunk)
+                    .execute()
+                    .data
+                    or []
+                ):
+                    insumo_map[int(m["id"])] = m
+                break
+            except Exception as exc:  # noqa: BLE001
+                from almacen_service import _pgrst_unknown_column
+                col = _pgrst_unknown_column(exc)
+                if col or "does not exist" in str(exc).lower():
+                    continue
+                raise
+
+    composition: Dict[str, List[dict]] = defaultdict(list)
+    seen: Dict[str, set] = defaultdict(set)
+
+    for s in si_rows:
+        iid = s.get("insumo_id")
+        if not iid:
+            continue
+        pid = s.get("presupuesto_id")
+        if pid and int(pid) in ppto_to_key:
+            ikey = ppto_to_key[int(pid)]
+        elif s.get("capitulo") or s.get("item"):
+            ikey = make_item_key(s.get("capitulo"), s.get("item"))
+        else:
+            continue
+        iid = int(iid)
+        if iid in seen[ikey]:
+            continue
+        seen[ikey].add(iid)
+        if ikey not in item_by_key:
+            item_by_key[ikey] = {
+                "item_key": ikey,
+                "capitulo": s.get("capitulo"),
+                "item": s.get("item"),
+                "descripcion": s.get("material_descripcion"),
+                "unidad": s.get("unidad") or "UND",
+                "vu_cobro": None,
+                "presupuesto_ids": [int(pid)] if pid else [],
+                "cant_presupuestada": 0.0,
+                "pk_id": None,
+            }
+        meta = insumo_map.get(iid, {})
+        vu = s.get("valor_compra_unitario")
+        vu_f = _f(vu) if vu is not None and _f(vu) > 0 else None
+        if vu_f is None:
+            vu_f = _vu_desde_meta_insumo(meta)
+        composition[ikey].append({
+            "insumo_id": iid,
+            "codigo": meta.get("codigo"),
+            "descripcion": (
+                (meta.get("descripcion") or "").strip()
+                or (s.get("material_descripcion") or "").strip()
+                or f"Insumo #{iid}"
+            ),
+            "unidad": meta.get("unidad") or s.get("unidad"),
+            "es_principal": s.get("es_principal") is not False,
+            "rendimiento": (
+                _f(meta.get("rendimiento"))
+                if meta.get("rendimiento") is not None
+                else None
+            ),
+            "vu_costo": vu_f,
+            "valor_negociado_total": None,
+        })
+    return dict(composition)
+
+
 def _rentabilidad_pct(vu_cobro: Optional[float], vu_costo: Optional[float]) -> Optional[float]:
     """% rentabilidad = (VU Cobro − VU Costo) / VU Cobro × 100."""
     if vu_cobro is None or vu_costo is None:
@@ -254,6 +429,7 @@ def _agregar_movimientos_por_insumo(
                 "valor_stock": 0.0,
                 "material_descripcion": (ln.get("material_descripcion") or "").strip() or None,
                 "unidad": (ln.get("unidad") or "").strip() or None,
+                "valor_unitario": None,
                 "_ocs": {},
             }
             by_ins[key] = bucket
@@ -271,6 +447,10 @@ def _agregar_movimientos_por_insumo(
         bucket["valor_entradas"] = _round2(bucket["valor_entradas"] + v_ent)
         bucket["valor_salidas"] = _round2(bucket["valor_salidas"] + v_sal)
         bucket["valor_stock"] = _round2(bucket["valor_stock"] + v_stk)
+
+        vu_ln = ln.get("valor_unitario")
+        if vu_ln is not None and _f(vu_ln) > 0 and not bucket.get("valor_unitario"):
+            bucket["valor_unitario"] = _round2(_f(vu_ln))
 
         mat = (ln.get("material_descripcion") or "").strip()
         if mat and not bucket.get("material_descripcion"):
@@ -423,12 +603,25 @@ def build_inventario_arbol_from_lines(
             ins["valor_stock"] = bucket["valor_stock"]
             ins["stock"] = bucket["valor_stock"]
             ins["ordenes_compra"] = bucket.get("ordenes_compra") or []
+            if (ins.get("vu_costo") is None or _f(ins.get("vu_costo")) <= 0) and bucket.get("valor_unitario"):
+                vu_b = _round2(_f(bucket["valor_unitario"]))
+                ins["vu_costo"] = vu_b
+                ins["vu_costo_unitario"] = vu_b
+                ins["costo_contribucion"] = vu_b
 
         for (ik, iid), bucket in mov_by_insumo.items():
             if ik != ikey or iid in seen_ins:
                 continue
             seen_ins.add(iid)
             desc = bucket.get("material_descripcion") or f"Insumo #{iid}"
+            vu_orph = bucket.get("valor_unitario")
+            vu_orph_f = _round2(_f(vu_orph)) if vu_orph is not None and _f(vu_orph) > 0 else None
+            if vu_orph_f is None:
+                for oc in (bucket.get("ordenes_compra") or []):
+                    ov = oc.get("valor_unitario")
+                    if ov is not None and _f(ov) > 0:
+                        vu_orph_f = _round2(_f(ov))
+                        break
             insumos.append({
                 "insumo_id": iid,
                 "codigo": None,
@@ -437,9 +630,9 @@ def build_inventario_arbol_from_lines(
                 "es_principal": False,
                 "es_mo": False,
                 "rendimiento": None,
-                "vu_costo_unitario": None,
-                "vu_costo": None,
-                "costo_contribucion": None,
+                "vu_costo_unitario": vu_orph_f,
+                "vu_costo": vu_orph_f,
+                "costo_contribucion": vu_orph_f,
                 "entradas": bucket["entradas"],
                 "salidas": bucket["salidas"],
                 "saldo": bucket["saldo"],
@@ -808,6 +1001,7 @@ def list_inventario_arbol(contrato_id: int) -> dict:
 
     movement_lines: List[dict] = []
     composition: Dict[str, List[dict]] = defaultdict(list)
+    enrich_ok = False
     try:
         movement_lines, composition = _enrich_inventario_movimientos(
             sb=sb,
@@ -815,14 +1009,31 @@ def list_inventario_arbol(contrato_id: int) -> dict:
             item_by_key=item_by_key,
             ppto_to_key=ppto_to_key,
         )
+        enrich_ok = True
     except Exception:
         _log.exception(
             "Inventario árbol: falló enriquecimiento de movimientos (contrato=%s). "
-            "Se devuelve el listado de precios sin entradas/salidas.",
+            "Se intenta composición ligera para VU costo.",
             contrato_id,
         )
         movement_lines = []
         composition = defaultdict(list)
+        try:
+            composition = _load_composicion_ligera(
+                sb=sb,
+                contrato_id=int(contrato_id),
+                item_by_key=item_by_key,
+                ppto_to_key=ppto_to_key,
+            )
+        except Exception:
+            _log.exception(
+                "Inventario árbol: falló también composición ligera (contrato=%s).",
+                contrato_id,
+            )
+            composition = defaultdict(list)
+
+    if enrich_ok:
+        _backfill_vu_costo_composition(composition, movement_lines)
 
     item_rows = list(item_by_key.values())
     mo_by_item: Dict[str, dict] = {}
@@ -844,7 +1055,9 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         mo_by_item=mo_by_item,
     )
     built["generado_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    _cache_set(contrato_id, built)
+    # No cachear respuestas degradadas (sin enrich) para no congelar VU costo vacío.
+    if enrich_ok:
+        _cache_set(contrato_id, built)
     return built
 
 
@@ -1252,11 +1465,7 @@ def _enrich_inventario_movimientos(
         vu = row.get("valor_compra_unitario")
         vu_f = _f(vu) if vu is not None and _f(vu) > 0 else None
         if vu_f is None:
-            ref = meta.get("valor_compra_referencia")
-            if ref is not None and _f(ref) > 0:
-                vu_f = _f(ref)
-            elif meta.get("costo_base") is not None and _f(meta.get("costo_base")) > 0:
-                vu_f = _f(meta.get("costo_base"))
+            vu_f = _vu_desde_meta_insumo(meta)
         rend = meta.get("rendimiento")
         es_principal = row.get("es_principal")
         if es_principal is None:
