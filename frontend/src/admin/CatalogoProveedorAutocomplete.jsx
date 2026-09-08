@@ -1,5 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+function contactsIncomplete(v) {
+  if (!v) return true
+  return !(
+    String(v.nit || '').trim()
+    && String(v.contacto_email || '').trim()
+    && String(v.contacto_nombre || '').trim()
+    && String(v.contacto_telefono || '').trim()
+  )
+}
+
+function pickPayload(p) {
+  return {
+    proveedor_id: p.id,
+    razon_social: p.razon_social || '',
+    nit: p.nit || '',
+    contacto_email: p.contacto_email || '',
+    contacto_nombre: p.contacto_nombre || '',
+    contacto_telefono: p.contacto_telefono || '',
+  }
+}
+
 export default function CatalogoProveedorAutocomplete({
   api,
   value,
@@ -12,6 +33,7 @@ export default function CatalogoProveedorAutocomplete({
   const [options, setOptions] = useState([])
   const [open, setOpen] = useState(false)
   const timer = useRef(null)
+  const enrichKeyRef = useRef('')
 
   useEffect(() => {
     setQuery(value?.razon_social || '')
@@ -26,15 +48,45 @@ export default function CatalogoProveedorAutocomplete({
     if (open) search(query)
   }, [open, search, query])
 
+  // Si ya hay razón social (o id) pero faltan contactos, completar el bloque desde el directorio.
+  useEffect(() => {
+    if (!api || disabled || !onChange) return
+    const razon = String(value?.razon_social || '').trim()
+    const pid = value?.proveedor_id
+    if (!razon && !pid) return
+    if (!contactsIncomplete(value)) return
+    const key = `${pid || ''}|${razon.toLowerCase()}|${String(value?.nit || '').trim()}`
+    if (enrichKeyRef.current === key) return
+    enrichKeyRef.current = key
+    let cancelled = false
+    api.searchProveedores(String(value?.nit || razon).trim(), 25)
+      .then((rows) => {
+        if (cancelled || !Array.isArray(rows) || !rows.length) return
+        const nameKey = razon.toLowerCase()
+        const nitKey = String(value?.nit || '').trim()
+        const match = rows.find((p) => String(p.id) === String(pid))
+          || rows.find((p) => nitKey && String(p.nit || '').trim() === nitKey)
+          || rows.find((p) => nameKey && String(p.razon_social || '').trim().toLowerCase() === nameKey)
+          || null
+        if (!match) return
+        onChange(pickPayload(match))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [
+    api,
+    disabled,
+    onChange,
+    value?.proveedor_id,
+    value?.razon_social,
+    value?.nit,
+    value?.contacto_email,
+    value?.contacto_nombre,
+    value?.contacto_telefono,
+  ])
+
   const pick = (p) => {
-    onChange?.({
-      proveedor_id: p.id,
-      razon_social: p.razon_social || '',
-      nit: p.nit || '',
-      contacto_email: p.contacto_email || '',
-      contacto_nombre: p.contacto_nombre || '',
-      contacto_telefono: p.contacto_telefono || '',
-    })
+    onChange?.(pickPayload(p))
     setQuery(p.razon_social || '')
     setOpen(false)
   }
@@ -43,13 +95,14 @@ export default function CatalogoProveedorAutocomplete({
     const v = e.target.value
     setQuery(v)
     setOpen(true)
+    enrichKeyRef.current = ''
     onChange?.({
       proveedor_id: '',
       razon_social: v,
-      nit: value?.nit || '',
-      contacto_email: value?.contacto_email || '',
-      contacto_nombre: value?.contacto_nombre || '',
-      contacto_telefono: value?.contacto_telefono || '',
+      nit: '',
+      contacto_email: '',
+      contacto_nombre: '',
+      contacto_telefono: '',
     })
     clearTimeout(timer.current)
     timer.current = setTimeout(() => search(v), 220)

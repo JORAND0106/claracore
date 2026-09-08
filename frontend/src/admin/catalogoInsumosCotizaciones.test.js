@@ -4,6 +4,7 @@ import {
   applyAutoGanadoraByMinValor,
   applyCaptureToPar,
   buildParFromCapture,
+  cloneImpuestoLado,
   coherenciaErrors,
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
@@ -14,6 +15,7 @@ import {
   incongruenciaNumeroEntrePares,
   newCotizacionPar,
   nextCotizacionNumero,
+  panelNoPrevistoTouched,
   sanitizeRendimientoInput,
   seedCotizacionPares,
   syncLegacyFromGanadora,
@@ -317,6 +319,57 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(payload[0].impuesto.iva, '0.19')
     const round = detalleToPares(payload)
     assert.equal(round[0].insumo.impuesto.iva, '0.19')
+  })
+
+  it('panelNoPrevistoTouched reconoce claves reales de impuesto', () => {
+    assert.equal(panelNoPrevistoTouched({
+      valor_no_previsto: '',
+      impuesto_np: { administracion: '0.1', imprevistos: '', utilidad: '', iva: '' },
+    }), true)
+    assert.equal(panelNoPrevistoTouched({
+      valor_no_previsto: '',
+      impuesto_np: { administracion: '', imprevistos: '', utilidad: '', iva: '' },
+    }), false)
+  })
+
+  it('applyCaptureToPar conserva No Previsto si el panel NP no se tocó', () => {
+    const par = {
+      ...newCotizacionPar({ esGanadora: true }),
+      insumo: {
+        ...newCotizacionPar().insumo,
+        valor: '100',
+        numero: 'BO-160-2026',
+        fecha: '2026-03-01',
+      },
+      no_previsto: {
+        ...newCotizacionPar().no_previsto,
+        valor: '150',
+        numero: 'BO-160-2026-NP',
+        fecha: '2026-03-02',
+        vigencia: '45 días',
+        impuesto: { administracion: '0.1', imprevistos: '', utilidad: '', iva: '' },
+      },
+    }
+    const updated = applyCaptureToPar(par, {
+      razon_social: 'PAVCO',
+      nit: '1',
+      descripcion: 'Tuberia',
+      unidad: 'M',
+      costo_base: '110',
+      cotizacion_numero: 'BO-160-2026-B',
+      cotizacion_fecha: '2026-03-10',
+      valor_no_previsto: '',
+      cotizacion_numero_np: '',
+      cotizacion_fecha_np: '',
+      cotizacion_vigencia_np: '',
+      impuesto_np: { administracion: '', imprevistos: '', utilidad: '', iva: '' },
+    })
+    assert.equal(updated.insumo.valor, '110')
+    assert.equal(updated.insumo.numero, 'BO-160-2026-B')
+    assert.equal(updated.no_previsto.valor, '150')
+    assert.equal(updated.no_previsto.numero, 'BO-160-2026-NP')
+    assert.equal(updated.no_previsto.fecha, '2026-03-02')
+    assert.equal(updated.no_previsto.impuesto.administracion, '0.1')
   })
 
   it('incongruenciaNumeroEntrePares detecta mismo Nº con proveedores distintos', () => {

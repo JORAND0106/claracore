@@ -577,6 +577,13 @@ export function coherenciaErrors(pares, draft = null) {
   return errors
 }
 
+function panelImpuestoTouched(imp) {
+  if (!imp || typeof imp !== 'object') return false
+  return ['administracion', 'imprevistos', 'utilidad', 'iva'].some(
+    (k) => imp[k] !== '' && imp[k] != null && Number(imp[k]) !== 0,
+  )
+}
+
 /**
  * ¿Hay algún dato diligenciado en el panel Costos — No Previsto?
  */
@@ -586,12 +593,9 @@ export function panelNoPrevistoTouched(form) {
   if (String(form.cotizacion_numero_np || '').trim()) return true
   if (String(form.cotizacion_fecha_np || '').trim()) return true
   if (String(form.cotizacion_vigencia_np || '').trim()) return true
-  const imp = form.impuesto_np
-  if (imp && typeof imp === 'object') {
-    const keys = ['a', 'i', 'u', 'iva']
-    if (keys.some((k) => imp[k] !== '' && imp[k] != null && Number(imp[k]) !== 0)) return true
-  }
-  return false
+  if (form.cotizacion_pdf_np) return true
+  if (String(form.cotizacion_pdf_nombre_np || '').trim()) return true
+  return panelImpuestoTouched(form.impuesto_np)
 }
 
 /**
@@ -604,12 +608,9 @@ export function panelInsumoTouched(form) {
   if (String(form.cotizacion_fecha || '').trim()) return true
   if (String(form.cotizacion_vigencia || '').trim()) return true
   if (form.cantidad_negociada !== '' && form.cantidad_negociada != null) return true
-  const imp = form.impuesto
-  if (imp && typeof imp === 'object') {
-    const keys = ['a', 'i', 'u', 'iva']
-    if (keys.some((k) => imp[k] !== '' && imp[k] != null && Number(imp[k]) !== 0)) return true
-  }
-  return false
+  if (form.cotizacion_pdf) return true
+  if (String(form.cotizacion_pdf_nombre || '').trim()) return true
+  return panelImpuestoTouched(form.impuesto)
 }
 
 export function toUpperTrim(s) {
@@ -738,8 +739,11 @@ export function applyCaptureToPar(par, form, opts = {}) {
   } else if ((form.cotizacion_pdf_nombre || '').trim() && !ladoHasPdf(ladoIns)) {
     ladoIns.pdf_nombre = String(form.cotizacion_pdf_nombre).trim()
   }
-  let ladoNp = panelNoPrevistoTouched(form)
-    ? {
+  // Si el panel NP no se tocó, conservar el lado ya guardado en la fila
+  // (evitar borrar No Previsto al actualizar solo Costos — Insumo).
+  let ladoNp
+  if (panelNoPrevistoTouched(form)) {
+    ladoNp = {
       ...(par.no_previsto || emptyLado()),
       proveedor: proveedorNombre,
       valor: valorNp !== '' && valorNp != null ? String(valorNp) : '',
@@ -749,21 +753,24 @@ export function applyCaptureToPar(par, form, opts = {}) {
       impuesto_etiqueta: impuestoEtiquetaNp,
       impuesto: impuestoNpForm,
     }
-    : {
+    if (form.cotizacion_pdf_np) {
+      ladoNp = applyPdfReplace(ladoNp, form.cotizacion_pdf_np)
+    } else if ((form.cotizacion_pdf_nombre_np || '').trim() && !ladoHasPdf(ladoNp)) {
+      ladoNp.pdf_nombre = String(form.cotizacion_pdf_nombre_np).trim()
+    }
+  } else if (ladoHasCaptureData(par.no_previsto) || ladoHasPdf(par.no_previsto)) {
+    ladoNp = {
+      ...(par.no_previsto || emptyLado()),
+      proveedor: proveedorNombre || par.no_previsto?.proveedor || '',
+    }
+  } else {
+    ladoNp = {
       ...emptyLado(),
       proveedor: proveedorNombre,
       pdf: par.no_previsto?.pdf || null,
       pdf_nombre: par.no_previsto?.pdf_nombre || '',
       pdf_historial: par.no_previsto?.pdf_historial || [],
     }
-  if (panelNoPrevistoTouched(form) && form.cotizacion_pdf_np) {
-    ladoNp = applyPdfReplace(ladoNp, form.cotizacion_pdf_np)
-  } else if (
-    panelNoPrevistoTouched(form)
-    && (form.cotizacion_pdf_nombre_np || '').trim()
-    && !ladoHasPdf(ladoNp)
-  ) {
-    ladoNp.pdf_nombre = String(form.cotizacion_pdf_nombre_np).trim()
   }
   const next = {
     ...par,
