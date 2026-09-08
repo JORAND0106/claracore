@@ -292,6 +292,7 @@ export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, 
       solicitud_item_id: r.id,
       insumo_id: r.insumo_id,
       es_principal: esPrincipal,
+      es_mo: false,
       es_actual: true,
       es_total: false,
       cantidad: cant > 0 ? cant : null,
@@ -318,6 +319,7 @@ export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, 
     es_principal: null,
     es_actual: true,
     es_total: true,
+    es_mo: false,
     cantidad: cantPrincipal,
     valor_cobro_unitario: vuCobroTotal,
     valor_cobro_linea: cobroTotal,
@@ -329,6 +331,59 @@ export function construirRentabilidadPorInsumos(hermanos, overrideDraft = null, 
   })
 
   return { filas, modo: 'por_insumo' }
+}
+
+/**
+ * Inserta la fila de mano de obra del backend (si existe) antes del Total
+ * y recalcula utilidad/%. No inventa VU de MO.
+ */
+export function fusionarManoObraEnRentabilidad(analisisLive, analisisBackend) {
+  if (!analisisLive?.filas?.length) return analisisLive
+  const mo = (analisisBackend?.filas || []).find((f) => f?.es_mo && Number(f.costo_insumo_linea) > 0)
+  if (!mo) return analisisLive
+
+  const filas = analisisLive.filas.filter((f) => !f.es_mo && !f.es_total)
+  const totalPrev = analisisLive.filas.find((f) => f.es_total) || null
+  const moFila = {
+    ...mo,
+    es_mo: true,
+    es_total: false,
+    es_principal: false,
+    valor_cobro_unitario: null,
+    valor_cobro_linea: null,
+    costo_insumo_unitario: null,
+    utilidad_estimada_linea: null,
+    rentabilidad_pct: null,
+  }
+  filas.push(moFila)
+
+  let sumCosto = 0
+  let tieneCosto = false
+  for (const f of filas) {
+    const c = Number(f.costo_insumo_linea)
+    if (Number.isFinite(c) && c > 0) {
+      sumCosto += c
+      tieneCosto = true
+    }
+  }
+  const cobroTotal = totalPrev?.valor_cobro_linea != null
+    ? Number(totalPrev.valor_cobro_linea)
+    : null
+  const costoTotal = tieneCosto ? sumCosto : null
+  const util = (cobroTotal != null && costoTotal != null) ? cobroTotal - costoTotal : null
+  const pct = (util != null && cobroTotal > 0) ? (util / cobroTotal) * 100 : null
+
+  filas.push({
+    ...(totalPrev || {}),
+    etiqueta_fila: 'Total ítem',
+    es_total: true,
+    es_mo: false,
+    costo_insumo_linea: costoTotal,
+    utilidad_estimada_linea: util,
+    rentabilidad_pct: pct,
+  })
+
+  return { ...analisisLive, filas, modo: 'por_insumo', costo_mo: moFila }
 }
 
 /** @deprecated Usar construirRentabilidadPorInsumos */

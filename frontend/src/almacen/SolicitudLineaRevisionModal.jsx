@@ -7,6 +7,7 @@ import TablaRentabilidadAcumulada from './TablaRentabilidadAcumulada'
 import {
   construirRentabilidadPorInsumos,
   descripcionItemPresupuesto,
+  fusionarManoObraEnRentabilidad,
   hermanosMismoPresupuestoItem,
   itemPuedeCorregirInsumoPostOc,
   itemPuedeValidar,
@@ -154,7 +155,12 @@ export default function SolicitudLineaRevisionModal({
     // Siempre reconstruir desde hermanos + draft para reflejar principal/asociados
     // y los valores editados en vivo (no usar el payload agregado antiguo).
     const porInsumo = construirRentabilidadPorInsumos(hermanos, override, meta)
-    if (porInsumo) return porInsumo
+    if (porInsumo) {
+      return fusionarManoObraEnRentabilidad(
+        porInsumo,
+        item.analisis_rentabilidad || item.preview?.analisis_rentabilidad,
+      )
+    }
     const raw = item.analisis_rentabilidad || item.preview?.analisis_rentabilidad
     if (raw?.modo === 'por_insumo' && Array.isArray(raw.filas) && raw.filas.length) return raw
     const analisis = item.analisis_valor || item.preview?.analisis_valor
@@ -173,6 +179,7 @@ export default function SolicitudLineaRevisionModal({
     sol?.consecutivo,
     sol?.orden_compra?.numero_oc,
     sol?.items,
+    item?.analisis_rentabilidad,
   ])
 
   if (!puedeAbrir || !item || !sol) return null

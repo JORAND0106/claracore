@@ -181,6 +181,7 @@ def _insumos_desde_composicion(comp_list: List[dict]) -> List[dict]:
             "descripcion": desc,
             "unidad": c.get("unidad"),
             "es_principal": es_principal,
+            "es_mo": False,
             "rendimiento": rend_f,
             "vu_costo": vu_f,
             "costo_contribucion": contrib,
@@ -320,6 +321,7 @@ def build_inventario_arbol_from_lines(
     item_rows: List[dict],
     composition: Dict[str, List[dict]],
     movement_lines: List[dict],
+    mo_by_item: Optional[Dict[str, dict]] = None,
 ) -> dict:
     """
     Agrega el árbol Capítulo → Ítem → Insumo → OC (testeable sin Supabase).
@@ -336,11 +338,12 @@ def build_inventario_arbol_from_lines(
         valor_entradas, valor_salidas, valor_stock,
       }, ...
     ]
+    mo_by_item[item_key] = resumen MO consolidado (opcional).
 
     Entradas/salidas/stock del ítem y capítulo se exponen en valor financiero
     (valor_entradas / valor_salidas / valor_stock). El nivel 3 lista cada insumo
     real del ítem (principal y asociados) con VU costo y valores de entrada/salida.
-    Al expandir un insumo se listan sus OCs con trazabilidad OC → Entrada → Salida
+    Al expandir un insumo se listan sus OCs con trazabilidad OC -> Entrada -> Salida
     (flags tiene_entrada / tiene_salida).
     """
     # Totales financieros / cantidad por ítem (desde movimientos; sin colapsar materiales)
@@ -416,6 +419,7 @@ def build_inventario_arbol_from_lines(
                 "descripcion": desc,
                 "unidad": bucket.get("unidad"),
                 "es_principal": False,
+                "es_mo": False,
                 "rendimiento": None,
                 "vu_costo": None,
                 "costo_contribucion": None,
@@ -431,11 +435,40 @@ def build_inventario_arbol_from_lines(
                 "ordenes_compra": bucket.get("ordenes_compra") or [],
             })
 
+        # Mano de obra (costo directo consolidado; sin stock ni flujo físico).
+        mo = (mo_by_item or {}).get(ikey) or {}
+        costo_mo = _f(mo.get("costo_insumo_linea")) if mo.get("costo_insumo_linea") is not None else 0.0
+        if costo_mo > 0:
+            insumos.append({
+                "insumo_id": None,
+                "codigo": None,
+                "descripcion": mo.get("etiqueta_fila") or "Mano de obra (subcontratistas)",
+                "unidad": None,
+                "es_principal": False,
+                "es_mo": True,
+                "rendimiento": None,
+                "vu_costo": None,
+                "costo_contribucion": _round2(costo_mo),
+                "entradas": None,
+                "salidas": None,
+                "saldo": None,
+                "valor_entradas": None,
+                "valor_salidas": None,
+                "valor_stock": None,
+                "stock": None,
+                "valor_negociado_total": None,
+                "saldo_por_consumir": None,
+                "ordenes_compra": [],
+                "na_movimientos": True,
+            })
+
         # Saldo por consumir = valor negociado acumulado − valor entradas (por fila)
         from almacen_insumo_liquidacion import calcular_saldo_por_consumir
         saldo_insumos = 0.0
         tiene_saldo = False
         for ins in insumos:
+            if ins.get("es_mo"):
+                continue
             spc = calcular_saldo_por_consumir(
                 ins.get("valor_negociado_total"),
                 ins.get("valor_entradas") or 0.0,
@@ -446,7 +479,7 @@ def build_inventario_arbol_from_lines(
                 tiene_saldo = True
 
         insumos.sort(key=lambda r: (
-            0 if r.get("es_principal") else 1,
+            2 if r.get("es_mo") else (0 if r.get("es_principal") else 1),
             str(r.get("descripcion") or "").lower(),
             int(r.get("insumo_id") or 0),
         ))
@@ -473,6 +506,16 @@ def build_inventario_arbol_from_lines(
         resumen["salidas"] = _round4(resumen["salidas"] + sal)
         resumen["saldo"] = _round4(resumen["saldo"] + saldo)
 
+        # Utilidad/%: si hay MO, incorporar el costo total amortizado sobre la cantidad de referencia.
+        cant_ref = _f(p.get("cant_presupuestada") or p.get("cant_total"))
+        if cant_ref <= 0 and mo.get("cantidad"):
+            cant_ref = _f(mo.get("cantidad"))
+        if costo_mo > 0 and vu_cobro is not None and cant_ref > 0:
+            mo_unit = costo_mo / cant_ref
+            vu_costo_eff = _round2((_f(vu_costo) if vu_costo is not None else 0.0) + mo_unit)
+            utilidad = _round2(_f(vu_cobro) - vu_costo_eff)
+            rentabilidad = _rentabilidad_pct(vu_cobro, vu_costo_eff)
+
         pids = p.get("presupuesto_ids") or []
         items_out.append({
             "item_key": ikey,
@@ -487,6 +530,7 @@ def build_inventario_arbol_from_lines(
             "pk_id": p.get("pk_id"),
             "vu_cobro": vu_cobro,
             "vu_costo": vu_costo,
+            "costo_mo": _round2(costo_mo) if costo_mo > 0 else None,
             "rendimiento": rend_item,
             "utilidad": utilidad,
             "rentabilidad_pct": rentabilidad,
@@ -754,10 +798,23 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         composition = defaultdict(list)
 
     item_rows = list(item_by_key.values())
+    mo_by_item: Dict[str, dict] = {}
+    try:
+        from almacen_mo_costo import calcular_costo_mo_por_items_contrato
+
+        mo_by_item = calcular_costo_mo_por_items_contrato(int(contrato_id), sb=sb) or {}
+    except Exception:
+        _log.exception(
+            "Inventario árbol: falló carga de mano de obra (contrato=%s).",
+            contrato_id,
+        )
+        mo_by_item = {}
+
     built = build_inventario_arbol_from_lines(
         item_rows=item_rows,
         composition=dict(composition),
         movement_lines=movement_lines,
+        mo_by_item=mo_by_item,
     )
     built["generado_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     _cache_set(contrato_id, built)

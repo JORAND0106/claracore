@@ -13,6 +13,9 @@ function fmtNumeroOc(n) {
 }
 
 function renderCobroVacio(col) {
+  if (col?.es_mo) {
+    return { text: '—', title: 'Mano de obra — costo directo, no genera cobro' }
+  }
   if (col?.es_principal === false) {
     return { text: '—', title: 'Insumo asociado — no genera cobro' }
   }
@@ -36,7 +39,7 @@ const METRIC_COLS = [
         if (col?.valor_cobro_unitario) return fmtMoney(col.valor_cobro_unitario)
         return renderCobroVacio(col)
       }
-      if (col?.es_principal === false) return '—'
+      if (col?.es_mo || col?.es_principal === false) return '—'
       if (col?.valor_cobro_unitario) return fmtMoney(col.valor_cobro_unitario)
       return renderCobroVacio(col)
     },
@@ -52,7 +55,7 @@ const METRIC_COLS = [
         }
         return { ...renderCobroVacio(col), strong: true }
       }
-      if (col?.es_principal === false) return '—'
+      if (col?.es_mo || col?.es_principal === false) return '—'
       if (col?.valor_cobro_linea != null) {
         return { text: fmtMoney(col.valor_cobro_linea), strong: true }
       }
@@ -66,15 +69,16 @@ const METRIC_COLS = [
     ayuda: 'Cantidad solicitada de este insumo (principal y asociados tienen su propia cantidad).',
     render: (col) => {
       if (col?.es_total) return '—'
+      if (col?.es_mo) return '—'
       return fmtCant(col?.cantidad)
     },
   },
   {
     id: 'vu_costo',
     label: 'VU costo',
-    ayuda: 'Valor unitario de compra del insumo en catálogo (con impuestos, si aplica).',
+    ayuda: 'Valor unitario de compra del insumo en catálogo (con impuestos, si aplica). Mano de obra no usa VU único.',
     render: (col) => {
-      if (col?.es_total) return '—'
+      if (col?.es_total || col?.es_mo) return '—'
       if (!col?.costo_insumo_unitario) return { sinPrecio: true }
       return { text: fmtMoney(col.costo_insumo_unitario) }
     },
@@ -82,9 +86,13 @@ const METRIC_COLS = [
   {
     id: 'total_costo',
     label: 'Tot. costo',
-    ayuda: 'Cantidad × VU costo de este insumo. En Total: suma de todos los insumos del ítem.',
+    ayuda: 'Cantidad × VU costo de este insumo (o costo total de mano de obra). En Total: suma de todos los costos del ítem.',
     render: (col) => {
       if (col?.es_total) {
+        if (col?.costo_insumo_linea == null) return { sinPrecio: true }
+        return { text: fmtMoney(col.costo_insumo_linea), strong: true }
+      }
+      if (col?.es_mo) {
         if (col?.costo_insumo_linea == null) return { sinPrecio: true }
         return { text: fmtMoney(col.costo_insumo_linea), strong: true }
       }
@@ -95,7 +103,7 @@ const METRIC_COLS = [
   {
     id: 'utilidad',
     label: 'Utilidad',
-    ayuda: 'Tot. cobro − suma de Tot. costo de todos los insumos (solo en la fila Total).',
+    ayuda: 'Tot. cobro − suma de Tot. costo (insumos + mano de obra). Solo en la fila Total.',
     render: (col) => {
       if (!col?.es_total) return '—'
       return {
