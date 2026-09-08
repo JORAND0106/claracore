@@ -44,6 +44,31 @@ describe('esquemaJoin', () => {
     assert.ok(out.joined >= 1)
   })
 
+  it('joins a third line against the polyline from a previous join', () => {
+    const first = joinIntersectingLines([
+      { id: 'a', type: 'linea', x1: 0, y1: 0, x2: 40, y2: 0 },
+      { id: 'b', type: 'linea', x1: 40, y1: 0, x2: 40, y2: 30 },
+    ])
+    const poly = first.objects.find((o) => o.type === 'polilinea')
+    assert.ok(poly)
+    const second = joinIntersectingLines([
+      ...first.objects,
+      { id: 'c', type: 'linea', x1: 20, y1: -10, x2: 20, y2: 10 },
+    ])
+    assert.ok(second.joined >= 1)
+    assert.equal(second.objects.some((o) => o.id === 'c'), false)
+    assert.ok(second.objects.some((o) => o.type === 'polilinea' || o.type === 'linea'))
+  })
+
+  it('join uses rotated world geometry, not stored x1/x2', () => {
+    const rot = Math.PI / 2
+    const rotated = { id: 'r', type: 'linea', x1: 0, y1: 0, x2: 40, y2: 0, rotation: rot }
+    const other = { id: 'v', type: 'linea', x1: 0, y1: -5, x2: 40, y2: -5 }
+    const out = joinIntersectingLines([rotated, other])
+    assert.ok(out.joined >= 1)
+    assert.ok(out.objects.every((o) => !o.rotation))
+  })
+
   it('Terminar only commits the typed sequence and never closes last→first', () => {
     const objects = [
       { id: 'n1', type: 'nodo', nodeNum: '1', x: 0, y: 0 },

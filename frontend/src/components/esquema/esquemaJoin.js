@@ -1,7 +1,11 @@
+import { objectWorldSegments } from './esquemaGeometry.js'
+
 /**
- * Une líneas que se cruzan o se tocan en una polilínea continua.
- * Las que no intersectan ninguna otra se dejan intactas.
+ * Une líneas / polilíneas que se cruzan o se tocan en una polilínea continua.
+ * Usa la geometría vigente (post-rotación). Las que no intersectan se dejan.
  */
+
+const JOINABLE = new Set(['linea', 'polilinea'])
 const EPS = 0.75
 
 function sub(a, b) {
@@ -43,7 +47,14 @@ export function segmentIntersection(a1, a2, b1, b2) {
 }
 
 function endsOf(line) {
-  return {
+  const segs = objectWorldSegments(line)
+  if (segs.length === 1) return segs[0]
+  if (line.type === 'polilinea' && (line.points || []).length) {
+    const segsW = objectWorldSegments(line)
+    if (!segsW.length) return { a: { x: 0, y: 0 }, b: { x: 0, y: 0 } }
+    return { a: segsW[0].a, b: segsW[segsW.length - 1].b }
+  }
+  return segs[0] || {
     a: { x: line.x1 || 0, y: line.y1 || 0 },
     b: { x: line.x2 || 0, y: line.y2 || 0 },
   }
@@ -160,7 +171,7 @@ export function joinIntersectingLines(objects, selectedIds = null) {
   const list = objects || []
   const pick = new Set(selectedIds || [])
   const useSel = pick.size > 0
-  const lines = list.filter((o) => o && o.type === 'linea' && (!useSel || pick.has(o.id)))
+  const lines = list.filter((o) => o && JOINABLE.has(o.type) && (!useSel || pick.has(o.id)))
   if (lines.length < 2) {
     return { objects: list, joined: 0, left: lines.length }
   }
@@ -177,16 +188,19 @@ export function joinIntersectingLines(objects, selectedIds = null) {
     if (!hits.has(i)) hits.set(i, [])
     hits.get(i).push(p)
   }
+  const worldSegs = lines.map((o) => objectWorldSegments(o))
 
   for (let i = 0; i < lines.length; i += 1) {
-    const A = endsOf(lines[i])
     for (let j = i + 1; j < lines.length; j += 1) {
-      const B = endsOf(lines[j])
-      const p = segmentIntersection(A.a, A.b, B.a, B.b)
-      if (!p) continue
-      unite(i, j)
-      bump(i, p)
-      bump(j, p)
+      for (const A of worldSegs[i]) {
+        for (const B of worldSegs[j]) {
+          const p = segmentIntersection(A.a, A.b, B.a, B.b)
+          if (!p) continue
+          unite(i, j)
+          bump(i, p)
+          bump(j, p)
+        }
+      }
     }
   }
 
@@ -207,7 +221,15 @@ export function joinIntersectingLines(objects, selectedIds = null) {
     const pieces = []
     for (const i of idxs) {
       consume.add(lines[i].id)
-      pieces.push(...splitLine(lines[i], hits.get(i) || []))
+      const cuts = hits.get(i) || []
+      for (const seg of worldSegs[i]) {
+        pieces.push(...splitLine({
+          x1: seg.a.x,
+          y1: seg.a.y,
+          x2: seg.b.x,
+          y2: seg.b.y,
+        }, cuts))
+      }
     }
     const chains = walkChains(pieces)
     const proto = lines[idxs[0]]
@@ -220,16 +242,19 @@ export function joinIntersectingLines(objects, selectedIds = null) {
           ...proto,
           id: nid,
           type: 'linea',
+          rotation: 0,
           x1: pts[0].x,
           y1: pts[0].y,
           x2: pts[1].x,
           y2: pts[1].y,
+          points: undefined,
         })
       } else {
         created.push({
           ...proto,
           id: nid,
           type: 'polilinea',
+          rotation: 0,
           points: pts,
           x1: undefined,
           y1: undefined,

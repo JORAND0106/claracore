@@ -35,16 +35,27 @@ import {
   objectBoundsOf,
   radToDeg,
   parseDynMeasure,
+  polarFromFields,
+  applyPolyFieldKey,
   nodeMarkerWorldRadius,
   parsePositive,
   pointAtDistance,
+  pointAtPolar,
+  snapResizePoint,
+  resizeAnchorPoint,
+  repositionCota,
+  rotateSelectionAroundPivot,
+  polylineDraftPreview,
   rotateObjectAroundPivot,
+  rotatePointAround,
+  snapClickKeepsSelection,
   scaleObjectUniform,
   selectIdsInDrag,
   snapThresholdWorld,
   worldToMeters,
 } from './esquemaGeometry'
 import { finalizeJoinSequence, joinIntersectingLines } from './esquemaJoin'
+import { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 import { parseCoordFile, topoToWorld, coordOriginFromRows } from './esquemaCoords'
 import {
   deleteLibraryItem,
@@ -118,6 +129,8 @@ const TOOL_GROUPS = [
     id: 'edicion',
     tools: [
       { id: 'girar-escalar', label: 'Girar y escalar', Icon: IconGirarEscalar },
+      { id: 'espejo', label: 'Espejo (eje de reflexión)', Icon: IconEspejo },
+      { id: 'matriz', label: 'Matriz (rectangular o polar)', Icon: IconMatriz },
       { id: 'offset', label: 'Offset / equidistancia', Icon: IconOffset },
       { id: 'borrador', label: 'Borrador', Icon: IconBorrador },
     ],
@@ -249,6 +262,9 @@ export default function EsquemaEditorModal({
   // Medida solo restringe el trazo si el usuario la digitó (no al sincronizar desde selección)
   const measureArmedRef = useRef(false)
   const dynBufferRef = useRef('')
+  const polyDistRef = useRef('')
+  const polyAngRef = useRef('')
+  const polyFieldRef = useRef('dist')
   const lastScreenRef = useRef({ x: 24, y: 24 })
   const moveGuideRef = useRef(null)
   const joinSeqRef = useRef([])
@@ -277,6 +293,17 @@ export default function EsquemaEditorModal({
   const [hasClipboard, setHasClipboard] = useState(false)
   const [measureArmed, setMeasureArmed] = useState(false)
   const [dynHud, setDynHud] = useState({ text: '', typing: false, x: 24, y: 24 })
+  const [polyHud, setPolyHud] = useState({
+    dist: '',
+    ang: '',
+    field: 'dist',
+    typing: false,
+    liveDist: '',
+    liveAng: '',
+    x: 24,
+    y: 24,
+    visible: false,
+  })
   const [coordRows, setCoordRows] = useState([])
   const [coordPanelOpen, setCoordPanelOpen] = useState(false)
   const [savePrompt, setSavePrompt] = useState(null)
@@ -293,7 +320,17 @@ export default function EsquemaEditorModal({
   const [selectMode, setSelectMode] = useState('mover')
   const [rotatePivot, setRotatePivot] = useState(null)
   const [toolHint, setToolHint] = useState('')
+  const [mirrorPrompt, setMirrorPrompt] = useState(null)
+  const [arrayMode, setArrayMode] = useState('rect')
+  const [arrayRows, setArrayRows] = useState('2')
+  const [arrayCols, setArrayCols] = useState('3')
+  const [arrayDx, setArrayDx] = useState('1')
+  const [arrayDy, setArrayDy] = useState('1')
+  const [arrayCount, setArrayCount] = useState('4')
+  const [arrayAngle, setArrayAngle] = useState('360')
   const rotatePivotRef = useRef(null)
+  const mirrorAxisRef = useRef(null)
+  const arrayModeRef = useRef('rect')
   const selectModeRef = useRef('mover')
   const selectedIdRef = useRef(null)
   const selectedIdsRef = useRef(new Set())
@@ -310,6 +347,7 @@ export default function EsquemaEditorModal({
   selectedIdsRef.current = new Set(selectedIds)
   joinSeqRef.current = joinSeq
   selectModeRef.current = selectMode
+  arrayModeRef.current = arrayMode
 
   useEffect(() => {
     themeRef.current = ui
@@ -428,14 +466,20 @@ export default function EsquemaEditorModal({
         ui: uiNow,
       })
     }
-    if (toolRef.current === 'girar-escalar' && selectedId && selSet.size === 1) {
-      const sel = objectsRef.current.find((o) => o.id === selectedId)
-      if (sel && sel.type !== 'image' && rotatePivotRef.current) {
-        drawTransformHandles(ctx, sel, zoomRef.current, uiNow)
+    if (toolRef.current === 'girar-escalar' && selSet.size) {
+      if (selectedId && selSet.size === 1) {
+        const sel = objectsRef.current.find((o) => o.id === selectedId)
+        if (sel && sel.type !== 'image' && rotatePivotRef.current) {
+          drawTransformHandles(ctx, sel, zoomRef.current, uiNow)
+        }
       }
       if (rotatePivotRef.current) {
         drawRotatePivot(ctx, rotatePivotRef.current, zoomRef.current, uiNow)
       }
+    }
+    if (toolRef.current === 'espejo' && mirrorAxisRef.current?.a) {
+      const b = mirrorAxisRef.current.b || lastPt.current
+      if (b) drawMoveGuide(ctx, mirrorAxisRef.current.a, b, zoomRef.current, uiNow)
     }
     if (marqueeRef.current?.from && marqueeRef.current?.to) {
       drawSelectionMarquee(ctx, marqueeRef.current.from, marqueeRef.current.to, zoomRef.current, uiNow)
@@ -623,9 +667,46 @@ export default function EsquemaEditorModal({
     })
   }
 
+  const headingDegFrom = (from, to) => {
+    if (!from || !to) return ''
+    const deg = radToDeg(Math.atan2(to.y - from.y, to.x - from.x))
+    return String(Math.round(((deg % 360) + 360) % 360))
+  }
+
+  const updatePolyHud = (typing = false) => {
+    const s = lastScreenRef.current
+    const pts = draftRef.current?.type === 'polilinea' ? (draftRef.current.points || []) : []
+    const last = pts[pts.length - 1]
+    const toward = lastPt.current || last
+    setPolyHud({
+      dist: polyDistRef.current,
+      ang: polyAngRef.current,
+      field: polyFieldRef.current,
+      typing: !!typing,
+      liveDist: last && toward ? formatMeters(dist(last, toward)) : '',
+      liveAng: last && toward ? `${headingDegFrom(last, toward)}°` : '',
+      x: (s?.x || 24) + 16,
+      y: (s?.y || 24) + 16,
+      visible: toolRef.current === 'polilinea' && pts.length > 0,
+    })
+  }
+
+  const readPolyDyn = () => polarFromFields(polyDistRef.current, polyAngRef.current)
+
+  const clearPolyFields = () => {
+    polyDistRef.current = ''
+    polyAngRef.current = ''
+    polyFieldRef.current = 'dist'
+    updatePolyHud(false)
+  }
+
   const clearDynBuffer = () => {
     dynBufferRef.current = ''
+    polyDistRef.current = ''
+    polyAngRef.current = ''
+    polyFieldRef.current = 'dist'
     updateDynHud('', false)
+    updatePolyHud(false)
   }
 
   const activeMeasureMeters = () => {
@@ -729,8 +810,14 @@ export default function EsquemaEditorModal({
   const snapSearchObjects = () => {
     const list = objectsRef.current || []
     const draft = draftRef.current
-    if (toolRef.current === 'polilinea' && draft?.type === 'polilinea' && (draft.points || []).length) {
-      return [...list, { ...draft, id: draft.id || '__draft-poly__' }]
+    if (toolRef.current === 'polilinea' && draft?.type === 'polilinea') {
+      const extras = (draft.points || []).slice(0, -1).map((pt, i) => ({
+        id: `__dp${i}`,
+        type: 'nodo',
+        x: pt.x,
+        y: pt.y,
+      }))
+      return extras.length ? [...list, ...extras] : list
     }
     return list
   }
@@ -830,6 +917,7 @@ export default function EsquemaEditorModal({
     const pts = (draft.points || []).filter((pt) => pt && Number.isFinite(pt.x) && Number.isFinite(pt.y))
     draftRef.current = null
     drawing.current = false
+    clearPolyFields()
     if (pts.length < 2) {
       snapRef.current = null
       setLiveMeasure('')
@@ -847,9 +935,79 @@ export default function EsquemaEditorModal({
     return true
   }
 
+  const editableSelection = () => objectsRef.current.filter((o) => (
+    selectedIdsRef.current.has(o.id) && !(o.type === 'image' && o.fit)
+  ))
+
+  const applyMirrorDecision = (keepOriginal) => {
+    if (!mirrorPrompt?.copies?.length) {
+      setMirrorPrompt(null)
+      return
+    }
+    pushHistory()
+    const copies = mirrorPrompt.copies.map((o) => ({ ...o, id: uid() }))
+    const rm = new Set(keepOriginal ? [] : (mirrorPrompt.sourceIds || []))
+    objectsRef.current = [
+      ...objectsRef.current.filter((o) => !rm.has(o.id)),
+      ...copies,
+    ]
+    selectIds(copies.map((o) => o.id))
+    setMirrorPrompt(null)
+    mirrorAxisRef.current = null
+    setDirty(true)
+    redraw()
+  }
+
+  const applyArrayRect = () => {
+    const group = editableSelection()
+    if (!group.length) {
+      setToolHint('Seleccione entidades para la matriz')
+      return
+    }
+    const rows = Math.max(1, Math.floor(Number(String(arrayRows).replace(',', '.')) || 1))
+    const cols = Math.max(1, Math.floor(Number(String(arrayCols).replace(',', '.')) || 1))
+    const dxMeters = Number(String(arrayDx).replace(',', '.'))
+    const dyMeters = Number(String(arrayDy).replace(',', '.'))
+    if (!Number.isFinite(dxMeters) || !Number.isFinite(dyMeters)) return
+    const copies = arrayRectangular(cloneScene(group), { rows, cols, dxMeters, dyMeters })
+      .map((o) => ({ ...o, id: uid() }))
+    if (!copies.length) {
+      setToolHint('Indique al menos 2 filas o 2 columnas')
+      return
+    }
+    pushHistory()
+    objectsRef.current = [...objectsRef.current, ...copies]
+    selectIds([...group.map((o) => o.id), ...copies.map((o) => o.id)])
+    setDirty(true)
+    setToolHint('')
+    redraw()
+  }
+
+  const applyArrayPolarAt = (center) => {
+    const group = editableSelection()
+    if (!group.length || !center) {
+      setToolHint('Seleccione entidades e indique el centro')
+      return
+    }
+    const count = Math.max(1, Math.floor(Number(String(arrayCount).replace(',', '.')) || 1))
+    const angleDeg = Number(String(arrayAngle).replace(',', '.'))
+    const copies = arrayPolar(cloneScene(group), { center, count, angleDeg })
+      .map((o) => ({ ...o, id: uid() }))
+    if (!copies.length) {
+      setToolHint('Indique al menos 2 copias')
+      return
+    }
+    pushHistory()
+    objectsRef.current = [...objectsRef.current, ...copies]
+    selectIds([...group.map((o) => o.id), ...copies.map((o) => o.id)])
+    setDirty(true)
+    setToolHint('')
+    redraw()
+  }
+
   const applyJoinLines = () => {
     const ids = [...selectedIdsRef.current]
-    const selectedLines = objectsRef.current.filter((o) => o.type === 'linea' && ids.includes(o.id))
+    const selectedLines = objectsRef.current.filter((o) => (o.type === 'linea' || o.type === 'polilinea') && ids.includes(o.id))
     const scopeIds = selectedLines.length >= 2 ? selectedLines.map((o) => o.id) : null
     const result = joinIntersectingLines(objectsRef.current, scopeIds)
     if (result.joined < 1) {
@@ -1061,13 +1219,29 @@ export default function EsquemaEditorModal({
     }
     drawing.current = true
 
-    // Girar: primero el punto base (con snap); luego las manijas orbitan ese pivote.
+    // Girar: primero el punto base (con snap); luego rota toda la selección alrededor.
     if (currentTool === 'girar-escalar') {
-      const selId = selectedIdRef.current
-      const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
-      const single = !!(sel && selectedIdsRef.current.size === 1 && sel.type !== 'image')
+      const group = editableSelection()
       const pivot = rotatePivotRef.current
-      if (single && pivot) {
+      if (!group.length) {
+        const hit = hitTest(p)
+        selectOne(hit ? hit.id : null)
+        if (hit && SHAPE_TOOLS.has(hit.type)) syncMeasureFromObject(hit)
+        drawing.current = false
+        redraw()
+        return
+      }
+      if (!pivot) {
+        p = snapWorldPoint(p)
+        rotatePivotRef.current = { x: p.x, y: p.y }
+        setRotatePivot(rotatePivotRef.current)
+        setToolHint('')
+        drawing.current = false
+        redraw()
+        return
+      }
+      if (group.length === 1) {
+        const sel = group[0]
         const th = hitTransformHandle(p, sel, handleHitThreshold() + 4, zoomRef.current)
         if (th) {
           const center = th.id === 'rotate' ? pivot : objectCenter(sel)
@@ -1080,6 +1254,7 @@ export default function EsquemaEditorModal({
             startAngle: Math.atan2(p.y - center.y, p.x - center.x),
             baseRot: sel.rotation || 0,
             origin: cloneScene([sel])[0],
+            groupOrigins: cloneScene(group),
             pivot: th.id === 'rotate' ? { ...pivot } : null,
           }
           pushHistory()
@@ -1096,29 +1271,24 @@ export default function EsquemaEditorModal({
           redraw()
           return
         }
-      }
-      if (single && !pivot) {
-        const hitOther = hitTest(p)
-        if (hitOther && hitOther.id !== sel.id) {
-          selectOne(hitOther.id)
-          if (SHAPE_TOOLS.has(hitOther.type)) syncMeasureFromObject(hitOther)
-          drawing.current = false
-          redraw()
-          return
-        }
-        p = snapWorldPoint(p)
-        rotatePivotRef.current = { x: p.x, y: p.y }
-        setRotatePivot(rotatePivotRef.current)
-        setToolHint('')
+        selectOne(hitSame.id)
         drawing.current = false
         redraw()
         return
       }
-      const hit = hitTest(p)
-      selectOne(hit ? hit.id : null)
-      if (hit && SHAPE_TOOLS.has(hit.type)) syncMeasureFromObject(hit)
-      drawing.current = false
-      redraw()
+      dragRef.current = {
+        mode: 'rotate',
+        ox: p.x,
+        oy: p.y,
+        startAngle: Math.atan2(p.y - pivot.y, p.x - pivot.x),
+        baseRot: 0,
+        origin: cloneScene([group[0]])[0],
+        groupOrigins: cloneScene(group),
+        pivot: { ...pivot },
+      }
+      pushHistory()
+      startPt.current = p
+      lastPt.current = p
       return
     }
 
@@ -1135,11 +1305,62 @@ export default function EsquemaEditorModal({
       return
     }
 
+    if (currentTool === 'espejo') {
+      const group = editableSelection()
+      if (!group.length) {
+        const hit = hitTest(p)
+        if (hit) selectOne(hit.id)
+        drawing.current = false
+        redraw()
+        return
+      }
+      p = snapWorldPoint(p)
+      const axis = mirrorAxisRef.current
+      if (!axis?.a) {
+        mirrorAxisRef.current = { a: { x: p.x, y: p.y } }
+        lastPt.current = p
+        drawing.current = false
+        redraw()
+        return
+      }
+      if (dist(axis.a, p) < 2) {
+        drawing.current = false
+        return
+      }
+      const copies = cloneScene(group).map((o) => mirrorObject(o, axis.a, p))
+      setMirrorPrompt({ copies, sourceIds: group.map((o) => o.id) })
+      mirrorAxisRef.current = { a: axis.a, b: { x: p.x, y: p.y } }
+      drawing.current = false
+      redraw()
+      return
+    }
+
+    if (currentTool === 'matriz') {
+      if (arrayModeRef.current === 'polar') {
+        const group = editableSelection()
+        if (!group.length) {
+          const hit = hitTest(p)
+          if (hit) selectOne(hit.id)
+          drawing.current = false
+          redraw()
+          return
+        }
+        p = snapWorldPoint(p)
+        applyArrayPolarAt(p)
+      }
+      drawing.current = false
+      return
+    }
+
     if (currentTool === 'polilinea') {
       const last = (draftRef.current?.type === 'polilinea' && (draftRef.current.points || []).length)
         ? draftRef.current.points[draftRef.current.points.length - 1]
         : null
+      const dynDown = readPolyDyn()
       p = snapWorldPoint(p, last ? { fromPoint: last } : {})
+      if (last && (dynDown?.w != null || dynDown?.deg != null)) {
+        p = pointAtPolar(last, p, { meters: dynDown.w, deg: dynDown.deg }) || p
+      }
       if (e.detail >= 2 && draftRef.current?.type === 'polilinea') {
         finishPolyline()
         drawing.current = false
@@ -1162,6 +1383,7 @@ export default function EsquemaEditorModal({
         }
       }
       lastPt.current = p
+      clearPolyFields()
       redraw(draftRef.current)
       return
     }
@@ -1204,6 +1426,34 @@ export default function EsquemaEditorModal({
         if (grabHit) snapRef.current = grabHit
         dragRef.current = {
           id: hit.id,
+          mode: 'move',
+          pending: true,
+          ox: grab.x,
+          oy: grab.y,
+          clickX: p.x,
+          clickY: p.y,
+          groupOrigins: cloneScene(group),
+        }
+        drawing.current = true
+        startPt.current = grab
+        lastPt.current = grab
+        moveGuideRef.current = null
+        redraw()
+        return
+      }
+      const snapKeep = findSnap(p, objectsRef.current, { threshold: snapThreshold(), allowNear: false })
+      if (snapClickKeepsSelection({
+        hitId: null,
+        selectedIds: [...selectedIdsRef.current],
+        snap: snapKeep,
+      })) {
+        const group = objectsRef.current.filter((o) => (
+          selectedIdsRef.current.has(o.id)
+        ) && !(o.type === 'image' && o.fit))
+        const grab = { x: snapKeep.x, y: snapKeep.y }
+        snapRef.current = snapKeep
+        dragRef.current = {
+          id: [...selectedIdsRef.current][0],
           mode: 'move',
           pending: true,
           ox: grab.x,
@@ -1427,15 +1677,38 @@ export default function EsquemaEditorModal({
       } else {
         setHoverCursor(null)
       }
-      if (TWO_POINT_TOOLS.has(currentTool) || currentTool === 'polilinea' || currentTool === 'seleccion' || currentTool === 'nodo' || currentTool === 'offset' || currentTool === 'girar-escalar') {
+      if (TWO_POINT_TOOLS.has(currentTool) || currentTool === 'polilinea' || currentTool === 'seleccion' || currentTool === 'nodo' || currentTool === 'offset' || currentTool === 'girar-escalar' || currentTool === 'espejo' || currentTool === 'matriz') {
         const prevSnap = snapRef.current
         const lastPoly = (
           currentTool === 'polilinea'
           && draftRef.current?.type === 'polilinea'
           && draftRef.current.points?.length
         ) ? draftRef.current.points[draftRef.current.points.length - 1] : null
-        snapWorldPoint(raw, lastPoly ? { fromPoint: lastPoly } : {})
-        if (prevSnap !== snapRef.current || snapRef.current) redraw()
+        let fromPoint = lastPoly
+        let excludeId = null
+        if (currentTool === 'seleccion' && selectModeRef.current === 'dimensionar' && sel) {
+          const handle = nearestResizeHandle(raw, sel)
+          fromPoint = handle ? resizeAnchorPoint(sel, handle.id) : null
+          excludeId = sel.id
+        }
+        let cursor = snapWorldPoint(raw, { fromPoint, excludeId })
+        if (currentTool === 'polilinea' && draftRef.current?.type === 'polilinea' && lastPoly) {
+          const dyn = readPolyDyn()
+          if (dyn?.w != null || dyn?.deg != null) {
+            cursor = pointAtPolar(lastPoly, cursor, { meters: dyn.w, deg: dyn.deg }) || cursor
+          }
+          lastPt.current = cursor
+          updatePolyHud(!!(polyDistRef.current || polyAngRef.current))
+          redraw({
+            ...draftRef.current,
+            points: polylineDraftPreview(draftRef.current.points, cursor),
+          })
+        } else if (currentTool === 'espejo' && mirrorAxisRef.current?.a) {
+          lastPt.current = cursor
+          redraw()
+        } else if (prevSnap !== snapRef.current || snapRef.current) {
+          redraw()
+        }
       } else if (snapRef.current) {
         snapRef.current = null
         redraw()
@@ -1456,14 +1729,19 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Redimensionado por manijas (sin snap: el arrastre debe ser libre)
+    // Redimensionado por manijas (osnap activo, ⊥ desde el extremo fijo)
     if (dragRef.current?.mode === 'resize') {
       const d = dragRef.current
-      lastPt.current = raw
-      snapRef.current = null
+      const others = objectsRef.current.filter((o) => o && o.id !== d.id)
+      const hit = d.handle === 'dim'
+        ? null
+        : snapResizePoint(raw, d.origin, d.handle, others, snapThreshold())
+      const pResize = hit ? { x: hit.x, y: hit.y } : raw
+      snapRef.current = hit
+      lastPt.current = pResize
       objectsRef.current = objectsRef.current.map((o) => {
         if (o.id !== d.id) return o
-        const next = applyResizeHandle(d.origin, d.handle, raw)
+        const next = applyResizeHandle(d.origin, d.handle, pResize)
         if (next.type === 'cota') next.text = cotaText(next)
         if (SHAPE_TOOLS.has(next.type)) {
           next.label = measureLabelFor(
@@ -1502,6 +1780,17 @@ export default function EsquemaEditorModal({
       const origins = new Map((d.groupOrigins || (d.origin ? [d.origin] : [])).map((o) => [o.id, o]))
       if (d.mode === 'move') {
         const moving = d.groupOrigins || (d.origin ? [d.origin] : [])
+        if (moving.length === 1 && moving[0].type === 'cota') {
+          const next = repositionCota(moving[0], raw)
+          objectsRef.current = objectsRef.current.map((o) => (
+            o.id === next.id ? { ...next, text: cotaText(next) } : o
+          ))
+          setLiveMeasure(formatMeters(Math.abs(next.offset || 0)))
+          moveGuideRef.current = null
+          setDirty(true)
+          redraw()
+          return
+        }
         const movingIds = new Set(moving.map((o) => o.id))
         const others = objectsRef.current.filter((o) => o && !movingIds.has(o.id))
         const moved = snapMoveDelta(raw, { x: d.ox, y: d.oy }, moving, others, snapThreshold())
@@ -1540,9 +1829,14 @@ export default function EsquemaEditorModal({
         }
         const pivot = d.pivot || objectCenter(d.origin)
         const ang = Math.atan2(raw.y - pivot.y, raw.x - pivot.x)
+        if (origins.size > 1) {
+          const delta = applySoftOrthoAngle(ang - d.startAngle)
+          setLiveMeasure(`${Math.round(radToDeg(delta))}°`)
+          return rotateObjectAroundPivot(origin, pivot, delta)
+        }
         const nextRot = applySoftOrthoAngle(d.baseRot + (ang - d.startAngle))
         setLiveMeasure(`${Math.round(radToDeg(nextRot))}°`)
-        if (d.pivot) return rotateObjectAroundPivot(d.origin, d.pivot, nextRot - d.baseRot)
+        if (d.pivot) return rotateObjectAroundPivot(origin, d.pivot, nextRot - d.baseRot)
         return { ...o, rotation: nextRot }
       })
       setDirty(true)
@@ -1563,16 +1857,16 @@ export default function EsquemaEditorModal({
       const pts = draftRef.current.points || []
       const last = pts[pts.length - 1]
       p = snapWorldPoint(raw, last ? { fromPoint: last } : {})
-      const dyn = parseDynMeasure(dynBufferRef.current)
-      if (dyn?.w != null && last) {
-        p = pointAtDistance(last, p, dyn.w) || p
+      const dyn = readPolyDyn()
+      if (last && (dyn?.w != null || dyn?.deg != null)) {
+        p = pointAtPolar(last, p, { meters: dyn.w, deg: dyn.deg }) || p
       }
       lastPt.current = p
       const preview = { ...draftRef.current, points: last ? [...pts, p] : pts }
       if (last) {
         const label = formatMeters(dist(last, p))
         setLiveMeasure(label)
-        updateDynHud(dynBufferRef.current || label, !!dynBufferRef.current)
+        updatePolyHud(!!(polyDistRef.current || polyAngRef.current))
       }
       redraw(preview)
       return
@@ -1855,21 +2149,17 @@ export default function EsquemaEditorModal({
   }
 
   const applyRotationDeg = (raw) => {
-    const id = selectedIdRef.current
-    if (!id) return
+    const ids = [...selectedIdsRef.current]
+    if (!ids.length) return
     const n = Number(String(raw ?? '').trim().replace(',', '.'))
     if (!Number.isFinite(n)) return
-    const obj = objectsRef.current.find((o) => o.id === id)
-    if (!obj || (obj.type === 'image' && obj.fit)) return
+    const primary = objectsRef.current.find((o) => o.id === (selectedIdRef.current || ids[0]))
+    if (!primary || (primary.type === 'image' && primary.fit)) return
     const target = degToRad(n)
-    const delta = target - (obj.rotation || 0)
-    const pivot = rotatePivotRef.current
+    const delta = target - (primary.rotation || 0)
+    const pivot = rotatePivotRef.current || objectCenter(primary)
     pushHistory()
-    objectsRef.current = objectsRef.current.map((o) => {
-      if (o.id !== id) return o
-      if (pivot) return rotateObjectAroundPivot(o, pivot, delta)
-      return { ...o, rotation: target }
-    })
+    objectsRef.current = rotateSelectionAroundPivot(objectsRef.current, ids, pivot, delta)
     setDirty(true)
     setPanTick((nTick) => nTick + 1)
   }
@@ -1988,13 +2278,14 @@ export default function EsquemaEditorModal({
       const pts = draftRef.current.points || []
       const last = pts[pts.length - 1]
       const toward = lastPt.current || last
-      const dyn = parseDynMeasure(dynBufferRef.current)
-      const dest = (dyn?.w != null && last)
-        ? (pointAtDistance(last, toward, dyn.w) || toward)
+      const dyn = readPolyDyn()
+      const dest = (last && (dyn?.w != null || dyn?.deg != null))
+        ? (pointAtPolar(last, toward, { meters: dyn.w, deg: dyn.deg }) || toward)
         : toward
       lastPt.current = dest
       const preview = { ...draftRef.current, points: last ? [...pts, dest] : pts }
       if (last && dest) setLiveMeasure(formatMeters(dist(last, dest)))
+      updatePolyHud(!!(polyDistRef.current || polyAngRef.current))
       redraw(preview)
       return
     }
@@ -2038,6 +2329,23 @@ export default function EsquemaEditorModal({
 
   const commitDynInput = () => {
     const mode = dynInputMode()
+    if (mode === 'poly') {
+      const polar = readPolyDyn()
+      if (polar.w == null && polar.deg == null) return false
+      const pts = draftRef.current.points || []
+      const last = pts[pts.length - 1]
+      const toward = lastPt.current || last
+      const dest = last
+        ? (pointAtPolar(last, toward, { meters: polar.w, deg: polar.deg }) || toward)
+        : toward
+      if (last && dest && dist(last, dest) >= 1) {
+        draftRef.current = { ...draftRef.current, points: [...pts, dest] }
+        lastPt.current = dest
+      }
+      clearPolyFields()
+      redraw(draftRef.current)
+      return true
+    }
     const dyn = parseDynMeasure(dynBufferRef.current)
     if (!mode || !dyn || (dyn.w == null && dyn.h == null)) return false
     if (mode === 'draw' && startPt.current && lastPt.current) {
@@ -2066,22 +2374,6 @@ export default function EsquemaEditorModal({
       snapRef.current = null
       clearDynBuffer()
       redraw()
-      return true
-    }
-    if (mode === 'poly') {
-      const pts = draftRef.current.points || []
-      const last = pts[pts.length - 1]
-      const toward = lastPt.current || last
-      const dest = (dyn.w != null && last)
-        ? (pointAtDistance(last, toward, dyn.w) || toward)
-        : toward
-      if (last && dest && dist(last, dest) >= 1) {
-        draftRef.current = { ...draftRef.current, points: [...pts, dest] }
-        lastPt.current = dest
-      }
-      dynBufferRef.current = ''
-      updateDynHud('', false)
-      redraw(draftRef.current)
       return true
     }
     if (mode === 'move') {
@@ -2124,6 +2416,20 @@ export default function EsquemaEditorModal({
       updateDynHud(dynBufferRef.current, true)
       return true
     }
+    if (dynInputMode() === 'poly') {
+      const next = applyPolyFieldKey({
+        dist: polyDistRef.current,
+        ang: polyAngRef.current,
+        field: polyFieldRef.current,
+      }, key)
+      if (!next) return false
+      polyDistRef.current = next.dist
+      polyAngRef.current = next.ang
+      polyFieldRef.current = next.field
+      updatePolyHud(true)
+      previewDynLive()
+      return true
+    }
     if (!dynInputMode()) return false
     if (key === 'Backspace') {
       dynBufferRef.current = dynBufferRef.current.slice(0, -1)
@@ -2131,6 +2437,10 @@ export default function EsquemaEditorModal({
       dynBufferRef.current += key
     } else if (key === 'x' || key === 'X' || key === '*') {
       if (!/[xX*]/.test(dynBufferRef.current)) dynBufferRef.current += 'x'
+    } else if (key === '<' || key === '>') {
+      if (!dynBufferRef.current.includes('<')) dynBufferRef.current += '<'
+    } else if (key === '-' && dynBufferRef.current.includes('<')) {
+      dynBufferRef.current += '-'
     } else {
       return false
     }
@@ -2143,9 +2453,15 @@ export default function EsquemaEditorModal({
   pasteClipboardRef.current = pasteClipboard
   deleteSelectedRef.current = deleteSelected
   escapeActionRef.current = () => {
-    if (dynBufferRef.current) {
+    if (dynBufferRef.current || polyDistRef.current || polyAngRef.current) {
       clearDynBuffer()
       previewDynLive()
+      return true
+    }
+    if (mirrorPrompt || mirrorAxisRef.current) {
+      setMirrorPrompt(null)
+      mirrorAxisRef.current = null
+      redraw()
       return true
     }
     if (rotatePivotRef.current) {
@@ -2286,17 +2602,35 @@ export default function EsquemaEditorModal({
   }
 
   const canZOrder = canReorderZOrder(objectsRef.current, selectedIds)
-  const selectedLineCount = objectsRef.current.filter((o) => o.type === 'linea' && selectedIds.includes(o.id)).length
-  const canvasLineCount = objectsRef.current.filter((o) => o.type === 'linea').length
+  const isJoinable = (o) => o.type === 'linea' || o.type === 'polilinea'
+  const selectedLineCount = objectsRef.current.filter((o) => isJoinable(o) && selectedIds.includes(o.id)).length
+  const canvasLineCount = objectsRef.current.filter(isJoinable).length
   const canJoinLines = selectedLineCount >= 2 || canvasLineCount >= 2
   const rotateHint = (
-    tool === 'girar-escalar' && selectedObj && selectedObj.type !== 'image'
+    tool === 'girar-escalar' && selectedIds.length
       ? (rotatePivot
-        ? 'Punto base de giro fijado. Arrastre la manija o indique otro punto.'
+        ? (selectedIds.length > 1
+          ? 'Punto base fijado. Arrastre para girar todo el conjunto.'
+          : 'Punto base de giro fijado. Arrastre la manija o indique otro punto.')
         : 'Indique el punto base de giro (clic en el lienzo; puede usar snap)')
       : ''
   )
-  const canvasHint = toolHint || rotateHint || insertHint
+  const polyHint = tool === 'polilinea'
+    ? 'Polilínea: el trazo sigue el mouse. Distancia (m) y Ángulo (°) en campos separados. Tab cambia de campo. 0° derecha, 90° abajo.'
+    : ''
+  const mirrorHint = tool === 'espejo'
+    ? (!selectedIds.length
+      ? 'Espejo: seleccione entidades y luego indique dos puntos del eje (snap activo).'
+      : (mirrorAxisRef.current?.a
+        ? 'Indique el segundo punto del eje de reflexión.'
+        : 'Indique el primer punto del eje de reflexión (snap activo).'))
+    : ''
+  const arrayHint = tool === 'matriz'
+    ? (arrayMode === 'polar'
+      ? 'Matriz polar: defina copias y ángulo, luego clic en el centro (snap activo).'
+      : 'Matriz rectangular: defina filas, columnas y espaciado en metros, luego Aplicar.')
+    : ''
+  const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || insertHint
 
   const pedirGuardar = () => {
     if (busy || !dirty) return
@@ -2379,6 +2713,8 @@ export default function EsquemaEditorModal({
                     onClick={() => {
                       if (tb.id !== 'polilinea') finishPolyline()
                       clearDynBuffer()
+                      mirrorAxisRef.current = null
+                      setMirrorPrompt(null)
                       setTool(tb.id)
                     }}
                     style={iconBtn(t, tool === tb.id)}
@@ -2425,12 +2761,32 @@ export default function EsquemaEditorModal({
           {tool === 'seleccion' ? (
             <SelectModeRadios t={t} value={selectMode} onChange={setSelectMode} />
           ) : null}
-          {tool === 'girar-escalar' && selectedObj && selectedObj.type !== 'image' ? (
+          {tool === 'matriz' ? (
+            <ArrayPanel
+              t={t}
+              mode={arrayMode}
+              onMode={setArrayMode}
+              rows={arrayRows}
+              cols={arrayCols}
+              dx={arrayDx}
+              dy={arrayDy}
+              count={arrayCount}
+              angle={arrayAngle}
+              onRows={setArrayRows}
+              onCols={setArrayCols}
+              onDx={setArrayDx}
+              onDy={setArrayDy}
+              onCount={setArrayCount}
+              onAngle={setArrayAngle}
+              onApplyRect={applyArrayRect}
+            />
+          ) : null}
+          {tool === 'girar-escalar' && selectedIds.length > 0 && (!selectedObj || selectedObj.type !== 'image') ? (
             <DraftPropField
               t={t}
               label="Giro"
               suffix="°"
-              initial={Math.round(radToDeg(selectedObj.rotation || 0) * 10) / 10}
+              initial={Math.round(radToDeg(selectedObj?.rotation || 0) * 10) / 10}
               onCommit={applyRotationDeg}
             />
           ) : null}
@@ -2671,7 +3027,62 @@ export default function EsquemaEditorModal({
               }}
             />
           )}
-          {dynHud.text ? (
+          {polyHud.visible ? (
+            <div
+              style={{
+                position: 'absolute',
+                left: Math.max(12, polyHud.x),
+                top: Math.max(12, polyHud.y),
+                zIndex: 4,
+                pointerEvents: 'none',
+                display: 'flex',
+                gap: 6,
+              }}
+            >
+              {[
+                {
+                  id: 'dist',
+                  label: 'Distancia',
+                  unit: 'm',
+                  value: polyHud.dist,
+                  live: polyHud.liveDist,
+                },
+                {
+                  id: 'ang',
+                  label: 'Ángulo',
+                  unit: '°',
+                  value: polyHud.ang,
+                  live: polyHud.liveAng,
+                },
+              ].map((field) => {
+                const active = polyHud.field === field.id && polyHud.typing
+                const shown = field.value
+                  ? (active ? `${field.value}|` : field.value)
+                  : (active ? '|' : field.live)
+                return (
+                  <div
+                    key={field.id}
+                    style={{
+                      minWidth: 92,
+                      padding: '4px 8px',
+                      borderRadius: 4,
+                      border: `1px solid ${active ? t.primary : t.border}`,
+                      background: active ? ui.hudTyping : ui.hudBg,
+                      color: t.text,
+                      boxShadow: '0 1px 4px rgba(15,23,42,0.12)',
+                    }}
+                  >
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.3, opacity: 0.72 }}>
+                      {field.label}
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'ui-monospace, Consolas, monospace' }}>
+                      {shown}{field.value || active ? ` ${field.unit}` : ''}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : dynHud.text ? (
             <div
               style={{
                 position: 'absolute',
@@ -2904,6 +3315,45 @@ export default function EsquemaEditorModal({
             </div>
           </div>
         )}
+        {mirrorPrompt && (
+          <div
+            style={{
+              position: 'absolute', inset: 0, zIndex: 20,
+              background: t.overlay || ui.overlay,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="cc-esquema-mirror"
+              style={{
+                width: 380, padding: 16, borderRadius: 12,
+                background: t.bgCard || '#fff', border: `1px solid ${t.border}`,
+                boxShadow: '0 12px 32px rgba(15,23,42,0.2)',
+                color: t.text,
+              }}
+            >
+              <div id="cc-esquema-mirror" style={{ fontWeight: 800, marginBottom: 8 }}>
+                Espejo
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.45, marginBottom: 14, color: t.textMuted }}>
+                ¿Conservar el objeto original además de la copia reflejada, o dejar solo el resultado del espejo?
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" style={ghost(t)} onClick={() => { setMirrorPrompt(null); mirrorAxisRef.current = null; redraw() }}>
+                  Cancelar
+                </button>
+                <button type="button" style={ghost(t)} onClick={() => applyMirrorDecision(false)}>
+                  Solo el espejo
+                </button>
+                <button type="button" style={primary(t)} onClick={() => applyMirrorDecision(true)}>
+                  Conservar original
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {iaPrompt && (
           <div
             style={{
@@ -3069,11 +3519,72 @@ function CircleRadioField({ t, diameterMeters, onCommitDiameter }) {
   )
 }
 
-function SelectModeRadios({ t, value, onChange, compact = false }) {
+function ArrayPanel({
+  t, mode, onMode, rows, cols, dx, dy, count, angle,
+  onRows, onCols, onDx, onDy, onCount, onAngle, onApplyRect,
+}) {
+  const field = (label, value, onChange, suffix) => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, fontWeight: 700, color: t.textMuted }}>
+      {label}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          style={{
+            width: 52, padding: '3px 5px', borderRadius: 6,
+            border: `1px solid ${t.border}`, fontSize: 12, fontWeight: 700,
+            color: t.text, background: t.bgCard || '#fff',
+          }}
+        />
+        {suffix ? <span>{suffix}</span> : null}
+      </span>
+    </label>
+  )
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+      <SelectModeRadios
+        t={t}
+        value={mode}
+        onChange={onMode}
+        compact
+        name="cc-esquema-array-mode"
+        ariaLabel="Tipo de matriz"
+        options={[
+          { id: 'rect', label: 'Rectangular' },
+          { id: 'polar', label: 'Polar' },
+        ]}
+      />
+      {mode === 'rect' ? (
+        <>
+          {field('Filas', rows, onRows)}
+          {field('Columnas', cols, onCols)}
+          {field('ΔX', dx, onDx, 'm')}
+          {field('ΔY', dy, onDy, 'm')}
+          <button type="button" style={primary(t)} onClick={onApplyRect}>Aplicar</button>
+        </>
+      ) : (
+        <>
+          {field('Copias', count, onCount)}
+          {field('Ángulo', angle, onAngle, '°')}
+        </>
+      )}
+    </span>
+  )
+}
+
+function SelectModeRadios({
+  t, value, onChange, compact = false,
+  options = [{ id: 'mover', label: 'Mover' }, { id: 'dimensionar', label: 'Dimensionar' }],
+  name = 'cc-esquema-select-mode',
+  ariaLabel = 'Modo de selección',
+}) {
   const opt = (id, label) => {
     const active = value === id
     return (
       <label
+        key={id}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -3091,7 +3602,7 @@ function SelectModeRadios({ t, value, onChange, compact = false }) {
       >
         <input
           type="radio"
-          name="cc-esquema-select-mode"
+          name={name}
           value={id}
           checked={active}
           onChange={() => onChange(id)}
@@ -3104,11 +3615,10 @@ function SelectModeRadios({ t, value, onChange, compact = false }) {
   return (
     <div
       role="radiogroup"
-      aria-label="Modo de selección"
+      aria-label={ariaLabel}
       style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
     >
-      {opt('mover', 'Mover')}
-      {opt('dimensionar', 'Dimensionar')}
+      {options.map((o) => opt(o.id, o.label))}
     </div>
   )
 }
@@ -3649,10 +4159,12 @@ function objectBounds(obj) {
 }
 
 function pointInObject(p, obj) {
+  const rot = obj?.rotation || 0
+  const q = rot ? rotatePointAround(p, objectCenter(obj), -rot) : p
   const bb = objectBounds(obj)
   if (!bb) return false
   const pad = 8
-  return p.x >= bb.x - pad && p.x <= bb.x + bb.w + pad && p.y >= bb.y - pad && p.y <= bb.y + bb.h + pad
+  return q.x >= bb.x - pad && q.x <= bb.x + bb.w + pad && q.y >= bb.y - pad && q.y <= bb.y + bb.h + pad
 }
 
 function translateObject(obj, dx, dy) {
@@ -4382,6 +4894,25 @@ function IconIa() {
   )
 }
 function IconMover() { return <svg {...iconProps()}><path d="M5 9 2 12l3 3" /><path d="M9 5 12 2l3 3" /><path d="M15 19 12 22l-3-3" /><path d="M19 9 22 12l-3 3" /><path d="M2 12h20" /><path d="M12 2v20" /></svg> }
+function IconEspejo() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M12 3v18" />
+      <path d="M5 8 12 12 5 16Z" />
+      <path d="M19 8 12 12l7 4Z" />
+    </svg>
+  )
+}
+function IconMatriz() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="4" y="4" width="6" height="6" rx="1" />
+      <rect x="14" y="4" width="6" height="6" rx="1" />
+      <rect x="4" y="14" width="6" height="6" rx="1" />
+      <rect x="14" y="14" width="6" height="6" rx="1" />
+    </svg>
+  )
+}
 function IconGirarEscalar() {
   return (
     <svg {...iconProps()}>

@@ -52,12 +52,42 @@ export function formatMeters(world, digits) {
 export function parseDynMeasure(raw) {
   const s = String(raw ?? '').trim()
   if (!s) return null
+  const polar = s.match(/^(?:([\d.,]+))?\s*<\s*(-?[\d.,]+)\s*$/)
+  if (polar) {
+    const w = polar[1] != null ? parsePositive(polar[1]) : null
+    const deg = Number(String(polar[2]).replace(',', '.'))
+    if (!Number.isFinite(deg)) return w != null ? { w, h: null } : null
+    return { w, h: null, deg }
+  }
   const parts = s.split(/[xX*×]/).map((p) => p.trim()).filter(Boolean)
   if (!parts.length) return null
   const w = parsePositive(parts[0])
   const h = parts.length >= 2 ? parsePositive(parts[1]) : null
   if (w == null && h == null) return null
   return { w, h }
+}
+
+/** Campos separados Distancia / Ángulo → mismos valores que usa pointAtPolar. */
+export function polarFromFields(distRaw, angRaw) {
+  const w = parsePositive(distRaw)
+  const degStr = String(angRaw ?? '').trim()
+  if (!degStr) return { w, deg: null }
+  const deg = Number(degStr.replace(',', '.'))
+  return { w, deg: Number.isFinite(deg) ? deg : null }
+}
+
+/** Teclas del HUD de Polilínea: Tab cambia de campo; cada valor se edita solo. */
+export function applyPolyFieldKey({ dist = '', ang = '', field = 'dist' } = {}, key) {
+  if (key === 'Tab') {
+    return { dist, ang, field: field === 'dist' ? 'ang' : 'dist' }
+  }
+  const cur = field === 'ang' ? String(ang ?? '') : String(dist ?? '')
+  let value = cur
+  if (key === 'Backspace') value = cur.slice(0, -1)
+  else if (/^[0-9]$/.test(key) || key === '.' || key === ',') value = cur + key
+  else if (key === '-' && field === 'ang') value = cur.startsWith('-') ? cur.slice(1) : `-${cur}`
+  else return null
+  return field === 'ang' ? { dist, ang: value, field } : { dist: value, ang, field }
 }
 
 /** Extremo a `meters` de `from` en la dirección hacia `toward`. */
@@ -71,6 +101,38 @@ export function pointAtDistance(from, toward, meters) {
   if (len < 1e-9) return { x: from.x + world, y: from.y }
   const s = world / len
   return { x: from.x + dx * s, y: from.y + dy * s }
+}
+
+/** 0° = +X (derecha), 90° = +Y (abajo en el lienzo). */
+export function pointAtPolar(from, toward, { meters = null, deg = null } = {}) {
+  if (!from) return null
+  if (deg != null && Number.isFinite(Number(deg))) {
+    const ang = (Number(deg) * Math.PI) / 180
+    const fallback = (toward && Math.hypot(toward.x - from.x, toward.y - from.y) > 1e-6)
+      ? Math.hypot(toward.x - from.x, toward.y - from.y)
+      : metersToWorld(1)
+    const world = meters != null ? metersToWorld(meters) : fallback
+    if (!Number.isFinite(world) || world <= 0) return null
+    return { x: from.x + Math.cos(ang) * world, y: from.y + Math.sin(ang) * world }
+  }
+  if (meters != null) return pointAtDistance(from, toward, meters)
+  return toward || null
+}
+
+export function polylineDraftPreview(points, cursor) {
+  const pts = (points || []).filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+  if (!cursor || !Number.isFinite(cursor.x)) return pts
+  if (!pts.length) return [{ x: cursor.x, y: cursor.y }]
+  return [...pts, { x: cursor.x, y: cursor.y }]
+}
+
+/** Clic en osnap discreto no debe vaciar la selección (el marcador no es un “vacío”). */
+export function snapClickKeepsSelection({ hitId = null, selectedIds = [], snap = null } = {}) {
+  const ids = selectedIds || []
+  const discrete = snap && snap.kind && snap.kind !== 'near' && snap.kind !== 'ortho'
+  if (!discrete || !ids.length) return false
+  if (hitId && ids.includes(hitId)) return false
+  return true
 }
 
 export function gridStepWorld(zoom) {
@@ -148,6 +210,11 @@ export function arrowHeadLength(obj) {
 }
 
 export const DEFAULT_COTA_OFFSET = 28
+
+/** Flecha de cota: tamaño fijo en pantalla, como los marcadores de snap. */
+export function cotaArrowHeadLength(zoom = 1) {
+  return snapMarkerWorldSize(zoom) * 0.85
+}
 
 /** Geometría de cota: puntos de medida, línea de cota, extensiones. */
 export function cotaLayout(obj) {
@@ -346,6 +413,50 @@ export function applyResizeHandle(origin, handleId, point) {
   return { ...origin, x1, y1, x2, y2 }
 }
 
+/** Extremo o esquina opuesta: origen del ⊥ al redimensionar. */
+export function resizeAnchorPoint(origin, handleId) {
+  if (!origin || !handleId || handleId === 'dim') return null
+  if (LINE_TOOLS.has(origin.type) || origin.type === 'cota') {
+    if (handleId === 'a') return objectWorldPoint(origin, { x: origin.x2, y: origin.y2 })
+    if (handleId === 'b') return objectWorldPoint(origin, { x: origin.x1, y: origin.y1 })
+    return null
+  }
+  const opp = { nw: 'se', se: 'nw', ne: 'sw', sw: 'ne', n: 's', s: 'n', e: 'w', w: 'e' }
+  const otherId = opp[handleId]
+  if (!otherId) return null
+  const h = getResizeHandles(origin).find((x) => x.id === otherId)
+  return h ? { x: h.x, y: h.y } : null
+}
+
+/** Snap al redimensionar: mismos kinds que al dibujar, excluyendo la entidad en edición. */
+export function snapResizePoint(cursor, origin, handleId, others, threshold = 12) {
+  if (!cursor || !origin) return null
+  const fromPoint = resizeAnchorPoint(origin, handleId)
+  return findSnap(cursor, others || [], {
+    threshold,
+    fromPoint,
+    allowNear: true,
+    allowPerp: handleId !== 'dim',
+    excludeId: origin.id,
+  })
+}
+
+/** Reposiciona la línea de cota sin alterar los puntos medidos ni el texto. */
+export function repositionCota(obj, point) {
+  if (!obj || obj.type !== 'cota' || !point) return obj
+  const offset = cotaSignedOffset(obj, point)
+  return { ...obj, offset, x1: obj.x1, y1: obj.y1, x2: obj.x2, y2: obj.y2 }
+}
+
+/** Rota todas las entidades de `ids` alrededor del mismo pivote, conservando relativas. */
+export function rotateSelectionAroundPivot(objects, ids, pivot, delta) {
+  const set = ids instanceof Set ? ids : new Set(ids || [])
+  if (!set.size || !pivot || !Number.isFinite(delta)) return objects || []
+  return (objects || []).map((o) => (
+    o && set.has(o.id) ? rotateObjectAroundPivot(o, pivot, delta) : o
+  ))
+}
+
 function resizeBox(x1, y1, x2, y2, handleId, point) {
   let left = Math.min(x1, x2)
   let right = Math.max(x1, x2)
@@ -428,15 +539,15 @@ export function collectSnapGeometry(objects, excludeId = null) {
       continue
     }
     if (LINE_TOOLS.has(obj.type) || obj.type === 'cota') {
-      const a = { x: obj.x1, y: obj.y1 }
-      const b = { x: obj.x2, y: obj.y2 }
+      const a = objectWorldPoint(obj, { x: obj.x1, y: obj.y1 })
+      const b = objectWorldPoint(obj, { x: obj.x2, y: obj.y2 })
       points.push({ ...a, kind: 'end' }, { ...b, kind: 'end' })
       points.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, kind: 'mid' })
       segments.push({ a, b })
       continue
     }
     if (obj.type === 'rect' || obj.type === 'triangulo') {
-      const corners = shapeCorners(obj)
+      const corners = shapeCorners(obj).map((c) => objectWorldPoint(obj, c))
       for (const c of corners) points.push({ ...c, kind: 'end' })
       let sx = 0
       let sy = 0
@@ -458,18 +569,19 @@ export function collectSnapGeometry(objects, excludeId = null) {
       const cy = (obj.y1 + obj.y2) / 2
       const rx = Math.abs(obj.x2 - obj.x1) / 2
       const ry = Math.abs(obj.y2 - obj.y1) / 2
-      points.push({ x: cx, y: cy, kind: 'center' })
+      const rot = obj.rotation || 0
+      points.push({ ...objectWorldPoint(obj, { x: cx, y: cy }), kind: 'center' })
       points.push(
-        { x: cx + rx, y: cy, kind: 'quad' },
-        { x: cx - rx, y: cy, kind: 'quad' },
-        { x: cx, y: cy + ry, kind: 'quad' },
-        { x: cx, y: cy - ry, kind: 'quad' },
+        { ...objectWorldPoint(obj, { x: cx + rx, y: cy }), kind: 'quad' },
+        { ...objectWorldPoint(obj, { x: cx - rx, y: cy }), kind: 'quad' },
+        { ...objectWorldPoint(obj, { x: cx, y: cy + ry }), kind: 'quad' },
+        { ...objectWorldPoint(obj, { x: cx, y: cy - ry }), kind: 'quad' },
       )
-      curves.push({ type: 'ellipse', cx, cy, rx, ry })
+      curves.push({ type: 'ellipse', cx, cy, rx, ry, rotation: rot })
       continue
     }
     if (obj.type === 'stroke' || obj.type === 'polilinea') {
-      const pts = obj.points || []
+      const pts = (obj.points || []).map((pt) => objectWorldPoint(obj, pt))
       if (pts.length) {
         points.push({ ...pts[0], kind: 'end' }, { ...pts[pts.length - 1], kind: 'end' })
         for (let i = 1; i < pts.length - 1; i += 1) {
@@ -665,7 +777,7 @@ export function findSnap(p, objects, {
       })
     }
     for (const curve of curves) {
-      const foot = nearestOnEllipse(fromPoint, curve.cx, curve.cy, curve.rx, curve.ry)
+      const foot = nearestOnCurve(fromPoint, curve)
       if (Math.hypot(foot.x - fromPoint.x, foot.y - fromPoint.y) < 4) continue
       considerSnap(best, p, foot.x, foot.y, 'perp', {
         guide: { a: { ...fromPoint }, b: { ...foot } },
@@ -684,7 +796,7 @@ export function findSnap(p, objects, {
       considerSnap(best, p, foot.x, foot.y, 'near', { guide: { a: seg.a, b: seg.b } })
     }
     for (const curve of curves) {
-      const foot = nearestOnEllipse(p, curve.cx, curve.cy, curve.rx, curve.ry)
+      const foot = nearestOnCurve(p, curve)
       if (nearDiscretePoint(foot, points, skip)) continue
       considerSnap(best, p, foot.x, foot.y, 'near')
     }
@@ -876,6 +988,56 @@ export function objectCenterOf(obj) {
   const w = obj.w || (obj.cols ? (obj.cols * (obj.cellW || 78)) : 0)
   const h = obj.h || (obj.rows ? (obj.rows * (obj.cellH || 30)) : 0)
   return { x: (obj.x || 0) + w / 2, y: (obj.y || 0) + h / 2 }
+}
+
+export function rotatePointAround(p, center, angle) {
+  const a = Number(angle) || 0
+  if (!p || Math.abs(a) < 1e-12) return { x: p?.x || 0, y: p?.y || 0 }
+  const c = Math.cos(a)
+  const s = Math.sin(a)
+  const dx = (p.x || 0) - (center?.x || 0)
+  const dy = (p.y || 0) - (center?.y || 0)
+  return {
+    x: (center?.x || 0) + dx * c - dy * s,
+    y: (center?.y || 0) + dx * s + dy * c,
+  }
+}
+
+/** Punto de mundo vigente (tras `rotation` alrededor del centro). */
+export function objectWorldPoint(obj, p) {
+  if (!p) return { x: 0, y: 0 }
+  const rot = obj?.rotation || 0
+  if (!rot) return { x: p.x || 0, y: p.y || 0 }
+  return rotatePointAround(p, objectCenterOf(obj), rot)
+}
+
+/** Segmentos de línea / polilínea en geometría vigente (post-rotación). */
+export function objectWorldSegments(obj) {
+  if (!obj) return []
+  if (obj.type === 'linea' || obj.type === 'flecha' || obj.type === 'cota') {
+    return [{
+      a: objectWorldPoint(obj, { x: obj.x1 || 0, y: obj.y1 || 0 }),
+      b: objectWorldPoint(obj, { x: obj.x2 || 0, y: obj.y2 || 0 }),
+    }]
+  }
+  if (obj.type === 'polilinea' || obj.type === 'stroke') {
+    const pts = (obj.points || []).map((p) => objectWorldPoint(obj, p))
+    const segs = []
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      if (!pts[i] || !pts[i + 1]) continue
+      segs.push({ a: pts[i], b: pts[i + 1] })
+    }
+    return segs
+  }
+  return []
+}
+
+function nearestOnCurve(p, curve) {
+  const rot = curve?.rotation || 0
+  const c = { x: curve.cx, y: curve.cy }
+  const local = rot ? rotatePointAround(p, c, -rot) : p
+  const foot = nearestOnEllipse(local, curve.cx, curve.cy, curve.rx, curve.ry)
+  return rot ? rotatePointAround(foot, c, rot) : foot
 }
 
 export function nodeMarkerWorldRadius(zoom = 1) {
@@ -1200,7 +1362,7 @@ export function drawMoveGuide(ctx, from, to, zoom = 1, ui) {
   ctx.restore()
 }
 
-function shiftObject(obj, dx, dy) {
+export function shiftObject(obj, dx, dy) {
   if (!obj || (!dx && !dy)) return obj
   if (obj.type === 'nodo') return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
   if (Array.isArray(obj.points)) {

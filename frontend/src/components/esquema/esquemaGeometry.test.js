@@ -5,7 +5,13 @@ import {
   applySoftOrtho,
   applySoftOrthoAngle,
   arrowHeadLength,
+  cotaArrowHeadLength,
   cotaLayout,
+  snapResizePoint,
+  resizeAnchorPoint,
+  repositionCota,
+  rotateSelectionAroundPivot,
+  objectWorldPoint,
   degToRad,
   ellipseFromCenter,
   findSnap,
@@ -19,8 +25,13 @@ import {
   lastLineReferenceAngle,
   metersToWorld,
   parseDynMeasure,
+  polarFromFields,
+  applyPolyFieldKey,
   parsePositive,
   pointAtDistance,
+  pointAtPolar,
+  polylineDraftPreview,
+  snapClickKeepsSelection,
   PX_PER_METER,
   scaleObjectUniform,
   SNAP_KIND_LABEL,
@@ -127,6 +138,25 @@ describe('esquemaGeometry', () => {
     const moved = snapMoveDelta({ x: 201, y: 1 }, end, line, target, snapThresholdWorld(zoom))
     assert.equal(end.x + moved.dx, 200)
     assert.equal(end.y + moved.dy, 0)
+  })
+
+  it('rotated line: Endpoint snap uses visual geometry, not stored x1/x2', () => {
+    const rot = Math.PI / 4
+    const line = { id: 'r', type: 'linea', x1: 0, y1: 0, x2: 50, y2: 0, rotation: rot }
+    const C = { x: 25, y: 0 }
+    const visEnd = {
+      x: C.x + 25 * Math.cos(rot),
+      y: C.y + 25 * Math.sin(rot),
+    }
+    const stale = findSnap({ x: 50, y: 0 }, [line], { threshold: 5, allowNear: false })
+    assert.notEqual(stale?.x, 50, 'stored endpoint is not the visual Endpoint')
+    const hit = findSnap({ x: visEnd.x, y: visEnd.y }, [line], { threshold: 6, allowNear: false })
+    assert.equal(hit.kind, 'end')
+    assert.ok(Math.hypot(hit.x - visEnd.x, hit.y - visEnd.y) < 1e-6)
+    const mid = findSnap({ x: 25, y: 0 }, [line], { threshold: 6, allowNear: false })
+    assert.equal(mid.kind, 'mid')
+    assert.equal(mid.x, 25)
+    assert.equal(mid.y, 0)
   })
 
   it('fromPoint still snaps to a foreign Endpoint (polyline uses the same findSnap)', () => {
@@ -282,6 +312,60 @@ describe('esquemaGeometry', () => {
     const dest = pointAtDistance({ x: 0, y: 0 }, { x: 100, y: 0 }, 2)
     assert.equal(dest.x, 100)
     assert.equal(dest.y, 0)
+  })
+
+  it('maps independent Distance and Angle fields without the combined CAD string', () => {
+    assert.deepEqual(polarFromFields('1,5', '45'), { w: 1.5, deg: 45 })
+    assert.deepEqual(polarFromFields('2', ''), { w: 2, deg: null })
+    assert.deepEqual(polarFromFields('', '90'), { w: null, deg: 90 })
+    assert.deepEqual(polarFromFields('', ''), { w: null, deg: null })
+    const afterDist = applyPolyFieldKey({ dist: '', ang: '', field: 'dist' }, '1')
+    const afterComma = applyPolyFieldKey(afterDist, ',')
+    const afterDec = applyPolyFieldKey(afterComma, '5')
+    const afterTab = applyPolyFieldKey(afterDec, 'Tab')
+    const afterAng = applyPolyFieldKey(afterTab, '4')
+    const withAng = applyPolyFieldKey(afterAng, '5')
+    assert.deepEqual(withAng, { dist: '1,5', ang: '45', field: 'ang' })
+    assert.deepEqual(polarFromFields(withAng.dist, withAng.ang), { w: 1.5, deg: 45 })
+    const onlyAng = applyPolyFieldKey({ dist: '', ang: '', field: 'ang' }, '9')
+    assert.deepEqual(polarFromFields(onlyAng.dist, applyPolyFieldKey(onlyAng, '0').ang), { w: null, deg: 90 })
+  })
+
+  it('parses polar distance<angle and keeps mouse direction when only length is typed after a move', () => {
+    assert.deepEqual(parseDynMeasure('1,5<90'), { w: 1.5, h: null, deg: 90 })
+    assert.deepEqual(parseDynMeasure('<45'), { w: null, h: null, deg: 45 })
+    const down = pointAtPolar({ x: 0, y: 0 }, { x: 10, y: 10 }, { meters: 1, deg: 90 })
+    assert.ok(Math.abs(down.x) < 1e-6)
+    assert.equal(down.y, metersToWorld(1))
+    const east = pointAtPolar({ x: 0, y: 0 }, { x: 10, y: 10 }, { meters: 1, deg: 0 })
+    assert.equal(east.x, metersToWorld(1))
+    assert.ok(Math.abs(east.y) < 1e-6)
+  })
+
+  it('polyline preview always appends the live cursor to committed vertices', () => {
+    const preview = polylineDraftPreview([{ x: 0, y: 0 }, { x: 40, y: 0 }], { x: 40, y: 30 })
+    assert.equal(preview.length, 3)
+    assert.equal(preview[2].x, 40)
+    assert.equal(preview[2].y, 30)
+    assert.equal(preview[1].y, 0)
+  })
+
+  it('a discrete snap click does not clear an existing selection', () => {
+    assert.equal(snapClickKeepsSelection({
+      hitId: null,
+      selectedIds: ['a'],
+      snap: { kind: 'end', x: 50, y: 0 },
+    }), true)
+    assert.equal(snapClickKeepsSelection({
+      hitId: null,
+      selectedIds: ['a'],
+      snap: null,
+    }), false)
+    assert.equal(snapClickKeepsSelection({
+      hitId: 'a',
+      selectedIds: ['a'],
+      snap: { kind: 'end', x: 0, y: 0 },
+    }), false)
   })
 
   it('grid step grows when zoomed out', () => {
@@ -504,6 +588,55 @@ describe('esquemaGeometry', () => {
     assert.equal(handles.length, 3)
     const moved = applyResizeHandle({ type: 'cota', x1: 0, y1: 0, x2: 100, y2: 0, offset: 20 }, 'dim', { x: 50, y: 40 })
     assert.ok(moved.offset < 0)
+  })
+
+  it('Dimensionar snap finds perpendicular on another entity from the fixed endpoint', () => {
+    const origin = { id: 'a', type: 'linea', x1: 0, y1: 0, x2: 50, y2: 0 }
+    const others = [{ id: 'b', type: 'linea', x1: 80, y1: -20, x2: 80, y2: 60 }]
+    assert.deepEqual(resizeAnchorPoint(origin, 'b'), { x: 0, y: 0 })
+    const hit = snapResizePoint({ x: 76, y: 2 }, origin, 'b', others, 12)
+    assert.equal(hit.kind, 'perp')
+    assert.equal(hit.x, 80)
+    assert.equal(hit.y, 0)
+  })
+
+  it('rotates every selected entity around the same base point', () => {
+    const objects = [
+      { id: 'a', type: 'linea', x1: 20, y1: 0, x2: 40, y2: 0, rotation: 0 },
+      { id: 'b', type: 'linea', x1: 20, y1: 30, x2: 40, y2: 30, rotation: 0 },
+      { id: 'c', type: 'linea', x1: 200, y1: 0, x2: 240, y2: 0, rotation: 0 },
+    ]
+    const next = rotateSelectionAroundPivot(objects, ['a', 'b'], { x: 0, y: 0 }, Math.PI / 2)
+    const visA = objectWorldPoint(next[0], { x: next[0].x1, y: next[0].y1 })
+    const visB = objectWorldPoint(next[1], { x: next[1].x1, y: next[1].y1 })
+    assert.ok(Math.abs(visA.x) < 1e-6)
+    assert.ok(Math.abs(visA.y - 20) < 1e-6)
+    assert.ok(Math.abs(visB.x + 30) < 1e-6)
+    assert.ok(Math.abs(visB.y - 20) < 1e-6)
+    assert.equal(next[2].x1, 200)
+    const relAfter = Math.hypot(visB.x - visA.x, visB.y - visA.y)
+    assert.ok(Math.abs(relAfter - 30) < 1e-6)
+  })
+
+  it('cota arrows stay screen-sized when the measured length grows', () => {
+    const short = cotaArrowHeadLength(1)
+    const longZoom = cotaArrowHeadLength(1)
+    assert.equal(short, longZoom)
+    assert.ok(Math.abs(short - snapMarkerScreenSize(1) * 0.85) < 1e-9)
+    const z2 = cotaArrowHeadLength(2)
+    assert.ok(z2 < short)
+    assert.ok(Math.abs(z2 * 2 - snapMarkerScreenSize(2) * 0.85) < 1e-9)
+  })
+
+  it('repositioning a cota changes only the offset, not the measured points', () => {
+    const cota = { type: 'cota', x1: 0, y1: 0, x2: 100, y2: 0, offset: 20, text: '2.00 m' }
+    const next = repositionCota(cota, { x: 50, y: 40 })
+    assert.equal(next.x1, 0)
+    assert.equal(next.x2, 100)
+    assert.equal(next.y1, 0)
+    assert.equal(next.y2, 0)
+    assert.ok(next.offset < 0)
+    assert.equal(next.text, '2.00 m')
   })
 })
 

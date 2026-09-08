@@ -1,7 +1,7 @@
 /**
  * Línea de cota de dibujo técnico: extensiones, flechas y texto en metros.
  */
-import { arrowHeadLength, cotaLayout, DEFAULT_COTA_OFFSET, formatMeters } from './esquemaGeometry.js'
+import { cotaArrowHeadLength, cotaLayout, DEFAULT_COTA_OFFSET, formatMeters } from './esquemaGeometry.js'
 import { esquemaEntityInk, resolveEsquemaUi } from './esquemaTheme.js'
 
 export { DEFAULT_COTA_OFFSET }
@@ -45,7 +45,7 @@ export function drawCota(ctx, obj, selected = false, zoom = 1, ui) {
   const z = zoom || 1
   const color = esquemaEntityInk(obj.color, palette)
   const lw = Math.max(0.7, obj.width || 1)
-  const head = Math.min(arrowHeadLength({ x1: L.d1.x, y1: L.d1.y, x2: L.d2.x, y2: L.d2.y, width: lw }), L.len * 0.28)
+  const head = Math.min(cotaArrowHeadLength(z), L.len * 0.45)
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
   ctx.strokeStyle = color

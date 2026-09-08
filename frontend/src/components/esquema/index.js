@@ -4,6 +4,7 @@ export { composeEsquemaExport, sceneExportBounds } from './esquemaExport'
 export { hydrateIaObjects, sceneForIa } from './esquemaIa'
 export { createCota, drawCota } from './esquemaCota'
 export { offsetEntity } from './esquemaOffset'
+export { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 export {
   createHatchRegionFromClick,
   drawHatchRegion,
