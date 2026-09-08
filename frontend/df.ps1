@@ -1,4 +1,7 @@
-param([string]$msg = "Actualizacion ClaraCore")
+param(
+    [string]$msg = "Actualizacion ClaraCore",
+    [switch]$Deploy
+)
 
 # Escritorio: build local + commit SOLO de frontend + push a main.
 # El push dispara Azure Static Web Apps (mismo workflow que usa el flujo iPad).
@@ -9,7 +12,11 @@ $frontendRoot = $PSScriptRoot
 $repoRoot = Split-Path -Parent $frontendRoot
 
 Write-Host "ADVERTENCIA: este comando despliega a PRODUCCION." -ForegroundColor Yellow
-$confirm = Read-Host "Escribe DEPLOY para continuar (o Enter para cancelar)"
+$confirm = if ($Deploy) {
+    "DEPLOY"
+} else {
+    Read-Host "Escribe DEPLOY para continuar (o Enter para cancelar)"
+}
 if ($confirm -ne "DEPLOY") {
     Write-Host "Deploy cancelado por seguridad." -ForegroundColor DarkYellow
     exit 1

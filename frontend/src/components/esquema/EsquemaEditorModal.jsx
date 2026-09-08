@@ -44,7 +44,7 @@ import {
   snapThresholdWorld,
   worldToMeters,
 } from './esquemaGeometry'
-import { joinIntersectingLines } from './esquemaJoin'
+import { finalizeJoinSequence, joinIntersectingLines } from './esquemaJoin'
 import { parseCoordFile, topoToWorld, coordOriginFromRows } from './esquemaCoords'
 import {
   deleteLibraryItem,
@@ -726,14 +726,23 @@ export default function EsquemaEditorModal({
   const snapThreshold = () => snapThresholdWorld(zoomRef.current)
   const handleHitThreshold = () => 10 / (zoomRef.current || 1)
 
+  const snapSearchObjects = () => {
+    const list = objectsRef.current || []
+    const draft = draftRef.current
+    if (toolRef.current === 'polilinea' && draft?.type === 'polilinea' && (draft.points || []).length) {
+      return [...list, { ...draft, id: draft.id || '__draft-poly__' }]
+    }
+    return list
+  }
+
   const snapWorldPoint = (p, { fromPoint = null, excludeId = null, allowPerp = true } = {}) => {
-    const hit = findSnap(p, objectsRef.current, {
+    const hit = findSnap(p, snapSearchObjects(), {
       threshold: snapThreshold(),
       fromPoint,
       allowNear: true,
       excludeId,
-      // Polilínea: ⊥ forzaba el 2º segmento a 90° sobre otras líneas.
-      allowPerp: allowPerp !== false && toolRef.current !== 'polilinea',
+      // Igual que Línea: ⊥ solo engancha si el cursor está cerca del pie, no bloquea 45°.
+      allowPerp: allowPerp !== false,
     })
     const discrete = hit && hit.kind !== 'near'
     if (discrete) {
@@ -951,32 +960,9 @@ export default function EsquemaEditorModal({
   }
 
   const finishJoinCircuit = () => {
-    const nums = [...joinSeqRef.current]
-    if (!nums.length) return
-    const first = nums[0]
-    const last = nums[nums.length - 1]
+    if (!joinSeqRef.current.length) return
     pushHistory()
-    if (nums.length >= 3 && first !== last) {
-      const a = findNodeByNum(last)
-      const b = findNodeByNum(first)
-      if (a && b) {
-        objectsRef.current = [...objectsRef.current, {
-          id: uid(),
-          type: 'linea',
-          joinSeq: true,
-          x1: a.x,
-          y1: a.y,
-          x2: b.x,
-          y2: b.y,
-          color: colorRef.current,
-          width: widthRef.current,
-          rotation: 0,
-        }]
-      }
-    }
-    objectsRef.current = objectsRef.current.map((o) => (
-      o.joinSeq ? { ...o, joinSeq: false } : o
-    ))
+    objectsRef.current = finalizeJoinSequence(objectsRef.current)
     joinSeqRef.current = []
     setJoinSeq([])
     setDirty(true)
@@ -1663,7 +1649,8 @@ export default function EsquemaEditorModal({
 
     if (toolRef.current === 'polilinea' && draftRef.current?.type === 'polilinea') {
       e.preventDefault()
-      drawing.current = true
+      // Entre clics: mismo hover de osnap que Línea/Rect (drawing=true ocultaba esa ruta).
+      drawing.current = false
       return
     }
 
@@ -3913,8 +3900,8 @@ function JoinSeqPanel({ t, seq, onChange, onFinish }) {
             type="button"
             style={ghost(t)}
             disabled={!list.length}
-            title="Terminar circuito y comenzar uno nuevo"
-            aria-label="Terminar circuito"
+            title="Terminar la secuencia tal como está (no cierra el circuito)"
+            aria-label="Terminar secuencia"
             onClick={onFinish}
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -3928,7 +3915,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish }) {
         </div>
       </div>
       {!list.length ? (
-        <div style={{ fontSize: 11, color: t.textMuted }}>Digite o pulse nodos. Terminar cierra el circuito y deja lista una secuencia nueva.</div>
+        <div style={{ fontSize: 11, color: t.textMuted }}>Digite o pulse nodos. Terminar deja la secuencia como está. Para cerrar el circuito, repita el primer nodo al final.</div>
       ) : (
         <div style={sheet.wrap}>
           <table style={sheet.table}>

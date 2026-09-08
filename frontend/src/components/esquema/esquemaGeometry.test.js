@@ -129,6 +129,15 @@ describe('esquemaGeometry', () => {
     assert.equal(end.y + moved.dy, 0)
   })
 
+  it('fromPoint still snaps to a foreign Endpoint (polyline uses the same findSnap)', () => {
+    const others = [{ id: 'L', type: 'linea', x1: 0, y1: 0, x2: 100, y2: 0 }]
+    const from = { x: 0, y: 40 }
+    const hit = findSnap({ x: 2, y: 2 }, others, { threshold: 12, fromPoint: from, allowPerp: true })
+    assert.equal(hit.kind, 'end')
+    assert.equal(hit.x, 0)
+    assert.equal(hit.y, 0)
+  })
+
   it('polyline continuation does not force the next segment onto a perpendicular', () => {
     const guide = [{ id: 'g', type: 'linea', x1: 0, y1: 40, x2: 200, y2: 40 }]
     const from = { x: 80, y: 0 }

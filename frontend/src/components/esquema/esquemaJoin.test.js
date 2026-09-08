@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { joinIntersectingLines, segmentIntersection } from './esquemaJoin.js'
+import { finalizeJoinSequence, joinIntersectingLines, segmentIntersection } from './esquemaJoin.js'
 
 describe('esquemaJoin', () => {
   it('detects a real crossing and leaves disjoint lines untouched', () => {
@@ -42,5 +42,19 @@ describe('esquemaJoin', () => {
     const chains = out.objects.filter((o) => o.type === 'linea' || o.type === 'polilinea')
     assert.ok(chains.length >= 1)
     assert.ok(out.joined >= 1)
+  })
+
+  it('Terminar only commits the typed sequence and never closes last→first', () => {
+    const objects = [
+      { id: 'n1', type: 'nodo', nodeNum: '1', x: 0, y: 0 },
+      { id: 'n2', type: 'nodo', nodeNum: '2', x: 40, y: 0 },
+      { id: 'n3', type: 'nodo', nodeNum: '3', x: 40, y: 30 },
+      { id: 'ab', type: 'linea', joinSeq: true, x1: 0, y1: 0, x2: 40, y2: 0 },
+      { id: 'bc', type: 'linea', joinSeq: true, x1: 40, y1: 0, x2: 40, y2: 30 },
+    ]
+    const next = finalizeJoinSequence(objects)
+    assert.equal(next.filter((o) => o.type === 'linea').length, 2)
+    assert.ok(next.every((o) => !o.joinSeq))
+    assert.equal(next.some((o) => o.type === 'linea' && o.x1 === 40 && o.y1 === 30 && o.x2 === 0 && o.y2 === 0), false)
   })
 })

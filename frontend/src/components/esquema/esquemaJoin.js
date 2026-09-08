@@ -246,3 +246,8 @@ export function joinIntersectingLines(objects, selectedIds = null) {
   const next = list.filter((o) => !consume.has(o.id)).concat(created)
   return { objects: next, joined, left: lines.length - consume.size }
 }
+
+/** Fija los tramos de unión por número. No agrega el cierre último→primero. */
+export function finalizeJoinSequence(objects) {
+  return (objects || []).map((o) => (o?.joinSeq ? { ...o, joinSeq: false } : o))
+}
