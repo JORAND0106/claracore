@@ -16,6 +16,8 @@ import {
   newCotizacionPar,
   nextCotizacionNumero,
   panelNoPrevistoTouched,
+  resolveProveedorFieldsForSave,
+  backfillGanadoraProveedor,
   sanitizeRendimientoInput,
   seedCotizacionPares,
   syncLegacyFromGanadora,
@@ -370,6 +372,75 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(updated.no_previsto.numero, 'BO-160-2026-NP')
     assert.equal(updated.no_previsto.fecha, '2026-03-02')
     assert.equal(updated.no_previsto.impuesto.administracion, '0.1')
+  })
+
+  it('resolveProveedorFieldsForSave usa solo la ganadora (no la oferta adicional)', () => {
+    const pares = [
+      {
+        id: 'a',
+        es_ganadora: true,
+        proveedor_id: 42,
+        nit: '860',
+        insumo: { proveedor: 'PAVCO', valor: '100', numero: 'BO-1' },
+        no_previsto: {},
+      },
+      {
+        id: 'b',
+        es_ganadora: false,
+        proveedor_id: 99,
+        nit: '900',
+        insumo: { proveedor: 'OTRO', valor: '200', numero: 'OT-1' },
+        no_previsto: {},
+      },
+    ]
+    const got = resolveProveedorFieldsForSave(pares, {
+      proveedor_id: 99,
+      razon_social: 'OTRO',
+      nit: '900',
+    })
+    assert.equal(got.proveedor_id, 42)
+    assert.equal(got.razon_social, 'PAVCO')
+    assert.equal(got.nit, '860')
+  })
+
+  it('backfillGanadoraProveedor no pisa ganadora con proveedor de otra oferta', () => {
+    const pares = [
+      {
+        id: 'a',
+        es_ganadora: true,
+        proveedor_id: 42,
+        insumo: { proveedor: 'PAVCO', valor: '100' },
+        no_previsto: {},
+      },
+    ]
+    const out = backfillGanadoraProveedor(pares, {
+      proveedor_id: 99,
+      razon_social: 'OTRO PROVEEDOR',
+      nit: '1',
+    }, { onlyIfNameMatch: true })
+    assert.equal(out[0].proveedor_id, 42)
+    assert.equal(out[0].insumo.proveedor, 'PAVCO')
+  })
+
+  it('backfillGanadoraProveedor completa ganadora cuando el form coincide', () => {
+    const pares = [
+      {
+        id: 'a',
+        es_ganadora: true,
+        proveedor_id: '',
+        insumo: { proveedor: 'PAVCO', valor: '100' },
+        no_previsto: {},
+      },
+    ]
+    const out = backfillGanadoraProveedor(pares, {
+      proveedor_id: 42,
+      razon_social: 'PAVCO',
+      nit: '860',
+      contacto_email: 'a@p.co',
+    }, { onlyIfNameMatch: true })
+    assert.equal(out[0].proveedor_id, 42)
+    assert.equal(out[0].nit, '860')
+    assert.equal(out[0].contacto_email, 'a@p.co')
   })
 
   it('incongruenciaNumeroEntrePares detecta mismo Nº con proveedores distintos', () => {

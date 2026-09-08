@@ -34,6 +34,7 @@ from catalogo_insumos_service import (
     get_insumo_catalogo,
     map_ocr_to_cotizacion,
     next_codigo_insumo,
+    repair_insumos_proveedor_desde_ganadora,
     resolve_cotizacion_by_numero,
     suggest_cotizaciones_numero,
     update_insumo_catalogo,
@@ -166,6 +167,14 @@ def route_list_insumos(
     require_permiso_catalogo_insumos(current_user, "ver")
     rows, total = list_catalogo_insumos(contrato_id, q, min(limit, 100), max(offset, 0))
     return {"items": rows, "total": total}
+
+
+@router.post("/{contrato_id}/insumos/repair-proveedor-ganadora")
+def route_repair_proveedor_ganadora(contrato_id: int, current_user=Depends(get_current_user)):
+    """Repara proveedor_id NULL desde la cotización ganadora / directorio."""
+    _check_contrato(current_user, contrato_id)
+    require_permiso_catalogo_insumos(current_user, "editar")
+    return repair_insumos_proveedor_desde_ganadora(contrato_id)
 
 
 @router.get("/{contrato_id}/insumos/{insumo_id}")
