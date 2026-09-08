@@ -115,3 +115,64 @@ def test_list_solicitudes_resumen_counts_and_oc(monkeypatch):
     assert b["tiene_orden_compra"] is True
     assert b["orden_compra"]["numero_oc"] == "OC-1"
     assert b["estado"] == "aprobada"  # OC fuerza estado en resumen
+    assert a["estado_entrada"] is None
+    assert a["estado_salida"] is None
+    assert b["estado_entrada"] is None
+    assert b["estado_salida"] is None
+    assert b["orden_compra"].get("estado_entrada") is None
+    assert b["orden_compra"].get("estado_salida") is None
+
+
+def test_list_solicitudes_resumen_estado_entrada_salida(monkeypatch):
+    store = {
+        "almacen_solicitud_item": [{"id": 1, "solicitud_id": 20}],
+        "almacen_orden_compra": [
+            {
+                "id": 50,
+                "solicitud_id": 20,
+                "numero_oc": 7,
+                "estado": "parcial",
+                "pdf_blob_path": None,
+            },
+        ],
+        "almacen_orden_compra_item": [
+            {"id": 1, "orden_compra_id": 50, "cantidad": 100, "cantidad_recibida": 40},
+        ],
+        "almacen_entrada": [
+            {"id": 8, "orden_compra_id": 50},
+        ],
+        "almacen_entrada_item": [
+            {"id": 80, "entrada_id": 8, "cantidad_recibida": 40},
+        ],
+        "almacen_salida": [
+            {"entrada_item_id": 80, "cantidad_salida": 10},
+        ],
+        "almacen_devolucion": [],
+    }
+    import almacen_service as svc
+
+    monkeypatch.setattr(svc, "_map_usuario_nombres", lambda sb, ids: {})
+    rows = [{
+        "id": 20,
+        "contrato_id": 1,
+        "estado": "aprobada",
+        "created_by": None,
+        "validada_by": None,
+        "consecutivo": 3,
+        "titulo": "Parcial",
+        "created_at": "2026-01-03",
+    }]
+    out = _list_solicitudes_resumen(_FakeSb(store), rows, contrato_id=1)
+    assert out[0]["estado_entrada"] == "parcial"
+    assert out[0]["estado_salida"] == "parcial"
+    assert out[0]["ordenes_compra"][0]["estado_entrada"] == "parcial"
+    assert out[0]["ordenes_compra"][0]["estado_salida"] == "parcial"
+
+    # Completar recepción y despacho → Total / Total
+    store["almacen_orden_compra_item"][0]["cantidad_recibida"] = 100
+    store["almacen_entrada_item"][0]["cantidad_recibida"] = 100
+    store["almacen_salida"] = [{"entrada_item_id": 80, "cantidad_salida": 100}]
+    store["almacen_orden_compra"][0]["estado"] = "completa"
+    out2 = _list_solicitudes_resumen(_FakeSb(store), rows, contrato_id=1)
+    assert out2[0]["estado_entrada"] == "total"
+    assert out2[0]["estado_salida"] == "total"

@@ -19,6 +19,7 @@ import {
   ESTADO_SOLICITUD_COLOR,
   ESTADO_SOLICITUD_LABEL,
   fmtFechaAlmacenCorta,
+  formatEstadoOcMovimiento,
   puedeAnularSolicitud,
   textoAprobacionSolicitud,
   useAlmacenApi,
@@ -197,7 +198,7 @@ export default function SolicitudesPanel({
         </div>
       ) : (
         <div style={ui.sheetWrap} className="cc-almacen-table-scroll cc-almacen-items-sheet">
-          <table className="cc-almacen-responsive-table" style={{ ...ui.sheetTable, minWidth: 920 }}>
+          <table className="cc-almacen-responsive-table" style={{ ...ui.sheetTable, minWidth: 1080 }}>
             <thead>
               <tr>
                 <th style={{ ...ui.th, width: 56 }}>#</th>
@@ -208,6 +209,8 @@ export default function SolicitudesPanel({
                 <th style={{ ...ui.th, textAlign: 'right', width: 88 }}>Ítems</th>
                 <th style={{ ...ui.th, width: 100 }}>Fecha</th>
                 <th style={{ ...ui.th, width: 72 }}>OC</th>
+                <th style={{ ...ui.th, width: 88 }} title="Entrada vs cantidad de la OC">Entrada</th>
+                <th style={{ ...ui.th, width: 88 }} title="Salida vs cantidad recibida en entrada">Salida</th>
                 <th style={{ ...ui.th, width: 220 }} />
               </tr>
             </thead>
@@ -258,6 +261,36 @@ export default function SolicitudesPanel({
                           ))}
                         </div>
                       ) : '—'}
+                  </td>
+                  <td
+                    style={{
+                      ...ui.td,
+                      fontWeight: s.estado_entrada ? 700 : 400,
+                      color: s.estado_entrada === 'total'
+                        ? '#15803d'
+                        : s.estado_entrada === 'parcial'
+                          ? '#b45309'
+                          : ui.textMuted,
+                    }}
+                    data-label="Entrada"
+                    data-testid="solicitud-estado-entrada"
+                  >
+                    {formatEstadoOcMovimiento(s.estado_entrada)}
+                  </td>
+                  <td
+                    style={{
+                      ...ui.td,
+                      fontWeight: s.estado_salida ? 700 : 400,
+                      color: s.estado_salida === 'total'
+                        ? '#15803d'
+                        : s.estado_salida === 'parcial'
+                          ? '#b45309'
+                          : ui.textMuted,
+                    }}
+                    data-label="Salida"
+                    data-testid="solicitud-estado-salida"
+                  >
+                    {formatEstadoOcMovimiento(s.estado_salida)}
                   </td>
                   <td style={ui.td} data-label="Acciones" onClick={(e) => e.stopPropagation()}>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
