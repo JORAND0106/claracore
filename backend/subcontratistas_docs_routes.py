@@ -14,11 +14,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from main import (
-    _es_admin_o_desarrollador,
-    _es_desarrollador,
-    _fetch_subcontratista_row,
-    _puede_gestionar_subcontratistas_admin,
-    _require_acceso_cortes_subcontratista,
     _require_contract_access,
     get_current_user,
     registrar_log,
@@ -47,6 +42,31 @@ _log = logging.getLogger("claracore.subcontratistas.docs.routes")
 
 router = APIRouter(tags=["subcontratistas-docs"])
 
+
+def _m():
+    """Lazy access a helpers definidos tarde en main.py (evita import circular)."""
+    import main as m
+    return m
+
+
+def _es_admin_o_desarrollador(current_user):
+    return _m()._es_admin_o_desarrollador(current_user)
+
+
+def _es_desarrollador(current_user):
+    return _m()._es_desarrollador(current_user)
+
+
+def _fetch_subcontratista_row(sub_id: int) -> dict:
+    return _m()._fetch_subcontratista_row(sub_id)
+
+
+def _puede_gestionar_subcontratistas_admin(current_user, contrato_id=None) -> bool:
+    return _m()._puede_gestionar_subcontratistas_admin(current_user, contrato_id)
+
+
+def _require_acceso_cortes_subcontratista(current_user, sub_id: int, *, escribir: bool = False) -> dict:
+    return _m()._require_acceso_cortes_subcontratista(current_user, sub_id, escribir=escribir)
 
 def _uid(current_user) -> Optional[int]:
     try:
