@@ -1,5 +1,5 @@
 /**
- * Smoke — VU costo ítem = contribución de insumos en Inventario.
+ * Smoke — VU costo sin rendimiento en Inventario.
  * node --test frontend/src/almacen/inventarioVuCostoConsistencia.test.js
  */
 import assert from 'node:assert/strict'
@@ -10,18 +10,22 @@ import { fileURLToPath } from 'node:url'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 
-describe('Inventario VU costo consistente', () => {
-  it('muestra contribución (VU × rendimiento) en fila de insumo', () => {
+describe('Inventario VU costo sin rendimiento', () => {
+  it('muestra VU unitario del insumo (no contribución × rendimiento)', () => {
     const src = readFileSync(join(dir, 'InventarioPanel.jsx'), 'utf8')
-    assert.match(src, /costo_contribucion \?\? ins\.vu_costo/)
-    assert.match(src, /vu_costo_unitario/)
-    assert.match(src, /suma de la contribución/)
+    assert.match(src, /ins\.vu_costo \?\? ins\.vu_costo_unitario/)
+    assert.match(src, /sin rendimiento/)
+    assert.doesNotMatch(src, /VU unitario .* × rendimiento/)
   })
 
-  it('backend alinea vu_costo del ítem con insumos', () => {
+  it('backend suma VU unitarios y no multiplica por rendimiento', () => {
     const src = readFileSync(join(dir, '../../../backend/almacen_inventario_arbol.py'), 'utf8')
     assert.match(src, /def _vu_costo_desde_insumos_materiales/)
-    assert.match(src, /vu_costo_unitario/)
+    assert.match(src, /No usa rendimiento/)
     assert.match(src, /vu_costo = _vu_costo_desde_insumos_materiales/)
+    assert.doesNotMatch(
+      src,
+      /VU costo del ítem = suma \(vu_costo × rendimiento\)/,
+    )
   })
 })

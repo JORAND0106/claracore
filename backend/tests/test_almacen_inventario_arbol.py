@@ -186,9 +186,9 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
 
     item = next(i for i in cap01["items"] if i["item"] == "01.01")
     assert item["vu_cobro"] == 80000
-    assert item["vu_costo"] == 25000  # 20000*1 + 100*50
-    assert item["utilidad"] == 55000
-    assert item["rentabilidad_pct"] == 68.75  # 55000/80000*100
+    assert item["vu_costo"] == 20100  # 20000 + 100 (sin × rendimiento)
+    assert item["utilidad"] == 59900
+    assert item["rentabilidad_pct"] == 74.88  # 59900/80000*100
     assert item["valor_entradas"] == 310000
     assert item["valor_salidas"] == 102000
     assert item["valor_stock"] == 208000
@@ -198,9 +198,8 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     assert len(item["insumos"]) == 2
     arena = next(i for i in item["insumos"] if i["insumo_id"] == 1)
     assert arena["descripcion"] == "Arena"
-    assert arena["vu_costo"] == 20000  # contribución (= unitario × 1)
+    assert arena["vu_costo"] == 20000
     assert arena["vu_costo_unitario"] == 20000
-    assert arena["costo_contribucion"] == 20000
     assert arena["es_principal"] is True
     assert arena["valor_entradas"] == 300000
     assert arena["valor_salidas"] == 100000
@@ -217,10 +216,10 @@ def test_build_arbol_capitulo_item_insumos_financieros_y_rentabilidad():
     cemento = next(i for i in item["insumos"] if i["insumo_id"] == 2)
     assert cemento["descripcion"] == "Cemento"
     assert cemento["vu_costo_unitario"] == 100
-    assert cemento["vu_costo"] == 5000  # 100 × rendimiento 50 — misma cifra que suma el ítem
+    assert cemento["vu_costo"] == 100  # rendimiento 50 no afecta VU
     assert cemento["es_principal"] is False
-    assert cemento["costo_contribucion"] == 5000
-    # Ítem VU = suma de contribuciones visibles en insumos
+    assert cemento["costo_contribucion"] == 100
+    # Ítem VU = suma de VU unitarios de insumos
     assert item["vu_costo"] == arena["vu_costo"] + cemento["vu_costo"]
     assert cemento["valor_entradas"] == 10000
     assert cemento["valor_salidas"] == 2000
@@ -286,8 +285,8 @@ def test_build_arbol_item_sin_movimientos_con_insumos():
     assert item["insumos"][0]["vu_costo"] == item["vu_costo"]
 
 
-def test_vu_costo_item_coincide_con_unico_insumo_con_rendimiento():
-    """Caso Geotextil: ítem con un solo insumo — VU ítem = contribución (VU × rend)."""
+def test_vu_costo_item_coincide_con_unico_insumo_sin_usar_rendimiento():
+    """Geotextil: un solo insumo — VU ítem = VU unitario (rendimiento no aplica)."""
     out = build_inventario_arbol_from_lines(
         item_rows=[{
             "item_key": "NP-01.|1",
@@ -312,10 +311,10 @@ def test_vu_costo_item_coincide_con_unico_insumo_con_rendimiento():
     item = out["items"][0]
     ins = item["insumos"][0]
     assert ins["vu_costo_unitario"] == 4066.0
-    assert ins["vu_costo"] == 4472.6  # 4066 × 1.1
-    assert ins["costo_contribucion"] == 4472.6
+    assert ins["vu_costo"] == 4066.0
+    assert item["vu_costo"] == 4066.0
     assert item["vu_costo"] == ins["vu_costo"]
-    assert item["vu_costo"] == 4472.6
+    assert ins.get("rendimiento") == 1.1  # se conserva como metadato
 
 
 def test_fetch_oc_rows_fallback_sin_proveedor_id():
