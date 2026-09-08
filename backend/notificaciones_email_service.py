@@ -907,12 +907,18 @@ class NotificacionesEmailRunner:
                 "skipped": None if is_weekday_bogota(dt) else "fin_de_semana_sin_jobs",
             }
 
-        # Snapshots no requieren SMTP/push; el resto sí
+        # Snapshots no requieren SMTP/push; el resto de jobs de correo sí.
+        # Con NOTIFICACIONES_EMAIL_ENVIO_ACTIVO=False, smtp_configured() es False:
+        # se conservan matriz_snapshot (histórico) y se omiten los envíos SMTP.
         needs_channel = any(j.job_type != "matriz_snapshot" for j in due)
         if needs_channel and not smtp_configured() and not self._push.configured():
             due = [j for j in due if j.job_type == "matriz_snapshot"]
             if not due:
-                return {"skipped": "sin_canales_configurados", "jobs": []}
+                return {
+                    "skipped": "envio_email_desactivado_sin_push",
+                    "jobs": [],
+                    "email_envio_activo": False,
+                }
 
         results: List[dict] = []
         for job in due:

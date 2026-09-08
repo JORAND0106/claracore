@@ -39,15 +39,21 @@ class JobRunSpec:
 
 def all_scheduled_jobs() -> List[JobRunSpec]:
     """
-    Jobs programados.
+    Jobs programados (cron lun–vie / snapshots también fin de semana según matcher).
 
-    Eliminados (flexibilización notificaciones validación):
-      - informe_no_copiado (4 recordatorios diarios)
-      - admin_resumen manana/tarde (correos diarios apertura/cierre)
+    Correos SMTP desactivados intencionalmente vía
+    notificaciones_email_mail.NOTIFICACIONES_EMAIL_ENVIO_ACTIVO = False.
+    El cron sigue ejecutando matriz_snapshot para alimentar
+    notificaciones_email_resumen_snapshot; no se elimina el código de los
+    jobs de correo (por si se reactivan con decisión explícita).
 
-    Nuevos:
-      - matriz_snapshot apertura/cierre (sin correo; alimenta informe semanal)
-      - admin_resumen_semanal lunes 08:00
+    Histórico sin correo:
+      - matriz_snapshot apertura/cierre → notificaciones_email_resumen_snapshot
+      - informe_periodico_copia → API del modal (independiente del cron)
+
+    Jobs que enviaban correo (hoy bloqueados por kill-switch SMTP):
+      - sin_item_asignado, validacion_pendiente, admin_resumen_semanal
+      - (legacy) informe_no_copiado, admin_resumen diario — ya fuera del schedule
     """
     jobs: List[JobRunSpec] = []
     for label, (h, m) in (
