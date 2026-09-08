@@ -29,7 +29,7 @@ const INVENTARIO_COLS = [
   {
     key: 'vu_costo',
     abbr: 'VU COSTO',
-    tip: 'VU Costo — En el ítem: suma de la contribución de cada insumo (VU unitario × rendimiento). En cada insumo: esa misma contribución, para que coincida con el total del ítem.',
+    tip: 'VU Costo — Precio unitario del insumo (sin rendimiento). En el ítem: suma de los VU de sus insumos.',
     align: 'right',
     ecoOnly: true,
   },
@@ -887,22 +887,11 @@ function FragmentInsumo({
         {verEconomicos && (
           <td
             style={num}
-            title={
-              ins.es_mo
-                ? 'Costo total de mano de obra (sin VU unitario)'
-                : (
-                  ins.vu_costo_unitario != null
-                  && ins.rendimiento != null
-                  && Number(ins.rendimiento) > 0
-                  && Number(ins.rendimiento) !== 1
-                    ? `VU unitario ${fmtMoney(ins.vu_costo_unitario)} × rendimiento ${ins.rendimiento}`
-                    : undefined
-                )
-            }
+            title={ins.es_mo ? 'Costo total de mano de obra (sin VU unitario)' : undefined}
           >
             {ins.es_mo
               ? fmtMoneyOrDash(ins.costo_contribucion, hideEco)
-              : fmtMoneyOrDash(ins.costo_contribucion ?? ins.vu_costo, hideEco)}
+              : fmtMoneyOrDash(ins.vu_costo ?? ins.vu_costo_unitario, hideEco)}
           </td>
         )}
         {verEconomicos && <td style={num}>—</td>}

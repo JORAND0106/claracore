@@ -130,7 +130,10 @@ def _fmt_numero_oc(n) -> Optional[str]:
 
 
 def _vu_costo_desde_composicion(comp_list: List[dict]) -> Tuple[Optional[float], Optional[float]]:
-    """VU costo del ítem = suma (vu_costo × rendimiento) de insumos asociados."""
+    """
+    VU costo del ítem = suma de VU unitarios de insumos (sin × rendimiento).
+    El rendimiento se conserva solo como metadato del principal; no afecta el costo.
+    """
     sum_costo = 0.0
     tiene = False
     rend_item = None
@@ -142,29 +145,25 @@ def _vu_costo_desde_composicion(comp_list: List[dict]) -> Tuple[Optional[float],
         vu_f = _f(vu) if vu is not None and _f(vu) > 0 else None
         if vu_f is None:
             continue
-        rend = c.get("rendimiento")
-        factor = _f(rend) if rend is not None and _f(rend) > 0 else 1.0
-        sum_costo += vu_f * factor
+        sum_costo += vu_f
         tiene = True
     return (_round2(sum_costo) if tiene else None, rend_item)
 
 
 def _vu_costo_desde_insumos_materiales(insumos: List[dict]) -> Optional[float]:
     """
-    VU costo del ítem = suma de costo_contribucion (VU × rendimiento) de insumos
-    materiales. Debe coincidir con lo mostrado en cada fila de insumo del Inventario.
+    VU costo del ítem = suma de VU unitarios de insumos materiales.
+    No usa rendimiento. Debe coincidir con lo mostrado en cada fila de insumo.
     """
     sum_costo = 0.0
     tiene = False
     for ins in insumos or []:
         if ins.get("es_mo"):
             continue
-        contrib = ins.get("costo_contribucion")
-        if contrib is not None and _f(contrib) > 0:
-            sum_costo += _f(contrib)
-            tiene = True
-            continue
-        vu = ins.get("vu_costo")
+        # Preferir VU unitario de catálogo; vu_costo ya es unitario (sin rendimiento).
+        vu = ins.get("vu_costo_unitario")
+        if vu is None:
+            vu = ins.get("vu_costo")
         if vu is not None and _f(vu) > 0:
             sum_costo += _f(vu)
             tiene = True
@@ -182,7 +181,7 @@ def _rentabilidad_pct(vu_cobro: Optional[float], vu_costo: Optional[float]) -> O
 
 
 def _insumos_desde_composicion(comp_list: List[dict]) -> List[dict]:
-    """Listado real de insumos (principal + asociados) con VU costo individual."""
+    """Listado real de insumos (principal + asociados) con VU costo unitario."""
     out: List[dict] = []
     for c in comp_list:
         iid = c.get("insumo_id")
@@ -192,8 +191,6 @@ def _insumos_desde_composicion(comp_list: List[dict]) -> List[dict]:
         vu_f = _f(vu) if vu is not None and _f(vu) > 0 else None
         rend = c.get("rendimiento")
         rend_f = _f(rend) if rend is not None else None
-        factor = rend_f if rend_f is not None and rend_f > 0 else 1.0
-        contrib = _round2(vu_f * factor) if vu_f is not None else None
         es_principal = c.get("es_principal") is not False
         desc = (c.get("descripcion") or "").strip() or f"Insumo #{int(iid)}"
         codigo = (c.get("codigo") or "").strip() or None
@@ -204,12 +201,10 @@ def _insumos_desde_composicion(comp_list: List[dict]) -> List[dict]:
             "unidad": c.get("unidad"),
             "es_principal": es_principal,
             "es_mo": False,
-            "rendimiento": rend_f,
-            # vu_costo_unitario: precio unitario de catálogo (sin × rendimiento)
+            "rendimiento": rend_f,  # metadato; no afecta VU costo
             "vu_costo_unitario": vu_f,
-            # vu_costo / costo_contribucion: contribución al ítem (VU × rendimiento)
-            "vu_costo": contrib if contrib is not None else vu_f,
-            "costo_contribucion": contrib if contrib is not None else vu_f,
+            "vu_costo": vu_f,
+            "costo_contribucion": vu_f,
             "valor_entradas": 0.0,
             "valor_salidas": 0.0,
             "valor_stock": 0.0,
