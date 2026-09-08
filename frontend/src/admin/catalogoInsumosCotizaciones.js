@@ -318,6 +318,81 @@ function ladoPayload(lado, extra = {}) {
   }
 }
 
+/** Campos de proveedor a persistir: siempre desde la cotización ganadora. */
+export function resolveProveedorFieldsForSave(pares = [], formFallback = null) {
+  const ganPar = (pares || []).find((p) => p.es_ganadora) || (pares || [])[0] || null
+  if (!ganPar) {
+    return {
+      proveedor_id: formFallback?.proveedor_id || '',
+      razon_social: (formFallback?.razon_social || '').trim(),
+      nit: (formFallback?.nit || '').trim(),
+      contacto_email: (formFallback?.contacto_email || '').trim(),
+      contacto_nombre: (formFallback?.contacto_nombre || '').trim(),
+      contacto_telefono: (formFallback?.contacto_telefono || '').trim(),
+    }
+  }
+  const ganName = String(ganPar.insumo?.proveedor || '').trim()
+  const formName = String(formFallback?.razon_social || '').trim()
+  const formMatchesGanadora = !!(
+    formFallback
+    && ganName
+    && formName
+    && formName.toLowerCase() === ganName.toLowerCase()
+  )
+  const useForm = formMatchesGanadora || (!ganName && !!formFallback)
+
+  return {
+    proveedor_id: ganPar.proveedor_id
+      || (useForm ? (formFallback?.proveedor_id || '') : '')
+      || '',
+    razon_social: ganName || (useForm ? formName : '') || '',
+    nit: String(ganPar.nit || (useForm ? formFallback?.nit : '') || '').trim(),
+    contacto_email: String(
+      ganPar.contacto_email || (useForm ? formFallback?.contacto_email : '') || '',
+    ).trim(),
+    contacto_nombre: String(
+      ganPar.contacto_nombre || (useForm ? formFallback?.contacto_nombre : '') || '',
+    ).trim(),
+    contacto_telefono: String(
+      ganPar.contacto_telefono || (useForm ? formFallback?.contacto_telefono : '') || '',
+    ).trim(),
+  }
+}
+
+/**
+ * Escribe proveedor_id/nit/contactos en el par ganador cuando faltan.
+ * Si `onlyIfNameMatch`, solo aplica cuando la razón social del form coincide con la ganadora
+ * (evita copiar el proveedor de una cotización adicional sobre la ganadora).
+ */
+export function backfillGanadoraProveedor(pares = [], prov = {}, { onlyIfNameMatch = false } = {}) {
+  const list = Array.isArray(pares) ? pares : []
+  if (!list.length || !prov) return list
+  const ganIdx = list.findIndex((p) => p.es_ganadora)
+  const idx = ganIdx >= 0 ? ganIdx : 0
+  const gan = list[idx]
+  if (!gan) return list
+  const ganName = String(gan.insumo?.proveedor || '').trim()
+  const provName = String(prov.razon_social || '').trim()
+  if (onlyIfNameMatch && ganName && provName && ganName.toLowerCase() !== provName.toLowerCase()) {
+    return list
+  }
+  const nextGan = {
+    ...gan,
+    proveedor_id: gan.proveedor_id || prov.proveedor_id || '',
+    nit: String(gan.nit || prov.nit || '').trim(),
+    contacto_email: String(gan.contacto_email || prov.contacto_email || '').trim(),
+    contacto_nombre: String(gan.contacto_nombre || prov.contacto_nombre || '').trim(),
+    contacto_telefono: String(gan.contacto_telefono || prov.contacto_telefono || '').trim(),
+    insumo: {
+      ...(gan.insumo || emptyLado()),
+      proveedor: ganName || provName || '',
+    },
+  }
+  const out = list.slice()
+  out[idx] = nextGan
+  return out
+}
+
 /** Payload JSON plano para guardar (pares → filas insumo + no_previsto con pair_id). */
 export function cotizacionesPayloadForSave(cotizacionesOrPares) {
   const list = cotizacionesOrPares || []

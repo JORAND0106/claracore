@@ -9,6 +9,7 @@ import {
   seedCotizacionPares,
   syncLegacyFromGanadora,
   impuestoGanadoraDesdePares,
+  backfillGanadoraProveedor,
 } from './catalogoInsumosCotizaciones.js'
 import {
   EMPTY_IMPUESTO,
@@ -242,6 +243,8 @@ export function buildEditFormFromInsumoRow(row, { proveedoresDirectorio = [] } =
   const gan = pickGanadora(cotizaciones)
   const impuestoGan = impuestoGanadoraDesdePares(cotizaciones)
   const prov = resolveProveedorFieldsForEdit(row, cotizaciones, proveedoresDirectorio)
+  // Asegurar que la ganadora conserve proveedor_id del insumo (no solo el form).
+  cotizaciones = backfillGanadoraProveedor(cotizaciones, prov)
 
   const ganPar = (cotizaciones || []).find((p) => p.es_ganadora) || (cotizaciones || [])[0] || null
   const fromPar = ganPar ? captureFieldsFromPar(ganPar) : null

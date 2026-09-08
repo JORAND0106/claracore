@@ -3,6 +3,7 @@ Insumos, proveedores y contexto presupuestal — módulo Almacén.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -1421,11 +1422,38 @@ def search_insumos_catalog(
         if not hay:
             continue
         seen_cod.add(cod)
-        pname = prov_map.get(int(row.get("proveedor_id") or 0), "—")
+        pname = prov_map.get(int(row.get("proveedor_id") or 0), "")
+        if not pname or pname == "—":
+            pname = _proveedor_nombre_fallback_desde_row(row) or "—"
         out.append(_row_from_almacen_insumo(row, pname))
 
     total = len(out)
     return out[offset: offset + limit], total
+
+
+def _proveedor_nombre_fallback_desde_row(row: dict) -> Optional[str]:
+    """Si falta FK de proveedor, usar el nombre de la cotización ganadora en detalle."""
+    raw = row.get("cotizaciones_detalle")
+    if raw is None or raw == "":
+        return None
+    data = raw
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    if not isinstance(data, list):
+        return None
+    gan = next(
+        (r for r in data if isinstance(r, dict) and r.get("es_ganadora") and (r.get("tipo") or "insumo") == "insumo"),
+        None,
+    )
+    if gan and (gan.get("proveedor") or "").strip():
+        return (gan.get("proveedor") or "").strip()
+    for r in data:
+        if isinstance(r, dict) and (r.get("tipo") or "insumo") == "insumo" and (r.get("proveedor") or "").strip():
+            return (r.get("proveedor") or "").strip()
+    return None
 
 
 def get_insumo(contrato_id: int, insumo_id: int) -> dict:
@@ -1456,6 +1484,8 @@ def get_insumo(contrato_id: int, insumo_id: int) -> dict:
         )
         if prov:
             pname = prov[0].get("razon_social") or "—"
+    if not pname or pname == "—":
+        pname = _proveedor_nombre_fallback_desde_row(row) or "—"
     return _row_from_almacen_insumo(row, pname)
 
 

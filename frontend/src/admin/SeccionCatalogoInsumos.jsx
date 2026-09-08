@@ -28,6 +28,7 @@ import {
   applyAutoGanadoraByMinValor,
   applyCaptureToPar,
   applyPdfReplace,
+  backfillGanadoraProveedor,
   buildParFromCapture,
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
@@ -38,6 +39,7 @@ import {
   incongruenciaNumeroEntrePares,
   ladoHasImpuesto,
   pickGanadora,
+  resolveProveedorFieldsForSave,
   sanitizeRendimientoInput,
   syncLegacyFromGanadora,
   toUpperTrim,
@@ -1428,16 +1430,26 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     } else {
       list = buildParFromCapture(form, pares, opts)
     }
+    // Si la captura corresponde a la ganadora, asegurar proveedor_id en ese par.
+    list = backfillGanadoraProveedor(list, form, { onlyIfNameMatch: true })
     const legacy = syncLegacyFromGanadora(list)
+    const provSave = resolveProveedorFieldsForSave(list, form)
     setModalFaltantes([])
     setModalRuleErrors(ganadoraRuleErrors(list))
     setSelectedParId(null)
-    const cleared = clearCaptureAfterSend()
-    const nextForm = {
+    // Persistencia usa proveedor de la ganadora; la UI sí limpia el panel de captura.
+    const formForSave = {
       ...form,
       cotizaciones_detalle: list,
       ...legacy,
+      ...provSave,
+    }
+    const cleared = clearCaptureAfterSend()
+    const nextForm = {
+      ...formForSave,
       ...cleared,
+      cotizaciones_detalle: list,
+      ...legacy,
     }
     setForm(nextForm)
 
@@ -1452,7 +1464,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
 
     if (editId && api) {
-      const check = validateGuardarInsumo(nextForm, { editId })
+      const check = validateGuardarInsumo(formForSave, { editId })
       if (check.faltantes.length || check.ruleErrors.length) {
         setModalFaltantes(check.faltantes)
         setModalRuleErrors(check.ruleErrors)
@@ -1466,7 +1478,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       }
       setBusy(true)
       try {
-        const fd = buildFormData(null, nextForm)
+        const fd = buildFormData(null, formForSave)
         await api.updateInsumoForm(editId, fd)
         formBaselineRef.current = snapshotForm(nextForm)
         setMsg({
@@ -1571,20 +1583,16 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fd.append('costo_base', String(costo))
     if (src.rendimiento !== '') fd.append('rendimiento', sanitizeRendimientoInput(src.rendimiento))
     fd.append('tributos', JSON.stringify(tributosPayloadDesdeForm(impuestoSrc)))
-    const ganPar = pares.find((p) => p.es_ganadora) || pares[0]
-    if (ganPar?.proveedor_id) fd.append('proveedor_id', String(ganPar.proveedor_id))
-    else if (src.proveedor_id) fd.append('proveedor_id', String(src.proveedor_id))
-    else if (ganPar?.insumo?.proveedor || src.razon_social) {
-      fd.append('razon_social', (ganPar?.insumo?.proveedor || src.razon_social || '').trim())
-      const nit = (ganPar?.nit || src.nit || '').trim()
-      if (nit) fd.append('nit', nit)
+    // Proveedor del insumo = siempre el de la cotización ganadora (nunca el de una oferta adicional).
+    const prov = resolveProveedorFieldsForSave(pares, src)
+    if (prov.proveedor_id) fd.append('proveedor_id', String(prov.proveedor_id))
+    else if (prov.razon_social) {
+      fd.append('razon_social', prov.razon_social)
+      if (prov.nit) fd.append('nit', prov.nit)
     }
-    const email = (ganPar?.contacto_email || src.contacto_email || '').trim()
-    const cnom = (ganPar?.contacto_nombre || src.contacto_nombre || '').trim()
-    const ctel = (ganPar?.contacto_telefono || src.contacto_telefono || '').trim()
-    if (email) fd.append('contacto_email', email)
-    if (cnom) fd.append('contacto_nombre', cnom)
-    if (ctel) fd.append('contacto_telefono', ctel)
+    if (prov.contacto_email) fd.append('contacto_email', prov.contacto_email)
+    if (prov.contacto_nombre) fd.append('contacto_nombre', prov.contacto_nombre)
+    if (prov.contacto_telefono) fd.append('contacto_telefono', prov.contacto_telefono)
     const legacy = syncLegacyFromGanadora(pares)
     if (legacy.cotizacion_numero) fd.append('cotizacion_numero', legacy.cotizacion_numero)
     if (legacy.cotizacion_fecha) fd.append('cotizacion_fecha', legacy.cotizacion_fecha)

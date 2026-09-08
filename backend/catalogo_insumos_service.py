@@ -931,6 +931,173 @@ def _sync_legacy_cotizacion_from_detalle(payload: dict, detalle: List[dict]) -> 
         payload["cotizacion_vigencia"] = gan["vigencia"]
 
 
+def _ganadora_insumo_detalle(detalle: List[dict]) -> Optional[dict]:
+    return next(
+        (r for r in (detalle or []) if r.get("es_ganadora") and r.get("tipo") == "insumo"),
+        None,
+    )
+
+
+def _lookup_proveedor_id_by_nombre(
+    contrato_id: int,
+    razon_social: str,
+    nit: str = "",
+) -> Optional[int]:
+    """Resuelve id de proveedor activo por NIT exacto o razón social (case-insensitive)."""
+    razon = (razon_social or "").strip()
+    nit_s = (nit or "").strip()
+    if not razon and not nit_s:
+        return None
+    sb = _sb()
+    if nit_s:
+        rows = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social, nit, activo")
+            .eq("contrato_id", int(contrato_id))
+            .eq("nit", nit_s)
+            .limit(5)
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            if r.get("activo", True):
+                return int(r["id"])
+    if razon:
+        rows = (
+            sb.table("almacen_proveedor")
+            .select("id, razon_social, nit, activo")
+            .eq("contrato_id", int(contrato_id))
+            .ilike("razon_social", razon)
+            .limit(10)
+            .execute()
+            .data
+            or []
+        )
+        want = _norm_proveedor_key(razon)
+        for r in rows:
+            if not r.get("activo", True):
+                continue
+            if _norm_proveedor_key(r.get("razon_social") or "") == want:
+                return int(r["id"])
+        # Fallback: búsqueda parcial vía search_proveedores
+        found = search_proveedores(int(contrato_id), razon, limit=25) or []
+        for r in found:
+            if _norm_proveedor_key(r.get("razon_social") or "") == want:
+                return int(r["id"])
+    return None
+
+
+def _backfill_proveedor_id_en_detalle(detalle: List[dict], proveedor_id: int) -> List[dict]:
+    """Escribe proveedor_id en la fila ganadora (y su pair) si faltaba."""
+    if not detalle or not proveedor_id:
+        return detalle or []
+    gan = _ganadora_insumo_detalle(detalle)
+    pair_id = gan.get("pair_id") if gan else None
+    out = []
+    for row in detalle:
+        r = dict(row)
+        same_pair = pair_id and r.get("pair_id") == pair_id
+        is_gan = bool(r.get("es_ganadora") and r.get("tipo") == "insumo")
+        if (is_gan or same_pair) and not r.get("proveedor_id"):
+            r["proveedor_id"] = int(proveedor_id)
+        out.append(r)
+    return out
+
+
+def _proveedor_nombre_desde_detalle(detalle: List[dict]) -> Optional[str]:
+    gan = _ganadora_insumo_detalle(detalle)
+    if gan and (gan.get("proveedor") or "").strip():
+        return (gan.get("proveedor") or "").strip()
+    for r in detalle or []:
+        if r.get("tipo") == "insumo" and (r.get("proveedor") or "").strip():
+            return (r.get("proveedor") or "").strip()
+    return None
+
+
+def _resolve_proveedor_id_for_payload(
+    *,
+    contrato_id: int,
+    proveedor_id: Any,
+    body: dict,
+    detalle: Optional[List[dict]] = None,
+    existing: Optional[dict] = None,
+) -> Tuple[Optional[int], List[dict]]:
+    """
+    Resuelve proveedor_id del insumo priorizando la cotización ganadora.
+    Nunca deja None si hay ganadora con nombre conocido en directorio o existing.
+    """
+    detalle = list(detalle or [])
+    pid: Optional[int] = None
+    if proveedor_id not in (None, ""):
+        try:
+            pid = int(proveedor_id)
+        except (TypeError, ValueError):
+            pid = None
+
+    gan = _ganadora_insumo_detalle(detalle)
+    if gan and gan.get("proveedor_id") not in (None, ""):
+        try:
+            pid = int(gan["proveedor_id"])
+        except (TypeError, ValueError):
+            pass
+
+    if pid is None and gan and (gan.get("proveedor") or "").strip():
+        pid = _lookup_proveedor_id_by_nombre(
+            contrato_id,
+            gan.get("proveedor") or "",
+            nit=str(body.get("nit") or ""),
+        )
+
+    if pid is None and body.get("razon_social"):
+        # Solo si la razón del body coincide con la ganadora (o no hay ganadora con nombre).
+        body_name = (body.get("razon_social") or "").strip()
+        gan_name = (gan.get("proveedor") or "").strip() if gan else ""
+        if not gan_name or _norm_proveedor_key(body_name) == _norm_proveedor_key(gan_name):
+            pid = _lookup_proveedor_id_by_nombre(
+                contrato_id,
+                body_name,
+                nit=str(body.get("nit") or ""),
+            )
+
+    if pid is None and existing and existing.get("proveedor_id") not in (None, ""):
+        # Conservar FK existente si la ganadora no apunta a otro proveedor distinto.
+        try:
+            existing_pid = int(existing["proveedor_id"])
+        except (TypeError, ValueError):
+            existing_pid = None
+        if existing_pid is not None:
+            gan_name = (gan.get("proveedor") or "").strip() if gan else ""
+            if not gan_name:
+                pid = existing_pid
+            else:
+                # Si el nombre de ganadora coincide con el proveedor existente, conservar.
+                try:
+                    rows = (
+                        _sb()
+                        .table("almacen_proveedor")
+                        .select("id, razon_social")
+                        .eq("id", existing_pid)
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    existing_name = (rows[0].get("razon_social") if rows else "") or ""
+                    if _norm_proveedor_key(existing_name) == _norm_proveedor_key(gan_name):
+                        pid = existing_pid
+                    else:
+                        # Intentar resolver por el nombre de la nueva ganadora ya se intentó;
+                        # si falló, aún así no borrar el FK existente (evita "—").
+                        pid = existing_pid
+                except Exception:
+                    pid = existing_pid
+
+    if pid is not None and detalle:
+        detalle = _backfill_proveedor_id_en_detalle(detalle, pid)
+    return pid, detalle
+
+
 def get_almacen_config(contrato_id: int) -> dict:
     sb = _sb()
     rows = (
@@ -975,7 +1142,12 @@ def _snapshot_historial(
 def _enrich_insumo_catalogo_row(row: dict, prov: Optional[dict] = None) -> dict:
     """Normaliza una fila de almacen_insumo al shape del listado/detalle del catálogo."""
     prov = prov or {}
-    item = _row_from_almacen_insumo(row, prov.get("razon_social") or "—")
+    detalle = cotizaciones_detalle_from_row(row)
+    nombre = (prov.get("razon_social") or "").strip()
+    if not nombre:
+        # Fallback: nombre de la cotización ganadora (cuando se perdió proveedor_id).
+        nombre = _proveedor_nombre_desde_detalle(detalle) or "—"
+    item = _row_from_almacen_insumo(row, nombre)
     item["proveedor_nit"] = prov.get("nit")
     item["contacto_email"] = prov.get("contacto_email")
     item["contacto_nombre"] = prov.get("contacto_nombre")
@@ -983,13 +1155,53 @@ def _enrich_insumo_catalogo_row(row: dict, prov: Optional[dict] = None) -> dict:
     item["cotizacion_numero"] = row.get("cotizacion_numero")
     item["cotizacion_fecha"] = row.get("cotizacion_fecha")
     item["cotizacion_vigencia"] = row.get("cotizacion_vigencia")
-    item["cotizaciones_detalle"] = cotizaciones_detalle_from_row(row)
+    item["cotizaciones_detalle"] = detalle
     item["cantidad_negociada"] = row.get("cantidad_negociada")
     item["valor_negociado_total"] = row.get("valor_negociado_total")
     if row.get("cantidad_negociada") is not None and _to_float(row.get("cantidad_negociada")) > 0:
         ctx_neg = get_contexto_negociado_insumo(int(row["contrato_id"]), int(row["id"]), 0, None, 0)
         item["consumo_negociado"] = ctx_neg
     return item
+
+
+def repair_insumos_proveedor_desde_ganadora(contrato_id: Optional[int] = None) -> dict:
+    """
+    Repara insumos con proveedor_id NULL usando el proveedor de la cotización ganadora
+    (o coincidencia por razón social en el directorio del contrato).
+    """
+    sb = _sb()
+    query = (
+        sb.table("almacen_insumo")
+        .select("id, contrato_id, codigo, proveedor_id, cotizaciones_detalle, cotizacion_numero")
+        .eq("activo", True)
+        .is_("proveedor_id", "null")
+    )
+    if contrato_id is not None:
+        query = query.eq("contrato_id", int(contrato_id))
+    rows = query.limit(2000).execute().data or []
+    repaired = []
+    skipped = []
+    for row in rows:
+        cid = int(row["contrato_id"])
+        detalle = cotizaciones_detalle_from_row(row)
+        pid, detalle_fixed = _resolve_proveedor_id_for_payload(
+            contrato_id=cid,
+            proveedor_id=None,
+            body={},
+            detalle=detalle,
+            existing=None,
+        )
+        if not pid:
+            skipped.append({"id": row["id"], "codigo": row.get("codigo")})
+            continue
+        upd = {
+            "proveedor_id": int(pid),
+            "cotizaciones_detalle": detalle_fixed,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        sb.table("almacen_insumo").update(upd).eq("id", int(row["id"])).execute()
+        repaired.append({"id": row["id"], "codigo": row.get("codigo"), "proveedor_id": int(pid)})
+    return {"ok": True, "repaired": repaired, "skipped": skipped, "total_null": len(rows)}
 
 
 def list_catalogo_insumos(
@@ -1031,6 +1243,38 @@ def list_catalogo_insumos(
     out = []
     for row in rows:
         pid = row.get("proveedor_id")
+        if pid in (None, ""):
+            detalle = cotizaciones_detalle_from_row(row)
+            resolved, detalle_fixed = _resolve_proveedor_id_for_payload(
+                contrato_id=int(contrato_id),
+                proveedor_id=None,
+                body={},
+                detalle=detalle,
+                existing=None,
+            )
+            if resolved:
+                try:
+                    sb.table("almacen_insumo").update({
+                        "proveedor_id": int(resolved),
+                        "cotizaciones_detalle": detalle_fixed,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }).eq("id", int(row["id"])).execute()
+                    row = {**row, "proveedor_id": int(resolved), "cotizaciones_detalle": detalle_fixed}
+                    pid = int(resolved)
+                    if pid not in prov_map:
+                        provs = (
+                            sb.table("almacen_proveedor")
+                            .select("id, razon_social, nit, contacto_email, contacto_nombre, contacto_telefono")
+                            .eq("id", pid)
+                            .limit(1)
+                            .execute()
+                            .data
+                            or []
+                        )
+                        if provs:
+                            prov_map[pid] = provs[0]
+                except Exception:
+                    pass
         prov = prov_map.get(int(pid or 0), {})
         out.append(_enrich_insumo_catalogo_row(row, prov))
     return out, total
@@ -1053,6 +1297,27 @@ def get_insumo_catalogo(contrato_id: int, insumo_id: int) -> dict:
     if not rows:
         raise ValueError("Insumo no encontrado.")
     row = rows[0]
+    # Auto-reparar FK perdida desde la ganadora (p.ej. tras agregar cotizaciones adicionales).
+    if row.get("proveedor_id") in (None, ""):
+        detalle = cotizaciones_detalle_from_row(row)
+        pid, detalle_fixed = _resolve_proveedor_id_for_payload(
+            contrato_id=int(contrato_id),
+            proveedor_id=None,
+            body={},
+            detalle=detalle,
+            existing=None,
+        )
+        if pid:
+            try:
+                sb.table("almacen_insumo").update({
+                    "proveedor_id": int(pid),
+                    "cotizaciones_detalle": detalle_fixed,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }).eq("id", int(insumo_id)).execute()
+                row["proveedor_id"] = int(pid)
+                row["cotizaciones_detalle"] = detalle_fixed
+            except Exception:
+                pass
     prov = {}
     if row.get("proveedor_id"):
         provs = (
@@ -1461,6 +1726,17 @@ def create_insumo_catalogo(
         )
     sb = _sb()
     payload = _build_insumo_payload(body, contrato_id, user_id)
+    detalle_for_resolve = payload.get("cotizaciones_detalle") or []
+    resolved_pid, detalle_fixed = _resolve_proveedor_id_for_payload(
+        contrato_id=contrato_id,
+        proveedor_id=payload.get("proveedor_id"),
+        body=body,
+        detalle=detalle_for_resolve,
+        existing=None,
+    )
+    payload["proveedor_id"] = resolved_pid
+    if "cotizaciones_detalle" in payload:
+        payload["cotizaciones_detalle"] = detalle_fixed
     _validar_cotizaciones_requeridas(
         contrato_id,
         payload["requiere_cotizacion"],
@@ -1508,6 +1784,21 @@ def update_insumo_catalogo(
     payload = _build_insumo_payload(body, contrato_id, user_id, codigo_fijo=existing.get("codigo"))
     if body.get("requiere_cotizacion") is None and "requiere_cotizacion" not in body:
         payload["requiere_cotizacion"] = existing.get("requiere_cotizacion", True)
+
+    detalle_for_resolve = payload.get("cotizaciones_detalle")
+    if detalle_for_resolve is None:
+        detalle_for_resolve = cotizaciones_detalle_from_row(existing)
+    resolved_pid, detalle_fixed = _resolve_proveedor_id_for_payload(
+        contrato_id=contrato_id,
+        proveedor_id=payload.get("proveedor_id"),
+        body=body,
+        detalle=detalle_for_resolve,
+        existing=existing,
+    )
+    payload["proveedor_id"] = resolved_pid
+    if "cotizaciones_detalle" in payload:
+        payload["cotizaciones_detalle"] = detalle_fixed
+
     _validar_cotizaciones_requeridas(
         contrato_id,
         payload["requiere_cotizacion"],
