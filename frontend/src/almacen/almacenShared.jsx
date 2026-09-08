@@ -484,6 +484,17 @@ export const ESTADO_OC_RECEPCION_LABEL = {
   anulada: 'Anulada',
 }
 
+/** Entrada/salida vs OC en grilla de solicitudes (Total | Parcial). */
+export const ESTADO_OC_MOVIMIENTO_LABEL = {
+  total: 'Total',
+  parcial: 'Parcial',
+}
+
+export function formatEstadoOcMovimiento(estado) {
+  if (!estado) return '—'
+  return ESTADO_OC_MOVIMIENTO_LABEL[estado] || '—'
+}
+
 export function mapOcEstadoRecepcion(estadoDb) {
   if (estadoDb === 'parcial') return 'parcial'
   if (estadoDb === 'completa') return 'completa'

@@ -1072,6 +1072,10 @@ def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[di
             oc["tiene_pdf_oc"] = bool(oc.get("pdf_blob_path"))
             oc_by_sol.setdefault(sid, []).append(oc)
 
+    flat_ocs = [oc for lst in oc_by_sol.values() for oc in lst]
+    if flat_ocs:
+        _enriquecer_ocs_estado_entrada_salida(sb, flat_ocs)
+
     user_ids = []
     for r in rows:
         if r.get("created_by"):
@@ -1096,10 +1100,18 @@ def _list_solicitudes_resumen(sb, rows: List[dict], contrato_id: int) -> List[di
             sol["tiene_orden_compra"] = True
             if sol.get("estado") != "aprobada":
                 sol["estado"] = "aprobada"
+            sol["estado_entrada"] = _rollup_estados_parcial_total(
+                [oc.get("estado_entrada") for oc in oc_list]
+            )
+            sol["estado_salida"] = _rollup_estados_parcial_total(
+                [oc.get("estado_salida") for oc in oc_list]
+            )
         else:
             sol["ordenes_compra"] = []
             sol["orden_compra"] = None
             sol["tiene_orden_compra"] = False
+            sol["estado_entrada"] = None
+            sol["estado_salida"] = None
         if sol.get("created_by"):
             sol["solicitante_nombre"] = names.get(int(sol["created_by"]))
         if sol.get("validada_by"):
@@ -3414,6 +3426,149 @@ def _oc_recepcion_resumen(items: List[dict], estado_oc: Optional[str] = None) ->
         "tiene_saldo_recepcion": tiene_saldo,
         "estado_recepcion": recepcion,
     }
+
+
+def _estado_entrada_vs_oc(items: List[dict], estado_oc: Optional[str] = None) -> Optional[str]:
+    """
+    Grilla solicitudes: Total si qty recibida coincide con la OC; Parcial si hay recepción incompleta.
+    None = sin entradas registradas (o OC anulada).
+    """
+    if estado_oc == "anulada":
+        return None
+    if not items:
+        return None
+    any_rec = False
+    all_full = True
+    for it in items:
+        cant = _to_float(it.get("cantidad"))
+        rec = _to_float(it.get("cantidad_recibida"))
+        if rec > 0.0001:
+            any_rec = True
+        if rec + 0.0001 < cant:
+            all_full = False
+    if not any_rec:
+        return None
+    return "total" if all_full else "parcial"
+
+
+def _estado_salida_vs_entrada(
+    entrada_items: List[dict],
+    despacho_neto: Dict[int, float],
+) -> Optional[str]:
+    """
+    Grilla solicitudes: Total si el despacho neto coincide con lo recibido en entrada;
+    Parcial si hay salidas incompletas. None = sin salidas.
+    """
+    if not entrada_items:
+        return None
+    any_recv = False
+    any_out = False
+    all_full = True
+    for ei in entrada_items:
+        recibida = _to_float(ei.get("cantidad_recibida"))
+        if recibida <= 0.0001:
+            continue
+        any_recv = True
+        try:
+            eid = int(ei["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        desp = _to_float(despacho_neto.get(eid, 0.0))
+        if desp > 0.0001:
+            any_out = True
+        if desp + 0.0001 < recibida:
+            all_full = False
+    if not any_recv or not any_out:
+        return None
+    return "total" if all_full else "parcial"
+
+
+def _rollup_estados_parcial_total(estados: List[Optional[str]]) -> Optional[str]:
+    """Total solo si todas las OC están total; Parcial si hay avance incompleto; None si nada."""
+    if not estados or all(e is None for e in estados):
+        return None
+    if all(e == "total" for e in estados):
+        return "total"
+    return "parcial"
+
+
+def _chunked_ids(ids: List[int], size: int = 120):
+    for i in range(0, len(ids), size):
+        yield ids[i:i + size]
+
+
+def _enriquecer_ocs_estado_entrada_salida(sb, oc_rows: List[dict]) -> None:
+    """Adjunta estado_entrada / estado_salida (total|parcial|None) a cada OC in-place."""
+    if not oc_rows:
+        return
+    oc_ids = [int(oc["id"]) for oc in oc_rows if oc.get("id") is not None]
+    if not oc_ids:
+        return
+
+    items_by_oc: Dict[int, List[dict]] = {}
+    for part in _chunked_ids(oc_ids):
+        batch = (
+            sb.table("almacen_orden_compra_item")
+            .select("id, orden_compra_id, cantidad, cantidad_recibida")
+            .in_("orden_compra_id", part)
+            .execute()
+            .data
+            or []
+        )
+        for it in batch:
+            oid = int(it["orden_compra_id"])
+            items_by_oc.setdefault(oid, []).append(it)
+
+    entradas_by_oc: Dict[int, List[dict]] = {}
+    for part in _chunked_ids(oc_ids):
+        batch = (
+            sb.table("almacen_entrada")
+            .select("id, orden_compra_id")
+            .in_("orden_compra_id", part)
+            .execute()
+            .data
+            or []
+        )
+        for en in batch:
+            oid = int(en["orden_compra_id"])
+            entradas_by_oc.setdefault(oid, []).append(en)
+
+    entrada_ids = [
+        int(en["id"])
+        for lst in entradas_by_oc.values()
+        for en in lst
+        if en.get("id") is not None
+    ]
+    ei_by_entrada: Dict[int, List[dict]] = {}
+    for part in _chunked_ids(entrada_ids):
+        batch = (
+            sb.table("almacen_entrada_item")
+            .select("id, entrada_id, cantidad_recibida")
+            .in_("entrada_id", part)
+            .execute()
+            .data
+            or []
+        )
+        for ei in batch:
+            eid = int(ei["entrada_id"])
+            ei_by_entrada.setdefault(eid, []).append(ei)
+
+    all_ei_ids = [
+        int(ei["id"])
+        for lst in ei_by_entrada.values()
+        for ei in lst
+        if ei.get("id") is not None
+    ]
+    despacho = _despacho_neto_por_entrada_item(sb, all_ei_ids) if all_ei_ids else {}
+
+    for oc in oc_rows:
+        oid = int(oc["id"])
+        oc_items = items_by_oc.get(oid, [])
+        oc["estado_entrada"] = _estado_entrada_vs_oc(oc_items, oc.get("estado"))
+        ei_rows: List[dict] = []
+        for en in entradas_by_oc.get(oid, []):
+            ei_rows.extend(ei_by_entrada.get(int(en["id"]), []))
+        oc["estado_salida"] = _estado_salida_vs_entrada(ei_rows, despacho)
 
 
 def _enriquecer_ocs_con_saldo_recepcion(sb, rows: List[dict]) -> List[dict]:
