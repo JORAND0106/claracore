@@ -3,6 +3,7 @@ import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { API_BASE } from '../../apiBase'
 import {
   labelTramoBitacora,
+  normalizeTramoValue,
   tramosDisponiblesParaNuevo,
 } from './bitacoraTramoHelpers'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
@@ -60,7 +61,11 @@ export default function BitacoraTramoDiaModal({
       if (!res.ok) return
       const data = await res.json()
       const tramos = Array.isArray(data?.tramos) ? data.tramos : []
-      setCatalogo(tramos.map((x) => String(x || '').trim()).filter(Boolean))
+      setCatalogo(
+        tramos
+          .map((x) => normalizeTramoValue(x))
+          .filter(Boolean),
+      )
     } catch { /* ignore */ }
   }, [contratoId, token])
 

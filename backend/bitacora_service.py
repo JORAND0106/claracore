@@ -42,25 +42,40 @@ EVENTO_TIPOS = frozenset({
     "novedades",
 })
 
-# Etiqueta UI para diarios legados sin tramo (columna NULL).
-TRAMO_NO_ESPECIFICADO_LABEL = "Tramo no especificado"
+# Etiqueta UI para diarios legados / migrados sin tramo real (columna NULL).
+TRAMO_NO_ESPECIFICADO_LABEL = "Sin tramo asignado"
+SIN_TRAMO_ASIGNADO_LABEL = TRAMO_NO_ESPECIFICADO_LABEL
 
 _log = logging.getLogger("claracore.bitacora")
 
 
-def _normalize_tramo(value: Any) -> Optional[str]:
-    """Trim; vacío → None (legado / no especificado)."""
+def _is_tramo_sentinel_invalido(value: Any) -> bool:
+    """True para «0» / «Tramo 0» (nunca es un tramo real del contrato)."""
     s = str(value or "").strip()
-    return s or None
+    if not s:
+        return False
+    if re.fullmatch(r"0+", s):
+        return True
+    if re.fullmatch(r"(?i)tramo[\s_-]*0+", s):
+        return True
+    return False
+
+
+def _normalize_tramo(value: Any) -> Optional[str]:
+    """Trim; vacío o sentinel «Tramo 0» → None (sin tramo asignado)."""
+    s = str(value or "").strip()
+    if not s or _is_tramo_sentinel_invalido(s):
+        return None
+    return s
 
 
 def _label_tramo(value: Any) -> str:
     n = _normalize_tramo(value)
-    return n or TRAMO_NO_ESPECIFICADO_LABEL
+    return n or SIN_TRAMO_ASIGNADO_LABEL
 
 
 def _require_tramo_nuevo(value: Any) -> str:
-    """Tramo obligatorio al crear un Reporte Diario nuevo."""
+    """Tramo obligatorio al crear un Reporte Diario nuevo (Tramo 1+ real)."""
     n = _normalize_tramo(value)
     if not n:
         raise ValueError(
@@ -2256,6 +2271,8 @@ def _enrich_entrada(
     No descarga blobs: las miniaturas van por endpoint /bitacora/media.
     """
     out = dict(row)
+    # Sentinel «Tramo 0» / «0» → null (sin tramo asignado) en respuestas API.
+    out["tramo"] = _normalize_tramo(out.get("tramo"))
     out["personal"] = _normalizar_personal(out.get("personal"))
     out["asistencia_colaboradores"] = _normalizar_asistencia_colaboradores(
         out.get("asistencia_colaboradores"),

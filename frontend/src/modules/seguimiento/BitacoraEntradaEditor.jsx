@@ -296,7 +296,7 @@ export default function BitacoraEntradaEditor({
         if (!res.ok || cancelled) return
         const data = await res.json()
         const list = (Array.isArray(data?.tramos) ? data.tramos : [])
-          .map((x) => String(x || '').trim())
+          .map((x) => normalizeTramoValue(x))
           .filter(Boolean)
         if (!cancelled) setTramosCatalogo(list)
       } catch { /* ignore */ }

@@ -2,19 +2,35 @@
  * Helpers de segmentación del Reporte Diario por Tramo.
  */
 
-/** Etiqueta UI para tramo ausente (legado o sin asignar). */
-export const TRAMO_NO_ESPECIFICADO_LABEL = 'Tramo no especificado'
+/** Etiqueta UI para tramo ausente (legado / migrado sin dato real). */
+export const TRAMO_NO_ESPECIFICADO_LABEL = 'Sin tramo asignado'
+/** Alias explícito del mismo estado. */
+export const SIN_TRAMO_ASIGNADO_LABEL = TRAMO_NO_ESPECIFICADO_LABEL
 
-/** Normaliza valor de tramo para comparar/guardar (trim; vacío → null). */
+/**
+ * ¿Es un sentinel inválido tipo «Tramo 0» / «0»?
+ * El listado real de tramos de un contrato empieza en Tramo 1; nunca existe Tramo 0.
+ */
+export function isTramoSentinelInvalido(tramo) {
+  const s = String(tramo ?? '').trim()
+  if (!s) return false
+  if (/^0+$/.test(s)) return true
+  // «Tramo 0», «TRAMO 0», «tramo_0», «Tramo0» — no «Tramo 10» ni «10»
+  if (/^tramo[\s_-]*0+$/i.test(s)) return true
+  return false
+}
+
+/** Normaliza valor de tramo para comparar/guardar (trim; vacío o Tramo 0 → null). */
 export function normalizeTramoValue(tramo) {
   const s = String(tramo ?? '').trim()
-  return s || null
+  if (!s || isTramoSentinelInvalido(s)) return null
+  return s
 }
 
 /** Etiqueta visible del tramo (nunca vacía). */
 export function labelTramoBitacora(tramo) {
   const n = normalizeTramoValue(tramo)
-  return n || TRAMO_NO_ESPECIFICADO_LABEL
+  return n || SIN_TRAMO_ASIGNADO_LABEL
 }
 
 /** ¿Hay al menos un diario diligenciado ese día? */
