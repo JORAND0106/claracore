@@ -2,7 +2,9 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildEditFormFromInsumoRow,
+  captureFieldsFromPar,
   normProveedorNombreUi,
+  proveedorContactsIncomplete,
   resolveProveedorFieldsForEdit,
 } from './catalogoInsumosProveedorEdit.js'
 
@@ -57,6 +59,32 @@ describe('resolveProveedorFieldsForEdit', () => {
     assert.equal(got.contacto_telefono, '300')
   })
 
+  it('completa NIT y contactos por razón social aunque el id no tenga datos', () => {
+    const got = resolveProveedorFieldsForEdit(
+      { proveedor_nombre: 'PAVCO (Wavin) MEXICHEM COLOMBIA S.A.S.' },
+      [{
+        id: 'p1',
+        es_ganadora: true,
+        insumo: { proveedor: 'PAVCO (Wavin) MEXICHEM COLOMBIA S.A.S.', valor: 100 },
+      }],
+      [{
+        id: 42,
+        razon_social: 'PAVCO (Wavin) MEXICHEM COLOMBIA S.A.S.',
+        nit: '860002212',
+        contacto_email: 'ventas@pavco.co',
+        contacto_nombre: 'Mesa',
+        contacto_telefono: '601123',
+      }],
+    )
+    assert.equal(got.razon_social, 'PAVCO (Wavin) MEXICHEM COLOMBIA S.A.S.')
+    assert.equal(got.nit, '860002212')
+    assert.equal(got.contacto_email, 'ventas@pavco.co')
+    assert.equal(got.contacto_nombre, 'Mesa')
+    assert.equal(got.contacto_telefono, '601123')
+    assert.equal(got.proveedor_id, 42)
+    assert.equal(proveedorContactsIncomplete(got), false)
+  })
+
   it('toma proveedor de la cotización ganadora si la fila no lo trae', () => {
     const pares = [{
       id: 'p1',
@@ -74,7 +102,7 @@ describe('resolveProveedorFieldsForEdit', () => {
   })
 })
 
-describe('buildEditFormFromInsumoRow', () => {
+describe('buildEditFormFromInsumoRow y captureFieldsFromPar', () => {
   it('autodiligencia proveedor al armar el formulario de edición', () => {
     const form = buildEditFormFromInsumoRow({
       codigo: 'INS-001',
@@ -97,5 +125,52 @@ describe('buildEditFormFromInsumoRow', () => {
     assert.equal(form.contacto_nombre, 'Carla')
     assert.equal(form.contacto_telefono, '320')
     assert.equal(form.proveedor_id, 3)
+  })
+
+  it('autodiligencia Costos Insumo y No Previsto desde la fila ganadora', () => {
+    const form = buildEditFormFromInsumoRow({
+      codigo: 'INS-002',
+      descripcion: 'Tuberia',
+      unidad: 'M',
+      cotizaciones_detalle: [
+        {
+          id: 'a-insumo',
+          pair_id: 'a',
+          tipo: 'insumo',
+          es_ganadora: true,
+          proveedor: 'PAVCO',
+          valor: 1000,
+          numero: 'BO-160-2026',
+          fecha: '2026-03-01',
+          vigencia: '30 días',
+          impuesto: { administracion: '', imprevistos: '', utilidad: '', iva: '0.19' },
+        },
+        {
+          id: 'a-np',
+          pair_id: 'a',
+          tipo: 'no_previsto',
+          proveedor: 'PAVCO',
+          valor: 1200,
+          numero: 'BO-160-2026-NP',
+          fecha: '2026-03-02',
+          vigencia: '45 días',
+          impuesto: { administracion: '0.1', imprevistos: '0.05', utilidad: '0.05', iva: '' },
+        },
+      ],
+    })
+    assert.equal(form.costo_base, '1000')
+    assert.equal(form.cotizacion_numero, 'BO-160-2026')
+    assert.equal(form.cotizacion_fecha, '2026-03-01')
+    assert.equal(form.valor_no_previsto, '1200')
+    assert.equal(form.cotizacion_numero_np, 'BO-160-2026-NP')
+    assert.equal(form.cotizacion_fecha_np, '2026-03-02')
+    assert.equal(form.cotizacion_vigencia_np, '45 días')
+    assert.equal(form.impuesto.iva, '0.19')
+    assert.equal(form.impuesto_np.administracion, '0.1')
+
+    const fields = captureFieldsFromPar(form.cotizaciones_detalle[0])
+    assert.equal(fields.valor_no_previsto, '1200')
+    assert.equal(fields.cotizacion_numero_np, 'BO-160-2026-NP')
+    assert.equal(fields.costo_base, '1000')
   })
 })

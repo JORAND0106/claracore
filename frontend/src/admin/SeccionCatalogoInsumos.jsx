@@ -29,7 +29,6 @@ import {
   applyCaptureToPar,
   applyPdfReplace,
   buildParFromCapture,
-  cloneImpuestoLado,
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
   fileFromDataTransfer,
@@ -48,6 +47,9 @@ import {
 import {
   EMPTY_INSUMO_FORM_BASE,
   buildEditFormFromInsumoRow,
+  captureFieldsFromPar,
+  proveedorContactsIncomplete,
+  resolveProveedorFieldsForEdit,
 } from './catalogoInsumosProveedorEdit'
 
 const EMPTY_FORM = {
@@ -1147,9 +1149,27 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       }
     }
 
-    const nextForm = buildEditFormFromInsumoRow(source, {
-      proveedoresDirectorio: proveedores || [],
-    })
+    let directorio = Array.isArray(proveedores) ? [...proveedores] : []
+    // Si el directorio local aún no cargó o está incompleto, buscar el proveedor por API.
+    let nextForm = buildEditFormFromInsumoRow(source, { proveedoresDirectorio: directorio })
+    if (api && nextForm.razon_social && proveedorContactsIncomplete(nextForm)) {
+      try {
+        const q = nextForm.nit || nextForm.razon_social
+        const found = await api.searchProveedores(q, 25)
+        if (Array.isArray(found) && found.length) {
+          directorio = [...directorio, ...found]
+          const prov = resolveProveedorFieldsForEdit(
+            source,
+            nextForm.cotizaciones_detalle || [],
+            directorio,
+          )
+          nextForm = { ...nextForm, ...prov }
+        }
+      } catch {
+        /* conservar lo ya resuelto */
+      }
+    }
+
     setForm(nextForm)
     formBaselineRef.current = snapshotForm(nextForm)
     setConsumoNegociado(source.consumo_negociado || row.consumo_negociado || null)
@@ -1178,41 +1198,40 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     return out
   }
 
-  const captureFieldsFromPar = (par) => {
-    const ins = par?.insumo || {}
-    const np = par?.no_previsto || {}
-    return {
-      proveedor_id: par.proveedor_id || '',
-      razon_social: ins.proveedor || '',
-      nit: par.nit || '',
-      contacto_email: par.contacto_email || '',
-      contacto_nombre: par.contacto_nombre || '',
-      contacto_telefono: par.contacto_telefono || '',
-      costo_base: ins.valor != null && ins.valor !== '' ? String(ins.valor) : '',
-      valor_no_previsto: np.valor != null && np.valor !== '' ? String(np.valor) : '',
-      cotizacion_numero: ins.numero || '',
-      cotizacion_fecha: ins.fecha || '',
-      cotizacion_vigencia: ins.vigencia || '',
-      cotizacion_numero_np: np.numero || '',
-      cotizacion_fecha_np: np.fecha || '',
-      cotizacion_vigencia_np: np.vigencia || '',
-      cotizacion_pdf: ins.pdf || null,
-      cotizacion_pdf_nombre: ins.pdf?.name || ins.pdf_nombre || '',
-      cotizacion_pdf_np: np.pdf || null,
-      cotizacion_pdf_nombre_np: np.pdf?.name || np.pdf_nombre || '',
-      impuesto: cloneImpuestoLado(ins.impuesto),
-      impuesto_np: cloneImpuestoLado(np.impuesto),
-    }
-  }
-
-  const selectCotizacionPar = (par) => {
+  const selectCotizacionPar = async (par) => {
     if (!par?.id) return
     if (selectedParId === par.id) {
       setSelectedParId(null)
       return
     }
     setSelectedParId(par.id)
-    setForm((f) => ({ ...f, ...captureFieldsFromPar(par) }))
+    let fields = captureFieldsFromPar(par)
+    // Completar NIT/contactos desde directorio o API si la fila solo trae razón social.
+    if (fields.razon_social && proveedorContactsIncomplete(fields)) {
+      let directorio = Array.isArray(proveedores) ? [...proveedores] : []
+      if (api) {
+        try {
+          const found = await api.searchProveedores(fields.nit || fields.razon_social, 25)
+          if (Array.isArray(found) && found.length) directorio = [...directorio, ...found]
+        } catch {
+          /* ignore */
+        }
+      }
+      const prov = resolveProveedorFieldsForEdit(
+        {
+          proveedor_id: fields.proveedor_id,
+          proveedor_nombre: fields.razon_social,
+          proveedor_nit: fields.nit,
+          contacto_email: fields.contacto_email,
+          contacto_nombre: fields.contacto_nombre,
+          contacto_telefono: fields.contacto_telefono,
+        },
+        [par],
+        directorio,
+      )
+      fields = { ...fields, ...prov }
+    }
+    setForm((f) => ({ ...f, ...fields }))
   }
 
   /** Autocarga proveedor/fecha/vigencia/PDF de una cotización ya registrada (por lado). */
