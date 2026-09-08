@@ -330,20 +330,34 @@ export default function SolicitudLineaRevisionModal({
                 {metaLinea}
               </div>
             )}
-            {descItem && (
-              <div style={{
-                fontSize: 'var(--cc-sm)',
-                fontWeight: 600,
-                color: ui.text,
-                marginTop: 6,
-                lineHeight: 1.4,
-                padding: '8px 10px',
-                borderRadius: 6,
-                background: `${ui.accentSoft}`,
-                border: `1px solid ${ui.textMuted}22`,
-              }}
+            {descItem ? (
+              <div
+                style={{
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 600,
+                  color: ui.text,
+                  marginTop: 6,
+                  lineHeight: 1.45,
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  background: `${ui.accentSoft}`,
+                  border: `1px solid ${ui.textMuted}22`,
+                }}
+                data-testid="revision-linea-item-descripcion"
               >
                 {descItem}
+              </div>
+            ) : (
+              <div
+                style={{
+                  fontSize: 'var(--cc-xs)',
+                  color: ui.textMuted,
+                  marginTop: 6,
+                  fontStyle: 'italic',
+                }}
+                data-testid="revision-linea-item-descripcion-faltante"
+              >
+                Sin descripción del ítem de cobro en el presupuesto.
               </div>
             )}
           </div>

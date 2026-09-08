@@ -701,10 +701,24 @@ def _enrich_solicitud(
                 cod = (r.get("codigo") or "").strip()
                 if cod:
                     insumo_codigos[int(r["id"])] = cod
+        # Descripción del ítem de cobro (barata): necesaria en Revisión de línea
+        # aunque el GET sea ligero (mapear/validar también devuelven ligera).
+        ppto_ids_lig = [int(it["presupuesto_id"]) for it in items if it.get("presupuesto_id")]
+        ppto_map_lig = _fetch_ppto_rows_batch(ppto_ids_lig, int(sol["contrato_id"]))
         for it in items:
             iid = it.get("insumo_id")
             if iid and int(iid) in insumo_codigos:
                 it["insumo_codigo"] = insumo_codigos[int(iid)]
+            pid = it.get("presupuesto_id")
+            if pid and int(pid) in ppto_map_lig:
+                pr = ppto_map_lig[int(pid)]
+                desc = (pr.get("descripcion") or "").strip()
+                if desc:
+                    it["item_descripcion"] = desc
+                if not it.get("capitulo"):
+                    it["capitulo"] = pr.get("capitulo")
+                if not it.get("item"):
+                    it["item"] = pr.get("item")
             if not ver_economicos:
                 _strip_economics_item(it)
         sol["items"] = items
@@ -771,6 +785,10 @@ def _enrich_solicitud(
                     it["capitulo"] = pr.get("capitulo")
                 if not it.get("item"):
                     it["item"] = pr.get("item")
+                desc = (pr.get("descripcion") or "").strip()
+                if desc:
+                    it["item_descripcion"] = desc
+                    it.setdefault("descripcion_item", desc)
 
         apply_saldo_flags_batch(
             int(sol["contrato_id"]),
