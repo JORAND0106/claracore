@@ -2,13 +2,17 @@
 -- Requisitos previos:
 --   • Backend desplegado en Azure con el módulo notificaciones_email.
 --   • CLARACORE_CRON_SECRET en Azure App Service (mismo valor que abajo).
---   • SMTP configurado en Azure (CLARACORE_CONTACTO_SMTP_*).
 --   • Migraciones notificaciones_email + snapshot periodo aplicadas.
 --
+-- IMPORTANTE (2026-09): el envío SMTP de notificaciones está DESACTIVADO en código
+-- (NOTIFICACIONES_EMAIL_ENVIO_ACTIVO = False en notificaciones_email_mail.py).
+-- Este cron DEBE seguir activo: genera snapshots en
+-- notificaciones_email_resumen_snapshot (apertura/cierre). No envía correos.
+--
 -- Nota: el runner filtra por tipo de job:
---   • matriz_snapshot → todos los días (incluye Sáb/Dom para el informe semanal)
---   • admin_resumen_semanal → solo lunes 08:00 America/Bogota
---   • sin_item / validacion_pendiente → lun–vie
+--   • matriz_snapshot → todos los días (incluye Sáb/Dom); sin correo
+--   • admin_resumen_semanal / sin_item / validacion_pendiente → omitidos mientras
+--     el kill-switch SMTP esté en False (y no haya Web Push)
 --
 -- INSTRUCCIÓN: reemplace SOLO la línea marcada con <<<PEGAR_CRON_SECRET>>>
 -- por el valor exacto de CLARACORE_CRON_SECRET configurado en Azure.

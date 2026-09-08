@@ -11,8 +11,37 @@ from typing import Optional
 
 _log = logging.getLogger("claracore.notificaciones_email")
 
+# =============================================================================
+# ENVÍO DE CORREO DESACTIVADO INTENCIONALMENTE
+# -----------------------------------------------------------------------------
+# Motivo: los correos automáticos (recordatorio de informe no copiado, alerta
+# de registros sin ítem, validación pendiente por nivel, y resumen de jornada /
+# semanal) se volvieron demasiado invasivos en operación.
+#
+# Qué SÍ sigue activo (no tocar al mantener este flag en False):
+#   - Cron pg_cron → POST /internal/cron/notificaciones-email/run
+#   - Snapshots en notificaciones_email_resumen_snapshot (matriz_snapshot 09:00/18:00)
+#   - Registro de copia en informe_periodico_copia (API del modal de recordatorio)
+#   - Modal emergente de informe periódico en la plataforma
+#
+# Qué NO se envía con este flag en False:
+#   - Ningún SMTP de notificaciones automáticas (try_send_notification_email /
+#     send_notification_email / smtp_configured → False)
+#
+# NO reactivar (poner True) sin decisión explícita de producto.
+# =============================================================================
+NOTIFICACIONES_EMAIL_ENVIO_ACTIVO = False
+
+
+def email_envio_activo() -> bool:
+    """True solo si está permitido enviar correos de notificaciones automáticas."""
+    return bool(NOTIFICACIONES_EMAIL_ENVIO_ACTIVO)
+
 
 def smtp_configured() -> bool:
+    """SMTP listo para notificaciones Y envío habilitado por kill-switch."""
+    if not NOTIFICACIONES_EMAIL_ENVIO_ACTIVO:
+        return False
     host = (
         os.getenv("CLARACORE_CONTACTO_SMTP_HOST")
         or os.getenv("CLARACORE_FACTURACION_SMTP_HOST")
@@ -110,6 +139,15 @@ def _wrap_html(title: str, body_html: str) -> str:
 
 
 def send_notification_email(to_addr: str, subject: str, text_body: str, html_body: str) -> bool:
+    if not NOTIFICACIONES_EMAIL_ENVIO_ACTIVO:
+        # Defensa en profundidad: no abrir sesión SMTP aunque alguien llame directo.
+        _log.info(
+            "Envío de notificaciones email desactivado intencionalmente; "
+            "omitido send_notification_email → %s (%s)",
+            (to_addr or "").strip(),
+            (subject or "")[:80],
+        )
+        return False
     to_addr = (to_addr or "").strip()
     if not to_addr:
         return False
@@ -135,6 +173,17 @@ def send_notification_email(to_addr: str, subject: str, text_body: str, html_bod
 def try_send_notification_email(
     to_addr: str, subject: str, text_body: str, html_body: str
 ) -> Optional[bool]:
+    """
+    Intenta enviar. None = omitido (kill-switch o SMTP no configurado);
+    True/False = resultado del envío.
+    """
+    if not NOTIFICACIONES_EMAIL_ENVIO_ACTIVO:
+        _log.info(
+            "Envío de notificaciones email desactivado intencionalmente; "
+            "omitido try_send → %s",
+            (to_addr or "").strip(),
+        )
+        return None
     if not smtp_configured():
         return None
     try:
