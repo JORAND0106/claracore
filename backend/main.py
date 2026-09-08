@@ -2921,8 +2921,8 @@ app.include_router(esquema_ia_router)
 from storage_quota_routes import router as storage_quota_router
 app.include_router(storage_quota_router)
 
-from subcontratistas_docs_routes import router as subcontratistas_docs_router
-app.include_router(subcontratistas_docs_router)
+# subcontratistas_docs_router se registra MÁS ABAJO (tras helpers de subcontratistas)
+# para evitar ImportError por import circular con símbolos definidos tarde en main.py.
 
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 from usuario_bienvenida_email import (
@@ -18122,6 +18122,10 @@ def alertas_corte(contrato_id: int, current_user=Depends(get_current_user)):
                     "vence_hoy":         ff == hoy,
                 })
     return alertas
+
+# Documentación/pólizas de subcontratistas (tras helpers locales — evita circular import).
+from subcontratistas_docs_routes import router as subcontratistas_docs_router
+app.include_router(subcontratistas_docs_router)
 
 # ─────────────────────────────────────────────
 # SICOE OBRA
