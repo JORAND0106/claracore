@@ -6,14 +6,24 @@ export const polizaTipoOptions = [
   { value: 'otro', label: 'Otro' },
 ]
 
-/** Orden jerárquico de documentos requeridos para corte. */
+/** Orden jerárquico completo (incl. SS — SS vive en el corte, no en Datos). */
 export const docTipoOrder = [
   { tipo: 'contrato_firmado', label: 'Contrato Firmado', versionado: true },
   { tipo: 'seguridad_social', label: 'Pago Seguridad Social', versionado: false, porPeriodo: true },
   { tipo: 'propuesta_economica', label: 'Propuesta Económica', versionado: true },
 ]
 
+/** Documentos contractuales en ficha del subcontratista (sin Seguridad Social). */
+export const docTipoContractuales = docTipoOrder.filter((d) => d.tipo !== 'seguridad_social')
+
 export const DOC_TIPO_LABEL = Object.fromEntries(docTipoOrder.map((d) => [d.tipo, d.label]))
+
+/** YYYY-MM del período SS asociado a un corte (mes de fecha_inicio). */
+export function periodoFromCorte(corte) {
+  const fi = String(corte?.fecha_inicio || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fi)) return ''
+  return fi.slice(0, 7)
+}
 
 /** Formato moneda es-CO (COP). */
 export function fmtMoneda(v) {

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { tFrom, isDarkMode } from '../../theme/adminPanelTheme'
 import DocumentosCorteExcelBlock from './DocumentosCorteExcelBlock'
 import PolizasExcelBlock from './PolizasExcelBlock'
-import { subcontratistasSheetStyles, subUi } from './subcontratistasSheetStyles'
+import { subcontratistasSheetCssVars, subcontratistasSheetStyles, subUi } from './subcontratistasSheetStyles'
 
 const EMPTY = {
   razon_social: '',
@@ -13,8 +13,8 @@ const EMPTY = {
 }
 
 /**
- * Hoja Excel de datos del subcontratista + bloques Pólizas / Documentos.
- * Usado en crear (stage) y en tab Datos (live).
+ * Hoja Excel de datos del subcontratista + bloques Pólizas / Documentos Contractuales.
+ * Seguridad Social no se muestra aquí (va en cada corte).
  */
 export default function SubcontratistaFormSheet({
   theme,
@@ -23,7 +23,6 @@ export default function SubcontratistaFormSheet({
   form,
   onChange,
   canEdit = true,
-  /** Si se pasa, controla pólizas/docs por separado de los campos básicos. */
   canEditDocs,
   subId = null,
   stagedPolizas,
@@ -32,13 +31,11 @@ export default function SubcontratistaFormSheet({
   onStagedDocs,
   onMsg,
   readOnlyHint = false,
-  initialSsPeriodo = '',
-  forceSsUpload = false,
-  onSsUploaded,
 }) {
   const tTok = tFrom(theme)
   const ui = subcontratistasSheetStyles(tTok)
   const S = subUi(theme, tTok)
+  const cssVars = subcontratistasSheetCssVars(tTok)
   const f = form || EMPTY
   const editing = canEdit && !readOnlyHint
   const docsEditable = canEditDocs != null ? !!canEditDocs : editing
@@ -57,7 +54,7 @@ export default function SubcontratistaFormSheet({
   ]
 
   return (
-    <div>
+    <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)', fontFamily: 'inherit' }}>
       <div style={ui.sectionTitle}>Datos del subcontratista</div>
       <div style={{ ...ui.sheetWrap, maxHeight: 'none' }}>
         <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
@@ -74,7 +71,13 @@ export default function SubcontratistaFormSheet({
           <tbody>
             {datosRows.map((row) => (
               <tr key={row.key}>
-                <td style={{ ...ui.td, fontWeight: 700, color: tTok.textMuted, background: isDarkMode(theme) ? 'rgba(0,175,197,0.04)' : 'rgba(0,119,182,0.03)' }}>
+                <td style={{
+                  ...ui.td,
+                  fontWeight: 700,
+                  color: tTok.textMuted,
+                  background: isDarkMode(theme) ? 'rgba(0,175,197,0.04)' : 'rgba(0,119,182,0.03)',
+                }}
+                >
                   {row.label}
                 </td>
                 <td style={ui.td}>
@@ -107,7 +110,7 @@ export default function SubcontratistaFormSheet({
                             borderRadius: 8,
                             padding: '6px 12px',
                             color: '#fff',
-                            fontSize: 12,
+                            fontSize: 'var(--cc-caption)',
                             fontWeight: 700,
                             textDecoration: 'none',
                             whiteSpace: 'nowrap',
@@ -139,9 +142,9 @@ export default function SubcontratistaFormSheet({
       </div>
 
       {mode === 'create' && (
-        <div style={{ ...S.alert('warn'), marginTop: 12, fontSize: 12 }}>
-          Puede agregar pólizas y documentos aquí; se subirán automáticamente después de crear el subcontratista.
-          Si solo completa los datos básicos, podrá cargar archivos luego desde el detalle.
+        <div style={{ ...S.alert('warn'), marginTop: 12, fontSize: 'var(--cc-caption)' }}>
+          Puede agregar pólizas y documentos contractuales aquí; se subirán después de crear.
+          El pago de Seguridad Social se registra en cada corte.
         </div>
       )}
 
@@ -165,9 +168,6 @@ export default function SubcontratistaFormSheet({
         stagedRows={stagedDocs}
         onStagedChange={onStagedDocs}
         onMsg={onMsg}
-        initialSsPeriodo={initialSsPeriodo}
-        forceSsUpload={forceSsUpload}
-        onSsUploaded={onSsUploaded}
       />
     </div>
   )

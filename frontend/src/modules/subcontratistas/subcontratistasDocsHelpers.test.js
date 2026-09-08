@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   DOC_TIPO_LABEL,
+  docTipoContractuales,
   docTipoOrder,
   emptyDocDraft,
   emptyPolizaDraft,
   fmtMoneda,
   nivelPolizaBadge,
+  periodoFromCorte,
   polizaTipoLabel,
   polizaTipoOptions,
 } from './subcontratistasDocsHelpers.js'
@@ -33,6 +35,18 @@ describe('subcontratistasDocsHelpers', () => {
     ])
     assert.equal(DOC_TIPO_LABEL.contrato_firmado, 'Contrato Firmado')
     assert.equal(DOC_TIPO_LABEL.seguridad_social, 'Pago Seguridad Social')
+  })
+
+  it('docTipoContractuales excluye seguridad social', () => {
+    assert.deepEqual(docTipoContractuales.map((d) => d.tipo), [
+      'contrato_firmado',
+      'propuesta_economica',
+    ])
+  })
+
+  it('periodoFromCorte usa fecha_inicio YYYY-MM', () => {
+    assert.equal(periodoFromCorte({ fecha_inicio: '2026-09-16' }), '2026-09')
+    assert.equal(periodoFromCorte({ fecha_inicio: '' }), '')
   })
 
   it('nivelPolizaBadge refleja vencida / por_vencer / ok', () => {
