@@ -499,3 +499,29 @@ def path_contabilidad_documento_empresa(categoria: str, nombre_archivo: str) -> 
     cat = re.sub(r"[^\w\-]", "_", (categoria or "otros").strip().lower())[:32]
     safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "documento").strip())[:120]
     return f"contabilidad-documentos-empresa/{cat}/{ts}_{safe}"
+
+
+def path_subcontratista_poliza(contrato_id: int, subcontratista_id: int, nombre_archivo: str) -> str:
+    """Soporte de póliza de subcontratista (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "poliza").strip())[:120]
+    return (
+        f"subcontratistas/{int(contrato_id)}/{int(subcontratista_id)}/"
+        f"polizas/{ts}_{safe}"
+    )
+
+
+def path_subcontratista_documento(
+    contrato_id: int,
+    subcontratista_id: int,
+    tipo: str,
+    nombre_archivo: str,
+) -> str:
+    """Documento requerido para corte de subcontratista (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    tipo_safe = re.sub(r"[^\w\-]", "_", (tipo or "doc").strip().lower())[:40]
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "documento").strip())[:120]
+    return (
+        f"subcontratistas/{int(contrato_id)}/{int(subcontratista_id)}/"
+        f"docs/{tipo_safe}/{ts}_{safe}"
+    )

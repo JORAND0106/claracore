@@ -122,7 +122,13 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
   const cargar = useCallback(async () => {
     if (!contratoId) return
     setLoading(true)
-    try { setSubs(await call('GET', `/subcontratistas/${contratoId}`)) }
+    try {
+      setSubs(await call('GET', `/subcontratistas/${contratoId}`))
+      // Emite notificaciones SISTEMA deduplicadas de pólizas por vencer/vencidas
+      try {
+        await call('GET', `/subcontratistas/${contratoId}/alertas-polizas?emitir=true`)
+      } catch { /* tablas nuevas o sin permiso: no bloquear listado */ }
+    }
     catch (e) { setMsg({ type: 'error', text: e.message }) }
     finally { setLoading(false) }
   }, [contratoId]) // eslint-disable-line react-hooks/exhaustive-deps
