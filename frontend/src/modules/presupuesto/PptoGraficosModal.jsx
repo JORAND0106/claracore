@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import PptoImageSourceBar from './PptoImageSourceBar'
 import PptoPieFotoField from './PptoPieFotoField'
@@ -44,7 +46,9 @@ export default function PptoGraficosModal({
   const [exito, setExito] = useState(null)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [slideIdx, setSlideIdx] = useState(0)
   const dropRef = useRef(null)
+  const iaDraftRef = useRef(`ppto-grupo-nuevo-${Date.now().toString(36)}`)
 
   const regsSel = useMemo(() => {
     const ids = seleccionados instanceof Set ? [...seleccionados] : []
@@ -531,61 +535,55 @@ export default function PptoGraficosModal({
               />
             </div>
             {imagenes.length > 0 && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                {imagenes.map((img) => (
-                  <div
-                    key={img.id}
-                    style={{
-                      position: 'relative',
-                      borderRadius: 8,
-                      overflow: 'hidden',
-                      border: `1px solid ${t.border}`,
-                      background: '#fff',
-                      aspectRatio: '4/3',
-                    }}
-                  >
-                    <img
-                      src={img.previewUrl}
-                      alt=""
-                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeImg(img.id)}
-                      disabled={guardando}
-                      style={{
-                        position: 'absolute',
-                        top: 4,
-                        right: 4,
-                        border: 'none',
-                        borderRadius: 6,
-                        background: 'rgba(0,0,0,0.55)',
-                        color: '#fff',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        padding: '2px 6px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      ✕
-                    </button>
-                    <span
-                      style={{
-                        position: 'absolute',
-                        left: 4,
-                        bottom: 4,
-                        fontSize: 10,
-                        background: 'rgba(0,0,0,0.5)',
-                        color: '#fff',
-                        borderRadius: 4,
-                        padding: '1px 5px',
-                      }}
-                    >
-                      {origenLabel(img.origen)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <AdjuntosMediaSlider
+                t={t}
+                items={slidesFromImagenes(imagenes, (img) => img.previewUrl)}
+                index={Math.min(slideIdx, imagenes.length - 1)}
+                height={200}
+                onIndexChange={setSlideIdx}
+                overlay={(() => {
+                  const img = imagenes[Math.min(slideIdx, imagenes.length - 1)]
+                  if (!img) return null
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => removeImg(img.id)}
+                        disabled={guardando}
+                        style={{
+                          position: 'absolute',
+                          top: 4,
+                          right: 4,
+                          border: 'none',
+                          borderRadius: 6,
+                          background: 'rgba(0,0,0,0.55)',
+                          color: '#fff',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '2px 6px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ✕
+                      </button>
+                      <span
+                        style={{
+                          position: 'absolute',
+                          left: 4,
+                          bottom: 28,
+                          fontSize: 10,
+                          background: 'rgba(0,0,0,0.5)',
+                          color: '#fff',
+                          borderRadius: 4,
+                          padding: '1px 5px',
+                        }}
+                      >
+                        {origenLabel(img.origen)}
+                      </span>
+                    </>
+                  )
+                })()}
+              />
             )}
           </div>
 
@@ -650,6 +648,7 @@ export default function PptoGraficosModal({
           t={t}
           title="Dibujar esquema · grupo de gráfico"
           contratoId={contratoId}
+          iaDoc={{ ambito: 'ppto_grupo_nuevo', docKey: iaDraftRef.current }}
           onClose={() => setEsquemaOpen(false)}
           onSave={guardarEsquema}
         />

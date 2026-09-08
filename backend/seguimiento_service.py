@@ -2864,6 +2864,30 @@ def _enrich_tarea_media(item: dict) -> dict:
     return item
 
 
+def _es_evidencia_imagen(ev: dict) -> bool:
+    mime = str(ev.get("mime_type") or "").lower()
+    name = str(ev.get("nombre_archivo") or ev.get("nombre") or "").lower()
+    if mime.startswith("image/"):
+        return True
+    return name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+
+
+def _enrich_evidencias_media(item: dict) -> dict:
+    evs = item.get("evidencias")
+    if not isinstance(evs, list):
+        return item
+    out = []
+    for ev in evs:
+        if not isinstance(ev, dict):
+            continue
+        if _es_evidencia_imagen(ev):
+            out.append(_enrich_imagen_preview(ev) or ev)
+        else:
+            out.append(ev)
+    item["evidencias"] = out
+    return item
+
+
 def _store_imagen_bytes(
     item_id: int,
     nombre: str,
@@ -3527,7 +3551,7 @@ def get_item_detalle(
         item["campos_libres"] = libres
         item["avance_pct"] = pct
         item = _enrich_tarea_media(item)
-    return item
+    return _enrich_evidencias_media(item)
 
 
 def list_bandeja(

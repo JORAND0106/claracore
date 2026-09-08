@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import {
   agregarEntradaGraficoHistorial,
@@ -50,6 +52,7 @@ export default function SicoeGraficosWizardPanel({
   titulo = 'Gráficos del registro',
   subtitulo,
   onOpenGaleria,
+  iaDocKey = null,
 }) {
   const [idx, setIdx] = useState(0)
   const [subiendo, setSubiendo] = useState(false)
@@ -158,58 +161,16 @@ export default function SicoeGraficosWizardPanel({
         <span style={{ fontSize: 'var(--cc-label)', color: '#F59E0B', whiteSpace: 'nowrap' }}>Opcional — obligatorio en validación</span>
       </div>
 
-      {actual ? (
-        <div style={{ position: 'relative', marginBottom: '8px' }}>
-          <img
-            src={actual.url}
-            alt="Gráfico"
-            style={{ width: '100%', borderRadius: '8px', maxHeight: '200px', objectFit: 'cover', display: 'block' }}
-          />
-          {lista.length > 1 && (
-            <>
-              <button
-                type="button"
-                disabled={safeIdx <= 0}
-                onClick={() => setIdx((i) => Math.max(0, i - 1))}
-                style={{
-                  position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)',
-                  background: 'rgba(0,0,0,0.55)', color: '#fff', border: 'none', borderRadius: '50%',
-                  width: 28, height: 28, cursor: safeIdx <= 0 ? 'default' : 'pointer', opacity: safeIdx <= 0 ? 0.35 : 1,
-                }}
-              >
-                ‹
-              </button>
-              <button
-                type="button"
-                disabled={safeIdx >= lista.length - 1}
-                onClick={() => setIdx((i) => Math.min(lista.length - 1, i + 1))}
-                style={{
-                  position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
-                  background: 'rgba(0,0,0,0.55)', color: '#fff', border: 'none', borderRadius: '50%',
-                  width: 28, height: 28, cursor: safeIdx >= lista.length - 1 ? 'default' : 'pointer',
-                  opacity: safeIdx >= lista.length - 1 ? 0.35 : 1,
-                }}
-              >
-                ›
-              </button>
-              <div style={{
-                position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
-                background: 'rgba(0,0,0,0.55)', color: '#fff', borderRadius: '12px',
-                padding: '2px 10px', fontSize: 'var(--cc-caption)', fontWeight: 700,
-              }}>
-                {safeIdx + 1} / {lista.length}
-              </div>
-            </>
-          )}
-        </div>
-      ) : (
-        <div style={{
-          padding: '24px', textAlign: 'center', color: t.textMuted, background: t.bgCard,
-          borderRadius: '8px', border: `1px dashed ${t.border}`, marginBottom: '8px', fontSize: 'var(--cc-sm)',
-        }}>
-          Sin gráficos adjuntos aún
-        </div>
-      )}
+      <div style={{ marginBottom: '8px' }}>
+        <AdjuntosMediaSlider
+          t={t}
+          items={slidesFromImagenes(lista, (g) => g.url)}
+          index={safeIdx}
+          height={200}
+          emptyLabel="Sin gráficos adjuntos aún"
+          onIndexChange={setIdx}
+        />
+      </div>
 
       {actual && (
         <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: '8px' }}>
@@ -287,6 +248,7 @@ export default function SicoeGraficosWizardPanel({
           title={actual ? 'Editar esquema · gráfico del registro' : 'Crear esquema · gráfico del registro'}
           initialDataUri={esquemaInitialDataUri}
           contratoId={contrato_id}
+          iaDoc={{ ambito: 'sicoe_lote', docKey: iaDocKey || `sicoe-lote-${contrato_id || 'local'}` }}
           onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
           onSave={guardarEsquemaComoGrafico}
         />

@@ -13,6 +13,10 @@ import {
   numeroActaLabel,
 } from './seguimientoTheme'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
+import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { evidenciaEsImagen, slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
+import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { fechaVencimientoEfectiva, sortByProximidadVencimiento } from './vencimientoLevels'
 
@@ -598,6 +602,8 @@ function ActionPanel({
   const [pdfBusy, setPdfBusy] = useState(false)
   const [localErr, setLocalErr] = useState('')
   const [destPick, setDestPick] = useState(null)
+  const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [slideIdx, setSlideIdx] = useState(0)
   const pdfUrlRef = useRef(null)
 
   useEffect(() => {
@@ -681,51 +687,94 @@ function ActionPanel({
         {type === 'adjuntos' && (
           loading ? <div style={{ color: t.textMuted }}>Cargando…</div> : (
             <>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-                {(detail?.evidencias || []).length === 0 && (
-                  <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin evidencias aún.</div>
-                )}
-                {(detail?.evidencias || []).map((ev) => (
-                  <div
-                    key={ev.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: 8,
-                      borderRadius: 8,
-                      border: `1px solid ${t.border}`,
-                      fontSize: 'var(--cc-sm)',
-                      color: t.text,
-                    }}
-                  >
-                    <IconClip />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {ev.nombre_archivo || 'Archivo'}
+              {(() => {
+                const evidencias = detail?.evidencias || []
+                const imagenes = evidencias.filter(evidenciaEsImagen)
+                const otros = evidencias.filter((ev) => !evidenciaEsImagen(ev))
+                const slides = slidesFromImagenes(imagenes, (ev) => imagenSrc(ev) || ev.url || ev.data_uri)
+                return (
+                  <>
+                    {slides.length > 0 && (
+                      <div style={{ marginBottom: 12 }}>
+                        <AdjuntosMediaSlider
+                          t={t}
+                          items={slides}
+                          index={Math.min(slideIdx, slides.length - 1)}
+                          height={220}
+                          onIndexChange={setSlideIdx}
+                          onClickItem={(slide) => openImageInNewTab(slide.source)}
+                        />
                       </div>
-                      <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>{fmtFecha(ev.created_at)}</div>
-                    </div>
-                    {(ev.url || ev.data_uri || imagenSrc(ev)) && (
-                      <button
-                        type="button"
-                        style={iconBtn(t)}
-                        title="Ver adjunto"
-                        onClick={() => openImageInNewTab(ev)}
-                      >
-                        <IconEye />
-                      </button>
                     )}
-                  </div>
-                ))}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+                      {evidencias.length === 0 && (
+                        <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin evidencias aún.</div>
+                      )}
+                      {otros.map((ev) => (
+                        <div
+                          key={ev.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            padding: 8,
+                            borderRadius: 8,
+                            border: `1px solid ${t.border}`,
+                            fontSize: 'var(--cc-sm)',
+                            color: t.text,
+                          }}
+                        >
+                          <IconClip />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {ev.nombre_archivo || 'Archivo'}
+                            </div>
+                            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted }}>{fmtFecha(ev.created_at)}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )
+              })()}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  style={primary(t)}
+                  onClick={() => onPickFile?.(item.id)}
+                >
+                  + Adjuntar archivo
+                </button>
+                <button
+                  type="button"
+                  style={ghost(t)}
+                  onClick={() => setEsquemaOpen(true)}
+                >
+                  ✎ Dibujar esquema
+                </button>
               </div>
-              <button
-                type="button"
-                style={primary(t)}
-                onClick={() => onPickFile?.(item.id)}
-              >
-                + Adjuntar archivo
-              </button>
+              {esquemaOpen && (
+                <EsquemaEditorModal
+                  t={t}
+                  title="Esquema · evidencia del compromiso"
+                  contratoId={item?.contrato_id}
+                  iaDoc={{ ambito: 'compromiso', docKey: `compromiso-${item.id}` }}
+                  onClose={() => setEsquemaOpen(false)}
+                  onSave={async (dataUrl) => {
+                    try {
+                      const file = await dataUriEsquemaAFile(dataUrl, `esquema-compromiso-${item.id}`)
+                      if (!file) throw new Error('No se pudo convertir el esquema')
+                      setEsquemaOpen(false)
+                      await api.uploadEvidencia(item.id, file, 'esquema')
+                      const d = await api.getItem(item.id)
+                      setDetail(d)
+                      onChanged?.()
+                    } catch (e) {
+                      setLocalErr(e.message || 'No se pudo guardar el esquema')
+                    }
+                  }}
+                />
+              )}
             </>
           )
         )}

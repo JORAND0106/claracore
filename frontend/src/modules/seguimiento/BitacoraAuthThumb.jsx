@@ -64,7 +64,7 @@ export default function BitacoraAuthThumb({
     <img
       src={src}
       alt=""
-      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+      style={{ width: '100%', height: '100%', objectFit: style.objectFit || 'contain', display: 'block' }}
     />
   )
 

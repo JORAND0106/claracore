@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
 import { MAX_FOTOS_BITACORA } from './bitacoraConstants'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
@@ -24,6 +26,7 @@ export default function BitacoraAdjuntos({
 }) {
   const ui = bitacoraSheetStyles(t)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [slideIdx, setSlideIdx] = useState(0)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
   const [galeriaItems, setGaleriaItems] = useState([])
   const [galeriaQ, setGaleriaQ] = useState('')
@@ -200,38 +203,29 @@ export default function BitacoraAdjuntos({
             {iconBtn('✎', 'Dibujar esquema', () => setEsquemaOpen(true))}
           </>
         )}
-        {list.map((im, idx) => (
-          <div
-            key={`${im.blob_path || im.nombre || 'im'}-${idx}`}
-            title={im.pie || im.nombre || ''}
+        {list.length > 0 && !disabled && (
+          <button
+            type="button"
+            title="Quitar adjunto visible"
+            onClick={() => {
+              const i = Math.min(slideIdx, list.length - 1)
+              onChange?.(list.filter((_, j) => j !== i))
+              setSlideIdx((prev) => Math.max(0, Math.min(prev, list.length - 2)))
+            }}
             style={{
-              position: 'relative',
-              width: 36,
-              height: 28,
+              ...ui.clipBtn,
               border: `1px solid ${ui.border}`,
-              borderRadius: 3,
-              overflow: 'hidden',
-              flexShrink: 0,
+              borderRadius: 4,
+              padding: '4px 8px',
+              fontSize: 13,
+              background: t.bg,
+              color: '#B91C1C',
+              cursor: 'pointer',
             }}
           >
-            <BitacoraAuthThumb api={api} im={im} width={36} height={28} />
-            {!disabled && (
-              <button
-                type="button"
-                title="Quitar"
-                onClick={() => onChange?.(list.filter((_, i) => i !== idx))}
-                style={{
-                  position: 'absolute', top: -2, right: -2,
-                  border: 'none', background: '#fff', color: '#B91C1C',
-                  borderRadius: 8, width: 14, height: 14, fontSize: 9,
-                  lineHeight: 1, cursor: 'pointer', padding: 0, fontWeight: 800,
-                }}
-              >
-                ×
-              </button>
-            )}
-          </div>
-        ))}
+            ×
+          </button>
+        )}
         <input
           ref={fileRef}
           type="file"
@@ -245,6 +239,26 @@ export default function BitacoraAdjuntos({
         />
         <div ref={pasteZoneRef} tabIndex={0} style={{ width: 1, height: 1, outline: 'none' }} aria-hidden />
       </div>
+      {list.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <AdjuntosMediaSlider
+            t={t}
+            items={slidesFromImagenes(list)}
+            index={Math.min(slideIdx, list.length - 1)}
+            height={160}
+            onIndexChange={setSlideIdx}
+            renderImage={(slide) => (
+              <BitacoraAuthThumb
+                api={api}
+                im={slide.source || list[slideIdx]}
+                width="100%"
+                height="100%"
+                style={{ objectFit: 'contain' }}
+              />
+            )}
+          />
+        </div>
+      )}
       {error && (
         <div style={{ color: '#B91C1C', fontSize: 11, marginTop: 4 }}>{error}</div>
       )}
@@ -338,6 +352,7 @@ export default function BitacoraAdjuntos({
         <EsquemaEditorModal
           t={t}
           title="Esquema · Bitácora"
+          iaDoc={{ ambito: 'bitacora', docKey: `bitacora-${entradaId != null ? entradaId : 'draft'}` }}
           onClose={() => setEsquemaOpen(false)}
           onSave={async (dataUrl) => {
             setEsquemaOpen(false)

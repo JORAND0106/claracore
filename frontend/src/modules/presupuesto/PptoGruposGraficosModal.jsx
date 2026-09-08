@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
 import PptoImageSourceBar from './PptoImageSourceBar'
 import PptoPieFotoField from './PptoPieFotoField'
@@ -40,6 +42,7 @@ export default function PptoGruposGraficosModal({
   const [buscando, setBuscando] = useState(false)
   const [galeriaOpen, setGaleriaOpen] = useState(false)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [slideIdx, setSlideIdx] = useState(0)
   const [reemplazarImagenId, setReemplazarImagenId] = useState(null)
   const [okMsg, setOkMsg] = useState('')
   const [pieFoto, setPieFoto] = useState('')
@@ -540,42 +543,40 @@ export default function PptoGruposGraficosModal({
                     <div style={{ fontWeight: 800, fontSize: cc.sm, color: t.text, marginBottom: 8 }}>
                       Imágenes ({(detalle.imagenes || []).length})
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
-                      {(detalle.imagenes || []).map((im) => (
-                        <div
-                          key={im.id}
+                    <AdjuntosMediaSlider
+                      t={t}
+                      items={slidesFromImagenes(detalle.imagenes || [], (im) => im.url)}
+                      index={Math.min(slideIdx, Math.max(0, (detalle.imagenes || []).length - 1))}
+                      height={220}
+                      emptyLabel="Sin imágenes en el grupo"
+                      onIndexChange={setSlideIdx}
+                    />
+                    {(detalle.imagenes || []).length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            const im = (detalle.imagenes || [])[Math.min(slideIdx, (detalle.imagenes || []).length - 1)]
+                            if (im) setReemplazarImagenId(im.id)
+                          }}
+                          title="Reemplazar imagen visible (sin cambiar registros)"
                           style={{
-                            border: `1px solid ${reemplazarImagenId === im.id ? t.primary : t.border}`,
-                            borderRadius: 10,
-                            overflow: 'hidden',
-                            background: t.bg,
+                            width: '100%',
+                            background: reemplazarImagenId ? t.primary : t.bgCard,
+                            color: reemplazarImagenId ? '#fff' : t.text,
+                            border: `1px solid ${t.border}`,
+                            borderRadius: 8,
+                            padding: '6px 8px',
+                            fontWeight: 700,
+                            fontSize: cc.caption,
+                            cursor: busy ? 'not-allowed' : 'pointer',
                           }}
                         >
-                          <img src={im.url} alt="" style={{ width: '100%', height: 110, objectFit: 'contain', background: '#fff' }} />
-                          <div style={{ padding: 8 }}>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => setReemplazarImagenId(im.id)}
-                              title="Reemplazar imagen (sin cambiar registros)"
-                              style={{
-                                width: '100%',
-                                background: reemplazarImagenId === im.id ? t.primary : t.bgCard,
-                                color: reemplazarImagenId === im.id ? '#fff' : t.text,
-                                border: `1px solid ${t.border}`,
-                                borderRadius: 8,
-                                padding: '6px 8px',
-                                fontWeight: 700,
-                                fontSize: cc.caption,
-                                cursor: busy ? 'not-allowed' : 'pointer',
-                              }}
-                            >
-                              {reemplazarImagenId === im.id ? 'Reemplazando…' : 'Reemplazar'}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                          {reemplazarImagenId ? 'Reemplazando…' : 'Reemplazar adjunto visible'}
+                        </button>
+                      </div>
+                    )}
                     {reemplazarImagenId && (
                       <div
                         ref={replaceDropRef}
@@ -804,6 +805,7 @@ export default function PptoGruposGraficosModal({
           t={t}
           title="Dibujar esquema · reemplazar imagen del grupo"
           contratoId={contratoId}
+          iaDoc={{ ambito: 'ppto_grupo', docKey: `ppto-grupo-${grupoId || 'local'}` }}
           onClose={() => setEsquemaOpen(false)}
           onSave={guardarEsquemaReemplazo}
         />

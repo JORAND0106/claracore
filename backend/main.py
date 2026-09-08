@@ -2915,6 +2915,9 @@ app.include_router(catalogo_insumos_router)
 from seguimiento_routes import router as seguimiento_router
 app.include_router(seguimiento_router)
 
+from esquema_ia_routes import router as esquema_ia_router
+app.include_router(esquema_ia_router)
+
 from storage_quota_routes import router as storage_quota_router
 app.include_router(storage_quota_router)
 

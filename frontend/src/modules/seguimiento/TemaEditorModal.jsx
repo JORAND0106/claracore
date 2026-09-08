@@ -1,5 +1,8 @@
+import { useState } from 'react'
 import QuienDijoAutocomplete from './QuienDijoAutocomplete'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import TemaRichEditor from './TemaRichEditor'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { isRichTextEmpty } from './richTextUtils'
@@ -32,6 +35,7 @@ export default function TemaEditorModal({
   onQuitar,
 }) {
   const imgs = normalizeIdeaImagenes(idea?.imagenes)
+  const [slideIdx, setSlideIdx] = useState(0)
 
   return (
     <div
@@ -128,61 +132,24 @@ export default function TemaEditorModal({
                 Opcional: adjuntar archivo, pegar captura (Ctrl+V) o dibujar.
               </div>
             ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {imgs.map((im, imgIdx) => {
-                  const src = imagenSrc(im)
-                  return (
-                    <div
-                      key={`${im.blob_path || im.nombre || 'img'}-${imgIdx}`}
-                      style={{ width: 88, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}
-                    >
-                      <button
-                        type="button"
-                        title={im.nombre || 'Ver imagen'}
-                        onClick={() => openImageInNewTab(im)}
-                        style={{
-                          width: 88,
-                          height: 72,
-                          padding: 0,
-                          border: `1px solid ${t.border}`,
-                          borderRadius: 8,
-                          background: t.bg || '#fff',
-                          overflow: 'hidden',
-                          cursor: src ? 'pointer' : 'default',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        {src ? (
-                          <img src={src} alt={im.nombre || 'Esquema'} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                        ) : (
-                          <span style={{ fontSize: 10, color: t.textMuted, padding: 4 }}>Sin vista</span>
-                        )}
-                      </button>
-                      <div style={{
-                        fontSize: 10,
-                        color: t.textMuted,
-                        maxWidth: 88,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                      >
-                        {im.pending ? 'Pendiente' : (im.nombre || 'Esquema')}
-                      </div>
-                      {!soloLectura && (
-                        <button
-                          type="button"
-                          style={{ ...ghost(t), padding: '2px 8px', fontSize: 11 }}
-                          onClick={() => onRemoveImagen?.(imgIdx)}
-                        >
-                          Quitar
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
+              <div>
+                <AdjuntosMediaSlider
+                  t={t}
+                  items={slidesFromImagenes(imgs, imagenSrc)}
+                  index={Math.min(slideIdx, imgs.length - 1)}
+                  height={180}
+                  onIndexChange={setSlideIdx}
+                  onClickItem={(slide) => openImageInNewTab(slide.source)}
+                />
+                {!soloLectura && (
+                  <button
+                    type="button"
+                    style={{ ...ghost(t), padding: '2px 8px', fontSize: 11, marginTop: 6 }}
+                    onClick={() => onRemoveImagen?.(Math.min(slideIdx, imgs.length - 1))}
+                  >
+                    Quitar adjunto visible
+                  </button>
+                )}
               </div>
             )}
           </div>

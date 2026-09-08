@@ -5,6 +5,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { listaGraficosRegistro } from './sicoeGraficosHelpers'
+import { slidesFromRegistro } from '../../components/adjuntos/adjuntosMedia'
 import SicoeMediaLightbox from './SicoeMediaLightbox'
 import {
   agruparRegistrosPorItem,
@@ -82,16 +83,13 @@ function fmtPesos(v) {
 }
 
 function mediaItemsDeRegistro(reg, reporte) {
-  const items = []
-  const foto = String(reg?.foto_url || '').trim()
-  if (foto) items.push({ url: foto, label: 'Foto' })
-  for (const g of listaGraficosRegistro(reg)) {
-    if (g?.url) items.push({ url: g.url, label: g.numero != null ? `Gráfico #${g.numero}` : 'Gráfico' })
-  }
-  if (!items.some((i) => i.label.startsWith('Gráfico'))) {
-    const fromRep = reporte?.registros?.find((r) => r.id === reg.id)
+  const fromRep = reporte?.registros?.find((r) => r.id === reg.id)
+  const foto = String(reg?.foto_url || fromRep?.foto_url || '').trim()
+  const graficos = listaGraficosRegistro(reg)
+  const items = slidesFromRegistro(foto, graficos)
+  if (!items.some((i) => i.kind === 'grafico' || i.kind === 'esquema')) {
     const gu = String(reg?.grafico_url || fromRep?.grafico_url || '').trim()
-    if (gu) items.push({ url: gu, label: 'Gráfico' })
+    if (gu) items.push({ url: gu, label: 'Gráfico', kind: 'grafico' })
   }
   return items
 }

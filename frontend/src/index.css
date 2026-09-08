@@ -1351,10 +1351,10 @@ select.cc-dashboard-acta-select--light option {
   gap: 4px;
 }
 
-/* Foto | Gráfico en la misma línea (mitad del 1/4 cada una) */
+/* Foto + gráficos + esquemas en un solo slider */
 .cc-sicoe-hoja-detalle-media-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   align-items: start;
   min-width: 0;
@@ -1379,7 +1379,8 @@ select.cc-dashboard-acta-select--light option {
 .cc-sicoe-hoja-media-thumb {
   width: 100%;
   aspect-ratio: 1 / 1;
-  object-fit: cover;
+  object-fit: contain;
+  background: #fff;
   display: block;
 }
 

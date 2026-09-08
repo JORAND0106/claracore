@@ -2,9 +2,10 @@
  * Hatch por subregión: dibuja bordes de todas las figuras y hace flood-fill
  * desde el clic, de modo que líneas/círculos superpuestos actúan como fronteras.
  */
+import { esquemaEntityInk } from './esquemaTheme.js'
 
 function strokeObjectEdges(ctx, obj) {
-  if (!obj || obj.type === 'hatchRegion' || obj.type === 'image') return
+  if (!obj || obj.type === 'hatchRegion' || obj.type === 'image' || obj.type === 'cota') return
   ctx.save()
   const center = objectCenterApprox(obj)
   if (obj.rotation) {
@@ -231,7 +232,7 @@ export function createHatchRegionFromClick(objects, worldX, worldY, hatchKind, c
     w: bw / scale,
     h: bh / scale,
     hatch: hatchKind,
-    color: color || '#1e293b',
+    color: color || undefined,
   }
 }
 
@@ -323,7 +324,7 @@ function rememberComposedHatch(cache, key, canvas) {
   if (keys.length > 24) delete cache[keys[0]]
 }
 
-export function drawHatchRegion(ctx, obj) {
+export function drawHatchRegion(ctx, obj, ui) {
   if (!obj?.maskDataUri) return
   const cache = drawHatchRegion._cache || (drawHatchRegion._cache = {})
   const composed = drawHatchRegion._composed || (drawHatchRegion._composed = {})
@@ -349,15 +350,16 @@ export function drawHatchRegion(ctx, obj) {
     const down = Math.max(sw, sh) > cap ? cap / Math.max(sw, sh) : 1
     const ow = Math.max(1, Math.round(sw * down))
     const oh = Math.max(1, Math.round(sh * down))
-    const ckey = `${key}|${obj.hatch}|${obj.color}|${ow}x${oh}`
+    const ink = esquemaEntityInk(obj.color, ui)
+    const ckey = `${key}|${obj.hatch}|${ink}|${ow}x${oh}`
     let off = composed[ckey]
     if (!off) {
       off = document.createElement('canvas')
       off.width = ow
       off.height = oh
       const octx = off.getContext('2d')
-      const pattern = makeHatchPattern(octx, obj.hatch, obj.color || '#1e293b')
-      octx.fillStyle = pattern || (obj.color || '#1e293b')
+      const pattern = makeHatchPattern(octx, obj.hatch, ink)
+      octx.fillStyle = pattern || ink
       octx.fillRect(0, 0, ow, oh)
       octx.globalCompositeOperation = 'destination-in'
       octx.drawImage(img, 0, 0, ow, oh)

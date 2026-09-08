@@ -25,7 +25,7 @@
     "test:tema-table": "node --test src/modules/seguimiento/temaTableWidth.test.js src/modules/seguimiento/temaEditorTables.test.js src/modules/seguimiento/temaEditorScroll.test.js",
     "test:libro-digital": "node --test src/modules/seguimiento/libroDigitalUtils.test.js",
     "test:tarea-excel": "node --test src/modules/seguimiento/tareaExcelLayout.test.js src/modules/seguimiento/tareaAvance.test.mjs src/modules/seguimiento/tareaChecklistMigracion.test.js src/modules/seguimiento/tareaSheetColors.test.js",
-    "test:esquema": "node --test src/components/esquema/esquemaGeometry.test.js"
+    "test:esquema": "node --test src/components/esquema/esquemaGeometry.test.js src/components/esquema/esquemaExport.test.js src/components/esquema/esquemaIa.test.js src/components/esquema/esquemaZOrder.test.js src/components/esquema/esquemaOffset.test.js src/components/esquema/esquemaCota.test.js src/components/esquema/esquemaTheme.test.js src/components/esquema/esquemaJoin.test.js src/components/adjuntos/adjuntosMedia.test.js"
   },
   "dependencies": {
     "@fullcalendar/core": "^6.1.21",

@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { evidenciaEsImagen, slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
+import { dataUriEsquemaAFile } from '../sicoe-obra/sicoeGraficosHelpers'
+import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { esDesarrolladorUsuario } from '../../utils/permisosContrato'
 import { seedChecklistFromItem } from './TareaChecklistEditor'
 import TareaExcelLayout from './TareaExcelLayout.jsx'
@@ -40,6 +45,8 @@ export default function ItemDetalleModal({
   const [fechaEdit, setFechaEdit] = useState('')
   const [horaEdit, setHoraEdit] = useState('')
   const [fechaEditDirty, setFechaEditDirty] = useState(false)
+  const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [evSlideIdx, setEvSlideIdx] = useState(0)
 
   const applyItem = (d) => {
     setItem(d)
@@ -740,6 +747,24 @@ export default function ItemDetalleModal({
       {esCompromiso && soyResponsable && (
         <section style={{ marginTop: 16 }}>
           <h4 style={h4(t)}>Evidencia / respuesta</h4>
+          {(() => {
+            const evidencias = item.evidencias || []
+            const imagenes = evidencias.filter(evidenciaEsImagen)
+            const slides = slidesFromImagenes(imagenes, (ev) => imagenSrc(ev) || ev.url || ev.data_uri)
+            return slides.length ? (
+              <div style={{ marginBottom: 10 }}>
+                <AdjuntosMediaSlider
+                  t={t}
+                  items={slides}
+                  index={Math.min(evSlideIdx, slides.length - 1)}
+                  height={200}
+                  onIndexChange={setEvSlideIdx}
+                  onClickItem={(slide) => openImageInNewTab(slide.source)}
+                />
+              </div>
+            ) : null
+          })()}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
             type="file"
             onChange={async (e) => {
@@ -752,11 +777,34 @@ export default function ItemDetalleModal({
               } catch (err) { setError(err.message) }
             }}
           />
+          <button type="button" style={ghost(t)} onClick={() => setEsquemaOpen(true)}>
+            ✎ Dibujar esquema
+          </button>
+          </div>
           <ul style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-            {(item.evidencias || []).map((ev) => (
+            {(item.evidencias || []).filter((ev) => !evidenciaEsImagen(ev)).map((ev) => (
               <li key={ev.id}>{ev.nombre_archivo} · {fmtFecha(ev.created_at)}</li>
             ))}
           </ul>
+          {esquemaOpen && (
+            <EsquemaEditorModal
+              t={t}
+              title="Esquema · evidencia del compromiso"
+              contratoId={item?.contrato_id}
+              iaDoc={{ ambito: 'compromiso', docKey: `compromiso-${item.id}` }}
+              onClose={() => setEsquemaOpen(false)}
+              onSave={async (dataUrl) => {
+                try {
+                  const file = await dataUriEsquemaAFile(dataUrl, `esquema-compromiso-${item.id}`)
+                  if (!file) throw new Error('No se pudo convertir el esquema')
+                  setEsquemaOpen(false)
+                  await api.uploadEvidencia(item.id, file, 'esquema')
+                  await reload()
+                  onChanged?.()
+                } catch (err) { setError(err.message) }
+              }}
+            />
+          )}
 
           <h4 style={{ ...h4(t), marginTop: 14 }}>Solicitar justificación</h4>
           <textarea

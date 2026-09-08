@@ -114,6 +114,8 @@ import {
 } from './modules/sicoe-obra/sicoeGraficosHelpers'
 import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPanel'
 import EsquemaEditorModal from './components/esquema/EsquemaEditorModal'
+import AdjuntosMediaSlider from './components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromRegistro } from './components/adjuntos/adjuntosMedia'
 import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import SicoeReporteItemsTabla from './modules/sicoe-obra/SicoeReporteItemsTabla'
@@ -2827,6 +2829,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || null)
   const [graficosHistLocal, setGraficosHistLocal] = useState(() => parseGraficosHistorial(registro))
   const [graficoIdx, setGraficoIdx] = useState(0)
+  const [mediaIdx, setMediaIdx] = useState(0)
   const [eliminandoGraf, setEliminandoGraf] = useState(false)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaInitialDataUri, setEsquemaInitialDataUri] = useState(null)
@@ -2877,6 +2880,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const esFotoConsecBd = regTieneFotoNumeroEnBd(registro)
   // Solo este registro — nunca el gráfico de otra línea del mismo reporte.
   const grafVista = _urlMedia(graficoActual?.url)
+  const mediaSlides = useMemo(
+    () => slidesFromRegistro(fotoVista, graficosLista),
+    [fotoVista, graficosLista],
+  )
+  useEffect(() => {
+    setMediaIdx((prev) => Math.min(prev, Math.max(0, mediaSlides.length - 1)))
+  }, [mediaSlides.length, registro.id])
+  const fotoOffset = mediaSlides[0]?.kind === 'foto' ? 1 : 0
+  const actualMedia = mediaSlides[mediaIdx] || null
     || _urlMedia(grafLocal)
     || _urlMedia(registro.grafico_url)
     || _urlMedia(regMismoEnReporte?.grafico_url)
@@ -3276,6 +3288,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
       limpiarPreviewFotoLocal()
       setFotoLocal(res.url)
+      setMediaIdx(0)
       // La foto ya está en so_foto_hashes (+ registro): invalidar galería para reutilizarla en otros.
       setGaleriaHojaRefreshKey((k) => k + 1)
       setGaleriaHojaSeed([{ url: res.url, numero: res.numero ?? numero, descripcion: '' }])
@@ -3320,7 +3333,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
     setGraficosHistLocal(nuevoHist)
     setGrafLocal(url)
-    setGraficoIdx(Math.max(0, nuevoHist.length - 1))
+    const nextG = Math.max(0, nuevoHist.length - 1)
+    setGraficoIdx(nextG)
+    setMediaIdx((fotoVista ? 1 : 0) + nextG)
   }
 
   // Subir gráfico (manual o pantallazo del plano)
@@ -3431,7 +3446,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
       setGraficosHistLocal(nuevoHist)
       setGrafLocal(ultimo?.url ?? null)
-      setGraficoIdx(Math.max(0, nuevoHist.length - 1))
+      const nextG = Math.max(0, nuevoHist.length - 1)
+      setGraficoIdx(nextG)
+      setMediaIdx(fotoVista && nuevoHist.length ? 1 + nextG : nextG)
     } catch (e) {
       alert('No se pudo eliminar el gráfico: ' + (e?.message || String(e)))
     }
@@ -4684,190 +4701,124 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       </div>{/* /.cc-sicoe-hoja-detalle-form */}
 
-      {/* ─ Columna media 1/4: Foto | Gráfico en la misma línea ─ */}
+      {/* ─ Columna media 1/4: foto + gráficos + esquemas en un solo slider ─ */}
       <aside className="cc-sicoe-hoja-detalle-media" aria-label="Registros fotográficos">
         <div className="cc-sicoe-hoja-detalle-media-row">
-          {/* Foto de obra */}
           <div className="cc-sicoe-hoja-media-card" style={{ borderColor: C.borde }}>
-            {fotoVista ? (
+            {mediaSlides.length ? (
               <>
-                <div style={{ position:'relative' }}>
-                <img
-                  key={fotoVista}
-                  src={fotoVista}
-                  alt="Foto"
-                  referrerPolicy="no-referrer"
-                  className="cc-sicoe-media-tap cc-sicoe-hoja-media-thumb"
-                  role="button"
-                  tabIndex={0}
-                  title="Clic para ampliar · clic derecho para guardar, copiar o abrir"
-                  onClick={() => {
-                    const items = [{ url: fotoVista, label: 'Foto' }]
-                    for (const g of graficosLista) {
-                      if (g?.url) items.push({ url: g.url, label: g.numero != null ? `Gráfico #${g.numero}` : 'Gráfico' })
-                    }
-                    setMediaLightbox({ items, index: 0 })
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      e.currentTarget.click()
+                <AdjuntosMediaSlider
+                  t={t}
+                  items={mediaSlides}
+                  index={mediaIdx}
+                  aspectRatio="1 / 1"
+                  onIndexChange={(i) => {
+                    setMediaIdx(i)
+                    const slide = mediaSlides[i]
+                    if (slide && slide.kind !== 'foto') {
+                      setGraficoIdx(Math.max(0, i - fotoOffset))
                     }
                   }}
-                  style={mediaThumbStyle}
-                  onLoad={() => setFotoImgError(false)}
-                  onError={() => setFotoImgError(true)}
+                  onClickItem={(_item, i) => setMediaLightbox({ items: mediaSlides, index: i })}
+                  overlay={(uploadingFoto || uploadingGraf) ? (
+                    <div style={{
+                      position:'absolute', left:0, right:0, bottom:0, padding:'2px 3px',
+                      background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:9,
+                      fontWeight:600, textAlign:'center',
+                    }}>
+                      …
+                    </div>
+                  ) : null}
                 />
-                {uploadingFoto && (
-                  <div style={{
-                    position:'absolute', left:0, right:0, bottom:0, padding:'2px 3px',
-                    background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:9,
-                    fontWeight:600, textAlign:'center',
-                  }}>
-                    …
-                  </div>
-                )}
-                </div>
-                {fotoImgError && (
+                {fotoImgError && fotoVista && (
                   <div style={{ padding:'3px', fontSize:9, color:'#B91C1C', background:'#FEF2F2' }}>
                     <a href={fotoVista} target="_blank" rel="noreferrer" style={{ color:t.primary, fontWeight:700 }}>Abrir</a>
                   </div>
                 )}
                 <div className="cc-sicoe-hoja-media-actions" style={{ color:t.textMuted, background:t.bg }}>
-                  <span style={{ fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={strRefCarpeta || 'Foto'}>
-                    📷{strRefCarpeta ? ` #${strRefCarpeta}` : ''}
-                  </span>
-                  {editableFoto && (
-                    <div style={{ display:'flex', flexDirection:'column', gap:1, alignItems:'flex-start' }}>
-                      <label style={{ cursor:'pointer', color:t.primary, fontWeight:'600' }} title="Cambiar foto">
-                        Cambiar
-                        <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
-                      </label>
-                      <button type="button" onClick={() => {
-                        setGaleriaHojaRefreshKey((k) => k + 1)
-                        setModalGaleriaHoja(true)
-                      }}
-                        title="Galería de fotos"
-                        style={{ cursor:'pointer', color:t.primary, fontWeight:'600', background:'none', border:'none', padding:0 }}>
-                        Galería
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div style={{ ...mediaEmptyThumbStyle, opacity: editableFoto ? 1 : 0.65, borderRadius: excel ? 2 : 6, overflow:'hidden', gap:2, padding:'4px 2px' }}>
-                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:2, cursor: editableFoto ? 'pointer' : 'default', width:'100%', height:'100%' }}>
-                  {uploadingFoto
-                    ? <span style={{ color:t.textMuted, fontSize:9 }}>⏳</span>
-                    : <>
-                        <span style={{ fontSize: excel ? 14 : 18 }}>📷</span>
-                        {editableFoto && <span style={{ fontSize:9, color:t.primary, fontWeight:'600' }}>Cargar</span>}
-                      </>
-                  }
-                  <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableFoto}
-                    onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
-                </label>
-                {editableFoto && (
-                <button type="button" onClick={() => {
-                  setGaleriaHojaRefreshKey((k) => k + 1)
-                  setModalGaleriaHoja(true)
-                }}
-                  title="Galería de fotos"
-                  style={{ padding:'2px', width:'100%', background:'transparent', border:'none', borderTop:`1px solid ${t.border}`, color:t.primary, fontSize:9, fontWeight:'600', cursor:'pointer' }}>
-                  Galería
-                </button>
-                )}
-                {!fotoVista && strRefCarpeta && (
-                  <div
-                    title={esFotoConsecBd ? 'Consecutivo de foto (BD).' : 'N.º de registro (falta foto en BD).'}
-                    style={{ margin: 0, padding: '2px', background: 'linear-gradient(90deg, #0d948818, #0d948800)', borderTop: `1px solid ${C.borde}`, textAlign: 'center', width:'100%' }}
+                  <span style={{ fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                    title={actualMedia?.kind === 'foto' ? (strRefCarpeta || 'Foto') : (graficoActual ? `${fmtFechaGrafico(graficoActual.creado_en)}${graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}` : 'Adjunto')}
                   >
-                    <div style={{ fontSize: 10, fontWeight: '900', color: '#0f766e', fontFamily: 'ui-monospace, Consolas, monospace', lineHeight: 1.2 }}>
-                      {strRefCarpeta}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          {/* Gráfico / plano */}
-          <div className="cc-sicoe-hoja-media-card" style={{ borderColor: C.borde }}>
-            {grafVista ? (
-              <>
-                <div style={{ position:'relative' }}>
-                  <img
-                    src={grafVista}
-                    alt="Gráfico"
-                    referrerPolicy="no-referrer"
-                    className="cc-sicoe-media-tap cc-sicoe-hoja-media-thumb"
-                    role="button"
-                    tabIndex={0}
-                    title="Clic para ampliar · clic derecho para guardar, copiar o abrir"
-                    onClick={() => {
-                      const items = []
-                      if (fotoVista) items.push({ url: fotoVista, label: 'Foto' })
-                      for (const g of graficosLista) {
-                        if (g?.url) items.push({ url: g.url, label: g.numero != null ? `Gráfico #${g.numero}` : 'Gráfico' })
-                      }
-                      if (!items.length && grafVista) items.push({ url: grafVista, label: 'Gráfico' })
-                      const idx = Math.max(0, items.findIndex((x) => x.url === grafVista))
-                      setMediaLightbox({ items, index: idx >= 0 ? idx : 0 })
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        e.currentTarget.click()
-                      }
-                    }}
-                    style={mediaThumbStyle}
-                  />
-                  {graficosLista.length > 1 && (
-                    <>
-                      <button type="button" disabled={graficoIdx <= 0} onClick={() => setGraficoIdx((i) => Math.max(0, i - 1))}
-                        style={{ position:'absolute', left:2, top:'50%', transform:'translateY(-50%)', background:'rgba(0,0,0,0.55)', color:'#fff', border:'none', borderRadius:'50%', width:18, height:18, fontSize:11, lineHeight:1, cursor: graficoIdx <= 0 ? 'default' : 'pointer', opacity: graficoIdx <= 0 ? 0.35 : 1 }}>‹</button>
-                      <button type="button" disabled={graficoIdx >= graficosLista.length - 1} onClick={() => setGraficoIdx((i) => Math.min(graficosLista.length - 1, i + 1))}
-                        style={{ position:'absolute', right:2, top:'50%', transform:'translateY(-50%)', background:'rgba(0,0,0,0.55)', color:'#fff', border:'none', borderRadius:'50%', width:18, height:18, fontSize:11, lineHeight:1, cursor: graficoIdx >= graficosLista.length - 1 ? 'default' : 'pointer', opacity: graficoIdx >= graficosLista.length - 1 ? 0.35 : 1 }}>›</button>
-                    </>
-                  )}
-                </div>
-                <div className="cc-sicoe-hoja-media-actions" style={{ color:t.textMuted, background:t.bg }}>
-                  <span style={{ fontWeight:700 }} title={graficoActual ? `${fmtFechaGrafico(graficoActual.creado_en)}${graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}` : 'Gráfico'}>
-                    📐{graficosLista.length > 1 ? ` ${graficoIdx + 1}/${graficosLista.length}` : ''}
+                    {actualMedia?.kind === 'foto'
+                      ? `📷${strRefCarpeta ? ` #${strRefCarpeta}` : ''}`
+                      : `📐${mediaSlides.length > 1 ? ` ${mediaIdx + 1}/${mediaSlides.length}` : ''}`}
                   </span>
-                  {editableGrafico && (
-                    <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
-                      <button
-                        type="button"
-                        onClick={abrirEsquemaEditor}
-                        disabled={esquemaCargando || uploadingGraf}
-                        title="Editar esquema"
-                        style={{ background:'transparent', border:'none', color:t.primary, fontWeight:'600', cursor: (esquemaCargando || uploadingGraf) ? 'wait' : 'pointer', padding:0 }}
-                      >
-                        {esquemaCargando ? '…' : '✎'}
-                      </button>
-                      <label style={{ cursor: uploadingGraf ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Añadir gráfico">
-                        +
-                        <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
-                          onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
-                      </label>
-                      <button type="button" onClick={eliminarGraficoActual} disabled={eliminandoGraf}
-                        title="Quitar gráfico"
-                        style={{ background:'transparent', border:'none', color:'#EF4444', fontWeight:'600', cursor: eliminandoGraf ? 'wait' : 'pointer', padding:0 }}>
-                        {eliminandoGraf ? '…' : '×'}
-                      </button>
-                    </div>
-                  )}
+                  <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
+                    {editableFoto && (
+                      <>
+                        <label style={{ cursor:'pointer', color:t.primary, fontWeight:'600' }} title={fotoVista ? 'Cambiar foto' : 'Cargar foto'}>
+                          {fotoVista ? 'Foto' : 'Cargar'}
+                          <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+                        </label>
+                        <button type="button" onClick={() => {
+                          setGaleriaHojaRefreshKey((k) => k + 1)
+                          setModalGaleriaHoja(true)
+                        }}
+                          title="Galería de fotos"
+                          style={{ cursor:'pointer', color:t.primary, fontWeight:'600', background:'none', border:'none', padding:0 }}>
+                          Galería
+                        </button>
+                      </>
+                    )}
+                    {editableGrafico && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={abrirEsquemaEditor}
+                          disabled={esquemaCargando || uploadingGraf}
+                          title={grafVista ? 'Editar esquema' : 'Crear esquema'}
+                          style={{ background:'transparent', border:'none', color:t.primary, fontWeight:'600', cursor: (esquemaCargando || uploadingGraf) ? 'wait' : 'pointer', padding:0 }}
+                        >
+                          {esquemaCargando ? '…' : '✎'}
+                        </button>
+                        <label style={{ cursor: uploadingGraf ? 'wait' : 'pointer', color:t.primary, fontWeight:'600' }} title="Añadir gráfico">
+                          +
+                          <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
+                            onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
+                        </label>
+                        {actualMedia?.kind !== 'foto' && grafVista && (
+                          <button type="button" onClick={eliminarGraficoActual} disabled={eliminandoGraf}
+                            title="Quitar gráfico"
+                            style={{ background:'transparent', border:'none', color:'#EF4444', fontWeight:'600', cursor: eliminandoGraf ? 'wait' : 'pointer', padding:0 }}>
+                            {eliminandoGraf ? '…' : '×'}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               </>
             ) : (
-              <div style={{ ...mediaEmptyThumbStyle, opacity: editableGrafico ? 1 : 0.65, gap:2, padding:'4px 2px' }}>
-                {uploadingGraf
+              <div style={{ ...mediaEmptyThumbStyle, opacity: (editableFoto || editableGrafico) ? 1 : 0.65, borderRadius: excel ? 2 : 6, overflow:'hidden', gap:4, padding:'4px 2px' }}>
+                {(uploadingFoto || uploadingGraf)
                   ? <span style={{ color:t.textMuted, fontSize:9 }}>⏳</span>
                   : <>
-                      <span style={{ fontSize: excel ? 14 : 18 }}>📐</span>
-                      {editableGrafico && (
-                        <div style={{ display:'flex', flexWrap:'wrap', gap:2, justifyContent:'center' }}>
+                      <span style={{ fontSize: excel ? 14 : 18 }}>🖼</span>
+                      <div style={{ display:'flex', flexWrap:'wrap', gap:2, justifyContent:'center' }}>
+                        {editableFoto && (
+                          <label style={{
+                            background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
+                            borderRadius:3, padding: '2px 5px', fontSize:9, cursor:'pointer', fontWeight:600,
+                          }} title="Cargar foto">
+                            📷
+                            <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto}
+                              onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+                          </label>
+                        )}
+                        {editableFoto && (
+                          <button type="button" onClick={() => {
+                            setGaleriaHojaRefreshKey((k) => k + 1)
+                            setModalGaleriaHoja(true)
+                          }}
+                            title="Galería de fotos"
+                            style={{
+                              background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
+                              borderRadius:3, padding: '2px 5px', fontSize:9, fontWeight:600, cursor:'pointer',
+                            }}>
+                            Galería
+                          </button>
+                        )}
+                        {editableGrafico && (
                           <button
                             type="button"
                             onClick={abrirEsquemaEditor}
@@ -4881,19 +4832,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                           >
                             {esquemaCargando ? '…' : '✎'}
                           </button>
+                        )}
+                        {editableGrafico && (
                           <label style={{
                             background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
                             borderRadius:3, padding: '2px 5px', fontSize:9,
                             cursor:'pointer', fontWeight:600,
-                          }} title="Subir archivo">
+                          }} title="Subir gráfico">
                             +
                             <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
                               onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
                           </label>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </>
                 }
+                {!fotoVista && strRefCarpeta && (
+                  <div
+                    title={esFotoConsecBd ? 'Consecutivo de foto (BD).' : 'N.º de registro (falta foto en BD).'}
+                    style={{ margin: 0, padding: '2px', background: 'linear-gradient(90deg, #0d948818, #0d948800)', borderTop: `1px solid ${C.borde}`, textAlign: 'center', width:'100%' }}
+                  >
+                    <div style={{ fontSize: 10, fontWeight: '900', color: '#0f766e', fontFamily: 'ui-monospace, Consolas, monospace', lineHeight: 1.2 }}>
+                      {strRefCarpeta}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -4906,6 +4869,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 : `Crear esquema · registro ${registro.numero_registro ?? ''}`}
               initialDataUri={esquemaInitialDataUri}
               contratoId={registro?.contrato_id}
+              iaDoc={{ ambito: 'sicoe_registro', docKey: `sicoe-reg-${registro?.id || registro?.numero_registro || 'local'}` }}
               onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
               onSave={guardarEsquemaComoGrafico}
             />
@@ -15119,6 +15083,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 API_URL={API_URL}
                 contrato_id={contrato_id}
                 hdrs={hdrs}
+                iaDocKey={`sicoe-lote-${loteGrafKey()}`}
                 graficos={graficosLoteActual}
                 onGraficosChange={(arr) => setGraficosPorLote((prev) => ({ ...prev, [loteGrafKey()]: arr }))}
                 titulo={tipoLocalizacion === 'multiple'

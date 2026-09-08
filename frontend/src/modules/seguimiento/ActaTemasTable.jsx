@@ -1,5 +1,8 @@
+import { useState } from 'react'
 import { htmlToPlainText, isRichTextEmpty } from './richTextUtils'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 
 function iconSvgProps(size = 16) {
@@ -227,6 +230,7 @@ export default function ActaTemasTable({
 /** Mini galería de adjuntos de un tema (esquemas/gráficos). */
 export function TemaAdjuntosPanel({ t, imagenes = [], onClose, viewportCompact = false }) {
   const imgs = Array.isArray(imagenes) ? imagenes : []
+  const [idx, setIdx] = useState(0)
   return (
     <div
       role="dialog"
@@ -262,35 +266,14 @@ export function TemaAdjuntosPanel({ t, imagenes = [], onClose, viewportCompact =
         {imgs.length === 0 ? (
           <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin adjuntos.</div>
         ) : (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            {imgs.map((im, i) => {
-              const src = imagenSrc(im)
-              return (
-                <button
-                  key={`${im.blob_path || im.nombre || 'img'}-${i}`}
-                  type="button"
-                  title={im.nombre || 'Ver'}
-                  onClick={() => openImageInNewTab(im)}
-                  style={{
-                    width: 120,
-                    height: 96,
-                    padding: 0,
-                    border: `1px solid ${t.border}`,
-                    borderRadius: 8,
-                    background: t.bg || '#fff',
-                    overflow: 'hidden',
-                    cursor: src ? 'pointer' : 'default',
-                  }}
-                >
-                  {src ? (
-                    <img src={src} alt={im.nombre || 'Adjunto'} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                  ) : (
-                    <span style={{ fontSize: 11, color: t.textMuted }}>{im.nombre || 'Sin vista'}</span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
+          <AdjuntosMediaSlider
+            t={t}
+            items={slidesFromImagenes(imgs, imagenSrc)}
+            index={idx}
+            height={280}
+            onIndexChange={setIdx}
+            onClickItem={(slide) => openImageInNewTab(slide.source)}
+          />
         )}
       </div>
     </div>

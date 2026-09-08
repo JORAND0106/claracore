@@ -1,5 +1,7 @@
 import { Fragment, useRef, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
+import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
+import { slidesFromChecklistItem } from '../../components/adjuntos/adjuntosMedia'
 import { imagenSrc, openImageInNewTab } from './imagenUtils'
 import { ESTADOS_GESTION } from './seguimientoTheme'
 import { calcularAvanceTarea, estadoEfectivoSubitem, normEstadoSubitem } from './tareaAvance'
@@ -145,6 +147,7 @@ export default function TareaChecklistEditor({
   const ui = tareaSheetStyles(t)
   const fileRefs = useRef({})
   const [esquemaIdx, setEsquemaIdx] = useState(null)
+  const [adjuntoIdx, setAdjuntoIdx] = useState({})
   const [commentsOpenIdx, setCommentsOpenIdx] = useState(null)
   const [draftComments, setDraftComments] = useState({})
   const [notifyPick, setNotifyPick] = useState({}) // idx -> user
@@ -527,8 +530,26 @@ export default function TareaChecklistEditor({
                         ☁{comentarios.length ? ` ${comentarios.length}` : ''}
                       </button>
                     </td>
-                    <td style={ui.tdSubitemCenter}>
-                      <div style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 2, justifyContent: 'center' }}>
+                    <td style={{ ...ui.tdSubitemCenter, minWidth: 120 }}>
+                      {(() => {
+                        const slides = slidesFromChecklistItem(it, imagenSrc)
+                        const slideI = Math.min(adjuntoIdx[idx] || 0, Math.max(0, slides.length - 1))
+                        const actual = slides[slideI]
+                        return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'stretch' }}>
+                        {slides.length > 0 && (
+                          <AdjuntosMediaSlider
+                            t={t}
+                            items={slides}
+                            index={slideI}
+                            compact
+                            onIndexChange={(i) => setAdjuntoIdx((prev) => ({ ...prev, [idx]: i }))}
+                            onClickItem={(slide) => {
+                              if (!openImageInNewTab(slide.source)) window.alert('No se pudo abrir el adjunto.')
+                            }}
+                          />
+                        )}
+                        <div style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 2, justifyContent: 'center' }}>
                         <input
                           ref={(el) => { fileRefs.current[it.id] = el }}
                           type="file"
@@ -550,17 +571,6 @@ export default function TareaChecklistEditor({
                             🖼
                           </button>
                         )}
-                        <button
-                          type="button"
-                          style={{ ...(srcImg ? ui.iconBtnActive : ui.iconBtn), opacity: srcImg ? 1 : 0.35 }}
-                          disabled={!srcImg}
-                          title={srcImg ? 'Ver imagen' : 'Sin imagen'}
-                          onClick={() => {
-                            if (!openImageInNewTab(it.imagen)) window.alert('No se pudo abrir la imagen.')
-                          }}
-                        >
-                          👁
-                        </button>
                         {!disabled && (
                           <button
                             type="button"
@@ -571,24 +581,16 @@ export default function TareaChecklistEditor({
                             ✎
                           </button>
                         )}
-                        <button
-                          type="button"
-                          style={{ ...(srcEsquema ? ui.iconBtnActive : ui.iconBtn), opacity: srcEsquema ? 1 : 0.35 }}
-                          disabled={!srcEsquema}
-                          title={srcEsquema ? 'Ver esquema' : 'Sin esquema'}
-                          onClick={() => {
-                            if (!openImageInNewTab(it.esquema)) window.alert('No se pudo abrir el esquema.')
-                          }}
-                        >
-                          ▤
-                        </button>
-                        {!disabled && srcImg && (
-                          <button type="button" style={ui.iconBtn} title="Quitar imagen" onClick={() => setAt(idx, { imagen: null })}>⌫i</button>
+                        {!disabled && actual?.kind === 'foto' && srcImg && (
+                          <button type="button" style={ui.iconBtn} title="Quitar foto" onClick={() => setAt(idx, { imagen: null })}>⌫</button>
                         )}
-                        {!disabled && srcEsquema && (
-                          <button type="button" style={ui.iconBtn} title="Quitar esquema" onClick={() => setAt(idx, { esquema: null })}>⌫e</button>
+                        {!disabled && actual?.kind === 'esquema' && srcEsquema && (
+                          <button type="button" style={ui.iconBtn} title="Quitar esquema" onClick={() => setAt(idx, { esquema: null })}>⌫</button>
                         )}
+                        </div>
                       </div>
+                        )
+                      })()}
                     </td>
                   </tr>
                   {commentsOpen && (
@@ -708,6 +710,7 @@ export default function TareaChecklistEditor({
           t={t}
           title={`Esquema · ${items[esquemaIdx].texto || `Sub-ítem ${esquemaIdx + 1}`}`}
           initialDataUri={imagenSrc(items[esquemaIdx].esquema)}
+          iaDoc={{ ambito: 'tarea_checklist', docKey: `tarea-subitem-${items[esquemaIdx].id}` }}
           onClose={() => setEsquemaIdx(null)}
           onSave={(dataUrl) => {
             setAt(esquemaIdx, {

@@ -3,8 +3,13 @@ import assert from 'node:assert/strict'
 import {
   applyResizeHandle,
   applySoftOrtho,
+  applySoftOrthoAngle,
+  arrowHeadLength,
+  cotaLayout,
+  degToRad,
   ellipseFromCenter,
   findSnap,
+  snapMoveDelta,
   formatMeters,
   getResizeHandles,
   getTransformHandles,
@@ -21,6 +26,12 @@ import {
   SNAP_KIND_LABEL,
   SNAP_KINDS_FASE1,
   SOFT_ORTHO_TOLERANCE_DEG,
+  snapMarkerScreenSize,
+  snapThresholdWorld,
+  SNAP_MARKER_MIN_PX,
+  SNAP_MARKER_MAX_PX,
+  nearestResizeHandle,
+  rotateObjectAroundPivot,
   clampZoom,
   landscapeExportSize,
   nodeMarkerWorldRadius,
@@ -63,6 +74,94 @@ describe('esquemaGeometry', () => {
     // Causa raíz previa: umbral 10/zoom (o 6.5 wu a 100 %) cubría el centro (a 5 wu del borde).
     const oldCenterHit = hitResizeHandle({ x: 5, y: 5 }, square, 10 * 0.65)
     assert.ok(oldCenterHit, 'the previous 10 wu threshold treated the body as a handle')
+    const nearest = nearestResizeHandle({ x: 5, y: 5 }, square)
+    assert.ok(nearest, 'Dimensionar from the body still picks a handle')
+  })
+
+  it('findSnap on a 0.20 m square vertex is exact (no coordinate conversion drift)', () => {
+    const square = [{ id: 'a', type: 'rect', x1: 0, y1: 0, x2: metersToWorld(0.2), y2: metersToWorld(0.2) }]
+    const se = { x: metersToWorld(0.2), y: metersToWorld(0.2) }
+    const hit = findSnap({ x: se.x - 1.2, y: se.y - 1.1 }, square, { threshold: 6.5 })
+    assert.equal(hit.kind, 'end')
+    assert.equal(hit.x, se.x)
+    assert.equal(hit.y, se.y)
+  })
+
+  it('move snap: 0.20 m vertex lands on target; cursor-anchored move inherited the grab offset', () => {
+    const moving = [{ id: 'a', type: 'rect', x1: 0, y1: 0, x2: 10, y2: 10 }]
+    const others = [{ id: 'b', type: 'rect', x1: 50, y1: 0, x2: 80, y2: 20 }]
+    const rawClick = { x: 7.5, y: 7.5 }
+    const grab = findSnap(rawClick, moving, { threshold: 6.5, allowNear: false })
+    assert.equal(grab.x, 10)
+    assert.equal(grab.y, 10)
+    const cursor = { x: 51, y: 1 }
+    const threshold = 6.5
+
+    const naive = findSnap(cursor, others, { threshold })
+    assert.equal(naive.x, 50)
+    assert.equal(naive.y, 0)
+    const naiveSE = { x: 10 + (naive.x - rawClick.x), y: 10 + (naive.y - rawClick.y) }
+    assert.equal(naiveSE.x, 52.5)
+    assert.equal(naiveSE.y, 2.5)
+
+    const moved = snapMoveDelta(cursor, grab, moving, others, threshold)
+    assert.equal(10 + moved.dx, 50)
+    assert.equal(10 + moved.dy, 0)
+    assert.equal(moved.snap.x, 50)
+    assert.equal(moved.snap.y, 0)
+  })
+
+  it('1.00 m line: old 6.5 px aperture missed Endpoint under the visible marker', () => {
+    const line = [{ id: 'L', type: 'linea', x1: 0, y1: 0, x2: metersToWorld(1), y2: 0 }]
+    const end = { x: metersToWorld(1), y: 0 }
+    const zoom = 2
+    const oldThresh = 6.5 / zoom
+    const click = { x: end.x - 5, y: 0 }
+    const oldHit = findSnap(click, line, { threshold: oldThresh, allowNear: false })
+    assert.equal(oldHit, null, '6.5 px screen aperture misses a click inside the 13 px marker')
+    const hit = findSnap(click, line, { threshold: snapThresholdWorld(zoom), allowNear: false })
+    assert.equal(hit.kind, 'end')
+    assert.equal(hit.x, end.x)
+    assert.equal(hit.y, end.y)
+    const target = [{ id: 'T', type: 'linea', x1: 200, y1: 0, x2: 260, y2: 0 }]
+    const moved = snapMoveDelta({ x: 201, y: 1 }, end, line, target, snapThresholdWorld(zoom))
+    assert.equal(end.x + moved.dx, 200)
+    assert.equal(end.y + moved.dy, 0)
+  })
+
+  it('polyline continuation does not force the next segment onto a perpendicular', () => {
+    const guide = [{ id: 'g', type: 'linea', x1: 0, y1: 40, x2: 200, y2: 40 }]
+    const from = { x: 80, y: 0 }
+    const cursor = { x: 81, y: 39 }
+    const forced = findSnap(cursor, guide, { threshold: 20, fromPoint: from, allowPerp: true })
+    assert.equal(forced.kind, 'perp')
+    const free = findSnap(cursor, guide, { threshold: 20, fromPoint: from, allowPerp: false })
+    assert.notEqual(free?.kind, 'perp')
+  })
+
+  it('rotate around a picked base keeps that point fixed', () => {
+    const line = { type: 'linea', x1: 0, y1: 0, x2: 50, y2: 0, rotation: 0 }
+    const pivot = { x: 0, y: 0 }
+    const next = rotateObjectAroundPivot(line, pivot, Math.PI / 2)
+    const C = { x: (next.x1 + next.x2) / 2, y: (next.y1 + next.y2) / 2 }
+    const dx = next.x1 - C.x
+    const dy = next.y1 - C.y
+    const vis = {
+      x: C.x + dx * Math.cos(next.rotation) - dy * Math.sin(next.rotation),
+      y: C.y + dx * Math.sin(next.rotation) + dy * Math.cos(next.rotation),
+    }
+    assert.ok(Math.hypot(vis.x - pivot.x, vis.y - pivot.y) < 1e-6)
+  })
+
+  it('move snap also lands a larger figure vertex exactly', () => {
+    const moving = [{ id: 'a', type: 'rect', x1: 0, y1: 0, x2: 100, y2: 60 }]
+    const others = [{ id: 'b', type: 'linea', x1: 200, y1: 40, x2: 260, y2: 40 }]
+    const grab = findSnap({ x: 96, y: 4 }, moving, { threshold: 8, allowNear: false })
+    assert.equal(grab.x, 100)
+    assert.equal(grab.y, 0)
+    const moved = snapMoveDelta({ x: 202, y: 42 }, grab, moving, others, 8)
+    assert.equal(100 + moved.dx, 200)
+    assert.equal(0 + moved.dy, 40)
   })
 
   it('line handles are endpoints', () => {
@@ -339,4 +438,64 @@ describe('esquemaGeometry', () => {
     const handles = getResizeHandles(origin)
     assert.equal(handles.length, 8)
   })
+
+  it('texto corner handle scales font; edge handle only changes the box', () => {
+    const origin = { type: 'texto', x: 0, y: 0, w: 100, h: 40, fontSize: 16, text: 'Hi' }
+    const corner = applyResizeHandle(origin, 'se', { x: 200, y: 80 })
+    assert.equal(corner.w, 200)
+    assert.equal(corner.h, 80)
+    assert.ok(corner.fontSize > 16)
+    assert.ok(Math.abs(corner.fontSize - 32) < 0.01)
+    const edge = applyResizeHandle(origin, 'e', { x: 180, y: 20 })
+    assert.equal(edge.w, 180)
+    assert.equal(edge.h, 40)
+    assert.equal(edge.fontSize, 16)
+  })
+
+  it('snap markers keep an 8 px floor and a 13 px cap', () => {
+    const far = snapMarkerScreenSize(0.15)
+    const mid = snapMarkerScreenSize(1)
+    const near = snapMarkerScreenSize(8)
+    assert.ok(far >= SNAP_MARKER_MIN_PX)
+    assert.ok(mid >= SNAP_MARKER_MIN_PX)
+    assert.ok(near <= SNAP_MARKER_MAX_PX)
+    assert.ok(far <= mid)
+    assert.ok(mid <= near)
+    assert.equal(snapMarkerScreenSize(0.25), SNAP_MARKER_MIN_PX)
+    const z = 2
+    const markerWu = snapMarkerScreenSize(z) / z
+    assert.ok(snapThresholdWorld(z) > 6.5 / z)
+    assert.ok(snapThresholdWorld(z) >= markerWu * 0.8, 'aperture must cover the visible marker disc')
+  })
+
+  it('soft ortho on rotation uses the same 8° tolerance as lines', () => {
+    const snapped = applySoftOrthoAngle(degToRad(7))
+    assert.ok(Math.abs(snapped) < 1e-9)
+    const free = applySoftOrthoAngle(degToRad(45))
+    assert.ok(Math.abs(free - degToRad(45)) < 1e-9)
+    const ninety = applySoftOrthoAngle(degToRad(86))
+    assert.ok(Math.abs(ninety - Math.PI / 2) < 1e-9)
+  })
+
+  it('arrow head grows with body length when scaled', () => {
+    const arrow = { type: 'flecha', x1: 0, y1: 0, x2: 100, y2: 0, width: 3 }
+    const short = arrowHeadLength(arrow)
+    const scaled = scaleObjectUniform(arrow, 2, { x: 50, y: 0 })
+    const long = arrowHeadLength(scaled)
+    assert.ok(long > short * 1.5)
+    assert.ok(scaled.width > arrow.width)
+  })
+
+  it('cota layout places dim line offset from the measured segment', () => {
+    const L = cotaLayout({ type: 'cota', x1: 0, y1: 0, x2: 100, y2: 0, offset: 20 })
+    assert.equal(Math.round(L.len), 100)
+    assert.equal(Math.round(L.d1.y), -20)
+    assert.equal(Math.round(L.d2.y), -20)
+    const handles = getResizeHandles({ type: 'cota', x1: 0, y1: 0, x2: 100, y2: 0, offset: 20 })
+    assert.equal(handles.length, 3)
+    const moved = applyResizeHandle({ type: 'cota', x1: 0, y1: 0, x2: 100, y2: 0, offset: 20 }, 'dim', { x: 50, y: 40 })
+    assert.ok(moved.offset < 0)
+  })
 })
+
+

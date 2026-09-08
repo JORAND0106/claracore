@@ -2,6 +2,7 @@
  * Geometría auxiliar del editor de esquema:
  * manijas de redimensionado, puntos de referencia (snap) y medidas por eje.
  */
+import { resolveEsquemaUi } from './esquemaTheme.js'
 
 export const BOX_TOOLS = new Set(['rect', 'elipse'])
 export const LINE_TOOLS = new Set(['linea', 'flecha'])
@@ -80,7 +81,7 @@ export function gridStepWorld(zoom) {
   return PX_PER_METER * 10
 }
 
-export function drawDotGrid(ctx, view, step, zoom = 1) {
+export function drawDotGrid(ctx, view, step, zoom = 1, ui) {
   if (!ctx || !view || !step || step <= 0) return
   const { x, y, w, h } = view
   if (!w || !h) return
@@ -88,7 +89,7 @@ export function drawDotGrid(ctx, view, step, zoom = 1) {
   const x0 = Math.floor(x / step) * step
   const y0 = Math.floor(y / step) * step
   ctx.save()
-  ctx.fillStyle = 'rgba(100, 116, 139, 0.42)'
+  ctx.fillStyle = resolveEsquemaUi(ui).grid
   for (let gx = x0; gx <= x + w + step; gx += step) {
     for (let gy = y0; gy <= y + h + step; gy += step) {
       ctx.beginPath()
@@ -100,8 +101,105 @@ export function drawDotGrid(ctx, view, step, zoom = 1) {
 }
 
 /** Manijas de redimensionado en espacio local (AABB o extremos de línea). */
+export function isCornerHandle(id) {
+  return id === 'nw' || id === 'ne' || id === 'se' || id === 'sw'
+}
+
+export function radToDeg(rad) {
+  const n = Number(rad)
+  return Number.isFinite(n) ? (n * 180) / Math.PI : 0
+}
+
+export function degToRad(deg) {
+  const n = Number(deg)
+  return Number.isFinite(n) ? (n * Math.PI) / 180 : 0
+}
+
+/** Piso/techo en px de pantalla: siempre visibles, sin tapar figuras chicas al acercar. */
+export const SNAP_MARKER_MIN_PX = 8
+export const SNAP_MARKER_MAX_PX = 13
+export const SNAP_MARKER_BASE_PX = 10
+
+export function snapMarkerScreenSize(zoom) {
+  const z = Math.max(0.001, Number(zoom) || 1)
+  const proportional = SNAP_MARKER_BASE_PX * Math.sqrt(z)
+  return Math.min(SNAP_MARKER_MAX_PX, Math.max(SNAP_MARKER_MIN_PX, proportional))
+}
+
+export function snapMarkerWorldSize(zoom) {
+  const z = Math.max(0.001, Number(zoom) || 1)
+  return snapMarkerScreenSize(z) / z
+}
+
+/** Umbral de detección en unidades de mundo: el marcador entero es zona caliente. */
+export function snapThresholdWorld(zoom) {
+  const z = Math.max(0.001, Number(zoom) || 1)
+  const marker = snapMarkerScreenSize(z)
+  return (marker * 0.55 + 4) / z
+}
+
+/** Cabeza de flecha proporcional al largo del cuerpo. */
+export function arrowHeadLength(obj) {
+  const body = Math.hypot((obj?.x2 || 0) - (obj?.x1 || 0), (obj?.y2 || 0) - (obj?.y1 || 0))
+  const w = Math.max(1, obj?.width || 3)
+  const scale = Number.isFinite(obj?.headScale) ? obj.headScale : 1
+  if (body < 1) return (8 + w * 2) * scale
+  return Math.min(body * 0.42, Math.max(body * 0.16, (8 + w * 1.6) * scale))
+}
+
+export const DEFAULT_COTA_OFFSET = 28
+
+/** Geometría de cota: puntos de medida, línea de cota, extensiones. */
+export function cotaLayout(obj) {
+  const a = { x: obj?.x1 || 0, y: obj?.y1 || 0 }
+  const b = { x: obj?.x2 || 0, y: obj?.y2 || 0 }
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy)
+  const ux = len > 1e-9 ? dx / len : 1
+  const uy = len > 1e-9 ? dy / len : 0
+  // Normal hacia "arriba" visual (+offset = -Y en trazo izquierda→derecha)
+  const nx = uy
+  const ny = -ux
+  const off = Number.isFinite(obj?.offset) ? obj.offset : DEFAULT_COTA_OFFSET
+  const sign = off < 0 ? -1 : 1
+  const gap = 3
+  const over = 6
+  const d1 = { x: a.x + nx * off, y: a.y + ny * off }
+  const d2 = { x: b.x + nx * off, y: b.y + ny * off }
+  const ext1a = { x: a.x + nx * sign * gap, y: a.y + ny * sign * gap }
+  const ext1b = { x: a.x + nx * (off + sign * over), y: a.y + ny * (off + sign * over) }
+  const ext2a = { x: b.x + nx * sign * gap, y: b.y + ny * sign * gap }
+  const ext2b = { x: b.x + nx * (off + sign * over), y: b.y + ny * (off + sign * over) }
+  return {
+    a, b, d1, d2, ext1a, ext1b, ext2a, ext2b,
+    mid: { x: (d1.x + d2.x) / 2, y: (d1.y + d2.y) / 2 },
+    len, angle: Math.atan2(dy, dx), nx, ny, offset: off,
+  }
+}
+
+export function cotaSignedOffset(obj, point) {
+  const a = { x: obj?.x1 || 0, y: obj?.y1 || 0 }
+  const b = { x: obj?.x2 || 0, y: obj?.y2 || 0 }
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-9 || !point) return DEFAULT_COTA_OFFSET
+  const nx = dy / len
+  const ny = -dx / len
+  return (point.x - a.x) * nx + (point.y - a.y) * ny
+}
+
 export function getResizeHandles(obj) {
   if (!obj) return []
+  if (obj.type === 'cota') {
+    const L = cotaLayout(obj)
+    return [
+      { id: 'a', x: L.a.x, y: L.a.y },
+      { id: 'b', x: L.b.x, y: L.b.y },
+      { id: 'dim', x: L.mid.x, y: L.mid.y },
+    ]
+  }
   if (LINE_TOOLS.has(obj.type)) {
     return [
       { id: 'a', x: obj.x1, y: obj.y1 },
@@ -170,12 +268,23 @@ export function hitResizeHandle(p, obj, threshold = 10) {
   return best
 }
 
+/** Manija más cercana, sin umbral: el modo Dimensionar no depende de acertar la esquina. */
+export function nearestResizeHandle(p, obj) {
+  return hitResizeHandle(p, obj, Number.POSITIVE_INFINITY)
+}
+
 /**
  * Aplica arrastre de manija. Conserva el lado/esquina opuesta fija.
  * Para tablas/hatchRegion ajusta x/y/w/h (o cellW/cellH de tabla).
  */
 export function applyResizeHandle(origin, handleId, point) {
   if (!origin || !handleId) return origin
+  if (origin.type === 'cota') {
+    if (handleId === 'a') return { ...origin, x1: point.x, y1: point.y }
+    if (handleId === 'b') return { ...origin, x2: point.x, y2: point.y }
+    if (handleId === 'dim') return { ...origin, offset: cotaSignedOffset(origin, point) }
+    return origin
+  }
   if (LINE_TOOLS.has(origin.type)) {
     if (handleId === 'a') return { ...origin, x1: point.x, y1: point.y }
     if (handleId === 'b') return { ...origin, x2: point.x, y2: point.y }
@@ -222,6 +331,10 @@ export function applyResizeHandle(origin, handleId, point) {
     if (origin.type === 'bloque') {
       next.children = (origin.children || []).map((ch) => scaleLocalXY(ch, nw / w0, nh / h0))
     }
+    if (origin.type === 'texto' && isCornerHandle(handleId)) {
+      const factor = Math.max(0.2, Math.sqrt((nw / w0) * (nh / h0)))
+      next.fontSize = Math.max(8, (origin.fontSize || 16) * factor)
+    }
     return next
   }
   if (origin.x1 == null) return origin
@@ -262,7 +375,7 @@ function resizeBox(x1, y1, x2, y2, handleId, point) {
 }
 
 export function cursorForHandle(handleId) {
-  if (handleId === 'a' || handleId === 'b') return 'grab'
+  if (handleId === 'a' || handleId === 'b' || handleId === 'dim') return 'grab'
   if (handleId === 'n' || handleId === 's') return 'ns-resize'
   if (handleId === 'e' || handleId === 'w') return 'ew-resize'
   if (handleId === 'ne' || handleId === 'sw') return 'nesw-resize'
@@ -295,19 +408,26 @@ const KIND_BIAS = {
   near: 1.15,
 }
 
+function isExcludedSnapId(id, excludeId) {
+  if (excludeId == null || id == null) return false
+  if (Array.isArray(excludeId)) return excludeId.includes(id)
+  if (excludeId instanceof Set) return excludeId.has(id)
+  return id === excludeId
+}
+
 /** Segmentos, curvas y puntos de referencia de un objeto (para snap). */
 export function collectSnapGeometry(objects, excludeId = null) {
   const points = []
   const segments = []
   const curves = []
   for (const obj of objects || []) {
-    if (!obj || obj.id === excludeId) continue
+    if (!obj || isExcludedSnapId(obj.id, excludeId)) continue
     if (obj.type === 'image' && obj.fit) continue
     if (obj.type === 'nodo') {
       points.push({ x: obj.x || 0, y: obj.y || 0, kind: 'node' })
       continue
     }
-    if (LINE_TOOLS.has(obj.type)) {
+    if (LINE_TOOLS.has(obj.type) || obj.type === 'cota') {
       const a = { x: obj.x1, y: obj.y1 }
       const b = { x: obj.x2, y: obj.y2 }
       points.push({ ...a, kind: 'end' }, { ...b, kind: 'end' })
@@ -440,6 +560,27 @@ export function lastLineReferenceAngle(objects) {
  * si el ángulo cae dentro de `toleranceDeg`. No es un forzado rígido.
  * Devuelve null si el usuario está claramente en un ángulo intermedio.
  */
+/** Atrae un ángulo de giro a 0/90/180/270 si cae dentro de la tolerancia. */
+export function applySoftOrthoAngle(radians, toleranceDeg = SOFT_ORTHO_TOLERANCE_DEG) {
+  const n = Number(radians)
+  if (!Number.isFinite(n)) return 0
+  const twoPi = Math.PI * 2
+  const ang = ((n % twoPi) + twoPi) % twoPi
+  const tol = (toleranceDeg * Math.PI) / 180
+  let bestDelta = Infinity
+  let best = ang
+  for (let k = 0; k < 4; k += 1) {
+    const target = (k * Math.PI) / 2
+    const delta = angleDiffAbs(ang, target)
+    if (delta < bestDelta) {
+      bestDelta = delta
+      best = target
+    }
+  }
+  if (bestDelta > tol) return n
+  return best
+}
+
 export function applySoftOrtho(from, to, {
   referenceAngle = 0,
   toleranceDeg = SOFT_ORTHO_TOLERANCE_DEG,
@@ -499,6 +640,8 @@ export function findSnap(p, objects, {
   threshold = 12,
   fromPoint = null,
   allowNear = true,
+  /** ⊥ desde fromPoint. En polilínea se apaga para no forzar el 2º segmento a 90°. */
+  allowPerp = true,
   /** Alias legado: si true, fuerza nearest aunque allowNear sea false. */
   allowEdgeProject = false,
 } = {}) {
@@ -509,7 +652,7 @@ export function findSnap(p, objects, {
     considerSnap(best, p, pt.x, pt.y, pt.kind)
   }
 
-  if (fromPoint) {
+  if (fromPoint && allowPerp !== false) {
     const perpThresh = threshold * 0.85
     const prevThresh = best.threshold
     best.threshold = perpThresh
@@ -550,26 +693,67 @@ export function findSnap(p, objects, {
   return best.hit
 }
 
-const SNAP_FILL = {
-  end: '#2563eb',
-  mid: '#22c55e',
-  center: '#a855f7',
-  quad: '#06b6d4',
-  node: '#ec4899',
-  near: '#64748b',
-  perp: '#f59e0b',
-  ortho: '#94a3b8',
+/**
+ * Traslación de move con osnap de entidad.
+ *
+ * El arrastre no debe anclar el clic crudo: si el usuario agarra cerca de un
+ * vértice, ese vértice (no el puntero) tiene que caer sobre el objetivo.
+ * Causa del desfase en figuras chicas (0.20 m = 10 wu): un clic a δ del
+ * vértice y un dest snappeado al objetivo dejaba el vértice en objetivo+δ.
+ */
+export function snapMoveDelta(cursor, originCursor, movingObjects, otherObjects, threshold = 12) {
+  const ox = originCursor?.x || 0
+  const oy = originCursor?.y || 0
+  const cx = cursor?.x || 0
+  const cy = cursor?.y || 0
+  const baseDx = cx - ox
+  const baseDy = cy - oy
+  let bestScore = Infinity
+  let best = { dx: baseDx, dy: baseDy, snap: null }
+
+  const sources = collectSnapGeometry(movingObjects).points
+  const grabTol = Math.max(1e-6, Number(threshold) * 0.4)
+  const grabbed = sources.filter((src) => Math.hypot(src.x - ox, src.y - oy) <= grabTol)
+  const trySources = grabbed.length ? grabbed : sources
+
+  for (const src of trySources) {
+    const hit = findSnap({ x: src.x + baseDx, y: src.y + baseDy }, otherObjects, {
+      threshold,
+      allowNear: true,
+    })
+    if (!hit) continue
+    const d = Math.hypot((src.x + baseDx) - hit.x, (src.y + baseDy) - hit.y)
+    const score = d + (KIND_BIAS[hit.kind] ?? 0.5)
+    if (score < bestScore) {
+      bestScore = score
+      best = { dx: hit.x - src.x, dy: hit.y - src.y, snap: { ...hit } }
+    }
+  }
+
+  if (!best.snap) {
+    const cursorHit = findSnap(cursor, otherObjects, { threshold, allowNear: true })
+    if (cursorHit) {
+      best = {
+        dx: cursorHit.x - ox,
+        dy: cursorHit.y - oy,
+        snap: { ...cursorHit },
+      }
+    }
+  }
+
+  return best
 }
 
-export function drawSnapMarker(ctx, snap, zoom = 1) {
+export function drawSnapMarker(ctx, snap, zoom = 1, ui) {
   if (!snap || !ctx) return
+  const palette = resolveEsquemaUi(ui)
   const z = zoom || 1
-  const s = Math.max(6, 8 / z)
-  const fill = SNAP_FILL[snap.kind] || '#2563eb'
+  const s = snapMarkerWorldSize(z)
+  const fill = palette.snap[snap.kind] || palette.selection
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
   if (snap.guide?.a && snap.guide?.b) {
-    ctx.strokeStyle = snap.kind === 'ortho' ? 'rgba(148, 163, 184, 0.7)' : 'rgba(37, 99, 235, 0.55)'
+    ctx.strokeStyle = snap.kind === 'ortho' ? palette.snapOrtho : palette.snapGuide
     ctx.lineWidth = 1 / z
     ctx.setLineDash([4 / z, 3 / z])
     ctx.beginPath()
@@ -626,22 +810,23 @@ export function drawSnapMarker(ctx, snap, zoom = 1) {
   if (snap.kind === 'center') {
     ctx.beginPath()
     ctx.arc(snap.x, snap.y, s * 0.18, 0, Math.PI * 2)
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = palette.canvas
     ctx.fill()
   }
   ctx.restore()
 }
 
-export function drawResizeHandles(ctx, obj, zoom = 1) {
+export function drawResizeHandles(ctx, obj, zoom = 1, ui) {
   const handles = getResizeHandles(obj)
   if (!handles.length) return
+  const palette = resolveEsquemaUi(ui)
   const size = resizeHandleWorldSize(obj, zoom)
   const z = zoom || 1
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
   for (const h of handles) {
-    ctx.fillStyle = '#fff'
-    ctx.strokeStyle = '#2563eb'
+    ctx.fillStyle = palette.handleFill
+    ctx.strokeStyle = palette.selection
     ctx.lineWidth = Math.min(1.25 / z, size * 0.18)
     ctx.beginPath()
     ctx.rect(h.x - size / 2, h.y - size / 2, size, size)
@@ -747,14 +932,15 @@ export function selectIdsInDrag(objects, from, to) {
     .filter(Boolean)
 }
 
-export function drawSelectionMarquee(ctx, from, to, zoom = 1) {
+export function drawSelectionMarquee(ctx, from, to, zoom = 1, ui) {
   if (!ctx || !from || !to) return
   const rect = selectionRectFromDrag(from, to)
+  const palette = resolveEsquemaUi(ui)
   const z = zoom || 1
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.fillStyle = rect.crossing ? 'rgba(22, 163, 74, 0.10)' : 'rgba(37, 99, 235, 0.10)'
-  ctx.strokeStyle = rect.crossing ? '#16a34a' : '#2563eb'
+  ctx.fillStyle = rect.crossing ? palette.crossingFill : palette.marqueeFill
+  ctx.strokeStyle = rect.crossing ? palette.crossingStroke : palette.marqueeStroke
   ctx.lineWidth = 1.15 / z
   if (rect.crossing) ctx.setLineDash([5 / z, 3 / z])
   ctx.fillRect(rect.x, rect.y, rect.w, rect.h)
@@ -778,6 +964,16 @@ export function objectBoundsOf(obj) {
       minY = Math.min(minY, p.y)
       maxY = Math.max(maxY, p.y)
     }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+  if (obj.type === 'cota') {
+    const L = cotaLayout(obj)
+    const xs = [L.a.x, L.b.x, L.d1.x, L.d2.x, L.ext1b.x, L.ext2b.x]
+    const ys = [L.a.y, L.b.y, L.d1.y, L.d2.y, L.ext1b.y, L.ext2b.y]
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
   }
   if (obj.x1 != null && obj.x2 != null) {
@@ -819,15 +1015,16 @@ export function hitTransformHandle(p, obj, threshold = 12, zoom = 1) {
   return best
 }
 
-export function drawTransformHandles(ctx, obj, zoom = 1) {
+export function drawTransformHandles(ctx, obj, zoom = 1, ui) {
   const handles = getTransformHandles(obj, zoom)
   if (!handles.length) return
+  const palette = resolveEsquemaUi(ui)
   const z = zoom || 1
   const s = Math.max(8, 10 / z)
   const c = objectCenterOf(obj)
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.strokeStyle = 'rgba(37, 99, 235, 0.45)'
+  ctx.strokeStyle = palette.snapGuide
   ctx.lineWidth = 1 / z
   ctx.setLineDash([3 / z, 3 / z])
   const rot = handles.find((h) => h.id === 'rotate')
@@ -841,15 +1038,15 @@ export function drawTransformHandles(ctx, obj, zoom = 1) {
   for (const h of handles) {
     ctx.beginPath()
     if (h.id === 'rotate') {
-      ctx.strokeStyle = '#7c3aed'
-      ctx.fillStyle = '#ede9fe'
+      ctx.strokeStyle = palette.rotateStroke
+      ctx.fillStyle = palette.rotateFill
       ctx.lineWidth = 1.6 / z
       ctx.arc(h.x, h.y, s * 0.55, 0, Math.PI * 2)
       ctx.fill()
       ctx.stroke()
     } else {
-      ctx.strokeStyle = '#059669'
-      ctx.fillStyle = '#d1fae5'
+      ctx.strokeStyle = palette.scaleStroke
+      ctx.fillStyle = palette.scaleFill
       ctx.lineWidth = 1.6 / z
       ctx.rect(h.x - s / 2, h.y - s / 2, s, s)
       ctx.fill()
@@ -942,7 +1139,15 @@ export function scaleObjectUniform(obj, factor, center) {
   if (obj.x1 != null && obj.x2 != null) {
     const a = sc(obj.x1, obj.y1)
     const b = sc(obj.x2, obj.y2)
-    return { ...obj, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+    const next = { ...obj, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+    if (obj.type === 'flecha') {
+      next.width = Math.max(0.75, (obj.width || 3) * factor)
+      next.headScale = (obj.headScale || 1) * factor
+    }
+    if (obj.type === 'cota' && Number.isFinite(obj.offset)) {
+      next.offset = obj.offset * factor
+    }
+    return next
   }
   if (obj.type === 'tabla') {
     const cols = Math.max(1, obj.cols || 1)
@@ -969,12 +1174,13 @@ export function scaleObjectUniform(obj, factor, center) {
   return obj
 }
 
-export function drawMoveGuide(ctx, from, to, zoom = 1) {
+export function drawMoveGuide(ctx, from, to, zoom = 1, ui) {
   if (!ctx || !from || !to) return
+  const palette = resolveEsquemaUi(ui)
   const z = zoom || 1
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.strokeStyle = 'rgba(37, 99, 235, 0.7)'
+  ctx.strokeStyle = palette.guide
   ctx.lineWidth = 1.25 / z
   ctx.setLineDash([6 / z, 4 / z])
   ctx.beginPath()
@@ -984,13 +1190,60 @@ export function drawMoveGuide(ctx, from, to, zoom = 1) {
   ctx.setLineDash([])
   const ang = Math.atan2(to.y - from.y, to.x - from.x)
   const ah = 10 / z
-  ctx.fillStyle = 'rgba(37, 99, 235, 0.8)'
+  ctx.fillStyle = palette.guide
   ctx.beginPath()
   ctx.moveTo(to.x, to.y)
   ctx.lineTo(to.x - ah * Math.cos(ang - 0.4), to.y - ah * Math.sin(ang - 0.4))
   ctx.lineTo(to.x - ah * Math.cos(ang + 0.4), to.y - ah * Math.sin(ang + 0.4))
   ctx.closePath()
   ctx.fill()
+  ctx.restore()
+}
+
+function shiftObject(obj, dx, dy) {
+  if (!obj || (!dx && !dy)) return obj
+  if (obj.type === 'nodo') return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
+  if (Array.isArray(obj.points)) {
+    return { ...obj, points: obj.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
+  }
+  if (obj.x1 != null && obj.x2 != null) {
+    return { ...obj, x1: obj.x1 + dx, y1: obj.y1 + dy, x2: obj.x2 + dx, y2: obj.y2 + dy }
+  }
+  return { ...obj, x: (obj.x || 0) + dx, y: (obj.y || 0) + dy }
+}
+
+/** Rota la entidad alrededor de un pivote de mundo (no solo el centro geométrico). */
+export function rotateObjectAroundPivot(obj, pivot, delta) {
+  if (!obj || !pivot || !Number.isFinite(delta)) return obj
+  if (Math.abs(delta) < 1e-12) return obj
+  const C = objectCenterOf(obj)
+  const c = Math.cos(delta)
+  const s = Math.sin(delta)
+  const vx = C.x - pivot.x
+  const vy = C.y - pivot.y
+  const rx = vx * c - vy * s
+  const ry = vx * s + vy * c
+  const moved = shiftObject(obj, pivot.x + rx - C.x, pivot.y + ry - C.y)
+  return { ...moved, rotation: (obj.rotation || 0) + delta }
+}
+
+export function drawRotatePivot(ctx, pivot, zoom = 1, ui) {
+  if (!ctx || !pivot) return
+  const palette = resolveEsquemaUi(ui)
+  const z = zoom || 1
+  const s = 7 / z
+  ctx.save()
+  ctx.strokeStyle = palette.rotateStroke
+  ctx.lineWidth = 1.4 / z
+  ctx.beginPath()
+  ctx.moveTo(pivot.x - s, pivot.y)
+  ctx.lineTo(pivot.x + s, pivot.y)
+  ctx.moveTo(pivot.x, pivot.y - s)
+  ctx.lineTo(pivot.x, pivot.y + s)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(pivot.x, pivot.y, s * 0.55, 0, Math.PI * 2)
+  ctx.stroke()
   ctx.restore()
 }
 
@@ -1001,22 +1254,23 @@ export function landscapeExportSize(width, height) {
   return { w: Math.max(w, h), h }
 }
 
-export function drawNorthIndicator(ctx, canvasW, canvasH, origin = null) {
+export function drawNorthIndicator(ctx, canvasW, canvasH, origin = null, ui) {
   if (!ctx || !canvasW || !canvasH) return
+  const palette = resolveEsquemaUi(ui)
   const ox = origin?.x || 0
   const oy = origin?.y || 0
   const size = 34
   const cx = ox + 22 + size / 2
   const cy = oy + canvasH - 22 - size / 2
   ctx.save()
-  ctx.fillStyle = 'rgba(255,255,255,0.92)'
-  ctx.strokeStyle = '#334155'
+  ctx.fillStyle = palette.northFill
+  ctx.strokeStyle = palette.northStroke
   ctx.lineWidth = 1.25
   ctx.beginPath()
   ctx.arc(cx, cy, size / 2, 0, Math.PI * 2)
   ctx.fill()
   ctx.stroke()
-  ctx.fillStyle = '#0f172a'
+  ctx.fillStyle = palette.northInk
   ctx.beginPath()
   ctx.moveTo(cx, cy - size * 0.36)
   ctx.lineTo(cx + 5.5, cy + 4)

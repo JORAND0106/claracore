@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createHatchRegionFromClick,
   drawHatchRegion,
@@ -10,32 +10,41 @@ import {
   LINE_TOOLS,
   applyResizeHandle,
   applySoftOrtho,
+  applySoftOrthoAngle,
+  arrowHeadLength,
   clampZoom,
+  DEFAULT_COTA_OFFSET,
+  degToRad,
   cursorForHandle,
   drawDotGrid,
   drawMoveGuide,
   drawNorthIndicator,
   drawResizeHandles,
+  drawRotatePivot,
   drawSelectionMarquee,
   drawSnapMarker,
   drawTransformHandles,
   ellipseFromCenter,
   findSnap,
+  snapMoveDelta,
   formatMeters,
   gridStepWorld,
-  hitResizeHandle,
+  nearestResizeHandle,
   hitTransformHandle,
   metersToWorld,
-  resizeHandleWorldSize,
+  objectBoundsOf,
+  radToDeg,
   parseDynMeasure,
-  landscapeExportSize,
   nodeMarkerWorldRadius,
   parsePositive,
   pointAtDistance,
+  rotateObjectAroundPivot,
   scaleObjectUniform,
   selectIdsInDrag,
+  snapThresholdWorld,
   worldToMeters,
 } from './esquemaGeometry'
+import { joinIntersectingLines } from './esquemaJoin'
 import { parseCoordFile, topoToWorld, coordOriginFromRows } from './esquemaCoords'
 import {
   deleteLibraryItem,
@@ -46,6 +55,22 @@ import {
   saveLibraryItem,
 } from './esquemaLibrary'
 import CcModalBrandHeader from '../CcModalBrandHeader'
+import { composeEsquemaExport, sceneExportBounds } from './esquemaExport'
+import { generarEsquemaIa, fetchEsquemaIaUso } from './esquemaIaApi'
+import {
+  hydrateIaObjects,
+  IA_MAX_USOS,
+  iaBlocked,
+  iaHasScene,
+  iaRemainingHoy,
+  readLocalIaUsos,
+  sceneForIa,
+  writeLocalIaUsos,
+} from './esquemaIa'
+import { canReorderZOrder, reorderZOrder } from './esquemaZOrder'
+import { canOffsetEntity, offsetEntity, signedOffsetDistance } from './esquemaOffset'
+import { cotaText, createCota, drawCota } from './esquemaCota'
+import { esquemaEntityInk, esquemaUiTheme, resolveEsquemaUi } from './esquemaTheme'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -58,26 +83,48 @@ const HATCHES = [
   { id: 7, label: 'Césped' },
 ]
 
-const TOOLS = [
-  { id: 'seleccion', label: 'Selección / mover', Icon: IconSeleccion },
-  { id: 'paneo', label: 'Paneo', Icon: IconPaneo },
-  { id: 'lapiz', label: 'Lápiz', Icon: IconLapiz },
-  { id: 'borrador', label: 'Borrador', Icon: IconBorrador },
-  { id: 'linea', label: 'Línea', Icon: IconLinea },
-  { id: 'polilinea', label: 'Polilínea', Icon: IconPolilinea },
-  { id: 'flecha', label: 'Flecha', Icon: IconFlecha },
-  { id: 'rect', label: 'Rectángulo', Icon: IconRect },
-  { id: 'elipse', label: 'Círculo / elipse (desde el centro)', Icon: IconElipse },
-  { id: 'triangulo', label: 'Triángulo', Icon: IconTriangulo },
-  { id: 'nodo', label: 'Nodo', Icon: IconNodo },
-  { id: 'unir-nodos', label: 'Unir nodos por número', Icon: IconUnirNodos },
-  { id: 'girar-escalar', label: 'Girar y escalar', Icon: IconGirarEscalar },
-  { id: 'tabla', label: 'Tabla', Icon: IconTabla },
-  { id: 'texto', label: 'Texto', Icon: IconTexto },
-  { id: 'hatch', label: 'Relleno hatch (región)', Icon: IconHatch },
+const TOOL_GROUPS = [
+  {
+    id: 'vista',
+    tools: [
+      { id: 'seleccion', label: 'Selección / mover', Icon: IconSeleccion },
+      { id: 'paneo', label: 'Paneo', Icon: IconPaneo },
+    ],
+  },
+  {
+    id: 'dibujo',
+    tools: [
+      { id: 'lapiz', label: 'Lápiz', Icon: IconLapiz },
+      { id: 'linea', label: 'Línea', Icon: IconLinea },
+      { id: 'polilinea', label: 'Polilínea', Icon: IconPolilinea },
+      { id: 'flecha', label: 'Flecha', Icon: IconFlecha },
+      { id: 'rect', label: 'Rectángulo', Icon: IconRect },
+      { id: 'elipse', label: 'Círculo / elipse (desde el centro)', Icon: IconElipse },
+      { id: 'triangulo', label: 'Triángulo', Icon: IconTriangulo },
+      { id: 'nodo', label: 'Nodo', Icon: IconNodo },
+      { id: 'unir-nodos', label: 'Unir nodos por número', Icon: IconUnirNodos },
+    ],
+  },
+  {
+    id: 'anotacion',
+    tools: [
+      { id: 'texto', label: 'Texto', Icon: IconTexto },
+      { id: 'tabla', label: 'Tabla', Icon: IconTabla },
+      { id: 'hatch', label: 'Relleno hatch (región)', Icon: IconHatch },
+      { id: 'cota', label: 'Acotado (línea de cota)', Icon: IconCota },
+    ],
+  },
+  {
+    id: 'edicion',
+    tools: [
+      { id: 'girar-escalar', label: 'Girar y escalar', Icon: IconGirarEscalar },
+      { id: 'offset', label: 'Offset / equidistancia', Icon: IconOffset },
+      { id: 'borrador', label: 'Borrador', Icon: IconBorrador },
+    ],
+  },
 ]
 
-function createTablaAt(x, y, rows = 2, cols = 3) {
+function createTablaAt(x, y, rows = 2, cols = 3, color) {
   const r = Math.max(1, Math.min(20, rows))
   const c = Math.max(1, Math.min(12, cols))
   return {
@@ -90,13 +137,13 @@ function createTablaAt(x, y, rows = 2, cols = 3) {
     rows: r,
     cols: c,
     cells: Array.from({ length: r }, () => Array.from({ length: c }, () => '')),
-    color: '#1e293b',
+    color: color || undefined,
     rotation: 0,
   }
 }
 
 /** Caja de texto libre sobre el lienzo (edición vía overlay HTML nativo). */
-function createTextoAt(x, y, color = '#1e293b') {
+function createTextoAt(x, y, color) {
   return {
     id: uid(),
     type: 'texto',
@@ -105,7 +152,7 @@ function createTextoAt(x, y, color = '#1e293b') {
     w: 180,
     h: 56,
     text: '',
-    color: color || '#1e293b',
+    color: color || undefined,
     fontSize: 16,
     rotation: 0,
   }
@@ -135,6 +182,7 @@ function resizeTablaObj(obj, dRows, dCols) {
 }
 
 const SHAPE_TOOLS = new Set(['linea', 'flecha', 'rect', 'elipse', 'triangulo'])
+const TWO_POINT_TOOLS = new Set([...SHAPE_TOOLS, 'cota'])
 const PATH_TYPES = new Set(['stroke', 'polilinea'])
 
 function uid() {
@@ -156,13 +204,14 @@ function renumberCoordRows(rows) {
   return (rows || []).map((r, i) => ({ ...(r || {}), num: String(i + 1) }))
 }
 
-const WIDTH_TYPES = new Set(['linea', 'flecha', 'rect', 'elipse', 'triangulo', 'stroke', 'polilinea'])
+const WIDTH_TYPES = new Set(['linea', 'flecha', 'rect', 'elipse', 'triangulo', 'stroke', 'polilinea', 'cota'])
 
 export default function EsquemaEditorModal({
   t,
   title = 'Crear esquema',
   initialDataUri = null,
   contratoId: contratoIdProp = null,
+  iaDoc = null,
   onSave,
   onClose,
 }) {
@@ -178,8 +227,12 @@ export default function EsquemaEditorModal({
   const panRef = useRef({ x: 0, y: 0 })
   const zoomRef = useRef(1)
   const panDragRef = useRef(null)
+  const ui = useMemo(() => esquemaUiTheme(t), [t])
+  const themeRef = useRef(ui)
+  themeRef.current = ui
+  const prevInkRef = useRef(ui.ink)
   const toolRef = useRef('lapiz')
-  const colorRef = useRef('#1e293b')
+  const colorRef = useRef(ui.ink)
   const widthRef = useRef(3)
   const hatchRef = useRef(0)
   const measureWRef = useRef('')
@@ -203,9 +256,11 @@ export default function EsquemaEditorModal({
   const coordOriginRef = useRef({ este0: 0, norte0: 0 })
   const coordFileRef = useRef(null)
   const contratoId = resolveContratoId(contratoIdProp)
+  const iaAmbito = String(iaDoc?.ambito || 'general')
+  const iaKey = String(iaDoc?.docKey || `contrato-${contratoId || 'local'}`)
 
   const [tool, setTool] = useState('lapiz')
-  const [color, setColor] = useState('#1e293b')
+  const [color, setColor] = useState(ui.ink)
   const [width, setWidth] = useState(3)
   const [hatch, setHatch] = useState(0)
   const [measureW, setMeasureW] = useState('')
@@ -231,6 +286,15 @@ export default function EsquemaEditorModal({
   const [insertHint, setInsertHint] = useState('')
   const [libNamePrompt, setLibNamePrompt] = useState(null)
   const [libNotice, setLibNotice] = useState('')
+  const [iaPrompt, setIaPrompt] = useState(null)
+  const [iaUsos, setIaUsos] = useState(0)
+  const [iaBusy, setIaBusy] = useState(false)
+  const [iaError, setIaError] = useState('')
+  const [selectMode, setSelectMode] = useState('mover')
+  const [rotatePivot, setRotatePivot] = useState(null)
+  const [toolHint, setToolHint] = useState('')
+  const rotatePivotRef = useRef(null)
+  const selectModeRef = useRef('mover')
   const selectedIdRef = useRef(null)
   const selectedIdsRef = useRef(new Set())
   const marqueeRef = useRef(null)
@@ -245,6 +309,40 @@ export default function EsquemaEditorModal({
   selectedIdRef.current = selectedId
   selectedIdsRef.current = new Set(selectedIds)
   joinSeqRef.current = joinSeq
+  selectModeRef.current = selectMode
+
+  useEffect(() => {
+    themeRef.current = ui
+    if (colorRef.current === prevInkRef.current) {
+      setColor(ui.ink)
+      colorRef.current = ui.ink
+    }
+    prevInkRef.current = ui.ink
+    redrawRef.current()
+  }, [ui])
+
+  useEffect(() => {
+    rotatePivotRef.current = null
+    setRotatePivot(null)
+  }, [tool, selectedId])
+
+  useEffect(() => {
+    setToolHint('')
+  }, [tool])
+
+  useEffect(() => {
+    setIaUsos(readLocalIaUsos())
+    let cancelled = false
+    fetchEsquemaIaUso()
+      .then((r) => {
+        if (cancelled) return
+        const usos = Number(r?.usos) || 0
+        setIaUsos(usos)
+        writeLocalIaUsos(usos, r?.fecha)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const selectIds = (ids) => {
     const list = [...new Set((ids || []).filter(Boolean))]
@@ -297,7 +395,8 @@ export default function EsquemaEditorModal({
     if (!w || !h) return
     const ctx = c.getContext('2d')
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.fillStyle = '#ffffff'
+    const uiNow = themeRef.current
+    ctx.fillStyle = uiNow.canvas
     ctx.fillRect(0, 0, w, h)
     ctx.save()
     ctx.translate(panRef.current.x, panRef.current.y)
@@ -308,7 +407,7 @@ export default function EsquemaEditorModal({
       y: -panRef.current.y / zGrid,
       w: w / zGrid,
       h: h / zGrid,
-    }, gridStepWorld(zGrid), zGrid)
+    }, gridStepWorld(zGrid), zGrid, uiNow)
     const list = [...objectsRef.current]
     if (extraDraft) list.push(extraDraft)
     const hideOverlayTextId = (
@@ -323,23 +422,31 @@ export default function EsquemaEditorModal({
         skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTextId,
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
         zoom: zoomRef.current,
-        skipResize: toolRef.current === 'girar-escalar' || multi,
+        skipResize: toolRef.current === 'girar-escalar'
+          || multi
+          || (toolRef.current === 'seleccion' && selectModeRef.current !== 'dimensionar'),
+        ui: uiNow,
       })
     }
     if (toolRef.current === 'girar-escalar' && selectedId && selSet.size === 1) {
       const sel = objectsRef.current.find((o) => o.id === selectedId)
-      if (sel && sel.type !== 'image') drawTransformHandles(ctx, sel, zoomRef.current)
+      if (sel && sel.type !== 'image' && rotatePivotRef.current) {
+        drawTransformHandles(ctx, sel, zoomRef.current, uiNow)
+      }
+      if (rotatePivotRef.current) {
+        drawRotatePivot(ctx, rotatePivotRef.current, zoomRef.current, uiNow)
+      }
     }
     if (marqueeRef.current?.from && marqueeRef.current?.to) {
-      drawSelectionMarquee(ctx, marqueeRef.current.from, marqueeRef.current.to, zoomRef.current)
+      drawSelectionMarquee(ctx, marqueeRef.current.from, marqueeRef.current.to, zoomRef.current, uiNow)
     }
     if (moveGuideRef.current?.a && moveGuideRef.current?.b) {
-      drawMoveGuide(ctx, moveGuideRef.current.a, moveGuideRef.current.b, zoomRef.current)
+      drawMoveGuide(ctx, moveGuideRef.current.a, moveGuideRef.current.b, zoomRef.current, uiNow)
     }
-    if (snapRef.current) drawSnapMarker(ctx, snapRef.current, zoomRef.current)
+    if (snapRef.current) drawSnapMarker(ctx, snapRef.current, zoomRef.current, uiNow)
     ctx.restore()
-    drawNorthIndicator(ctx, w, h)
-  }, [selectedId, selectedIds, panTick])
+    drawNorthIndicator(ctx, w, h, null, uiNow)
+  }, [selectedId, selectedIds, panTick, selectMode])
 
   redrawRef.current = redraw
 
@@ -561,7 +668,7 @@ export default function EsquemaEditorModal({
       return { ...shape, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
     }
 
-    if (toolId === 'linea' || toolId === 'flecha') {
+    if (toolId === 'linea' || toolId === 'flecha' || toolId === 'cota') {
       if (!wVal) return { ...shape, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
       const ang = Math.atan2(b.y - a.y, b.x - a.x)
       return {
@@ -601,7 +708,7 @@ export default function EsquemaEditorModal({
   }
 
   const measureLabelFor = (toolId, a, b) => {
-    if (toolId === 'linea' || toolId === 'flecha') {
+    if (toolId === 'linea' || toolId === 'flecha' || toolId === 'cota') {
       return formatMeters(dist(a, b))
     }
     if (toolId === 'elipse') {
@@ -615,18 +722,18 @@ export default function EsquemaEditorModal({
     return `${w} × ${h}`
   }
 
-  // Snap solo con intención clara: ~6–7 px de pantalla (no ~14).
-  const snapThreshold = () => 6.5 / (zoomRef.current || 1)
+  // El marcador visible (8–13 px) es la zona caliente; no un disco menor de 6.5 px.
+  const snapThreshold = () => snapThresholdWorld(zoomRef.current)
   const handleHitThreshold = () => 10 / (zoomRef.current || 1)
-  /** Hit de manija = mitad del cuadrado visible (no el umbral amplio de 10 wu/zoom). */
-  const resizeHandleGrabThreshold = (obj) => resizeHandleWorldSize(obj, zoomRef.current) * 0.5
 
-  const snapWorldPoint = (p, { fromPoint = null, excludeId = null } = {}) => {
+  const snapWorldPoint = (p, { fromPoint = null, excludeId = null, allowPerp = true } = {}) => {
     const hit = findSnap(p, objectsRef.current, {
       threshold: snapThreshold(),
       fromPoint,
       allowNear: true,
       excludeId,
+      // Polilínea: ⊥ forzaba el 2º segmento a 90° sobre otras líneas.
+      allowPerp: allowPerp !== false && toolRef.current !== 'polilinea',
     })
     const discrete = hit && hit.kind !== 'near'
     if (discrete) {
@@ -634,7 +741,7 @@ export default function EsquemaEditorModal({
       return { x: hit.x, y: hit.y }
     }
     const drawingLine = fromPoint && (
-      LINE_TOOLS.has(toolRef.current) || toolRef.current === 'polilinea'
+      LINE_TOOLS.has(toolRef.current) || toolRef.current === 'polilinea' || toolRef.current === 'cota'
     )
     if (drawingLine) {
       const ortho = applySoftOrtho(fromPoint, p, {
@@ -727,6 +834,35 @@ export default function EsquemaEditorModal({
     setDirty(true)
     snapRef.current = null
     setLiveMeasure('')
+    redraw()
+    return true
+  }
+
+  const applyJoinLines = () => {
+    const ids = [...selectedIdsRef.current]
+    const selectedLines = objectsRef.current.filter((o) => o.type === 'linea' && ids.includes(o.id))
+    const scopeIds = selectedLines.length >= 2 ? selectedLines.map((o) => o.id) : null
+    const result = joinIntersectingLines(objectsRef.current, scopeIds)
+    if (result.joined < 1) {
+      setToolHint('No hay líneas con intersección real para unir')
+      return false
+    }
+    pushHistory()
+    objectsRef.current = result.objects
+    selectOne(null)
+    setDirty(true)
+    setToolHint(result.joined === 1 ? '1 tramo unido en los cruces' : `${result.joined} tramos unidos en los cruces`)
+    redraw()
+    return true
+  }
+
+  const applyZOrder = (direction) => {
+    const ids = [...selectedIdsRef.current]
+    const next = reorderZOrder(objectsRef.current, ids, direction)
+    if (next === objectsRef.current) return false
+    pushHistory()
+    objectsRef.current = next
+    setDirty(true)
     redraw()
     return true
   }
@@ -939,26 +1075,57 @@ export default function EsquemaEditorModal({
     }
     drawing.current = true
 
-    // Manijas de girar/escalar (solo esa herramienta)
+    // Girar: primero el punto base (con snap); luego las manijas orbitan ese pivote.
     if (currentTool === 'girar-escalar') {
       const selId = selectedIdRef.current
       const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
-      const th = sel ? hitTransformHandle(p, sel, handleHitThreshold() + 4, zoomRef.current) : null
-      if (th) {
-        const center = objectCenter(sel)
-        dragRef.current = {
-          id: sel.id,
-          mode: th.id === 'rotate' ? 'rotate' : 'scale',
-          ox: p.x,
-          oy: p.y,
-          startDist: Math.max(8, dist(p, center)),
-          startAngle: Math.atan2(p.y - center.y, p.x - center.x),
-          baseRot: sel.rotation || 0,
-          origin: cloneScene([sel])[0],
+      const single = !!(sel && selectedIdsRef.current.size === 1 && sel.type !== 'image')
+      const pivot = rotatePivotRef.current
+      if (single && pivot) {
+        const th = hitTransformHandle(p, sel, handleHitThreshold() + 4, zoomRef.current)
+        if (th) {
+          const center = th.id === 'rotate' ? pivot : objectCenter(sel)
+          dragRef.current = {
+            id: sel.id,
+            mode: th.id === 'rotate' ? 'rotate' : 'scale',
+            ox: p.x,
+            oy: p.y,
+            startDist: Math.max(8, dist(p, center)),
+            startAngle: Math.atan2(p.y - center.y, p.x - center.x),
+            baseRot: sel.rotation || 0,
+            origin: cloneScene([sel])[0],
+            pivot: th.id === 'rotate' ? { ...pivot } : null,
+          }
+          pushHistory()
+          startPt.current = p
+          lastPt.current = p
+          return
         }
-        pushHistory()
-        startPt.current = p
-        lastPt.current = p
+        const hitSame = hitTest(p)
+        if (!hitSame || hitSame.id === sel.id) {
+          p = snapWorldPoint(p)
+          rotatePivotRef.current = { x: p.x, y: p.y }
+          setRotatePivot(rotatePivotRef.current)
+          drawing.current = false
+          redraw()
+          return
+        }
+      }
+      if (single && !pivot) {
+        const hitOther = hitTest(p)
+        if (hitOther && hitOther.id !== sel.id) {
+          selectOne(hitOther.id)
+          if (SHAPE_TOOLS.has(hitOther.type)) syncMeasureFromObject(hitOther)
+          drawing.current = false
+          redraw()
+          return
+        }
+        p = snapWorldPoint(p)
+        rotatePivotRef.current = { x: p.x, y: p.y }
+        setRotatePivot(rotatePivotRef.current)
+        setToolHint('')
+        drawing.current = false
+        redraw()
         return
       }
       const hit = hitTest(p)
@@ -967,26 +1134,6 @@ export default function EsquemaEditorModal({
       drawing.current = false
       redraw()
       return
-    }
-
-    // Resize SOLO si el clic cae dentro del cuadrado visible de una manija.
-    // El cuerpo (incluido un osnap que coincida visualmente con una esquina) inicia move.
-    if (currentTool === 'seleccion' && selectedIdsRef.current.size <= 1) {
-      const selId = selectedIdRef.current
-      const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
-      const handle = sel ? hitResizeHandle(p, sel, resizeHandleGrabThreshold(sel)) : null
-      if (handle) {
-        dragRef.current = {
-          id: sel.id,
-          mode: 'resize',
-          handle: handle.id,
-          origin: cloneScene([sel])[0],
-        }
-        pushHistory()
-        startPt.current = p
-        lastPt.current = p
-        return
-      }
     }
 
     if (currentTool === 'paneo') {
@@ -1039,20 +1186,49 @@ export default function EsquemaEditorModal({
         const already = selectedIdsRef.current.has(hit.id)
         if (!already) selectOne(hit.id)
         if (SHAPE_TOOLS.has(hit.type) && selectedIdsRef.current.size === 1) syncMeasureFromObject(hit)
+        if (selectModeRef.current === 'dimensionar') {
+          selectOne(hit.id)
+          const handle = hit.type !== 'image' ? nearestResizeHandle(p, hit) : null
+          if (handle) {
+            dragRef.current = {
+              id: hit.id,
+              mode: 'resize',
+              handle: handle.id,
+              origin: cloneScene([hit])[0],
+            }
+            pushHistory()
+            drawing.current = true
+            startPt.current = p
+            lastPt.current = p
+            moveGuideRef.current = null
+            snapRef.current = null
+            redraw()
+            return
+          }
+          drawing.current = false
+          redraw()
+          return
+        }
         const group = objectsRef.current.filter((o) => (
           selectedIdsRef.current.has(o.id) || o.id === hit.id
         ) && !(o.type === 'image' && o.fit))
+        // Ancla el agarre al osnap de la entidad (no al clic crudo).
+        const grabHit = findSnap(p, [hit], { threshold: snapThreshold(), allowNear: false })
+        const grab = grabHit ? { x: grabHit.x, y: grabHit.y } : p
+        if (grabHit) snapRef.current = grabHit
         dragRef.current = {
           id: hit.id,
           mode: 'move',
           pending: true,
-          ox: p.x,
-          oy: p.y,
+          ox: grab.x,
+          oy: grab.y,
+          clickX: p.x,
+          clickY: p.y,
           groupOrigins: cloneScene(group),
         }
         drawing.current = true
-        startPt.current = p
-        lastPt.current = p
+        startPt.current = grab
+        lastPt.current = grab
         moveGuideRef.current = null
         redraw()
         return
@@ -1108,7 +1284,7 @@ export default function EsquemaEditorModal({
         return
       }
       pushHistory()
-      const table = createTablaAt(p.x, p.y)
+      const table = { ...createTablaAt(p.x, p.y), color: colorRef.current }
       objectsRef.current = [...objectsRef.current, table]
       selectOne(table.id)
       setDirty(true)
@@ -1160,8 +1336,28 @@ export default function EsquemaEditorModal({
       return
     }
 
+    if (currentTool === 'offset') {
+      const hit = hitTest(p) || (selectedIdRef.current
+        ? objectsRef.current.find((o) => o.id === selectedIdRef.current)
+        : null)
+      if (hit && canOffsetEntity(hit)) {
+        selectOne(hit.id)
+        dragRef.current = {
+          mode: 'offset',
+          id: hit.id,
+          origin: cloneScene([hit])[0],
+        }
+        drawing.current = true
+        startPt.current = p
+        lastPt.current = p
+        return
+      }
+      drawing.current = false
+      return
+    }
+
     // Snap al iniciar trazo de figura (extremo / medio)
-    if (SHAPE_TOOLS.has(currentTool)) {
+    if (TWO_POINT_TOOLS.has(currentTool)) {
       p = snapWorldPoint(p)
     }
 
@@ -1181,7 +1377,7 @@ export default function EsquemaEditorModal({
       return
     }
 
-    if (SHAPE_TOOLS.has(currentTool)) {
+    if (TWO_POINT_TOOLS.has(currentTool)) {
       draftRef.current = {
         id: uid(),
         type: currentTool,
@@ -1190,10 +1386,11 @@ export default function EsquemaEditorModal({
         x2: p.x,
         y2: p.y,
         color: colorRef.current,
-        width: widthRef.current,
+        width: currentTool === 'cota' ? Math.min(1.5, widthRef.current) : widthRef.current,
         rotation: 0,
         hatch: null,
         label: '0',
+        ...(currentTool === 'cota' ? { offset: DEFAULT_COTA_OFFSET, text: '0 m' } : {}),
       }
     }
   }
@@ -1233,11 +1430,10 @@ export default function EsquemaEditorModal({
       const selId = selectedIdRef.current
       const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
       if (currentTool === 'seleccion') {
-        const handle = (sel && selectedIdsRef.current.size <= 1)
-          ? hitResizeHandle(raw, sel, resizeHandleGrabThreshold(sel))
-          : null
-        if (handle) setHoverCursor(cursorForHandle(handle.id))
-        else if (hitTest(raw)) setHoverCursor('move')
+        if (selectModeRef.current === 'dimensionar' && sel && selectedIdsRef.current.size <= 1) {
+          const handle = nearestResizeHandle(raw, sel)
+          setHoverCursor(handle ? cursorForHandle(handle.id) : (hitTest(raw) ? 'nwse-resize' : 'crosshair'))
+        } else if (hitTest(raw)) setHoverCursor('move')
         else setHoverCursor('crosshair')
       } else if (currentTool === 'girar-escalar') {
         const th = sel ? hitTransformHandle(raw, sel, handleHitThreshold() + 4, zoomRef.current) : null
@@ -1245,7 +1441,7 @@ export default function EsquemaEditorModal({
       } else {
         setHoverCursor(null)
       }
-      if (SHAPE_TOOLS.has(currentTool) || currentTool === 'polilinea' || currentTool === 'seleccion' || currentTool === 'nodo') {
+      if (TWO_POINT_TOOLS.has(currentTool) || currentTool === 'polilinea' || currentTool === 'seleccion' || currentTool === 'nodo' || currentTool === 'offset' || currentTool === 'girar-escalar') {
         const prevSnap = snapRef.current
         const lastPoly = (
           currentTool === 'polilinea'
@@ -1282,6 +1478,7 @@ export default function EsquemaEditorModal({
       objectsRef.current = objectsRef.current.map((o) => {
         if (o.id !== d.id) return o
         const next = applyResizeHandle(d.origin, d.handle, raw)
+        if (next.type === 'cota') next.text = cotaText(next)
         if (SHAPE_TOOLS.has(next.type)) {
           next.label = measureLabelFor(
             next.type,
@@ -1311,17 +1508,23 @@ export default function EsquemaEditorModal({
         return
       }
       if (d.pending && d.mode === 'move') {
-        if (dist(raw, { x: d.ox, y: d.oy }) < 4) return
+        const click = { x: d.clickX ?? d.ox, y: d.clickY ?? d.oy }
+        if (dist(raw, click) < 4) return
         d.pending = false
         pushHistory()
       }
       const origins = new Map((d.groupOrigins || (d.origin ? [d.origin] : [])).map((o) => [o.id, o]))
       if (d.mode === 'move') {
-        let dest = snapWorldPoint(raw, { excludeId: d.id })
+        const moving = d.groupOrigins || (d.origin ? [d.origin] : [])
+        const movingIds = new Set(moving.map((o) => o.id))
+        const others = objectsRef.current.filter((o) => o && !movingIds.has(o.id))
+        const moved = snapMoveDelta(raw, { x: d.ox, y: d.oy }, moving, others, snapThreshold())
+        let dest = { x: d.ox + moved.dx, y: d.oy + moved.dy }
+        snapRef.current = moved.snap
         const ortho = applySoftOrtho({ x: d.ox, y: d.oy }, dest, { referenceAngle: 0 })
-        if (ortho && (!snapRef.current || snapRef.current.kind === 'ortho' || snapRef.current.kind === 'near')) {
+        if (ortho && (!moved.snap || moved.snap.kind === 'near')) {
           dest = { x: ortho.x, y: ortho.y }
-          if (!snapRef.current || snapRef.current.kind === 'near') snapRef.current = ortho
+          if (!moved.snap || moved.snap.kind === 'near') snapRef.current = ortho
         }
         const dyn = parseDynMeasure(dynBufferRef.current)
         if (dyn?.w != null) {
@@ -1349,9 +1552,12 @@ export default function EsquemaEditorModal({
           const factor = now / (d.startDist || now)
           return scaleObjectUniform(d.origin, factor, center)
         }
-        const center = objectCenter(d.origin)
-        const ang = Math.atan2(raw.y - center.y, raw.x - center.x)
-        return { ...o, rotation: d.baseRot + (ang - d.startAngle) }
+        const pivot = d.pivot || objectCenter(d.origin)
+        const ang = Math.atan2(raw.y - pivot.y, raw.x - pivot.x)
+        const nextRot = applySoftOrthoAngle(d.baseRot + (ang - d.startAngle))
+        setLiveMeasure(`${Math.round(radToDeg(nextRot))}°`)
+        if (d.pivot) return rotateObjectAroundPivot(d.origin, d.pivot, nextRot - d.baseRot)
+        return { ...o, rotation: nextRot }
       })
       setDirty(true)
       redraw()
@@ -1386,7 +1592,23 @@ export default function EsquemaEditorModal({
       return
     }
 
-    if (SHAPE_TOOLS.has(currentTool) && draftRef.current && startPt.current) {
+    if (dragRef.current?.mode === 'offset') {
+      const d = dragRef.current
+      p = snapWorldPoint(raw)
+      lastPt.current = p
+      const signed = signedOffsetDistance(d.origin, p)
+      const dyn = parseDynMeasure(dynBufferRef.current)
+      const mag = dyn?.w != null ? metersToWorld(dyn.w) : Math.abs(signed)
+      const distW = mag * (signed < 0 ? -1 : 1)
+      const copy = offsetEntity(d.origin, distW)
+      draftRef.current = copy ? { ...copy, id: 'draft-offset' } : null
+      setLiveMeasure(formatMeters(Math.abs(distW)))
+      updateDynHud(dynBufferRef.current || formatMeters(Math.abs(distW)), !!dynBufferRef.current)
+      redraw(draftRef.current)
+      return
+    }
+
+    if (TWO_POINT_TOOLS.has(currentTool) && draftRef.current && startPt.current) {
       p = snapWorldPoint(raw, { fromPoint: startPt.current })
       lastPt.current = p
       let shape
@@ -1416,6 +1638,7 @@ export default function EsquemaEditorModal({
         shape = applyMeasureToShape(shape, currentTool, startPt.current, p)
       }
       shape.label = measureLabelFor(currentTool, { x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 })
+      if (shape.type === 'cota') shape.text = cotaText(shape)
       draftRef.current = shape
       setLiveMeasure(shape.label)
       updateDynHud(dynBufferRef.current || shape.label, !!dynBufferRef.current)
@@ -1494,7 +1717,31 @@ export default function EsquemaEditorModal({
       return
     }
 
-    if (SHAPE_TOOLS.has(currentTool) && draftRef.current && startPt.current) {
+    if (dragRef.current?.mode === 'offset') {
+      const d = dragRef.current
+      p = snapWorldPoint(p)
+      const signed = signedOffsetDistance(d.origin, p)
+      const dyn = parseDynMeasure(dynBufferRef.current)
+      const mag = dyn?.w != null ? metersToWorld(dyn.w) : Math.abs(signed)
+      const distW = mag * (signed < 0 ? -1 : 1)
+      const copy = offsetEntity(d.origin, distW)
+      dragRef.current = null
+      draftRef.current = null
+      clearDynBuffer()
+      if (copy) {
+        pushHistory()
+        const placed = { ...copy, id: uid() }
+        objectsRef.current = [...objectsRef.current, placed]
+        selectOne(placed.id)
+        setDirty(true)
+        setLiveMeasure(formatMeters(Math.abs(distW)))
+      }
+      snapRef.current = null
+      redraw()
+      return
+    }
+
+    if (TWO_POINT_TOOLS.has(currentTool) && draftRef.current && startPt.current) {
       p = snapWorldPoint(p, { fromPoint: startPt.current })
       let shape = applyMeasureToShape(
         { ...draftRef.current },
@@ -1513,10 +1760,15 @@ export default function EsquemaEditorModal({
         return
       }
       shape.label = measureLabelFor(currentTool, a, b)
+      if (shape.type === 'cota') {
+        shape.offset = Number.isFinite(shape.offset) ? shape.offset : DEFAULT_COTA_OFFSET
+        shape.text = cotaText(shape)
+        shape = { ...createCota(a, b, shape), id: shape.id, label: shape.label }
+      }
       pushHistory()
       objectsRef.current = [...objectsRef.current, shape]
       selectOne(shape.id)
-      syncMeasureFromObject(shape)
+      if (SHAPE_TOOLS.has(shape.type)) syncMeasureFromObject(shape)
       setLiveMeasure(shape.label)
       setDirty(true)
       draftRef.current = null
@@ -1615,6 +1867,40 @@ export default function EsquemaEditorModal({
     setPanTick((n) => n + 1)
   }
 
+  const applyRotationDeg = (raw) => {
+    const id = selectedIdRef.current
+    if (!id) return
+    const n = Number(String(raw ?? '').trim().replace(',', '.'))
+    if (!Number.isFinite(n)) return
+    const obj = objectsRef.current.find((o) => o.id === id)
+    if (!obj || (obj.type === 'image' && obj.fit)) return
+    const target = degToRad(n)
+    const delta = target - (obj.rotation || 0)
+    const pivot = rotatePivotRef.current
+    pushHistory()
+    objectsRef.current = objectsRef.current.map((o) => {
+      if (o.id !== id) return o
+      if (pivot) return rotateObjectAroundPivot(o, pivot, delta)
+      return { ...o, rotation: target }
+    })
+    setDirty(true)
+    setPanTick((nTick) => nTick + 1)
+  }
+
+  const applyFontSize = (raw) => {
+    const id = selectedIdRef.current
+    const n = parsePositive(raw)
+    if (!id || n == null) return
+    const obj = objectsRef.current.find((o) => o.id === id)
+    if (!obj || obj.type !== 'texto') return
+    pushHistory()
+    objectsRef.current = objectsRef.current.map((o) => (
+      o.id === id ? { ...o, fontSize: Math.max(8, Math.min(96, n)) } : o
+    ))
+    setDirty(true)
+    setPanTick((nTick) => nTick + 1)
+  }
+
   const refreshLibrary = () => {
     setLibItems(loadLibrary(contratoId))
   }
@@ -1634,7 +1920,7 @@ export default function EsquemaEditorModal({
     setLibNamePrompt({
       objects: usable,
       nombre: usable.length > 1 ? 'Bloque' : entityTypeLabel(usable[0].type),
-      preview: libraryPreviewDataUri(usable),
+      preview: libraryPreviewDataUri(usable, 88, ui),
     })
   }
 
@@ -1670,7 +1956,7 @@ export default function EsquemaEditorModal({
       && draftRef.current
       && startPt.current
       && lastPt.current
-      && SHAPE_TOOLS.has(toolRef.current)
+      && TWO_POINT_TOOLS.has(toolRef.current)
     ) {
       let shape = applyMeasureToShape(
         { ...draftRef.current },
@@ -1687,7 +1973,8 @@ export default function EsquemaEditorModal({
 
   const dynInputMode = () => {
     const tool = toolRef.current
-    if (SHAPE_TOOLS.has(tool) && draftRef.current && startPt.current) return 'draw'
+    if (TWO_POINT_TOOLS.has(tool) && draftRef.current && startPt.current) return 'draw'
+    if (tool === 'offset' && dragRef.current?.mode === 'offset') return 'offset'
     if (tool === 'polilinea' && draftRef.current?.type === 'polilinea' && (draftRef.current.points || []).length) {
       return 'poly'
     }
@@ -1727,19 +2014,38 @@ export default function EsquemaEditorModal({
     if (mode === 'move') {
       const d = dragRef.current
       const toward = lastPt.current || { x: d.ox + 1, y: d.oy }
-      const snapped = snapWorldPoint(toward, { excludeId: d.id })
+      const moving = d.groupOrigins || (d.origin ? [d.origin] : [])
+      const movingIds = new Set(moving.map((o) => o.id))
+      const others = objectsRef.current.filter((o) => o && !movingIds.has(o.id))
+      const moved = snapMoveDelta(toward, { x: d.ox, y: d.oy }, moving, others, snapThreshold())
+      let dest = { x: d.ox + moved.dx, y: d.oy + moved.dy }
+      snapRef.current = moved.snap
       const dyn = parseDynMeasure(dynBufferRef.current)
-      const dest = (dyn?.w != null)
-        ? (pointAtDistance({ x: d.ox, y: d.oy }, snapped, dyn.w) || snapped)
-        : snapped
+      if (dyn?.w != null) {
+        dest = pointAtDistance({ x: d.ox, y: d.oy }, dest, dyn.w) || dest
+      }
       const dx = dest.x - d.ox
       const dy = dest.y - d.oy
-      objectsRef.current = objectsRef.current.map((o) => (
-        o.id === d.id ? translateObject(d.origin, dx, dy) : o
-      ))
+      const origins = new Map(moving.map((o) => [o.id, o]))
+      objectsRef.current = objectsRef.current.map((o) => {
+        const origin = origins.get(o.id)
+        return origin ? translateObject(origin, dx, dy) : o
+      })
       setLiveMeasure(formatMeters(Math.hypot(dx, dy)))
       setDirty(true)
       redraw()
+    }
+    if (mode === 'offset') {
+      const d = dragRef.current
+      const toward = lastPt.current || { x: (d.origin.x1 || 0) + 10, y: (d.origin.y1 || 0) }
+      const signed = signedOffsetDistance(d.origin, toward)
+      const dyn = parseDynMeasure(dynBufferRef.current)
+      const mag = dyn?.w != null ? metersToWorld(dyn.w) : Math.abs(signed)
+      const distW = mag * (signed < 0 ? -1 : 1)
+      const copy = offsetEntity(d.origin, distW)
+      draftRef.current = copy ? { ...copy, id: 'draft-offset' } : null
+      setLiveMeasure(formatMeters(Math.abs(distW)))
+      redraw(draftRef.current)
     }
   }
 
@@ -1759,10 +2065,13 @@ export default function EsquemaEditorModal({
       const b = { x: shape.x2, y: shape.y2 }
       if (dist(a, b) < 1) return false
       shape.label = measureLabelFor(toolRef.current, a, b)
+      if (shape.type === 'cota') {
+        shape = { ...createCota(a, b, shape), id: shape.id, label: shape.label }
+      }
       pushHistory()
       objectsRef.current = [...objectsRef.current, shape]
       selectOne(shape.id)
-      syncMeasureFromObject(shape)
+      if (SHAPE_TOOLS.has(shape.type)) syncMeasureFromObject(shape)
       setLiveMeasure(shape.label)
       setDirty(true)
       draftRef.current = null
@@ -1793,6 +2102,27 @@ export default function EsquemaEditorModal({
       dragRef.current = null
       drawing.current = false
       clearDynBuffer()
+      redraw()
+      return true
+    }
+    if (mode === 'offset') {
+      const d = dragRef.current
+      const toward = lastPt.current || { x: (d.origin.x1 || 0) + 10, y: (d.origin.y1 || 0) }
+      const signed = signedOffsetDistance(d.origin, toward)
+      const mag = dyn.w != null ? metersToWorld(dyn.w) : Math.abs(signed)
+      const distW = mag * (signed < 0 ? -1 : 1)
+      const copy = offsetEntity(d.origin, distW)
+      dragRef.current = null
+      draftRef.current = null
+      drawing.current = false
+      clearDynBuffer()
+      if (!copy) return false
+      pushHistory()
+      const placed = { ...copy, id: uid() }
+      objectsRef.current = [...objectsRef.current, placed]
+      selectOne(placed.id)
+      setDirty(true)
+      setLiveMeasure(formatMeters(Math.abs(distW)))
       redraw()
       return true
     }
@@ -1829,6 +2159,12 @@ export default function EsquemaEditorModal({
     if (dynBufferRef.current) {
       clearDynBuffer()
       previewDynLive()
+      return true
+    }
+    if (rotatePivotRef.current) {
+      rotatePivotRef.current = null
+      setRotatePivot(null)
+      redraw()
       return true
     }
     if (pendingInsertRef.current) {
@@ -1897,6 +2233,84 @@ export default function EsquemaEditorModal({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const fitViewToObjects = (objs) => {
+    const bb = sceneExportBounds(objs)
+    const { w, h } = cssSize()
+    if (w < 40 || h < 40) return
+    const z = clampZoom(Math.min(2.5, Math.min((w - 80) / bb.w, (h - 80) / bb.h)))
+    zoomRef.current = z
+    panRef.current = {
+      x: (w / 2) - (bb.x + bb.w / 2) * z,
+      y: (h / 2) - (bb.y + bb.h / 2) * z,
+    }
+    setZoomPct(Math.round(z * 100))
+    setPanTick((n) => n + 1)
+  }
+
+  const abrirIaPrompt = () => {
+    if (iaBusy || iaBlocked(iaUsos)) return
+    setIaError('')
+    setIaPrompt({ text: '' })
+  }
+
+  const confirmarIa = async () => {
+    const text = String(iaPrompt?.text || '').trim()
+    if (!text || iaBusy || iaBlocked(iaUsos)) return
+    const modo = iaHasScene(objectsRef.current) ? 'ajuste' : 'generacion'
+    setIaBusy(true)
+    setIaError('')
+    try {
+      const data = await generarEsquemaIa({
+        contratoId,
+        ambito: iaAmbito,
+        docKey: iaKey,
+        instruccion: text,
+        modo,
+        scene: sceneForIa(objectsRef.current),
+      })
+      const generated = hydrateIaObjects(data.objects)
+      const keepBg = objectsRef.current.filter((o) => o.type === 'image' && o.fit)
+      const base = modo === 'ajuste'
+        ? keepBg
+        : objectsRef.current
+      let next = [...base, ...generated]
+      for (const h of data.hatches || []) {
+        const region = createHatchRegionFromClick(next, h.x, h.y, h.kind, h.color)
+        if (region) next.push({ ...region, id: `iah${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}` })
+      }
+      if (!generated.length && !(data.hatches || []).length) {
+        throw new Error('Clara no dibujó entidades. Reformule la instrucción.')
+      }
+      pushHistory()
+      objectsRef.current = next
+      const usos = Number(data.usos) || (iaUsos + 1)
+      setIaUsos(usos)
+      writeLocalIaUsos(usos, data.fecha)
+      setIaPrompt(null)
+      selectOne(null)
+      setDirty(true)
+      fitViewToObjects(next.filter((o) => !(o.type === 'image' && o.fit)))
+      redraw()
+    } catch (e) {
+      setIaError(e?.message || 'No se pudo generar el esquema')
+    } finally {
+      setIaBusy(false)
+    }
+  }
+
+  const canZOrder = canReorderZOrder(objectsRef.current, selectedIds)
+  const selectedLineCount = objectsRef.current.filter((o) => o.type === 'linea' && selectedIds.includes(o.id)).length
+  const canvasLineCount = objectsRef.current.filter((o) => o.type === 'linea').length
+  const canJoinLines = selectedLineCount >= 2 || canvasLineCount >= 2
+  const rotateHint = (
+    tool === 'girar-escalar' && selectedObj && selectedObj.type !== 'image'
+      ? (rotatePivot
+        ? 'Punto base de giro fijado. Arrastre la manija o indique otro punto.'
+        : 'Indique el punto base de giro (clic en el lienzo; puede usar snap)')
+      : ''
+  )
+  const canvasHint = toolHint || rotateHint || insertHint
+
   const pedirGuardar = () => {
     if (busy || !dirty) return
     setSavePrompt({ title: '' })
@@ -1915,6 +2329,7 @@ export default function EsquemaEditorModal({
         title,
         objects: objectsRef.current,
         nodes,
+        drawObject,
       })
       await onSave?.(composed)
     } finally {
@@ -1928,7 +2343,7 @@ export default function EsquemaEditorModal({
       aria-modal="true"
       style={{
         position: 'fixed', inset: 0, zIndex: 13000,
-        background: 'rgba(15,23,42,0.55)',
+        background: t.overlay || ui.overlay,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,
       }}
@@ -1963,53 +2378,100 @@ export default function EsquemaEditorModal({
           >
             <IconUndo />
           </button>
-          {TOOLS.map((tb) => {
-            const active = tool === tb.id
-            const Icon = tb.Icon
-            return (
-              <button
-                key={tb.id}
-                type="button"
-                title={tb.label}
-                aria-label={tb.label}
-                onClick={() => {
-                  if (tb.id !== 'polilinea') finishPolyline()
-                  clearDynBuffer()
-                  setTool(tb.id)
-                }}
-                style={iconBtn(t, active)}
-              >
-                <Icon />
-              </button>
-            )
-          })}
+          {TOOL_GROUPS.map((group) => (
+            <span key={group.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <ToolDivider t={t} />
+              {group.tools.map((tb) => {
+                const Icon = tb.Icon
+                return (
+                  <button
+                    key={tb.id}
+                    type="button"
+                    title={tb.label}
+                    aria-label={tb.label}
+                    onClick={() => {
+                      if (tb.id !== 'polilinea') finishPolyline()
+                      clearDynBuffer()
+                      setTool(tb.id)
+                    }}
+                    style={iconBtn(t, tool === tb.id)}
+                  >
+                    <Icon />
+                  </button>
+                )
+              })}
+              {group.id === 'vista' ? (
+                <>
+                  <button type="button" title="Alejar (zoom out)" aria-label="Alejar" onClick={() => setZoomAroundCenter(zoomRef.current / 1.25)} style={iconBtn(t, false)}>
+                    <IconZoomOut />
+                  </button>
+                  <button type="button" title="Acercar (zoom in)" aria-label="Acercar" onClick={() => setZoomAroundCenter(zoomRef.current * 1.25)} style={iconBtn(t, false)}>
+                    <IconZoomIn />
+                  </button>
+                  <button type="button" title="Restablecer zoom 100%" aria-label="Zoom 100%" onClick={() => setZoomAroundCenter(1)} style={{ ...ghost(t), padding: '6px 8px', fontSize: 'var(--cc-xs)', minWidth: 52 }}>
+                    {zoomPct}%
+                  </button>
+                </>
+              ) : null}
+              {group.id === 'edicion' ? (
+                <>
+                  <button
+                    type="button"
+                    title={canJoinLines ? 'Unir líneas que se intersectan' : 'Se necesitan al menos dos líneas para unir'}
+                    aria-label="Unir líneas que se intersectan"
+                    disabled={!canJoinLines}
+                    onClick={applyJoinLines}
+                    style={{ ...iconBtn(t, false), opacity: canJoinLines ? 1 : 0.4 }}
+                  >
+                    <IconUnirLineas />
+                  </button>
+                  <button type="button" title={canZOrder ? 'Traer al frente' : 'Seleccione una entidad para traerla al frente'} aria-label="Traer al frente" disabled={!canZOrder} onClick={() => applyZOrder('front')} style={{ ...iconBtn(t, false), opacity: canZOrder ? 1 : 0.4 }}>
+                    <IconTraerFrente />
+                  </button>
+                  <button type="button" title={canZOrder ? 'Enviar al fondo' : 'Seleccione una entidad para enviarla al fondo'} aria-label="Enviar al fondo" disabled={!canZOrder} onClick={() => applyZOrder('back')} style={{ ...iconBtn(t, false), opacity: canZOrder ? 1 : 0.4 }}>
+                    <IconEnviarFondo />
+                  </button>
+                </>
+              ) : null}
+            </span>
+          ))}
+          {tool === 'seleccion' ? (
+            <SelectModeRadios t={t} value={selectMode} onChange={setSelectMode} />
+          ) : null}
+          {tool === 'girar-escalar' && selectedObj && selectedObj.type !== 'image' ? (
+            <DraftPropField
+              t={t}
+              label="Giro"
+              suffix="°"
+              initial={Math.round(radToDeg(selectedObj.rotation || 0) * 10) / 10}
+              onCommit={applyRotationDeg}
+            />
+          ) : null}
+          <ToolDivider t={t} />
           <button
             type="button"
-            title="Alejar (zoom out)"
-            aria-label="Alejar"
-            onClick={() => setZoomAroundCenter(zoomRef.current / 1.25)}
-            style={iconBtn(t, false)}
+            title={iaBlocked(iaUsos)
+              ? 'Alcanzó el límite diario de 20 consultas de IA. Podrá volver a usarlo mañana.'
+              : `Dibujar con IA · ${iaRemainingHoy(iaUsos)} restantes hoy`}
+            aria-label="Dibujar con IA"
+            disabled={iaBusy || iaBlocked(iaUsos)}
+            onClick={abrirIaPrompt}
+            style={{
+              ...iconBtn(t, !!iaPrompt),
+              opacity: (iaBusy || iaBlocked(iaUsos)) ? 0.4 : 1,
+              cursor: (iaBusy || iaBlocked(iaUsos)) ? 'not-allowed' : 'pointer',
+            }}
           >
-            <IconZoomOut />
+            <IconIa />
           </button>
-          <button
-            type="button"
-            title="Acercar (zoom in)"
-            aria-label="Acercar"
-            onClick={() => setZoomAroundCenter(zoomRef.current * 1.25)}
-            style={iconBtn(t, false)}
+          <span
+            title={iaBlocked(iaUsos)
+              ? 'Alcanzó el límite diario de 20 consultas de IA. Podrá volver a usarlo mañana.'
+              : `${iaRemainingHoy(iaUsos)} consultas de IA restantes hoy`}
+            style={{ fontSize: 10, fontWeight: 700, color: t.textMuted, minWidth: 18 }}
           >
-            <IconZoomIn />
-          </button>
-          <button
-            type="button"
-            title="Restablecer zoom 100%"
-            aria-label="Zoom 100%"
-            onClick={() => setZoomAroundCenter(1)}
-            style={{ ...ghost(t), padding: '6px 8px', fontSize: 'var(--cc-xs)', minWidth: 52 }}
-          >
-            {zoomPct}%
-          </button>
+            {iaRemainingHoy(iaUsos)}
+          </span>
           <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 4, alignItems: 'center' }} title="Color">
             <input type="color" value={color} onChange={(e) => setColor(e.target.value)} disabled={tool === 'borrador'} />
           </label>
@@ -2159,13 +2621,13 @@ export default function EsquemaEditorModal({
           </div>
         </div>
 
-        <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: '#e2e8f0', padding: 10, position: 'relative' }}>
+        <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: ui.wrap, padding: 10, position: 'relative' }}>
           <canvas
             ref={canvasRef}
             tabIndex={0}
             style={{
               display: 'block', width: '100%', height: '100%',
-              background: '#fff', borderRadius: 8, touchAction: 'none',
+              background: ui.canvas, borderRadius: 8, touchAction: 'none',
               outline: 'none',
               cursor: hoverCursor
                 || (tool === 'paneo' ? 'grab'
@@ -2190,6 +2652,7 @@ export default function EsquemaEditorModal({
             <TablaOverlay
               key={`${selectedObj.id}-${selectedObj.rows}-${selectedObj.cols}-${zoomPct}`}
               obj={selectedObj}
+              ui={ui}
               pan={panRef.current}
               zoom={zoomRef.current}
               canvasEl={canvasRef.current}
@@ -2209,6 +2672,7 @@ export default function EsquemaEditorModal({
             <TextoOverlay
               key={`${selectedObj.id}-${selectedObj.w}-${selectedObj.h}-${zoomPct}`}
               obj={selectedObj}
+              ui={ui}
               pan={panRef.current}
               zoom={zoomRef.current}
               canvasEl={canvasRef.current}
@@ -2231,7 +2695,7 @@ export default function EsquemaEditorModal({
                 padding: '3px 8px',
                 borderRadius: 4,
                 border: `1px solid ${dynHud.typing ? t.primary : t.border}`,
-                background: dynHud.typing ? '#fffbeb' : 'rgba(255,255,255,0.94)',
+                background: dynHud.typing ? ui.hudTyping : ui.hudBg,
                 color: t.text,
                 fontSize: 12,
                 fontWeight: 700,
@@ -2269,7 +2733,10 @@ export default function EsquemaEditorModal({
           {selectedObj && selectedObj.type !== 'image' && (
             <PropiedadesPanel
               t={t}
+              ui={ui}
               obj={selectedObj}
+              selectMode={tool === 'seleccion' ? selectMode : null}
+              onSelectMode={setSelectMode}
               measureW={measureW}
               measureH={measureH}
               onMeasureW={setMeasureW}
@@ -2277,6 +2744,8 @@ export default function EsquemaEditorModal({
               onApplyDims={(w, h) => applyMeasureToSelected(w, h)}
               onColor={applySelectedColor}
               onWidth={applySelectedWidth}
+              onFontSize={applyFontSize}
+              onRotationDeg={applyRotationDeg}
             />
           )}
           {coordPanelOpen && (
@@ -2310,6 +2779,7 @@ export default function EsquemaEditorModal({
           {libOpen ? (
             <BibliotecaPanel
               t={t}
+              ui={ui}
               contratoId={contratoId}
               items={libItems}
               notice={libNotice}
@@ -2325,14 +2795,14 @@ export default function EsquemaEditorModal({
               }}
             />
           ) : null}
-          {insertHint ? (
+          {canvasHint ? (
             <div style={{
               position: 'absolute', left: 18, bottom: 72, zIndex: 5,
-              padding: '4px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.94)',
+              padding: '4px 8px', borderRadius: 6, background: ui.hudBg,
               border: `1px solid ${t.border}`, fontSize: 12, fontWeight: 700, color: t.text,
             }}
             >
-              {insertHint}
+              {canvasHint}
             </div>
           ) : null}
         </div>
@@ -2340,7 +2810,7 @@ export default function EsquemaEditorModal({
           <div
             style={{
               position: 'absolute', inset: 0, zIndex: 22,
-              background: t.overlay || 'rgba(15,23,42,0.35)',
+              background: t.overlay || ui.overlay,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}
           >
@@ -2373,7 +2843,7 @@ export default function EsquemaEditorModal({
                   <div style={{
                     display: 'flex', justifyContent: 'center', marginBottom: 12,
                     border: `1px solid ${t.sheetGridBorder || '#94a3b8'}`,
-                    background: '#fff', borderRadius: 4, padding: 8,
+                    background: ui.previewBg, borderRadius: 4, padding: 8,
                   }}>
                     <img src={libNamePrompt.preview} alt="Vista previa del bloque" width={96} height={96} />
                   </div>
@@ -2409,7 +2879,7 @@ export default function EsquemaEditorModal({
           <div
             style={{
               position: 'absolute', inset: 0, zIndex: 20,
-              background: 'rgba(15,23,42,0.35)',
+              background: t.overlay || ui.overlay,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}
             onClick={() => setSavePrompt(null)}
@@ -2437,12 +2907,72 @@ export default function EsquemaEditorModal({
                 style={{
                   width: '100%', boxSizing: 'border-box', padding: '8px 10px',
                   borderRadius: 8, border: `1px solid ${t.border}`,
-                  fontSize: 14, color: t.text,
+                  fontSize: 14, color: t.text, background: t.inputBg || ui.inputBg,
                 }}
               />
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
                 <button type="button" style={ghost(t)} onClick={() => setSavePrompt(null)}>Cancelar</button>
                 <button type="button" style={primary(t)} onClick={confirmarGuardar}>Guardar</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {iaPrompt && (
+          <div
+            style={{
+              position: 'absolute', inset: 0, zIndex: 20,
+              background: t.overlay || ui.overlay,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+            onClick={() => { if (!iaBusy) setIaPrompt(null) }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: 420, padding: 16, borderRadius: 12,
+                background: t.bgCard || '#fff', border: `1px solid ${t.border}`,
+                boxShadow: '0 12px 32px rgba(15,23,42,0.2)',
+              }}
+            >
+              <CcModalBrandHeader theme={t} />
+              <div style={{ fontWeight: 800, marginBottom: 6, color: t.text }}>
+                {iaHasScene(objectsRef.current) ? 'Ajustar esquema con IA' : 'Dibujar con IA'}
+              </div>
+              <div style={{ fontSize: 12, color: t.textMuted, marginBottom: 10 }}>
+                {iaHasScene(objectsRef.current)
+                  ? 'Describa el ajuste. Clara modifica las entidades del lienzo (no genera una imagen).'
+                  : 'Describa el esquema. Clara dibuja entidades reales (no una imagen).'}
+                {' '}Quedan {iaRemainingHoy(iaUsos)} de {IA_MAX_USOS} consultas hoy.
+              </div>
+              <textarea
+                autoFocus
+                rows={4}
+                disabled={iaBusy}
+                value={iaPrompt.text}
+                onChange={(e) => setIaPrompt({ text: e.target.value })}
+                placeholder={iaHasScene(objectsRef.current)
+                  ? 'Ej. hazla más ancha, agrega una tapa'
+                  : 'Ej. caja de 1.2×1.2×2.0 m con tapa'}
+                style={{
+                  width: '100%', boxSizing: 'border-box', padding: '8px 10px',
+                  borderRadius: 8, border: `1px solid ${t.border}`,
+                  fontSize: 14, color: t.text, resize: 'vertical',
+                  fontFamily: 'inherit', background: t.inputBg || ui.inputBg,
+                }}
+              />
+              {iaError && (
+                <div style={{ color: t.danger || '#B91C1C', fontSize: 12, fontWeight: 600, marginTop: 8 }}>{iaError}</div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button type="button" style={ghost(t)} disabled={iaBusy} onClick={() => setIaPrompt(null)}>Cancelar</button>
+                <button
+                  type="button"
+                  style={primary(t)}
+                  disabled={iaBusy || !String(iaPrompt.text || '').trim()}
+                  onClick={() => void confirmarIa()}
+                >
+                  {iaBusy ? 'Generando…' : (iaHasScene(objectsRef.current) ? 'Aplicar ajuste' : 'Dibujar')}
+                </button>
               </div>
             </div>
           </div>
@@ -2459,6 +2989,7 @@ function entityTypeLabel(type) {
     rect: 'Rectángulo',
     elipse: 'Elipse / círculo',
     triangulo: 'Triángulo',
+    cota: 'Línea de cota',
     polilinea: 'Polilínea',
     nodo: 'Nodo',
     stroke: 'Trazo',
@@ -2512,6 +3043,21 @@ function PropField({ t, label, value, onChange, onCommit, suffix = 'm' }) {
   )
 }
 
+function DraftPropField({ t, label, suffix, initial, onCommit }) {
+  const [raw, setRaw] = useState(String(initial ?? ''))
+  useEffect(() => { setRaw(String(initial ?? '')) }, [initial])
+  return (
+    <PropField
+      t={t}
+      label={label}
+      suffix={suffix}
+      value={raw}
+      onChange={setRaw}
+      onCommit={() => onCommit?.(raw)}
+    />
+  )
+}
+
 function CircleRadioField({ t, diameterMeters, onCommitDiameter }) {
   const [raw, setRaw] = useState(() => {
     const n = Number(diameterMeters)
@@ -2536,8 +3082,53 @@ function CircleRadioField({ t, diameterMeters, onCommitDiameter }) {
   )
 }
 
+function SelectModeRadios({ t, value, onChange, compact = false }) {
+  const opt = (id, label) => {
+    const active = value === id
+    return (
+      <label
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: compact ? '3px 8px' : '4px 10px',
+          borderRadius: 7,
+          border: `1px solid ${active ? t.primary : t.border}`,
+          background: active ? `${t.primary}18` : (t.inputBg || t.bgCard),
+          color: active ? t.primary : t.text,
+          fontSize: 11,
+          fontWeight: 700,
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+      >
+        <input
+          type="radio"
+          name="cc-esquema-select-mode"
+          value={id}
+          checked={active}
+          onChange={() => onChange(id)}
+          style={{ margin: 0 }}
+        />
+        {label}
+      </label>
+    )
+  }
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Modo de selección"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+    >
+      {opt('mover', 'Mover')}
+      {opt('dimensionar', 'Dimensionar')}
+    </div>
+  )
+}
+
 function PropiedadesPanel({
-  t, obj, measureW, measureH, onMeasureW, onMeasureH, onApplyDims, onColor, onWidth,
+  t, ui, obj, measureW, measureH, onMeasureW, onMeasureH, onApplyDims, onColor, onWidth,
+  onFontSize, onRotationDeg, selectMode, onSelectMode,
 }) {
   const isShape = SHAPE_TOOLS.has(obj.type)
   const isBox = BOX_TOOLS.has(obj.type)
@@ -2566,6 +3157,9 @@ function PropiedadesPanel({
       <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
         Propiedades · {entityTypeLabel(obj.type)}
       </div>
+      {selectMode && onSelectMode ? (
+        <SelectModeRadios t={t} value={selectMode} onChange={onSelectMode} compact />
+      ) : null}
       {circle ? (
         <PropField
           t={t}
@@ -2604,6 +3198,24 @@ function PropiedadesPanel({
           Bloque cohesionado · {(obj.children || []).length} parte{(obj.children || []).length === 1 ? '' : 's'}
         </div>
       ) : null}
+      {obj.type === 'texto' ? (
+        <DraftPropField
+          t={t}
+          label="Tamaño de fuente"
+          suffix="px"
+          initial={obj.fontSize || 16}
+          onCommit={(v) => onFontSize?.(v)}
+        />
+      ) : null}
+      {obj.type !== 'image' && obj.type !== 'nodo' ? (
+        <DraftPropField
+          t={t}
+          label="Giro"
+          suffix="°"
+          initial={Math.round(radToDeg(obj.rotation || 0) * 10) / 10}
+          onCommit={(v) => onRotationDeg?.(v)}
+        />
+      ) : null}
       {obj.type === 'nodo' ? (
         <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>
           N° {obj.nodeNum || '—'}
@@ -2620,7 +3232,7 @@ function PropiedadesPanel({
           Color
           <input
             type="color"
-            value={obj.color || '#1e293b'}
+            value={esquemaEntityInk(obj.color, ui)}
             onChange={(e) => onColor(e.target.value)}
           />
         </label>
@@ -2648,9 +3260,12 @@ function PropiedadesPanel({
 
 function drawObject(ctx, obj, selected, opts = {}) {
   if (!obj) return
+  const ui = resolveEsquemaUi(opts.ui)
+  const selColor = ui.selection
+  const ink = esquemaEntityInk(obj.color, ui)
   ctx.save()
   if (obj.type === 'nodo') {
-    drawNodo(ctx, obj, selected, opts.zoom || 1)
+    drawNodo(ctx, obj, selected, opts.zoom || 1, ui)
     ctx.restore()
     return
   }
@@ -2672,25 +3287,25 @@ function drawObject(ctx, obj, selected, opts = {}) {
     }
     ctx.translate(-(obj.x || 0), -(obj.y || 0))
     if (selected) {
-      ctx.strokeStyle = '#2563eb'
+      ctx.strokeStyle = selColor
       ctx.lineWidth = 1
       ctx.setLineDash([4, 3])
       ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, (obj.w || 0) + 8, (obj.h || 0) + 8)
       ctx.setLineDash([])
-      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1)
+      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1, ui)
     }
     ctx.restore()
     return
   }
   if (obj.type === 'hatchRegion') {
-    drawHatchRegion(ctx, obj)
+    drawHatchRegion(ctx, obj, ui)
     if (selected) {
-      ctx.strokeStyle = '#2563eb'
+      ctx.strokeStyle = selColor
       ctx.lineWidth = 1
       ctx.setLineDash([4, 3])
       ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, (obj.w || 0) + 8, (obj.h || 0) + 8)
       ctx.setLineDash([])
-      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1)
+      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1, ui)
     }
     ctx.restore()
     return
@@ -2702,16 +3317,28 @@ function drawObject(ctx, obj, selected, opts = {}) {
       ctx.rotate(obj.rotation)
       ctx.translate(-center.x, -center.y)
     }
-    drawTabla(ctx, obj, { skipText: !!opts.skipTablaText })
+    drawTabla(ctx, obj, { skipText: !!opts.skipTablaText, ui })
     if (selected) {
       const { w, h } = tablaSize(obj)
-      ctx.strokeStyle = '#2563eb'
+      ctx.strokeStyle = selColor
       ctx.lineWidth = 1
       ctx.setLineDash([4, 3])
       ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, w + 8, h + 8)
       ctx.setLineDash([])
-      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1)
+      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1, ui)
     }
+    ctx.restore()
+    return
+  }
+  if (obj.type === 'cota') {
+    const center = objectCenter(obj)
+    if (obj.rotation) {
+      ctx.translate(center.x, center.y)
+      ctx.rotate(obj.rotation)
+      ctx.translate(-center.x, -center.y)
+    }
+    drawCota(ctx, obj, selected, opts.zoom || 1, ui)
+    if (selected && !opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1, ui)
     ctx.restore()
     return
   }
@@ -2722,14 +3349,14 @@ function drawObject(ctx, obj, selected, opts = {}) {
       ctx.rotate(obj.rotation)
       ctx.translate(-center.x, -center.y)
     }
-    drawTexto(ctx, obj, { skipText: !!opts.skipTextoText })
+    drawTexto(ctx, obj, { skipText: !!opts.skipTextoText, ui })
     if (selected) {
-      ctx.strokeStyle = '#2563eb'
+      ctx.strokeStyle = selColor
       ctx.lineWidth = 1
       ctx.setLineDash([4, 3])
       ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, (obj.w || 0) + 8, (obj.h || 0) + 8)
       ctx.setLineDash([])
-      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1)
+      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1, ui)
     }
     ctx.restore()
     return
@@ -2745,7 +3372,7 @@ function drawObject(ctx, obj, selected, opts = {}) {
     ctx.lineJoin = 'round'
     ctx.lineWidth = obj.erase ? Math.max(8, (obj.width || 3) * 3) : (obj.width || 3)
     ctx.globalCompositeOperation = obj.erase ? 'destination-out' : 'source-over'
-    ctx.strokeStyle = obj.color || '#1e293b'
+    ctx.strokeStyle = ink
     const pts = obj.points || []
     if (pts.length) {
       ctx.beginPath()
@@ -2755,15 +3382,15 @@ function drawObject(ctx, obj, selected, opts = {}) {
     }
   } else if (SHAPE_TOOLS.has(obj.type) || obj.type === 'linea' || obj.type === 'flecha') {
     ctx.globalCompositeOperation = 'source-over'
-    ctx.strokeStyle = obj.color || '#1e293b'
-    ctx.fillStyle = obj.color || '#1e293b'
+    ctx.strokeStyle = ink
+    ctx.fillStyle = ink
     ctx.lineWidth = obj.width || 3
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     const a = { x: obj.x1, y: obj.y1 }
     const b = { x: obj.x2, y: obj.y2 }
     if (obj.hatch != null && ['rect', 'elipse', 'triangulo'].includes(obj.type)) {
-      fillHatch(ctx, obj)
+      fillHatch(ctx, obj, ui)
     }
     if (obj.type === 'linea' || obj.type === 'flecha') {
       ctx.beginPath()
@@ -2772,7 +3399,7 @@ function drawObject(ctx, obj, selected, opts = {}) {
       ctx.stroke()
       if (obj.type === 'flecha') {
         const ang = Math.atan2(b.y - a.y, b.x - a.x)
-        const len = 12 + (obj.width || 3) * 2
+        const len = arrowHeadLength(obj)
         ctx.beginPath()
         ctx.moveTo(b.x, b.y)
         ctx.lineTo(b.x - len * Math.cos(ang - 0.4), b.y - len * Math.sin(ang - 0.4))
@@ -2802,7 +3429,7 @@ function drawObject(ctx, obj, selected, opts = {}) {
     ctx.globalCompositeOperation = 'source-over'
     const bb = objectBounds(obj)
     if (bb) {
-      ctx.strokeStyle = '#2563eb'
+      ctx.strokeStyle = selColor
       ctx.lineWidth = 1
       ctx.setLineDash([4, 3])
       ctx.strokeRect(bb.x - 4, bb.y - 4, bb.w + 8, bb.h + 8)
@@ -2810,29 +3437,31 @@ function drawObject(ctx, obj, selected, opts = {}) {
     }
     // Manijas tipo Tinkercad (también para stroke/tabla vía getResizeHandles)
     if (obj.type !== 'image') {
-      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1)
+      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1, ui)
     }
   }
   ctx.restore()
 }
 
-function drawNodo(ctx, obj, selected, zoom = 1) {
+function drawNodo(ctx, obj, selected, zoom = 1, ui) {
+  const palette = resolveEsquemaUi(ui)
+  const ink = esquemaEntityInk(obj.color, palette)
   const x = obj.x || 0
   const y = obj.y || 0
   const z = zoom || 1
   const r = nodeMarkerWorldRadius(z)
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.fillStyle = obj.color || '#1e293b'
-  ctx.strokeStyle = selected ? '#2563eb' : '#fff'
+  ctx.fillStyle = ink
+  ctx.strokeStyle = selected ? palette.selection : palette.canvas
   ctx.lineWidth = Math.min(1.2 / z, r * 0.35)
   ctx.beginPath()
   ctx.arc(x, y, r, 0, Math.PI * 2)
   ctx.fill()
   ctx.stroke()
   ctx.font = `600 ${10 / z}px sans-serif`
-  ctx.fillStyle = obj.color || '#1e293b'
-  ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+  ctx.fillStyle = ink
+  ctx.strokeStyle = palette.canvas
   ctx.lineWidth = 2.2 / z
   const label = String(obj.nodeNum ?? '')
   ctx.strokeText(label, x + r + 2.5 / z, y - 1.5 / z)
@@ -2877,8 +3506,8 @@ function pathForClosed(ctx, obj) {
   }
 }
 
-function fillHatch(ctx, obj) {
-  const pattern = makeHatchPattern(ctx, obj.hatch, obj.color || '#1e293b')
+function fillHatch(ctx, obj, ui) {
+  const pattern = makeHatchPattern(ctx, obj.hatch, esquemaEntityInk(obj.color, ui))
   if (!pattern) return
   ctx.save()
   pathForClosed(ctx, obj)
@@ -2887,15 +3516,17 @@ function fillHatch(ctx, obj) {
   ctx.restore()
 }
 
-function drawTabla(ctx, obj, { skipText = false } = {}) {
+function drawTabla(ctx, obj, { skipText = false, ui } = {}) {
+  const palette = resolveEsquemaUi(ui)
+  const ink = esquemaEntityInk(obj.color, palette)
   const { w, h, rows, cols, cellW, cellH } = tablaSize(obj)
   const x = obj.x || 0
   const y = obj.y || 0
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = palette.canvas
   ctx.fillRect(x, y, w, h)
-  ctx.strokeStyle = obj.color || '#1e293b'
+  ctx.strokeStyle = ink
   ctx.lineWidth = 1.5
   ctx.strokeRect(x, y, w, h)
   for (let i = 1; i < rows; i += 1) {
@@ -2907,7 +3538,7 @@ function drawTabla(ctx, obj, { skipText = false } = {}) {
     ctx.beginPath(); ctx.moveTo(xx, y); ctx.lineTo(xx, y + h); ctx.stroke()
   }
   if (!skipText) {
-    ctx.fillStyle = obj.color || '#1e293b'
+    ctx.fillStyle = ink
     ctx.font = '12px sans-serif'
     ctx.textBaseline = 'middle'
     for (let i = 0; i < rows; i += 1) {
@@ -2950,7 +3581,9 @@ function wrapTextoLines(ctx, text, maxWidth) {
   return lines
 }
 
-function drawTexto(ctx, obj, { skipText = false } = {}) {
+function drawTexto(ctx, obj, { skipText = false, ui } = {}) {
+  const palette = resolveEsquemaUi(ui)
+  const ink = esquemaEntityInk(obj.color, palette)
   const x = obj.x || 0
   const y = obj.y || 0
   const w = Math.max(24, obj.w || 180)
@@ -2958,13 +3591,13 @@ function drawTexto(ctx, obj, { skipText = false } = {}) {
   const fontSize = Math.max(10, obj.fontSize || 16)
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)'
+  ctx.strokeStyle = palette.border
   ctx.lineWidth = 1
   ctx.setLineDash([3, 3])
   ctx.strokeRect(x, y, w, h)
   ctx.setLineDash([])
   if (!skipText) {
-    ctx.fillStyle = obj.color || '#1e293b'
+    ctx.fillStyle = ink
     ctx.font = `${fontSize}px sans-serif`
     ctx.textBaseline = 'top'
     ctx.textAlign = 'left'
@@ -3003,6 +3636,7 @@ function objectCenter(obj) {
 }
 
 function objectBounds(obj) {
+  if (obj.type === 'cota') return objectBoundsOf(obj)
   if (obj.type === 'nodo') return { x: (obj.x || 0) - 8, y: (obj.y || 0) - 8, w: 16, h: 16 }
   if (PATH_TYPES.has(obj.type)) {
     const pts = obj.points || []
@@ -3054,151 +3688,17 @@ function translateObject(obj, dx, dy) {
   }
 }
 
-function sceneExportBounds(objects) {
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const o of objects || []) {
-    if (!o || (o.type === 'image' && o.fit)) continue
-    const b = objectBounds(o)
-    if (!b) continue
-    minX = Math.min(minX, b.x)
-    minY = Math.min(minY, b.y)
-    maxX = Math.max(maxX, b.x + (b.w || 0))
-    maxY = Math.max(maxY, b.y + (b.h || 0))
-  }
-  if (!Number.isFinite(minX)) return { x: 0, y: 0, w: 400, h: 280 }
-  return {
-    x: minX,
-    y: minY,
-    w: Math.max(40, maxX - minX),
-    h: Math.max(40, maxY - minY),
-  }
-}
-
-function drawExportCoordTable(ctx, nodes, x, y, width) {
-  const rows = nodes || []
-  const headerH = 26
-  const rowH = 24
-  const cols = [
-    { k: 'nodeNum', t: 'N°', w: 0.08 },
-    { k: 'norte', t: 'Norte', w: 0.20 },
-    { k: 'este', t: 'Este', w: 0.20 },
-    { k: 'cota', t: 'Cota', w: 0.16 },
-    { k: 'desc', t: 'Descripción', w: 0.36 },
-  ]
-  const border = '#94a3b8'
-  const headerBg = '#D6EAF8'
-  const headerColor = '#0077B6'
-  const text = '#0f172a'
-  const tableW = width
-  let cx = x
-  ctx.save()
-  ctx.font = '700 11px sans-serif'
-  ctx.textBaseline = 'middle'
-  for (const col of cols) {
-    const cw = tableW * col.w
-    ctx.fillStyle = headerBg
-    ctx.fillRect(cx, y, cw, headerH)
-    ctx.strokeStyle = border
-    ctx.lineWidth = 1
-    ctx.strokeRect(cx, y, cw, headerH)
-    ctx.fillStyle = headerColor
-    ctx.fillText(col.t, cx + 8, y + headerH / 2)
-    cx += cw
-  }
-  ctx.font = '12px sans-serif'
-  ctx.fillStyle = text
-  rows.forEach((n, i) => {
-    const ry = y + headerH + i * rowH
-    cx = x
-    const bg = i % 2 ? '#f8fafc' : '#ffffff'
-    const values = [
-      String(n.nodeNum ?? ''),
-      n.norte == null ? '' : String(n.norte),
-      n.este == null ? '' : String(n.este),
-      n.cota == null ? '' : String(n.cota),
-      String(n.desc || ''),
-    ]
-    cols.forEach((col, ci) => {
-      const cw = tableW * col.w
-      ctx.fillStyle = bg
-      ctx.fillRect(cx, ry, cw, rowH)
-      ctx.strokeStyle = border
-      ctx.strokeRect(cx, ry, cw, rowH)
-      ctx.fillStyle = text
-      ctx.fillText(values[ci], cx + 8, ry + rowH / 2, cw - 14)
-      cx += cw
-    })
-  })
-  ctx.restore()
-  return headerH + rows.length * rowH
-}
-
-function composeEsquemaExport({ title, objects, nodes }) {
-  const margin = 48
-  const titleH = 56
-  const tableGap = 20
-  const tableTitleH = 22
-  const rows = nodes || []
-  const bb = sceneExportBounds(objects)
-  const maxInner = 1100
-  const scale = Math.min(2.2, maxInner / bb.w, maxInner / bb.h)
-  const drawW = Math.round(bb.w * scale + margin * 2)
-  const drawH = Math.round(bb.h * scale + margin * 2)
-  const tableBlock = rows.length ? tableGap + tableTitleH + 8 + 26 + rows.length * 24 + margin : margin
-  const h = titleH + drawH + tableBlock
-  const w = landscapeExportSize(Math.max(720, drawW), h).w
-  const c = document.createElement('canvas')
-  c.width = Math.round(w)
-  c.height = Math.round(h)
-  const ctx = c.getContext('2d')
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, w, h)
-  ctx.fillStyle = '#0f172a'
-  ctx.font = '700 20px sans-serif'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(title || 'Esquema', margin, titleH / 2)
-
-  const drawX = Math.round((w - drawW) / 2)
-  ctx.save()
-  ctx.beginPath()
-  ctx.rect(drawX, titleH, drawW, drawH)
-  ctx.clip()
-  ctx.translate(drawX + margin - bb.x * scale, titleH + margin - bb.y * scale)
-  ctx.scale(scale, scale)
-  for (const obj of objects || []) {
-    if (obj?.type === 'image' && obj.fit) continue
-    drawObject(ctx, obj, false, { skipResize: true, zoom: scale })
-  }
-  ctx.restore()
-  ctx.save()
-  ctx.strokeStyle = '#334155'
-  ctx.lineWidth = 1.5
-  ctx.strokeRect(drawX + 0.75, titleH + 0.75, drawW - 1.5, drawH - 1.5)
-  ctx.restore()
-  drawNorthIndicator(ctx, drawW, drawH, { x: drawX, y: titleH })
-
-  if (rows.length) {
-    const tableX = margin
-    const tableW = w - margin * 2
-    const tableY = titleH + drawH + tableGap
-    ctx.fillStyle = '#0f172a'
-    ctx.font = '700 13px sans-serif'
-    ctx.textBaseline = 'alphabetic'
-    ctx.fillText('Tabla de coordenadas', tableX, tableY + 14)
-    drawExportCoordTable(ctx, rows, tableX, tableY + tableTitleH + 4, tableW)
-  }
-  return Promise.resolve(c.toDataURL('image/png'))
-}
-
 function coordSheetStyles(t) {
-  const border = t?.sheetGridBorder || '#94a3b8'
-  const headerBg = t?.sheetHeaderBg || '#D6EAF8'
-  const headerColor = t?.sheetHeaderColor || t?.primary || '#0077B6'
-  const text = t?.text || '#0f172a'
-  const inputBg = t?.inputBg || t?.bg || '#f8fafc'
+  const ui = esquemaUiTheme(t)
+  const border = t?.sheetGridBorder || ui.border
+  const headerBg = t?.sheetHeaderBg || (ui.dark
+    ? 'rgba(0,180,198,0.16)'
+    : ui.rest
+      ? 'rgba(14,116,144,0.14)'
+      : '#D6EAF8')
+  const headerColor = t?.sheetHeaderColor || ui.primary
+  const text = t?.text || ui.text
+  const inputBg = t?.inputBg || ui.inputBg
   return {
     border,
     wrap: {
@@ -3230,7 +3730,7 @@ function coordSheetStyles(t) {
       border: `1px solid ${border}`,
       verticalAlign: 'middle',
       height: 28,
-      background: '#fff',
+      background: t?.inputBg || t?.bgCard || '#fff',
     },
     inp: {
       width: '100%',
@@ -3476,14 +3976,15 @@ function JoinSeqPanel({ t, seq, onChange, onFinish }) {
   )
 }
 
-function libraryPreviewDataUri(objects, size = 88) {
+function libraryPreviewDataUri(objects, size = 88, ui) {
   if (typeof document === 'undefined') return ''
+  const palette = resolveEsquemaUi(ui)
   const packed = packLibraryBlock(objects)
   const c = document.createElement('canvas')
   c.width = size
   c.height = size
   const ctx = c.getContext('2d')
-  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = palette.previewBg
   ctx.fillRect(0, 0, size, size)
   const pad = 8
   const sc = Math.min(
@@ -3496,13 +3997,13 @@ function libraryPreviewDataUri(objects, size = 88) {
   )
   ctx.scale(sc, sc)
   for (const child of packed.children) {
-    drawObject(ctx, child, false, { skipResize: true, zoom: sc })
+    drawObject(ctx, child, false, { skipResize: true, zoom: sc, ui: palette })
   }
   return c.toDataURL('image/png')
 }
 
 function BibliotecaPanel({
-  t, contratoId, items, notice, canSaveSelection, onClose, onSaveSelection, onInsert, onDelete,
+  t, ui, contratoId, items, notice, canSaveSelection, onClose, onSaveSelection, onInsert, onDelete,
 }) {
   const sheet = coordSheetStyles(t)
   const iconAction = {
@@ -3576,11 +4077,11 @@ function BibliotecaPanel({
                 <tr key={it.id}>
                   <td style={{ ...sheet.td, textAlign: 'center', padding: 4 }}>
                     <img
-                      src={libraryPreviewDataUri(it.objects?.length ? it.objects : it.children)}
+                      src={libraryPreviewDataUri(it.objects?.length ? it.objects : it.children, 88, ui)}
                       alt=""
                       width={48}
                       height={48}
-                      style={{ display: 'block', margin: '0 auto', background: '#fff' }}
+                      style={{ display: 'block', margin: '0 auto', background: resolveEsquemaUi(ui).previewBg }}
                     />
                   </td>
                   <td style={sheet.td}>
@@ -3608,7 +4109,8 @@ function BibliotecaPanel({
 }
 
 /** Overlay HTML para editar celdas de la tabla seleccionada (teclado/táctil). */
-function TablaOverlay({ obj, pan, zoom = 1, canvasEl, onCellChange }) {
+function TablaOverlay({ obj, ui, pan, zoom = 1, canvasEl, onCellChange }) {
+  const palette = resolveEsquemaUi(ui)
   const [cells, setCells] = useState(() => cloneScene(obj.cells || []))
   useEffect(() => {
     setCells(cloneScene(obj.cells || []))
@@ -3661,9 +4163,9 @@ function TablaOverlay({ obj, pan, zoom = 1, canvasEl, onCellChange }) {
                     }}
                     style={{
                       width: '100%', height: '100%', boxSizing: 'border-box',
-                      border: 'none', background: 'rgba(255,255,255,0.92)',
-                      fontSize: 12, padding: '2px 4px', color: '#0f172a',
-                      outline: '1px solid #93c5fd',
+                      border: 'none', background: palette.cellBg,
+                      fontSize: 12, padding: '2px 4px', color: esquemaEntityInk(obj.color, palette),
+                      outline: `1px solid ${palette.primary}`,
                     }}
                   />
                 </td>
@@ -3680,7 +4182,7 @@ function TablaOverlay({ obj, pan, zoom = 1, canvasEl, onCellChange }) {
  * Overlay de texto: <textarea> nativo para que Shift/Bloq Mayús / teclado en pantalla
  * y la capitalización del SO se apliquen sin transformación del editor.
  */
-function TextoOverlay({ obj, pan, zoom = 1, canvasEl, onTextChange }) {
+function TextoOverlay({ obj, ui, pan, zoom = 1, canvasEl, onTextChange }) {
   const ref = useRef(null)
   const [value, setValue] = useState(() => String(obj?.text ?? ''))
 
@@ -3741,16 +4243,16 @@ function TextoOverlay({ obj, pan, zoom = 1, canvasEl, onTextChange }) {
           boxSizing: 'border-box',
           margin: 0,
           padding: `${4 * z}px`,
-          border: '1px solid #93c5fd',
+          border: `1px solid ${resolveEsquemaUi(ui).primary}`,
           borderRadius: 4,
-          background: 'rgba(255,255,255,0.96)',
-          color: obj.color || '#0f172a',
+          background: resolveEsquemaUi(ui).cellBg,
+          color: esquemaEntityInk(obj.color, ui),
           fontSize,
           fontFamily: 'sans-serif',
           lineHeight: 1.25,
           resize: 'none',
           textTransform: 'none',
-          WebkitTextFillColor: obj.color || '#0f172a',
+          WebkitTextFillColor: esquemaEntityInk(obj.color, ui),
           outline: 'none',
           overflow: 'auto',
         }}
@@ -3764,6 +4266,21 @@ function primary(t) {
 }
 function ghost(t) {
   return { border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 10px', cursor: 'pointer', background: 'transparent', color: t.text, fontSize: 'var(--cc-sm)' }
+}
+function ToolDivider({ t }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 1,
+        alignSelf: 'stretch',
+        minHeight: 22,
+        margin: '0 2px',
+        background: t.border,
+        opacity: 0.9,
+      }}
+    />
+  )
 }
 function iconBtn(t, active) {
   return {
@@ -3847,6 +4364,36 @@ function IconRect() { return <svg {...iconProps()}><rect x="4" y="6" width="16" 
 function IconElipse() { return <svg {...iconProps()}><ellipse cx="12" cy="12" rx="9" ry="6" /></svg> }
 function IconTriangulo() { return <svg {...iconProps()}><path d="M12 4 21 19H3Z" /></svg> }
 function IconHatch() { return <svg {...iconProps()}><path d="M4 20 20 4" /><path d="M4 14 14 4" /><path d="M10 20 20 10" /></svg> }
+function IconOffset() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M5 7h10" />
+      <path d="M5 17h10" />
+      <path d="M19 5v14" />
+      <path d="m16 8 3-3 3 3" />
+      <path d="m16 16 3 3 3-3" />
+    </svg>
+  )
+}
+function IconCota() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M5 6v12" />
+      <path d="M19 6v12" />
+      <path d="M5 12h14" />
+      <path d="m8 9-3 3 3 3" />
+      <path d="m16 9 3 3-3 3" />
+    </svg>
+  )
+}
+function IconIa() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M12 3 13.2 7.2 17.5 8.5 13.2 9.8 12 14 10.8 9.8 6.5 8.5 10.8 7.2Z" />
+      <path d="M18 13 18.7 15.3 21 16 18.7 16.7 18 19 17.3 16.7 15 16 17.3 15.3Z" />
+    </svg>
+  )
+}
 function IconMover() { return <svg {...iconProps()}><path d="M5 9 2 12l3 3" /><path d="M9 5 12 2l3 3" /><path d="M15 19 12 22l-3-3" /><path d="M19 9 22 12l-3 3" /><path d="M2 12h20" /><path d="M12 2v20" /></svg> }
 function IconGirarEscalar() {
   return (
@@ -3865,6 +4412,16 @@ function IconNodo() {
       <path d="M12 18v3" />
       <path d="M3 12h3" />
       <path d="M18 12h3" />
+    </svg>
+  )
+}
+function IconUnirLineas() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 18 11 11" />
+      <path d="M20 18 13 11" />
+      <path d="M12 4v7" />
+      <circle cx="12" cy="11" r="2.2" />
     </svg>
   )
 }
@@ -3932,6 +4489,22 @@ function IconGuardar() {
   )
 }
 function IconUndo() { return <svg {...iconProps()}><path d="M3 7v6h6" /><path d="M3 13a9 9 0 1 0 3-7.7L3 7" /></svg> }
+function IconTraerFrente() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="4" y="9" width="10" height="10" rx="1" />
+      <rect x="10" y="4" width="10" height="10" rx="1" />
+    </svg>
+  )
+}
+function IconEnviarFondo() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="10" y="4" width="10" height="10" rx="1" />
+      <rect x="4" y="9" width="10" height="10" rx="1" />
+    </svg>
+  )
+}
 function IconCopiar() {
   return (
     <svg {...iconProps()}>

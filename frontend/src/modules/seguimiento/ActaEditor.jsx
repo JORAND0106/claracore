@@ -1706,6 +1706,11 @@ export default function ActaEditor({
         <EsquemaEditorModal
           t={t}
           title={`Esquema · Idea ${(esquemaIdeaIdx + 1)}`}
+          contratoId={form?.contrato_id}
+          iaDoc={{
+            ambito: 'acta_idea',
+            docKey: `acta-${localActaId || actaId || 'new'}-idea-${esquemaIdeaIdx}`,
+          }}
           onClose={() => setEsquemaIdeaIdx(null)}
           onSave={(dataUrl) => {
             const idx = esquemaIdeaIdx
@@ -1713,6 +1718,8 @@ export default function ActaEditor({
               nombre: `esquema-idea-${idx + 1}-${Date.now()}.png`,
               data_uri: dataUrl,
               mime_type: 'image/png',
+              kind: 'esquema',
+              origen: 'esquema',
             })
             setEsquemaIdeaIdx(null)
             if (!ok) setError('Máximo 8 esquemas/gráficos por idea')
