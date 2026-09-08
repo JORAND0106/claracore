@@ -14,7 +14,7 @@ export default function CatalogoProveedorAutocomplete({
   const timer = useRef(null)
 
   useEffect(() => {
-    if (value?.razon_social) setQuery(value.razon_social)
+    setQuery(value?.razon_social || '')
   }, [value?.razon_social, value?.proveedor_id])
 
   const search = useCallback((q) => {

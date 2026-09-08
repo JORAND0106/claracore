@@ -9,13 +9,11 @@ import {
   IMPUESTO_CAMPOS_UI,
   computeValorDespuesAiuIva,
   etiquetaTributos,
-  formImpuestoDesdeTributos,
   fmtPctDesdeDecimal,
   fmtSumatoriaAiu,
   inferirTipoImpuesto,
   impuestoTieneDatos,
   labelTipoImpuesto,
-  seedTributosDesdeLegado,
   tipoTributoCortoDesdeRow,
   tooltipTotalPorcentaje,
   tributosPayloadDesdeForm,
@@ -42,42 +40,18 @@ import {
   ladoHasImpuesto,
   pickGanadora,
   sanitizeRendimientoInput,
-  seedCotizacionPares,
   syncLegacyFromGanadora,
   toUpperTrim,
   validateCaptureForEnviar,
   validateGuardarInsumo,
 } from './catalogoInsumosCotizaciones'
+import {
+  EMPTY_INSUMO_FORM_BASE,
+  buildEditFormFromInsumoRow,
+} from './catalogoInsumosProveedorEdit'
 
 const EMPTY_FORM = {
-  proveedor_id: '',
-  razon_social: '',
-  nit: '',
-  contacto_email: '',
-  contacto_nombre: '',
-  contacto_telefono: '',
-  codigo: '',
-  descripcion: '',
-  unidad: '',
-  rendimiento: '',
-  costo_base: '',
-  valor_no_previsto: '',
-  cantidad_negociada: '',
-  cantidad_negociada_np: '',
-  impuesto: { ...EMPTY_IMPUESTO },
-  impuesto_np: { ...EMPTY_IMPUESTO },
-  cotizacion_numero: '',
-  cotizacion_fecha: '',
-  cotizacion_vigencia: '',
-  cotizacion_numero_np: '',
-  cotizacion_fecha_np: '',
-  cotizacion_vigencia_np: '',
-  cotizacion_pdf: null,
-  cotizacion_pdf_nombre: '',
-  cotizacion_pdf_np: null,
-  cotizacion_pdf_nombre_np: '',
-  cotizaciones_detalle: [],
-  requiere_cotizacion: true,
+  ...EMPTY_INSUMO_FORM_BASE,
 }
 
 function snapshotForm(f) {
@@ -1149,65 +1123,39 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     }
   }
 
-  const openEdit = (row) => {
-    setEditId(row.insumo_id || row.id)
-    const trib = seedTributosDesdeLegado(row)
-    let cotizaciones = seedCotizacionPares({
-      existing: row.cotizaciones_detalle,
-      minPares: 0,
-      legacy: {
-        cotizacion_numero: row.cotizacion_numero,
-        cotizacion_fecha: row.cotizacion_fecha,
-        cotizacion_vigencia: row.cotizacion_vigencia,
-      },
-      proveedorNombre: row.proveedor_nombre || '',
-      costoBase: row.costo ?? row.costo_base ?? '',
-    })
-    cotizaciones = cotizaciones.map((p) => ({
-      ...p,
-      coherencia: p.coherencia || {
-        descripcion: row.descripcion || '',
-        unidad: row.unidad || '',
-        rendimiento: row.rendimiento ?? '',
-      },
-    }))
-    cotizaciones = applyAutoGanadoraByMinValor(cotizaciones)
-    const legacySync = syncLegacyFromGanadora(cotizaciones)
-    const gan = pickGanadora(cotizaciones)
-    const impuestoGan = impuestoGanadoraDesdePares(cotizaciones)
-    const nextForm = {
-      ...EMPTY_FORM,
-      proveedor_id: row.proveedor_id || '',
-      razon_social: row.proveedor_nombre || '',
-      nit: row.proveedor_nit || '',
-      contacto_email: row.contacto_email || '',
-      contacto_nombre: row.contacto_nombre || '',
-      contacto_telefono: row.contacto_telefono || '',
-      codigo: row.codigo || '',
-      descripcion: row.descripcion || '',
-      unidad: row.unidad || '',
-      rendimiento: row.rendimiento ?? '',
-      costo_base: gan?.valor != null && gan.valor !== '' ? String(gan.valor) : (row.costo ?? row.costo_base ?? ''),
-      valor_no_previsto: '',
-      cantidad_negociada: row.cantidad_negociada ?? '',
-      impuesto: impuestoGan || formImpuestoDesdeTributos(trib),
-      cotizacion_numero: legacySync.cotizacion_numero || row.cotizacion_numero || '',
-      cotizacion_fecha: '',
-      cotizacion_vigencia: '',
-      cotizaciones_detalle: cotizaciones,
-      requiere_cotizacion: row.requiere_cotizacion !== false,
-    }
-    setForm(nextForm)
-    formBaselineRef.current = snapshotForm(nextForm)
-    setConsumoNegociado(row.consumo_negociado || null)
-    setUnidadModoCustom(false)
-    setUnidadCustom('')
+  const openEdit = async (row) => {
+    if (!row) return
+    const insumoId = row.insumo_id || row.id
+    setEditId(insumoId || null)
+    setBusy(true)
     setDupAlert(null)
     setModalFaltantes([])
-    setModalRuleErrors(ganadoraRuleErrors(cotizaciones))
     setSelectedParId(null)
     setMainTab('insumos')
+    setUnidadModoCustom(false)
+    setUnidadCustom('')
+
+    let source = row
+    // Siempre hidratar detalle completo: el listado a veces trae proveedor incompleto
+    // (sin NIT/contactos) o solo el nombre "—" cuando falta el join.
+    if (api && insumoId) {
+      try {
+        const full = await api.getInsumo(insumoId)
+        if (full && (full.insumo_id || full.id)) source = full
+      } catch {
+        /* usar fila del listado */
+      }
+    }
+
+    const nextForm = buildEditFormFromInsumoRow(source, {
+      proveedoresDirectorio: proveedores || [],
+    })
+    setForm(nextForm)
+    formBaselineRef.current = snapshotForm(nextForm)
+    setConsumoNegociado(source.consumo_negociado || row.consumo_negociado || null)
+    setModalRuleErrors(ganadoraRuleErrors(nextForm.cotizaciones_detalle || []))
     setModalOpen(true)
+    setBusy(false)
   }
 
   /** Abre el popup de edición desde un ítem de cotización en la pestaña Proveedores. */
@@ -1215,20 +1163,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     const id = item?.insumo_id
     if (!id || busy) return
     const fromRows = (rows || []).find((r) => Number(r.insumo_id || r.id) === Number(id))
-    if (fromRows) {
-      openEdit(fromRows)
-      return
-    }
-    if (!api) return
-    setBusy(true)
-    try {
-      const row = await api.getInsumo(id)
-      openEdit(row)
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message || 'No se pudo abrir el insumo.' })
-    } finally {
-      setBusy(false)
-    }
+    await openEdit(fromRows || { insumo_id: id, id })
   }
 
   const uniqueInsumosCotizacion = (items) => {
