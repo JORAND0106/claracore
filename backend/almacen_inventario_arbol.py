@@ -149,6 +149,28 @@ def _vu_costo_desde_composicion(comp_list: List[dict]) -> Tuple[Optional[float],
     return (_round2(sum_costo) if tiene else None, rend_item)
 
 
+def _vu_costo_desde_insumos_materiales(insumos: List[dict]) -> Optional[float]:
+    """
+    VU costo del ítem = suma de costo_contribucion (VU × rendimiento) de insumos
+    materiales. Debe coincidir con lo mostrado en cada fila de insumo del Inventario.
+    """
+    sum_costo = 0.0
+    tiene = False
+    for ins in insumos or []:
+        if ins.get("es_mo"):
+            continue
+        contrib = ins.get("costo_contribucion")
+        if contrib is not None and _f(contrib) > 0:
+            sum_costo += _f(contrib)
+            tiene = True
+            continue
+        vu = ins.get("vu_costo")
+        if vu is not None and _f(vu) > 0:
+            sum_costo += _f(vu)
+            tiene = True
+    return _round2(sum_costo) if tiene else None
+
+
 def _rentabilidad_pct(vu_cobro: Optional[float], vu_costo: Optional[float]) -> Optional[float]:
     """% rentabilidad = (VU Cobro − VU Costo) / VU Cobro × 100."""
     if vu_cobro is None or vu_costo is None:
@@ -183,8 +205,11 @@ def _insumos_desde_composicion(comp_list: List[dict]) -> List[dict]:
             "es_principal": es_principal,
             "es_mo": False,
             "rendimiento": rend_f,
-            "vu_costo": vu_f,
-            "costo_contribucion": contrib,
+            # vu_costo_unitario: precio unitario de catálogo (sin × rendimiento)
+            "vu_costo_unitario": vu_f,
+            # vu_costo / costo_contribucion: contribución al ítem (VU × rendimiento)
+            "vu_costo": contrib if contrib is not None else vu_f,
+            "costo_contribucion": contrib if contrib is not None else vu_f,
             "valor_entradas": 0.0,
             "valor_salidas": 0.0,
             "valor_stock": 0.0,
@@ -385,17 +410,13 @@ def build_inventario_arbol_from_lines(
 
         comp_list = list(composition.get(ikey) or [])
         insumos = _insumos_desde_composicion(comp_list)
-        vu_costo, rend_item = _vu_costo_desde_composicion(comp_list)
-        utilidad = (
-            _round2(_f(vu_cobro) - vu_costo)
-            if vu_cobro is not None and vu_costo is not None
-            else None
-        )
-        rentabilidad = _rentabilidad_pct(vu_cobro, vu_costo)
+        _, rend_item = _vu_costo_desde_composicion(comp_list)
 
         # Fusionar valores / OCs de movimientos en cada insumo; agregar huérfanos
-        seen_ins = {int(i["insumo_id"]) for i in insumos}
+        seen_ins = {int(i["insumo_id"]) for i in insumos if i.get("insumo_id") is not None}
         for ins in insumos:
+            if ins.get("insumo_id") is None:
+                continue
             bucket = mov_by_insumo.get((ikey, int(ins["insumo_id"])))
             if not bucket:
                 continue
@@ -421,6 +442,7 @@ def build_inventario_arbol_from_lines(
                 "es_principal": False,
                 "es_mo": False,
                 "rendimiento": None,
+                "vu_costo_unitario": None,
                 "vu_costo": None,
                 "costo_contribucion": None,
                 "entradas": bucket["entradas"],
@@ -435,6 +457,15 @@ def build_inventario_arbol_from_lines(
                 "ordenes_compra": bucket.get("ordenes_compra") or [],
             })
 
+        # VU ítem = suma verificable de lo mostrado en cada insumo material.
+        vu_costo = _vu_costo_desde_insumos_materiales(insumos)
+        utilidad = (
+            _round2(_f(vu_cobro) - vu_costo)
+            if vu_cobro is not None and vu_costo is not None
+            else None
+        )
+        rentabilidad = _rentabilidad_pct(vu_cobro, vu_costo)
+
         # Mano de obra (costo directo consolidado; sin stock ni flujo físico).
         mo = (mo_by_item or {}).get(ikey) or {}
         costo_mo = _f(mo.get("costo_insumo_linea")) if mo.get("costo_insumo_linea") is not None else 0.0
@@ -447,6 +478,7 @@ def build_inventario_arbol_from_lines(
                 "es_principal": False,
                 "es_mo": True,
                 "rendimiento": None,
+                "vu_costo_unitario": None,
                 "vu_costo": None,
                 "costo_contribucion": _round2(costo_mo),
                 "entradas": None,
