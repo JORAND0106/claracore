@@ -2921,6 +2921,9 @@ app.include_router(esquema_ia_router)
 from storage_quota_routes import router as storage_quota_router
 app.include_router(storage_quota_router)
 
+from subcontratistas_docs_routes import router as subcontratistas_docs_router
+app.include_router(subcontratistas_docs_router)
+
 from telegram_service import handle_telegram_webhook_update, try_send_soporte_telegram
 from usuario_bienvenida_email import (
     BienvenidaEmailError,
@@ -17731,12 +17734,19 @@ def _asegurar_corte_vigente_subcontratista(
     *,
     ref_date: Optional[date] = None,
     max_periodos: int = 36,
+    out_bloqueo: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     Garantiza un corte que cubra ref_date (hoy por defecto).
     Si el último corte ya venció, genera automáticamente los siguientes
     según tipo_periodo, sin huecos (inicio = fin del anterior).
     Si no hay ningún corte seed, no inventa el primero (requiere creación inicial).
+
+    Bloqueo documental: si falta Contrato Firmado vigente, Propuesta Económica vigente
+    o Seguridad Social del período del corte a crear, no inserta ese período (ni los
+    siguientes). La secuencia de fechas se conserva: al completar la documentación,
+    el próximo intento parte del fecha_fin del último corte existente.
+    Si out_bloqueo es un dict mutable, se rellena con el checklist cuando hay bloqueo.
     """
     hoy = ref_date or date.today()
     today_s = hoy.isoformat()
@@ -17792,11 +17802,58 @@ def _asegurar_corte_vigente_subcontratista(
     except (TypeError, ValueError):
         return None
 
+    # Evaluar documentación del próximo período antes de insertar
+    try:
+        from subcontratistas_docs_service import puede_generar_corte_automatico
+        ff_previo = _fecha_fin_periodo_corte(fi, tipo)
+        ok_docs, chk = puede_generar_corte_automatico(
+            supabase, int(sub_id), fecha_inicio=fi.isoformat(), fecha_fin=ff_previo.isoformat()
+        )
+        if not ok_docs:
+            if isinstance(out_bloqueo, dict):
+                out_bloqueo.clear()
+                out_bloqueo.update({
+                    "bloqueado": True,
+                    "pendiente": True,
+                    "fecha_inicio_pendiente": fi.isoformat(),
+                    "fecha_fin_pendiente": ff_previo.isoformat(),
+                    "checklist": chk,
+                })
+            return None
+    except Exception:
+        # Si la tabla de docs aún no existe o falla la consulta, no bloquear cortes legacy
+        try:
+            _log_api.warning(
+                "docs-check corte auto sub=%s: fallo (se permite generación)",
+                sub_id,
+            )
+        except Exception:
+            pass
+
     creado = None
     for _ in range(max_periodos):
         ff = _fecha_fin_periodo_corte(fi, tipo)
         if ff <= fi:
             break
+        # Revalidar docs por cada período (SS mensual puede cambiar)
+        try:
+            from subcontratistas_docs_service import puede_generar_corte_automatico
+            ok_docs, chk = puede_generar_corte_automatico(
+                supabase, int(sub_id), fecha_inicio=fi.isoformat(), fecha_fin=ff.isoformat()
+            )
+            if not ok_docs:
+                if isinstance(out_bloqueo, dict):
+                    out_bloqueo.clear()
+                    out_bloqueo.update({
+                        "bloqueado": True,
+                        "pendiente": True,
+                        "fecha_inicio_pendiente": fi.isoformat(),
+                        "fecha_fin_pendiente": ff.isoformat(),
+                        "checklist": chk,
+                    })
+                break
+        except Exception:
+            pass
         consecutivo += 1
         row = {
             "subcontratista_id": int(sub_id),
@@ -17835,6 +17892,18 @@ def listar_subcontratistas(contrato_id: int, current_user=Depends(get_current_us
             rows = [r for r in rows if int(r.get("id") or 0) == int(own)]
         else:
             rows = []
+    # Indicador visual de pólizas (no falla si la tabla aún no existe)
+    try:
+        from subcontratistas_docs_service import get_alerta_config, resumen_alerta_polizas_sub
+        cfg = get_alerta_config(supabase, int(contrato_id))
+        for r in rows:
+            try:
+                r["poliza_alerta"] = resumen_alerta_polizas_sub(supabase, int(r["id"]), cfg)
+            except Exception:
+                r["poliza_alerta"] = None
+    except Exception:
+        for r in rows:
+            r.setdefault("poliza_alerta", None)
     return rows
 
 @app.post("/subcontratistas/{contrato_id}")
@@ -17868,9 +17937,14 @@ def toggle_activo_subcontratista(sub_id: int, current_user=Depends(get_current_u
 def obtener_corte_vigente(sub_id: int, current_user=Depends(get_current_user)):
     """Único corte abierto que cubre hoy (genera siguientes si el último ya venció)."""
     _require_acceso_cortes_subcontratista(current_user, sub_id, escribir=False)
-    vigente = _asegurar_corte_vigente_subcontratista(int(sub_id))
+    bloqueo: dict = {}
+    vigente = _asegurar_corte_vigente_subcontratista(int(sub_id), out_bloqueo=bloqueo)
     if not vigente:
-        return {"corte": None}
+        payload = {"corte": None}
+        if bloqueo.get("bloqueado"):
+            payload["generacion_bloqueada"] = True
+            payload["generacion_pendiente"] = bloqueo
+        return payload
     return {"corte": vigente}
 
 
@@ -17880,6 +17954,22 @@ def listar_cortes(sub_id: int, current_user=Depends(get_current_user)):
     _asegurar_corte_vigente_subcontratista(int(sub_id))
     rows = supabase.table("subcontratista_cortes").select("*").eq("subcontratista_id", sub_id).order("consecutivo").execute().data
     return rows or []
+
+
+@app.get("/subcontratistas/{sub_id}/generacion-corte-estado")
+def generacion_corte_estado(sub_id: int, current_user=Depends(get_current_user)):
+    """Estado de generación automática: vigente o pendiente por documentación faltante."""
+    _require_acceso_cortes_subcontratista(current_user, sub_id, escribir=False)
+    bloqueo: dict = {}
+    vigente = _asegurar_corte_vigente_subcontratista(int(sub_id), out_bloqueo=bloqueo)
+    if vigente:
+        return {"tiene_vigente": True, "corte": vigente, "bloqueado": False}
+    return {
+        "tiene_vigente": False,
+        "corte": None,
+        "bloqueado": bool(bloqueo.get("bloqueado")),
+        "pendiente": bloqueo or None,
+    }
 
 @app.get("/subcontratistas/{sub_id}/proximo-consecutivo")
 def proximo_consecutivo(sub_id: int, current_user=Depends(get_current_user)):
