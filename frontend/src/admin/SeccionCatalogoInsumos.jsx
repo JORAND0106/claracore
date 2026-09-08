@@ -863,29 +863,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
     fontWeight: 700,
     color: t.text,
     WebkitTextFillColor: t.text,
+    fontSize: compactCatalog ? 'var(--cc-sm)' : 'var(--cc-sm)',
+    minHeight: compactCatalog ? undefined : 34,
+    padding: compactCatalog ? undefined : '8px 10px',
   }
   const costTh = {
     ...thHeader,
-    padding: '2px 6px',
+    padding: compactCatalog ? '2px 6px' : '6px 10px',
     fontWeight: 700,
-    fontSize: 'var(--cc-caption)',
+    fontSize: compactCatalog ? 'var(--cc-caption)' : 'var(--cc-sm)',
     whiteSpace: 'normal',
-    overflowWrap: 'anywhere',
-    wordBreak: 'break-word',
-    lineHeight: 1.15,
+    overflowWrap: 'break-word',
+    wordBreak: 'normal',
+    lineHeight: 1.25,
     verticalAlign: 'middle',
   }
   const costTd = {
     ...td,
-    padding: '1px 4px',
-    fontSize: 'var(--cc-xs)',
+    padding: compactCatalog ? '1px 4px' : '4px 8px',
+    fontSize: compactCatalog ? 'var(--cc-xs)' : 'var(--cc-sm)',
     overflow: 'visible',
     minWidth: 0,
   }
   const costCellInp = sheetCellInput(inputStyle, {
-    padding: '1px 4px',
-    minHeight: 22,
-    fontSize: 'var(--cc-xs)',
+    padding: compactCatalog ? '1px 4px' : '6px 8px',
+    minHeight: compactCatalog ? 22 : 32,
+    fontSize: compactCatalog ? 'var(--cc-xs)' : 'var(--cc-sm)',
     maxWidth: '100%',
     boxSizing: 'border-box',
     color: t.text,
@@ -893,9 +896,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   })
   const costBtnCompact = {
     ...btnSecondary,
-    padding: '2px 8px',
-    fontSize: 'var(--cc-caption)',
-    minHeight: 22,
+    padding: compactCatalog ? '2px 8px' : '6px 12px',
+    fontSize: compactCatalog ? 'var(--cc-caption)' : 'var(--cc-sm)',
+    minHeight: compactCatalog ? 22 : 32,
     lineHeight: 1.2,
     whiteSpace: 'nowrap',
   }
@@ -2257,9 +2260,31 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       )}
 
       {modalOpen && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 10002, background: ui.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 0' }}>
-          <div style={{ width: 'min(1540px, 98vw)', maxHeight: '94vh', overflow: 'auto', ...modalPanelStyle, padding: '18px 22px' }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0, marginBottom: 12, color: t.text }}>{editId ? 'Editar insumo' : 'Nuevo insumo'}</h3>
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 10002,
+          background: ui.overlay,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: compactCatalog ? '8px 0' : '10px 8px',
+        }}
+        >
+          <div
+            style={{
+              width: compactCatalog ? 'min(1540px, 98vw)' : 'min(1780px, calc(100vw - 24px))',
+              maxHeight: '96vh',
+              overflow: 'auto',
+              ...modalPanelStyle,
+              padding: compactCatalog ? '18px 22px' : '20px 28px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+            data-testid="catalogo-insumo-modal"
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 12, color: t.text, fontSize: compactCatalog ? undefined : 'var(--cc-lg)' }}>
+              {editId ? 'Editar insumo' : 'Nuevo insumo'}
+            </h3>
 
             {dupAlert && (
               <div style={{ background: ui.warnBg, color: ui.warnText, padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 'var(--cc-sm)' }}>
@@ -2382,15 +2407,20 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                   : 'rgba(0, 119, 182, 0.22)',
             }}
             >
-              <table style={{ ...sheetTable, minWidth: 720, tableLayout: 'fixed' }}>
+              <table style={{
+                ...sheetTable,
+                minWidth: compactCatalog ? 720 : 980,
+                tableLayout: compactCatalog ? 'fixed' : 'auto',
+              }}
+              >
                 <thead>
                   <tr>
-                    <th style={{ ...thHeader, width: '14%' }}>Código</th>
-                    <th style={{ ...thHeader, width: '14%' }}>Unidad *</th>
-                    <th style={{ ...thHeader, width: '10%' }}>Rend.</th>
-                    <th style={{ ...thHeader, width: '28%' }}>Descripción *</th>
-                    <th style={{ ...thHeader, width: '14%' }} title="Cantidad negociada con el proveedor (propiedad del insumo)">Cant. neg.</th>
-                    <th style={{ ...thHeader, width: '20%' }} title="Cantidad × valor unitario de la cotización ganadora vigente">Vlr. negociado</th>
+                    <th style={{ ...thHeader, width: compactCatalog ? '14%' : 120 }}>Código</th>
+                    <th style={{ ...thHeader, width: compactCatalog ? '14%' : 110 }}>Unidad *</th>
+                    <th style={{ ...thHeader, width: compactCatalog ? '10%' : 88 }}>Rend.</th>
+                    <th style={{ ...thHeader, width: compactCatalog ? '28%' : 'auto', minWidth: 220 }}>Descripción *</th>
+                    <th style={{ ...thHeader, width: compactCatalog ? '14%' : 120 }} title="Cantidad negociada con el proveedor (propiedad del insumo)">Cant. neg.</th>
+                    <th style={{ ...thHeader, width: compactCatalog ? '20%' : 160 }} title="Cantidad × valor unitario de la cotización ganadora vigente">Vlr. negociado</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2402,24 +2432,30 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         : 'rgba(203, 213, 225, 0.55)',
                   }}
                   >
-                    <td style={{ ...td, overflow: 'hidden' }}>
+                    <td style={{ ...td, overflow: 'visible', minWidth: 100 }}>
                       <input
-                        style={{ ...idBlockInp, opacity: 0.9, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                        style={{
+                          ...idBlockInp,
+                          opacity: 0.9,
+                          fontSize: compactCatalog ? undefined : 'var(--cc-sm)',
+                          overflow: 'visible',
+                          textOverflow: 'clip',
+                        }}
                         value={form.codigo || (editId ? '—' : 'Generando…')}
                         title={form.codigo || ''}
                         readOnly
                         disabled
                       />
                     </td>
-                    <td style={{ ...td, overflow: 'hidden', minWidth: 0 }}>
+                    <td style={{ ...td, overflow: 'visible', minWidth: 0 }}>
                       {(form.cotizaciones_detalle || []).length > 0 ? (
-                        <input style={{ ...idBlockInp, opacity: 0.9 }} value={form.unidad} readOnly />
+                        <input style={{ ...idBlockInp, opacity: 0.9, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }} value={form.unidad} readOnly />
                       ) : (
                         <UnidadSelector
                           value={form.unidad}
                           onChange={(v) => setForm({ ...form, unidad: v })}
-                          selectStyle={idBlockInp}
-                          inputStyle={idBlockInp}
+                          selectStyle={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
+                          inputStyle={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
                           btnPrimary={btnPrimary}
                           btnSecondary={btnSecondary}
                           modoCustom={unidadModoCustom}
@@ -2429,9 +2465,9 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         />
                       )}
                     </td>
-                    <td style={{ ...td, overflow: 'hidden' }}>
+                    <td style={{ ...td, overflow: 'visible' }}>
                       <input
-                        style={idBlockInp}
+                        style={{ ...idBlockInp, fontSize: compactCatalog ? undefined : 'var(--cc-sm)' }}
                         inputMode="decimal"
                         value={form.rendimiento}
                         readOnly={(form.cotizaciones_detalle || []).length > 0}
@@ -2440,15 +2476,22 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         onChange={(e) => setForm({ ...form, rendimiento: sanitizeRendimientoInput(e.target.value) })}
                       />
                     </td>
-                    <td style={{ ...td, overflow: 'hidden', minWidth: 0 }}>
+                    <td style={{ ...td, overflow: 'visible', minWidth: 200 }}>
                       <input
-                        style={{ ...idBlockInp, textTransform: 'uppercase' }}
+                        style={{
+                          ...idBlockInp,
+                          textTransform: 'uppercase',
+                          fontSize: compactCatalog ? undefined : 'var(--cc-sm)',
+                          whiteSpace: 'normal',
+                          overflow: 'visible',
+                          textOverflow: 'clip',
+                        }}
                         value={form.descripcion}
                         readOnly={(form.cotizaciones_detalle || []).length > 0}
                         onChange={(e) => setForm({ ...form, descripcion: e.target.value.toUpperCase() })}
                       />
                     </td>
-                    <td style={{ ...td, overflow: 'hidden' }}>
+                    <td style={{ ...td, overflow: 'visible' }}>
                       <input
                         style={idBlockInp}
                         type="number"
@@ -2460,7 +2503,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                         onChange={(e) => setForm({ ...form, cantidad_negociada: e.target.value })}
                       />
                     </td>
-                    <td style={{ ...td, overflow: 'hidden' }}>
+                    <td style={{ ...td, overflow: 'visible', whiteSpace: 'nowrap' }}>
                       <div
                         style={{
                           ...idBlockInp,
@@ -2480,8 +2523,10 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             </div>
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))',
-              gap: 8,
+              gridTemplateColumns: compactCatalog
+                ? 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))'
+                : 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))',
+              gap: compactCatalog ? 8 : 14,
               marginBottom: 8,
             }}
             >
@@ -2504,12 +2549,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 >
                   Costos — Insumo
                 </div>
-                <table style={{ ...sheetTable, minWidth: 0, width: '100%', tableLayout: 'fixed' }}>
+                <table style={{
+                  ...sheetTable,
+                  minWidth: 0,
+                  width: '100%',
+                  tableLayout: compactCatalog ? 'fixed' : 'auto',
+                }}
+                >
                   <colgroup>
-                    <col style={{ width: '28%' }} />
-                    <col style={{ width: '22%' }} />
-                    <col style={{ width: '28%' }} />
-                    <col style={{ width: '22%' }} />
+                    <col style={{ width: compactCatalog ? '28%' : '22%' }} />
+                    <col style={{ width: compactCatalog ? '22%' : '28%' }} />
+                    <col style={{ width: compactCatalog ? '28%' : '22%' }} />
+                    <col style={{ width: compactCatalog ? '22%' : '28%' }} />
                   </colgroup>
                   <tbody>
                     <tr style={{ background: sheetZebra(ui, 0) }}>
@@ -2609,12 +2660,18 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
                 >
                   Costos — No Previsto
                 </div>
-                <table style={{ ...sheetTable, minWidth: 0, width: '100%', tableLayout: 'fixed' }}>
+                <table style={{
+                  ...sheetTable,
+                  minWidth: 0,
+                  width: '100%',
+                  tableLayout: compactCatalog ? 'fixed' : 'auto',
+                }}
+                >
                   <colgroup>
-                    <col style={{ width: '28%' }} />
-                    <col style={{ width: '22%' }} />
-                    <col style={{ width: '28%' }} />
-                    <col style={{ width: '22%' }} />
+                    <col style={{ width: compactCatalog ? '28%' : '22%' }} />
+                    <col style={{ width: compactCatalog ? '22%' : '28%' }} />
+                    <col style={{ width: compactCatalog ? '28%' : '22%' }} />
+                    <col style={{ width: compactCatalog ? '22%' : '28%' }} />
                   </colgroup>
                   <tbody>
                     <tr style={{ background: sheetZebra(ui, 0) }}>

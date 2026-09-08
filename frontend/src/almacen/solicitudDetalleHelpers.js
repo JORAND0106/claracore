@@ -348,13 +348,20 @@ function formatAbscisaValor(val) {
 
 /** Descripción del ítem de cobro (actividad del presupuesto). */
 export function descripcionItemPresupuesto(item) {
-  const ctx = item?.contexto_presupuesto || item?.preview?.contexto_presupuesto
-  return String(
-    ctx?.descripcion
-    || item?.item_descripcion
-    || item?.descripcion_item
-    || '',
-  ).trim()
+  if (!item) return ''
+  const ctx = item.contexto_presupuesto || item.preview?.contexto_presupuesto
+  const candidates = [
+    ctx?.descripcion,
+    item.item_descripcion,
+    item.descripcion_item,
+    item.presupuesto_descripcion,
+    // No usar material_descripcion / descripcion_solicitada: son del insumo, no del ítem.
+  ]
+  for (const c of candidates) {
+    const s = String(c || '').trim()
+    if (s) return s
+  }
+  return ''
 }
 
 /** Nodos inicio/fin de la línea (presupuesto o guardados). */
