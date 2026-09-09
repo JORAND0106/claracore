@@ -185,7 +185,7 @@ import {
   sicoeCantidadCambioSignificativo,
   sicoeCalcCantidadTotal,
 } from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
-import { formatearCantidadTotal } from './modules/sicoe-obra/sicoeCantidadRedondeo.js'
+import { formatearCantidadTotal, formatearDimension, redondearDimension } from './modules/sicoe-obra/sicoeCantidadRedondeo.js'
 import {
   sicoeNuevoReporteDraftClear,
   sicoeNuevoReporteDraftIsDirty,
@@ -2823,6 +2823,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [editandoSub,    setEditandoSub]    = useState(false)
   const [uploadingGraf,    setUploadingGraf]    = useState(false)
   const [modalGaleriaHoja, setModalGaleriaHoja] = useState(false)
+  const [confirmCantidadCambio, setConfirmCantidadCambio] = useState(null)
   const [galeriaHojaRefreshKey, setGaleriaHojaRefreshKey] = useState(0)
   const [galeriaHojaSeed, setGaleriaHojaSeed] = useState(null)
   const [fotoImgError, setFotoImgError] = useState(false)
@@ -3525,12 +3526,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' })
   }, [indiceItemKbd, mostrarLista, registro.id])
 
-  const guardarCambios = async () => {
+  const guardarCambios = async ({ skipConfirmCantidad = false } = {}) => {
     const idItem = itemListadoId
-    const longN = sicoeNumCampoOmitNull(longitud)
-    const anchoN = sicoeNumCampoOmitNull(ancho)
-    const espeN = sicoeNumCampoOmitNull(espesor)
-    const cantN = sicoeNumCampoOmitNull(cantidad)
+    const longN = redondearDimension(longitud)
+    const anchoN = redondearDimension(ancho)
+    const espeN = redondearDimension(espesor)
+    const cantN = redondearDimension(cantidad)
     if (longN == null && anchoN == null && espeN == null && cantN == null) {
       alert('Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).')
       return
@@ -3549,12 +3550,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
 
     const cantAnterior = Number(registro.cantidad_total || 0)
-    if (sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)) {
-      const okCambio = window.confirm(
-        `Cantidad anterior: ${formatearCantidadTotal(cantAnterior, { locale: false })} → Cantidad actual: ${formatearCantidadTotal(cantTotal, { locale: false })}\n\n` +
-        'Al cambiar la cantidad total se reiniciarán las validaciones de todos los niveles a «No Revisado» y quedará una alerta visible para los validadores. ¿Continuar?',
-      )
-      if (!okCambio) return
+    if (!skipConfirmCantidad && sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)) {
+      setConfirmCantidadCambio({ cantAnterior, cantTotal })
+      return
     }
 
     await sicoeEncolarGuardadoReporte(registro.reporte_id, async () => {
@@ -4642,7 +4640,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     onChange={e => setter(e.target.value)}
                     placeholder={ph}
                     type="number"
-                    step="any"
+                    step="0.001"
+                    inputMode="decimal"
                     style={inpSt}
                   />
                 </div>
@@ -4650,10 +4649,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             </>
           ) : (
             <>
-              <CampoRO label="Longitud"  valor={registro.longitud} />
-              <CampoRO label="Ancho"     valor={registro.ancho} />
-              <CampoRO label="Espesor"   valor={registro.espesor} />
-              <CampoRO label="Cantidad"  valor={registro.cantidad} />
+              <CampoRO label="Longitud"  valor={formatearDimension(registro.longitud, { locale: false, empty: null })} />
+              <CampoRO label="Ancho"     valor={formatearDimension(registro.ancho, { locale: false, empty: null })} />
+              <CampoRO label="Espesor"   valor={formatearDimension(registro.espesor, { locale: false, empty: null })} />
+              <CampoRO label="Cantidad"  valor={formatearDimension(registro.cantidad, { locale: false, empty: null })} />
             </>
           )}
           <CampoRO label="Cant. Total" labelShort="Cant. Tot." valor={formatearCantidadTotal(cantTotal, { locale: false })} color={t.primary} />
@@ -5182,6 +5181,55 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           onConfirmar={confirmarReversionN3Doble}
           onCancelar={() => setMostrarPopupReversionN3(false)}
         />
+      )}
+
+      {confirmCantidadCambio && (
+        <CcConfirmModal
+          theme={t}
+          zIndex={10700}
+          tipo="warn"
+          titulo="Cambio de cantidad"
+          confirmar="Continuar"
+          cancelar="Cancelar"
+          onCancel={() => setConfirmCantidadCambio(null)}
+          onConfirm={() => {
+            setConfirmCantidadCambio(null)
+            void guardarCambios({ skipConfirmCantidad: true })
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 8,
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: `1px solid ${t.border}`,
+              background: t.bg,
+            }}>
+              <div>
+                <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Cantidad anterior
+                </div>
+                <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>
+                  {formatearCantidadTotal(confirmCantidadCambio.cantAnterior, { locale: false })}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Cantidad nueva
+                </div>
+                <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.primary, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>
+                  {formatearCantidadTotal(confirmCantidadCambio.cantTotal, { locale: false })}
+                </div>
+              </div>
+            </div>
+            <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.45 }}>
+              Al cambiar la cantidad total se reiniciarán las validaciones de todos los niveles a «No Revisado»
+              y quedará una alerta visible para los validadores.
+            </p>
+          </div>
+        </CcConfirmModal>
       )}
 
       {/* ─ Acciones finales ─ */}

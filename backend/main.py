@@ -1983,6 +1983,7 @@ from sicoe_creador_permisos import (  # noqa: E402
 from sicoe_cantidad_redondeo import (  # noqa: E402
     calcular_cantidad_con_redondeo as _sicoe_calcular_cantidad_con_redondeo,
     redondear_cantidad_total_dinamico as _sicoe_redondear_cantidad_total,
+    redondear_dimension as _sicoe_redondear_dimension,
 )
 
 
@@ -2089,8 +2090,8 @@ def _sicoe_aplicar_alerta_cantidad(
     uid: Optional[int],
     nivel_max_previo: Optional[int] = None,
 ) -> None:
-    update["cantidad_alerta_anterior"] = round(float(cantidad_anterior), 2)
-    update["cantidad_alerta_actual"] = round(float(cantidad_nueva), 2)
+    update["cantidad_alerta_anterior"] = _sicoe_redondear_cantidad_total(cantidad_anterior)
+    update["cantidad_alerta_actual"] = _sicoe_redondear_cantidad_total(cantidad_nueva)
     update["cantidad_alerta_en"] = datetime.now(timezone.utc).isoformat()
     if uid is not None:
         update["cantidad_alerta_por"] = int(uid)
@@ -25475,7 +25476,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
 
     for dk in ("longitud", "ancho", "espesor", "cantidad"):
         if dk in data and data[dk] is not None:
-            data[dk] = round(float(data[dk]), 2)
+            data[dk] = _sicoe_redondear_dimension(data[dk])
     # `id_pol` existe en presupuesto, no en `so_registros`; un cliente antiguo no debe romper el UPDATE.
     data.pop("id_pol", None)
     # cantidad_total: redondeo dinámico (2 ó 3 dp). Si hay dims en el payload, recalcular desde ellas.
@@ -25923,7 +25924,7 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     for dk in ("longitud", "ancho", "espesor", "cantidad"):
         if data.get(dk) is not None:
             try:
-                data[dk] = round(float(data[dk]), 2)
+                data[dk] = _sicoe_redondear_dimension(data[dk])
             except (TypeError, ValueError):
                 pass
     if any(data.get(k) is not None for k in ("longitud", "ancho", "espesor", "cantidad")):
@@ -26706,7 +26707,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
         if pre_patch:
             for dk in ("longitud", "ancho", "espesor", "cantidad"):
                 if dk in pre_patch and pre_patch[dk] is not None:
-                    pre_patch[dk] = round(float(pre_patch[dk]), 2)
+                    pre_patch[dk] = _sicoe_redondear_dimension(pre_patch[dk])
             if any(k in pre_patch for k in ("longitud", "ancho", "espesor", "cantidad")):
                 merged_for_cant = {
                     k: pre_patch[k] if k in pre_patch else registro.get(k)
