@@ -2682,7 +2682,7 @@ def _require_contract_access(current_user, contrato_id: int):
     raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
 
 
-COMPETENCIAS_BASE = ["EAB", "ENEL-CODENSA", "ETB", "Gas Natural", "ICCU", "IDU", "MOVISTAR"]
+COMPETENCIAS_BASE = ["Alumbrado P.", "EAB", "ENEL-CODENSA", "ETB", "Gas Natural", "ICCU", "IDU", "MOVISTAR"]
 
 
 def _comentario_sicoe_visible_para_usuario(
@@ -4527,6 +4527,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     costo_directo_hasta: Optional[float] = None,
     capitulo: Optional[str] = None,
     capitulos: Optional[List[str]] = None,
+    competencia: Optional[str] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = None,
     items_op: Optional[str] = None,
@@ -4576,6 +4577,8 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         caps_eff = [str(capitulo).strip()]
     if caps_eff:
         q = _apply_capitulos_to_so_registros_q(q, caps_eff)
+    if competencia is not None and str(competencia).strip():
+        q = q.eq("competencia", str(competencia).strip())
     q = _apply_item_patterns_to_so_registros_q(q, items_eff, items_op)
     if subcontratista_id is not None:
         q = q.eq("subcontratista_id", subcontratista_id)
@@ -4654,6 +4657,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
     costo_directo_hasta: Optional[float] = None,
     capitulo: Optional[str] = None,
     capitulos: Optional[List[str]] = None,
+    competencia: Optional[str] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = None,
     items_op: Optional[str] = None,
@@ -4733,6 +4737,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 costo_directo_desde=costo_directo_desde,
                 costo_directo_hasta=costo_directo_hasta,
                 capitulos=caps_eff,
+                competencia=competencia,
                 items=items_eff,
                 items_op=items_op,
                 subcontratista_id=subcontratista_id,
@@ -4810,6 +4815,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             costo_directo_desde=costo_directo_desde,
                             costo_directo_hasta=costo_directo_hasta,
                             capitulos=caps_eff,
+                            competencia=competencia,
                             items=items_eff,
                             items_op=items_op,
                             subcontratista_id=subcontratista_id,
@@ -4848,6 +4854,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         costo_directo_desde=costo_directo_desde,
                         costo_directo_hasta=costo_directo_hasta,
                         capitulos=caps_eff,
+                        competencia=competencia,
                         items=items_eff,
                         items_op=items_op,
                         subcontratista_id=subcontratista_id,
@@ -4889,6 +4896,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     costo_directo_desde=costo_directo_desde,
                     costo_directo_hasta=costo_directo_hasta,
                     capitulos=caps_eff,
+                    competencia=competencia,
                     items=items_eff,
                     items_op=items_op,
                     subcontratista_id=subcontratista_id,
@@ -4930,6 +4938,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     costo_directo_desde=costo_directo_desde,
                     costo_directo_hasta=costo_directo_hasta,
                     capitulos=caps_eff,
+                    competencia=competencia,
                     items=items_eff,
                     items_op=items_op,
                     subcontratista_id=subcontratista_id,
@@ -19098,6 +19107,7 @@ def buscar_reportes_obra(
     subcontratista_id: Optional[int] = None,
     capitulo: Optional[str] = None,
     capitulos_filtro: Optional[str] = None,
+    competencia: Optional[str] = None,
     item: Optional[str] = None,
     items_filtro: Optional[str] = None,
     items_filtro_op: Optional[str] = Query(None),
@@ -19177,6 +19187,7 @@ def buscar_reportes_obra(
     has_reg_f = any([
         bool(caps_buscar_norm), bool(items_buscar_norm), subcontratista_id is not None,
         bool(tramo), bool(costado),
+        bool(competencia and str(competencia).strip()),
         cantidad_desde is not None, cantidad_hasta is not None,
         costo_directo_desde is not None, costo_directo_hasta is not None,
     ])
@@ -19280,6 +19291,7 @@ def buscar_reportes_obra(
             costo_directo_desde=costo_directo_desde,
             costo_directo_hasta=costo_directo_hasta,
             capitulos=caps_buscar_norm,
+            competencia=(str(competencia).strip() if competencia and str(competencia).strip() else None),
             items=items_buscar_norm,
             items_op=items_buscar_op,
             subcontratista_id=subcontratista_id,
@@ -21537,6 +21549,7 @@ def _sicoe_analisis_response_cache_key(
     subcontratista_id=None,
     capitulo=None,
     capitulos_filtro=None,
+    competencia=None,
     item=None,
     items_filtro=None,
     items_filtro_op=None,
@@ -21579,6 +21592,7 @@ def _sicoe_analisis_response_cache_key(
             "subcontratista_id": subcontratista_id,
             "capitulo": capitulo,
             "capitulos_filtro": capitulos_filtro,
+            "competencia": competencia,
             "item": item,
             "items_filtro": items_filtro,
             "items_filtro_op": items_filtro_op,
@@ -21684,6 +21698,7 @@ def analisis_registros_obra(
     subcontratista_id: Optional[int]  = None,
     capitulo:         Optional[str]   = None,
     capitulos_filtro: Optional[str]   = None,
+    competencia:      Optional[str]   = None,
     item:             Optional[str]   = None,
     items_filtro:     Optional[str]   = None,
     items_filtro_op:  Optional[str]   = Query(None),
@@ -21730,6 +21745,7 @@ def analisis_registros_obra(
         subcontratista_id=subcontratista_id,
         capitulo=capitulo,
         capitulos_filtro=capitulos_filtro,
+        competencia=competencia,
         item=item,
         items_filtro=items_filtro,
         items_filtro_op=items_filtro_op,
@@ -22037,6 +22053,8 @@ def analisis_registros_obra(
             q = _apply_item_patterns_to_so_registros_q(q, items_ana, items_filtro_op)
             if _caps_l:
                 q = _apply_capitulos_to_so_registros_q(q, _caps_l)
+            if competencia is not None and str(competencia).strip():
+                q = q.eq("competencia", str(competencia).strip())
             if _sub_l is not None:
                 q = q.eq("subcontratista_id", _sub_l)
             if _rp_l is not None:
@@ -22725,6 +22743,7 @@ def obtener_reporte(
     item: Optional[str] = None,
     items_filtro: Optional[str] = Query(None),
     items_filtro_op: Optional[str] = Query(None),
+    competencia: Optional[str] = Query(None),
     tramo: Optional[str] = None,
     costado: Optional[str] = None,
     pk_id: Optional[int] = None,
@@ -22833,6 +22852,7 @@ def obtener_reporte(
                     abs_inicio=abs_inicio,
                     abs_final=abs_final,
                     capitulo=capitulo,
+                    competencia=(str(competencia).strip() if competencia and str(competencia).strip() else None),
                     items=items_detalle_norm,
                     items_op=items_filtro_op,
                     subcontratista_id=subcontratista_id,
@@ -26233,6 +26253,7 @@ def sicoe_cantidades_por_item(
     subcontratista_id: Optional[int] = None,
     capitulo: Optional[str] = None,
     capitulos_filtro: Optional[str] = None,
+    competencia: Optional[str] = None,
     item: Optional[str] = None,
     items_filtro: Optional[str] = None,
     items_filtro_op: Optional[str] = Query(None),
@@ -26285,6 +26306,7 @@ def sicoe_cantidades_por_item(
             subcontratista_id is not None,
             bool(caps_ana) or bool((capitulo or "").strip()),
             bool(items_ana) or bool((item or "").strip()),
+            bool((competencia or "").strip()),
             bool((tramo or "").strip()),
             bool((costado or "").strip()),
             abs_inicio is not None,
@@ -26492,6 +26514,7 @@ def sicoe_cantidades_por_item(
             costo_directo_hasta=costo_directo_hasta,
             capitulo=None,
             capitulos=caps_ana or None,
+            competencia=(str(competencia).strip() if competencia and str(competencia).strip() else None),
             item=None,
             items=items_ana or None,
             items_op=items_filtro_op,

@@ -1,5 +1,6 @@
 import { API_BASE } from '../../apiBase'
 import { sicoeItemsSugerenciasParams } from './sicoeFiltroItemHelpers'
+import { fetchSicoeCompetenciasCached } from './sicoeCatalogoCache'
 
 export { sicoeItemPickerPuedeBuscar, sicoeItemsSugerenciasParams } from './sicoeFiltroItemHelpers'
 
@@ -63,7 +64,7 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
   if (ctx.semana) pCap.set('semana', ctx.semana)
   if (ctx.subcontratista_id) pCap.set('subcontratista_id', ctx.subcontratista_id)
 
-  const [caps, tc, actas, subc, semanas, actasFiltro] = await Promise.all([
+  const [caps, tc, actas, subc, semanas, actasFiltro, comps] = await Promise.all([
     fetch(`${API}/sicoe-obra/${contratoId}/filtros/capitulos?${pCap}`, { headers: hdrs })
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []),
@@ -84,6 +85,7 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
     fetch(`${API}/sicoe-obra/${contratoId}/filtros/actas`, { headers: hdrs })
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []),
+    fetchSicoeCompetenciasCached(API, contratoId, token).catch(() => []),
   ])
 
   // Prefetch acotado (capítulo/acta/semana). La búsqueda libre de ítem sin capítulo
@@ -113,6 +115,7 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
 
   return {
     capitulos: Array.isArray(caps) ? caps : [],
+    competencias: Array.isArray(comps) ? comps.filter((c) => String(c || '').trim()) : [],
     tramos: tc?.tramos || [],
     costados: tc?.costados || [],
     semanas: Array.isArray(semanas) ? semanas : [],

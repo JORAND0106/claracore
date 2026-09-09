@@ -162,6 +162,7 @@ export default function SicoeFiltroModal({
       estados_reporte: estadosReporte.map((e) => ({ value: e, label: e })),
       etiquetas_validacion: etiquetasValidacion.map((e) => ({ value: e, label: e })),
       capitulos: (opciones.capitulos || []).map((c) => ({ value: c, label: c })),
+      competencias: (opciones.competencias || []).map((c) => ({ value: c, label: c })),
       tramos: (opciones.tramos || []).map((v) => ({ value: v, label: v })),
       costados: (opciones.costados || []).map((v) => ({ value: v, label: v })),
       semanas_opts: (opciones.semanas || [])
