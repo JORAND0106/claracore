@@ -1,7 +1,13 @@
 import { useState } from 'react'
 import { tFrom, isDarkMode } from '../../theme/adminPanelTheme'
+import {
+  decimalAPuntosPct,
+  fmtPctDesdeDecimal,
+  puntosPctADecimal,
+} from '../../admin/catalogoInsumosTributos'
 import DocumentosCorteExcelBlock from './DocumentosCorteExcelBlock'
 import PolizasExcelBlock from './PolizasExcelBlock'
+import { fmtMoneda } from './subcontratistasDocsHelpers'
 import { subcontratistasSheetCssVars, subcontratistasSheetStyles, subUi } from './subcontratistasSheetStyles'
 
 const EMPTY = {
@@ -10,6 +16,8 @@ const EMPTY = {
   nit: '',
   nombre_contacto: '',
   telefono: '',
+  anticipo: null,
+  amortizacion_pct: null,
 }
 
 /**
@@ -45,12 +53,16 @@ export default function SubcontratistaFormSheet({
 
   const telClean = (f.telefono || '').replace(/[^0-9]/g, '')
 
+  const amortDecimal = puntosPctADecimal(f.amortizacion_pct)
+
   const datosRows = [
     { key: 'razon_social', label: 'Razón Social *', kind: 'text', required: true },
     { key: 'nit', label: 'NIT', kind: 'nit' },
     { key: 'objeto_contrato', label: 'Objeto del Contrato', kind: 'textarea' },
     { key: 'nombre_contacto', label: 'Nombre del Contacto / Rep. Legal', kind: 'text' },
     { key: 'telefono', label: 'Teléfono de Contacto', kind: 'tel' },
+    { key: 'anticipo', label: 'Anticipo', kind: 'money' },
+    { key: 'amortizacion_pct', label: '% de Amortización', kind: 'pct' },
   ]
 
   return (
@@ -120,6 +132,69 @@ export default function SubcontratistaFormSheet({
                           WhatsApp
                         </a>
                       )}
+                    </div>
+                  ) : row.kind === 'money' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        style={{ ...ui.cellInp, flex: 1, textAlign: 'right' }}
+                        type="number"
+                        min="0"
+                        step="any"
+                        disabled={!editing}
+                        value={f.anticipo != null && f.anticipo !== '' ? f.anticipo : ''}
+                        placeholder="0"
+                        title="Valor en COP"
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (v === '') set('anticipo', null)
+                          else {
+                            const n = Number(String(v).replace(',', '.'))
+                            set('anticipo', Number.isFinite(n) ? n : null)
+                          }
+                        }}
+                      />
+                      <span style={{
+                        minWidth: 88,
+                        textAlign: 'right',
+                        fontSize: 'var(--cc-caption)',
+                        color: tTok.textMuted,
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                      >
+                        {fmtMoneda(f.anticipo)}
+                      </span>
+                    </div>
+                  ) : row.kind === 'pct' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        style={{ ...ui.cellInp, flex: 1, textAlign: 'right' }}
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="any"
+                        inputMode="decimal"
+                        disabled={!editing}
+                        value={amortDecimal}
+                        placeholder="0.05"
+                        title="Decimal (0.05 = 5%)"
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (v === '') set('amortizacion_pct', null)
+                          else set('amortizacion_pct', decimalAPuntosPct(v))
+                        }}
+                      />
+                      <span style={{
+                        minWidth: 64,
+                        textAlign: 'right',
+                        fontWeight: 700,
+                        fontSize: 'var(--cc-sm)',
+                        color: tTok.primary,
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                      title="Equivalente %"
+                      >
+                        {fmtPctDesdeDecimal(amortDecimal)}
+                      </span>
                     </div>
                   ) : (
                     <input

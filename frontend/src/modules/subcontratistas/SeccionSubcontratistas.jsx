@@ -191,7 +191,18 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     }
     setCreating(true)
     try {
-      const nuevo = await call('POST', `/subcontratistas/${contratoId}`, crearForm)
+      const payload = {
+        razon_social: crearForm.razon_social,
+        objeto_contrato: crearForm.objeto_contrato || null,
+        nit: crearForm.nit || null,
+        nombre_contacto: crearForm.nombre_contacto || null,
+        telefono: crearForm.telefono || null,
+        anticipo: crearForm.anticipo != null && crearForm.anticipo !== '' ? Number(crearForm.anticipo) : null,
+        amortizacion_pct: crearForm.amortizacion_pct != null && crearForm.amortizacion_pct !== ''
+          ? Number(crearForm.amortizacion_pct)
+          : null,
+      }
+      const nuevo = await call('POST', `/subcontratistas/${contratoId}`, payload)
       const newId = nuevo?.id
       let uploadErrors = 0
       if (newId && token) {
@@ -247,10 +258,21 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
   const guardarEdicion = async () => {
     setSaving(true)
     try {
-      await call('PUT', `/subcontratistas/${detalle.id}`, editForm)
+      const payload = {
+        razon_social: editForm.razon_social,
+        objeto_contrato: editForm.objeto_contrato || null,
+        nit: editForm.nit || null,
+        nombre_contacto: editForm.nombre_contacto || null,
+        telefono: editForm.telefono || null,
+        anticipo: editForm.anticipo != null && editForm.anticipo !== '' ? Number(editForm.anticipo) : null,
+        amortizacion_pct: editForm.amortizacion_pct != null && editForm.amortizacion_pct !== ''
+          ? Number(editForm.amortizacion_pct)
+          : null,
+      }
+      await call('PUT', `/subcontratistas/${detalle.id}`, payload)
       setMsg({ type: 'success', text: 'Datos actualizados.' })
       setEditando(false)
-      setDetalle({ ...detalle, ...editForm })
+      setDetalle({ ...detalle, ...payload })
       cargar()
     } catch (e) {
       setMsg({ type: 'error', text: e.message })

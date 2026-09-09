@@ -17652,6 +17652,8 @@ class SubcontratistaCreate(BaseModel):
     nit:             Optional[str] = None
     nombre_contacto: Optional[str] = None
     telefono:        Optional[str] = None
+    anticipo:        Optional[float] = None
+    amortizacion_pct: Optional[float] = None
 
 class CorteCreate(BaseModel):
     tipo_periodo: str          # 'quincenal' | 'mensual'
@@ -17675,6 +17677,7 @@ class SubprecioBulkItem(BaseModel):
     precio_unitario_sub: float
     origen: Optional[str] = "presupuesto"
     cantidad_manual: Optional[float] = None
+    tributos: Optional[dict] = None
 
 
 class SubprecioBulkBody(BaseModel):
@@ -17994,7 +17997,13 @@ def listar_subcontratistas(contrato_id: int, current_user=Depends(get_current_us
 def crear_subcontratista(contrato_id: int, body: SubcontratistaCreate, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     row = {"contrato_id": contrato_id, **body.dict()}
-    result = supabase.table("subcontratistas").insert(row).execute()
+    try:
+        result = supabase.table("subcontratistas").insert(row).execute()
+    except Exception:
+        # Columnas anticipo / amortizacion_pct aún no migradas
+        row.pop("anticipo", None)
+        row.pop("amortizacion_pct", None)
+        result = supabase.table("subcontratistas").insert(row).execute()
     nuevo = result.data[0] if result.data else {}
     registrar_log(current_user, "CREAR", "SUBCONTRATISTAS", "subcontratista", str(nuevo.get("id","")),
                   {"razon_social": body.razon_social})
@@ -18002,7 +18011,13 @@ def crear_subcontratista(contrato_id: int, body: SubcontratistaCreate, current_u
 
 @app.put("/subcontratistas/{sub_id}")
 def actualizar_subcontratista(sub_id: int, body: SubcontratistaCreate, current_user=Depends(get_current_user)):
-    supabase.table("subcontratistas").update(body.dict()).eq("id", sub_id).execute()
+    patch = body.dict()
+    try:
+        supabase.table("subcontratistas").update(patch).eq("id", sub_id).execute()
+    except Exception:
+        patch.pop("anticipo", None)
+        patch.pop("amortizacion_pct", None)
+        supabase.table("subcontratistas").update(patch).eq("id", sub_id).execute()
     registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "subcontratista", str(sub_id),
                   {"razon_social": body.razon_social})
     return {"ok": True}
@@ -18241,19 +18256,31 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
     try:
         precios_rows = (
             supabase.table("subcontratista_precios")
-            .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual")
+            .select(
+                "id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual, "
+                "tributos, precio_unitario_con_aiu"
+            )
             .eq("subcontratista_id", int(sub_id))
             .execute()
             .data
         ) or []
     except Exception:
-        precios_rows = (
-            supabase.table("subcontratista_precios")
-            .select("id, listado_precio_id, precio_unitario_sub")
-            .eq("subcontratista_id", int(sub_id))
-            .execute()
-            .data
-        ) or []
+        try:
+            precios_rows = (
+                supabase.table("subcontratista_precios")
+                .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual")
+                .eq("subcontratista_id", int(sub_id))
+                .execute()
+                .data
+            ) or []
+        except Exception:
+            precios_rows = (
+                supabase.table("subcontratista_precios")
+                .select("id, listado_precio_id, precio_unitario_sub")
+                .eq("subcontratista_id", int(sub_id))
+                .execute()
+                .data
+            ) or []
 
     items = build_precios_sheet(listado, cant_map, precios_rows)
     return {"items": items, "total": len(items)}
@@ -18308,15 +18335,25 @@ def bulk_upsert_precios_sub(
             "precio_unitario_sub": p["precio_unitario_sub"],
             "origen": p["origen"],
             "cantidad_manual": p["cantidad_manual"] if p["origen"] == "manual" else None,
+            "tributos": p.get("tributos") or {},
+            "precio_unitario_con_aiu": p.get("precio_unitario_con_aiu"),
         }
         if lp_id in by_lp:
             try:
                 supabase.table("subcontratista_precios").update(patch).eq("id", by_lp[lp_id]).execute()
             except Exception:
-                # Columnas origen/cantidad_manual aún no migradas
-                supabase.table("subcontratista_precios").update(
-                    {"precio_unitario_sub": p["precio_unitario_sub"]}
-                ).eq("id", by_lp[lp_id]).execute()
+                # Columnas nuevas aún no migradas: degradar progresivamente
+                slim = {
+                    "precio_unitario_sub": p["precio_unitario_sub"],
+                    "origen": p["origen"],
+                    "cantidad_manual": p["cantidad_manual"] if p["origen"] == "manual" else None,
+                }
+                try:
+                    supabase.table("subcontratista_precios").update(slim).eq("id", by_lp[lp_id]).execute()
+                except Exception:
+                    supabase.table("subcontratista_precios").update(
+                        {"precio_unitario_sub": p["precio_unitario_sub"]}
+                    ).eq("id", by_lp[lp_id]).execute()
             actualizados += 1
         else:
             row = {
@@ -18326,13 +18363,20 @@ def bulk_upsert_precios_sub(
                 "precio_unitario_sub": p["precio_unitario_sub"],
                 "origen": p["origen"],
                 "cantidad_manual": p["cantidad_manual"] if p["origen"] == "manual" else None,
+                "tributos": p.get("tributos") or {},
+                "precio_unitario_con_aiu": p.get("precio_unitario_con_aiu"),
             }
             try:
                 supabase.table("subcontratista_precios").insert(row).execute()
             except Exception:
-                row.pop("origen", None)
-                row.pop("cantidad_manual", None)
-                supabase.table("subcontratista_precios").insert(row).execute()
+                row.pop("tributos", None)
+                row.pop("precio_unitario_con_aiu", None)
+                try:
+                    supabase.table("subcontratista_precios").insert(row).execute()
+                except Exception:
+                    row.pop("origen", None)
+                    row.pop("cantidad_manual", None)
+                    supabase.table("subcontratista_precios").insert(row).execute()
             insertados += 1
 
     registrar_log(

@@ -109,6 +109,14 @@ def build_items_cobro_asignados(
             vu_sub_n = float(vu_sub) if vu_sub is not None and vu_sub != "" else None
         except (TypeError, ValueError):
             vu_sub_n = None
+        try:
+            vu_con_aiu = (
+                float(prev.get("precio_unitario_con_aiu"))
+                if prev.get("precio_unitario_con_aiu") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            vu_con_aiu = None
         rows.append({
             "listado_precio_id": lp_id,
             "precio_id": prev.get("id"),
@@ -120,6 +128,8 @@ def build_items_cobro_asignados(
             "cantidad": round(cant, 4),
             "vu_cobro": vu_ref_n,
             "vu_costo_mo": vu_sub_n,
+            "vu_costo_con_aiu": vu_con_aiu,
+            "tributos": prev.get("tributos") or {},
             "origen": "presupuesto",
             "cantidad_editable": False,
         })
@@ -184,6 +194,14 @@ def build_precios_sheet(
         except (TypeError, ValueError):
             vu_sub_n = None
         try:
+            vu_con_aiu = (
+                float(pr.get("precio_unitario_con_aiu"))
+                if pr.get("precio_unitario_con_aiu") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            vu_con_aiu = None
+        try:
             cant_m = float(pr.get("cantidad_manual")) if pr.get("cantidad_manual") is not None else None
         except (TypeError, ValueError):
             cant_m = None
@@ -198,6 +216,8 @@ def build_precios_sheet(
             "cantidad": cant_m,
             "vu_cobro": vu_ref_n,
             "vu_costo_mo": vu_sub_n,
+            "vu_costo_con_aiu": vu_con_aiu,
+            "tributos": pr.get("tributos") or {},
             "origen": "manual",
             "cantidad_editable": True,
         })
@@ -216,7 +236,9 @@ def build_precios_sheet(
 
 
 def normalize_bulk_precios_payload(items: Any) -> List[dict]:
-    """Valida body de bulk: listado_precio_id, precio_unitario_sub, origen?, cantidad_manual?."""
+    """Valida body de bulk: listado_precio_id, precio_unitario_sub, origen?, cantidad_manual?, tributos?."""
+    from almacen_insumos_service import compute_valor_despues_aiu_iva, normalize_tributos
+
     if not isinstance(items, list) or not items:
         raise ValueError("Debe enviar al menos un ítem con precio.")
     out: List[dict] = []
@@ -242,11 +264,15 @@ def normalize_bulk_precios_payload(items: Any) -> List[dict]:
         origen = str(raw.get("origen") or "presupuesto").strip().lower()
         if origen not in ("presupuesto", "manual"):
             raise ValueError(f"origen inválido para listado_precio_id={lp_id}.")
+        tributos = normalize_tributos(raw.get("tributos"))
+        precio_con_aiu = float(compute_valor_despues_aiu_iva(precio, tributos))
         row = {
             "listado_precio_id": lp_id,
             "precio_unitario_sub": precio,
             "origen": origen,
             "cantidad_manual": None,
+            "tributos": tributos,
+            "precio_unitario_con_aiu": precio_con_aiu,
         }
         if origen == "manual":
             raw_cant = raw.get("cantidad_manual", raw.get("cantidad"))
