@@ -409,9 +409,9 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
               })}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: `1px solid ${tTok.border}`, paddingTop: 8 }}>
-              <button type="button" style={{ ...S.btn('ghost', true), fontSize: 'var(--cc-caption)' }} onClick={() => { onChange(new Date().toISOString().slice(0, 10)); onToggle() }}>↖ hoy</button>
-              <button type="button" style={{ ...S.btn('danger', true), fontSize: 'var(--cc-caption)' }} onClick={() => { onChange(''); onToggle() }}>— borrar</button>
-              <button type="button" style={{ ...S.btn('ghost', true), fontSize: 'var(--cc-caption)' }} onClick={onToggle}>✕ cerrar</button>
+              <button type="button" style={{ ...S.btn('ghost', true) }} onClick={() => { onChange(new Date().toISOString().slice(0, 10)); onToggle() }}>↖ hoy</button>
+              <button type="button" style={{ ...S.btn('danger', true) }} onClick={() => { onChange(''); onToggle() }}>— borrar</button>
+              <button type="button" style={{ ...S.btn('ghost', true) }} onClick={onToggle}>✕ cerrar</button>
             </div>
           </div>
         )}
@@ -636,7 +636,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                   onClick={() => setTabDetalle(id)}
                   style={{
                     padding: '10px 20px', minHeight: 44, border: 'none', background: 'transparent',
-                    cursor: 'pointer', fontSize: 'var(--cc-sm)', fontWeight: tabDetalle === id ? 700 : 400,
+                    cursor: 'pointer', fontSize: 'var(--cc-sm)', lineHeight: 1.3, fontWeight: tabDetalle === id ? 700 : 400,
                     color: tabDetalle === id ? tTok.primary : col.textSecondary,
                     borderBottom: tabDetalle === id ? `2px solid ${tTok.primary}` : '2px solid transparent',
                     transition: 'all 0.15s', whiteSpace: 'nowrap', flex: '0 0 auto',

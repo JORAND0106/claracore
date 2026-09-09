@@ -20,16 +20,6 @@ const EMPTY = {
   amortizacion_pct: null,
 }
 
-function labelCellStyle(theme, tTok, ui) {
-  return {
-    ...ui.td,
-    fontWeight: 700,
-    color: tTok.textMuted,
-    background: isDarkMode(theme) ? 'rgba(0,175,197,0.04)' : 'rgba(0,119,182,0.03)',
-    whiteSpace: 'nowrap',
-  }
-}
-
 /**
  * Hoja Excel de datos del subcontratista + bloques Pólizas / Documentos Contractuales.
  * Seguridad Social no se muestra aquí (va en cada corte).
@@ -62,23 +52,32 @@ export default function SubcontratistaFormSheet({
   const set = (key, val) => onChange?.({ ...f, [key]: val })
   const telClean = (f.telefono || '').replace(/[^0-9]/g, '')
   const amortDecimal = puntosPctADecimal(f.amortizacion_pct)
-  const lbl = labelCellStyle(theme, tTok, ui)
+
+  const lbl = {
+    ...ui.tdLabel,
+    background: isDarkMode(theme) ? 'rgba(0,175,197,0.04)' : 'rgba(0,119,182,0.03)',
+  }
+  const val = {
+    ...ui.td,
+    overflow: 'hidden',
+  }
 
   return (
     <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)', fontFamily: 'inherit' }}>
       <div style={ui.sectionTitle}>Datos del subcontratista</div>
-      <div style={{ ...ui.sheetWrap, maxHeight: 'none' }}>
-        <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
+      <div style={{ ...ui.sheetWrap, maxHeight: 'none', overflowX: 'auto' }}>
+        <table style={{ ...ui.sheetTable, tableLayout: 'fixed', minWidth: 640 }}>
           <colgroup>
-            <col style={{ width: '16%' }} />
-            <col style={{ width: '34%' }} />
-            <col style={{ width: '16%' }} />
-            <col style={{ width: '34%' }} />
+            {/* Etiquetas más anchas para textos largos (Contacto / Rep. Legal) sin invadir el valor */}
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '28%' }} />
+            <col style={{ width: '20%' }} />
+            <col style={{ width: '30%' }} />
           </colgroup>
           <tbody>
             <tr>
               <td style={lbl}>Razón Social *</td>
-              <td style={ui.td}>
+              <td style={val}>
                 <input
                   style={ui.cellInp}
                   value={f.razon_social || ''}
@@ -88,7 +87,7 @@ export default function SubcontratistaFormSheet({
                 />
               </td>
               <td style={lbl}>NIT</td>
-              <td style={ui.td}>
+              <td style={val}>
                 <input
                   style={ui.cellInp}
                   value={f.nit || ''}
@@ -100,7 +99,7 @@ export default function SubcontratistaFormSheet({
             </tr>
             <tr>
               <td style={lbl}>Objeto del Contrato</td>
-              <td style={ui.td} colSpan={3}>
+              <td style={val} colSpan={3}>
                 <textarea
                   style={{ ...ui.cellInp, height: 'auto', minHeight: 56, resize: 'vertical', padding: 6 }}
                   value={f.objeto_contrato || ''}
@@ -112,19 +111,20 @@ export default function SubcontratistaFormSheet({
             </tr>
             <tr>
               <td style={lbl}>Nombre del Contacto / Rep. Legal</td>
-              <td style={ui.td}>
+              <td style={val}>
                 <input
                   style={ui.cellInp}
                   value={f.nombre_contacto || ''}
                   disabled={!editing}
                   onChange={(e) => set('nombre_contacto', e.target.value)}
+                  placeholder="Nombre completo"
                 />
               </td>
               <td style={lbl}>Teléfono de Contacto</td>
-              <td style={ui.td}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <td style={val}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, width: '100%' }}>
                   <input
-                    style={{ ...ui.cellInp, flex: 1 }}
+                    style={{ ...ui.cellInp, flex: '1 1 auto', minWidth: 0 }}
                     value={f.telefono || ''}
                     disabled={!editing}
                     onChange={(e) => set('telefono', e.target.value.replace(/[^0-9+\-\s]/g, ''))}
@@ -138,14 +138,17 @@ export default function SubcontratistaFormSheet({
                       onMouseEnter={() => setWaHover(true)}
                       onMouseLeave={() => setWaHover(false)}
                       style={{
+                        flex: '0 0 auto',
                         background: '#25D366',
                         borderRadius: 8,
-                        padding: '6px 12px',
+                        padding: '6px 10px',
                         color: '#fff',
-                        fontSize: 'var(--cc-caption)',
+                        fontSize: 'var(--cc-sm)',
+                        lineHeight: 1.3,
                         fontWeight: 700,
                         textDecoration: 'none',
                         whiteSpace: 'nowrap',
+                        fontFamily: 'inherit',
                         opacity: waHover ? 0.92 : 1,
                       }}
                     >
@@ -157,10 +160,10 @@ export default function SubcontratistaFormSheet({
             </tr>
             <tr>
               <td style={lbl}>Anticipo</td>
-              <td style={ui.td}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <td style={val}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, width: '100%' }}>
                   <input
-                    style={{ ...ui.cellInp, flex: 1, textAlign: 'right' }}
+                    style={{ ...ui.cellInp, flex: '1 1 auto', minWidth: 0, textAlign: 'right' }}
                     type="number"
                     min="0"
                     step="any"
@@ -178,11 +181,13 @@ export default function SubcontratistaFormSheet({
                     }}
                   />
                   <span style={{
-                    minWidth: 88,
+                    flex: '0 0 auto',
+                    minWidth: 72,
                     textAlign: 'right',
                     fontSize: 'var(--cc-caption)',
                     color: tTok.textMuted,
                     fontVariantNumeric: 'tabular-nums',
+                    whiteSpace: 'nowrap',
                   }}
                   >
                     {fmtMoneda(f.anticipo)}
@@ -190,10 +195,10 @@ export default function SubcontratistaFormSheet({
                 </div>
               </td>
               <td style={lbl}>% de Amortización</td>
-              <td style={ui.td}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <td style={val}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, width: '100%' }}>
                   <input
-                    style={{ ...ui.cellInp, flex: 1, textAlign: 'right' }}
+                    style={{ ...ui.cellInp, flex: '1 1 auto', minWidth: 0, textAlign: 'right' }}
                     type="number"
                     min="0"
                     max="1"
@@ -210,12 +215,14 @@ export default function SubcontratistaFormSheet({
                     }}
                   />
                   <span style={{
-                    minWidth: 64,
+                    flex: '0 0 auto',
+                    minWidth: 52,
                     textAlign: 'right',
                     fontWeight: 700,
                     fontSize: 'var(--cc-sm)',
                     color: tTok.primary,
                     fontVariantNumeric: 'tabular-nums',
+                    whiteSpace: 'nowrap',
                   }}
                   title="Equivalente %"
                   >
