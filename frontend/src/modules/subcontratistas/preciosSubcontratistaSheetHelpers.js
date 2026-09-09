@@ -1,6 +1,11 @@
 /**
- * Helpers puros — hoja unificada Tab Precios (presupuesto + manual).
+ * Helpers puros — hoja unificada Tab Precios (presupuesto + manual + AIU/IVA).
  */
+import {
+  EMPTY_IMPUESTO,
+  formImpuestoDesdeTributos,
+  tributosPayloadDesdeForm,
+} from '../../admin/catalogoInsumosTributos.js'
 
 export function parseNum(raw) {
   const s = String(raw ?? '').trim()
@@ -46,9 +51,16 @@ export function filterListadoItems(listado, { capitulo = '', query = '', exclude
   return out
 }
 
+export function impuestoFromRow(row) {
+  if (row?.impuesto && typeof row.impuesto === 'object') {
+    return { ...EMPTY_IMPUESTO, ...row.impuesto }
+  }
+  return formImpuestoDesdeTributos(row?.tributos || {})
+}
+
 /**
  * Arma el payload de bulk a partir de filas + drafts de edición.
- * drafts: { [rowKey]: { vu_costo?, cantidad?, ... } }
+ * drafts: { [rowKey]: { vu_costo?, cantidad?, impuesto? } }
  */
 export function buildBulkPayload(rows, drafts = {}) {
   const out = []
@@ -60,10 +72,12 @@ export function buildBulkPayload(rows, drafts = {}) {
     const vu = parseNum(vuRaw)
     if (vu == null || Number.isNaN(vu) || vu < 0) continue
     if (!r.listado_precio_id) continue
+    const impuesto = d.impuesto || impuestoFromRow(r) || EMPTY_IMPUESTO
     const item = {
       listado_precio_id: Number(r.listado_precio_id),
       precio_unitario_sub: vu,
       origen,
+      tributos: tributosPayloadDesdeForm(impuesto),
     }
     if (origen === 'manual') {
       const cantRaw = d.cantidad != null ? d.cantidad : (r.cantidad != null ? r.cantidad : '')

@@ -97,11 +97,31 @@ class TestItemsCobro(unittest.TestCase):
         self.assertEqual(len(out), 2)
         self.assertIsNone(out[0]["cantidad_manual"])
         self.assertEqual(out[1]["cantidad_manual"], 2.5)
+        self.assertIn("tributos", out[0])
+        self.assertEqual(out[0]["precio_unitario_con_aiu"], 10.0)
         with self.assertRaises(ValueError):
             normalize_bulk_precios_payload([
                 {"listado_precio_id": 3, "precio_unitario_sub": 1, "origen": "manual"},
             ])
 
+    def test_bulk_payload_computes_aiu(self):
+        out = normalize_bulk_precios_payload([
+            {
+                "listado_precio_id": 1,
+                "precio_unitario_sub": 1000,
+                "origen": "presupuesto",
+                "tributos": {
+                    "administracion": 5,
+                    "imprevistos": 3,
+                    "utilidad": 5,
+                    "iva": 19,
+                },
+            },
+        ])
+        # base + base*(0.05+0.03+0.05) + base*0.05*0.19 = 1000 + 130 + 9.5 → 1140
+        self.assertEqual(out[0]["precio_unitario_con_aiu"], 1140.0)
+        self.assertEqual(out[0]["tributos"]["tipo"], "iva_sobre_utilidad")
+        self.assertEqual(out[0]["precio_unitario_sub"], 1000.0)
 
 if __name__ == "__main__":
     unittest.main()

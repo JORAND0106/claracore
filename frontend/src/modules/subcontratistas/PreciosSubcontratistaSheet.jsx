@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE } from '../../apiBase'
+import {
+  EMPTY_IMPUESTO,
+  computeValorDespuesAiuIva,
+  impuestoTieneDatos,
+} from '../../admin/catalogoInsumosTributos'
 import { fmtMoneda } from './subcontratistasDocsHelpers'
+import PreciosAiuIvaModal from './PreciosAiuIvaModal'
 import {
   bulkUpsertPreciosSub,
   deletePrecioSub,
@@ -10,6 +16,7 @@ import {
   buildBulkPayload,
   filterListadoItems,
   hasInvalidDrafts,
+  impuestoFromRow,
   isDraftIncomplete,
   parseNum,
   rowKey,
@@ -42,6 +49,7 @@ export default function PreciosSubcontratistaSheet({
   const [listadoLoading, setListadoLoading] = useState(false)
   const [acOpenKey, setAcOpenKey] = useState(null)
   const [acQuery, setAcQuery] = useState('')
+  const [aiuKey, setAiuKey] = useState(null)
   const wrapRef = useRef(null)
 
   const loadSheet = useCallback(async () => {
@@ -58,6 +66,7 @@ export default function PreciosSubcontratistaSheet({
         next[key] = {
           vu_costo: it.vu_costo_mo != null && it.vu_costo_mo !== '' ? String(it.vu_costo_mo) : '',
           cantidad: it.cantidad != null && it.cantidad !== '' ? String(it.cantidad) : '',
+          impuesto: impuestoFromRow(it),
         }
       }
       setDrafts(next)
@@ -146,7 +155,7 @@ export default function PreciosSubcontratistaSheet({
     setRows((prev) => [...prev, row])
     setDrafts((prev) => ({
       ...prev,
-      [draftKey]: { vu_costo: '', cantidad: '', query: '' },
+      [draftKey]: { vu_costo: '', cantidad: '', query: '', impuesto: { ...EMPTY_IMPUESTO } },
     }))
     setAcOpenKey(draftKey)
     setAcQuery('')
@@ -209,7 +218,13 @@ export default function PreciosSubcontratistaSheet({
     }))
     setDrafts((prev) => ({
       ...prev,
-      [key]: { ...(prev[key] || {}), query: '', vu_costo: prev[key]?.vu_costo || '', cantidad: prev[key]?.cantidad || '' },
+      [key]: {
+        ...(prev[key] || {}),
+        query: '',
+        vu_costo: prev[key]?.vu_costo || '',
+        cantidad: prev[key]?.cantidad || '',
+        impuesto: prev[key]?.impuesto || { ...EMPTY_IMPUESTO },
+      },
     }))
     setAcOpenKey(key)
     setAcQuery('')
@@ -288,7 +303,7 @@ export default function PreciosSubcontratistaSheet({
             Ítems de Cobro
           </div>
           <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, lineHeight: 1.4 }}>
-            Cantidades de Presupuesto (solo VU Costo M.O. editable) + ítems agregados manualmente.
+            VU Costo M.O. es el valor antes de AIU/IVA. Use A·Í·U·IVA para desglosar y ver el valor resultante.
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -330,17 +345,18 @@ export default function PreciosSubcontratistaSheet({
         <div style={{ ...ui.sheetWrap, maxHeight: 'min(560px, 58vh)' }}>
           <table style={ui.sheetTable}>
             <colgroup>
-              <col style={{ width: '9%' }} />
-              <col style={{ width: '30%' }} />
-              <col style={{ width: '7%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '24%' }} />
+              <col style={{ width: '6%' }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '16%' }} />
+              <col style={{ width: '14%' }} />
               <col style={{ width: '12%' }} />
             </colgroup>
             <thead>
               <tr>
-                {['Ítem', 'Descripción', 'Und', 'Cantidad', 'VU Cobro', 'VU Costo M.O.', ''].map((h, i) => (
+                {['Ítem', 'Descripción', 'Und', 'Cantidad', 'VU Cobro', 'VU Costo M.O.', 'Con AIU/IVA', ''].map((h, i) => (
                   <th key={h || `a${i}`} style={ui.th}>{h}</th>
                 ))}
               </tr>
@@ -490,25 +506,56 @@ export default function PreciosSubcontratistaSheet({
                       {fmtMoneda(r.vu_cobro)}
                     </td>
                     <td style={ui.td}>
-                      {canEdit ? (
-                        <input
-                          style={{
-                            ...ui.cellInp,
-                            textAlign: 'right',
-                            background: tTok.inputBg || 'transparent',
-                          }}
-                          type="number"
-                          min="0"
-                          step="any"
-                          disabled={saving}
-                          value={d.vu_costo ?? ''}
-                          placeholder="0"
-                          onChange={(e) => setDraftField(key, 'vu_costo', e.target.value)}
-                        />
-                      ) : (
-                        <span style={{ display: 'block', textAlign: 'right', fontWeight: 700, color: 'var(--cc-color-success)' }}>
-                          {fmtMoneda(parseNum(d.vu_costo) ?? r.vu_costo_mo)}
-                        </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {canEdit ? (
+                          <input
+                            style={{
+                              ...ui.cellInp,
+                              textAlign: 'right',
+                              background: tTok.inputBg || 'transparent',
+                            }}
+                            type="number"
+                            min="0"
+                            step="any"
+                            disabled={saving}
+                            value={d.vu_costo ?? ''}
+                            placeholder="Antes AIU"
+                            title="Valor antes de AIU/IVA"
+                            onChange={(e) => setDraftField(key, 'vu_costo', e.target.value)}
+                          />
+                        ) : (
+                          <span style={{ display: 'block', textAlign: 'right', fontWeight: 700 }}>
+                            {fmtMoneda(parseNum(d.vu_costo) ?? r.vu_costo_mo)}
+                          </span>
+                        )}
+                        {canEdit && (
+                          <button
+                            type="button"
+                            disabled={saving}
+                            title="Desglose Administración, Imprevistos, Utilidad e IVA"
+                            onClick={() => setAiuKey(key)}
+                            style={{
+                              ...S.btn('ghost', true),
+                              padding: '2px 6px',
+                              minHeight: 26,
+                              fontSize: 'var(--cc-caption)',
+                              fontWeight: 700,
+                              borderColor: impuestoTieneDatos(d.impuesto || EMPTY_IMPUESTO) ? tTok.primary : tTok.border,
+                              color: impuestoTieneDatos(d.impuesto || EMPTY_IMPUESTO) ? tTok.primary : tTok.textMuted,
+                            }}
+                          >
+                            {impuestoTieneDatos(d.impuesto || EMPTY_IMPUESTO) ? 'A · Í · U · IVA ✓' : 'A · Í · U · IVA'}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td style={{ ...ui.td, textAlign: 'right', fontWeight: 700, color: 'var(--cc-color-success)' }}>
+                      {fmtMoneda(
+                        computeValorDespuesAiuIva(
+                          parseNum(d.vu_costo) ?? r.vu_costo_mo ?? 0,
+                          d.impuesto || EMPTY_IMPUESTO,
+                          { valoresEnDecimal: true },
+                        ),
                       )}
                     </td>
                     <td style={{ ...ui.td, textAlign: 'center' }}>
@@ -536,6 +583,18 @@ export default function PreciosSubcontratistaSheet({
           </table>
         </div>
       )}
+
+      <PreciosAiuIvaModal
+        open={!!aiuKey}
+        theme={theme}
+        vuBase={(aiuKey && drafts[aiuKey]?.vu_costo) || ''}
+        impuesto={(aiuKey && drafts[aiuKey]?.impuesto) || EMPTY_IMPUESTO}
+        onClose={() => setAiuKey(null)}
+        onSave={(impuesto) => {
+          if (aiuKey) setDraftField(aiuKey, 'impuesto', impuesto)
+          setAiuKey(null)
+        }}
+      />
     </div>
   )
 }
