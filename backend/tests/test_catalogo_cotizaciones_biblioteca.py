@@ -6,11 +6,23 @@ from catalogo_insumos_cotizaciones_lib import (
 )
 
 
-def test_apply_auto_ganadora_detalle_elige_menor():
+def test_apply_auto_ganadora_detalle_respeta_marcada():
     detalle = [
         {"tipo": "insumo", "numero": "A", "valor": 500, "es_ganadora": True},
         {"tipo": "insumo", "numero": "B", "valor": 200, "es_ganadora": False},
-        {"tipo": "no_previsto", "numero": "A-NP", "valor": 50, "es_ganadora": True},
+        {"tipo": "no_previsto", "numero": "A-NP", "valor": 50, "es_ganadora": False},
+    ]
+    out = apply_auto_ganadora_detalle(detalle)
+    gan = [r for r in out if r.get("es_ganadora")]
+    assert len(gan) == 1
+    assert gan[0]["numero"] == "A"
+
+
+def test_apply_auto_ganadora_detalle_elige_menor_si_ninguna_marcada():
+    detalle = [
+        {"tipo": "insumo", "numero": "A", "valor": 500, "es_ganadora": False},
+        {"tipo": "insumo", "numero": "B", "valor": 200, "es_ganadora": False},
+        {"tipo": "no_previsto", "numero": "A-NP", "valor": 50, "es_ganadora": False},
     ]
     out = apply_auto_ganadora_detalle(detalle)
     gan = [r for r in out if r.get("es_ganadora")]

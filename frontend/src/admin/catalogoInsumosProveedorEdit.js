@@ -3,7 +3,7 @@
  * Puro (sin React) para poder unit-testear sin cargar el formulario completo.
  */
 import {
-  applyAutoGanadoraByMinValor,
+  ensureGanadora,
   cloneImpuestoLado,
   pickGanadora,
   seedCotizacionPares,
@@ -238,7 +238,7 @@ export function buildEditFormFromInsumoRow(row, { proveedoresDirectorio = [] } =
       rendimiento: row?.rendimiento ?? '',
     },
   }))
-  cotizaciones = applyAutoGanadoraByMinValor(cotizaciones)
+  cotizaciones = ensureGanadora(cotizaciones)
   const legacySync = syncLegacyFromGanadora(cotizaciones)
   const gan = pickGanadora(cotizaciones)
   const impuestoGan = impuestoGanadoraDesdePares(cotizaciones)

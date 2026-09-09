@@ -9,8 +9,10 @@ import {
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
   detalleToPares,
+  ensureGanadora,
   ganadoraRuleErrors,
   ganadoraDesdeInsumoRow,
+  hasGanadoraVigente,
   impuestoGanadoraDesdePares,
   incongruenciaNumeroEntrePares,
   newCotizacionPar,
@@ -20,6 +22,7 @@ import {
   backfillGanadoraProveedor,
   sanitizeRendimientoInput,
   seedCotizacionPares,
+  setGanadoraPar,
   syncLegacyFromGanadora,
   toUpperTrim,
   validateCaptureForEnviar,
@@ -52,23 +55,41 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(withOne[0].no_previsto.valor, '')
   })
 
-  it('applyAutoGanadoraByMinValor elige el menor valor insumo', () => {
-    let pares = [
-      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '500', numero: 'COT-001' } },
-      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '200', numero: 'COT-002' } },
-      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '300', numero: 'COT-003' } },
-    ]
-    pares = applyAutoGanadoraByMinValor(pares)
-    const gan = pares.find((p) => p.es_ganadora)
-    assert.equal(gan.insumo.numero, 'COT-002')
-    assert.deepEqual(ganadoraRuleErrors(pares), [])
-  })
-
-  it('ganadoraRuleErrors detecta ganadora más cara en No Previsto', () => {
+  it('ensureGanadora respeta la marcada y no fuerza el menor valor', () => {
     let pares = [
       {
         ...newCotizacionPar({ esGanadora: true }),
-        insumo: { ...newCotizacionPar().insumo, valor: '100', numero: 'COT-001' },
+        insumo: { ...newCotizacionPar().insumo, valor: '500', numero: 'COT-001' },
+      },
+      {
+        ...newCotizacionPar(),
+        insumo: { ...newCotizacionPar().insumo, valor: '200', numero: 'COT-002' },
+      },
+      {
+        ...newCotizacionPar(),
+        insumo: { ...newCotizacionPar().insumo, valor: '300', numero: 'COT-003' },
+      },
+    ]
+    pares = ensureGanadora(pares)
+    const gan = pares.find((p) => p.es_ganadora)
+    assert.equal(gan.insumo.numero, 'COT-001')
+    assert.deepEqual(ganadoraRuleErrors(pares), [])
+  })
+
+  it('ensureGanadora asigna la primera con valor si ninguna está marcada', () => {
+    let pares = [
+      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '500', numero: 'COT-001' } },
+      { ...newCotizacionPar(), insumo: { ...newCotizacionPar().insumo, valor: '200', numero: 'COT-002' } },
+    ]
+    pares = applyAutoGanadoraByMinValor(pares)
+    assert.equal(pares.find((p) => p.es_ganadora)?.insumo.numero, 'COT-001')
+  })
+
+  it('ganadoraRuleErrors ya no bloquea por valor mayor', () => {
+    const pares = [
+      {
+        ...newCotizacionPar({ esGanadora: true }),
+        insumo: { ...newCotizacionPar().insumo, valor: '500', numero: 'COT-001' },
         no_previsto: { ...newCotizacionPar().no_previsto, valor: '500', numero: 'COT-001' },
       },
       {
@@ -77,9 +98,7 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
         no_previsto: { ...newCotizacionPar().no_previsto, valor: '150', numero: 'COT-002' },
       },
     ]
-    pares = applyAutoGanadoraByMinValor(pares)
-    const errs = ganadoraRuleErrors(pares)
-    assert.ok(errs.some((e) => /No Previsto/i.test(e)))
+    assert.deepEqual(ganadoraRuleErrors(pares), [])
   })
 
   it('coherenciaErrors exige misma descripción/unidad/rendimiento', () => {
@@ -478,24 +497,31 @@ describe('catalogoInsumosCotizaciones flujo enviar', () => {
     assert.equal(errs.length, 0)
   })
 
-  it('applyAutoGanadoraByMinValor cambia ganadora al agregar menor valor', () => {
+  it('buildParFromCapture no revoca ganadora vigente; setGanadoraPar sí', () => {
     let pares = [
       {
         ...newCotizacionPar({ esGanadora: true }),
         insumo: { ...newCotizacionPar().insumo, valor: '500', numero: 'OLD' },
       },
     ]
-    pares = applyAutoGanadoraByMinValor(pares)
+    assert.equal(hasGanadoraVigente(pares), true)
+    pares = buildParFromCapture({
+      ...baseCapture,
+      costo_base: '200',
+      cotizacion_numero: 'NEW',
+      cotizacion_numero_np: 'NEW-NP',
+    }, pares, { makeGanadora: false })
     assert.equal(pares.find((p) => p.es_ganadora)?.insumo.numero, 'OLD')
-    pares = [
-      ...pares,
-      {
-        ...newCotizacionPar(),
-        insumo: { ...newCotizacionPar().insumo, valor: '200', numero: 'NEW' },
-      },
-    ]
-    pares = applyAutoGanadoraByMinValor(pares)
+    assert.equal(pares.length, 2)
+    const newId = pares.find((p) => p.insumo.numero === 'NEW')?.id
+    pares = setGanadoraPar(pares, newId)
     assert.equal(pares.find((p) => p.es_ganadora)?.insumo.numero, 'NEW')
+  })
+
+  it('buildParFromCapture marca ganadora si aún no hay vigente', () => {
+    const pares = buildParFromCapture({ ...baseCapture }, [])
+    assert.equal(pares.length, 1)
+    assert.equal(pares[0].es_ganadora, true)
   })
 
   it('cotizacionesPayloadForSave conserva nit/contactos de perdedoras', () => {
