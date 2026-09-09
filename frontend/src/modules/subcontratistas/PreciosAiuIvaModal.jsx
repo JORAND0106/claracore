@@ -220,6 +220,8 @@ export default function PreciosAiuIvaModal({
               cursor: 'pointer',
               fontWeight: 600,
               fontFamily: 'inherit',
+              fontSize: 'var(--cc-sm)',
+              lineHeight: 1.3,
             }}
           >
             Cancelar
@@ -236,6 +238,8 @@ export default function PreciosAiuIvaModal({
               cursor: 'pointer',
               fontWeight: 700,
               fontFamily: 'inherit',
+              fontSize: 'var(--cc-sm)',
+              lineHeight: 1.3,
             }}
           >
             Guardar
