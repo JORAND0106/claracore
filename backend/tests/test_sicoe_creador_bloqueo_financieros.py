@@ -5,9 +5,37 @@ from sicoe_creador_permisos import (
     SICOE_CAMPOS_DIMENSIONALES,
     SICOE_CAMPOS_GRAFICO,
     SICOE_CAMPOS_PERMITIDOS_CREADOR,
+    sicoe_debe_reset_alerta_por_cambio_cantidad,
     sicoe_put_keys_prohibidas_creador_dims,
     sicoe_valores_put_equivalentes,
 )
+
+
+def test_reset_alerta_solo_modo_creador_sin_editar():
+    # Operativo (solo Crear / modo creador dimensional) → sí
+    assert sicoe_debe_reset_alerta_por_cambio_cantidad(
+        puede_editar_full=False,
+        modo_solo_creador_dims=True,
+        sellado=False,
+    ) is True
+    # Permiso Editar (residente, contratista, interventoría, etc.) → no
+    assert sicoe_debe_reset_alerta_por_cambio_cantidad(
+        puede_editar_full=True,
+        modo_solo_creador_dims=False,
+        sellado=False,
+    ) is False
+    # Quien tiene Editar aunque también pudiera ser creador → no
+    assert sicoe_debe_reset_alerta_por_cambio_cantidad(
+        puede_editar_full=True,
+        modo_solo_creador_dims=True,
+        sellado=False,
+    ) is False
+    # Sellado → no
+    assert sicoe_debe_reset_alerta_por_cambio_cantidad(
+        puede_editar_full=False,
+        modo_solo_creador_dims=True,
+        sellado=True,
+    ) is False
 
 
 def test_eco_item_sin_cambio_no_es_prohibido():

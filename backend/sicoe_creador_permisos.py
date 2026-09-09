@@ -41,6 +41,21 @@ SICOE_CAMPOS_BLOQUEADOS_SOLO_CREAR = SICOE_CAMPOS_FINANCIEROS | frozenset({
 })
 
 
+def sicoe_debe_reset_alerta_por_cambio_cantidad(
+    *,
+    puede_editar_full: bool,
+    modo_solo_creador_dims: bool,
+    sellado: bool = False,
+) -> bool:
+    """
+    Reset + alerta de cantidad solo cuando la edición es vía permiso Crear
+    (creador dimensional sin Editar). Quien edita con Editar no dispara reset.
+    """
+    if sellado or puede_editar_full:
+        return False
+    return bool(modo_solo_creador_dims)
+
+
 def sicoe_valores_put_equivalentes(a: Any, b: Any) -> bool:
     """True si el cliente reenvía el mismo valor efectivo (evita 403 por eco de campos)."""
     if a is None and b is None:
