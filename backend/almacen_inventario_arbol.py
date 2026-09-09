@@ -170,6 +170,92 @@ def _vu_costo_desde_insumos_materiales(insumos: List[dict]) -> Optional[float]:
     return _round2(sum_costo) if tiene else None
 
 
+def _mo_unit_costo(mo: Optional[dict], *, cant_presupuestada: float = 0.0) -> Optional[float]:
+    """
+    VU unitario de mano de obra amortizado sobre la cantidad de referencia del ítem.
+
+    Prioridad de denominador: cant_presupuestada → cantidad ejecutada N2 →
+    costo_insumo_unitario ya calculado → promedio ponderado del desglose.
+    """
+    if not mo:
+        return None
+    costo_mo = _f(mo.get("costo_insumo_linea")) if mo.get("costo_insumo_linea") is not None else 0.0
+    if costo_mo <= 0:
+        return None
+    cant_ref = _f(cant_presupuestada)
+    if cant_ref <= 0 and mo.get("cantidad") is not None:
+        cant_ref = _f(mo.get("cantidad"))
+    if cant_ref > 0:
+        return costo_mo / cant_ref
+    unit = mo.get("costo_insumo_unitario")
+    if unit is not None and _f(unit) > 0:
+        return _f(unit)
+    # Promedio ponderado por cantidad en desglose (sin inventar precios).
+    sum_c = 0.0
+    sum_q = 0.0
+    for d in mo.get("desglose") or []:
+        q = _f(d.get("cantidad_total"))
+        p = _f(d.get("precio_unitario_sub"))
+        if q > 0 and p > 0:
+            sum_c += q * p
+            sum_q += q
+    if sum_q > 0:
+        return sum_c / sum_q
+    return None
+
+
+def _merge_mo_buckets(a: dict, b: dict) -> dict:
+    """Combina dos resúmenes MO del mismo ítem (p. ej. tras realinear claves)."""
+    if not a:
+        return dict(b or {})
+    if not b:
+        return dict(a)
+    cant = _f(a.get("cantidad")) + _f(b.get("cantidad"))
+    costo = _f(a.get("costo_insumo_linea")) + _f(b.get("costo_insumo_linea"))
+    desglose = list(a.get("desglose") or []) + list(b.get("desglose") or [])
+    return {
+        "es_mo": True,
+        "etiqueta_fila": a.get("etiqueta_fila") or b.get("etiqueta_fila") or "Mano de obra (subcontratistas)",
+        "cantidad": round(cant, 4) if cant > 0 else None,
+        "costo_insumo_linea": round(costo, 2) if costo > 0 else None,
+        "costo_insumo_unitario": round(costo / cant, 4) if cant > 0 and costo > 0 else None,
+        "desglose": desglose,
+    }
+
+
+def alinear_mo_by_item(
+    item_by_key: Dict[str, dict],
+    mo_by_item: Dict[str, dict],
+) -> Dict[str, dict]:
+    """
+    Reasigna costos MO a las claves del inventario cuando el capítulo en
+    so_registros difiere del listado pero el número de ítem es único.
+    """
+    if not mo_by_item:
+        return {}
+    out: Dict[str, dict] = {}
+    by_item_num: Dict[str, List[str]] = defaultdict(list)
+    for ikey in item_by_key or {}:
+        _cap, _, itm = str(ikey).partition("|")
+        num = _norm_item_key_local(itm)
+        if num:
+            by_item_num[num].append(ikey)
+
+    for mo_key, mo in (mo_by_item or {}).items():
+        target = mo_key if mo_key in (item_by_key or {}) else None
+        if target is None:
+            _cap, _, itm = str(mo_key).partition("|")
+            num = _norm_item_key_local(itm)
+            cands = by_item_num.get(num) or []
+            if len(cands) == 1:
+                target = cands[0]
+        if target is None:
+            # Conservar con clave original (útil si el ítem aparece solo vía MO).
+            target = mo_key
+        out[target] = _merge_mo_buckets(out.get(target) or {}, mo)
+    return out
+
+
 def _vu_desde_meta_insumo(meta: dict) -> Optional[float]:
     """Precio unitario de catálogo: referencia → costo_base+AIU/IVA → costo_base."""
     if not meta:
@@ -657,6 +743,7 @@ def build_inventario_arbol_from_lines(
         # Mano de obra (costo directo consolidado; sin stock ni flujo físico).
         mo = (mo_by_item or {}).get(ikey) or {}
         costo_mo = _f(mo.get("costo_insumo_linea")) if mo.get("costo_insumo_linea") is not None else 0.0
+        mo_unit = _mo_unit_costo(mo, cant_presupuestada=_f(p.get("cant_presupuestada") or p.get("cant_total")))
         if costo_mo > 0:
             insumos.append({
                 "insumo_id": None,
@@ -666,8 +753,8 @@ def build_inventario_arbol_from_lines(
                 "es_principal": False,
                 "es_mo": True,
                 "rendimiento": None,
-                "vu_costo_unitario": None,
-                "vu_costo": None,
+                "vu_costo_unitario": _round2(mo_unit) if mo_unit is not None else None,
+                "vu_costo": _round2(mo_unit) if mo_unit is not None else None,
                 "costo_contribucion": _round2(costo_mo),
                 "entradas": None,
                 "salidas": None,
@@ -726,15 +813,13 @@ def build_inventario_arbol_from_lines(
         resumen["salidas"] = _round4(resumen["salidas"] + sal)
         resumen["saldo"] = _round4(resumen["saldo"] + saldo)
 
-        # Utilidad/%: si hay MO, incorporar el costo total amortizado sobre la cantidad de referencia.
-        cant_ref = _f(p.get("cant_presupuestada") or p.get("cant_total"))
-        if cant_ref <= 0 and mo.get("cantidad"):
-            cant_ref = _f(mo.get("cantidad"))
-        if costo_mo > 0 and vu_cobro is not None and cant_ref > 0:
-            mo_unit = costo_mo / cant_ref
-            vu_costo_eff = _round2((_f(vu_costo) if vu_costo is not None else 0.0) + mo_unit)
-            utilidad = _round2(_f(vu_cobro) - vu_costo_eff)
-            rentabilidad = _rentabilidad_pct(vu_cobro, vu_costo_eff)
+        # Unificar materiales + MO en VU Costo / utilidad / % (ítems solo-MO o mixtos).
+        if mo_unit is not None and mo_unit > 0:
+            base_mat = _f(vu_costo) if vu_costo is not None else 0.0
+            vu_costo = _round2(base_mat + mo_unit)
+            if vu_cobro is not None:
+                utilidad = _round2(_f(vu_cobro) - vu_costo)
+                rentabilidad = _rentabilidad_pct(vu_cobro, vu_costo)
 
         pids = p.get("presupuesto_ids") or []
         items_out.append({
@@ -1037,10 +1122,13 @@ def list_inventario_arbol(contrato_id: int) -> dict:
 
     item_rows = list(item_by_key.values())
     mo_by_item: Dict[str, dict] = {}
+    mo_ok = False
     try:
         from almacen_mo_costo import calcular_costo_mo_por_items_contrato
 
         mo_by_item = calcular_costo_mo_por_items_contrato(int(contrato_id), sb=sb) or {}
+        mo_by_item = alinear_mo_by_item(item_by_key, mo_by_item)
+        mo_ok = True
     except Exception:
         _log.exception(
             "Inventario árbol: falló carga de mano de obra (contrato=%s).",
@@ -1055,8 +1143,8 @@ def list_inventario_arbol(contrato_id: int) -> dict:
         mo_by_item=mo_by_item,
     )
     built["generado_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    # No cachear respuestas degradadas (sin enrich) para no congelar VU costo vacío.
-    if enrich_ok:
+    # No cachear respuestas degradadas (sin enrich o sin MO) para no congelar VU vacío.
+    if enrich_ok and mo_ok:
         _cache_set(contrato_id, built)
     return built
 

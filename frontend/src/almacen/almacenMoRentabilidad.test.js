@@ -106,4 +106,13 @@ describe('UI wiring MO', () => {
     assert.match(src, /nivel2_objeto_pago_sub/)
     assert.match(src, /subcontratista_precios/)
   })
+
+  it('Inventario unifica VU Costo con MO amortizada', () => {
+    const src = readFileSync(join(dir, '../../../backend/almacen_inventario_arbol.py'), 'utf8')
+    assert.match(src, /def _mo_unit_costo/)
+    assert.match(src, /def alinear_mo_by_item/)
+    assert.match(src, /Unificar materiales \+ MO en VU Costo/)
+    const tip = readFileSync(join(dir, 'InventarioPanel.jsx'), 'utf8')
+    assert.match(tip, /mano de obra de subcontratistas \(amortizada\)/)
+  })
 })

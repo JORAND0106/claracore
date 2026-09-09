@@ -29,7 +29,7 @@ const INVENTARIO_COLS = [
   {
     key: 'vu_costo',
     abbr: 'VU COSTO',
-    tip: 'VU Costo — Precio unitario del insumo (sin rendimiento). En el ítem: suma de los VU de sus insumos.',
+    tip: 'VU Costo — Precio unitario del insumo (sin rendimiento). En el ítem: suma de VU de materiales + mano de obra de subcontratistas (amortizada).',
     align: 'right',
     ecoOnly: true,
   },
