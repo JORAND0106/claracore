@@ -56,6 +56,7 @@ from main import (
     supabase,
     PresupuestoBulkEstado,
     PresupuestoBulkCompetencia,
+    PresupuestoBulkSubcontratista,
     PresupuestoBulkObservacion,
     PresupuestoBulkPreInterv,
     PresupuestoBulkRecalc,
@@ -738,6 +739,35 @@ def post_presupuesto_version_biblioteca_bulk_competencia(
         raise HTTPException(status_code=422, detail="competencia no puede estar vacía.")
     return bulk_patch_biblioteca_ids(
         supabase, contrato_id, version_id, body.ids, {"competencia": comp}
+    )
+
+
+@router.post("/presupuesto/{contrato_id}/versiones/{version_id}/bulk-subcontratista")
+def post_presupuesto_version_biblioteca_bulk_subcontratista(
+    contrato_id: int,
+    version_id: str,
+    body: PresupuestoBulkSubcontratista,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    sub_id = int(body.subcontratista_id or 0)
+    if sub_id <= 0:
+        raise HTTPException(status_code=422, detail="subcontratista_id inválido.")
+    sub_rows = (
+        supabase.table("subcontratistas")
+        .select("id, contrato_id, activo")
+        .eq("id", sub_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not sub_rows or int(sub_rows[0].get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Subcontratista no encontrado en este contrato.")
+    if sub_rows[0].get("activo") is False:
+        raise HTTPException(status_code=422, detail="El subcontratista está inactivo.")
+    return bulk_patch_biblioteca_ids(
+        supabase, contrato_id, version_id, body.ids, {"subcontratista_id": sub_id}
     )
 
 

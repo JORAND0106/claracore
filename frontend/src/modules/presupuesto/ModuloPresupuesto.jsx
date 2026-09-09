@@ -64,6 +64,10 @@ import { resolverMetaLogosPresupuesto } from './presupuestoExportLogos'
 import { idsRangoSeleccion } from './pptoSeleccionRango'
 import { pptoFormatoNodos } from './pptoFormatoNodos'
 import { pptoConstruirTramosUnicos, pptoFilasDeTramo } from './pptoTramoBusqueda'
+import {
+  pptoLabelSubcontratista,
+  pptoNormalizarSubcontratistasOpciones,
+} from './pptoSubcontratistaMasiva'
 import { pptoPopVistaAnterior, pptoTotalesSeleccion } from './pptoNavegacionVista'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { CC_LISTADO_META_CHANGED } from '../../cache/listadoMetaEvents'
@@ -323,6 +327,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalConfirm, setModalConfirm] = useState(false)
   const [modalEdicionMasiva, setModalEdicionMasiva] = useState(false)
   const [competenciasEdicionMasiva, setCompetenciasEdicionMasiva] = useState([])
+  const [subcontratistasEdicionMasiva, setSubcontratistasEdicionMasiva] = useState([])
 
   useEffect(() => {
     if (!modalEdicionMasiva || !contratoId) return
@@ -346,6 +351,20 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
         if (!cancelled) setCompetenciasEdicionMasiva(cleaned)
       } catch {
         if (!cancelled) setCompetenciasEdicionMasiva([])
+      }
+      try {
+        const tok = getToken()
+        // Activos del contrato (misma fuente que SICOE); no requiere permiso admin de Subcontratistas.
+        const resSub = await fetch(`${API}/sicoe-obra/${contratoId}/subcontratistas-activos`, {
+          headers: { Authorization: `Bearer ${tok}` },
+        })
+        let rows = []
+        if (resSub.ok) {
+          rows = await resSub.json()
+        }
+        if (!cancelled) setSubcontratistasEdicionMasiva(pptoNormalizarSubcontratistasOpciones(rows))
+      } catch {
+        if (!cancelled) setSubcontratistasEdicionMasiva([])
       }
     })()
     return () => { cancelled = true }
@@ -4130,19 +4149,50 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setRegistros((prev) => prev.map((r) => (idSet.has(String(r.id)) ? { ...r, competencia: comp } : r)))
   }
 
-  async function aplicarMasivoCapItem({ capitulo, item, competencia, precioSeleccionado, observacion }) {
+  async function aplicarSubcontratistaMasiva(ids, subcontratistaId) {
+    const sid = Number(subcontratistaId)
+    if (!Number.isFinite(sid) || sid <= 0 || !ids.length) return
+    const ep = pptoEp()
+    if (!ep.bulkSubcontratista) throw new Error('Asignación de subcontratista no disponible.')
+    const method = ep.mode === 'version' ? 'POST' : 'PUT'
+    const res = await fetch(`${ep.bulkSubcontratista}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids, subcontratista_id: sid }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.detail || 'No se pudo asignar el subcontratista.')
+    }
+    const idSet = new Set(ids.map((id) => String(id)))
+    setRegistros((prev) => prev.map((r) => (
+      idSet.has(String(r.id)) ? { ...r, subcontratista_id: sid } : r
+    )))
+  }
+
+  async function aplicarMasivoCapItem({
+    capitulo, item, competencia, precioSeleccionado, observacion, subcontratistaId,
+  }) {
     const cap = capitulo || ''
     const it = item || ''
     const comp = String(competencia || '').trim()
     const obs = String(observacion || '').trim()
+    const sid = subcontratistaId != null && subcontratistaId !== ''
+      ? Number(subcontratistaId)
+      : null
+    const tieneSub = Number.isFinite(sid) && sid > 0
     const ids = idsSeleccionadosEditables()
     if (!ids.length) throw new Error('No hay registros editables (los sellados se omiten).')
     registrarUndoPresupuesto('Edición masiva: Capítulo / Ítem', ids)
 
     const tieneCapItem = !!(cap || it)
-    if (!tieneCapItem && !comp && !obs) {
-      throw new Error('Indique capítulo, ítem, competencia u observación (opcional).')
+    if (!tieneCapItem && !comp && !obs && !tieneSub) {
+      throw new Error('Indique capítulo, ítem, competencia, subcontratista u observación (opcional).')
     }
+
+    const labelSub = tieneSub
+      ? pptoLabelSubcontratista(sid, subcontratistasEdicionMasiva)
+      : ''
 
     const resumen = ids.map((id) => {
       const r = registros.find((x) => x.id === id)
@@ -4152,6 +4202,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (it && it !== (r.item || '')) partes.push(`Ítem: ${r.item || '—'} → ${it}`)
       if (precioSeleccionado && it) partes.push(`V.U: ${fmt(precioSeleccionado.precio_unitario)}`)
       if (comp && comp !== (r.competencia || '')) partes.push(`Comp: ${r.competencia || '—'} → ${comp}`)
+      if (tieneSub && Number(r.subcontratista_id || 0) !== sid) {
+        partes.push(
+          `Sub: ${pptoLabelSubcontratista(r.subcontratista_id, subcontratistasEdicionMasiva)} → ${labelSub}`,
+        )
+      }
       if (obs) partes.push(`Obs: ${obs}`)
       if (!partes.length) return null
       return filaResumenMasivo(
@@ -4168,7 +4223,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         if (!r) return false
         return (cap && cap !== (r.capitulo || '')) || (it && it !== (r.item || ''))
       })
-      if (!idsCapItemCambio.length && !comp && !obs) {
+      if (!idsCapItemCambio.length && !comp && !obs && !tieneSub) {
         throw new Error('Ningún registro editable requiere ese cambio de capítulo/ítem.')
       }
       if (idsCapItemCambio.length) {
@@ -4195,6 +4250,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         return r && (r.competencia || '') !== comp
       })
       if (idsComp.length) await aplicarCompetenciaMasiva(idsComp, comp)
+    }
+    if (tieneSub) {
+      const idsSub = ids.filter((id) => {
+        const r = registros.find((x) => x.id === id)
+        return r && Number(r.subcontratista_id || 0) !== sid
+      })
+      if (idsSub.length) await aplicarSubcontratistaMasiva(idsSub, sid)
     }
     if (obs) await aplicarObservacionMasiva(ids, obs)
     return resumen
@@ -6720,6 +6782,7 @@ async function darDeBaja(id) {
         capitulosListado={capitulosListado}
         listadoPrecios={listadoPrecios}
         competenciasOpciones={competenciasEdicionMasiva}
+        subcontratistasOpciones={subcontratistasEdicionMasiva}
         guardandoBulk={guardandoBulk}
         onApplyCapItem={aplicarMasivoCapItem}
         onApplyDimensiones={aplicarMasivoDimensiones}

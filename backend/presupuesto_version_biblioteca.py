@@ -63,6 +63,7 @@ PRESUPUESTO_VERSION_ITEM_INSERT_KEYS = (
     "pre_interv_en",
     "calculo_por",
     "calculo_en",
+    "subcontratista_id",
 )
 
 # Coincidencia exacta para propagar validación entre versiones (solo presupuesto_version_items).

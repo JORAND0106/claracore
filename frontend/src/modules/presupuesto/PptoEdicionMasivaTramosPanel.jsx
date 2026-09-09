@@ -7,6 +7,7 @@ import {
   pptoFilasDetalleTramo,
   pptoOrigenTramoBadgeStyle,
 } from './pptoTramoBusqueda'
+import { PPTO_TRAMOS_COMPETENCIA_AYUDA } from './pptoSubcontratistaMasiva'
 
 const cc = {
   caption: 'var(--cc-caption)',
@@ -406,8 +407,32 @@ export default function PptoEdicionMasivaTramosPanel({
             color: t.textMuted,
             marginBottom: 6,
             letterSpacing: 0.3,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
           }}>
             NUEVA COMPETENCIA
+            <span
+              title={PPTO_TRAMOS_COMPETENCIA_AYUDA}
+              aria-label={`Ayuda: ${PPTO_TRAMOS_COMPETENCIA_AYUDA}`}
+              style={{
+                display: 'inline-flex',
+                width: '1.25em',
+                height: '1.25em',
+                borderRadius: '50%',
+                background: '#64748b',
+                color: '#fff',
+                fontSize: '0.85em',
+                fontWeight: 700,
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'help',
+                flexShrink: 0,
+                lineHeight: 1,
+              }}
+            >
+              ?
+            </span>
           </div>
           <select
             value={editCompetenciaTramos}
