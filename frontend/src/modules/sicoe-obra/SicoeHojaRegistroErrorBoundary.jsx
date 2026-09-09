@@ -37,7 +37,7 @@ export class SicoeHojaRegistroErrorBoundary extends Component {
             padding: '14px 16px',
             background: '#FEF2F2',
             color: '#991B1B',
-            fontSize: 13,
+            fontSize: 'var(--cc-sm)',
             borderTop: `2px solid ${t.primary || '#DC2626'}`,
           }}
         >
@@ -55,6 +55,7 @@ export class SicoeHojaRegistroErrorBoundary extends Component {
               cursor: 'pointer',
               fontWeight: 700,
               padding: '4px 10px',
+              fontSize: 'var(--cc-sm)',
             }}
           >
             Reintentar
