@@ -1278,11 +1278,14 @@ select.cc-dashboard-acta-select--light option {
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Tabla ítems/registros: densificar celdas en móvil (vista desktop residual) */
-  .cc-sicoe-items-sheet th,
+  /* Tabla ítems/registros: densificar celdas en móvil; fuente sigue la escala global */
+  .cc-sicoe-items-sheet th {
+    padding: 5px 6px !important;
+    font-size: var(--cc-caption, 11px) !important;
+  }
   .cc-sicoe-items-sheet td {
     padding: 5px 6px !important;
-    font-size: 12px !important;
+    font-size: var(--cc-sm, 13px) !important;
   }
 
   .cc-sicoe-items-mobile {
