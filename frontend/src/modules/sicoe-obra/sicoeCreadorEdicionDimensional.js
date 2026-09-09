@@ -112,6 +112,21 @@ export function sicoePuedeEditarCamposFinancieros({
 }
 
 /**
+ * Reset de validaciones + alerta de cambio de cantidad:
+ * solo cuando la edición dimensional ocurre vía permiso «Crear» (operativo creador),
+ * sin permiso «Editar». Quien edita con «Editar» guarda cantidad sin reset ni alerta.
+ */
+export function sicoeDebeResetAlertaPorCambioCantidad({
+  puedeEditar = false,
+  puedeCrear = false,
+  esCreador = false,
+  selladoMax = false,
+} = {}) {
+  if (selladoMax || puedeEditar) return false
+  return !!(puedeCrear && esCreador)
+}
+
+/**
  * «+ Nuevo Registro» dentro de un reporte ya enviado.
  * Disponible con Crear (mixto) o Editar. No depende del sellado de otras líneas:
  * el registro nuevo nace pendiente; el sellado aplica a cada línea por separado.

@@ -184,6 +184,7 @@ import {
   sicoePuedeEditarGraficoRegistro,
   sicoeCantidadCambioSignificativo,
   sicoeCalcCantidadTotal,
+  sicoeDebeResetAlertaPorCambioCantidad,
 } from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
 import { formatearCantidadTotal, formatearDimension, redondearDimension } from './modules/sicoe-obra/sicoeCantidadRedondeo.js'
 import {
@@ -2967,6 +2968,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     esCreador: esCreadorReg,
     selladoMax: regSelladoMax,
   })
+  /** Reset+alerta de cantidad: solo edición vía permiso Crear (sin Editar). */
+  const resetAlertaCantidadSoloCrear = sicoeDebeResetAlertaPorCambioCantidad({
+    puedeEditar: !!puedeEditar,
+    puedeCrear: !!puedeCrear,
+    esCreador: esCreadorReg,
+    selladoMax: regSelladoMax,
+  })
   /** Compat: ítem + dims juntos (solo quien tiene Editar completo). */
   const editableCampos = editableCamposFinancieros
   const soloMetaSubSellado = puedeEditar && regSelladoMax
@@ -3550,7 +3558,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
 
     const cantAnterior = Number(registro.cantidad_total || 0)
-    if (!skipConfirmCantidad && sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)) {
+    if (
+      resetAlertaCantidadSoloCrear
+      && !skipConfirmCantidad
+      && sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)
+    ) {
       setConfirmCantidadCambio({ cantAnterior, cantTotal })
       return
     }
@@ -3666,7 +3678,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           ) {
             patchOptimista.costo_directo = Math.round(cantTotal * Number(vlrUnitario))
           }
-          if (sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)) {
+          if (
+            resetAlertaCantidadSoloCrear
+            && sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)
+          ) {
             const activos = nivelesContrato?.niveles_activos || [1, 2, 3]
             let maxPrev = null
             for (const n of activos) {
@@ -3694,7 +3709,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         setToastMsg(
           puedeAsignarItem && itemSel
             ? `Ítem ${itemSel.item_numero} asignado correctamente`
-            : (sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)
+            : (resetAlertaCantidadSoloCrear && sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)
               ? 'Cambios guardados · validaciones reiniciadas'
               : 'Cambios guardados'),
         )

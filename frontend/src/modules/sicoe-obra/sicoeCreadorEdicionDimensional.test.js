@@ -11,6 +11,7 @@ import {
   sicoePuedeEditarCamposDimensionales,
   sicoePuedeEditarCamposFinancieros,
   sicoePuedeEditarGraficoRegistro,
+  sicoeDebeResetAlertaPorCambioCantidad,
 } from './sicoeCreadorEdicionDimensional.js'
 
 describe('sicoeCreadorEdicionDimensional', () => {
@@ -129,6 +130,57 @@ describe('sicoeCreadorEdicionDimensional', () => {
     assert.equal(sicoeCantidadCambioSignificativo(10, 10), false)
     assert.equal(sicoeCantidadCambioSignificativo(10, 12), true)
     assert.equal(sicoeCantidadCambioSignificativo(0.003, 0.004), true)
+  })
+
+  it('reset+alerta solo con permiso Crear (operativo creador), no con Editar', () => {
+    // Operativo: Crear + creador, sin Editar → sí
+    assert.equal(
+      sicoeDebeResetAlertaPorCambioCantidad({
+        puedeCrear: true,
+        esCreador: true,
+        puedeEditar: false,
+        selladoMax: false,
+      }),
+      true,
+    )
+    // Residente/costos u otros con Editar → no (aunque también tenga Crear o sea creador)
+    assert.equal(
+      sicoeDebeResetAlertaPorCambioCantidad({
+        puedeCrear: true,
+        esCreador: true,
+        puedeEditar: true,
+        selladoMax: false,
+      }),
+      false,
+    )
+    assert.equal(
+      sicoeDebeResetAlertaPorCambioCantidad({
+        puedeCrear: false,
+        esCreador: false,
+        puedeEditar: true,
+        selladoMax: false,
+      }),
+      false,
+    )
+    // Crear sin ser creador → no
+    assert.equal(
+      sicoeDebeResetAlertaPorCambioCantidad({
+        puedeCrear: true,
+        esCreador: false,
+        puedeEditar: false,
+      }),
+      false,
+    )
+    // Sellado → no
+    assert.equal(
+      sicoeDebeResetAlertaPorCambioCantidad({
+        puedeCrear: true,
+        esCreador: true,
+        puedeEditar: false,
+        selladoMax: true,
+      }),
+      false,
+    )
   })
 
   it('Gráfico editable con Crear+creador hasta sellado; Editar también post-sello', () => {

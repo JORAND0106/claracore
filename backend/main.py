@@ -25508,9 +25508,20 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         else:
             data["costo_directo"] = round(float(data["costo_directo"]), 0)
 
-    # Solo cambio de cantidad_total → reset de niveles ya alcanzados + alerta (N1..max_prev).
+    # Solo edición vía permiso «Crear» (creador dimensional, sin «Editar»):
+    # cambio de cantidad_total → reset de niveles ya alcanzados + alerta (N1..max_prev).
+    # Quien edita con «Editar» guarda la cantidad sin reiniciar validaciones ni alerta.
     # Otras ediciones dimensionales (p. ej. solo localización) se guardan sin alerta ni reset.
-    if not sellado and "cantidad_total" in data and data["cantidad_total"] is not None:
+    from sicoe_creador_permisos import sicoe_debe_reset_alerta_por_cambio_cantidad as _debe_reset_alerta
+    if (
+        _debe_reset_alerta(
+            puede_editar_full=puede_editar_full,
+            modo_solo_creador_dims=modo_solo_creador_dims,
+            sellado=sellado,
+        )
+        and "cantidad_total" in data
+        and data["cantidad_total"] is not None
+    ):
         try:
             prev_ct = _sicoe_redondear_cantidad_total(prev_row.get("cantidad_total") or 0)
         except (TypeError, ValueError):
@@ -26681,11 +26692,6 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                 detail="El registro está aprobado en el último nivel de validación: no puede reasignarse el ítem.",
             )
 
-        try:
-            prev_ct = _sicoe_redondear_cantidad_total(registro.get("cantidad_total") or 0)
-        except (TypeError, ValueError):
-            prev_ct = 0.0
-
         _pre_dim_keys = ("longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion")
         _pre_loc_keys = (
             "civ", "tramo", "infraestructura", "calzada", "ubicacion", "coord_lat", "coord_lng",
@@ -26782,18 +26788,8 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             "acta_rpo_id":      acta_rpo_id,
             "corte_id":         corte_id,
         }
-        if prev_ct != cant_total:
-            reiniciados, nivel_max_prev = _sicoe_reset_validaciones_por_cambio_cantidad(
-                int(contrato_id), registro, upd_reg_payload
-            )
-            # `registro` ya tiene pre_patch; recuperar estados originales de niveles vía select fresco
-            # si el merge perdió los estados — el select inicial sí traía SICOE_SELECT_NIVELES_ESTADO.
-            if nivel_max_prev is not None:
-                _sicoe_aplicar_alerta_cantidad(
-                    upd_reg_payload, prev_ct, cant_total, _sicoe_uid_from_user(current_user), nivel_max_prev
-                )
-            elif reiniciados:
-                pass
+        # asignar-item exige permiso «Editar»: no reinicia validaciones ni genera alerta
+        # (eso solo aplica a edición dimensional vía permiso «Crear»).
         uid_asig = _sicoe_uid_from_user(current_user)
         if uid_asig is not None:
             upd_reg_payload["modificado_por_reg"] = int(uid_asig)
