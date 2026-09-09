@@ -43,7 +43,7 @@ const INVENTARIO_COLS = [
   {
     key: 'rent',
     abbr: '% RENT.',
-    tip: '% Rentabilidad — (Utilidad / VU Cobro) × 100. Incluye costo de mano de obra validada N2.',
+    tip: '% Rentabilidad — (Utilidad / VU Cobro) × 100. Incluye mano de obra (N2 o precio pactado en Subcontratistas).',
     align: 'right',
     ecoOnly: true,
   },

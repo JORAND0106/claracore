@@ -1618,10 +1618,18 @@ def route_inventario_graficos(
 
 
 @router.get("/{contrato_id}/inventario/arbol")
-def route_inventario_arbol(contrato_id: int, current_user=Depends(get_current_user)):
+def route_inventario_arbol(
+    contrato_id: int,
+    refresh: bool = False,
+    current_user=Depends(get_current_user),
+):
     """Tabla Excel del inventario: capítulo → ítem → insumo → OC + resumen."""
+    from almacen_inventario_arbol import invalidar_cache_inventario_arbol
+
     _check_contrato(current_user, contrato_id)
     require_permiso_almacen(current_user, "ver")
+    if refresh:
+        invalidar_cache_inventario_arbol(contrato_id)
     data = list_inventario_arbol(contrato_id)
     if not puede_ver_valores_economicos_almacen(current_user):
         # Ocultar montos unitarios / valores monetarios.

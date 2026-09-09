@@ -2,8 +2,12 @@
 Costo de mano de obra de subcontratistas para rentabilidad Almacén.
 
 Solo LECTURA de SICOE Obra / Subcontratistas (no modifica esos módulos).
-Fuente: so_registros validados Nivel 2, objeto de cobro/pago al sub,
-con precio pactado en subcontratista_precios (sin promediar precios).
+
+Fuente primaria: so_registros validados Nivel 2 (objeto de pago al sub) ×
+precio pactado en subcontratista_precios (sin promediar precios).
+
+Fuente de respaldo (Inventario / ítems sin ejecución N2 aún): VU Costo M.O.
+pactado en subcontratista_precios (con AIU/IVA del subcontratista), p. ej. Rocería.
 """
 from __future__ import annotations
 
@@ -57,29 +61,136 @@ def _sb():
     return _almacen_sb()
 
 
+def _vu_mo_unitario_con_aiu(
+    precio_base: Any,
+    *,
+    precio_con_aiu: Any = None,
+    tributos: Any = None,
+) -> Optional[float]:
+    """VU unitario comparable a cobro: prioriza con AIU/IVA; si no, aplica tributos del sub."""
+    stamped = _f(precio_con_aiu)
+    if stamped > 0:
+        return stamped
+    base = _f(precio_base)
+    if base <= 0:
+        return None
+    try:
+        from almacen_insumos_service import compute_valor_despues_aiu_iva, tributos_tienen_datos
+
+        if tributos_tienen_datos(tributos):
+            return float(compute_valor_despues_aiu_iva(base, tributos))
+    except Exception:
+        _log.exception("MO: no se pudo aplicar AIU/IVA al VU pactado")
+    return base
+
+
+def _fetch_precios_rows(sb, contrato_id: int) -> List[dict]:
+    """Lee subcontratista_precios con degradación si faltan columnas (AIU / manual)."""
+    selects = [
+        "subcontratista_id, listado_precio_id, precio_unitario_sub, precio_unitario_con_aiu, "
+        "cantidad_manual, origen, tributos, listado_precios(capitulo, item_numero, unidad)",
+        "subcontratista_id, listado_precio_id, precio_unitario_sub, precio_unitario_con_aiu, "
+        "tributos, listado_precios(capitulo, item_numero, unidad)",
+        "subcontratista_id, listado_precio_id, precio_unitario_sub, "
+        "listado_precios(capitulo, item_numero, unidad)",
+    ]
+    last_exc = None
+    for sel in selects:
+        try:
+            return (
+                sb.table("subcontratista_precios")
+                .select(sel)
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if last_exc:
+        _log.exception(
+            "MO: no se pudieron leer subcontratista_precios (contrato=%s): %s",
+            contrato_id,
+            last_exc,
+        )
+    return []
+
+
+def _tributos_por_sub(sb, contrato_id: int, sub_ids: List[int]) -> Dict[int, dict]:
+    out: Dict[int, dict] = {}
+    if not sub_ids:
+        return out
+    try:
+        for part in _chunked(sorted(set(int(x) for x in sub_ids))):
+            rows = (
+                sb.table("subcontratistas")
+                .select("id, tributos")
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", part)
+                .execute()
+                .data
+                or []
+            )
+            for r in rows:
+                try:
+                    out[int(r["id"])] = r.get("tributos") or {}
+                except (TypeError, ValueError, KeyError):
+                    continue
+    except Exception:
+        _log.exception("MO: no se pudieron leer tributos de subcontratistas (contrato=%s)", contrato_id)
+    return out
+
+
+def _subs_asignados_por_item(sb, contrato_id: int) -> Dict[str, set]:
+    """item_key → set(subcontratista_id) desde presupuesto (si la columna existe)."""
+    out: Dict[str, set] = {}
+    try:
+        offset = 0
+        while True:
+            batch = (
+                sb.table("presupuesto")
+                .select("capitulo, item, subcontratista_id, cant_total")
+                .eq("contrato_id", int(contrato_id))
+                .eq("tipo_ejecucion", "Presupuesto de Obra")
+                .eq("dado_de_baja", False)
+                .not_.is_("subcontratista_id", "null")
+                .order("id")
+                .range(offset, offset + 999)
+                .execute()
+                .data
+                or []
+            )
+            for r in batch:
+                try:
+                    sub_id = int(r["subcontratista_id"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if _f(r.get("cant_total")) <= 0:
+                    continue
+                ikey = _item_key(r.get("capitulo"), r.get("item"))
+                _cap, _, itm = ikey.partition("|")
+                if not itm:
+                    continue
+                out.setdefault(ikey, set()).add(sub_id)
+            if len(batch) < 1000:
+                break
+            offset += 1000
+    except Exception:
+        _log.info(
+            "MO: presupuesto.subcontratista_id no disponible para asignaciones (contrato=%s)",
+            contrato_id,
+        )
+    return out
+
+
 def mapa_precios_pactados_sub(sb, contrato_id: int) -> Dict[Tuple[int, str], float]:
     """
-    (subcontratista_id, item_key) → precio_unitario_sub.
-    item_key = capitulo|item_numero normalizados vía listado_precios.
+    (subcontratista_id, item_key) → precio_unitario_sub (base, antes de AIU).
+    Usado al valorizar ejecución N2 (cantidad × precio pactado de esa fila).
     """
     out: Dict[Tuple[int, str], float] = {}
-    try:
-        rows = (
-            sb.table("subcontratista_precios")
-            .select(
-                "subcontratista_id, precio_unitario_sub, "
-                "listado_precios(capitulo, item_numero)"
-            )
-            .eq("contrato_id", int(contrato_id))
-            .execute()
-            .data
-            or []
-        )
-    except Exception:
-        _log.exception("MO: no se pudieron leer subcontratista_precios (contrato=%s)", contrato_id)
-        return out
-
-    for r in rows:
+    for r in _fetch_precios_rows(sb, contrato_id):
         try:
             sub_id = int(r["subcontratista_id"])
         except (TypeError, ValueError, KeyError):
@@ -95,6 +206,101 @@ def mapa_precios_pactados_sub(sb, contrato_id: int) -> Dict[Tuple[int, str], flo
         if not _itm:
             continue
         out[(sub_id, ikey)] = precio
+    return out
+
+
+def costos_mo_desde_precios_pactados(sb, contrato_id: int) -> Dict[str, dict]:
+    """
+    Fallback sin N2: VU Costo M.O. unitario desde precios pactados (con AIU/IVA).
+
+    No promedia entre subcontratistas: prioriza el sub asignado en presupuesto;
+    si hay varios precios distintos sin asignación única, omite el ítem.
+    """
+    rows = _fetch_precios_rows(sb, contrato_id)
+    if not rows:
+        return {}
+
+    sub_ids = []
+    for r in rows:
+        try:
+            sub_ids.append(int(r["subcontratista_id"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    trib_by_sub = _tributos_por_sub(sb, contrato_id, sub_ids)
+    assigned = _subs_asignados_por_item(sb, contrato_id)
+
+    # item_key → list of candidate dicts
+    cand: Dict[str, List[dict]] = {}
+    for r in rows:
+        try:
+            sub_id = int(r["subcontratista_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        lp = r.get("listado_precios") or {}
+        if isinstance(lp, list):
+            lp = lp[0] if lp else {}
+        ikey = _item_key(lp.get("capitulo"), lp.get("item_numero"))
+        _cap, _, itm = ikey.partition("|")
+        if not itm:
+            continue
+        from subcontratistas_items_cobro import resolve_tributos_subcontratista
+
+        trib = resolve_tributos_subcontratista(trib_by_sub.get(sub_id) or {}, [r])
+        vu = _vu_mo_unitario_con_aiu(
+            r.get("precio_unitario_sub"),
+            precio_con_aiu=r.get("precio_unitario_con_aiu"),
+            tributos=trib,
+        )
+        if vu is None or vu <= 0:
+            continue
+        cant = _f(r.get("cantidad_manual")) if r.get("cantidad_manual") not in (None, "") else 0.0
+        cand.setdefault(ikey, []).append({
+            "subcontratista_id": sub_id,
+            "vu": float(vu),
+            "cantidad": cant if cant > 0 else None,
+            "precio_unitario_sub": _f(r.get("precio_unitario_sub")),
+        })
+
+    out: Dict[str, dict] = {}
+    for ikey, opts in cand.items():
+        preferidos = [o for o in opts if o["subcontratista_id"] in (assigned.get(ikey) or set())]
+        pool = preferidos if preferidos else opts
+        precios_u = {round(o["vu"], 2) for o in pool}
+        chosen = None
+        if len(pool) == 1:
+            chosen = pool[0]
+        elif len(precios_u) == 1:
+            chosen = pool[0]
+        elif len(preferidos) == 1:
+            chosen = preferidos[0]
+        else:
+            # Ambiguo: no inventar promedio entre subcontratistas distintos.
+            continue
+        vu = chosen["vu"]
+        cant = chosen.get("cantidad")
+        costo_linea = round(vu * cant, 2) if cant and cant > 0 else None
+        out[ikey] = {
+            "es_mo": True,
+            "etiqueta_fila": "Mano de obra (subcontratistas)",
+            "cantidad": cant,
+            "costo_insumo_unitario": round(vu, 4),
+            "costo_insumo_linea": costo_linea if costo_linea and costo_linea > 0 else (
+                round(vu, 2)  # al menos el unitario como contribución visible
+                if vu > 0 else None
+            ),
+            "fuente": "precios_pactados",
+            "desglose": [{
+                "subcontratista_id": chosen["subcontratista_id"],
+                "precio_unitario_sub": chosen.get("precio_unitario_sub"),
+                "precio_unitario_con_aiu": vu,
+                "cantidad_total": cant,
+                "costo_linea": costo_linea,
+            }],
+        }
+        # Si no hay cantidad, costo_insumo_linea = vu (1 und) para que Inventario
+        # detecte costo_mo > 0; _mo_unit_costo usará costo_insumo_unitario.
+        if out[ikey]["costo_insumo_linea"] is None and vu > 0:
+            out[ikey]["costo_insumo_linea"] = round(vu, 2)
     return out
 
 
@@ -241,6 +447,20 @@ def calcular_costo_mo(
         pk_id=pk_id,
     )
     if not regs:
+        # Sin N2: usar VU pactado del tab Precios (p. ej. Rocería solo-MO).
+        ikey_fb = _item_key(cap or capitulo, itm)
+        try:
+            fb_map = costos_mo_desde_precios_pactados(client, contrato_id) or {}
+            fb = fb_map.get(ikey_fb)
+            if fb and _f(fb.get("costo_insumo_unitario") or fb.get("costo_insumo_linea")) > 0:
+                return fb
+            for k, v in fb_map.items():
+                if _norm_item(str(k).partition("|")[2]) == itm and _f(
+                    v.get("costo_insumo_unitario") or v.get("costo_insumo_linea")
+                ) > 0:
+                    return v
+        except Exception:
+            _log.exception("MO: fallback precios falló (contrato=%s item=%s)", contrato_id, itm)
         return empty
 
     ikey = _item_key(cap or capitulo, itm)
@@ -352,6 +572,19 @@ def calcular_costo_mo_por_items_contrato(
             bucket["costo_insumo_unitario"] = round(costo / cant, 4)
         else:
             bucket["costo_insumo_unitario"] = None
+
+    # Completar ítems sin ejecución N2 con VU pactado (Inventario / solo-MO).
+    try:
+        for ikey, mo in (costos_mo_desde_precios_pactados(client, contrato_id) or {}).items():
+            existing = by_item.get(ikey)
+            if existing and _f(existing.get("costo_insumo_linea")) > 0:
+                continue
+            by_item[ikey] = mo
+    except Exception:
+        _log.exception(
+            "MO: no se pudo completar desde precios pactados (contrato=%s)",
+            contrato_id,
+        )
 
     return by_item
 

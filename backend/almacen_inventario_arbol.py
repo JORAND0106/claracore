@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 _log = logging.getLogger(__name__)
 _CACHE: Dict[int, Tuple[float, dict]] = {}
-_CACHE_TTL_SEC = 90
+_CACHE_TTL_SEC = 15
 _IN_CHUNK = 200
 
 
@@ -174,28 +174,35 @@ def _mo_unit_costo(mo: Optional[dict], *, cant_presupuestada: float = 0.0) -> Op
     """
     VU unitario de mano de obra amortizado sobre la cantidad de referencia del ítem.
 
-    Prioridad de denominador: cant_presupuestada → cantidad ejecutada N2 →
-    costo_insumo_unitario ya calculado → promedio ponderado del desglose.
+    Si la fuente es precio pactado (sin N2), usa costo_insumo_unitario directo
+    (ya incluye AIU/IVA). Si hay N2: costo_linea / cantidad de referencia.
     """
     if not mo:
         return None
     costo_mo = _f(mo.get("costo_insumo_linea")) if mo.get("costo_insumo_linea") is not None else 0.0
+    unit_direct = mo.get("costo_insumo_unitario")
+    if (mo.get("fuente") == "precios_pactados"
+            and unit_direct is not None and _f(unit_direct) > 0):
+        return _f(unit_direct)
     if costo_mo <= 0:
+        if unit_direct is not None and _f(unit_direct) > 0:
+            return _f(unit_direct)
         return None
     cant_ref = _f(cant_presupuestada)
     if cant_ref <= 0 and mo.get("cantidad") is not None:
         cant_ref = _f(mo.get("cantidad"))
     if cant_ref > 0:
         return costo_mo / cant_ref
-    unit = mo.get("costo_insumo_unitario")
-    if unit is not None and _f(unit) > 0:
-        return _f(unit)
+    if unit_direct is not None and _f(unit_direct) > 0:
+        return _f(unit_direct)
     # Promedio ponderado por cantidad en desglose (sin inventar precios).
     sum_c = 0.0
     sum_q = 0.0
     for d in mo.get("desglose") or []:
         q = _f(d.get("cantidad_total"))
-        p = _f(d.get("precio_unitario_sub"))
+        p = _f(d.get("precio_unitario_sub") if d.get("precio_unitario_con_aiu") in (None, "") else d.get("precio_unitario_con_aiu"))
+        if p <= 0:
+            p = _f(d.get("precio_unitario_con_aiu")) or _f(d.get("precio_unitario_sub"))
         if q > 0 and p > 0:
             sum_c += q * p
             sum_q += q

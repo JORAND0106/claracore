@@ -4,6 +4,7 @@ from __future__ import annotations
 from almacen_mo_costo import (
     calcular_costo_mo,
     calcular_costo_mo_por_items_contrato,
+    costos_mo_desde_precios_pactados,
     fila_rentabilidad_mo,
 )
 from almacen_insumos_service import filas_rentabilidad_por_insumo
@@ -31,6 +32,7 @@ class _FakeQuery:
         self.store = store
         self._filters = []
         self._not_null = set()
+        self._range = None
         self.not_ = _FakeNot(self)
 
     def select(self, *_a, **_k):
@@ -44,6 +46,13 @@ class _FakeQuery:
         self._filters.append(("in", col, list(vals)))
         return self
 
+    def order(self, *_a, **_k):
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def execute(self):
         rows = list(self.store.get(self.table, []))
         for op, col, val in self._filters:
@@ -53,6 +62,9 @@ class _FakeQuery:
                 rows = [r for r in rows if r.get(col) in val]
         for col in self._not_null:
             rows = [r for r in rows if r.get(col) is not None]
+        if self._range is not None:
+            start, end = self._range
+            rows = rows[start:end + 1]
         return _FakeResp(rows)
 
 
@@ -323,3 +335,104 @@ def test_alinear_mo_by_item_cuando_capitulo_difiere():
     )
     assert inv_key in aligned
     assert aligned[inv_key]["costo_insumo_linea"] == 1000
+
+
+def test_roceria_precios_pactados_sin_n2_alimenta_inventario():
+    """
+    Caso producción: Rocería solo tiene precio en Subcontratistas (sin so_registros N2).
+    VU Cobro 942073, VU M.O. con AIU 1_000_000, cantidad 10.4 HA.
+    """
+    store = {
+        "subcontratista_precios": [
+            {
+                "subcontratista_id": 7,
+                "contrato_id": 3,
+                "listado_precio_id": 55,
+                "precio_unitario_sub": 1000000,
+                "precio_unitario_con_aiu": 1000000,
+                "cantidad_manual": 10.4,
+                "origen": "presupuesto",
+                "tributos": {},
+                "listado_precios": {
+                    "capitulo": "1. PRELIMINARES",
+                    "item_numero": "5.",
+                    "unidad": "HA",
+                    "descripcion": "ROCERÍA",
+                },
+            },
+        ],
+        "subcontratistas": [
+            {"id": 7, "contrato_id": 3, "tributos": {}},
+        ],
+        "presupuesto": [
+            {
+                "id": 1,
+                "contrato_id": 3,
+                "capitulo": "1. PRELIMINARES",
+                "item": "5.",
+                "cant_total": 10.4,
+                "subcontratista_id": 7,
+                "tipo_ejecucion": "Presupuesto de Obra",
+                "dado_de_baja": False,
+            },
+        ],
+        "so_registros": [],
+    }
+    sb = _FakeSb(store)
+    by_item = calcular_costo_mo_por_items_contrato(3, sb=sb)
+    ikey = make_item_key("1. PRELIMINARES", "5.")
+    assert ikey in by_item
+    assert by_item[ikey]["fuente"] == "precios_pactados"
+    assert by_item[ikey]["costo_insumo_unitario"] == 1000000.0
+
+    out = build_inventario_arbol_from_lines(
+        item_rows=[{
+            "item_key": ikey,
+            "capitulo": "1. PRELIMINARES",
+            "item": "5.",
+            "descripcion": "ROCERÍA",
+            "unidad": "HA",
+            "vu_cobro": 942073,
+            "cant_presupuestada": 10.4,
+            "presupuesto_ids": [1],
+        }],
+        composition={},
+        movement_lines=[],
+        mo_by_item=by_item,
+    )
+    item = out["items"][0]
+    assert item["vu_costo"] == 1000000.0
+    assert item["utilidad"] == 942073 - 1000000
+    assert item["rentabilidad_pct"] is not None
+    assert item["rentabilidad_pct"] < 0
+
+
+def test_costos_mo_desde_precios_aplica_aiu_global():
+    store = {
+        "subcontratista_precios": [
+            {
+                "subcontratista_id": 1,
+                "contrato_id": 1,
+                "listado_precio_id": 9,
+                "precio_unitario_sub": 100,
+                "listado_precios": {"capitulo": "2.", "item_numero": "2.1"},
+            },
+        ],
+        "subcontratistas": [
+            {
+                "id": 1,
+                "contrato_id": 1,
+                "tributos": {
+                    "tipo": "iva_pleno",
+                    "iva": {"porcentaje": 19},
+                },
+            },
+        ],
+        "presupuesto": [],
+        "so_registros": [],
+    }
+    sb = _FakeSb(store)
+    out = costos_mo_desde_precios_pactados(sb, 1)
+    ikey = make_item_key("2.", "2.1")
+    assert ikey in out
+    assert out[ikey]["costo_insumo_unitario"] == 119.0
