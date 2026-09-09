@@ -17673,6 +17673,8 @@ class SubprecioUpdate(BaseModel):
 class SubprecioBulkItem(BaseModel):
     listado_precio_id: int
     precio_unitario_sub: float
+    origen: Optional[str] = "presupuesto"
+    cantidad_manual: Optional[float] = None
 
 
 class SubprecioBulkBody(BaseModel):
@@ -18180,10 +18182,10 @@ def actualizar_precio_sub(precio_id: int, body: SubprecioUpdate, current_user=De
 
 @app.get("/subcontratistas/{sub_id}/items-cobro-asignados")
 def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_user)):
-    """Ítems del listado con cantidad > 0 asignada a este subcontratista en Presupuesto."""
+    """Hoja unificada: ítems de Presupuesto (cant > 0) + filas manuales."""
     from subcontratistas_items_cobro import (
         aggregate_presupuesto_cant_map,
-        build_items_cobro_asignados,
+        build_precios_sheet,
     )
 
     sub = _require_acceso_precios_subcontratista(current_user, sub_id, escribir=False)
@@ -18210,7 +18212,6 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
                 break
             offset += 1000
     except Exception as exc:
-        # Columna aún no migrada o error de esquema: sin asignaciones visibles.
         logging.getLogger(__name__).warning(
             "items-cobro-asignados: no se pudo leer presupuesto.subcontratista_id (sub=%s): %s",
             sub_id,
@@ -18237,22 +18238,24 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
             break
         offset += 1000
 
-    precios_rows = (
-        supabase.table("subcontratista_precios")
-        .select("id, listado_precio_id, precio_unitario_sub")
-        .eq("subcontratista_id", int(sub_id))
-        .execute()
-        .data
-    ) or []
-    precios_by_lp = {}
-    for pr in precios_rows:
-        try:
-            lp = int(pr.get("listado_precio_id"))
-        except (TypeError, ValueError):
-            continue
-        precios_by_lp[lp] = pr
+    try:
+        precios_rows = (
+            supabase.table("subcontratista_precios")
+            .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual")
+            .eq("subcontratista_id", int(sub_id))
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        precios_rows = (
+            supabase.table("subcontratista_precios")
+            .select("id, listado_precio_id, precio_unitario_sub")
+            .eq("subcontratista_id", int(sub_id))
+            .execute()
+            .data
+        ) or []
 
-    items = build_items_cobro_asignados(listado, cant_map, precios_by_lp)
+    items = build_precios_sheet(listado, cant_map, precios_rows)
     return {"items": items, "total": len(items)}
 
 
@@ -18260,7 +18263,7 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
 def bulk_upsert_precios_sub(
     sub_id: int, body: SubprecioBulkBody, current_user=Depends(get_current_user)
 ):
-    """Upsert masivo de VU Costo M.O. para ítems del listado."""
+    """Upsert masivo de VU Costo M.O. (+ origen / cantidad_manual)."""
     from subcontratistas_items_cobro import normalize_bulk_precios_payload
 
     sub = _require_acceso_precios_subcontratista(current_user, sub_id, escribir=True)
@@ -18301,19 +18304,35 @@ def bulk_upsert_precios_sub(
     actualizados = 0
     for p in payload:
         lp_id = p["listado_precio_id"]
-        precio = p["precio_unitario_sub"]
+        patch = {
+            "precio_unitario_sub": p["precio_unitario_sub"],
+            "origen": p["origen"],
+            "cantidad_manual": p["cantidad_manual"] if p["origen"] == "manual" else None,
+        }
         if lp_id in by_lp:
-            supabase.table("subcontratista_precios").update(
-                {"precio_unitario_sub": precio}
-            ).eq("id", by_lp[lp_id]).execute()
+            try:
+                supabase.table("subcontratista_precios").update(patch).eq("id", by_lp[lp_id]).execute()
+            except Exception:
+                # Columnas origen/cantidad_manual aún no migradas
+                supabase.table("subcontratista_precios").update(
+                    {"precio_unitario_sub": p["precio_unitario_sub"]}
+                ).eq("id", by_lp[lp_id]).execute()
             actualizados += 1
         else:
-            supabase.table("subcontratista_precios").insert({
+            row = {
                 "subcontratista_id": int(sub_id),
                 "contrato_id": contrato_id,
                 "listado_precio_id": lp_id,
-                "precio_unitario_sub": precio,
-            }).execute()
+                "precio_unitario_sub": p["precio_unitario_sub"],
+                "origen": p["origen"],
+                "cantidad_manual": p["cantidad_manual"] if p["origen"] == "manual" else None,
+            }
+            try:
+                supabase.table("subcontratista_precios").insert(row).execute()
+            except Exception:
+                row.pop("origen", None)
+                row.pop("cantidad_manual", None)
+                supabase.table("subcontratista_precios").insert(row).execute()
             insertados += 1
 
     registrar_log(
@@ -18325,6 +18344,53 @@ def bulk_upsert_precios_sub(
         {"insertados": insertados, "actualizados": actualizados, "total": len(payload)},
     )
     return {"ok": True, "insertados": insertados, "actualizados": actualizados, "total": len(payload)}
+
+
+@app.delete("/subcontratistas/precios/{precio_id}")
+def eliminar_precio_sub(precio_id: int, current_user=Depends(get_current_user)):
+    """Elimina solo filas de origen manual."""
+    prev = None
+    try:
+        prev = (
+            supabase.table("subcontratista_precios")
+            .select("id, subcontratista_id, origen, listado_precio_id")
+            .eq("id", precio_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+    except Exception:
+        prev = None
+    if not prev:
+        # Fallback sin columna origen
+        prev = (
+            supabase.table("subcontratista_precios")
+            .select("id, subcontratista_id, listado_precio_id")
+            .eq("id", precio_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+    if not prev:
+        raise HTTPException(status_code=404, detail="Precio de subcontratista no encontrado.")
+    row = prev[0]
+    _require_acceso_precios_subcontratista(current_user, int(row["subcontratista_id"]), escribir=True)
+    origen = str(row.get("origen") or "manual").strip().lower()
+    if origen and origen != "manual":
+        raise HTTPException(
+            status_code=403,
+            detail="Solo se pueden eliminar ítems agregados manualmente (no los de Presupuesto).",
+        )
+    supabase.table("subcontratista_precios").delete().eq("id", int(precio_id)).execute()
+    registrar_log(
+        current_user,
+        "ELIMINAR",
+        "SUBCONTRATISTAS",
+        "precio_sub",
+        str(precio_id),
+        {"listado_precio_id": row.get("listado_precio_id"), "origen": origen or "manual"},
+    )
+    return {"ok": True}
 
 
 @app.get("/subcontratistas/{contrato_id}/alertas-corte")

@@ -81,9 +81,9 @@ def build_items_cobro_asignados(
     precios_by_lp: Optional[Dict[int, dict]] = None,
 ) -> List[dict]:
     """
-    Filas para el modal: solo ítems del listado con cantidad > 0 asignada al sub.
+    Filas desde Presupuesto: solo ítems del listado con cantidad > 0 asignada al sub.
 
-    precios_by_lp: { listado_precio_id: { id, precio_unitario_sub } }
+    precios_by_lp: { listado_precio_id: { id, precio_unitario_sub, origen?, cantidad_manual? } }
     """
     precios_by_lp = precios_by_lp or {}
     rows: List[dict] = []
@@ -120,6 +120,8 @@ def build_items_cobro_asignados(
             "cantidad": round(cant, 4),
             "vu_cobro": vu_ref_n,
             "vu_costo_mo": vu_sub_n,
+            "origen": "presupuesto",
+            "cantidad_editable": False,
         })
 
     def _sort_key(r: dict) -> Tuple:
@@ -133,8 +135,88 @@ def build_items_cobro_asignados(
     return rows
 
 
+def build_precios_sheet(
+    listado_items: Iterable[dict],
+    cant_map: Dict[Tuple[str, str, str], float],
+    precios_rows: Iterable[dict],
+) -> List[dict]:
+    """
+    Tabla unificada: filas de Presupuesto (cant > 0) + filas manuales persistidas.
+    """
+    listado_by_id: Dict[int, dict] = {}
+    for item in listado_items or []:
+        try:
+            listado_by_id[int(item.get("id"))] = item
+        except (TypeError, ValueError):
+            continue
+
+    precios_by_lp: Dict[int, dict] = {}
+    for pr in precios_rows or []:
+        try:
+            lp = int(pr.get("listado_precio_id"))
+        except (TypeError, ValueError):
+            continue
+        precios_by_lp[lp] = pr
+
+    ppto_rows = build_items_cobro_asignados(listado_items, cant_map, precios_by_lp)
+    ppto_lp = {int(r["listado_precio_id"]) for r in ppto_rows}
+
+    manual_rows: List[dict] = []
+    for pr in precios_rows or []:
+        try:
+            lp_id = int(pr.get("listado_precio_id"))
+        except (TypeError, ValueError):
+            continue
+        if lp_id in ppto_lp:
+            continue
+        origen = str(pr.get("origen") or "manual").strip().lower()
+        # Cualquier precio no cubierto por cantidad de Presupuesto se muestra como manual.
+        if origen != "manual":
+            origen = "manual"
+        lp = listado_by_id.get(lp_id) or {}
+        vu_ref = lp.get("precio_unitario")
+        try:
+            vu_ref_n = float(vu_ref) if vu_ref is not None and vu_ref != "" else None
+        except (TypeError, ValueError):
+            vu_ref_n = None
+        try:
+            vu_sub_n = float(pr.get("precio_unitario_sub")) if pr.get("precio_unitario_sub") is not None else None
+        except (TypeError, ValueError):
+            vu_sub_n = None
+        try:
+            cant_m = float(pr.get("cantidad_manual")) if pr.get("cantidad_manual") is not None else None
+        except (TypeError, ValueError):
+            cant_m = None
+        manual_rows.append({
+            "listado_precio_id": lp_id,
+            "precio_id": pr.get("id"),
+            "capitulo": lp.get("capitulo") or "",
+            "competencia": lp.get("competencia") or "",
+            "item_numero": lp.get("item_numero") or "",
+            "descripcion": lp.get("descripcion") or "",
+            "unidad": lp.get("unidad") or lp.get("und") or "",
+            "cantidad": cant_m,
+            "vu_cobro": vu_ref_n,
+            "vu_costo_mo": vu_sub_n,
+            "origen": "manual",
+            "cantidad_editable": True,
+        })
+
+    def _sort_key(r: dict) -> Tuple:
+        return (
+            0 if r.get("origen") == "presupuesto" else 1,
+            norm_capitulo_key(r.get("capitulo")),
+            norm_item_key(r.get("item_numero")),
+            str(r.get("competencia") or ""),
+        )
+
+    out = list(ppto_rows) + manual_rows
+    out.sort(key=_sort_key)
+    return out
+
+
 def normalize_bulk_precios_payload(items: Any) -> List[dict]:
-    """Valida body de bulk: [{ listado_precio_id, precio_unitario_sub }, ...]."""
+    """Valida body de bulk: listado_precio_id, precio_unitario_sub, origen?, cantidad_manual?."""
     if not isinstance(items, list) or not items:
         raise ValueError("Debe enviar al menos un ítem con precio.")
     out: List[dict] = []
@@ -157,7 +239,31 @@ def normalize_bulk_precios_payload(items: Any) -> List[dict]:
             raise ValueError(f"precio_unitario_sub inválido para listado_precio_id={lp_id}.")
         if precio < 0:
             raise ValueError(f"precio_unitario_sub no puede ser negativo (listado_precio_id={lp_id}).")
-        out.append({"listado_precio_id": lp_id, "precio_unitario_sub": precio})
+        origen = str(raw.get("origen") or "presupuesto").strip().lower()
+        if origen not in ("presupuesto", "manual"):
+            raise ValueError(f"origen inválido para listado_precio_id={lp_id}.")
+        row = {
+            "listado_precio_id": lp_id,
+            "precio_unitario_sub": precio,
+            "origen": origen,
+            "cantidad_manual": None,
+        }
+        if origen == "manual":
+            raw_cant = raw.get("cantidad_manual", raw.get("cantidad"))
+            if raw_cant is None or str(raw_cant).strip() == "":
+                raise ValueError(
+                    f"cantidad_manual obligatoria para ítem manual (listado_precio_id={lp_id})."
+                )
+            try:
+                cant_manual = float(raw_cant)
+            except (TypeError, ValueError):
+                raise ValueError(f"cantidad_manual inválida (listado_precio_id={lp_id}).")
+            if cant_manual < 0:
+                raise ValueError(
+                    f"cantidad_manual no puede ser negativa (listado_precio_id={lp_id})."
+                )
+            row["cantidad_manual"] = cant_manual
+        out.append(row)
     if not out:
         raise ValueError("Debe enviar al menos un ítem con precio.")
     return out
