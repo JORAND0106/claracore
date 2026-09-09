@@ -25170,21 +25170,26 @@ class MasivoCorteRegistrosBody(BaseModel):
     subcontratista_id: int
     corte_id: int
     reporte_id: Optional[int] = None
+    # Obligatorio: Sí/No explícito para Almacén (rentabilidad MO).
+    objeto_pago_sub: bool
 
 
 def _sicoe_patch_masivo_corte(
     sub_id: int,
     corte_id: int,
     uid: Optional[int],
+    objeto_pago_sub: bool,
 ) -> Dict[str, Any]:
     """
     Payload UPDATE para asignación masiva de corte en so_registros.
     No incluir updated_at: esa columna no existe en so_registros (PGRST204).
     Trazabilidad: modificado_por_reg + registrar_log.
+    Incluye nivel2_objeto_pago_sub (objeto de cobro al subcontratista) en la misma operación.
     """
     patch: Dict[str, Any] = {
         "subcontratista_id": int(sub_id),
         "corte_id": int(corte_id),
+        "nivel2_objeto_pago_sub": bool(objeto_pago_sub),
     }
     if uid is not None:
         patch["modificado_por_reg"] = int(uid)
@@ -25198,8 +25203,8 @@ def actualizar_corte_registros_masivo(
     current_user=Depends(get_current_user),
 ):
     """
-    Asigna subcontratista + corte vigente a varios registros.
-    Solo admite el corte abierto actual del sub (vía _asegurar_corte_vigente_subcontratista).
+    Asigna subcontratista + corte vigente + objeto de cobro (nivel2_objeto_pago_sub)
+    a varios registros. Solo admite el corte abierto actual del sub.
     """
     if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
         raise HTTPException(
@@ -25225,6 +25230,8 @@ def actualizar_corte_registros_masivo(
         corte_id = int(body.corte_id)
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="subcontratista_id o corte_id inválido")
+
+    objeto_pago = bool(body.objeto_pago_sub)
 
     # Validar que el sub pertenece al contrato
     def _sub():
@@ -25262,7 +25269,7 @@ def actualizar_corte_registros_masivo(
 
     uid = _sicoe_uid_from_user(current_user)
     # so_registros NO tiene columna updated_at (PGRST204). Trazabilidad: modificado_por_reg + logs.
-    patch = _sicoe_patch_masivo_corte(sub_id, vigente_id, uid)
+    patch = _sicoe_patch_masivo_corte(sub_id, vigente_id, uid, objeto_pago)
 
     actualizados = 0
     omitidos = []
@@ -25315,13 +25322,18 @@ def actualizar_corte_registros_masivo(
                 "subcontratista_id": sub_id,
                 "corte_id": vigente_id,
                 "corte_consecutivo": vigente.get("consecutivo"),
+                "nivel2_objeto_pago_sub": objeto_pago,
                 "registro_ids": ids,
                 "actualizados": actualizados,
                 "omitidos": omitidos[:40],
                 "reporte_id": body.reporte_id,
             },
             valor_anterior=None,
-            valor_nuevo={"corte_id": vigente_id, "subcontratista_id": sub_id},
+            valor_nuevo={
+                "corte_id": vigente_id,
+                "subcontratista_id": sub_id,
+                "nivel2_objeto_pago_sub": objeto_pago,
+            },
         )
     except Exception:
         pass
@@ -25340,6 +25352,7 @@ def actualizar_corte_registros_masivo(
             "fecha_fin": vigente.get("fecha_fin"),
         },
         "subcontratista_id": sub_id,
+        "nivel2_objeto_pago_sub": objeto_pago,
     }
 
 
