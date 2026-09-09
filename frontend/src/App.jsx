@@ -2752,6 +2752,7 @@ function sicoeHojaRegistroSyncKey(reg) {
     reg.capitulo,
     reg.subcontratista_id,
     reg.corte_id,
+    reg.nivel2_objeto_pago_sub,
   ]
     .map((x) => (x == null ? '' : String(x)))
     .join('|')
@@ -5468,6 +5469,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [corteMasivoSubId, setCorteMasivoSubId]   = useState('')
   const [corteMasivoVigente, setCorteMasivoVigente] = useState(null)
   const [corteMasivoCargando, setCorteMasivoCargando] = useState(false)
+  /** null = sin responder; true/false = Sí/No explícito (objeto de cobro al sub). */
+  const [corteMasivoObjetoCobro, setCorteMasivoObjetoCobro] = useState(null)
   const [guardandoCorteMasivo, setGuardandoCorteMasivo] = useState(false)
   const [reportesDisponibles, setReportesDisponibles] = useState([])
   const [reporteDestino, setReporteDestino]       = useState('')
@@ -6240,6 +6243,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (seleccionados.length === 0) return
     setCorteMasivoSubId('')
     setCorteMasivoVigente(null)
+    setCorteMasivoObjetoCobro(null)
     setModalCorteMasivo(true)
     // Asegura listado de subcontratistas (mismo endpoint que portada/hoja).
     if (!listaSubs.length && contrato_id) {
@@ -6280,10 +6284,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const ejecutarCorteMasivo = async () => {
     if (seleccionados.length === 0 || !corteMasivoSubId || !corteMasivoVigente?.id) return
+    if (corteMasivoObjetoCobro !== true && corteMasivoObjetoCobro !== false) {
+      alert('Indique si es objeto de cobro (Sí o No).')
+      return
+    }
     setGuardandoCorteMasivo(true)
     const idsMasivo = [...seleccionados]
     const sidMasivo = parseInt(corteMasivoSubId, 10)
     const cidMasivo = Number(corteMasivoVigente.id)
+    const objetoCobroMasivo = !!corteMasivoObjetoCobro
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/masivo-corte`, {
         method: 'PUT',
@@ -6293,6 +6302,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           subcontratista_id: sidMasivo,
           corte_id: cidMasivo,
           reporte_id: reporte?.id ?? null,
+          objeto_pago_sub: objetoCobroMasivo,
         }),
       })
       if (!res.ok) {
@@ -6302,18 +6312,27 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       }
       const data = await res.json().catch(() => ({}))
       const n = data?.actualizados ?? idsMasivo.length
-      // Optimistic: detalle del registro debe reflejar sub/corte del masivo (no el del reporte).
+      // Optimistic: detalle del registro debe reflejar sub/corte/objeto cobro del masivo.
       const idSet = new Set(idsMasivo.map((x) => String(x)))
       setRegistros((prev) => prev.map((r) => (
         idSet.has(String(r.id))
-          ? { ...r, subcontratista_id: sidMasivo, corte_id: cidMasivo }
+          ? {
+              ...r,
+              subcontratista_id: sidMasivo,
+              corte_id: cidMasivo,
+              nivel2_objeto_pago_sub: objetoCobroMasivo,
+            }
           : r
       )))
-      setMsgMasivo(`Corte #${corteMasivoVigente.consecutivo ?? corteMasivoVigente.id} asignado a ${n} registro(s).`)
+      setMsgMasivo(
+        `Corte #${corteMasivoVigente.consecutivo ?? corteMasivoVigente.id} asignado a ${n} registro(s)`
+        + ` · Objeto de cobro: ${objetoCobroMasivo ? 'Sí' : 'No'}.`,
+      )
       setModalCorteMasivo(false)
       setSeleccionados([])
       setCorteMasivoSubId('')
       setCorteMasivoVigente(null)
+      setCorteMasivoObjetoCobro(null)
       await recargar()
       try { onRefrescarListadoSicoe?.() } catch { /* noop */ }
     } catch (e) {
@@ -7969,6 +7988,48 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               </div>
             )}
 
+            <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:8, fontWeight:700 }}>
+              ¿Es objeto de cobro?
+            </div>
+            <div
+              role="radiogroup"
+              aria-label="¿Es objeto de cobro?"
+              style={{ display:'flex', gap:10, marginBottom:14 }}
+            >
+              {[
+                { val: true, label: 'Sí' },
+                { val: false, label: 'No' },
+              ].map((opt) => {
+                const activo = corteMasivoObjetoCobro === opt.val
+                return (
+                  <button
+                    key={String(opt.val)}
+                    type="button"
+                    role="radio"
+                    aria-checked={activo}
+                    disabled={guardandoCorteMasivo}
+                    onClick={() => setCorteMasivoObjetoCobro(opt.val)}
+                    style={{
+                      flex: 1,
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: `1.5px solid ${activo ? '#0d9488' : t.border}`,
+                      background: activo ? '#0d948818' : t.bg,
+                      color: activo ? '#0f766e' : t.text,
+                      fontWeight: 800,
+                      fontSize: 'var(--cc-sm)',
+                      cursor: guardandoCorteMasivo ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:4, lineHeight:1.4 }}>
+              Se aplica a todos los registros seleccionados. Almacén usa este dato para costos de mano de obra.
+            </div>
+
             <div style={{ display:'flex', gap:10, marginTop:12 }}>
               <button
                 type="button"
@@ -7981,10 +8042,20 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               <button
                 type="button"
                 onClick={ejecutarCorteMasivo}
-                disabled={!corteMasivoSubId || !corteMasivoVigente?.id || guardandoCorteMasivo}
+                disabled={
+                  !corteMasivoSubId
+                  || !corteMasivoVigente?.id
+                  || (corteMasivoObjetoCobro !== true && corteMasivoObjetoCobro !== false)
+                  || guardandoCorteMasivo
+                }
                 style={{
                   flex:1, background:'#0d9488', color:'#fff', border:'none', borderRadius:8, padding:10, fontWeight:700, cursor:'pointer',
-                  opacity: (!corteMasivoSubId || !corteMasivoVigente?.id || guardandoCorteMasivo) ? 0.6 : 1,
+                  opacity: (
+                    !corteMasivoSubId
+                    || !corteMasivoVigente?.id
+                    || (corteMasivoObjetoCobro !== true && corteMasivoObjetoCobro !== false)
+                    || guardandoCorteMasivo
+                  ) ? 0.6 : 1,
                 }}
               >
                 {guardandoCorteMasivo ? 'Guardando…' : 'Guardar'}

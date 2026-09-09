@@ -21,11 +21,13 @@ def sicoe_patch_masivo_corte(
     sub_id: int,
     corte_id: int,
     uid: Optional[int],
+    objeto_pago_sub: bool,
 ) -> Dict[str, Any]:
     """Espejo de _sicoe_patch_masivo_corte en main.py (test puro sin FastAPI)."""
     patch: Dict[str, Any] = {
         "subcontratista_id": int(sub_id),
         "corte_id": int(corte_id),
+        "nivel2_objeto_pago_sub": bool(objeto_pago_sub),
     }
     if uid is not None:
         patch["modificado_por_reg"] = int(uid)
@@ -46,17 +48,27 @@ def test_solo_corte_abierto():
 
 def test_patch_masivo_corte_sin_updated_at():
     """so_registros no tiene updated_at (PGRST204); trazabilidad vía modificado_por_reg."""
-    p = sicoe_patch_masivo_corte(10, 77, 42)
+    p = sicoe_patch_masivo_corte(10, 77, 42, True)
     assert p == {
         "subcontratista_id": 10,
         "corte_id": 77,
+        "nivel2_objeto_pago_sub": True,
         "modificado_por_reg": 42,
     }
     assert "updated_at" not in p
 
 
 def test_patch_masivo_corte_sin_uid():
-    p = sicoe_patch_masivo_corte(10, 77, None)
-    assert p == {"subcontratista_id": 10, "corte_id": 77}
+    p = sicoe_patch_masivo_corte(10, 77, None, False)
+    assert p == {
+        "subcontratista_id": 10,
+        "corte_id": 77,
+        "nivel2_objeto_pago_sub": False,
+    }
     assert "modificado_por_reg" not in p
     assert "updated_at" not in p
+
+
+def test_patch_masivo_corte_incluye_objeto_cobro_si_y_no():
+    assert sicoe_patch_masivo_corte(1, 2, 3, True)["nivel2_objeto_pago_sub"] is True
+    assert sicoe_patch_masivo_corte(1, 2, 3, False)["nivel2_objeto_pago_sub"] is False
