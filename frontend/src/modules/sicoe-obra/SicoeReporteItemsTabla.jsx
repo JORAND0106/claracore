@@ -43,7 +43,7 @@ function sheetStyles(t, carpetaCompact) {
   return {
     grid,
     th: {
-      fontSize: '11px',
+      fontSize: 'var(--cc-caption)',
       fontWeight: 800,
       color: t.textMuted,
       textTransform: 'uppercase',
@@ -59,7 +59,7 @@ function sheetStyles(t, carpetaCompact) {
     },
     td: {
       padding: carpetaCompact ? '5px 8px' : '6px 10px',
-      fontSize: '13px',
+      fontSize: 'var(--cc-sm)',
       color: t.text,
       border: `1px solid ${grid}`,
       verticalAlign: 'middle',
@@ -364,7 +364,7 @@ export default function SicoeReporteItemsTabla({
 
         {algunoSeleccionado && puedeMasivaNivel && (
           <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
+            <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
               Selección · {seleccionados.length} registro(s){nivelLabel ? ` · ${nivelLabel}` : ''}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: estadoFiltroMasivo ? 10 : 0 }}>
@@ -506,11 +506,11 @@ export default function SicoeReporteItemsTabla({
           >
             <span style={{ fontWeight: 800, color: t.text }}>Total</span>
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'baseline' }}>
-              <span style={{ fontSize: 12, color: t.textMuted }}>
+              <span style={{ fontSize: 'var(--cc-label)', color: t.textMuted }}>
                 Cant. <strong style={{ color: t.text, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(totalCant)}</strong>
               </span>
               {verValoresEconomicos && (
-                <span style={{ fontSize: 13, color: t.textMuted }}>
+                <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
                   CD <strong style={{ color: t.primary, fontWeight: 900, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtPesos(totalCd)}</strong>
                 </span>
               )}
@@ -624,7 +624,7 @@ export default function SicoeReporteItemsTabla({
                     fontVariantNumeric: 'tabular-nums',
                     fontFamily: 'ui-monospace, Consolas, monospace',
                     color: t.primary,
-                    fontSize: '14px',
+                    fontSize: 'var(--cc-sm)',
                   }}
                 >
                   {fmtPesos(totalCd)}
@@ -774,9 +774,9 @@ function MobileItemCard({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontWeight: 800, color: t.primary, fontSize: 14 }}>{fila.itemNum}</div>
-            <div style={{ fontSize: 13, lineHeight: 1.35, marginTop: 4, wordBreak: 'break-word' }}>{fila.descripcion}</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', marginTop: 8, fontSize: 12, color: t.textMuted }}>
+            <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-sm)' }}>{fila.itemNum}</div>
+            <div style={{ fontSize: 'var(--cc-sm)', lineHeight: 1.35, marginTop: 4, wordBreak: 'break-word' }}>{fila.descripcion}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px', marginTop: 8, fontSize: 'var(--cc-label)', color: t.textMuted }}>
               <span>Und <strong style={{ color: t.text }}>{fila.unidad}</strong></span>
               <span>Cant <strong style={{ color: t.text, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(fila.sumCant)}</strong></span>
               {verValoresEconomicos && (
@@ -785,7 +785,7 @@ function MobileItemCard({
               <span>{fila.regs.length} reg.</span>
             </div>
           </div>
-          <span style={{ color: t.textMuted, fontSize: 12, flexShrink: 0 }}>{abierto ? '▲' : '▼'}</span>
+          <span style={{ color: t.textMuted, fontSize: 'var(--cc-label)', flexShrink: 0 }}>{abierto ? '▲' : '▼'}</span>
         </div>
       </button>
 
@@ -794,7 +794,7 @@ function MobileItemCard({
           style={{ padding: '0 14px 10px', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
           onClick={(e) => e.stopPropagation()}
         >
-          <span style={{ fontSize: 11, fontWeight: 800, color: t.textMuted }}>Masivo ({selIds.length})</span>
+          <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: t.textMuted }}>Masivo ({selIds.length})</span>
           <button type="button" disabled={ejecutandoMasivo} onClick={() => onValidacionAprobar?.(selIds)} style={{ ...btnVal('#16a34a', ejecutandoMasivo), width: 'auto', padding: '6px 10px', height: 'auto' }}>✓</button>
           <button type="button" disabled={ejecutandoMasivo} onClick={() => onPedirComentarioMasivo?.('Pendiente', selIds)} style={{ ...btnVal('#d97706', ejecutandoMasivo), width: 'auto', padding: '6px 10px', height: 'auto' }}>●</button>
           <button type="button" disabled={ejecutandoMasivo} onClick={() => onPedirComentarioMasivo?.('Rechazado', selIds)} style={{ ...btnVal('#dc2626', ejecutandoMasivo), width: 'auto', padding: '6px 10px', height: 'auto' }}>✕</button>
@@ -847,7 +847,7 @@ function MobileItemCard({
                     }}
                   >
                     <div style={{ fontWeight: 800, color: hasPastel ? rowFg : '#D97706' }}>#{reg.numero_registro}</div>
-                    <div style={{ fontSize: 12, marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: '6px 12px' }}>
+                    <div style={{ fontSize: 'var(--cc-label)', marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: '6px 12px' }}>
                       <span>Cant {fmtNum(reg.cantidad)}</span>
                       <span>Total <strong>{formatearCantidadTotal(reg.cantidad_total)}</strong></span>
                       {verValoresEconomicos && <span>CD <strong>{fmtPesos(reg.costo_directo)}</strong></span>}
@@ -979,7 +979,7 @@ function FragmentItem({
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
-                  fontSize: 11,
+                  fontSize: 'var(--cc-caption)',
                   fontWeight: 800,
                   color: t.textMuted,
                 }}
@@ -1016,7 +1016,7 @@ function FragmentItem({
               </button>
             </div>
           ) : (
-            <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 600 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 600 }}>
               {fila.regs.length} reg.
             </span>
           )}
@@ -1145,7 +1145,7 @@ function IndicadoresNiveles({
               lineHeight: 1,
             }}
           >
-            <span style={{ fontSize: 11, lineHeight: 1 }} aria-hidden>{nv.emoji || '📋'}</span>
+            <span style={{ fontSize: 'var(--cc-caption)', lineHeight: 1 }} aria-hidden>{nv.emoji || '📋'}</span>
             <span
               style={{
                 display: 'inline-block',
@@ -1156,7 +1156,7 @@ function IndicadoresNiveles({
                 boxShadow: est === 'No Revisado' ? `inset 0 0 0 1px ${t.border}` : `0 0 0 1px ${color}55`,
               }}
             />
-            <span style={{ fontSize: 9, fontWeight: 800, color: esMi ? t.primary : t.textMuted, letterSpacing: '0.02em' }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: esMi ? t.primary : t.textMuted, letterSpacing: '0.02em' }}>
               {nv.label}
             </span>
           </button>
@@ -1203,7 +1203,7 @@ function FragmentReg({
     textAlign: 'right',
     fontVariantNumeric: 'tabular-nums',
     fontFamily: 'ui-monospace, Consolas, monospace',
-    fontSize: 12,
+    fontSize: 'var(--cc-label)',
   }
 
   const openDetail = () => onToggleRegistroExpandido?.(expandido ? null : reg.id)
@@ -1313,7 +1313,7 @@ function btnVal(bg, disabled) {
     width: 24,
     height: 24,
     fontWeight: 800,
-    fontSize: 11,
+    fontSize: 'var(--cc-caption)',
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.55 : 1,
     padding: 0,
@@ -1325,7 +1325,7 @@ function btnIcon(color) {
     background: 'transparent',
     border: 'none',
     cursor: 'pointer',
-    fontSize: 15,
+    fontSize: 'var(--cc-body)',
     lineHeight: 1,
     padding: '2px 3px',
     color,
@@ -1340,7 +1340,7 @@ function menuItem(t, disabled) {
     background: 'transparent',
     border: 'none',
     padding: '9px 12px',
-    fontSize: '13px',
+    fontSize: 'var(--cc-sm)',
     fontWeight: 600,
     color: t?.text || '#0F2942',
     cursor: disabled ? 'not-allowed' : 'pointer',
