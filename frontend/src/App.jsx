@@ -2772,7 +2772,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   /** Al montar (p. ej. desde tabla de ítems): abre el editor de esquema una vez. */
   autoAbrirEsquema = false,
   onEsquemaAutoAbierto = null,
-  /** Panel denso tipo Excel (menos scroll vertical). Default true en desktop. */
+  /** Panel denso (menos padding/scroll). La tipografía siempre sigue --cc-* (Pequeña/Mediana/Grande). */
   panelExcelCompact = true,
 }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
@@ -3967,8 +3967,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const excel = !!panelExcelCompact && !hojaCompact
   const secMb = excel ? 6 : 16
   const secPad = excel ? '6px 8px' : '16px'
+  // Tipografía siempre vía --cc-* (Pequeña/Mediana/Grande). El modo excel
+  // solo densifica padding/bordes — nunca fija px de fuente.
   const labSt = {
-    fontSize: excel ? 9 : 'var(--cc-caption)',
+    fontSize: 'var(--cc-caption)',
     fontWeight: 700,
     color: C.label,
     letterSpacing: excel ? '0.03em' : '0.7px',
@@ -3981,29 +3983,28 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     background: t.bg,
     border: `1px solid ${excel ? sheetGrid : `${t.primary}55`}`,
     borderRadius: excel ? 0 : 6,
-    padding: excel ? '3px 6px' : '6px 10px',
+    padding: excel ? '4px 6px' : '6px 10px',
     color: t.text,
-    fontSize: excel ? 12 : 'var(--cc-sm)',
+    fontSize: 'var(--cc-input)',
     boxSizing: 'border-box',
-    minHeight: excel ? 26 : (hojaCompact ? 44 : undefined),
-    height: excel ? 26 : undefined,
+    minHeight: hojaCompact ? 44 : (excel ? 'calc(var(--cc-input) + 10px)' : undefined),
   }
   const roBoxSt = {
-    fontSize: excel ? 12 : 'var(--cc-sm)',
+    fontSize: 'var(--cc-sm)',
     color: t.text,
     fontWeight: 600,
     background: t.bgCard,
     borderRadius: excel ? 0 : 6,
-    padding: excel ? '3px 6px' : '6px 10px',
+    padding: excel ? '4px 6px' : '6px 10px',
     border: `1px solid ${excel ? sheetGrid : C.borde}`,
-    minHeight: excel ? 26 : undefined,
-    lineHeight: excel ? '20px' : undefined,
+    minHeight: excel ? 'calc(var(--cc-sm) + 10px)' : undefined,
+    lineHeight: 1.25,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: excel ? 'nowrap' : undefined,
   }
   const secTitleSt = (color) => ({
-    fontSize: excel ? 10 : 'var(--cc-label)',
+    fontSize: 'var(--cc-label)',
     fontWeight: 800,
     color: color || t.textMuted,
     letterSpacing: excel ? '0.04em' : '1px',
@@ -4240,7 +4241,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       </div>
 
       {regSelladoMax && (
-        <div style={{ marginBottom: excel ? 6 : 12, background:'#0d948818', border:'1px solid #0d948855', borderRadius: excel ? 2 : 8, padding: excel ? '5px 8px' : '8px 12px', fontSize: excel ? 11 : 'var(--cc-sm)', color:t.text }}>
+        <div style={{ marginBottom: excel ? 6 : 12, background:'#0d948818', border:'1px solid #0d948855', borderRadius: excel ? 2 : 8, padding: excel ? '5px 8px' : '8px 12px', fontSize: 'var(--cc-sm)', color:t.text }}>
           Sellado: el último nivel activo del contrato está aprobado ({encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'Nivel máximo'})
           {registro.bloqueado ? ' (sello de bloqueo en costos activo)' : ''}. No se pueden cambiar cantidades ni ítem; solo puede ajustarse el subcontratista, el corte (y foto/gráfico si aplica).
         </div>
@@ -4255,7 +4256,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             border: '2px solid rgba(234,179,8,0.65)',
             borderRadius: excel ? 2 : 8,
             padding: excel ? '6px 8px' : '10px 12px',
-            fontSize: excel ? 11 : 'var(--cc-sm)',
+            fontSize: 'var(--cc-sm)',
             color: '#92400e',
             fontWeight: 700,
           }}
@@ -4275,7 +4276,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           border: '1px solid rgba(37,99,235,0.35)',
           borderRadius: excel ? 2 : 8,
           padding: excel ? '5px 8px' : '8px 12px',
-          fontSize: excel ? 11 : 'var(--cc-sm)',
+          fontSize: 'var(--cc-sm)',
           color: t.text,
         }}>
           Permiso «Crear» (mixto): puede editar dimensiones y localización de este registro. Capítulo, competencia, ítem y corte requieren el permiso «Editar» (independiente).
@@ -4283,7 +4284,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       )}
 
       {reversionBloqueadaN6 && (
-        <div style={{ marginBottom: excel ? 6 : 12, background:'rgba(234,179,8,0.12)', border:'1px solid rgba(234,179,8,0.45)', borderRadius: excel ? 2 : 8, padding: excel ? '5px 8px' : '8px 12px', fontSize: excel ? 11 : 'var(--cc-sm)', color:'#92400e', fontWeight:'600' }}>
+        <div style={{ marginBottom: excel ? 6 : 12, background:'rgba(234,179,8,0.12)', border:'1px solid rgba(234,179,8,0.45)', borderRadius: excel ? 2 : 8, padding: excel ? '5px 8px' : '8px 12px', fontSize: 'var(--cc-sm)', color:'#92400e', fontWeight:'600' }}>
           Este registro tiene aprobación en Nivel 6 (funcionario / aprobación para pago). No admite reversión de cantidades.
         </div>
       )}
@@ -4330,7 +4331,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   justifyContent:'center',
                   background:'linear-gradient(145deg, rgba(124,58,237,0.35), rgba(220,38,38,0.22))',
                   border:'1px solid rgba(124,58,237,0.45)',
-                  fontSize:'1.35rem',
+                  fontSize:'var(--cc-lg)',
                   lineHeight:1,
                   boxShadow:'0 2px 10px rgba(124,58,237,0.25)',
                 }}
@@ -4364,7 +4365,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 color: arm3Llave ? '#15803d' : t.textMuted,
               }}>{encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'N máx.'} {arm3Llave ? '✓' : '○'}</span>
               <span style={{
-                fontSize:'12px', color:t.textMuted, fontWeight:'900', width:'22px', textAlign:'center',
+                fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'900', width:'22px', textAlign:'center',
                 transform: panelReversionExpandido ? 'rotate(0deg)' : 'rotate(-90deg)',
                 transition:'transform 0.2s ease',
               }} aria-hidden>▼</span>
@@ -4673,13 +4674,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 rows={1}
                 onInput={(e) => {
                   const el = e.currentTarget
-                  el.style.height = '26px'
-                  el.style.height = `${Math.min(96, Math.max(26, el.scrollHeight))}px`
+                  const minH = excel ? 32 : 44
+                  el.style.height = `${minH}px`
+                  el.style.height = `${Math.min(96, Math.max(minH, el.scrollHeight))}px`
                 }}
                 style={{
                   ...inpSt,
                   height: 'auto',
-                  minHeight: excel ? 26 : 44,
+                  minHeight: excel ? 'calc(var(--cc-input) + 10px)' : 44,
                   maxHeight: 96,
                   resize: 'vertical',
                   lineHeight: 1.35,
@@ -4717,7 +4719,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   overlay={(uploadingFoto || uploadingGraf) ? (
                     <div style={{
                       position:'absolute', left:0, right:0, bottom:0, padding:'2px 3px',
-                      background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:9,
+                      background:'rgba(15,23,42,0.72)', color:'#F8FAFC', fontSize:'var(--cc-caption)',
                       fontWeight:600, textAlign:'center',
                     }}>
                       …
@@ -4725,7 +4727,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   ) : null}
                 />
                 {fotoImgError && fotoVista && (
-                  <div style={{ padding:'3px', fontSize:9, color:'#B91C1C', background:'#FEF2F2' }}>
+                  <div style={{ padding:'3px', fontSize:'var(--cc-caption)', color:'#B91C1C', background:'#FEF2F2' }}>
                     <a href={fotoVista} target="_blank" rel="noreferrer" style={{ color:t.primary, fontWeight:700 }}>Abrir</a>
                   </div>
                 )}
@@ -4785,14 +4787,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             ) : (
               <div style={{ ...mediaEmptyThumbStyle, opacity: (editableFoto || editableGrafico) ? 1 : 0.65, borderRadius: excel ? 2 : 6, overflow:'hidden', gap:4, padding:'4px 2px' }}>
                 {(uploadingFoto || uploadingGraf)
-                  ? <span style={{ color:t.textMuted, fontSize:9 }}>⏳</span>
+                  ? <span style={{ color:t.textMuted, fontSize:'var(--cc-caption)' }}>⏳</span>
                   : <>
-                      <span style={{ fontSize: excel ? 14 : 18 }}>🖼</span>
+                      <span style={{ fontSize: 'var(--cc-md)' }}>🖼</span>
                       <div style={{ display:'flex', flexWrap:'wrap', gap:2, justifyContent:'center' }}>
                         {editableFoto && (
                           <label style={{
                             background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
-                            borderRadius:3, padding: '2px 5px', fontSize:9, cursor:'pointer', fontWeight:600,
+                            borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)', cursor:'pointer', fontWeight:600,
                           }} title="Cargar foto">
                             📷
                             <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto}
@@ -4807,7 +4809,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                             title="Galería de fotos"
                             style={{
                               background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
-                              borderRadius:3, padding: '2px 5px', fontSize:9, fontWeight:600, cursor:'pointer',
+                              borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)', fontWeight:600, cursor:'pointer',
                             }}>
                             Galería
                           </button>
@@ -4820,7 +4822,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                             title="Crear esquema"
                             style={{
                               background:t.primary, color:'#fff', border:'none', borderRadius:3,
-                              padding: '2px 5px', fontSize:9, fontWeight:700,
+                              padding: '2px 5px', fontSize:'var(--cc-caption)', fontWeight:700,
                               cursor: esquemaCargando ? 'wait' : 'pointer',
                             }}
                           >
@@ -4830,7 +4832,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         {editableGrafico && (
                           <label style={{
                             background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                            borderRadius:3, padding: '2px 5px', fontSize:9,
+                            borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)',
                             cursor:'pointer', fontWeight:600,
                           }} title="Subir gráfico">
                             +
@@ -4846,7 +4848,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     title={esFotoConsecBd ? 'Consecutivo de foto (BD).' : 'N.º de registro (falta foto en BD).'}
                     style={{ margin: 0, padding: '2px', background: 'linear-gradient(90deg, #0d948818, #0d948800)', borderTop: `1px solid ${C.borde}`, textAlign: 'center', width:'100%' }}
                   >
-                    <div style={{ fontSize: 10, fontWeight: '900', color: '#0f766e', fontFamily: 'ui-monospace, Consolas, monospace', lineHeight: 1.2 }}>
+                    <div style={{ fontSize: 'var(--cc-caption)', fontWeight: '900', color: '#0f766e', fontFamily: 'ui-monospace, Consolas, monospace', lineHeight: 1.2 }}>
                       {strRefCarpeta}
                     </div>
                   </div>
@@ -5036,7 +5038,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     title={sinItemAsignado ? 'Asigna un ítem antes de validar' : (bloqueado ? 'Registro bloqueado' : undefined)}
                     onClick={() => ejecutarValidacion(estado)}
                     style={{
-                      padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: excel ? 11 : 'var(--cc-sm)', fontWeight: '700',
+                      padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: 'var(--cc-sm)', fontWeight: '700',
                       cursor: validacionDeshabilitada ? 'not-allowed' : 'pointer', opacity: validacionDeshabilitada ? 0.5 : 1,
                       background: activo ? `${color}22` : 'transparent',
                       color, border: activo ? `2px solid ${color}` : `1px solid ${color}55`,
@@ -5078,7 +5080,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           <button
             onClick={() => { setMostrarPopupReversionN3(false); setEstadoValidando('Comentario'); setMostrarPopupValidacion(true) }}
             style={{
-              padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: excel ? 11 : 'var(--cc-sm)', fontWeight:'700',
+              padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: 'var(--cc-sm)', fontWeight:'700',
               cursor:'pointer', background:`${t.primary}22`, color:t.primary, border:`1px solid ${t.primary}66`,
             }}
           >
@@ -5121,8 +5123,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               )}
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom: excel ? 6 : 12 }}>
-              <span style={{ fontSize: excel ? 11 : 'var(--cc-sm)', color:t.textMuted }}>Estado actual:</span>
-              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: excel ? 11 : 'var(--cc-sm)', fontWeight:'700', color: COLOR_SUB[estadoActual] || '#3B82F6' }}>
+              <span style={{ fontSize: 'var(--cc-sm)', color:t.textMuted }}>Estado actual:</span>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: 'var(--cc-sm)', fontWeight:'700', color: COLOR_SUB[estadoActual] || '#3B82F6' }}>
                 <span style={{ width:'10px', height:'10px', borderRadius:'50%', background: COLOR_SUB[estadoActual] || '#3B82F6' }} />
                 {estadoActual}
               </span>
@@ -5135,7 +5137,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     <button key={estado} type="button"
                       onClick={() => ejecutarValidacionSub(estado)}
                       style={{
-                        padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: excel ? 11 : 'var(--cc-sm)', fontWeight:'700',
+                        padding: excel ? '4px 10px' : '8px 16px', borderRadius: excel ? 4 : 8, fontSize: 'var(--cc-sm)', fontWeight:'700',
                         cursor:'pointer', background: activo ? `${color}22` : 'transparent',
                         color, border: activo ? `2px solid ${color}` : `1px solid ${color}55`,
                       }}>
@@ -5145,7 +5147,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 })}
               </div>
             ) : (
-              <div style={{ fontSize: excel ? 11 : 'var(--cc-sm)', color:t.textMuted, fontStyle:'italic' }}>
+              <div style={{ fontSize: 'var(--cc-sm)', color:t.textMuted, fontStyle:'italic' }}>
                 Este registro no está marcado como objeto de pago al subcontratista.
               </div>
             )}
@@ -5208,7 +5210,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           {(editableCamposDimensionales || editableCamposFinancieros) && (
           <button onClick={guardarCambios} disabled={guardando} style={{
             background: t.primary, color:'#fff', border:'none',
-            borderRadius: excel ? 4 : 8, padding: excel ? '5px 14px' : '8px 22px', fontSize: excel ? 12 : 'var(--cc-sm)', fontWeight:'700',
+            borderRadius: excel ? 4 : 8, padding: excel ? '5px 14px' : '8px 22px', fontSize: 'var(--cc-sm)', fontWeight:'700',
             cursor: guardando ? 'not-allowed' : 'pointer', opacity: guardando ? 0.6 : 1
           }}>{guardando ? 'Guardando...' : '💾 Guardar Cambios'}</button>
           )}
