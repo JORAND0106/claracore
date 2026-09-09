@@ -1980,6 +1980,10 @@ from sicoe_creador_permisos import (  # noqa: E402
     sicoe_put_keys_prohibidas_creador_dims as _sicoe_put_keys_prohibidas_creador_dims,
     sicoe_valores_put_equivalentes as _sicoe_valores_put_equivalentes,
 )
+from sicoe_cantidad_redondeo import (  # noqa: E402
+    calcular_cantidad_con_redondeo as _sicoe_calcular_cantidad_con_redondeo,
+    redondear_cantidad_total_dinamico as _sicoe_redondear_cantidad_total,
+)
 
 
 def _sicoe_uid_from_user(current_user) -> Optional[int]:
@@ -25474,8 +25478,19 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             data[dk] = round(float(data[dk]), 2)
     # `id_pol` existe en presupuesto, no en `so_registros`; un cliente antiguo no debe romper el UPDATE.
     data.pop("id_pol", None)
-    if "cantidad_total" in data and data["cantidad_total"] is not None:
-        data["cantidad_total"] = round(float(data["cantidad_total"]), 2)
+    # cantidad_total: redondeo dinámico (2 ó 3 dp). Si hay dims en el payload, recalcular desde ellas.
+    _dim_keys_touch = ("longitud", "ancho", "espesor", "cantidad")
+    if any(k in data for k in _dim_keys_touch):
+        def _dim_for_cant(k: str):
+            return data[k] if k in data else prev_row.get(k)
+        data["cantidad_total"] = _sicoe_calcular_cantidad_con_redondeo(
+            _dim_for_cant("longitud"),
+            _dim_for_cant("ancho"),
+            _dim_for_cant("espesor"),
+            _dim_for_cant("cantidad"),
+        )
+    elif "cantidad_total" in data and data["cantidad_total"] is not None:
+        data["cantidad_total"] = _sicoe_redondear_cantidad_total(data["cantidad_total"])
     vlr_merged = (
         float(data["vlr_unitario"])
         if data.get("vlr_unitario") is not None
@@ -25496,10 +25511,10 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
     # Otras ediciones dimensionales (p. ej. solo localización) se guardan sin alerta ni reset.
     if not sellado and "cantidad_total" in data and data["cantidad_total"] is not None:
         try:
-            prev_ct = round(float(prev_row.get("cantidad_total") or 0), 2)
+            prev_ct = _sicoe_redondear_cantidad_total(prev_row.get("cantidad_total") or 0)
         except (TypeError, ValueError):
             prev_ct = 0.0
-        new_ct = round(float(data["cantidad_total"]), 2)
+        new_ct = _sicoe_redondear_cantidad_total(data["cantidad_total"])
         if prev_ct != new_ct:
             validaciones_reiniciadas, nivel_max_prev = _sicoe_reset_validaciones_por_cambio_cantidad(
                 int(contrato_id), prev_row, data
@@ -25905,6 +25920,28 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     data["contrato_id"] = contrato_id
     data["creado_por_reg"] = int(current_user.get("sub") or current_user.get("id", 0))
     data.pop("id_pol", None)
+    for dk in ("longitud", "ancho", "espesor", "cantidad"):
+        if data.get(dk) is not None:
+            try:
+                data[dk] = round(float(data[dk]), 2)
+            except (TypeError, ValueError):
+                pass
+    if any(data.get(k) is not None for k in ("longitud", "ancho", "espesor", "cantidad")):
+        data["cantidad_total"] = _sicoe_calcular_cantidad_con_redondeo(
+            data.get("longitud"),
+            data.get("ancho"),
+            data.get("espesor"),
+            data.get("cantidad"),
+        )
+    elif data.get("cantidad_total") is not None:
+        data["cantidad_total"] = _sicoe_redondear_cantidad_total(data["cantidad_total"])
+    if data.get("cantidad_total") is not None and data.get("vlr_unitario"):
+        try:
+            data["costo_directo"] = round(
+                float(data["cantidad_total"]) * float(data["vlr_unitario"]), 0
+            )
+        except (TypeError, ValueError):
+            pass
     try:
         def _rep():
             return supabase.table("so_reportes").select(
@@ -26644,7 +26681,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             )
 
         try:
-            prev_ct = round(float(registro.get("cantidad_total") or 0), 2)
+            prev_ct = _sicoe_redondear_cantidad_total(registro.get("cantidad_total") or 0)
         except (TypeError, ValueError):
             prev_ct = 0.0
 
@@ -26670,13 +26707,24 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             for dk in ("longitud", "ancho", "espesor", "cantidad"):
                 if dk in pre_patch and pre_patch[dk] is not None:
                     pre_patch[dk] = round(float(pre_patch[dk]), 2)
-            if "cantidad_total" in pre_patch and pre_patch["cantidad_total"] is not None:
-                pre_patch["cantidad_total"] = round(float(pre_patch["cantidad_total"]), 2)
+            if any(k in pre_patch for k in ("longitud", "ancho", "espesor", "cantidad")):
+                merged_for_cant = {
+                    k: pre_patch[k] if k in pre_patch else registro.get(k)
+                    for k in ("longitud", "ancho", "espesor", "cantidad")
+                }
+                pre_patch["cantidad_total"] = _sicoe_calcular_cantidad_con_redondeo(
+                    merged_for_cant["longitud"],
+                    merged_for_cant["ancho"],
+                    merged_for_cant["espesor"],
+                    merged_for_cant["cantidad"],
+                )
+            elif "cantidad_total" in pre_patch and pre_patch["cantidad_total"] is not None:
+                pre_patch["cantidad_total"] = _sicoe_redondear_cantidad_total(pre_patch["cantidad_total"])
             registro = {**registro, **pre_patch}
 
         cant_total = float(pre_patch.get("cantidad_total", registro.get("cantidad_total")) or 0)
         vlr_unit   = float(item.get("precio_unitario") or 0)
-        cant_total = round(cant_total, 2)
+        cant_total = _sicoe_redondear_cantidad_total(cant_total)
         costo_dir  = round(cant_total * vlr_unit, 0)
         reporte_id = registro["reporte_id"]
 
