@@ -125,8 +125,10 @@ describe('sicoeCreadorEdicionDimensional', () => {
 
   it('solo cambio de cantidad total es significativo', () => {
     assert.equal(sicoeCalcCantidadTotal(2, 3, 4, 1), 24)
+    assert.equal(sicoeCalcCantidadTotal(0.25, 0.015, null, null), 0.004)
     assert.equal(sicoeCantidadCambioSignificativo(10, 10), false)
     assert.equal(sicoeCantidadCambioSignificativo(10, 12), true)
+    assert.equal(sicoeCantidadCambioSignificativo(0.003, 0.004), true)
   })
 
   it('Gráfico editable con Crear+creador hasta sellado; Editar también post-sello', () => {

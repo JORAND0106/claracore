@@ -2,6 +2,11 @@
  * Permiso mixto «Crear» (Reporte de Cantidades): creación + edición dimensional
  * del registro propio. Independiente del permiso «Editar» (financieros/clasificación).
  */
+import {
+  calcularCantidadConRedondeo,
+  formatearCantidadTotal,
+  redondearCantidadTotalDinamico,
+} from './sicoeCantidadRedondeo.js'
 
 export const SICOE_CAMPOS_DIMENSIONALES = Object.freeze([
   'longitud',
@@ -118,20 +123,14 @@ export function sicoePuedeAgregarRegistroEnReporte({
   return !!(puedeCrear || puedeEditar)
 }
 
+/** @deprecated Prefer calcularCantidadConRedondeo — se mantiene como alias. */
 export function sicoeCalcCantidadTotal(longitud, ancho, espesor, cantidad) {
-  const isEmpty = (v) => v === '' || v === null || v === undefined
-  if (isEmpty(longitud) && isEmpty(ancho) && isEmpty(espesor) && isEmpty(cantidad)) return 0
-  const lv = !isEmpty(longitud) ? parseFloat(longitud) : 1
-  const av = !isEmpty(ancho) ? parseFloat(ancho) : 1
-  const ev = !isEmpty(espesor) ? parseFloat(espesor) : 1
-  const cv = !isEmpty(cantidad) ? parseFloat(cantidad) : 1
-  if ([lv, av, ev, cv].some((n) => Number.isNaN(n))) return 0
-  return Math.round(lv * av * ev * cv * 100) / 100
+  return calcularCantidadConRedondeo(longitud, ancho, espesor, cantidad)
 }
 
 export function sicoeCantidadCambioSignificativo(anterior, actual) {
-  const a = Math.round(Number(anterior || 0) * 100) / 100
-  const b = Math.round(Number(actual || 0) * 100) / 100
+  const a = redondearCantidadTotalDinamico(anterior || 0)
+  const b = redondearCantidadTotalDinamico(actual || 0)
   return a !== b
 }
 
@@ -179,6 +178,6 @@ export function sicoeFormatearAlertaCantidad(registro, nivelesActivos) {
     anterior: a,
     actual: b,
     nivelMaxPrevio: maxPrev,
-    texto: `Cantidad anterior: ${a.toFixed(2)} → Cantidad actual: ${b.toFixed(2)}`,
+    texto: `Cantidad anterior: ${formatearCantidadTotal(a, { locale: false })} → Cantidad actual: ${formatearCantidadTotal(b, { locale: false })}`,
   }
 }

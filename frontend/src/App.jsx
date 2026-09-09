@@ -183,7 +183,9 @@ import {
   sicoePuedeEditarCamposFinancieros,
   sicoePuedeEditarGraficoRegistro,
   sicoeCantidadCambioSignificativo,
+  sicoeCalcCantidadTotal,
 } from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
+import { formatearCantidadTotal } from './modules/sicoe-obra/sicoeCantidadRedondeo.js'
 import {
   sicoeNuevoReporteDraftClear,
   sicoeNuevoReporteDraftIsDirty,
@@ -3456,16 +3458,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setEliminandoGraf(false)
   }
 
-  const calcCantTotal = (l, a, e, c) => {
-    const isEmpty = v => v === '' || v === null || v === undefined
-    if (isEmpty(l) && isEmpty(a) && isEmpty(e) && isEmpty(c)) return 0
-    const lv = !isEmpty(l) ? parseFloat(l) : 1
-    const av = !isEmpty(a) ? parseFloat(a) : 1
-    const ev = !isEmpty(e) ? parseFloat(e) : 1
-    const cv = !isEmpty(c) ? parseFloat(c) : 1
-    if (isNaN(lv) || isNaN(av) || isNaN(ev) || isNaN(cv)) return 0
-    return Math.round(lv * av * ev * cv * 100) / 100
-  }
+  const calcCantTotal = (l, a, e, c) => sicoeCalcCantidadTotal(l, a, e, c)
 
   const cantTotal   = calcCantTotal(longitud, ancho, espesor, cantidad)
   const vlrUnitario = itemSel?.precio_unitario ?? registro.vlr_unitario ?? 0
@@ -3558,7 +3551,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     const cantAnterior = Number(registro.cantidad_total || 0)
     if (sicoeCantidadCambioSignificativo(cantAnterior, cantTotal)) {
       const okCambio = window.confirm(
-        `Cantidad anterior: ${cantAnterior.toFixed(2)} → Cantidad actual: ${cantTotal.toFixed(2)}\n\n` +
+        `Cantidad anterior: ${formatearCantidadTotal(cantAnterior, { locale: false })} → Cantidad actual: ${formatearCantidadTotal(cantTotal, { locale: false })}\n\n` +
         'Al cambiar la cantidad total se reiniciarán las validaciones de todos los niveles a «No Revisado» y quedará una alerta visible para los validadores. ¿Continuar?',
       )
       if (!okCambio) return
@@ -4662,7 +4655,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <CampoRO label="Cantidad"  valor={registro.cantidad} />
             </>
           )}
-          <CampoRO label="Cant. Total" labelShort="Cant. Tot." valor={cantTotal.toFixed(2)} color={t.primary} />
+          <CampoRO label="Cant. Total" labelShort="Cant. Tot." valor={formatearCantidadTotal(cantTotal, { locale: false })} color={t.primary} />
           {nivelInfo.verValoresEconomicos && (
             <CampoRO label="Vlr. Unitario" labelShort="Vlr. Un." valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
           )}
@@ -6753,7 +6746,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             <span>Cant.</span>
             <span className="cc-sicoe-num">
               {reg.cantidad_total != null
-                ? Number(reg.cantidad_total).toLocaleString('es-CO', { maximumFractionDigits: 2 })
+                ? formatearCantidadTotal(reg.cantidad_total)
                 : (reg.cantidad != null ? String(reg.cantidad) : '—')}
             </span>
           </div>
@@ -10998,7 +10991,12 @@ function ModuloSicoeObra({
       const registros = await res.json()
       const registrosOk = Array.isArray(registros) ? registros : []
       const headers = exportSeleccionCampos.map(c => prettyCampo(c))
-      const bodyRows = registrosOk.map(r => exportSeleccionCampos.map(c => r?.[c] ?? ''))
+      const bodyRows = registrosOk.map(r => exportSeleccionCampos.map(c => {
+        if (c === 'cantidad_total' && r?.[c] != null && r?.[c] !== '') {
+          return formatearCantidadTotal(r[c], { locale: false, empty: '' })
+        }
+        return r?.[c] ?? ''
+      }))
       const hoy = new Date()
       const fechaTxt = hoy.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
       const horaTxt = hoy.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
@@ -11712,7 +11710,7 @@ function ModuloSicoeObra({
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'var(--cc-label)', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.descripcion}</td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
-                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}  calcCategory="Cantidad" calcCategoryLabel="Cantidad" calcKind="cant" calcLabel={`${(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} · ${g.label}`} />
+                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={formatearCantidadTotal(g.cantidad_total||0)}  calcCategory="Cantidad" calcCategoryLabel="Cantidad" calcKind="cant" calcLabel={`${formatearCantidadTotal(g.cantidad_total||0)} · ${g.label}`} />
                         </td>
                         <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'var(--cc-label)' }}>{g.unidad}</td>
                         {nivelInfo.verValoresEconomicos && (
@@ -11812,7 +11810,7 @@ function ModuloSicoeObra({
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'var(--cc-label)' }}>{g.capitulo}</td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
-                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}  calcCategory="Cantidad" calcCategoryLabel="Cantidad" calcKind="cant" calcLabel={`${(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} · ${g.label}`} />
+                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={formatearCantidadTotal(g.cantidad_total||0)}  calcCategory="Cantidad" calcCategoryLabel="Cantidad" calcKind="cant" calcLabel={`${formatearCantidadTotal(g.cantidad_total||0)} · ${g.label}`} />
                         </td>
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
@@ -14488,7 +14486,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     const parts = [reg.longitud, reg.ancho, reg.espesor, reg.cantidad].map((v) => sicoeNumCampoOmitNull(v))
     const fin = parts.filter((v) => v !== null)
     if (fin.length === 0) return null
-    return fin.reduce((a, b) => a * b, 1)
+    return sicoeCalcCantidadTotal(reg.longitud, reg.ancho, reg.espesor, reg.cantidad)
   }
 
   const agregarRegistro = () => {
@@ -15119,7 +15117,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     )}
                   </div>
                   <div style={{ fontWeight:'700', color: reg.cantidad_total ? '#10B981' : t.textMuted, fontSize:'var(--cc-sm)' }}>
-                    {reg.cantidad_total != null ? Number(reg.cantidad_total).toFixed(2) : '—'}
+                    {reg.cantidad_total != null ? formatearCantidadTotal(reg.cantidad_total, { locale: false }) : '—'}
                   </div>
                   <div style={{ fontSize:'var(--cc-lg)' }}>{reg._fotoOk ? '✅' : '⬜'}</div>
                 </div>
@@ -15343,7 +15341,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                         a[modalRegistro]={...a[modalRegistro], [campo]: e.target.value}
                         const parts = ['longitud','ancho','espesor','cantidad'].map((c) => sicoeNumCampoOmitNull(a[modalRegistro][c]))
                         const fin = parts.filter((v) => v !== null)
-                        a[modalRegistro].cantidad_total = fin.length ? fin.reduce((x,y)=>x*y,1) : null
+                        a[modalRegistro].cantidad_total = fin.length
+                          ? sicoeCalcCantidadTotal(
+                              a[modalRegistro].longitud,
+                              a[modalRegistro].ancho,
+                              a[modalRegistro].espesor,
+                              a[modalRegistro].cantidad,
+                            )
+                          : null
                         setRegistros(a)
                       }}
                       placeholder='0'
@@ -15372,7 +15377,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               <div style={{ padding:'10px 14px', background:t.bg, borderRadius:'8px', display:'flex', justifyContent:'space-between' }}>
                 <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'600' }}>CANTIDAD TOTAL</span>
                 <span style={{ fontSize:'var(--cc-lg)', fontWeight:'800', color:'#10B981' }}>
-                    {registros[modalRegistro].cantidad_total != null ? Number(registros[modalRegistro].cantidad_total).toFixed(2) : '—'}
+                    {registros[modalRegistro].cantidad_total != null ? formatearCantidadTotal(registros[modalRegistro].cantidad_total, { locale: false }) : '—'}
                 </span>
               </div>
               {/* Observación */}

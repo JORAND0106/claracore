@@ -9,6 +9,7 @@ import {
   vuEfectivoFila,
 } from './sicoeCantidadesPorItemHelpers'
 import { pastelDeEstadoValidacion, estadoNivelRegistro } from './sicoeReporteItemsTablaHelpers'
+import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
 
 function fmtNum(v, dig = 2) {
   if (v == null || v === '') return '—'
@@ -662,7 +663,7 @@ export default function SicoeCantidadesPorItemVista({
                         {fmtNum(reg.espesor, 3)}
                       </td>
                       <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.cantidad)}</td>
-                      <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fmtNum(reg.cantidad_total)}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{formatearCantidadTotal(reg.cantidad_total)}</td>
                       {verEco && (
                         <td style={{ ...td, textAlign: 'right', color: t.primary, fontWeight: 700 }}>{fmtPesos(cd)}</td>
                       )}

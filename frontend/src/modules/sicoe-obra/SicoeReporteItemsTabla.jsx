@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom'
 import { listaGraficosRegistro } from './sicoeGraficosHelpers'
 import { slidesFromRegistro } from '../../components/adjuntos/adjuntosMedia'
 import SicoeMediaLightbox from './SicoeMediaLightbox'
+import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
 import {
   agruparRegistrosPorItem,
   pastelDeEstadoValidacion,
@@ -848,7 +849,7 @@ function MobileItemCard({
                     <div style={{ fontWeight: 800, color: hasPastel ? rowFg : '#D97706' }}>#{reg.numero_registro}</div>
                     <div style={{ fontSize: 12, marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: '6px 12px' }}>
                       <span>Cant {fmtNum(reg.cantidad)}</span>
-                      <span>Total <strong>{fmtNum(reg.cantidad_total)}</strong></span>
+                      <span>Total <strong>{formatearCantidadTotal(reg.cantidad_total)}</strong></span>
                       {verValoresEconomicos && <span>CD <strong>{fmtPesos(reg.costo_directo)}</strong></span>}
                     </div>
                   </button>
@@ -1236,7 +1237,7 @@ function FragmentReg({
         <td style={numStyle}>{fmtNum(reg.ancho)}</td>
         <td style={numStyle}>{fmtNum(reg.espesor)}</td>
         <td style={numStyle}>{fmtNum(reg.cantidad)}</td>
-        <td style={{ ...numStyle, fontWeight: 700 }}>{fmtNum(reg.cantidad_total)}</td>
+        <td style={{ ...numStyle, fontWeight: 700 }}>{formatearCantidadTotal(reg.cantidad_total)}</td>
         {verValoresEconomicos && (
           <td style={{ ...numStyle, fontWeight: 700, color: hasPastel ? rowFg : t.primary }}>{fmtPesos(reg.costo_directo)}</td>
         )}

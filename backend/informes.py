@@ -10686,6 +10686,15 @@ def _fn(n, dec=2):
     except Exception:
         return str(n)
 
+
+def _fn_cant(n):
+    """cantidad_total con redondeo dinámico de visualización (2 ó 3 dp)."""
+    try:
+        from sicoe_cantidad_redondeo import formatear_cantidad_total
+        return formatear_cantidad_total(n)
+    except Exception:
+        return _fn(n, 2)
+
 def _sf(n, default=0.0):
     """Convierte a float sin romper el endpoint (strings, comas, vacíos)."""
     if n is None or n == "":
@@ -11207,7 +11216,7 @@ def _fill_memoria_excel_ws(
             _fn(r.get("ancho")),
             _fn(r.get("espesor")),
             _fn(r.get("cantidad")),
-            _fn(r.get("cantidad_total")),
+            _fn_cant(r.get("cantidad_total")),
             (obs or "")[:500],
         ]
         for col, v in enumerate(vals, start=1):
@@ -11230,7 +11239,7 @@ def _fill_memoria_excel_ws(
         horizontal="right", vertical="center"
     )
     ws.cell(row=tot_r, column=1).font = Font(bold=True, size=9)
-    c_tot = ws.cell(row=tot_r, column=10, value=_fn(total_cant))
+    c_tot = ws.cell(row=tot_r, column=10, value=_fn_cant(total_cant))
     c_tot.font = Font(bold=True, size=9)
     c_tot.alignment = Alignment(horizontal="right")
     c_tot.border = bd
@@ -12919,7 +12928,7 @@ def _html_memoria_minima(contrato, sub, corte, item_info, registros, usuario_nom
           <td style="border:1px solid #999;padding:4px">{_h(r.get("numero_registro"))}</td>
           <td style="border:1px solid #999;padding:4px">{_h(r.get("abs_inicio"))}</td>
           <td style="border:1px solid #999;padding:4px">{_h(r.get("abs_final"))}</td>
-          <td style="border:1px solid #999;padding:4px">{_fn(r.get("cantidad_total"))}</td>
+          <td style="border:1px solid #999;padding:4px">{_fn_cant(r.get("cantidad_total"))}</td>
           <td style="border:1px solid #999;padding:4px">{_h((r.get("observacion") or "")[:300])}</td>
         </tr>"""
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
@@ -13230,7 +13239,7 @@ def _html_memoria_item_body(
                 <td class="data-td" style="text-align:right">{_fn(r.get('ancho'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('espesor'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('cantidad'))}</td>
-                <td class="data-td" style="text-align:right;font-weight:bold">{_fn(r.get('cantidad_total'))}</td>
+                <td class="data-td" style="text-align:right;font-weight:bold">{_fn_cant(r.get('cantidad_total'))}</td>
                 <td class="data-td mem002-obs">{_h((obs or '')[:500])}</td>
             </tr>"""
 
@@ -13241,7 +13250,7 @@ def _html_memoria_item_body(
     body += f"""<table class="w100 mem002-total-wrap" cellspacing="0" cellpadding="0">
         <tr>
             <td class="total-td" style="width:60%;text-align:right;padding-right:8px">CANTIDAD TOTAL DEL ÍTEM</td>
-            <td class="total-td" style="width:9%;text-align:right">{_fn(total_cant)}</td>
+            <td class="total-td" style="width:9%;text-align:right">{_fn_cant(total_cant)}</td>
             <td class="total-td" style="width:31%">&nbsp;</td>
         </tr>
     </table>"""
