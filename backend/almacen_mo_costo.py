@@ -107,6 +107,19 @@ def _precio_fila(
     pactado = precios.get((sub_id, ikey))
     if pactado is not None and pactado > 0:
         return pactado
+    # Misma sub + mismo nº de ítem aunque el texto de capítulo difiera del listado.
+    _cap, _, itm = str(ikey).partition("|")
+    itm_n = _norm_item(itm)
+    if itm_n:
+        matches = [
+            float(p)
+            for (sid, k), p in (precios or {}).items()
+            if int(sid) == int(sub_id)
+            and _norm_item(str(k).partition("|")[2]) == itm_n
+            and _f(p) > 0
+        ]
+        if len(matches) == 1:
+            return matches[0]
     # Fallback histórico en el registro (sin inventar promedio).
     stamped = _f(registro.get("vlr_unitario_subcontratista"))
     if stamped > 0:
@@ -269,7 +282,7 @@ def calcular_costo_mo(
         "es_mo": True,
         "etiqueta_fila": "Mano de obra (subcontratistas)",
         "cantidad": round(sum_cant, 4) if sum_cant > 0 else None,
-        "costo_insumo_unitario": None,
+        "costo_insumo_unitario": round(sum_costo / sum_cant, 4) if sum_cant > 0 else None,
         "costo_insumo_linea": round(sum_costo, 2),
         "desglose": desglose,
     }
@@ -333,6 +346,12 @@ def calcular_costo_mo_por_items_contrato(
             bucket["cantidad"] = None
         if not bucket["costo_insumo_linea"]:
             bucket["costo_insumo_linea"] = None
+        cant = _f(bucket.get("cantidad"))
+        costo = _f(bucket.get("costo_insumo_linea"))
+        if cant > 0 and costo > 0:
+            bucket["costo_insumo_unitario"] = round(costo / cant, 4)
+        else:
+            bucket["costo_insumo_unitario"] = None
 
     return by_item
 

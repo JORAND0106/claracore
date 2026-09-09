@@ -142,9 +142,41 @@ def test_calcular_costo_mo_sin_promediar_precios_distintos():
     mo = calcular_costo_mo(9, capitulo="1.", item="10.1", sb=sb)
     assert mo["costo_insumo_linea"] == 110.0
     assert mo["cantidad"] == 8.0
+    assert mo["costo_insumo_unitario"] == 13.75
     assert len(mo["desglose"]) == 2
     precios = {d["precio_unitario_sub"] for d in mo["desglose"]}
     assert precios == {10.0, 20.0}
+
+
+def test_precio_fila_resuelve_aunque_capitulo_listado_difiere():
+    """Precios en listado con capítulo largo; registro SICOE con capítulo corto."""
+    store = _store_base()
+    store["subcontratista_precios"] = [
+        {
+            "subcontratista_id": 1,
+            "contrato_id": 9,
+            "precio_unitario_sub": 15,
+            "listado_precios": {"capitulo": "1. PRELIMINARES", "item_numero": "5."},
+        },
+    ]
+    store["so_registros"] = [
+        {
+            "id": 201,
+            "contrato_id": 9,
+            "subcontratista_id": 1,
+            "capitulo": "1.",
+            "item_numero": "5.",
+            "cantidad_total": 10,
+            "pk_id_id": 1,
+            "nivel2_estado": "Aprobado",
+            "nivel2_objeto_pago_sub": True,
+            "vlr_unitario_subcontratista": 0,
+        },
+    ]
+    sb = _FakeSb(store)
+    mo = calcular_costo_mo(9, capitulo="1.", item="5.", sb=sb)
+    assert mo["costo_insumo_linea"] == 150.0
+    assert mo["costo_insumo_unitario"] == 15.0
 
 
 def test_calcular_costo_mo_filtra_por_pk():
@@ -231,6 +263,63 @@ def test_inventario_arbol_inserta_mo_sin_movimientos():
     assert mo_rows[0]["valor_entradas"] is None
     assert mo_rows[0]["valor_salidas"] is None
     assert mo_rows[0]["valor_stock"] is None
-    # utilidad unitaria con MO amortizada: 100 - (30 + 200/10) = 50
+    # VU costo unificado: materiales 30 + MO 200/10 = 50
+    assert item["vu_costo"] == 50.0
+    # utilidad unitaria con MO amortizada: 100 - 50 = 50
     assert item["utilidad"] == 50.0
     assert item["costo_mo"] == 200.0
+    assert item["rentabilidad_pct"] == 50.0
+
+
+def test_inventario_arbol_mo_solo_sin_materiales_roceria():
+    """Ítem solo-MO (p. ej. Rocería): VU Costo/Utilidad/% desde N2, sin insumos de catálogo."""
+    ikey = make_item_key("1. PRELIMINARES", "5.")
+    out = build_inventario_arbol_from_lines(
+        item_rows=[{
+            "item_key": ikey,
+            "capitulo": "1. PRELIMINARES",
+            "item": "5.",
+            "descripcion": "ROCERÍA",
+            "unidad": "M2",
+            "vu_cobro": 942073,
+            "cant_presupuestada": 100,
+            "presupuesto_ids": [11],
+        }],
+        composition={},
+        movement_lines=[],
+        mo_by_item={
+            ikey: {
+                "es_mo": True,
+                "etiqueta_fila": "Mano de obra (subcontratistas)",
+                "costo_insumo_linea": 50000000,
+                "cantidad": 100,
+                "costo_insumo_unitario": 500000,
+            },
+        },
+    )
+    item = out["items"][0]
+    assert item["vu_costo"] == 500000.0
+    assert item["utilidad"] == 442073.0
+    assert item["rentabilidad_pct"] is not None
+    assert item["rentabilidad_pct"] > 0
+    assert any(i.get("es_mo") for i in item["insumos"])
+    assert not any(not i.get("es_mo") for i in item["insumos"])
+
+
+def test_alinear_mo_by_item_cuando_capitulo_difiere():
+    from almacen_inventario_arbol import alinear_mo_by_item
+
+    inv_key = make_item_key("1. PRELIMINARES", "5.")
+    mo_key = make_item_key("1.", "5.")
+    aligned = alinear_mo_by_item(
+        {inv_key: {"item": "5.", "capitulo": "1. PRELIMINARES"}},
+        {
+            mo_key: {
+                "es_mo": True,
+                "costo_insumo_linea": 1000,
+                "cantidad": 2,
+            },
+        },
+    )
+    assert inv_key in aligned
+    assert aligned[inv_key]["costo_insumo_linea"] == 1000
