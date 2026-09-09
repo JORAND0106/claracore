@@ -62,22 +62,38 @@ def impuesto_lado_as_tributos_payload(impuesto: Any) -> Optional[dict]:
 
 
 def apply_auto_ganadora_detalle(detalle: List[dict]) -> List[dict]:
-    """Marca como ganadora la cotización tipo insumo de menor valor (absoluto)."""
+    """
+    Asegura exactamente una ganadora tipo insumo.
+
+    Si el cliente ya marcó una (confirmación manual al agregar cotización),
+    se respeta. Solo elige por menor valor cuando ninguna está marcada
+    (p. ej. datos legacy o importaciones sin flag).
+    """
     rows = list(detalle or [])
     if not rows:
         return rows
-    candidatos = [
+    insumos = [
         (i, r)
         for i, r in enumerate(rows)
-        if (r.get("tipo") or "insumo") == "insumo" and r.get("valor") is not None
+        if (r.get("tipo") or "insumo") == "insumo"
     ]
+    if not insumos:
+        for r in rows:
+            r["es_ganadora"] = False
+        return rows
+
+    marked = [(i, r) for i, r in insumos if r.get("es_ganadora")]
     for r in rows:
         r["es_ganadora"] = False
+    if marked:
+        rows[marked[0][0]]["es_ganadora"] = True
+        return rows
+
+    candidatos = [
+        (i, r) for i, r in insumos if r.get("valor") is not None
+    ]
     if not candidatos:
-        for r in rows:
-            if (r.get("tipo") or "insumo") == "insumo":
-                r["es_ganadora"] = True
-                break
+        rows[insumos[0][0]]["es_ganadora"] = True
         return rows
     min_val = min(float(r.get("valor") or 0) for _, r in candidatos)
     win_i = next(i for i, r in candidatos if float(r.get("valor") or 0) == min_val)

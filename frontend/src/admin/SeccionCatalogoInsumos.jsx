@@ -25,22 +25,24 @@ import CcConfirmModal from '../components/CcConfirmModal'
 import CatalogoProveedorAutocomplete from './CatalogoProveedorAutocomplete'
 import CatalogoCotizacionAutocomplete from './CatalogoCotizacionAutocomplete'
 import {
-  applyAutoGanadoraByMinValor,
   applyCaptureToPar,
   applyPdfReplace,
   backfillGanadoraProveedor,
   buildParFromCapture,
   collectPdfFilesFromPares,
   cotizacionesPayloadForSave,
+  ensureGanadora,
   fileFromDataTransfer,
   ganadoraDesdeInsumoRow,
   ganadoraRuleErrors,
+  hasGanadoraVigente,
   impuestoGanadoraDesdePares,
   incongruenciaNumeroEntrePares,
   ladoHasImpuesto,
   pickGanadora,
   resolveProveedorFieldsForSave,
   sanitizeRendimientoInput,
+  setGanadoraPar,
   syncLegacyFromGanadora,
   toUpperTrim,
   validateCaptureForEnviar,
@@ -905,6 +907,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [deleteProvConfirm, setDeleteProvConfirm] = useState(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [confirmRevocarGanadora, setConfirmRevocarGanadora] = useState(null)
   const formBaselineRef = useRef('')
   const [mainTab, setMainTab] = useState('insumos')
   const [proveedores, setProveedores] = useState([])
@@ -925,6 +928,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
   const closeModal = useCallback(() => {
     setModalOpen(false)
     setConfirmDiscard(false)
+    setConfirmRevocarGanadora(null)
     setDupAlert(null)
     setConsumoNegociado(null)
     setModalFaltantes([])
@@ -1336,7 +1340,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           [lado]: { ...(p[lado] || {}), ...patch },
         }
       })
-      list = applyAutoGanadoraByMinValor(list)
+      list = ensureGanadora(list)
       const legacy = syncLegacyFromGanadora(list)
       const gan = pickGanadora(list)
       setModalRuleErrors(ganadoraRuleErrors(list))
@@ -1364,7 +1368,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           [lado]: applyPdfReplace(p[lado] || {}, file),
         }
       })
-      list = applyAutoGanadoraByMinValor(list)
+      list = ensureGanadora(list)
       const legacy = syncLegacyFromGanadora(list)
       setModalRuleErrors(ganadoraRuleErrors(list))
       return { ...f, cotizaciones_detalle: list, ...legacy }
@@ -1428,10 +1432,32 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       list = pares.map((p) => (
         p.id === selectedParId ? applyCaptureToPar(p, form, opts) : p
       ))
-      list = applyAutoGanadoraByMinValor(list)
-    } else {
-      list = buildParFromCapture(form, pares, opts)
+      list = ensureGanadora(list)
+      await persistCotizacionEnTabla(list, { wasUpdate })
+      return
     }
+
+    // Nueva cotización: si ya hay ganadora vigente, pedir confirmación de revocación.
+    if (hasGanadoraVigente(pares)) {
+      list = buildParFromCapture(form, pares, { ...opts, makeGanadora: false })
+      setConfirmRevocarGanadora({
+        pendingList: list,
+        newParId: list[list.length - 1]?.id,
+        wasUpdate: false,
+      })
+      return
+    }
+
+    list = buildParFromCapture(form, pares, { ...opts, makeGanadora: true })
+    await persistCotizacionEnTabla(list, { wasUpdate: false })
+  }
+
+  const persistCotizacionEnTabla = async (listIn, {
+    wasUpdate = false,
+    clearCantidadNegociada = false,
+    revocada = false,
+  } = {}) => {
+    let list = ensureGanadora(listIn)
     // Si la captura corresponde a la ganadora, asegurar proveedor_id en ese par.
     list = backfillGanadoraProveedor(list, form, { onlyIfNameMatch: true })
     const legacy = syncLegacyFromGanadora(list)
@@ -1445,6 +1471,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       cotizaciones_detalle: list,
       ...legacy,
       ...provSave,
+      ...(clearCantidadNegociada ? { cantidad_negociada: '' } : {}),
     }
     const cleared = clearCaptureAfterSend()
     const nextForm = {
@@ -1452,6 +1479,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       ...cleared,
       cotizaciones_detalle: list,
       ...legacy,
+      ...(clearCantidadNegociada ? { cantidad_negociada: '' } : {}),
     }
     setForm(nextForm)
 
@@ -1465,6 +1493,13 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
       return
     }
 
+    const successBase = wasUpdate
+      ? 'Cotización actualizada'
+      : 'Cotización enviada'
+    const revocarHint = revocada
+      ? ' Se revocó la ganadora anterior. Actualice la cantidad negociada con el nuevo proveedor ganador: la negociación previa de cantidad y valor ya no aplica.'
+      : ''
+
     if (editId && api) {
       const check = validateGuardarInsumo(formForSave, { editId })
       if (check.faltantes.length || check.ruleErrors.length) {
@@ -1473,8 +1508,8 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         setMsg({
           type: 'success',
           text: wasUpdate
-            ? 'Tabla actualizada en el formulario. Complete los requisitos y pulse Guardar para persistir.'
-            : 'Cotización enviada a la tabla. Complete los requisitos y pulse Guardar para persistir.',
+            ? `Tabla actualizada en el formulario. Complete los requisitos y pulse Guardar para persistir.${revocarHint}`
+            : `Cotización enviada a la tabla. Complete los requisitos y pulse Guardar para persistir.${revocarHint}`,
         })
         return
       }
@@ -1485,7 +1520,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
         formBaselineRef.current = snapshotForm(nextForm)
         setMsg({
           type: 'success',
-          text: wasUpdate ? 'Cotización actualizada y guardada.' : 'Cotización enviada y guardada.',
+          text: `${successBase} y guardada.${revocarHint}`,
         })
         load()
         loadProveedores()
@@ -1499,7 +1534,26 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
 
     setMsg({
       type: 'success',
-      text: wasUpdate ? 'Tabla actualizada.' : 'Cotización enviada a la tabla.',
+      text: wasUpdate
+        ? `Tabla actualizada.${revocarHint}`
+        : `Cotización enviada a la tabla.${revocarHint}`,
+    })
+  }
+
+  const confirmarRevocarGanadora = async (revocar) => {
+    const pending = confirmRevocarGanadora
+    setConfirmRevocarGanadora(null)
+    if (!pending?.pendingList) return
+    let list = pending.pendingList
+    if (revocar && pending.newParId) {
+      list = setGanadoraPar(list, pending.newParId)
+    } else {
+      list = ensureGanadora(list)
+    }
+    await persistCotizacionEnTabla(list, {
+      wasUpdate: !!pending.wasUpdate,
+      clearCantidadNegociada: !!revocar,
+      revocada: !!revocar,
     })
   }
 
@@ -1524,7 +1578,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             },
           }
         })
-        list = applyAutoGanadoraByMinValor(list)
+        list = ensureGanadora(list)
         const legacy = syncLegacyFromGanadora(list)
         const gan = pickGanadora(list)
         setModalRuleErrors(ganadoraRuleErrors(list))
@@ -2738,7 +2792,7 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
             <SheetSectionTitle
               t={t}
               ui={ui}
-              helpTitle="Descripción, unidad y rendimiento son comunes a la fila. Cada grupo conserva solo sus columnas de costo. Pulse una fila para cargarla en los paneles de costos. La ganadora es la de menor costo de insumo. Arrastre el PDF o use el clip."
+              helpTitle="Descripción, unidad y rendimiento son comunes a la fila. Cada grupo conserva solo sus columnas de costo. Pulse una fila para cargarla en los paneles de costos. Al agregar una cotización adicional se le pregunta si debe revocar a la ganadora vigente. Arrastre el PDF o use el clip."
             >
               3. Tabla comparativa de cotizaciones
             </SheetSectionTitle>
@@ -3085,6 +3139,25 @@ export default function SeccionCatalogoInsumos({ token, user, perms, theme: them
           onConfirm={() => closeModal()}
         >
           Hay cambios sin guardar en el formulario del insumo. ¿Desea cerrar y perder la información diligenciada?
+        </CcConfirmModal>
+      )}
+
+      {confirmRevocarGanadora && (
+        <CcConfirmModal
+          theme={ui.confirmTheme}
+          tipo="warn"
+          titulo="Revocar cotización ganadora"
+          confirmar="Sí, revocar"
+          cancelar="No"
+          procesando={busy}
+          onCancel={() => !busy && confirmarRevocarGanadora(false)}
+          onConfirm={() => confirmarRevocarGanadora(true)}
+        >
+          ¿Esta nueva cotización debe revocar a la cotización ganadora actual?
+          <span style={{ display: 'block', marginTop: 8 }}>
+            Si responde Sí, la nueva pasará a ser la ganadora y deberá actualizar la cantidad negociada con el nuevo proveedor.
+            Si responde No, se guarda en el historial sin cambiar la ganadora vigente.
+          </span>
         </CcConfirmModal>
       )}
 

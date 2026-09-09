@@ -219,9 +219,10 @@ def aplicar_liquidacion_en_update(
     """
     precio_ant = existing.get("valor_compra_referencia")
     precio_nuevo = payload.get("valor_compra_referencia", precio_ant)
+    # Respetar cantidad del payload (None = vaciar tras revocar ganadora).
+    # No heredar del existing: el formulario de catálogo siempre envía el valor
+    # vigente o lo omite precisamente para dejarlo vacío.
     cant_neg = payload.get("cantidad_negociada")
-    if cant_neg is None:
-        cant_neg = existing.get("cantidad_negociada")
 
     congelado = _f(existing.get("valor_consumido_congelado"))
     qty_liq = _f(existing.get("cantidad_entradas_liquidada"))

@@ -260,7 +260,7 @@ export function seedCotizacionPares({
   while (minPares > 0 && pares.length < Math.max(1, minPares)) {
     pares.push(newCotizacionPar({ esGanadora: pares.length === 0 }))
   }
-  return applyAutoGanadoraByMinValor(pares)
+  return ensureGanadora(pares)
 }
 
 /** @deprecated Use seedCotizacionPares */
@@ -583,63 +583,49 @@ export function nextCotizacionNumero(pares) {
   return `COT-${String(max + 1).padStart(3, '0')}`
 }
 
-/** Marca como ganadora la fila con menor valor insumo (empate: primera). */
-export function applyAutoGanadoraByMinValor(pares) {
+/**
+ * Asegura exactamente una ganadora respetando la marcada por el usuario.
+ * Si ninguna está marcada, asigna la primera fila con valor de insumo (o la primera).
+ * Ya no fuerza el menor valor: la revocación es confirmación manual en UI.
+ */
+export function ensureGanadora(pares) {
   const list = pares || []
-  const ranked = list
-    .map((p) => ({ id: p.id, v: toNumValor(p.insumo?.valor) }))
-    .filter((x) => x.v != null)
-  if (!ranked.length) {
-    return list.map((p, i) => ({ ...p, es_ganadora: i === 0 && list.length === 1 }))
+  if (!list.length) return list
+  const marked = list.find((p) => p.es_ganadora)
+  if (marked) {
+    return list.map((p) => ({ ...p, es_ganadora: p.id === marked.id }))
   }
-  const min = Math.min(...ranked.map((x) => x.v))
-  const winId = ranked.find((x) => x.v === min)?.id
+  const withValor = list.find((p) => toNumValor(p.insumo?.valor) != null)
+  const winId = (withValor || list[0]).id
   return list.map((p) => ({ ...p, es_ganadora: p.id === winId }))
 }
 
-/**
- * Errores de regla: la ganadora no puede superar otras en valor insumo ni No Previsto.
- * También avisa si el mínimo No Previsto cae en otra fila.
- */
-export function ganadoraRuleErrors(pares) {
+/** Marca el par indicado como ganadora (el resto deja de serlo). */
+export function setGanadoraPar(pares, ganadoraId) {
   const list = pares || []
-  const errors = []
-  const gan = list.find((p) => p.es_ganadora)
-  if (!gan) return errors
+  if (!ganadoraId) return ensureGanadora(list)
+  return list.map((p) => ({ ...p, es_ganadora: p.id === ganadoraId }))
+}
 
-  const ganIns = toNumValor(gan.insumo?.valor)
-  const ganNp = toNumValor(gan.no_previsto?.valor)
-  const numLabel = gan.insumo?.numero || gan.id
+/**
+ * @deprecated Prefer ensureGanadora. Conserva el nombre por compatibilidad;
+ * ya no elige por menor valor.
+ */
+export function applyAutoGanadoraByMinValor(pares) {
+  return ensureGanadora(pares)
+}
 
-  for (const p of list) {
-    if (p.id === gan.id) continue
-    const vi = toNumValor(p.insumo?.valor)
-    if (ganIns != null && vi != null && ganIns > vi + 1e-9) {
-      errors.push(
-        `Cotización ganadora (${numLabel}) tiene valor insumo mayor que ${p.insumo?.numero || p.id} (${vi}). Debe ser la de menor valor.`,
-      )
-    }
-    const vn = toNumValor(p.no_previsto?.valor)
-    if (ganNp != null && vn != null && ganNp > vn + 1e-9) {
-      errors.push(
-        `Cotización ganadora (${numLabel}) tiene valor No Previsto mayor que ${p.insumo?.numero || p.id} (${vn}). Debe ser la de menor valor.`,
-      )
-    }
-  }
+/**
+ * Ya no bloquea por «menor valor»: la ganadora la define el usuario.
+ * Se mantiene la API para no romper callers; siempre retorna [].
+ */
+export function ganadoraRuleErrors(_pares) {
+  return []
+}
 
-  const npRanked = list
-    .map((p) => ({ id: p.id, v: toNumValor(p.no_previsto?.valor), num: p.insumo?.numero }))
-    .filter((x) => x.v != null)
-  if (npRanked.length && ganNp != null) {
-    const minNp = Math.min(...npRanked.map((x) => x.v))
-    const minNpRow = npRanked.find((x) => x.v === minNp)
-    if (minNpRow && minNpRow.id !== gan.id && minNp + 1e-9 < ganNp) {
-      errors.push(
-        `El menor valor No Previsto está en ${minNpRow.num || minNpRow.id}, no en la ganadora. Ajuste valores o use el mismo proveedor ganador.`,
-      )
-    }
-  }
-  return errors
+/** True si ya hay una cotización ganadora vigente en la tabla. */
+export function hasGanadoraVigente(pares) {
+  return (pares || []).some((p) => p.es_ganadora)
 }
 
 export function normCoherencia(s) {
@@ -748,6 +734,8 @@ export function sanitizeRendimientoInput(raw) {
  * @param {string} [opts.impuestoEtiquetaNp]
  * @param {object} [opts.impuesto]
  * @param {object} [opts.impuestoNp]
+ * @param {boolean} [opts.makeGanadora] Si true, la nueva cotización pasa a ser ganadora;
+ *   si false, se agrega al historial sin revocar. Si se omite: ganadora solo si aún no hay vigente.
  */
 export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
   const numeroIns = toUpperTrim(form.cotizacion_numero)
@@ -818,7 +806,21 @@ export function buildParFromCapture(form, paresExistentes = [], opts = {}) {
   if (!panelNoPrevistoTouched(form)) {
     par.no_previsto = emptyLado()
   }
-  return applyAutoGanadoraByMinValor([...(paresExistentes || []), par])
+  const existentes = paresExistentes || []
+  const alreadyHasGanadora = hasGanadoraVigente(existentes)
+  // Nueva cotización: no revoca sola; solo es ganadora si aún no hay vigente
+  // (o si el caller pide makeGanadora explícitamente tras confirmación).
+  if (opts.makeGanadora === true) {
+    par.es_ganadora = true
+  } else if (opts.makeGanadora === false || alreadyHasGanadora) {
+    par.es_ganadora = false
+  } else {
+    par.es_ganadora = true
+  }
+  const list = [...existentes.map((p) => (
+    par.es_ganadora ? { ...p, es_ganadora: false } : p
+  )), par]
+  return ensureGanadora(list)
 }
 
 /**
@@ -1002,7 +1004,7 @@ export function validateGuardarInsumo(form, { editId = null } = {}) {
       || (gan.pdf_nombre || '').trim()
     )
     if (!hasGan) {
-      faltantes.push('Cotización ganadora (menor valor) con datos')
+      faltantes.push('Cotización ganadora con datos')
     }
 
     for (const p of pares) {
