@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { tFrom, isDarkMode, isRestMode, buildContratoUiTheme } from '../../theme/adminPanelTheme'
 import CorteSsBlock from './CorteSsBlock'
+import ItemCobroAsignadosModal from './ItemCobroAsignadosModal'
 import SubcontratistaFormSheet, { EMPTY_SUBCONTRATISTA_FORM } from './SubcontratistaFormSheet'
 import { uploadDocumento, uploadPoliza } from './subcontratistasApi'
 import { fmtMoneda, nivelPolizaBadge, periodoFromCorte } from './subcontratistasDocsHelpers'
@@ -64,12 +65,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
   const [preciosSub, setPreciosSub] = useState([])
   const [preciosLoading, setPreciosLoading] = useState(false)
   const [showAgregarItem, setShowAgregarItem] = useState(false)
-  const [listadoPrecios, setListadoPrecios] = useState([])
-  const [busqCapitulo, setBusqCapitulo] = useState('')
-  const [busqTexto, setBusqTexto] = useState('')
-  const [itemSel, setItemSel] = useState(null)
-  const [precioSubForm, setPrecioSubForm] = useState('')
-  const [creatingPrecio, setCreatingPrecio] = useState(false)
   const [precioEdit, setPrecioEdit] = useState(null)
   const [editPrecioVal, setEditPrecioVal] = useState('')
   const [savingPrecio, setSavingPrecio] = useState(false)
@@ -184,12 +179,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     setPreciosLoading(true)
     try { setPreciosSub(await call('GET', `/subcontratistas/${sid}/precios`) || []) }
     catch { /* ignore */ } finally { setPreciosLoading(false) }
-  }
-
-  const cargarListado = async () => {
-    if (listadoPrecios.length > 0) return
-    try { setListadoPrecios(await call('GET', `/listado-precios/${contratoId}`) || []) }
-    catch { /* ignore */ }
   }
 
   const abrirDetalle = (sub) => {
@@ -344,31 +333,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     }
   }
 
-  const agregarPrecio = async () => {
-    if (!itemSel || !precioSubForm) {
-      setMsg({ type: 'error', text: 'Selecciona un ítem y define el precio.' })
-      return
-    }
-    setCreatingPrecio(true)
-    try {
-      await call('POST', `/subcontratistas/${detalle.id}/precios`, {
-        listado_precio_id: itemSel.id,
-        precio_unitario_sub: parseFloat(precioSubForm) || 0,
-      })
-      setMsg({ type: 'success', text: 'Ítem agregado.' })
-      setShowAgregarItem(false)
-      setItemSel(null)
-      setBusqTexto('')
-      setBusqCapitulo('')
-      setPrecioSubForm('')
-      cargarPreciosSub(detalle.id)
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message })
-    } finally {
-      setCreatingPrecio(false)
-    }
-  }
-
   const guardarPrecioEdit = async () => {
     setSavingPrecio(true)
     try {
@@ -463,22 +427,10 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     )
   }
 
-  const cmpNat = (a, b) => {
-    const n = (s) => parseFloat((s || '').match(/^(\d+(\.\d+)?)/)?.[1] ?? '9999')
-    const na = n(a)
-    const nb = n(b)
-    return na !== nb ? na - nb : (a || '').localeCompare(b || '', 'es')
-  }
   const subsFiltrados = subs.filter((s) => !filtro
     || (s.razon_social || '').toLowerCase().includes(filtro.toLowerCase())
     || (s.nit || '').includes(filtro)
     || (s.nombre_contacto || '').toLowerCase().includes(filtro.toLowerCase()))
-  const capsUnicos = [...new Set(listadoPrecios.map((i) => i.capitulo).filter(Boolean))].sort(cmpNat)
-  const itemsBusq = listadoPrecios.filter((i) => {
-    if (busqCapitulo && i.capitulo !== busqCapitulo) return false
-    if (busqTexto && !(`${i.descripcion || ''} ${i.item_numero || ''}`).toLowerCase().includes(busqTexto.toLowerCase())) return false
-    return true
-  })
 
   const ssPeriodoPendiente = (() => {
     const chk = genCorteEstado?.pendiente?.checklist || genCorteEstado?.checklist
@@ -848,14 +800,7 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                       <button
                         type="button"
                         style={S.btn('primary', true)}
-                        onClick={() => {
-                          setShowAgregarItem(true)
-                          setItemSel(null)
-                          setBusqTexto('')
-                          setBusqCapitulo('')
-                          setPrecioSubForm('')
-                          cargarListado()
-                        }}
+                        onClick={() => setShowAgregarItem(true)}
                       >
                         + Agregar Ítem
                       </button>
@@ -1069,132 +1014,17 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
         </div>
       )}
 
-      {/* AGREGAR ÍTEM */}
-      {showAgregarItem && (
-        <div style={{ ...overlayStyle, zIndex: 10002 }}>
-          <div style={{ ...modalStyle(1040), minHeight: 'min(720px, 90vh)' }}>
-            <CcModalBrandHeader theme={theme} />
-            <div style={modalHead}>
-              <div>
-                <div style={modalTitle}>Agregar Ítem de Cobro</div>
-                <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, marginTop: 2 }}>Subcontratista: {detalle?.razon_social}</div>
-              </div>
-              <button type="button" style={S.closeBtn} onClick={() => setShowAgregarItem(false)}>✕</button>
-            </div>
-            <div style={modalScroll}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
-                <div>
-                  <div style={labelStyle}>Capítulo</div>
-                  <select
-                    style={selectStyle}
-                    value={busqCapitulo}
-                    onChange={(e) => { setBusqCapitulo(e.target.value); setBusqTexto(''); setItemSel(null) }}
-                  >
-                    <option value="">Todos los capítulos</option>
-                    {capsUnicos.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <div style={labelStyle}>Buscar ítem o descripción</div>
-                  <input
-                    style={inputStyle}
-                    value={busqTexto}
-                    onChange={(e) => { setBusqTexto(e.target.value); setItemSel(null) }}
-                    placeholder="Escribe para buscar..."
-                  />
-                </div>
-              </div>
-              {(busqTexto || busqCapitulo) && !itemSel && (
-                <div style={{
-                  maxHeight: 'min(320px, 36vh)',
-                  overflowY: 'auto',
-                  border: `1px solid ${sheetUi.border}`,
-                  borderRadius: 4,
-                  marginBottom: 14,
-                  background: tTok.bgCard,
-                }}
-                >
-                  {itemsBusq.length === 0 ? (
-                    <div style={{ padding: 14, textAlign: 'center', color: col.textMuted, fontSize: 'var(--cc-sm)' }}>Sin resultados</div>
-                  ) : itemsBusq.slice(0, 40).map((i) => (
-                    <div
-                      key={i.id}
-                      onClick={() => { setItemSel(i); setBusqTexto(i.descripcion) }}
-                      style={{
-                        padding: '10px 14px',
-                        cursor: 'pointer',
-                        borderBottom: `1px solid ${sheetUi.border}`,
-                        fontSize: 'var(--cc-sm)',
-                        color: tTok.text,
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}12` }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                    >
-                      <span style={{ color: tTok.primary, fontWeight: 700, marginRight: 8 }}>{i.item_numero}</span>
-                      <span style={{ color: col.textTable }}>{i.descripcion}</span>
-                      <span style={{ color: col.textMuted, marginLeft: 8, fontSize: 'var(--cc-caption)' }}>[{i.unidad}]</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {itemSel && (
-                <div style={{ ...cardSubtle, marginBottom: 14 }}>
-                  <div style={{
-                    fontSize: 'var(--cc-caption)',
-                    color: tTok.primary,
-                    fontWeight: 700,
-                    letterSpacing: 1,
-                    textTransform: 'uppercase',
-                    marginBottom: 10,
-                  }}
-                  >
-                    Ítem seleccionado
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    {[['Ítem', itemSel.item_numero], ['Unidad', itemSel.unidad], ['Descripción', itemSel.descripcion], ['Vlr. Unitario Referencia', fmt(itemSel.precio_unitario)]].map(([l, v]) => (
-                      <div key={l}>
-                        <div style={{
-                          fontSize: 'var(--cc-caption)',
-                          color: col.textMuted,
-                          textTransform: 'uppercase',
-                          letterSpacing: 0.8,
-                          marginBottom: 3,
-                          fontWeight: 600,
-                        }}
-                        >
-                          {l}
-                        </div>
-                        <div style={{ fontSize: 'var(--cc-body)', fontWeight: 600, color: col.textPrimary }}>{v || '—'}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div>
-                <div style={labelStyle}>Valor Unitario Subcontratista *</div>
-                <input
-                  style={inputStyle}
-                  type="number"
-                  value={precioSubForm}
-                  onChange={(e) => setPrecioSubForm(e.target.value)}
-                  placeholder="Precio acordado con el subcontratista"
-                />
-              </div>
-              {itemSel && (
-                <div style={{ ...warnHintStyle, marginTop: 12, marginBottom: 0 }}>
-                  El valor pactado es exclusivo de este subcontratista y no modifica el listado de precios del contrato.
-                </div>
-              )}
-            </div>
-            <div style={modalFoot}>
-              <button type="button" style={S.btn('ghost')} onClick={() => setShowAgregarItem(false)}>Cancelar</button>
-              <button type="button" style={S.btn('primary')} onClick={agregarPrecio} disabled={creatingPrecio}>
-                {creatingPrecio ? 'Agregando...' : 'Agregar Ítem'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ItemCobroAsignadosModal
+        open={!!showAgregarItem && !!detalle?.id}
+        onClose={() => setShowAgregarItem(false)}
+        theme={theme}
+        token={token}
+        subId={detalle?.id}
+        razonSocial={detalle?.razon_social}
+        canEdit={!!(perms?.crear || perms?.editar)}
+        onMsg={setMsg}
+        onSaved={() => detalle?.id && cargarPreciosSub(detalle.id)}
+      />
 
       {/* DETALLE PRECIO */}
       {precioEdit && (
