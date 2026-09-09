@@ -4,8 +4,13 @@ import {
   SICOE_ESTADO_REPORTE_REVERSION,
   SICOE_ESTADOS_REPORTE_FILTRO,
   SICOE_ESTADOS_REPORTE_SOLO_REVERSION,
+  sicoeAppendFSicoeToSearchParams,
   sicoeEstadosReporteFiltro,
+  sicoeFiltroDef,
   sicoeFiltroSoloReversionInterventoria,
+  sicoeFiltroTieneValor,
+  sicoeFSicoeToFiltros,
+  sicoeFiltrosToFSicoe,
   sicoePuedeFiltroCatalogoCompleto,
   sicoePuedeVerFiltroSubcontratista,
 } from './sicoeFiltroCatalogo.js'
@@ -159,5 +164,19 @@ describe('sicoePuedeVerFiltroSubcontratista', () => {
       }, 10),
       true,
     )
+  })
+})
+
+describe('filtro Competencia (caja Ítem)', () => {
+  it('está en catálogo categoría item y se envía a la API', () => {
+    const def = sicoeFiltroDef('competencia')
+    assert.equal(def?.categoria, 'item')
+    assert.equal(def?.tipo, 'select')
+    const f = sicoeFiltrosToFSicoe({ competencia: 'Alumbrado P.' })
+    assert.equal(sicoeFiltroTieneValor(def, f), true)
+    assert.equal(sicoeFSicoeToFiltros(f).competencia, 'Alumbrado P.')
+    const p = new URLSearchParams()
+    sicoeAppendFSicoeToSearchParams(p, f)
+    assert.equal(p.get('competencia'), 'Alumbrado P.')
   })
 })

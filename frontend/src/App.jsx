@@ -8365,7 +8365,7 @@ function ModuloSicoeObra({
   const [filtros, setFiltros] = useState({
     numero_reporte: '', numero_registro: '',
     semana: '', acta_rpo: '',
-    subcontratista_id: '', capitulo: '', item: '',
+    subcontratista_id: '', capitulo: '', competencia: '', item: '',
     tramo: '', costado: '', pk_id: '',
     abs_inicio: '', abs_final: '', estado: '',
     cargo: '', estado_registro: '',
@@ -10386,7 +10386,7 @@ function ModuloSicoeObra({
     analisis?.modo === 'capitulo_items'
   )
 
-  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'', etiqueta_validacion:'' }
+  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', competencia:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'', etiqueta_validacion:'' }
   /** Abscisas y nodos en cabecera de reporte (grilla SICOE). */
   const fmtSicoeRangoCabecera = (a, b) => {
     const pa = a != null && String(a).trim() !== '' ? String(a).trim() : '—'
