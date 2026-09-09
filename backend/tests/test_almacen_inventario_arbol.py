@@ -317,6 +317,57 @@ def test_vu_costo_item_coincide_con_unico_insumo_sin_usar_rendimiento():
     assert ins.get("rendimiento") == 1.1  # se conserva como metadato
 
 
+def test_orphan_insumo_usa_valor_unitario_de_movimiento():
+    """Si no hay composición, el VU del insumo/ítem sale del valor_unitario de la OC."""
+    ikey = "2.|2.1"
+    out = build_inventario_arbol_from_lines(
+        item_rows=[{
+            "item_key": ikey,
+            "capitulo": "2.",
+            "item": "2.1",
+            "descripcion": "SUBBASE GRANULAR",
+            "unidad": "M3",
+            "vu_cobro": 297349,
+            "presupuesto_ids": [],
+        }],
+        composition={},
+        movement_lines=[{
+            "item_key": ikey,
+            "insumo_id": 55,
+            "orden_compra_id": 9,
+            "numero_oc": 12,
+            "proveedor_nombre": "Prov",
+            "material_descripcion": "Material subbase",
+            "unidad": "M3",
+            "valor_unitario": 1200,
+            "entradas": 10,
+            "salidas": 0,
+            "saldo": 10,
+            "valor_entradas": 12000,
+            "valor_salidas": 0,
+            "valor_stock": 12000,
+        }],
+    )
+    item = out["items"][0]
+    assert len(item["insumos"]) == 1
+    ins = item["insumos"][0]
+    assert ins["vu_costo"] == 1200
+    assert item["vu_costo"] == 1200
+    assert item["valor_stock"] == 12000
+
+
+def test_backfill_vu_costo_composition_from_movements():
+    from almacen_inventario_arbol import _backfill_vu_costo_composition
+    composition = {
+        "A|1": [{"insumo_id": 7, "vu_costo": None}],
+    }
+    _backfill_vu_costo_composition(
+        composition,
+        [{"item_key": "A|1", "insumo_id": 7, "valor_unitario": 4066}],
+    )
+    assert composition["A|1"][0]["vu_costo"] == 4066.0
+
+
 def test_fetch_oc_rows_fallback_sin_proveedor_id():
     sb = MagicMock()
     calls = {"n": 0}
