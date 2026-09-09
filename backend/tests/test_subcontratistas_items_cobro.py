@@ -1,4 +1,4 @@
-"""Tests — ítems de cobro desde cantidades de Presupuesto."""
+"""Tests — ítems de cobro / hoja de precios unificada."""
 from __future__ import annotations
 
 import unittest
@@ -6,6 +6,7 @@ import unittest
 from subcontratistas_items_cobro import (
     aggregate_presupuesto_cant_map,
     build_items_cobro_asignados,
+    build_precios_sheet,
     lookup_cant,
     normalize_bulk_precios_payload,
     norm_item_key,
@@ -52,38 +53,54 @@ class TestItemsCobro(unittest.TestCase):
                 "unidad": "UND",
                 "precio_unitario": 50,
             },
-            {
-                "id": 103,
-                "capitulo": "9",
-                "competencia": "",
-                "item_numero": "9.9",
-                "descripcion": "SIN ASIGNAR",
-                "unidad": "M",
-                "precio_unitario": 10,
-            },
         ]
         precios = {101: {"id": 7, "precio_unitario_sub": 800}}
         rows = build_items_cobro_asignados(listado, cant_map, precios)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["listado_precio_id"], 101)
-        self.assertEqual(rows[0]["cantidad"], 12.5)
-        self.assertEqual(rows[0]["vu_cobro"], 1000)
-        self.assertEqual(rows[0]["vu_costo_mo"], 800)
-        self.assertEqual(rows[0]["precio_id"], 7)
-        self.assertEqual(rows[0]["unidad"], "M2")
+        self.assertEqual(rows[0]["origen"], "presupuesto")
+        self.assertFalse(rows[0]["cantidad_editable"])
 
-    def test_bulk_payload(self):
+    def test_sheet_merges_manual(self):
+        cant_map = {("4", "A", "4.6"): 10}
+        listado = [
+            {
+                "id": 101, "capitulo": "4", "competencia": "A", "item_numero": "4.6",
+                "descripcion": "A", "unidad": "M2", "precio_unitario": 100,
+            },
+            {
+                "id": 202, "capitulo": "9", "competencia": "", "item_numero": "9.1",
+                "descripcion": "EXTRA", "unidad": "UND", "precio_unitario": 50,
+            },
+        ]
+        precios = [
+            {"id": 1, "listado_precio_id": 101, "precio_unitario_sub": 80, "origen": "presupuesto"},
+            {"id": 2, "listado_precio_id": 202, "precio_unitario_sub": 40, "origen": "manual", "cantidad_manual": 3},
+        ]
+        sheet = build_precios_sheet(listado, cant_map, precios)
+        self.assertEqual(len(sheet), 2)
+        self.assertEqual(sheet[0]["origen"], "presupuesto")
+        self.assertEqual(sheet[0]["cantidad"], 10)
+        self.assertEqual(sheet[1]["origen"], "manual")
+        self.assertEqual(sheet[1]["cantidad"], 3)
+        self.assertTrue(sheet[1]["cantidad_editable"])
+
+    def test_bulk_payload_manual_requires_cantidad(self):
         out = normalize_bulk_precios_payload([
-            {"listado_precio_id": 1, "precio_unitario_sub": "10.5"},
-            {"listado_precio_id": 1, "precio_unitario_sub": 99},  # dup ignored
-            {"listado_precio_id": 2, "precio_unitario_sub": 0},
+            {"listado_precio_id": 1, "precio_unitario_sub": 10, "origen": "presupuesto"},
+            {
+                "listado_precio_id": 2,
+                "precio_unitario_sub": 5,
+                "origen": "manual",
+                "cantidad_manual": 2.5,
+            },
         ])
         self.assertEqual(len(out), 2)
-        self.assertEqual(out[0]["precio_unitario_sub"], 10.5)
+        self.assertIsNone(out[0]["cantidad_manual"])
+        self.assertEqual(out[1]["cantidad_manual"], 2.5)
         with self.assertRaises(ValueError):
-            normalize_bulk_precios_payload([])
-        with self.assertRaises(ValueError):
-            normalize_bulk_precios_payload([{"listado_precio_id": 1, "precio_unitario_sub": -1}])
+            normalize_bulk_precios_payload([
+                {"listado_precio_id": 3, "precio_unitario_sub": 1, "origen": "manual"},
+            ])
 
 
 if __name__ == "__main__":

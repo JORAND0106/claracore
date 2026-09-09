@@ -1,5 +1,5 @@
 /**
- * API helpers — ítems de cobro asignados desde Presupuesto.
+ * API helpers — hoja unificada de precios del subcontratista.
  */
 import { API_BASE } from '../../apiBase'
 
@@ -19,7 +19,7 @@ async function parseError(res) {
   throw new Error(detail)
 }
 
-/** GET ítems con cantidad > 0 asignada al sub en Presupuesto. */
+/** GET hoja unificada: Presupuesto + manuales. */
 export async function fetchItemsCobroAsignados(subId, token) {
   const res = await fetch(`${API_BASE}/subcontratistas/${subId}/items-cobro-asignados`, {
     headers: authHeaders(token),
@@ -29,9 +29,9 @@ export async function fetchItemsCobroAsignados(subId, token) {
 }
 
 /**
- * POST bulk upsert VU Costo M.O.
+ * POST bulk upsert VU Costo M.O. (+ origen / cantidad_manual).
  * @param {number} subId
- * @param {{ listado_precio_id: number, precio_unitario_sub: number }[]} items
+ * @param {{ listado_precio_id: number, precio_unitario_sub: number, origen?: string, cantidad_manual?: number }[]} items
  * @param {string} token
  */
 export async function bulkUpsertPreciosSub(subId, items, token) {
@@ -39,6 +39,16 @@ export async function bulkUpsertPreciosSub(subId, items, token) {
     method: 'POST',
     headers: authHeaders(token, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ items }),
+  })
+  if (!res.ok) await parseError(res)
+  return res.json()
+}
+
+/** DELETE precio de origen manual. */
+export async function deletePrecioSub(precioId, token) {
+  const res = await fetch(`${API_BASE}/subcontratistas/precios/${precioId}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
   })
   if (!res.ok) await parseError(res)
   return res.json()

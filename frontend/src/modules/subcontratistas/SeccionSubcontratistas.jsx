@@ -2,10 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { tFrom, isDarkMode, isRestMode, buildContratoUiTheme } from '../../theme/adminPanelTheme'
 import CorteSsBlock from './CorteSsBlock'
-import ItemCobroAsignadosModal from './ItemCobroAsignadosModal'
+import PreciosSubcontratistaSheet from './PreciosSubcontratistaSheet'
 import SubcontratistaFormSheet, { EMPTY_SUBCONTRATISTA_FORM } from './SubcontratistaFormSheet'
 import { uploadDocumento, uploadPoliza } from './subcontratistasApi'
-import { fmtMoneda, nivelPolizaBadge, periodoFromCorte } from './subcontratistasDocsHelpers'
+import { nivelPolizaBadge, periodoFromCorte } from './subcontratistasDocsHelpers'
 import { subcontratistasSheetCssVars, subcontratistasSheetStyles, subUi } from './subcontratistasSheetStyles'
 
 /**
@@ -62,12 +62,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
   const [corteDetalle, setCorteDetalle] = useState(null)
   const [editCorteForm, setEditCorteForm] = useState({})
   const [savingCorte, setSavingCorte] = useState(false)
-  const [preciosSub, setPreciosSub] = useState([])
-  const [preciosLoading, setPreciosLoading] = useState(false)
-  const [showAgregarItem, setShowAgregarItem] = useState(false)
-  const [precioEdit, setPrecioEdit] = useState(null)
-  const [editPrecioVal, setEditPrecioVal] = useState('')
-  const [savingPrecio, setSavingPrecio] = useState(false)
   const [calFiOpen, setCalFiOpen] = useState(false)
   const [calFfOpen, setCalFfOpen] = useState(false)
   const [calEditFf, setCalEditFf] = useState(false)
@@ -143,7 +137,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     borderRadius: 10,
     padding: '14px 18px',
   }
-  const fmt = fmtMoneda
 
   const cargar = useCallback(async () => {
     if (!contratoId) return
@@ -175,12 +168,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     }
   }
 
-  const cargarPreciosSub = async (sid) => {
-    setPreciosLoading(true)
-    try { setPreciosSub(await call('GET', `/subcontratistas/${sid}/precios`) || []) }
-    catch { /* ignore */ } finally { setPreciosLoading(false) }
-  }
-
   const abrirDetalle = (sub) => {
     setDetalle(sub)
     setTabDetalle('datos')
@@ -188,7 +175,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
     setEditForm({ ...sub })
     setGenCorteEstado(null)
     cargarCortes(sub.id)
-    cargarPreciosSub(sub.id)
   }
 
   useEffect(() => {
@@ -330,22 +316,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
       setMsg({ type: 'error', text: e.message })
     } finally {
       setSavingCorte(false)
-    }
-  }
-
-  const guardarPrecioEdit = async () => {
-    setSavingPrecio(true)
-    try {
-      await call('PUT', `/subcontratistas/precios/${precioEdit.id}`, {
-        precio_unitario_sub: parseFloat(editPrecioVal) || 0,
-      })
-      setMsg({ type: 'success', text: 'Precio actualizado.' })
-      setPrecioEdit(null)
-      cargarPreciosSub(detalle.id)
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message })
-    } finally {
-      setSavingPrecio(false)
     }
   }
 
@@ -792,62 +762,15 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
                 </div>
               )}
 
-              {tabDetalle === 'precios' && (
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                    <div style={secTitle}>Ítems de Cobro</div>
-                    {perms?.crear && (
-                      <button
-                        type="button"
-                        style={S.btn('primary', true)}
-                        onClick={() => setShowAgregarItem(true)}
-                      >
-                        + Agregar Ítem
-                      </button>
-                    )}
-                  </div>
-                  {preciosLoading ? (
-                    <div style={{ color: col.textMuted, fontSize: 'var(--cc-sm)' }}>Cargando...</div>
-                  ) : preciosSub.length === 0 ? (
-                    <div style={S.empty}>No hay ítems asignados.</div>
-                  ) : (
-                    <div style={{ ...sheetUi.sheetWrap, maxHeight: 'min(480px, 52vh)' }}>
-                      <table style={sheetUi.sheetTable}>
-                        <colgroup>
-                          <col style={{ width: '14%' }} />
-                          <col style={{ width: '10%' }} />
-                          <col style={{ width: '42%' }} />
-                          <col style={{ width: '17%' }} />
-                          <col style={{ width: '17%' }} />
-                        </colgroup>
-                        <thead>
-                          <tr>
-                            {['Capítulo', 'Ítem', 'Descripción', 'Vlr. Referencia', 'Vlr. Subcontratista'].map((h) => (
-                              <th key={h} style={sheetUi.th}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {preciosSub.map((p) => (
-                            <tr
-                              key={p.id}
-                              onClick={() => { setPrecioEdit(p); setEditPrecioVal(String(p.precio_unitario_sub)) }}
-                              style={{ cursor: 'pointer' }}
-                              onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}12` }}
-                              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                            >
-                              <td style={{ ...sheetUi.td, color: col.textMuted }}>{p.capitulo || '—'}</td>
-                              <td style={{ ...sheetUi.td, fontWeight: 700, color: tTok.primary }}>{p.item_numero || '—'}</td>
-                              <td style={sheetUi.td}>{p.descripcion}</td>
-                              <td style={{ ...sheetUi.td, color: col.textMuted, textAlign: 'right' }}>{fmt(p.precio_unitario_ref)}</td>
-                              <td style={{ ...sheetUi.td, color: 'var(--cc-color-success)', fontWeight: 700, textAlign: 'right' }}>{fmt(p.precio_unitario_sub)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
+              {tabDetalle === 'precios' && detalle?.id && (
+                <PreciosSubcontratistaSheet
+                  theme={theme}
+                  token={token}
+                  subId={detalle.id}
+                  contratoId={contratoId}
+                  canEdit={!!(perms?.crear || perms?.editar)}
+                  onMsg={setMsg}
+                />
               )}
             </div>
 
@@ -1007,78 +930,6 @@ export default function SeccionSubcontratistas({ call, user, perms, theme, token
               {perms?.editar && corteDetalle.id != null && (
                 <button type="button" style={S.btn('primary')} onClick={guardarCorteEdit} disabled={savingCorte}>
                   {savingCorte ? 'Guardando...' : 'Guardar'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <ItemCobroAsignadosModal
-        open={!!showAgregarItem && !!detalle?.id}
-        onClose={() => setShowAgregarItem(false)}
-        theme={theme}
-        token={token}
-        subId={detalle?.id}
-        razonSocial={detalle?.razon_social}
-        canEdit={!!(perms?.crear || perms?.editar)}
-        onMsg={setMsg}
-        onSaved={() => detalle?.id && cargarPreciosSub(detalle.id)}
-      />
-
-      {/* DETALLE PRECIO */}
-      {precioEdit && (
-        <div style={{ ...overlayStyle, zIndex: 10002 }}>
-          <div style={modalStyle(820)}>
-            <CcModalBrandHeader theme={theme} />
-            <div style={modalHead}>
-              <div>
-                <div style={modalTitle}>
-                  {precioEdit.item_numero} — {(precioEdit.descripcion || '').substring(0, 48)}{(precioEdit.descripcion || '').length > 48 ? '...' : ''}
-                </div>
-                <div style={{ fontSize: 'var(--cc-caption)', color: col.textSecondary, marginTop: 2 }}>{detalle?.razon_social}</div>
-              </div>
-              <button type="button" style={S.closeBtn} onClick={() => setPrecioEdit(null)}>✕</button>
-            </div>
-            <div style={modalScroll}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-                {[['Capítulo', precioEdit.capitulo], ['Competencia', precioEdit.competencia || '—'], ['Ítem', precioEdit.item_numero], ['Unidad', precioEdit.unidad]].map(([l, v]) => (
-                  <div key={l} style={cardSubtle}>
-                    <div style={{
-                      fontSize: 'var(--cc-caption)',
-                      color: col.textMuted,
-                      textTransform: 'uppercase',
-                      letterSpacing: 0.8,
-                      marginBottom: 4,
-                      fontWeight: 600,
-                    }}
-                    >
-                      {l}
-                    </div>
-                    <div style={{ fontSize: 'var(--cc-body)', fontWeight: 600, color: col.textPrimary }}>{v}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                <div>
-                  <div style={labelStyle}>Vlr. Unitario Referencia (Contrato)</div>
-                  <div style={{ ...inputStyle, opacity: 0.55, pointerEvents: 'none', color: col.textSecondary }}>{fmt(precioEdit.precio_unitario_ref)}</div>
-                </div>
-                <div>
-                  <div style={labelStyle}>Vlr. Unitario Subcontratista {perms?.editar ? '*' : ''}</div>
-                  {perms?.editar ? (
-                    <input style={inputStyle} type="number" value={editPrecioVal} onChange={(e) => setEditPrecioVal(e.target.value)} />
-                  ) : (
-                    <div style={{ ...inputStyle, opacity: 0.7, pointerEvents: 'none', color: 'var(--cc-color-success)', fontWeight: 700 }}>{fmt(precioEdit.precio_unitario_sub)}</div>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div style={modalFoot}>
-              <button type="button" style={S.btn('ghost')} onClick={() => setPrecioEdit(null)}>Cerrar</button>
-              {perms?.editar && (
-                <button type="button" style={S.btn('primary')} onClick={guardarPrecioEdit} disabled={savingPrecio}>
-                  {savingPrecio ? 'Guardando...' : 'Guardar'}
                 </button>
               )}
             </div>
