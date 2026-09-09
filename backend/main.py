@@ -17677,11 +17677,14 @@ class SubprecioBulkItem(BaseModel):
     precio_unitario_sub: float
     origen: Optional[str] = "presupuesto"
     cantidad_manual: Optional[float] = None
-    tributos: Optional[dict] = None
 
 
 class SubprecioBulkBody(BaseModel):
     items: List[SubprecioBulkItem]
+
+
+class SubcontratistaTributosBody(BaseModel):
+    tributos: Optional[dict] = None
 
 
 def _usuario_subcontratista_id(current_user) -> Optional[int]:
@@ -18256,10 +18259,7 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
     try:
         precios_rows = (
             supabase.table("subcontratista_precios")
-            .select(
-                "id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual, "
-                "tributos, precio_unitario_con_aiu"
-            )
+            .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual, tributos")
             .eq("subcontratista_id", int(sub_id))
             .execute()
             .data
@@ -18282,9 +18282,55 @@ def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_u
                 .data
             ) or []
 
-    items = build_precios_sheet(listado, cant_map, precios_rows)
-    return {"items": items, "total": len(items)}
+    from subcontratistas_items_cobro import resolve_tributos_subcontratista
 
+    tributos_sub = {}
+    try:
+        tributos_sub = (sub or {}).get("tributos") or {}
+        if not tributos_sub:
+            row_t = (
+                supabase.table("subcontratistas")
+                .select("tributos")
+                .eq("id", int(sub_id))
+                .limit(1)
+                .execute()
+                .data
+            )
+            if row_t:
+                tributos_sub = row_t[0].get("tributos") or {}
+    except Exception:
+        tributos_sub = {}
+
+    tributos = resolve_tributos_subcontratista(tributos_sub, precios_rows)
+    items = build_precios_sheet(listado, cant_map, precios_rows)
+    return {"items": items, "total": len(items), "tributos": tributos}
+
+
+@app.put("/subcontratistas/{sub_id}/tributos")
+def actualizar_tributos_subcontratista(
+    sub_id: int, body: SubcontratistaTributosBody, current_user=Depends(get_current_user)
+):
+    """AIU/IVA único del subcontratista (aplica a todos los ítems de cobro)."""
+    from almacen_insumos_service import normalize_tributos
+
+    _require_acceso_precios_subcontratista(current_user, sub_id, escribir=True)
+    tributos = normalize_tributos(body.tributos if body else {})
+    try:
+        supabase.table("subcontratistas").update({"tributos": tributos}).eq("id", int(sub_id)).execute()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo guardar tributos (¿columna migrada?): {exc}",
+        )
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "SUBCONTRATISTAS",
+        "tributos_sub",
+        str(sub_id),
+        {"tipo": (tributos or {}).get("tipo")},
+    )
+    return {"ok": True, "tributos": tributos}
 
 @app.post("/subcontratistas/{sub_id}/precios/bulk")
 def bulk_upsert_precios_sub(
@@ -18335,25 +18381,15 @@ def bulk_upsert_precios_sub(
             "precio_unitario_sub": p["precio_unitario_sub"],
             "origen": p["origen"],
             "cantidad_manual": p["cantidad_manual"] if p["origen"] == "manual" else None,
-            "tributos": p.get("tributos") or {},
-            "precio_unitario_con_aiu": p.get("precio_unitario_con_aiu"),
         }
         if lp_id in by_lp:
             try:
                 supabase.table("subcontratista_precios").update(patch).eq("id", by_lp[lp_id]).execute()
             except Exception:
-                # Columnas nuevas aún no migradas: degradar progresivamente
-                slim = {
-                    "precio_unitario_sub": p["precio_unitario_sub"],
-                    "origen": p["origen"],
-                    "cantidad_manual": p["cantidad_manual"] if p["origen"] == "manual" else None,
-                }
-                try:
-                    supabase.table("subcontratista_precios").update(slim).eq("id", by_lp[lp_id]).execute()
-                except Exception:
-                    supabase.table("subcontratista_precios").update(
-                        {"precio_unitario_sub": p["precio_unitario_sub"]}
-                    ).eq("id", by_lp[lp_id]).execute()
+                # Columnas origen/cantidad_manual aún no migradas
+                supabase.table("subcontratista_precios").update(
+                    {"precio_unitario_sub": p["precio_unitario_sub"]}
+                ).eq("id", by_lp[lp_id]).execute()
             actualizados += 1
         else:
             row = {
@@ -18363,20 +18399,13 @@ def bulk_upsert_precios_sub(
                 "precio_unitario_sub": p["precio_unitario_sub"],
                 "origen": p["origen"],
                 "cantidad_manual": p["cantidad_manual"] if p["origen"] == "manual" else None,
-                "tributos": p.get("tributos") or {},
-                "precio_unitario_con_aiu": p.get("precio_unitario_con_aiu"),
             }
             try:
                 supabase.table("subcontratista_precios").insert(row).execute()
             except Exception:
-                row.pop("tributos", None)
-                row.pop("precio_unitario_con_aiu", None)
-                try:
-                    supabase.table("subcontratista_precios").insert(row).execute()
-                except Exception:
-                    row.pop("origen", None)
-                    row.pop("cantidad_manual", None)
-                    supabase.table("subcontratista_precios").insert(row).execute()
+                row.pop("origen", None)
+                row.pop("cantidad_manual", None)
+                supabase.table("subcontratista_precios").insert(row).execute()
             insertados += 1
 
     registrar_log(

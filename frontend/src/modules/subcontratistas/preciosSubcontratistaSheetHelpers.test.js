@@ -38,27 +38,20 @@ describe('preciosSubcontratistaSheetHelpers', () => {
     assert.equal(out[0].id, 2)
   })
 
-  it('buildBulkPayload incluye cantidad_manual y tributos', () => {
+  it('buildBulkPayload no incluye tributos por ítem', () => {
     const rows = [
       { listado_precio_id: 1, origen: 'presupuesto', vu_costo_mo: 10, cantidad: 5 },
       { listado_precio_id: 2, origen: 'manual', vu_costo_mo: 8, cantidad: 3, _draftKey: 'd1' },
     ]
     const drafts = {
-      'lp-1': { vu_costo: '11', impuesto: { administracion: '0.05', imprevistos: '', utilidad: '', iva: '' } },
+      'lp-1': { vu_costo: '11' },
       d1: { vu_costo: '9', cantidad: '4' },
     }
     const out = buildBulkPayload(rows, drafts)
-    assert.equal(out.length, 2)
-    assert.equal(out[0].listado_precio_id, 1)
-    assert.equal(out[0].precio_unitario_sub, 11)
-    assert.equal(out[0].origen, 'presupuesto')
-    assert.equal(out[0].tributos.administracion, 5)
-    assert.equal(out[0].tributos.tipo, 'aiu_sin_iva')
-    assert.equal(out[1].listado_precio_id, 2)
-    assert.equal(out[1].precio_unitario_sub, 9)
-    assert.equal(out[1].origen, 'manual')
-    assert.equal(out[1].cantidad_manual, 4)
-    assert.ok(out[1].tributos)
+    assert.deepEqual(out, [
+      { listado_precio_id: 1, precio_unitario_sub: 11, origen: 'presupuesto' },
+      { listado_precio_id: 2, precio_unitario_sub: 9, origen: 'manual', cantidad_manual: 4 },
+    ])
   })
 
   it('isDraftIncomplete y hasInvalidDrafts', () => {

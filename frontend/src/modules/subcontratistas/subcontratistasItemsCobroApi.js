@@ -53,3 +53,14 @@ export async function deletePrecioSub(precioId, token) {
   if (!res.ok) await parseError(res)
   return res.json()
 }
+
+/** PUT AIU/IVA global del subcontratista. */
+export async function upsertTributosSub(subId, tributos, token) {
+  const res = await fetch(`${API_BASE}/subcontratistas/${subId}/tributos`, {
+    method: 'PUT',
+    headers: authHeaders(token, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ tributos }),
+  })
+  if (!res.ok) await parseError(res)
+  return res.json()
+}

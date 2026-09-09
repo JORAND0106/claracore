@@ -10,6 +10,7 @@ from subcontratistas_items_cobro import (
     lookup_cant,
     normalize_bulk_precios_payload,
     norm_item_key,
+    resolve_tributos_subcontratista,
 )
 
 
@@ -59,6 +60,7 @@ class TestItemsCobro(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["origen"], "presupuesto")
         self.assertFalse(rows[0]["cantidad_editable"])
+        self.assertNotIn("tributos", rows[0])
 
     def test_sheet_merges_manual(self):
         cant_map = {("4", "A", "4.6"): 10}
@@ -97,31 +99,29 @@ class TestItemsCobro(unittest.TestCase):
         self.assertEqual(len(out), 2)
         self.assertIsNone(out[0]["cantidad_manual"])
         self.assertEqual(out[1]["cantidad_manual"], 2.5)
-        self.assertIn("tributos", out[0])
-        self.assertEqual(out[0]["precio_unitario_con_aiu"], 10.0)
+        self.assertNotIn("tributos", out[0])
+        self.assertNotIn("precio_unitario_con_aiu", out[0])
         with self.assertRaises(ValueError):
             normalize_bulk_precios_payload([
                 {"listado_precio_id": 3, "precio_unitario_sub": 1, "origen": "manual"},
             ])
 
-    def test_bulk_payload_computes_aiu(self):
-        out = normalize_bulk_precios_payload([
-            {
-                "listado_precio_id": 1,
-                "precio_unitario_sub": 1000,
-                "origen": "presupuesto",
-                "tributos": {
-                    "administracion": 5,
-                    "imprevistos": 3,
-                    "utilidad": 5,
-                    "iva": 19,
-                },
-            },
-        ])
-        # base + base*(0.05+0.03+0.05) + base*0.05*0.19 = 1000 + 130 + 9.5 → 1140
-        self.assertEqual(out[0]["precio_unitario_con_aiu"], 1140.0)
-        self.assertEqual(out[0]["tributos"]["tipo"], "iva_sobre_utilidad")
-        self.assertEqual(out[0]["precio_unitario_sub"], 1000.0)
+    def test_resolve_tributos_prefers_sub_then_legacy_line(self):
+        from_sub = resolve_tributos_subcontratista(
+            {"administracion": 5, "imprevistos": 0, "utilidad": 0, "iva": None},
+            [{"tributos": {"administracion": 1, "utilidad": 2, "iva": 19}}],
+        )
+        self.assertEqual(from_sub["administracion"], 5)
+        from_legacy = resolve_tributos_subcontratista(
+            {},
+            [
+                {"tributos": {}},
+                {"tributos": {"administracion": 5, "imprevistos": 3, "utilidad": 5, "iva": 19}},
+            ],
+        )
+        self.assertEqual(from_legacy["tipo"], "iva_sobre_utilidad")
+        self.assertEqual(from_legacy["administracion"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

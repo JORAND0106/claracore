@@ -20,7 +20,9 @@ export default function PreciosAiuIvaModal({
   open,
   theme,
   title = 'AIU / IVA — VU Costo M.O.',
+  subtitle = '',
   vuBase = '',
+  showVuBase = true,
   impuesto,
   onClose,
   onSave,
@@ -92,10 +94,16 @@ export default function PreciosAiuIvaModal({
         <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', marginBottom: 8, color: tTok.primary }}>
           {title}
         </div>
-        <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, marginBottom: 12 }}>
-          VU base (antes): <strong style={{ color: tTok.text }}>{fmtMoneda(vuBase)}</strong>
-        </div>
-
+        {subtitle ? (
+          <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, marginBottom: 12 }}>
+            {subtitle}
+          </div>
+        ) : null}
+        {showVuBase ? (
+          <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, marginBottom: 12 }}>
+            VU base (antes): <strong style={{ color: tTok.text }}>{fmtMoneda(vuBase)}</strong>
+          </div>
+        ) : null}
         <div style={{
           marginBottom: 10,
           padding: '8px 10px',
@@ -195,7 +203,7 @@ export default function PreciosAiuIvaModal({
             Después
           </span>
           <span style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: tTok.primary, fontVariantNumeric: 'tabular-nums' }}>
-            {fmtMoneda(despues)}
+            {showVuBase ? fmtMoneda(despues) : 'Se aplica a cada VU Costo M.O.'}
           </span>
         </div>
 

@@ -3,7 +3,9 @@ import { API_BASE } from '../../apiBase'
 import {
   EMPTY_IMPUESTO,
   computeValorDespuesAiuIva,
+  etiquetaTributos,
   impuestoTieneDatos,
+  tributosPayloadDesdeForm,
 } from '../../admin/catalogoInsumosTributos'
 import { fmtMoneda } from './subcontratistasDocsHelpers'
 import PreciosAiuIvaModal from './PreciosAiuIvaModal'
@@ -11,12 +13,13 @@ import {
   bulkUpsertPreciosSub,
   deletePrecioSub,
   fetchItemsCobroAsignados,
+  upsertTributosSub,
 } from './subcontratistasItemsCobroApi'
 import {
   buildBulkPayload,
   filterListadoItems,
   hasInvalidDrafts,
-  impuestoFromRow,
+  impuestoFromTributos,
   isDraftIncomplete,
   parseNum,
   rowKey,
@@ -27,6 +30,7 @@ import { tFrom } from '../../theme/adminPanelTheme'
 
 /**
  * Tab Precios — tabla unificada (Presupuesto + agregados manuales).
+ * AIU/IVA es único a nivel del subcontratista y recalcula «Con AIU/IVA» en todas las filas.
  */
 export default function PreciosSubcontratistaSheet({
   theme,
@@ -49,7 +53,8 @@ export default function PreciosSubcontratistaSheet({
   const [listadoLoading, setListadoLoading] = useState(false)
   const [acOpenKey, setAcOpenKey] = useState(null)
   const [acQuery, setAcQuery] = useState('')
-  const [aiuKey, setAiuKey] = useState(null)
+  const [impuestoGlobal, setImpuestoGlobal] = useState({ ...EMPTY_IMPUESTO })
+  const [aiuOpen, setAiuOpen] = useState(false)
   const wrapRef = useRef(null)
 
   const loadSheet = useCallback(async () => {
@@ -66,14 +71,15 @@ export default function PreciosSubcontratistaSheet({
         next[key] = {
           vu_costo: it.vu_costo_mo != null && it.vu_costo_mo !== '' ? String(it.vu_costo_mo) : '',
           cantidad: it.cantidad != null && it.cantidad !== '' ? String(it.cantidad) : '',
-          impuesto: impuestoFromRow(it),
         }
       }
       setDrafts(next)
+      setImpuestoGlobal(impuestoFromTributos(data?.tributos))
       if (data?.aviso) setAviso(String(data.aviso))
     } catch (e) {
       setRows([])
       setDrafts({})
+      setImpuestoGlobal({ ...EMPTY_IMPUESTO })
       onMsg?.({ type: 'error', text: e.message || 'No se pudo cargar la hoja de precios.' })
     } finally {
       setLoading(false)
@@ -97,20 +103,13 @@ export default function PreciosSubcontratistaSheet({
     }
   }, [contratoId, token])
 
-  useEffect(() => {
-    loadSheet()
-  }, [loadSheet])
-
-  useEffect(() => {
-    loadListado()
-  }, [loadListado])
+  useEffect(() => { loadSheet() }, [loadSheet])
+  useEffect(() => { loadListado() }, [loadListado])
 
   useEffect(() => {
     const onDoc = (ev) => {
       if (!wrapRef.current) return
-      if (!wrapRef.current.contains(ev.target)) {
-        setAcOpenKey(null)
-      }
+      if (!wrapRef.current.contains(ev.target)) setAcOpenKey(null)
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
@@ -120,11 +119,13 @@ export default function PreciosSubcontratistaSheet({
     () => rows.map((r) => Number(r.listado_precio_id)).filter((n) => Number.isFinite(n) && n > 0),
     [rows],
   )
-
   const capitulos = useMemo(() => uniqueCapitulos(listado), [listado])
-
   const payload = useMemo(() => buildBulkPayload(rows, drafts), [rows, drafts])
   const invalid = useMemo(() => hasInvalidDrafts(rows, drafts), [rows, drafts])
+  const tributosResumen = useMemo(
+    () => etiquetaTributos(tributosPayloadDesdeForm(impuestoGlobal || EMPTY_IMPUESTO)),
+    [impuestoGlobal],
+  )
 
   const setDraftField = (key, field, value) => {
     setDrafts((prev) => ({
@@ -155,7 +156,7 @@ export default function PreciosSubcontratistaSheet({
     setRows((prev) => [...prev, row])
     setDrafts((prev) => ({
       ...prev,
-      [draftKey]: { vu_costo: '', cantidad: '', query: '', impuesto: { ...EMPTY_IMPUESTO } },
+      [draftKey]: { vu_costo: '', cantidad: '', query: '' },
     }))
     setAcOpenKey(draftKey)
     setAcQuery('')
@@ -223,7 +224,6 @@ export default function PreciosSubcontratistaSheet({
         query: '',
         vu_costo: prev[key]?.vu_costo || '',
         cantidad: prev[key]?.cantidad || '',
-        impuesto: prev[key]?.impuesto || { ...EMPTY_IMPUESTO },
       },
     }))
     setAcOpenKey(key)
@@ -255,6 +255,22 @@ export default function PreciosSubcontratistaSheet({
       await loadSheet()
     } catch (e) {
       onMsg?.({ type: 'error', text: e.message || 'No se pudieron guardar los precios.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const guardarAiuGlobal = async (impuesto) => {
+    if (!canEdit) return
+    setSaving(true)
+    try {
+      const tributos = tributosPayloadDesdeForm(impuesto || EMPTY_IMPUESTO)
+      const res = await upsertTributosSub(subId, tributos, token)
+      setImpuestoGlobal(impuestoFromTributos(res?.tributos || tributos))
+      setAiuOpen(false)
+      onMsg?.({ type: 'success', text: 'AIU/IVA del subcontratista guardado. Se aplica a todos los ítems.' })
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudo guardar el AIU/IVA.' })
     } finally {
       setSaving(false)
     }
@@ -303,7 +319,7 @@ export default function PreciosSubcontratistaSheet({
             Ítems de Cobro
           </div>
           <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, lineHeight: 1.4 }}>
-            VU Costo M.O. es el valor antes de AIU/IVA. Use A·Í·U·IVA para desglosar y ver el valor resultante.
+            VU Costo M.O. es el valor antes de AIU/IVA. El desglose A·Í·U·IVA es único para este subcontratista.
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -330,6 +346,42 @@ export default function PreciosSubcontratistaSheet({
         </div>
       </div>
 
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        marginBottom: 12,
+        padding: '8px 10px',
+        borderRadius: 8,
+        border: `1px solid ${tTok.border}`,
+        background: tTok.inputBg || tTok.bgCard,
+      }}
+      >
+        <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: tTok.textMuted }}>
+          AIU / IVA (global)
+        </span>
+        <button
+          type="button"
+          disabled={!canEdit || saving || loading}
+          title="Desglose único: Administración, Imprevistos, Utilidad e IVA"
+          onClick={() => setAiuOpen(true)}
+          style={{
+            ...S.btn('ghost', true),
+            padding: '4px 10px',
+            minHeight: 30,
+            fontWeight: 700,
+            borderColor: impuestoTieneDatos(impuestoGlobal) ? tTok.primary : tTok.border,
+            color: impuestoTieneDatos(impuestoGlobal) ? tTok.primary : tTok.text,
+          }}
+        >
+          {impuestoTieneDatos(impuestoGlobal) ? 'A · Í · U · IVA ✓' : 'A · Í · U · IVA'}
+        </button>
+        <span style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, overflowWrap: 'anywhere' }}>
+          {tributosResumen === '—' ? 'Sin desglose. Se aplica a todos los ítems.' : tributosResumen}
+        </span>
+      </div>
+
       {loading ? (
         <div style={{ color: tTok.textMuted, fontSize: 'var(--cc-sm)', padding: 16 }}>Cargando hoja de precios…</div>
       ) : rows.length === 0 ? (
@@ -345,19 +397,18 @@ export default function PreciosSubcontratistaSheet({
         <div style={{ ...ui.sheetWrap, maxHeight: 'min(560px, 58vh)' }}>
           <table style={ui.sheetTable}>
             <colgroup>
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '24%' }} />
-              <col style={{ width: '6%' }} />
               <col style={{ width: '10%' }} />
+              <col style={{ width: '28%' }} />
+              <col style={{ width: '7%' }} />
               <col style={{ width: '12%' }} />
               <col style={{ width: '14%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '12%' }} />
+              <col style={{ width: '15%' }} />
             </colgroup>
             <thead>
               <tr>
-                {['Ítem', 'Descripción', 'Und', 'Cantidad', 'VU Cobro', 'VU Costo M.O.', 'Con AIU/IVA', ''].map((h, i) => (
-                  <th key={h || `a${i}`} style={ui.th}>{h}</th>
+                {['Ítem', 'Descripción', 'Und', 'Cantidad', 'VU Cobro', 'VU Costo M.O.', 'Con AIU/IVA'].map((h) => (
+                  <th key={h} style={ui.th}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -374,6 +425,7 @@ export default function PreciosSubcontratistaSheet({
                     excludeLpIds: usedLpIds.filter((id) => id !== Number(r.listado_precio_id)),
                   })
                   : []
+                const vuBase = parseNum(d.vu_costo) ?? r.vu_costo_mo ?? 0
 
                 return (
                   <tr key={key}>
@@ -397,7 +449,31 @@ export default function PreciosSubcontratistaSheet({
                           ) : null}
                         </div>
                       ) : (
-                        r.item_numero || '—'
+                        <div>
+                          {r.item_numero || '—'}
+                          {canEdit && isManual && (
+                            <button
+                              type="button"
+                              style={{
+                                display: 'block',
+                                marginTop: 2,
+                                border: 'none',
+                                background: 'transparent',
+                                color: tTok.danger || '#dc2626',
+                                cursor: 'pointer',
+                                fontSize: 'var(--cc-caption)',
+                                fontWeight: 700,
+                                padding: 0,
+                                fontFamily: 'inherit',
+                              }}
+                              disabled={saving}
+                              onClick={() => eliminarManual(r)}
+                              title={r._isDraft ? 'Descartar fila' : 'Eliminar ítem manual'}
+                            >
+                              {r._isDraft ? 'Descartar' : 'Eliminar'}
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td style={{ ...ui.td, position: 'relative' }}>
@@ -480,6 +556,26 @@ export default function PreciosSubcontratistaSheet({
                               ))}
                             </div>
                           )}
+                          {canEdit && (
+                            <button
+                              type="button"
+                              style={{
+                                marginTop: 4,
+                                border: 'none',
+                                background: 'transparent',
+                                color: tTok.danger || '#dc2626',
+                                cursor: 'pointer',
+                                fontSize: 'var(--cc-caption)',
+                                fontWeight: 700,
+                                padding: 0,
+                                fontFamily: 'inherit',
+                              }}
+                              disabled={saving}
+                              onClick={() => eliminarManual(r)}
+                            >
+                              Descartar
+                            </button>
+                          )}
                         </div>
                       ) : (
                         r.descripcion || '—'
@@ -506,74 +602,33 @@ export default function PreciosSubcontratistaSheet({
                       {fmtMoneda(r.vu_cobro)}
                     </td>
                     <td style={ui.td}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {canEdit ? (
-                          <input
-                            style={{
-                              ...ui.cellInp,
-                              textAlign: 'right',
-                              background: tTok.inputBg || 'transparent',
-                            }}
-                            type="number"
-                            min="0"
-                            step="any"
-                            disabled={saving}
-                            value={d.vu_costo ?? ''}
-                            placeholder="Antes AIU"
-                            title="Valor antes de AIU/IVA"
-                            onChange={(e) => setDraftField(key, 'vu_costo', e.target.value)}
-                          />
-                        ) : (
-                          <span style={{ display: 'block', textAlign: 'right', fontWeight: 700 }}>
-                            {fmtMoneda(parseNum(d.vu_costo) ?? r.vu_costo_mo)}
-                          </span>
-                        )}
-                        {canEdit && (
-                          <button
-                            type="button"
-                            disabled={saving}
-                            title="Desglose Administración, Imprevistos, Utilidad e IVA"
-                            onClick={() => setAiuKey(key)}
-                            style={{
-                              ...S.btn('ghost', true),
-                              padding: '2px 6px',
-                              minHeight: 26,
-                              fontSize: 'var(--cc-caption)',
-                              fontWeight: 700,
-                              borderColor: impuestoTieneDatos(d.impuesto || EMPTY_IMPUESTO) ? tTok.primary : tTok.border,
-                              color: impuestoTieneDatos(d.impuesto || EMPTY_IMPUESTO) ? tTok.primary : tTok.textMuted,
-                            }}
-                          >
-                            {impuestoTieneDatos(d.impuesto || EMPTY_IMPUESTO) ? 'A · Í · U · IVA ✓' : 'A · Í · U · IVA'}
-                          </button>
-                        )}
-                      </div>
+                      {canEdit ? (
+                        <input
+                          style={{
+                            ...ui.cellInp,
+                            textAlign: 'right',
+                            background: tTok.inputBg || 'transparent',
+                          }}
+                          type="number"
+                          min="0"
+                          step="any"
+                          disabled={saving}
+                          value={d.vu_costo ?? ''}
+                          placeholder="Antes AIU"
+                          title="Valor antes de AIU/IVA"
+                          onChange={(e) => setDraftField(key, 'vu_costo', e.target.value)}
+                        />
+                      ) : (
+                        <span style={{ display: 'block', textAlign: 'right', fontWeight: 700 }}>
+                          {fmtMoneda(vuBase)}
+                        </span>
+                      )}
                     </td>
                     <td style={{ ...ui.td, textAlign: 'right', fontWeight: 700, color: 'var(--cc-color-success)' }}>
                       {fmtMoneda(
-                        computeValorDespuesAiuIva(
-                          parseNum(d.vu_costo) ?? r.vu_costo_mo ?? 0,
-                          d.impuesto || EMPTY_IMPUESTO,
-                          { valoresEnDecimal: true },
-                        ),
-                      )}
-                    </td>
-                    <td style={{ ...ui.td, textAlign: 'center' }}>
-                      {canEdit && isManual && (
-                        <button
-                          type="button"
-                          style={{
-                            ...S.btn('danger', true),
-                            padding: '2px 8px',
-                            minHeight: 28,
-                            fontSize: 'var(--cc-caption)',
-                          }}
-                          disabled={saving}
-                          onClick={() => eliminarManual(r)}
-                          title={r._isDraft ? 'Descartar fila' : 'Eliminar ítem manual'}
-                        >
-                          {r._isDraft ? 'Descartar' : 'Eliminar'}
-                        </button>
+                        computeValorDespuesAiuIva(vuBase, impuestoGlobal || EMPTY_IMPUESTO, {
+                          valoresEnDecimal: true,
+                        }),
                       )}
                     </td>
                   </tr>
@@ -585,15 +640,14 @@ export default function PreciosSubcontratistaSheet({
       )}
 
       <PreciosAiuIvaModal
-        open={!!aiuKey}
+        open={aiuOpen}
         theme={theme}
-        vuBase={(aiuKey && drafts[aiuKey]?.vu_costo) || ''}
-        impuesto={(aiuKey && drafts[aiuKey]?.impuesto) || EMPTY_IMPUESTO}
-        onClose={() => setAiuKey(null)}
-        onSave={(impuesto) => {
-          if (aiuKey) setDraftField(aiuKey, 'impuesto', impuesto)
-          setAiuKey(null)
-        }}
+        title="AIU / IVA — Subcontratista"
+        subtitle="Único desglose aplicable a todos los ítems de cobro."
+        showVuBase={false}
+        impuesto={impuestoGlobal}
+        onClose={() => setAiuOpen(false)}
+        onSave={guardarAiuGlobal}
       />
     </div>
   )
