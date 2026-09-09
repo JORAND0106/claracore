@@ -17670,6 +17670,15 @@ class SubprecioUpdate(BaseModel):
     precio_unitario_sub: float
 
 
+class SubprecioBulkItem(BaseModel):
+    listado_precio_id: int
+    precio_unitario_sub: float
+
+
+class SubprecioBulkBody(BaseModel):
+    items: List[SubprecioBulkItem]
+
+
 def _usuario_subcontratista_id(current_user) -> Optional[int]:
     """subcontratista_id del usuario autenticado (JWT o tabla usuarios)."""
     for key in ("subcontratista_id", "sub_id"):
@@ -18167,6 +18176,156 @@ def actualizar_precio_sub(precio_id: int, body: SubprecioUpdate, current_user=De
     registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "precio_sub", str(precio_id),
                   {"precio_unitario_sub": body.precio_unitario_sub})
     return {"ok": True}
+
+
+@app.get("/subcontratistas/{sub_id}/items-cobro-asignados")
+def listar_items_cobro_asignados(sub_id: int, current_user=Depends(get_current_user)):
+    """Ítems del listado con cantidad > 0 asignada a este subcontratista en Presupuesto."""
+    from subcontratistas_items_cobro import (
+        aggregate_presupuesto_cant_map,
+        build_items_cobro_asignados,
+    )
+
+    sub = _require_acceso_precios_subcontratista(current_user, sub_id, escribir=False)
+    contrato_id = int(sub["contrato_id"])
+
+    ppto_rows: List[dict] = []
+    try:
+        offset = 0
+        while True:
+            batch = (
+                supabase.table("presupuesto")
+                .select("capitulo, competencia, item, cant_total")
+                .eq("contrato_id", contrato_id)
+                .eq("subcontratista_id", int(sub_id))
+                .eq("tipo_ejecucion", "Presupuesto de Obra")
+                .eq("dado_de_baja", False)
+                .order("id")
+                .range(offset, offset + 999)
+                .execute()
+                .data
+            )
+            ppto_rows.extend(batch or [])
+            if len(batch or []) < 1000:
+                break
+            offset += 1000
+    except Exception as exc:
+        # Columna aún no migrada o error de esquema: sin asignaciones visibles.
+        logging.getLogger(__name__).warning(
+            "items-cobro-asignados: no se pudo leer presupuesto.subcontratista_id (sub=%s): %s",
+            sub_id,
+            exc,
+        )
+        return {"items": [], "total": 0, "aviso": "Sin columna de asignación en presupuesto o sin datos."}
+
+    cant_map = aggregate_presupuesto_cant_map(ppto_rows)
+
+    listado: List[dict] = []
+    offset = 0
+    while True:
+        batch = (
+            supabase.table("listado_precios")
+            .select("id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario")
+            .eq("contrato_id", contrato_id)
+            .order("item_numero")
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        listado.extend(batch or [])
+        if len(batch or []) < 1000:
+            break
+        offset += 1000
+
+    precios_rows = (
+        supabase.table("subcontratista_precios")
+        .select("id, listado_precio_id, precio_unitario_sub")
+        .eq("subcontratista_id", int(sub_id))
+        .execute()
+        .data
+    ) or []
+    precios_by_lp = {}
+    for pr in precios_rows:
+        try:
+            lp = int(pr.get("listado_precio_id"))
+        except (TypeError, ValueError):
+            continue
+        precios_by_lp[lp] = pr
+
+    items = build_items_cobro_asignados(listado, cant_map, precios_by_lp)
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/subcontratistas/{sub_id}/precios/bulk")
+def bulk_upsert_precios_sub(
+    sub_id: int, body: SubprecioBulkBody, current_user=Depends(get_current_user)
+):
+    """Upsert masivo de VU Costo M.O. para ítems del listado."""
+    from subcontratistas_items_cobro import normalize_bulk_precios_payload
+
+    sub = _require_acceso_precios_subcontratista(current_user, sub_id, escribir=True)
+    contrato_id = int(sub["contrato_id"])
+    try:
+        payload = normalize_bulk_precios_payload([i.model_dump() for i in (body.items or [])])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    lp_ids = [p["listado_precio_id"] for p in payload]
+    existentes_lp = (
+        supabase.table("listado_precios")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .in_("id", lp_ids)
+        .execute()
+        .data
+    ) or []
+    ok_lp = {int(r["id"]) for r in existentes_lp}
+    invalid = [i for i in lp_ids if i not in ok_lp]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ítems ajenos al listado del contrato: {invalid[:8]}",
+        )
+
+    prev_rows = (
+        supabase.table("subcontratista_precios")
+        .select("id, listado_precio_id")
+        .eq("subcontratista_id", int(sub_id))
+        .in_("listado_precio_id", lp_ids)
+        .execute()
+        .data
+    ) or []
+    by_lp = {int(r["listado_precio_id"]): int(r["id"]) for r in prev_rows}
+
+    insertados = 0
+    actualizados = 0
+    for p in payload:
+        lp_id = p["listado_precio_id"]
+        precio = p["precio_unitario_sub"]
+        if lp_id in by_lp:
+            supabase.table("subcontratista_precios").update(
+                {"precio_unitario_sub": precio}
+            ).eq("id", by_lp[lp_id]).execute()
+            actualizados += 1
+        else:
+            supabase.table("subcontratista_precios").insert({
+                "subcontratista_id": int(sub_id),
+                "contrato_id": contrato_id,
+                "listado_precio_id": lp_id,
+                "precio_unitario_sub": precio,
+            }).execute()
+            insertados += 1
+
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "SUBCONTRATISTAS",
+        "precio_sub_bulk",
+        str(sub_id),
+        {"insertados": insertados, "actualizados": actualizados, "total": len(payload)},
+    )
+    return {"ok": True, "insertados": insertados, "actualizados": actualizados, "total": len(payload)}
+
 
 @app.get("/subcontratistas/{contrato_id}/alertas-corte")
 def alertas_corte(contrato_id: int, current_user=Depends(get_current_user)):
