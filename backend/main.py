@@ -1216,6 +1216,12 @@ class PresupuestoBulkCompetencia(BaseModel):
     competencia: str
 
 
+class PresupuestoBulkSubcontratista(BaseModel):
+    """Asigna subcontratista_id a registros de presupuesto (edición masiva)."""
+    ids: List[int]
+    subcontratista_id: int
+
+
 class PresupuestoBulkObservacion(BaseModel):
     ids: List[int]
     observacion_externa: str
@@ -13773,6 +13779,73 @@ def bulk_competencia(contrato_id: int, body: PresupuestoBulkCompetencia, current
         det_bulk,
     )
     return {"actualizados": len(ids_ok), "competencia": comp}
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-subcontratista")
+def bulk_subcontratista(
+    contrato_id: int, body: PresupuestoBulkSubcontratista, current_user=Depends(get_current_user)
+):
+    """Asigna `subcontratista_id` en lote (edición masiva · Capítulo/Ítem).
+
+    Solo toca subcontratista_id (+ updated_at). No modifica validación ni sellado.
+    Los registros sellados se rechazan (misma regla que cap/ítem editable).
+    """
+    _require_contract_access(current_user, contrato_id)
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    sub_id = int(body.subcontratista_id or 0)
+    if sub_id <= 0:
+        raise HTTPException(status_code=422, detail="subcontratista_id inválido.")
+    sub_rows = (
+        supabase.table("subcontratistas")
+        .select("id, contrato_id, activo, razon_social")
+        .eq("id", sub_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not sub_rows or int(sub_rows[0].get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Subcontratista no encontrado en este contrato.")
+    if sub_rows[0].get("activo") is False:
+        raise HTTPException(status_code=422, detail="El subcontratista está inactivo.")
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+    rows = (
+        supabase.table("presupuesto")
+        .select("id, contrato_id, id_pol, subcontratista_id")
+        .in_("id", body.ids)
+        .execute()
+        .data
+        or []
+    )
+    ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
+    if not ids_ok:
+        raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+    rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
+    supabase.table("presupuesto").update(
+        {"subcontratista_id": sub_id, "updated_at": "now()"}
+    ).in_("id", ids_ok).execute()
+    det_bulk = {
+        "contrato_id": contrato_id,
+        "cantidad_registros": len(ids_ok),
+        "subcontratista_id": sub_id,
+        "razon_social": sub_rows[0].get("razon_social"),
+    }
+    audit_filas = [(dict(r), {**dict(r), "subcontratista_id": sub_id}) for r in rows_ok]
+    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRESUPUESTO",
+        "presupuesto_bulk_subcontratista",
+        str(contrato_id),
+        det_bulk,
+    )
+    return {"actualizados": len(ids_ok), "subcontratista_id": sub_id}
 
 
 @app.put("/presupuesto/{contrato_id}/bulk-observacion")

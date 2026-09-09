@@ -9,6 +9,7 @@ import {
   pptoActualizarCompetenciaFilas,
   pptoClonarFilasFuenteTramos,
 } from './pptoTramoBusqueda'
+import { pptoLabelSubcontratista } from './pptoSubcontratistaMasiva'
 
 const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
 const PPTO_TIPO_OBRA = 'Obra Ejecutada'
@@ -218,6 +219,36 @@ function CompetenciaSelect({ value, onChange, opciones, t, label = 'NUEVA COMPET
   )
 }
 
+function SubcontratistaSelect({ value, onChange, opciones, t, disabled = false }) {
+  return (
+    <div style={{ flex: '1 1 240px' }}>
+      <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.3 }}>
+        SUBCONTRATISTA
+      </div>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        style={{
+          width: '100%',
+          background: t.inputBg,
+          border: `1.5px solid ${value ? t.primary : t.border}`,
+          borderRadius: 8,
+          padding: `${cc.padSm} 12px`,
+          color: t.text,
+          fontSize: cc.sm,
+          opacity: disabled ? 0.55 : 1,
+        }}
+      >
+        <option value="">— Sin cambio —</option>
+        {(opciones || []).map((s) => (
+          <option key={s.id} value={String(s.id)}>{s.label}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 /**
  * Edición masiva presupuesto: capítulo/ítem, dimensiones, tipo, tramos, depuración e interventoría.
  */
@@ -240,6 +271,7 @@ export default function PptoEdicionMasivaModal({
   capitulosListado,
   listadoPrecios,
   competenciasOpciones = [],
+  subcontratistasOpciones = [],
   guardandoBulk,
   onApplyCapItem,
   onApplyDimensiones,
@@ -294,6 +326,7 @@ export default function PptoEdicionMasivaModal({
   const [itemBusqueda, setItemBusqueda] = useState('')
   const [itemDropOpen, setItemDropOpen] = useState(false)
   const [editCompetencia, setEditCompetencia] = useState('')
+  const [editSubcontratistaId, setEditSubcontratistaId] = useState('')
   const [obsCapItem, setObsCapItem] = useState('')
   const [dimAncho, setDimAncho] = useState('')
   const [dimEspesor, setDimEspesor] = useState('')
@@ -329,6 +362,7 @@ export default function PptoEdicionMasivaModal({
     setMensajeExito('')
     setAplicando(false)
     setEditCompetencia('')
+    setEditSubcontratistaId('')
     setTramoSelec(null)
     setTramosSelIds(new Set())
     setEditCompetenciaTramos('')
@@ -418,8 +452,12 @@ export default function PptoEdicionMasivaModal({
     const tieneCap = !!editCapitulo
     const tieneItem = !!editItem
     const tieneComp = !!editCompetencia
+    const tieneSub = !!String(editSubcontratistaId || '').trim()
     const tieneObs = !!obsCapItem.trim()
-    if (!tieneCap && !tieneItem && !tieneComp && !tieneObs) return []
+    if (!tieneCap && !tieneItem && !tieneComp && !tieneSub && !tieneObs) return []
+    const labelNuevoSub = tieneSub
+      ? pptoLabelSubcontratista(editSubcontratistaId, subcontratistasOpciones)
+      : ''
     return editables.map((r) => {
       const antCap = r.capitulo || '—'
       const antItem = r.item || '—'
@@ -429,6 +467,11 @@ export default function PptoEdicionMasivaModal({
       if (precioSeleccionado && tieneItem) partes.push(`V.U: ${formatCOP(precioSeleccionado.precio_unitario)}`)
       if (tieneComp && editCompetencia !== (r.competencia || '')) {
         partes.push(`Comp: ${r.competencia || '—'} → ${editCompetencia}`)
+      }
+      if (tieneSub && Number(r.subcontratista_id || 0) !== Number(editSubcontratistaId)) {
+        partes.push(
+          `Sub: ${pptoLabelSubcontratista(r.subcontratista_id, subcontratistasOpciones)} → ${labelNuevoSub}`,
+        )
       }
       if (tieneObs) partes.push(`Obs: ${obsCapItem.trim()}`)
       if (!partes.length) return null
@@ -442,7 +485,10 @@ export default function PptoEdicionMasivaModal({
         nuevo: partes.join(' · '),
       }
     }).filter(Boolean)
-  }, [editCapitulo, editItem, editCompetencia, obsCapItem, editables, precioSeleccionado])
+  }, [
+    editCapitulo, editItem, editCompetencia, editSubcontratistaId, obsCapItem,
+    editables, precioSeleccionado, subcontratistasOpciones,
+  ])
 
   const previewTramos = useMemo(() => {
     const comp = String(editCompetenciaTramos || '').trim()
@@ -555,8 +601,8 @@ export default function PptoEdicionMasivaModal({
     try {
       let resumen = []
       if (tabSafe === 'capitem') {
-        if (!editCapitulo && !editItem && !editCompetencia && !obsCapItem.trim()) {
-          setErrorApply('Seleccione capítulo, ítem, competencia u observación (opcional).')
+        if (!editCapitulo && !editItem && !editCompetencia && !editSubcontratistaId && !obsCapItem.trim()) {
+          setErrorApply('Seleccione capítulo, ítem, competencia, subcontratista u observación (opcional).')
           return
         }
         resumen = await onApplyCapItem({
@@ -565,6 +611,7 @@ export default function PptoEdicionMasivaModal({
           competencia: editCompetencia,
           precioSeleccionado,
           observacion: obsCapItem,
+          subcontratistaId: editSubcontratistaId || null,
         })
       } else if (tabSafe === 'dims') {
         if (!dimAncho.trim() && !dimEspesor.trim() && !obsDims.trim()) {
@@ -819,6 +866,13 @@ export default function PptoEdicionMasivaModal({
                   t={t}
                   label="NUEVA COMPETENCIA"
                   allowEmpty
+                />
+                <SubcontratistaSelect
+                  value={editSubcontratistaId}
+                  onChange={setEditSubcontratistaId}
+                  opciones={subcontratistasOpciones}
+                  t={t}
+                  disabled={!nEditables}
                 />
               </div>
               <ObservacionBox t={t} value={obsCapItem} onChange={setObsCapItem} />
