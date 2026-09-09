@@ -4,7 +4,9 @@ import {
   calcularCantidadConRedondeo,
   decimalesCantidadTotal,
   formatearCantidadTotal,
+  formatearDimension,
   redondearCantidadTotalDinamico,
+  redondearDimension,
 } from './sicoeCantidadRedondeo.js'
 
 describe('calcularCantidadConRedondeo', () => {
@@ -22,6 +24,20 @@ describe('calcularCantidadConRedondeo', () => {
   it('todos vacíos → 0; multiplica cantidad (× N)', () => {
     assert.equal(calcularCantidadConRedondeo(null, null, null, null), 0)
     assert.equal(calcularCantidadConRedondeo(1, 1, 1, 2), 2)
+  })
+})
+
+describe('redondearDimension', () => {
+  it('acepta hasta 3 decimales (no corta a 2)', () => {
+    assert.equal(redondearDimension(0.015), 0.015)
+    assert.equal(redondearDimension(0.00375), 0.004)
+    assert.equal(redondearDimension('1.2345'), 1.235)
+    assert.equal(redondearDimension(''), null)
+  })
+
+  it('formatearDimension muestra hasta 3 decimales', () => {
+    assert.equal(formatearDimension(0.015, { locale: false }), '0.015')
+    assert.equal(formatearDimension(1.5, { locale: false }), '1.5')
   })
 })
 

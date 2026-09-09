@@ -14,6 +14,35 @@ function _toFactor(v) {
   return Number.isFinite(n) ? n : NaN
 }
 
+/** Máximo de decimales persistidos en longitud/ancho/espesor/cantidad. */
+export const SICOE_DIM_DECIMALES = 3
+
+/** Redondea un factor dimensional a 3 decimales (null si vacío/inválido). */
+export function redondearDimension(valor) {
+  if (_isEmpty(valor)) return null
+  const n = typeof valor === 'number' ? valor : parseFloat(String(valor).replace(',', '.'))
+  if (!Number.isFinite(n)) return null
+  return Math.round(n * 1000) / 1000
+}
+
+/** Visualización de dimensión (hasta 3 decimales, sin forzar ceros). */
+export function formatearDimension(valor, opts = {}) {
+  const empty = opts.empty !== undefined ? opts.empty : '—'
+  if (_isEmpty(valor)) return empty
+  const n = redondearDimension(valor)
+  if (n == null) return String(valor)
+  if (opts.locale === false) {
+    return String(n)
+  }
+  try {
+    return n.toLocaleString('es-CO', {
+      maximumFractionDigits: SICOE_DIM_DECIMALES,
+    })
+  } catch {
+    return String(n)
+  }
+}
+
 /** Aplica la regla de redondeo dinámico a un producto ya calculado. */
 export function redondearCantidadTotalDinamico(valorExacto) {
   const exact = Number(valorExacto)

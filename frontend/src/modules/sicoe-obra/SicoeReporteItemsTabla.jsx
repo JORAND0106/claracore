@@ -69,7 +69,7 @@ function sheetStyles(t, carpetaCompact) {
   }
 }
 
-function fmtNum(v, digits = 2) {
+function fmtNum(v, digits = 3) {
   if (v == null || v === '') return '—'
   const n = Number(v)
   if (Number.isNaN(n)) return String(v)

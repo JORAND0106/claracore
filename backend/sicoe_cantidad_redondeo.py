@@ -26,6 +26,16 @@ def _to_factor(v: Any) -> float:
         return float("nan")
 
 
+def redondear_dimension(valor: Any) -> Optional[float]:
+    """Redondea longitud/ancho/espesor/cantidad a 3 decimales (None si vacío)."""
+    if _is_empty(valor):
+        return None
+    try:
+        return float(round(float(valor), 3))
+    except (TypeError, ValueError):
+        return None
+
+
 def redondear_cantidad_total_dinamico(valor_exacto: Any) -> float:
     """Aplica la regla de redondeo dinámico a un producto ya calculado."""
     try:
