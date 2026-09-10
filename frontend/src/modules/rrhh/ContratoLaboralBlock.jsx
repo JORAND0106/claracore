@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import { tFrom } from '../../theme/adminPanelTheme'
+import CatalogSelect from './CatalogSelect'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
@@ -11,8 +12,9 @@ export default function ContratoLaboralBlock({
   api,
   trabajadorId,
   tiposContrato = [],
-  tipoContratoId,
+  tipoContrato = '',
   onTipoContratoChange,
+  onAddTipoContrato,
   canEdit = true,
   canExport = true,
   onMsg,
@@ -32,6 +34,10 @@ export default function ContratoLaboralBlock({
     open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null,
   })
   const [previewUrl, setPreviewUrl] = useState(null)
+
+  const tipoOptions = (tiposContrato || [])
+    .map((t) => (typeof t === 'string' ? t : t?.nombre))
+    .filter(Boolean)
 
   const cargar = async () => {
     if (!api || !trabajadorId) return
@@ -57,14 +63,14 @@ export default function ContratoLaboralBlock({
 
   const generar = async () => {
     if (!canEdit || !api) return
-    if (!tipoContratoId) {
+    if (!tipoContrato) {
       onMsg?.({ type: 'error', text: 'Seleccione un tipo de contrato del catálogo.' })
       return
     }
     setBusy(true)
     try {
       await api.generarContratoLaboral(trabajadorId, {
-        tipo_contrato_id: Number(tipoContratoId),
+        tipo_contrato: tipoContrato,
         numero_contrato_laboral: numero || null,
         fecha_inicio: fechaInicio || null,
         fecha_fin: fechaFin || null,
@@ -119,17 +125,14 @@ export default function ContratoLaboralBlock({
             <tr>
               <td style={{ ...ui.tdLabel, width: '28%' }}>Tipo de contrato *</td>
               <td style={ui.td}>
-                <select
+                <CatalogSelect
+                  value={tipoContrato || ''}
+                  options={tipoOptions}
+                  canEdit={canEdit}
                   style={ui.cellSelect}
-                  value={tipoContratoId || ''}
-                  disabled={!canEdit}
-                  onChange={(e) => onTipoContratoChange?.(e.target.value)}
-                >
-                  <option value="">— Seleccione —</option>
-                  {tiposContrato.filter((t) => t.activo !== false).map((t) => (
-                    <option key={t.id} value={t.id}>{t.nombre}</option>
-                  ))}
-                </select>
+                  onChange={(v) => onTipoContratoChange?.(v)}
+                  onAddNew={async (v) => { await onAddTipoContrato?.(v) }}
+                />
               </td>
             </tr>
             <tr>

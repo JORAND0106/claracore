@@ -36,12 +36,13 @@ export function createRrhhApi(contratoId, token) {
     listEmpresas: () => apiJson(`${base}/empresas-contratantes`, { token }),
     catalogoDocs: () => apiJson(`${base}/catalogos/documentos`, { token }),
 
-    listTiposContrato: (soloActivos = false) =>
-      apiJson(`${base}/tipos-contrato?solo_activos=${soloActivos ? 'true' : 'false'}`, { token }),
-    createTipoContrato: (body) =>
-      apiJson(`${base}/tipos-contrato`, { method: 'POST', token, body }),
-    updateTipoContrato: (id, body) =>
-      apiJson(`${base}/tipos-contrato/${id}`, { method: 'PUT', token, body }),
+    listCatalogoOpciones: () => apiJson(`${base}/catalogo-opciones`, { token }),
+    addCatalogoOpcion: (categoria, valor) =>
+      apiJson(`${base}/catalogo-opciones/${encodeURIComponent(categoria)}`, {
+        method: 'POST',
+        token,
+        body: { valor },
+      }),
 
     listTrabajadores: ({ q, estado } = {}) => {
       const qs = new URLSearchParams()

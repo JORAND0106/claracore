@@ -16,7 +16,7 @@ from azure_blob_storage import (
     path_rrhh_trabajador_documento,
     upload_blob_private,
 )
-from rrhh_service import get_trabajador, get_tipo_contrato, trabajador_display_nombre
+from rrhh_service import get_trabajador, trabajador_display_nombre
 
 _log = logging.getLogger("claracore.rrhh.docs")
 
@@ -335,31 +335,36 @@ def generar_contrato_laboral(
     trabajador_id: int,
     *,
     current_user,
-    tipo_contrato_id: Optional[int] = None,
+    tipo_contrato: Optional[str] = None,
+    tipo_contrato_id: Optional[int] = None,  # legacy ignored
     numero_contrato_laboral: Optional[str] = None,
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
 ) -> dict:
     from rrhh_contrato_pdf import generar_pdf_contrato_laboral
+    from rrhh_service import add_catalogo_opcion
 
     trab = get_trabajador(sb, contrato_id, trabajador_id)
-    tid = tipo_contrato_id if tipo_contrato_id is not None else trab.get("tipo_contrato_id")
-    if tid is None:
+    tipo_nombre = (tipo_contrato or trab.get("tipo_contrato") or "").strip()
+    if not tipo_nombre:
         raise ValueError("Seleccione un tipo de contrato laboral.")
-    tipo = get_tipo_contrato(sb, contrato_id, int(tid))
-    if not tipo or not tipo.get("activo", True):
-        raise ValueError("Tipo de contrato no encontrado o inactivo.")
 
-    # Persistir tipo en el trabajador si cambió
-    if trab.get("tipo_contrato_id") != int(tipo["id"]):
+    if (trab.get("tipo_contrato") or "").strip() != tipo_nombre:
         sb.table("rrhh_trabajadores").update(
             {
-                "tipo_contrato_id": int(tipo["id"]),
+                "tipo_contrato": tipo_nombre,
                 "updated_at": _now_iso(),
                 "updated_by": _uid(current_user),
             }
         ).eq("id", int(trabajador_id)).execute()
-        trab["tipo_contrato_id"] = int(tipo["id"])
+        trab["tipo_contrato"] = tipo_nombre
+
+    try:
+        add_catalogo_opcion(sb, contrato_id, "tipo_contrato", tipo_nombre, current_user)
+    except Exception:
+        pass
+
+    tipo = {"nombre": tipo_nombre}
 
     crows = (
         sb.table("contratos")
@@ -415,8 +420,7 @@ def generar_contrato_laboral(
     payload = {
         "trabajador_id": int(trabajador_id),
         "contrato_id": int(contrato_id),
-        "tipo_contrato_id": int(tipo["id"]),
-        "tipo_contrato_nombre": tipo.get("nombre") or "Contrato laboral",
+        "tipo_contrato_nombre": tipo_nombre,
         "numero_contrato_laboral": (numero_contrato_laboral or "").strip()[:80] or None,
         "fecha_inicio": (fecha_inicio or "").strip()[:10] or None,
         "fecha_fin": (fecha_fin or "").strip()[:10] or None,

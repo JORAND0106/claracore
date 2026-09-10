@@ -8,7 +8,6 @@ import {
 } from '../../theme/adminPanelTheme'
 import ContratoLaboralBlock from './ContratoLaboralBlock'
 import DocumentosTrabajadorBlock from './DocumentosTrabajadorBlock'
-import TiposContratoCatalogo from './TiposContratoCatalogo'
 import TrabajadorFormSheet from './TrabajadorFormSheet'
 import { createRrhhApi } from './rrhhApi'
 import {
@@ -23,7 +22,6 @@ import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
  * Módulo RRHH — Documentación para contratación (fase 1).
- * Independiente de Bitácora y Subcontratistas.
  */
 export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode }) {
   const theme = themeMode || (isDarkMode(t) ? 'dark' : isRestMode(t) ? 'rest' : 'light')
@@ -36,13 +34,12 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const cid = contratoId || usuario?.contrato_id
   const api = useMemo(() => (cid && token ? createRrhhApi(cid, token) : null), [cid, token])
 
-  const [seccion, setSeccion] = useState('trabajadores') // trabajadores | catalogo
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const [filtro, setFiltro] = useState('')
   const [msg, setMsg] = useState(null)
   const [empresas, setEmpresas] = useState([])
-  const [tipos, setTipos] = useState([])
+  const [catalogo, setCatalogo] = useState({})
   const [busy, setBusy] = useState(false)
 
   const [showCrear, setShowCrear] = useState(false)
@@ -62,14 +59,14 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     if (!api || !permisos.ver) return
     setLoading(true)
     try {
-      const [trab, emp, tip] = await Promise.all([
+      const [trab, emp, cat] = await Promise.all([
         api.listTrabajadores({ q: filtro || undefined }),
         api.listEmpresas(),
-        api.listTiposContrato(false),
+        api.listCatalogoOpciones(),
       ])
       setItems(trab?.items || [])
       setEmpresas(emp?.opciones || [])
-      setTipos(tip?.items || [])
+      setCatalogo(cat?.categorias || {})
     } catch (e) {
       flash('error', e.message || 'No se pudo cargar RRHH.')
     } finally {
@@ -80,6 +77,17 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   useEffect(() => {
     cargar()
   }, [cargar])
+
+  const addCatalogValue = useCallback(async (categoria, valor) => {
+    if (!api) return
+    await api.addCatalogoOpcion(categoria, valor)
+    setCatalogo((prev) => {
+      const list = [...(prev?.[categoria] || [])]
+      if (!list.includes(valor)) list.push(valor)
+      list.sort((a, b) => a.localeCompare(b, 'es'))
+      return { ...prev, [categoria]: list }
+    })
+  }, [api])
 
   const overlayStyle = {
     position: 'fixed',
@@ -144,6 +152,12 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     } catch (e) {
       flash('error', e.message || 'No se pudo abrir el trabajador.')
     }
+  }
+
+  const cerrarCrear = () => {
+    if (busy) return
+    setShowCrear(false)
+    setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
   }
 
   const guardarCrear = async () => {
@@ -239,44 +253,25 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             Documentación para contratación — registro, contrato laboral y documentos de ingreso
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {permisos.crear && (
           <button
             type="button"
-            style={{
-              ...S.btnGhost,
-              background: seccion === 'trabajadores' ? `${tTok.primary}22` : 'transparent',
-              color: seccion === 'trabajadores' ? tTok.primary : tTok.textMuted,
-              borderColor: seccion === 'trabajadores' ? tTok.primary : tTok.border,
+            style={S.btnPrimary}
+            onClick={() => {
+              const cons = empresas.find((e) => e.tipo === 'consorcio')
+              setCrearForm({
+                ...EMPTY_TRABAJADOR_FORM,
+                empresa_key: 'consorcio',
+                empresa_tipo: 'consorcio',
+                empresa_nombre: cons?.nombre || '',
+                empresa_nit: cons?.nit || '',
+              })
+              setShowCrear(true)
             }}
-            onClick={() => setSeccion('trabajadores')}
           >
-            Trabajadores
+            + Registrar trabajador
           </button>
-          <button
-            type="button"
-            style={{
-              ...S.btnGhost,
-              background: seccion === 'catalogo' ? `${tTok.primary}22` : 'transparent',
-              color: seccion === 'catalogo' ? tTok.primary : tTok.textMuted,
-              borderColor: seccion === 'catalogo' ? tTok.primary : tTok.border,
-            }}
-            onClick={() => setSeccion('catalogo')}
-          >
-            Tipos de contrato
-          </button>
-          {seccion === 'trabajadores' && permisos.crear && (
-            <button
-              type="button"
-              style={S.btnPrimary}
-              onClick={() => {
-                setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
-                setShowCrear(true)
-              }}
-            >
-              + Registrar trabajador
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {msg && (
@@ -293,124 +288,78 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         </div>
       )}
 
-      {seccion === 'catalogo' ? (
-        <div style={{
-          flex: 1,
-          minHeight: 0,
-          overflow: 'auto',
-          background: tTok.bgCard,
-          border: `1px solid ${tTok.border}`,
-          borderRadius: 12,
-          padding: 14,
-        }}>
-          <TiposContratoCatalogo
-            theme={theme}
-            items={tipos}
-            canAdmin={permisos.puedeAdminCatalogo}
-            busy={busy}
-            onCreate={async (body) => {
-              setBusy(true)
-              try {
-                await api.createTipoContrato(body)
-                flash('success', 'Tipo de contrato agregado.')
-                await cargar()
-              } catch (e) {
-                flash('error', e.message || 'No se pudo crear.')
-              } finally {
-                setBusy(false)
-              }
-            }}
-            onUpdate={async (id, body) => {
-              setBusy(true)
-              try {
-                await api.updateTipoContrato(id, body)
-                flash('success', 'Catálogo actualizado.')
-                await cargar()
-              } catch (e) {
-                flash('error', e.message || 'No se pudo actualizar.')
-              } finally {
-                setBusy(false)
-              }
-            }}
-          />
-        </div>
-      ) : (
-        <>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-            <input
-              style={{ ...S.input, maxWidth: 360 }}
-              placeholder="Buscar por nombre, documento, cargo o empresa…"
-              value={filtro}
-              onChange={(e) => setFiltro(e.target.value)}
-            />
-            <button type="button" style={S.btnGhost} onClick={cargar}>Actualizar</button>
-          </div>
-          <div style={{
-            flex: 1,
-            minHeight: 0,
-            overflow: 'auto',
-            background: tTok.bgCard,
-            border: `1px solid ${sheetUi.border}`,
-            borderRadius: 8,
-            ...sheetCssVars,
-          }}>
-            <table style={{ ...sheetUi.sheetTable, tableLayout: 'auto' }}>
-              <thead>
-                <tr>
-                  <th style={sheetUi.th}>Trabajador</th>
-                  <th style={sheetUi.th}>Documento</th>
-                  <th style={sheetUi.th}>Cargo</th>
-                  <th style={sheetUi.th}>Empresa</th>
-                  <th style={sheetUi.th}>Salario</th>
-                  <th style={sheetUi.th}>Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && (
-                  <tr><td style={sheetUi.td} colSpan={6}>Cargando…</td></tr>
-                )}
-                {!loading && items.length === 0 && (
-                  <tr>
-                    <td style={sheetUi.td} colSpan={6}>
-                      No hay trabajadores registrados. Use «Registrar trabajador» para iniciar la documentación de contratación.
-                    </td>
-                  </tr>
-                )}
-                {items.map((row) => (
-                  <tr
-                    key={row.id}
-                    onClick={() => abrirDetalle(row)}
-                    style={{ cursor: 'pointer' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}10` }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                  >
-                    <td style={sheetUi.td}>{nombreCompleto(row)}</td>
-                    <td style={sheetUi.td}>{row.tipo_documento} {row.numero_documento}</td>
-                    <td style={sheetUi.td}>{row.cargo_aspira || '—'}</td>
-                    <td style={sheetUi.td}>
-                      {row.empresa_tipo === 'subcontratista' ? 'Sub · ' : 'Consorcio · '}
-                      {row.empresa_nombre}
-                    </td>
-                    <td style={sheetUi.td}>{fmtSalario(row.salario)}</td>
-                    <td style={sheetUi.td}>{row.estado}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        <input
+          style={{ ...S.input, maxWidth: 360 }}
+          placeholder="Buscar por nombre, documento, cargo o empresa…"
+          value={filtro}
+          onChange={(e) => setFiltro(e.target.value)}
+        />
+        <button type="button" style={S.btnGhost} onClick={cargar}>Actualizar</button>
+      </div>
+      <div style={{
+        flex: 1,
+        minHeight: 0,
+        overflow: 'auto',
+        background: tTok.bgCard,
+        border: `1px solid ${sheetUi.border}`,
+        borderRadius: 8,
+        ...sheetCssVars,
+      }}>
+        <table style={{ ...sheetUi.sheetTable, tableLayout: 'auto' }}>
+          <thead>
+            <tr>
+              <th style={sheetUi.th}>Trabajador</th>
+              <th style={sheetUi.th}>Documento</th>
+              <th style={sheetUi.th}>Cargo</th>
+              <th style={sheetUi.th}>Empresa</th>
+              <th style={sheetUi.th}>Salario</th>
+              <th style={sheetUi.th}>Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr><td style={sheetUi.td} colSpan={6}>Cargando…</td></tr>
+            )}
+            {!loading && items.length === 0 && (
+              <tr>
+                <td style={sheetUi.td} colSpan={6}>
+                  No hay trabajadores registrados. Use «Registrar trabajador» para iniciar la documentación de contratación.
+                </td>
+              </tr>
+            )}
+            {items.map((row) => (
+              <tr
+                key={row.id}
+                onClick={() => abrirDetalle(row)}
+                style={{ cursor: 'pointer' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}10` }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+              >
+                <td style={sheetUi.td}>{nombreCompleto(row)}</td>
+                <td style={sheetUi.td}>{row.tipo_documento} {row.numero_documento}</td>
+                <td style={sheetUi.td}>{row.cargo_aspira || '—'}</td>
+                <td style={sheetUi.td}>
+                  {row.empresa_tipo === 'subcontratista' ? 'Sub · ' : 'Consorcio · '}
+                  {row.empresa_nombre}
+                </td>
+                <td style={sheetUi.td}>{fmtSalario(row.salario)}</td>
+                <td style={sheetUi.td}>{row.estado}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      {/* Modal crear */}
+      {/* Modal crear — no cierra al clic fuera */}
       {showCrear && (
-        <div style={overlayStyle} onClick={() => !busy && setShowCrear(false)}>
-          <div style={modalStyle(920)} onClick={(e) => e.stopPropagation()}>
+        <div style={overlayStyle} role="presentation">
+          <div style={modalStyle(920)} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div style={{ fontWeight: 800, fontSize: 'var(--cc-h2)', color: tTok.text }}>
                 Registrar trabajador
               </div>
-              <button type="button" style={S.btnGhost} onClick={() => setShowCrear(false)}>Cerrar</button>
             </div>
             <div style={modalScroll}>
               <TrabajadorFormSheet
@@ -419,7 +368,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                 onChange={setCrearForm}
                 canEdit
                 empresas={empresas}
-                tiposContrato={tipos}
+                catalogo={catalogo}
+                onAddCatalogValue={addCatalogValue}
               />
             </div>
             <div style={{
@@ -430,7 +380,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
               gap: 8,
               background: tTok.bgCard,
             }}>
-              <button type="button" style={S.btnGhost} disabled={busy} onClick={() => setShowCrear(false)}>Cancelar</button>
+              <button type="button" style={S.btnGhost} disabled={busy} onClick={cerrarCrear}>Cancelar</button>
               <button type="button" style={S.btnPrimary} disabled={busy} onClick={guardarCrear}>
                 {busy ? 'Guardando…' : 'Guardar'}
               </button>
@@ -439,10 +389,10 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         </div>
       )}
 
-      {/* Modal detalle */}
+      {/* Modal detalle — no cierra al clic fuera */}
       {detalle && (
-        <div style={overlayStyle} onClick={() => !busy && setDetalle(null)}>
-          <div style={modalStyle(980)} onClick={(e) => e.stopPropagation()}>
+        <div style={overlayStyle} role="presentation">
+          <div style={modalStyle(980)} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>
@@ -451,9 +401,10 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                 </div>
                 <div style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted }}>
                   {detalle.tipo_documento} {detalle.numero_documento} · {detalle.empresa_nombre}
+                  {detalle.empresa_nit ? ` · NIT ${detalle.empresa_nit}` : ''}
                 </div>
               </div>
-              <button type="button" style={S.btnGhost} onClick={() => setDetalle(null)}>Cerrar</button>
+              <button type="button" style={S.btnGhost} onClick={() => !busy && setDetalle(null)}>Cerrar</button>
             </div>
             <div style={{
               display: 'flex',
@@ -490,7 +441,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     onChange={setEditForm}
                     canEdit={editando && permisos.editar}
                     empresas={empresas}
-                    tiposContrato={tipos}
+                    catalogo={catalogo}
+                    onAddCatalogValue={addCatalogValue}
                   />
                   <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
                     {!editando && permisos.editar && (
@@ -537,9 +489,10 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                   theme={theme}
                   api={api}
                   trabajadorId={detalle.id}
-                  tiposContrato={tipos}
-                  tipoContratoId={editForm?.tipo_contrato_id || detalle.tipo_contrato_id || ''}
-                  onTipoContratoChange={(v) => setEditForm((prev) => ({ ...(prev || formFromTrabajador(detalle)), tipo_contrato_id: v }))}
+                  tiposContrato={(catalogo.tipo_contrato || []).map((nombre) => ({ nombre, activo: true }))}
+                  tipoContrato={editForm?.tipo_contrato || detalle.tipo_contrato || ''}
+                  onTipoContratoChange={(v) => setEditForm((prev) => ({ ...(prev || formFromTrabajador(detalle)), tipo_contrato: v }))}
+                  onAddTipoContrato={async (v) => addCatalogValue('tipo_contrato', v)}
                   canEdit={permisos.crear || permisos.editar}
                   canExport={permisos.exportar || permisos.ver}
                   onMsg={(m) => flash(m.type, m.text)}
