@@ -580,3 +580,44 @@ def path_rrhh_trabajador_firma(
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "firma.png").strip())[:120]
     return f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/firma/{ts}_{safe}"
+
+
+def path_rrhh_desprendible(
+    contrato_id: int,
+    nomina_id: int,
+    trabajador_id: int,
+    nombre_archivo: str,
+) -> str:
+    """Desprendible de pago PDF (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "desprendible.pdf").strip())[:120]
+    return (
+        f"rrhh/{int(contrato_id)}/nominas/{int(nomina_id)}/"
+        f"desprendibles/{int(trabajador_id)}_{ts}_{safe}"
+    )
+
+
+def path_rrhh_nomina_xlsx(
+    contrato_id: int,
+    nomina_id: int,
+    nombre_archivo: str,
+) -> str:
+    """Relación de nómina en Excel (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "nomina.xlsx").strip())[:120]
+    return f"rrhh/{int(contrato_id)}/nominas/{int(nomina_id)}/xlsx/{ts}_{safe}"
+
+
+def path_rrhh_liquidacion_pdf(
+    contrato_id: int,
+    trabajador_id: int,
+    liquidacion_id: int,
+    nombre_archivo: str,
+) -> str:
+    """Documento de liquidación PDF (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "liquidacion.pdf").strip())[:120]
+    return (
+        f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/"
+        f"liquidaciones/{int(liquidacion_id)}_{ts}_{safe}"
+    )

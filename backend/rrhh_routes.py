@@ -26,6 +26,28 @@ from rrhh_docs_service import (
     soft_delete_documento,
 )
 from rrhh_permissions import require_permiso_rrhh, tiene_permiso_rrhh
+from rrhh_nomina_service import (
+    anular_nomina,
+    cerrar_nomina,
+    create_hora_extra,
+    create_novedad,
+    download_desprendible,
+    download_liquidacion_pdf,
+    download_nomina_xlsx,
+    generar_liquidacion,
+    generar_nomina,
+    get_liquidacion,
+    get_nomina,
+    get_provisiones,
+    list_horas_extras,
+    list_liquidaciones,
+    list_nomina_items,
+    list_nominas,
+    list_novedades,
+    regenerar_nomina_borrador,
+    soft_delete_hora_extra,
+    soft_delete_novedad,
+)
 from rrhh_service import (
     add_catalogo_opcion,
     clear_trabajador_imagen,
@@ -88,6 +110,10 @@ class TrabajadorBody(BaseModel):
     salario: Optional[float] = None
     salario_liquidable: bool = True
     subsidio_transporte: bool = False
+    periodicidad: str = Field("mensual", max_length=20)
+    arl_nivel_riesgo: str = Field("I", max_length=5)
+    fecha_ingreso: Optional[str] = None
+    fecha_retiro: Optional[str] = None
     tipo_contrato: Optional[str] = None
     empresa_key: Optional[str] = Field(None, max_length=80)
     empresa_tipo: str = Field("consorcio", max_length=40)
@@ -123,6 +149,10 @@ class TrabajadorPatchBody(BaseModel):
     salario: Optional[float] = None
     salario_liquidable: Optional[bool] = None
     subsidio_transporte: Optional[bool] = None
+    periodicidad: Optional[str] = Field(None, max_length=20)
+    arl_nivel_riesgo: Optional[str] = Field(None, max_length=5)
+    fecha_ingreso: Optional[str] = None
+    fecha_retiro: Optional[str] = None
     tipo_contrato: Optional[str] = None
     empresa_key: Optional[str] = Field(None, max_length=80)
     empresa_tipo: Optional[str] = Field(None, max_length=40)
@@ -139,6 +169,42 @@ class GenerarContratoBody(BaseModel):
     numero_contrato_laboral: Optional[str] = Field(None, max_length=80)
     fecha_inicio: Optional[str] = None
     fecha_fin: Optional[str] = None
+
+
+class NovedadBody(BaseModel):
+    trabajador_id: int
+    tipo: str = Field(..., max_length=40)
+    fecha_inicio: str
+    fecha_fin: str
+    dias: Optional[float] = None
+    porcentaje_pago: float = 0
+    notas: Optional[str] = None
+
+
+class HoraExtraBody(BaseModel):
+    trabajador_id: int
+    tipo: str = Field(..., max_length=40)
+    fecha: str
+    cantidad_horas: float = 0
+    valor_fijo: Optional[float] = None
+    notas: Optional[str] = None
+
+
+class GenerarNominaBody(BaseModel):
+    periodicidad: str = Field(..., max_length=20)
+    anio: int
+    mes: int
+    quincena: Optional[int] = None
+    notas: Optional[str] = None
+
+
+class LiquidacionBody(BaseModel):
+    trabajador_id: int
+    fecha_retiro: str
+    causa: Optional[str] = None
+    indemnizacion: float = 0
+    salario_pendiente: float = 0
+    dias_vacaciones_pendientes: Optional[float] = None
 
 
 # ── Catálogos auxiliares ──────────────────────────────────────────────────────
@@ -686,3 +752,361 @@ def route_delete_contrato(
         f"Contrato laboral anulado trabajador {trabajador_id}",
     )
     return row
+
+
+# ── Novedades ────────────────────────────────────────────────────────────────
+
+@router.get("/{contrato_id}/novedades")
+def route_list_novedades(
+    contrato_id: int,
+    trabajador_id: Optional[int] = Query(None),
+    fecha_desde: Optional[str] = Query(None),
+    fecha_hasta: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    return {
+        "items": list_novedades(
+            supabase,
+            contrato_id,
+            trabajador_id=trabajador_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+        )
+    }
+
+
+@router.post("/{contrato_id}/novedades")
+def route_create_novedad(
+    contrato_id: int,
+    body: NovedadBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "crear", contrato_id)
+    try:
+        row = create_novedad(supabase, contrato_id, body.model_dump(), current_user)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "CREAR",
+        "RRHH",
+        "rrhh_novedades",
+        str(row.get("id")),
+        f"Novedad {row.get('tipo')} trabajador {row.get('trabajador_id')}",
+    )
+    return row
+
+
+@router.delete("/{contrato_id}/novedades/{novedad_id}")
+def route_delete_novedad(
+    contrato_id: int,
+    novedad_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "eliminar", contrato_id)
+    try:
+        soft_delete_novedad(supabase, contrato_id, novedad_id, current_user)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return {"ok": True}
+
+
+# ── Horas extras / recargos ──────────────────────────────────────────────────
+
+@router.get("/{contrato_id}/horas-extras")
+def route_list_horas_extras(
+    contrato_id: int,
+    trabajador_id: Optional[int] = Query(None),
+    fecha_desde: Optional[str] = Query(None),
+    fecha_hasta: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    return {
+        "items": list_horas_extras(
+            supabase,
+            contrato_id,
+            trabajador_id=trabajador_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+        )
+    }
+
+
+@router.post("/{contrato_id}/horas-extras")
+def route_create_hora_extra(
+    contrato_id: int,
+    body: HoraExtraBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "crear", contrato_id)
+    try:
+        row = create_hora_extra(supabase, contrato_id, body.model_dump(), current_user)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "CREAR",
+        "RRHH",
+        "rrhh_horas_extras",
+        str(row.get("id")),
+        f"Hora extra {row.get('tipo')} trabajador {row.get('trabajador_id')}",
+    )
+    return row
+
+
+@router.delete("/{contrato_id}/horas-extras/{he_id}")
+def route_delete_hora_extra(
+    contrato_id: int,
+    he_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "eliminar", contrato_id)
+    try:
+        soft_delete_hora_extra(supabase, contrato_id, he_id, current_user)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return {"ok": True}
+
+
+# ── Nóminas ──────────────────────────────────────────────────────────────────
+
+@router.get("/{contrato_id}/nominas")
+def route_list_nominas(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    return {"items": list_nominas(supabase, contrato_id)}
+
+
+@router.post("/{contrato_id}/nominas/generar")
+def route_generar_nomina(
+    contrato_id: int,
+    body: GenerarNominaBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "crear", contrato_id)
+    try:
+        result = generar_nomina(
+            supabase,
+            contrato_id,
+            periodicidad=body.periodicidad,
+            anio=body.anio,
+            mes=body.mes,
+            quincena=body.quincena,
+            current_user=current_user,
+            notas=body.notas,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    nom = result["nomina"]
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "CREAR",
+        "RRHH",
+        "rrhh_nominas",
+        str(nom.get("id")),
+        f"Nómina {nom.get('periodicidad')} {nom.get('mes')}/{nom.get('anio')}",
+    )
+    return result
+
+
+@router.get("/{contrato_id}/nominas/{nomina_id}")
+def route_get_nomina(
+    contrato_id: int,
+    nomina_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        nomina = get_nomina(supabase, contrato_id, nomina_id)
+        items = list_nomina_items(supabase, contrato_id, nomina_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return {"nomina": nomina, "items": items}
+
+
+@router.post("/{contrato_id}/nominas/{nomina_id}/regenerar")
+def route_regenerar_nomina(
+    contrato_id: int,
+    nomina_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "editar", contrato_id)
+    try:
+        result = regenerar_nomina_borrador(
+            supabase, contrato_id, nomina_id, current_user
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return result
+
+
+@router.post("/{contrato_id}/nominas/{nomina_id}/cerrar")
+def route_cerrar_nomina(
+    contrato_id: int,
+    nomina_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "editar", contrato_id)
+    try:
+        result = cerrar_nomina(supabase, contrato_id, nomina_id, current_user)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ACTUALIZAR",
+        "RRHH",
+        "rrhh_nominas",
+        str(nomina_id),
+        "Nómina cerrada — desprendibles, emails y xlsx",
+    )
+    return result
+
+
+@router.post("/{contrato_id}/nominas/{nomina_id}/anular")
+def route_anular_nomina(
+    contrato_id: int,
+    nomina_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "eliminar", contrato_id)
+    try:
+        row = anular_nomina(supabase, contrato_id, nomina_id, current_user)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return row
+
+
+@router.get("/{contrato_id}/nominas/{nomina_id}/xlsx")
+def route_download_nomina_xlsx(
+    contrato_id: int,
+    nomina_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        data, name = download_nomina_xlsx(supabase, contrato_id, nomina_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@router.get("/{contrato_id}/nominas/{nomina_id}/items/{item_id}/desprendible")
+def route_download_desprendible(
+    contrato_id: int,
+    nomina_id: int,
+    item_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        data, name = download_desprendible(supabase, contrato_id, nomina_id, item_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
+
+
+# ── Liquidaciones ────────────────────────────────────────────────────────────
+
+@router.get("/{contrato_id}/liquidaciones")
+def route_list_liquidaciones(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    return {"items": list_liquidaciones(supabase, contrato_id)}
+
+
+@router.post("/{contrato_id}/liquidaciones")
+def route_generar_liquidacion(
+    contrato_id: int,
+    body: LiquidacionBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "crear", contrato_id)
+    try:
+        row = generar_liquidacion(
+            supabase, contrato_id, body.model_dump(), current_user
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "CREAR",
+        "RRHH",
+        "rrhh_liquidaciones",
+        str(row.get("id")),
+        f"Liquidación trabajador {row.get('trabajador_id')}",
+    )
+    return row
+
+
+@router.get("/{contrato_id}/liquidaciones/{liq_id}")
+def route_get_liquidacion(
+    contrato_id: int,
+    liq_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        return get_liquidacion(supabase, contrato_id, liq_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/liquidaciones/{liq_id}/pdf")
+def route_download_liquidacion_pdf(
+    contrato_id: int,
+    liq_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        data, name = download_liquidacion_pdf(supabase, contrato_id, liq_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
+
+
+@router.get("/{contrato_id}/trabajadores/{trabajador_id}/provisiones")
+def route_get_provisiones(
+    contrato_id: int,
+    trabajador_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    return get_provisiones(supabase, contrato_id, trabajador_id)

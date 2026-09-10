@@ -480,6 +480,26 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
     if "subsidio_transporte" in body or not partial:
         out["subsidio_transporte"] = _parse_bool(body.get("subsidio_transporte"), False)
 
+    if "periodicidad" in body or not partial:
+        per = (_trim(body.get("periodicidad"), max_len=20) or "mensual").lower()
+        if per not in ("quincenal", "mensual"):
+            raise ValueError("Periodicidad inválida (quincenal o mensual).")
+        out["periodicidad"] = per
+
+    if "arl_nivel_riesgo" in body or not partial:
+        nivel = (_trim(body.get("arl_nivel_riesgo"), max_len=5) or "I").upper()
+        if nivel not in ("I", "II", "III", "IV", "V"):
+            raise ValueError("Nivel de riesgo ARL inválido (I–V).")
+        out["arl_nivel_riesgo"] = nivel
+
+    if "fecha_ingreso" in body or not partial:
+        fi = _trim(body.get("fecha_ingreso"), max_len=10)
+        out["fecha_ingreso"] = fi[:10] if fi else None
+
+    if "fecha_retiro" in body:
+        fr = _trim(body.get("fecha_retiro"), max_len=10)
+        out["fecha_retiro"] = fr[:10] if fr else None
+
     if "estado" in body:
         est = (_trim(body.get("estado"), max_len=20) or "activo").lower()
         if est not in ("activo", "inactivo", "retirado"):

@@ -350,6 +350,33 @@ export default function TrabajadorFormSheet({
                   onChange={(e) => setField('salario', formatSalarioInput(e.target.value))}
                 />
               </SheetField>
+              <SheetField label="Periodicidad" labelStyle={lbl} valueStyle={valCell}>
+                <select
+                  style={ui.cellSelect}
+                  value={f.periodicidad || 'mensual'}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('periodicidad', e.target.value)}
+                >
+                  <option value="mensual">Mensual</option>
+                  <option value="quincenal">Quincenal</option>
+                </select>
+              </SheetField>
+              <SheetField label="Nivel riesgo ARL" labelStyle={lbl} valueStyle={valCell}>
+                <select
+                  style={ui.cellSelect}
+                  value={f.arl_nivel_riesgo || 'I'}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('arl_nivel_riesgo', e.target.value)}
+                >
+                  <option value="I">I</option>
+                  <option value="II">II</option>
+                  <option value="III">III</option>
+                  <option value="IV">IV</option>
+                  <option value="V">V</option>
+                </select>
+              </SheetField>
+            </tr>
+            <tr>
               <SheetField label="Salario liquidable" labelStyle={lbl} valueStyle={valCell}>
                 <select
                   style={ui.cellSelect}
@@ -371,6 +398,15 @@ export default function TrabajadorFormSheet({
                   <option value="false">No</option>
                   <option value="true">Sí</option>
                 </select>
+              </SheetField>
+              <SheetField label="Fecha ingreso" labelStyle={lbl} valueStyle={valCell}>
+                <input
+                  type="date"
+                  style={ui.cellInp}
+                  value={f.fecha_ingreso || ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('fecha_ingreso', e.target.value)}
+                />
               </SheetField>
             </tr>
             <tr>
