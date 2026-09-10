@@ -30,7 +30,7 @@ export const MAPA_NAVEGACION_MODULOS = [
   { id: 'actas', nombre: 'Actas', icono: '📝', grupo: 'gestion', orden: 12 },
   { id: 'contabilidad', nombre: 'Contabilidad', icono: '🧾', grupo: 'gestion', orden: 13 },
   { id: 'subcontratistas', nombre: 'Subcontratistas', icono: '🤝', grupo: 'gestion', orden: 14 },
-  { id: 'rrhh', nombre: 'RRHH', icono: '👥', grupo: 'gestion', orden: 15 },
+  { id: 'rrhh', nombre: 'Recursos Humanos', icono: '👥', grupo: 'gestion', orden: 15 },
   { id: 'auditor_sst', nombre: 'Auditor SST', icono: '🛡️', grupo: 'sst', orden: 16 },
 ]
 

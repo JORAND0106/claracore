@@ -20414,7 +20414,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['almacen',      '🏪', 'Almacén',        !esContador && tienePermisoAlmacen],
             ['programacion', '📅', 'Programación',   !esContador && tienePermisoProgramacionObra],
             ['seguimiento',  '📌', 'Seguimiento',    !esContador && tienePermisoSeguimiento],
-            ['rrhh',         '👥', 'RRHH',           !esContador && tienePermisoRrhh],
+            ['rrhh',         '👥', 'Recursos Humanos', !esContador && tienePermisoRrhh],
             ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
             ['semaforo',     '🗺️', 'Plano Semáforo', !esContador],
             ['auditor_sst',  '🛡️', 'Auditor',       !esContador && tieneModuloAuditorSst],
@@ -20469,7 +20469,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               ['almacen', '🏪', 'Almacén', !esContador && tienePermisoAlmacen],
               ['programacion', '📅', 'Prog.', !esContador && tienePermisoProgramacionObra],
               ['seguimiento', '📌', 'Seguim.', !esContador && tienePermisoSeguimiento],
-              ['rrhh', '👥', 'RRHH', !esContador && tienePermisoRrhh],
+              ['rrhh', '👥', 'Recursos Humanos', !esContador && tienePermisoRrhh],
               ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
               ['semaforo', '🗺️', 'Semáforo', !esContador],
               ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
@@ -23436,9 +23436,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             />
           ) : (
             <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
-              <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>RRHH</div>
+              <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Recursos Humanos</div>
               <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
-                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «RRHH» (acción Ver).
+                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Recursos Humanos» (acción Ver).
               </div>
             </div>
           )

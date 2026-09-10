@@ -59,6 +59,32 @@ export function createRrhhApi(contratoId, token) {
     deleteTrabajador: (id) =>
       apiJson(`${base}/trabajadores/${id}`, { method: 'DELETE', token }),
 
+    uploadFoto: async (trabajadorId, archivo) => {
+      const fd = new FormData()
+      fd.append('archivo', archivo)
+      return apiJson(`${base}/trabajadores/${trabajadorId}/foto`, {
+        method: 'POST',
+        token,
+        formData: fd,
+      })
+    },
+    fotoUrl: (trabajadorId) => `${API_BASE}${base}/trabajadores/${trabajadorId}/foto`,
+    deleteFoto: (trabajadorId) =>
+      apiJson(`${base}/trabajadores/${trabajadorId}/foto`, { method: 'DELETE', token }),
+
+    uploadFirma: async (trabajadorId, archivo) => {
+      const fd = new FormData()
+      fd.append('archivo', archivo)
+      return apiJson(`${base}/trabajadores/${trabajadorId}/firma`, {
+        method: 'POST',
+        token,
+        formData: fd,
+      })
+    },
+    firmaUrl: (trabajadorId) => `${API_BASE}${base}/trabajadores/${trabajadorId}/firma`,
+    deleteFirma: (trabajadorId) =>
+      apiJson(`${base}/trabajadores/${trabajadorId}/firma`, { method: 'DELETE', token }),
+
     listDocumentos: (trabajadorId, categoria) => {
       const qs = categoria ? `?categoria=${encodeURIComponent(categoria)}` : ''
       return apiJson(`${base}/trabajadores/${trabajadorId}/documentos${qs}`, { token })

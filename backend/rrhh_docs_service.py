@@ -329,6 +329,47 @@ def list_contratos_generados(sb, contrato_id: int, trabajador_id: int) -> List[d
     )
 
 
+def _siguiente_numero_cto_lab(sb, contrato_id: int) -> str:
+    """Consecutivo autoincremental CTO-LAB-NNNN por obra."""
+    cid = int(contrato_id)
+    rows = (
+        sb.table("rrhh_contrato_laboral_seq")
+        .select("contrato_id, ultimo")
+        .eq("contrato_id", cid)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if rows:
+        siguiente = int(rows[0].get("ultimo") or 0) + 1
+        sb.table("rrhh_contrato_laboral_seq").update(
+            {"ultimo": siguiente, "updated_at": _now_iso()}
+        ).eq("contrato_id", cid).execute()
+    else:
+        siguiente = 1
+        try:
+            sb.table("rrhh_contrato_laboral_seq").insert(
+                {"contrato_id": cid, "ultimo": siguiente}
+            ).execute()
+        except Exception:
+            # Carrera: reintentar update
+            again = (
+                sb.table("rrhh_contrato_laboral_seq")
+                .select("ultimo")
+                .eq("contrato_id", cid)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            siguiente = int((again[0].get("ultimo") if again else 0) or 0) + 1
+            sb.table("rrhh_contrato_laboral_seq").update(
+                {"ultimo": siguiente, "updated_at": _now_iso()}
+            ).eq("contrato_id", cid).execute()
+    return f"CTO-LAB-{siguiente:04d}"
+
+
 def generar_contrato_laboral(
     sb,
     contrato_id: int,
@@ -377,11 +418,14 @@ def generar_contrato_laboral(
     )
     contrato_obra = crows[0] if crows else {}
 
+    # Número siempre automático (ignora valor manual del cliente)
+    numero_auto = _siguiente_numero_cto_lab(sb, contrato_id)
+
     pdf_bytes = generar_pdf_contrato_laboral(
         trabajador=trab,
         tipo_contrato=tipo,
         contrato_obra=contrato_obra,
-        numero_contrato_laboral=numero_contrato_laboral,
+        numero_contrato_laboral=numero_auto,
         fecha_inicio=fecha_inicio,
         fecha_fin=fecha_fin,
     )
@@ -421,7 +465,7 @@ def generar_contrato_laboral(
         "trabajador_id": int(trabajador_id),
         "contrato_id": int(contrato_id),
         "tipo_contrato_nombre": tipo_nombre,
-        "numero_contrato_laboral": (numero_contrato_laboral or "").strip()[:80] or None,
+        "numero_contrato_laboral": numero_auto,
         "fecha_inicio": (fecha_inicio or "").strip()[:10] or None,
         "fecha_fin": (fecha_fin or "").strip()[:10] or None,
         "version_num": next_ver,

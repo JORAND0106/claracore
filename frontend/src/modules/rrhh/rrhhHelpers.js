@@ -1,10 +1,14 @@
+import { capitalizarNombrePropio } from '../seguimiento/personalAsistenciaHelpers.js'
+
 export const EMPTY_TRABAJADOR_FORM = {
   nombres: '',
   apellidos: '',
   tipo_documento: 'CC',
   numero_documento: '',
+  lugar_expedicion: '',
   fecha_nacimiento: '',
   genero: '',
+  tipo_sangre: '',
   direccion: '',
   ciudad: '',
   telefono: '',
@@ -19,6 +23,7 @@ export const EMPTY_TRABAJADOR_FORM = {
   caja_compensacion: '',
   cargo_aspira: '',
   salario: '',
+  salario_liquidable: true,
   subsidio_transporte: false,
   tipo_contrato: '',
   empresa_key: 'consorcio',
@@ -28,7 +33,19 @@ export const EMPTY_TRABAJADOR_FORM = {
   empresa_nit: '',
   estado: 'activo',
   notas: '',
+  foto_preview_url: '',
+  firma_data_url: '',
+  _foto_file: null,
+  _foto_clear: false,
+  _firma_changed: false,
 }
+
+export const TIPOS_SANGRE = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-']
+
+export const PARENTESCO_DEFAULTS = [
+  'Padre', 'Madre', 'Cónyuge', 'Hijo', 'Hija', 'Hermano', 'Hermana',
+  'Abuelo', 'Abuela', 'Tío', 'Tía', 'Primo', 'Prima', 'Suegro', 'Suegra', 'Amigo', 'Amiga',
+]
 
 export const DOC_TIPOS_SOPORTE = [
   { tipo: 'cedula', label: 'Cédula / Documento de identidad' },
@@ -48,6 +65,14 @@ export function nombreCompleto(t) {
   return `${t?.nombres || ''} ${t?.apellidos || ''}`.trim()
 }
 
+export function capitalizarOracion(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return ''
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
+}
+
+export { capitalizarNombrePropio }
+
 export function fmtSalario(val) {
   if (val == null || val === '') return '—'
   const n = Number(val)
@@ -57,6 +82,22 @@ export function fmtSalario(val) {
     currency: 'COP',
     maximumFractionDigits: 0,
   }).format(n)
+}
+
+/** Formatea dígitos a $ 1.234.567 mientras se digita. */
+export function formatSalarioInput(raw) {
+  const digits = String(raw || '').replace(/[^\d]/g, '')
+  if (!digits) return ''
+  const n = Number(digits)
+  if (!Number.isFinite(n)) return ''
+  return `$ ${n.toLocaleString('es-CO', { maximumFractionDigits: 0 })}`
+}
+
+export function parseSalarioInput(raw) {
+  const digits = String(raw || '').replace(/[^\d]/g, '')
+  if (!digits) return null
+  const n = Number(digits)
+  return Number.isFinite(n) ? n : null
 }
 
 export function empresaKeyFromTrabajador(t) {
@@ -72,8 +113,11 @@ export function formFromTrabajador(t) {
   return {
     ...EMPTY_TRABAJADOR_FORM,
     ...t,
-    salario: t.salario != null ? String(t.salario) : '',
+    salario: t.salario != null ? formatSalarioInput(String(Math.round(Number(t.salario)))) : '',
+    salario_liquidable: t.salario_liquidable !== false,
     tipo_contrato: t.tipo_contrato || '',
+    tipo_sangre: t.tipo_sangre || '',
+    lugar_expedicion: t.lugar_expedicion || '',
     empresa_key: empresaKeyFromTrabajador(t),
     empresa_subcontratista_id: t.empresa_subcontratista_id != null
       ? String(t.empresa_subcontratista_id)
@@ -81,21 +125,16 @@ export function formFromTrabajador(t) {
     empresa_nit: t.empresa_nit || '',
     subsidio_transporte: Boolean(t.subsidio_transporte),
     fecha_nacimiento: (t.fecha_nacimiento || '').toString().slice(0, 10),
+    foto_preview_url: '',
+    firma_data_url: '',
+    _foto_file: null,
+    _foto_clear: false,
+    _firma_changed: false,
   }
 }
 
 export function payloadFromForm(form) {
-  const raw = String(form.salario ?? '').trim()
-  let salario = null
-  if (raw !== '') {
-    const normalized = raw.includes(',') && raw.includes('.')
-      ? raw.replace(/\./g, '').replace(',', '.')
-      : raw.includes(',')
-        ? raw.replace(/\./g, '').replace(',', '.')
-        : raw.replace(/\./g, '')
-    const n = Number(normalized)
-    salario = Number.isFinite(n) ? n : null
-  }
+  const salario = parseSalarioInput(form.salario)
   const empresaKey = form.empresa_key
     || (form.empresa_tipo === 'subcontratista' && form.empresa_subcontratista_id
       ? `sub:${form.empresa_subcontratista_id}`
@@ -105,8 +144,10 @@ export function payloadFromForm(form) {
     apellidos: form.apellidos,
     tipo_documento: form.tipo_documento || 'CC',
     numero_documento: form.numero_documento,
+    lugar_expedicion: form.lugar_expedicion || null,
     fecha_nacimiento: form.fecha_nacimiento || null,
     genero: form.genero || null,
+    tipo_sangre: form.tipo_sangre || null,
     direccion: form.direccion || null,
     ciudad: form.ciudad || null,
     telefono: form.telefono || null,
@@ -121,6 +162,7 @@ export function payloadFromForm(form) {
     caja_compensacion: form.caja_compensacion || null,
     cargo_aspira: form.cargo_aspira || null,
     salario,
+    salario_liquidable: form.salario_liquidable !== false,
     subsidio_transporte: Boolean(form.subsidio_transporte),
     tipo_contrato: form.tipo_contrato || null,
     empresa_key: empresaKey,
@@ -131,4 +173,14 @@ export function payloadFromForm(form) {
     estado: form.estado || 'activo',
     notas: form.notas || null,
   }
+}
+
+export function dataUrlToBlob(dataUrl) {
+  const m = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/)
+  if (!m) return null
+  const mime = m[1]
+  const bin = atob(m[2])
+  const arr = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i += 1) arr[i] = bin.charCodeAt(i)
+  return new Blob([arr], { type: mime })
 }

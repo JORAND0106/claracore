@@ -43,6 +43,7 @@ def test_generar_pdf_bytes():
             "tipo_documento": "CC",
             "numero_documento": "123",
             "salario": 1_200_000,
+            "salario_liquidable": True,
             "subsidio_transporte": False,
             "empresa_nombre": "Consorcio X",
             "empresa_nit": "900",
@@ -55,9 +56,23 @@ def test_generar_pdf_bytes():
         },
         tipo_contrato={"nombre": "Obra o labor"},
         contrato_obra={"numero": "C-1", "objeto": "Obra"},
-        numero_contrato_laboral="CL-9",
+        numero_contrato_laboral="CTO-LAB-0009",
         fecha_inicio="2026-02-01",
         fecha_fin=None,
     )
     assert pdf[:5] == b"%PDF-"
     assert len(pdf) > 500
+
+
+def test_pdf_incluye_marca_claracore_en_html_contexto():
+    from rrhh_contrato_pdf import _texto_a_html
+
+    html = _texto_a_html(
+        "TÍTULO: Contrato de prueba\n\nPARTES\nEntre el empleador y el trabajador.",
+        footer_empleador="Consorcio Demo",
+        footer_nit="900.111.222",
+    )
+    assert "Producto generado por ClaraCore Solutions SAS" in html
+    assert "Consorcio Demo" in html
+    assert "pdf:pagenumber" in html
+    assert "pdf:pagecount" in html

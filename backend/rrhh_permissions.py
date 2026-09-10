@@ -137,7 +137,7 @@ def require_permiso_rrhh(
     if not tiene_permiso_rrhh(current_user, accion, contrato_id):
         raise _http_exc(
             403,
-            f"No tiene permiso (RRHH · {accion}). Configúrelo en Control de accesos.",
+            f"No tiene permiso (Recursos Humanos · {accion}). Configúrelo en Control de accesos.",
         )
 
 

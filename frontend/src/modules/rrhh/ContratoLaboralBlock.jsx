@@ -27,7 +27,6 @@ export default function ContratoLaboralBlock({
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [numero, setNumero] = useState('')
   const [fechaInicio, setFechaInicio] = useState('')
   const [fechaFin, setFechaFin] = useState('')
   const [preview, setPreview] = useState({
@@ -71,7 +70,6 @@ export default function ContratoLaboralBlock({
     try {
       await api.generarContratoLaboral(trabajadorId, {
         tipo_contrato: tipoContrato,
-        numero_contrato_laboral: numero || null,
         fecha_inicio: fechaInicio || null,
         fecha_fin: fechaFin || null,
       })
@@ -116,7 +114,7 @@ export default function ContratoLaboralBlock({
     <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)' }}>
       <div style={ui.sectionTitle}>Contrato laboral (PDF)</div>
       <div style={{ marginBottom: 8, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
-        Se genera desde plantilla con marcadores tipo {'{{NOMBRE_TRABAJADOR}}'}, usando los datos del registro y el tipo de contrato seleccionado.
+        Se genera desde plantilla con marcadores tipo {'{{NOMBRE_TRABAJADOR}}'}. El número de contrato se asigna automáticamente con prefijo CTO-LAB-.
       </div>
 
       <div style={{ ...ui.sheetWrap, maxHeight: 'none', marginBottom: 10 }}>
@@ -137,8 +135,8 @@ export default function ContratoLaboralBlock({
             </tr>
             <tr>
               <td style={ui.tdLabel}>N.° contrato laboral</td>
-              <td style={ui.td}>
-                <input style={ui.cellInp} value={numero} disabled={!canEdit} onChange={(e) => setNumero(e.target.value)} placeholder="Opcional" />
+              <td style={{ ...ui.td, color: tTok.textMuted }}>
+                Automático (CTO-LAB-0001, CTO-LAB-0002, …)
               </td>
             </tr>
             <tr>
@@ -168,6 +166,7 @@ export default function ContratoLaboralBlock({
           <thead>
             <tr>
               <th style={ui.th}>Versión</th>
+              <th style={ui.th}>N.° CTO-LAB</th>
               <th style={ui.th}>Tipo</th>
               <th style={ui.th}>Estado</th>
               <th style={ui.th}>Fecha</th>
@@ -175,13 +174,14 @@ export default function ContratoLaboralBlock({
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td style={ui.td} colSpan={5}>Cargando…</td></tr>}
+            {loading && <tr><td style={ui.td} colSpan={6}>Cargando…</td></tr>}
             {!loading && items.length === 0 && (
-              <tr><td style={ui.td} colSpan={5}>Aún no hay contratos generados.</td></tr>
+              <tr><td style={ui.td} colSpan={6}>Aún no hay contratos generados.</td></tr>
             )}
             {items.map((row) => (
               <tr key={row.id}>
                 <td style={ui.td}>v{row.version_num}{row.vigente ? ' · vigente' : ''}</td>
+                <td style={ui.td}>{row.numero_contrato_laboral || '—'}</td>
                 <td style={ui.td}>{row.tipo_contrato_nombre}</td>
                 <td style={ui.td}>{row.estado}</td>
                 <td style={ui.td}>{(row.created_at || '').toString().slice(0, 19).replace('T', ' ')}</td>

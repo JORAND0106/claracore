@@ -22,6 +22,7 @@ CATALOG_CATEGORIAS = frozenset({
     "caja_compensacion",
     "cargo",
     "tipo_contrato",
+    "parentesco",
 })
 
 CATALOG_DEFAULTS = {
@@ -71,7 +72,28 @@ CATALOG_DEFAULTS = {
         "Comfama",
     ),
     "cargo": (),
+    "parentesco": (
+        "Padre",
+        "Madre",
+        "Cónyuge",
+        "Hijo",
+        "Hija",
+        "Hermano",
+        "Hermana",
+        "Abuelo",
+        "Abuela",
+        "Tío",
+        "Tía",
+        "Primo",
+        "Prima",
+        "Suegro",
+        "Suegra",
+        "Amigo",
+        "Amiga",
+    ),
 }
+
+TIPOS_SANGRE = frozenset({"O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-"})
 
 
 def _now_iso() -> str:
@@ -137,7 +159,7 @@ def _validate_categoria(categoria: str) -> str:
     if cat not in CATALOG_CATEGORIAS:
         raise ValueError(
             "Categoría de catálogo inválida. Use: eps, pension, cesantias, arl, "
-            "caja_compensacion, cargo, tipo_contrato."
+            "caja_compensacion, cargo, tipo_contrato, parentesco."
         )
     return cat
 
@@ -387,6 +409,7 @@ def _maybe_persist_catalog_values(sb, contrato_id: int, payload: dict, current_u
         ("caja_compensacion", payload.get("caja_compensacion")),
         ("cargo", payload.get("cargo_aspira")),
         ("tipo_contrato", payload.get("tipo_contrato")),
+        ("parentesco", payload.get("emergencia_parentesco")),
     )
     for cat, valor in mapping:
         if valor and str(valor).strip():
@@ -419,6 +442,7 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
     for k in (
         "fecha_nacimiento",
         "genero",
+        "lugar_expedicion",
         "direccion",
         "ciudad",
         "telefono",
@@ -438,8 +462,21 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
         max_len = 4000 if k == "notas" else (1000 if k == "direccion" else 300)
         set_opt(k, max_len=max_len)
 
+    if "tipo_sangre" in body or not partial:
+        ts = _trim(body.get("tipo_sangre"), max_len=8)
+        if ts:
+            ts_up = ts.upper().replace(" ", "")
+            if ts_up not in TIPOS_SANGRE:
+                raise ValueError("Tipo de sangre inválido.")
+            out["tipo_sangre"] = ts_up
+        else:
+            out["tipo_sangre"] = None
+
     if "salario" in body or not partial:
         out["salario"] = _parse_money(body.get("salario"))
+
+    if "salario_liquidable" in body or not partial:
+        out["salario_liquidable"] = _parse_bool(body.get("salario_liquidable"), True)
 
     if "subsidio_transporte" in body or not partial:
         out["subsidio_transporte"] = _parse_bool(body.get("subsidio_transporte"), False)
@@ -584,3 +621,157 @@ def soft_delete_trabajador(sb, contrato_id: int, trabajador_id: int, current_use
 
 def trabajador_display_nombre(trab: dict) -> str:
     return f"{(trab.get('nombres') or '').strip()} {(trab.get('apellidos') or '').strip()}".strip()
+
+
+_IMG_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
+_MAX_IMG_BYTES = 8 * 1024 * 1024
+
+
+def _normalize_img_mime(content_type: Optional[str]) -> str:
+    return (content_type or "application/octet-stream").split(";")[0].strip().lower()
+
+
+def _validate_imagen(content_type: Optional[str], size: int) -> str:
+    if size <= 0:
+        raise ValueError("Archivo vacío.")
+    if size > _MAX_IMG_BYTES:
+        raise ValueError("La imagen supera el máximo de 8 MB.")
+    mime = _normalize_img_mime(content_type)
+    if mime not in _IMG_MIMES:
+        raise ValueError("Formato no permitido. Use JPEG, PNG o WebP.")
+    return mime
+
+
+def set_trabajador_imagen(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+    *,
+    kind: str,
+    archivo_bytes: bytes,
+    nombre_archivo: str,
+    content_type: Optional[str],
+    current_user,
+) -> dict:
+    """Guarda foto o firma del trabajador en blob privado y actualiza columnas."""
+    from azure_blob_storage import (
+        delete_blob_private,
+        path_rrhh_trabajador_firma,
+        path_rrhh_trabajador_foto,
+        upload_blob_private,
+    )
+
+    kind_n = (kind or "").strip().lower()
+    if kind_n not in ("foto", "firma"):
+        raise ValueError("Tipo de imagen inválido.")
+    trab = get_trabajador(sb, contrato_id, trabajador_id)
+    mime = _validate_imagen(content_type, len(archivo_bytes or b""))
+    if kind_n == "foto":
+        blob_path = path_rrhh_trabajador_foto(
+            int(contrato_id), int(trabajador_id), nombre_archivo or "foto.jpg"
+        )
+        path_key, mime_key, name_key = "foto_blob_path", "foto_mime_type", "foto_nombre_archivo"
+        old_path = trab.get("foto_blob_path")
+    else:
+        blob_path = path_rrhh_trabajador_firma(
+            int(contrato_id), int(trabajador_id), nombre_archivo or "firma.png"
+        )
+        path_key, mime_key, name_key = "firma_blob_path", "firma_mime_type", "firma_nombre_archivo"
+        old_path = trab.get("firma_blob_path")
+
+    upload_blob_private(blob_path, archivo_bytes, content_type=mime)
+    payload = {
+        path_key: blob_path,
+        mime_key: mime,
+        name_key: (nombre_archivo or ("foto.jpg" if kind_n == "foto" else "firma.png"))[:200],
+        "updated_at": _now_iso(),
+        "updated_by": _uid(current_user),
+    }
+    rows = (
+        sb.table(_TABLE_TRAB)
+        .update(payload)
+        .eq("id", int(trabajador_id))
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        try:
+            delete_blob_private(blob_path)
+        except Exception:
+            pass
+        raise ValueError("No se pudo guardar la imagen del trabajador.")
+    if old_path and old_path != blob_path:
+        try:
+            delete_blob_private(old_path)
+        except Exception:
+            pass
+    return rows[0]
+
+
+def clear_trabajador_imagen(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+    *,
+    kind: str,
+    current_user,
+) -> dict:
+    from azure_blob_storage import delete_blob_private
+
+    kind_n = (kind or "").strip().lower()
+    if kind_n not in ("foto", "firma"):
+        raise ValueError("Tipo de imagen inválido.")
+    trab = get_trabajador(sb, contrato_id, trabajador_id)
+    if kind_n == "foto":
+        old_path = trab.get("foto_blob_path")
+        payload = {
+            "foto_blob_path": None,
+            "foto_mime_type": None,
+            "foto_nombre_archivo": None,
+            "updated_at": _now_iso(),
+            "updated_by": _uid(current_user),
+        }
+    else:
+        old_path = trab.get("firma_blob_path")
+        payload = {
+            "firma_blob_path": None,
+            "firma_mime_type": None,
+            "firma_nombre_archivo": None,
+            "updated_at": _now_iso(),
+            "updated_by": _uid(current_user),
+        }
+    rows = (
+        sb.table(_TABLE_TRAB)
+        .update(payload)
+        .eq("id", int(trabajador_id))
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("No se pudo quitar la imagen.")
+    if old_path:
+        try:
+            delete_blob_private(old_path)
+        except Exception:
+            pass
+    return rows[0]
+
+
+def download_trabajador_imagen(
+    sb, contrato_id: int, trabajador_id: int, *, kind: str
+) -> tuple[bytes, dict]:
+    from azure_blob_storage import download_blob_bytes_private
+
+    kind_n = (kind or "").strip().lower()
+    if kind_n not in ("foto", "firma"):
+        raise ValueError("Tipo de imagen inválido.")
+    trab = get_trabajador(sb, contrato_id, trabajador_id)
+    path = trab.get("foto_blob_path") if kind_n == "foto" else trab.get("firma_blob_path")
+    if not path:
+        raise ValueError("Imagen no encontrada.")
+    data = download_blob_bytes_private(path)
+    return data, trab

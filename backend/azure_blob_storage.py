@@ -558,3 +558,25 @@ def path_rrhh_contrato_laboral(
         f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/"
         f"contratos_laborales/v{int(version_num)}_{ts}_{safe}"
     )
+
+
+def path_rrhh_trabajador_foto(
+    contrato_id: int,
+    trabajador_id: int,
+    nombre_archivo: str,
+) -> str:
+    """Fotografía del trabajador (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "foto.jpg").strip())[:120]
+    return f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/foto/{ts}_{safe}"
+
+
+def path_rrhh_trabajador_firma(
+    contrato_id: int,
+    trabajador_id: int,
+    nombre_archivo: str,
+) -> str:
+    """Firma manuscrita del trabajador (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "firma.png").strip())[:120]
+    return f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/firma/{ts}_{safe}"
