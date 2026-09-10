@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from azure_blob_storage import (
     delete_blob_private,
@@ -22,6 +23,9 @@ _log = logging.getLogger("claracore.rrhh.docs")
 
 _TABLE_DOCS = "rrhh_trabajador_documentos"
 _TABLE_CONTRATOS = "rrhh_contratos_generados"
+_TABLE_SEQ = "rrhh_contrato_laboral_seq"
+
+_CTO_LAB_RE = re.compile(r"^CTO-LAB-(\d+)$", re.IGNORECASE)
 
 DOC_CATEGORIAS = frozenset({"soporte", "ingreso"})
 
@@ -329,45 +333,99 @@ def list_contratos_generados(sb, contrato_id: int, trabajador_id: int) -> List[d
     )
 
 
-def _siguiente_numero_cto_lab(sb, contrato_id: int) -> str:
-    """Consecutivo autoincremental CTO-LAB-NNNN por obra."""
-    cid = int(contrato_id)
+def _parse_cto_lab_num(valor: Optional[str]) -> Optional[int]:
+    m = _CTO_LAB_RE.match(str(valor or "").strip())
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _numeros_cto_lab_en_uso(sb, contrato_id: int) -> Set[int]:
     rows = (
-        sb.table("rrhh_contrato_laboral_seq")
-        .select("contrato_id, ultimo")
+        sb.table(_TABLE_CONTRATOS)
+        .select("numero_contrato_laboral")
+        .eq("contrato_id", int(contrato_id))
+        .is_("eliminado_en", "null")
+        .execute()
+        .data
+        or []
+    )
+    used: Set[int] = set()
+    for r in rows:
+        n = _parse_cto_lab_num(r.get("numero_contrato_laboral"))
+        if n is not None:
+            used.add(n)
+    return used
+
+
+def _sync_seq_ultimo(sb, contrato_id: int, used: Set[int]) -> None:
+    cid = int(contrato_id)
+    ultimo = max(used) if used else 0
+    existing = (
+        sb.table(_TABLE_SEQ)
+        .select("contrato_id")
         .eq("contrato_id", cid)
         .limit(1)
         .execute()
         .data
         or []
     )
-    if rows:
-        siguiente = int(rows[0].get("ultimo") or 0) + 1
-        sb.table("rrhh_contrato_laboral_seq").update(
-            {"ultimo": siguiente, "updated_at": _now_iso()}
+    if existing:
+        sb.table(_TABLE_SEQ).update(
+            {"ultimo": ultimo, "updated_at": _now_iso()}
         ).eq("contrato_id", cid).execute()
     else:
-        siguiente = 1
         try:
-            sb.table("rrhh_contrato_laboral_seq").insert(
-                {"contrato_id": cid, "ultimo": siguiente}
+            sb.table(_TABLE_SEQ).insert(
+                {"contrato_id": cid, "ultimo": ultimo}
             ).execute()
         except Exception:
-            # Carrera: reintentar update
-            again = (
-                sb.table("rrhh_contrato_laboral_seq")
-                .select("ultimo")
-                .eq("contrato_id", cid)
-                .limit(1)
-                .execute()
-                .data
-                or []
-            )
-            siguiente = int((again[0].get("ultimo") if again else 0) or 0) + 1
-            sb.table("rrhh_contrato_laboral_seq").update(
-                {"ultimo": siguiente, "updated_at": _now_iso()}
+            sb.table(_TABLE_SEQ).update(
+                {"ultimo": ultimo, "updated_at": _now_iso()}
             ).eq("contrato_id", cid).execute()
-    return f"CTO-LAB-{siguiente:04d}"
+
+
+def _siguiente_numero_cto_lab(sb, contrato_id: int) -> str:
+    """Asigna el menor consecutivo libre CTO-LAB-NNNN (reutiliza huecos liberados)."""
+    used = _numeros_cto_lab_en_uso(sb, contrato_id)
+    n = 1
+    while n in used:
+        n += 1
+    used.add(n)
+    _sync_seq_ultimo(sb, contrato_id, used)
+    return f"CTO-LAB-{n:04d}"
+
+
+def cascade_delete_contratos_trabajador(
+    sb, contrato_id: int, trabajador_id: int, *, current_user
+) -> int:
+    """Anula contratos laborales del trabajador y libera consecutivos CTO-LAB."""
+    rows = (
+        sb.table(_TABLE_CONTRATOS)
+        .select("id, azure_blob_path, numero_contrato_laboral")
+        .eq("trabajador_id", int(trabajador_id))
+        .eq("contrato_id", int(contrato_id))
+        .is_("eliminado_en", "null")
+        .execute()
+        .data
+        or []
+    )
+    for row in rows:
+        sb.table(_TABLE_CONTRATOS).update(
+            {
+                "eliminado_en": _now_iso(),
+                "eliminado_por": _uid(current_user),
+                "vigente": False,
+                "estado": "anulado",
+            }
+        ).eq("id", row["id"]).execute()
+        # Conservar blob por auditoría; el número sí se libera del contador
+    used = _numeros_cto_lab_en_uso(sb, contrato_id)
+    _sync_seq_ultimo(sb, contrato_id, used)
+    return len(rows)
 
 
 def generar_contrato_laboral(
@@ -545,6 +603,8 @@ def soft_delete_contrato_generado(
     )
     if not updated:
         raise ValueError("No se pudo eliminar el contrato generado.")
+    used = _numeros_cto_lab_en_uso(sb, contrato_id)
+    _sync_seq_ultimo(sb, contrato_id, used)
     return updated[0]
 
 

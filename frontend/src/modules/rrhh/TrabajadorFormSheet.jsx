@@ -200,9 +200,10 @@ export default function TrabajadorFormSheet({
               <SheetField label="N.° documento *" labelStyle={lbl} valueStyle={valCell}>
                 <input
                   style={ui.cellInp}
+                  inputMode="numeric"
                   value={f.numero_documento ?? ''}
                   disabled={!canEdit}
-                  onChange={(e) => setField('numero_documento', e.target.value)}
+                  onChange={(e) => setField('numero_documento', e.target.value.replace(/\D/g, ''))}
                 />
               </SheetField>
               <SheetField label="Lugar expedición" labelStyle={lbl} valueStyle={valCell}>
