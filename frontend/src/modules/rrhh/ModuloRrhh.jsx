@@ -8,6 +8,8 @@ import {
 } from '../../theme/adminPanelTheme'
 import ContratoLaboralBlock from './ContratoLaboralBlock'
 import DocumentosTrabajadorBlock from './DocumentosTrabajadorBlock'
+import LiquidacionPanel from './LiquidacionPanel'
+import NominaPanel from './NominaPanel'
 import TrabajadorFormSheet from './TrabajadorFormSheet'
 import { createRrhhApi } from './rrhhApi'
 import {
@@ -51,6 +53,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const [tabDetalle, setTabDetalle] = useState('datos')
   const [editForm, setEditForm] = useState(null)
   const [editando, setEditando] = useState(false)
+  const [seccionModulo, setSeccionModulo] = useState('documentacion') // documentacion | nomina | liquidacion
 
   const flash = useCallback((type, text) => {
     setMsg({ type, text })
@@ -314,10 +317,10 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         <div>
           <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 800, color: tTok.text }}>Recursos Humanos</div>
           <div style={{ fontSize: 'var(--cc-sm)', color: tTok.textMuted }}>
-            Documentación para contratación — registro, contrato laboral y documentos de ingreso
+            Documentación, nómina y liquidación de colaboradores
           </div>
         </div>
-        {permisos.crear && (
+        {seccionModulo === 'documentacion' && permisos.crear && (
           <button
             type="button"
             style={S.btnPrimary}
@@ -338,6 +341,29 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         )}
       </div>
 
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+        {[
+          { id: 'documentacion', label: 'Documentación' },
+          { id: 'nomina', label: 'Nómina' },
+          { id: 'liquidacion', label: 'Liquidación' },
+        ].map((sec) => (
+          <button
+            key={sec.id}
+            type="button"
+            onClick={() => setSeccionModulo(sec.id)}
+            style={{
+              ...S.btnGhost,
+              fontWeight: seccionModulo === sec.id ? 700 : 500,
+              background: seccionModulo === sec.id ? `${tTok.primary}18` : 'transparent',
+              color: seccionModulo === sec.id ? tTok.primary : tTok.textMuted,
+              borderColor: seccionModulo === sec.id ? tTok.primary : tTok.border,
+            }}
+          >
+            {sec.label}
+          </button>
+        ))}
+      </div>
+
       {msg && (
         <div style={{
           marginBottom: 10,
@@ -352,6 +378,33 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         </div>
       )}
 
+      {seccionModulo === 'nomina' && (
+        <NominaPanel
+          api={api}
+          permisos={permisos}
+          trabajadores={items}
+          S={S}
+          tTok={tTok}
+          sheetUi={sheetUi}
+          flash={flash}
+        />
+      )}
+
+      {seccionModulo === 'liquidacion' && (
+        <LiquidacionPanel
+          api={api}
+          permisos={permisos}
+          trabajadores={items}
+          S={S}
+          tTok={tTok}
+          sheetUi={sheetUi}
+          flash={flash}
+          onTrabajadoresChanged={cargar}
+        />
+      )}
+
+      {seccionModulo === 'documentacion' && (
+        <>
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <input
           style={{ ...S.input, maxWidth: 360 }}
@@ -414,6 +467,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
           </tbody>
         </table>
       </div>
+        </>
+      )}
 
       {/* Modal crear — no cierra al clic fuera */}
       {showCrear && (

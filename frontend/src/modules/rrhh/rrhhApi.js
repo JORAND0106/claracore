@@ -133,6 +133,70 @@ export function createRrhhApi(contratoId, token) {
         token,
       }),
 
+    // ── Nómina ──────────────────────────────────────────────────────────────
+    listNovedades: ({ trabajadorId, fechaDesde, fechaHasta } = {}) => {
+      const qs = new URLSearchParams()
+      if (trabajadorId) qs.set('trabajador_id', trabajadorId)
+      if (fechaDesde) qs.set('fecha_desde', fechaDesde)
+      if (fechaHasta) qs.set('fecha_hasta', fechaHasta)
+      const s = qs.toString()
+      return apiJson(`${base}/novedades${s ? `?${s}` : ''}`, { token })
+    },
+    createNovedad: (body) =>
+      apiJson(`${base}/novedades`, { method: 'POST', token, body }),
+    deleteNovedad: (id) =>
+      apiJson(`${base}/novedades/${id}`, { method: 'DELETE', token }),
+
+    listHorasExtras: ({ trabajadorId, fechaDesde, fechaHasta } = {}) => {
+      const qs = new URLSearchParams()
+      if (trabajadorId) qs.set('trabajador_id', trabajadorId)
+      if (fechaDesde) qs.set('fecha_desde', fechaDesde)
+      if (fechaHasta) qs.set('fecha_hasta', fechaHasta)
+      const s = qs.toString()
+      return apiJson(`${base}/horas-extras${s ? `?${s}` : ''}`, { token })
+    },
+    createHoraExtra: (body) =>
+      apiJson(`${base}/horas-extras`, { method: 'POST', token, body }),
+    deleteHoraExtra: (id) =>
+      apiJson(`${base}/horas-extras/${id}`, { method: 'DELETE', token }),
+
+    listNominas: () => apiJson(`${base}/nominas`, { token }),
+    generarNomina: (body) =>
+      apiJson(`${base}/nominas/generar`, { method: 'POST', token, body }),
+    getNomina: (id) => apiJson(`${base}/nominas/${id}`, { token }),
+    regenerarNomina: (id) =>
+      apiJson(`${base}/nominas/${id}/regenerar`, { method: 'POST', token }),
+    cerrarNomina: (id) =>
+      apiJson(`${base}/nominas/${id}/cerrar`, { method: 'POST', token }),
+    anularNomina: (id) =>
+      apiJson(`${base}/nominas/${id}/anular`, { method: 'POST', token }),
+    nominaXlsxUrl: (id) => `${API_BASE}${base}/nominas/${id}/xlsx`,
+    desprendibleUrl: (nominaId, itemId) =>
+      `${API_BASE}${base}/nominas/${nominaId}/items/${itemId}/desprendible`,
+
+    listLiquidaciones: () => apiJson(`${base}/liquidaciones`, { token }),
+    generarLiquidacion: (body) =>
+      apiJson(`${base}/liquidaciones`, { method: 'POST', token, body }),
+    getLiquidacion: (id) => apiJson(`${base}/liquidaciones/${id}`, { token }),
+    liquidacionPdfUrl: (id) => `${API_BASE}${base}/liquidaciones/${id}/pdf`,
+    getProvisiones: (trabajadorId) =>
+      apiJson(`${base}/trabajadores/${trabajadorId}/provisiones`, { token }),
+
+    async downloadBlob(url, filename) {
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) await parseError(res)
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename || 'archivo'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+    },
+
     async fetchBlobUrl(url) {
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
