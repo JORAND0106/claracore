@@ -1657,11 +1657,11 @@ def sync_visitantes_catalogo(
     return synced
 
 
-ESTADOS_COLABORADOR = ("activo", "incapacitado", "inactivo")
+ESTADOS_COLABORADOR = ("activo", "incapacitado", "inactivo", "retirado")
 DOCUMENTO_TIPOS_COLABORADOR = ("CC", "CE", "TI", "PA", "NIT", "OTRO")
 HORA_SALIDA_DEFAULT = "16:30"
-# Solo Activo cuenta en resumen por cargo; Inactivo e Incapacitado = sin jornada.
-ESTADOS_SIN_JORNADA = frozenset({"inactivo", "incapacitado"})
+# Solo Activo (RRHH) cuenta en el Resumen por cargo.
+ESTADOS_CUENTAN_RESUMEN = frozenset({"activo"})
 
 
 def _norm_documento_numero(raw) -> str:
@@ -1875,20 +1875,27 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
         except (TypeError, ValueError):
             cid = None
         try:
+            rrhh_id = (
+                int(item["rrhh_trabajador_id"])
+                if item.get("rrhh_trabajador_id") not in (None, "")
+                else None
+            )
+        except (TypeError, ValueError):
+            rrhh_id = None
+        try:
             sub_id = int(item["subcontratista_id"]) if item.get("subcontratista_id") not in (None, "") else None
         except (TypeError, ValueError):
             sub_id = None
-        key = (cid, _norm_nombre_visitante(nombre), doc_num)
+        key = (rrhh_id, cid, _norm_nombre_visitante(nombre), doc_num)
         if key in seen:
             continue
         seen.add(key)
-        sin_jornada = estado in ESTADOS_SIN_JORNADA
-        hora_ingreso = None if sin_jornada else _parse_hora_hhmm(item.get("hora_ingreso"))
-        hora_salida = (
-            None if sin_jornada
-            else _parse_hora_hhmm(item.get("hora_salida"), default=HORA_SALIDA_DEFAULT)
-        )
+        # Horario = dato operativo del día (siempre se conserva; no depende del estado RRHH).
+        hora_ingreso = _parse_hora_hhmm(item.get("hora_ingreso"))
+        hora_salida = _parse_hora_hhmm(item.get("hora_salida"), default=HORA_SALIDA_DEFAULT)
+        origen = str(item.get("origen") or ("rrhh" if rrhh_id is not None else "legado")).strip() or "legado"
         out.append({
+            "rrhh_trabajador_id": rrhh_id,
             "colaborador_id": cid,
             "nombre": nombre,
             "documento_tipo": doc_tipo,
@@ -1902,22 +1909,144 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
             "fecha_ingreso": _parse_fecha_iso(item.get("fecha_ingreso")),
             "fecha_retiro": _parse_fecha_iso(item.get("fecha_retiro")),
             "observacion": str(item.get("observacion") or item.get("observaciones") or "").strip(),
-            "origen": str(item.get("origen") or "catalogo").strip() or "catalogo",
+            "origen": origen,
         })
     return out
 
 
 def _personal_desde_asistencia(asistencia: List[dict]) -> List[dict]:
-    """Agrega cantidades por cargo solo para colaboradores con estado Activo."""
+    """Agrega cantidades por cargo solo para colaboradores con estado Activo (RRHH)."""
     counts: Dict[str, float] = {}
     for row in asistencia or []:
-        if str(row.get("estado") or "").lower() != "activo":
+        if str(row.get("estado") or "").lower() not in ESTADOS_CUENTAN_RESUMEN:
             continue
         cargo = str(row.get("cargo") or "").strip()
         if not cargo:
             continue
         counts[cargo] = counts.get(cargo, 0.0) + 1.0
     return [{"cargo": c, "cantidad": n} for c, n in sorted(counts.items(), key=lambda x: x[0].lower())]
+
+
+def _nombre_completo_rrhh(trab: dict) -> str:
+    if not isinstance(trab, dict):
+        return ""
+    if trab.get("nombre"):
+        return _capitalizar_nombre_propio(trab.get("nombre"))
+    return _capitalizar_nombre_propio(
+        f"{trab.get('nombres') or ''} {trab.get('apellidos') or ''}".strip()
+    )
+
+
+def enrich_asistencia_desde_rrhh(
+    sb,
+    contrato_id: int,
+    asistencia: List[dict],
+) -> List[dict]:
+    """
+    Enlaza filas con RRHH: snapshot de cargo/empresa/estado al guardar.
+    Filas sin rrhh_trabajador_id (legado) se conservan tal cual.
+    """
+    try:
+        from rrhh_service import list_trabajadores
+    except Exception as exc:  # pragma: no cover
+        _log.warning("enrich_asistencia_desde_rrhh import: %s", exc)
+        return list(asistencia or [])
+
+    try:
+        todos = list_trabajadores(sb, int(contrato_id)) or []
+    except Exception as exc:
+        _log.warning("enrich_asistencia_desde_rrhh list: %s", exc)
+        todos = []
+    by_id: Dict[int, dict] = {}
+    for t in todos:
+        try:
+            by_id[int(t["id"])] = t
+        except (TypeError, ValueError, KeyError):
+            continue
+
+    out: List[dict] = []
+    for item in asistencia or []:
+        tid = item.get("rrhh_trabajador_id")
+        if tid is None:
+            out.append({**item, "origen": item.get("origen") or "legado"})
+            continue
+        try:
+            tid_i = int(tid)
+        except (TypeError, ValueError):
+            raise ValueError(
+                "Colaborador inválido. Selecciónelo desde el catálogo de RRHH."
+            ) from None
+        trab = by_id.get(tid_i)
+        if not trab:
+            raise ValueError(
+                f"El colaborador RRHH #{tid_i} no existe o fue eliminado. "
+                "Regístrelo primero en el módulo de Recursos Humanos."
+            )
+        estado = str(trab.get("estado") or "activo").strip().lower()
+        if estado not in ESTADOS_COLABORADOR:
+            estado = "activo"
+        try:
+            sub_id = (
+                int(trab["empresa_subcontratista_id"])
+                if trab.get("empresa_subcontratista_id") not in (None, "")
+                else None
+            )
+        except (TypeError, ValueError):
+            sub_id = None
+        out.append({
+            **item,
+            "rrhh_trabajador_id": tid_i,
+            "nombre": _nombre_completo_rrhh(trab),
+            "documento_tipo": str(trab.get("tipo_documento") or item.get("documento_tipo") or "CC").upper(),
+            "documento_numero": _norm_documento_numero(
+                trab.get("numero_documento") or item.get("documento_numero")
+            ),
+            "cargo": str(trab.get("cargo_aspira") or item.get("cargo") or "").strip(),
+            "subcontratista_id": sub_id,
+            "subcontratista_nombre": str(
+                trab.get("empresa_nombre") or item.get("subcontratista_nombre") or ""
+            ).strip(),
+            "estado": estado,  # snapshot al guardar → congela resumen al cerrar
+            "origen": "rrhh",
+        })
+    return out
+
+
+def list_rrhh_trabajadores_para_bitacora(
+    sb, contrato_id: int, q: str = "",
+) -> List[dict]:
+    """Catálogo RRHH reducido para autocompletado de Personal en obra."""
+    try:
+        from rrhh_service import list_trabajadores
+    except Exception as exc:  # pragma: no cover
+        _log.warning("list_rrhh_trabajadores_para_bitacora import: %s", exc)
+        return []
+    try:
+        rows = list_trabajadores(sb, int(contrato_id), q=q or None) or []
+    except Exception as exc:
+        _log.warning("list_rrhh_trabajadores_para_bitacora: %s", exc)
+        return []
+    out: List[dict] = []
+    for t in rows:
+        if not isinstance(t, dict):
+            continue
+        try:
+            tid = int(t["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        out.append({
+            "id": tid,
+            "nombres": t.get("nombres"),
+            "apellidos": t.get("apellidos"),
+            "nombre": _nombre_completo_rrhh(t),
+            "tipo_documento": t.get("tipo_documento") or "CC",
+            "numero_documento": t.get("numero_documento") or "",
+            "cargo_aspira": t.get("cargo_aspira") or "",
+            "empresa_nombre": t.get("empresa_nombre") or "",
+            "empresa_subcontratista_id": t.get("empresa_subcontratista_id"),
+            "estado": str(t.get("estado") or "activo").lower(),
+        })
+    return out
 
 
 def sync_colaboradores_catalogo(
@@ -1927,57 +2056,11 @@ def sync_colaboradores_catalogo(
     *,
     user_id: Optional[int] = None,
 ) -> List[dict]:
-    """Upsert catálogo y snapshot inmutable para asistencia_colaboradores."""
-    synced: List[dict] = []
-    for item in asistencia or []:
-        nombre = str(item.get("nombre") or "").strip()
-        if not nombre:
-            continue
-        cat = upsert_colaborador(
-            sb,
-            contrato_id,
-            nombre,
-            documento_tipo=item.get("documento_tipo") or "CC",
-            documento_numero=item.get("documento_numero") or "",
-            cargo=item.get("cargo") or "",
-            subcontratista_id=item.get("subcontratista_id"),
-            subcontratista_nombre=item.get("subcontratista_nombre") or "",
-            fecha_ingreso=item.get("fecha_ingreso"),
-            fecha_retiro=item.get("fecha_retiro"),
-            user_id=user_id,
-        )
-        synced.append({
-            **item,
-            "colaborador_id": (
-                int((cat or {}).get("id"))
-                if cat and cat.get("id") is not None
-                else item.get("colaborador_id")
-            ),
-            "nombre": str((cat or {}).get("nombre") or nombre),
-            "documento_tipo": str((cat or {}).get("documento_tipo") or item.get("documento_tipo") or "CC"),
-            "documento_numero": str((cat or {}).get("documento_numero") or item.get("documento_numero") or ""),
-            "cargo": str(item.get("cargo") or (cat or {}).get("cargo") or "").strip(),
-            "subcontratista_id": (
-                item.get("subcontratista_id")
-                if item.get("subcontratista_id") is not None
-                else (cat or {}).get("subcontratista_id")
-            ),
-            "subcontratista_nombre": str(
-                item.get("subcontratista_nombre") or (cat or {}).get("subcontratista_nombre") or ""
-            ).strip(),
-            "fecha_ingreso": _parse_fecha_iso(
-                item.get("fecha_ingreso")
-                if item.get("fecha_ingreso") not in (None, "")
-                else (cat or {}).get("fecha_ingreso")
-            ),
-            "fecha_retiro": _parse_fecha_iso(
-                item.get("fecha_retiro")
-                if item.get("fecha_retiro") not in (None, "")
-                else (cat or {}).get("fecha_retiro")
-            ),
-            "origen": "catalogo",
-        })
-    return synced
+    """
+    Compat legado: ya no crea colaboradores nuevos en Bitácora.
+    El alta maestra vive en RRHH; aquí solo se enriquecen filas con snapshot.
+    """
+    return enrich_asistencia_desde_rrhh(sb, contrato_id, asistencia)
 
 
 def _resolver_personal_y_asistencia(
@@ -1988,13 +2071,13 @@ def _resolver_personal_y_asistencia(
     user_id: Optional[int] = None,
 ) -> Tuple[List[dict], Optional[List[dict]]]:
     """
-    Si viene asistencia_colaboradores, sincroniza catálogo y deriva personal.
-    Si no, usa personal legacy.
+    Si viene asistencia_colaboradores, enriquece desde RRHH (snapshot de estado)
+    y deriva personal. Si no, usa personal legacy.
     Returns (personal, asistencia|None).
     """
     if "asistencia_colaboradores" in data:
         lista = _normalizar_asistencia_colaboradores(data.get("asistencia_colaboradores"))
-        synced = sync_colaboradores_catalogo(sb, contrato_id, lista, user_id=user_id)
+        synced = enrich_asistencia_desde_rrhh(sb, contrato_id, lista)
         personal = _expandir_personal_otro(_personal_desde_asistencia(synced))
         return personal, synced
     personal = _expandir_personal_otro(_normalizar_personal(data.get("personal")))

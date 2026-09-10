@@ -239,6 +239,11 @@ export function createSeguimientoApi(contratoId, token) {
     },
     upsertBitacoraColaborador: (body) =>
       send('POST', `/seguimiento/${cid}/bitacora/colaboradores`, body),
+    /** Catálogo RRHH para Personal en obra (permiso Bitácora, no exige permiso RRHH). */
+    listBitacoraRrhhTrabajadores: (q = '') => {
+      const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+      return get(`/seguimiento/${cid}/bitacora/rrhh-trabajadores${qs}`)
+    },
     listSubcontratistasActivos: () => get(`/sicoe-obra/${cid}/subcontratistas-activos`),
     plantillaAutocompletarDiario: (tramo) => {
       const q = tramo != null && String(tramo).trim() !== ''

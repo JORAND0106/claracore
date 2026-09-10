@@ -1236,6 +1236,20 @@ def route_list_bitacora_colaboradores(
     return list_colaboradores(supabase, contrato_id, q or "")
 
 
+@router.get("/{contrato_id}/bitacora/rrhh-trabajadores")
+def route_list_bitacora_rrhh_trabajadores(
+    contrato_id: int,
+    q: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """Catálogo RRHH para autocompletado de Personal en obra (permiso Bitácora)."""
+    from bitacora_service import list_rrhh_trabajadores_para_bitacora
+
+    require_permiso_bitacora(current_user, "ver", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    return {"items": list_rrhh_trabajadores_para_bitacora(supabase, contrato_id, q or "")}
+
+
 @router.post("/{contrato_id}/bitacora/colaboradores")
 def route_upsert_bitacora_colaborador(
     contrato_id: int,

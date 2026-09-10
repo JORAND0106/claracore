@@ -643,7 +643,6 @@ def _html_asistencia_colaboradores(diario: Optional[dict], pal: dict) -> str:
             continue
         cargo = str(a.get("cargo") or "").strip() or "—"
         empresa = str(a.get("subcontratista_nombre") or "").strip() or "—"
-        estado = str(a.get("estado") or "activo").strip().capitalize()
         ini = str(a.get("hora_ingreso") or "").strip()[:5]
         fin = str(a.get("hora_salida") or "").strip()[:5]
         horario = "–".join(p for p in (ini, fin) if p) or "—"
@@ -651,7 +650,6 @@ def _html_asistencia_colaboradores(diario: Optional[dict], pal: dict) -> str:
             _esc(nombre),
             _esc(cargo),
             _esc(empresa),
-            _esc(estado),
             _esc(horario),
         ])
     if not rows:
@@ -660,10 +658,10 @@ def _html_asistencia_colaboradores(diario: Optional[dict], pal: dict) -> str:
         f'<div style="margin-top:3pt;">'
         + _section_title("Asistencia", pal)
         + _mini_table(
-            ["Nombre", "Cargo", "Empresa", "Estado", "Horario"],
+            ["Nombre", "Cargo", "Empresa", "Horario"],
             rows,
             pal,
-            ["28%", "18%", "24%", "12%", "18%"],
+            ["30%", "22%", "28%", "20%"],
             compact=True,
         )
         + "</div>"
