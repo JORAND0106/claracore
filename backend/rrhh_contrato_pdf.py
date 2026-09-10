@@ -27,7 +27,7 @@ _PLANTILLA_TXT = os.path.join(_ASSETS_DIR, "rrhh_contrato_laboral_plantilla.txt"
 _PAGE_CSS = """
 @page {
   size: letter;
-  margin: 1.6cm 1.9cm 1.6cm 1.9cm;
+  margin: 1.6cm 1.9cm 2.2cm 1.9cm;
 }
 body {
   font-family: Arial, Helvetica, sans-serif;
@@ -86,6 +86,22 @@ h2 {
   width: 85%;
   padding-top: 4pt;
 }
+.doc-footer {
+  font-size: 7.5pt;
+  color: #64748b;
+  text-align: center;
+  border-top: 1px solid #cbd5e1;
+  padding-top: 3pt;
+  line-height: 1.35;
+}
+.doc-footer .marca {
+  color: #475569;
+  font-weight: bold;
+}
+.doc-footer .paginas {
+  margin-top: 2pt;
+  color: #94a3b8;
+}
 """
 
 
@@ -139,17 +155,21 @@ def construir_contexto_placeholders(
         except (TypeError, ValueError):
             letras = "CERO PESOS"
     subsidio = "SÍ" if trabajador.get("subsidio_transporte") else "NO"
+    liquidable = "SÍ" if trabajador.get("salario_liquidable", True) else "NO"
     return {
         "{{NOMBRE_TRABAJADOR}}": _campo(nombre),
         "{{TIPO_DOCUMENTO}}": _campo(trabajador.get("tipo_documento"), vacio="CC"),
         "{{NUMERO_DOCUMENTO}}": _campo(trabajador.get("numero_documento")),
+        "{{LUGAR_EXPEDICION}}": _campo(trabajador.get("lugar_expedicion")),
         "{{DIRECCION_TRABAJADOR}}": _campo(trabajador.get("direccion")),
         "{{CIUDAD_TRABAJADOR}}": _campo(trabajador.get("ciudad")),
         "{{TELEFONO_TRABAJADOR}}": _campo(trabajador.get("telefono")),
         "{{EMAIL_TRABAJADOR}}": _campo(trabajador.get("email")),
+        "{{TIPO_SANGRE}}": _campo(trabajador.get("tipo_sangre")),
         "{{CARGO}}": _campo(trabajador.get("cargo_aspira")),
         "{{SALARIO}}": formato_pesos_cop(salario) if salario is not None else "________________",
         "{{SALARIO_LETRAS}}": letras,
+        "{{SALARIO_LIQUIDABLE}}": liquidable,
         "{{SUBSIDIO_TRANSPORTE}}": subsidio,
         "{{TIPO_CONTRATO}}": _campo(tipo_contrato.get("nombre")),
         "{{EMPRESA_CONTRATANTE}}": _campo(trabajador.get("empresa_nombre")),
@@ -191,7 +211,7 @@ def _cargar_plantilla() -> str:
         return fh.read()
 
 
-def _texto_a_html(texto: str) -> str:
+def _texto_a_html(texto: str, *, footer_empleador: str, footer_nit: str) -> str:
     """Convierte plantilla en prosa a HTML simple (párrafos por doble salto / etiquetas)."""
     blocks = []
     for raw in texto.replace("\r\n", "\n").split("\n\n"):
@@ -221,7 +241,21 @@ def _texto_a_html(texto: str) -> str:
   <td><div class="linea-firma">EL TRABAJADOR</div></td>
 </tr></table>
 """
-    return f"<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><style>{_PAGE_CSS}</style></head><body>{html_body}</body></html>"
+    emp = _esc(footer_empleador or "________________")
+    nit = _esc(footer_nit or "________________")
+    footer_html = (
+        f'<div class="doc-footer">'
+        f"<div>Empleador: {emp} · NIT {nit}</div>"
+        f'<div class="marca">Producto generado por ClaraCore Solutions SAS</div>'
+        f'<div class="paginas">Página <pdf:pagenumber/> de <pdf:pagecount/></div>'
+        f"</div>"
+    )
+    return (
+        "<!DOCTYPE html><html xmlns=\"http://www.w3.org/1999/xhtml\"><head>"
+        f"<meta charset=\"utf-8\"/><style>{_PAGE_CSS}</style></head><body>"
+        f"<pdf:footer>{footer_html}</pdf:footer>"
+        f"{html_body}</body></html>"
+    )
 
 
 def generar_pdf_contrato_laboral(
@@ -243,8 +277,11 @@ def generar_pdf_contrato_laboral(
         fecha_fin=fecha_fin,
     )
     texto = _aplicar_placeholders(plantilla, ctx)
-    # Re-aplicar en firmas del HTML helper también
-    html_doc = _texto_a_html(texto)
+    html_doc = _texto_a_html(
+        texto,
+        footer_empleador=trabajador.get("empresa_nombre") or "",
+        footer_nit=trabajador.get("empresa_nit") or "",
+    )
     # Insertar nombres en firmas si el HTML default fue usado
     html_doc = html_doc.replace(
         '<div class="linea-firma">EL EMPLEADOR</div>',

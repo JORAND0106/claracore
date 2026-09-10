@@ -28,12 +28,15 @@ from rrhh_docs_service import (
 from rrhh_permissions import require_permiso_rrhh, tiene_permiso_rrhh
 from rrhh_service import (
     add_catalogo_opcion,
+    clear_trabajador_imagen,
     create_trabajador,
+    download_trabajador_imagen,
     get_trabajador,
     list_catalogo,
     list_catalogo_todos,
     list_empresas_contratantes,
     list_trabajadores,
+    set_trabajador_imagen,
     soft_delete_trabajador,
     update_trabajador,
 )
@@ -65,8 +68,10 @@ class TrabajadorBody(BaseModel):
     apellidos: str = Field(..., min_length=1, max_length=200)
     tipo_documento: str = Field("CC", max_length=20)
     numero_documento: str = Field(..., min_length=3, max_length=40)
+    lugar_expedicion: Optional[str] = None
     fecha_nacimiento: Optional[str] = None
     genero: Optional[str] = None
+    tipo_sangre: Optional[str] = None
     direccion: Optional[str] = None
     ciudad: Optional[str] = None
     telefono: Optional[str] = None
@@ -81,6 +86,7 @@ class TrabajadorBody(BaseModel):
     caja_compensacion: Optional[str] = None
     cargo_aspira: Optional[str] = None
     salario: Optional[float] = None
+    salario_liquidable: bool = True
     subsidio_transporte: bool = False
     tipo_contrato: Optional[str] = None
     empresa_key: Optional[str] = Field(None, max_length=80)
@@ -97,8 +103,10 @@ class TrabajadorPatchBody(BaseModel):
     apellidos: Optional[str] = Field(None, min_length=1, max_length=200)
     tipo_documento: Optional[str] = Field(None, max_length=20)
     numero_documento: Optional[str] = Field(None, min_length=3, max_length=40)
+    lugar_expedicion: Optional[str] = None
     fecha_nacimiento: Optional[str] = None
     genero: Optional[str] = None
+    tipo_sangre: Optional[str] = None
     direccion: Optional[str] = None
     ciudad: Optional[str] = None
     telefono: Optional[str] = None
@@ -113,6 +121,7 @@ class TrabajadorPatchBody(BaseModel):
     caja_compensacion: Optional[str] = None
     cargo_aspira: Optional[str] = None
     salario: Optional[float] = None
+    salario_liquidable: Optional[bool] = None
     subsidio_transporte: Optional[bool] = None
     tipo_contrato: Optional[str] = None
     empresa_key: Optional[str] = Field(None, max_length=80)
@@ -291,6 +300,164 @@ def route_delete_trabajador(
         str(trabajador_id),
         "Trabajador eliminado (soft)",
     )
+    return row
+
+
+# ── Foto / firma del trabajador ───────────────────────────────────────────────
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/foto")
+async def route_upload_foto(
+    contrato_id: int,
+    trabajador_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    if not (
+        tiene_permiso_rrhh(current_user, "editar", contrato_id)
+        or tiene_permiso_rrhh(current_user, "crear", contrato_id)
+    ):
+        require_permiso_rrhh(current_user, "editar", contrato_id)
+    data = await archivo.read()
+    try:
+        row = set_trabajador_imagen(
+            supabase,
+            contrato_id,
+            trabajador_id,
+            kind="foto",
+            archivo_bytes=data,
+            nombre_archivo=archivo.filename or "foto.jpg",
+            content_type=archivo.content_type,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "EDITAR",
+        "RRHH",
+        "rrhh_trabajadores",
+        str(trabajador_id),
+        "Foto del trabajador actualizada",
+    )
+    return row
+
+
+@router.get("/{contrato_id}/trabajadores/{trabajador_id}/foto")
+def route_get_foto(
+    contrato_id: int,
+    trabajador_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        data, trab = download_trabajador_imagen(
+            supabase, contrato_id, trabajador_id, kind="foto"
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=trab.get("foto_mime_type") or "image/jpeg",
+        headers={
+            "Content-Disposition": f'inline; filename="{trab.get("foto_nombre_archivo") or "foto.jpg"}"'
+        },
+    )
+
+
+@router.delete("/{contrato_id}/trabajadores/{trabajador_id}/foto")
+def route_delete_foto(
+    contrato_id: int,
+    trabajador_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "editar", contrato_id)
+    try:
+        row = clear_trabajador_imagen(
+            supabase, contrato_id, trabajador_id, kind="foto", current_user=current_user
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return row
+
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/firma")
+async def route_upload_firma(
+    contrato_id: int,
+    trabajador_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    if not (
+        tiene_permiso_rrhh(current_user, "editar", contrato_id)
+        or tiene_permiso_rrhh(current_user, "crear", contrato_id)
+    ):
+        require_permiso_rrhh(current_user, "editar", contrato_id)
+    data = await archivo.read()
+    try:
+        row = set_trabajador_imagen(
+            supabase,
+            contrato_id,
+            trabajador_id,
+            kind="firma",
+            archivo_bytes=data,
+            nombre_archivo=archivo.filename or "firma.png",
+            content_type=archivo.content_type or "image/png",
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "EDITAR",
+        "RRHH",
+        "rrhh_trabajadores",
+        str(trabajador_id),
+        "Firma del trabajador actualizada",
+    )
+    return row
+
+
+@router.get("/{contrato_id}/trabajadores/{trabajador_id}/firma")
+def route_get_firma(
+    contrato_id: int,
+    trabajador_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        data, trab = download_trabajador_imagen(
+            supabase, contrato_id, trabajador_id, kind="firma"
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=trab.get("firma_mime_type") or "image/png",
+        headers={
+            "Content-Disposition": f'inline; filename="{trab.get("firma_nombre_archivo") or "firma.png"}"'
+        },
+    )
+
+
+@router.delete("/{contrato_id}/trabajadores/{trabajador_id}/firma")
+def route_delete_firma(
+    contrato_id: int,
+    trabajador_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "editar", contrato_id)
+    try:
+        row = clear_trabajador_imagen(
+            supabase, contrato_id, trabajador_id, kind="firma", current_user=current_user
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
     return row
 
 

@@ -1,9 +1,10 @@
 /**
- * Permisos RRHH — fila «RRHH» en Control de accesos.
+ * Permisos Recursos Humanos — fila «Recursos Humanos» (legado «RRHH») en Control de accesos.
  */
-import { esDesarrolladorUsuario, tienePermisoFlag } from '../../utils/permisosContrato.js'
+import { esDesarrolladorUsuario, permisoFuncionContrato } from '../../utils/permisosContrato.js'
 
-export const RRHH_FUNCION = 'rrhh'
+export const RRHH_FUNCION = 'recursos humanos'
+export const RRHH_FUNCION_LEGACY = 'rrhh'
 
 const TODOS = {
   ver: true,
@@ -14,10 +15,20 @@ const TODOS = {
   exportar: true,
 }
 
+function permisoFila(usuario, contratoId) {
+  return (
+    permisoFuncionContrato(usuario, RRHH_FUNCION, contratoId)
+    || permisoFuncionContrato(usuario, 'Recursos Humanos', contratoId)
+    || permisoFuncionContrato(usuario, RRHH_FUNCION_LEGACY, contratoId)
+    || permisoFuncionContrato(usuario, 'RRHH', contratoId)
+  )
+}
+
 export function permisoRrhh(usuario, accion, contratoId) {
   if (esDesarrolladorUsuario(usuario)) return true
   const cid = contratoId ?? usuario?.contrato_id
-  return tienePermisoFlag(usuario, RRHH_FUNCION, accion, cid)
+  const p = permisoFila(usuario, cid)
+  return !!(p && p[accion])
 }
 
 export function accesoRrhh(usuario, contratoId) {

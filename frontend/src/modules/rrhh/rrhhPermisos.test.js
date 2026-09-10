@@ -23,7 +23,7 @@ describe('rrhhPermisos', () => {
     assert.equal(accesoRrhh(u, 10).ver, false)
   })
 
-  it('respeta flag ver de la matriz', () => {
+  it('respeta flag ver de la matriz (RRHH legado)', () => {
     const u = {
       cargo_nombre: 'Administrador',
       contrato_id: 10,
@@ -43,6 +43,26 @@ describe('rrhhPermisos', () => {
     assert.equal(a.crear, false)
     assert.equal(a.editar, true)
   })
+
+  it('acepta nombre Recursos Humanos', () => {
+    const u = {
+      cargo_nombre: 'Administrador',
+      contrato_id: 10,
+      permisos: [{
+        funcion_nombre: 'Recursos Humanos',
+        contrato_id: 10,
+        ver: true,
+        crear: true,
+        editar: false,
+        eliminar: false,
+        validar: false,
+        exportar: false,
+      }],
+    }
+    assert.equal(permisoRrhh(u, 'ver', 10), true)
+    assert.equal(permisoRrhh(u, 'crear', 10), true)
+    assert.equal(permisoRrhh(u, 'editar', 10), false)
+  })
 })
 
 describe('rrhhHelpers payload', () => {
@@ -52,7 +72,10 @@ describe('rrhhHelpers payload', () => {
       nombres: 'Juan',
       apellidos: 'Gómez',
       numero_documento: '998877',
-      salario: '2.500.000',
+      salario: '$ 2.500.000',
+      salario_liquidable: false,
+      lugar_expedicion: 'Bogotá, Cundinamarca',
+      tipo_sangre: 'O+',
       subsidio_transporte: true,
       tipo_contrato: 'Término fijo',
       empresa_key: 'sub:42',
@@ -66,5 +89,8 @@ describe('rrhhHelpers payload', () => {
     assert.equal(p.tipo_contrato, 'Término fijo')
     assert.equal(p.subsidio_transporte, true)
     assert.equal(p.salario, 2500000)
+    assert.equal(p.salario_liquidable, false)
+    assert.equal(p.lugar_expedicion, 'Bogotá, Cundinamarca')
+    assert.equal(p.tipo_sangre, 'O+')
   })
 })

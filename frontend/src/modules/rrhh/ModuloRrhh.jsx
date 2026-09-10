@@ -16,12 +16,13 @@ import {
   fmtSalario,
   nombreCompleto,
   payloadFromForm,
+  dataUrlToBlob,
 } from './rrhhHelpers'
 import { accesoRrhh } from './rrhhPermisos'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
- * Módulo RRHH — Documentación para contratación (fase 1).
+ * Módulo Recursos Humanos — Documentación para contratación.
  */
 export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode }) {
   const theme = themeMode || (isDarkMode(t) ? 'dark' : isRestMode(t) ? 'rest' : 'light')
@@ -68,7 +69,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       setEmpresas(emp?.opciones || [])
       setCatalogo(cat?.categorias || {})
     } catch (e) {
-      flash('error', e.message || 'No se pudo cargar RRHH.')
+      flash('error', e.message || 'No se pudo cargar Recursos Humanos.')
     } finally {
       setLoading(false)
     }
@@ -87,6 +88,49 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       list.sort((a, b) => a.localeCompare(b, 'es'))
       return { ...prev, [categoria]: list }
     })
+  }, [api])
+
+  const syncMediaPreviews = useCallback(async (trab, formBase) => {
+    if (!api || !trab?.id) return formBase
+    let next = { ...formBase }
+    const revoke = (u) => {
+      if (u && String(u).startsWith('blob:')) {
+        try { URL.revokeObjectURL(u) } catch { /* ignore */ }
+      }
+    }
+    if (trab.foto_blob_path) {
+      try {
+        const url = await api.fetchBlobUrl(api.fotoUrl(trab.id))
+        revoke(next.foto_preview_url)
+        next = { ...next, foto_preview_url: url, _foto_file: null, _foto_clear: false }
+      } catch { /* sin foto */ }
+    }
+    if (trab.firma_blob_path) {
+      try {
+        const url = await api.fetchBlobUrl(api.firmaUrl(trab.id))
+        revoke(next.firma_data_url)
+        next = { ...next, firma_data_url: url, _firma_changed: false, _firma_clear: false }
+      } catch { /* sin firma */ }
+    }
+    return next
+  }, [api])
+
+  const persistMedia = useCallback(async (trabajadorId, form) => {
+    if (!api || !trabajadorId || !form) return
+    if (form._foto_file) {
+      await api.uploadFoto(trabajadorId, form._foto_file)
+    } else if (form._foto_clear) {
+      try { await api.deleteFoto(trabajadorId) } catch { /* ignore */ }
+    }
+    if (form._firma_changed && form.firma_data_url && String(form.firma_data_url).startsWith('data:')) {
+      const blob = dataUrlToBlob(form.firma_data_url)
+      if (blob) {
+        const file = new File([blob], 'firma.png', { type: blob.type || 'image/png' })
+        await api.uploadFirma(trabajadorId, file)
+      }
+    } else if (form._firma_changed && !form.firma_data_url) {
+      try { await api.deleteFirma(trabajadorId) } catch { /* ignore */ }
+    }
   }, [api])
 
   const overlayStyle = {
@@ -146,7 +190,9 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     try {
       const full = await api.getTrabajador(row.id)
       setDetalle(full)
-      setEditForm(formFromTrabajador(full))
+      const base = formFromTrabajador(full)
+      const withMedia = await syncMediaPreviews(full, base)
+      setEditForm(withMedia)
       setEditando(false)
       setTabDetalle('datos')
     } catch (e) {
@@ -156,6 +202,9 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const cerrarCrear = () => {
     if (busy) return
+    if (crearForm.foto_preview_url && String(crearForm.foto_preview_url).startsWith('blob:')) {
+      try { URL.revokeObjectURL(crearForm.foto_preview_url) } catch { /* ignore */ }
+    }
     setShowCrear(false)
     setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
   }
@@ -165,6 +214,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     setBusy(true)
     try {
       const created = await api.createTrabajador(payloadFromForm(crearForm))
+      await persistMedia(created.id, crearForm)
       flash('success', 'Trabajador registrado.')
       setShowCrear(false)
       setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
@@ -182,8 +232,11 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     setBusy(true)
     try {
       const updated = await api.updateTrabajador(detalle.id, payloadFromForm(editForm))
-      setDetalle(updated)
-      setEditForm(formFromTrabajador(updated))
+      await persistMedia(detalle.id, editForm)
+      const full = await api.getTrabajador(detalle.id)
+      setDetalle(full)
+      const withMedia = await syncMediaPreviews(full, formFromTrabajador(full))
+      setEditForm(withMedia)
       setEditando(false)
       flash('success', 'Trabajador actualizado.')
       await cargar()
@@ -221,9 +274,9 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         border: `1px solid ${tTok.border}`,
         borderRadius: 12,
       }}>
-        <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: tTok.text, marginBottom: 10 }}>RRHH</div>
+        <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: tTok.text, marginBottom: 10 }}>Recursos Humanos</div>
         <div style={{ fontSize: 'var(--cc-body)', color: tTok.textMuted, lineHeight: 1.5 }}>
-          Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «RRHH» (acción Ver).
+          Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Recursos Humanos» (acción Ver).
         </div>
       </div>
     )
@@ -232,7 +285,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   if (!cid) {
     return (
       <div style={{ padding: 24, color: tTok.textMuted }}>
-        Seleccione un contrato de obra para gestionar RRHH.
+        Seleccione un contrato de obra para gestionar Recursos Humanos.
       </div>
     )
   }
@@ -248,7 +301,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         marginBottom: 12,
       }}>
         <div>
-          <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 800, color: tTok.text }}>RRHH</div>
+          <div style={{ fontSize: 'var(--cc-h2)', fontWeight: 800, color: tTok.text }}>Recursos Humanos</div>
           <div style={{ fontSize: 'var(--cc-sm)', color: tTok.textMuted }}>
             Documentación para contratación — registro, contrato laboral y documentos de ingreso
           </div>

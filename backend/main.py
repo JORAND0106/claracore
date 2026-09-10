@@ -7801,7 +7801,7 @@ _FUNCIONES_REQUERIDAS = (
     {"codigo": "CATINS", "nombre": "Catálogo de insumos", "modulo": "Obra"},
     {"codigo": "SEGUIMIENTO", "nombre": "Seguimiento", "modulo": "Obra"},
     {"codigo": "BITACORA", "nombre": "Bitácora", "modulo": "Obra"},
-    {"codigo": "RRHH", "nombre": "RRHH", "modulo": "Gestión"},
+    {"codigo": "RRHH", "nombre": "Recursos Humanos", "modulo": "Gestión"},
 )
 
 
@@ -7820,6 +7820,18 @@ def _ensure_funciones_requeridas(sb=None) -> list:
         nombre_funcion = req["nombre"]
         cod = str(req.get("codigo") or "").strip().upper()
         if nombre_funcion.lower() in existentes or (cod and cod in codigos_existentes):
+            # Renombrar etiqueta visible si el código ya existe con otro nombre (p. ej. RRHH → Recursos Humanos)
+            if cod and cod in codigos_existentes and nombre_funcion.lower() not in existentes:
+                try:
+                    for f in funciones:
+                        if str((f.get("codigo") or "")).strip().upper() == cod:
+                            cur = (f.get("nombre") or "").strip()
+                            if cur.lower() != nombre_funcion.lower():
+                                sb.table("funciones").update({"nombre": nombre_funcion}).eq("id", f["id"]).execute()
+                                existentes.add(nombre_funcion.lower())
+                            break
+                except Exception as e_ren:
+                    _log_api.warning("funciones requeridas: no se pudo renombrar %s → %s: %s", cod, nombre_funcion, e_ren)
             continue
         try:
             sb.table("funciones").insert(req).execute()
