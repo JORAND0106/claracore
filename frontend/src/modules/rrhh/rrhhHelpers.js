@@ -20,9 +20,12 @@ export const EMPTY_TRABAJADOR_FORM = {
   cargo_aspira: '',
   salario: '',
   subsidio_transporte: false,
-  tipo_contrato_id: '',
+  tipo_contrato: '',
+  empresa_key: 'consorcio',
   empresa_tipo: 'consorcio',
   empresa_subcontratista_id: '',
+  empresa_nombre: '',
+  empresa_nit: '',
   estado: 'activo',
   notas: '',
 }
@@ -56,16 +59,26 @@ export function fmtSalario(val) {
   }).format(n)
 }
 
+export function empresaKeyFromTrabajador(t) {
+  if (!t) return 'consorcio'
+  if (t.empresa_tipo === 'subcontratista' && t.empresa_subcontratista_id != null) {
+    return `sub:${t.empresa_subcontratista_id}`
+  }
+  return 'consorcio'
+}
+
 export function formFromTrabajador(t) {
   if (!t) return { ...EMPTY_TRABAJADOR_FORM }
   return {
     ...EMPTY_TRABAJADOR_FORM,
     ...t,
     salario: t.salario != null ? String(t.salario) : '',
-    tipo_contrato_id: t.tipo_contrato_id != null ? String(t.tipo_contrato_id) : '',
+    tipo_contrato: t.tipo_contrato || '',
+    empresa_key: empresaKeyFromTrabajador(t),
     empresa_subcontratista_id: t.empresa_subcontratista_id != null
       ? String(t.empresa_subcontratista_id)
       : '',
+    empresa_nit: t.empresa_nit || '',
     subsidio_transporte: Boolean(t.subsidio_transporte),
     fecha_nacimiento: (t.fecha_nacimiento || '').toString().slice(0, 10),
   }
@@ -75,7 +88,6 @@ export function payloadFromForm(form) {
   const raw = String(form.salario ?? '').trim()
   let salario = null
   if (raw !== '') {
-    // Soporta 2500000, 2.500.000, 2,500,000.50
     const normalized = raw.includes(',') && raw.includes('.')
       ? raw.replace(/\./g, '').replace(',', '.')
       : raw.includes(',')
@@ -84,6 +96,10 @@ export function payloadFromForm(form) {
     const n = Number(normalized)
     salario = Number.isFinite(n) ? n : null
   }
+  const empresaKey = form.empresa_key
+    || (form.empresa_tipo === 'subcontratista' && form.empresa_subcontratista_id
+      ? `sub:${form.empresa_subcontratista_id}`
+      : 'consorcio')
   return {
     nombres: form.nombres,
     apellidos: form.apellidos,
@@ -106,10 +122,11 @@ export function payloadFromForm(form) {
     cargo_aspira: form.cargo_aspira || null,
     salario,
     subsidio_transporte: Boolean(form.subsidio_transporte),
-    tipo_contrato_id: form.tipo_contrato_id ? Number(form.tipo_contrato_id) : null,
-    empresa_tipo: form.empresa_tipo || 'consorcio',
-    empresa_subcontratista_id: form.empresa_tipo === 'subcontratista' && form.empresa_subcontratista_id
-      ? Number(form.empresa_subcontratista_id)
+    tipo_contrato: form.tipo_contrato || null,
+    empresa_key: empresaKey,
+    empresa_tipo: form.empresa_tipo || (empresaKey.startsWith('sub:') ? 'subcontratista' : 'consorcio'),
+    empresa_subcontratista_id: empresaKey.startsWith('sub:')
+      ? Number(empresaKey.slice(4))
       : null,
     estado: form.estado || 'activo',
     notas: form.notas || null,

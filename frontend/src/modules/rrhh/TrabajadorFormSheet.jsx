@@ -1,8 +1,49 @@
+import { useEffect, useRef } from 'react'
 import { isDarkMode, tFrom } from '../../theme/adminPanelTheme'
+import CatalogSelect from './CatalogSelect'
 import { rrhhSheetCssVars, rrhhSheetStyles } from './rrhhSheetStyles'
+
+/** Celda etiqueta + valor — definida fuera para no remountar inputs en cada tecla. */
+function SheetField({ label, labelStyle, valueStyle, children, colSpan = 1 }) {
+  return (
+    <>
+      <td style={labelStyle}>{label}</td>
+      <td style={valueStyle} colSpan={colSpan}>{children}</td>
+    </>
+  )
+}
+
+function AutoTextarea({ value, onChange, disabled, style, placeholder }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.max(56, el.scrollHeight)}px`
+  }, [value])
+  return (
+    <textarea
+      ref={ref}
+      style={{
+        ...style,
+        resize: 'none',
+        overflow: 'hidden',
+        minHeight: 56,
+        lineHeight: 1.4,
+        whiteSpace: 'pre-wrap',
+      }}
+      value={value ?? ''}
+      disabled={disabled}
+      placeholder={placeholder}
+      rows={2}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
+  )
+}
 
 /**
  * Formulario hoja de cálculo — registro / edición de trabajador.
+ * Inputs estables (sin componentes recreados) para digitación continua.
  */
 export default function TrabajadorFormSheet({
   theme,
@@ -10,13 +51,17 @@ export default function TrabajadorFormSheet({
   onChange,
   canEdit = true,
   empresas = [],
-  tiposContrato = [],
+  catalogo = {},
+  onAddCatalogValue,
 }) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
   const cssVars = rrhhSheetCssVars(tTok)
   const f = form || {}
-  const set = (key, val) => onChange?.({ ...f, [key]: val })
+
+  const setField = (key, val) => {
+    onChange?.({ ...f, [key]: val })
+  }
 
   const lbl = {
     ...ui.tdLabel,
@@ -24,20 +69,41 @@ export default function TrabajadorFormSheet({
   }
   const val = { ...ui.td, overflow: 'hidden' }
 
-  const Field = ({ label, children }) => (
-    <>
-      <td style={lbl}>{label}</td>
-      <td style={val}>{children}</td>
-    </>
-  )
+  const empresaKey = f.empresa_key
+    || (f.empresa_tipo === 'subcontratista' && f.empresa_subcontratista_id
+      ? `sub:${f.empresa_subcontratista_id}`
+      : 'consorcio')
 
-  const inp = (key, props = {}) => (
-    <input
-      style={ui.cellInp}
-      value={f[key] ?? ''}
-      disabled={!canEdit}
-      onChange={(e) => set(key, e.target.value)}
-      {...props}
+  const empresaSel = (empresas || []).find((e) => e.key === empresaKey)
+    || (empresas || []).find((e) => e.tipo === 'consorcio')
+  const nitAuto = empresaSel?.nit || f.empresa_nit || ''
+
+  const onEmpresaChange = (key) => {
+    const emp = (empresas || []).find((e) => e.key === key)
+    if (!emp) {
+      onChange?.({ ...f, empresa_key: key })
+      return
+    }
+    onChange?.({
+      ...f,
+      empresa_key: emp.key,
+      empresa_tipo: emp.tipo,
+      empresa_subcontratista_id: emp.tipo === 'subcontratista' ? String(emp.id ?? '') : '',
+      empresa_nombre: emp.nombre,
+      empresa_nit: emp.nit || '',
+    })
+  }
+
+  const catSelect = (field, categoria) => (
+    <CatalogSelect
+      value={f[field] || ''}
+      options={catalogo?.[categoria] || []}
+      canEdit={canEdit}
+      style={ui.cellSelect}
+      onChange={(v) => setField(field, v)}
+      onAddNew={async (v) => {
+        await onAddCatalogValue?.(categoria, v)
+      }}
     />
   )
 
@@ -54,45 +120,103 @@ export default function TrabajadorFormSheet({
           </colgroup>
           <tbody>
             <tr>
-              <Field label="Nombres *">{inp('nombres')}</Field>
-              <Field label="Apellidos *">{inp('apellidos')}</Field>
+              <SheetField label="Nombres *" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.nombres ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('nombres', e.target.value)}
+                />
+              </SheetField>
+              <SheetField label="Apellidos *" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.apellidos ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('apellidos', e.target.value)}
+                />
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Tipo documento *">
+              <SheetField label="Tipo documento *" labelStyle={lbl} valueStyle={val}>
                 <select
                   style={ui.cellSelect}
                   value={f.tipo_documento || 'CC'}
                   disabled={!canEdit}
-                  onChange={(e) => set('tipo_documento', e.target.value)}
+                  onChange={(e) => setField('tipo_documento', e.target.value)}
                 >
                   {['CC', 'CE', 'TI', 'PA', 'OTRO'].map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
-              </Field>
-              <Field label="Número documento *">{inp('numero_documento')}</Field>
+              </SheetField>
+              <SheetField label="Número documento *" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.numero_documento ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('numero_documento', e.target.value)}
+                />
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Fecha nacimiento">{inp('fecha_nacimiento', { type: 'date' })}</Field>
-              <Field label="Género">
+              <SheetField label="Fecha nacimiento" labelStyle={lbl} valueStyle={val}>
+                <input
+                  type="date"
+                  style={ui.cellInp}
+                  value={f.fecha_nacimiento ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('fecha_nacimiento', e.target.value)}
+                />
+              </SheetField>
+              <SheetField label="Género" labelStyle={lbl} valueStyle={val}>
                 <select
                   style={ui.cellSelect}
                   value={f.genero || ''}
                   disabled={!canEdit}
-                  onChange={(e) => set('genero', e.target.value)}
+                  onChange={(e) => setField('genero', e.target.value)}
                 >
                   <option value="">—</option>
                   <option value="F">Femenino</option>
                   <option value="M">Masculino</option>
                   <option value="O">Otro</option>
                 </select>
-              </Field>
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Dirección">{inp('direccion')}</Field>
-              <Field label="Ciudad">{inp('ciudad')}</Field>
+              <SheetField label="Dirección" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.direccion ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('direccion', e.target.value)}
+                />
+              </SheetField>
+              <SheetField label="Ciudad" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.ciudad ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('ciudad', e.target.value)}
+                />
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Teléfono">{inp('telefono')}</Field>
-              <Field label="Correo">{inp('email', { type: 'email' })}</Field>
+              <SheetField label="Teléfono" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.telefono ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('telefono', e.target.value)}
+                />
+              </SheetField>
+              <SheetField label="Correo" labelStyle={lbl} valueStyle={val}>
+                <input
+                  type="email"
+                  style={ui.cellInp}
+                  value={f.email ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('email', e.target.value)}
+                />
+              </SheetField>
             </tr>
           </tbody>
         </table>
@@ -109,11 +233,32 @@ export default function TrabajadorFormSheet({
           </colgroup>
           <tbody>
             <tr>
-              <Field label="Nombre">{inp('emergencia_nombre')}</Field>
-              <Field label="Parentesco">{inp('emergencia_parentesco')}</Field>
+              <SheetField label="Nombre" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.emergencia_nombre ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('emergencia_nombre', e.target.value)}
+                />
+              </SheetField>
+              <SheetField label="Parentesco" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.emergencia_parentesco ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('emergencia_parentesco', e.target.value)}
+                />
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Teléfono">{inp('emergencia_telefono')}</Field>
+              <SheetField label="Teléfono" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  value={f.emergencia_telefono ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('emergencia_telefono', e.target.value)}
+                />
+              </SheetField>
               <td style={lbl} /><td style={val} />
             </tr>
           </tbody>
@@ -131,15 +276,25 @@ export default function TrabajadorFormSheet({
           </colgroup>
           <tbody>
             <tr>
-              <Field label="EPS">{inp('eps')}</Field>
-              <Field label="Pensión">{inp('pension')}</Field>
+              <SheetField label="EPS" labelStyle={lbl} valueStyle={val}>
+                {catSelect('eps', 'eps')}
+              </SheetField>
+              <SheetField label="Pensión" labelStyle={lbl} valueStyle={val}>
+                {catSelect('pension', 'pension')}
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Cesantías">{inp('cesantias')}</Field>
-              <Field label="ARL">{inp('arl')}</Field>
+              <SheetField label="Cesantías" labelStyle={lbl} valueStyle={val}>
+                {catSelect('cesantias', 'cesantias')}
+              </SheetField>
+              <SheetField label="ARL" labelStyle={lbl} valueStyle={val}>
+                {catSelect('arl', 'arl')}
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Caja de compensación">{inp('caja_compensacion')}</Field>
+              <SheetField label="Caja de compensación" labelStyle={lbl} valueStyle={val}>
+                {catSelect('caja_compensacion', 'caja_compensacion')}
+              </SheetField>
               <td style={lbl} /><td style={val} />
             </tr>
           </tbody>
@@ -157,87 +312,84 @@ export default function TrabajadorFormSheet({
           </colgroup>
           <tbody>
             <tr>
-              <Field label="Cargo al que aspira">{inp('cargo_aspira')}</Field>
-              <Field label="Salario">{inp('salario', { inputMode: 'decimal', placeholder: 'COP' })}</Field>
+              <SheetField label="Cargo" labelStyle={lbl} valueStyle={val}>
+                {catSelect('cargo_aspira', 'cargo')}
+              </SheetField>
+              <SheetField label="Salario" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={ui.cellInp}
+                  inputMode="decimal"
+                  placeholder="COP"
+                  value={f.salario ?? ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('salario', e.target.value)}
+                />
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Subsidio de transporte">
+              <SheetField label="Subsidio de transporte" labelStyle={lbl} valueStyle={val}>
                 <select
                   style={ui.cellSelect}
                   value={f.subsidio_transporte ? 'true' : 'false'}
                   disabled={!canEdit}
-                  onChange={(e) => set('subsidio_transporte', e.target.value === 'true')}
+                  onChange={(e) => setField('subsidio_transporte', e.target.value === 'true')}
                 >
                   <option value="false">No</option>
                   <option value="true">Sí</option>
                 </select>
-              </Field>
-              <Field label="Tipo de contrato">
+              </SheetField>
+              <SheetField label="Tipo de contrato" labelStyle={lbl} valueStyle={val}>
+                {catSelect('tipo_contrato', 'tipo_contrato')}
+              </SheetField>
+            </tr>
+            <tr>
+              <SheetField label="Empresa contratante *" labelStyle={lbl} valueStyle={val}>
                 <select
                   style={ui.cellSelect}
-                  value={f.tipo_contrato_id || ''}
+                  value={empresaKey}
                   disabled={!canEdit}
-                  onChange={(e) => set('tipo_contrato_id', e.target.value)}
+                  onChange={(e) => onEmpresaChange(e.target.value)}
                 >
-                  <option value="">— Seleccione —</option>
-                  {tiposContrato.filter((t) => t.activo !== false).map((t) => (
-                    <option key={t.id} value={t.id}>{t.nombre}</option>
+                  {(empresas || []).map((e) => (
+                    <option key={e.key} value={e.key}>{e.label || e.nombre}</option>
                   ))}
                 </select>
-              </Field>
+              </SheetField>
+              <SheetField label="NIT" labelStyle={lbl} valueStyle={val}>
+                <input
+                  style={{ ...ui.cellInp, color: ui.textMuted }}
+                  value={nitAuto}
+                  readOnly
+                  tabIndex={-1}
+                  placeholder="Se completa al elegir la empresa"
+                />
+              </SheetField>
             </tr>
             <tr>
-              <Field label="Empresa contratante *">
-                <select
-                  style={ui.cellSelect}
-                  value={f.empresa_tipo || 'consorcio'}
-                  disabled={!canEdit}
-                  onChange={(e) => onChange?.({
-                    ...f,
-                    empresa_tipo: e.target.value,
-                    empresa_subcontratista_id: e.target.value === 'subcontratista' ? f.empresa_subcontratista_id : '',
-                  })}
-                >
-                  <option value="consorcio">Consorcio / Contratista principal</option>
-                  <option value="subcontratista">Subcontratista</option>
-                </select>
-              </Field>
-              <Field label={f.empresa_tipo === 'subcontratista' ? 'Subcontratista *' : 'Razón social'}>
-                {f.empresa_tipo === 'subcontratista' ? (
-                  <select
-                    style={ui.cellSelect}
-                    value={f.empresa_subcontratista_id || ''}
-                    disabled={!canEdit}
-                    onChange={(e) => set('empresa_subcontratista_id', e.target.value)}
-                  >
-                    <option value="">— Seleccione —</option>
-                    {(empresas || [])
-                      .filter((e) => e.tipo === 'subcontratista')
-                      .map((e) => (
-                        <option key={e.id} value={e.id}>{e.nombre}</option>
-                      ))}
-                  </select>
-                ) : (
-                  <span style={{ padding: '4px', color: ui.textMuted }}>
-                    {(empresas || []).find((e) => e.tipo === 'consorcio')?.nombre || 'Consorcio / Contratista principal'}
-                  </span>
-                )}
-              </Field>
-            </tr>
-            <tr>
-              <Field label="Estado">
+              <SheetField label="Estado" labelStyle={lbl} valueStyle={val}>
                 <select
                   style={ui.cellSelect}
                   value={f.estado || 'activo'}
                   disabled={!canEdit}
-                  onChange={(e) => set('estado', e.target.value)}
+                  onChange={(e) => setField('estado', e.target.value)}
                 >
                   <option value="activo">Activo</option>
                   <option value="inactivo">Inactivo</option>
                   <option value="retirado">Retirado</option>
                 </select>
-              </Field>
-              <Field label="Notas">{inp('notas')}</Field>
+              </SheetField>
+              <td style={lbl} /><td style={val} />
+            </tr>
+            <tr>
+              <SheetField label="Notas" labelStyle={lbl} valueStyle={val} colSpan={3}>
+                <AutoTextarea
+                  style={ui.cellInp}
+                  value={f.notas ?? ''}
+                  disabled={!canEdit}
+                  placeholder="Observaciones…"
+                  onChange={(v) => setField('notas', v)}
+                />
+              </SheetField>
             </tr>
           </tbody>
         </table>
