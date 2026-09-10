@@ -34,11 +34,33 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
   const [refreshSignal, setRefreshSignal] = useState(0)
   const refreshPendingRef = useRef(false)
 
-  const catalogoPerms = useMemo(
+  const catalogoPermsRaw = useMemo(
     () => permisosCatalogoInsumos(usuario, permisos?.contratoId),
     [usuario, permisos?.contratoId],
   )
-  const puedeVerCatalogo = !!catalogoPerms?.ver
+  // Botón Insumos + crear/editar insumos: solo con permiso Almacén · editar.
+  const puedeVerCatalogo = Boolean(permisos?.editar)
+  const catalogoPerms = useMemo(() => {
+    if (!puedeVerCatalogo) {
+      return {
+        ver: false,
+        crear: false,
+        editar: false,
+        eliminar: false,
+        validar: false,
+        exportar: false,
+      }
+    }
+    return {
+      ...catalogoPermsRaw,
+      ver: true,
+      crear: true,
+      editar: true,
+      eliminar: Boolean(catalogoPermsRaw?.eliminar),
+      validar: Boolean(catalogoPermsRaw?.validar),
+      exportar: Boolean(catalogoPermsRaw?.exportar),
+    }
+  }, [puedeVerCatalogo, catalogoPermsRaw])
 
   const theme = useMemo(() => t || {
     primary: ui.accent,

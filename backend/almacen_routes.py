@@ -354,6 +354,7 @@ async def route_create_insumo(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
     require_permiso_catalogo_insumos(current_user, "crear")
     soporte = None
     if soporte_pdf and soporte_pdf.filename:
@@ -383,6 +384,7 @@ async def route_create_insumo(
 @router.post("/{contrato_id}/insumos/json")
 def route_create_insumo_json(contrato_id: int, body: InsumoCreateBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
+    require_permiso_almacen(current_user, "editar")
     require_permiso_catalogo_insumos(current_user, "crear")
     try:
         return create_insumo(contrato_id, _uid(current_user), {

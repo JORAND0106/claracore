@@ -38,9 +38,30 @@ export function rolExcluidoAlmacen(usuario) {
   return false
 }
 
-/** Solo Contratista Gerencial (o Desarrollador) ve costos, cobros y rentabilidad. */
+/** Rol Operativo Gerencial (no interventoría). */
+export function esOperativoGerencialUsuario(usuario) {
+  const rol = normRol(usuario?.rol_nombre || usuario?.rol)
+  if (rol === 'operativo gerencial') return true
+  if (rol.includes('operativo') && rol.includes('gerencial') && !rol.includes('intervent')) return true
+  return false
+}
+
+/** Cargo Residente Administrativo — excepción para ver valores económicos. */
+export function esResidenteAdministrativoUsuario(usuario) {
+  const cargo = normRol(usuario?.cargo_nombre || usuario?.cargo)
+  return cargo === 'residente administrativo'
+}
+
+/**
+ * Costos/cobros/utilidad/rentabilidad: solo Operativo Gerencial (rol)
+ * o cargo Residente Administrativo (excepción).
+ * Desarrollador (plataforma) conserva acceso vía esDesarrolladorUsuario en App.
+ */
 export function puedeVerValoresEconomicosAlmacen(usuario) {
-  return esContratistaGerencialUsuario(usuario)
+  if (esDesarrolladorUsuario(usuario)) return true
+  if (esOperativoGerencialUsuario(usuario)) return true
+  if (esResidenteAdministrativoUsuario(usuario)) return true
+  return false
 }
 
 /** Solo Contratista Gerencial (o Desarrollador) mapea insumo y aprueba. */

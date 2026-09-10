@@ -18,7 +18,7 @@ function computeTotal(costoBase, impuestos) {
   return Math.round(total)
 }
 
-export default function InsumoAutocomplete({ value, onChange, disabled }) {
+export default function InsumoAutocomplete({ value, onChange, disabled, allowCreate = false }) {
   const api = useAlmacenApi()
   const ui = useAlmacenTheme()
   const [query, setQuery] = useState('')
@@ -122,7 +122,11 @@ export default function InsumoAutocomplete({ value, onChange, disabled }) {
     }
   }
 
-  const showCreate = open && query.trim() && !options.some((o) => o.label?.toLowerCase() === query.trim().toLowerCase())
+  const showCreate =
+    allowCreate &&
+    open &&
+    query.trim() &&
+    !options.some((o) => o.label?.toLowerCase() === query.trim().toLowerCase())
 
   return (
     <div>

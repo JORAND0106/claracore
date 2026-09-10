@@ -41,13 +41,50 @@ def rol_excluido_almacen(current_user) -> bool:
     return False
 
 
+def _cargo_norm(current_user) -> str:
+    return _norm(current_user.get("cargo_nombre") or current_user.get("cargo") or "")
+
+
+def es_operativo_gerencial(current_user) -> bool:
+    """Rol Operativo Gerencial (no interventoría / no contratista gerencial)."""
+    rol = _norm_rol(current_user)
+    if rol == "operativo gerencial":
+        return True
+    if "operativo" in rol and "gerencial" in rol and "intervent" not in rol:
+        return True
+    return False
+
+
+def es_residente_administrativo(current_user) -> bool:
+    """Cargo Residente Administrativo — excepción para ver valores económicos."""
+    return _cargo_norm(current_user) == "residente administrativo"
+
+
 def puede_ver_valores_economicos_almacen(current_user) -> bool:
-    """Solo Contratista Gerencial (y Desarrollador) ven costos/cobros/rentabilidad."""
-    return es_contratista_gerencial(current_user)
+    """
+    Costos/cobros/utilidad/rentabilidad visibles solo para:
+    - rol Operativo Gerencial, o
+    - cargo Residente Administrativo (excepción, cualquier rol).
+    Desarrollador (plataforma) conserva acceso técnico.
+    """
+    try:
+        from main import _es_desarrollador
+
+        if _es_desarrollador(current_user):
+            return True
+    except Exception:
+        pass
+    if _norm_rol(current_user) == "desarrollador":
+        return True
+    if es_operativo_gerencial(current_user):
+        return True
+    if es_residente_administrativo(current_user):
+        return True
+    return False
 
 
 def es_contratista_gerencial(current_user) -> bool:
-    """Rol Contratista Gerencial (o Desarrollador)."""
+    """Rol Contratista Gerencial (o Desarrollador). Usado para mapear/aprobar, no para eco."""
     try:
         from main import _es_desarrollador
 
