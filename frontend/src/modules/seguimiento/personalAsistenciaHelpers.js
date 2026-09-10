@@ -1,15 +1,22 @@
-/** Helpers de asistencia de colaboradores (Reporte Diario). */
+/** Helpers de asistencia de colaboradores (Reporte Diario) — catálogo RRHH. */
 
 export const DOCUMENTO_TIPOS = ['CC', 'CE', 'TI', 'PA', 'NIT', 'OTRO']
+
+/** Estados legados / snapshot (Bitácora + RRHH). RRHH: activo|inactivo|retirado. */
 export const ESTADOS_COLABORADOR = [
   { value: 'activo', label: 'Activo' },
   { value: 'incapacitado', label: 'Incapacitado' },
   { value: 'inactivo', label: 'Inactivo' },
+  { value: 'retirado', label: 'Retirado' },
 ]
+
 export const HORA_SALIDA_DEFAULT = '16:30'
 
-/** Solo Activo aporta al resumen por cargo; Inactivo e Incapacitado = sin jornada. */
-export const ESTADOS_SIN_JORNADA = new Set(['inactivo', 'incapacitado'])
+/** Solo «activo» (RRHH) aporta al Resumen por cargo. */
+export const ESTADOS_CUENTAN_RESUMEN = new Set(['activo'])
+
+export const HINT_REGISTRAR_EN_RRHH =
+  'No hay coincidencias en RRHH. Registre el colaborador primero en el módulo de Recursos Humanos.'
 
 export function capitalizarNombrePropio(raw) {
   return String(raw || '')
@@ -38,16 +45,46 @@ export function parseFechaISO(raw) {
   return `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 }
 
-export function estadoSinJornada(estado) {
-  return ESTADOS_SIN_JORNADA.has(String(estado || '').toLowerCase())
+export function normalizeEstadoRrhh(estado) {
+  const s = String(estado || '').trim().toLowerCase()
+  if (['activo', 'inactivo', 'retirado', 'incapacitado'].includes(s)) return s
+  return 'activo'
 }
 
-export function estadoPermiteFechaRetiro(estado) {
-  return String(estado || '').toLowerCase() === 'inactivo'
+export function estadoCuentaEnResumen(estado) {
+  return ESTADOS_CUENTAN_RESUMEN.has(normalizeEstadoRrhh(estado))
+}
+
+export function nombreCompletoRrhh(trab) {
+  if (!trab || typeof trab !== 'object') return ''
+  if (trab.nombre) return capitalizarNombrePropio(trab.nombre)
+  return capitalizarNombrePropio(
+    `${trab.nombres || ''} ${trab.apellidos || ''}`.trim(),
+  )
+}
+
+/** Fila de asistencia a partir de un trabajador RRHH. */
+export function asistenciaRowFromRrhh(trab, partial = {}) {
+  const nombre = nombreCompletoRrhh(trab)
+  const tid = trab?.id != null ? Number(trab.id) : null
+  return emptyAsistenciaRow({
+    rrhh_trabajador_id: Number.isFinite(tid) ? tid : null,
+    colaborador_id: null,
+    nombre,
+    documento_tipo: String(trab?.tipo_documento || 'CC').toUpperCase(),
+    documento_numero: soloDigitosDocumento(trab?.numero_documento),
+    cargo: String(trab?.cargo_aspira || trab?.cargo || '').trim(),
+    subcontratista_id: trab?.empresa_subcontratista_id ?? null,
+    subcontratista_nombre: String(trab?.empresa_nombre || '').trim(),
+    estado: normalizeEstadoRrhh(trab?.estado),
+    origen: 'rrhh',
+    ...partial,
+  })
 }
 
 export function emptyAsistenciaRow(partial = {}) {
   return {
+    rrhh_trabajador_id: null,
     colaborador_id: null,
     nombre: '',
     documento_tipo: 'CC',
@@ -61,7 +98,7 @@ export function emptyAsistenciaRow(partial = {}) {
     fecha_ingreso: '',
     fecha_retiro: '',
     observacion: '',
-    origen: 'catalogo',
+    origen: 'rrhh',
     ...partial,
   }
 }
@@ -74,11 +111,15 @@ export function asistenciaFromEntrada(entradaOrList) {
       : null)
   if (!Array.isArray(list)) return []
   return list.map((r) => {
-    const estado = ['activo', 'incapacitado', 'inactivo'].includes(String(r?.estado || '').toLowerCase())
-      ? String(r.estado).toLowerCase()
-      : 'activo'
-    const sinJornada = estadoSinJornada(estado)
+    let tid = null
+    try {
+      tid = r?.rrhh_trabajador_id != null && r.rrhh_trabajador_id !== ''
+        ? Number(r.rrhh_trabajador_id)
+        : null
+      if (!Number.isFinite(tid)) tid = null
+    } catch { tid = null }
     return emptyAsistenciaRow({
+      rrhh_trabajador_id: tid,
       colaborador_id: r?.colaborador_id ?? null,
       nombre: capitalizarNombrePropio(r?.nombre || ''),
       documento_tipo: String(r?.documento_tipo || 'CC').toUpperCase(),
@@ -86,23 +127,36 @@ export function asistenciaFromEntrada(entradaOrList) {
       cargo: String(r?.cargo || '').trim(),
       subcontratista_id: r?.subcontratista_id ?? null,
       subcontratista_nombre: String(r?.subcontratista_nombre || '').trim(),
-      estado,
-      hora_ingreso: sinJornada ? '' : String(r?.hora_ingreso || '').slice(0, 5),
-      hora_salida: sinJornada
-        ? ''
-        : (String(r?.hora_salida || HORA_SALIDA_DEFAULT).slice(0, 5) || HORA_SALIDA_DEFAULT),
+      estado: normalizeEstadoRrhh(r?.estado),
+      hora_ingreso: String(r?.hora_ingreso || '').slice(0, 5),
+      hora_salida: String(r?.hora_salida || HORA_SALIDA_DEFAULT).slice(0, 5) || HORA_SALIDA_DEFAULT,
       fecha_ingreso: parseFechaISO(r?.fecha_ingreso),
       fecha_retiro: parseFechaISO(r?.fecha_retiro),
       observacion: String(r?.observacion || r?.observaciones || '').trim(),
-      origen: r?.origen || 'catalogo',
+      origen: r?.origen || (tid != null ? 'rrhh' : 'legado'),
     })
   }).filter((r) => r.nombre)
 }
 
-export function personalAgregadoDesdeAsistencia(rows) {
+/**
+ * Resumen por cargo.
+ * @param {object[]} rows
+ * @param {{ liveEstadosByRrhhId?: Map<number,string>|Record<string,string>|null }} [opts]
+ *   Si `liveEstadosByRrhhId` está presente (reporte abierto), usa el estado actual de RRHH.
+ *   Si es null/undefined (reporte cerrado), usa el snapshot guardado en la fila.
+ */
+export function personalAgregadoDesdeAsistencia(rows, opts = {}) {
+  const live = opts.liveEstadosByRrhhId ?? null
+  const getLive = (id) => {
+    if (live == null || id == null) return null
+    if (live instanceof Map) return live.get(Number(id)) ?? live.get(id) ?? null
+    return live[id] ?? live[String(id)] ?? live[Number(id)] ?? null
+  }
   const counts = new Map()
   for (const r of rows || []) {
-    if (String(r?.estado || '').toLowerCase() !== 'activo') continue
+    const liveEst = getLive(r?.rrhh_trabajador_id)
+    const estado = liveEst != null ? normalizeEstadoRrhh(liveEst) : normalizeEstadoRrhh(r?.estado)
+    if (!estadoCuentaEnResumen(estado)) continue
     const cargo = String(r?.cargo || '').trim()
     if (!cargo) continue
     counts.set(cargo, (counts.get(cargo) || 0) + 1)
@@ -113,40 +167,63 @@ export function personalAgregadoDesdeAsistencia(rows) {
 }
 
 export function asistenciaParaPayload(rows) {
-  return asistenciaFromEntrada(rows).map((r) => {
-    const sinJornada = estadoSinJornada(r.estado)
-    return {
-      colaborador_id: r.colaborador_id,
-      nombre: r.nombre,
-      documento_tipo: r.documento_tipo,
-      documento_numero: r.documento_numero,
-      cargo: r.cargo,
-      subcontratista_id: r.subcontratista_id,
-      subcontratista_nombre: r.subcontratista_nombre,
-      estado: r.estado,
-      hora_ingreso: sinJornada ? null : (r.hora_ingreso || null),
-      hora_salida: sinJornada ? null : (r.hora_salida || HORA_SALIDA_DEFAULT),
-      fecha_ingreso: r.fecha_ingreso || null,
-      fecha_retiro: r.fecha_retiro || null,
-      observacion: r.observacion,
-      origen: r.origen || 'catalogo',
-    }
-  })
+  return asistenciaFromEntrada(rows).map((r) => ({
+    rrhh_trabajador_id: r.rrhh_trabajador_id,
+    colaborador_id: r.colaborador_id,
+    nombre: r.nombre,
+    documento_tipo: r.documento_tipo,
+    documento_numero: r.documento_numero,
+    cargo: r.cargo,
+    subcontratista_id: r.subcontratista_id,
+    subcontratista_nombre: r.subcontratista_nombre,
+    estado: r.estado,
+    hora_ingreso: r.hora_ingreso || null,
+    hora_salida: r.hora_salida || HORA_SALIDA_DEFAULT,
+    fecha_ingreso: r.fecha_ingreso || null,
+    fecha_retiro: r.fecha_retiro || null,
+    observacion: r.observacion,
+    origen: r.origen || 'rrhh',
+  }))
 }
 
 export function labelEstadoColaborador(estado) {
-  const found = ESTADOS_COLABORADOR.find((e) => e.value === String(estado || '').toLowerCase())
+  const found = ESTADOS_COLABORADOR.find((e) => e.value === normalizeEstadoRrhh(estado))
   return found?.label || 'Activo'
 }
 
 export function formatHorarioAsistencia(row) {
-  if (estadoSinJornada(row?.estado)) {
-    return labelEstadoColaborador(row?.estado)
-  }
   const ini = String(row?.hora_ingreso || '').slice(0, 5)
   const fin = String(row?.hora_salida || '').slice(0, 5)
   if (ini && fin) return `${ini} – ${fin}`
   if (ini) return `Desde ${ini}`
   if (fin) return `Hasta ${fin}`
   return '—'
+}
+
+/** Filtra catálogo RRHH por texto (nombre / documento / cargo / empresa). */
+export function filtrarTrabajadoresRrhh(catalogo = [], query = '', excludeIds = []) {
+  const needle = String(query || '').trim().toLowerCase()
+  const excl = new Set((excludeIds || []).map((x) => Number(x)).filter((n) => Number.isFinite(n)))
+  const list = Array.isArray(catalogo) ? catalogo : []
+  return list.filter((t) => {
+    const id = Number(t?.id)
+    if (Number.isFinite(id) && excl.has(id)) return false
+    if (!needle) return true
+    const nombre = nombreCompletoRrhh(t).toLowerCase()
+    const doc = String(t?.numero_documento || '').toLowerCase()
+    const cargo = String(t?.cargo_aspira || t?.cargo || '').toLowerCase()
+    const emp = String(t?.empresa_nombre || '').toLowerCase()
+    return nombre.includes(needle) || doc.includes(needle) || cargo.includes(needle) || emp.includes(needle)
+  })
+}
+
+/** Mapa id → estado desde catálogo RRHH. */
+export function mapaEstadosRrhh(catalogo = []) {
+  const map = new Map()
+  for (const t of catalogo || []) {
+    const id = Number(t?.id)
+    if (!Number.isFinite(id)) continue
+    map.set(id, normalizeEstadoRrhh(t?.estado))
+  }
+  return map
 }

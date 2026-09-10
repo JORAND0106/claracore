@@ -20,7 +20,6 @@ import {
 } from './bitacoraEventoActividades'
 import {
   formatHorarioAsistencia,
-  labelEstadoColaborador,
 } from './personalAsistenciaHelpers'
 import {
   buildActasPages,
@@ -141,17 +140,15 @@ function DiarioPage({ page, palette, api, onZoomPhoto }) {
                   <th scope="col">Nombre</th>
                   <th scope="col">Cargo</th>
                   <th scope="col">Empresa</th>
-                  <th scope="col">Estado</th>
                   <th scope="col">Horario</th>
                 </tr>
               </thead>
               <tbody>
                 {d.asistencia_colaboradores.map((a, i) => (
-                  <tr key={`as-${a.colaborador_id || a.nombre}-${i}`} style={{ color: palette.text, borderColor: palette.pageEdge }}>
+                  <tr key={`as-${a.rrhh_trabajador_id || a.colaborador_id || a.nombre}-${i}`} style={{ color: palette.text, borderColor: palette.pageEdge }}>
                     <td data-label="Nombre">{a.nombre || '—'}</td>
                     <td data-label="Cargo">{a.cargo || '—'}</td>
                     <td data-label="Empresa">{a.subcontratista_nombre || '—'}</td>
-                    <td data-label="Estado">{labelEstadoColaborador(a.estado)}</td>
                     <td data-label="Horario" className="cc-libro-sheet-cell--nowrap">{formatHorarioAsistencia(a)}</td>
                   </tr>
                 ))}

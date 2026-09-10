@@ -18,8 +18,10 @@ import {
   emptyActividadRow,
 } from './bitacoraEventoActividades'
 import {
+  HINT_REGISTRAR_EN_RRHH,
   asistenciaFromEntrada,
   asistenciaParaPayload,
+  mapaEstadosRrhh,
   personalAgregadoDesdeAsistencia,
 } from './personalAsistenciaHelpers'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
@@ -229,6 +231,7 @@ export default function BitacoraEntradaEditor({
     return mergePersonalPlantilla(personalPlantillaVacia(), prev)
   })
   const [asistencia, setAsistencia] = useState(() => asistenciaFromEntrada(entrada))
+  const [rrhhCatalogo, setRrhhCatalogo] = useState([])
   const [usos, setUsos] = useState(
     Array.isArray(entrada?.equipos_uso) && entrada.equipos_uso.length
       ? entrada.equipos_uso.map(usoFromApi)
@@ -304,16 +307,32 @@ export default function BitacoraEntradaEditor({
     return () => { cancelled = true }
   }, [tipo, contratoId, token])
 
-  // Resumen de cargos siempre derivado de asistencia (solo Activos).
+  // Catálogo RRHH (Personal en obra — autocompletado).
+  useEffect(() => {
+    if (tipo !== 'diario' || !api?.listBitacoraRrhhTrabajadores) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await api.listBitacoraRrhhTrabajadores()
+        const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
+        if (!cancelled) setRrhhCatalogo(items)
+      } catch { /* sin permiso / red */ }
+    })()
+    return () => { cancelled = true }
+  }, [api, tipo])
+
+  // Resumen: live RRHH si abierto; snapshot si cerrado.
+  const resumenCongelado = !editable && String(entrada?.estado || '').toLowerCase() === 'cerrado'
   useEffect(() => {
     if (tipo !== 'diario') return
-    const agg = personalAgregadoDesdeAsistencia(asistencia)
+    const liveMap = resumenCongelado ? null : mapaEstadosRrhh(rrhhCatalogo)
+    const agg = personalAgregadoDesdeAsistencia(asistencia, { liveEstadosByRrhhId: liveMap })
     setPersonal((prev) => mergePersonalPlantilla(prev, agg.map((r) => ({
       cargo: r.cargo,
       cantidad: r.cantidad,
       cargo_otro: '',
     }))))
-  }, [asistencia, tipo])
+  }, [asistencia, tipo, rrhhCatalogo, resumenCongelado])
 
   useEffect(() => {
     if (!contratoId || !token) return undefined
@@ -423,7 +442,19 @@ export default function BitacoraEntradaEditor({
     const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     try {
       const asistenciaPayload = asistenciaParaPayload(asistencia)
-      const personalPayload = personalAgregadoDesdeAsistencia(asistenciaPayload)
+      const sinRrhh = asistenciaPayload.filter(
+        (r) => r.nombre && r.rrhh_trabajador_id == null && r.origen !== 'legado',
+      )
+      if (sinRrhh.length) {
+        setError(HINT_REGISTRAR_EN_RRHH)
+        setBusy(false)
+        return
+      }
+      const liveMap = mapaEstadosRrhh(rrhhCatalogo)
+      const personalPayload = personalAgregadoDesdeAsistencia(
+        asistenciaPayload,
+        { liveEstadosByRrhhId: liveMap },
+      )
       const materialesPayload = materiales
         .filter((m) => (
           m.tipo_material || m.proveedor || m.placa || m.numeros_vale
@@ -861,13 +892,13 @@ export default function BitacoraEntradaEditor({
             <>
               <PersonalAsistenciaPanel
                 t={t}
-                api={api}
                 rows={asistencia}
                 onChange={setAsistencia}
-                fechaDiario={fecha}
                 disabled={!editable}
                 sheetStyles={ui}
                 compact={grillaCompacta}
+                rrhhCatalogo={rrhhCatalogo}
+                resumenCongelado={resumenCongelado}
               />
 
               {/* Maquinaria Excel */}
