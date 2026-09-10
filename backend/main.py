@@ -2926,6 +2926,9 @@ app.include_router(catalogo_insumos_router)
 from seguimiento_routes import router as seguimiento_router
 app.include_router(seguimiento_router)
 
+from rrhh_routes import router as rrhh_router
+app.include_router(rrhh_router)
+
 from esquema_ia_routes import router as esquema_ia_router
 app.include_router(esquema_ia_router)
 
@@ -7798,6 +7801,7 @@ _FUNCIONES_REQUERIDAS = (
     {"codigo": "CATINS", "nombre": "Catálogo de insumos", "modulo": "Obra"},
     {"codigo": "SEGUIMIENTO", "nombre": "Seguimiento", "modulo": "Obra"},
     {"codigo": "BITACORA", "nombre": "Bitácora", "modulo": "Obra"},
+    {"codigo": "RRHH", "nombre": "RRHH", "modulo": "Gestión"},
 )
 
 

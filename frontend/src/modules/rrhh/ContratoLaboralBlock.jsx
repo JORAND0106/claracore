@@ -1,0 +1,230 @@
+import { useEffect, useState } from 'react'
+import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
+import { tFrom } from '../../theme/adminPanelTheme'
+import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
+
+/**
+ * Generación de contrato laboral PDF + historial de versiones.
+ */
+export default function ContratoLaboralBlock({
+  theme,
+  api,
+  trabajadorId,
+  tiposContrato = [],
+  tipoContratoId,
+  onTipoContratoChange,
+  canEdit = true,
+  canExport = true,
+  onMsg,
+}) {
+  const tTok = tFrom(theme)
+  const ui = rrhhSheetStyles(tTok)
+  const S = rrhhUi(theme, tTok)
+  const cssVars = rrhhSheetCssVars(tTok)
+
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [numero, setNumero] = useState('')
+  const [fechaInicio, setFechaInicio] = useState('')
+  const [fechaFin, setFechaFin] = useState('')
+  const [preview, setPreview] = useState({
+    open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null,
+  })
+  const [previewUrl, setPreviewUrl] = useState(null)
+
+  const cargar = async () => {
+    if (!api || !trabajadorId) return
+    setLoading(true)
+    try {
+      const res = await api.listContratosLaborales(trabajadorId)
+      setItems(res?.items || [])
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudieron cargar los contratos.' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    cargar()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trabajadorId])
+
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+  }, [previewUrl])
+
+  const generar = async () => {
+    if (!canEdit || !api) return
+    if (!tipoContratoId) {
+      onMsg?.({ type: 'error', text: 'Seleccione un tipo de contrato del catálogo.' })
+      return
+    }
+    setBusy(true)
+    try {
+      await api.generarContratoLaboral(trabajadorId, {
+        tipo_contrato_id: Number(tipoContratoId),
+        numero_contrato_laboral: numero || null,
+        fecha_inicio: fechaInicio || null,
+        fecha_fin: fechaFin || null,
+      })
+      onMsg?.({ type: 'success', text: 'Contrato laboral generado en PDF.' })
+      await cargar()
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudo generar el contrato.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const abrir = async (row) => {
+    if (!api || !row?.id) return
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreview({ open: true, loading: true, error: '', nombre: row.nombre_archivo, mime: 'application/pdf', blobUrl: null })
+    try {
+      const url = await api.fetchBlobUrl(api.contratoLaboralArchivoUrl(trabajadorId, row.id))
+      setPreviewUrl(url)
+      setPreview({ open: true, loading: false, error: '', nombre: row.nombre_archivo, mime: 'application/pdf', blobUrl: url })
+    } catch (e) {
+      setPreview({ open: true, loading: false, error: e.message || 'No se pudo abrir el PDF.', nombre: row.nombre_archivo, mime: 'application/pdf', blobUrl: null })
+    }
+  }
+
+  const eliminar = async (row) => {
+    if (!canEdit || !row?.id) return
+    if (!window.confirm('¿Anular esta versión del contrato laboral?')) return
+    setBusy(true)
+    try {
+      await api.deleteContratoLaboral(trabajadorId, row.id)
+      onMsg?.({ type: 'success', text: 'Contrato anulado.' })
+      await cargar()
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudo anular.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)' }}>
+      <div style={ui.sectionTitle}>Contrato laboral (PDF)</div>
+      <div style={{ marginBottom: 8, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
+        Se genera desde plantilla con marcadores tipo {'{{NOMBRE_TRABAJADOR}}'}, usando los datos del registro y el tipo de contrato seleccionado.
+      </div>
+
+      <div style={{ ...ui.sheetWrap, maxHeight: 'none', marginBottom: 10 }}>
+        <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
+          <tbody>
+            <tr>
+              <td style={{ ...ui.tdLabel, width: '28%' }}>Tipo de contrato *</td>
+              <td style={ui.td}>
+                <select
+                  style={ui.cellSelect}
+                  value={tipoContratoId || ''}
+                  disabled={!canEdit}
+                  onChange={(e) => onTipoContratoChange?.(e.target.value)}
+                >
+                  <option value="">— Seleccione —</option>
+                  {tiposContrato.filter((t) => t.activo !== false).map((t) => (
+                    <option key={t.id} value={t.id}>{t.nombre}</option>
+                  ))}
+                </select>
+              </td>
+            </tr>
+            <tr>
+              <td style={ui.tdLabel}>N.° contrato laboral</td>
+              <td style={ui.td}>
+                <input style={ui.cellInp} value={numero} disabled={!canEdit} onChange={(e) => setNumero(e.target.value)} placeholder="Opcional" />
+              </td>
+            </tr>
+            <tr>
+              <td style={ui.tdLabel}>Fecha inicio</td>
+              <td style={ui.td}>
+                <input type="date" style={ui.cellInp} value={fechaInicio} disabled={!canEdit} onChange={(e) => setFechaInicio(e.target.value)} />
+              </td>
+            </tr>
+            <tr>
+              <td style={ui.tdLabel}>Fecha fin</td>
+              <td style={ui.td}>
+                <input type="date" style={ui.cellInp} value={fechaFin} disabled={!canEdit} onChange={(e) => setFechaFin(e.target.value)} />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {canEdit && (
+        <button type="button" style={{ ...S.btnPrimary, marginBottom: 12 }} disabled={busy} onClick={generar}>
+          {busy ? 'Generando…' : 'Generar PDF del contrato'}
+        </button>
+      )}
+
+      <div style={ui.sheetWrap}>
+        <table style={ui.sheetTable}>
+          <thead>
+            <tr>
+              <th style={ui.th}>Versión</th>
+              <th style={ui.th}>Tipo</th>
+              <th style={ui.th}>Estado</th>
+              <th style={ui.th}>Fecha</th>
+              <th style={ui.th}>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td style={ui.td} colSpan={5}>Cargando…</td></tr>}
+            {!loading && items.length === 0 && (
+              <tr><td style={ui.td} colSpan={5}>Aún no hay contratos generados.</td></tr>
+            )}
+            {items.map((row) => (
+              <tr key={row.id}>
+                <td style={ui.td}>v{row.version_num}{row.vigente ? ' · vigente' : ''}</td>
+                <td style={ui.td}>{row.tipo_contrato_nombre}</td>
+                <td style={ui.td}>{row.estado}</td>
+                <td style={ui.td}>{(row.created_at || '').toString().slice(0, 19).replace('T', ' ')}</td>
+                <td style={ui.td}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {(canExport || true) && (
+                      <button type="button" style={{ ...S.btnGhost, padding: '4px 8px' }} onClick={() => abrir(row)}>
+                        Ver PDF
+                      </button>
+                    )}
+                    {canEdit && (
+                      <button type="button" style={S.btnDanger} disabled={busy} onClick={() => eliminar(row)}>
+                        Anular
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {preview.open && (
+        <SoportePreviewModal
+          t={tTok}
+          open={preview.open}
+          loading={preview.loading}
+          error={preview.error}
+          nombre={preview.nombre}
+          mime={preview.mime}
+          blobUrl={preview.blobUrl}
+          onClose={() => {
+            if (previewUrl) URL.revokeObjectURL(previewUrl)
+            setPreviewUrl(null)
+            setPreview({ open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null })
+          }}
+          onDownload={() => {
+            if (!preview.blobUrl) return
+            const a = document.createElement('a')
+            a.href = preview.blobUrl
+            a.download = preview.nombre || 'contrato.pdf'
+            a.click()
+          }}
+        />
+      )}
+    </div>
+  )
+}

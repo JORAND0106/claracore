@@ -1,0 +1,29 @@
+TÍTULO: CONTRATO LABORAL
+## Modalidad: {{TIPO_CONTRATO}}
+## Contrato laboral N.° {{NUMERO_CONTRATO_LABORAL}} — Obra {{CONTRATO_OBRA}}
+
+Bogotá D.C., {{FECHA_GENERACION}}
+
+PARTES
+De una parte, {{EMPRESA_CONTRATANTE}}, identificada con NIT {{EMPRESA_NIT}}, quien en adelante se denominará EL EMPLEADOR; y de otra parte, {{NOMBRE_TRABAJADOR}}, identificado(a) con {{TIPO_DOCUMENTO}} N.° {{NUMERO_DOCUMENTO}}, con domicilio en {{DIRECCION_TRABAJADOR}}, {{CIUDAD_TRABAJADOR}}, teléfono {{TELEFONO_TRABAJADOR}}, correo {{EMAIL_TRABAJADOR}}, quien en adelante se denominará EL TRABAJADOR; celebran el presente contrato laboral bajo la modalidad de {{TIPO_CONTRATO}}, el cual se regirá por las siguientes cláusulas:
+
+# CLÁUSULAS
+
+CLÁUSULA 1. – OBJETO: EL TRABAJADOR se obliga a prestar sus servicios personales en el cargo de {{CARGO}} en la obra o contrato identificado como {{CONTRATO_OBRA}} ({{OBJETO_OBRA}}), bajo la dependencia y subordinación de EL EMPLEADOR, de conformidad con la legislación laboral colombiana vigente.
+
+CLÁUSULA 2. – TIPO DE CONTRATO: El presente contrato se celebra a {{TIPO_CONTRATO}}. Cuando aplique término fijo u obra o labor, la vigencia se entiende desde {{FECHA_INICIO}} hasta {{FECHA_FIN}}, sin perjuicio de las causales legales de terminación.
+
+CLÁUSULA 3. – REMUNERACIÓN: EL EMPLEADOR pagará a EL TRABAJADOR un salario mensual de {{SALARIO_LETRAS}} ({{SALARIO}}). Beneficiario de subsidio de transporte: {{SUBSIDIO_TRANSPORTE}}. Los pagos se realizarán conforme a la periodicidad y medios definidos por EL EMPLEADOR.
+
+CLÁUSULA 4. – SEGURIDAD SOCIAL: EL TRABAJADOR declara afiliación o será afiliado a: EPS {{EPS}}; Fondo de pensiones {{PENSION}}; Cesantías {{CESANTIAS}}; ARL {{ARL}}; Caja de compensación familiar {{CAJA_COMPENSACION}}. EL EMPLEADOR cumplirá con las cotizaciones a su cargo según la ley.
+
+CLÁUSULA 5. – CONTACTO DE EMERGENCIA: En caso de emergencia, EL EMPLEADOR podrá contactar a {{EMERGENCIA_NOMBRE}}, teléfono {{EMERGENCIA_TELEFONO}}.
+
+CLÁUSULA 6. – OBLIGACIONES: EL TRABAJADOR se obliga a cumplir el reglamento interno, las normas de seguridad y salud en el trabajo, y las instrucciones legítimas de sus superiores. EL EMPLEADOR se obliga a proporcionar los elementos y condiciones necesarias para la ejecución del trabajo.
+
+CLÁUSULA 7. – TERMINACIÓN: El contrato podrá terminarse por las causales previstas en el Código Sustantivo del Trabajo y demás normas aplicables, con el pago de las prestaciones e indemnizaciones que correspondan.
+
+CLÁUSULA 8. – INTEGRIDAD: Este documento, junto con los anexos y la documentación de ingreso, constituye el acuerdo íntegro entre las partes en materia laboral para el cargo indicado.
+
+FIRMAS
+En constancia, las partes suscriben el presente contrato en la fecha {{FECHA_GENERACION}}.

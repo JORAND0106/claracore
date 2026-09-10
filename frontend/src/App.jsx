@@ -210,6 +210,7 @@ import TopografiaMain from './components/topografia/TopografiaMain'
 import AlmacenMain from './almacen/AlmacenMain'
 import ModuloSeguimiento from './modules/seguimiento/ModuloSeguimiento'
 import { accesoSeguimiento } from './modules/seguimiento/seguimientoPermisos'
+import ModuloRrhh, { accesoRrhh } from './modules/rrhh'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
@@ -19749,6 +19750,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   // Seguimiento abierto a todos los roles de obra; Contador sigue fuera (flujo contable).
   // Borrado definitivo se controla con seguimientoAcceso.eliminar / esDesarrollador.
   const tienePermisoSeguimiento = !esContador && !!seguimientoAcceso.ver
+  const rrhhAcceso = accesoRrhh(usuario, usuario?.contrato_id)
+  const tienePermisoRrhh = esDeveloper || (!esContador && !!rrhhAcceso.ver)
   const tieneAccesoContabilidad = esDeveloper || esContador
     || (usuario?.permisos || []).some(
       (p) => (p.funcion_nombre || '').toLowerCase() === 'contabilidad' && p.ver,
@@ -20411,6 +20414,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['almacen',      '🏪', 'Almacén',        !esContador && tienePermisoAlmacen],
             ['programacion', '📅', 'Programación',   !esContador && tienePermisoProgramacionObra],
             ['seguimiento',  '📌', 'Seguimiento',    !esContador && tienePermisoSeguimiento],
+            ['rrhh',         '👥', 'RRHH',           !esContador && tienePermisoRrhh],
             ['topografia',   '📐', 'Topografía',     !esContador && tienePermisoTopografia],
             ['semaforo',     '🗺️', 'Plano Semáforo', !esContador],
             ['auditor_sst',  '🛡️', 'Auditor',       !esContador && tieneModuloAuditorSst],
@@ -20465,6 +20469,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               ['almacen', '🏪', 'Almacén', !esContador && tienePermisoAlmacen],
               ['programacion', '📅', 'Prog.', !esContador && tienePermisoProgramacionObra],
               ['seguimiento', '📌', 'Seguim.', !esContador && tienePermisoSeguimiento],
+              ['rrhh', '👥', 'RRHH', !esContador && tienePermisoRrhh],
               ['topografia', '📐', 'Topo', !esContador && tienePermisoTopografia],
               ['semaforo', '🗺️', 'Semáforo', !esContador],
               ['auditor_sst', '🛡️', 'Auditor', !esContador && tieneModuloAuditorSst],
@@ -23418,6 +23423,25 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             token={getToken()}
             contratoId={usuario?.contrato_id}
           />
+        )}
+        {moduloActivo === 'rrhh' && (
+          tienePermisoRrhh ? (
+            <ModuloRrhh
+              key={`rrhh-${usuario?.contrato_id ?? 'x'}`}
+              t={t}
+              themeMode={activeTheme}
+              usuario={usuario}
+              token={getToken()}
+              contratoId={usuario?.contrato_id}
+            />
+          ) : (
+            <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
+              <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>RRHH</div>
+              <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
+                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «RRHH» (acción Ver).
+              </div>
+            </div>
+          )
         )}
         {moduloActivo === 'semaforo' && (
           <ModuloPlanoMapaCalor key={`semaforo-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} />
