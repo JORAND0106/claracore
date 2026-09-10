@@ -24,10 +24,14 @@ def test_rol_excluido_interventoria():
     assert rol_excluido_almacen({"rol_nombre": "Interventoría Gerencial"}) is True
 
 
-def test_valores_economicos_solo_gerencial():
+def test_valores_economicos_operativo_gerencial_o_residente_admin():
     assert puede_ver_valores_economicos_almacen({"rol_nombre": "Contratista"}) is False
     assert puede_ver_valores_economicos_almacen({"rol_nombre": "Operativo Contratista"}) is False
-    assert puede_ver_valores_economicos_almacen({"rol_nombre": "Contratista Gerencial"}) is True
+    assert puede_ver_valores_economicos_almacen({"rol_nombre": "Contratista Gerencial"}) is False
+    assert puede_ver_valores_economicos_almacen({"rol_nombre": "Operativo Gerencial"}) is True
+    assert puede_ver_valores_economicos_almacen(
+        {"rol_nombre": "Operativo Campo", "cargo": "Residente Administrativo"}
+    ) is True
 
 
 def test_permiso_bloqueado_si_rol_excluido(monkeypatch):
