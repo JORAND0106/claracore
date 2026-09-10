@@ -122,4 +122,13 @@ describe('rrhhHelpers payload', () => {
     })
     assert.equal(nonDigits.ok, false)
   })
+
+  it('construye checklist con tipos extendidos y Otro al final', async () => {
+    const { buildDocChecklist, slugTipoDocumento } = await import('./rrhhHelpers.js')
+    const list = buildDocChecklist('soporte', ['Licencia de conducción', 'Certificado bancario'])
+    assert.equal(list[list.length - 1].tipo, 'otro')
+    assert.ok(list.some((t) => t.tipo === slugTipoDocumento('Licencia de conducción')))
+    assert.ok(list.some((t) => t.label === 'Certificado bancario'))
+    assert.ok(list.some((t) => t.tipo === 'cedula'))
+  })
 })

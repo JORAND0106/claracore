@@ -98,6 +98,38 @@ export const DOC_TIPOS_INGRESO = [
   { tipo: 'otro', label: 'Otro' },
 ]
 
+/** Slug estable alineado con backend.slug_tipo_documento */
+export function slugTipoDocumento(label) {
+  const s = String(label || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return `ext_${(s || 'documento').slice(0, 72)}`
+}
+
+/**
+ * Checklist: tipos base + tipos extendidos del catálogo + «Otro» al final.
+ * @param {'soporte'|'ingreso'} categoria
+ * @param {string[]} customLabels
+ */
+export function buildDocChecklist(categoria, customLabels = []) {
+  const base = (categoria === 'ingreso' ? DOC_TIPOS_INGRESO : DOC_TIPOS_SOPORTE)
+    .filter((t) => t.tipo !== 'otro')
+  const seen = new Set(base.map((t) => t.tipo))
+  const custom = []
+  for (const raw of customLabels || []) {
+    const label = String(raw || '').trim()
+    if (!label) continue
+    const tipo = slugTipoDocumento(label)
+    if (seen.has(tipo)) continue
+    seen.add(tipo)
+    custom.push({ tipo, label, custom: true })
+  }
+  return [...base, ...custom, { tipo: 'otro', label: 'Otro' }]
+}
+
 export function nombreCompleto(t) {
   return `${t?.nombres || ''} ${t?.apellidos || ''}`.trim()
 }

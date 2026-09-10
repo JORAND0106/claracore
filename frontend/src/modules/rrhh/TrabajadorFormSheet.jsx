@@ -122,25 +122,6 @@ export default function TrabajadorFormSheet({
 
   return (
     <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)', fontFamily: 'inherit' }}>
-      <FotoTrabajadorCapture
-        previewUrl={f.foto_preview_url || ''}
-        disabled={!canEdit}
-        themeTokens={tTok}
-        onFileReady={(file) => {
-          const url = URL.createObjectURL(file)
-          if (f.foto_preview_url && String(f.foto_preview_url).startsWith('blob:')) {
-            try { URL.revokeObjectURL(f.foto_preview_url) } catch { /* ignore */ }
-          }
-          setMany({ _foto_file: file, foto_preview_url: url })
-        }}
-        onClear={() => {
-          if (f.foto_preview_url && String(f.foto_preview_url).startsWith('blob:')) {
-            try { URL.revokeObjectURL(f.foto_preview_url) } catch { /* ignore */ }
-          }
-          setMany({ _foto_file: null, foto_preview_url: '', _foto_clear: true })
-        }}
-      />
-
       <div style={ui.sectionTitle}>Datos personales</div>
       <div style={{ ...ui.sheetWrap, maxHeight: 'none', overflow: 'visible', marginBottom: 10 }}>
         <table style={{ ...ui.sheetTable, minWidth: 720 }}>
@@ -434,13 +415,48 @@ export default function TrabajadorFormSheet({
         </table>
       </div>
 
-      <FirmaPad
-        value={f.firma_data_url || ''}
-        disabled={!canEdit}
-        themeTokens={tTok}
-        titulo="Firma del trabajador"
-        onChange={(dataUrl) => setMany({ firma_data_url: dataUrl, _firma_changed: true })}
-      />
+      <div style={ui.sectionTitle}>Fotografía y firma</div>
+      <div style={{
+        display: 'flex',
+        gap: 12,
+        alignItems: 'stretch',
+        flexWrap: 'wrap',
+        border: `1px solid ${tTok.border}`,
+        borderRadius: 8,
+        padding: 10,
+        background: tTok.bgCard || tTok.bg,
+        marginBottom: 4,
+      }}>
+        <FotoTrabajadorCapture
+          compact
+          previewUrl={f.foto_preview_url || ''}
+          disabled={!canEdit}
+          themeTokens={tTok}
+          titulo="Fotografía del colaborador"
+          onFileReady={(file) => {
+            const url = URL.createObjectURL(file)
+            if (f.foto_preview_url && String(f.foto_preview_url).startsWith('blob:')) {
+              try { URL.revokeObjectURL(f.foto_preview_url) } catch { /* ignore */ }
+            }
+            setMany({ _foto_file: file, foto_preview_url: url })
+          }}
+          onClear={() => {
+            if (f.foto_preview_url && String(f.foto_preview_url).startsWith('blob:')) {
+              try { URL.revokeObjectURL(f.foto_preview_url) } catch { /* ignore */ }
+            }
+            setMany({ _foto_file: null, foto_preview_url: '', _foto_clear: true })
+          }}
+        />
+        <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+          <FirmaPad
+            value={f.firma_data_url || ''}
+            disabled={!canEdit}
+            themeTokens={tTok}
+            titulo="Firma del colaborador"
+            onChange={(dataUrl) => setMany({ firma_data_url: dataUrl, _firma_changed: true })}
+          />
+        </div>
+      </div>
     </div>
   )
 }

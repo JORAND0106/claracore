@@ -23,6 +23,8 @@ CATALOG_CATEGORIAS = frozenset({
     "cargo",
     "tipo_contrato",
     "parentesco",
+    "doc_soporte",
+    "doc_ingreso",
 })
 
 CATALOG_DEFAULTS = {
@@ -86,6 +88,8 @@ CATALOG_DEFAULTS = {
         "Amig@",
         "Otro",
     ),
+    "doc_soporte": (),
+    "doc_ingreso": (),
 }
 
 TIPOS_SANGRE = frozenset({"O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-"})
@@ -154,7 +158,7 @@ def _validate_categoria(categoria: str) -> str:
     if cat not in CATALOG_CATEGORIAS:
         raise ValueError(
             "Categoría de catálogo inválida. Use: eps, pension, cesantias, arl, "
-            "caja_compensacion, cargo, tipo_contrato, parentesco."
+            "caja_compensacion, cargo, tipo_contrato, parentesco, doc_soporte, doc_ingreso."
         )
     return cat
 

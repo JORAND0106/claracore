@@ -197,7 +197,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       setEditando(false)
       setTabDetalle('datos')
     } catch (e) {
-      flash('error', e.message || 'No se pudo abrir el trabajador.')
+      flash('error', e.message || 'No se pudo abrir el colaborador.')
     }
   }
 
@@ -221,7 +221,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     try {
       const created = await api.createTrabajador(payloadFromForm(crearForm))
       await persistMedia(created.id, crearForm)
-      flash('success', 'Trabajador registrado.')
+      flash('success', 'Colaborador registrado.')
       setShowCrear(false)
       setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
       await cargar()
@@ -249,7 +249,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       const withMedia = await syncMediaPreviews(full, formFromTrabajador(full))
       setEditForm(withMedia)
       setEditando(false)
-      flash('success', 'Trabajador actualizado.')
+      flash('success', 'Colaborador actualizado.')
       await cargar()
     } catch (e) {
       flash('error', e.message || 'No se pudo actualizar.')
@@ -265,7 +265,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     try {
       await api.deleteTrabajador(detalle.id)
       setDetalle(null)
-      flash('success', 'Trabajador eliminado.')
+      flash('success', 'Colaborador eliminado.')
       await cargar()
     } catch (e) {
       flash('error', e.message || 'No se pudo eliminar.')
@@ -333,7 +333,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
               setShowCrear(true)
             }}
           >
-            + Registrar trabajador
+            + Registrar colaborador
           </button>
         )}
       </div>
@@ -388,7 +388,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             {!loading && items.length === 0 && (
               <tr>
                 <td style={sheetUi.td} colSpan={6}>
-                  No hay trabajadores registrados. Use «Registrar trabajador» para iniciar la documentación de contratación.
+                  No hay colaboradores registrados. Use «Registrar colaborador» para iniciar la documentación de contratación.
                 </td>
               </tr>
             )}
@@ -422,7 +422,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div style={{ fontWeight: 800, fontSize: 'var(--cc-h2)', color: tTok.text }}>
-                Registrar trabajador
+                Registrar colaborador
               </div>
             </div>
             <div style={modalScroll}>
@@ -545,6 +545,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                   trabajadorId={detalle.id}
                   categoria="soporte"
                   canEdit={permisos.crear || permisos.editar}
+                  customTipos={catalogo.doc_soporte || []}
+                  onTiposChange={addCatalogValue}
                   onMsg={(m) => flash(m.type, m.text)}
                 />
               )}
@@ -569,6 +571,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                   trabajadorId={detalle.id}
                   categoria="ingreso"
                   canEdit={permisos.crear || permisos.editar}
+                  customTipos={catalogo.doc_ingreso || []}
+                  onTiposChange={addCatalogValue}
                   onMsg={(m) => flash(m.type, m.text)}
                 />
               )}
