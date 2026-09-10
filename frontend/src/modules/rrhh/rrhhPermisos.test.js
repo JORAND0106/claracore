@@ -54,14 +54,16 @@ describe('rrhhHelpers payload', () => {
       numero_documento: '998877',
       salario: '2.500.000',
       subsidio_transporte: true,
+      tipo_contrato: 'Término fijo',
+      empresa_key: 'sub:42',
       empresa_tipo: 'subcontratista',
       empresa_subcontratista_id: '42',
-      tipo_contrato_id: '3',
     })
     assert.equal(p.nombres, 'Juan')
     assert.equal(p.empresa_tipo, 'subcontratista')
     assert.equal(p.empresa_subcontratista_id, 42)
-    assert.equal(p.tipo_contrato_id, 3)
+    assert.equal(p.empresa_key, 'sub:42')
+    assert.equal(p.tipo_contrato, 'Término fijo')
     assert.equal(p.subsidio_transporte, true)
     assert.equal(p.salario, 2500000)
   })

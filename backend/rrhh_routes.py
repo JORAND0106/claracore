@@ -25,18 +25,17 @@ from rrhh_docs_service import (
     soft_delete_contrato_generado,
     soft_delete_documento,
 )
-from rrhh_permissions import require_admin_catalogo_rrhh, require_permiso_rrhh, tiene_permiso_rrhh
+from rrhh_permissions import require_permiso_rrhh, tiene_permiso_rrhh
 from rrhh_service import (
-    create_tipo_contrato,
+    add_catalogo_opcion,
     create_trabajador,
-    ensure_tipos_contrato_default,
+    get_trabajador,
+    list_catalogo,
+    list_catalogo_todos,
     list_empresas_contratantes,
-    list_tipos_contrato,
     list_trabajadores,
     soft_delete_trabajador,
-    update_tipo_contrato,
     update_trabajador,
-    get_trabajador,
 )
 
 _log = logging.getLogger("claracore.rrhh.routes")
@@ -57,18 +56,8 @@ def _audit(current_user, contrato_id: int) -> dict:
     return u
 
 
-class TipoContratoBody(BaseModel):
-    nombre: str = Field(..., min_length=2, max_length=200)
-    descripcion: Optional[str] = Field(None, max_length=1000)
-    activo: bool = True
-    orden: int = 0
-
-
-class TipoContratoPatchBody(BaseModel):
-    nombre: Optional[str] = Field(None, min_length=2, max_length=200)
-    descripcion: Optional[str] = Field(None, max_length=1000)
-    activo: Optional[bool] = None
-    orden: Optional[int] = None
+class CatalogoOpcionBody(BaseModel):
+    valor: str = Field(..., min_length=1, max_length=200)
 
 
 class TrabajadorBody(BaseModel):
@@ -93,7 +82,8 @@ class TrabajadorBody(BaseModel):
     cargo_aspira: Optional[str] = None
     salario: Optional[float] = None
     subsidio_transporte: bool = False
-    tipo_contrato_id: Optional[int] = None
+    tipo_contrato: Optional[str] = None
+    empresa_key: Optional[str] = Field(None, max_length=80)
     empresa_tipo: str = Field("consorcio", max_length=40)
     empresa_subcontratista_id: Optional[int] = None
     empresa_nombre: Optional[str] = None
@@ -124,7 +114,8 @@ class TrabajadorPatchBody(BaseModel):
     cargo_aspira: Optional[str] = None
     salario: Optional[float] = None
     subsidio_transporte: Optional[bool] = None
-    tipo_contrato_id: Optional[int] = None
+    tipo_contrato: Optional[str] = None
+    empresa_key: Optional[str] = Field(None, max_length=80)
     empresa_tipo: Optional[str] = Field(None, max_length=40)
     empresa_subcontratista_id: Optional[int] = None
     empresa_nombre: Optional[str] = None
@@ -134,7 +125,8 @@ class TrabajadorPatchBody(BaseModel):
 
 
 class GenerarContratoBody(BaseModel):
-    tipo_contrato_id: Optional[int] = None
+    tipo_contrato: Optional[str] = Field(None, max_length=200)
+    tipo_contrato_id: Optional[int] = None  # legacy ignored
     numero_contrato_laboral: Optional[str] = Field(None, max_length=80)
     fecha_inicio: Optional[str] = None
     fecha_fin: Optional[str] = None
@@ -156,69 +148,44 @@ def route_empresas(contrato_id: int, current_user=Depends(get_current_user)):
     return list_empresas_contratantes(supabase, contrato_id)
 
 
-# ── Tipos de contrato ─────────────────────────────────────────────────────────
-
-@router.get("/{contrato_id}/tipos-contrato")
-def route_list_tipos(
-    contrato_id: int,
-    solo_activos: bool = Query(False),
-    current_user=Depends(get_current_user),
-):
+@router.get("/{contrato_id}/catalogo-opciones")
+def route_catalogo_todos(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
-    ensure_tipos_contrato_default(supabase, contrato_id, current_user)
-    return {"items": list_tipos_contrato(supabase, contrato_id, solo_activos=solo_activos)}
+    return {"categorias": list_catalogo_todos(supabase, contrato_id)}
 
 
-@router.post("/{contrato_id}/tipos-contrato")
-def route_create_tipo(
+@router.get("/{contrato_id}/catalogo-opciones/{categoria}")
+def route_catalogo_cat(contrato_id: int, categoria: str, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        items = list_catalogo(supabase, contrato_id, categoria)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return {"items": items, "valores": [r.get("valor") for r in items if r.get("valor")]}
+
+
+@router.post("/{contrato_id}/catalogo-opciones/{categoria}")
+def route_catalogo_add(
     contrato_id: int,
-    body: TipoContratoBody,
+    categoria: str,
+    body: CatalogoOpcionBody,
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    require_admin_catalogo_rrhh(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "crear", contrato_id)
     try:
-        row = create_tipo_contrato(supabase, contrato_id, body.model_dump(), current_user)
+        row = add_catalogo_opcion(supabase, contrato_id, categoria, body.valor, current_user)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     registrar_log(
         _audit(current_user, contrato_id),
         "CREAR",
         "RRHH",
-        "rrhh_tipos_contrato",
+        "rrhh_catalogo_opciones",
         str(row.get("id")),
-        f"Tipo contrato laboral: {row.get('nombre')}",
-    )
-    return row
-
-
-@router.put("/{contrato_id}/tipos-contrato/{tipo_id}")
-def route_update_tipo(
-    contrato_id: int,
-    tipo_id: int,
-    body: TipoContratoPatchBody,
-    current_user=Depends(get_current_user),
-):
-    _require_contract_access(current_user, contrato_id)
-    require_admin_catalogo_rrhh(current_user, contrato_id)
-    try:
-        row = update_tipo_contrato(
-            supabase,
-            contrato_id,
-            tipo_id,
-            body.model_dump(exclude_unset=True),
-            current_user,
-        )
-    except ValueError as exc:
-        raise _http_value_error(exc) from exc
-    registrar_log(
-        _audit(current_user, contrato_id),
-        "EDITAR",
-        "RRHH",
-        "rrhh_tipos_contrato",
-        str(tipo_id),
-        f"Tipo contrato laboral actualizado: {row.get('nombre')}",
+        f"Catálogo {categoria}: {row.get('valor')}",
     )
     return row
 
@@ -481,7 +448,7 @@ def route_generar_contrato(
             contrato_id,
             trabajador_id,
             current_user=current_user,
-            tipo_contrato_id=body.tipo_contrato_id,
+            tipo_contrato=body.tipo_contrato,
             numero_contrato_laboral=body.numero_contrato_laboral,
             fecha_inicio=body.fecha_inicio,
             fecha_fin=body.fecha_fin,

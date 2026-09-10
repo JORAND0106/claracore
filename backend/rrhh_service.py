@@ -1,26 +1,77 @@
 """
-Servicio RRHH — trabajadores, tipos de contrato y empresas contratantes.
-Sin integración con Bitácora ni con el módulo Subcontratistas (solo lectura de nombres).
+Servicio RRHH — trabajadores, catálogo reutilizable y empresas contratantes.
+Lectura de Subcontratistas solo para listar empresas/NIT (sin modificar ese módulo).
 """
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 _log = logging.getLogger("claracore.rrhh")
 
-_TABLE_TIPOS = "rrhh_tipos_contrato"
+_TABLE_CATALOGO = "rrhh_catalogo_opciones"
 _TABLE_TRAB = "rrhh_trabajadores"
 
-TIPOS_CONTRATO_DEFAULT = (
-    "Término fijo",
-    "Término indefinido",
-    "Obra o labor",
-    "Prestación de servicios",
-)
+CATALOG_CATEGORIAS = frozenset({
+    "eps",
+    "pension",
+    "cesantias",
+    "arl",
+    "caja_compensacion",
+    "cargo",
+    "tipo_contrato",
+})
 
-DOCUMENTO_TIPOS = ("CC", "CE", "TI", "PA", "NIT", "OTRO")
+CATALOG_DEFAULTS = {
+    "tipo_contrato": (
+        "Término fijo",
+        "Término indefinido",
+        "Obra o labor",
+        "Prestación de servicios",
+    ),
+    "eps": (
+        "Nueva EPS",
+        "Sura",
+        "Sanitas",
+        "Compensar",
+        "Famisanar",
+        "Salud Total",
+        "Coomeva",
+        "Aliansalud",
+    ),
+    "pension": (
+        "Colpensiones",
+        "Porvenir",
+        "Protección",
+        "Colfondos",
+        "Skandia",
+    ),
+    "cesantias": (
+        "Porvenir",
+        "Protección",
+        "Colfondos",
+        "FNA",
+        "Skandia",
+    ),
+    "arl": (
+        "Sura",
+        "Positiva",
+        "Colmena",
+        "Bolívar",
+        "Equidad",
+        "AXA Colpatria",
+    ),
+    "caja_compensacion": (
+        "Compensar",
+        "Cafam",
+        "Colsubsidio",
+        "Comfenalco",
+        "Comfama",
+    ),
+    "cargo": (),
+}
 
 
 def _now_iso() -> str:
@@ -75,136 +126,150 @@ def _parse_money(val: Any) -> Optional[float]:
     return round(n, 2)
 
 
-def ensure_tipos_contrato_default(sb, contrato_id: int, current_user=None) -> List[dict]:
-    """Crea tipos por defecto si el catálogo del contrato está vacío."""
-    cid = int(contrato_id)
+def _norm_valor(valor: str) -> str:
+    s = str(valor or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def _validate_categoria(categoria: str) -> str:
+    cat = (categoria or "").strip().lower()
+    if cat not in CATALOG_CATEGORIAS:
+        raise ValueError(
+            "Categoría de catálogo inválida. Use: eps, pension, cesantias, arl, "
+            "caja_compensacion, cargo, tipo_contrato."
+        )
+    return cat
+
+
+def list_catalogo(sb, contrato_id: int, categoria: str) -> List[dict]:
+    cat = _validate_categoria(categoria)
+    ensure_catalogo_defaults(sb, contrato_id, cat)
+    return (
+        sb.table(_TABLE_CATALOGO)
+        .select("id, categoria, valor, activo")
+        .eq("contrato_id", int(contrato_id))
+        .eq("categoria", cat)
+        .eq("activo", True)
+        .order("valor")
+        .execute()
+        .data
+        or []
+    )
+
+
+def list_catalogo_todos(sb, contrato_id: int) -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {c: [] for c in sorted(CATALOG_CATEGORIAS)}
+    for cat in CATALOG_CATEGORIAS:
+        ensure_catalogo_defaults(sb, contrato_id, cat)
+    rows = (
+        sb.table(_TABLE_CATALOGO)
+        .select("categoria, valor")
+        .eq("contrato_id", int(contrato_id))
+        .eq("activo", True)
+        .order("valor")
+        .execute()
+        .data
+        or []
+    )
+    for r in rows:
+        cat = r.get("categoria")
+        val = (r.get("valor") or "").strip()
+        if cat in out and val and val not in out[cat]:
+            out[cat].append(val)
+    return out
+
+
+def ensure_catalogo_defaults(sb, contrato_id: int, categoria: str, current_user=None) -> None:
+    cat = _validate_categoria(categoria)
+    defaults = CATALOG_DEFAULTS.get(cat) or ()
+    if not defaults:
+        return
     existing = (
-        sb.table(_TABLE_TIPOS)
+        sb.table(_TABLE_CATALOGO)
         .select("id")
-        .eq("contrato_id", cid)
+        .eq("contrato_id", int(contrato_id))
+        .eq("categoria", cat)
         .limit(1)
         .execute()
         .data
         or []
     )
     if existing:
-        return list_tipos_contrato(sb, cid, solo_activos=False)
+        return
     uid = _uid(current_user) if current_user else None
-    rows = []
-    for i, nombre in enumerate(TIPOS_CONTRATO_DEFAULT):
-        payload = {
-            "contrato_id": cid,
-            "nombre": nombre,
-            "descripcion": None,
-            "activo": True,
-            "orden": i + 1,
-            "created_by": uid,
-        }
-        ins = sb.table(_TABLE_TIPOS).insert(payload).execute().data
-        if ins:
-            rows.append(ins[0])
-    return rows or list_tipos_contrato(sb, cid, solo_activos=False)
+    for valor in defaults:
+        try:
+            add_catalogo_opcion(sb, contrato_id, cat, valor, current_user={"sub": uid} if uid else {})
+        except Exception:
+            pass
 
 
-def list_tipos_contrato(sb, contrato_id: int, *, solo_activos: bool = False) -> List[dict]:
-    q = (
-        sb.table(_TABLE_TIPOS)
+def add_catalogo_opcion(sb, contrato_id: int, categoria: str, valor: str, current_user=None) -> dict:
+    cat = _validate_categoria(categoria)
+    v = _require_str(valor, "Valor", min_len=1, max_len=200)
+    norm = _norm_valor(v)
+    existing = (
+        sb.table(_TABLE_CATALOGO)
         .select("*")
         .eq("contrato_id", int(contrato_id))
-        .order("orden")
-        .order("nombre")
+        .eq("categoria", cat)
+        .eq("valor_norm", norm)
+        .limit(1)
+        .execute()
+        .data
+        or []
     )
-    if solo_activos:
-        q = q.eq("activo", True)
-    return q.execute().data or []
-
-
-def create_tipo_contrato(sb, contrato_id: int, body: dict, current_user) -> dict:
-    nombre = _require_str(body.get("nombre"), "Nombre del tipo de contrato", min_len=2, max_len=200)
+    if existing:
+        row = existing[0]
+        if not row.get("activo"):
+            updated = (
+                sb.table(_TABLE_CATALOGO)
+                .update({"activo": True, "valor": v})
+                .eq("id", row["id"])
+                .execute()
+                .data
+                or []
+            )
+            return updated[0] if updated else {**row, "activo": True, "valor": v}
+        return row
     payload = {
         "contrato_id": int(contrato_id),
-        "nombre": nombre,
-        "descripcion": _trim(body.get("descripcion"), max_len=1000),
-        "activo": _parse_bool(body.get("activo"), True),
-        "orden": int(body.get("orden") or 0),
-        "created_by": _uid(current_user),
+        "categoria": cat,
+        "valor": v,
+        "valor_norm": norm,
+        "activo": True,
+        "created_by": _uid(current_user) if current_user else None,
     }
     try:
-        rows = sb.table(_TABLE_TIPOS).insert(payload).execute().data or []
+        rows = sb.table(_TABLE_CATALOGO).insert(payload).execute().data or []
     except Exception as exc:
         msg = str(exc).lower()
         if "unique" in msg or "duplicate" in msg:
-            raise ValueError("Ya existe un tipo de contrato con ese nombre.") from exc
+            again = (
+                sb.table(_TABLE_CATALOGO)
+                .select("*")
+                .eq("contrato_id", int(contrato_id))
+                .eq("categoria", cat)
+                .eq("valor_norm", norm)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if again:
+                return again[0]
+            raise ValueError("Esa opción ya existe en el catálogo.") from exc
         raise
     if not rows:
-        raise ValueError("No se pudo crear el tipo de contrato.")
+        raise ValueError("No se pudo agregar la opción al catálogo.")
     return rows[0]
-
-
-def update_tipo_contrato(sb, contrato_id: int, tipo_id: int, body: dict, current_user) -> dict:
-    rows = (
-        sb.table(_TABLE_TIPOS)
-        .select("*")
-        .eq("id", int(tipo_id))
-        .eq("contrato_id", int(contrato_id))
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if not rows:
-        raise ValueError("Tipo de contrato no encontrado.")
-    patch: Dict[str, Any] = {
-        "updated_at": _now_iso(),
-        "updated_by": _uid(current_user),
-    }
-    if "nombre" in body:
-        patch["nombre"] = _require_str(body.get("nombre"), "Nombre del tipo de contrato", min_len=2, max_len=200)
-    if "descripcion" in body:
-        patch["descripcion"] = _trim(body.get("descripcion"), max_len=1000)
-    if "activo" in body:
-        patch["activo"] = _parse_bool(body.get("activo"), True)
-    if "orden" in body and body.get("orden") is not None:
-        patch["orden"] = int(body["orden"])
-    try:
-        updated = (
-            sb.table(_TABLE_TIPOS)
-            .update(patch)
-            .eq("id", int(tipo_id))
-            .eq("contrato_id", int(contrato_id))
-            .execute()
-            .data
-            or []
-        )
-    except Exception as exc:
-        msg = str(exc).lower()
-        if "unique" in msg or "duplicate" in msg:
-            raise ValueError("Ya existe un tipo de contrato con ese nombre.") from exc
-        raise
-    if not updated:
-        raise ValueError("No se pudo actualizar el tipo de contrato.")
-    return updated[0]
-
-
-def get_tipo_contrato(sb, contrato_id: int, tipo_id: int) -> Optional[dict]:
-    rows = (
-        sb.table(_TABLE_TIPOS)
-        .select("*")
-        .eq("id", int(tipo_id))
-        .eq("contrato_id", int(contrato_id))
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    return rows[0] if rows else None
 
 
 def list_empresas_contratantes(sb, contrato_id: int) -> dict:
     """
-    Opciones de empresa contratante:
-    - Consorcio / contratista principal (desde contratos.contratista)
-    - Subcontratistas registrados (lectura de tabla; sin acoplar módulo Subcontratistas)
+    Consorcio (contratos.contratista/nit) + subcontratistas registrados.
+    Un solo listado para el selector de empresa contratante.
     """
     cid = int(contrato_id)
     crows = (
@@ -217,13 +282,16 @@ def list_empresas_contratantes(sb, contrato_id: int) -> dict:
         or []
     )
     c = crows[0] if crows else {}
+    consorcio_nombre = (c.get("contratista") or "Consorcio / Contratista principal").strip() or (
+        "Consorcio / Contratista principal"
+    )
     consorcio = {
+        "key": "consorcio",
         "tipo": "consorcio",
         "id": None,
-        "nombre": (c.get("contratista") or "Consorcio / Contratista principal").strip()
-        or "Consorcio / Contratista principal",
+        "nombre": consorcio_nombre,
         "nit": (c.get("nit") or "").strip() or None,
-        "label": f"Consorcio — {(c.get('contratista') or 'Contratista principal').strip()}",
+        "label": f"Consorcio — {consorcio_nombre}",
     }
     subs = (
         sb.table("subcontratistas")
@@ -241,10 +309,12 @@ def list_empresas_contratantes(sb, contrato_id: int) -> dict:
         nombre = (s.get("razon_social") or "").strip()
         if not nombre:
             continue
+        sid = s.get("id")
         sub_opts.append(
             {
+                "key": f"sub:{sid}",
                 "tipo": "subcontratista",
-                "id": s.get("id"),
+                "id": sid,
                 "nombre": nombre,
                 "nit": (s.get("nit") or "").strip() or None,
                 "label": f"Subcontratista — {nombre}",
@@ -255,8 +325,20 @@ def list_empresas_contratantes(sb, contrato_id: int) -> dict:
 
 def _resolve_empresa(sb, contrato_id: int, body: dict) -> Dict[str, Any]:
     empresas = list_empresas_contratantes(sb, contrato_id)
-    tipo = _trim(body.get("empresa_tipo"), max_len=40) or "consorcio"
-    tipo = tipo.lower()
+    # Prefer explicit key (consorcio | sub:ID)
+    key = _trim(body.get("empresa_key"), max_len=80)
+    if key:
+        match = next((e for e in empresas["opciones"] if e.get("key") == key), None)
+        if not match:
+            raise ValueError("Empresa contratante no encontrada.")
+        return {
+            "empresa_tipo": match["tipo"],
+            "empresa_nombre": match["nombre"],
+            "empresa_nit": match.get("nit"),
+            "empresa_subcontratista_id": match.get("id"),
+        }
+
+    tipo = (_trim(body.get("empresa_tipo"), max_len=40) or "consorcio").lower()
     if tipo not in ("consorcio", "subcontratista"):
         raise ValueError("empresa_tipo debe ser «consorcio» o «subcontratista».")
 
@@ -271,14 +353,13 @@ def _resolve_empresa(sb, contrato_id: int, body: dict) -> Dict[str, Any]:
 
     sub_id = body.get("empresa_subcontratista_id")
     if sub_id is None or str(sub_id).strip() == "":
-        raise ValueError("Seleccione el subcontratista contratante.")
+        raise ValueError("Seleccione la empresa contratante (subcontratista).")
     try:
         sid = int(sub_id)
     except (TypeError, ValueError) as exc:
         raise ValueError("Subcontratista inválido.") from exc
     match = next((s for s in empresas["subcontratistas"] if int(s["id"]) == sid), None)
     if not match:
-        # Fallback: permitir nombre explícito si el sub ya no está activo
         nombre = _trim(body.get("empresa_nombre"), max_len=300)
         if not nombre:
             raise ValueError("Subcontratista no encontrado o inactivo.")
@@ -294,6 +375,25 @@ def _resolve_empresa(sb, contrato_id: int, body: dict) -> Dict[str, Any]:
         "empresa_nit": match.get("nit"),
         "empresa_subcontratista_id": sid,
     }
+
+
+def _maybe_persist_catalog_values(sb, contrato_id: int, payload: dict, current_user) -> None:
+    """Persiste valores elegidos/nuevos en el catálogo reutilizable (sin duplicar)."""
+    mapping = (
+        ("eps", payload.get("eps")),
+        ("pension", payload.get("pension")),
+        ("cesantias", payload.get("cesantias")),
+        ("arl", payload.get("arl")),
+        ("caja_compensacion", payload.get("caja_compensacion")),
+        ("cargo", payload.get("cargo_aspira")),
+        ("tipo_contrato", payload.get("tipo_contrato")),
+    )
+    for cat, valor in mapping:
+        if valor and str(valor).strip():
+            try:
+                add_catalogo_opcion(sb, contrato_id, cat, str(valor), current_user)
+            except Exception as exc:
+                _log.debug("catalog persist %s: %s", cat, exc)
 
 
 def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = False) -> Dict[str, Any]:
@@ -332,9 +432,10 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
         "arl",
         "caja_compensacion",
         "cargo_aspira",
+        "tipo_contrato",
         "notas",
     ):
-        max_len = 1000 if k in ("direccion", "notas") else 300
+        max_len = 4000 if k == "notas" else (1000 if k == "direccion" else 300)
         set_opt(k, max_len=max_len)
 
     if "salario" in body or not partial:
@@ -351,23 +452,14 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
     elif not partial:
         out["estado"] = "activo"
 
-    if "tipo_contrato_id" in body or not partial:
-        tid = body.get("tipo_contrato_id")
-        if tid is None or tid == "":
-            out["tipo_contrato_id"] = None
-        else:
-            tipo = get_tipo_contrato(sb, contrato_id, int(tid))
-            if not tipo:
-                raise ValueError("Tipo de contrato no encontrado.")
-            out["tipo_contrato_id"] = int(tipo["id"])
-
     if (
-        "empresa_tipo" in body
+        "empresa_key" in body
+        or "empresa_tipo" in body
         or "empresa_subcontratista_id" in body
         or "empresa_nombre" in body
         or not partial
     ):
-        out.update(_resolve_empresa(sb, contrato_id, body if (body.get("empresa_tipo") or not partial) else {
+        out.update(_resolve_empresa(sb, contrato_id, body if (body.get("empresa_tipo") or body.get("empresa_key") or not partial) else {
             **body,
             "empresa_tipo": body.get("empresa_tipo") or "consorcio",
         }))
@@ -424,10 +516,10 @@ def get_trabajador(sb, contrato_id: int, trabajador_id: int) -> dict:
 
 
 def create_trabajador(sb, contrato_id: int, body: dict, current_user) -> dict:
-    ensure_tipos_contrato_default(sb, contrato_id, current_user)
     payload = _payload_trabajador(sb, contrato_id, body or {}, partial=False)
     payload["contrato_id"] = int(contrato_id)
     payload["created_by"] = _uid(current_user)
+    _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
     try:
         rows = sb.table(_TABLE_TRAB).insert(payload).execute().data or []
     except Exception as exc:
@@ -445,6 +537,7 @@ def update_trabajador(sb, contrato_id: int, trabajador_id: int, body: dict, curr
     payload = _payload_trabajador(sb, contrato_id, body or {}, partial=True)
     payload["updated_at"] = _now_iso()
     payload["updated_by"] = _uid(current_user)
+    _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
     try:
         rows = (
             sb.table(_TABLE_TRAB)
