@@ -2,7 +2,8 @@ import { useRef, useState } from 'react'
 import { esArchivoImagen, prepararImagenParaUpload } from '../../comprimirImagen.js'
 
 /**
- * Captura / carga de fotografía del trabajador.
+ * Captura / carga de fotografía del colaborador.
+ * @param {{ compact?: boolean }} props — compact: sin marco exterior (para panel compartido).
  */
 export default function FotoTrabajadorCapture({
   previewUrl,
@@ -10,6 +11,8 @@ export default function FotoTrabajadorCapture({
   onClear,
   disabled = false,
   themeTokens = {},
+  compact = false,
+  titulo = 'Fotografía del colaborador',
 }) {
   const fileRef = useRef(null)
   const camRef = useRef(null)
@@ -38,7 +41,14 @@ export default function FotoTrabajadorCapture({
   }
 
   return (
-    <div style={{
+    <div style={compact ? {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'flex-start',
+      flexWrap: 'wrap',
+      flex: '1 1 240px',
+      minWidth: 0,
+    } : {
       display: 'flex',
       gap: 12,
       alignItems: 'flex-start',
@@ -62,13 +72,13 @@ export default function FotoTrabajadorCapture({
         flexShrink: 0,
       }}>
         {previewUrl ? (
-          <img src={previewUrl} alt="Foto trabajador" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          <img src={previewUrl} alt="Foto colaborador" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         ) : (
           <span style={{ fontSize: 'var(--cc-caption)', color: muted, textAlign: 'center', padding: 6 }}>Sin foto</span>
         )}
       </div>
-      <div style={{ flex: '1 1 180px', minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginBottom: 6 }}>Fotografía del trabajador</div>
+      <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginBottom: 6 }}>{titulo}</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"

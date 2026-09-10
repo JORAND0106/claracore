@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -17,7 +18,7 @@ from azure_blob_storage import (
     path_rrhh_trabajador_documento,
     upload_blob_private,
 )
-from rrhh_service import get_trabajador, trabajador_display_nombre
+from rrhh_service import add_catalogo_opcion, get_trabajador, trabajador_display_nombre
 
 _log = logging.getLogger("claracore.rrhh.docs")
 
@@ -26,6 +27,7 @@ _TABLE_CONTRATOS = "rrhh_contratos_generados"
 _TABLE_SEQ = "rrhh_contrato_laboral_seq"
 
 _CTO_LAB_RE = re.compile(r"^CTO-LAB-(\d+)$", re.IGNORECASE)
+_EXT_TIPO_RE = re.compile(r"^ext_[a-z0-9_]{1,80}$")
 
 DOC_CATEGORIAS = frozenset({"soporte", "ingreso"})
 
@@ -55,6 +57,21 @@ DOC_MIMES = frozenset({
     "image/webp",
 })
 MAX_DOC_BYTES = 20 * 1024 * 1024
+
+_CATALOGO_POR_DOC = {
+    "soporte": "doc_soporte",
+    "ingreso": "doc_ingreso",
+}
+
+
+def slug_tipo_documento(label: str) -> str:
+    """Slug estable para tipos de documento agregados vía «Otro»."""
+    s = unicodedata.normalize("NFD", str(label or "").strip().lower())
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    if not s:
+        s = "documento"
+    return f"ext_{s[:72]}"
 
 
 def _now_iso() -> str:
@@ -87,27 +104,55 @@ def validate_upload(content_type: Optional[str], size: int) -> str:
     return mime
 
 
-def _tipos_permitidos(categoria: str) -> frozenset:
+def _tipos_builtin(categoria: str) -> frozenset:
     if categoria == "soporte":
-        return frozenset(k for k, _ in DOC_TIPOS_SOPORTE)
+        return frozenset(k for k, _ in DOC_TIPOS_SOPORTE if k != "otro")
     if categoria == "ingreso":
-        return frozenset(k for k, _ in DOC_TIPOS_INGRESO)
+        return frozenset(k for k, _ in DOC_TIPOS_INGRESO if k != "otro")
     raise ValueError("Categoría de documento inválida.")
 
 
-def _validate_tipo(categoria: str, tipo: str, tipo_otro_texto: Optional[str]) -> tuple[str, Optional[str]]:
+def _validate_tipo(
+    sb,
+    contrato_id: int,
+    categoria: str,
+    tipo: str,
+    tipo_otro_texto: Optional[str],
+    current_user,
+) -> tuple[str, Optional[str]]:
     cat = (categoria or "").strip().lower()
     if cat not in DOC_CATEGORIAS:
         raise ValueError("Categoría inválida. Use «soporte» o «ingreso».")
     t = (tipo or "").strip().lower()
-    if t not in _tipos_permitidos(cat):
-        raise ValueError(f"Tipo de documento inválido para {cat}.")
     otro = (tipo_otro_texto or "").strip() or None
+    builtins = _tipos_builtin(cat)
+    catalog_key = _CATALOGO_POR_DOC[cat]
+
+    # Flujo «Otro»: pide nombre, persiste en catálogo y usa slug ext_*
     if t == "otro":
         if not otro:
             raise ValueError("Indique el nombre del documento cuando elige «Otro».")
-        return t, otro[:200]
-    return t, None
+        label = otro[:200]
+        try:
+            add_catalogo_opcion(sb, contrato_id, catalog_key, label, current_user)
+        except Exception as exc:
+            _log.debug("persist doc tipo catalog: %s", exc)
+        return slug_tipo_documento(label), label
+
+    if t in builtins:
+        return t, None
+
+    # Tipo ya extendido (reutilización del checklist)
+    if _EXT_TIPO_RE.match(t):
+        label = otro or t[4:].replace("_", " ").strip() or t
+        if otro:
+            try:
+                add_catalogo_opcion(sb, contrato_id, catalog_key, label[:200], current_user)
+            except Exception as exc:
+                _log.debug("persist ext doc tipo: %s", exc)
+        return t, (label[:200] if label else None)
+
+    raise ValueError(f"Tipo de documento inválido para {cat}.")
 
 
 def list_documentos(
@@ -152,7 +197,9 @@ def create_documento(
 ) -> dict:
     trab = get_trabajador(sb, contrato_id, trabajador_id)
     cat = (categoria or "").strip().lower()
-    t, otro = _validate_tipo(cat, tipo, tipo_otro_texto)
+    t, otro = _validate_tipo(
+        sb, contrato_id, cat, tipo, tipo_otro_texto, current_user
+    )
     mime = validate_upload(content_type, len(archivo_bytes))
     safe_name = (nombre_archivo or f"{t}.pdf").strip()[:255] or f"{t}.pdf"
     blob_path = path_rrhh_trabajador_documento(
@@ -612,4 +659,5 @@ def catalogo_tipos_documento() -> dict:
     return {
         "soporte": [{"tipo": k, "label": v} for k, v in DOC_TIPOS_SOPORTE],
         "ingreso": [{"tipo": k, "label": v} for k, v in DOC_TIPOS_INGRESO],
+        "slug_ext_prefix": "ext_",
     }

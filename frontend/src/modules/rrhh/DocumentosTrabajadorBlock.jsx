@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import { tFrom, isDarkMode } from '../../theme/adminPanelTheme'
-import { DOC_TIPOS_INGRESO, DOC_TIPOS_SOPORTE } from './rrhhHelpers'
+import { buildDocChecklist, slugTipoDocumento } from './rrhhHelpers'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
  * Bloque Excel de documentos versionados (soporte o ingreso).
- * Mismo patrón visual/UX que Documentos Contractuales de Subcontratistas.
+ * «Otro» agrega tipos permanentes al checklist (catálogo reutilizable).
  */
 export default function DocumentosTrabajadorBlock({
   theme,
@@ -14,19 +14,24 @@ export default function DocumentosTrabajadorBlock({
   trabajadorId,
   categoria = 'soporte',
   canEdit = true,
+  customTipos = [],
+  onTiposChange,
   onMsg,
 }) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
   const S = rrhhUi(theme, tTok)
   const cssVars = rrhhSheetCssVars(tTok)
-  const tipos = categoria === 'ingreso' ? DOC_TIPOS_INGRESO : DOC_TIPOS_SOPORTE
+  const catalogKey = categoria === 'ingreso' ? 'doc_ingreso' : 'doc_soporte'
+  const tipos = useMemo(
+    () => buildDocChecklist(categoria, customTipos),
+    [categoria, customTipos],
+  )
 
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [histTipo, setHistTipo] = useState(null)
-  const [otroTexto, setOtroTexto] = useState('')
   const [preview, setPreview] = useState({
     open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null,
   })
@@ -59,15 +64,28 @@ export default function DocumentosTrabajadorBlock({
   const vigentesPorTipo = useMemo(() => {
     const map = {}
     for (const meta of tipos) {
+      if (meta.tipo === 'otro') continue
       const ofTipo = rows.filter((r) => r.tipo === meta.tipo)
       map[meta.tipo] = ofTipo.find((r) => r.vigente) || ofTipo[0] || null
       map[`${meta.tipo}__hist`] = ofTipo
+    }
+    // Documentos legacy tipo=otro con texto: agrupar por slug del texto
+    for (const r of rows) {
+      if (r.tipo === 'otro' && r.tipo_otro_texto) {
+        const slug = slugTipoDocumento(r.tipo_otro_texto)
+        if (!map[`${slug}__hist`]) map[`${slug}__hist`] = []
+        map[`${slug}__hist`].push(r)
+        if (!map[slug] || r.vigente) map[slug] = r
+      }
     }
     return map
   }, [rows, tipos])
 
   const displayRows = useMemo(
     () => tipos.map((meta) => {
+      if (meta.tipo === 'otro') {
+        return { _placeholder: true, tipo: 'otro', label: meta.label, _meta: meta, _isOtro: true }
+      }
       const vig = vigentesPorTipo[meta.tipo]
       if (vig) return { ...vig, _meta: meta }
       return { _placeholder: true, tipo: meta.tipo, label: meta.label, _meta: meta }
@@ -84,6 +102,35 @@ export default function DocumentosTrabajadorBlock({
     }
   }
 
+  const onClickTipo = async (meta) => {
+    if (!canEdit || busy) return
+    if (meta.tipo === 'otro') {
+      const nombre = window.prompt('¿De qué tipo de documento se trata?')
+      const label = String(nombre || '').trim()
+      if (!label) {
+        onMsg?.({ type: 'error', text: 'Debe indicar el nombre del tipo de documento.' })
+        return
+      }
+      try {
+        if (onTiposChange) {
+          await onTiposChange(catalogKey, label)
+        } else {
+          await api?.addCatalogoOpcion?.(catalogKey, label)
+        }
+      } catch (e) {
+        onMsg?.({ type: 'error', text: e.message || 'No se pudo agregar el tipo de documento.' })
+        return
+      }
+      const slug = slugTipoDocumento(label)
+      abrirFilePicker({ tipo: slug, tipo_otro_texto: label })
+      return
+    }
+    abrirFilePicker({
+      tipo: meta.tipo,
+      tipo_otro_texto: meta.custom ? meta.label : null,
+    })
+  }
+
   const onFileChosen = async (file) => {
     const action = pendingActionRef.current
     pendingActionRef.current = null
@@ -95,7 +142,7 @@ export default function DocumentosTrabajadorBlock({
         tipo: action.tipo,
         archivo: file,
         version_label: action.replaceId ? 'Reemplazo' : 'Original',
-        tipo_otro_texto: action.tipo === 'otro' ? (otroTexto || 'Otro documento') : null,
+        tipo_otro_texto: action.tipo_otro_texto || null,
         marcar_vigente: true,
       })
       onMsg?.({ type: 'success', text: action.replaceId ? 'Documento reemplazado.' : 'Documento cargado.' })
@@ -150,18 +197,9 @@ export default function DocumentosTrabajadorBlock({
     <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)' }}>
       <div style={ui.sectionTitle}>{titulo}</div>
       <div style={{ marginBottom: 6, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
-        Clic en fila vacía para cargar. Reemplazar genera nueva versión y conserva el historial.
+        Clic en fila vacía para cargar. «Otro» agrega un tipo nuevo al checklist permanente.
+        Reemplazar genera nueva versión y conserva el historial.
       </div>
-      {tipos.some((t) => t.tipo === 'otro') && canEdit && (
-        <div style={{ marginBottom: 8 }}>
-          <input
-            style={{ ...S.input, maxWidth: 360 }}
-            placeholder="Nombre si el tipo es «Otro»"
-            value={otroTexto}
-            onChange={(e) => setOtroTexto(e.target.value)}
-          />
-        </div>
-      )}
       <div style={{ ...ui.sheetWrap, maxHeight: 'min(360px, 42vh)' }}>
         <table style={ui.sheetTable}>
           <thead>
@@ -182,12 +220,14 @@ export default function DocumentosTrabajadorBlock({
                 return (
                   <tr
                     key={`ph-${meta.tipo}`}
-                    onClick={() => abrirFilePicker({ tipo: meta.tipo })}
+                    onClick={() => onClickTipo(meta)}
                     style={{ cursor: canEdit && !busy ? 'pointer' : 'default' }}
                   >
                     <td style={lbl}>{meta.label}</td>
                     <td style={{ ...ui.td, color: tTok.textMuted }}>
-                      {canEdit ? 'Clic para cargar…' : 'Sin documento'}
+                      {canEdit
+                        ? (meta.tipo === 'otro' ? 'Clic para agregar tipo…' : 'Clic para cargar…')
+                        : 'Sin documento'}
                     </td>
                     <td style={ui.td}>—</td>
                     <td style={ui.td}>—</td>
@@ -198,7 +238,6 @@ export default function DocumentosTrabajadorBlock({
                 <tr key={row.id}>
                   <td style={lbl}>
                     {meta.label}
-                    {row.tipo === 'otro' && row.tipo_otro_texto ? ` — ${row.tipo_otro_texto}` : ''}
                     {row.vigente ? (
                       <span style={{ marginLeft: 6, color: S.successColor, fontSize: 'var(--cc-caption)', fontWeight: 700 }}>
                         vigente
@@ -226,7 +265,11 @@ export default function DocumentosTrabajadorBlock({
                             type="button"
                             style={{ ...S.btnGhost, padding: '4px 8px' }}
                             disabled={busy}
-                            onClick={() => abrirFilePicker({ tipo: meta.tipo, replaceId: row.id })}
+                            onClick={() => abrirFilePicker({
+                              tipo: meta.tipo,
+                              tipo_otro_texto: meta.custom ? meta.label : null,
+                              replaceId: row.id,
+                            })}
                           >
                             Reemplazar
                           </button>

@@ -9,7 +9,7 @@ export default function FirmaPad({
   onChange,
   disabled = false,
   themeTokens = {},
-  titulo = 'Firma del trabajador',
+  titulo = 'Firma del colaborador',
 }) {
   const canvasRef = useRef(null)
   const drawingRef = useRef(false)
