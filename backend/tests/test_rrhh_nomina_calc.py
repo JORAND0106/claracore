@@ -126,6 +126,7 @@ def test_xlsx_build_bytes():
         "fecha_inicio": "2026-09-01",
         "fecha_fin": "2026-09-30",
         "estado": "cerrada",
+        "smmlv_usado": 1_750_000,
     }
     items = [{
         "trabajador_id": 1,
@@ -154,8 +155,33 @@ def test_xlsx_build_bytes():
         "prov_prima": 166_666,
         "prov_vacaciones": 83_333,
         "total_provisiones": 418_331,
-        "detalle_json": {"nombre": "Ana Pérez", "documento": "CC 123", "email": "a@b.co"},
+        "detalle_json": {
+            "nombre": "Ana Pérez",
+            "documento": "CC 123",
+            "email": "a@b.co",
+            "arl_nivel": "I",
+        },
     }]
     data = build_nomina_xlsx(nomina, items, contrato_label="Obra demo")
     assert data[:2] == b"PK"  # zip/xlsx magic
     assert len(data) > 500
+
+    from openpyxl import load_workbook
+    import io
+    wb = load_workbook(io.BytesIO(data))
+    assert "Parametros" in wb.sheetnames
+    assert "Nómina" in wb.sheetnames
+    ws = wb["Nómina"]
+    # Fila 5 = primer colaborador (header en fila 4)
+    assert str(ws["L5"].value).startswith("=")  # IBC fórmula
+    assert str(ws["M5"].value).startswith("=")  # Total devengado
+    assert str(ws["N5"].value).startswith("=")  # Ded salud
+    assert str(ws["Q5"].value).startswith("=")  # Total deducciones
+    assert str(ws["R5"].value).startswith("=")  # Neto
+    assert str(ws["Y5"].value).startswith("=")  # Total aportes
+    assert str(ws["AD5"].value).startswith("=")  # Total provisiones
+    # Bases son valores numéricos
+    assert ws["E5"].value == 2_000_000
+    assert isinstance(ws["E5"].value, (int, float))
+    # Totales con SUM
+    assert str(ws["M6"].value).startswith("=SUM(")

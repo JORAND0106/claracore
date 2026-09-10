@@ -184,9 +184,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const tabsDetalle = [
     { id: 'datos', label: 'Registro' },
-    { id: 'soporte', label: 'Docs. soporte' },
+    { id: 'documentacion', label: 'Documentación' },
     { id: 'contrato', label: 'Contrato laboral' },
-    { id: 'ingreso', label: 'Docs. ingreso' },
   ]
 
   const abrirDetalle = async (row) => {
@@ -593,17 +592,43 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                   </div>
                 </>
               )}
-              {tabDetalle === 'soporte' && (
-                <DocumentosTrabajadorBlock
-                  theme={theme}
-                  api={api}
-                  trabajadorId={detalle.id}
-                  categoria="soporte"
-                  canEdit={permisos.crear || permisos.editar}
-                  customTipos={catalogo.doc_soporte || []}
-                  onTiposChange={addCatalogValue}
-                  onMsg={(m) => flash(m.type, m.text)}
-                />
+              {tabDetalle === 'documentacion' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                  <div style={{
+                    padding: 12,
+                    border: `1px solid ${tTok.border}`,
+                    borderRadius: 10,
+                    background: tTok.bgCard,
+                  }}>
+                    <DocumentosTrabajadorBlock
+                      theme={theme}
+                      api={api}
+                      trabajadorId={detalle.id}
+                      categoria="soporte"
+                      canEdit={permisos.crear || permisos.editar}
+                      customTipos={catalogo.doc_soporte || []}
+                      onTiposChange={addCatalogValue}
+                      onMsg={(m) => flash(m.type, m.text)}
+                    />
+                  </div>
+                  <div style={{
+                    padding: 12,
+                    border: `1px solid ${tTok.border}`,
+                    borderRadius: 10,
+                    background: tTok.bgCard,
+                  }}>
+                    <DocumentosTrabajadorBlock
+                      theme={theme}
+                      api={api}
+                      trabajadorId={detalle.id}
+                      categoria="ingreso"
+                      canEdit={permisos.crear || permisos.editar}
+                      customTipos={catalogo.doc_ingreso || []}
+                      onTiposChange={addCatalogValue}
+                      onMsg={(m) => flash(m.type, m.text)}
+                    />
+                  </div>
+                </div>
               )}
               {tabDetalle === 'contrato' && (
                 <ContratoLaboralBlock
@@ -616,18 +641,6 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                   onAddTipoContrato={async (v) => addCatalogValue('tipo_contrato', v)}
                   canEdit={permisos.crear || permisos.editar}
                   canExport={permisos.exportar || permisos.ver}
-                  onMsg={(m) => flash(m.type, m.text)}
-                />
-              )}
-              {tabDetalle === 'ingreso' && (
-                <DocumentosTrabajadorBlock
-                  theme={theme}
-                  api={api}
-                  trabajadorId={detalle.id}
-                  categoria="ingreso"
-                  canEdit={permisos.crear || permisos.editar}
-                  customTipos={catalogo.doc_ingreso || []}
-                  onTiposChange={addCatalogValue}
                   onMsg={(m) => flash(m.type, m.text)}
                 />
               )}
