@@ -525,3 +525,36 @@ def path_subcontratista_documento(
         f"subcontratistas/{int(contrato_id)}/{int(subcontratista_id)}/"
         f"docs/{tipo_safe}/{ts}_{safe}"
     )
+
+
+def path_rrhh_trabajador_documento(
+    contrato_id: int,
+    trabajador_id: int,
+    categoria: str,
+    tipo: str,
+    nombre_archivo: str,
+) -> str:
+    """Documento de soporte o ingreso RRHH (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    cat_safe = re.sub(r"[^\w\-]", "_", (categoria or "doc").strip().lower())[:40]
+    tipo_safe = re.sub(r"[^\w\-]", "_", (tipo or "doc").strip().lower())[:40]
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "documento").strip())[:120]
+    return (
+        f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/"
+        f"{cat_safe}/{tipo_safe}/{ts}_{safe}"
+    )
+
+
+def path_rrhh_contrato_laboral(
+    contrato_id: int,
+    trabajador_id: int,
+    version_num: int,
+    nombre_archivo: str,
+) -> str:
+    """Contrato laboral PDF generado (RRHH)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "contrato.pdf").strip())[:120]
+    return (
+        f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/"
+        f"contratos_laborales/v{int(version_num)}_{ts}_{safe}"
+    )
