@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
+import CcDatePickerInput from '../../components/CcDatePickerInput'
 import { isDarkMode, tFrom } from '../../theme/adminPanelTheme'
-import BirthDateSelect from './BirthDateSelect'
 import CatalogSelect from './CatalogSelect'
 import FirmaPad from './FirmaPad'
 import FotoTrabajadorCapture from './FotoTrabajadorCapture'
@@ -217,11 +217,13 @@ export default function TrabajadorFormSheet({
               </SheetField>
             </tr>
             <tr>
-              <SheetField label="F. nacimiento" labelStyle={lbl} valueStyle={{ ...valCell, overflow: 'visible' }} colSpan={3}>
-                <BirthDateSelect
+              <SheetField label="F. nacimiento" labelStyle={lbl} valueStyle={valCell} colSpan={3}>
+                <CcDatePickerInput
                   value={f.fecha_nacimiento || ''}
                   disabled={!canEdit}
-                  selectStyle={ui.cellSelect}
+                  style={ui.cellInp}
+                  aria-label="Fecha de nacimiento"
+                  max={new Date().toISOString().slice(0, 10)}
                   onChange={(v) => setField('fecha_nacimiento', v)}
                 />
               </SheetField>

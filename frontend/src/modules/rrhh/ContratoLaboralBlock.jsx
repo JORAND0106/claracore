@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
+import CcDatePickerInput from '../../components/CcDatePickerInput'
 import { tFrom } from '../../theme/adminPanelTheme'
 import CatalogSelect from './CatalogSelect'
-import RrhhDateSelect from './RrhhDateSelect'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
@@ -143,13 +143,11 @@ export default function ContratoLaboralBlock({
             <tr>
               <td style={ui.tdLabel}>Fecha inicio</td>
               <td style={ui.td}>
-                <RrhhDateSelect
+                <CcDatePickerInput
                   value={fechaInicio}
                   disabled={!canEdit}
-                  selectStyle={ui.cellSelect}
-                  minYear={1990}
-                  maxYear={new Date().getFullYear() + 15}
-                  ariaPrefix="Fecha inicio"
+                  style={ui.cellInp}
+                  aria-label="Fecha inicio del contrato laboral"
                   onChange={setFechaInicio}
                 />
               </td>
@@ -157,13 +155,11 @@ export default function ContratoLaboralBlock({
             <tr>
               <td style={ui.tdLabel}>Fecha fin</td>
               <td style={ui.td}>
-                <RrhhDateSelect
+                <CcDatePickerInput
                   value={fechaFin}
                   disabled={!canEdit}
-                  selectStyle={ui.cellSelect}
-                  minYear={1990}
-                  maxYear={new Date().getFullYear() + 20}
-                  ariaPrefix="Fecha fin"
+                  style={ui.cellInp}
+                  aria-label="Fecha fin del contrato laboral"
                   onChange={setFechaFin}
                 />
               </td>
