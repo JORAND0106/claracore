@@ -76,20 +76,15 @@ CATALOG_DEFAULTS = {
         "Padre",
         "Madre",
         "Cónyuge",
-        "Hijo",
-        "Hija",
-        "Hermano",
-        "Hermana",
-        "Abuelo",
-        "Abuela",
-        "Tío",
-        "Tía",
-        "Primo",
-        "Prima",
-        "Suegro",
-        "Suegra",
-        "Amigo",
-        "Amiga",
+        "Compañero(a) permanente",
+        "Hij@",
+        "Herman@",
+        "Abuel@",
+        "Ti@",
+        "Prim@",
+        "Suegr@",
+        "Amig@",
+        "Otro",
     ),
 }
 
@@ -597,6 +592,18 @@ def update_trabajador(sb, contrato_id: int, trabajador_id: int, body: dict, curr
 
 def soft_delete_trabajador(sb, contrato_id: int, trabajador_id: int, current_user) -> dict:
     get_trabajador(sb, contrato_id, trabajador_id)
+    # Cascada: anular contratos laborales del trabajador y liberar consecutivos CTO-LAB
+    try:
+        from rrhh_docs_service import cascade_delete_contratos_trabajador
+
+        cascade_delete_contratos_trabajador(
+            sb, contrato_id, trabajador_id, current_user=current_user
+        )
+    except Exception as exc:
+        _log.warning(
+            "cascada contratos laborales trabajador %s: %s", trabajador_id, exc
+        )
+        raise
     rows = (
         sb.table(_TABLE_TRAB)
         .update(

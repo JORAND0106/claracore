@@ -43,9 +43,46 @@ export const EMPTY_TRABAJADOR_FORM = {
 export const TIPOS_SANGRE = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-']
 
 export const PARENTESCO_DEFAULTS = [
-  'Padre', 'Madre', 'Cónyuge', 'Hijo', 'Hija', 'Hermano', 'Hermana',
-  'Abuelo', 'Abuela', 'Tío', 'Tía', 'Primo', 'Prima', 'Suegro', 'Suegra', 'Amigo', 'Amiga',
+  'Padre',
+  'Madre',
+  'Cónyuge',
+  'Compañero(a) permanente',
+  'Hij@',
+  'Herman@',
+  'Abuel@',
+  'Ti@',
+  'Prim@',
+  'Suegr@',
+  'Amig@',
+  'Otro',
 ]
+
+export const CAMPOS_OBLIGATORIOS_TRABAJADOR = [
+  { key: 'nombres', label: 'Nombres' },
+  { key: 'apellidos', label: 'Apellidos' },
+  { key: 'tipo_documento', label: 'Tipo de documento' },
+  { key: 'numero_documento', label: 'Número de documento' },
+  { key: 'empresa_key', label: 'Empresa' },
+]
+
+export function validateTrabajadorForm(form) {
+  const faltantes = []
+  for (const c of CAMPOS_OBLIGATORIOS_TRABAJADOR) {
+    const v = form?.[c.key]
+    if (v == null || String(v).trim() === '') faltantes.push(c.label)
+  }
+  const doc = String(form?.numero_documento || '').trim()
+  if (doc && !/^\d+$/.test(doc)) {
+    faltantes.push('Número de documento (solo dígitos)')
+  }
+  return {
+    ok: faltantes.length === 0,
+    faltantes,
+    mensaje: faltantes.length
+      ? `Complete los campos obligatorios: ${faltantes.join(', ')}.`
+      : '',
+  }
+}
 
 export const DOC_TIPOS_SOPORTE = [
   { tipo: 'cedula', label: 'Cédula / Documento de identidad' },

@@ -5,7 +5,11 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { accesoRrhh, permisoRrhh } from './rrhhPermisos.js'
-import { payloadFromForm, EMPTY_TRABAJADOR_FORM } from './rrhhHelpers.js'
+import {
+  payloadFromForm,
+  EMPTY_TRABAJADOR_FORM,
+  validateTrabajadorForm,
+} from './rrhhHelpers.js'
 
 describe('rrhhPermisos', () => {
   it('desarrollador tiene acceso total', () => {
@@ -92,5 +96,30 @@ describe('rrhhHelpers payload', () => {
     assert.equal(p.salario_liquidable, false)
     assert.equal(p.lugar_expedicion, 'Bogotá, Cundinamarca')
     assert.equal(p.tipo_sangre, 'O+')
+  })
+
+  it('valida campos obligatorios al guardar', () => {
+    const bad = validateTrabajadorForm({ ...EMPTY_TRABAJADOR_FORM })
+    assert.equal(bad.ok, false)
+    assert.ok(bad.faltantes.includes('Nombres'))
+    assert.ok(bad.faltantes.includes('Número de documento'))
+    const good = validateTrabajadorForm({
+      ...EMPTY_TRABAJADOR_FORM,
+      nombres: 'Ana',
+      apellidos: 'Pérez',
+      tipo_documento: 'CC',
+      numero_documento: '123456',
+      empresa_key: 'consorcio',
+    })
+    assert.equal(good.ok, true)
+    const nonDigits = validateTrabajadorForm({
+      ...EMPTY_TRABAJADOR_FORM,
+      nombres: 'Ana',
+      apellidos: 'Pérez',
+      tipo_documento: 'CC',
+      numero_documento: '12AB',
+      empresa_key: 'consorcio',
+    })
+    assert.equal(nonDigits.ok, false)
   })
 })

@@ -17,6 +17,7 @@ import {
   nombreCompleto,
   payloadFromForm,
   dataUrlToBlob,
+  validateTrabajadorForm,
 } from './rrhhHelpers'
 import { accesoRrhh } from './rrhhPermisos'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
@@ -211,6 +212,11 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const guardarCrear = async () => {
     if (!api || !permisos.crear) return
+    const v = validateTrabajadorForm(crearForm)
+    if (!v.ok) {
+      flash('error', v.mensaje)
+      return
+    }
     setBusy(true)
     try {
       const created = await api.createTrabajador(payloadFromForm(crearForm))
@@ -229,9 +235,14 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const guardarEdicion = async () => {
     if (!api || !permisos.editar || !detalle) return
+    const v = validateTrabajadorForm(editForm)
+    if (!v.ok) {
+      flash('error', v.mensaje)
+      return
+    }
     setBusy(true)
     try {
-      const updated = await api.updateTrabajador(detalle.id, payloadFromForm(editForm))
+      await api.updateTrabajador(detalle.id, payloadFromForm(editForm))
       await persistMedia(detalle.id, editForm)
       const full = await api.getTrabajador(detalle.id)
       setDetalle(full)
@@ -407,7 +418,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       {/* Modal crear — no cierra al clic fuera */}
       {showCrear && (
         <div style={overlayStyle} role="presentation">
-          <div style={modalStyle(920)} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+          <div style={modalStyle(1290)} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div style={{ fontWeight: 800, fontSize: 'var(--cc-h2)', color: tTok.text }}>
@@ -445,7 +456,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       {/* Modal detalle — no cierra al clic fuera */}
       {detalle && (
         <div style={overlayStyle} role="presentation">
-          <div style={modalStyle(980)} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+          <div style={modalStyle(1370)} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div>

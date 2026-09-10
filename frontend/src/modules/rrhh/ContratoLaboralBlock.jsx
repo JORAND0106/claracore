@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import { tFrom } from '../../theme/adminPanelTheme'
 import CatalogSelect from './CatalogSelect'
+import RrhhDateSelect from './RrhhDateSelect'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
@@ -142,13 +143,29 @@ export default function ContratoLaboralBlock({
             <tr>
               <td style={ui.tdLabel}>Fecha inicio</td>
               <td style={ui.td}>
-                <input type="date" style={ui.cellInp} value={fechaInicio} disabled={!canEdit} onChange={(e) => setFechaInicio(e.target.value)} />
+                <RrhhDateSelect
+                  value={fechaInicio}
+                  disabled={!canEdit}
+                  selectStyle={ui.cellSelect}
+                  minYear={1990}
+                  maxYear={new Date().getFullYear() + 15}
+                  ariaPrefix="Fecha inicio"
+                  onChange={setFechaInicio}
+                />
               </td>
             </tr>
             <tr>
               <td style={ui.tdLabel}>Fecha fin</td>
               <td style={ui.td}>
-                <input type="date" style={ui.cellInp} value={fechaFin} disabled={!canEdit} onChange={(e) => setFechaFin(e.target.value)} />
+                <RrhhDateSelect
+                  value={fechaFin}
+                  disabled={!canEdit}
+                  selectStyle={ui.cellSelect}
+                  minYear={1990}
+                  maxYear={new Date().getFullYear() + 20}
+                  ariaPrefix="Fecha fin"
+                  onChange={setFechaFin}
+                />
               </td>
             </tr>
           </tbody>
