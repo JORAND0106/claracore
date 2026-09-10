@@ -149,11 +149,9 @@ export default function DocumentosTrabajadorBlock({
   return (
     <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)' }}>
       <div style={ui.sectionTitle}>{titulo}</div>
-      {categoria === 'soporte' || true ? (
-        <div style={{ marginBottom: 6, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
-          Clic en fila vacía para cargar. Reemplazar genera nueva versión y conserva el historial.
-        </div>
-      ) : null}
+      <div style={{ marginBottom: 6, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
+        Clic en fila vacía para cargar. Reemplazar genera nueva versión y conserva el historial.
+      </div>
       {tipos.some((t) => t.tipo === 'otro') && canEdit && (
         <div style={{ marginBottom: 8 }}>
           <input

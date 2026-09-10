@@ -51,13 +51,6 @@ def _http_value_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=400, detail=msg)
 
 
-def _uid(current_user) -> int:
-    try:
-        return int(current_user.get("sub"))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=401, detail="Token inválido") from exc
-
-
 def _audit(current_user, contrato_id: int) -> dict:
     u = dict(current_user or {})
     u["contrato_id"] = int(contrato_id)

@@ -213,13 +213,6 @@ def _texto_a_html(texto: str) -> str:
                 p = p.strip()
                 if p:
                     blocks.append(f'<p class="{cls}">{_esc(p)}</p>')
-    firmas = """
-<table class="firmas"><tr>
-  <td><div class="linea-firma">EL EMPLEADOR<br/>{{EMPRESA_CONTRATANTE}}</div></td>
-  <td><div class="linea-firma">EL TRABAJADOR<br/>{{NOMBRE_TRABAJADOR}}</div></td>
-</tr></table>
-""".replace("{{EMPRESA_CONTRATANTE}}", "").replace("{{NOMBRE_TRABAJADOR}}", "")
-    # Firmas se agregan desde plantilla; si no hay sección FIRMAS, append default
     html_body = "\n".join(blocks)
     if "linea-firma" not in html_body and "EL EMPLEADOR" not in html_body.upper():
         html_body += """
