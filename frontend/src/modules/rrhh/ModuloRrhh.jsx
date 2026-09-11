@@ -134,6 +134,15 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     } else if (form._firma_changed && !form.firma_data_url) {
       try { await api.deleteFirma(trabajadorId) } catch { /* ignore */ }
     }
+    if (form._cert_bancaria_file) {
+      await api.uploadDocumento(trabajadorId, {
+        categoria: 'bancario',
+        tipo: 'certificacion_bancaria',
+        archivo: form._cert_bancaria_file,
+        version_label: 'Original',
+        marcar_vigente: true,
+      })
+    }
   }, [api])
 
   const overlayStyle = {
@@ -486,6 +495,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                 empresas={empresas}
                 catalogo={catalogo}
                 onAddCatalogValue={addCatalogValue}
+                api={api}
+                onMsg={(m) => flash(m.type, m.text)}
               />
             </div>
             <div style={{
@@ -559,6 +570,10 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     empresas={empresas}
                     catalogo={catalogo}
                     onAddCatalogValue={addCatalogValue}
+                    api={api}
+                    trabajadorId={detalle.id}
+                    docLocked={Boolean(detalle.doc_bloqueado)}
+                    onMsg={(m) => flash(m.type, m.text)}
                   />
                   <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
                     {!editando && permisos.editar && (

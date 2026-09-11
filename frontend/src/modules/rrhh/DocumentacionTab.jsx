@@ -11,7 +11,7 @@ const panelStyle = (tTok) => ({
 })
 
 /**
- * TAB unificado Documentación: soporte, ingreso, contrato, bancario,
+ * TAB unificado Documentación: soporte, ingreso, contrato,
  * afiliaciones, validación + un solo botón guardar (ícono).
  */
 export default function DocumentacionTab({
@@ -37,11 +37,9 @@ export default function DocumentacionTab({
 
   const refSoporte = useRef(null)
   const refIngreso = useRef(null)
-  const refBancario = useRef(null)
   const refAfiliacion = useRef(null)
 
   const [busy, setBusy] = useState(false)
-  const [ocrBusy, setOcrBusy] = useState(false)
   const [obsValidacion, setObsValidacion] = useState(detalle?.doc_validacion_observacion || '')
 
   const setField = useCallback((key, val) => {
@@ -52,20 +50,16 @@ export default function DocumentacionTab({
     if (!api || !detalle || !canEdit) return
     setBusy(true)
     try {
-      // Campos del TAB (contrato + bancarios + fecha ingreso)
       await api.updateTrabajador(detalle.id, {
         fecha_ingreso: editForm?.fecha_ingreso || null,
         tipo_contrato: editForm?.tipo_contrato || null,
-        banco_entidad: editForm?.banco_entidad || null,
-        banco_tipo_cuenta: editForm?.banco_tipo_cuenta || null,
-        banco_numero_cuenta: editForm?.banco_numero_cuenta || null,
         eps: editForm?.eps || null,
         pension: editForm?.pension || null,
         arl: editForm?.arl || null,
         cesantias: editForm?.cesantias || null,
         caja_compensacion: editForm?.caja_compensacion || null,
       })
-      const refs = [refSoporte, refIngreso, refBancario, refAfiliacion]
+      const refs = [refSoporte, refIngreso, refAfiliacion]
       let files = 0
       let tipos = 0
       for (const r of refs) {
@@ -82,51 +76,6 @@ export default function DocumentacionTab({
       flash('error', e.message || 'No se pudo guardar la documentación.')
     } finally {
       setBusy(false)
-    }
-  }
-
-  const onCertBancariaSelected = async (file) => {
-    if (!file || !api || !detalle || !canEdit) return
-    // Encolar via ref: el bloque bancario ya maneja pending; aquí solo OCR
-    setOcrBusy(true)
-    try {
-      const r = await api.ocrBancario(detalle.id, file)
-      const sug = r?.sugerencias || {}
-      if (sug.banco_entidad) setField('banco_entidad', sug.banco_entidad)
-      if (sug.banco_tipo_cuenta) setField('banco_tipo_cuenta', sug.banco_tipo_cuenta)
-      if (sug.banco_numero_cuenta) setField('banco_numero_cuenta', sug.banco_numero_cuenta)
-      flash(r?.ok ? 'success' : 'error', r?.mensaje || 'OCR bancario completado.')
-    } catch (e) {
-      flash('error', e.message || 'OCR bancario falló.')
-    } finally {
-      setOcrBusy(false)
-    }
-  }
-
-  // Intercept bancario file via wrapping: DocumentosTrabajadorBlock stages files;
-  // we hook OCR by listening after pending — simpler: add OCR button that uses vigente/pending file.
-  const runOcrFromPendingOrVigente = async () => {
-    if (!api || !detalle) return
-    setOcrBusy(true)
-    try {
-      // Prefer pending file from bancario block
-      const pending = refBancario.current
-      // Fallback: download vigente cert and re-upload to OCR endpoint
-      const docs = await api.listDocumentos(detalle.id, 'bancario')
-      const vig = (docs?.items || []).find((d) => d.tipo === 'certificacion_bancaria' && d.vigente)
-      if (!vig) {
-        flash('error', 'Cargue primero la certificación bancaria (queda pendiente) y guarde, o use OCR tras seleccionar el archivo.')
-        // Try to OCR from a file picker
-        return
-      }
-      const url = await api.fetchBlobUrl(api.documentoArchivoUrl(detalle.id, vig.id))
-      const blob = await fetch(url).then((r) => r.blob())
-      const file = new File([blob], vig.nombre_archivo || 'cert.pdf', { type: vig.mime_type || 'application/pdf' })
-      await onCertBancariaSelected(file)
-    } catch (e) {
-      flash('error', e.message || 'No se pudo ejecutar OCR.')
-    } finally {
-      setOcrBusy(false)
     }
   }
 
@@ -325,72 +274,6 @@ export default function DocumentacionTab({
           customTipos={catalogo?.doc_ingreso || []}
           onTiposChange={addCatalogValue}
           onMsg={(m) => flash(m.type, m.text)}
-        />
-      </div>
-
-      {/* Bancario */}
-      <div style={panelStyle(tTok)}>
-        <div style={{ ...ui.sectionTitle, marginBottom: 6 }}>Datos bancarios</div>
-        <div style={{ ...ui.sheetWrap, maxHeight: 'none', marginBottom: 8 }}>
-          <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
-            <tbody>
-              <tr>
-                <td style={{ ...ui.tdLabel, width: '28%' }}>Entidad bancaria</td>
-                <td style={ui.td}>
-                  <input
-                    style={ui.cellInp}
-                    disabled={!canEdit}
-                    value={editForm?.banco_entidad || ''}
-                    onChange={(e) => setField('banco_entidad', e.target.value)}
-                  />
-                </td>
-              </tr>
-              <tr>
-                <td style={ui.tdLabel}>Tipo de cuenta</td>
-                <td style={ui.td}>
-                  <select
-                    style={ui.cellSelect}
-                    disabled={!canEdit}
-                    value={editForm?.banco_tipo_cuenta || ''}
-                    onChange={(e) => setField('banco_tipo_cuenta', e.target.value)}
-                  >
-                    <option value="">—</option>
-                    <option value="ahorros">Ahorros</option>
-                    <option value="corriente">Corriente</option>
-                  </select>
-                </td>
-              </tr>
-              <tr>
-                <td style={ui.tdLabel}>Número de cuenta</td>
-                <td style={ui.td}>
-                  <input
-                    style={ui.cellInp}
-                    disabled={!canEdit}
-                    value={editForm?.banco_numero_cuenta || ''}
-                    onChange={(e) => setField('banco_numero_cuenta', e.target.value)}
-                  />
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        {canEdit && (
-          <button type="button" style={{ ...S.btnGhost, marginBottom: 8, padding: '4px 8px' }} disabled={ocrBusy || busy} onClick={runOcrFromPendingOrVigente}>
-            {ocrBusy ? 'OCR…' : 'OCR desde certificación cargada'}
-          </button>
-        )}
-        <DocumentosTrabajadorBlock
-          ref={refBancario}
-          theme={theme}
-          api={api}
-          trabajadorId={detalle.id}
-          categoria="bancario"
-          canEdit={canEdit}
-          locked={locked}
-          hideSave
-          tituloOverride="Certificación bancaria"
-          onMsg={(m) => flash(m.type, m.text)}
-          onFileStaged={(file) => onCertBancariaSelected(file)}
         />
       </div>
 

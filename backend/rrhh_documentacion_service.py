@@ -3,8 +3,11 @@ Consolidación documental RRHH: auditoría, validación, PDF consolidado y bloqu
 """
 from __future__ import annotations
 
+import base64
 import io
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,6 +26,16 @@ _log = logging.getLogger("claracore.rrhh.doc_consolidacion")
 _TABLE = "rrhh_trabajadores"
 _TABLE_DOCS = "rrhh_trabajador_documentos"
 
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+_CERT_PLANTILLA = os.path.join(_ASSETS_DIR, "rrhh_certificado_documental_plantilla.txt")
+_PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_0-9]+\}\}")
+
+# Caja de foto en el certificado (px). La firma usa la mitad de la altura.
+_FOTO_W = 120
+_FOTO_H = 140
+_FIRMA_H = _FOTO_H // 2
+_FIRMA_MAX_W = 200
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -33,6 +46,175 @@ def _uid(current_user) -> Optional[int]:
         return int(current_user.get("sub"))
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+def _fecha_firma_bogota() -> str:
+    meses = {
+        1: "enero", 2: "febrero", 3: "marzo", 4: "abril",
+        5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
+        9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre",
+    }
+    try:
+        import pytz
+        now = datetime.now(pytz.timezone("America/Bogota"))
+    except Exception:
+        now = datetime.now(timezone.utc)
+    return f"{now.day} de {meses[now.month]} de {now.year}"
+
+
+def _cargar_plantilla_certificado() -> str:
+    """Plantilla editable en backend/assets/rrhh_certificado_documental_plantilla.txt."""
+    if not os.path.isfile(_CERT_PLANTILLA):
+        raise ValueError(
+            "No se encontró la plantilla del certificado documental "
+            "(backend/assets/rrhh_certificado_documental_plantilla.txt)."
+        )
+    with open(_CERT_PLANTILLA, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _aplicar_placeholders_cert(texto: str, ctx: Dict[str, str]) -> str:
+    out = texto
+    for k, v in ctx.items():
+        out = out.replace(k, v)
+    restantes = _PLACEHOLDER_RE.findall(out)
+    if restantes:
+        _log.warning("Placeholders sin reemplazar en certificado documental: %s", restantes)
+    return out
+
+
+def _contexto_certificado(trab: dict, contrato_obra: Optional[dict] = None) -> Dict[str, str]:
+    obra = contrato_obra or {}
+    nombre = trabajador_display_nombre(trab) or "________________"
+    vacio = "________________"
+
+    def campo(v):
+        s = str(v or "").strip()
+        return s if s else vacio
+
+    return {
+        "{{NOMBRE_COLABORADOR}}": campo(nombre),
+        "{{TIPO_DOCUMENTO}}": campo(trab.get("tipo_documento") or "CC"),
+        "{{NUMERO_DOCUMENTO}}": campo(trab.get("numero_documento")),
+        "{{CARGO}}": campo(trab.get("cargo_aspira")),
+        "{{NUMERO_CONTRATO}}": campo(obra.get("numero")),
+        "{{OBJETO_CONTRATO}}": campo(obra.get("objeto")),
+        "{{EMPRESA}}": campo(trab.get("empresa_nombre")),
+        "{{FECHA_FIRMA}}": _fecha_firma_bogota(),
+    }
+
+
+def _cargar_contrato_obra(sb, contrato_id: int) -> dict:
+    try:
+        rows = (
+            sb.table("contratos")
+            .select("id, numero, objeto, contratista, nit")
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else {}
+    except Exception as exc:
+        _log.warning("contrato obra %s: %s", contrato_id, exc)
+        return {}
+
+
+def _pil_cover_jpeg(data: bytes, target_w: int, target_h: int) -> bytes:
+    """Recorte centrado preservando proporción, luego resize exacto (sin deformar)."""
+    from PIL import Image
+
+    resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
+    img = Image.open(io.BytesIO(data))
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    elif img.mode == "L":
+        img = img.convert("RGB")
+    src_w, src_h = img.size
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError("imagen vacía")
+    target_ratio = target_w / float(target_h)
+    src_ratio = src_w / float(src_h)
+    if src_ratio > target_ratio:
+        new_w = int(round(src_h * target_ratio))
+        left = max(0, (src_w - new_w) // 2)
+        img = img.crop((left, 0, left + new_w, src_h))
+    elif src_ratio < target_ratio:
+        new_h = int(round(src_w / target_ratio))
+        top = max(0, (src_h - new_h) // 2)
+        img = img.crop((0, top, src_w, top + new_h))
+    img = img.resize((target_w, target_h), resample)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=88, optimize=True)
+    return buf.getvalue()
+
+
+def _pil_fit_height_png(data: bytes, max_h: int, max_w: int) -> Tuple[bytes, int, int]:
+    """Escala preservando proporción para caber en max_h (y max_w)."""
+    from PIL import Image
+
+    resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
+    img = Image.open(io.BytesIO(data))
+    if img.mode not in ("RGBA", "RGB"):
+        img = img.convert("RGBA")
+    src_w, src_h = img.size
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError("imagen vacía")
+    scale = min(max_h / float(src_h), max_w / float(src_w), 1.0)
+    new_w = max(1, int(round(src_w * scale)))
+    new_h = max(1, int(round(src_h * scale)))
+    if (new_w, new_h) != (src_w, src_h):
+        img = img.resize((new_w, new_h), resample)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue(), new_w, new_h
+
+
+def _foto_data_url(sb_path: Optional[str], mime: str) -> Optional[str]:
+    if not sb_path:
+        return None
+    try:
+        raw = download_blob_bytes_private(sb_path)
+        try:
+            jpeg = _pil_cover_jpeg(raw, _FOTO_W, _FOTO_H)
+            b64 = base64.b64encode(jpeg).decode("ascii")
+            return f"data:image/jpeg;base64,{b64}"
+        except Exception:
+            b64 = base64.b64encode(raw).decode("ascii")
+            return f"data:{mime or 'image/jpeg'};base64,{b64}"
+    except Exception:
+        return None
+
+
+def _firma_data_url(sb_path: Optional[str], mime: str) -> Tuple[Optional[str], int, int]:
+    """Retorna (data_url, width_px, height_px) con altura ≈ mitad de la foto."""
+    if not sb_path:
+        return None, _FIRMA_MAX_W, _FIRMA_H
+    try:
+        raw = download_blob_bytes_private(sb_path)
+        try:
+            png, w, h = _pil_fit_height_png(raw, _FIRMA_H, _FIRMA_MAX_W)
+            b64 = base64.b64encode(png).decode("ascii")
+            return f"data:image/png;base64,{b64}", w, h
+        except Exception:
+            b64 = base64.b64encode(raw).decode("ascii")
+            return f"data:{mime or 'image/png'};base64,{b64}", _FIRMA_MAX_W, _FIRMA_H
+    except Exception:
+        return None, _FIRMA_MAX_W, _FIRMA_H
+
+
+def _texto_certificacion_html(trab: dict, contrato_obra: Optional[dict]) -> str:
+    import html as html_mod
+
+    plantilla = _cargar_plantilla_certificado()
+    filled = _aplicar_placeholders_cert(plantilla, _contexto_certificado(trab, contrato_obra))
+    paras = []
+    for block in re.split(r"\n\s*\n", filled.strip()):
+        line = " ".join(ln.strip() for ln in block.splitlines() if ln.strip())
+        if line:
+            paras.append(f"<p class=\"cert-text\">{html_mod.escape(line)}</p>")
+    return "\n".join(paras)
 
 
 def _docs_vigentes_pdf(sb, contrato_id: int, trabajador_id: int) -> List[dict]:
@@ -150,6 +332,9 @@ def _build_portada_html(
     checklist: List[dict],
     foto_data_url: Optional[str],
     firma_data_url: Optional[str],
+    firma_w: int,
+    firma_h: int,
+    contrato_obra: Optional[dict] = None,
 ) -> str:
     import html as html_mod
 
@@ -164,38 +349,68 @@ def _build_portada_html(
             f"<td style='text-align:center'>{esc(item['estado'])}</td></tr>"
         )
     foto_html = (
-        f'<img src="{foto_data_url}" style="width:120px;height:140px;object-fit:cover;border:1px solid #cbd5e1;" />'
-        if foto_data_url else '<div style="width:120px;height:140px;border:1px dashed #94a3b8;"></div>'
+        f'<img src="{foto_data_url}" width="{_FOTO_W}" height="{_FOTO_H}" '
+        f'style="width:{_FOTO_W}px;height:{_FOTO_H}px;border:1px solid #cbd5e1;" />'
+        if foto_data_url
+        else (
+            f'<div style="width:{_FOTO_W}px;height:{_FOTO_H}px;border:1px dashed #94a3b8;'
+            f'display:inline-block;"></div>'
+        )
     )
-    firma_html = (
-        f'<img src="{firma_data_url}" style="max-width:220px;max-height:80px;" />'
-        if firma_data_url else '<div style="height:60px;border-top:1px solid #334155;width:200px;margin-top:40px;"></div>'
-    )
+    fw = max(1, int(firma_w or _FIRMA_MAX_W))
+    fh = max(1, int(firma_h or _FIRMA_H))
+    if firma_data_url:
+        firma_html = (
+            f'<img src="{firma_data_url}" width="{fw}" height="{fh}" '
+            f'style="width:{fw}px;height:{fh}px;" />'
+        )
+    else:
+        firma_html = (
+            f'<div style="height:{_FIRMA_H}px;border-bottom:1px solid #334155;'
+            f'width:{_FIRMA_MAX_W}px;margin-left:auto;"></div>'
+        )
+    cert_html = _texto_certificacion_html(trab, contrato_obra)
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
 <style>
-@page {{ size: letter; margin: 1.5cm; }}
+@page {{ size: letter; margin: 1.4cm; }}
 body {{ font-family: Arial, Helvetica, sans-serif; font-size: 10pt; color: #0f172a; }}
-h1 {{ color: #0077B6; text-align: center; font-size: 14pt; }}
-table {{ width: 100%; border-collapse: collapse; margin-top: 12pt; }}
-th, td {{ border: 1px solid #cbd5e1; padding: 5pt 7pt; }}
-th {{ background: #e0f2fe; }}
-.meta td {{ border: none; padding: 2pt 6pt; }}
+h1 {{ color: #0077B6; text-align: center; font-size: 13pt; margin: 0 0 8pt 0; }}
+table.meta {{ width: 100%; border-collapse: collapse; margin-top: 6pt; }}
+table.meta td {{ border: none; padding: 1.5pt 5pt; font-size: 9.5pt; }}
+table.checklist {{ width: 100%; border-collapse: collapse; margin: 4pt 0 8pt 0; }}
+table.checklist th, table.checklist td {{
+  border: 1px solid #cbd5e1;
+  padding: 1.5pt 4pt;
+  font-size: 8.5pt;
+  line-height: 1.15;
+}}
+table.checklist th {{ background: #e0f2fe; font-size: 8pt; }}
+.cert-text {{
+  text-align: justify;
+  font-size: 9pt;
+  line-height: 1.35;
+  margin: 0 0 7pt 0;
+  color: #0f172a;
+}}
+.firma-block {{ margin-top: 14pt; text-align: right; }}
+.firma-label {{ font-size: 8pt; color: #64748b; margin-top: 3pt; }}
 </style></head><body>
 <h1>Certificado de cumplimiento documental</h1>
-<div style="text-align:center;margin:10pt 0;">{foto_html}</div>
+<div style="text-align:center;margin:6pt 0 4pt 0;">{foto_html}</div>
 <table class="meta">
 <tr><td><b>Colaborador</b></td><td>{esc(nombre)}</td>
 <td><b>Documento</b></td><td>{esc(trab.get('tipo_documento'))} {esc(trab.get('numero_documento'))}</td></tr>
 <tr><td><b>Cargo</b></td><td>{esc(trab.get('cargo_aspira'))}</td>
 <td><b>Fecha ingreso</b></td><td>{esc(trab.get('fecha_ingreso'))}</td></tr>
 </table>
-<p>Checklist de documentación adjunta:</p>
-<table><tr><th>Documento</th><th>Estado</th></tr>{rows}</table>
-<div style="margin-top:36pt;text-align:center;">
+<p style="margin:8pt 0 2pt 0;font-size:9pt;font-weight:bold;">Checklist de documentación adjunta</p>
+<table class="checklist"><tr><th>Documento</th><th style="width:18%">Estado</th></tr>{rows}</table>
+{cert_html}
+<div class="firma-block">
 {firma_html}
-<div style="font-size:8.5pt;color:#64748b;margin-top:4pt;">Firma del colaborador</div>
+<div class="firma-label">Firma del colaborador</div>
 </div>
-<p style="margin-top:18pt;font-size:8pt;color:#64748b;text-align:center;">
+<p style="margin-top:14pt;font-size:7.5pt;color:#64748b;text-align:center;">
 ClaraCore — Recursos Humanos · Documento generado automáticamente
 </p>
 </body></html>"""
@@ -233,18 +448,6 @@ def _checklist_items(trab: dict, docs: List[dict]) -> List[dict]:
             label = d.get("tipo_otro_texto") or DOC_TIPO_LABEL.get(t) or t
             items.append({"label": label, "estado": "Cumple"})
     return items
-
-
-def _blob_to_data_url(sb_path: Optional[str], mime: str) -> Optional[str]:
-    if not sb_path:
-        return None
-    try:
-        import base64
-        data = download_blob_bytes_private(sb_path)
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"data:{mime};base64,{b64}"
-    except Exception:
-        return None
 
 
 def _merge_pdfs(portada: bytes, adjuntos: List[bytes]) -> bytes:
@@ -417,10 +620,11 @@ def build_pdf_consolidado_bytes(
                 pass
 
     checklist = _checklist_items(trabajador, docs)
-    foto_url = _blob_to_data_url(
+    obra = _cargar_contrato_obra(sb, contrato_id)
+    foto_url = _foto_data_url(
         trabajador.get("foto_blob_path"), trabajador.get("foto_mime_type") or "image/jpeg"
     )
-    firma_url = _blob_to_data_url(
+    firma_url, firma_w, firma_h = _firma_data_url(
         trabajador.get("firma_blob_path"), trabajador.get("firma_mime_type") or "image/png"
     )
     html = _build_portada_html(
@@ -428,8 +632,11 @@ def build_pdf_consolidado_bytes(
         checklist=checklist,
         foto_data_url=foto_url,
         firma_data_url=firma_url,
+        firma_w=firma_w,
+        firma_h=firma_h,
+        contrato_obra=obra,
     )
-    portada = to_pdf_bytes(html)
+    portada = to_pdf_bytes(html, landscape=False)
     consolidado = _merge_pdfs(portada, adjuntos_pdf)
     nombre = (
         f"preview_documentacion_{trabajador.get('numero_documento') or trabajador_id}.pdf"
