@@ -32,6 +32,8 @@ export const EMPTY_TRABAJADOR_FORM = {
   banco_entidad: '',
   banco_tipo_cuenta: '',
   banco_numero_cuenta: '',
+  _cert_bancaria_file: null,
+  _cert_bancaria_nombre: '',
   tipo_contrato: '',
   empresa_key: 'consorcio',
   empresa_tipo: 'consorcio',
@@ -224,6 +226,8 @@ export function formFromTrabajador(t) {
     banco_entidad: t.banco_entidad || '',
     banco_tipo_cuenta: t.banco_tipo_cuenta || '',
     banco_numero_cuenta: t.banco_numero_cuenta || '',
+    _cert_bancaria_file: null,
+    _cert_bancaria_nombre: '',
     empresa_key: empresaKeyFromTrabajador(t),
     empresa_subcontratista_id: t.empresa_subcontratista_id != null
       ? String(t.empresa_subcontratista_id)

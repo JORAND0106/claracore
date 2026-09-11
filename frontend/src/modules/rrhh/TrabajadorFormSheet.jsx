@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import CcDatePickerInput from '../../components/CcDatePickerInput'
 import { isDarkMode, tFrom } from '../../theme/adminPanelTheme'
 import CatalogSelect from './CatalogSelect'
@@ -12,7 +12,7 @@ import {
   capitalizarOracion,
   formatSalarioInput,
 } from './rrhhHelpers'
-import { rrhhSheetCssVars, rrhhSheetStyles } from './rrhhSheetStyles'
+import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 function SheetField({ label, labelStyle, valueStyle, children, colSpan = 1 }) {
   return (
@@ -63,14 +63,70 @@ export default function TrabajadorFormSheet({
   empresas = [],
   catalogo = {},
   onAddCatalogValue,
+  api = null,
+  trabajadorId = null,
+  docLocked = false,
+  onMsg = null,
 }) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
   const cssVars = rrhhSheetCssVars(tTok)
+  const S = rrhhUi(theme, tTok)
   const f = form || {}
+  const certInputRef = useRef(null)
+  const [certBusy, setCertBusy] = useState(false)
+  const [certNombreVigente, setCertNombreVigente] = useState('')
 
   const setField = (key, val) => onChange?.({ ...f, [key]: val })
   const setMany = (patch) => onChange?.({ ...f, ...patch })
+  const bancoEditable = canEdit && !docLocked
+
+  useEffect(() => {
+    let cancelled = false
+    const loadCert = async () => {
+      if (!api || !trabajadorId) {
+        setCertNombreVigente('')
+        return
+      }
+      try {
+        const res = await api.listDocumentos(trabajadorId, 'bancario')
+        const vig = (res?.items || []).find((d) => d.tipo === 'certificacion_bancaria' && d.vigente)
+        if (!cancelled) setCertNombreVigente(vig?.nombre_archivo || '')
+      } catch {
+        if (!cancelled) setCertNombreVigente('')
+      }
+    }
+    loadCert()
+    return () => { cancelled = true }
+  }, [api, trabajadorId])
+
+  const onCertFile = async (file) => {
+    if (!file || !bancoEditable) return
+    setCertBusy(true)
+    try {
+      setMany({
+        _cert_bancaria_file: file,
+        _cert_bancaria_nombre: file.name,
+      })
+      if (api) {
+        const r = await api.ocrBancario(trabajadorId || null, file)
+        const sug = r?.sugerencias || {}
+        const patch = {
+          _cert_bancaria_file: file,
+          _cert_bancaria_nombre: file.name,
+        }
+        if (sug.banco_entidad) patch.banco_entidad = sug.banco_entidad
+        if (sug.banco_tipo_cuenta) patch.banco_tipo_cuenta = sug.banco_tipo_cuenta
+        if (sug.banco_numero_cuenta) patch.banco_numero_cuenta = sug.banco_numero_cuenta
+        setMany(patch)
+        if (r?.ok === false) onMsg?.({ type: 'error', text: r?.mensaje || 'No se pudieron leer los datos del adjunto.' })
+      }
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudo procesar la certificación bancaria.' })
+    } finally {
+      setCertBusy(false)
+    }
+  }
 
   const lbl = {
     ...ui.tdLabel,
@@ -327,6 +383,65 @@ export default function TrabajadorFormSheet({
                   <option value="retirado">Retirado</option>
                 </select>
               </SheetField>
+            </tr>
+            <tr>
+              <td style={lbl}>Cuenta bancaria</td>
+              <td style={{ ...valCell, overflow: 'visible' }} colSpan={5}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    style={{ ...ui.cellInp, flex: '1 1 140px', minWidth: 120 }}
+                    placeholder="Entidad bancaria"
+                    disabled={!bancoEditable}
+                    value={f.banco_entidad || ''}
+                    onChange={(e) => setField('banco_entidad', e.target.value)}
+                    aria-label="Entidad bancaria"
+                  />
+                  <select
+                    style={{ ...ui.cellSelect, flex: '0 1 120px', minWidth: 110 }}
+                    disabled={!bancoEditable}
+                    value={f.banco_tipo_cuenta || ''}
+                    onChange={(e) => setField('banco_tipo_cuenta', e.target.value)}
+                    aria-label="Tipo de cuenta"
+                  >
+                    <option value="">Tipo cuenta</option>
+                    <option value="ahorros">Ahorros</option>
+                    <option value="corriente">Corriente</option>
+                  </select>
+                  <input
+                    style={{ ...ui.cellInp, flex: '1 1 140px', minWidth: 120 }}
+                    placeholder="Número de cuenta"
+                    disabled={!bancoEditable}
+                    value={f.banco_numero_cuenta || ''}
+                    onChange={(e) => setField('banco_numero_cuenta', e.target.value)}
+                    aria-label="Número de cuenta"
+                  />
+                  <input
+                    ref={certInputRef}
+                    type="file"
+                    accept=".pdf,image/jpeg,image/png,image/webp,application/pdf"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      e.target.value = ''
+                      if (file) onCertFile(file)
+                    }}
+                  />
+                  <button
+                    type="button"
+                    style={{ ...S.btnGhost, padding: '4px 8px', whiteSpace: 'nowrap' }}
+                    disabled={!bancoEditable || certBusy}
+                    title="Adjuntar certificación bancaria"
+                    onClick={() => certInputRef.current?.click()}
+                  >
+                    {certBusy ? 'Procesando…' : 'Adjuntar certificación'}
+                  </button>
+                  {(f._cert_bancaria_nombre || certNombreVigente) && (
+                    <span style={{ fontSize: 'var(--cc-caption)', color: tTok.textMuted, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {f._cert_bancaria_nombre || certNombreVigente}
+                    </span>
+                  )}
+                </div>
+              </td>
             </tr>
             <tr>
               <SheetField label="Salario" labelStyle={lbl} valueStyle={valCell}>

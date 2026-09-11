@@ -1156,6 +1156,23 @@ def _puede_validar_docs(current_user, contrato_id: int) -> bool:
         return tiene_permiso_rrhh(current_user, "validar", contrato_id)
 
 
+@router.post("/{contrato_id}/documentacion/ocr-bancario")
+async def route_ocr_bancario_contrato(
+    contrato_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """OCR de certificación bancaria sin requerir trabajador (p. ej. alta en Registro)."""
+    _require_contract_access(current_user, contrato_id)
+    if not (
+        tiene_permiso_rrhh(current_user, "editar", contrato_id)
+        or tiene_permiso_rrhh(current_user, "crear", contrato_id)
+    ):
+        raise HTTPException(403, detail="Sin permiso.")
+    data = await archivo.read()
+    return ocr_certificacion_bancaria(data, archivo.content_type)
+
+
 @router.post("/{contrato_id}/trabajadores/{trabajador_id}/documentacion/ocr-bancario")
 async def route_ocr_bancario(
     contrato_id: int,

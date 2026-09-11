@@ -185,7 +185,10 @@ export function createRrhhApi(contratoId, token) {
     ocrBancario: async (trabajadorId, archivo) => {
       const fd = new FormData()
       fd.append('archivo', archivo)
-      return apiJson(`${base}/trabajadores/${trabajadorId}/documentacion/ocr-bancario`, {
+      const path = trabajadorId
+        ? `${base}/trabajadores/${trabajadorId}/documentacion/ocr-bancario`
+        : `${base}/documentacion/ocr-bancario`
+      return apiJson(path, {
         method: 'POST',
         token,
         formData: fd,

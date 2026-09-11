@@ -43,6 +43,10 @@ export default function ContratoLaboralBlock({
     .map((t) => (typeof t === 'string' ? t : t?.nombre))
     .filter(Boolean)
 
+  const cellPad = compact ? { padding: '3px 6px', minHeight: 28, lineHeight: 1.25 } : {}
+  const cellLabel = { ...ui.tdLabel, ...cellPad }
+  const cell = { ...ui.td, ...cellPad }
+
   const cargar = async () => {
     if (!api || !trabajadorId) return
     setLoading(true)
@@ -130,8 +134,8 @@ export default function ContratoLaboralBlock({
         <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
           <tbody>
             <tr>
-              <td style={{ ...ui.tdLabel, width: '28%' }}>Tipo de contrato *</td>
-              <td style={ui.td}>
+              <td style={{ ...cellLabel, width: '28%' }}>Tipo de contrato *</td>
+              <td style={cell}>
                 <CatalogSelect
                   value={tipoContrato || ''}
                   options={tipoOptions}
@@ -144,8 +148,8 @@ export default function ContratoLaboralBlock({
             </tr>
             {onFechaIngresoChange && (
               <tr>
-                <td style={ui.tdLabel}>Fecha de ingreso</td>
-                <td style={ui.td}>
+                <td style={cellLabel}>Fecha de ingreso</td>
+                <td style={cell}>
                   <CcDatePickerInput
                     value={fechaIngreso || ''}
                     disabled={!canEdit}
@@ -157,33 +161,32 @@ export default function ContratoLaboralBlock({
               </tr>
             )}
             <tr>
-              <td style={ui.tdLabel}>N.° contrato laboral</td>
-              <td style={{ ...ui.td, color: tTok.textMuted }}>
+              <td style={cellLabel}>N.° contrato laboral</td>
+              <td style={{ ...cell, color: tTok.textMuted }}>
                 Automático (CTO-LAB-0001, CTO-LAB-0002, …)
               </td>
             </tr>
             <tr>
-              <td style={ui.tdLabel}>Fecha inicio</td>
-              <td style={ui.td}>
-                <CcDatePickerInput
-                  value={fechaInicio}
-                  disabled={!canEdit}
-                  style={ui.cellInp}
-                  aria-label="Fecha inicio del contrato laboral"
-                  onChange={setFechaInicio}
-                />
-              </td>
-            </tr>
-            <tr>
-              <td style={ui.tdLabel}>Fecha fin</td>
-              <td style={ui.td}>
-                <CcDatePickerInput
-                  value={fechaFin}
-                  disabled={!canEdit}
-                  style={ui.cellInp}
-                  aria-label="Fecha fin del contrato laboral"
-                  onChange={setFechaFin}
-                />
+              <td style={cellLabel}>Fechas</td>
+              <td style={cell}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ color: tTok.textMuted, fontSize: 'var(--cc-caption)', whiteSpace: 'nowrap' }}>Inicio</span>
+                  <CcDatePickerInput
+                    value={fechaInicio}
+                    disabled={!canEdit}
+                    style={{ ...ui.cellInp, minWidth: 130, flex: 1 }}
+                    aria-label="Fecha inicio del contrato laboral"
+                    onChange={setFechaInicio}
+                  />
+                  <span style={{ color: tTok.textMuted, fontSize: 'var(--cc-caption)', whiteSpace: 'nowrap' }}>Fin</span>
+                  <CcDatePickerInput
+                    value={fechaFin}
+                    disabled={!canEdit}
+                    style={{ ...ui.cellInp, minWidth: 130, flex: 1 }}
+                    aria-label="Fecha fin del contrato laboral"
+                    onChange={setFechaFin}
+                  />
+                </div>
               </td>
             </tr>
           </tbody>

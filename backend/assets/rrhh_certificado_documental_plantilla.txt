@@ -1,0 +1,5 @@
+Yo, {{NOMBRE_COLABORADOR}}, identificado(a) con {{TIPO_DOCUMENTO}} No. {{NUMERO_DOCUMENTO}}, certifico y doy fe de que la documentación adjunta a este registro es veraz, se encuentra vigente y corresponde fielmente a mi situación real, y que la misma respalda mi vinculación en el cargo de {{CARGO}}, asociado al contrato {{NUMERO_CONTRATO}}, cuyo objeto es {{OBJETO_CONTRATO}}.
+
+Declaro que, en caso de que se determine que alguno de los documentos aportados no corresponde a la realidad, ha sido alterado o contiene información falsa, dicha situación exonera a {{EMPRESA}} de cualquier responsabilidad civil o penal derivada de dicha falsedad, y faculta a la empresa para dejar sin efecto legal el contrato de trabajo en cualquier fase de su ejecución, sin perjuicio de las reclamaciones y acciones legales a que haya lugar.
+
+En constancia de lo anterior, firmo el presente certificado el día {{FECHA_FIRMA}}.
