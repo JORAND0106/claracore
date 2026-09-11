@@ -12374,18 +12374,20 @@ def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
     return row
 
 # Campos que cuentan como “edición” para reapertura de registro sellado (no basta con el motivo solo).
+# Nota: competencia es solo clasificación/agrupación — no dispara reapertura ni motivo (usar bulk-competencia).
 _PPTO_REABRIR_CAMPOS = frozenset(
     {
-        "capitulo", "competencia", "item", "descripcion", "und", "calzada", "tramo",
+        "capitulo", "item", "descripcion", "und", "calzada", "tramo",
         "vlr_unitario", "area_long_nod", "ancho", "espesor", "cant_total", "costo_directo",
         "observacion_externa",
     }
 )
 
 # Cambios de datos “de negocio” por contratista que invalidan un estado ya asignado por Interventoría (sin sellado).
+# competencia excluida: no afecta financieros ni validación.
 _PPTO_CT_SUBSTANTIVE = frozenset(
     {
-        "capitulo", "competencia", "item", "descripcion", "und",
+        "capitulo", "item", "descripcion", "und",
         "vlr_unitario", "observacion_externa", "costo_directo",
         "area_long_nod", "ancho", "espesor",
     }

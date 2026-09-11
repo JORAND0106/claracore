@@ -37,3 +37,14 @@ def test_puede_reabrir_no_exige_rol_contratista(monkeypatch):
     monkeypatch.setattr(main, "_cargo_permiso_editar_registros_presupuesto", lambda *_a, **_k: True)
     monkeypatch.setattr(main, "_es_rol_contratista_ppto", lambda _u: False)
     assert main._puede_reabrir_presupuesto_sellado({"sub": "3", "rol_nombre": "Residente Interventoría"}, 5) is True
+
+
+def test_competencia_no_es_campo_sustantivo_ni_reapertura():
+    """Competencia es clasificación: no debe exigir motivo ni contar como reapertura."""
+    import main
+
+    assert "competencia" not in main._PPTO_CT_SUBSTANTIVE
+    assert "competencia" not in main._PPTO_REABRIR_CAMPOS
+    prev = {"competencia": "IDU", "revisado": "Aprobado", "capitulo": "1", "item": "1.1"}
+    assert main._ppto_substantive_contractor_fields_changed(prev, {"competencia": "ETB"}) is False
+    assert main._ppto_substantive_contractor_fields_changed(prev, {"capitulo": "2"}) is True

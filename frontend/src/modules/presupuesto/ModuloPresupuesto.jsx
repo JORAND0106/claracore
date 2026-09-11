@@ -1060,6 +1060,7 @@ useEffect(() => {
   function cuerpoTieneCambioSustantivo(reg, body) {
     if (!reg || !body || typeof body !== 'object') return false
     const keys = [
+      // competencia excluida a propósito: clasificación administrativa, sin motivo.
       'capitulo', 'item', 'descripcion', 'und', 'vlr_unitario', 'observacion_externa', 'costo_directo',
       'area_long_nod', 'ancho', 'espesor', 'no_inicio', 'no_final', 'tipo_ejecucion',
     ]
@@ -4181,33 +4182,44 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       ? Number(subcontratistaId)
       : null
     const tieneSub = Number.isFinite(sid) && sid > 0
-    const ids = idsSeleccionadosEditables()
-    if (!ids.length) throw new Error('No hay registros editables (los sellados se omiten).')
-    registrarUndoPresupuesto('Edición masiva: Capítulo / Ítem', ids)
-
+    const idsEditables = idsSeleccionadosEditables()
+    // Competencia es administrativa (como Tramos): incluye sellados vía bulk-competencia.
+    const idsTodos = [...seleccionados].filter((id) => id != null && id !== '')
     const tieneCapItem = !!(cap || it)
     if (!tieneCapItem && !comp && !obs && !tieneSub) {
       throw new Error('Indique capítulo, ítem, competencia, subcontratista u observación (opcional).')
     }
+    if ((tieneCapItem || obs || tieneSub) && !idsEditables.length && !comp) {
+      throw new Error('No hay registros editables (los sellados se omiten).')
+    }
+    if (comp && !idsTodos.length) {
+      throw new Error('No hay registros seleccionados.')
+    }
+    if (!comp && !idsEditables.length) {
+      throw new Error('No hay registros editables (los sellados se omiten).')
+    }
+
+    const idsParaResumen = comp ? idsTodos : idsEditables
+    registrarUndoPresupuesto('Edición masiva: Capítulo / Ítem', idsParaResumen)
 
     const labelSub = tieneSub
       ? pptoLabelSubcontratista(sid, subcontratistasEdicionMasiva)
       : ''
 
-    const resumen = ids.map((id) => {
+    const resumen = idsParaResumen.map((id) => {
       const r = registros.find((x) => x.id === id)
       if (!r) return null
       const partes = []
-      if (cap && cap !== (r.capitulo || '')) partes.push(`Cap: ${r.capitulo || '—'} → ${cap}`)
-      if (it && it !== (r.item || '')) partes.push(`Ítem: ${r.item || '—'} → ${it}`)
-      if (precioSeleccionado && it) partes.push(`V.U: ${fmt(precioSeleccionado.precio_unitario)}`)
+      if (cap && cap !== (r.capitulo || '') && !esSellado(r)) partes.push(`Cap: ${r.capitulo || '—'} → ${cap}`)
+      if (it && it !== (r.item || '') && !esSellado(r)) partes.push(`Ítem: ${r.item || '—'} → ${it}`)
+      if (precioSeleccionado && it && !esSellado(r)) partes.push(`V.U: ${fmt(precioSeleccionado.precio_unitario)}`)
       if (comp && comp !== (r.competencia || '')) partes.push(`Comp: ${r.competencia || '—'} → ${comp}`)
-      if (tieneSub && Number(r.subcontratista_id || 0) !== sid) {
+      if (tieneSub && !esSellado(r) && Number(r.subcontratista_id || 0) !== sid) {
         partes.push(
           `Sub: ${pptoLabelSubcontratista(r.subcontratista_id, subcontratistasEdicionMasiva)} → ${labelSub}`,
         )
       }
-      if (obs) partes.push(`Obs: ${obs}`)
+      if (obs && !esSellado(r)) partes.push(`Obs: ${obs}`)
       if (!partes.length) return null
       return filaResumenMasivo(
         r,
@@ -4218,7 +4230,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }).filter(Boolean)
 
     if (tieneCapItem) {
-      const idsCapItemCambio = ids.filter((id) => {
+      const idsCapItemCambio = idsEditables.filter((id) => {
         const r = registros.find((x) => x.id === id)
         if (!r) return false
         return (cap && cap !== (r.capitulo || '')) || (it && it !== (r.item || ''))
@@ -4245,20 +4257,23 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
     }
     if (comp) {
-      const idsComp = ids.filter((id) => {
+      const idsComp = idsTodos.filter((id) => {
         const r = registros.find((x) => x.id === id)
         return r && (r.competencia || '') !== comp
       })
       if (idsComp.length) await aplicarCompetenciaMasiva(idsComp, comp)
+      else if (!tieneCapItem && !obs && !tieneSub) {
+        throw new Error('Ningún registro requiere ese cambio de competencia.')
+      }
     }
     if (tieneSub) {
-      const idsSub = ids.filter((id) => {
+      const idsSub = idsEditables.filter((id) => {
         const r = registros.find((x) => x.id === id)
         return r && Number(r.subcontratista_id || 0) !== sid
       })
       if (idsSub.length) await aplicarSubcontratistaMasiva(idsSub, sid)
     }
-    if (obs) await aplicarObservacionMasiva(ids, obs)
+    if (obs) await aplicarObservacionMasiva(idsEditables, obs)
     return resumen
   }
 
@@ -6615,7 +6630,7 @@ async function darDeBaja(id) {
               <div style={{ position:'relative' }}>
                 <textarea id="textarea-comentario" autoFocus value={textoComentario} onChange={e => setTextoComentario(e.target.value)}
                   placeholder="Escribe aquí el motivo o comentario..."
-                  style={{ width:'100%',minHeight:'100px',background:t.inputBg,border:`1.5px solid ${color}66`,borderRadius:'8px',padding:'10px',color:t.text,fontSize:'var(--cc-label)',resize:'vertical',boxSizing:'border-box' }} />
+                  style={{ width:'100%',minHeight:'100px',background:t.inputBg,border:`1.5px solid ${modalComentario.obligatorio && lenTxt < minLen ? '#EF4444' : `${color}66`}`,borderRadius:'8px',padding:'10px',color:t.text,fontSize:'var(--cc-label)',resize:'vertical',boxSizing:'border-box' }} />
                 <div style={{ position:'absolute', bottom:'8px', right:'8px' }}>
                   <EmojiPicker t={t} onSelect={em => setTextoComentario(prev => prev + em)} />
                 </div>
