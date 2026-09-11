@@ -115,7 +115,14 @@ export default function TrabajadorFormSheet({
           _cert_bancaria_file: file,
           _cert_bancaria_nombre: file.name,
         }
-        if (sug.banco_entidad) patch.banco_entidad = sug.banco_entidad
+        if (sug.banco_entidad) {
+          patch.banco_entidad = sug.banco_entidad
+          const opts = catalogo?.banco_entidad || []
+          const exists = opts.some((o) => String(o).trim().toLowerCase() === String(sug.banco_entidad).trim().toLowerCase())
+          if (!exists && onAddCatalogValue) {
+            try { await onAddCatalogValue('banco_entidad', sug.banco_entidad) } catch { /* ignore */ }
+          }
+        }
         if (sug.banco_tipo_cuenta) patch.banco_tipo_cuenta = sug.banco_tipo_cuenta
         if (sug.banco_numero_cuenta) patch.banco_numero_cuenta = sug.banco_numero_cuenta
         setMany(patch)
@@ -388,13 +395,17 @@ export default function TrabajadorFormSheet({
               <td style={lbl}>Cuenta bancaria</td>
               <td style={{ ...valCell, overflow: 'visible' }} colSpan={5}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input
-                    style={{ ...ui.cellInp, flex: '1 1 140px', minWidth: 120 }}
-                    placeholder="Entidad bancaria"
-                    disabled={!bancoEditable}
+                  <CatalogSelect
                     value={f.banco_entidad || ''}
-                    onChange={(e) => setField('banco_entidad', e.target.value)}
-                    aria-label="Entidad bancaria"
+                    options={catalogo?.banco_entidad || []}
+                    canEdit={bancoEditable}
+                    style={{ ...ui.cellSelect, flex: '1 1 160px', minWidth: 140 }}
+                    placeholder="Entidad bancaria"
+                    addLabel="— Otro (agregar) —"
+                    onChange={(v) => setField('banco_entidad', v)}
+                    onAddNew={async (v) => {
+                      if (onAddCatalogValue) await onAddCatalogValue('banco_entidad', v)
+                    }}
                   />
                   <select
                     style={{ ...ui.cellSelect, flex: '0 1 120px', minWidth: 110 }}
