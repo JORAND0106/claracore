@@ -361,8 +361,24 @@ export default function PptoEdicionMasivaModal({
     setErrorApply('')
     setMensajeExito('')
     setAplicando(false)
+    // Limpiar TODO el formulario CapItem/Dims/etc. al abrir: si quedan capítulo/ítem
+    // de una sesión anterior, un cambio solo de competencia disparaba ejecutarRecalcular + motivo.
+    setEditCapitulo('')
+    setEditItem('')
+    setItemBusqueda('')
+    setItemDropOpen(false)
     setEditCompetencia('')
     setEditSubcontratistaId('')
+    setObsCapItem('')
+    setDimAncho('')
+    setDimEspesor('')
+    setObsDims('')
+    setTipoEjecucion('')
+    setObsTipo('')
+    setEstadoDep('')
+    setObsDep('')
+    setEstadoInterv('')
+    setObsInterv('')
     setTramoSelec(null)
     setTramosSelIds(new Set())
     setEditCompetenciaTramos('')
@@ -458,22 +474,25 @@ export default function PptoEdicionMasivaModal({
     const labelNuevoSub = tieneSub
       ? pptoLabelSubcontratista(editSubcontratistaId, subcontratistasOpciones)
       : ''
-    return editables.map((r) => {
+    // Competencia aplica también a sellados; el resto solo a editables.
+    const base = tieneComp ? filasSel : editables
+    return base.map((r) => {
+      const sellado = esSellado(r)
       const antCap = r.capitulo || '—'
       const antItem = r.item || '—'
       const partes = []
-      if (tieneCap && editCapitulo !== (r.capitulo || '')) partes.push(`Cap: ${antCap} → ${editCapitulo}`)
-      if (tieneItem && editItem !== (r.item || '')) partes.push(`Ítem: ${antItem} → ${editItem}`)
-      if (precioSeleccionado && tieneItem) partes.push(`V.U: ${formatCOP(precioSeleccionado.precio_unitario)}`)
+      if (!sellado && tieneCap && editCapitulo !== (r.capitulo || '')) partes.push(`Cap: ${antCap} → ${editCapitulo}`)
+      if (!sellado && tieneItem && editItem !== (r.item || '')) partes.push(`Ítem: ${antItem} → ${editItem}`)
+      if (!sellado && precioSeleccionado && tieneItem) partes.push(`V.U: ${formatCOP(precioSeleccionado.precio_unitario)}`)
       if (tieneComp && editCompetencia !== (r.competencia || '')) {
         partes.push(`Comp: ${r.competencia || '—'} → ${editCompetencia}`)
       }
-      if (tieneSub && Number(r.subcontratista_id || 0) !== Number(editSubcontratistaId)) {
+      if (!sellado && tieneSub && Number(r.subcontratista_id || 0) !== Number(editSubcontratistaId)) {
         partes.push(
           `Sub: ${pptoLabelSubcontratista(r.subcontratista_id, subcontratistasOpciones)} → ${labelNuevoSub}`,
         )
       }
-      if (tieneObs) partes.push(`Obs: ${obsCapItem.trim()}`)
+      if (!sellado && tieneObs) partes.push(`Obs: ${obsCapItem.trim()}`)
       if (!partes.length) return null
       return {
         id: r.id,
@@ -487,7 +506,7 @@ export default function PptoEdicionMasivaModal({
     }).filter(Boolean)
   }, [
     editCapitulo, editItem, editCompetencia, editSubcontratistaId, obsCapItem,
-    editables, precioSeleccionado, subcontratistasOpciones,
+    editables, filasSel, precioSeleccionado, subcontratistasOpciones, esSellado,
   ])
 
   const previewTramos = useMemo(() => {
@@ -867,6 +886,9 @@ export default function PptoEdicionMasivaModal({
                   label="NUEVA COMPETENCIA"
                   allowEmpty
                 />
+                <div style={{ flex: '1 1 100%', marginTop: -8, fontSize: cc.caption, color: t.textMuted, lineHeight: 1.4 }}>
+                  La competencia es solo clasificación: se aplica de inmediato (también en sellados) sin motivo de edición.
+                </div>
                 <SubcontratistaSelect
                   value={editSubcontratistaId}
                   onChange={setEditSubcontratistaId}
@@ -1001,7 +1023,12 @@ export default function PptoEdicionMasivaModal({
                   ? nEditablesInterv === 0
                   : tabSafe === 'tramos'
                     ? (tramosSelIds.size === 0 || !String(editCompetenciaTramos || '').trim() || filasFuenteTramos.length === 0)
-                    : nEditables === 0)
+                    : tabSafe === 'capitem'
+                      ? (
+                        // Competencia sola: permitir aunque todos los seleccionados estén sellados.
+                        !(nEditables > 0 || (String(editCompetencia || '').trim() && filasSel.length > 0))
+                      )
+                      : nEditables === 0)
               }
               style={{
                 background: t.primary,
