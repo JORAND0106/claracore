@@ -92,6 +92,8 @@ def _contexto_certificado(trab: dict, contrato_obra: Optional[dict] = None) -> D
         s = str(v or "").strip()
         return s if s else vacio
 
+    empleador = campo(trab.get("empresa_nombre") or obra.get("contratista"))
+    nit = campo(trab.get("empresa_nit") or obra.get("nit"))
     return {
         "{{NOMBRE_COLABORADOR}}": campo(nombre),
         "{{TIPO_DOCUMENTO}}": campo(trab.get("tipo_documento") or "CC"),
@@ -99,7 +101,10 @@ def _contexto_certificado(trab: dict, contrato_obra: Optional[dict] = None) -> D
         "{{CARGO}}": campo(trab.get("cargo_aspira")),
         "{{NUMERO_CONTRATO}}": campo(obra.get("numero")),
         "{{OBJETO_CONTRATO}}": campo(obra.get("objeto")),
-        "{{EMPRESA}}": campo(trab.get("empresa_nombre")),
+        "{{EMPLEADOR}}": empleador,
+        "{{NIT_EMPLEADOR}}": nit,
+        # Alias legacy por si una plantilla antigua aún usa {{EMPRESA}}
+        "{{EMPRESA}}": empleador,
         "{{FECHA_FIRMA}}": _fecha_firma_bogota(),
     }
 
@@ -205,15 +210,32 @@ def _firma_data_url(sb_path: Optional[str], mime: str) -> Tuple[Optional[str], i
 
 
 def _texto_certificacion_html(trab: dict, contrato_obra: Optional[dict]) -> str:
+    """Renderiza la plantilla con datos dinámicos en mayúsculas y negrita."""
     import html as html_mod
 
     plantilla = _cargar_plantilla_certificado()
-    filled = _aplicar_placeholders_cert(plantilla, _contexto_certificado(trab, contrato_obra))
+    ctx = _contexto_certificado(trab, contrato_obra)
+
+    def render_block(block: str) -> str:
+        parts = re.split(r"(\{\{[A-Z_0-9]+\}\})", block)
+        out = []
+        for part in parts:
+            if not part:
+                continue
+            if part in ctx:
+                val = html_mod.escape(str(ctx[part]).upper())
+                out.append(f'<b class="dyn">{val}</b>')
+            elif _PLACEHOLDER_RE.fullmatch(part):
+                out.append(f'<b class="dyn">{html_mod.escape(part)}</b>')
+            else:
+                out.append(html_mod.escape(part))
+        return "".join(out)
+
     paras = []
-    for block in re.split(r"\n\s*\n", filled.strip()):
+    for block in re.split(r"\n\s*\n", plantilla.strip()):
         line = " ".join(ln.strip() for ln in block.splitlines() if ln.strip())
         if line:
-            paras.append(f"<p class=\"cert-text\">{html_mod.escape(line)}</p>")
+            paras.append(f'<p class="cert-text">{render_block(line)}</p>')
     return "\n".join(paras)
 
 
@@ -342,15 +364,17 @@ def _build_portada_html(
         return html_mod.escape(str(v if v is not None else "—"))
 
     nombre = trabajador_display_nombre(trab)
+    doc_txt = f"{esc(trab.get('tipo_documento'))} {esc(trab.get('numero_documento'))}".strip()
     rows = ""
     for item in checklist:
         rows += (
             f"<tr><td>{esc(item['label'])}</td>"
-            f"<td style='text-align:center'>{esc(item['estado'])}</td></tr>"
+            f"<td style='text-align:center;color:#166534;font-weight:700;'>"
+            f"<span style='font-size:11pt;'>✓</span> {esc(item['estado'])}</td></tr>"
         )
     foto_html = (
         f'<img src="{foto_data_url}" width="{_FOTO_W}" height="{_FOTO_H}" '
-        f'style="width:{_FOTO_W}px;height:{_FOTO_H}px;border:1px solid #cbd5e1;" />'
+        f'style="width:{_FOTO_W}px;height:{_FOTO_H}px;border:1px solid #94a3b8;" />'
         if foto_data_url
         else (
             f'<div style="width:{_FOTO_W}px;height:{_FOTO_H}px;border:1px dashed #94a3b8;'
@@ -367,24 +391,53 @@ def _build_portada_html(
     else:
         firma_html = (
             f'<div style="height:{_FIRMA_H}px;border-bottom:1px solid #334155;'
-            f'width:{_FIRMA_MAX_W}px;margin-left:auto;"></div>'
+            f'width:{_FIRMA_MAX_W}px;"></div>'
         )
     cert_html = _texto_certificacion_html(trab, contrato_obra)
+    meta_extra = ""
+    if trab.get("empresa_nombre"):
+        meta_extra += (
+            f"<tr><td class='lbl'>Empresa</td><td>{esc(trab.get('empresa_nombre'))}</td></tr>"
+        )
+    if trab.get("empresa_nit"):
+        meta_extra += (
+            f"<tr><td class='lbl'>NIT empleador</td><td>{esc(trab.get('empresa_nit'))}</td></tr>"
+        )
+    if trab.get("tipo_contrato"):
+        meta_extra += (
+            f"<tr><td class='lbl'>Tipo contrato</td><td>{esc(trab.get('tipo_contrato'))}</td></tr>"
+        )
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
 <style>
 @page {{ size: letter; margin: 1.4cm; }}
 body {{ font-family: Arial, Helvetica, sans-serif; font-size: 10pt; color: #0f172a; }}
-h1 {{ color: #0077B6; text-align: center; font-size: 13pt; margin: 0 0 8pt 0; }}
-table.meta {{ width: 100%; border-collapse: collapse; margin-top: 6pt; }}
-table.meta td {{ border: none; padding: 1.5pt 5pt; font-size: 9.5pt; }}
-table.checklist {{ width: 100%; border-collapse: collapse; margin: 4pt 0 8pt 0; }}
-table.checklist th, table.checklist td {{
+h1 {{ color: #0077B6; text-align: center; font-size: 13pt; margin: 0 0 10pt 0; }}
+table.top {{ width: 100%; border-collapse: collapse; margin-bottom: 10pt; }}
+table.top td {{ vertical-align: top; border: none; padding: 0; }}
+table.datos {{
+  width: 100%;
+  border-collapse: collapse;
+  border: 1.5pt solid #64748b;
+}}
+table.datos td {{
+  border: none;
+  padding: 3pt 6pt;
+  font-size: 9.5pt;
+  line-height: 1.25;
+}}
+table.datos td.lbl {{
+  width: 32%;
+  font-weight: bold;
+  color: #475569;
+}}
+table.docs {{ width: 100%; border-collapse: collapse; margin: 4pt 0 8pt 0; }}
+table.docs th, table.docs td {{
   border: 1px solid #cbd5e1;
   padding: 1.5pt 4pt;
   font-size: 8.5pt;
   line-height: 1.15;
 }}
-table.checklist th {{ background: #e0f2fe; font-size: 8pt; }}
+table.docs th {{ background: #e0f2fe; font-size: 8pt; }}
 .cert-text {{
   text-align: justify;
   font-size: 9pt;
@@ -392,23 +445,31 @@ table.checklist th {{ background: #e0f2fe; font-size: 8pt; }}
   margin: 0 0 7pt 0;
   color: #0f172a;
 }}
-.firma-block {{ margin-top: 14pt; text-align: right; }}
+.cert-text .dyn {{ font-weight: bold; text-transform: uppercase; }}
+.firma-block {{ margin-top: 14pt; text-align: left; }}
 .firma-label {{ font-size: 8pt; color: #64748b; margin-top: 3pt; }}
+.firma-meta {{ font-size: 9pt; margin-top: 4pt; color: #0f172a; }}
 </style></head><body>
 <h1>Certificado de cumplimiento documental</h1>
-<div style="text-align:center;margin:6pt 0 4pt 0;">{foto_html}</div>
-<table class="meta">
-<tr><td><b>Colaborador</b></td><td>{esc(nombre)}</td>
-<td><b>Documento</b></td><td>{esc(trab.get('tipo_documento'))} {esc(trab.get('numero_documento'))}</td></tr>
-<tr><td><b>Cargo</b></td><td>{esc(trab.get('cargo_aspira'))}</td>
-<td><b>Fecha ingreso</b></td><td>{esc(trab.get('fecha_ingreso'))}</td></tr>
+<table class="top"><tr>
+<td style="width:{_FOTO_W + 16}px;padding-right:10pt;">{foto_html}</td>
+<td>
+<table class="datos">
+<tr><td class="lbl">Colaborador</td><td>{esc(nombre)}</td></tr>
+<tr><td class="lbl">Documento</td><td>{doc_txt}</td></tr>
+<tr><td class="lbl">Cargo</td><td>{esc(trab.get('cargo_aspira'))}</td></tr>
+<tr><td class="lbl">Fecha ingreso</td><td>{esc(trab.get('fecha_ingreso'))}</td></tr>
+{meta_extra}
 </table>
-<p style="margin:8pt 0 2pt 0;font-size:9pt;font-weight:bold;">Checklist de documentación adjunta</p>
-<table class="checklist"><tr><th>Documento</th><th style="width:18%">Estado</th></tr>{rows}</table>
+</td>
+</tr></table>
 {cert_html}
+<p style="margin:10pt 0 2pt 0;font-size:9pt;font-weight:bold;">Documentación adjunta</p>
+<table class="docs"><tr><th>Documento</th><th style="width:22%">Estado</th></tr>{rows}</table>
 <div class="firma-block">
 {firma_html}
 <div class="firma-label">Firma del colaborador</div>
+<div class="firma-meta"><b>{esc(nombre)}</b><br/>{doc_txt}</div>
 </div>
 <p style="margin-top:14pt;font-size:7.5pt;color:#64748b;text-align:center;">
 ClaraCore — Recursos Humanos · Documento generado automáticamente
@@ -417,15 +478,16 @@ ClaraCore — Recursos Humanos · Documento generado automáticamente
 
 
 def _checklist_items(trab: dict, docs: List[dict]) -> List[dict]:
+    """Solo documentos vigentes adjuntos; estado unificado «Verificado» tras auditoría."""
     vigentes = {(d.get("categoria"), d.get("tipo")) for d in docs if d.get("vigente")}
     items = []
-    # Soporte / ingreso / bancario / afiliación base
     from rrhh_docs_service import (
         DOC_TIPOS_AFILIACION,
         DOC_TIPOS_BANCARIO,
         DOC_TIPOS_INGRESO,
         DOC_TIPOS_SOPORTE,
     )
+    seen_labels = set()
     for cat, tipos in (
         ("soporte", DOC_TIPOS_SOPORTE),
         ("ingreso", DOC_TIPOS_INGRESO),
@@ -435,18 +497,22 @@ def _checklist_items(trab: dict, docs: List[dict]) -> List[dict]:
         for tipo, label in tipos:
             if tipo == "otro":
                 continue
-            items.append({
-                "label": label,
-                "estado": "Cumple" if (cat, tipo) in vigentes else "No aplica",
-            })
-    # Tipos «otro» / ext_*
+            if (cat, tipo) not in vigentes:
+                continue
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+            items.append({"label": label, "estado": "Verificado"})
     for d in docs:
         if not d.get("vigente"):
             continue
         t = d.get("tipo") or ""
         if t.startswith("ext_") or d.get("tipo_otro_texto"):
             label = d.get("tipo_otro_texto") or DOC_TIPO_LABEL.get(t) or t
-            items.append({"label": label, "estado": "Cumple"})
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+            items.append({"label": label, "estado": "Verificado"})
     return items
 
 

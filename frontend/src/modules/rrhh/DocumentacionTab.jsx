@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import ContratoLaboralBlock from './ContratoLaboralBlock'
 import DocumentosTrabajadorBlock from './DocumentosTrabajadorBlock'
+import { PASTEL_ESTADO_VALIDACION } from '../sicoe-obra/sicoeReporteItemsTablaHelpers'
 import { rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 const panelStyle = (tTok) => ({
@@ -9,6 +10,32 @@ const panelStyle = (tTok) => ({
   borderRadius: 10,
   background: tTok.bgCard,
 })
+
+const iconSquare = (base, extra = {}) => ({
+  ...base,
+  width: 40,
+  height: 40,
+  padding: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  ...extra,
+})
+
+function btnEstadoValidacion(estadoKey, disabled) {
+  const pastel = PASTEL_ESTADO_VALIDACION[estadoKey] || PASTEL_ESTADO_VALIDACION.Pendiente
+  return {
+    background: pastel.bg,
+    color: pastel.color,
+    border: `1px solid ${pastel.border}`,
+    borderRadius: 6,
+    padding: '6px 12px',
+    fontWeight: 700,
+    fontSize: 'var(--cc-sm)',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.55 : 1,
+  }
+}
 
 /**
  * TAB unificado Documentación: soporte, ingreso, contrato,
@@ -168,39 +195,38 @@ export default function DocumentacionTab({
           {esDesarrollador && (
             <button
               type="button"
-              style={S.btnGhost}
+              style={iconSquare(S.btnGhost)}
               disabled={busy}
-              title="Genera el PDF con los documentos actuales sin borrar adjuntos ni cambiar la validación"
+              title="Vista previa del PDF consolidado con los documentos actuales (no borra adjuntos ni cambia la validación)"
+              aria-label="Vista previa del PDF consolidado"
               onClick={previewConsolidado}
             >
-              Vista previa consolidado
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                <path d="M1 12s4-4 11-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity="0.35" transform="translate(0 4)" />
+                <circle cx="12" cy="15" r="2.2" stroke="currentColor" strokeWidth="2" />
+              </svg>
             </button>
           )}
           {detalle?.doc_consolidado_blob_path && (
             <button
               type="button"
               style={S.btnGhost}
+              title="Abrir el PDF consolidado aprobado"
               onClick={() => api.downloadBlob(api.docConsolidadoUrl(detalle.id), detalle.doc_consolidado_nombre || 'consolidado.pdf')}
             >
               Ver PDF consolidado
             </button>
           )}
-              {canEdit && (
+          {canEdit && (
             <button
               type="button"
               title="Guardar documentación"
               aria-label="Guardar documentación"
               disabled={busy}
               onClick={guardarTodo}
-              style={{
-                ...S.btnPrimary,
-                width: 40,
-                height: 40,
-                padding: 0,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
+              style={iconSquare(S.btnPrimary)}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path
@@ -307,16 +333,21 @@ export default function DocumentacionTab({
           </div>
         ) : (
           <>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10, alignItems: 'center' }}>
               {esDesarrollador && (
                 <button
                   type="button"
-                  style={S.btnPrimary}
+                  style={iconSquare(S.btnPrimary)}
                   disabled={busy}
-                  title="PDF con documentos actuales; no borra adjuntos ni cambia Aprobado/Pendiente/Rechazado"
+                  title="Vista previa del PDF consolidado con los documentos actuales (no borra adjuntos ni cambia la validación)"
+                  aria-label="Vista previa del PDF consolidado"
                   onClick={previewConsolidado}
                 >
-                  Vista previa consolidado
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                    <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                    <circle cx="12" cy="15" r="2.2" stroke="currentColor" strokeWidth="2" />
+                  </svg>
                 </button>
               )}
               <button
@@ -329,17 +360,29 @@ export default function DocumentacionTab({
               </button>
               <button
                 type="button"
-                style={S.btnGhost}
+                style={btnEstadoValidacion('Aprobado', busy || locked || !detalle.doc_auditoria_ok)}
                 disabled={busy || locked || !detalle.doc_auditoria_ok}
                 onClick={() => setValidacion('aprobado')}
-                title={!detalle.doc_auditoria_ok ? 'Requiere auditoría sin discrepancias' : ''}
+                title={!detalle.doc_auditoria_ok ? 'Requiere auditoría sin discrepancias' : 'Marcar documentación como aprobada'}
               >
                 Aprobado
               </button>
-              <button type="button" style={S.btnGhost} disabled={busy || locked} onClick={() => setValidacion('pendiente')}>
+              <button
+                type="button"
+                style={btnEstadoValidacion('Pendiente', busy || locked)}
+                disabled={busy || locked}
+                onClick={() => setValidacion('pendiente')}
+                title="Marcar documentación como pendiente"
+              >
                 Pendiente
               </button>
-              <button type="button" style={S.btnDanger} disabled={busy || locked} onClick={() => setValidacion('rechazado')}>
+              <button
+                type="button"
+                style={btnEstadoValidacion('Rechazado', busy || locked)}
+                disabled={busy || locked}
+                onClick={() => setValidacion('rechazado')}
+                title="Marcar documentación como rechazada"
+              >
                 Rechazado
               </button>
             </div>

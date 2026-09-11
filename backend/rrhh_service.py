@@ -25,6 +25,7 @@ CATALOG_CATEGORIAS = frozenset({
     "parentesco",
     "doc_soporte",
     "doc_ingreso",
+    "banco_entidad",
 })
 
 CATALOG_DEFAULTS = {
@@ -90,6 +91,32 @@ CATALOG_DEFAULTS = {
     ),
     "doc_soporte": (),
     "doc_ingreso": (),
+    "banco_entidad": (
+        "Bancolombia",
+        "Banco de Bogotá",
+        "Davivienda",
+        "BBVA Colombia",
+        "Banco de Occidente",
+        "Banco Popular",
+        "Banco AV Villas",
+        "Banco Caja Social",
+        "Scotiabank Colpatria",
+        "Itaú",
+        "Bancamía",
+        "Banco Agrario",
+        "Banco Falabella",
+        "Banco Pichincha",
+        "Banco Serfinanza",
+        "Banco W",
+        "Banco Finandina",
+        "Banco Cooperativo Coopcentral",
+        "Nequi",
+        "Daviplata",
+        "Movii",
+        "RappiPay",
+        "Lulo Bank",
+        "Nu Colombia",
+    ),
 }
 
 TIPOS_SANGRE = frozenset({"O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-"})
@@ -158,7 +185,8 @@ def _validate_categoria(categoria: str) -> str:
     if cat not in CATALOG_CATEGORIAS:
         raise ValueError(
             "Categoría de catálogo inválida. Use: eps, pension, cesantias, arl, "
-            "caja_compensacion, cargo, tipo_contrato, parentesco, doc_soporte, doc_ingreso."
+            "caja_compensacion, cargo, tipo_contrato, parentesco, doc_soporte, "
+            "doc_ingreso, banco_entidad."
         )
     return cat
 
@@ -459,6 +487,7 @@ def _maybe_persist_catalog_values(sb, contrato_id: int, payload: dict, current_u
         ("cargo", payload.get("cargo_aspira")),
         ("tipo_contrato", payload.get("tipo_contrato")),
         ("parentesco", payload.get("emergencia_parentesco")),
+        ("banco_entidad", payload.get("banco_entidad")),
     )
     for cat, valor in mapping:
         if valor and str(valor).strip():

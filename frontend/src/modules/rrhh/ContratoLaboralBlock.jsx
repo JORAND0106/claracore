@@ -5,9 +5,20 @@ import { tFrom } from '../../theme/adminPanelTheme'
 import CatalogSelect from './CatalogSelect'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
+const iconBtn = (base, extra = {}) => ({
+  ...base,
+  width: 34,
+  height: 34,
+  padding: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  ...extra,
+})
+
 /**
  * Generación de contrato laboral PDF + historial de versiones.
- * compact: omite título/leyenda y admite fecha de ingreso en la misma hoja (TAB Documentación).
+ * compact: omite título/leyenda (TAB Documentación).
  */
 export default function ContratoLaboralBlock({
   theme,
@@ -32,7 +43,7 @@ export default function ContratoLaboralBlock({
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [fechaInicio, setFechaInicio] = useState('')
+  const [fechaInicio, setFechaInicio] = useState(fechaIngreso || '')
   const [fechaFin, setFechaFin] = useState('')
   const [preview, setPreview] = useState({
     open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null,
@@ -46,6 +57,15 @@ export default function ContratoLaboralBlock({
   const cellPad = compact ? { padding: '3px 6px', minHeight: 28, lineHeight: 1.25 } : {}
   const cellLabel = { ...ui.tdLabel, ...cellPad }
   const cell = { ...ui.td, ...cellPad }
+
+  useEffect(() => {
+    if (fechaIngreso && !fechaInicio) setFechaInicio(fechaIngreso)
+  }, [fechaIngreso, fechaInicio])
+
+  const setInicio = (v) => {
+    setFechaInicio(v)
+    onFechaIngresoChange?.(v)
+  }
 
   const cargar = async () => {
     if (!api || !trabajadorId) return
@@ -146,24 +166,32 @@ export default function ContratoLaboralBlock({
                 />
               </td>
             </tr>
-            {onFechaIngresoChange && (
-              <tr>
-                <td style={cellLabel}>Fecha de ingreso</td>
-                <td style={cell}>
-                  <CcDatePickerInput
-                    value={fechaIngreso || ''}
-                    disabled={!canEdit}
-                    style={ui.cellInp}
-                    aria-label="Fecha de ingreso"
-                    onChange={onFechaIngresoChange}
-                  />
-                </td>
-              </tr>
-            )}
             <tr>
               <td style={cellLabel}>N.° contrato laboral</td>
-              <td style={{ ...cell, color: tTok.textMuted }}>
-                Automático (CTO-LAB-0001, CTO-LAB-0002, …)
+              <td style={cell}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ color: tTok.textMuted }}>Automático (CTO-LAB-0001, …)</span>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      style={iconBtn(S.btnPrimary)}
+                      disabled={busy}
+                      title="Generar PDF del contrato laboral"
+                      aria-label="Generar PDF del contrato laboral"
+                      onClick={generar}
+                    >
+                      {busy ? (
+                        <span style={{ fontSize: 11 }}>…</span>
+                      ) : (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                          <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                          <path d="M12 18v-6M9 15h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                      )}
+                    </button>
+                  )}
+                </div>
               </td>
             </tr>
             <tr>
@@ -176,7 +204,7 @@ export default function ContratoLaboralBlock({
                     disabled={!canEdit}
                     style={{ ...ui.cellInp, minWidth: 130, flex: 1 }}
                     aria-label="Fecha inicio del contrato laboral"
-                    onChange={setFechaInicio}
+                    onChange={setInicio}
                   />
                   <span style={{ color: tTok.textMuted, fontSize: 'var(--cc-caption)', whiteSpace: 'nowrap' }}>Fin</span>
                   <CcDatePickerInput
@@ -193,46 +221,59 @@ export default function ContratoLaboralBlock({
         </table>
       </div>
 
-      {canEdit && (
-        <button type="button" style={{ ...S.btnPrimary, marginBottom: 8, padding: '6px 10px' }} disabled={busy} onClick={generar}>
-          {busy ? 'Generando…' : 'Generar PDF del contrato'}
-        </button>
-      )}
-
       <div style={ui.sheetWrap}>
         <table style={ui.sheetTable}>
           <thead>
             <tr>
-              <th style={ui.th}>Versión</th>
-              <th style={ui.th}>N.° CTO-LAB</th>
-              <th style={ui.th}>Tipo</th>
+              <th style={ui.th}>Número de contrato</th>
               <th style={ui.th}>Estado</th>
               <th style={ui.th}>Fecha</th>
-              <th style={ui.th}>Acciones</th>
+              <th style={{ ...ui.th, width: '22%' }}>Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td style={ui.td} colSpan={6}>Cargando…</td></tr>}
+            {loading && <tr><td style={ui.td} colSpan={4}>Cargando…</td></tr>}
             {!loading && items.length === 0 && (
-              <tr><td style={ui.td} colSpan={6}>Aún no hay contratos generados.</td></tr>
+              <tr><td style={ui.td} colSpan={4}>Aún no hay contratos generados.</td></tr>
             )}
             {items.map((row) => (
               <tr key={row.id}>
-                <td style={ui.td}>v{row.version_num}{row.vigente ? ' · vigente' : ''}</td>
-                <td style={ui.td}>{row.numero_contrato_laboral || '—'}</td>
-                <td style={ui.td}>{row.tipo_contrato_nombre}</td>
+                <td style={ui.td}>
+                  {row.numero_contrato_laboral || '—'}
+                  {row.vigente ? (
+                    <span style={{ marginLeft: 6, color: tTok.primary, fontSize: 'var(--cc-caption)' }}>vigente</span>
+                  ) : null}
+                </td>
                 <td style={ui.td}>{row.estado}</td>
                 <td style={ui.td}>{(row.created_at || '').toString().slice(0, 19).replace('T', ' ')}</td>
                 <td style={ui.td}>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {(canExport || true) && (
-                      <button type="button" style={{ ...S.btnGhost, padding: '4px 8px' }} onClick={() => abrir(row)}>
-                        Ver PDF
+                      <button
+                        type="button"
+                        style={iconBtn(S.btnGhost)}
+                        title="Ver PDF del contrato"
+                        aria-label="Ver PDF del contrato"
+                        onClick={() => abrir(row)}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" stroke="currentColor" strokeWidth="2" />
+                          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
+                        </svg>
                       </button>
                     )}
                     {canEdit && (
-                      <button type="button" style={S.btnDanger} disabled={busy} onClick={() => eliminar(row)}>
-                        Anular
+                      <button
+                        type="button"
+                        style={iconBtn(S.btnDanger)}
+                        disabled={busy}
+                        title="Anular esta versión del contrato"
+                        aria-label="Anular esta versión del contrato"
+                        onClick={() => eliminar(row)}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                        </svg>
                       </button>
                     )}
                   </div>
