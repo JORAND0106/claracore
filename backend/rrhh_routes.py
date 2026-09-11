@@ -26,6 +26,13 @@ from rrhh_docs_service import (
     soft_delete_documento,
 )
 from rrhh_permissions import require_permiso_rrhh, tiene_permiso_rrhh
+from rrhh_banco_ocr import ocr_certificacion_bancaria
+from rrhh_documentacion_service import (
+    consolidar_documentacion,
+    download_doc_consolidado,
+    eliminar_tipo_documento_otro,
+    set_validacion,
+)
 from rrhh_nomina_service import (
     anular_nomina,
     cerrar_nomina,
@@ -114,6 +121,9 @@ class TrabajadorBody(BaseModel):
     arl_nivel_riesgo: str = Field("I", max_length=5)
     fecha_ingreso: Optional[str] = None
     fecha_retiro: Optional[str] = None
+    banco_entidad: Optional[str] = None
+    banco_tipo_cuenta: Optional[str] = None
+    banco_numero_cuenta: Optional[str] = None
     tipo_contrato: Optional[str] = None
     empresa_key: Optional[str] = Field(None, max_length=80)
     empresa_tipo: str = Field("consorcio", max_length=40)
@@ -153,6 +163,9 @@ class TrabajadorPatchBody(BaseModel):
     arl_nivel_riesgo: Optional[str] = Field(None, max_length=5)
     fecha_ingreso: Optional[str] = None
     fecha_retiro: Optional[str] = None
+    banco_entidad: Optional[str] = None
+    banco_tipo_cuenta: Optional[str] = None
+    banco_numero_cuenta: Optional[str] = None
     tipo_contrato: Optional[str] = None
     empresa_key: Optional[str] = Field(None, max_length=80)
     empresa_tipo: Optional[str] = Field(None, max_length=40)
@@ -169,6 +182,16 @@ class GenerarContratoBody(BaseModel):
     numero_contrato_laboral: Optional[str] = Field(None, max_length=80)
     fecha_inicio: Optional[str] = None
     fecha_fin: Optional[str] = None
+
+
+class ValidacionDocBody(BaseModel):
+    estado: str = Field(..., max_length=20)
+    observacion: Optional[str] = None
+
+
+class EliminarTipoOtroBody(BaseModel):
+    categoria: str = Field(..., max_length=40)
+    label: str = Field(..., min_length=1, max_length=200)
 
 
 class NovedadBody(BaseModel):
@@ -1110,3 +1133,143 @@ def route_get_provisiones(
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
     return get_provisiones(supabase, contrato_id, trabajador_id)
+
+
+# ── Documentación consolidada / validación / OCR bancario ────────────────────
+
+def _puede_validar_docs(current_user, contrato_id: int) -> bool:
+    from rrhh_permissions import es_desarrollador_rrhh
+    try:
+        return es_desarrollador_rrhh(current_user) or tiene_permiso_rrhh(
+            current_user, "validar", contrato_id
+        )
+    except Exception:
+        # Fallback si helper no existe
+        cargo = str(
+            (current_user or {}).get("cargo_nombre")
+            or (current_user or {}).get("cargo")
+            or ""
+        ).lower()
+        if "desarrollador" in cargo:
+            return True
+        return tiene_permiso_rrhh(current_user, "validar", contrato_id)
+
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/documentacion/ocr-bancario")
+async def route_ocr_bancario(
+    contrato_id: int,
+    trabajador_id: int,
+    archivo: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "editar", contrato_id)
+    data = await archivo.read()
+    return ocr_certificacion_bancaria(data, archivo.content_type)
+
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/documentacion/consolidar")
+def route_consolidar_documentacion(
+    contrato_id: int,
+    trabajador_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    if not _puede_validar_docs(current_user, contrato_id):
+        # También permitir editar para re-ejecutar tras correcciones
+        if not (
+            tiene_permiso_rrhh(current_user, "editar", contrato_id)
+            or tiene_permiso_rrhh(current_user, "crear", contrato_id)
+        ):
+            raise HTTPException(403, detail="Sin permiso para consolidar documentación.")
+    try:
+        result = consolidar_documentacion(
+            supabase, contrato_id, trabajador_id, current_user
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ACTUALIZAR",
+        "RRHH",
+        "rrhh_trabajadores",
+        str(trabajador_id),
+        "Consolidar documentación / auditoría",
+    )
+    return result
+
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/documentacion/validacion")
+def route_set_validacion(
+    contrato_id: int,
+    trabajador_id: int,
+    body: ValidacionDocBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    if not _puede_validar_docs(current_user, contrato_id):
+        raise HTTPException(403, detail="Se requiere permiso Validar (o rol Desarrollador).")
+    try:
+        row = set_validacion(
+            supabase,
+            contrato_id,
+            trabajador_id,
+            estado=body.estado,
+            observacion=body.observacion,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ACTUALIZAR",
+        "RRHH",
+        "rrhh_trabajadores",
+        str(trabajador_id),
+        f"Validación documental → {body.estado}",
+    )
+    return row
+
+
+@router.get("/{contrato_id}/trabajadores/{trabajador_id}/documentacion/consolidado")
+def route_download_consolidado(
+    contrato_id: int,
+    trabajador_id: int,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    if not (
+        tiene_permiso_rrhh(current_user, "ver", contrato_id)
+        or tiene_permiso_rrhh(current_user, "exportar", contrato_id)
+    ):
+        raise HTTPException(403, detail="Sin permiso.")
+    try:
+        data, name = download_doc_consolidado(supabase, contrato_id, trabajador_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
+
+
+@router.post("/{contrato_id}/documentacion/eliminar-tipo-otro")
+def route_eliminar_tipo_otro(
+    contrato_id: int,
+    body: EliminarTipoOtroBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "eliminar", contrato_id)
+    try:
+        result = eliminar_tipo_documento_otro(
+            supabase,
+            contrato_id,
+            categoria=body.categoria,
+            label=body.label,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    return result

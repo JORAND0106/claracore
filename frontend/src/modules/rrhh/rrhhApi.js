@@ -182,6 +182,35 @@ export function createRrhhApi(contratoId, token) {
     getProvisiones: (trabajadorId) =>
       apiJson(`${base}/trabajadores/${trabajadorId}/provisiones`, { token }),
 
+    ocrBancario: async (trabajadorId, archivo) => {
+      const fd = new FormData()
+      fd.append('archivo', archivo)
+      return apiJson(`${base}/trabajadores/${trabajadorId}/documentacion/ocr-bancario`, {
+        method: 'POST',
+        token,
+        formData: fd,
+      })
+    },
+    consolidarDocumentacion: (trabajadorId) =>
+      apiJson(`${base}/trabajadores/${trabajadorId}/documentacion/consolidar`, {
+        method: 'POST',
+        token,
+      }),
+    setValidacionDocumentacion: (trabajadorId, body) =>
+      apiJson(`${base}/trabajadores/${trabajadorId}/documentacion/validacion`, {
+        method: 'POST',
+        token,
+        body,
+      }),
+    docConsolidadoUrl: (trabajadorId) =>
+      `${API_BASE}${base}/trabajadores/${trabajadorId}/documentacion/consolidado`,
+    eliminarTipoOtro: (body) =>
+      apiJson(`${base}/documentacion/eliminar-tipo-otro`, {
+        method: 'POST',
+        token,
+        body,
+      }),
+
     async downloadBlob(url, filename) {
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},

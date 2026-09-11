@@ -29,7 +29,7 @@ _TABLE_SEQ = "rrhh_contrato_laboral_seq"
 _CTO_LAB_RE = re.compile(r"^CTO-LAB-(\d+)$", re.IGNORECASE)
 _EXT_TIPO_RE = re.compile(r"^ext_[a-z0-9_]{1,80}$")
 
-DOC_CATEGORIAS = frozenset({"soporte", "ingreso"})
+DOC_CATEGORIAS = frozenset({"soporte", "ingreso", "bancario", "afiliacion"})
 
 DOC_TIPOS_SOPORTE = (
     ("cedula", "Cédula / Documento de identidad"),
@@ -45,9 +45,23 @@ DOC_TIPOS_INGRESO = (
     ("otro", "Otro"),
 )
 
+DOC_TIPOS_BANCARIO = (
+    ("certificacion_bancaria", "Certificación bancaria"),
+)
+
+DOC_TIPOS_AFILIACION = (
+    ("cert_eps", "Certificación EPS"),
+    ("cert_pension", "Certificación Pensión / AFP"),
+    ("cert_arl", "Certificación ARL"),
+    ("cert_cesantias", "Certificación Cesantías"),
+    ("cert_caja", "Certificación Caja de Compensación"),
+)
+
 DOC_TIPO_LABEL = {
     **{k: v for k, v in DOC_TIPOS_SOPORTE},
     **{k: v for k, v in DOC_TIPOS_INGRESO},
+    **{k: v for k, v in DOC_TIPOS_BANCARIO},
+    **{k: v for k, v in DOC_TIPOS_AFILIACION},
 }
 
 DOC_MIMES = frozenset({
@@ -109,6 +123,10 @@ def _tipos_builtin(categoria: str) -> frozenset:
         return frozenset(k for k, _ in DOC_TIPOS_SOPORTE if k != "otro")
     if categoria == "ingreso":
         return frozenset(k for k, _ in DOC_TIPOS_INGRESO if k != "otro")
+    if categoria == "bancario":
+        return frozenset(k for k, _ in DOC_TIPOS_BANCARIO)
+    if categoria == "afiliacion":
+        return frozenset(k for k, _ in DOC_TIPOS_AFILIACION)
     raise ValueError("Categoría de documento inválida.")
 
 
@@ -122,13 +140,18 @@ def _validate_tipo(
 ) -> tuple[str, Optional[str]]:
     cat = (categoria or "").strip().lower()
     if cat not in DOC_CATEGORIAS:
-        raise ValueError("Categoría inválida. Use «soporte» o «ingreso».")
+        raise ValueError("Categoría inválida.")
     t = (tipo or "").strip().lower()
     otro = (tipo_otro_texto or "").strip() or None
     builtins = _tipos_builtin(cat)
+
+    if cat in ("bancario", "afiliacion"):
+        if t not in builtins:
+            raise ValueError(f"Tipo de documento inválido para {cat}.")
+        return t, None
+
     catalog_key = _CATALOGO_POR_DOC[cat]
 
-    # Flujo «Otro»: pide nombre, persiste en catálogo y usa slug ext_*
     if t == "otro":
         if not otro:
             raise ValueError("Indique el nombre del documento cuando elige «Otro».")
@@ -142,7 +165,6 @@ def _validate_tipo(
     if t in builtins:
         return t, None
 
-    # Tipo ya extendido (reutilización del checklist)
     if _EXT_TIPO_RE.match(t):
         label = otro or t[4:].replace("_", " ").strip() or t
         if otro:
@@ -179,6 +201,14 @@ def list_documentos(
     return q.execute().data or []
 
 
+def assert_documentacion_editable(trab: dict) -> None:
+    if trab.get("doc_bloqueado"):
+        raise ValueError(
+            "La documentación de este colaborador está bloqueada (aprobada). "
+            "No se permiten cambios."
+        )
+
+
 def create_documento(
     sb,
     contrato_id: int,
@@ -196,11 +226,29 @@ def create_documento(
     marcar_vigente: bool = True,
 ) -> dict:
     trab = get_trabajador(sb, contrato_id, trabajador_id)
+    assert_documentacion_editable(trab)
     cat = (categoria or "").strip().lower()
     t, otro = _validate_tipo(
         sb, contrato_id, cat, tipo, tipo_otro_texto, current_user
     )
     mime = validate_upload(content_type, len(archivo_bytes))
+    data = archivo_bytes
+    # Compresión máxima de PDF sin perder legibilidad (respeta firmas certificadas)
+    if mime == "application/pdf":
+        try:
+            from pdf_prepare import prepare_pdf_for_storage
+
+            prepared = prepare_pdf_for_storage(data)
+            data = prepared.data
+            _log.info(
+                "rrhh pdf prepare orig=%s final=%s compressed=%s note=%s",
+                prepared.original_size,
+                prepared.final_size,
+                prepared.compressed,
+                prepared.note,
+            )
+        except Exception as exc:
+            _log.warning("rrhh pdf compress skip: %s", exc)
     safe_name = (nombre_archivo or f"{t}.pdf").strip()[:255] or f"{t}.pdf"
     blob_path = path_rrhh_trabajador_documento(
         int(contrato_id),
@@ -209,7 +257,7 @@ def create_documento(
         t,
         safe_name,
     )
-    upload_blob_private(blob_path, archivo_bytes, content_type=mime)
+    upload_blob_private(blob_path, data, content_type=mime)
     label = (version_label or "").strip() or ("Original" if marcar_vigente else "Histórico")
 
     if marcar_vigente:
@@ -239,8 +287,8 @@ def create_documento(
         "azure_blob_path": blob_path,
         "nombre_archivo": safe_name,
         "mime_type": mime,
-        "tamano_bytes": len(archivo_bytes),
-        "hash_sha256": _sha256_hex(archivo_bytes),
+        "tamano_bytes": len(data),
+        "hash_sha256": _sha256_hex(data),
         "notas": (notas or "").strip()[:1000] or None,
         "created_by": _uid(current_user),
     }
@@ -259,7 +307,6 @@ def create_documento(
         rows[0].get("id"),
         contrato_id,
     )
-    # Enrich with trabajador nombre for logs/UI if needed
     rows[0]["_trabajador_nombre"] = trabajador_display_nombre(trab)
     return rows[0]
 
@@ -310,7 +357,8 @@ def marcar_documento_vigente(sb, contrato_id: int, trabajador_id: int, doc_id: i
 
 
 def soft_delete_documento(sb, contrato_id: int, trabajador_id: int, doc_id: int, current_user) -> dict:
-    get_trabajador(sb, contrato_id, trabajador_id)
+    trab = get_trabajador(sb, contrato_id, trabajador_id)
+    assert_documentacion_editable(trab)
     rows = (
         sb.table(_TABLE_DOCS)
         .select("*")
@@ -491,6 +539,7 @@ def generar_contrato_laboral(
     from rrhh_service import add_catalogo_opcion
 
     trab = get_trabajador(sb, contrato_id, trabajador_id)
+    assert_documentacion_editable(trab)
     tipo_nombre = (tipo_contrato or trab.get("tipo_contrato") or "").strip()
     if not tipo_nombre:
         raise ValueError("Seleccione un tipo de contrato laboral.")

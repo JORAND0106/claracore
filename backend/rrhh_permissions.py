@@ -141,6 +141,11 @@ def require_permiso_rrhh(
         )
 
 
+def es_desarrollador_rrhh(current_user) -> bool:
+    """Acceso pleno fijo al panel de validación documental."""
+    return _es_desarrollador_seguro(current_user)
+
+
 def es_admin_plataforma(current_user) -> bool:
     """Administrador de plataforma o Desarrollador — catálogo de tipos de contrato."""
     if _es_desarrollador_seguro(current_user):
