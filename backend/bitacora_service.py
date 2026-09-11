@@ -290,6 +290,65 @@ def _expandir_personal_otro(personal: List[dict]) -> List[dict]:
     return out
 
 
+def _merge_personal_por_cargo(*listas: List[dict]) -> List[dict]:
+    """Suma cantidades por cargo (case-insensitive) para Resumen / PDF."""
+    counts: Dict[str, float] = {}
+    labels: Dict[str, str] = {}
+    for lista in listas:
+        for item in lista or []:
+            if not isinstance(item, dict):
+                continue
+            cargo = str(item.get("cargo") or "").strip()
+            if not cargo:
+                continue
+            key = cargo.lower()
+            try:
+                n = float(item.get("cantidad") or 0)
+            except (TypeError, ValueError):
+                n = 0.0
+            if n <= 0:
+                continue
+            counts[key] = counts.get(key, 0.0) + n
+            if key not in labels:
+                labels[key] = cargo
+    return [
+        {"cargo": labels[k], "cantidad": counts[k]}
+        for k in sorted(counts.keys(), key=lambda x: labels[x].lower())
+    ]
+
+
+# Contrato con botón temporal cargo/cantidad (Desarrollador). Por número único.
+BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO = "ICCU-CTO-1574-2025"
+
+
+def _contrato_numero(sb, contrato_id: int) -> str:
+    try:
+        rows = (
+            sb.table("contratos")
+            .select("numero")
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if rows:
+            return str(rows[0].get("numero") or "").strip()
+    except Exception as exc:
+        _log.debug("_contrato_numero: %s", exc)
+    return ""
+
+
+def _puede_personal_manual(sb, current_user, contrato_id: int) -> bool:
+    """Solo Desarrollador + contrato ICCU-CTO-1574-2025."""
+    from bitacora_permissions import _es_desarrollador_seguro
+
+    if not _es_desarrollador_seguro(current_user):
+        return False
+    num = _contrato_numero(sb, contrato_id).upper()
+    return num == BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO.upper()
+
+
 def _normalizar_adjuntos_flex(raw, *, max_n: int = 20) -> List[dict]:
     """Adjuntos genéricos (vales, preoperacionales) sin tope de fotos de bitácora."""
     if not isinstance(raw, list):
@@ -2069,18 +2128,29 @@ def _resolver_personal_y_asistencia(
     data: dict,
     *,
     user_id: Optional[int] = None,
+    current_user: Optional[dict] = None,
 ) -> Tuple[List[dict], Optional[List[dict]]]:
     """
     Si viene asistencia_colaboradores, enriquece desde RRHH (snapshot de estado)
-    y deriva personal. Si no, usa personal legacy.
+    y deriva personal. Combina con personal_manual (temporal Dev+contrato)
+    cuando está autorizado. Si no hay asistencia, usa personal legacy.
     Returns (personal, asistencia|None).
     """
+    manual: List[dict] = []
+    if current_user is not None and _puede_personal_manual(sb, current_user, contrato_id):
+        manual = _expandir_personal_otro(
+            _normalizar_personal(data.get("personal_manual") or [])
+        )
+
     if "asistencia_colaboradores" in data:
         lista = _normalizar_asistencia_colaboradores(data.get("asistencia_colaboradores"))
         synced = enrich_asistencia_desde_rrhh(sb, contrato_id, lista)
-        personal = _expandir_personal_otro(_personal_desde_asistencia(synced))
+        from_rrhh = _expandir_personal_otro(_personal_desde_asistencia(synced))
+        personal = _merge_personal_por_cargo(from_rrhh, manual)
         return personal, synced
     personal = _expandir_personal_otro(_normalizar_personal(data.get("personal")))
+    if manual:
+        personal = _merge_personal_por_cargo(personal, manual)
     return personal, None
 
 
@@ -2088,6 +2158,24 @@ def _strip_para_autocompletar(entrada: dict) -> dict:
     """Personal + asistencia + maquinaria del día anterior. Materiales nunca se autocompletan."""
     personal = _normalizar_personal(entrada.get("personal"))
     asistencia = _normalizar_asistencia_colaboradores(entrada.get("asistencia_colaboradores"))
+    # Aporte manual = personal − RRHH (para botón temporal / legado).
+    from_rrhh = {
+        str(r.get("cargo") or "").strip().lower(): float(r.get("cantidad") or 0)
+        for r in _personal_desde_asistencia(asistencia)
+        if str(r.get("cargo") or "").strip()
+    }
+    personal_manual: List[dict] = []
+    for item in _expandir_personal_otro(personal):
+        cargo = str(item.get("cargo") or "").strip()
+        if not cargo:
+            continue
+        try:
+            cant = float(item.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            cant = 0.0
+        diff = cant - from_rrhh.get(cargo.lower(), 0.0)
+        if diff > 0:
+            personal_manual.append({"cargo": cargo, "cantidad": diff})
     usos = []
     for u in entrada.get("equipos_uso") or []:
         if not isinstance(u, dict):
@@ -2111,6 +2199,7 @@ def _strip_para_autocompletar(entrada: dict) -> dict:
         "fuente_fecha": entrada.get("fecha"),
         "fuente_tramo": entrada.get("tramo"),
         "personal": personal,
+        "personal_manual": personal_manual,
         "asistencia_colaboradores": asistencia,
         "equipos_uso": usos,
         "materiales": [],  # siempre vacío: movimientos son del día
@@ -2703,7 +2792,7 @@ def crear_reporte_diario(
             "updated_at": _now_utc().isoformat(),
         }
         personal, asistencia = _resolver_personal_y_asistencia(
-            sb, contrato_id, data, user_id=user_id,
+            sb, contrato_id, data, user_id=user_id, current_user=current_user,
         )
         payload["personal"] = personal
         if asistencia is not None:
@@ -2914,7 +3003,7 @@ def update_entrada(
         if "personal" in data or "asistencia_colaboradores" in data:
             with _stage_timer(stages, "sync_cargos"):
                 pers, asist = _resolver_personal_y_asistencia(
-                    sb, contrato_id, data, user_id=user_id,
+                    sb, contrato_id, data, user_id=user_id, current_user=current_user,
                 )
                 patch["personal"] = pers
                 if asist is not None:

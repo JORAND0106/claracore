@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { API_BASE } from '../../apiBase'
 import CieloClimaCanvas from '../../components/inicio/CieloClimaCanvas'
 import { labelClima } from './bitacoraConstants'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
+import { esFechaPasadaBitacora, pickHourlyClima } from './bitacoraClimaHelpers'
 
-const OPEN_METEO = 'https://api.open-meteo.com/v1/forecast'
+const OPEN_METEO_FORECAST = 'https://api.open-meteo.com/v1/forecast'
+const OPEN_METEO_ARCHIVE = 'https://archive-api.open-meteo.com/v1/archive'
 
 function centroideDesdePlano(data) {
   if (!data) return null
@@ -39,12 +41,14 @@ function centroideDesdePlano(data) {
 }
 
 /**
- * Clima compacto en línea con fecha/hora: celda animada + temp + descripción editable.
+ * Clima compacto: en vivo si la fecha es hoy; histórico Open-Meteo si es atrasada.
  */
 export default function BitacoraClimaField({
   t,
   contratoId,
   token,
+  fecha = '',
+  horaPreferida = '12:00',
   value,
   onChange,
   disabled = false,
@@ -73,21 +77,56 @@ export default function BitacoraClimaField({
           }
         }
       }
-      const p = new URLSearchParams({
-        latitude: String(lat),
-        longitude: String(lon),
-        current: 'temperature_2m,weather_code',
-        timezone: 'America/Bogota',
-      })
-      const climaRes = await fetch(`${OPEN_METEO}?${p}`)
-      if (!climaRes.ok) throw new Error('No se pudo consultar el clima')
-      const json = await climaRes.json()
-      const cur = json?.current
-      if (!cur) throw new Error('Respuesta de clima vacía')
+
+      const fechaISO = String(fecha || '').slice(0, 10)
+      const past = esFechaPasadaBitacora(fechaISO)
+      let preferHour = 12
+      try {
+        preferHour = Number(String(horaPreferida || '12:00').slice(0, 2))
+        if (!Number.isFinite(preferHour)) preferHour = 12
+      } catch { preferHour = 12 }
+
+      let next = null
+      if (past) {
+        const p = new URLSearchParams({
+          latitude: String(lat),
+          longitude: String(lon),
+          start_date: fechaISO,
+          end_date: fechaISO,
+          hourly: 'temperature_2m,weather_code',
+          timezone: 'America/Bogota',
+        })
+        let json = null
+        for (const base of [OPEN_METEO_ARCHIVE, OPEN_METEO_FORECAST]) {
+          const climaRes = await fetch(`${base}?${p}`)
+          if (!climaRes.ok) continue
+          json = await climaRes.json()
+          if (json?.hourly?.time?.length) break
+        }
+        if (!json?.hourly) throw new Error('No se pudo consultar el clima histórico')
+        next = pickHourlyClima(json.hourly, preferHour)
+        if (!next) throw new Error('Sin datos de clima para esa fecha')
+      } else {
+        const p = new URLSearchParams({
+          latitude: String(lat),
+          longitude: String(lon),
+          current: 'temperature_2m,weather_code',
+          timezone: 'America/Bogota',
+        })
+        const climaRes = await fetch(`${OPEN_METEO_FORECAST}?${p}`)
+        if (!climaRes.ok) throw new Error('No se pudo consultar el clima')
+        const json = await climaRes.json()
+        const cur = json?.current
+        if (!cur) throw new Error('Respuesta de clima vacía')
+        next = {
+          clima_codigo: cur.weather_code,
+          clima_temp_c: cur.temperature_2m,
+          clima_descripcion: labelClima(cur.weather_code),
+        }
+      }
+
       onChange?.({
-        clima_codigo: cur.weather_code,
-        clima_temp_c: cur.temperature_2m,
-        clima_descripcion: labelClima(cur.weather_code),
+        ...next,
         clima_editado_manual: false,
       })
     } catch (e) {
@@ -97,19 +136,16 @@ export default function BitacoraClimaField({
     }
   }
 
+  // Primera carga / cambio de fecha: autocompletar si no hay edición manual.
   useEffect(() => {
-    if (
-      value?.clima_codigo == null
-      && value?.clima_temp_c == null
-      && !value?.clima_descripcion
-      && !disabled
-    ) {
-      void cargar()
-    }
+    if (disabled) return undefined
+    if (value?.clima_editado_manual) return undefined
+    void cargar()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contratoId])
+  }, [contratoId, fecha])
 
   if (compact) {
+    const past = esFechaPasadaBitacora(fecha)
     return (
       <div style={{
         display: 'flex',
@@ -121,6 +157,7 @@ export default function BitacoraClimaField({
         minHeight: 36,
         flex: '1 1 220px',
         background: t.bgCard,
+        position: 'relative',
       }}>
         <div style={{
           position: 'relative',
@@ -169,13 +206,13 @@ export default function BitacoraClimaField({
               clima_descripcion: e.target.value,
               clima_editado_manual: true,
             })}
-            placeholder="Clima"
+            placeholder={past ? 'Clima histórico' : 'Clima'}
             style={{ ...ui.cellInp, flex: 1, minWidth: 0 }}
           />
           {!disabled && (
             <button
               type="button"
-              title="Actualizar desde clima en vivo"
+              title={past ? 'Actualizar desde clima histórico de la fecha' : 'Actualizar desde clima en vivo'}
               onClick={() => void cargar()}
               disabled={loading}
               style={{ ...ui.clipBtn, opacity: loading ? 0.5 : 1 }}
@@ -194,6 +231,5 @@ export default function BitacoraClimaField({
     )
   }
 
-  // fallback no compact (unused)
   return null
 }

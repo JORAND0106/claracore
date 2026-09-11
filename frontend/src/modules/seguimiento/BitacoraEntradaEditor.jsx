@@ -22,7 +22,10 @@ import {
   asistenciaFromEntrada,
   asistenciaParaPayload,
   mapaEstadosRrhh,
+  mergePersonalCantidades,
   personalAgregadoDesdeAsistencia,
+  puedeUsarCargoCantidadTemporal,
+  recoverPersonalManual,
 } from './personalAsistenciaHelpers'
 import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
 import {
@@ -231,7 +234,11 @@ export default function BitacoraEntradaEditor({
     return mergePersonalPlantilla(personalPlantillaVacia(), prev)
   })
   const [asistencia, setAsistencia] = useState(() => asistenciaFromEntrada(entrada))
+  const [personalManual, setPersonalManual] = useState(() => (
+    recoverPersonalManual(entrada?.personal, entrada?.asistencia_colaboradores)
+  ))
   const [rrhhCatalogo, setRrhhCatalogo] = useState([])
+  const [contratoNumero, setContratoNumero] = useState('')
   const [usos, setUsos] = useState(
     Array.isArray(entrada?.equipos_uso) && entrada.equipos_uso.length
       ? entrada.equipos_uso.map(usoFromApi)
@@ -321,18 +328,23 @@ export default function BitacoraEntradaEditor({
     return () => { cancelled = true }
   }, [api, tipo])
 
-  // Resumen: live RRHH si abierto; snapshot si cerrado.
+  // Resumen: live RRHH si abierto; snapshot si cerrado; + registro directo temporal.
   const resumenCongelado = !editable && String(entrada?.estado || '').toLowerCase() === 'cerrado'
+  const permitirCargoCantidad = puedeUsarCargoCantidadTemporal({
+    esDesarrollador: Boolean(permisos?.esDesarrollador),
+    contratoNumero,
+  })
   useEffect(() => {
     if (tipo !== 'diario') return
     const liveMap = resumenCongelado ? null : mapaEstadosRrhh(rrhhCatalogo)
-    const agg = personalAgregadoDesdeAsistencia(asistencia, { liveEstadosByRrhhId: liveMap })
+    const aggRrhh = personalAgregadoDesdeAsistencia(asistencia, { liveEstadosByRrhhId: liveMap })
+    const agg = mergePersonalCantidades(aggRrhh, personalManual)
     setPersonal((prev) => mergePersonalPlantilla(prev, agg.map((r) => ({
       cargo: r.cargo,
       cantidad: r.cantidad,
       cargo_otro: '',
     }))))
-  }, [asistencia, tipo, rrhhCatalogo, resumenCongelado])
+  }, [asistencia, tipo, rrhhCatalogo, resumenCongelado, personalManual])
 
   useEffect(() => {
     if (!contratoId || !token) return undefined
@@ -345,6 +357,7 @@ export default function BitacoraEntradaEditor({
         })
         if (!res.ok || cancelled) return
         const data = await res.json()
+        if (!cancelled && data?.numero) setContratoNumero(String(data.numero))
         let lat = data?.centro_lat != null ? Number(data.centro_lat) : null
         let lng = data?.centro_lng != null ? Number(data.centro_lng) : null
         if ((lat == null || lng == null) && data?.plano_geojson) {
@@ -451,10 +464,14 @@ export default function BitacoraEntradaEditor({
         return
       }
       const liveMap = mapaEstadosRrhh(rrhhCatalogo)
-      const personalPayload = personalAgregadoDesdeAsistencia(
+      const personalRrhh = personalAgregadoDesdeAsistencia(
         asistenciaPayload,
         { liveEstadosByRrhhId: liveMap },
       )
+      const personalManualPayload = permitirCargoCantidad
+        ? mergePersonalCantidades(personalManual)
+        : []
+      const personalPayload = mergePersonalCantidades(personalRrhh, personalManualPayload)
       const materialesPayload = materiales
         .filter((m) => (
           m.tipo_material || m.proveedor || m.placa || m.numeros_vale
@@ -486,6 +503,7 @@ export default function BitacoraEntradaEditor({
         hora_inicio_labores: horaInicio || null,
         ...clima,
         personal: personalPayload,
+        personal_manual: personalManualPayload,
         asistencia_colaboradores: asistenciaPayload,
         equipos_uso: buildUsosPayload(),
         materiales: materialesPayload,
@@ -528,6 +546,10 @@ export default function BitacoraEntradaEditor({
       setImagenes(Array.isArray(rowClean.imagenes) ? rowClean.imagenes : [])
       if (Array.isArray(rowClean.asistencia_colaboradores)) {
         setAsistencia(asistenciaFromEntrada(rowClean))
+        setPersonalManual(recoverPersonalManual(
+          rowClean.personal,
+          rowClean.asistencia_colaboradores,
+        ))
       }
       if (Array.isArray(rowClean.eventos)) {
         setEventos(eventosFromEntrada(rowClean))
@@ -552,14 +574,24 @@ export default function BitacoraEntradaEditor({
     try {
       const data = await api.plantillaAutocompletarDiario(tramo)
       const prevAsist = asistenciaFromEntrada(data)
-      if (!data || (!prevAsist.length && !data.personal?.length && !data.equipos_uso?.length)) {
+      const hasManual = Array.isArray(data.personal_manual) && data.personal_manual.length
+      if (!data || (!prevAsist.length && !data.personal?.length && !hasManual && !data.equipos_uso?.length)) {
         setError('No hay una Bitácora anterior del mismo tramo para autocompletar.')
         return
       }
       // No tocar fecha / hora / clima / tramo ni materiales
       if (prevAsist.length) {
         setAsistencia(prevAsist)
-      } else if (Array.isArray(data.personal)) {
+      }
+      // Cargo/cantidad temporal (y legado personal): recuperar aporte manual.
+      const manualPrev = Array.isArray(data.personal_manual) && data.personal_manual.length
+        ? mergePersonalCantidades(data.personal_manual)
+        : recoverPersonalManual(data.personal, prevAsist)
+      if (manualPrev.length) {
+        setPersonalManual(manualPrev)
+      } else if (!prevAsist.length && Array.isArray(data.personal)) {
+        // Solo personal legado sin asistencia RRHH → todo como registro directo.
+        setPersonalManual(mergePersonalCantidades(data.personal))
         setPersonal((prev) => mergePersonalPlantilla(prev, data.personal))
       }
       if (Array.isArray(data.equipos_uso) && data.equipos_uso.length) {
@@ -572,7 +604,7 @@ export default function BitacoraEntradaEditor({
         data.fuente_tramo ? labelTramoBitacora(data.fuente_tramo) : null,
       ].filter(Boolean).join(' · ')
       setOkMsg(
-        `Asistencia y maquinaria cargadas desde el reporte anterior${fuente ? ` (${fuente})` : ''}. `
+        `Asistencia, cargos y maquinaria cargados desde el reporte anterior${fuente ? ` (${fuente})` : ''}. `
         + 'Materiales quedan vacíos. Fecha, hora, clima y tramo no se modificaron.',
       )
     } catch (e) {
@@ -863,6 +895,8 @@ export default function BitacoraEntradaEditor({
                 t={t}
                 contratoId={contratoId}
                 token={token}
+                fecha={fecha}
+                horaPreferida={horaInicio}
                 value={clima}
                 onChange={setClima}
                 disabled={!editable}
@@ -899,6 +933,9 @@ export default function BitacoraEntradaEditor({
                 compact={grillaCompacta}
                 rrhhCatalogo={rrhhCatalogo}
                 resumenCongelado={resumenCongelado}
+                personalManual={personalManual}
+                onChangePersonalManual={setPersonalManual}
+                permitirCargoCantidad={permitirCargoCantidad && editable}
               />
 
               {/* Maquinaria Excel */}

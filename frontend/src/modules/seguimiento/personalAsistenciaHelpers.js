@@ -1,5 +1,7 @@
 /** Helpers de asistencia de colaboradores (Reporte Diario) — catálogo RRHH. */
 
+import { BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO } from './bitacoraConstants.js'
+
 export const DOCUMENTO_TIPOS = ['CC', 'CE', 'TI', 'PA', 'NIT', 'OTRO']
 
 /** Estados legados / snapshot (Bitácora + RRHH). RRHH: activo|inactivo|retirado. */
@@ -226,4 +228,57 @@ export function mapaEstadosRrhh(catalogo = []) {
     map.set(id, normalizeEstadoRrhh(t?.estado))
   }
   return map
+}
+
+/** Normaliza lista {cargo, cantidad, cargo_otro?} sumando por cargo. */
+export function normalizarPersonalCantidades(rows = []) {
+  const counts = new Map()
+  const otroByKey = new Map()
+  for (const r of rows || []) {
+    let cargo = String(r?.cargo || '').trim()
+    if (!cargo) continue
+    const otro = String(r?.cargo_otro || '').trim()
+    if (cargo.toLowerCase().startsWith('otro') && otro) cargo = otro
+    let n = Number(r?.cantidad)
+    if (!Number.isFinite(n) || n < 0) n = 0
+    if (n === 0) continue
+    const key = cargo.toLowerCase()
+    counts.set(key, (counts.get(key) || 0) + n)
+    if (!otroByKey.has(key)) otroByKey.set(key, cargo)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => otroByKey.get(a[0]).localeCompare(otroByKey.get(b[0]), 'es'))
+    .map(([k, cantidad]) => ({ cargo: otroByKey.get(k), cantidad }))
+}
+
+/** Suma varias listas de {cargo, cantidad} por cargo. */
+export function mergePersonalCantidades(...lists) {
+  const flat = []
+  for (const list of lists) {
+    if (Array.isArray(list)) flat.push(...list)
+  }
+  return normalizarPersonalCantidades(flat)
+}
+
+/**
+ * Recupera el aporte «manual» (cargo/cantidad) como diferencia
+ * personal_guardado − agregado_RRHH (snapshot en asistencia).
+ */
+export function recoverPersonalManual(personalGuardado, asistenciaRows, opts = {}) {
+  const merged = normalizarPersonalCantidades(personalGuardado)
+  const rrhh = personalAgregadoDesdeAsistencia(asistenciaRows, opts)
+  const rrhhMap = new Map(rrhh.map((r) => [String(r.cargo).toLowerCase(), Number(r.cantidad) || 0]))
+  const out = []
+  for (const row of merged) {
+    const key = String(row.cargo).toLowerCase()
+    const diff = (Number(row.cantidad) || 0) - (rrhhMap.get(key) || 0)
+    if (diff > 0) out.push({ cargo: row.cargo, cantidad: diff })
+  }
+  return out
+}
+
+export function puedeUsarCargoCantidadTemporal({ esDesarrollador, contratoNumero } = {}) {
+  if (!esDesarrollador) return false
+  const num = String(contratoNumero || '').trim().toUpperCase()
+  return num === String(BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO).toUpperCase()
 }
