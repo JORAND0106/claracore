@@ -19,6 +19,12 @@ export const CARGOS_PERSONAL = [
   'Otro',
 ]
 
+/**
+ * Contrato con botón temporal «Registrar cargo y cantidad» (solo Desarrollador).
+ * Identificación por `contratos.numero` (único en plataforma).
+ */
+export const BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO = 'ICCU-CTO-1574-2025'
+
 /** Tipos de evento; `conDestinatario` controla el campo «a quién se dirige». */
 export const EVENTO_TIPOS = [
   { value: 'visita_terceros', label: 'Recorrido de obra', conDestinatario: true },

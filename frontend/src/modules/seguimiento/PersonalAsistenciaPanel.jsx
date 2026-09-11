@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { personalEnColumnas } from './bitacoraConstants'
+import { CARGOS_PERSONAL, personalEnColumnas } from './bitacoraConstants'
 import {
   HINT_REGISTRAR_EN_RRHH,
   HORA_SALIDA_DEFAULT,
@@ -8,6 +8,7 @@ import {
   filtrarTrabajadoresRrhh,
   formatHorarioAsistencia,
   mapaEstadosRrhh,
+  mergePersonalCantidades,
   nombreCompletoRrhh,
   personalAgregadoDesdeAsistencia,
 } from './personalAsistenciaHelpers'
@@ -129,8 +130,10 @@ function NombreRrhhAutocomplete({
   )
 }
 
+
 /**
  * Personal en obra: asistencia diaria desde catálogo RRHH (sin popup de alta).
+ * Opcional: captura temporal cargo/cantidad (solo Dev + contrato permitido).
  */
 export default function PersonalAsistenciaPanel({
   t,
@@ -142,15 +145,30 @@ export default function PersonalAsistenciaPanel({
   rrhhCatalogo = [],
   /** Si true (reporte cerrado), el resumen usa el snapshot guardado, no el estado live de RRHH. */
   resumenCongelado = false,
+  /** Filas {cargo, cantidad} del botón temporal. */
+  personalManual = [],
+  onChangePersonalManual,
+  /** Mostrar botón «Registrar cargo y cantidad». */
+  permitirCargoCantidad = false,
+  cargosOpciones = CARGOS_PERSONAL,
 }) {
   const ui = sheetStyles || {}
+  const [cargoFormOpen, setCargoFormOpen] = useState(false)
+  const [draftCargo, setDraftCargo] = useState(CARGOS_PERSONAL[0] || 'Oficial')
+  const [draftCargoOtro, setDraftCargoOtro] = useState('')
+  const [draftCantidad, setDraftCantidad] = useState(1)
+
   const liveMap = useMemo(
     () => (resumenCongelado ? null : mapaEstadosRrhh(rrhhCatalogo)),
     [resumenCongelado, rrhhCatalogo],
   )
-  const agregado = useMemo(
+  const agregadoRrhh = useMemo(
     () => personalAgregadoDesdeAsistencia(rows, { liveEstadosByRrhhId: liveMap }),
     [rows, liveMap],
+  )
+  const agregado = useMemo(
+    () => mergePersonalCantidades(agregadoRrhh, personalManual),
+    [agregadoRrhh, personalManual],
   )
   const personalCols = useMemo(() => personalEnColumnas(
     agregado.length
@@ -185,6 +203,24 @@ export default function PersonalAsistenciaPanel({
     onChange?.((rows || []).filter((_, i) => i !== idx))
   }
 
+  const addCargoCantidad = () => {
+    let cargo = String(draftCargo || '').trim()
+    if (cargo.toLowerCase() === 'otro') {
+      cargo = String(draftCargoOtro || '').trim()
+    }
+    const n = Number(draftCantidad)
+    if (!cargo || !Number.isFinite(n) || n <= 0) return
+    const next = mergePersonalCantidades(personalManual, [{ cargo, cantidad: n }])
+    onChangePersonalManual?.(next)
+    setDraftCantidad(1)
+    setDraftCargoOtro('')
+    setCargoFormOpen(false)
+  }
+
+  const removeManual = (idx) => {
+    onChangePersonalManual?.((personalManual || []).filter((_, i) => i !== idx))
+  }
+
   const btnGhost = {
     border: `1px dashed ${t.border}`,
     background: t.bg || '#fff',
@@ -211,9 +247,21 @@ export default function PersonalAsistenciaPanel({
       }}>
         <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>Personal en obra</div>
         {!disabled && (
-          <button type="button" onClick={addRow} style={btnGhost}>
-            + Agregar colaborador
-          </button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {permitirCargoCantidad && (
+              <button
+                type="button"
+                onClick={() => setCargoFormOpen((v) => !v)}
+                style={btnGhost}
+                title="Temporal · solo Desarrollador · contrato ICCU-CTO-1574-2025"
+              >
+                Registrar cargo y cantidad
+              </button>
+            )}
+            <button type="button" onClick={addRow} style={btnGhost}>
+              + Agregar colaborador
+            </button>
+          </div>
         )}
       </div>
 
@@ -226,6 +274,117 @@ export default function PersonalAsistenciaPanel({
         }}>
           Busque por nombre en el catálogo de RRHH. Cargo y empresa se completan solos.
           Los colaboradores nuevos se registran en Recursos Humanos.
+        </div>
+      )}
+
+      {permitirCargoCantidad && cargoFormOpen && !disabled && (
+        <div style={{
+          ...ui.sheetWrap,
+          marginBottom: 8,
+          padding: 10,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          alignItems: 'flex-end',
+        }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 160 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Cargo</span>
+            <select
+              value={draftCargo}
+              onChange={(e) => setDraftCargo(e.target.value)}
+              style={cellInp}
+            >
+              {(cargosOpciones?.length ? cargosOpciones : CARGOS_PERSONAL).map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          {String(draftCargo).toLowerCase() === 'otro' && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140, flex: 1 }}>
+              <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Cuál</span>
+              <input
+                value={draftCargoOtro}
+                onChange={(e) => setDraftCargoOtro(e.target.value)}
+                style={cellInp}
+                placeholder="Nombre del cargo"
+              />
+            </label>
+          )}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 88 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Cantidad</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={draftCantidad}
+              onChange={(e) => setDraftCantidad(e.target.value)}
+              style={cellInp}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={addCargoCantidad}
+            style={{
+              ...btnGhost,
+              borderStyle: 'solid',
+              background: t.primary,
+              color: '#fff',
+              borderColor: t.primary,
+            }}
+          >
+            Sumar al resumen
+          </button>
+        </div>
+      )}
+
+      {permitirCargoCantidad && (personalManual || []).length > 0 && (
+        <div style={{ ...ui.sheetWrap, marginBottom: 8 }} className="cc-bitacora-sheet-scroll">
+          <table style={{ ...ui.sheetTable, minWidth: 0 }}>
+            <thead>
+              <tr>
+                <th style={{ ...ui.th, width: '55%' }}>Cargo (registro directo)</th>
+                <th style={{ ...ui.th, width: '25%', textAlign: 'center' }}>Cant.</th>
+                <th style={{ ...ui.th, width: '20%' }} />
+              </tr>
+            </thead>
+            <tbody>
+              {(personalManual || []).map((row, idx) => (
+                <tr key={`man-${row.cargo}-${idx}`}>
+                  <td style={ui.td} data-label="Cargo">{row.cargo}</td>
+                  <td style={{ ...ui.td, textAlign: 'center', fontWeight: 800 }} data-label="Cant.">
+                    {disabled ? row.cantidad : (
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={row.cantidad}
+                        onChange={(e) => {
+                          const n = Number(e.target.value)
+                          const next = (personalManual || []).map((r, i) => (
+                            i === idx ? { ...r, cantidad: Number.isFinite(n) && n >= 0 ? n : 0 } : r
+                          )).filter((r) => Number(r.cantidad) > 0)
+                          onChangePersonalManual?.(next)
+                        }}
+                        style={{ ...cellInp, width: 72, textAlign: 'center' }}
+                      />
+                    )}
+                  </td>
+                  <td style={{ ...ui.td, textAlign: 'center' }}>
+                    {!disabled && (
+                      <button
+                        type="button"
+                        onClick={() => removeManual(idx)}
+                        style={{ ...ui.clipBtn, color: '#B91C1C', fontWeight: 700 }}
+                        title="Quitar"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -359,7 +518,8 @@ export default function PersonalAsistenciaPanel({
       </div>
 
       <div style={{ ...ui.sectionTitle, marginTop: 12, marginBottom: 6 }}>
-        Resumen por cargo (automático · solo Activos en RRHH)
+        Resumen por cargo (automático
+        {permitirCargoCantidad ? ' · RRHH + registro directo' : ' · solo Activos en RRHH'})
       </div>
       <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
         {compact ? (
