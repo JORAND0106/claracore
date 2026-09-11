@@ -110,12 +110,19 @@ CATALOG_DEFAULTS = {
         "Banco W",
         "Banco Finandina",
         "Banco Cooperativo Coopcentral",
+        "Banco GNB Sudameris",
+        "Banco Mundo Mujer",
+        "Banco Credifinanciera",
+        "Ban100",
         "Nequi",
         "Daviplata",
         "Movii",
         "RappiPay",
         "Lulo Bank",
         "Nu Colombia",
+        "Dale!",
+        "Cotrafa",
+        "Confiar Cooperativa Financiera",
     ),
 }
 
@@ -230,26 +237,36 @@ def list_catalogo_todos(sb, contrato_id: int) -> Dict[str, List[str]]:
 
 
 def ensure_catalogo_defaults(sb, contrato_id: int, categoria: str, current_user=None) -> None:
+    """
+    Precarga valores por defecto del catálogo.
+    Inserta solo los que falten (no duplica); así «Otro» no impide completar el listado base
+    (p. ej. bancos de Colombia en banco_entidad).
+    """
     cat = _validate_categoria(categoria)
     defaults = CATALOG_DEFAULTS.get(cat) or ()
     if not defaults:
         return
-    existing = (
+    existing_rows = (
         sb.table(_TABLE_CATALOGO)
-        .select("id")
+        .select("valor_norm")
         .eq("contrato_id", int(contrato_id))
         .eq("categoria", cat)
-        .limit(1)
         .execute()
         .data
         or []
     )
-    if existing:
-        return
+    existing_norms = {
+        str(r.get("valor_norm") or "").strip()
+        for r in existing_rows
+        if r.get("valor_norm")
+    }
     uid = _uid(current_user) if current_user else None
     for valor in defaults:
+        if _norm_valor(valor) in existing_norms:
+            continue
         try:
             add_catalogo_opcion(sb, contrato_id, cat, valor, current_user={"sub": uid} if uid else {})
+            existing_norms.add(_norm_valor(valor))
         except Exception:
             pass
 
