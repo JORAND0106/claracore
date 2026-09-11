@@ -367,10 +367,25 @@ def _build_portada_html(
     doc_txt = f"{esc(trab.get('tipo_documento'))} {esc(trab.get('numero_documento'))}".strip()
     rows = ""
     for item in checklist:
+        estado = str(item.get("estado") or "").upper()
+        if estado == "VERIFICADO":
+            estado_html = (
+                "<span style='color:#166534;font-weight:700;'>"
+                "<span style='font-size:9pt;'>✓</span> VERIFICADO</span>"
+            )
+        elif estado == "NO ADJUNTO":
+            estado_html = (
+                "<span style='color:#991b1b;font-weight:700;'>"
+                "<span style='font-size:9pt;'>✗</span> NO ADJUNTO</span>"
+            )
+        else:
+            estado_html = (
+                "<span style='color:#64748b;font-weight:600;'>"
+                "<span style='font-size:9pt;'>—</span> NO APLICA</span>"
+            )
         rows += (
             f"<tr><td>{esc(item['label'])}</td>"
-            f"<td style='text-align:center;color:#166534;font-weight:700;'>"
-            f"<span style='font-size:11pt;'>✓</span> {esc(item['estado'])}</td></tr>"
+            f"<td style='text-align:center'>{estado_html}</td></tr>"
         )
     foto_html = (
         f'<img src="{foto_data_url}" width="{_FOTO_W}" height="{_FOTO_H}" '
@@ -432,12 +447,19 @@ table.datos td.lbl {{
 }}
 table.docs {{ width: 100%; border-collapse: collapse; margin: 4pt 0 8pt 0; }}
 table.docs th, table.docs td {{
-  border: 1px solid #cbd5e1;
-  padding: 1.5pt 4pt;
-  font-size: 8.5pt;
-  line-height: 1.15;
+  border: 0.5pt solid #cbd5e1;
+  padding: 1pt 4pt;
+  font-size: 8pt;
+  line-height: 1.1;
+  vertical-align: middle;
 }}
-table.docs th {{ background: #e0f2fe; font-size: 8pt; }}
+table.docs th {{
+  background: #f1f5f9;
+  font-size: 7.5pt;
+  font-weight: 700;
+  color: #475569;
+  padding: 2pt 4pt;
+}}
 .cert-text {{
   text-align: justify;
   font-size: 9pt;
@@ -465,7 +487,7 @@ table.docs th {{ background: #e0f2fe; font-size: 8pt; }}
 </tr></table>
 {cert_html}
 <p style="margin:10pt 0 2pt 0;font-size:9pt;font-weight:bold;">Documentación adjunta</p>
-<table class="docs"><tr><th>Documento</th><th style="width:22%">Estado</th></tr>{rows}</table>
+<table class="docs"><tr><th>Documento</th><th style="width:24%">Estado</th></tr>{rows or '<tr><td colspan="2" style="text-align:center;color:#64748b;">Sin documentos contemplados</td></tr>'}</table>
 <div class="firma-block">
 {firma_html}
 <div class="firma-label">Firma del colaborador</div>
@@ -477,17 +499,127 @@ ClaraCore — Recursos Humanos · Documento generado automáticamente
 </body></html>"""
 
 
-def _checklist_items(trab: dict, docs: List[dict]) -> List[dict]:
-    """Solo documentos vigentes adjuntos; estado unificado «Verificado» tras auditoría."""
-    vigentes = {(d.get("categoria"), d.get("tipo")) for d in docs if d.get("vigente")}
-    items = []
+def _doc_aplica_al_colaborador(trab: dict, categoria: str, tipo: str) -> bool:
+    """
+    Relevancia/obligatoriedad por tipo según datos del colaborador.
+    Soporte, ingreso y bancario base: siempre aplican.
+    Afiliaciones: aplican solo si el colaborador tiene entidad registrada.
+    Tipos extendidos (ext_*): aplican (fueron añadidos al checklist del contrato).
+    """
+    cat = (categoria or "").strip().lower()
+    t = (tipo or "").strip().lower()
+    if t == "otro":
+        return False
+    if cat in ("soporte", "ingreso", "bancario"):
+        return True
+    if cat == "afiliacion":
+        field_by_tipo = {
+            "cert_eps": "eps",
+            "cert_pension": "pension",
+            "cert_arl": "arl",
+            "cert_cesantias": "cesantias",
+            "cert_caja": "caja_compensacion",
+        }
+        field = field_by_tipo.get(t)
+        if not field:
+            return True
+        return bool(str(trab.get(field) or "").strip())
+    if t.startswith("ext_"):
+        return True
+    return True
+
+
+def _estado_documento_checklist(
+    *,
+    aplica: bool,
+    adjunto: bool,
+    auditoria_ok: Optional[bool],
+) -> str:
+    """
+    NO APLICA | NO ADJUNTO | VERIFICADO
+    VERIFICADO: aplica, está cargado y la auditoría no falló
+    (ok=True, o aún no ejecutada: ok is None — la aprobación real exige ok=True).
+    """
+    if not aplica:
+        return "NO APLICA"
+    if not adjunto:
+        return "NO ADJUNTO"
+    if auditoria_ok is False:
+        return "NO ADJUNTO"
+    return "VERIFICADO"
+
+
+def _custom_tipos_catalogo(sb, contrato_id: int) -> List[Tuple[str, str, str]]:
+    """[(categoria, tipo_slug, label), ...] desde catálogo doc_soporte / doc_ingreso."""
+    if sb is None or not contrato_id:
+        return []
+    try:
+        from rrhh_docs_service import slug_tipo_documento
+        from rrhh_service import list_catalogo
+    except Exception:
+        return []
+    out: List[Tuple[str, str, str]] = []
+    for cat, catalog_key in (("soporte", "doc_soporte"), ("ingreso", "doc_ingreso")):
+        try:
+            rows = list_catalogo(sb, contrato_id, catalog_key)
+        except Exception:
+            rows = []
+        for r in rows or []:
+            label = str(r.get("valor") or "").strip()
+            if not label:
+                continue
+            out.append((cat, slug_tipo_documento(label), label))
+    return out
+
+
+def _checklist_items(
+    trab: dict,
+    docs: List[dict],
+    *,
+    sb=None,
+    contrato_id: Optional[int] = None,
+) -> List[dict]:
+    """
+    Lista completa de documentos contemplados (siempre), con estado individual:
+    NO ADJUNTO | VERIFICADO | NO APLICA.
+    No depende de que el colaborador esté Aprobado.
+    """
+    vigentes = {
+        (d.get("categoria"), d.get("tipo"))
+        for d in docs
+        if d.get("vigente") and not d.get("eliminado_en")
+    }
+    # Tras consolidación los blobs se eliminan; si hay PDF consolidado y auditoría OK,
+    # los tipos que constaban en la auditoría/checklist previo se tratan como adjuntos.
+    auditoria_ok = trab.get("doc_auditoria_ok")
+    if trab.get("doc_consolidado_blob_path") and auditoria_ok and not vigentes:
+        # No inventar adjuntos: sin vigentes reales → NO ADJUNTO salvo NO APLICA
+        pass
+
+    items: List[dict] = []
     from rrhh_docs_service import (
         DOC_TIPOS_AFILIACION,
         DOC_TIPOS_BANCARIO,
         DOC_TIPOS_INGRESO,
         DOC_TIPOS_SOPORTE,
     )
-    seen_labels = set()
+
+    seen: set = set()
+
+    def add_item(cat: str, tipo: str, label: str) -> None:
+        key = (cat, tipo)
+        if tipo == "otro" or key in seen:
+            return
+        seen.add(key)
+        aplica = _doc_aplica_al_colaborador(trab, cat, tipo)
+        adjunto = key in vigentes
+        estado = _estado_documento_checklist(
+            aplica=aplica,
+            adjunto=adjunto,
+            auditoria_ok=auditoria_ok if isinstance(auditoria_ok, bool) else None,
+        )
+        items.append({"label": label, "estado": estado, "categoria": cat, "tipo": tipo})
+
     for cat, tipos in (
         ("soporte", DOC_TIPOS_SOPORTE),
         ("ingreso", DOC_TIPOS_INGRESO),
@@ -495,24 +627,20 @@ def _checklist_items(trab: dict, docs: List[dict]) -> List[dict]:
         ("afiliacion", DOC_TIPOS_AFILIACION),
     ):
         for tipo, label in tipos:
-            if tipo == "otro":
-                continue
-            if (cat, tipo) not in vigentes:
-                continue
-            if label in seen_labels:
-                continue
-            seen_labels.add(label)
-            items.append({"label": label, "estado": "Verificado"})
+            add_item(cat, tipo, label)
+
+    for cat, tipo, label in _custom_tipos_catalogo(sb, int(contrato_id or 0) or 0):
+        add_item(cat, tipo, label)
+
     for d in docs:
         if not d.get("vigente"):
             continue
         t = d.get("tipo") or ""
+        cat = d.get("categoria") or "soporte"
         if t.startswith("ext_") or d.get("tipo_otro_texto"):
             label = d.get("tipo_otro_texto") or DOC_TIPO_LABEL.get(t) or t
-            if label in seen_labels:
-                continue
-            seen_labels.add(label)
-            items.append({"label": label, "estado": "Verificado"})
+            add_item(cat, t, label)
+
     return items
 
 
@@ -685,7 +813,9 @@ def build_pdf_consolidado_bytes(
             except Exception:
                 pass
 
-    checklist = _checklist_items(trabajador, docs)
+    checklist = _checklist_items(
+        trabajador, docs, sb=sb, contrato_id=contrato_id
+    )
     obra = _cargar_contrato_obra(sb, contrato_id)
     foto_url = _foto_data_url(
         trabajador.get("foto_blob_path"), trabajador.get("foto_mime_type") or "image/jpeg"
