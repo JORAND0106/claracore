@@ -300,7 +300,7 @@ export default function TrabajadorFormSheet({
         </table>
       </div>
 
-      <div style={ui.sectionTitle}>Afiliaciones y condiciones laborales</div>
+      <div style={ui.sectionTitle}>Condiciones laborales</div>
       <div style={{ ...ui.sheetWrap, maxHeight: 'none', overflow: 'visible', marginBottom: 10 }}>
         <table style={{ ...ui.sheetTable, minWidth: 720 }}>
           <colgroup>
@@ -312,17 +312,6 @@ export default function TrabajadorFormSheet({
             <col style={{ width: '20%' }} />
           </colgroup>
           <tbody>
-            <tr>
-              <SheetField label="EPS" labelStyle={lbl} valueStyle={valCell}>{catSelect('eps', 'eps')}</SheetField>
-              <SheetField label="Pensión" labelStyle={lbl} valueStyle={valCell}>{catSelect('pension', 'pension')}</SheetField>
-              <SheetField label="Cesantías" labelStyle={lbl} valueStyle={valCell}>{catSelect('cesantias', 'cesantias')}</SheetField>
-            </tr>
-            <tr>
-              <SheetField label="ARL" labelStyle={lbl} valueStyle={valCell}>{catSelect('arl', 'arl')}</SheetField>
-              <SheetField label="Caja compensación" labelStyle={lbl} valueStyle={valCell} colSpan={3}>
-                {catSelect('caja_compensacion', 'caja_compensacion')}
-              </SheetField>
-            </tr>
             <tr>
               <SheetField label="Cargo" labelStyle={lbl} valueStyle={valCell}>{catSelect('cargo_aspira', 'cargo')}</SheetField>
               <SheetField label="Tipo contrato" labelStyle={lbl} valueStyle={valCell}>{catSelect('tipo_contrato', 'tipo_contrato')}</SheetField>

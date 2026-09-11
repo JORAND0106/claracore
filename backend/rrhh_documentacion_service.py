@@ -329,38 +329,14 @@ def _aprobar_y_consolidar_pdf(
     observacion: Optional[str],
     current_user,
 ) -> dict:
-    from topografia_utils import to_pdf_bytes
-
-    docs = [d for d in list_documentos(sb, contrato_id, trabajador_id) if d.get("vigente")]
-    pairs = _cargar_blobs(docs)
-    adjuntos_pdf: List[bytes] = []
-    for d, data in pairs:
-        if data[:5] == b"%PDF-":
-            adjuntos_pdf.append(data)
-        else:
-            try:
-                import fitz
-                doc = fitz.open()
-                page = doc.new_page()
-                page.insert_image(page.rect, stream=data)
-                adjuntos_pdf.append(doc.tobytes())
-                doc.close()
-            except Exception:
-                pass
-
-    checklist = _checklist_items(trab, docs)
-    foto_url = _blob_to_data_url(trab.get("foto_blob_path"), trab.get("foto_mime_type") or "image/jpeg")
-    firma_url = _blob_to_data_url(trab.get("firma_blob_path"), trab.get("firma_mime_type") or "image/png")
-    html = _build_portada_html(
-        trab=trab, checklist=checklist, foto_data_url=foto_url, firma_data_url=firma_url
+    consolidado, nombre_base, _n = build_pdf_consolidado_bytes(
+        sb, contrato_id, trabajador_id, trab=trab
     )
-    portada = to_pdf_bytes(html)
-    consolidado = _merge_pdfs(portada, adjuntos_pdf)
-
     nombre = f"documentacion_consolidada_{trab.get('numero_documento') or trabajador_id}.pdf"
     blob_path = path_rrhh_doc_consolidado(int(contrato_id), int(trabajador_id), nombre)
     upload_blob_private(blob_path, consolidado, content_type="application/pdf")
 
+    docs = [d for d in list_documentos(sb, contrato_id, trabajador_id) if d.get("vigente")]
     # Eliminar adjuntos individuales del storage y soft-delete DB
     for d in docs:
         path = d.get("azure_blob_path")
@@ -406,6 +382,72 @@ def download_doc_consolidado(sb, contrato_id: int, trabajador_id: int) -> Tuple[
         raise ValueError("No hay PDF consolidado para este colaborador.")
     data = download_blob_bytes_private(path)
     return data, trab.get("doc_consolidado_nombre") or "documentacion_consolidada.pdf"
+
+
+def build_pdf_consolidado_bytes(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+    *,
+    trab: Optional[dict] = None,
+) -> Tuple[bytes, str, int]:
+    """
+    Genera el PDF consolidado con los documentos vigentes actuales.
+    No modifica storage ni estado de validación.
+    Retorna (pdf_bytes, filename, n_adjuntos).
+    """
+    from topografia_utils import to_pdf_bytes
+
+    trabajador = trab or get_trabajador(sb, contrato_id, trabajador_id)
+    docs = [d for d in list_documentos(sb, contrato_id, trabajador_id) if d.get("vigente")]
+    pairs = _cargar_blobs(docs)
+    adjuntos_pdf: List[bytes] = []
+    for d, data in pairs:
+        if data[:5] == b"%PDF-":
+            adjuntos_pdf.append(data)
+        else:
+            try:
+                import fitz
+                doc = fitz.open()
+                page = doc.new_page()
+                page.insert_image(page.rect, stream=data)
+                adjuntos_pdf.append(doc.tobytes())
+                doc.close()
+            except Exception:
+                pass
+
+    checklist = _checklist_items(trabajador, docs)
+    foto_url = _blob_to_data_url(
+        trabajador.get("foto_blob_path"), trabajador.get("foto_mime_type") or "image/jpeg"
+    )
+    firma_url = _blob_to_data_url(
+        trabajador.get("firma_blob_path"), trabajador.get("firma_mime_type") or "image/png"
+    )
+    html = _build_portada_html(
+        trab=trabajador,
+        checklist=checklist,
+        foto_data_url=foto_url,
+        firma_data_url=firma_url,
+    )
+    portada = to_pdf_bytes(html)
+    consolidado = _merge_pdfs(portada, adjuntos_pdf)
+    nombre = (
+        f"preview_documentacion_{trabajador.get('numero_documento') or trabajador_id}.pdf"
+    )
+    return consolidado, nombre, len(adjuntos_pdf)
+
+
+def preview_pdf_consolidado(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+) -> Tuple[bytes, str]:
+    """
+    Vista previa para Desarrollador: PDF consolidado con docs existentes,
+    sin borrar adjuntos ni alterar validación.
+    """
+    data, nombre, _n = build_pdf_consolidado_bytes(sb, contrato_id, trabajador_id)
+    return data, nombre
 
 
 def eliminar_tipo_documento_otro(

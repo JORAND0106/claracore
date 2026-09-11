@@ -1,12 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import { tFrom, isDarkMode } from '../../theme/adminPanelTheme'
-import { buildDocChecklist, slugTipoDocumento } from './rrhhHelpers'
+import CatalogSelect from './CatalogSelect'
+import { AFILIACION_ENTIDAD_BY_TIPO, buildDocChecklist, slugTipoDocumento } from './rrhhHelpers'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
  * Bloque de documentos versionados.
  * Con hideSave: los archivos se encolan; el padre confirma con el guardado único del TAB.
+ * Con showAfiliacionEntidad: columna de selección de entidad (EPS, Pensión, …) junto a la certificación.
  */
 const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock({
   theme,
@@ -22,6 +24,11 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
   tituloOverride = null,
   onPendingChange = null,
   onFileStaged = null,
+  showAfiliacionEntidad = false,
+  afiliacionValues = null,
+  onAfiliacionChange = null,
+  onAfiliacionAdd = null,
+  catalogo = null,
 }, ref) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
@@ -265,6 +272,28 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
           : 'Documentos de soporte')
 
   const histRows = histTipo ? (vigentesPorTipo[`${histTipo}__hist`] || []) : []
+  const showEntidad = Boolean(showAfiliacionEntidad && categoria === 'afiliacion')
+  const colSpan = showEntidad ? 5 : 4
+
+  const renderEntidadCell = (meta) => {
+    const cfg = AFILIACION_ENTIDAD_BY_TIPO[meta?.tipo]
+    if (!cfg) return <td style={ui.td}>—</td>
+    return (
+      <td style={ui.td} onClick={(e) => e.stopPropagation()}>
+        <CatalogSelect
+          value={afiliacionValues?.[cfg.field] || ''}
+          options={catalogo?.[cfg.catalogKey] || []}
+          canEdit={editable}
+          style={ui.cellSelect}
+          placeholder={`— ${cfg.label} —`}
+          onChange={(v) => onAfiliacionChange?.(cfg.field, v)}
+          onAddNew={async (v) => {
+            if (onAfiliacionAdd) await onAfiliacionAdd(cfg.catalogKey, v)
+          }}
+        />
+      </td>
+    )
+  }
 
   return (
     <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)' }}>
@@ -278,14 +307,15 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
         <table style={ui.sheetTable}>
           <thead>
             <tr>
-              <th style={{ ...ui.th, width: '34%' }}>Tipo</th>
-              <th style={{ ...ui.th, width: '28%' }}>Archivo</th>
+              <th style={{ ...ui.th, width: showEntidad ? '22%' : '34%' }}>Tipo</th>
+              {showEntidad && <th style={{ ...ui.th, width: '22%' }}>Entidad</th>}
+              <th style={{ ...ui.th, width: showEntidad ? '22%' : '28%' }}>Archivo</th>
               <th style={{ ...ui.th, width: '14%' }}>Versión</th>
-              <th style={{ ...ui.th, width: '24%' }}>Acciones</th>
+              <th style={{ ...ui.th, width: showEntidad ? '20%' : '24%' }}>Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td style={ui.td} colSpan={4}>Cargando…</td></tr>}
+            {loading && <tr><td style={ui.td} colSpan={colSpan}>Cargando…</td></tr>}
             {!loading && displayRows.map((row) => {
               const meta = row._meta
               if (row._placeholder) {
@@ -307,6 +337,7 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
                         </button>
                       )}
                     </td>
+                    {showEntidad && renderEntidadCell(meta)}
                     <td style={{ ...ui.td, color: tTok.textMuted }}>
                       {editable ? (meta.tipo === 'otro' ? 'Clic para agregar tipo…' : 'Clic para seleccionar…') : 'Sin documento'}
                     </td>
@@ -332,6 +363,7 @@ const DocumentosTrabajadorBlock = forwardRef(function DocumentosTrabajadorBlock(
                       <span style={{ marginLeft: 6, color: tTok.primary, fontSize: 'var(--cc-caption)', fontWeight: 700 }}>pendiente</span>
                     )}
                   </td>
+                  {showEntidad && renderEntidadCell(meta)}
                   <td style={ui.td}>
                     {row._pending ? row.nombre_archivo : (
                       <button type="button" onClick={() => abrirPreview(row)} style={{ ...S.btnGhost, padding: '4px 8px', border: 'none', color: tTok.primary }}>

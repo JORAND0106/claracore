@@ -31,6 +31,7 @@ from rrhh_documentacion_service import (
     consolidar_documentacion,
     download_doc_consolidado,
     eliminar_tipo_documento_otro,
+    preview_pdf_consolidado,
     set_validacion,
 )
 from rrhh_nomina_service import (
@@ -1247,6 +1248,37 @@ def route_download_consolidado(
         data, name = download_doc_consolidado(supabase, contrato_id, trabajador_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
+
+
+@router.get("/{contrato_id}/trabajadores/{trabajador_id}/documentacion/preview-consolidado")
+def route_preview_consolidado(
+    contrato_id: int,
+    trabajador_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Vista previa del PDF consolidado: solo Desarrollador; no altera adjuntos ni validación."""
+    from rrhh_permissions import es_desarrollador_rrhh
+
+    _require_contract_access(current_user, contrato_id)
+    if not es_desarrollador_rrhh(current_user):
+        raise HTTPException(403, detail="Solo el rol Desarrollador puede generar la vista previa del consolidado.")
+    try:
+        data, name = preview_pdf_consolidado(supabase, contrato_id, trabajador_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "CONSULTAR",
+        "RRHH",
+        "rrhh_trabajadores",
+        str(trabajador_id),
+        "Vista previa PDF consolidado (sin alterar validación)",
+    )
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/pdf",
