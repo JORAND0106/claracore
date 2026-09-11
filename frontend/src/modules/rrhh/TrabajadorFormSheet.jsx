@@ -400,8 +400,8 @@ export default function TrabajadorFormSheet({
                     options={catalogo?.banco_entidad || []}
                     canEdit={bancoEditable}
                     style={{ ...ui.cellSelect, flex: '1 1 160px', minWidth: 140 }}
-                    placeholder="Entidad bancaria"
-                    addLabel="— Otro (agregar) —"
+                    placeholder="— Seleccione banco —"
+                    addLabel="— Otro (agregar banco) —"
                     onChange={(v) => setField('banco_entidad', v)}
                     onAddNew={async (v) => {
                       if (onAddCatalogValue) await onAddCatalogValue('banco_entidad', v)
