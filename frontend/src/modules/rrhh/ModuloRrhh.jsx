@@ -6,8 +6,7 @@ import {
   isRestMode,
   buildContratoUiTheme,
 } from '../../theme/adminPanelTheme'
-import ContratoLaboralBlock from './ContratoLaboralBlock'
-import DocumentosTrabajadorBlock from './DocumentosTrabajadorBlock'
+import DocumentacionTab from './DocumentacionTab'
 import LiquidacionPanel from './LiquidacionPanel'
 import NominaPanel from './NominaPanel'
 import TrabajadorFormSheet from './TrabajadorFormSheet'
@@ -185,7 +184,6 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const tabsDetalle = [
     { id: 'datos', label: 'Registro' },
     { id: 'documentacion', label: 'Documentación' },
-    { id: 'contrato', label: 'Contrato laboral' },
   ]
 
   const abrirDetalle = async (row) => {
@@ -593,55 +591,24 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                 </>
               )}
               {tabDetalle === 'documentacion' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                  <div style={{
-                    padding: 12,
-                    border: `1px solid ${tTok.border}`,
-                    borderRadius: 10,
-                    background: tTok.bgCard,
-                  }}>
-                    <DocumentosTrabajadorBlock
-                      theme={theme}
-                      api={api}
-                      trabajadorId={detalle.id}
-                      categoria="soporte"
-                      canEdit={permisos.crear || permisos.editar}
-                      customTipos={catalogo.doc_soporte || []}
-                      onTiposChange={addCatalogValue}
-                      onMsg={(m) => flash(m.type, m.text)}
-                    />
-                  </div>
-                  <div style={{
-                    padding: 12,
-                    border: `1px solid ${tTok.border}`,
-                    borderRadius: 10,
-                    background: tTok.bgCard,
-                  }}>
-                    <DocumentosTrabajadorBlock
-                      theme={theme}
-                      api={api}
-                      trabajadorId={detalle.id}
-                      categoria="ingreso"
-                      canEdit={permisos.crear || permisos.editar}
-                      customTipos={catalogo.doc_ingreso || []}
-                      onTiposChange={addCatalogValue}
-                      onMsg={(m) => flash(m.type, m.text)}
-                    />
-                  </div>
-                </div>
-              )}
-              {tabDetalle === 'contrato' && (
-                <ContratoLaboralBlock
+                <DocumentacionTab
                   theme={theme}
+                  tTok={tTok}
                   api={api}
-                  trabajadorId={detalle.id}
-                  tiposContrato={(catalogo.tipo_contrato || []).map((nombre) => ({ nombre, activo: true }))}
-                  tipoContrato={editForm?.tipo_contrato || detalle.tipo_contrato || ''}
-                  onTipoContratoChange={(v) => setEditForm((prev) => ({ ...(prev || formFromTrabajador(detalle)), tipo_contrato: v }))}
-                  onAddTipoContrato={async (v) => addCatalogValue('tipo_contrato', v)}
-                  canEdit={permisos.crear || permisos.editar}
-                  canExport={permisos.exportar || permisos.ver}
-                  onMsg={(m) => flash(m.type, m.text)}
+                  detalle={detalle}
+                  editForm={editForm}
+                  setEditForm={setEditForm}
+                  catalogo={catalogo}
+                  addCatalogValue={addCatalogValue}
+                  permisos={permisos}
+                  flash={flash}
+                  formFromTrabajador={formFromTrabajador}
+                  onTrabajadorUpdated={async (full) => {
+                    setDetalle(full)
+                    const withMedia = await syncMediaPreviews(full, formFromTrabajador(full))
+                    setEditForm(withMedia)
+                    await cargar()
+                  }}
                 />
               )}
             </div>

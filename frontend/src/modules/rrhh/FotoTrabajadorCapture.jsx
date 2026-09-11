@@ -60,8 +60,8 @@ export default function FotoTrabajadorCapture({
       marginBottom: 12,
     }}>
       <div style={{
-        width: 96,
-        height: 112,
+        width: 160,
+        height: 186,
         borderRadius: 8,
         border: `1px dashed ${border}`,
         overflow: 'hidden',

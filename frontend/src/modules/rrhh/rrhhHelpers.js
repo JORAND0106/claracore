@@ -29,6 +29,9 @@ export const EMPTY_TRABAJADOR_FORM = {
   arl_nivel_riesgo: 'I',
   fecha_ingreso: '',
   fecha_retiro: '',
+  banco_entidad: '',
+  banco_tipo_cuenta: '',
+  banco_numero_cuenta: '',
   tipo_contrato: '',
   empresa_key: 'consorcio',
   empresa_tipo: 'consorcio',
@@ -113,12 +116,26 @@ export function slugTipoDocumento(label) {
   return `ext_${(s || 'documento').slice(0, 72)}`
 }
 
+export const DOC_TIPOS_BANCARIO = [
+  { tipo: 'certificacion_bancaria', label: 'Certificación bancaria' },
+]
+
+export const DOC_TIPOS_AFILIACION = [
+  { tipo: 'cert_eps', label: 'Certificación EPS' },
+  { tipo: 'cert_pension', label: 'Certificación Pensión / AFP' },
+  { tipo: 'cert_arl', label: 'Certificación ARL' },
+  { tipo: 'cert_cesantias', label: 'Certificación Cesantías' },
+  { tipo: 'cert_caja', label: 'Certificación Caja de Compensación' },
+]
+
 /**
  * Checklist: tipos base + tipos extendidos del catálogo + «Otro» al final.
- * @param {'soporte'|'ingreso'} categoria
+ * @param {'soporte'|'ingreso'|'bancario'|'afiliacion'} categoria
  * @param {string[]} customLabels
  */
 export function buildDocChecklist(categoria, customLabels = []) {
+  if (categoria === 'bancario') return [...DOC_TIPOS_BANCARIO]
+  if (categoria === 'afiliacion') return [...DOC_TIPOS_AFILIACION]
   const base = (categoria === 'ingreso' ? DOC_TIPOS_INGRESO : DOC_TIPOS_SOPORTE)
     .filter((t) => t.tipo !== 'otro')
   const seen = new Set(base.map((t) => t.tipo))
@@ -195,6 +212,9 @@ export function formFromTrabajador(t) {
     arl_nivel_riesgo: t.arl_nivel_riesgo || 'I',
     fecha_ingreso: (t.fecha_ingreso || '').toString().slice(0, 10),
     fecha_retiro: (t.fecha_retiro || '').toString().slice(0, 10),
+    banco_entidad: t.banco_entidad || '',
+    banco_tipo_cuenta: t.banco_tipo_cuenta || '',
+    banco_numero_cuenta: t.banco_numero_cuenta || '',
     empresa_key: empresaKeyFromTrabajador(t),
     empresa_subcontratista_id: t.empresa_subcontratista_id != null
       ? String(t.empresa_subcontratista_id)
@@ -245,6 +265,9 @@ export function payloadFromForm(form) {
     arl_nivel_riesgo: form.arl_nivel_riesgo || 'I',
     fecha_ingreso: form.fecha_ingreso || null,
     fecha_retiro: form.fecha_retiro || null,
+    banco_entidad: form.banco_entidad || null,
+    banco_tipo_cuenta: form.banco_tipo_cuenta || null,
+    banco_numero_cuenta: form.banco_numero_cuenta || null,
     tipo_contrato: form.tipo_contrato || null,
     empresa_key: empresaKey,
     empresa_tipo: form.empresa_tipo || (empresaKey.startsWith('sub:') ? 'subcontratista' : 'consorcio'),

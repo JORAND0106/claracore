@@ -621,3 +621,17 @@ def path_rrhh_liquidacion_pdf(
         f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/"
         f"liquidaciones/{int(liquidacion_id)}_{ts}_{safe}"
     )
+
+
+def path_rrhh_doc_consolidado(
+    contrato_id: int,
+    trabajador_id: int,
+    nombre_archivo: str,
+) -> str:
+    """PDF consolidado de documentación RRHH (contenedor privado)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe = re.sub(r"[^\w.\-]", "_", (nombre_archivo or "documentacion_consolidada.pdf").strip())[:120]
+    return (
+        f"rrhh/{int(contrato_id)}/trabajadores/{int(trabajador_id)}/"
+        f"consolidado/{ts}_{safe}"
+    )

@@ -287,6 +287,56 @@ def add_catalogo_opcion(sb, contrato_id: int, categoria: str, valor: str, curren
     return rows[0]
 
 
+def soft_delete_catalogo_opcion(
+    sb,
+    contrato_id: int,
+    categoria: str,
+    valor: str,
+    current_user=None,
+) -> dict:
+    """Desactiva una opción de catálogo (p. ej. tipo «otro» de documentos)."""
+    cat = _validate_categoria(categoria)
+    v = _require_str(valor, "Valor", min_len=1, max_len=200)
+    norm = _norm_valor(v)
+    rows = (
+        sb.table(_TABLE_CATALOGO)
+        .select("*")
+        .eq("contrato_id", int(contrato_id))
+        .eq("categoria", cat)
+        .eq("valor_norm", norm)
+        .eq("activo", True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        # Intentar por valor exacto
+        rows = (
+            sb.table(_TABLE_CATALOGO)
+            .select("*")
+            .eq("contrato_id", int(contrato_id))
+            .eq("categoria", cat)
+            .eq("valor", v)
+            .eq("activo", True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    if not rows:
+        raise ValueError("Opción de catálogo no encontrada.")
+    updated = (
+        sb.table(_TABLE_CATALOGO)
+        .update({"activo": False})
+        .eq("id", rows[0]["id"])
+        .execute()
+        .data
+        or []
+    )
+    return updated[0] if updated else {**rows[0], "activo": False}
+
+
 def list_empresas_contratantes(sb, contrato_id: int) -> dict:
     """
     Consorcio (contratos.contratista/nit) + subcontratistas registrados.
@@ -499,6 +549,20 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
     if "fecha_retiro" in body:
         fr = _trim(body.get("fecha_retiro"), max_len=10)
         out["fecha_retiro"] = fr[:10] if fr else None
+
+    if "banco_entidad" in body or not partial:
+        out["banco_entidad"] = _trim(body.get("banco_entidad"), max_len=200)
+    if "banco_tipo_cuenta" in body or not partial:
+        btc = _trim(body.get("banco_tipo_cuenta"), max_len=20)
+        if btc:
+            btc = btc.lower()
+            if btc not in ("ahorros", "corriente"):
+                raise ValueError("Tipo de cuenta bancaria inválido (ahorros o corriente).")
+            out["banco_tipo_cuenta"] = btc
+        else:
+            out["banco_tipo_cuenta"] = None
+    if "banco_numero_cuenta" in body or not partial:
+        out["banco_numero_cuenta"] = _trim(body.get("banco_numero_cuenta"), max_len=40)
 
     if "estado" in body:
         est = (_trim(body.get("estado"), max_len=20) or "activo").lower()
