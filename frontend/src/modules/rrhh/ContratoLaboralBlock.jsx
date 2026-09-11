@@ -7,6 +7,7 @@ import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 /**
  * Generación de contrato laboral PDF + historial de versiones.
+ * compact: omite título/leyenda y admite fecha de ingreso en la misma hoja (TAB Documentación).
  */
 export default function ContratoLaboralBlock({
   theme,
@@ -16,6 +17,9 @@ export default function ContratoLaboralBlock({
   tipoContrato = '',
   onTipoContratoChange,
   onAddTipoContrato,
+  fechaIngreso = null,
+  onFechaIngresoChange = null,
+  compact = false,
   canEdit = true,
   canExport = true,
   onMsg,
@@ -113,12 +117,16 @@ export default function ContratoLaboralBlock({
 
   return (
     <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)' }}>
-      <div style={ui.sectionTitle}>Contrato laboral (PDF)</div>
-      <div style={{ marginBottom: 8, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
-        Se genera desde plantilla con marcadores tipo {'{{NOMBRE_TRABAJADOR}}'}. El número de contrato se asigna automáticamente con prefijo CTO-LAB-.
-      </div>
+      {!compact && (
+        <>
+          <div style={ui.sectionTitle}>Contrato laboral (PDF)</div>
+          <div style={{ marginBottom: 8, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
+            Se genera desde plantilla con marcadores tipo {'{{NOMBRE_TRABAJADOR}}'}. El número de contrato se asigna automáticamente con prefijo CTO-LAB-.
+          </div>
+        </>
+      )}
 
-      <div style={{ ...ui.sheetWrap, maxHeight: 'none', marginBottom: 10 }}>
+      <div style={{ ...ui.sheetWrap, maxHeight: 'none', marginBottom: 8 }}>
         <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
           <tbody>
             <tr>
@@ -134,6 +142,20 @@ export default function ContratoLaboralBlock({
                 />
               </td>
             </tr>
+            {onFechaIngresoChange && (
+              <tr>
+                <td style={ui.tdLabel}>Fecha de ingreso</td>
+                <td style={ui.td}>
+                  <CcDatePickerInput
+                    value={fechaIngreso || ''}
+                    disabled={!canEdit}
+                    style={ui.cellInp}
+                    aria-label="Fecha de ingreso"
+                    onChange={onFechaIngresoChange}
+                  />
+                </td>
+              </tr>
+            )}
             <tr>
               <td style={ui.tdLabel}>N.° contrato laboral</td>
               <td style={{ ...ui.td, color: tTok.textMuted }}>
@@ -169,7 +191,7 @@ export default function ContratoLaboralBlock({
       </div>
 
       {canEdit && (
-        <button type="button" style={{ ...S.btnPrimary, marginBottom: 12 }} disabled={busy} onClick={generar}>
+        <button type="button" style={{ ...S.btnPrimary, marginBottom: 8, padding: '6px 10px' }} disabled={busy} onClick={generar}>
           {busy ? 'Generando…' : 'Generar PDF del contrato'}
         </button>
       )}

@@ -128,6 +128,15 @@ export const DOC_TIPOS_AFILIACION = [
   { tipo: 'cert_caja', label: 'Certificación Caja de Compensación' },
 ]
 
+/** Mapeo certificación → campo/catálogo de entidad en rrhh_trabajadores */
+export const AFILIACION_ENTIDAD_BY_TIPO = {
+  cert_eps: { field: 'eps', catalogKey: 'eps', label: 'EPS' },
+  cert_pension: { field: 'pension', catalogKey: 'pension', label: 'Pensión' },
+  cert_arl: { field: 'arl', catalogKey: 'arl', label: 'ARL' },
+  cert_cesantias: { field: 'cesantias', catalogKey: 'cesantias', label: 'Cesantías' },
+  cert_caja: { field: 'caja_compensacion', catalogKey: 'caja_compensacion', label: 'Caja compensación' },
+}
+
 /**
  * Checklist: tipos base + tipos extendidos del catálogo + «Otro» al final.
  * @param {'soporte'|'ingreso'|'bancario'|'afiliacion'} categoria

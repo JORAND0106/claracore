@@ -1,6 +1,4 @@
 import { useCallback, useRef, useState } from 'react'
-import CcDatePickerInput from '../../components/CcDatePickerInput'
-import CatalogSelect from './CatalogSelect'
 import ContratoLaboralBlock from './ContratoLaboralBlock'
 import DocumentosTrabajadorBlock from './DocumentosTrabajadorBlock'
 import { rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
@@ -35,6 +33,7 @@ export default function DocumentacionTab({
   const locked = Boolean(detalle?.doc_bloqueado)
   const canEdit = (permisos.crear || permisos.editar) && !locked
   const canValidar = Boolean(permisos.validar || permisos.esDesarrollador)
+  const esDesarrollador = Boolean(permisos.esDesarrollador)
 
   const refSoporte = useRef(null)
   const refIngreso = useRef(null)
@@ -60,6 +59,11 @@ export default function DocumentacionTab({
         banco_entidad: editForm?.banco_entidad || null,
         banco_tipo_cuenta: editForm?.banco_tipo_cuenta || null,
         banco_numero_cuenta: editForm?.banco_numero_cuenta || null,
+        eps: editForm?.eps || null,
+        pension: editForm?.pension || null,
+        arl: editForm?.arl || null,
+        cesantias: editForm?.cesantias || null,
+        caja_compensacion: editForm?.caja_compensacion || null,
       })
       const refs = [refSoporte, refIngreso, refBancario, refAfiliacion]
       let files = 0
@@ -148,6 +152,22 @@ export default function DocumentacionTab({
     }
   }
 
+  const previewConsolidado = async () => {
+    if (!api || !detalle || !esDesarrollador) return
+    setBusy(true)
+    try {
+      await api.downloadBlob(
+        api.previewConsolidadoUrl(detalle.id),
+        `preview_documentacion_${detalle.numero_documento || detalle.id}.pdf`,
+      )
+      flash('success', 'Vista previa generada. No se modificaron adjuntos ni el estado de validación.')
+    } catch (e) {
+      flash('error', e.message || 'No se pudo generar la vista previa.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const setValidacion = async (estado) => {
     if (!api || !detalle || !canValidar) return
     if (estado === 'aprobado' && !detalle.doc_auditoria_ok) {
@@ -196,6 +216,17 @@ export default function DocumentacionTab({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ fontWeight: 700, color: tTok.text }}>Documentación del colaborador</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {esDesarrollador && (
+            <button
+              type="button"
+              style={S.btnGhost}
+              disabled={busy}
+              title="Genera el PDF con los documentos actuales sin borrar adjuntos ni cambiar la validación"
+              onClick={previewConsolidado}
+            >
+              Vista previa consolidado
+            </button>
+          )}
           {detalle?.doc_consolidado_blob_path && (
             <button
               type="button"
@@ -245,36 +276,18 @@ export default function DocumentacionTab({
 
       {/* Contrato laboral */}
       <div style={panelStyle(tTok)}>
-        <div style={{ ...ui.sectionTitle, marginBottom: 8 }}>Contrato laboral</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: tTok.textMuted, marginBottom: 2 }}>Tipo de contrato</div>
-            <CatalogSelect
-              value={editForm?.tipo_contrato || ''}
-              options={catalogo?.tipo_contrato || []}
-              canEdit={canEdit}
-              style={inputStyle}
-              onChange={(v) => setField('tipo_contrato', v)}
-              onAddNew={async (v) => addCatalogValue('tipo_contrato', v)}
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: tTok.textMuted, marginBottom: 2 }}>Fecha de ingreso</div>
-            <CcDatePickerInput
-              value={editForm?.fecha_ingreso || ''}
-              onChange={(v) => setField('fecha_ingreso', v)}
-              disabled={!canEdit}
-            />
-          </div>
-        </div>
+        <div style={{ ...ui.sectionTitle, marginBottom: 6 }}>Contrato laboral</div>
         <ContratoLaboralBlock
           theme={theme}
           api={api}
           trabajadorId={detalle.id}
+          compact
           tiposContrato={(catalogo?.tipo_contrato || []).map((nombre) => ({ nombre, activo: true }))}
           tipoContrato={editForm?.tipo_contrato || detalle.tipo_contrato || ''}
           onTipoContratoChange={(v) => setField('tipo_contrato', v)}
           onAddTipoContrato={async (v) => addCatalogValue('tipo_contrato', v)}
+          fechaIngreso={editForm?.fecha_ingreso || ''}
+          onFechaIngresoChange={(v) => setField('fecha_ingreso', v)}
           canEdit={canEdit}
           canExport={permisos.exportar || permisos.ver}
           onMsg={(m) => flash(m.type, m.text)}
@@ -317,27 +330,52 @@ export default function DocumentacionTab({
 
       {/* Bancario */}
       <div style={panelStyle(tTok)}>
-        <div style={{ ...ui.sectionTitle, marginBottom: 8 }}>Datos bancarios</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 10 }}>
-          <div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: tTok.textMuted }}>Entidad bancaria</div>
-            <input style={inputStyle} disabled={!canEdit} value={editForm?.banco_entidad || ''} onChange={(e) => setField('banco_entidad', e.target.value)} />
-          </div>
-          <div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: tTok.textMuted }}>Tipo de cuenta</div>
-            <select style={inputStyle} disabled={!canEdit} value={editForm?.banco_tipo_cuenta || ''} onChange={(e) => setField('banco_tipo_cuenta', e.target.value)}>
-              <option value="">—</option>
-              <option value="ahorros">Ahorros</option>
-              <option value="corriente">Corriente</option>
-            </select>
-          </div>
-          <div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: tTok.textMuted }}>Número de cuenta</div>
-            <input style={inputStyle} disabled={!canEdit} value={editForm?.banco_numero_cuenta || ''} onChange={(e) => setField('banco_numero_cuenta', e.target.value)} />
-          </div>
+        <div style={{ ...ui.sectionTitle, marginBottom: 6 }}>Datos bancarios</div>
+        <div style={{ ...ui.sheetWrap, maxHeight: 'none', marginBottom: 8 }}>
+          <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
+            <tbody>
+              <tr>
+                <td style={{ ...ui.tdLabel, width: '28%' }}>Entidad bancaria</td>
+                <td style={ui.td}>
+                  <input
+                    style={ui.cellInp}
+                    disabled={!canEdit}
+                    value={editForm?.banco_entidad || ''}
+                    onChange={(e) => setField('banco_entidad', e.target.value)}
+                  />
+                </td>
+              </tr>
+              <tr>
+                <td style={ui.tdLabel}>Tipo de cuenta</td>
+                <td style={ui.td}>
+                  <select
+                    style={ui.cellSelect}
+                    disabled={!canEdit}
+                    value={editForm?.banco_tipo_cuenta || ''}
+                    onChange={(e) => setField('banco_tipo_cuenta', e.target.value)}
+                  >
+                    <option value="">—</option>
+                    <option value="ahorros">Ahorros</option>
+                    <option value="corriente">Corriente</option>
+                  </select>
+                </td>
+              </tr>
+              <tr>
+                <td style={ui.tdLabel}>Número de cuenta</td>
+                <td style={ui.td}>
+                  <input
+                    style={ui.cellInp}
+                    disabled={!canEdit}
+                    value={editForm?.banco_numero_cuenta || ''}
+                    onChange={(e) => setField('banco_numero_cuenta', e.target.value)}
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
         {canEdit && (
-          <button type="button" style={{ ...S.btnGhost, marginBottom: 8 }} disabled={ocrBusy || busy} onClick={runOcrFromPendingOrVigente}>
+          <button type="button" style={{ ...S.btnGhost, marginBottom: 8, padding: '4px 8px' }} disabled={ocrBusy || busy} onClick={runOcrFromPendingOrVigente}>
             {ocrBusy ? 'OCR…' : 'OCR desde certificación cargada'}
           </button>
         )}
@@ -350,19 +388,14 @@ export default function DocumentacionTab({
           canEdit={canEdit}
           locked={locked}
           hideSave
-          tituloOverride="Certificación bancaria (adjunto)"
+          tituloOverride="Certificación bancaria"
           onMsg={(m) => flash(m.type, m.text)}
           onFileStaged={(file) => onCertBancariaSelected(file)}
         />
       </div>
 
-      {/* Afiliaciones */}
+      {/* Afiliaciones: entidad + certificación en el mismo panel */}
       <div style={panelStyle(tTok)}>
-        <div style={{ marginBottom: 8, fontSize: 'var(--cc-caption)', color: tTok.textMuted }}>
-          Certificaciones obligatorias según afiliaciones del registro:
-          {[detalle.eps && `EPS: ${detalle.eps}`, detalle.pension && `Pensión: ${detalle.pension}`, detalle.arl && `ARL: ${detalle.arl}`, detalle.cesantias && `Cesantías: ${detalle.cesantias}`, detalle.caja_compensacion && `Caja: ${detalle.caja_compensacion}`]
-            .filter(Boolean).join(' · ') || 'Complete las afiliaciones en Registro.'}
-        </div>
         <DocumentosTrabajadorBlock
           ref={refAfiliacion}
           theme={theme}
@@ -372,6 +405,11 @@ export default function DocumentacionTab({
           canEdit={canEdit}
           locked={locked}
           hideSave
+          showAfiliacionEntidad
+          afiliacionValues={editForm}
+          catalogo={catalogo}
+          onAfiliacionChange={(field, v) => setField(field, v)}
+          onAfiliacionAdd={async (catalogKey, v) => addCatalogValue(catalogKey, v)}
           onMsg={(m) => flash(m.type, m.text)}
         />
       </div>
@@ -387,8 +425,24 @@ export default function DocumentacionTab({
         ) : (
           <>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-              <button type="button" style={S.btnPrimary} disabled={busy || locked} onClick={consolidar}>
-                Consolidar documentación
+              {esDesarrollador && (
+                <button
+                  type="button"
+                  style={S.btnPrimary}
+                  disabled={busy}
+                  title="PDF con documentos actuales; no borra adjuntos ni cambia Aprobado/Pendiente/Rechazado"
+                  onClick={previewConsolidado}
+                >
+                  Vista previa consolidado
+                </button>
+              )}
+              <button
+                type="button"
+                style={esDesarrollador ? S.btnGhost : S.btnPrimary}
+                disabled={busy || locked}
+                onClick={consolidar}
+              >
+                {esDesarrollador ? 'Ejecutar auditoría' : 'Consolidar documentación'}
               </button>
               <button
                 type="button"

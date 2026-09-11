@@ -204,6 +204,8 @@ export function createRrhhApi(contratoId, token) {
       }),
     docConsolidadoUrl: (trabajadorId) =>
       `${API_BASE}${base}/trabajadores/${trabajadorId}/documentacion/consolidado`,
+    previewConsolidadoUrl: (trabajadorId) =>
+      `${API_BASE}${base}/trabajadores/${trabajadorId}/documentacion/preview-consolidado`,
     eliminarTipoOtro: (body) =>
       apiJson(`${base}/documentacion/eliminar-tipo-otro`, {
         method: 'POST',
