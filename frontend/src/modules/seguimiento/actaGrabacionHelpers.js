@@ -20,6 +20,38 @@ export function formatMinutosCupo(segundos) {
   return mins.toFixed(1).replace(/\.0$/, '')
 }
 
+/**
+ * Saludo oral según hora local del dispositivo.
+ * 05:00–11:59 → Buenos días · 12:00–18:59 → Buenas tardes · resto → Buenas noches
+ */
+export function saludoSegunHora(now = new Date()) {
+  const h = now instanceof Date ? now.getHours() : Number(now)
+  const hour = Number.isFinite(h) ? h : new Date().getHours()
+  if (hour >= 5 && hour < 12) return 'Buenos días'
+  if (hour >= 12 && hour < 19) return 'Buenas tardes'
+  return 'Buenas noches'
+}
+
+/**
+ * Guion compacto para lectura en voz alta (sin scroll en el modal ancho).
+ */
+export function buildGuionModeradorGrabacion(now = new Date()) {
+  const saludo = saludoSegunHora(now)
+  return (
+    `${saludo}. Antes de iniciar, informo que esta reunión será grabada únicamente `
+    + 'para elaborar el acta de compromisos y temas en ClaraCore.\n\n'
+    + 'Importante: ClaraCore no conserva el audio de forma permanente. Al detener, '
+    + 'el archivo se descarga en el dispositivo de quien graba; es responsabilidad '
+    + 'exclusiva del moderador guardar esa copia si desea un registro propio de la '
+    + 'reunión. La plataforma no ofrece archivo ni consulta posterior del audio.\n\n'
+    + 'Con fundamento en la Ley 1581 de 2012, cada participante debe indicar en voz '
+    + 'alta su nombre completo, la entidad que representa y si autoriza o no la '
+    + 'grabación de su voz. Quien no autorice podrá permanecer sin que su '
+    + 'intervención sea grabada, en la medida de lo posible. Continuamos con la '
+    + 'ronda de presentaciones y consentimientos.'
+  )
+}
+
 export function pickRecorderMimeType(isTypeSupported = (t) => {
   try {
     return typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)

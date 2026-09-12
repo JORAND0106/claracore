@@ -3,11 +3,13 @@ import { describe, it } from 'node:test'
 
 import {
   buildGrabacionFilename,
+  buildGuionModeradorGrabacion,
   downloadBlob,
   extensionForMime,
   formatMinutosCupo,
   formatMmSs,
   pickRecorderMimeType,
+  saludoSegunHora,
   segundosAReclamar,
 } from './actaGrabacionHelpers.js'
 import { createGrabacionSessionController } from './actaGrabacionSession.js'
@@ -23,6 +25,29 @@ describe('actaGrabacionHelpers', () => {
     assert.equal(formatMinutosCupo(10800), '180')
     assert.equal(formatMinutosCupo(90), '1.5')
     assert.equal(formatMinutosCupo(0), '0')
+  })
+
+  it('saludo dinámico según hora', () => {
+    assert.equal(saludoSegunHora(new Date(2026, 8, 12, 5, 0)), 'Buenos días')
+    assert.equal(saludoSegunHora(new Date(2026, 8, 12, 11, 59)), 'Buenos días')
+    assert.equal(saludoSegunHora(new Date(2026, 8, 12, 12, 0)), 'Buenas tardes')
+    assert.equal(saludoSegunHora(new Date(2026, 8, 12, 18, 59)), 'Buenas tardes')
+    assert.equal(saludoSegunHora(new Date(2026, 8, 12, 19, 0)), 'Buenas noches')
+    assert.equal(saludoSegunHora(new Date(2026, 8, 12, 4, 59)), 'Buenas noches')
+  })
+
+  it('guion incluye saludo y refuerzo de descarga/archivo', () => {
+    const manana = buildGuionModeradorGrabacion(new Date(2026, 8, 12, 9, 30))
+    assert.match(manana, /^Buenos días\./)
+    assert.match(manana, /responsabilidad exclusiva del moderador/)
+    assert.match(manana, /no ofrece archivo ni consulta posterior del audio/)
+    assert.match(manana, /Ley 1581/)
+
+    const tarde = buildGuionModeradorGrabacion(new Date(2026, 8, 12, 15, 0))
+    assert.match(tarde, /^Buenas tardes\./)
+
+    const noche = buildGuionModeradorGrabacion(new Date(2026, 8, 12, 21, 0))
+    assert.match(noche, /^Buenas noches\./)
   })
 
   it('elige mime soportado', () => {
