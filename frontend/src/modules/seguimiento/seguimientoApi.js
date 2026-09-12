@@ -180,6 +180,19 @@ export function createSeguimientoApi(contratoId, token) {
     pegarImagenTarea: (itemId, body) => send('POST', `/seguimiento/tareas/${itemId}/imagen`, body),
     redaccionClara: (body) => send('POST', '/seguimiento/redaccion-clara', body, 120000),
 
+    // ── Grabación de reuniones (cupo diario / contrato) ─────────────────────
+    grabacionCupo: () => get(`/seguimiento/${cid}/grabacion/cupo`),
+    iniciarGrabacion: () => send('POST', `/seguimiento/${cid}/grabacion/sesiones`, {}),
+    reclamarGrabacion: (sesionId, segundos) =>
+      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/reclamar`, {
+        segundos: Math.max(0, Math.min(120, Number(segundos) || 0)),
+      }),
+    finalizarGrabacion: (sesionId, body = {}) =>
+      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/finalizar`, {
+        segundos_adicionales: Math.max(0, Math.min(120, Number(body.segundos_adicionales) || 0)),
+        motivo: body.motivo || undefined,
+      }),
+
     // ── Bitácora de Obra ────────────────────────────────────────────────────
     listBitacora: (params = {}) => {
       const q = new URLSearchParams()
