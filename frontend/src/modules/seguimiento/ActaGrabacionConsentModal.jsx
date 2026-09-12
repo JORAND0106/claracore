@@ -1,18 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
-import { formatMinutosCupo } from './actaGrabacionHelpers'
+import {
+  buildGuionModeradorGrabacion,
+  formatMinutosCupo,
+} from './actaGrabacionHelpers'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 
-const GUION_MODERADOR = `Buenos días / buenas tardes. Antes de iniciar, informo que esta reunión será grabada únicamente para elaborar el acta de compromisos y temas en ClaraCore.
-
-El audio no se almacena de forma permanente en la plataforma: se descarga en el dispositivo de quien graba y se usa de manera temporal para la síntesis del acta.
-
-Con fundamento en la Ley 1581 de 2012 (protección de datos personales), cada participante debe indicar en voz alta su nombre completo, la entidad o empresa que representa, y si autoriza o no la grabación de su voz para este fin.
-
-Quien no autorice podrá permanecer en la reunión sin que su intervención sea objeto de grabación, en la medida de lo posible. Continuamos con la ronda de presentaciones y consentimientos.`
+/** Ancho previo ~560px → el doble en escritorio. */
+const MODAL_WIDTH_DESKTOP = 'min(1120px, 98vw)'
 
 /**
  * Consentimiento previo a grabar (Ley 1581) + aviso de cupo y captura.
+ * El guion del moderador se muestra completo, sin scroll interno.
  */
 export default function ActaGrabacionConsentModal({
   t,
@@ -23,10 +22,17 @@ export default function ActaGrabacionConsentModal({
   onCancel,
   onConfirm,
   zIndex = 13000,
+  /** Inyectable para pruebas de saludo dinámico. */
+  now = null,
 }) {
   const [leido, setLeido] = useState(false)
   const [ronda, setRonda] = useState(false)
   const [tabAudio, setTabAudio] = useState(true)
+
+  const guion = useMemo(
+    () => buildGuionModeradorGrabacion(now || new Date()),
+    [now],
+  )
 
   useEffect(() => {
     setLeido(false)
@@ -51,7 +57,7 @@ export default function ActaGrabacionConsentModal({
       <div
         style={{
           ...seguimientoModalSheetStyle(viewportCompact),
-          width: viewportCompact ? undefined : 'min(560px, 100%)',
+          width: viewportCompact ? undefined : MODAL_WIDTH_DESKTOP,
           background: t.bgCard,
           border: `1px solid ${t.border}`,
           boxShadow: t.shadow || '0 12px 40px rgba(0,0,0,0.2)',
@@ -63,18 +69,28 @@ export default function ActaGrabacionConsentModal({
         }}
       >
         <CcModalBrandHeader theme={t} />
-        <div style={{ padding: '14px 18px 18px', overflow: 'auto' }}>
-          <h2 id="cc-grabacion-consent-title" style={{ margin: '0 0 6px', fontSize: 'var(--cc-title)', color: t.text }}>
-            Grabar reunión
-          </h2>
-          <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-            Antes de capturar audio, el moderador debe leer el aviso y completar la ronda de consentimiento.
-            La grabación coexiste con «Redactar con Clara»; no sustituye la redacción de temas.
-          </p>
+        <div
+          style={{
+            padding: viewportCompact ? '12px 14px 16px' : '16px 22px 20px',
+            overflow: viewportCompact ? 'auto' : 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+            minHeight: 0,
+          }}
+        >
+          <div>
+            <h2 id="cc-grabacion-consent-title" style={{ margin: '0 0 4px', fontSize: 'var(--cc-title)', color: t.text }}>
+              Grabar reunión
+            </h2>
+            <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4 }}>
+              Lea el aviso en voz alta, confirme la ronda de consentimiento y continúe.
+              La grabación coexiste con «Redactar con Clara».
+            </p>
+          </div>
 
           {cupo && (
             <div style={{
-              marginBottom: 12,
               padding: '8px 10px',
               borderRadius: 8,
               border: `1px solid ${bloqueado ? 'var(--cc-color-danger,#b91c1c)' : t.border}`,
@@ -83,6 +99,7 @@ export default function ActaGrabacionConsentModal({
                 : (t.bg || '#fff'),
               fontSize: 'var(--cc-sm)',
               color: t.text,
+              flexShrink: 0,
             }}
             >
               Cupo del contrato hoy:{' '}
@@ -92,66 +109,81 @@ export default function ActaGrabacionConsentModal({
             </div>
           )}
 
-          <label style={{ display: 'block', fontSize: 'var(--cc-label)', fontWeight: 600, color: t.textMuted, marginBottom: 4 }}>
-            Guion para leer en voz alta
-          </label>
-          <textarea
-            readOnly
-            value={GUION_MODERADOR}
-            rows={10}
+          <div
             style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              fontSize: 'var(--cc-sm)',
-              lineHeight: 1.45,
-              padding: 10,
-              borderRadius: 8,
-              border: `1px solid ${t.border}`,
-              background: t.bg || '#fff',
-              color: t.text,
-              resize: 'vertical',
-              marginBottom: 12,
+              display: 'grid',
+              gridTemplateColumns: viewportCompact ? '1fr' : 'minmax(0, 1.35fr) minmax(280px, 0.9fr)',
+              gap: viewportCompact ? 12 : 18,
+              alignItems: 'start',
+              minHeight: 0,
             }}
-          />
+          >
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 'var(--cc-label)', fontWeight: 600, color: t.textMuted, marginBottom: 6 }}>
+                Guion para leer en voz alta
+              </div>
+              <div
+                data-testid="cc-grabacion-guion"
+                role="document"
+                aria-label="Texto para leer en voz alta"
+                style={{
+                  boxSizing: 'border-box',
+                  padding: '12px 14px',
+                  borderRadius: 8,
+                  border: `1px solid ${t.border}`,
+                  background: t.bg || '#fff',
+                  color: t.text,
+                  fontSize: viewportCompact ? 'var(--cc-sm)' : 'calc(var(--cc-sm) + 1px)',
+                  lineHeight: 1.42,
+                  whiteSpace: 'pre-wrap',
+                  overflow: 'visible',
+                  maxHeight: 'none',
+                }}
+              >
+                {guion}
+              </div>
+            </div>
 
-          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8, fontSize: 'var(--cc-sm)', color: t.text, cursor: 'pointer' }}>
-            <input type="checkbox" checked={leido} onChange={(e) => setLeido(e.target.checked)} disabled={busy} style={{ marginTop: 2 }} />
-            <span>Confirmó que leyó el aviso en voz alta a los asistentes.</span>
-          </label>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8, fontSize: 'var(--cc-sm)', color: t.text, cursor: 'pointer' }}>
-            <input type="checkbox" checked={ronda} onChange={(e) => setRonda(e.target.checked)} disabled={busy} style={{ marginTop: 2 }} />
-            <span>
-              Cada asistente indicó nombre, entidad y consentimiento (o negativa) conforme a la Ley 1581 de 2012.
-            </span>
-          </label>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 12, fontSize: 'var(--cc-sm)', color: t.text, cursor: 'pointer' }}>
-            <input type="checkbox" checked={tabAudio} onChange={(e) => setTabAudio(e.target.checked)} disabled={busy} style={{ marginTop: 2 }} />
-            <span>
-              Incluir audio de pestaña/ventana del navegador (Meet, Teams web, etc.). Si cancela el diálogo del navegador, se grabará solo el micrófono.
-            </span>
-          </label>
-
-          <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs, 11px)', color: t.textMuted, lineHeight: 1.4 }}>
-            El archivo se descarga automáticamente en su equipo al detener. ClaraCore no guarda el audio en servidores.
-            Apps de escritorio nativas fuera del navegador no se capturan.
-          </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 'var(--cc-sm)', color: t.text, cursor: 'pointer' }}>
+                <input type="checkbox" checked={leido} onChange={(e) => setLeido(e.target.checked)} disabled={busy} style={{ marginTop: 2 }} />
+                <span>Confirmó que leyó el aviso en voz alta a los asistentes.</span>
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 'var(--cc-sm)', color: t.text, cursor: 'pointer' }}>
+                <input type="checkbox" checked={ronda} onChange={(e) => setRonda(e.target.checked)} disabled={busy} style={{ marginTop: 2 }} />
+                <span>
+                  Cada asistente indicó nombre, entidad y consentimiento (o negativa) conforme a la Ley 1581 de 2012.
+                </span>
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 'var(--cc-sm)', color: t.text, cursor: 'pointer' }}>
+                <input type="checkbox" checked={tabAudio} onChange={(e) => setTabAudio(e.target.checked)} disabled={busy} style={{ marginTop: 2 }} />
+                <span>
+                  Incluir audio de pestaña/ventana del navegador (Meet, Teams web, etc.). Si cancela el diálogo del navegador, se grabará solo el micrófono.
+                </span>
+              </label>
+              <p style={{ margin: 0, fontSize: 'var(--cc-xs, 11px)', color: t.textMuted, lineHeight: 1.4 }}>
+                Al detener, el archivo se descarga en su equipo. ClaraCore no lo guarda en servidores.
+                Conserve esa copia usted mismo si necesita un archivo de la reunión. Apps nativas fuera del navegador no se capturan.
+              </p>
+            </div>
+          </div>
 
           {error && (
             <div style={{
-              marginBottom: 12,
               padding: '8px 10px',
               borderRadius: 8,
               border: '1px solid var(--cc-color-danger,#b91c1c)',
               background: 'color-mix(in srgb, var(--cc-color-danger,#b91c1c) 12%, transparent)',
               color: t.text,
               fontSize: 'var(--cc-sm)',
+              flexShrink: 0,
             }}
             >
               {error}
             </div>
           )}
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
             <button
               type="button"
               disabled={busy}
@@ -193,4 +225,4 @@ export default function ActaGrabacionConsentModal({
   )
 }
 
-export { GUION_MODERADOR }
+export { MODAL_WIDTH_DESKTOP }
