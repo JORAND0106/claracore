@@ -16,6 +16,12 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from main import _require_contract_access, get_current_user, registrar_log, supabase
+from acta_grabacion_cupo_service import (
+    finalizar_sesion as grabacion_finalizar_sesion,
+    iniciar_sesion as grabacion_iniciar_sesion,
+    leer_cupo as grabacion_leer_cupo,
+    reclamar_segundos as grabacion_reclamar_segundos,
+)
 from seguimiento_permissions import require_permiso_seguimiento, tiene_permiso_seguimiento
 from seguimiento_service import (
     ActaAccesoDenegado,
@@ -676,6 +682,72 @@ def route_proximo_consecutivo(contrato_id: int, current_user=Depends(get_current
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
     return {"consecutivo": proximo_consecutivo(supabase, contrato_id)}
+
+
+# ── Grabación de reuniones (cupo diario por contrato) ─────────────────────────
+
+class GrabacionReclamarBody(BaseModel):
+    segundos: int = Field(..., ge=0, le=120)
+
+
+class GrabacionFinalizarBody(BaseModel):
+    segundos_adicionales: int = Field(0, ge=0, le=120)
+    motivo: Optional[str] = Field(None, max_length=80)
+
+
+@router.get("/{contrato_id}/grabacion/cupo")
+def route_grabacion_cupo(contrato_id: int, current_user=Depends(get_current_user)):
+    """Cupo diario de grabación: 180 min/contrato (America/Bogota)."""
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return grabacion_leer_cupo(supabase, contrato_id)
+
+
+@router.post("/{contrato_id}/grabacion/sesiones")
+def route_grabacion_iniciar(contrato_id: int, current_user=Depends(get_current_user)):
+    """Inicia sesión de grabación si queda cupo (sin reservar minutos por adelantado)."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    return grabacion_iniciar_sesion(supabase, contrato_id, _uid(current_user))
+
+
+@router.post("/{contrato_id}/grabacion/sesiones/{sesion_id}/reclamar")
+def route_grabacion_reclamar(
+    contrato_id: int,
+    sesion_id: int,
+    body: GrabacionReclamarBody,
+    current_user=Depends(get_current_user),
+):
+    """Reclama segundos de cupo de forma atómica (heartbeat). Si agota, debe_cerrar=true."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    return grabacion_reclamar_segundos(
+        supabase,
+        contrato_id,
+        sesion_id,
+        _uid(current_user),
+        body.segundos,
+    )
+
+
+@router.post("/{contrato_id}/grabacion/sesiones/{sesion_id}/finalizar")
+def route_grabacion_finalizar(
+    contrato_id: int,
+    sesion_id: int,
+    body: GrabacionFinalizarBody,
+    current_user=Depends(get_current_user),
+):
+    """Cierra la sesión y opcionalmente reclama los últimos segundos pendientes."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    return grabacion_finalizar_sesion(
+        supabase,
+        contrato_id,
+        sesion_id,
+        _uid(current_user),
+        segundos_adicionales=body.segundos_adicionales,
+        motivo=body.motivo,
+    )
 
 
 @router.get("/{contrato_id}/compromisos-abiertos")

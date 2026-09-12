@@ -130,3 +130,69 @@ def test_static_routes_registered_before_param_routes():
     assert "/seguimiento/bandeja" in order
     assert "/seguimiento/tareas" in order
     assert order.index("/seguimiento/bandeja") < order.index("/seguimiento/{contrato_id}/actas")
+
+
+def test_grabacion_cupo_routes_ok(client, monkeypatch):
+    import seguimiento_routes as sr
+
+    monkeypatch.setattr(
+        sr,
+        "grabacion_leer_cupo",
+        lambda *_a, **_k: {
+            "fecha": "2026-09-12",
+            "limite_minutos": 180,
+            "segundos_restantes": 10800,
+            "permitido": True,
+            "blocked": False,
+        },
+    )
+    monkeypatch.setattr(
+        sr,
+        "grabacion_iniciar_sesion",
+        lambda *_a, **_k: {
+            "permitido": True,
+            "sesion": {"id": 42, "estado": "activa"},
+            "segundos_restantes": 10800,
+        },
+    )
+    monkeypatch.setattr(
+        sr,
+        "grabacion_reclamar_segundos",
+        lambda *_a, **_k: {
+            "claimed": 30,
+            "segundos_restantes": 10770,
+            "debe_cerrar": False,
+            "sesion": {"id": 42, "estado": "activa"},
+        },
+    )
+    monkeypatch.setattr(
+        sr,
+        "grabacion_finalizar_sesion",
+        lambda *_a, **_k: {
+            "claimed": 0,
+            "debe_cerrar": True,
+            "sesion": {"id": 42, "estado": "finalizada"},
+        },
+    )
+
+    r = client.get("/seguimiento/1/grabacion/cupo")
+    assert r.status_code == 200
+    assert r.json()["limite_minutos"] == 180
+
+    r = client.post("/seguimiento/1/grabacion/sesiones")
+    assert r.status_code == 200
+    assert r.json()["sesion"]["id"] == 42
+
+    r = client.post(
+        "/seguimiento/1/grabacion/sesiones/42/reclamar",
+        json={"segundos": 30},
+    )
+    assert r.status_code == 200
+    assert r.json()["claimed"] == 30
+
+    r = client.post(
+        "/seguimiento/1/grabacion/sesiones/42/finalizar",
+        json={"segundos_adicionales": 0, "motivo": "usuario"},
+    )
+    assert r.status_code == 200
+    assert r.json()["sesion"]["estado"] == "finalizada"
