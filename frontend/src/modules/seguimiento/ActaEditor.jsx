@@ -2,10 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import ActaCompromisosAbiertosTable from './ActaCompromisosAbiertosTable'
+import ActaGrabacionBar from './ActaGrabacionBar'
+import ActaGrabacionConsentModal from './ActaGrabacionConsentModal'
 import ActaTemasTable, { TemaAdjuntosPanel } from './ActaTemasTable'
 import CompromisoFormModal from './CompromisoFormModal'
 import IdeaClaraModal from './IdeaClaraModal'
 import TemaEditorModal from './TemaEditorModal'
+import { createGrabacionSessionController } from './actaGrabacionSession'
+import { formatMinutosCupo } from './actaGrabacionHelpers'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import UbicacionAutocomplete from './UbicacionAutocomplete'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
@@ -348,6 +352,16 @@ export default function ActaEditor({
   const [temaEditIdx, setTemaEditIdx] = useState(null)
   /** Índice del tema cuya galería de adjuntos está abierta. */
   const [temaAdjuntosIdx, setTemaAdjuntosIdx] = useState(null)
+  /** Consentimiento / grabación de reunión (Prompt 2). */
+  const [grabacionConsentOpen, setGrabacionConsentOpen] = useState(false)
+  const [grabacionCupo, setGrabacionCupo] = useState(null)
+  const [grabacionBusy, setGrabacionBusy] = useState(false)
+  const [grabacionError, setGrabacionError] = useState('')
+  const [grabacionPhase, setGrabacionPhase] = useState('idle')
+  const [grabacionElapsed, setGrabacionElapsed] = useState(0)
+  const [grabacionTabAudioOk, setGrabacionTabAudioOk] = useState(false)
+  const [grabacionStopping, setGrabacionStopping] = useState(false)
+  const grabacionCtrlRef = useRef(null)
   const esDev = !!permisos?.esDesarrollador
   const esElaborador = form.elaborador_id != null
     && Number(form.elaborador_id) === Number(usuario?.id)
@@ -367,6 +381,83 @@ export default function ActaEditor({
   const hydratedActaIdRef = useRef(null)
   const apiRef = useRef(api)
   apiRef.current = api
+
+  useEffect(() => () => {
+    try { grabacionCtrlRef.current?.dispose?.() } catch { /* ignore */ }
+    grabacionCtrlRef.current = null
+  }, [])
+
+  const abrirConsentimientoGrabacion = async () => {
+    setGrabacionError('')
+    setGrabacionBusy(true)
+    setGrabacionConsentOpen(true)
+    try {
+      const cupo = await apiRef.current.grabacionCupo()
+      setGrabacionCupo(cupo)
+    } catch (e) {
+      setGrabacionError(friendlyFetchError(e, 'No se pudo consultar el cupo de grabación'))
+    } finally {
+      setGrabacionBusy(false)
+    }
+  }
+
+  const iniciarGrabacionDesdeConsent = async ({ includeTabAudio } = {}) => {
+    setGrabacionError('')
+    setGrabacionBusy(true)
+    try {
+      try { grabacionCtrlRef.current?.dispose?.() } catch { /* ignore */ }
+      const ctrl = createGrabacionSessionController({
+        api: apiRef.current,
+        getMeta: () => ({
+          fecha: form.fecha_reunion,
+          consecutivo,
+        }),
+        onCupo: (c) => setGrabacionCupo(c),
+        onTick: ({ elapsedSec }) => setGrabacionElapsed(elapsedSec),
+        onState: (st) => {
+          if (st.phase) setGrabacionPhase(st.phase)
+          if (st.tabAudioOk != null) setGrabacionTabAudioOk(!!st.tabAudioOk)
+          if (st.stopping != null) setGrabacionStopping(!!st.stopping)
+          if (st.elapsedSec != null) setGrabacionElapsed(st.elapsedSec)
+          if (st.phase === 'idle') {
+            setGrabacionStopping(false)
+          }
+        },
+        onError: (msg) => setError(msg || 'Error de grabación'),
+        onDownloaded: ({ filename, auto }) => {
+          setOkMsg(
+            auto
+              ? `Cupo agotado: grabación detenida y descargada (${filename}).`
+              : `Grabación descargada en su equipo (${filename}). El audio no se guardó en ClaraCore.`,
+          )
+        },
+      })
+      grabacionCtrlRef.current = ctrl
+      await ctrl.start({ includeTabAudio })
+      setGrabacionConsentOpen(false)
+    } catch (e) {
+      const msg = friendlyFetchError(e, 'No se pudo iniciar la grabación')
+      setGrabacionError(msg)
+      try { grabacionCtrlRef.current?.dispose?.() } catch { /* ignore */ }
+      grabacionCtrlRef.current = null
+      setGrabacionPhase('idle')
+    } finally {
+      setGrabacionBusy(false)
+    }
+  }
+
+  const detenerGrabacion = async () => {
+    setGrabacionStopping(true)
+    try {
+      await grabacionCtrlRef.current?.stop?.({ motivo: 'usuario' })
+    } catch (e) {
+      setError(friendlyFetchError(e, 'No se pudo detener la grabación'))
+    } finally {
+      grabacionCtrlRef.current = null
+      setGrabacionPhase('idle')
+      setGrabacionStopping(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -972,6 +1063,17 @@ export default function ActaEditor({
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          {puedeEditar && grabacionPhase !== 'recording' && grabacionPhase !== 'stopping' && (
+            <button
+              type="button"
+              disabled={grabacionBusy}
+              onClick={abrirConsentimientoGrabacion}
+              title="Grabar micrófono y audio de pestaña (cupo diario del contrato)"
+              style={ghost(t)}
+            >
+              Grabar reunión
+            </button>
+          )}
           {puedeEditar && (permisos?.crear || permisos?.editar) && (
             <button type="button" disabled={saving} onClick={() => guardar()} style={primary(t)}>
               {saving ? 'Guardando…' : 'Guardar'}
@@ -980,6 +1082,23 @@ export default function ActaEditor({
           <button type="button" onClick={onCancel} style={ghost(t)}>{asModal ? 'Cerrar' : 'Volver'}</button>
         </div>
       </div>
+
+      {(grabacionPhase === 'recording' || grabacionPhase === 'stopping') && (
+        <ActaGrabacionBar
+          t={t}
+          elapsedSec={grabacionElapsed}
+          segundosRestantes={grabacionCupo?.segundos_restantes}
+          tabAudioOk={grabacionTabAudioOk}
+          stopping={grabacionStopping || grabacionPhase === 'stopping'}
+          onStop={detenerGrabacion}
+        />
+      )}
+      {grabacionCupo && grabacionPhase === 'idle' && !grabacionConsentOpen && (
+        <div style={{ fontSize: 'var(--cc-xs, 11px)', color: t.textMuted }}>
+          Cupo grabación hoy: {formatMinutosCupo(grabacionCupo.segundos_restantes)} min restantes
+          {grabacionCupo.blocked ? ' (agotado)' : ''}
+        </div>
+      )}
 
       <div className="cc-seguim-acta-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {TABS_ACTA.map((tb) => {
@@ -1699,6 +1818,22 @@ export default function ActaEditor({
             setClaraIdx(null)
             await abrirCompromiso(idx, html)
           }}
+        />
+      )}
+
+      {grabacionConsentOpen && (
+        <ActaGrabacionConsentModal
+          t={t}
+          cupo={grabacionCupo}
+          busy={grabacionBusy}
+          error={grabacionError}
+          viewportCompact={viewportCompact}
+          onCancel={() => {
+            if (grabacionBusy) return
+            setGrabacionConsentOpen(false)
+            setGrabacionError('')
+          }}
+          onConfirm={iniciarGrabacionDesdeConsent}
         />
       )}
 
