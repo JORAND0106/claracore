@@ -490,6 +490,80 @@ def fusionar_estaciones_vista(estaciones_db: list, estaciones_flat: list) -> lis
     return enriquecer_estaciones_poligonal(merged)
 
 
+def estaciones_campo_crudas(estaciones_db: list) -> list:
+    """Copia de estaciones sin azimuts/coords ajustadas — solo lecturas de campo.
+
+    Conserva ``angulo_medido``, ``distancia``, verticales y alturas; anula
+    cualquier resultado de compensación para poder recalcular el cierre
+    preliminar de campo con independencia de ``ajustada_at``.
+    """
+    out = []
+    for e in estaciones_db or []:
+        row = dict(e)
+        for k in (
+            "azimut",
+            "angulo_corregido",
+            "norte",
+            "este",
+            "cota",
+            "norte_ajustado",
+            "este_ajustado",
+            "cota_ajustada",
+            "delta_norte",
+            "delta_este",
+            "delta_cota",
+            "correccion_norte",
+            "correccion_este",
+            "correccion_cota",
+        ):
+            row[k] = None
+        out.append(row)
+    return out
+
+
+def calcular_cierre_preliminar_campo(
+    pol: dict,
+    armadas: list,
+    estaciones_db: list,
+    amarres: dict,
+    punto_inicial: Optional[dict],
+    punto_final: Optional[dict] = None,
+) -> dict:
+    """Cierre lineal/angular desde ángulos y distancias de campo (sin ajuste)."""
+    crudas = estaciones_campo_crudas(estaciones_db)
+    armadas_enr, _, _ = radiar_armadas(armadas, crudas, amarres)
+    return calcular_cierre_poligonal(
+        armadas_enr,
+        punto_inicial,
+        sentido=pol.get("sentido") or "antihorario",
+        tol_relativa=pol.get("tolerancia_relativa") or 25000,
+        tol_cota_mm_km=pol.get("tolerancia_cota_mm_km") or 12,
+        precision_angular_seg=pol.get("precision_angular_seg") or 10.0,
+        longitud_max_delta_m=pol.get("longitud_max_delta_m"),
+        punto_final=punto_final,
+        tipo_pol=pol.get("tipo") or "cerrada",
+    )
+
+
+def resumen_cierre_preliminar_campo(cierre_campo: Optional[dict]) -> Optional[dict]:
+    """Vista compacta para UI / persistencia de «Prelim. campo»."""
+    if not cierre_campo:
+        return None
+    if cierre_campo.get("error_lineal") is None and cierre_campo.get("precision") is None:
+        return None
+    return {
+        "delta_norte": cierre_campo.get("delta_norte"),
+        "delta_este": cierre_campo.get("delta_este"),
+        "delta_cota": cierre_campo.get("delta_cota"),
+        "error_lineal": cierre_campo.get("error_lineal"),
+        "precision": cierre_campo.get("precision"),
+        "perimetro": cierre_campo.get("perimetro"),
+        "admisible_lineal": cierre_campo.get("admisible_lineal"),
+        "es_preliminar": True,
+        "fuente": "recalculado_campo",
+    }
+
+
 def aplicar_cierre_lineal_coords_ajustadas(
     cierre: dict,
     *,
@@ -563,40 +637,44 @@ def aplicar_cierre_lineal_coords_ajustadas(
 def reconstruir_cierre_preliminar(
     pol: Optional[dict],
     perimetro: Optional[float] = None,
+    *,
+    cierre_campo: Optional[dict] = None,
 ) -> Optional[dict]:
-    """Cierre lineal de campo (pre-Bowditch) persistido o reconstruido desde ΔN/ΔE.
+    """Cierre lineal de campo (pre-compensación) para auditoría.
 
-    Tras «Terminar poligonal» el cierre vivo usa coords ajustadas (~0). El
-    preliminar (calidad de campo) queda en columnas dedicadas o, en poligonales
-    antiguas, en ``error_cierre_dn/de`` (misclosure de entrada al Bowditch).
+    Preferencia:
+    1. Recálculo vivo desde ángulos/distancias crudas (``cierre_campo``).
+    2. Columnas ``error_lineal_preliminar`` / ``precision_relativa_preliminar``.
+    3. **No** usar ``error_cierre_dn/de`` como fallback: esos valores son el
+       misclosure de entrada al Bowditch (post-reparto angular) y pueden ser
+       peores que el verdadero preliminar de campo (p. ej. 1:19448 vs 1:55154).
     """
+    vivo = resumen_cierre_preliminar_campo(cierre_campo)
+    if vivo:
+        return vivo
     if not pol or not pol.get("ajustada_at"):
         return None
-    dn = pol.get("error_cierre_dn")
-    de = pol.get("error_cierre_de")
-    dz = pol.get("error_cierre_dz")
     e_lin = pol.get("error_lineal_preliminar")
     prec = pol.get("precision_relativa_preliminar")
-    if e_lin is None and dn is not None and de is not None:
-        e_lin = round(math.hypot(float(dn), float(de)), 4)
     peri = float(perimetro) if perimetro is not None else None
     if prec is None and e_lin is not None and peri is not None and peri > 0:
         if float(e_lin) > 1e-9:
             prec = int(round(peri / float(e_lin)))
         else:
             prec = int(1e9)
-    if e_lin is None and prec is None and dn is None and de is None:
+    if e_lin is None and prec is None:
         return None
     if prec is not None and prec > 10**9:
         prec = 10**9
     return {
-        "delta_norte": round(float(dn), 4) if dn is not None else None,
-        "delta_este": round(float(de), 4) if de is not None else None,
-        "delta_cota": round(float(dz), 4) if dz is not None else None,
+        "delta_norte": None,
+        "delta_este": None,
+        "delta_cota": None,
         "error_lineal": float(e_lin) if e_lin is not None else None,
         "precision": int(prec) if prec is not None else None,
         "perimetro": peri,
         "es_preliminar": True,
+        "fuente": "persistido",
     }
 
 
@@ -2680,19 +2758,9 @@ def svg_plano_poligonal_profesional(
 
     nortes = [p["norte"] for p in puntos] + [float(p["norte"]) for p in extra_coords]
     estes = [p["este"] for p in puntos] + [float(p["este"]) for p in extra_coords]
-    min_n_raw, max_n_raw = min(nortes), max(nortes)
-    min_e_raw, max_e_raw = min(estes), max(estes)
-    span_n = max(max_n_raw - min_n_raw, 1.0)
-    span_e = max(max_e_raw - min_e_raw, 1.0)
-    half = max(span_n, span_e) * 0.56
-    cx_n = (min_n_raw + max_n_raw) / 2
-    cx_e = (min_e_raw + max_e_raw) / 2
-    min_n, max_n = cx_n - half, cx_n + half
-    min_e, max_e = cx_e - half, cx_e + half
-    span_m = 2 * half
-    scale_px = min(w, h) / max(span_m, 1e-9)
-    off_x = x0 + (w - span_m * scale_px) / 2
-    off_y = y0 + (h - span_m * scale_px) / 2
+    min_n, max_n, min_e, max_e, scale_px, off_x, off_y, span_m = _encuadre_plano_rect(
+        nortes, estes, x0=x0, y0=y0, w=w, h=h, pad_frac=0.06
+    )
 
     def tx(e: float) -> float:
         return off_x + (e - min_e) * scale_px
@@ -2706,7 +2774,7 @@ def svg_plano_poligonal_profesional(
         f'<rect x="{x0}" y="{y0}" width="{w}" height="{h}" fill="#fafafa" stroke="#000" stroke-width="0.5"/>',
     ]
 
-    step_e = _nice_grid_step(span_m)
+    step_e = _nice_grid_step(max(max_e - min_e, max_n - min_n))
     step_n = step_e
     e_val = math.floor(min_e / step_e) * step_e
     while e_val <= max_e + step_e * 0.01:
@@ -2866,19 +2934,71 @@ def svg_plano_poligonal_profesional(
     return "".join(parts)
 
 
-def _escala_plano_sugerida(puntos: list, ancho_util_mm: float = 200.0) -> tuple[str, float]:
-    """Escala 1:N para impresión carta horizontal y extensión en metros."""
+def _escala_plano_sugerida(
+    puntos: list,
+    ancho_util_mm: float = 240.0,
+    alto_util_mm: float = 145.0,
+    margen_frac: float = 0.08,
+) -> tuple[str, float]:
+    """Escala 1:N más grande (denominador menor) que aún cabe en el área útil.
+
+    Elige el candidato estándar más grande posible (p. ej. ~1:7500 para
+    extensión ~1474 m en carta horizontal) en vez de un valor conservador
+    que deje la hoja casi vacía.
+    """
     if len(puntos) < 2:
         return "—", 0.0
-    estes = [p["este"] for p in puntos]
-    nortes = [p["norte"] for p in puntos]
-    span_m = max(max(estes) - min(estes), max(nortes) - min(nortes), 1.0)
-    span_dibujo = span_m * 1.2
-    papel_m = ancho_util_mm / 1000.0
-    denom_raw = max(span_dibujo / papel_m, 1.0)
-    candidatos = [50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000]
-    denom = next((c for c in candidatos if c >= denom_raw), int(round(denom_raw)))
-    return f"1:{denom}", span_m
+    estes = [float(p["este"]) for p in puntos]
+    nortes = [float(p["norte"]) for p in puntos]
+    span_e = max(max(estes) - min(estes), 1.0)
+    span_n = max(max(nortes) - min(nortes), 1.0)
+    span_m = max(span_e, span_n)
+    # Escalas estándar de dibujo topográfico (incluye 7500).
+    candidatos = [
+        50, 100, 200, 250, 500, 750, 1000, 1250, 1500, 2000, 2500,
+        3000, 4000, 5000, 7500, 10000, 12500, 15000, 20000, 25000, 50000,
+    ]
+    pad = 1.0 + max(float(margen_frac), 0.0)
+    chosen = None
+    for denom in candidatos:
+        need_w_mm = span_e * pad * 1000.0 / denom
+        need_h_mm = span_n * pad * 1000.0 / denom
+        if need_w_mm <= ancho_util_mm and need_h_mm <= alto_util_mm:
+            chosen = denom
+            break
+    if chosen is None:
+        # Ningún candidato cabe: usar el mínimo necesario redondeado al alza.
+        raw_w = span_e * pad * 1000.0 / max(ancho_util_mm, 1e-6)
+        raw_h = span_n * pad * 1000.0 / max(alto_util_mm, 1e-6)
+        chosen = int(math.ceil(max(raw_w, raw_h) / 100.0) * 100)
+    return f"1:{chosen}", span_m
+
+
+def _encuadre_plano_rect(
+    nortes: list,
+    estes: list,
+    *,
+    x0: float,
+    y0: float,
+    w: float,
+    h: float,
+    pad_frac: float = 0.06,
+) -> tuple:
+    """Encuadre rectangular que maximiza el trazado en el área útil (sin forzar cuadrado)."""
+    min_n_raw, max_n_raw = min(nortes), max(nortes)
+    min_e_raw, max_e_raw = min(estes), max(estes)
+    span_n = max(max_n_raw - min_n_raw, 1.0)
+    span_e = max(max_e_raw - min_e_raw, 1.0)
+    pad_n = span_n * pad_frac
+    pad_e = span_e * pad_frac
+    min_n, max_n = min_n_raw - pad_n, max_n_raw + pad_n
+    min_e, max_e = min_e_raw - pad_e, max_e_raw + pad_e
+    span_n2 = max_n - min_n
+    span_e2 = max_e - min_e
+    scale_px = min(w / span_e2, h / span_n2)
+    off_x = x0 + (w - span_e2 * scale_px) / 2
+    off_y = y0 + (h - span_n2 * scale_px) / 2
+    return min_n, max_n, min_e, max_e, scale_px, off_x, off_y, max(span_n, span_e)
 
 
 def _filas_tabla_coordenadas_plano(puntos: list) -> str:
@@ -2983,9 +3103,43 @@ _POLIGONAL_SATELLITE_OPACITY = 0.42
 
 
 def _mapbox_access_token() -> str:
-    import os
+    """Token Mapbox para Static Images API (PDF satelital).
 
-    return (os.getenv("MAPBOX_TOKEN") or os.getenv("VITE_MAPBOX_TOKEN") or "").strip()
+    Busca ``MAPBOX_TOKEN`` / ``VITE_MAPBOX_TOKEN`` en el entorno y, como
+    respaldo de desarrollo, en ``frontend/.env*`` del repo.
+    """
+    import os
+    from pathlib import Path
+
+    for key in ("MAPBOX_TOKEN", "VITE_MAPBOX_TOKEN"):
+        val = (os.getenv(key) or "").strip()
+        if val:
+            return val
+    # Respaldo: leer .env del frontend (mismo token que usa la vista en pantalla).
+    root = Path(__file__).resolve().parents[1]
+    for rel in (
+        "frontend/.env.production",
+        "frontend/.env.development",
+        "frontend/.env",
+        "backend/.env",
+        ".env",
+    ):
+        path = root / rel
+        if not path.is_file():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, _, v = s.partition("=")
+                if k.strip() in ("MAPBOX_TOKEN", "VITE_MAPBOX_TOKEN"):
+                    tok = v.strip().strip('"').strip("'")
+                    if tok:
+                        return tok
+        except OSError:
+            continue
+    return ""
 
 
 def _fetch_mapbox_satellite_png(
@@ -3160,6 +3314,7 @@ def html_pagina_plano_poligonal(
     escala_txt, span_m = _escala_plano_sugerida(puntos)
     # Carta horizontal: aprovechar al máximo el área útil
     width, height = 980, 560
+    uso_satelite = False
     svg = svg_plano_poligonal_satelital(
         estaciones,
         punto_inicial,
@@ -3170,7 +3325,9 @@ def html_pagina_plano_poligonal(
         punto_final=punto_final,
         cierre=cierre,
     )
-    if not svg:
+    if svg:
+        uso_satelite = True
+    else:
         svg = svg_plano_poligonal_profesional(
             estaciones,
             punto_inicial,
@@ -3183,11 +3340,18 @@ def html_pagina_plano_poligonal(
         )
     b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     rotulado = html_rotulado_plano(contrato, pol, firmas)
+    if uso_satelite:
+        fondo_leyenda = "Fondo: satélite Mapbox (opacidad media-baja)"
+    else:
+        fondo_leyenda = (
+            "Fondo: cuadrícula (satélite no disponible — configure MAPBOX_TOKEN "
+            "o VITE_MAPBOX_TOKEN en el backend para Static Images API)"
+        )
     leyenda = (
         '<span style="font-size:5pt;margin-right:6px;">● Est.</span>'
         '<span style="font-size:5pt;margin-right:6px;color:#ea580c;">▲ Aux.</span>'
         '<span style="font-size:5pt;margin-right:6px;color:#16a34a;">■ Am.</span>'
-        '<span style="font-size:5pt;margin-right:6px;">Fondo: satélite Mapbox (opacidad media-baja)</span>'
+        f'<span style="font-size:5pt;margin-right:6px;">{html.escape(fondo_leyenda)}</span>'
     )
     if (pol.get("tipo") or "cerrada") == "abierta":
         leyenda += (

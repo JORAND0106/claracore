@@ -266,6 +266,25 @@ export default function PoligonalGrafico({
     }
   }, [])
 
+  /** Norte arriba: solo bearing → 0; conserva zoom y centro. */
+  const orientNorth = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    try {
+      const center = map.getCenter()
+      const zoom = map.getZoom()
+      map.easeTo({
+        bearing: 0,
+        center,
+        zoom,
+        duration: 350,
+        essential: true,
+      })
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   // Crear mapa una vez
   useEffect(() => {
     if (!mapNodeRef.current || mapRef.current) return undefined
@@ -536,6 +555,32 @@ export default function PoligonalGrafico({
         >
           Restablecer zoom
         </button>
+        <button
+          type="button"
+          onClick={orientNorth}
+          title="Orientar al norte (bearing 0°). No cambia zoom ni centro."
+          aria-label="Orientar mapa al norte"
+          data-poligonal-north="1"
+          style={{
+            fontSize: 'var(--cc-xs)',
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid #cbd5e1',
+            background: '#fff',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            fontWeight: 600,
+            color: '#1e40af',
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden focusable="false">
+            <path d="M12 2 L16 14 L12 11 L8 14 Z" fill="#1e40af" />
+            <circle cx="12" cy="12" r="9" fill="none" stroke="#94a3b8" strokeWidth="1.5" />
+          </svg>
+          Norte
+        </button>
         <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
           Satélite · Rueda / pellizcar: zoom · Arrastrar: pan · Clic en un punto: detalle
         </span>
@@ -567,6 +612,36 @@ export default function PoligonalGrafico({
             style={{ width: '100%', height: '100%' }}
             aria-label="Mapa satelital de la poligonal"
           />
+          <button
+            type="button"
+            onClick={orientNorth}
+            title="Norte arriba"
+            aria-label="Orientar al norte"
+            data-poligonal-compass="1"
+            style={{
+              position: 'absolute',
+              top: 10,
+              right: 10,
+              zIndex: 2,
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              border: '1px solid #cbd5e1',
+              background: 'rgba(255,255,255,0.95)',
+              boxShadow: '0 2px 8px rgba(15,23,42,0.15)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden focusable="false">
+              <circle cx="12" cy="12" r="9" fill="#fff" stroke="#94a3b8" strokeWidth="1.5" />
+              <path d="M12 3 L15.5 14 L12 11.5 L8.5 14 Z" fill="#dc2626" />
+              <text x="12" y="20" textAnchor="middle" fontSize="5" fontWeight="700" fill="#1e40af">N</text>
+            </svg>
+          </button>
           {selectedDetalle && popupCss && (
             <NodoDetallePopup
               detalle={selectedDetalle}

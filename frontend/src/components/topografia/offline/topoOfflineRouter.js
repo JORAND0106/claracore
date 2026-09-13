@@ -59,6 +59,7 @@ function inferSubmodule(path, method) {
 }
 
 function inferOpType(method, path) {
+  if (path.includes('/reabrir')) return 'editar'
   if (path.includes('/recalcular')) return 'calcular'
   if (path.includes('/calcular')) return 'calcular'
   if (path.includes('/cerrar')) return 'cerrar'
