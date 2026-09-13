@@ -2456,8 +2456,16 @@ def _fmt_pdf_num(v, dec=4) -> str:
 
 
 _PDF_CELL = "padding:1px 2px;font-size:6pt;border:1px solid #cbd5e1;vertical-align:middle;"
+_PDF_CELL_NUM = (
+    "padding:1px 2px;font-size:5.5pt;border:1px solid #cbd5e1;vertical-align:middle;"
+    "text-align:right;font-variant-numeric:tabular-nums;"
+)
 _PDF_CELL_ANG = "padding:1px 1px;font-size:5.5pt;white-space:nowrap;border:1px solid #cbd5e1;vertical-align:middle;"
 _PDF_TH = "padding:2px 3px;font-size:6pt;font-weight:700;background:#e2e8f0;border:1px solid #94a3b8;"
+_PDF_TH_NUM = (
+    "padding:2px 2px;font-size:5.5pt;font-weight:700;background:#e2e8f0;border:1px solid #94a3b8;"
+    "text-align:center;white-space:nowrap;"
+)
 _PDF_SEC = "font-size:5.5pt;font-weight:700;color:#1e40af;margin:1px 0 0;"
 _PDF_TH_C = "padding:1px;font-size:5pt;font-weight:700;background:#e2e8f0;border:1px solid #94a3b8;vertical-align:middle;"
 _PDF_CELL_C = "padding:1px;font-size:5pt;border:1px solid #cbd5e1;vertical-align:middle;"
@@ -2465,29 +2473,76 @@ _PDF_CELL_ANG_C = "padding:1px;font-size:4.8pt;white-space:nowrap;border:1px sol
 _PDF_TBL = "border-collapse:collapse;table-layout:fixed;width:100%;"
 
 
+def _proyecciones_tramo_pdf(e: dict) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """ΔN/ΔE/ΔZ del tramo: persistidos (Bowditch) o, si faltan, azimut×distancia."""
+    dn = e.get("proyeccion_norte")
+    if dn is None:
+        dn = e.get("delta_norte")
+    de = e.get("proyeccion_este")
+    if de is None:
+        de = e.get("delta_este")
+    dz = e.get("proyeccion_cota")
+    if dz is None:
+        dz = e.get("delta_cota")
+
+    dist = e.get("distancia")
+    az = e.get("azimut")
+    if (dn is None or de is None) and dist is not None and az is not None and float(dist) > 1e-9:
+        az_r = math.radians(float(az))
+        d = float(dist)
+        if dn is None:
+            dn = d * math.cos(az_r)
+        if de is None:
+            de = d * math.sin(az_r)
+    return (
+        float(dn) if dn is not None else None,
+        float(de) if de is not None else None,
+        float(dz) if dz is not None else None,
+    )
+
+
+def _correcciones_tramo_pdf(
+    e: dict, *, ajustada: bool
+) -> tuple[Optional[float], Optional[float]]:
+    """Corr.N / Corr.E solo si la poligonal está ajustada (Bowditch); si no, None → guion."""
+    if not ajustada:
+        return None, None
+    cn = e.get("correccion_norte")
+    ce = e.get("correccion_este")
+    return (
+        float(cn) if cn is not None else None,
+        float(ce) if ce is not None else None,
+    )
+
+
 def html_tabla_poligonal_pdf(estaciones: list, pol: dict) -> str:
-    """Cartera de calculo compacta para PDF."""
+    """Cartera de calculo compacta para PDF (incluye ΔN/ΔE y Corr.N/E)."""
+    ajustada = bool(pol.get("ajustada_at"))
+    # Cabeceras alineadas con la cartera en pantalla (Corr.N / Corr.E).
     headers = [
-        ("#", _PDF_TH),
-        ("Arm", _PDF_TH),
-        ("Pto", _PDF_TH),
-        ("∠obs", _PDF_TH + "white-space:nowrap;"),
-        ("∠cor", _PDF_TH + "white-space:nowrap;"),
-        ("∠vert", _PDF_TH + "white-space:nowrap;"),
-        ("Dist", _PDF_TH),
-        ("Az", _PDF_TH + "white-space:nowrap;"),
-        ("ΔN", _PDF_TH),
-        ("ΔE", _PDF_TH),
-        ("ΔZ", _PDF_TH),
-        ("cN", _PDF_TH),
-        ("cE", _PDF_TH),
-        ("Norte", _PDF_TH),
-        ("Este", _PDF_TH),
-        ("Cota", _PDF_TH),
+        ("#", _PDF_TH, "3%"),
+        ("Arm", _PDF_TH, "4%"),
+        ("Pto", _PDF_TH, "8%"),
+        ("Ang.obs", _PDF_TH + "white-space:nowrap;", "8%"),
+        ("Ang.cor", _PDF_TH + "white-space:nowrap;", "8%"),
+        ("Ang.vert", _PDF_TH + "white-space:nowrap;", "8%"),
+        ("Dist", _PDF_TH_NUM, "5%"),
+        ("Az", _PDF_TH + "white-space:nowrap;", "8%"),
+        ("ΔN", _PDF_TH_NUM, "6%"),
+        ("ΔE", _PDF_TH_NUM, "6%"),
+        ("ΔZ", _PDF_TH_NUM, "5%"),
+        ("Corr.N", _PDF_TH_NUM, "6%"),
+        ("Corr.E", _PDF_TH_NUM, "6%"),
+        ("Norte", _PDF_TH_NUM, "7%"),
+        ("Este", _PDF_TH_NUM, "7%"),
+        ("Cota", _PDF_TH_NUM, "5%"),
     ]
-    ths = "".join(f'<th style="{st}">{html.escape(lbl)}</th>' for lbl, st in headers)
+    colgroup = "".join(f'<col style="width:{w};"/>' for _, _, w in headers)
+    ths = "".join(f'<th style="{st}">{html.escape(lbl)}</th>' for lbl, st, _w in headers)
     rows = ""
     for e in estaciones or []:
+        dn, de, dz = _proyecciones_tramo_pdf(e)
+        cn, ce = _correcciones_tramo_pdf(e, ajustada=ajustada)
         rows += (
             "<tr>"
             f'<td style="{_PDF_CELL}">{e.get("orden", "")}</td>'
@@ -2496,16 +2551,16 @@ def html_tabla_poligonal_pdf(estaciones: list, pol: dict) -> str:
             f'<td style="{_PDF_CELL_ANG}">{html.escape(str(e.get("angulo_observado_texto") or "—"))}</td>'
             f'<td style="{_PDF_CELL_ANG}">{html.escape(str(e.get("angulo_corregido_texto") or "—"))}</td>'
             f'<td style="{_PDF_CELL_ANG}">{html.escape(str(e.get("angulo_vertical_texto") or "—"))}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("distancia"), 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(e.get("distancia"), 3)}</td>'
             f'<td style="{_PDF_CELL_ANG}">{html.escape(str(e.get("azimut_texto") or "—"))}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("proyeccion_norte"), 3)}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("proyeccion_este"), 3)}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("proyeccion_cota"), 3)}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("correccion_norte"), 3)}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("correccion_este"), 3)}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("norte"), 3)}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("este"), 3)}</td>'
-            f'<td style="{_PDF_CELL}">{_fmt_pdf_num(e.get("cota"), 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(dn, 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(de, 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(dz, 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(cn, 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(ce, 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(e.get("norte"), 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(e.get("este"), 3)}</td>'
+            f'<td style="{_PDF_CELL_NUM}">{_fmt_pdf_num(e.get("cota"), 3)}</td>'
             "</tr>"
         )
     equipo = " / ".join(
@@ -2517,13 +2572,20 @@ def html_tabla_poligonal_pdf(estaciones: list, pol: dict) -> str:
         ]
         if x
     ) or pol.get("equipo") or "—"
+    nota_corr = (
+        "Corr.N / Corr.E = corrección Bowditch por tramo."
+        if ajustada
+        else "Corr.N / Corr.E: pendientes de compensación (poligonal no ajustada)."
+    )
     return f"""
     <p style="font-size:7pt;margin:4px 0 2px;color:#334155;">
       <b>Equipo:</b> {html.escape(str(equipo))} |
       <b>Operador:</b> {html.escape(str(pol.get("operador") or "—"))} |
       <b>Fecha:</b> {html.escape(str(pol.get("fecha_campo") or "—"))}
     </p>
+    <p style="font-size:6pt;margin:0 0 2px;color:#64748b;">{html.escape(nota_corr)} ΔN/ΔE = proyecciones del tramo (azimut×distancia).</p>
     <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;">
+      <colgroup>{colgroup}</colgroup>
       <tr>{ths}</tr>
       {rows}
     </table>
