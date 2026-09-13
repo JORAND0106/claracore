@@ -445,9 +445,15 @@ export function useTopografiaApi(contratoId, token) {
     const method = (options.method || 'GET').toUpperCase()
     const [pathOnly, query = ''] = path.split('?')
 
-    if (method === 'GET' && (options.headers || {})['Accept'] === 'application/pdf') {
+    const accept = (options.headers || {})['Accept'] || ''
+    if (
+      method === 'GET'
+      && (accept === 'application/pdf'
+        || accept.includes('spreadsheetml')
+        || accept.includes('application/vnd.openxmlformats'))
+    ) {
       if (efectivoOffline) {
-        throw new Error('Exportación PDF no disponible sin conexión.')
+        throw new Error('Exportación no disponible sin conexión.')
       }
     }
 
@@ -471,6 +477,8 @@ export function useTopografiaApi(contratoId, token) {
       const ct = res.headers.get('content-type') || ''
       const isJson = ct.includes('application/json')
       const isPdf = ct.includes('application/pdf')
+      const isXlsx = ct.includes('spreadsheetml') || ct.includes('application/vnd.openxmlformats')
+        || ct.includes('application/octet-stream')
 
       if (!res.ok) {
         let detail = res.statusText
@@ -490,7 +498,7 @@ export function useTopografiaApi(contratoId, token) {
         throw new Error(typeof detail === 'string' ? detail : 'Error en solicitud')
       }
       if (res.status === 204) return null
-      if (isPdf) return res.blob()
+      if (isPdf || (isXlsx && accept.includes('spreadsheetml'))) return res.blob()
       if (!isJson) {
         const text = await res.text()
         if (text.trimStart().startsWith('<!')) {
@@ -557,6 +565,24 @@ export function useTopografiaApi(contratoId, token) {
     URL.revokeObjectURL(url)
   }, [api])
 
+  const downloadExcel = useCallback(async (path, filename) => {
+    const blob = await api(path, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+    })
+    if (!(blob instanceof Blob) || blob.size < 80) {
+      throw new Error('El servidor no devolvió un Excel válido. Reinicie el backend e intente de nuevo.')
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [api])
+
   return {
     api,
     online: !efectivoOffline,
@@ -566,6 +592,7 @@ export function useTopografiaApi(contratoId, token) {
     clearDraft,
     syncDraft,
     downloadPdf,
+    downloadExcel,
   }
 }
 
