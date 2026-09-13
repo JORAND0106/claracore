@@ -12,7 +12,7 @@ import { parseApiError, PermisoAviso, puede, useTopografiaApi, useTopoTheme } fr
 
 export default function PoligonalForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
-  const { api, downloadPdf } = useTopografiaApi(contratoId, token)
+  const { api, downloadPdf, downloadExcel } = useTopografiaApi(contratoId, token)
 
   const [lista, setLista] = useState([])
 
@@ -39,6 +39,7 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
   const [refreshingVista, setRefreshingVista] = useState(false)
 
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [excelBusy, setExcelBusy] = useState(false)
 
 
 
@@ -156,6 +157,18 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
 
     }
 
+  }
+
+  const descargarExcelPoligonal = async () => {
+    if (!sel) return
+    setExcelBusy(true)
+    try {
+      await downloadExcel(`/poligonales/${sel}/excel`, 'poligonal.xlsx')
+    } catch (e) {
+      showError(e)
+    } finally {
+      setExcelBusy(false)
+    }
   }
 
 
@@ -366,9 +379,21 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
                 </button>
               )}
               {puede(permisos, 'exportar') && (
-                <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} onClick={descargarPdfPoligonal} disabled={pdfBusy}>
-                  {pdfBusy ? 'Generando PDF…' : 'PDF'}
-                </button>
+                <>
+                  <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} onClick={descargarPdfPoligonal} disabled={pdfBusy || excelBusy}>
+                    {pdfBusy ? 'Generando PDF…' : 'PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    className="cc-topo-touch-btn"
+                    style={ui.btnSecondary}
+                    onClick={descargarExcelPoligonal}
+                    disabled={pdfBusy || excelBusy}
+                    title="Cartera con fórmulas vivas (cierre angular/lineal, Bowditch y esquema)"
+                  >
+                    {excelBusy ? 'Generando Excel…' : 'Excel'}
+                  </button>
+                </>
               )}
             </div>
             </div>

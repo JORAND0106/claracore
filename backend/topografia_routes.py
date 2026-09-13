@@ -59,6 +59,7 @@ from topografia_entrega_utils import (
     ordenadas_transversales,
     resumen_sectores_entrega,
 )
+from topografia_poligonal_xlsx import build_poligonal_xlsx_bytes
 from topografia_utils import (
     area_por_coordenadas,
     azimut_desde_deltas,
@@ -69,6 +70,7 @@ from topografia_utils import (
     ajustar_poligonal_armadas,
     aplicar_cierre_lineal_coords_ajustadas,
     enriquecer_estaciones_poligonal,
+    estaciones_campo_crudas,
     fusionar_estaciones_vista,
     calcular_cierre_preliminar_campo,
     resumen_cierre_preliminar_campo,
@@ -3019,6 +3021,49 @@ def pdf_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="poligonal_{poligonal_id[:8]}.pdf"'},
+    )
+
+
+@router.get("/{contrato_id}/poligonales/{poligonal_id}/excel")
+def excel_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+    """Exporta cartera con fórmulas Excel vivas (cierre + Bowditch + esquema)."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "exportar")
+    try:
+        data = obtener_poligonal(contrato_id, poligonal_id, current_user)
+        contrato = _require_contrato_row(contrato_id)
+        pol = data["poligonal"]
+        # Radiación desde lecturas de campo (sin azimuts/coords ya compensados)
+        # para que las celdas de entrada del Excel sean datos editables reales.
+        estaciones_db = _estaciones_activas(poligonal_id)
+        armadas = _armadas_activas(poligonal_id)
+        punto_inicial = data.get("punto_inicial")
+        punto_final = data.get("punto_final")
+        punto_visado = (
+            _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
+        )
+        amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
+        armadas_enr, _, flat_campo = radiar_armadas(
+            armadas, estaciones_campo_crudas(estaciones_db), amarres
+        )
+        xbytes = build_poligonal_xlsx_bytes(
+            contrato=contrato,
+            pol=pol,
+            estaciones=flat_campo,
+            punto_inicial=punto_inicial,
+            punto_final=punto_final,
+            cierre=data.get("cierre"),
+            armadas=armadas_enr,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"No se pudo generar el Excel: {exc}") from exc
+    nombre = (pol.get("nombre") or poligonal_id[:8] or "poligonal").replace(" ", "_")[:40]
+    return Response(
+        content=xbytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="poligonal_{nombre}.xlsx"'},
     )
 
 
