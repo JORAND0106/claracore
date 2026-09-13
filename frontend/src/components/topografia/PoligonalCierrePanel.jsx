@@ -2,9 +2,8 @@ import { Semaforo, useTopoTheme, useTopoViewport } from './topografiaShared'
 import { fmtNum, fmtRatio } from '../../utils/topografia_angular'
 
 /**
- * Panel de cierre angular + lineal (dos columnas en desktop; una en móvil).
- * Si hay ``cierrePreliminar`` (poligonal ya compensada), muestra la calidad
- * de campo pre-Bowditch aparte del cierre ajustado.
+ * Panel de cierre angular + lineal.
+ * El cierre lineal mostrado es siempre el de campo (sin compensación Bowditch).
  */
 export default function PoligonalCierrePanel({ cierre, cierrePreliminar = null }) {
   const { cierre: C } = useTopoTheme()
@@ -12,7 +11,33 @@ export default function PoligonalCierrePanel({ cierre, cierrePreliminar = null }
   if (!cierre) return null
   const seg = cierre.error_angular_seg
   const segTxt = seg === null || seg === undefined ? '—' : `${seg >= 0 ? '' : '-'}${Math.abs(seg).toFixed(1)}"`
-  const pre = cierrePreliminar
+
+  // Lineal principal = dato real de campo (preliminar), nunca el residual post-Bowditch (~0 / 1:1e9).
+  const lin = (() => {
+    const pre = cierrePreliminar
+    const usarPre =
+      pre &&
+      (pre.error_lineal != null || pre.precision != null) &&
+      (cierre.cierre_desde_coords_ajustadas ||
+        cierre.cierre_lineal_es_campo ||
+        pre.fuente === 'recalculado_campo' ||
+        (Number(cierre.error_lineal) === 0 && pre.error_lineal != null && Number(pre.error_lineal) > 0))
+    if (!usarPre) return cierre
+    const tol = cierre.tolerancia_relativa
+    const prec = pre.precision
+    const admisible =
+      prec != null && tol != null ? Number(prec) >= Number(tol) : pre.admisible_lineal ?? cierre.admisible_lineal
+    return {
+      ...cierre,
+      delta_norte: pre.delta_norte ?? cierre.delta_norte,
+      delta_este: pre.delta_este ?? cierre.delta_este,
+      delta_cota: pre.delta_cota ?? cierre.delta_cota,
+      error_lineal: pre.error_lineal ?? cierre.error_lineal,
+      precision: pre.precision ?? cierre.precision,
+      perimetro: pre.perimetro ?? cierre.perimetro,
+      admisible_lineal: admisible,
+    }
+  })()
 
   return (
     <div
@@ -131,70 +156,59 @@ export default function PoligonalCierrePanel({ cierre, cierrePreliminar = null }
         <div style={C.head}>
           <span>Cierre lineal</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {cierre.admisible_cota === false && (
+            {lin.admisible_cota === false && (
               <span style={{ fontSize: 9, background: '#fee2e2', color: '#991b1b', padding: '1px 6px', borderRadius: 4 }}>Cota</span>
             )}
-            <Semaforo ok={!!cierre.admisible_lineal} labelOk="CUMPLE" labelBad="NO CUMPLE" />
+            <Semaforo ok={!!lin.admisible_lineal} labelOk="CUMPLE" labelBad="NO CUMPLE" />
           </div>
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', flex: 1 }}>
           <tbody>
-            <tr><td style={C.rowL}>Perímetro</td><td style={C.rowV}>{fmtNum(cierre.perimetro, 3)} m</td></tr>
+            <tr><td style={C.rowL}>Perímetro</td><td style={C.rowV}>{fmtNum(lin.perimetro, 3)} m</td></tr>
             <tr>
               <td style={C.rowL}>ΔN / ΔE / ΔZ</td>
               <td style={C.rowV}>
-                {fmtNum(cierre.delta_norte, 4)} / {fmtNum(cierre.delta_este, 4)} / {cierre.delta_cota != null ? fmtNum(cierre.delta_cota, 4) : '—'}
+                {fmtNum(lin.delta_norte, 4)} / {fmtNum(lin.delta_este, 4)} / {lin.delta_cota != null ? fmtNum(lin.delta_cota, 4) : '—'}
               </td>
             </tr>
-            <tr><td style={C.rowL}>Error lineal</td><td style={C.rowV}>{fmtNum(cierre.error_lineal, 4)} m</td></tr>
-            {cierre.tipo_pol === 'abierta' && cierre.llegada_objetivo && (
+            <tr><td style={C.rowL}>Error lineal</td><td style={C.rowV}>{fmtNum(lin.error_lineal, 4)} m</td></tr>
+            {lin.tipo_pol === 'abierta' && lin.llegada_objetivo && (
               <tr>
                 <td style={C.rowL}>Llegada obj.</td>
                 <td style={C.rowV}>
-                  N {fmtNum(cierre.llegada_objetivo.norte, 4)} · E {fmtNum(cierre.llegada_objetivo.este, 4)}
+                  N {fmtNum(lin.llegada_objetivo.norte, 4)} · E {fmtNum(lin.llegada_objetivo.este, 4)}
                 </td>
               </tr>
             )}
-            {cierre.tipo_pol === 'abierta' && cierre.llegada_calculada && (
+            {lin.tipo_pol === 'abierta' && lin.llegada_calculada && (
               <tr>
                 <td style={C.rowL}>Llegada calc.</td>
                 <td style={C.rowV}>
-                  N {fmtNum(cierre.llegada_calculada.norte, 4)} · E {fmtNum(cierre.llegada_calculada.este, 4)}
+                  N {fmtNum(lin.llegada_calculada.norte, 4)} · E {fmtNum(lin.llegada_calculada.este, 4)}
                 </td>
               </tr>
             )}
             <tr>
               <td style={C.rowL}>Cierre obtenido</td>
-              <td style={{ ...C.rowV, background: cierre.admisible_lineal ? '#dcfce7' : '#fee2e2', color: cierre.admisible_lineal ? '#166534' : '#991b1b', fontWeight: 800 }}>
-                {fmtRatio(cierre.precision)}
-                {cierre.cierre_desde_coords_ajustadas && (
-                  <span style={{ display: 'block', fontSize: 9, fontWeight: 600, opacity: 0.8 }}>
-                    ajustado (Bowditch)
-                  </span>
-                )}
+              <td
+                style={{
+                  ...C.rowV,
+                  background: lin.admisible_lineal ? '#dcfce7' : '#fee2e2',
+                  color: lin.admisible_lineal ? '#166534' : '#991b1b',
+                  fontWeight: 800,
+                }}
+                title="Precisión de campo (sin compensación Bowditch)"
+              >
+                {fmtRatio(lin.precision)}
               </td>
             </tr>
-            {pre && (pre.error_lineal != null || pre.precision != null) && (
-              <tr title="Cierre lineal de campo antes de la compensación (calidad real del trabajo)">
-                <td style={C.rowL}>Prelim. campo</td>
-                <td style={C.rowV}>
-                  {fmtRatio(pre.precision)}
-                  <span style={{ display: 'block', fontSize: 10, fontWeight: 400, opacity: 0.8 }}>
-                    err. {fmtNum(pre.error_lineal, 4)} m
-                    {pre.delta_norte != null && (
-                      <> · ΔN {fmtNum(pre.delta_norte, 4)} / ΔE {fmtNum(pre.delta_este, 4)}</>
-                    )}
-                  </span>
-                </td>
-              </tr>
-            )}
-            <tr><td style={C.rowL}>Tolerancia plan</td><td style={C.rowV}>{fmtRatio(cierre.tolerancia_relativa)}</td></tr>
-            {cierre.tolerancia_relativa_res643 != null && (
+            <tr><td style={C.rowL}>Tolerancia plan</td><td style={C.rowV}>{fmtRatio(lin.tolerancia_relativa)}</td></tr>
+            {lin.tolerancia_relativa_res643 != null && (
               <tr>
                 <td style={C.rowL}>Tol. Res. 643</td>
                 <td style={C.rowV}>
-                  {fmtRatio(cierre.tolerancia_relativa_res643)}
-                  {cierre.area_m2 != null && <span style={{ opacity: 0.75, fontWeight: 400 }}> · {fmtNum(cierre.area_m2, 0)} m²</span>}
+                  {fmtRatio(lin.tolerancia_relativa_res643)}
+                  {lin.area_m2 != null && <span style={{ opacity: 0.75, fontWeight: 400 }}> · {fmtNum(lin.area_m2, 0)} m²</span>}
                 </td>
               </tr>
             )}

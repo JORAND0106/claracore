@@ -614,6 +614,38 @@ export default function PoligonalGrafico({
           />
           <button
             type="button"
+            onClick={fitToTraverse}
+            title="Encuadrar poligonal completa"
+            aria-label="Encuadrar poligonal"
+            data-poligonal-extent="1"
+            style={{
+              position: 'absolute',
+              top: 10,
+              right: 52,
+              zIndex: 2,
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              border: '1px solid #cbd5e1',
+              background: 'rgba(255,255,255,0.95)',
+              boxShadow: '0 2px 8px rgba(15,23,42,0.15)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden focusable="false">
+              <path d="M4 9 V4 H9" fill="none" stroke="#1e40af" strokeWidth="2" strokeLinecap="round" />
+              <path d="M15 4 H20 V9" fill="none" stroke="#1e40af" strokeWidth="2" strokeLinecap="round" />
+              <path d="M20 15 V20 H15" fill="none" stroke="#1e40af" strokeWidth="2" strokeLinecap="round" />
+              <path d="M9 20 H4 V15" fill="none" stroke="#1e40af" strokeWidth="2" strokeLinecap="round" />
+              <rect x="8" y="8" width="8" height="8" rx="1" fill="none" stroke="#64748b" strokeWidth="1.5" />
+            </svg>
+          </button>
+          <button
+            type="button"
             onClick={orientNorth}
             title="Norte arriba"
             aria-label="Orientar al norte"

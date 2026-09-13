@@ -35,6 +35,11 @@ describe('PoligonalGrafico Mapbox satelital', () => {
     assert.match(grafico, /data-poligonal-compass|data-poligonal-north/)
   })
 
+  it('tiene control de encuadre (fit bounds)', () => {
+    assert.match(grafico, /data-poligonal-extent/)
+    assert.match(grafico, /fitToTraverse|fitBounds/)
+  })
+
   it('ya no depende del lienzo cartesiano SVG con viewBox propio', () => {
     assert.doesNotMatch(grafico, /useTopoViewportGestures/)
     assert.match(grafico, /data-poligonal-mapbox/)
