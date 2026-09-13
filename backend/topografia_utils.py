@@ -498,10 +498,14 @@ def ajustar_poligonal_armadas(
     punto_inicial: Optional[dict],
     punto_final: Optional[dict] = None,
 ) -> dict:
-    """Corrección angular + Bowditch usando azimuts de radiación por armadas.
+    """Compensación angular + Bowditch (regla de la brújula).
 
-    Los azimuts provienen de ``radiar_armadas``: con amarres reales, Ang.Obs. es el
-    azimut leído del equipo orientado; sin amarres, ceros atrás.
+    1. Cierre preliminar con azimuts radiados.
+    2. Distribuye el error angular (−Diferencia / n) entre los ángulos de vértice
+       y recalcula azimuts: Az'_i = (Az'_{i−1} + 180° + Ang'_i) mod 360.
+    3. Con esos azimuts, calcula ΣΔN/ΣΔE y reparte el misclosure proporcional a
+       la longitud de cada tramo (Bowditch).
+    4. Acumula coordenadas ajustadas desde el punto inicial.
     """
     armadas_enr, _, flat = radiar_armadas(armadas, estaciones_db, amarres)
     flat_by_id = {p["id"]: p for p in flat if p.get("id")}
@@ -519,24 +523,70 @@ def ajustar_poligonal_armadas(
         tipo_pol=pol.get("tipo") or "cerrada",
     )
 
-    traverse = [
-        e
-        for e in sorted(estaciones_db or [], key=lambda x: x.get("orden") or 0)
-        if float(e.get("distancia") or 0) > 1e-9
-    ]
-    n_trav = len(traverse)
-    error_ang = cierre.get("error_angular")
-    corr_ang = (-error_ang / n_trav) if (n_trav and error_ang is not None) else 0.0
+    # Tramos con distancia (vértices de la poligonal), en orden de armadas.
+    legs: List[dict] = []
+    for arm in armadas_enr or []:
+        fwd = _punto_estacion_adelante(arm)
+        if not fwd or float(fwd.get("distancia") or 0) <= 1e-9:
+            continue
+        if fwd.get("azimut") is None:
+            continue
+        legs.append({"arm": arm, "fwd": fwd, "est_db": flat_by_id.get(fwd.get("id"), fwd)})
 
-    longitud = sum(float(e.get("distancia") or 0) for e in traverse)
+    n_trav = len(legs)
+    # Ángulos que alimentan Σ (detalle sin amarre inicial excluido ni orientación).
+    angs_vert = [
+        d
+        for d in (cierre.get("angulos_cierre_detalle") or [])
+        if d.get("derivado") and not d.get("excluido_amarre_inicial") and not d.get("orientacion")
+    ]
+    # Si no hay detalle derivado, un ángulo por tramo.
+    n_ang = len(angs_vert) if angs_vert else n_trav
+    if cierre.get("tiene_orientacion"):
+        n_ang = max(n_ang, int(cierre.get("num_angulos") or n_ang))
+
+    error_ang = cierre.get("error_angular")
+    corr_ang = (-float(error_ang) / n_ang) if (n_ang and error_ang is not None) else 0.0
+
+    # Ángulos de giro por tramo (derivados) + compensación uniforme.
+    ang_por_tramo: List[Optional[float]] = []
+    if angs_vert and len(angs_vert) >= n_trav:
+        for i in range(n_trav):
+            ang_por_tramo.append(float(angs_vert[i]["angulo_cierre"]) + corr_ang)
+    else:
+        # Recalcular derivados desde azimuts radiados.
+        az_prev = None
+        for i, leg in enumerate(legs):
+            az = float(leg["fwd"]["azimut"])
+            if i == 0:
+                base = leg["arm"].get("base_azimut")
+                if base is not None:
+                    ang_por_tramo.append(angulo_obs_derivado_desde_base(az, base) + corr_ang)
+                else:
+                    ang_por_tramo.append(corr_ang)
+            else:
+                ang_por_tramo.append(angulo_obs_derivado_desde_azimuts(az, az_prev) + corr_ang)
+            az_prev = az
+
+    # Recalcular azimuts con ángulos compensados (se conserva el azimut del 1º tramo).
+    azimuts_corr: List[float] = []
+    for i, leg in enumerate(legs):
+        if i == 0:
+            azimuts_corr.append(float(leg["fwd"]["azimut"]) % 360.0)
+        else:
+            ang_i = ang_por_tramo[i] if i < len(ang_por_tramo) else 0.0
+            az_new = (azimuts_corr[i - 1] + 180.0 + float(ang_i or 0.0)) % 360.0
+            azimuts_corr.append(az_new)
+
+    longitud = sum(float(leg["fwd"].get("distancia") or 0) for leg in legs)
     sum_dn = sum_de = sum_dz = 0.0
     leg_data = []
-
-    for e in traverse:
-        fp = flat_by_id.get(e["id"], {})
-        az = fp.get("azimut")
-        dist = float(e.get("distancia") or 0)
-        ang_corr = (e.get("angulo_medido") or 0) + corr_ang
+    for i, leg in enumerate(legs):
+        fwd = leg["fwd"]
+        e = leg["est_db"]
+        dist = float(fwd.get("distancia") or 0)
+        az = azimuts_corr[i] if i < len(azimuts_corr) else fwd.get("azimut")
+        ang_corr = ang_por_tramo[i] if i < len(ang_por_tramo) else None
         dn = de = dz = None
         if az is not None:
             az_r = math.radians(az)
@@ -544,27 +594,42 @@ def ajustar_poligonal_armadas(
             de = dist * math.sin(az_r)
             sum_dn += dn
             sum_de += de
-            ang_v = e.get("angulo_vertical")
-            hi = armada_hi.get(e.get("armada_id"), 0)
-            ht = e.get("altura_objetivo") or 0
+            ang_v = fwd.get("angulo_vertical")
+            hi = armada_hi.get(fwd.get("armada_id"), 0)
+            ht = fwd.get("altura_objetivo") or 0
             if ang_v is not None:
                 vz = math.radians(ang_v)
                 sin_vz = math.sin(vz)
                 if abs(sin_vz) > 1e-9:
                     dz = hi + (dist * math.cos(vz) / sin_vz) - ht
                     sum_dz += dz
-        leg_data.append({"est": e, "az": az, "dn": dn, "de": de, "dz": dz, "ang_corr": ang_corr})
+        leg_data.append({
+            "est": e,
+            "fwd": fwd,
+            "az": az,
+            "dn": dn,
+            "de": de,
+            "dz": dz,
+            "ang_corr": ang_corr,
+            "dist": dist,
+        })
 
+    tipo = (pol.get("tipo") or "cerrada").lower()
     pi = punto_inicial or {}
-    if (pol.get("tipo") or "cerrada") == "cerrada":
+    if tipo == "cerrada":
         err_dn, err_de, err_dz = sum_dn, sum_de, sum_dz
     else:
-        err_dn = sum_dn - (float(pi.get("norte") or 0) - float(pi.get("norte") or 0))
-        err_de = sum_de
+        # Abierta: misclosure respecto a llegada si existe; si no, Σ proyecciones.
+        pf = punto_final or {}
+        if pf.get("norte") is not None and pi.get("norte") is not None:
+            err_dn = sum_dn - (float(pf["norte"]) - float(pi["norte"]))
+            err_de = sum_de - (float(pf["este"]) - float(pi["este"]))
+        else:
+            err_dn, err_de = sum_dn, sum_de
         err_dz = sum_dz
 
     err_lineal = math.hypot(err_dn, err_de)
-    precision = (longitud / err_lineal) if err_lineal > 1e-9 else 999999
+    precision = (longitud / err_lineal) if err_lineal > 1e-9 else 1e12
 
     norte_acum = float(pi.get("norte") or 0)
     este_acum = float(pi.get("este") or 0)
@@ -573,7 +638,8 @@ def ajustar_poligonal_armadas(
     updates = []
     for leg in leg_data:
         e = leg["est"]
-        dist = float(e.get("distancia") or 0)
+        dist = leg["dist"]
+        eid = e.get("id") or leg["fwd"].get("id")
         cn = ce = cz = 0.0
         if longitud > 0 and dist > 0:
             cn = -(err_dn * dist / longitud)
@@ -584,24 +650,24 @@ def ajustar_poligonal_armadas(
             este_acum += leg["de"] + ce
             if cota_acum is not None and leg["dz"] is not None:
                 cota_acum += leg["dz"] + cz
-        updates.append(
-            {
-                "id": e["id"],
-                "angulo_corregido": round(leg["ang_corr"], 8),
-                "azimut": round(leg["az"], 6) if leg["az"] is not None else None,
-                "delta_norte": round(leg["dn"], 6) if leg["dn"] is not None else None,
-                "delta_este": round(leg["de"], 6) if leg["de"] is not None else None,
-                "delta_cota": round(leg["dz"], 6) if leg["dz"] is not None else None,
-                "correccion_norte": round(cn, 6),
-                "correccion_este": round(ce, 6),
-                "correccion_cota": round(cz, 6),
-                "norte_ajustado": round(norte_acum, 4),
-                "este_ajustado": round(este_acum, 4),
-                "cota_ajustada": round(cota_acum, 4) if cota_acum is not None else None,
-            }
-        )
+        upd = {
+            "id": eid,
+            "azimut": round(leg["az"], 6) if leg["az"] is not None else None,
+            "delta_norte": round(leg["dn"], 6) if leg["dn"] is not None else None,
+            "delta_este": round(leg["de"], 6) if leg["de"] is not None else None,
+            "delta_cota": round(leg["dz"], 6) if leg["dz"] is not None else None,
+            "correccion_norte": round(cn, 6),
+            "correccion_este": round(ce, 6),
+            "correccion_cota": round(cz, 6),
+            "norte_ajustado": round(norte_acum, 4),
+            "este_ajustado": round(este_acum, 4),
+            "cota_ajustada": round(cota_acum, 4) if cota_acum is not None else None,
+        }
+        if leg["ang_corr"] is not None:
+            upd["angulo_corregido"] = round(leg["ang_corr"], 8)
+        updates.append(upd)
 
-    # Puntos sin distancia (orientación): solo azimut radiado
+    # Orientación / puntos sin distancia: persistir azimut radiado.
     for e in sorted(estaciones_db or [], key=lambda x: x.get("orden") or 0):
         if float(e.get("distancia") or 0) > 1e-9:
             continue
@@ -615,22 +681,98 @@ def ajustar_poligonal_armadas(
                 }
             )
 
+    # Cierre tras compensación: aplicar azimuts corregidos a armadas y recalcular.
+    arms_adj = _aplicar_azimuts_a_armadas(armadas_enr, {u["id"]: u for u in updates if u.get("id")})
+    cierre_ajustado = calcular_cierre_poligonal(
+        arms_adj,
+        punto_inicial,
+        sentido=cierre.get("sentido") or pol.get("sentido") or "antihorario",
+        tol_relativa=pol.get("tolerancia_relativa") or 25000,
+        tol_cota_mm_km=pol.get("tolerancia_cota_mm_km") or 12,
+        precision_angular_seg=pol.get("precision_angular_seg") or 10.0,
+        longitud_max_delta_m=pol.get("longitud_max_delta_m"),
+        punto_final=punto_final,
+        tipo_pol=tipo,
+        inferir_sentido=False,
+    )
+
+    # El misclosure lineal post-Bowditch se mide con coordenadas ajustadas
+    # (Σ (Δ + corrección) = 0), no con azimut×distancia sin correcciones.
+    trav_updates = [u for u in updates if u.get("norte_ajustado") is not None]
+    if trav_updates and pi.get("norte") is not None and pi.get("este") is not None:
+        last = trav_updates[-1]
+        dN_post = round(float(pi["norte"]) - float(last["norte_ajustado"]), 4)
+        dE_post = round(float(pi["este"]) - float(last["este_ajustado"]), 4)
+        e_post = round(math.hypot(dN_post, dE_post), 4)
+        cierre_ajustado["delta_norte"] = dN_post
+        cierre_ajustado["delta_este"] = dE_post
+        cierre_ajustado["error_lineal"] = e_post
+        if e_post > 1e-9 and longitud > 0:
+            prec_post = longitud / e_post
+        elif longitud > 0:
+            prec_post = 1e12
+        else:
+            prec_post = None
+        precision_post_int = int(round(prec_post)) if prec_post is not None else None
+        if precision_post_int is not None and precision_post_int > 10**9:
+            precision_post_int = 10**9
+        cierre_ajustado["precision"] = precision_post_int
+        tol_lin = int(pol.get("tolerancia_relativa") or 25000)
+        cierre_ajustado["admisible_lineal"] = (
+            precision_post_int is not None and precision_post_int >= tol_lin
+        )
+        cierre_ajustado["admisible"] = bool(
+            cierre_ajustado.get("cerrado")
+            and cierre_ajustado["admisible_lineal"]
+            and (cierre_ajustado.get("admisible_angular") is not False)
+        )
+
     tol_cota_m = (float(pol.get("tolerancia_cota_mm_km") or 12) / 1000.0) * max(longitud / 1000.0, 1e-6)
 
     return {
         "cierre": cierre,
+        "cierre_ajustado": cierre_ajustado,
         "updates": updates,
         "resumen": {
             "error_dn": round(err_dn, 4),
             "error_de": round(err_de, 4),
             "error_dz": round(err_dz, 4) if err_dz else None,
             "error_lineal": round(err_lineal, 4),
-            "precision": int(round(precision)),
+            "precision": int(round(precision)) if precision < 1e12 else int(1e9),
             "longitud_total": round(longitud, 3),
             "correccion_angular_por_estacion": round(corr_ang, 8),
             "admisible_cota": abs(err_dz or 0) <= tol_cota_m or longitud == 0,
+            "error_lineal_post": cierre_ajustado.get("error_lineal"),
+            "precision_post": cierre_ajustado.get("precision"),
         },
     }
+
+
+def _aplicar_azimuts_a_armadas(armadas_enr: list, updates_by_id: dict) -> list:
+    """Devuelve copia de armadas con azimuts (y coords ajustadas) de ``updates``."""
+    out = []
+    for arm in armadas_enr or []:
+        pts = []
+        for p in arm.get("puntos") or []:
+            u = updates_by_id.get(p.get("id")) or {}
+            np = dict(p)
+            if u.get("azimut") is not None:
+                az = float(u["azimut"])
+                np["azimut"] = az
+                np["azimut_texto"] = decimal_to_gms(az)
+                np["azimut_gms"] = decimal_a_gms_numero(az)
+            if u.get("norte_ajustado") is not None:
+                np["norte"] = u["norte_ajustado"]
+                np["este"] = u.get("este_ajustado")
+                if u.get("cota_ajustada") is not None:
+                    np["cota"] = u["cota_ajustada"]
+            if u.get("angulo_corregido") is not None:
+                np["angulo_derivado"] = u["angulo_corregido"]
+                np["angulo_derivado_texto"] = decimal_to_gms(u["angulo_corregido"])
+                np["angulo_derivado_para_cierre"] = True
+            pts.append(np)
+        out.append({**arm, "puntos": pts})
+    return out
 
 
 def _punto_estacion_adelante(armada: dict) -> Optional[dict]:
@@ -806,7 +948,12 @@ def calcular_cierre_poligonal(
                 if az_ref_inicial is None:
                     az_ref_inicial = float(fwd["azimut"]) % 360.0
                 az_anterior = float(fwd["azimut"])
-            if fwd.get("nombre_punto") == end_name and fwd.get("norte") is not None:
+            # Evitar cierre prematuro (p. ej. 1ª visual al punto inicial/amarre).
+            if (
+                fwd.get("nombre_punto") == end_name
+                and fwd.get("norte") is not None
+                and n_legs >= 3
+            ):
                 retorno = fwd
                 cerrado = True
         elif (dist <= 1e-9) and ang is not None:
@@ -897,26 +1044,44 @@ def calcular_cierre_poligonal(
         sum_dn += dist * math.cos(az_r)
         sum_de += dist * math.sin(az_r)
 
-    if cerrado and retorno and target:
+    # Circuito evaluable: cierre por nombre, o poligonal cerrada con suficientes lados
+    # (y orientación) aunque el último tramo no repita el nombre del amarre.
+    if tipo_pol != "abierta" and not cerrado and n_legs >= 3 and (tiene_orientacion or start is not None):
+        cerrado = True
+
+    if tipo_pol == "abierta" and cerrado and retorno and target:
         dN = round(float(target["norte"]) - float(retorno["norte"]), 4)
         dE = round(float(target["este"]) - float(retorno["este"]), 4)
         if target.get("cota") is not None and retorno.get("cota") is not None:
             dZ = round(float(target["cota"]) - float(retorno["cota"]), 4)
         e_lineal = round(math.hypot(dN, dE), 4)
-        precision = (perimetro / e_lineal) if e_lineal > 1e-9 else None
-    elif cerrado and retorno and start and tipo_pol != "abierta":
-        dN = round(start["norte"] - retorno["norte"], 4)
-        dE = round(start["este"] - retorno["este"], 4)
-        if start.get("cota") is not None and retorno.get("cota") is not None:
-            dZ = round(start["cota"] - retorno["cota"], 4)
-        e_lineal = round(math.hypot(dN, dE), 4)
-        precision = (perimetro / e_lineal) if e_lineal > 1e-9 else None
-    elif cerrado and abs(sum_dn) + abs(sum_de) > 0:
-        # Cierre por suma de proyecciones de los legs (coherente con azimut + distancia)
+    elif n_legs >= 2 and tipo_pol != "abierta":
+        # Preliminar (sin compensar): misclosure = −Σ proyecciones (ΔN/ΔE de los tramos).
         dN = round(-sum_dn, 4)
         dE = round(-sum_de, 4)
         e_lineal = round(math.hypot(sum_dn, sum_de), 4)
-        precision = (perimetro / e_lineal) if e_lineal > 1e-9 else None
+        if retorno and start:
+            dN_c = round(float(start["norte"]) - float(retorno["norte"]), 4)
+            dE_c = round(float(start["este"]) - float(retorno["este"]), 4)
+            e_c = round(math.hypot(dN_c, dE_c), 4)
+            # Si el retorno por nombre aporta un error mayor (coords radiadas), usarlo.
+            if e_c > e_lineal + 1e-4:
+                dN, dE, e_lineal = dN_c, dE_c, e_c
+                if start.get("cota") is not None and retorno.get("cota") is not None:
+                    dZ = round(float(start["cota"]) - float(retorno["cota"]), 4)
+    elif cerrado and retorno and start and tipo_pol != "abierta":
+        dN = round(float(start["norte"]) - float(retorno["norte"]), 4)
+        dE = round(float(start["este"]) - float(retorno["este"]), 4)
+        if start.get("cota") is not None and retorno.get("cota") is not None:
+            dZ = round(float(start["cota"]) - float(retorno["cota"]), 4)
+        e_lineal = round(math.hypot(dN, dE), 4)
+
+    if e_lineal is not None and perimetro > 0:
+        if e_lineal > 1e-9:
+            precision = perimetro / e_lineal
+        else:
+            # Cierre lineal nulo → precisión «infinita» (cumple cualquier tolerancia).
+            precision = 1e12
 
     # Res. 643 §9.2.2: error angular max = precision angular del equipo * sqrt(n vertices)
     n_ang = n_ang_trav + (1 if tiene_orientacion else 0)
@@ -939,6 +1104,8 @@ def calcular_cierre_poligonal(
                 lados_excedidos.append(lado)
 
     precision_int = int(round(precision)) if precision is not None else None
+    if precision_int is not None and precision_int > 10**9:
+        precision_int = 10**9
     admisible_lineal = (precision_int is not None and precision_int >= int(tol_relativa))
     tol_cota_m = (tol_cota_mm_km / 1000.0) * max(perimetro / 1000.0, 1e-6)
     admisible_cota = (abs(dZ) <= tol_cota_m) if dZ is not None else None

@@ -703,7 +703,7 @@ export default function PoligonalModal({
     try {
       await api(`/poligonales/${poligonalId}/cerrar`, { method: 'POST' })
       setResultado(null)
-      await sincronizarDetalle('Poligonal terminada. Pendiente validación contratista e interventoría.')
+      await sincronizarDetalle('Poligonal terminada y compensada (angular + Bowditch). Pendiente validación.')
     } catch (e) {
       showError(e)
     } finally {
@@ -2075,11 +2075,13 @@ export default function PoligonalModal({
                     const c = detalle.cierre
                     const angOk = c?.admisible_angular !== false
                     const puedeTerminar = !!(c?.cerrado && c?.admisible_lineal && angOk && detalle.estaciones?.length)
-                    let title = 'Cierra la libreta y habilita validación contratista / interventoría'
+                    let title = 'Compensa angular + Bowditch, cierra la libreta y habilita validación'
                     if (!c?.cerrado || !c?.admisible_lineal) {
                       title = 'El circuito debe cerrar dentro de tolerancia lineal antes de terminar'
                     } else if (c?.admisible_angular === false) {
                       title = 'El cierre angular está fuera de tolerancia; revise azimuts/ángulos antes de terminar'
+                    } else {
+                      title = 'Al terminar se reparte el error angular y se aplica Bowditch a las coordenadas'
                     }
                     return (
                   <button

@@ -76,6 +76,7 @@ from topografia_utils import (
     html_encabezado_pdf,
     html_pie_pdf,
     calcular_cierre_poligonal,
+    _aplicar_azimuts_a_armadas,
     newpoint_por_angulo_distancias,
     faltantes_campo_newpoint,
     calcular_nivelacion_geometrica,
@@ -1958,6 +1959,26 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
     amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
     armadas_enr, known, estaciones_flat = radiar_armadas(armadas, estaciones, amarres)
 
+    # Si ya está compensada, el cierre vivo usa azimuts/coords ajustados.
+    if pol.get("ajustada_at"):
+        upd_by_id = {}
+        for e in estaciones:
+            if not e.get("id"):
+                continue
+            patch = {}
+            if e.get("azimut") is not None:
+                patch["azimut"] = e["azimut"]
+            if e.get("norte_ajustado") is not None:
+                patch["norte_ajustado"] = e["norte_ajustado"]
+                patch["este_ajustado"] = e.get("este_ajustado")
+                patch["cota_ajustada"] = e.get("cota_ajustada")
+            if e.get("angulo_corregido") is not None:
+                patch["angulo_corregido"] = e["angulo_corregido"]
+            if patch:
+                upd_by_id[e["id"]] = patch
+        if upd_by_id:
+            armadas_enr = _aplicar_azimuts_a_armadas(armadas_enr, upd_by_id)
+
     # Puntos disponibles para el selector de cambio de armada
     estacion_names = set()
     if punto_inicial and punto_inicial.get("nombre"):
@@ -2523,7 +2544,8 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
 
     resultado = ajustar_poligonal_armadas(pol, armadas, estaciones, amarres, punto_inicial, punto_final)
     resumen = resultado["resumen"]
-    cierre = resultado["cierre"]
+    cierre = resultado.get("cierre_ajustado") or resultado["cierre"]
+    cierre_pre = resultado["cierre"]
 
     for upd in resultado["updates"]:
         eid = upd.pop("id")
@@ -2535,22 +2557,28 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
             "error_cierre_dn": resumen["error_dn"],
             "error_cierre_de": resumen["error_de"],
             "error_cierre_dz": resumen["error_dz"],
-            "error_lineal": resumen["error_lineal"],
-            "precision_relativa": resumen["precision"],
-            "suma_angular_obs": cierre.get("suma_observada"),
-            "suma_angular_teorica": cierre.get("suma_teorica"),
-            "error_angular_seg": cierre.get("error_angular_seg"),
-            "num_vertices": cierre.get("num_vertices"),
+            "error_lineal": cierre.get("error_lineal") if cierre.get("error_lineal") is not None else resumen["error_lineal"],
+            "precision_relativa": cierre.get("precision") if cierre.get("precision") is not None else resumen["precision"],
+            "suma_angular_obs": cierre.get("suma_observada") or cierre_pre.get("suma_observada"),
+            "suma_angular_teorica": cierre.get("suma_teorica") or cierre_pre.get("suma_teorica"),
+            "error_angular_seg": cierre.get("error_angular_seg") if cierre.get("error_angular_seg") is not None else cierre_pre.get("error_angular_seg"),
+            "num_vertices": cierre.get("num_vertices") or cierre_pre.get("num_vertices"),
             "ajustada_at": now,
         }
     ).eq("id", poligonal_id).execute()
 
-    return {"ok": True, "ajustada_at": now, "resumen": resumen, "cierre": cierre}
+    return {
+        "ok": True,
+        "ajustada_at": now,
+        "resumen": resumen,
+        "cierre": cierre,
+        "cierre_preliminar": cierre_pre,
+    }
 
 
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/cerrar")
 def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
-    """Termina la poligonal (libreta cerrada). La biblioteca se publica tras validación interventoría."""
+    """Termina la poligonal: compensación angular + Bowditch y libreta cerrada."""
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar")
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
@@ -2561,8 +2589,9 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
     if (pol.get("estado") or "") == "cerrado":
         raise HTTPException(status_code=422, detail="La poligonal ya está terminada.")
 
-    cierre = _cierre_poligonal_vivo(pol, poligonal_id)
-    if not cierre.get("cerrado"):
+    # 1) Validar cierre preliminar (sin compensar) dentro de tolerancia.
+    cierre_pre = _cierre_poligonal_vivo(pol, poligonal_id)
+    if not cierre_pre.get("cerrado"):
         if (pol.get("tipo") or "cerrada") == "abierta":
             dest = (_row("topo_puntos", id=pol.get("punto_final_id")) or {}).get("nombre") or "llegada"
             raise HTTPException(
@@ -2571,17 +2600,17 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
             )
         raise HTTPException(
             status_code=422,
-            detail="La poligonal aun no cierra: falta la observacion que regresa al punto inicial.",
+            detail="La poligonal aun no cierra: faltan observaciones suficientes para evaluar el circuito.",
         )
-    if not cierre.get("admisible_lineal"):
-        prec = cierre.get("precision")
+    if not cierre_pre.get("admisible_lineal"):
+        prec = cierre_pre.get("precision")
         raise HTTPException(
             status_code=422,
-            detail=f"El cierre lineal es inadmisible (precision 1:{int(prec) if prec else 0}, tolerancia 1:{int(cierre.get('tolerancia_relativa') or 0)}). Revise angulos y distancias antes de terminar.",
+            detail=f"El cierre lineal preliminar es inadmisible (precision 1:{int(prec) if prec else 0}, tolerancia 1:{int(cierre_pre.get('tolerancia_relativa') or 0)}). Revise angulos y distancias antes de terminar.",
         )
-    if cierre.get("admisible_angular") is False:
-        err = cierre.get("error_angular_seg")
-        tol = cierre.get("tolerancia_angular_seg")
+    if cierre_pre.get("admisible_angular") is False:
+        err = cierre_pre.get("error_angular_seg")
+        tol = cierre_pre.get("tolerancia_angular_seg")
         raise HTTPException(
             status_code=422,
             detail=(
@@ -2591,8 +2620,48 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
             ),
         )
 
-    supabase.table("topo_poligonales").update({"estado": "cerrado"}).eq("id", poligonal_id).execute()
-    return {"ok": True, "cierre": cierre, "mensaje": "Poligonal terminada. Pendiente validación contratista e interventoría."}
+    # 2) Compensación completa: angular → Bowditch.
+    estaciones = _estaciones_activas(poligonal_id)
+    armadas = _armadas_activas(poligonal_id)
+    punto_inicial = _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None
+    punto_final = _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None
+    punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
+    amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
+
+    resultado = ajustar_poligonal_armadas(pol, armadas, estaciones, amarres, punto_inicial, punto_final)
+    resumen = resultado["resumen"]
+    cierre = resultado.get("cierre_ajustado") or resultado["cierre"]
+
+    for upd in resultado["updates"]:
+        eid = upd.pop("id")
+        if eid:
+            supabase.table("topo_poligonal_estaciones").update(upd).eq("id", eid).execute()
+
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("topo_poligonales").update(
+        {
+            "estado": "cerrado",
+            "error_cierre_dn": resumen["error_dn"],
+            "error_cierre_de": resumen["error_de"],
+            "error_cierre_dz": resumen["error_dz"],
+            "error_lineal": cierre.get("error_lineal") if cierre.get("error_lineal") is not None else resumen["error_lineal"],
+            "precision_relativa": cierre.get("precision") if cierre.get("precision") is not None else resumen["precision"],
+            "suma_angular_obs": cierre.get("suma_observada"),
+            "suma_angular_teorica": cierre.get("suma_teorica"),
+            "error_angular_seg": cierre.get("error_angular_seg"),
+            "num_vertices": cierre.get("num_vertices"),
+            "ajustada_at": now,
+        }
+    ).eq("id", poligonal_id).execute()
+
+    return {
+        "ok": True,
+        "cierre": cierre,
+        "cierre_preliminar": resultado["cierre"],
+        "resumen": resumen,
+        "ajustada_at": now,
+        "mensaje": "Poligonal terminada y compensada (angular + Bowditch). Pendiente validación contratista e interventoría.",
+    }
 
 
 @router.put("/{contrato_id}/poligonales/{poligonal_id}/validar-nivel1")
