@@ -18,6 +18,7 @@ import {
   parseApiError,
   puede,
   esDesarrolladorTopo,
+  poligonalSellada,
 } from './topografiaShared'
 import TopoExcelSheet from './TopoExcelSheet'
 import { topoSheetStyles } from './topoSheetStyles'
@@ -1099,7 +1100,7 @@ export default function PoligonalModal({
                     ? `Nueva poligonal ${form.tipo === 'abierta' ? 'abierta' : 'cerrada'}`
                     : (() => {
                         const p = detalle?.poligonal
-                        const selladaT = (p?.nivel2_estado || '') === 'Aprobado' || Boolean(p?.biblioteca_at)
+                        const selladaT = poligonalSellada(p)
                         const terminadaT = p?.estado === 'cerrado'
                         const nombre = p?.nombre || 'Poligonal'
                         if (terminadaT && selladaT) return `Ver · ${nombre}`
@@ -1132,7 +1133,7 @@ export default function PoligonalModal({
                   {refreshing ? 'Actualizando…' : 'Actualizar'}
                 </button>
               )}
-              {step === 'estaciones' && poligonalId && esDesarrolladorTopo(usuario) && !((detalle?.poligonal?.nivel2_estado || '') === 'Aprobado' || Boolean(detalle?.poligonal?.biblioteca_at)) && (
+              {step === 'estaciones' && poligonalId && esDesarrolladorTopo(usuario) && !poligonalSellada(detalle?.poligonal) && (
                 <button
                   type="button"
                   style={ui.btnSecondary}
@@ -1145,7 +1146,7 @@ export default function PoligonalModal({
               )}
               {step === 'estaciones' && poligonalId && esDesarrolladorTopo(usuario)
                 && String(detalle?.poligonal?.estado || '').toLowerCase() === 'cerrado'
-                && !((detalle?.poligonal?.nivel2_estado || '') === 'Aprobado' || Boolean(detalle?.poligonal?.biblioteca_at)) && (
+                && !poligonalSellada(detalle?.poligonal) && (
                 <button
                   type="button"
                   style={{ ...ui.btnSecondary, borderColor: '#f59e0b', color: '#b45309' }}
@@ -1330,7 +1331,7 @@ export default function PoligonalModal({
               <div style={{ marginBottom: 16 }}>
                 <div style={sheet.sectionTitle}>Puntos de amarre (estación y visado)</div>
                 <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: sheet.textMuted }}>
-                  Defina el punto de estación (inicio del circuito) y el punto de visado (referencia). Con ambas coordenadas se calcula el azimut y la distancia de la base de partida. Al terminar con cierre admisible, la poligonal queda lista para validación; la biblioteca se publica cuando interventoría aprueba.
+                  Defina el punto de estación (inicio del circuito) y el punto de visado (referencia). Con ambas coordenadas se calcula el azimut y la distancia de la base de partida. Al terminar con cierre admisible, los puntos compensados se publican en la biblioteca y la poligonal queda lista para validación contratista/interventoría.
                 </p>
 
                 {puntosVerificados.length > 0 && (
@@ -1544,7 +1545,7 @@ export default function PoligonalModal({
 
           {step === 'estaciones' && detalle && (() => {
             const pol = detalle.poligonal || {}
-            const sellada = (pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at)
+            const sellada = poligonalSellada(pol)
             const terminada = pol.estado === 'cerrado'
             const soloVer = sellada
             const editableLibreta = puede(permisos, 'editar') && !terminada && !soloVer

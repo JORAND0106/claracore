@@ -626,7 +626,7 @@ export async function readTopoOffline(contratoId, path, query = '') {
     )
     if (meta?.data) return meta.data
     const all = await topoDb.topo_poligonales.where('contrato_id').equals(cid).toArray()
-    return all.filter((p) => p.nivel2_estado === 'Aprobado' || p.biblioteca_at)
+    return all.filter((p) => p.nivel2_estado === 'Aprobado')
   }
 
   if (path.match(/^\/poligonales\/[^/]+\/puntos-biblioteca$/)) {
