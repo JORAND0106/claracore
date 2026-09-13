@@ -1,4 +1,4 @@
-import { chipEstadoValidacion, useTopoTheme } from './topografiaShared'
+import { chipEstadoValidacion, poligonalSellada, useTopoTheme } from './topografiaShared'
 import { fmtRatio } from '../../utils/topografia_angular'
 
 function fmtFecha(iso, { hora = false } = {}) {
@@ -90,7 +90,7 @@ export default function PoligonalResumen({ poligonal, cierre }) {
   const pol = poligonal || {}
   const n1 = chipEstadoValidacion(pol.nivel1_estado)
   const n2 = chipEstadoValidacion(pol.nivel2_estado)
-  const sellada = (pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at)
+  const sellada = poligonalSellada(pol)
   const xs = 'var(--cc-xs)'
 
   const tipoLabel = pol.tipo === 'abierta' ? 'Abierta' : 'Cerrada'
@@ -99,7 +99,7 @@ export default function PoligonalResumen({ poligonal, cierre }) {
 
   const creacion = fmtFecha(pol.created_at)
   const fechaN1 = fmtFecha(pol.nivel1_fecha, { hora: true })
-  const fechaN2 = fmtFecha(pol.nivel2_fecha, { hora: true }) || (pol.biblioteca_at ? fmtFecha(pol.biblioteca_at, { hora: true }) : null)
+  const fechaN2 = fmtFecha(pol.nivel2_fecha, { hora: true })
 
   const metricas = cierre
     ? [

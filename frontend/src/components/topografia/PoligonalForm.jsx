@@ -8,7 +8,7 @@ import TopoErrorModal from './TopoErrorModal'
 import TopoConfirmModal from './TopoConfirmModal'
 import TopoRenderErrorBoundary from './TopoRenderErrorBoundary'
 
-import { parseApiError, PermisoAviso, puede, useTopografiaApi, useTopoTheme } from './topografiaShared'
+import { parseApiError, PermisoAviso, puede, poligonalSellada, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
 export default function PoligonalForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
@@ -269,7 +269,7 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
 
                 onClick={() => seleccionarTab(p.id)}
 
-                onDoubleClick={() => (p.estado === 'cerrado' || (p.nivel2_estado || '') === 'Aprobado' || p.biblioteca_at ? abrirVer(p.id) : abrirEditar(p.id))}
+                onDoubleClick={() => (p.estado === 'cerrado' || poligonalSellada(p) ? abrirVer(p.id) : abrirEditar(p.id))}
 
                 title={`${p.nombre} (${p.estado}). Doble clic: abrir libreta`}
 
@@ -345,7 +345,7 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
 
       {detalle ? (() => {
         const pol = detalle.poligonal || {}
-        const sellada = (pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at)
+        const sellada = poligonalSellada(pol)
         const terminada = pol.estado === 'cerrado'
         return (
         <div>

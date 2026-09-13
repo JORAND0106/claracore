@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import {
   chipEstadoValidacion,
   determinarNivelValidacionTopo,
+  poligonalSellada,
   useTopoTheme,
   useTopoViewport,
 } from './topografiaShared'
@@ -93,13 +94,15 @@ export default function PoligonalValidacionPanel({
   const cierreOk = cierre?.cerrado && cierre?.admisible_lineal
   const listaValidar = terminada && ajustada && cierreOk
   const n1Aprobado = (pol.nivel1_estado || '') === 'Aprobado'
-  const sellada = (pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at)
+  const basePath = validarPathPrefix || `/poligonales/${pol.id}`
+  const esNivelacion = basePath.includes('nivelacion')
+  // Poligonal: sellado solo con BO interventoría. Nivelación: biblioteca_at sigue sellando.
+  const sellada = esNivelacion
+    ? ((pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at))
+    : poligonalSellada(pol)
 
   const habilitadoN1 = !soloLectura && listaValidar && !sellada && requisitosN1Ok && (nv.esDev || (nv.puedeValidar && nv.niveles.includes(1)))
   const habilitadoN2 = !soloLectura && listaValidar && !sellada && n1Aprobado && (nv.esDev || (nv.puedeValidar && nv.niveles.includes(2)))
-
-  const basePath = validarPathPrefix || `/poligonales/${pol.id}`
-  const esNivelacion = basePath.includes('nivelacion')
 
   const ejecutar = useCallback(async (nivel, estado, comentario_data) => {
     setBusy(true)

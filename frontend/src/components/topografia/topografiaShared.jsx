@@ -752,10 +752,11 @@ export function esDesarrolladorTopo(usuario) {
   return cargo === 'desarrollador' || rol === 'desarrollador'
 }
 
-/** Sellado definitivo: solo tras BO interventoría aprobada (nivel2 + biblioteca). */
+/** Sellado definitivo: solo tras BO interventoría aprobada (nivel2).
+ *  ``biblioteca_at`` indica puntos publicados (puede ser al terminar) y no sella. */
 export function poligonalSellada(pol) {
   const p = pol || {}
-  return (p.nivel2_estado || '') === 'Aprobado' || Boolean(p.biblioteca_at)
+  return (p.nivel2_estado || '') === 'Aprobado'
 }
 
 /** Nivel de validación topográfica: 0=dev (ambos), 1=contratista, 2=interventoría, null=sin validar. */

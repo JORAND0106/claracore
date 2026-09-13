@@ -164,12 +164,12 @@ def _require_contrato_row(contrato_id: int) -> dict:
 
 
 def _poligonal_sellada(pol: dict) -> bool:
-    """Sellado definitivo: únicamente tras validación interventoría (BO) aprobada."""
-    if (pol.get("nivel2_estado") or "") == "Aprobado":
-        return True
-    if pol.get("biblioteca_at"):
-        return True
-    return False
+    """Sellado definitivo: únicamente tras validación interventoría (BO) aprobada.
+
+    ``biblioteca_at`` indica publicación de puntos en biblioteca (puede ocurrir
+    al terminar la poligonal) y ya no implica sellado.
+    """
+    return (pol.get("nivel2_estado") or "") == "Aprobado"
 
 
 def _assert_poligonal_sellada(pol: dict) -> None:
@@ -820,7 +820,12 @@ def _rol_origen_topo(current_user) -> str:
 
 
 def _publicar_poligonal_en_biblioteca(contrato_id: int, poligonal_id: str, pol: dict) -> None:
-    """Publica coordenadas ajustadas en topo_puntos (solo tras aprobación interventoría)."""
+    """Publica coordenadas ajustadas en topo_puntos (idempotente).
+
+    Se invoca al terminar la poligonal (cierre admisible) y de nuevo si
+    interventoría aprueba (refresco). No sella la poligonal: el sellado
+    depende solo de ``nivel2_estado == Aprobado``.
+    """
     estaciones = _estaciones_activas(poligonal_id)
     now = datetime.now(timezone.utc).isoformat()
     usar_ajustadas = bool(pol.get("ajustada_at"))
@@ -933,6 +938,7 @@ def _aplicar_validacion_poligonal(
 
     if nivel == 2 and body.estado == "Aprobado":
         pol_upd = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id) or pol
+        # Refresco idempotente: los puntos ya se publicaron al terminar.
         _publicar_poligonal_en_biblioteca(contrato_id, poligonal_id, pol_upd)
 
     return {
@@ -2710,6 +2716,7 @@ def reabrir_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
             "nivel2_estado": "No Revisado",
             "nivel2_usuario_id": None,
             "nivel2_fecha": None,
+            "biblioteca_at": None,
         },
     )
 
@@ -2884,13 +2891,27 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
         },
     )
 
+    # Publicar puntos compensados en biblioteca de inmediato (no espera validación).
+    pol_cerrada = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id) or {
+        **pol,
+        "ajustada_at": now,
+        "estado": "cerrado",
+    }
+    _publicar_poligonal_en_biblioteca(contrato_id, poligonal_id, pol_cerrada)
+    pol_final = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id) or pol_cerrada
+
     return {
         "ok": True,
         "cierre": cierre,
         "cierre_preliminar": cierre_pre,
         "resumen": resumen,
         "ajustada_at": now,
-        "mensaje": "Poligonal terminada y compensada (angular + Bowditch). Pendiente validación contratista e interventoría.",
+        "biblioteca_at": pol_final.get("biblioteca_at") or now,
+        "biblioteca": True,
+        "mensaje": (
+            "Poligonal terminada y compensada (angular + Bowditch). "
+            "Puntos publicados en biblioteca. Pendiente validación contratista e interventoría."
+        ),
     }
 
 
@@ -2917,7 +2938,7 @@ def validar_poligonal_nivel2(
     body: ValidarPoligonalBody,
     current_user=Depends(get_current_user),
 ):
-    """Validación interventoría. Al aprobar, publica coordenadas ajustadas en la biblioteca."""
+    """Validación interventoría. El sellado ocurre al aprobar; la biblioteca ya se publicó al terminar."""
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "validar")
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
