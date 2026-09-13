@@ -1057,7 +1057,8 @@ def _limpiar_ajuste_poligonal(poligonal_id: str) -> None:
             "cota_ajustada": None,
         }
     ).eq("poligonal_id", poligonal_id).execute()
-    supabase.table("topo_poligonales").update(
+    _update_topo_poligonales_safe(
+        poligonal_id,
         {
             "ajustada_at": None,
             "error_cierre_dn": None,
@@ -1071,8 +1072,45 @@ def _limpiar_ajuste_poligonal(poligonal_id: str) -> None:
             "suma_angular_teorica": None,
             "error_angular_seg": None,
             "num_vertices": None,
-        }
-    ).eq("id", poligonal_id).execute()
+        },
+    )
+
+
+_TOPO_POL_OMIT_COLUMNS: set[str] = set()
+
+
+def _pgrst_unknown_column_topo(err: BaseException) -> Optional[str]:
+    """Extrae columna ausente (PGRST204 / schema cache) de un error PostgREST."""
+    text = str(err) or ""
+    if "PGRST204" not in text and "schema cache" not in text.lower():
+        return None
+    # Could not find the 'col' column of 'topo_poligonales'
+    import re
+
+    m = re.search(r"Could not find the '([^']+)' column", text)
+    if m:
+        return m.group(1)
+    m = re.search(r'column ["\']?([a-zA-Z0-9_]+)["\']? of relation', text, re.I)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _update_topo_poligonales_safe(poligonal_id: str, payload: dict) -> None:
+    """UPDATE topo_poligonales omitiendo columnas aún no migradas (PGRST204)."""
+    data = {k: v for k, v in (payload or {}).items() if k not in _TOPO_POL_OMIT_COLUMNS}
+    while data:
+        try:
+            supabase.table("topo_poligonales").update(data).eq("id", poligonal_id).execute()
+            return
+        except Exception as exc:
+            col = _pgrst_unknown_column_topo(exc)
+            if col and col in data:
+                _TOPO_POL_OMIT_COLUMNS.add(col)
+                data.pop(col, None)
+                continue
+            raise
+
 
 
 def _propagar_nombre_amarre_armadas(poligonal_id: str, nombre_viejo: str, nombre_nuevo: str) -> None:
@@ -2059,6 +2097,29 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
         cierre_campo=cierre_campo,
     )
 
+    # El cuadro de cierre lineal debe mostrar el dato de campo (calidad real),
+    # no el residual post-Bowditch (~0 / 1:1e9).
+    if cierre_campo and (
+        cierre_campo.get("error_lineal") is not None or cierre_campo.get("precision") is not None
+    ):
+        cierre = dict(cierre or {})
+        if cierre.get("cierre_desde_coords_ajustadas"):
+            cierre["error_lineal_ajustado"] = cierre.get("error_lineal")
+            cierre["precision_ajustada"] = cierre.get("precision")
+        for k in ("delta_norte", "delta_este", "delta_cota", "error_lineal", "precision", "perimetro"):
+            if cierre_campo.get(k) is not None:
+                cierre[k] = cierre_campo[k]
+        tol_lin = int(pol.get("tolerancia_relativa") or cierre.get("tolerancia_relativa") or 25000)
+        prec = cierre.get("precision")
+        cierre["admisible_lineal"] = prec is not None and int(prec) >= tol_lin
+        cierre["admisible"] = bool(
+            cierre.get("cerrado")
+            and cierre["admisible_lineal"]
+            and (cierre.get("admisible_angular") is not False)
+        )
+        cierre["cierre_desde_coords_ajustadas"] = False
+        cierre["cierre_lineal_es_campo"] = True
+
     # Autocorregir persistencia si el valor guardado no coincide con el de campo.
     if pol.get("ajustada_at") and cierre_preliminar and cierre_preliminar.get("fuente") == "recalculado_campo":
         prec_vivo = cierre_preliminar.get("precision")
@@ -2072,12 +2133,13 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
             needs_heal = True
         if needs_heal:
             try:
-                supabase.table("topo_poligonales").update(
+                _update_topo_poligonales_safe(
+                    poligonal_id,
                     {
                         "error_lineal_preliminar": e_vivo,
                         "precision_relativa_preliminar": prec_vivo,
-                    }
-                ).eq("id", poligonal_id).execute()
+                    },
+                )
                 pol["error_lineal_preliminar"] = e_vivo
                 pol["precision_relativa_preliminar"] = prec_vivo
             except Exception:
@@ -2635,7 +2697,8 @@ def reabrir_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
     ajustada_prev = pol.get("ajustada_at")
     _limpiar_ajuste_poligonal(poligonal_id)
     now = datetime.now(timezone.utc).isoformat()
-    supabase.table("topo_poligonales").update(
+    _update_topo_poligonales_safe(
+        poligonal_id,
         {
             "estado": "borrador",
             "nivel_validacion": 0,
@@ -2645,8 +2708,8 @@ def reabrir_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
             "nivel2_estado": "No Revisado",
             "nivel2_usuario_id": None,
             "nivel2_fecha": None,
-        }
-    ).eq("id", poligonal_id).execute()
+        },
+    )
 
     try:
         registrar_log(
@@ -2711,7 +2774,8 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
         supabase.table("topo_poligonal_estaciones").update(upd).eq("id", eid).execute()
 
     now = datetime.now(timezone.utc).isoformat()
-    supabase.table("topo_poligonales").update(
+    _update_topo_poligonales_safe(
+        poligonal_id,
         {
             "error_cierre_dn": resumen["error_dn"],
             "error_cierre_de": resumen["error_de"],
@@ -2725,8 +2789,8 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
             "error_angular_seg": cierre.get("error_angular_seg") if cierre.get("error_angular_seg") is not None else resultado["cierre"].get("error_angular_seg"),
             "num_vertices": cierre.get("num_vertices") or resultado["cierre"].get("num_vertices"),
             "ajustada_at": now,
-        }
-    ).eq("id", poligonal_id).execute()
+        },
+    )
 
     return {
         "ok": True,
@@ -2799,7 +2863,8 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
             supabase.table("topo_poligonal_estaciones").update(upd).eq("id", eid).execute()
 
     now = datetime.now(timezone.utc).isoformat()
-    supabase.table("topo_poligonales").update(
+    _update_topo_poligonales_safe(
+        poligonal_id,
         {
             "estado": "cerrado",
             "error_cierre_dn": resumen["error_dn"],
@@ -2814,8 +2879,8 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
             "error_angular_seg": cierre.get("error_angular_seg"),
             "num_vertices": cierre.get("num_vertices"),
             "ajustada_at": now,
-        }
-    ).eq("id", poligonal_id).execute()
+        },
+    )
 
     return {
         "ok": True,

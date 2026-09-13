@@ -64,6 +64,8 @@ export default function PoligonalCalculoTable({
   armadas = null,
   onUpdateHI = null,
   canEditHI = false,
+  /** Punto de arranque (amarre inicial) — primera fila solo con N/E/Z. */
+  puntoInicial = null,
 }) {
   const ui = useTopoTheme()
   const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
@@ -87,7 +89,17 @@ export default function PoligonalCalculoTable({
     [cierre],
   )
 
-  if (!estaciones?.length) {
+  const arranque = useMemo(() => {
+    if (!puntoInicial || puntoInicial.norte == null || puntoInicial.este == null) return null
+    return {
+      nombre: puntoInicial.nombre || 'Arranque',
+      norte: puntoInicial.norte,
+      este: puntoInicial.este,
+      cota: puntoInicial.cota,
+    }
+  }, [puntoInicial])
+
+  if (!estaciones?.length && !arranque) {
     return (
       <div style={{ ...ui.card, color: ui.textMuted }}>
         Agregue puntos para ver la cartera de radiacion por armadas.
@@ -154,7 +166,54 @@ export default function PoligonalCalculoTable({
             </tr>
           </thead>
           <tbody>
-            {estaciones.map((e) => {
+            {arranque && (
+              <tr
+                key="arranque-poligonal"
+                style={{ background: 'rgba(22, 163, 74, 0.08)' }}
+                title="Punto de arranque de la poligonal (coordenadas originales de amarre)"
+              >
+                <td style={{ ...td, color: ui.textMuted }}>—</td>
+                <td style={{ ...td, color: ui.textMuted }}>—</td>
+                <td style={{ ...td, fontWeight: 700 }}>{arranque.nombre}</td>
+                <td style={td}>
+                  <span
+                    style={{
+                      fontSize: 'var(--cc-xs)',
+                      padding: '1px 6px',
+                      borderRadius: 6,
+                      background: '#dcfce7',
+                      color: '#166534',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Arranque
+                  </span>
+                </td>
+                <td style={td}>—</td>
+                {ajustada && <td style={td}>—</td>}
+                <td style={td}>—</td>
+                <td style={td}>—</td>
+                <td style={td}>—</td>
+                <td style={td}>—</td>
+                <td style={td}>—</td>
+                {ajustada && (
+                  <>
+                    <td style={td}>—</td>
+                    <td style={td}>—</td>
+                    <td style={td}>—</td>
+                    <td style={td}>—</td>
+                    <td style={td}>—</td>
+                  </>
+                )}
+                <td style={{ ...td, fontWeight: 600 }}>{fmtNum(arranque.norte, 4)}</td>
+                <td style={{ ...td, fontWeight: 600 }}>{fmtNum(arranque.este, 4)}</td>
+                <td style={{ ...td, fontWeight: 600 }}>
+                  {arranque.cota != null ? fmtNum(arranque.cota, 4) : '—'}
+                </td>
+                {acciones && <td style={td} />}
+              </tr>
+            )}
+            {(estaciones || []).map((e) => {
               const ladoExcedido = advertenciaDistancia(e, cierre)
               const enEdicion = editandoId && e.id === editandoId
               const arm =
