@@ -32,4 +32,10 @@ describe('Ángulo derivado — UI', () => {
     assert.match(src, /admisible_angular !== false/)
     assert.match(src, /cierre angular está fuera de tolerancia/)
   })
+
+  it('Cierre angular muestra etiqueta auto de sentido', () => {
+    const src = read('PoligonalCierrePanel.jsx')
+    assert.match(src, /sentido_auto/)
+    assert.match(src, /sentido_inferido/)
+  })
 })
