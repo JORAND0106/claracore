@@ -14,8 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from topografia_utils import (  # noqa: E402
     ajustar_poligonal_armadas,
+    aplicar_cierre_lineal_coords_ajustadas,
     calcular_cierre_poligonal,
     radiar_armadas,
+    reconstruir_cierre_preliminar,
 )
 
 
@@ -139,6 +141,67 @@ class TestBowditchAlTerminar(unittest.TestCase):
         self.assertEqual(len(trav), 4)
         corr_e = [abs(u["correccion_este"]) for u in trav]
         self.assertGreaterEqual(corr_e[3], corr_e[0] - 1e-9)
+
+    def test_cierre_tras_ajuste_no_empeora_al_reconsultar(self):
+        """Simula GET post-Terminar: azimuts ajustados sin correcciones en ΣΔ.
+
+        El cierre lineal mostrado debe seguir midiendo coords ajustadas (~0),
+        nunca el residual az×dist (que puede ser peor que el preliminar).
+        """
+        armadas, estaciones, amarres, pi = _cuadrado([100.0, 100.0, 100.0, 100.5])
+        pol = {
+            "sentido": "antihorario",
+            "tipo": "cerrada",
+            "tolerancia_relativa": 500,
+            "precision_angular_seg": 10.0,
+            "ajustada_at": "2026-01-01T00:00:00Z",
+        }
+        res = ajustar_poligonal_armadas(pol, armadas, estaciones, amarres, pi)
+        pre_prec = res["cierre"].get("precision") or 0
+        pre_err = res["cierre"].get("error_lineal") or 0
+        self.assertGreater(pre_err, 0.1)
+
+        # Persistir updates como haría el POST /cerrar
+        by_id = {u["id"]: u for u in res["updates"] if u.get("id")}
+        estaciones_db = []
+        for e in estaciones:
+            u = by_id.get(e["id"], {})
+            estaciones_db.append({**e, **u})
+
+        arms, _, _ = radiar_armadas(armadas, estaciones_db, amarres)
+        # Overlay azimuts (como obtener_poligonal)
+        from topografia_utils import _aplicar_azimuts_a_armadas
+
+        arms = _aplicar_azimuts_a_armadas(arms, by_id)
+        cierre_vivo = calcular_cierre_poligonal(
+            arms, pi, tipo_pol="cerrada", tol_relativa=500, sentido="antihorario",
+        )
+        # Sin corrección: residual az×dist puede ser > preliminar
+        cierre_ok = aplicar_cierre_lineal_coords_ajustadas(
+            cierre_vivo,
+            punto_inicial=pi,
+            estaciones=estaciones_db,
+            tol_relativa=500,
+        )
+        self.assertLessEqual(abs(cierre_ok.get("error_lineal") or 0), 1e-3)
+        self.assertTrue(cierre_ok.get("cierre_desde_coords_ajustadas"))
+        post_prec = cierre_ok.get("precision") or 0
+        self.assertGreaterEqual(post_prec, pre_prec)
+
+        # Preliminar reconstruible para auditoría
+        pol_saved = {
+            **pol,
+            "error_cierre_dn": res["resumen"]["error_dn"],
+            "error_cierre_de": res["resumen"]["error_de"],
+            "error_lineal_preliminar": res["cierre"]["error_lineal"],
+            "precision_relativa_preliminar": res["cierre"]["precision"],
+            "error_lineal": cierre_ok["error_lineal"],
+            "precision_relativa": cierre_ok["precision"],
+        }
+        pre = reconstruir_cierre_preliminar(pol_saved, cierre_ok.get("perimetro"))
+        self.assertIsNotNone(pre)
+        self.assertAlmostEqual(pre["error_lineal"], pre_err, places=3)
+        self.assertTrue(pre["es_preliminar"])
 
 
 if __name__ == "__main__":
