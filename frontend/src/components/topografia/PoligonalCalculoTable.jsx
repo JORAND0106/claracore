@@ -191,21 +191,25 @@ export default function PoligonalCalculoTable({
                     </span>
                   </td>
                   <td style={td}>
-                    {e.angulo_observado_texto ?? '—'}
-                    {e.tipo_punto === 'estacion' && e.angulo_derivado_para_cierre && e.angulo_derivado_texto && (
-                      <span
-                        title={`Ángulo para cierre angular (derivado del azimut): ${e.angulo_derivado_texto}`}
-                        style={{
-                          display: 'block',
-                          marginTop: 2,
-                          fontSize: 9,
-                          fontWeight: 700,
-                          color: '#0e7490',
-                          letterSpacing: 0.2,
-                        }}
-                      >
-                        cierre {e.angulo_derivado_texto} · derivado
-                      </span>
+                    {e.tipo_punto === 'estacion' && e.angulo_derivado_para_cierre && e.angulo_derivado_texto ? (
+                      <>
+                        {e.angulo_derivado_texto}
+                        <span
+                          title="Ángulo para cierre angular, derivado del azimut directo de campo: (Az_sig − Az_ant − 180°) mod 360. El azimut leído permanece en la columna Azimut."
+                          style={{
+                            display: 'block',
+                            marginTop: 2,
+                            fontSize: 9,
+                            fontWeight: 700,
+                            color: '#0e7490',
+                            letterSpacing: 0.2,
+                          }}
+                        >
+                          derivado
+                        </span>
+                      </>
+                    ) : (
+                      e.angulo_observado_texto ?? '—'
                     )}
                   </td>
                   {ajustada && <td style={td}>{e.angulo_corregido_texto ?? '—'}</td>}
