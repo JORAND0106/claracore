@@ -25,6 +25,8 @@ describe('Ángulo derivado — UI', () => {
     assert.match(src, /angulo_derivado_para_cierre/)
     assert.match(src, /angulo_derivado_texto/)
     assert.match(src, /derivado/)
+    // La columna Ang. obs. prioriza el valor derivado (no el azimut crudo)
+    assert.match(src, /angulo_derivado_texto \? \(/)
   })
 
   it('Terminar exige cierre angular cuando está calculado', () => {

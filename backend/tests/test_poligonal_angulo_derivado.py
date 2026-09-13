@@ -357,10 +357,17 @@ class TestDerivacionUniformeYOrientRef(unittest.TestCase):
         self.assertIsNotNone(cierre["error_orientacion_seg"])
         self.assertLess(abs(cierre["error_orientacion_seg"]), 120)
         self.assertAlmostEqual(cierre["error_orientacion_seg"], -55.0, delta=1.0)
-        self.assertTrue(all(d.get("derivado") for d in cierre["angulos_cierre_detalle"]))
-        # Con geometría coherente, Diferencia ≈ residual de orientación (~55"), no cientos de grados
-        self.assertIsNotNone(cierre["error_angular_seg"])
-        self.assertLess(abs(cierre["error_angular_seg"]), 3600)
+        # Diferencia genuina Σobs−Σteor (= Orient.ref de forma natural, no por copia)
+        self.assertAlmostEqual(cierre["error_angular_seg"], -55.0, delta=1.0)
+        self.assertAlmostEqual(
+            cierre["error_angular_seg"], cierre["error_orientacion_seg"], delta=0.05,
+        )
+        self.assertAlmostEqual(
+            (cierre["suma_observada"] - cierre["suma_teorica"]) * 3600,
+            cierre["error_angular_seg"],
+            delta=0.05,
+        )
+        self.assertIsNotNone(cierre.get("angulo_amarre_inicial_excluido"))
 
     def test_dos_angulos_sin_coords_visado_no_corrompen_suma(self):
         """Dos armadas con visado sin N/E deben derivarse igual y no inflar Σ observada."""
@@ -392,6 +399,38 @@ class TestDerivacionUniformeYOrientRef(unittest.TestCase):
         self.assertTrue(all(d["derivado"] for d in cierre["angulos_cierre_detalle"]))
         self.assertAlmostEqual(cierre["suma_observada"], 360.0, places=3)
         self.assertAlmostEqual(cierre["error_angular_seg"] or 0, 0.0, delta=1.0)
+
+    def test_nombre_estacion_desfasado_sigue_derivando_secuencial(self):
+        """Si estacion_nombre no coincide con el punto radiado, usar azimut del lado previo."""
+        gps2 = {"norte": 1000.0, "este": 2000.0, "cota": 100.0}
+        gps1 = {"norte": 1000.0, "este": 1900.0, "cota": 100.0}
+        azs = [164.3313888889, 100.0, 50.0, 10.0]
+        # Armadas 3 y 4: nombres de estación que NO coinciden con el punto anterior
+        armadas = [
+            {"id": "a1", "orden": 1, "estacion_nombre": "GPS2", "visado_nombre": "GPS1", "altura_instrumento": 1.5},
+            {"id": "a2", "orden": 2, "estacion_nombre": "D1", "visado_nombre": "GPS2", "altura_instrumento": 1.5},
+            {"id": "a3", "orden": 3, "estacion_nombre": "EST_X", "visado_nombre": "SIN_COORDS", "altura_instrumento": 1.5},
+            {"id": "a4", "orden": 4, "estacion_nombre": "EST_Y", "visado_nombre": "TAMPOCO", "altura_instrumento": 1.5},
+        ]
+        nombres = ["D1", "D2", "D3", "D4"]
+        estaciones = [
+            {
+                "id": f"p{i+1}", "armada_id": f"a{i+1}", "orden": 1,
+                "nombre_punto": nombres[i], "tipo_punto": "estacion",
+                "angulo_medido": azs[i], "angulo_vertical": 90.0,
+                "distancia": 40.0, "altura_objetivo": 0,
+            }
+            for i in range(4)
+        ]
+        arms, _, flat = radiar_armadas(armadas, estaciones, {"GPS2": gps2, "GPS1": gps1})
+        self.assertTrue(all(a["metodo_azimut"] == "coordenadas" for a in arms))
+        self.assertTrue(all(
+            p.get("angulo_derivado_para_cierre") and p.get("angulo_derivado") is not None
+            for p in flat
+        ))
+        # Ningún ángulo derivado debe ser copia del azimut directo
+        for p in flat:
+            self.assertGreater(abs(float(p["angulo_derivado"]) - float(p["azimut"])), 1e-6)
 
     def test_ceros_atras_sigue_sin_forzar_coordenadas(self):
         armadas = [
@@ -425,9 +464,18 @@ class TestInferirSentidoHelper(unittest.TestCase):
     def test_antihorario_por_suma(self):
         self.assertEqual(inferir_sentido_poligonal(360.1, 4), "antihorario")
 
-    def test_orientacion_fuerza_horario(self):
+    def test_orientacion_no_fuerza_si_suma_es_interior(self):
+        # n=32 → teor A=5400, H=6120; suma cerca de 5400 ⇒ antihorario aunque haya orientación
         self.assertEqual(
-            inferir_sentido_poligonal(500.0, 32, tiene_orientacion=True),
+            inferir_sentido_poligonal(5399.98, 32, tiene_orientacion=True),
+            "antihorario",
+        )
+
+    def test_orientacion_empate_puede_preferir_horario(self):
+        # Empate exacto a mitad: winding vacío → desempate con orientación
+        mid = ((32 + 2) * 180 + (32 - 2) * 180) / 2
+        self.assertEqual(
+            inferir_sentido_poligonal(mid, 32, tiene_orientacion=True),
             "horario",
         )
 

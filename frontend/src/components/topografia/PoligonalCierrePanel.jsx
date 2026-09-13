@@ -91,8 +91,10 @@ export default function PoligonalCierrePanel({ cierre }) {
               <td style={C.rowL}>Σ Teórica</td>
               <td style={C.rowV}>
                 {cierre.suma_teorica_texto ?? '—'}
-                {cierre.tiene_orientacion && (
-                  <span style={{ opacity: 0.75, fontWeight: 400 }}> (n+2)×180°</span>
+                {cierre.num_vertices != null && (
+                  <span style={{ opacity: 0.75, fontWeight: 400 }}>
+                    {cierre.sentido === 'horario' ? ' (n+2)×180°' : ' (n−2)×180°'}
+                  </span>
                 )}
               </td>
             </tr>

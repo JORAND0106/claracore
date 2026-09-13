@@ -218,13 +218,11 @@ def inferir_sentido_poligonal(
     Criterio principal: qué Σ teórica queda más cerca de Σ observada
     (horario → (n+2)×180° exteriores; antihorario → (n−2)×180° interiores).
     Empate o suma vacía: winding de vértices (x=Este, y=Norte); área > 0 ⇒ antihorario.
-    Con lectura de orientación al amarre, el libro de campo usa exteriores (horario).
+    ``tiene_orientacion`` no fuerza sentido: la suma de ángulos de vértice decide.
     """
     n = int(n_vertices or 0)
     if n <= 0:
         return "antihorario"
-    if tiene_orientacion:
-        return "horario"
     teor_h = (n + 2) * 180.0
     teor_a = (n - 2) * 180.0
     err_h = abs(float(suma_observada) - teor_h)
@@ -241,6 +239,9 @@ def inferir_sentido_poligonal(
             area2 += float(pts[i]["este"]) * float(pts[i + 1]["norte"])
             area2 -= float(pts[i + 1]["este"]) * float(pts[i]["norte"])
         return "antihorario" if area2 > 0 else "horario"
+    # Con orientación y empate numérico, preferir exteriores solo como desempate débil.
+    if tiene_orientacion:
+        return "horario"
     return "antihorario"
 
 
@@ -347,6 +348,8 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
     # True si alguna armada ya trabajó con azimut directo (amarres N/E). No activar
     # en poligonales puramente ceros_atrás, para no reinterpretar α_obs como azimut.
     cadena_azimut_directo = False
+    # Azimut del último punto-estación radiado (respaldo si el nombre de estación no coincide).
+    azimut_lado_prev: Optional[float] = None
 
     armadas_out = []
     estaciones_flat = []
@@ -361,12 +364,15 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
         # Si la cadena ya usa azimut directo, forzar recíproco + método coordenadas aunque
         # el visado momentáneamente carezca de N/E (evita 1–2 ángulos sin derivar).
         az_llegada = azimut_llegada_por_nombre.get(arm.get("estacion_nombre"))
+        if az_llegada is None and azimut_lado_prev is not None and cadena_azimut_directo:
+            az_llegada = azimut_lado_prev
         if az_llegada is not None and (metodo_az == "coordenadas" or cadena_azimut_directo):
             base_az = azimut_reciproco(az_llegada)
             metodo_az = "coordenadas"
             cadena_azimut_directo = True
         hi = arm.get("altura_instrumento") or 0
         puntos = []
+        az_estacion_fwd: Optional[float] = None
         for o in obs_by_arm.get(arm.get("id"), []):
             ang = o.get("angulo_medido")
             ang_v = o.get("angulo_vertical")
@@ -392,9 +398,10 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
             if metodo_az == "coordenadas" and az is not None:
                 ang_deriv = angulo_obs_derivado_desde_base(az, base_az)
                 ang_deriv_texto = decimal_to_gms(ang_deriv)
+            tipo_pt = o.get("tipo_punto") or "auxiliar"
             punto = {
                 **o,
-                "tipo_punto": o.get("tipo_punto") or "auxiliar",
+                "tipo_punto": tipo_pt,
                 "armada_orden": arm.get("orden"),
                 "metodo_azimut": metodo_az,
                 "angulo_observado_gms": decimal_a_gms_numero(ang) if ang is not None else None,
@@ -416,6 +423,8 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
             if az is not None and o.get("nombre_punto"):
                 # Última visual a ese nombre (llegada) alimenta el recíproco de armadas siguientes
                 azimut_llegada_por_nombre[o["nombre_punto"]] = az
+            if tipo_pt == "estacion" and az is not None:
+                az_estacion_fwd = float(az)
             if n is not None and e_ is not None and o.get("nombre_punto"):
                 vertice_prev = {
                     "norte": round(n, 4),
@@ -427,6 +436,8 @@ def radiar_armadas(armadas: list, estaciones: list, amarres: dict):
                 radiados[nombre_fwd] = vertice_prev
             puntos.append(punto)
             estaciones_flat.append(punto)
+        if az_estacion_fwd is not None:
+            azimut_lado_prev = az_estacion_fwd
         armadas_out.append({
             **arm,
             "base_azimut": round(base_az, 6),
@@ -744,25 +755,21 @@ def calcular_cierre_poligonal(
         metodo = arm.get("metodo_azimut") or fwd.get("metodo_azimut")
         az_fwd = fwd.get("azimut")
         base = arm.get("base_azimut")
-        pre = fwd.get("angulo_derivado")
         deriva = (
             metodo == "coordenadas"
             or bool(fwd.get("angulo_derivado_para_cierre"))
             or (cadena_azimut_directo and az_fwd is not None)
         )
         if deriva and az_fwd is not None:
-            if pre is not None and (
-                metodo == "coordenadas" or fwd.get("angulo_derivado_para_cierre")
-            ):
-                return float(pre), True
-            if base is not None and (
-                metodo == "coordenadas" or fwd.get("angulo_derivado_para_cierre")
-            ):
-                return angulo_obs_derivado_desde_base(az_fwd, base), True
+            # Preferir cadena azimutal (siempre reproducible) sobre valor precomputado,
+            # para que estaciones sin N/E de visado no queden con ángulo = azimut crudo.
             if az_anterior is not None:
                 return angulo_obs_derivado_desde_azimuts(az_fwd, az_anterior), True
             if base is not None:
                 return angulo_obs_derivado_desde_base(az_fwd, base), True
+            pre = fwd.get("angulo_derivado")
+            if pre is not None and abs(float(pre) - float(az_fwd)) > 1e-6:
+                return float(pre), True
         ang = fwd.get("angulo_medido")
         return (float(ang) if ang is not None else None), False
 
@@ -831,9 +838,23 @@ def calcular_cierre_poligonal(
 
     n_ang_trav = len(angulos_travesia)
     n_vert = n_legs
+    tiene_orientacion = orientacion_ang is not None
+
+    # Con lectura de orientación al cierre: el ángulo de la 1ª estación (visado a
+    # amarre/GPS) no es el ángulo de vértice del polígono; el de orientación sí lo es.
+    # Excluir el primero evita inflar Σ Observada (~238° en el caso GPS→arranque).
+    angulo_amarre_excluido = None
+    if tiene_orientacion and angulos_travesia:
+        angulo_amarre_excluido = angulos_travesia.pop(0)
+        if angulos_detalle and not angulos_detalle[0].get("orientacion"):
+            first_det = angulos_detalle.pop(0)
+            first_det["excluido_amarre_inicial"] = True
+            # Conservar en detalle para auditoría, sin alimentar la suma.
+            angulos_detalle.append(first_det)
+        n_ang_trav = len(angulos_travesia)
+
     suma_travesia = sum(angulos_travesia) if angulos_travesia else 0.0
     suma_obs = suma_travesia + (orientacion_ang or 0)
-    tiene_orientacion = orientacion_ang is not None
 
     vertices = _vertices_poligonal_cierre(armadas_enr)
     sentido_inferido = inferir_sentido_poligonal(
@@ -848,13 +869,10 @@ def calcular_cierre_poligonal(
     else:
         sentido = sentido_declarado
 
-    # Con orientacion al punto de referencia (libro Excel): Σ = (n+2)×180° (angulos exteriores).
-    # Solo travesia (n lados): antihorario (n-2)×180°, horario (n+2)×180°.
+    # Σ teórica según sentido (exteriores horario / interiores antihorario).
+    # Ya no se fuerza (n+2)×180 solo por haber orientación: la suma de vértices decide.
     if n_vert:
-        if tiene_orientacion:
-            teorico = (n_vert + 2) * 180
-        else:
-            teorico = ((n_vert + 2) if sentido == "horario" else (n_vert - 2)) * 180
+        teorico = ((n_vert + 2) if sentido == "horario" else (n_vert - 2)) * 180
     else:
         teorico = None
 
@@ -865,13 +883,6 @@ def calcular_cierre_poligonal(
     if az_ref_inicial is not None and az_ref_final is not None:
         diff_az = ((az_ref_final - az_ref_inicial + 180) % 360) - 180
         error_orient_seg = round(diff_az * 3600, 2)
-
-    # Azimut directo + orientación de cierre: la magnitud real del levantamiento es
-    # el residual arranque→cierre (p. ej. 164°19'53" → 164°18'58" ≈ −55"), no un
-    # Σobs−Σteórica inflado por el amarre GPS u ángulos parcialmente no derivados.
-    if tiene_orientacion and angulos_derivados and error_orient_seg is not None:
-        error_ang_seg = float(error_orient_seg)
-        error_ang = error_ang_seg / 3600.0
 
     dN = dE = dZ = e_lineal = precision = None
     sum_dn = sum_de = 0.0
@@ -960,6 +971,9 @@ def calcular_cierre_poligonal(
         "tiene_orientacion": tiene_orientacion,
         "angulos_derivados": angulos_derivados,
         "angulos_cierre_detalle": angulos_detalle,
+        "angulo_amarre_inicial_excluido": (
+            round(angulo_amarre_excluido, 6) if angulo_amarre_excluido is not None else None
+        ),
         "num_angulos": n_ang,
         "num_vertices": n_vert,
         "suma_observada": round(suma_obs, 6),
