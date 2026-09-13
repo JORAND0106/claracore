@@ -1,20 +1,22 @@
-"""Exportación Excel de poligonal con fórmulas vivas (cierre + Bowditch + esquema).
+"""Exportación Excel de poligonal con fórmulas vivas (alineadas al backend).
 
-Hoja «Cartera»:
-  - Encabezado tipo PDF (contrato, equipo, etc.)
-  - Fila de arranque + filas de estaciones (ángulos/distancias = entrada)
-  - Columnas calculadas con fórmulas Excel (ángulo derivado, azimut corregido,
-    proyecciones, correcciones Bowditch, coordenadas ajustadas)
-  - Bloques de cierre angular y lineal con semáforo CUMPLE/NO CUMPLE
+Pestañas:
+  - «Resumen»: datos generales + parámetros + cierres angular/lineal
+  - «Cartera»: tabla armada por armada (entradas + fórmulas de cálculo)
+  - «Esquema»: gráfico Este/Norte ajustado (referencia Cartera)
 
-Hoja «Esquema»:
-  - Tabla Este/Norte ajustados (fórmulas que referencian Cartera)
-  - Gráfico de dispersión que se actualiza al editar datos de campo
+Cierre angular (mismo criterio que ``calcular_cierre_poligonal``):
+  - Ángulo derivado: (Az − base) mod 360 en el 1º tramo;
+    (Az_i − Az_{i−1} − 180) mod 360 en los siguientes (azimut directo).
+  - Con orientación (dist=0): se excluye el ángulo del 1º tramo (amarre) de Σ
+    y se suma el ángulo de orientación → evita inflar Σ (~+179° típico).
+  - Diff = Σ Observada − Σ Teórica; Diferencia (″) = Diff × 3600.
+  - Σ Teórica = (n−2)×180 antihorario / (n+2)×180 horario.
 """
 from __future__ import annotations
 
 import io
-from typing import Any, Dict, List, Optional
+from typing import List, Optional, Tuple
 
 from openpyxl import Workbook
 from openpyxl.chart import Reference, ScatterChart, Series
@@ -22,12 +24,11 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-# ── estilos ──────────────────────────────────────────────────────────────────
 _SIDE = Side(style="thin", color="94A3B8")
 _BORDER = Border(left=_SIDE, right=_SIDE, top=_SIDE, bottom=_SIDE)
 _FILL_HDR = PatternFill("solid", fgColor="1E40AF")
 _FILL_HDR2 = PatternFill("solid", fgColor="475569")
-_FILL_INPUT = PatternFill("solid", fgColor="FEF9C3")  # amarillo: editable
+_FILL_INPUT = PatternFill("solid", fgColor="FEF9C3")
 _FILL_CALC = PatternFill("solid", fgColor="F1F5F9")
 _FILL_OK = PatternFill("solid", fgColor="DCFCE7")
 _FILL_BAD = PatternFill("solid", fgColor="FEE2E2")
@@ -59,7 +60,6 @@ def _cell(ws, row: int, col: int, value=None, *, fill=None, font=None, align=Non
 
 
 def _legs_estacion(estaciones: list) -> List[dict]:
-    """Tramos de la poligonal: estaciones con distancia > 0, en orden."""
     out = []
     for e in sorted(estaciones or [], key=lambda x: int(x.get("orden") or 0)):
         if (e.get("tipo_punto") or "auxiliar") != "estacion":
@@ -70,19 +70,27 @@ def _legs_estacion(estaciones: list) -> List[dict]:
     return out
 
 
-def _es_azimut_directo(legs: list) -> bool:
+def _estacion_orientacion(estaciones: list) -> Optional[dict]:
+    """Primera estación con distancia 0 (lectura de orientación al cierre)."""
+    for e in sorted(estaciones or [], key=lambda x: int(x.get("orden") or 0)):
+        if (e.get("tipo_punto") or "auxiliar") != "estacion":
+            continue
+        if float(e.get("distancia") or 0) <= 1e-9 and e.get("angulo_medido") is not None:
+            return e
+    return None
+
+
+def _es_azimut_directo(legs: list, orient: Optional[dict] = None) -> bool:
+    pool = list(legs or [])
+    if orient:
+        pool.append(orient)
     return any(
         (e.get("metodo_azimut") == "coordenadas") or bool(e.get("angulo_derivado_para_cierre"))
-        for e in (legs or [])
+        for e in pool
     )
 
 
 def _az_campo_lectura(e: dict, *, azimut_directo: bool) -> Optional[float]:
-    """Lectura de campo para la columna de entrada D.
-
-    Azimut directo: ``angulo_medido`` es la lectura de azimut del equipo.
-    Ángulos (ceros atrás): ``angulo_medido`` es el ángulo horizontal observado.
-    """
     if e.get("angulo_medido") is not None:
         try:
             return float(e["angulo_medido"]) % 360.0
@@ -97,7 +105,6 @@ def _az_campo_lectura(e: dict, *, azimut_directo: bool) -> Optional[float]:
 
 
 def _base_azimut_arranque(legs: list, armadas: Optional[list]) -> float:
-    """Azimut base de la 1ª armada (reciproco / amarre), editable en B14."""
     if armadas:
         arms = sorted(armadas, key=lambda a: int(a.get("orden") or 0))
         if arms and arms[0].get("base_azimut") is not None:
@@ -144,6 +151,31 @@ def _hi_por_armada(armadas: Optional[list], e: dict) -> float:
     return float(e.get("altura_instrumento") or 0)
 
 
+def _angulo_orientacion_seed(
+    orient: Optional[dict],
+    *,
+    azimut_directo: bool,
+    cierre: dict,
+    last_leg_az: Optional[float],
+) -> float:
+    """Ángulo de orientación que alimenta Σ (mismo criterio que el backend)."""
+    for d in cierre.get("angulos_cierre_detalle") or []:
+        if d.get("orientacion") and d.get("angulo_cierre") is not None:
+            return float(d["angulo_cierre"]) % 360.0
+    if not orient:
+        return 0.0
+    az = _az_campo_lectura(orient, azimut_directo=azimut_directo)
+    if az is None and orient.get("azimut") is not None:
+        az = float(orient["azimut"]) % 360.0
+    if azimut_directo and az is not None and last_leg_az is not None:
+        return (az - last_leg_az - 180.0) % 360.0
+    if azimut_directo and orient.get("angulo_derivado") is not None:
+        return float(orient["angulo_derivado"]) % 360.0
+    if az is not None:
+        return az % 360.0
+    return 0.0
+
+
 def build_poligonal_xlsx_bytes(
     *,
     contrato: dict,
@@ -154,19 +186,35 @@ def build_poligonal_xlsx_bytes(
     cierre: Optional[dict] = None,
     armadas: Optional[list] = None,
 ) -> bytes:
-    """Genera .xlsx con fórmulas vivas. No depende de red."""
-    del punto_final  # reservado; cierre abierto puede ampliarse después
+    del punto_final
     cierre = cierre or {}
     legs = _legs_estacion(estaciones)
+    orient = _estacion_orientacion(estaciones)
     n = len(legs)
     pi = punto_inicial or {}
+
     sentido = (cierre.get("sentido") or pol.get("sentido") or "antihorario").lower()
     antihorario = sentido != "horario"
     tol_rel = int(cierre.get("tolerancia_relativa") or pol.get("tolerancia_relativa") or 30000)
     prec_ang = float(cierre.get("precision_angular_equipo_seg") or pol.get("precision_angular_seg") or 10.0)
-    azimut_directo = _es_azimut_directo(legs)
+    azimut_directo = _es_azimut_directo(legs, orient)
     base_az = _base_azimut_arranque(legs, armadas)
-    # En modo ángulos, B14 guarda el azimut del 1º tramo (se conserva en compensación).
+
+    tiene_orientacion = bool(cierre.get("tiene_orientacion")) or orient is not None
+    last_az = None
+    if legs:
+        last_az = _az_campo_lectura(legs[-1], azimut_directo=azimut_directo)
+        if last_az is None and legs[-1].get("azimut") is not None:
+            last_az = float(legs[-1]["azimut"]) % 360.0
+    ang_orient = _angulo_orientacion_seed(
+        orient, azimut_directo=azimut_directo, cierre=cierre, last_leg_az=last_az
+    )
+
+    # n_angulos: como backend (tras excluir amarre + orientación, ≈ n_vert)
+    n_ang = int(cierre.get("num_angulos") or 0) or n
+    if tiene_orientacion and n_ang < 1:
+        n_ang = n
+
     az1_seed = 0.0
     if legs:
         if azimut_directo:
@@ -177,13 +225,16 @@ def build_poligonal_xlsx_bytes(
             az1_seed = (base_az + (_az_campo_lectura(legs[0], azimut_directo=False) or 0.0)) % 360.0
 
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Cartera"
 
-    # ── Encabezado (estilo PDF) ──────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # Hoja Resumen (info + cierres)
+    # ══════════════════════════════════════════════════════════════════════════
+    wr = wb.active
+    wr.title = "Resumen"
+
     titulo = f"Poligonal trigonométrica — {pol.get('nombre') or ''}"
-    ws.merge_cells("A1:T1")
-    _cell(ws, 1, 1, titulo, fill=_FILL_TITLE, font=_FONT_TITLE, align=_AL_L, border=False)
+    wr.merge_cells("A1:F1")
+    _cell(wr, 1, 1, titulo, fill=_FILL_TITLE, font=_FONT_TITLE, align=_AL_L, border=False)
 
     equipo = " / ".join(
         x
@@ -207,71 +258,187 @@ def build_poligonal_xlsx_bytes(
     ]
     for i, (lab, val) in enumerate(meta):
         r = 2 + i
-        _cell(ws, r, 1, lab, font=_FONT_SUB, fill=_FILL_CALC, align=_AL_L)
-        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=6)
-        _cell(ws, r, 2, val, font=_FONT_CELL, align=_AL_L)
+        _cell(wr, r, 1, lab, font=_FONT_SUB, fill=_FILL_CALC, align=_AL_L)
+        wr.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4)
+        _cell(wr, r, 2, val, font=_FONT_CELL, align=_AL_L)
 
-    # Parámetros de cálculo
-    # B11 sentido_anti, B12 tol_rel, B13 prec_ang, B14 base/Az1, B15 n, B16 modo
-    _cell(ws, 10, 1, "PARÁMETROS DE CÁLCULO", fill=_FILL_HDR2, font=_FONT_HDR, align=_AL_L)
-    ws.merge_cells("A10:D10")
-    param_b14_label = (
-        "Azimut base arranque (°)" if azimut_directo else "Azimut 1º tramo (°)"
-    )
-    params = [
-        (11, "Sentido antihorario (1=sí, 0=horario)", 1 if antihorario else 0),
-        (12, "Tolerancia relativa plan (1:N)", tol_rel),
-        (13, "Precisión angular equipo (\")", prec_ang),
-        (14, param_b14_label, round(base_az if azimut_directo else az1_seed, 6)),
-        (15, "Nº tramos (estaciones)", n),
-        (16, "Modo azimut directo (1=sí, 0=ángulos)", 1 if azimut_directo else 0),
+    _cell(wr, 11, 1, "PARÁMETROS DE CÁLCULO", fill=_FILL_HDR2, font=_FONT_HDR, align=_AL_L)
+    wr.merge_cells("A11:B11")
+
+    param_b14_label = "Azimut base arranque (°)" if azimut_directo else "Azimut 1º tramo (°)"
+    params: List[Tuple[int, str, object, str, bool]] = [
+        (12, "Sentido antihorario (1=sí, 0=horario)", 1 if antihorario else 0, "0", True),
+        (13, "Tolerancia relativa plan (1:N)", tol_rel, "0", True),
+        (14, "Precisión angular equipo (\")", prec_ang, "0.######", True),
+        (15, param_b14_label, round(base_az if azimut_directo else az1_seed, 6), "0.000000", True),
+        (16, "Nº vértices / tramos (n)", n, "0", False),
+        (17, "Modo azimut directo (1=sí)", 1 if azimut_directo else 0, "0", True),
+        (18, "Tiene orientación cierre (1=sí)", 1 if tiene_orientacion else 0, "0", True),
+        (19, "Ángulo orientación (°)", round(ang_orient, 8), "0.000000", True),
+        (20, "Nº ángulos en Σ / corrección", n_ang, "0", True),
     ]
-    for r, lab, val in params:
-        _cell(ws, r, 1, lab, font=_FONT_MUTED, fill=_FILL_CALC, align=_AL_L)
-        fill = _FILL_INPUT if r in (11, 12, 13, 14, 16) else _FILL_CALC
-        num_fmt = "0" if r in (11, 12, 15, 16) else "0.######"
-        _cell(ws, r, 2, val, fill=fill, font=_FONT_CELL, align=_AL_R, num_fmt=num_fmt)
+    for r, lab, val, fmt, editable in params:
+        _cell(wr, r, 1, lab, font=_FONT_MUTED, fill=_FILL_CALC, align=_AL_L)
+        _cell(
+            wr,
+            r,
+            2,
+            val,
+            fill=_FILL_INPUT if editable else _FILL_CALC,
+            font=_FONT_CELL,
+            align=_AL_R,
+            num_fmt=fmt,
+        )
 
     _cell(
-        ws,
-        17,
+        wr,
+        21,
         1,
-        "Celdas amarillas = entrada editable. El resto son fórmulas: al cambiar ángulo/distancia "
-        "se recalculan cierre angular, lineal, Bowditch y el esquema (hoja Esquema).",
+        "Con orientación=1 el 1º ángulo de Cartera (amarre) se excluye de Σ Observada "
+        "y se suma B19 (igual que la plataforma). Diff = Σobs − Σteórica. "
+        "Celdas amarillas = editables. La cartera detallada está en la pestaña Cartera.",
         font=_FONT_MUTED,
         border=False,
         align=_AL_L,
     )
-    ws.merge_cells("A17:T17")
+    wr.merge_cells("A21:F21")
 
-    # ── Tabla principal ─────────────────────────────────────────────────────
-    HDR_ROW = 18
-    START_ROW = 19
-    FIRST_LEG = 20
+    # Cierre angular (valores en B)
+    _cell(wr, 23, 1, "CIERRE ANGULAR", fill=_FILL_HDR2, font=_FONT_HDR, align=_AL_L)
+    wr.merge_cells("A23:B23")
+
+    # Filas Cartera: arranque=5, first leg=6 → last=5+n
+    # Definidas tras crear Cartera; aquí usamos nombres fijos acordados:
+    # Cartera!I6:I{5+n} ángulos derivados; Cartera!U6:U{5+n} flag Σ (0/1)
+    first_leg_row = 6
+    last_leg_row = 5 + n if n else 5
+    rng_u = f"Cartera!U{first_leg_row}:U{last_leg_row}"
+    rng_i = f"Cartera!I{first_leg_row}:I{last_leg_row}"
+    rng_l = f"Cartera!L{first_leg_row}:L{last_leg_row}"
+    rng_m = f"Cartera!M{first_leg_row}:M{last_leg_row}"
+    rng_n = f"Cartera!N{first_leg_row}:N{last_leg_row}"
+    rng_e = f"Cartera!E{first_leg_row}:E{last_leg_row}"
+
+    ang_block = [
+        (24, "Sentido", '=IF($B$12=1,"Antihorario (int.)","Horario (ext.)")', None),
+        (25, "Áng. / Vért.", '=$B$20&" / "&$B$16', None),
+        (
+            26,
+            "Σ Observada (°)",
+            f'=IF($B$16<=0,0,SUMIF({rng_u},1,{rng_i})+IF($B$18=1,$B$19,0))',
+            "0.000000",
+        ),
+        (27, "Σ Teórica (°)", '=IF($B$12=1,($B$16-2)*180,($B$16+2)*180)', "0.000000"),
+        # Diff genuina = Σobs − Σteor (plataforma)
+        (28, "Diff angular (°)", "=$B$26-$B$27", "0.000000"),
+        (29, "Diferencia (\")", "=$B$28*3600", "0.00"),
+        (30, "Tolerancia (\")", "=$B$14*SQRT(MAX($B$16,1))", "0.0"),
+        (31, "Estado", '=IF(ABS(B29)<=B30,"CUMPLE","REVISAR")', None),
+    ]
+    for r, lab, formul, fmt in ang_block:
+        _cell(wr, r, 1, lab, fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
+        _cell(
+            wr,
+            r,
+            2,
+            formul,
+            fill=_FILL_CALC,
+            font=Font(bold=True, size=9) if r == 31 else _FONT_CELL,
+            align=_AL_R,
+            num_fmt=fmt,
+        )
+    wr.conditional_formatting.add("B31", FormulaRule(formula=['B31="CUMPLE"'], fill=_FILL_OK))
+    wr.conditional_formatting.add("B31", FormulaRule(formula=['B31="REVISAR"'], fill=_FILL_BAD))
+
+    # Refs internas para Bowditch (Cartera las usa)
+    _cell(wr, 33, 1, "REF. LINEAL (para Bowditch en Cartera)", fill=_FILL_HDR2, font=_FONT_HDR, align=_AL_L)
+    wr.merge_cells("A33:B33")
+    lin_ref = [
+        (34, "ErrN = ΣΔN (m)", f"=IF($B$16<=0,0,SUM({rng_l}))", "0.0000"),
+        (35, "ErrE = ΣΔE (m)", f"=IF($B$16<=0,0,SUM({rng_m}))", "0.0000"),
+        (36, "Perímetro (m)", f"=IF($B$16<=0,0,SUM({rng_e}))", "0.000"),
+        (37, "ErrZ = ΣΔZ (m)", f"=IF($B$16<=0,0,SUM({rng_n}))", "0.0000"),
+    ]
+    for r, lab, formul, fmt in lin_ref:
+        _cell(wr, r, 1, lab, fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
+        _cell(wr, r, 2, formul, fill=_FILL_CALC, font=_FONT_CELL, align=_AL_R, num_fmt=fmt)
+
+    _cell(wr, 39, 1, "CIERRE LINEAL (campo)", fill=_FILL_HDR2, font=_FONT_HDR, align=_AL_L)
+    wr.merge_cells("A39:B39")
+    lin_block = [
+        (40, "Perímetro (m)", "=$B$36", "0.000"),
+        (41, "ΔN (m)", "=-B34", "0.0000"),
+        (42, "ΔE (m)", "=-B35", "0.0000"),
+        (43, "ΔZ (m)", "=-B37", "0.0000"),
+        (44, "Error lineal (m)", "=SQRT(B34^2+B35^2)", "0.0000"),
+        (45, "Cierre 1:N", "=IF(B44<=1E-9,1E9,ROUND(B36/B44,0))", "0"),
+        (46, "Tolerancia plan", '="1:"&$B$13', None),
+        (47, "Estado", '=IF(B45>=$B$13,"CUMPLE","NO CUMPLE")', None),
+    ]
+    for r, lab, formul, fmt in lin_block:
+        _cell(wr, r, 1, lab, fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
+        _cell(
+            wr,
+            r,
+            2,
+            formul,
+            fill=_FILL_CALC,
+            font=Font(bold=True, size=9) if r == 47 else _FONT_CELL,
+            align=_AL_R,
+            num_fmt=fmt,
+        )
+    wr.conditional_formatting.add("B47", FormulaRule(formula=['B47="CUMPLE"'], fill=_FILL_OK))
+    wr.conditional_formatting.add("B47", FormulaRule(formula=['B47="NO CUMPLE"'], fill=_FILL_BAD))
+
+    for col, w in [("A", 42), ("B", 18), ("C", 12), ("D", 12), ("E", 12), ("F", 12)]:
+        wr.column_dimensions[col].width = w
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Hoja Cartera
+    # ══════════════════════════════════════════════════════════════════════════
+    ws = wb.create_sheet("Cartera")
+    _cell(ws, 1, 1, "Cartera de cálculo (fórmulas vivas)", fill=_FILL_TITLE, font=_FONT_TITLE, border=False)
+    ws.merge_cells("A1:U1")
+    _cell(
+        ws,
+        2,
+        1,
+        "Amarillo = editable. Ang.deriv / cierres / Bowditch referencian Resumen. "
+        "Columna «En Σ» = 0 excluye el amarre inicial cuando hay orientación.",
+        font=_FONT_MUTED,
+        border=False,
+        align=_AL_L,
+    )
+    ws.merge_cells("A2:U2")
+
+    HDR_ROW = 4
+    START_ROW = 5
+    FIRST_LEG = 6
     LAST_LEG = FIRST_LEG + n - 1 if n else FIRST_LEG - 1
 
     col_d_hdr = "Az campo °" if azimut_directo else "Ang.obs °"
     headers = [
-        "#",  # A
-        "Armada",  # B
-        "Punto",  # C
-        col_d_hdr,  # D INPUT
-        "Dist m",  # E INPUT
-        "Ang.vert °",  # F INPUT
-        "HI m",  # G INPUT
-        "HT m",  # H INPUT
-        "Ang.deriv °",  # I
-        "Ang.corr °",  # J
-        "Az corr °",  # K
-        "ΔN m",  # L
-        "ΔE m",  # M
-        "ΔZ m",  # N
-        "Corr.N m",  # O
-        "Corr.E m",  # P
-        "Corr.Z m",  # Q
-        "Norte aj.",  # R
-        "Este aj.",  # S
-        "Cota aj.",  # T
+        "#",
+        "Armada",
+        "Punto",
+        col_d_hdr,
+        "Dist m",
+        "Ang.vert °",
+        "HI m",
+        "HT m",
+        "Ang.deriv °",
+        "Ang.corr °",
+        "Az corr °",
+        "ΔN m",
+        "ΔE m",
+        "ΔZ m",
+        "Corr.N m",
+        "Corr.E m",
+        "Corr.Z m",
+        "Norte aj.",
+        "Este aj.",
+        "Cota aj.",
+        "En Σ",
     ]
     for c, h in enumerate(headers, 1):
         _cell(ws, HDR_ROW, c, h, fill=_FILL_HDR, font=_FONT_HDR, align=_AL_C)
@@ -317,9 +484,8 @@ def build_poligonal_xlsx_bytes(
         align=_AL_R,
         num_fmt="0.0000",
     )
+    _cell(ws, START_ROW, 21, "—", fill=_FILL_ARRANQUE, align=_AL_C, font=_FONT_MUTED)
 
-    # Referencias fijas del bloque de cierres (columna W):
-    # W19 Diff angular (°), W21 ErrN=ΣΔN, W22 ErrE=ΣΔE, W23 Peri, W24 ErrZ
     for i, e in enumerate(legs):
         r = FIRST_LEG + i
         lectura = _az_campo_lectura(e, azimut_directo=azimut_directo)
@@ -363,10 +529,10 @@ def build_poligonal_xlsx_bytes(
         _cell(ws, r, 7, float(hi), fill=_FILL_INPUT, align=_AL_R, num_fmt="0.000")
         _cell(ws, r, 8, float(ht), fill=_FILL_INPUT, align=_AL_R, num_fmt="0.000")
 
-        # I: Ang.deriv
+        # I Ang.deriv — mismo despeje que angulo_obs_derivado_desde_* en backend
         if azimut_directo:
             if i == 0:
-                _cell(ws, r, 9, f"=MOD(D{r}-$B$14,360)", fill=_FILL_CALC, align=_AL_R, num_fmt="0.000000")
+                _cell(ws, r, 9, f"=MOD(D{r}-Resumen!$B$15,360)", fill=_FILL_CALC, align=_AL_R, num_fmt="0.000000")
             else:
                 prev = r - 1
                 _cell(
@@ -379,13 +545,20 @@ def build_poligonal_xlsx_bytes(
                     num_fmt="0.000000",
                 )
         else:
-            # Ángulo observado de campo (entrada D)
             _cell(ws, r, 9, f"=D{r}", fill=_FILL_CALC, align=_AL_R, num_fmt="0.000000")
 
-        # J: Ang.corr = Ang − Diff/n   (corr = −Diff/n)
-        _cell(ws, r, 10, f"=I{r}-$W$19/$B$15", fill=_FILL_CALC, align=_AL_R, num_fmt="0.000000")
+        # J Ang.corr = Ang − Diff/n_angulos   (corr = −Diff/n)
+        _cell(
+            ws,
+            r,
+            10,
+            f"=I{r}-Resumen!$B$28/MAX(Resumen!$B$20,1)",
+            fill=_FILL_CALC,
+            align=_AL_R,
+            num_fmt="0.000000",
+        )
 
-        # K: Az corr — conserva 1º; luego MOD(prev+180+Ang.corr,360)
+        # K Az corr
         if azimut_directo:
             if i == 0:
                 _cell(ws, r, 11, f"=D{r}", fill=_FILL_CALC, align=_AL_R, num_fmt="0.000000")
@@ -402,7 +575,7 @@ def build_poligonal_xlsx_bytes(
                 )
         else:
             if i == 0:
-                _cell(ws, r, 11, "=$B$14", fill=_FILL_CALC, align=_AL_R, num_fmt="0.000000")
+                _cell(ws, r, 11, "=Resumen!$B$15", fill=_FILL_CALC, align=_AL_R, num_fmt="0.000000")
             else:
                 prev = r - 1
                 _cell(
@@ -426,9 +599,33 @@ def build_poligonal_xlsx_bytes(
             align=_AL_R,
             num_fmt="0.0000",
         )
-        _cell(ws, r, 15, f"=IF($W$23<=0,0,-$W$21*E{r}/$W$23)", fill=_FILL_CALC, align=_AL_R, num_fmt="0.0000")
-        _cell(ws, r, 16, f"=IF($W$23<=0,0,-$W$22*E{r}/$W$23)", fill=_FILL_CALC, align=_AL_R, num_fmt="0.0000")
-        _cell(ws, r, 17, f"=IF($W$23<=0,0,-$W$24*E{r}/$W$23)", fill=_FILL_CALC, align=_AL_R, num_fmt="0.0000")
+        _cell(
+            ws,
+            r,
+            15,
+            f"=IF(Resumen!$B$36<=0,0,-Resumen!$B$34*E{r}/Resumen!$B$36)",
+            fill=_FILL_CALC,
+            align=_AL_R,
+            num_fmt="0.0000",
+        )
+        _cell(
+            ws,
+            r,
+            16,
+            f"=IF(Resumen!$B$36<=0,0,-Resumen!$B$35*E{r}/Resumen!$B$36)",
+            fill=_FILL_CALC,
+            align=_AL_R,
+            num_fmt="0.0000",
+        )
+        _cell(
+            ws,
+            r,
+            17,
+            f"=IF(Resumen!$B$36<=0,0,-Resumen!$B$37*E{r}/Resumen!$B$36)",
+            fill=_FILL_CALC,
+            align=_AL_R,
+            num_fmt="0.0000",
+        )
 
         prev_r = START_ROW if i == 0 else (r - 1)
         _cell(ws, r, 18, f"=R{prev_r}+L{r}+O{r}", fill=_FILL_CALC, align=_AL_R, num_fmt="0.0000")
@@ -443,206 +640,49 @@ def build_poligonal_xlsx_bytes(
             num_fmt="0.0000",
         )
 
+        # U En Σ: 1º tramo excluido si hay orientación (amarre inicial)
+        if i == 0:
+            _cell(
+                ws,
+                r,
+                21,
+                '=IF(Resumen!$B$18=1,0,1)',
+                fill=_FILL_CALC,
+                align=_AL_C,
+                num_fmt="0",
+            )
+        else:
+            _cell(ws, r, 21, 1, fill=_FILL_CALC, align=_AL_C, num_fmt="0")
+
     if n == 0:
-        FIRST_LEG = START_ROW
         LAST_LEG = START_ROW
 
-    # ── Bloque auxiliar W (referencias internas) ─────────────────────────────
-    BLK = 22  # V labels, W values
-    _cell(ws, 18, BLK, "REF. FÓRMULAS", fill=_FILL_HDR2, font=_FONT_HDR, align=_AL_L)
-    ws.merge_cells(start_row=18, start_column=BLK, end_row=18, end_column=BLK + 1)
-
-    if n > 0:
-        rng_I = f"I{FIRST_LEG}:I{LAST_LEG}"
-        rng_L = f"L{FIRST_LEG}:L{LAST_LEG}"
-        rng_M = f"M{FIRST_LEG}:M{LAST_LEG}"
-        rng_N = f"N{FIRST_LEG}:N{LAST_LEG}"
-        rng_E = f"E{FIRST_LEG}:E{LAST_LEG}"
-    else:
-        rng_I = rng_L = rng_M = rng_N = rng_E = "I19"
-
-    # W19 Diff — usado por Ang.corr
-    _cell(ws, 19, BLK, "Diff angular (°)", fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
-    _cell(
-        ws,
-        19,
-        BLK + 1,
-        f"=IF($B$15<=0,0,SUM({rng_I})-IF($B$11=1,($B$15-2)*180,($B$15+2)*180))",
-        fill=_FILL_CALC,
-        font=_FONT_CELL,
-        align=_AL_R,
-        num_fmt="0.000000",
-    )
-    _cell(ws, 20, BLK, "(reservado)", fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
-    _cell(ws, 20, BLK + 1, None, fill=_FILL_CALC)
-
-    _cell(ws, 21, BLK, "ErrN = ΣΔN (m)", fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
-    _cell(
-        ws,
-        21,
-        BLK + 1,
-        f"=IF($B$15<=0,0,SUM({rng_L}))",
-        fill=_FILL_CALC,
-        font=_FONT_CELL,
-        align=_AL_R,
-        num_fmt="0.0000",
-    )
-    _cell(ws, 22, BLK, "ErrE = ΣΔE (m)", fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
-    _cell(
-        ws,
-        22,
-        BLK + 1,
-        f"=IF($B$15<=0,0,SUM({rng_M}))",
-        fill=_FILL_CALC,
-        font=_FONT_CELL,
-        align=_AL_R,
-        num_fmt="0.0000",
-    )
-    _cell(ws, 23, BLK, "Perímetro (m)", fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
-    _cell(
-        ws,
-        23,
-        BLK + 1,
-        f"=IF($B$15<=0,0,SUM({rng_E}))",
-        fill=_FILL_CALC,
-        font=_FONT_CELL,
-        align=_AL_R,
-        num_fmt="0.000",
-    )
-    _cell(ws, 24, BLK, "ErrZ = ΣΔZ (m)", fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
-    _cell(
-        ws,
-        24,
-        BLK + 1,
-        f"=IF($B$15<=0,0,SUM({rng_N}))",
-        fill=_FILL_CALC,
-        font=_FONT_CELL,
-        align=_AL_R,
-        num_fmt="0.0000",
-    )
-
-    # ── Cierre angular (columna Y) ───────────────────────────────────────────
-    YA = 25
-    _cell(ws, 18, YA, "CIERRE ANGULAR", fill=_FILL_HDR2, font=_FONT_HDR, align=_AL_L)
-    ws.merge_cells(start_row=18, start_column=YA, end_row=18, end_column=YA + 1)
-    # Valores en columna Z (YA+1)
-    ang_rows = [
-        (19, "Sentido", '=IF($B$11=1,"Antihorario (int.)","Horario (ext.)")', None),
-        (20, "Áng. / Vért.", '=$B$15&" / "&$B$15', None),
-        (21, "Σ Observada (°)", f"=IF($B$15<=0,0,SUM({rng_I}))", "0.000000"),
-        (22, "Σ Teórica (°)", '=IF($B$11=1,($B$15-2)*180,($B$15+2)*180)', "0.000000"),
-        (23, "Diferencia (\")", "=$W$19*3600", "0.00"),
-        (24, "Tolerancia (\")", "=$B$13*SQRT(MAX($B$15,1))", "0.0"),
-        (25, "Estado", '=IF(ABS(Z23)<=Z24,"CUMPLE","REVISAR")', None),
-    ]
-    for r, lab, formul, fmt in ang_rows:
-        _cell(ws, r, YA, lab, fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
-        cell = _cell(
-            ws,
-            r,
-            YA + 1,
-            formul,
-            fill=_FILL_CALC,
-            font=Font(bold=True, size=9) if r == 25 else _FONT_CELL,
-            align=_AL_R,
-            num_fmt=fmt,
-        )
-        del cell
-    ws.conditional_formatting.add(
-        f"{get_column_letter(YA + 1)}25",
-        FormulaRule(formula=[f'{get_column_letter(YA + 1)}25="CUMPLE"'], fill=_FILL_OK),
-    )
-    ws.conditional_formatting.add(
-        f"{get_column_letter(YA + 1)}25",
-        FormulaRule(formula=[f'{get_column_letter(YA + 1)}25="REVISAR"'], fill=_FILL_BAD),
-    )
-
-    # ── Cierre lineal (columna AA) — ΔN/ΔE como en plataforma (−Σ proyecciones)
-    LA = 27
-    _cell(ws, 18, LA, "CIERRE LINEAL (campo)", fill=_FILL_HDR2, font=_FONT_HDR, align=_AL_L)
-    ws.merge_cells(start_row=18, start_column=LA, end_row=18, end_column=LA + 1)
-    # Valores en columna AB (LA+1)
-    lin_rows = [
-        (19, "Perímetro (m)", "=$W$23", "0.000"),
-        (20, "ΔN (m)", "=-W21", "0.0000"),
-        (21, "ΔE (m)", "=-W22", "0.0000"),
-        (22, "ΔZ (m)", "=-W24", "0.0000"),
-        (23, "Error lineal (m)", "=SQRT(W21^2+W22^2)", "0.0000"),
-        (24, "Cierre 1:N", "=IF(AB23<=1E-9,1E9,ROUND(W23/AB23,0))", "0"),
-        (25, "Tolerancia plan", '="1:"&$B$12', None),
-        (26, "Estado", '=IF(AB24>=$B$12,"CUMPLE","NO CUMPLE")', None),
-    ]
-    for r, lab, formul, fmt in lin_rows:
-        _cell(ws, r, LA, lab, fill=_FILL_CALC, font=_FONT_MUTED, align=_AL_L)
-        _cell(
-            ws,
-            r,
-            LA + 1,
-            formul,
-            fill=_FILL_CALC,
-            font=Font(bold=True, size=9) if r == 26 else _FONT_CELL,
-            align=_AL_R,
-            num_fmt=fmt,
-        )
-    ws.conditional_formatting.add(
-        f"{get_column_letter(LA + 1)}26",
-        FormulaRule(formula=[f'{get_column_letter(LA + 1)}26="CUMPLE"'], fill=_FILL_OK),
-    )
-    ws.conditional_formatting.add(
-        f"{get_column_letter(LA + 1)}26",
-        FormulaRule(formula=[f'{get_column_letter(LA + 1)}26="NO CUMPLE"'], fill=_FILL_BAD),
-    )
-
-    note_row = max(LAST_LEG + 2, 28)
+    note_row = max(LAST_LEG + 2, 8)
     _cell(
         ws,
         note_row,
         1,
-        "Compensación Bowditch: Corr.N/E/Z = −ΣΔ × Dist / Perímetro; "
-        "Norte/Este/Cota aj. acumulan Δ + corrección desde el arranque. "
-        "Ángulos en grados decimales. Diff angular = Σobs − Σteórica; "
-        "Ang.corr = Ang.deriv − Diff/n (reparte −Diff/n).",
+        "Bowditch: Corr = −Err × Dist / Perímetro (Resumen!B34:B37). "
+        "Diff angular = Resumen!B28 = Σobs − Σteórica. "
+        "Ang.corr = Ang.deriv − Diff / n_ángulos.",
         font=_FONT_MUTED,
         border=False,
         align=_AL_L,
     )
-    ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=20)
+    ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=21)
 
     widths = {
-        "A": 5,
-        "B": 7,
-        "C": 12,
-        "D": 11,
-        "E": 9,
-        "F": 10,
-        "G": 7,
-        "H": 7,
-        "I": 11,
-        "J": 11,
-        "K": 10,
-        "L": 9,
-        "M": 9,
-        "N": 9,
-        "O": 9,
-        "P": 9,
-        "Q": 9,
-        "R": 11,
-        "S": 11,
-        "T": 10,
-        "V": 18,
-        "W": 12,
-        "Y": 16,
-        "Z": 14,
-        "AA": 18,
-        "AB": 12,
+        "A": 5, "B": 7, "C": 12, "D": 11, "E": 9, "F": 10, "G": 7, "H": 7,
+        "I": 11, "J": 11, "K": 10, "L": 9, "M": 9, "N": 9, "O": 9, "P": 9, "Q": 9,
+        "R": 11, "S": 11, "T": 10, "U": 6,
     }
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
+    ws.freeze_panes = "A5"
 
-    ws.freeze_panes = "A19"
-    ws.print_title_rows = "1:18"
-
-    # ── Hoja Esquema ─────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    # Hoja Esquema
+    # ══════════════════════════════════════════════════════════════════════════
     ws2 = wb.create_sheet("Esquema")
     _cell(
         ws2,
@@ -658,8 +698,7 @@ def build_poligonal_xlsx_bytes(
         ws2,
         2,
         1,
-        "Este/Norte referencian la hoja Cartera. Si edita azimut/ángulo o distancia allí, "
-        "el gráfico se actualiza al recalcular en Excel.",
+        "Este/Norte referencian Cartera. Al editar azimut/ángulo o distancia, el gráfico se actualiza al recalcular.",
         font=_FONT_MUTED,
         border=False,
     )
@@ -691,10 +730,6 @@ def build_poligonal_xlsx_bytes(
         _cell(ws2, close_r, 4, f"=Cartera!R{START_ROW}", fill=_FILL_ARRANQUE, align=_AL_R, num_fmt="0.0000")
         _cell(ws2, close_r, 5, f"=Cartera!T{START_ROW}", fill=_FILL_ARRANQUE, align=_AL_R, num_fmt="0.0000")
 
-    for col, w in [("A", 5), ("B", 18), ("C", 14), ("D", 14), ("E", 12)]:
-        ws2.column_dimensions[col].width = w
-
-    if n > 0:
         chart = ScatterChart()
         chart.title = "Esquema — Este vs Norte (ajustado)"
         chart.style = 10
@@ -702,9 +737,8 @@ def build_poligonal_xlsx_bytes(
         chart.y_axis.title = "Norte (m)"
         chart.height = 14
         chart.width = 18
-        end_r = close_r
-        xvalues = Reference(ws2, min_col=3, min_row=5, max_row=end_r)
-        yvalues = Reference(ws2, min_col=4, min_row=5, max_row=end_r)
+        xvalues = Reference(ws2, min_col=3, min_row=5, max_row=close_r)
+        yvalues = Reference(ws2, min_col=4, min_row=5, max_row=close_r)
         series = Series(yvalues, xvalues, title="Poligonal")
         series.marker.symbol = "circle"
         series.marker.size = 7
@@ -713,16 +747,8 @@ def build_poligonal_xlsx_bytes(
         chart.legend = None
         ws2.add_chart(chart, "G4")
 
-    _cell(ws2, close_r + 2, 1, "Leyenda Cartera:", font=_FONT_SUB, border=False)
-    _cell(
-        ws2,
-        close_r + 3,
-        1,
-        "Amarillo = editable (Az/Ang campo, Dist, Ang.vert, HI, HT, arranque N/E/Z, parámetros)",
-        font=_FONT_MUTED,
-        border=False,
-    )
-    ws2.merge_cells(start_row=close_r + 3, start_column=1, end_row=close_r + 3, end_column=5)
+    for col, w in [("A", 5), ("B", 18), ("C", 14), ("D", 14), ("E", 12)]:
+        ws2.column_dimensions[col].width = w
 
     buf = io.BytesIO()
     wb.save(buf)
