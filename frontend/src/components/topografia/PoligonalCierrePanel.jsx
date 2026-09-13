@@ -33,7 +33,29 @@ export default function PoligonalCierrePanel({ cierre }) {
           <tbody>
             <tr>
               <td style={C.rowL}>Sentido</td>
-              <td style={C.rowV}>{cierre.sentido === 'horario' ? 'Horario (ext.)' : 'Antihorario (int.)'}</td>
+              <td style={C.rowV}>
+                {cierre.sentido === 'horario' ? 'Horario (ext.)' : 'Antihorario (int.)'}
+                {cierre.sentido_auto && cierre.sentido_inferido && (
+                  <span
+                    title="Sentido identificado de forma semiautomática según Σ observada vs teórica (y winding si empata)"
+                    style={{
+                      marginLeft: 6,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      letterSpacing: 0.3,
+                      textTransform: 'uppercase',
+                      background: '#f0fdf4',
+                      color: '#166534',
+                      border: '1px solid #bbf7d0',
+                      borderRadius: 4,
+                      padding: '1px 5px',
+                      verticalAlign: 'middle',
+                    }}
+                  >
+                    auto
+                  </span>
+                )}
+              </td>
             </tr>
             <tr>
               <td style={C.rowL}>Ángulos / Vértices</td>
@@ -76,7 +98,7 @@ export default function PoligonalCierrePanel({ cierre }) {
             </tr>
             <tr><td style={C.rowL}>Diferencia</td><td style={{ ...C.rowV, color: '#b45309' }}>{segTxt}</td></tr>
             {cierre.error_orientacion_seg != null && (
-              <tr title="Azimut al visado de referencia al inicio vs al final (coordenadas de amarre o ceros atrás)">
+              <tr title="Azimut de arranque de la poligonal (primer lado) vs azimut de cierre / orientación final">
                 <td style={C.rowL}>Orient. ref.</td>
                 <td style={C.rowV}>
                   {cierre.error_orientacion_seg >= 0 ? '' : '-'}

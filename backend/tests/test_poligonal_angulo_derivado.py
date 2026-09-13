@@ -22,6 +22,7 @@ from topografia_utils import (  # noqa: E402
     angulo_obs_derivado_desde_base,
     calcular_cierre_poligonal,
     decimal_to_gms,
+    inferir_sentido_poligonal,
     radiar_armadas,
 )
 
@@ -200,11 +201,235 @@ class TestSentidoSoloTeorica(unittest.TestCase):
             for i in range(4)
         ]
         arms, _, _ = radiar_armadas(armadas, estaciones, {"A": A, "D": D})
-        cah = calcular_cierre_poligonal(arms, {"nombre": "A", **A}, sentido="antihorario", tipo_pol="cerrada")
-        cho = calcular_cierre_poligonal(arms, {"nombre": "A", **A}, sentido="horario", tipo_pol="cerrada")
+        cah = calcular_cierre_poligonal(
+            arms, {"nombre": "A", **A}, sentido="antihorario", tipo_pol="cerrada",
+            inferir_sentido=False,
+        )
+        cho = calcular_cierre_poligonal(
+            arms, {"nombre": "A", **A}, sentido="horario", tipo_pol="cerrada",
+            inferir_sentido=False,
+        )
         self.assertAlmostEqual(cah["suma_observada"], cho["suma_observada"])
         self.assertEqual(cah["suma_teorica"], 360)
         self.assertEqual(cho["suma_teorica"], 1080)
+
+    def test_inferencia_semiautomatica_antihorario(self):
+        A = {"norte": 1000.0, "este": 2000.0, "cota": 100.0}
+        D = {"norte": 1000.0, "este": 1900.0, "cota": 100.0}
+        armadas = [
+            {"id": "a1", "orden": 1, "estacion_nombre": "A", "visado_nombre": "D", "altura_instrumento": 1.5},
+            {"id": "a2", "orden": 2, "estacion_nombre": "B", "visado_nombre": "A", "altura_instrumento": 1.5},
+            {"id": "a3", "orden": 3, "estacion_nombre": "C", "visado_nombre": "B", "altura_instrumento": 1.5},
+            {"id": "a4", "orden": 4, "estacion_nombre": "D", "visado_nombre": "C", "altura_instrumento": 1.5},
+        ]
+        azs = [0.0, 270.0, 180.0, 90.0]
+        nombres = ["B", "C", "D", "A"]
+        estaciones = [
+            {
+                "id": f"p{i+1}", "armada_id": f"a{i+1}", "orden": 1,
+                "nombre_punto": nombres[i], "tipo_punto": "estacion",
+                "angulo_medido": azs[i], "angulo_vertical": 90.0,
+                "distancia": 100.0, "altura_objetivo": 0,
+            }
+            for i in range(4)
+        ]
+        arms, _, _ = radiar_armadas(armadas, estaciones, {"A": A, "D": D})
+        # Declarado horario (errado); la inferencia debe corregir a antihorario.
+        cierre = calcular_cierre_poligonal(
+            arms, {"nombre": "A", **A}, sentido="horario", tipo_pol="cerrada",
+            inferir_sentido=True,
+        )
+        self.assertEqual(cierre["sentido_inferido"], "antihorario")
+        self.assertEqual(cierre["sentido"], "antihorario")
+        self.assertEqual(cierre["suma_teorica"], 360)
+        self.assertTrue(cierre["sentido_auto"])
+
+
+class TestDerivacionUniformeYOrientRef(unittest.TestCase):
+    """Regresión: azimut directo + 2 armadas sin N/E de visado + orient. ref. arranque/cierre."""
+
+    def _gms(self, g, m, s):
+        return g + m / 60.0 + s / 3600.0
+
+    def test_visado_sin_coords_sigue_derivando(self):
+        """Si la cadena ya es azimut directo, un visado sin N/E no debe romper la derivación."""
+        gps2 = {"norte": 1000.0, "este": 2000.0, "cota": 100.0}
+        gps1 = {"norte": 1000.0, "este": 1900.0, "cota": 100.0}  # base GPS2→GPS1 = 270°
+        az_start = self._gms(164, 19, 53)
+        az_mid = self._gms(100, 0, 0)
+        az_end = self._gms(50, 0, 0)
+        armadas = [
+            {"id": "a1", "orden": 1, "estacion_nombre": "GPS2", "visado_nombre": "GPS1", "altura_instrumento": 1.5},
+            {"id": "a2", "orden": 2, "estacion_nombre": "D1", "visado_nombre": "GPS2", "altura_instrumento": 1.5},
+            # Visado inventado sin coordenadas → antes caía a ceros_atrás
+            {"id": "a3", "orden": 3, "estacion_nombre": "D2", "visado_nombre": "SIN_COORDS", "altura_instrumento": 1.5},
+            {"id": "a4", "orden": 4, "estacion_nombre": "D3", "visado_nombre": "D2", "altura_instrumento": 1.5},
+        ]
+        estaciones = [
+            {
+                "id": "p1", "armada_id": "a1", "orden": 1, "nombre_punto": "D1",
+                "tipo_punto": "estacion", "angulo_medido": az_start, "angulo_vertical": 90.0,
+                "distancia": 50.0, "altura_objetivo": 0,
+            },
+            {
+                "id": "p2", "armada_id": "a2", "orden": 1, "nombre_punto": "D2",
+                "tipo_punto": "estacion", "angulo_medido": az_mid, "angulo_vertical": 90.0,
+                "distancia": 40.0, "altura_objetivo": 0,
+            },
+            {
+                "id": "p3", "armada_id": "a3", "orden": 1, "nombre_punto": "D3",
+                "tipo_punto": "estacion", "angulo_medido": az_end, "angulo_vertical": 90.0,
+                "distancia": 35.0, "altura_objetivo": 0,
+            },
+            {
+                "id": "p4", "armada_id": "a4", "orden": 1, "nombre_punto": "D4",
+                "tipo_punto": "estacion", "angulo_medido": 10.0, "angulo_vertical": 90.0,
+                "distancia": 30.0, "altura_objetivo": 0,
+            },
+        ]
+        arms, _, flat = radiar_armadas(armadas, estaciones, {"GPS2": gps2, "GPS1": gps1})
+        self.assertTrue(all(a["metodo_azimut"] == "coordenadas" for a in arms))
+        self.assertTrue(all(p.get("angulo_derivado_para_cierre") for p in flat))
+        # Armada 3 (visado sin coords) debe usar recíproco de llegada a D2
+        self.assertAlmostEqual(arms[2]["base_azimut"], (az_mid + 180) % 360, places=5)
+
+    def test_orient_ref_usa_azimut_arranque_no_amarre(self):
+        """Orient. ref. = azimut primer lado vs azimut de orientación final (~55"), no GPS."""
+        # D1 = vértice inicial. GPS2 en la dirección del lado previo (D4), para que
+        # el ángulo derivado en D1 sea el exterior de la poligonal (270° horario).
+        d1 = {"norte": 5000.0, "este": 6000.0, "cota": 100.0}
+        az_arranque = self._gms(164, 19, 53)
+        az_cierre = self._gms(164, 18, 58)
+        az_backsight = (az_arranque + 90) % 360  # D1 → D4 (= recíproco del último lado)
+        gps2 = {
+            "norte": d1["norte"] + 80.0 * math.cos(math.radians(az_backsight)),
+            "este": d1["este"] + 80.0 * math.sin(math.radians(az_backsight)),
+            "cota": 100.0,
+        }
+        azs_lados = [
+            az_arranque,
+            (az_arranque + 90) % 360,
+            (az_arranque + 180) % 360,
+            (az_arranque + 270) % 360,
+        ]
+        nombres_est = ["D1", "D2", "D3", "D4"]
+        nombres_fwd = ["D2", "D3", "D4", "D1"]
+        visados = ["GPS2", "D1", "D2", "D3"]
+        armadas = []
+        estaciones = []
+        for i in range(4):
+            armadas.append({
+                "id": f"a{i+1}", "orden": i + 1,
+                "estacion_nombre": nombres_est[i],
+                "visado_nombre": visados[i],
+                "altura_instrumento": 1.5,
+            })
+            estaciones.append({
+                "id": f"p{i+1}", "armada_id": f"a{i+1}", "orden": 1,
+                "nombre_punto": nombres_fwd[i], "tipo_punto": "estacion",
+                "angulo_medido": azs_lados[i], "angulo_vertical": 90.0,
+                "distancia": 100.0, "altura_objetivo": 0,
+            })
+        armadas.append({
+            "id": "a5", "orden": 5,
+            "estacion_nombre": "D1", "visado_nombre": "GPS2",
+            "altura_instrumento": 1.5,
+        })
+        estaciones.append({
+            "id": "p5", "armada_id": "a5", "orden": 1,
+            "nombre_punto": "CIERRE", "tipo_punto": "estacion",
+            "angulo_medido": az_cierre, "angulo_vertical": 90.0,
+            "distancia": 0.0, "altura_objetivo": 0,
+        })
+        arms, _, _ = radiar_armadas(armadas, estaciones, {"D1": d1, "GPS2": gps2})
+        cierre = calcular_cierre_poligonal(
+            arms,
+            {"nombre": "D1", **d1},
+            sentido="horario",
+            tipo_pol="cerrada",
+            precision_angular_seg=10.0,
+        )
+        self.assertTrue(cierre["tiene_orientacion"])
+        self.assertTrue(cierre["angulos_derivados"])
+        self.assertEqual(cierre["azimut_referencia_inicial_texto"], decimal_to_gms(az_arranque))
+        self.assertEqual(cierre["azimut_referencia_final_texto"], decimal_to_gms(az_cierre))
+        self.assertFalse((cierre["azimut_referencia_inicial_texto"] or "").startswith("286"))
+        self.assertIsNotNone(cierre["error_orientacion_seg"])
+        self.assertLess(abs(cierre["error_orientacion_seg"]), 120)
+        self.assertAlmostEqual(cierre["error_orientacion_seg"], -55.0, delta=1.0)
+        self.assertTrue(all(d.get("derivado") for d in cierre["angulos_cierre_detalle"]))
+        # Con geometría coherente, Diferencia ≈ residual de orientación (~55"), no cientos de grados
+        self.assertIsNotNone(cierre["error_angular_seg"])
+        self.assertLess(abs(cierre["error_angular_seg"]), 3600)
+
+    def test_dos_angulos_sin_coords_visado_no_corrompen_suma(self):
+        """Dos armadas con visado sin N/E deben derivarse igual y no inflar Σ observada."""
+        A = {"norte": 1000.0, "este": 2000.0, "cota": 100.0}
+        D = {"norte": 1000.0, "este": 1900.0, "cota": 100.0}
+        armadas = [
+            {"id": "a1", "orden": 1, "estacion_nombre": "A", "visado_nombre": "D", "altura_instrumento": 1.5},
+            {"id": "a2", "orden": 2, "estacion_nombre": "B", "visado_nombre": "SIN_A", "altura_instrumento": 1.5},
+            {"id": "a3", "orden": 3, "estacion_nombre": "C", "visado_nombre": "SIN_B", "altura_instrumento": 1.5},
+            {"id": "a4", "orden": 4, "estacion_nombre": "D", "visado_nombre": "C", "altura_instrumento": 1.5},
+        ]
+        azs = [0.0, 270.0, 180.0, 90.0]
+        nombres = ["B", "C", "D", "A"]
+        estaciones = [
+            {
+                "id": f"p{i+1}", "armada_id": f"a{i+1}", "orden": 1,
+                "nombre_punto": nombres[i], "tipo_punto": "estacion",
+                "angulo_medido": azs[i], "angulo_vertical": 90.0,
+                "distancia": 100.0, "altura_objetivo": 0,
+            }
+            for i in range(4)
+        ]
+        arms, _, _ = radiar_armadas(armadas, estaciones, {"A": A, "D": D})
+        self.assertTrue(all(a["metodo_azimut"] == "coordenadas" for a in arms))
+        cierre = calcular_cierre_poligonal(
+            arms, {"nombre": "A", **A}, sentido="antihorario", tipo_pol="cerrada",
+            inferir_sentido=False,
+        )
+        self.assertTrue(all(d["derivado"] for d in cierre["angulos_cierre_detalle"]))
+        self.assertAlmostEqual(cierre["suma_observada"], 360.0, places=3)
+        self.assertAlmostEqual(cierre["error_angular_seg"] or 0, 0.0, delta=1.0)
+
+    def test_ceros_atras_sigue_sin_forzar_coordenadas(self):
+        armadas = [
+            {"id": "a1", "orden": 1, "estacion_nombre": "E1", "visado_nombre": "V1", "altura_instrumento": 1.5},
+            {"id": "a2", "orden": 2, "estacion_nombre": "E2", "visado_nombre": "E1", "altura_instrumento": 1.5},
+        ]
+        estaciones = [
+            {
+                "id": "p1", "armada_id": "a1", "orden": 1, "nombre_punto": "E2",
+                "tipo_punto": "estacion", "angulo_medido": 90.0, "angulo_vertical": None,
+                "distancia": 50.0, "altura_objetivo": 0,
+            },
+            {
+                "id": "p2", "armada_id": "a2", "orden": 1, "nombre_punto": "E3",
+                "tipo_punto": "estacion", "angulo_medido": 90.0, "angulo_vertical": None,
+                "distancia": 40.0, "altura_objetivo": 0,
+            },
+        ]
+        arms, _, flat = radiar_armadas(armadas, estaciones, {})
+        self.assertTrue(all(a["metodo_azimut"] == "ceros_atras" for a in arms))
+        self.assertTrue(all(p.get("angulo_derivado") is None for p in flat))
+        cierre = calcular_cierre_poligonal(arms, {"nombre": "E1"}, sentido="antihorario")
+        self.assertFalse(cierre.get("angulos_derivados"))
+
+
+class TestInferirSentidoHelper(unittest.TestCase):
+    def test_horario_por_suma(self):
+        # n=4 → teor H=1080, A=360; suma cerca de 1080
+        self.assertEqual(inferir_sentido_poligonal(1080.05, 4), "horario")
+
+    def test_antihorario_por_suma(self):
+        self.assertEqual(inferir_sentido_poligonal(360.1, 4), "antihorario")
+
+    def test_orientacion_fuerza_horario(self):
+        self.assertEqual(
+            inferir_sentido_poligonal(500.0, 32, tiene_orientacion=True),
+            "horario",
+        )
 
 
 if __name__ == "__main__":
