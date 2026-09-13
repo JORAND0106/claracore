@@ -490,6 +490,116 @@ def fusionar_estaciones_vista(estaciones_db: list, estaciones_flat: list) -> lis
     return enriquecer_estaciones_poligonal(merged)
 
 
+def aplicar_cierre_lineal_coords_ajustadas(
+    cierre: dict,
+    *,
+    punto_inicial: Optional[dict],
+    estaciones: list,
+    tol_relativa: int = 25000,
+    perimetro: Optional[float] = None,
+) -> dict:
+    """Fuerza el cierre lineal a medirse con coordenadas ajustadas (post-Bowditch).
+
+    Evita que un recálculo por azimut×distancia (sin correcciones) muestre un
+    error peor que el preliminar tras «Terminar poligonal».
+    """
+    if not cierre:
+        return cierre
+    pi = punto_inicial or {}
+    if pi.get("norte") is None or pi.get("este") is None:
+        return cierre
+    trav = [
+        e
+        for e in sorted(estaciones or [], key=lambda x: x.get("orden") or 0)
+        if e.get("norte_ajustado") is not None and e.get("este_ajustado") is not None
+        and float(e.get("distancia") or 0) > 1e-9
+    ]
+    if not trav:
+        # También aceptar puntos con norte/este ya fusionados desde ajustados
+        trav = [
+            e
+            for e in sorted(estaciones or [], key=lambda x: x.get("orden") or 0)
+            if e.get("norte") is not None
+            and e.get("este") is not None
+            and float(e.get("distancia") or 0) > 1e-9
+            and e.get("correccion_norte") is not None
+        ]
+        if not trav:
+            return cierre
+        last_n = float(trav[-1]["norte"])
+        last_e = float(trav[-1]["este"])
+    else:
+        last_n = float(trav[-1]["norte_ajustado"])
+        last_e = float(trav[-1]["este_ajustado"])
+
+    dN = round(float(pi["norte"]) - last_n, 4)
+    dE = round(float(pi["este"]) - last_e, 4)
+    e_lin = round(math.hypot(dN, dE), 4)
+    peri = float(perimetro if perimetro is not None else (cierre.get("perimetro") or 0))
+    if e_lin > 1e-9 and peri > 0:
+        prec = peri / e_lin
+    elif peri > 0:
+        prec = 1e12
+    else:
+        prec = None
+    prec_int = int(round(prec)) if prec is not None else None
+    if prec_int is not None and prec_int > 10**9:
+        prec_int = 10**9
+    out = dict(cierre)
+    out["delta_norte"] = dN
+    out["delta_este"] = dE
+    out["error_lineal"] = e_lin
+    out["precision"] = prec_int
+    out["admisible_lineal"] = prec_int is not None and prec_int >= int(tol_relativa or 25000)
+    out["admisible"] = bool(
+        out.get("cerrado")
+        and out["admisible_lineal"]
+        and (out.get("admisible_angular") is not False)
+    )
+    out["cierre_desde_coords_ajustadas"] = True
+    return out
+
+
+def reconstruir_cierre_preliminar(
+    pol: Optional[dict],
+    perimetro: Optional[float] = None,
+) -> Optional[dict]:
+    """Cierre lineal de campo (pre-Bowditch) persistido o reconstruido desde ΔN/ΔE.
+
+    Tras «Terminar poligonal» el cierre vivo usa coords ajustadas (~0). El
+    preliminar (calidad de campo) queda en columnas dedicadas o, en poligonales
+    antiguas, en ``error_cierre_dn/de`` (misclosure de entrada al Bowditch).
+    """
+    if not pol or not pol.get("ajustada_at"):
+        return None
+    dn = pol.get("error_cierre_dn")
+    de = pol.get("error_cierre_de")
+    dz = pol.get("error_cierre_dz")
+    e_lin = pol.get("error_lineal_preliminar")
+    prec = pol.get("precision_relativa_preliminar")
+    if e_lin is None and dn is not None and de is not None:
+        e_lin = round(math.hypot(float(dn), float(de)), 4)
+    peri = float(perimetro) if perimetro is not None else None
+    if prec is None and e_lin is not None and peri is not None and peri > 0:
+        if float(e_lin) > 1e-9:
+            prec = int(round(peri / float(e_lin)))
+        else:
+            prec = int(1e9)
+    if e_lin is None and prec is None and dn is None and de is None:
+        return None
+    if prec is not None and prec > 10**9:
+        prec = 10**9
+    return {
+        "delta_norte": round(float(dn), 4) if dn is not None else None,
+        "delta_este": round(float(de), 4) if de is not None else None,
+        "delta_cota": round(float(dz), 4) if dz is not None else None,
+        "error_lineal": float(e_lin) if e_lin is not None else None,
+        "precision": int(prec) if prec is not None else None,
+        "perimetro": peri,
+        "es_preliminar": True,
+    }
+
+
 def ajustar_poligonal_armadas(
     pol: dict,
     armadas: list,
@@ -2868,6 +2978,171 @@ def html_rotulado_plano(contrato: dict, pol: dict, firmas: List[dict]) -> str:
     """
 
 
+# Opacidad satélite PDF (alineada con PoligonalGrafico.jsx)
+_POLIGONAL_SATELLITE_OPACITY = 0.42
+
+
+def _mapbox_access_token() -> str:
+    import os
+
+    return (os.getenv("MAPBOX_TOKEN") or os.getenv("VITE_MAPBOX_TOKEN") or "").strip()
+
+
+def _fetch_mapbox_satellite_png(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    width: int,
+    height: int,
+    token: str,
+) -> Optional[bytes]:
+    """Mapbox Static Images API — satélite encuadrado al bbox WGS84."""
+    import urllib.error
+    import urllib.request
+
+    w = max(64, min(int(width), 1280))
+    h = max(64, min(int(height), 1280))
+    # Asegurar orden
+    west, east = min(west, east), max(west, east)
+    south, north = min(south, north), max(south, north)
+    path = f"[{west},{south},{east},{north}]/{w}x{h}@2x"
+    url = (
+        "https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static/"
+        f"{path}?access_token={token}&attribution=false&logo=false"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ClaraCore-Topo/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read()
+        if data and data[:8] == b"\x89PNG\r\n\x1a\n":
+            return data
+        if data and data[:2] == b"\xff\xd8":
+            return data
+        return data or None
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+
+
+def svg_plano_poligonal_satelital(
+    estaciones: list,
+    punto_inicial: Optional[dict],
+    pol: dict,
+    *,
+    width: int = 980,
+    height: int = 560,
+    escala_texto: str = "",
+    punto_final: Optional[dict] = None,
+    cierre: Optional[dict] = None,
+) -> Optional[str]:
+    """Plano PDF con fondo satelital Mapbox (EPSG:3116→WGS84) y trazado encima.
+
+    Devuelve ``None`` si no hay token o falla la imagen estática (fallback cartesiano).
+    """
+    from topo_crs import bbox_lonlat, gk_bogota_to_wgs84, puntos_gk_a_lonlat
+
+    token = _mapbox_access_token()
+    if not token:
+        return None
+
+    puntos = _puntos_para_plano(estaciones, punto_inicial)
+    chain = _cadena_vertices_plano(puntos)
+    if len(chain) < 2:
+        return None
+
+    lonlats = puntos_gk_a_lonlat(chain)
+    if len(lonlats) < 2:
+        return None
+
+    bbox = bbox_lonlat(lonlats, pad_frac=0.10)
+    if not bbox:
+        return None
+    west, south, east, north = bbox
+
+    frame = 4
+    ml, mr, mt, mb = 8, 8, 8, 18
+    x0 = frame + ml
+    y0 = frame + mt
+    w = width - 2 * frame - ml - mr
+    h = height - 2 * frame - mt - mb
+
+    png = _fetch_mapbox_satellite_png(west, south, east, north, int(w), int(h), token)
+    if not png:
+        return None
+
+    mime = "image/jpeg" if png[:2] == b"\xff\xd8" else "image/png"
+    img_b64 = base64.b64encode(png).decode("ascii")
+
+    def tx(lon: float) -> float:
+        return x0 + (lon - west) / max(east - west, 1e-12) * w
+
+    def ty(lat: float) -> float:
+        return y0 + (north - lat) / max(north - south, 1e-12) * h
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        f'<rect x="0.5" y="0.5" width="{width - 1}" height="{height - 1}" fill="#fff" stroke="#000" stroke-width="0.6"/>',
+        f'<rect x="{x0}" y="{y0}" width="{w}" height="{h}" fill="#e5e7eb" stroke="#000" stroke-width="0.5"/>',
+        f'<image x="{x0}" y="{y0}" width="{w}" height="{h}" opacity="{_POLIGONAL_SATELLITE_OPACITY}" '
+        f'preserveAspectRatio="none" href="data:{mime};base64,{img_b64}" '
+        f'xlink:href="data:{mime};base64,{img_b64}"/>',
+    ]
+
+    # Trazado
+    pts_xy = []
+    for p in chain:
+        try:
+            lon, lat = gk_bogota_to_wgs84(float(p["este"]), float(p["norte"]))
+        except (TypeError, ValueError):
+            continue
+        pts_xy.append((tx(lon), ty(lat), p))
+
+    if len(pts_xy) >= 2:
+        pts_str = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in pts_xy)
+        cerrada = (pol.get("tipo") or "cerrada") == "cerrada"
+        if cerrada and len(pts_xy) >= 3:
+            parts.append(
+                f'<polygon points="{pts_str}" fill="rgba(37,99,235,0.12)" stroke="#1d4ed8" stroke-width="1.4"/>'
+            )
+        else:
+            parts.append(
+                f'<polyline points="{pts_str}" fill="none" stroke="#1d4ed8" stroke-width="1.4"/>'
+            )
+
+    for x, y, p in pts_xy:
+        nombre = html.escape(str(p.get("nombre") or ""))
+        tipo = (p.get("tipo_punto") or "").lower()
+        if tipo == "amarre":
+            fill = "#16a34a"
+        elif tipo == "auxiliar":
+            fill = "#ea580c"
+        else:
+            fill = "#2563eb"
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.2" fill="{fill}" stroke="#fff" stroke-width="0.8"/>'
+        )
+        if nombre:
+            parts.append(
+                f'<text x="{x + 4:.1f}" y="{y - 4:.1f}" font-size="6.5" font-weight="700" '
+                f'fill="#1e3a8a" stroke="#fff" stroke-width="2.5" paint-order="stroke">{nombre}</text>'
+            )
+
+    if escala_texto:
+        parts.append(
+            f'<text x="{x0 + 4}" y="{y0 + h + 12}" font-size="6.5" fill="#374151">'
+            f'{html.escape(escala_texto)} · Satélite MAGNA-SIRGAS/EPSG:3116</text>'
+        )
+    # Rosa N
+    nx, ny = x0 + w - 18, y0 + 22
+    parts.append(
+        f'<polygon points="{nx},{ny - 10} {nx - 5},{ny + 2} {nx + 5},{ny + 2}" fill="#1e40af"/>'
+        f'<text x="{nx}" y="{ny - 12}" font-size="8" font-weight="700" fill="#1e40af" text-anchor="middle">N</text>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 def html_pagina_plano_poligonal(
     contrato: dict,
     pol: dict,
@@ -2877,28 +3152,42 @@ def html_pagina_plano_poligonal(
     punto_final: Optional[dict] = None,
     cierre: Optional[dict] = None,
 ) -> str:
-    """Una sola hoja carta horizontal: plano a escala uniforme y rotulado compacto."""
+    """Una sola hoja carta horizontal: plano satelital a escala (encuadre automático)."""
     titulo = f"Plano — {pol.get('nombre', '')}"
     if (pol.get("tipo") or "cerrada") == "abierta":
         titulo += " (abierta)"
     puntos = _puntos_para_plano(estaciones, punto_inicial)
     escala_txt, span_m = _escala_plano_sugerida(puntos)
-    svg = svg_plano_poligonal_profesional(
+    # Carta horizontal: aprovechar al máximo el área útil
+    width, height = 980, 560
+    svg = svg_plano_poligonal_satelital(
         estaciones,
         punto_inicial,
         pol,
-        width=720,
-        height=400,
+        width=width,
+        height=height,
         escala_texto=escala_txt,
         punto_final=punto_final,
         cierre=cierre,
     )
+    if not svg:
+        svg = svg_plano_poligonal_profesional(
+            estaciones,
+            punto_inicial,
+            pol,
+            width=width,
+            height=height,
+            escala_texto=escala_txt,
+            punto_final=punto_final,
+            cierre=cierre,
+        )
     b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     rotulado = html_rotulado_plano(contrato, pol, firmas)
     leyenda = (
         '<span style="font-size:5pt;margin-right:6px;">● Est.</span>'
         '<span style="font-size:5pt;margin-right:6px;color:#ea580c;">▲ Aux.</span>'
         '<span style="font-size:5pt;margin-right:6px;color:#16a34a;">■ Am.</span>'
+        '<span style="font-size:5pt;margin-right:6px;">Fondo: satélite Mapbox (opacidad media-baja)</span>'
     )
     if (pol.get("tipo") or "cerrada") == "abierta":
         leyenda += (
@@ -2906,7 +3195,8 @@ def html_pagina_plano_poligonal(
             '<span style="font-size:5pt;color:#c2410c;">○ Llegada calc.</span>'
         )
     info_escala = (
-        f'Escala sugerida {html.escape(escala_txt)} · Ext. ~{_fmt_pdf_num(span_m, 1)} m · Carta horizontal'
+        f'Escala sugerida {html.escape(escala_txt)} · Ext. ~{_fmt_pdf_num(span_m, 1)} m'
+        f' · Encuadre automático · Carta horizontal'
     )
     return f"""
     <div style="page-break-before:always;"></div>
@@ -2923,7 +3213,7 @@ def html_pagina_plano_poligonal(
       </tr>
       <tr>
         <td style="padding:2px 4px;background:#fff;line-height:0;">
-          <img src="data:image/svg+xml;base64,{b64}" width="720" height="400" style="display:block;" />
+          <img src="data:image/svg+xml;base64,{b64}" width="{width}" height="{height}" style="display:block;width:100%;height:auto;" />
         </td>
       </tr>
       <tr>

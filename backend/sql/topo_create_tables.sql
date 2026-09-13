@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS topo_poligonales (
     error_cierre_de      DOUBLE PRECISION,
     error_lineal         DOUBLE PRECISION,
     precision_relativa   DOUBLE PRECISION,
+    error_lineal_preliminar DOUBLE PRECISION,
+    precision_relativa_preliminar DOUBLE PRECISION,
     metodo               VARCHAR(20) DEFAULT 'trigonometrica',
     tolerancia_cota_mm_km DOUBLE PRECISION DEFAULT 12,
     precision_angular_seg  DOUBLE PRECISION DEFAULT 10,

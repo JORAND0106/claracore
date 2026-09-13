@@ -1045,7 +1045,7 @@ export default function PoligonalModal({
 
   const panel = {
     width: '100%',
-    maxWidth: isCompact ? '100%' : 1560,
+    maxWidth: isCompact ? '100%' : 'min(98vw, 1920px)',
     minHeight: isCompact ? '100%' : undefined,
     maxHeight: isCompact ? '100dvh' : undefined,
     background: ui.card.background,
@@ -2065,7 +2065,10 @@ export default function PoligonalModal({
 
               {detalle.cierre && (
                 <div style={{ marginTop: 16 }}>
-                  <PoligonalCierrePanel cierre={detalle.cierre} />
+                  <PoligonalCierrePanel
+                    cierre={detalle.cierre}
+                    cierrePreliminar={detalle.cierre_preliminar}
+                  />
                 </div>
               )}
 
@@ -2104,7 +2107,10 @@ export default function PoligonalModal({
               {terminada && (
               <>
               <div style={{ marginTop: 4, marginBottom: 12 }}>
-                <PoligonalCierrePanel cierre={detalle.cierre} />
+                <PoligonalCierrePanel
+                  cierre={detalle.cierre}
+                  cierrePreliminar={detalle.cierre_preliminar}
+                />
               </div>
 
               <div style={{ marginTop: 4 }}>

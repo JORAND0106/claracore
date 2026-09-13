@@ -67,8 +67,10 @@ from topografia_utils import (
     decimal_a_gms_numero,
     decimal_to_gms,
     ajustar_poligonal_armadas,
+    aplicar_cierre_lineal_coords_ajustadas,
     enriquecer_estaciones_poligonal,
     fusionar_estaciones_vista,
+    reconstruir_cierre_preliminar,
     gms_to_decimal,
     html_documento_poligonal_pdf,
     html_documento_newpoint_pdf,
@@ -301,7 +303,25 @@ def _cierre_poligonal_vivo(pol: dict, poligonal_id: str) -> dict:
     punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
     amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
     armadas_enr, _, _ = radiar_armadas(armadas, estaciones, amarres)
-    return calcular_cierre_poligonal(
+    if pol.get("ajustada_at"):
+        upd_by_id = {}
+        for e in estaciones:
+            if not e.get("id"):
+                continue
+            patch = {}
+            if e.get("azimut") is not None:
+                patch["azimut"] = e["azimut"]
+            if e.get("norte_ajustado") is not None:
+                patch["norte_ajustado"] = e["norte_ajustado"]
+                patch["este_ajustado"] = e.get("este_ajustado")
+                patch["cota_ajustada"] = e.get("cota_ajustada")
+            if e.get("angulo_corregido") is not None:
+                patch["angulo_corregido"] = e["angulo_corregido"]
+            if patch:
+                upd_by_id[e["id"]] = patch
+        if upd_by_id:
+            armadas_enr = _aplicar_azimuts_a_armadas(armadas_enr, upd_by_id)
+    cierre = calcular_cierre_poligonal(
         armadas_enr,
         punto_inicial,
         sentido=pol.get("sentido") or "antihorario",
@@ -312,6 +332,14 @@ def _cierre_poligonal_vivo(pol: dict, poligonal_id: str) -> dict:
         punto_final=punto_final,
         tipo_pol=pol.get("tipo") or "cerrada",
     )
+    if pol.get("ajustada_at"):
+        cierre = aplicar_cierre_lineal_coords_ajustadas(
+            cierre,
+            punto_inicial=punto_inicial,
+            estaciones=estaciones,
+            tol_relativa=int(pol.get("tolerancia_relativa") or 25000),
+        )
+    return cierre
 
 
 def _exigir_poligonal_lista_validar(pol: dict, poligonal_id: str) -> dict:
@@ -1035,6 +1063,8 @@ def _limpiar_ajuste_poligonal(poligonal_id: str) -> None:
             "error_cierre_dz": None,
             "error_lineal": None,
             "precision_relativa": None,
+            "error_lineal_preliminar": None,
+            "precision_relativa_preliminar": None,
             "suma_angular_obs": None,
             "suma_angular_teorica": None,
             "error_angular_seg": None,
@@ -2003,7 +2033,18 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
         tipo_pol=pol.get("tipo") or "cerrada",
     )
 
+    if pol.get("ajustada_at"):
+        # Tras Bowditch el misclosure lineal se mide con coords ajustadas,
+        # no con azimut×distancia (que puede parecer peor que el preliminar).
+        cierre = aplicar_cierre_lineal_coords_ajustadas(
+            cierre,
+            punto_inicial=punto_inicial,
+            estaciones=estaciones,
+            tol_relativa=int(pol.get("tolerancia_relativa") or 25000),
+        )
+
     estaciones_vista = fusionar_estaciones_vista(estaciones, estaciones_flat)
+    cierre_preliminar = reconstruir_cierre_preliminar(pol, cierre.get("perimetro") if cierre else None)
 
     return {
         "poligonal": _enriquecer_poligonal_vista(pol),
@@ -2017,6 +2058,7 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
         "puntos_estacion_disponibles": puntos_estacion_disponibles,
         "puntos_visado_disponibles": puntos_visado_disponibles,
         "cierre": cierre,
+        "cierre_preliminar": cierre_preliminar,
     }
 
 
@@ -2559,6 +2601,8 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
             "error_cierre_dz": resumen["error_dz"],
             "error_lineal": cierre.get("error_lineal") if cierre.get("error_lineal") is not None else resumen["error_lineal"],
             "precision_relativa": cierre.get("precision") if cierre.get("precision") is not None else resumen["precision"],
+            "error_lineal_preliminar": cierre_pre.get("error_lineal") if cierre_pre.get("error_lineal") is not None else resumen.get("error_lineal"),
+            "precision_relativa_preliminar": cierre_pre.get("precision") if cierre_pre.get("precision") is not None else resumen.get("precision"),
             "suma_angular_obs": cierre.get("suma_observada") or cierre_pre.get("suma_observada"),
             "suma_angular_teorica": cierre.get("suma_teorica") or cierre_pre.get("suma_teorica"),
             "error_angular_seg": cierre.get("error_angular_seg") if cierre.get("error_angular_seg") is not None else cierre_pre.get("error_angular_seg"),
@@ -2646,6 +2690,8 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
             "error_cierre_dz": resumen["error_dz"],
             "error_lineal": cierre.get("error_lineal") if cierre.get("error_lineal") is not None else resumen["error_lineal"],
             "precision_relativa": cierre.get("precision") if cierre.get("precision") is not None else resumen["precision"],
+            "error_lineal_preliminar": cierre_pre.get("error_lineal") if cierre_pre.get("error_lineal") is not None else resumen.get("error_lineal"),
+            "precision_relativa_preliminar": cierre_pre.get("precision") if cierre_pre.get("precision") is not None else resumen.get("precision"),
             "suma_angular_obs": cierre.get("suma_observada"),
             "suma_angular_teorica": cierre.get("suma_teorica"),
             "error_angular_seg": cierre.get("error_angular_seg"),
@@ -2657,7 +2703,7 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
     return {
         "ok": True,
         "cierre": cierre,
-        "cierre_preliminar": resultado["cierre"],
+        "cierre_preliminar": cierre_pre,
         "resumen": resumen,
         "ajustada_at": now,
         "mensaje": "Poligonal terminada y compensada (angular + Bowditch). Pendiente validación contratista e interventoría.",

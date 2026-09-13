@@ -1,18 +1,22 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import 'mapbox-gl/dist/mapbox-gl.css'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import { useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
-import { useTopoViewportGestures } from './useTopoViewportGestures'
-import {
-  MARKER_PX,
-  distanciasVecinas,
-  markerRadiusSvg,
-  markerStrokeSvg,
-  pickVisibleLabelIndices,
-  svgPointToCss,
-  textCounterScale,
-  estimateLabelBoxPx,
-} from './topoPlanoLod'
+import { gkBogotaToWgs84 } from '../../utils/epsg3116'
+import { crearMapboxMapSeguro, MapaNoDisponible } from '../../mapboxSafe'
+import { SICOE_MAPA_STYLE_SATELLITE } from '../../modules/sicoe-obra/sicoeMapaBasemap'
+import { distanciasVecinas } from './topoPlanoLod'
+
+/** Opacidad media-baja de la capa satelital para legibilidad del trazado. */
+export const POLIGONAL_SATELLITE_OPACITY = 0.42
+
+const SRC_LINE = 'poligonal-line'
+const SRC_PTS = 'poligonal-pts'
+const LYR_LINE = 'poligonal-line-lyr'
+const LYR_PTS = 'poligonal-pts-lyr'
+const LYR_PTS_HIT = 'poligonal-pts-hit'
+const LYR_LABELS = 'poligonal-labels-lyr'
 
 function puntosGrafico(estaciones) {
   const verts = (estaciones || []).filter(
@@ -22,88 +26,21 @@ function puntosGrafico(estaciones) {
   return (estaciones || []).filter((e) => e.norte != null && e.este != null)
 }
 
-function niceStep(span) {
-  const raw = span / 8
-  const mag = 10 ** Math.floor(Math.log10(Math.max(raw, 1e-6)))
-  const norm = raw / mag
-  if (norm <= 1) return mag
-  if (norm <= 2) return 2 * mag
-  if (norm <= 5) return 5 * mag
-  return 10 * mag
+function toLngLat(norte, este) {
+  return gkBogotaToWgs84(este, norte)
 }
 
-/** Texto con tamaño de pantalla estable (counter-scale respecto al zoom del SVG). */
-function ScreenText({
-  x,
-  y,
-  scale,
-  fontSize = 10,
-  children,
-  textAnchor = 'start',
-  dx = 0,
-  dy = 0,
-  ...rest
-}) {
-  const inv = textCounterScale(scale)
-  return (
-    <text
-      transform={`translate(${x}, ${y}) scale(${inv})`}
-      x={dx}
-      y={dy}
-      fontSize={fontSize}
-      textAnchor={textAnchor}
-      style={{ pointerEvents: 'none' }}
-      {...rest}
-    >
-      {children}
-    </text>
-  )
-}
-
-/** Solo el nombre del punto, con fondo suave para contraste. */
-function NameLabel({
-  x,
-  y,
-  scale,
-  nombre,
-  dx = 7,
-  dy = -5,
-  textAnchor = 'start',
-  color = '#1e3a8a',
-  selected = false,
-}) {
-  const inv = textCounterScale(scale)
-  const name = nombre || '—'
-  const box = estimateLabelBoxPx([name], { nameSize: selected ? 12 : 11, padX: 4, padY: 2 })
-  let rectX = 0
-  if (textAnchor === 'end') rectX = -box.w
-  else if (textAnchor === 'middle') rectX = -box.w / 2
-  const rectTop = dy - box.padY
-  return (
-    <g transform={`translate(${x}, ${y}) scale(${inv})`} style={{ pointerEvents: 'none' }}>
-      <rect
-        x={rectX + dx}
-        y={rectTop}
-        width={box.w}
-        height={box.h}
-        rx={3}
-        ry={3}
-        fill={selected ? 'rgba(219,234,254,0.95)' : 'rgba(255,255,255,0.9)'}
-        stroke={selected ? 'rgba(37,99,235,0.55)' : 'rgba(148,163,184,0.45)'}
-        strokeWidth={1}
-      />
-      <text
-        x={dx}
-        y={rectTop + box.padY + (selected ? 12 : 11) * 0.78}
-        fontSize={selected ? 12 : 11}
-        fontWeight={700}
-        fill={color}
-        textAnchor={textAnchor}
-      >
-        {name}
-      </text>
-    </g>
-  )
+function applySatelliteOpacity(map, opacity = POLIGONAL_SATELLITE_OPACITY) {
+  try {
+    const layers = map.getStyle()?.layers || []
+    for (const layer of layers) {
+      if (layer.type === 'raster') {
+        map.setPaintProperty(layer.id, 'raster-opacity', opacity)
+      }
+    }
+  } catch {
+    /* estilo no listo */
+  }
 }
 
 function NodoDetallePopup({ detalle, style, onClose }) {
@@ -191,6 +128,10 @@ function NodoDetallePopup({ detalle, style, onClose }) {
   )
 }
 
+/**
+ * Plano de la poligonal sobre Mapbox satelital (EPSG:3116 → WGS84).
+ * Conserva zoom (rueda/pellizco), pan, clic en punto y «Restablecer zoom».
+ */
 export default function PoligonalGrafico({
   estaciones,
   puntoInicial = null,
@@ -200,218 +141,376 @@ export default function PoligonalGrafico({
   alto = 400,
 }) {
   const ui = useTopoTheme()
+  const mapNodeRef = useRef(null)
+  const mapRef = useRef(null)
+  const boundsRef = useRef(null)
+  const [mapError, setMapError] = useState(null)
+  const [mapReady, setMapReady] = useState(false)
   const [selectedKey, setSelectedKey] = useState(null)
-  const {
-    containerRef,
-    scale,
-    viewBox,
-    cssSize,
-    resetVista,
-    consumeTap,
-    viewportHandlers,
-    containerStyle,
-    contentStyle,
-  } = useTopoViewportGestures({ worldWidth: ancho, worldHeight: alto })
+  const [popupCss, setPopupCss] = useState(null)
 
-  const plot = useMemo(() => {
+  const geo = useMemo(() => {
     const tipoPol = cierre?.tipo_pol || (puntoFinal ? 'abierta' : 'cerrada')
     const esAbierta = tipoPol === 'abierta'
     const puntos = puntosGrafico(estaciones)
-    const amarre = puntoInicial?.norte != null && puntoInicial?.este != null
-      ? { nombre: puntoInicial.nombre || 'Amarre', norte: puntoInicial.norte, este: puntoInicial.este, cota: puntoInicial.cota }
-      : null
-    const llegadaObj = cierre?.llegada_objetivo || (puntoFinal?.norte != null && puntoFinal?.este != null
-      ? { nombre: puntoFinal.nombre || 'Llegada', norte: puntoFinal.norte, este: puntoFinal.este, cota: puntoFinal.cota }
-      : null)
-    const llegadaCalc = cierre?.llegada_calculada || null
+    const amarre =
+      puntoInicial?.norte != null && puntoInicial?.este != null
+        ? {
+            key: 'extra:amarre',
+            nombre: puntoInicial.nombre || 'Amarre',
+            norte: puntoInicial.norte,
+            este: puntoInicial.este,
+            cota: puntoInicial.cota,
+            rol: 'amarre',
+          }
+        : null
+    const llegadaObjRaw =
+      cierre?.llegada_objetivo ||
+      (puntoFinal?.norte != null && puntoFinal?.este != null
+        ? {
+            nombre: puntoFinal.nombre || 'Llegada',
+            norte: puntoFinal.norte,
+            este: puntoFinal.este,
+            cota: puntoFinal.cota,
+          }
+        : null)
+    const llegadaCalcRaw = cierre?.llegada_calculada || null
 
-    const all = [...puntos]
-    if (amarre && !puntos.some((p) => p.nombre_punto === amarre.nombre)) {
-      all.unshift(amarre)
-    }
-    for (const extra of [llegadaObj, llegadaCalc]) {
-      if (extra?.norte != null && extra?.este != null && !all.some((p) => p.norte === extra.norte && p.este === extra.este)) {
-        all.push({ ...extra, nombre_punto: extra.nombre })
-      }
-    }
-
-    if (all.length < 2) return null
-
-    const nortes = all.map((p) => p.norte)
-    const estes = all.map((p) => p.este)
-    let minN = Math.min(...nortes)
-    let maxN = Math.max(...nortes)
-    let minE = Math.min(...estes)
-    let maxE = Math.max(...estes)
-    const span = Math.max(maxN - minN, maxE - minE, 1)
-    const pad = span * 0.15
-    minN -= pad
-    maxN += pad
-    minE -= pad
-    maxE += pad
-
-    const margin = { l: 52, r: 24, t: 40, b: 44 }
-    const w = ancho - margin.l - margin.r
-    const h = alto - margin.t - margin.b
-    const tx = (e) => margin.l + ((e - minE) / Math.max(maxE - minE, 0.001)) * w
-    const ty = (n) => margin.t + h - ((n - minN) / Math.max(maxN - minN, 0.001)) * h
-
-    const stepN = niceStep(maxN - minN)
-    const stepE = niceStep(maxE - minE)
-    const gridLines = []
-    for (let n = Math.ceil(minN / stepN) * stepN; n <= maxN; n += stepN) {
-      gridLines.push({ type: 'h', val: n, y: ty(n) })
-    }
-    for (let e = Math.ceil(minE / stepE) * stepE; e <= maxE; e += stepE) {
-      gridLines.push({ type: 'v', val: e, x: tx(e) })
-    }
-
-    const traverse = puntos.length >= 2 ? puntos : all
-    const coords = traverse.map((p) => ({ x: tx(p.este), y: ty(p.norte), p }))
-    const polyStr = coords.map((c) => `${c.x},${c.y}`).join(' ')
-    const esCerrada = !esAbierta && coords.length >= 3
-
-    let gapLine = null
-    if (esAbierta && llegadaObj && llegadaCalc) {
-      const err = cierre?.error_lineal
-      if (err != null && err > 0.05) {
-        gapLine = {
-          x1: tx(llegadaObj.este),
-          y1: ty(llegadaObj.norte),
-          x2: tx(llegadaCalc.este),
-          y2: ty(llegadaCalc.norte),
-          err,
-          modo: 'llegada',
-        }
-      }
-    } else if (amarre && cierre?.cerrado && coords.length >= 1) {
-      const last = coords[coords.length - 1]
-      const ax = tx(amarre.este)
-      const ay = ty(amarre.norte)
-      const err = cierre.error_lineal
-      if (err != null && err > 0.05) {
-        gapLine = { x1: last.x, y1: last.y, x2: ax, y2: ay, err, modo: 'amarre' }
-      }
-    }
-
-    const amarreCoord = amarre ? { x: tx(amarre.este), y: ty(amarre.norte), p: amarre } : null
-    const llegadaObjCoord = llegadaObj
-      ? { x: tx(llegadaObj.este), y: ty(llegadaObj.norte), p: llegadaObj }
-      : null
-    const llegadaCalcCoord = llegadaCalc
-      ? { x: tx(llegadaCalc.este), y: ty(llegadaCalc.norte), p: llegadaCalc }
-      : null
-
-    return {
-      coords,
-      polyStr,
-      esCerrada,
-      esAbierta,
-      gridLines,
-      gapLine,
-      amarreCoord,
-      llegadaObjCoord,
-      llegadaCalcCoord,
-      margin,
-      w,
-      h,
-      north: { x: margin.l + w - 28, y: margin.t + 18, tip: margin.t + 2 },
-    }
-  }, [estaciones, puntoInicial, puntoFinal, cierre, ancho, alto])
-
-  // Solo nombres: declutter fijo (nivel 0), en cualquier zoom
-  const namesVisible = useMemo(() => {
-    if (!plot?.coords?.length) return []
-    return pickVisibleLabelIndices(plot.coords, scale, 0)
-  }, [plot, scale])
-
-  const markerR = markerRadiusSvg(scale)
-  const markerStroke = markerStrokeSvg(scale)
-  const hitR = markerRadiusSvg(scale, {
-    desiredPx: 14,
-    minPx: 10,
-    maxPx: 18,
-  })
-  const amarreR = markerRadiusSvg(scale, {
-    desiredPx: MARKER_PX.AMARRE,
-    minPx: MARKER_PX.MIN,
-    maxPx: MARKER_PX.MAX + 0.5,
-  })
-
-  const selectedDetalle = useMemo(() => {
-    if (!plot || selectedKey == null) return null
-    if (typeof selectedKey === 'string' && selectedKey.startsWith('extra:')) {
-      const kind = selectedKey.slice(6)
-      const c = kind === 'amarre'
-        ? plot.amarreCoord
-        : kind === 'llegadaObj'
-          ? plot.llegadaObjCoord
-          : kind === 'llegadaCalc'
-            ? plot.llegadaCalcCoord
-            : null
-      if (!c) return null
-      const p = c.p
-      return {
-        key: selectedKey,
-        x: c.x,
-        y: c.y,
-        nombre: `${p.nombre || p.nombre_punto || kind}${kind === 'amarre' ? ' (amarre)' : kind === 'llegadaObj' ? ' (obj.)' : kind === 'llegadaCalc' ? ' (calc.)' : ''}`,
+    const traverse = []
+    for (const p of puntos) {
+      const ll = toLngLat(p.norte, p.este)
+      if (!ll) continue
+      traverse.push({
+        key: String(traverse.length),
+        nombre: p.nombre_punto || p.nombre || `P${traverse.length + 1}`,
         norte: p.norte,
         este: p.este,
         cota: p.cota,
-        distPrev: null,
-        distNext: null,
-        prevNombre: null,
-        nextNombre: null,
+        lng: ll.lng,
+        lat: ll.lat,
+        rol: 'estacion',
+        id: p.id,
+      })
+    }
+
+    const extras = []
+    const pushExtra = (raw, key, rol) => {
+      if (!raw || raw.norte == null || raw.este == null) return
+      const ll = toLngLat(raw.norte, raw.este)
+      if (!ll) return
+      if (traverse.some((t) => Math.abs(t.norte - raw.norte) < 1e-4 && Math.abs(t.este - raw.este) < 1e-4)) {
+        return
       }
+      extras.push({
+        key,
+        nombre: raw.nombre || rol,
+        norte: raw.norte,
+        este: raw.este,
+        cota: raw.cota,
+        lng: ll.lng,
+        lat: ll.lat,
+        rol,
+      })
     }
-    const idx = Number(selectedKey)
-    const c = plot.coords[idx]
-    if (!c) return null
-    const vecinos = distanciasVecinas(plot.coords, idx, plot.esCerrada)
-    const p = c.p
+    if (amarre) pushExtra(amarre, 'extra:amarre', 'amarre')
+    if (esAbierta && llegadaObjRaw) pushExtra(llegadaObjRaw, 'extra:llegadaObj', 'llegadaObj')
+    if (esAbierta && llegadaCalcRaw) pushExtra(llegadaCalcRaw, 'extra:llegadaCalc', 'llegadaCalc')
+
+    if (traverse.length < 2 && extras.length < 1) return null
+
+    const esCerrada = !esAbierta && traverse.length >= 3
+    const lineCoords = traverse.map((p) => [p.lng, p.lat])
+    if (esCerrada && lineCoords.length >= 3) {
+      lineCoords.push(lineCoords[0])
+    }
+
+    const allPts = [...traverse, ...extras]
+    const lngs = allPts.map((p) => p.lng)
+    const lats = allPts.map((p) => p.lat)
+    const bounds = [
+      [Math.min(...lngs), Math.min(...lats)],
+      [Math.max(...lngs), Math.max(...lats)],
+    ]
+
+    // Distancias entre vértices en metros Gauss (mismo criterio que el plano cartesiano).
+    const coordsForDist = traverse.map((p) => ({
+      x: p.este,
+      y: p.norte,
+      p: { nombre_punto: p.nombre, nombre: p.nombre, norte: p.norte, este: p.este },
+    }))
+
     return {
-      key: selectedKey,
-      x: c.x,
-      y: c.y,
-      nombre: p.nombre_punto || p.nombre || `#${idx + 1}`,
-      norte: p.norte,
-      este: p.este,
-      cota: p.cota,
-      distPrev: vecinos.prev,
-      distNext: vecinos.next,
-      prevNombre: vecinos.prevNombre,
-      nextNombre: vecinos.nextNombre,
+      traverse,
+      extras,
+      allPts,
+      lineCoords,
+      esCerrada,
+      esAbierta,
+      bounds,
+      coordsForDist,
+      gapErr:
+        cierre?.cerrado && cierre?.error_lineal != null && cierre.error_lineal > 0.05
+          ? cierre.error_lineal
+          : null,
     }
-  }, [plot, selectedKey])
+  }, [estaciones, puntoInicial, puntoFinal, cierre])
 
-  const popupCss = useMemo(() => {
-    if (!selectedDetalle || !viewBox) return null
-    const pos = svgPointToCss(selectedDetalle.x, selectedDetalle.y, viewBox, cssSize.w, cssSize.h)
-    // Anclar popup a la derecha del punto; si no cabe, a la izquierda
-    const popupW = 230
-    const popupH = 180
-    let left = pos.left + 14
-    let top = pos.top - 20
-    if (left + popupW > cssSize.w - 8) left = pos.left - popupW - 10
-    if (left < 8) left = 8
-    if (top + popupH > cssSize.h - 8) top = Math.max(8, cssSize.h - popupH - 8)
-    if (top < 8) top = 8
-    return { left, top }
-  }, [selectedDetalle, viewBox, cssSize])
-
-  const selectNodo = useCallback((key) => {
-    setSelectedKey((prev) => (prev === key ? null : key))
+  const fitToTraverse = useCallback(() => {
+    const map = mapRef.current
+    const b = boundsRef.current
+    if (!map || !b) return
+    try {
+      map.fitBounds(b, { padding: 48, duration: 400, maxZoom: 18 })
+    } catch {
+      /* ignore */
+    }
   }, [])
 
-  const trySelectFromTap = useCallback((key, e) => {
-    e?.stopPropagation?.()
-    const tap = consumeTap()
-    if (!tap) return
-    selectNodo(key)
-  }, [consumeTap, selectNodo])
+  // Crear mapa una vez
+  useEffect(() => {
+    if (!mapNodeRef.current || mapRef.current) return undefined
+    if (!geo) return undefined
 
-  if (!plot) {
+    const { map, error } = crearMapboxMapSeguro(mapNodeRef.current, {
+      style: SICOE_MAPA_STYLE_SATELLITE,
+      center: [
+        (geo.bounds[0][0] + geo.bounds[1][0]) / 2,
+        (geo.bounds[0][1] + geo.bounds[1][1]) / 2,
+      ],
+      zoom: 15,
+      attributionControl: true,
+      cooperativeGestures: false,
+    })
+    if (error || !map) {
+      setMapError(error || 'No se pudo cargar Mapbox')
+      return undefined
+    }
+    mapRef.current = map
+    setMapError(null)
+
+    const onLoad = () => {
+      applySatelliteOpacity(map, POLIGONAL_SATELLITE_OPACITY)
+      setMapReady(true)
+      boundsRef.current = geo.bounds
+      try {
+        map.fitBounds(geo.bounds, { padding: 48, duration: 0, maxZoom: 18 })
+      } catch {
+        /* ignore */
+      }
+    }
+    map.on('load', onLoad)
+    map.on('style.load', () => applySatelliteOpacity(map, POLIGONAL_SATELLITE_OPACITY))
+
+    return () => {
+      try {
+        map.remove()
+      } catch {
+        /* ignore */
+      }
+      mapRef.current = null
+      setMapReady(false)
+    }
+    // Solo montar una vez; geo se sincroniza en el efecto siguiente
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!geo])
+
+  // Actualizar GeoJSON / capas cuando cambian estaciones
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || !geo) return
+
+    boundsRef.current = geo.bounds
+
+    const lineFc = {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'LineString', coordinates: geo.lineCoords },
+        },
+      ],
+    }
+    const ptsFc = {
+      type: 'FeatureCollection',
+      features: geo.allPts.map((p) => ({
+        type: 'Feature',
+        properties: {
+          key: p.key,
+          nombre: p.nombre,
+          rol: p.rol,
+          norte: p.norte,
+          este: p.este,
+          cota: p.cota ?? null,
+        },
+        geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+      })),
+    }
+
+    const ensureLayers = () => {
+      if (!map.getSource(SRC_LINE)) {
+        map.addSource(SRC_LINE, { type: 'geojson', data: lineFc })
+        map.addSource(SRC_PTS, { type: 'geojson', data: ptsFc })
+        map.addLayer({
+          id: LYR_LINE,
+          type: 'line',
+          source: SRC_LINE,
+          paint: {
+            'line-color': '#2563eb',
+            'line-width': 3,
+            'line-opacity': 0.95,
+          },
+        })
+        map.addLayer({
+          id: LYR_PTS_HIT,
+          type: 'circle',
+          source: SRC_PTS,
+          paint: {
+            'circle-radius': 14,
+            'circle-color': 'transparent',
+            'circle-opacity': 0,
+          },
+        })
+        map.addLayer({
+          id: LYR_PTS,
+          type: 'circle',
+          source: SRC_PTS,
+          paint: {
+            'circle-radius': [
+              'match',
+              ['get', 'rol'],
+              'amarre', 7,
+              'llegadaObj', 7,
+              'llegadaCalc', 6,
+              6,
+            ],
+            'circle-color': [
+              'match',
+              ['get', 'rol'],
+              'amarre', '#16a34a',
+              'llegadaObj', '#15803d',
+              'llegadaCalc', '#c2410c',
+              '#2563eb',
+            ],
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+          },
+        })
+        map.addLayer({
+          id: LYR_LABELS,
+          type: 'symbol',
+          source: SRC_PTS,
+          layout: {
+            'text-field': ['get', 'nombre'],
+            'text-size': 12,
+            'text-offset': [0, -1.35],
+            'text-anchor': 'bottom',
+            'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+            'text-allow-overlap': false,
+            'text-optional': true,
+          },
+          paint: {
+            'text-color': '#1e3a8a',
+            'text-halo-color': 'rgba(255,255,255,0.92)',
+            'text-halo-width': 1.6,
+          },
+        })
+      } else {
+        map.getSource(SRC_LINE).setData(lineFc)
+        map.getSource(SRC_PTS).setData(ptsFc)
+      }
+      applySatelliteOpacity(map, POLIGONAL_SATELLITE_OPACITY)
+    }
+
+    ensureLayers()
+    fitToTraverse()
+  }, [geo, mapReady, fitToTraverse])
+
+  // Clic en punto → detalle
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return undefined
+
+    const onClick = (e) => {
+      const feats = map.queryRenderedFeatures(e.point, { layers: [LYR_PTS_HIT, LYR_PTS] })
+      const f = feats?.[0]
+      if (!f) {
+        setSelectedKey(null)
+        setPopupCss(null)
+        return
+      }
+      const key = f.properties?.key
+      setSelectedKey((prev) => (prev === key ? null : key))
+      const canvas = map.getCanvas()
+      const rect = canvas.getBoundingClientRect()
+      const popupW = 230
+      const popupH = 180
+      let left = e.point.x + 14
+      let top = e.point.y - 20
+      if (left + popupW > rect.width - 8) left = e.point.x - popupW - 10
+      if (left < 8) left = 8
+      if (top + popupH > rect.height - 8) top = Math.max(8, rect.height - popupH - 8)
+      if (top < 8) top = 8
+      setPopupCss({ left, top })
+    }
+    map.on('click', onClick)
+    map.getCanvas().style.cursor = 'grab'
+    const onEnter = () => {
+      map.getCanvas().style.cursor = 'pointer'
+    }
+    const onLeave = () => {
+      map.getCanvas().style.cursor = 'grab'
+    }
+    map.on('mouseenter', LYR_PTS_HIT, onEnter)
+    map.on('mouseleave', LYR_PTS_HIT, onLeave)
+
+    return () => {
+      map.off('click', onClick)
+      map.off('mouseenter', LYR_PTS_HIT, onEnter)
+      map.off('mouseleave', LYR_PTS_HIT, onLeave)
+    }
+  }, [mapReady])
+
+  const selectedDetalle = useMemo(() => {
+    if (!geo || selectedKey == null) return null
+    const pt = geo.allPts.find((p) => p.key === selectedKey)
+    if (!pt) return null
+    let distPrev = null
+    let distNext = null
+    let prevNombre = null
+    let nextNombre = null
+    if (pt.rol === 'estacion') {
+      const idx = geo.traverse.findIndex((p) => p.key === selectedKey)
+      if (idx >= 0) {
+        const vecinos = distanciasVecinas(geo.coordsForDist, idx, geo.esCerrada)
+        distPrev = vecinos.prev
+        distNext = vecinos.next
+        prevNombre = vecinos.prevNombre
+        nextNombre = vecinos.nextNombre
+      }
+    }
+    const suffix =
+      pt.rol === 'amarre'
+        ? ' (amarre)'
+        : pt.rol === 'llegadaObj'
+          ? ' (obj.)'
+          : pt.rol === 'llegadaCalc'
+            ? ' (calc.)'
+            : ''
+    return {
+      key: selectedKey,
+      nombre: `${pt.nombre}${suffix}`,
+      norte: pt.norte,
+      este: pt.este,
+      cota: pt.cota,
+      distPrev,
+      distNext,
+      prevNombre,
+      nextNombre,
+    }
+  }, [geo, selectedKey])
+
+  if (!geo) {
     return (
       <div style={{ ...ui.card, color: ui.textMuted }}>
         Agregue puntos con coordenadas radiadas para ver el gráfico de la poligonal.
@@ -419,260 +518,72 @@ export default function PoligonalGrafico({
     )
   }
 
-  const nameColor = ui.grafico?.pointLabel || '#1e3a8a'
-
   return (
     <div style={ui.card}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>Plano de la poligonal</span>
         <button
           type="button"
-          onClick={resetVista}
-          style={{ fontSize: 'var(--cc-xs)', padding: '4px 10px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}
+          onClick={fitToTraverse}
+          style={{
+            fontSize: 'var(--cc-xs)',
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid #cbd5e1',
+            background: '#fff',
+            cursor: 'pointer',
+          }}
         >
           Restablecer zoom
         </button>
         <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-          Rueda / pellizcar: zoom · Arrastrar: pan · Clic en un punto: detalle
+          Satélite · Rueda / pellizcar: zoom · Arrastrar: pan · Clic en un punto: detalle
         </span>
       </div>
 
-      {plot.gapLine && (
+      {geo.gapErr != null && (
         <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#b45309' }}>
-          {plot.gapLine.modo === 'llegada' ? (
-            <>Error de cierre a la llegada: {fmtNum(plot.gapLine.err, 3)} m entre objetivo y posición calculada (línea punteada).</>
-          ) : (
-            <>El polígono de vértices radiados no coincide con el amarre inicial: error de cierre {fmtNum(plot.gapLine.err, 3)} m (línea punteada roja).</>
-          )}
+          Error de cierre lineal preliminar: {fmtNum(geo.gapErr, 3)} m (el trazado muestra coords
+          radiadas/ajustadas sobre el satélite).
         </p>
       )}
 
-      <div
-        ref={containerRef}
-        {...viewportHandlers}
-        style={{
-          ...containerStyle,
-          borderRadius: 8,
-          border: ui.grafico.border,
-          background: ui.grafico.background,
-        }}
-      >
-        <svg
-          width="100%"
-          height={alto}
-          viewBox={viewBox}
-          preserveAspectRatio="xMidYMid meet"
-          shapeRendering="geometricPrecision"
-          textRendering="geometricPrecision"
-          style={contentStyle}
-          onClick={() => {
-            // Clic en vacío (no en nodo): cerrar popup si fue tap limpio
-            const tap = consumeTap()
-            if (tap) setSelectedKey(null)
+      {mapError ? (
+        <MapaNoDisponible t={ui.t || ui} mensaje={mapError} minHeight={alto} />
+      ) : (
+        <div
+          style={{
+            position: 'relative',
+            width: '100%',
+            height: alto,
+            borderRadius: 8,
+            border: ui.grafico?.border || '1px solid #cbd5e1',
+            overflow: 'hidden',
           }}
         >
-          {plot.gridLines.map((g) =>
-            g.type === 'h' ? (
-              <g key={`h-${g.val}`}>
-                <line x1={plot.margin.l} y1={g.y} x2={plot.margin.l + plot.w} y2={g.y} stroke="#cbd5e1" strokeWidth={markerStrokeSvg(scale, 1)} />
-                <ScreenText x={6} y={g.y} scale={scale} fontSize={9} fill="#64748b" dy={3}>
-                  {fmtNum(g.val, 0)}
-                </ScreenText>
-              </g>
-            ) : (
-              <g key={`v-${g.val}`}>
-                <line x1={g.x} y1={plot.margin.t} x2={g.x} y2={plot.margin.t + plot.h} stroke="#cbd5e1" strokeWidth={markerStrokeSvg(scale, 1)} />
-                <ScreenText x={g.x} y={alto - 8} scale={scale} fontSize={9} fill="#64748b" textAnchor="middle">
-                  {fmtNum(g.val, 0)}
-                </ScreenText>
-              </g>
-            ),
-          )}
-
-          <ScreenText x={plot.margin.l + plot.w / 2} y={alto - 6} scale={scale} fontSize={9} fill="#64748b" textAnchor="middle">
-            Este →
-          </ScreenText>
-          <g transform={`translate(14, ${plot.margin.t + plot.h / 2}) rotate(-90) scale(${textCounterScale(scale)})`}>
-            <text x={0} y={0} fontSize={9} fill="#64748b" textAnchor="middle" style={{ pointerEvents: 'none' }}>
-              Norte →
-            </text>
-          </g>
-
-          <g>
-            <line
-              x1={plot.north.x}
-              y1={plot.north.y}
-              x2={plot.north.x}
-              y2={plot.north.tip}
-              stroke="#1e40af"
-              strokeWidth={markerStrokeSvg(scale, 2)}
-            />
-            <polygon
-              points={`${plot.north.x},${plot.north.tip} ${plot.north.x - 6 * textCounterScale(scale)},${plot.north.tip + 10 * textCounterScale(scale)} ${plot.north.x + 6 * textCounterScale(scale)},${plot.north.tip + 10 * textCounterScale(scale)}`}
-              fill="#1e40af"
-            />
-            <ScreenText x={plot.north.x} y={plot.north.tip - 5} scale={scale} fontSize={12} fill="#1e40af" fontWeight="700" textAnchor="middle">
-              N
-            </ScreenText>
-          </g>
-
-          {plot.esCerrada ? (
-            <polygon
-              points={plot.polyStr}
-              fill="rgba(37,99,235,0.08)"
-              stroke="#2563eb"
-              strokeWidth={markerStrokeSvg(scale, 1.75)}
-              strokeDasharray={plot.gapLine ? '6 4' : undefined}
-            />
-          ) : (
-            <polyline
-              points={plot.polyStr}
-              fill="none"
-              stroke="#2563eb"
-              strokeWidth={markerStrokeSvg(scale, 1.75)}
-            />
-          )}
-
-          {plot.gapLine && (
-            <line
-              x1={plot.gapLine.x1}
-              y1={plot.gapLine.y1}
-              x2={plot.gapLine.x2}
-              y2={plot.gapLine.y2}
-              stroke={plot.gapLine.modo === 'llegada' ? '#94a3b8' : '#dc2626'}
-              strokeWidth={markerStrokeSvg(scale, 1.75)}
-              strokeDasharray="4 3"
-            />
-          )}
-
-          {plot.llegadaObjCoord && (
-            <g
-              data-nodo-key="extra:llegadaObj"
-              style={{ cursor: 'pointer' }}
-              onClick={(e) => trySelectFromTap('extra:llegadaObj', e)}
-              onTouchEnd={(e) => trySelectFromTap('extra:llegadaObj', e)}
-            >
-              <polygon
-                points={(() => {
-                  const { x, y } = plot.llegadaObjCoord
-                  const r = amarreR
-                  return `${x},${y - r} ${x + r},${y} ${x},${y + r} ${x - r},${y}`
-                })()}
-                fill="none"
-                stroke="#15803d"
-                strokeWidth={markerStroke}
-              />
-              <circle cx={plot.llegadaObjCoord.x} cy={plot.llegadaObjCoord.y} r={hitR} fill="transparent" />
-              <NameLabel
-                x={plot.llegadaObjCoord.x}
-                y={plot.llegadaObjCoord.y}
-                scale={scale}
-                nombre={`${plot.llegadaObjCoord.p.nombre || 'Llegada'} (obj.)`}
-                color="#15803d"
-                selected={selectedKey === 'extra:llegadaObj'}
-              />
-            </g>
-          )}
-
-          {plot.llegadaCalcCoord && (
-            <g
-              data-nodo-key="extra:llegadaCalc"
-              style={{ cursor: 'pointer' }}
-              onClick={(e) => trySelectFromTap('extra:llegadaCalc', e)}
-              onTouchEnd={(e) => trySelectFromTap('extra:llegadaCalc', e)}
-            >
-              <circle
-                cx={plot.llegadaCalcCoord.x}
-                cy={plot.llegadaCalcCoord.y}
-                r={amarreR}
-                fill="none"
-                stroke="#c2410c"
-                strokeWidth={markerStroke}
-                strokeDasharray="3 2"
-              />
-              <circle cx={plot.llegadaCalcCoord.x} cy={plot.llegadaCalcCoord.y} r={hitR} fill="transparent" />
-              <NameLabel
-                x={plot.llegadaCalcCoord.x}
-                y={plot.llegadaCalcCoord.y}
-                scale={scale}
-                nombre={`${plot.llegadaCalcCoord.p.nombre || 'Llegada'} (calc.)`}
-                color="#c2410c"
-                selected={selectedKey === 'extra:llegadaCalc'}
-              />
-            </g>
-          )}
-
-          {plot.amarreCoord && (
-            <g
-              data-nodo-key="extra:amarre"
-              style={{ cursor: 'pointer' }}
-              onClick={(e) => trySelectFromTap('extra:amarre', e)}
-              onTouchEnd={(e) => trySelectFromTap('extra:amarre', e)}
-            >
-              <circle
-                cx={plot.amarreCoord.x}
-                cy={plot.amarreCoord.y}
-                r={amarreR}
-                fill="#16a34a"
-                stroke="#fff"
-                strokeWidth={markerStroke}
-              />
-              <circle cx={plot.amarreCoord.x} cy={plot.amarreCoord.y} r={hitR} fill="transparent" />
-              <NameLabel
-                x={plot.amarreCoord.x}
-                y={plot.amarreCoord.y}
-                scale={scale}
-                nombre={`${plot.amarreCoord.p.nombre} (amarre)`}
-                color="#166534"
-                selected={selectedKey === 'extra:amarre'}
-              />
-            </g>
-          )}
-
-          {plot.coords.map(({ x, y, p }, idx) => {
-            const key = String(idx)
-            const isSel = selectedKey === key
-            return (
-              <g
-                key={p.id || p.nombre_punto || idx}
-                data-nodo-key={key}
-                style={{ cursor: 'pointer' }}
-                onClick={(e) => trySelectFromTap(key, e)}
-                onTouchEnd={(e) => trySelectFromTap(key, e)}
-              >
-                <circle
-                  cx={x}
-                  cy={y}
-                  r={isSel ? markerR * 1.25 : markerR}
-                  fill={isSel ? '#1d4ed8' : '#2563eb'}
-                  stroke="#fff"
-                  strokeWidth={markerStroke}
-                />
-                {/* Área de toque ampliada */}
-                <circle cx={x} cy={y} r={hitR} fill="transparent" />
-                {namesVisible[idx] && (
-                  <NameLabel
-                    x={x}
-                    y={y}
-                    scale={scale}
-                    nombre={p.nombre_punto}
-                    color={nameColor}
-                    selected={isSel}
-                  />
-                )}
-              </g>
-            )
-          })}
-        </svg>
-
-        {selectedDetalle && popupCss && (
-          <NodoDetallePopup
-            detalle={selectedDetalle}
-            style={popupCss}
-            onClose={() => setSelectedKey(null)}
+          <div
+            ref={mapNodeRef}
+            data-poligonal-mapbox="1"
+            style={{ width: '100%', height: '100%' }}
+            aria-label="Mapa satelital de la poligonal"
           />
-        )}
-      </div>
+          {selectedDetalle && popupCss && (
+            <NodoDetallePopup
+              detalle={selectedDetalle}
+              style={popupCss}
+              onClose={() => {
+                setSelectedKey(null)
+                setPopupCss(null)
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {/* ancho reservado para layout; Mapbox usa 100% del contenedor */}
+      <span style={{ display: 'none' }} aria-hidden>
+        {ancho}
+      </span>
     </div>
   )
 }

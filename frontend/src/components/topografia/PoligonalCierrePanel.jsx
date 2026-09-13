@@ -3,13 +3,16 @@ import { fmtNum, fmtRatio } from '../../utils/topografia_angular'
 
 /**
  * Panel de cierre angular + lineal (dos columnas en desktop; una en móvil).
+ * Si hay ``cierrePreliminar`` (poligonal ya compensada), muestra la calidad
+ * de campo pre-Bowditch aparte del cierre ajustado.
  */
-export default function PoligonalCierrePanel({ cierre }) {
+export default function PoligonalCierrePanel({ cierre, cierrePreliminar = null }) {
   const { cierre: C } = useTopoTheme()
   const { isCompact } = useTopoViewport()
   if (!cierre) return null
   const seg = cierre.error_angular_seg
   const segTxt = seg === null || seg === undefined ? '—' : `${seg >= 0 ? '' : '-'}${Math.abs(seg).toFixed(1)}"`
+  const pre = cierrePreliminar
 
   return (
     <div
@@ -164,8 +167,27 @@ export default function PoligonalCierrePanel({ cierre }) {
               <td style={C.rowL}>Cierre obtenido</td>
               <td style={{ ...C.rowV, background: cierre.admisible_lineal ? '#dcfce7' : '#fee2e2', color: cierre.admisible_lineal ? '#166534' : '#991b1b', fontWeight: 800 }}>
                 {fmtRatio(cierre.precision)}
+                {cierre.cierre_desde_coords_ajustadas && (
+                  <span style={{ display: 'block', fontSize: 9, fontWeight: 600, opacity: 0.8 }}>
+                    ajustado (Bowditch)
+                  </span>
+                )}
               </td>
             </tr>
+            {pre && (pre.error_lineal != null || pre.precision != null) && (
+              <tr title="Cierre lineal de campo antes de la compensación (calidad real del trabajo)">
+                <td style={C.rowL}>Prelim. campo</td>
+                <td style={C.rowV}>
+                  {fmtRatio(pre.precision)}
+                  <span style={{ display: 'block', fontSize: 10, fontWeight: 400, opacity: 0.8 }}>
+                    err. {fmtNum(pre.error_lineal, 4)} m
+                    {pre.delta_norte != null && (
+                      <> · ΔN {fmtNum(pre.delta_norte, 4)} / ΔE {fmtNum(pre.delta_este, 4)}</>
+                    )}
+                  </span>
+                </td>
+              </tr>
+            )}
             <tr><td style={C.rowL}>Tolerancia plan</td><td style={C.rowV}>{fmtRatio(cierre.tolerancia_relativa)}</td></tr>
             {cierre.tolerancia_relativa_res643 != null && (
               <tr>
