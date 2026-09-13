@@ -30,6 +30,11 @@ describe('PoligonalGrafico Mapbox satelital', () => {
     assert.match(grafico, /Clic en un punto: detalle/)
   })
 
+  it('tiene control de orientación al norte (bearing 0)', () => {
+    assert.match(grafico, /orientNorth|bearing:\s*0/)
+    assert.match(grafico, /data-poligonal-compass|data-poligonal-north/)
+  })
+
   it('ya no depende del lienzo cartesiano SVG con viewBox propio', () => {
     assert.doesNotMatch(grafico, /useTopoViewportGestures/)
     assert.match(grafico, /data-poligonal-mapbox/)

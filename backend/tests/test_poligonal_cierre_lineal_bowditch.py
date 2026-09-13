@@ -16,8 +16,10 @@ from topografia_utils import (  # noqa: E402
     ajustar_poligonal_armadas,
     aplicar_cierre_lineal_coords_ajustadas,
     calcular_cierre_poligonal,
+    calcular_cierre_preliminar_campo,
     radiar_armadas,
     reconstruir_cierre_preliminar,
+    _escala_plano_sugerida,
 )
 
 
@@ -188,20 +190,52 @@ class TestBowditchAlTerminar(unittest.TestCase):
         post_prec = cierre_ok.get("precision") or 0
         self.assertGreaterEqual(post_prec, pre_prec)
 
-        # Preliminar reconstruible para auditoría
+        # Preliminar reconstruible para auditoría desde campo crudo
         pol_saved = {
             **pol,
             "error_cierre_dn": res["resumen"]["error_dn"],
             "error_cierre_de": res["resumen"]["error_de"],
-            "error_lineal_preliminar": res["cierre"]["error_lineal"],
-            "precision_relativa_preliminar": res["cierre"]["precision"],
+            # Simula persistencia ERRÓNEA antigua (= residual Bowditch / post-angular)
+            "error_lineal_preliminar": res["resumen"]["error_lineal"],
+            "precision_relativa_preliminar": res["resumen"]["precision"],
             "error_lineal": cierre_ok["error_lineal"],
             "precision_relativa": cierre_ok["precision"],
         }
-        pre = reconstruir_cierre_preliminar(pol_saved, cierre_ok.get("perimetro"))
+        # Recalc desde lecturas crudas (sin azimuts ajustados)
+        campo = calcular_cierre_preliminar_campo(pol, armadas, estaciones, amarres, pi)
+        pre = reconstruir_cierre_preliminar(
+            pol_saved, campo.get("perimetro"), cierre_campo=campo
+        )
         self.assertIsNotNone(pre)
+        self.assertEqual(pre["fuente"], "recalculado_campo")
         self.assertAlmostEqual(pre["error_lineal"], pre_err, places=3)
         self.assertTrue(pre["es_preliminar"])
+        # No debe preferir el residual post-angular (peor) si hay recalc de campo
+        self.assertNotEqual(pre["precision"], res["resumen"]["precision_post"])
+
+
+class TestEscalaPlanoPdf(unittest.TestCase):
+    def test_elige_7500_para_extension_1474_alargada(self):
+        """Caso real PDF: extensión ~1474 m (alargada) → 1:7500, no 1:10000."""
+        # Poligonal tipo corredor: ~1474 m Este × ~280 m Norte (perímetro ~3.2 km)
+        pts = [
+            {"norte": 1_018_100.0, "este": 1_009_000.0},
+            {"norte": 1_018_380.0, "este": 1_010_474.4},
+        ]
+        escala, span = _escala_plano_sugerida(pts)
+        self.assertAlmostEqual(span, 1474.4, places=1)
+        self.assertEqual(escala, "1:7500")
+
+    def test_no_usa_fallback_dn_de_como_preliminar(self):
+        """error_cierre_dn/de (Bowditch) no deben inventar Prelim. campo."""
+        pol = {
+            "ajustada_at": "2026-01-01T00:00:00Z",
+            "error_cierre_dn": 0.1587,
+            "error_cierre_de": 0.0560,
+            # Sin columnas dedicadas → antes se reconstruía 1:19448
+        }
+        pre = reconstruir_cierre_preliminar(pol, perimetro=3273.178)
+        self.assertIsNone(pre)
 
 
 if __name__ == "__main__":

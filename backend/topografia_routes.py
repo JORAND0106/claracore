@@ -70,6 +70,8 @@ from topografia_utils import (
     aplicar_cierre_lineal_coords_ajustadas,
     enriquecer_estaciones_poligonal,
     fusionar_estaciones_vista,
+    calcular_cierre_preliminar_campo,
+    resumen_cierre_preliminar_campo,
     reconstruir_cierre_preliminar,
     gms_to_decimal,
     html_documento_poligonal_pdf,
@@ -2044,7 +2046,42 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
         )
 
     estaciones_vista = fusionar_estaciones_vista(estaciones, estaciones_flat)
-    cierre_preliminar = reconstruir_cierre_preliminar(pol, cierre.get("perimetro") if cierre else None)
+
+    # Prelim. campo: siempre desde lecturas crudas (ángulo medido + distancia),
+    # independiente de azimuts/coords ajustados. Así se recupera p. ej. 1:55154
+    # aunque error_cierre_dn/de guarden el residual post-angular (1:19448).
+    cierre_campo = calcular_cierre_preliminar_campo(
+        pol, armadas, estaciones, amarres, punto_inicial, punto_final
+    )
+    cierre_preliminar = reconstruir_cierre_preliminar(
+        pol,
+        (cierre_campo or cierre or {}).get("perimetro"),
+        cierre_campo=cierre_campo,
+    )
+
+    # Autocorregir persistencia si el valor guardado no coincide con el de campo.
+    if pol.get("ajustada_at") and cierre_preliminar and cierre_preliminar.get("fuente") == "recalculado_campo":
+        prec_vivo = cierre_preliminar.get("precision")
+        e_vivo = cierre_preliminar.get("error_lineal")
+        prec_db = pol.get("precision_relativa_preliminar")
+        e_db = pol.get("error_lineal_preliminar")
+        needs_heal = False
+        if prec_vivo is not None and (prec_db is None or int(prec_db) != int(prec_vivo)):
+            needs_heal = True
+        if e_vivo is not None and (e_db is None or abs(float(e_db) - float(e_vivo)) > 1e-4):
+            needs_heal = True
+        if needs_heal:
+            try:
+                supabase.table("topo_poligonales").update(
+                    {
+                        "error_lineal_preliminar": e_vivo,
+                        "precision_relativa_preliminar": prec_vivo,
+                    }
+                ).eq("id", poligonal_id).execute()
+                pol["error_lineal_preliminar"] = e_vivo
+                pol["precision_relativa_preliminar"] = prec_vivo
+            except Exception:
+                pass
 
     return {
         "poligonal": _enriquecer_poligonal_vista(pol),
@@ -2543,6 +2580,7 @@ def recalcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depen
 
     Descarta norte/este/azimut persistidos (fórmula anterior incorrecta con amarres)
     y devuelve el mismo payload que GET detalle con radiación actualizada.
+    No cambia ``estado`` (use ``/reabrir`` para devolver una poligonal cerrada a editable).
     """
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar")
@@ -2566,6 +2604,80 @@ def recalcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depen
     return obtener_poligonal(contrato_id, poligonal_id, current_user)
 
 
+@router.post("/{contrato_id}/poligonales/{poligonal_id}/reabrir")
+def reabrir_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
+    """Desarrollador: reabre una poligonal terminada (estado=cerrado) a editable.
+
+    Limpia ajuste Bowditch / angular persistido y vuelve ``estado`` a borrador.
+    No modifica ángulos medidos ni distancias de campo. Queda registrado en logs.
+    """
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    try:
+        from main import _es_desarrollador, registrar_log
+
+        if not _es_desarrollador(current_user):
+            raise HTTPException(status_code=403, detail="Solo desarrollador puede reabrir poligonales.")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Solo desarrollador puede reabrir poligonales.")
+
+    pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
+    if not pol:
+        raise HTTPException(status_code=404, detail="Poligonal no encontrada")
+    if _poligonal_sellada(pol):
+        raise HTTPException(status_code=403, detail="Poligonal sellada tras validación de interventoría.")
+    if (pol.get("estado") or "").lower() != "cerrado":
+        raise HTTPException(status_code=422, detail="La poligonal no está cerrada; no hay nada que reabrir.")
+
+    estado_prev = pol.get("estado")
+    ajustada_prev = pol.get("ajustada_at")
+    _limpiar_ajuste_poligonal(poligonal_id)
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("topo_poligonales").update(
+        {
+            "estado": "borrador",
+            "nivel_validacion": 0,
+            "nivel1_estado": "No Revisado",
+            "nivel1_usuario_id": None,
+            "nivel1_fecha": None,
+            "nivel2_estado": "No Revisado",
+            "nivel2_usuario_id": None,
+            "nivel2_fecha": None,
+        }
+    ).eq("id", poligonal_id).execute()
+
+    try:
+        registrar_log(
+            current_user,
+            "REABRIR_POLIGONAL",
+            "TOPOGRAFIA",
+            entidad_tipo="topo_poligonal",
+            entidad_id=poligonal_id,
+            detalle={
+                "contrato_id": contrato_id,
+                "poligonal_id": poligonal_id,
+                "nombre": pol.get("nombre"),
+                "estado_anterior": estado_prev,
+                "ajustada_at_anterior": ajustada_prev,
+                "reabierta_at": now,
+                "nota": "Desarrollador reabrió poligonal; datos crudos de campo intactos.",
+            },
+            severidad="WARNING",
+            categoria="auditoria",
+            endpoint=f"/topografia/{contrato_id}/poligonales/{poligonal_id}/reabrir",
+            metodo_http="POST",
+        )
+    except Exception:
+        pass
+
+    data = obtener_poligonal(contrato_id, poligonal_id, current_user)
+    data["mensaje"] = "Poligonal reabierta a borrador. Datos de campo intactos; ajuste limpiado."
+    data["reabierta_at"] = now
+    return data
+
+
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/calcular")
 def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Corregir y ajustar: distribuye error angular y aplica Bowditch (azimuts por armadas)."""
@@ -2584,10 +2696,15 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
     punto_visado = _row("topo_puntos", id=pol.get("punto_visado_id")) if pol.get("punto_visado_id") else None
     amarres = _amarres_poligonal(punto_inicial, punto_visado, punto_final)
 
+    # Preliminar de campo SIEMPRE desde lecturas crudas (no desde residual Bowditch).
+    cierre_campo = calcular_cierre_preliminar_campo(
+        pol, armadas, estaciones, amarres, punto_inicial, punto_final
+    )
+
     resultado = ajustar_poligonal_armadas(pol, armadas, estaciones, amarres, punto_inicial, punto_final)
     resumen = resultado["resumen"]
     cierre = resultado.get("cierre_ajustado") or resultado["cierre"]
-    cierre_pre = resultado["cierre"]
+    cierre_pre = resumen_cierre_preliminar_campo(cierre_campo) or resultado["cierre"]
 
     for upd in resultado["updates"]:
         eid = upd.pop("id")
@@ -2603,10 +2720,10 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
             "precision_relativa": cierre.get("precision") if cierre.get("precision") is not None else resumen["precision"],
             "error_lineal_preliminar": cierre_pre.get("error_lineal") if cierre_pre.get("error_lineal") is not None else resumen.get("error_lineal"),
             "precision_relativa_preliminar": cierre_pre.get("precision") if cierre_pre.get("precision") is not None else resumen.get("precision"),
-            "suma_angular_obs": cierre.get("suma_observada") or cierre_pre.get("suma_observada"),
-            "suma_angular_teorica": cierre.get("suma_teorica") or cierre_pre.get("suma_teorica"),
-            "error_angular_seg": cierre.get("error_angular_seg") if cierre.get("error_angular_seg") is not None else cierre_pre.get("error_angular_seg"),
-            "num_vertices": cierre.get("num_vertices") or cierre_pre.get("num_vertices"),
+            "suma_angular_obs": cierre.get("suma_observada") or resultado["cierre"].get("suma_observada"),
+            "suma_angular_teorica": cierre.get("suma_teorica") or resultado["cierre"].get("suma_teorica"),
+            "error_angular_seg": cierre.get("error_angular_seg") if cierre.get("error_angular_seg") is not None else resultado["cierre"].get("error_angular_seg"),
+            "num_vertices": cierre.get("num_vertices") or resultado["cierre"].get("num_vertices"),
             "ajustada_at": now,
         }
     ).eq("id", poligonal_id).execute()

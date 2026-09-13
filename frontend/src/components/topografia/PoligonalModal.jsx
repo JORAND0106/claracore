@@ -383,6 +383,32 @@ export default function PoligonalModal({
     }
   }
 
+  const reabrirPoligonalDev = async () => {
+    if (!poligonalId) return
+    const ok = window.confirm(
+      '¿Reabrir esta poligonal cerrada?\n\n' +
+        'Solo Desarrollador. Se limpia el ajuste (Bowditch/angular) y vuelve a borrador editable. ' +
+        'Los ángulos y distancias de campo no se modifican. La acción queda en auditoría.',
+    )
+    if (!ok) return
+    setBusy(true)
+    try {
+      const data = await api(`/poligonales/${poligonalId}/reabrir`, { method: 'POST' })
+      if (data?.poligonal) {
+        aplicarDetalle(data, poligonalId, { resetCaptura: false })
+      } else {
+        await cargarDetalle(poligonalId)
+      }
+      onSaved?.(poligonalId)
+      setSyncMsg(data?.mensaje || 'Poligonal reabierta. Datos de campo intactos.')
+      window.setTimeout(() => setSyncMsg(null), 6000)
+    } catch (e) {
+      showError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   useEffect(() => {
     if (!open) {
       prevOpenRef.current = false
@@ -1115,6 +1141,19 @@ export default function PoligonalModal({
                   disabled={busy || refreshing}
                 >
                   {busy ? 'Recalculando…' : 'Recalcular'}
+                </button>
+              )}
+              {step === 'estaciones' && poligonalId && esDesarrolladorTopo(usuario)
+                && String(detalle?.poligonal?.estado || '').toLowerCase() === 'cerrado'
+                && !((detalle?.poligonal?.nivel2_estado || '') === 'Aprobado' || Boolean(detalle?.poligonal?.biblioteca_at)) && (
+                <button
+                  type="button"
+                  style={{ ...ui.btnSecondary, borderColor: '#f59e0b', color: '#b45309' }}
+                  title="Devuelve la poligonal a borrador editable sin tocar ángulos/distancias de campo (Desarrollador)"
+                  onClick={reabrirPoligonalDev}
+                  disabled={busy || refreshing}
+                >
+                  {busy ? 'Reabriendo…' : 'Reabrir poligonal'}
                 </button>
               )}
               <button type="button" style={ui.btnSecondary} onClick={onClose}>Cerrar</button>
