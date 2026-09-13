@@ -6,6 +6,7 @@ import PoligonalResumen from './PoligonalResumen'
 import TopoErrorModal from './TopoErrorModal'
 
 import TopoConfirmModal from './TopoConfirmModal'
+import TopoRenderErrorBoundary from './TopoRenderErrorBoundary'
 
 import { parseApiError, PermisoAviso, puede, useTopografiaApi, useTopoTheme } from './topografiaShared'
 
@@ -382,6 +383,13 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
 
 
 
+      <TopoRenderErrorBoundary
+        theme={ui.t}
+        titulo="Error al abrir la poligonal"
+        onClose={() => {
+          setModalOpen(false)
+        }}
+      >
       <PoligonalModal
 
         open={modalOpen}
@@ -415,6 +423,7 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
         puntosVerificados={puntosVerificados}
 
       />
+      </TopoRenderErrorBoundary>
 
 
 
