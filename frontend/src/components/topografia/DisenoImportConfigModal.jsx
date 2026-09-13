@@ -224,7 +224,7 @@ export default function DisenoImportConfigModal({ open, nombreArchivo, onConfirm
         onClick={(e) => e.stopPropagation()}
 
       >
-        <CcModalBrandHeader theme={t} />
+        <CcModalBrandHeader theme={ui.t} />
         <h3 style={{ margin: '0 0 6px', color: ui.text, fontSize: 'var(--cc-base)' }}>
 
           Configuración del diseño transversal
