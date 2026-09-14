@@ -4,6 +4,8 @@
  */
 import { useMemo } from 'react'
 import {
+  DIST_MAX_VISUAL_ALERT_M,
+  distanciaExcedeAlerta,
   distanciaVminusFila,
   distanciaVplusFila,
   filaTieneVminus,
@@ -106,7 +108,7 @@ export default function NivelacionCarteraTable({
           const esCierre = Boolean(fila.es_fila_cierre)
           const distVp = vistaRow.distancia_vplus_calc
           const distVm = vistaRow.distancia_vminus_calc
-          const distOver = (distVp != null && distVp > 50) || (distVm != null && distVm > 50)
+          const distOver = distanciaExcedeAlerta(distVp) || distanciaExcedeAlerta(distVm)
           const selected = editandoIdx === idx
           const border = ui.t?.border || '#e2e8f0'
           return (
@@ -179,7 +181,19 @@ export default function NivelacionCarteraTable({
                   <strong style={{ color: bloques[bk]?.accent }}>{bk === 'vplus' ? 'V+' : bk === 'vi' ? 'Vi' : 'V−'}</strong>
                   <span>{fmtHilos(fila[bk], esAutomatico)}</span>
                   {(bk === 'vplus' || bk === 'vminus') && (
-                    <span style={{ color: ui.textMuted }}>
+                    <span
+                      style={{
+                        color: distanciaExcedeAlerta(bk === 'vplus' ? distVp : distVm)
+                          ? '#dc2626'
+                          : ui.textMuted,
+                        fontWeight: distanciaExcedeAlerta(bk === 'vplus' ? distVp : distVm) ? 700 : 400,
+                      }}
+                      title={
+                        distanciaExcedeAlerta(bk === 'vplus' ? distVp : distVm)
+                          ? `Advertencia: distancia > ${DIST_MAX_VISUAL_ALERT_M} m (no bloquea)`
+                          : undefined
+                      }
+                    >
                       d=
                       {fmtN(bk === 'vplus' ? distVp : distVm, 2)}
                     </span>
@@ -257,7 +271,7 @@ export default function NivelacionCarteraTable({
             const esCierre = Boolean(fila.es_fila_cierre)
             const distVp = vistaRow.distancia_vplus_calc ?? distanciaVplusFila(fila, tipoNivel)
             const distVm = vistaRow.distancia_vminus_calc ?? distanciaVminusFila(fila, tipoNivel)
-            const distOver = (distVp != null && distVp > 50) || (distVm != null && distVm > 50)
+            const distOver = distanciaExcedeAlerta(distVp) || distanciaExcedeAlerta(distVm)
             const selected = editandoIdx === idx
             const hilosBad = esAutomatico && ['vplus', 'vi', 'vminus'].some((bk) => hilosIncongruentes(fila[bk], tipoNivel))
 
@@ -303,12 +317,34 @@ export default function NivelacionCarteraTable({
                 </td>
                 <td style={tdBase}>{idx === 0 ? 'BM' : (fila.tipo_punto || '—')}</td>
                 {celdasHilos('vplus')}
-                <td style={{ ...tdGroupColor('vplus'), color: distVp > 50 ? '#dc2626' : undefined, fontWeight: distVp > 50 ? 700 : 400 }}>
+                <td
+                  style={{
+                    ...tdGroupColor('vplus'),
+                    color: distanciaExcedeAlerta(distVp) ? '#dc2626' : undefined,
+                    fontWeight: distanciaExcedeAlerta(distVp) ? 700 : 400,
+                  }}
+                  title={
+                    distanciaExcedeAlerta(distVp)
+                      ? `Advertencia: Dist V+ > ${DIST_MAX_VISUAL_ALERT_M} m (no bloquea)`
+                      : undefined
+                  }
+                >
                   {esCierre ? '—' : (filaTieneVplus(fila, tipoNivel) ? fmtN(distVp, 2) : '—')}
                 </td>
                 {celdasHilos('vi')}
                 {celdasHilos('vminus')}
-                <td style={{ ...tdGroupColor('vminus'), color: distVm > 50 ? '#dc2626' : undefined, fontWeight: distVm > 50 ? 700 : 400 }}>
+                <td
+                  style={{
+                    ...tdGroupColor('vminus'),
+                    color: distanciaExcedeAlerta(distVm) ? '#dc2626' : undefined,
+                    fontWeight: distanciaExcedeAlerta(distVm) ? 700 : 400,
+                  }}
+                  title={
+                    distanciaExcedeAlerta(distVm)
+                      ? `Advertencia: Dist V− > ${DIST_MAX_VISUAL_ALERT_M} m (no bloquea)`
+                      : undefined
+                  }
+                >
                   {filaTieneVminus(fila, tipoNivel) ? fmtN(distVm, 2) : '—'}
                 </td>
                 <td style={{ ...tdBase, textAlign: 'center', fontWeight: 700, color: ui.accent }}>{fmtN(vistaRow.altura_instrumento)}</td>

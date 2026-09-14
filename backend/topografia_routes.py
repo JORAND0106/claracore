@@ -3136,18 +3136,15 @@ def _resolver_bms_nivelacion(niv: dict, contrato_id: int) -> tuple[dict[str, flo
 
 
 def _validar_distancia_lectura_nivel(lect: dict, dist_max: float) -> None:
+    """Valida que la distancia sea numérica. Exceder dist_max NO bloquea (solo alerta visual)."""
     dist = lect.get("distancia_m")
     if dist is None:
         return
     try:
-        d = float(dist)
+        float(dist)
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="Distancia taquimétrica inválida.")
-    if d > dist_max:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Distancia {d:.2f} m supera el tope de {dist_max:.0f} m (visual taquimétrica).",
-        )
+    # dist > dist_max: advertencia visual en cartera/perfil; no se rechaza el registro.
 
 
 def _payload_lectura_nivel(body: LecturaNivelBody, tipo_nivel: str) -> dict:

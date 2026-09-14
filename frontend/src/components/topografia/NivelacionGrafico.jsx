@@ -1,6 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { coloresBloqueNiv, useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
+import {
+  DIST_MAX_VISUAL_ALERT_M,
+  distanciaExcedeAlerta,
+} from '../../utils/topografia_nivelacion'
 
 function niceStep(span) {
   const raw = span / 8
@@ -18,6 +22,8 @@ function parseAbscisa(val, fallback) {
   return Number.isFinite(n) ? n : fallback
 }
 
+const STROKE_ALERTA = 'rgba(220, 38, 38, 0.55)'
+
 export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto = 360 }) {
   const ui = useTopoTheme()
   const bloques = coloresBloqueNiv(ui.t)
@@ -34,13 +40,17 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
       if (cota == null || Number.isNaN(cota)) continue
       const distVp = f.distancia_vplus_calc != null ? Math.abs(Number(f.distancia_vplus_calc)) : 0
       const distVm = f.distancia_vminus_calc != null ? Math.abs(Number(f.distancia_vminus_calc)) : 0
-      prog += distVp || distVm || 0
+      const dVpFinite = Number.isFinite(distVp) ? distVp : 0
+      const dVmFinite = Number.isFinite(distVm) ? distVm : 0
+      prog += dVpFinite || dVmFinite || 0
       const abs = parseAbscisa(f.abscisa, prog)
       pts.push({
         nombre: f.nombre_punto || `#${i + 1}`,
         abscisa: abs,
         cota,
         esCierre: Boolean(f.es_fila_cierre),
+        dVp: dVpFinite,
+        dVm: dVmFinite,
       })
     }
     if (pts.length < 2) return null
@@ -77,16 +87,30 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
     }
 
     const coords = pts.map((p) => ({ x: tx(p.abscisa), y: ty(p.cota), p }))
-    const polyStr = coords.map((c) => `${c.x},${c.y}`).join(' ')
+    // Tramo origen→destino: alerta si V+ del origen o V− del destino > umbral
+    const segmentos = []
+    for (let i = 1; i < coords.length; i += 1) {
+      const prev = coords[i - 1]
+      const curr = coords[i]
+      const alerta = distanciaExcedeAlerta(prev.p.dVp) || distanciaExcedeAlerta(curr.p.dVm)
+      segmentos.push({
+        x1: prev.x,
+        y1: prev.y,
+        x2: curr.x,
+        y2: curr.y,
+        alerta,
+      })
+    }
 
     return {
       coords,
-      polyStr,
+      segmentos,
       gridLines,
       margin,
       w,
       h,
       north: { x: margin.l + w - 28, y: margin.t + 18, tip: margin.t + 2 },
+      hayAlertaDist: segmentos.some((s) => s.alerta),
     }
   }, [filasVista, ancho, alto])
 
@@ -138,6 +162,11 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
           Restablecer zoom
         </button>
         <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Rueda: zoom · Arrastrar: pan</span>
+        {plot.hayAlertaDist && (
+          <span style={{ fontSize: 'var(--cc-xs)', color: '#dc2626', fontWeight: 600 }}>
+            Tramos en rojo: Dist V+/V− &gt; {DIST_MAX_VISUAL_ALERT_M} m (advertencia; no bloquea)
+          </span>
+        )}
       </div>
 
       <div
@@ -188,10 +217,21 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
             <text x={plot.north.x} y={plot.north.tip - 5} fontSize="12" fill="#1e40af" fontWeight="700" textAnchor="middle">N</text>
           </g>
 
-          <polyline points={plot.polyStr} fill="none" stroke={ui.accent} strokeWidth="2" />
+          {plot.segmentos.map((s, i) => (
+            <line
+              key={`seg-${i}`}
+              x1={s.x1}
+              y1={s.y1}
+              x2={s.x2}
+              y2={s.y2}
+              stroke={s.alerta ? STROKE_ALERTA : ui.accent}
+              strokeWidth={s.alerta ? 3.5 : 2}
+              strokeLinecap="round"
+            />
+          ))}
 
-          {plot.coords.map(({ x, y, p }) => (
-            <g key={p.nombre}>
+          {plot.coords.map(({ x, y, p }, idx) => (
+            <g key={`${p.nombre}-${idx}`}>
               <circle
                 cx={x}
                 cy={y}

@@ -768,8 +768,17 @@ export function lecturasToFilas(lecturas, tipoNivel) {
     .map(([, f]) => f)
 }
 
+/** Umbral de advertencia visual (m) para distancias V+/V−. No bloquea registro. */
+export const DIST_MAX_VISUAL_ALERT_M = 50
+
+export function distanciaExcedeAlerta(dist, maxM = DIST_MAX_VISUAL_ALERT_M) {
+  if (dist == null || dist === '') return false
+  const n = Number(dist)
+  return Number.isFinite(n) && Math.abs(n) > maxM
+}
+
 export function calcularVistaNivelacion(filas, tipoNivel, cotasBiblioteca = {}, opts = {}) {
-  const distMax = opts.distMax ?? 50
+  const distMax = opts.distMax ?? DIST_MAX_VISUAL_ALERT_M
   let cotas = { ...cotasBiblioteca }
   let hi = null
   let distVplusTotal = 0
@@ -781,14 +790,18 @@ export function calcularVistaNivelacion(filas, tipoNivel, cotasBiblioteca = {}, 
     const distVm = distanciaVminusFila(fila, tipoNivel)
     if (distVp != null) {
       distVplusTotal += Math.abs(distVp)
-      if (distVp > distMax) {
-        avisos.push(`Fila ${idx + 1}: Dist (V+) ${distVp.toFixed(2)} m supera ${distMax} m.`)
+      if (distanciaExcedeAlerta(distVp, distMax)) {
+        avisos.push(
+          `Fila ${idx + 1}: Dist (V+) ${distVp.toFixed(2)} m > ${distMax} m (advertencia; no bloquea).`,
+        )
       }
     }
     if (distVm != null) {
       distVminusTotal += Math.abs(distVm)
-      if (distVm > distMax) {
-        avisos.push(`Fila ${idx + 1}: Dist (V−) ${distVm.toFixed(2)} m supera ${distMax} m.`)
+      if (distanciaExcedeAlerta(distVm, distMax)) {
+        avisos.push(
+          `Fila ${idx + 1}: Dist (V−) ${distVm.toFixed(2)} m > ${distMax} m (advertencia; no bloquea).`,
+        )
       }
     }
 
