@@ -16,7 +16,7 @@ import {
 } from './libroDigitalUtils.js'
 
 describe('buildBitacoraPages', () => {
-  it('una página por diario; ignora eventos legacy; fechas ascendentes', () => {
+  it('páginas de diario + eventos independientes no consolidados', () => {
     const pages = buildBitacoraPages([
       { id: 3, tipo: 'evento', fecha: '2026-08-12', created_at: '2026-08-12T14:00:00Z', evento_tipo: 'novedades' },
       {
@@ -24,13 +24,15 @@ describe('buildBitacoraPages', () => {
         eventos: [{ id: 'a', evento_tipo: 'novedades' }],
       },
       { id: 4, tipo: 'diario', fecha: '2026-08-10', created_at: '2026-08-10T09:00:00Z' },
-      { id: 5, tipo: 'evento', fecha: '2026-08-11', created_at: '2026-08-11T11:00:00Z' },
+      { id: 5, tipo: 'evento', fecha: '2026-08-11', created_at: '2026-08-11T11:00:00Z', evento_tipo: 'reporte_actividades' },
+      { id: 6, tipo: 'evento', fecha: '2026-08-09', consolidado_en_diario_id: 99, evento_tipo: 'novedades' },
     ])
     assert.deepEqual(
       pages.map((p) => `${p.kind}:${p.sourceId}`),
-      ['diario:4', 'diario:1'],
+      ['diario:4', 'evento:5', 'diario:1', 'evento:3'],
     )
-    assert.equal(pages[1].meta.eventos_count, 1)
+    assert.equal(pages.find((p) => p.sourceId === 1).meta.eventos_count, 1)
+    assert.equal(pages.some((p) => p.sourceId === 6), false)
   })
 
   it('omite filas sin fecha', () => {

@@ -1044,11 +1044,155 @@ def _ensure_diario_shell_for_fecha(
     raise ValueError(f"No se pudo crear diario shell para {f}")
 
 
+_SCHEMA_EVENTOS_CACHE: Dict[str, Any] = {"ts": 0.0, "flags": None}
+
+
+def bitacora_schema_eventos_disponible(sb) -> Dict[str, bool]:
+    """
+    Detecta si el esquema remoto ya tiene columnas de unificación.
+    Sin ellas la migración no puede embeber eventos y list_entradas debe
+    seguir exponiendo filas tipo=evento para no perder visibilidad.
+    """
+    now = time.time()
+    cached = _SCHEMA_EVENTOS_CACHE.get("flags")
+    if cached is not None and (now - float(_SCHEMA_EVENTOS_CACHE.get("ts") or 0)) < 60.0:
+        return dict(cached)
+
+    flags = {"eventos": False, "consolidado_en_diario_id": False}
+    try:
+        sb.table("seguimiento_bitacora_entrada").select("eventos").limit(0).execute()
+        flags["eventos"] = True
+    except Exception as exc:
+        _log.warning("bitacora schema sin columna eventos: %s", exc)
+    try:
+        sb.table("seguimiento_bitacora_entrada").select("consolidado_en_diario_id").limit(0).execute()
+        flags["consolidado_en_diario_id"] = True
+    except Exception as exc:
+        _log.warning("bitacora schema sin columna consolidado_en_diario_id: %s", exc)
+    _SCHEMA_EVENTOS_CACHE["flags"] = dict(flags)
+    _SCHEMA_EVENTOS_CACHE["ts"] = now
+    return flags
+
+
+def _evento_no_consolidado(row: dict, *, schema_tiene_consolidado: bool) -> bool:
+    """True si la fila tipo=evento debe seguir visible como documento independiente."""
+    if str(row.get("tipo") or "") != "evento":
+        return False
+    if not schema_tiene_consolidado:
+        return True
+    return row.get("consolidado_en_diario_id") in (None, "")
+
+
+def auditar_integridad_eventos(sb, contrato_id: int) -> dict:
+    """
+    Evidencia de integridad / visibilidad de eventos (legacy + embebidos).
+    No modifica datos.
+    """
+    schema = bitacora_schema_eventos_disponible(sb)
+    out: Dict[str, Any] = {
+        "contrato_id": int(contrato_id),
+        "schema": schema,
+        "eventos_independientes": 0,
+        "eventos_consolidados": 0,
+        "diarios": 0,
+        "diarios_con_bloques_evento": 0,
+        "bloques_evento_embebidos": 0,
+        "por_tipo_independiente": {},
+        "muestra_independientes": [],
+        "alerta": None,
+    }
+    try:
+        rows = (
+            sb.table("seguimiento_bitacora_entrada")
+            .select(
+                "id,tipo,fecha,evento_tipo,consolidado_en_diario_id,eventos"
+                if schema["eventos"] and schema["consolidado_en_diario_id"]
+                else (
+                    "id,tipo,fecha,evento_tipo,eventos"
+                    if schema["eventos"]
+                    else (
+                        "id,tipo,fecha,evento_tipo,consolidado_en_diario_id"
+                        if schema["consolidado_en_diario_id"]
+                        else "id,tipo,fecha,evento_tipo,cuerpo_html,evento_detalle,imagenes"
+                    )
+                )
+            )
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        # Fallback mínimo si el select compuesto falla.
+        try:
+            rows = (
+                sb.table("seguimiento_bitacora_entrada")
+                .select("id,tipo,fecha,evento_tipo")
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc2:
+            out["alerta"] = f"No se pudo leer entradas: {exc2 or exc}"
+            return out
+
+    indep: List[dict] = []
+    for r in rows:
+        tipo = str(r.get("tipo") or "")
+        if tipo == "diario":
+            out["diarios"] += 1
+            evs = r.get("eventos") if isinstance(r.get("eventos"), list) else []
+            if evs:
+                out["diarios_con_bloques_evento"] += 1
+                out["bloques_evento_embebidos"] += len(evs)
+        elif tipo == "evento":
+            if _evento_no_consolidado(r, schema_tiene_consolidado=schema["consolidado_en_diario_id"]):
+                out["eventos_independientes"] += 1
+                indep.append(r)
+                et = str(r.get("evento_tipo") or "sin_tipo") or "sin_tipo"
+                out["por_tipo_independiente"][et] = int(out["por_tipo_independiente"].get(et) or 0) + 1
+            else:
+                out["eventos_consolidados"] += 1
+
+    for r in indep[:12]:
+        out["muestra_independientes"].append({
+            "id": r.get("id"),
+            "fecha": str(r.get("fecha") or "")[:10],
+            "evento_tipo": r.get("evento_tipo"),
+            "tiene_cuerpo": bool(str(r.get("cuerpo_html") or "").strip()),
+            "tiene_detalle": isinstance(r.get("evento_detalle"), dict) and bool(r.get("evento_detalle")),
+            "imagenes": len(r.get("imagenes") or []) if isinstance(r.get("imagenes"), list) else None,
+        })
+
+    if not schema["eventos"] or not schema["consolidado_en_diario_id"]:
+        out["alerta"] = (
+            "Esquema incompleto: faltan columnas de unificación "
+            f"(eventos={schema['eventos']}, consolidado_en_diario_id={schema['consolidado_en_diario_id']}). "
+            "Los Reportes de Evento siguen como filas independientes; la UI unificada "
+            "debe listarlos explícitamente hasta aplicar la migración SQL."
+        )
+    elif out["eventos_independientes"] > 0 and out["bloques_evento_embebidos"] == 0:
+        out["alerta"] = (
+            f"Hay {out['eventos_independientes']} eventos independientes sin consolidar "
+            "y ningún bloque embebido en diarios. Ejecutar migrar_eventos_legacy_contrato."
+        )
+    return out
+
+
 def migrar_eventos_legacy_contrato(sb, contrato_id: int) -> int:
     """
     Idempotente: mueve eventos independientes no consolidados a bloques del
     diario de la misma fecha. Devuelve cantidad migrada.
     """
+    schema = bitacora_schema_eventos_disponible(sb)
+    if not schema["eventos"] or not schema["consolidado_en_diario_id"]:
+        _log.error(
+            "migrar_eventos_legacy bloqueada: esquema incompleto contrato=%s schema=%s. "
+            "Aplicar backend/migrations/20260827220000_seguimiento_bitacora_eventos_en_diario.sql",
+            contrato_id, schema,
+        )
+        return 0
     try:
         eventos = (
             sb.table("seguimiento_bitacora_entrada")
@@ -1064,7 +1208,7 @@ def migrar_eventos_legacy_contrato(sb, contrato_id: int) -> int:
         )
     except Exception as exc:
         # Columna aún no migrada en el esquema remoto.
-        _log.debug("migrar_eventos_legacy select: %s", exc)
+        _log.error("migrar_eventos_legacy select falló contrato=%s: %s", contrato_id, exc)
         return 0
     if not eventos:
         return 0
@@ -2595,9 +2739,15 @@ def list_entradas(
     Lista entradas del contrato. Visibilidad: cualquier usuario con permiso
     «Ver» de Bitácora (o Desarrollador) ve todas las entradas del contrato;
     no hay filtro adicional por elaborador, asistencia ni asignación.
-    Por defecto oculta eventos legacy ya consolidados en un Diario.
+
+    Unificación:
+    - Por defecto: diarios + eventos independientes aún no consolidados
+      (si el esquema aún no tiene consolidado_en_diario_id, todos los tipo=evento).
+    - tipo=diario: solo diarios.
+    - tipo=evento: solo eventos independientes (no consolidados).
     """
     t0 = time.perf_counter()
+    schema = bitacora_schema_eventos_disponible(sb)
     try:
         migrar_eventos_legacy_contrato(sb, contrato_id)
     except Exception as exc:
@@ -2614,16 +2764,25 @@ def list_entradas(
         query = query.gte("fecha", str(fecha_desde)[:10])
     if fecha_hasta:
         query = query.lte("fecha", str(fecha_hasta)[:10])
-    if tipo in ("diario", "evento"):
-        query = query.eq("tipo", tipo)
-    else:
-        # Unificación: hilo principal = solo diarios (eventos viven embebidos).
+    if tipo == "diario":
         query = query.eq("tipo", "diario")
+    elif tipo == "evento":
+        query = query.eq("tipo", "evento")
+    # else: sin filtro de tipo → diarios + eventos; filtramos consolidados abajo.
     rows = query.execute().data or []
 
-    # Filtrar eventos legacy ya migrados si el caller pidió tipo=evento.
-    if tipo == "evento":
-        rows = [r for r in rows if r.get("consolidado_en_diario_id") in (None, "")]
+    if tipo in (None, "", "evento"):
+        rows = [
+            r for r in rows
+            if str(r.get("tipo") or "") == "diario"
+            or _evento_no_consolidado(
+                r, schema_tiene_consolidado=schema["consolidado_en_diario_id"],
+            )
+        ]
+        if tipo == "evento":
+            rows = [r for r in rows if str(r.get("tipo") or "") == "evento"]
+    elif tipo == "diario":
+        rows = [r for r in rows if str(r.get("tipo") or "") == "diario"]
 
     # Autocierre lazy + batch de usos (evita N+1 round-trips a PostgREST)
     closed_rows = []
@@ -2665,6 +2824,7 @@ def list_entradas(
         contrato_id, len(out), (time.perf_counter() - t0) * 1000.0,
     )
     return out
+
 
 
 def _fetch_entrada_row(sb, contrato_id: int, entrada_id: int) -> dict:

@@ -1,3 +1,9 @@
+-- URGENTE PRODUCCIÓN (proyecto Supabase ClaraCore):
+-- Esta migración DEBE aplicarse en el SQL Editor de Supabase.
+-- Sin las columnas `eventos` y `consolidado_en_diario_id`, la unificación
+-- no puede embeber Reportes de Evento y el listado por defecto solo veía
+-- tipo=diario (los eventos independientes quedaban invisibles en la UI).
+--
 -- Unificación Bitácora: eventos como bloques dentro del Reporte Diario.
 -- Ventana de gracia D+1 se aplica en código (momento_cierre_diario).
 
