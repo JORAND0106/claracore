@@ -69,7 +69,7 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
     ),
     "plano_semaforo": "Plano semáforo: mapa con colores presupuesto vs obra ejecutada/cobrada.",
     "guias": "Guías de usuario publicadas por módulo.",
-    "mapa_navegacion": "Mapa panorámico de navegación: índice educativo de los módulos (sin deep links).",
+    "mapa_navegacion": "Mapa interactivo de funcionalidades: 7 secciones (Dashboard, Presupuesto, SICOE Obra, Informes, Almacén, Seguimiento, Topografía) con subtemas de capacitación (sin deep links).",
     "auditor_sst": "Auditor con inteligencia artificial (documentos y hallazgos).",
     "admin": (
         "Panel Admin (⚙ barra superior): Usuarios, Cargos, Control de accesos, Contratos, Listado de Precios, "

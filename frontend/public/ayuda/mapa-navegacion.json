@@ -2,69 +2,235 @@
   "version": 1,
   "updated_at": null,
   "modulos": {
-    "dashboard": {
+    "dash_obra_ejecutada_presupuesto": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "reporte_cantidades": {
+    "dash_resumen_desviaciones": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "dash_aprobacion_sicoe_ppto": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "dash_obra_acta_capitulo_rol": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_crear_obra_ejecutada": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_nueva_version_versiones": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_descargar_excel": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_analisis_datos": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_filtros": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_panel_dinamico": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_edicion_individual_masiva": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_consulta_registro": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_conexion_autocad": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_graficos_bibliotecas": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "ppto_cierre_financiero": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "sicoe_viz_reportes_cantidades": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "sicoe_filtros": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "sicoe_panel_dinamico": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "sicoe_crear_reporte_registros": {
       "descripcion": "Asistente de creación de reportes de cantidades en obra: Info General, Plantilla, Localización, Registros y Topografía. Incluye capacitación interactiva guiada desde este mapa.",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "programacion_obra": {
+    "sicoe_consulta_registros": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "topografia": {
+    "sicoe_validacion_cantidades_masiva": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "seguimiento": {
+    "sicoe_descarga_plantillas": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "editar_registros_presupuesto": {
+    "informes_biblioteca": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "listado_precios": {
+    "informes_firmas_formatos": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "informes_ccd": {
+    "informes_tipos_descarga": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "almacen": {
+    "informes_firma_documentos": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "catalogo_insumos": {
+    "almacen_crear_insumo": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "contratos": {
+    "almacen_plantillas": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "actas": {
+    "almacen_solicitud_borrador_aprobacion": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "contabilidad": {
+    "almacen_aprobacion_oc": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "subcontratistas": {
+    "almacen_entradas": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "rrhh": {
+    "almacen_despachador": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
     },
-    "auditor_sst": {
+    "almacen_devoluciones": {
       "descripcion": "",
-      "imagenes": []
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "almacen_salidas": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "almacen_inventario": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "seg_calendario": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "seg_nueva_tarea": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "seg_nueva_acta": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "seg_bitacora": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "seg_libro_digital": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "topo_biblioteca_puntos": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "topo_crear_poligonal": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "topo_crear_punto": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "topo_circuito_nivelacion": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "topo_estructura_diseno": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
+    },
+    "topo_carteras_via": {
+      "descripcion": "",
+      "imagenes": [],
+      "videoUrl": ""
     }
   }
 }
