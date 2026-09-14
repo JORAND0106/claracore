@@ -18,9 +18,9 @@ import {
   entityDetailKey,
   topoDb,
 } from './topoDb.js'
-import { resolverPayloadLecturasNivelacionOffline } from './topoNivelacionLecturasPayload.js'
+import { resolverPayloadLecturasNivelacionOffline, preferPendingNivelacionDetail } from './topoNivelacionLecturasPayload.js'
 
-export { resolverPayloadLecturasNivelacionOffline } from './topoNivelacionLecturasPayload.js'
+export { resolverPayloadLecturasNivelacionOffline, preferPendingNivelacionDetail } from './topoNivelacionLecturasPayload.js'
 
 export const TOPO_SUBMODULES = {
   biblioteca: 'biblioteca',
@@ -908,6 +908,40 @@ export async function nombrePuntoColisiona(contratoId, nombre, excludeId = null)
   return rows.some((p) => p.id !== excludeId && (p.nombre || '').trim().toLowerCase() === norm)
 }
 
+/**
+ * Tras un PUT online de lecturas, actualiza la caché del detalle para que un GET
+ * fallido no devuelva una cartera vacía/antigua y pise la UI.
+ */
+export async function cacheNivelacionLecturasAfterPut(contratoId, nivelacionId, putResponse) {
+  if (!nivelacionId || !putResponse || typeof putResponse !== 'object') return
+  const lecturas = Array.isArray(putResponse.lecturas) ? putResponse.lecturas : null
+  if (!lecturas || !lecturas.length) return
+  const prev = (await getCachedTopoEntityDetail(contratoId, 'nivelacion', nivelacionId)) || {}
+  await cacheTopoEntityDetail(contratoId, 'nivelacion', nivelacionId, {
+    ...prev,
+    nivelacion: {
+      ...(prev.nivelacion || { id: nivelacionId }),
+      id: nivelacionId,
+      estado: 'borrador',
+      _pending_sync: false,
+    },
+    lecturas,
+    _pending_sync: false,
+  })
+}
+
+/**
+ * Fusiona respuesta GET de nivelación con caché local pendiente de sync.
+ * Evita que un GET online (servidor aún sin la cola) pise lecturas locales más ricas.
+ * @returns {object} detalle efectivo a devolver al caller
+ */
+export async function mergeNivelacionGetWithPendingCache(contratoId, path, serverData) {
+  if (!serverData?.nivelacion?.id) return serverData
+  if (!path.match(/^\/nivelaciones\/[^/]+$/)) return serverData
+  const existing = await getCachedTopoEntityDetail(contratoId, 'nivelacion', serverData.nivelacion.id)
+  return preferPendingNivelacionDetail(serverData, existing)
+}
+
 export async function cacheOnlineResponse(contratoId, path, data) {
   if (!data || typeof data !== 'object') return
   const cid = Number(contratoId)
@@ -946,7 +980,32 @@ export async function cacheOnlineResponse(contratoId, path, data) {
   }
 
   if (path.match(/^\/nivelaciones\/[^/]+$/) && data.nivelacion) {
-    await cacheTopoEntityDetail(contratoId, 'nivelacion', data.nivelacion.id, data)
+    const nivId = data.nivelacion.id
+    const existing = await getCachedTopoEntityDetail(contratoId, 'nivelacion', nivId)
+    // No pisar una cartera local pendiente de sync con un GET del servidor más pobre
+    // (p. ej. PUT offline → GET online antes de que la cola suba).
+    if (existing?._pending_sync) {
+      const localN = Array.isArray(existing.lecturas) ? existing.lecturas.length : 0
+      const remoteN = Array.isArray(data.lecturas) ? data.lecturas.length : 0
+      if (remoteN < localN) {
+        await cacheTopoEntityDetail(contratoId, 'nivelacion', nivId, {
+          ...data,
+          lecturas: existing.lecturas,
+          vista_local: existing.vista_local,
+          _pending_sync: true,
+          nivelacion: {
+            ...data.nivelacion,
+            _pending_sync: true,
+            tipo_nivel: existing.nivelacion?.tipo_nivel || data.nivelacion?.tipo_nivel,
+          },
+        })
+        return
+      }
+    }
+    await cacheTopoEntityDetail(contratoId, 'nivelacion', nivId, {
+      ...data,
+      _pending_sync: false,
+    })
     return
   }
 

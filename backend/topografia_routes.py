@@ -3161,6 +3161,9 @@ def _reemplazar_lecturas_nivelacion_db(nivelacion_id: str, payloads: list[dict])
     elimina las lecturas previas. Si algo falla, deja intactas las previas o las
     restaura.
     """
+    import logging
+
+    log = logging.getLogger("claracore.topo.nivelacion")
     previas = (
         supabase.table("topo_nivelacion_lecturas")
         .select("*")
@@ -3174,6 +3177,13 @@ def _reemplazar_lecturas_nivelacion_db(nivelacion_id: str, payloads: list[dict])
     clean = [sanitizar_fila_lectura_nivelacion({**p, "nivelacion_id": nivelacion_id}) for p in payloads]
     if not clean:
         raise HTTPException(status_code=422, detail="La cartera no puede quedar vacía.")
+
+    log.info(
+        "nivelacion_lecturas_replace start id=%s previas=%s payload=%s",
+        nivelacion_id,
+        len(previas),
+        len(clean),
+    )
 
     nuevas_ids: list[str] = []
     try:
@@ -3215,8 +3225,33 @@ def _reemplazar_lecturas_nivelacion_db(nivelacion_id: str, payloads: list[dict])
             raise RuntimeError(
                 f"La cartera quedó inconsistente tras sincronizar ({len(rows)}/{len(clean)})."
             )
+        # Verificar huella orden|tipo|nombre (no solo conteo)
+        expected_fp = sorted(
+            f"{int(r.get('orden') or 0)}|{r.get('tipo_lectura') or ''}|"
+            f"{(r.get('nombre_punto') or '').strip()}"
+            for r in clean
+        )
+        got_fp = sorted(
+            f"{int(r.get('orden') or 0)}|{r.get('tipo_lectura') or ''}|"
+            f"{(r.get('nombre_punto') or '').strip()}"
+            for r in rows
+        )
+        if expected_fp != got_fp:
+            raise RuntimeError(
+                "La huella de lecturas persistidas no coincide con el payload enviado."
+            )
+        log.info(
+            "nivelacion_lecturas_replace ok id=%s saved=%s",
+            nivelacion_id,
+            len(rows),
+        )
         return rows
-    except Exception:
+    except Exception as exc:
+        log.exception(
+            "nivelacion_lecturas_replace fail id=%s err=%s",
+            nivelacion_id,
+            exc,
+        )
         # Compensación: quitar parciales nuevas y restaurar previas si hace falta
         try:
             if nuevas_ids:
@@ -3668,6 +3703,12 @@ def sincronizar_lecturas_nivelacion(
         "lecturas": rows,
         "count": len(rows),
         "puntos": contar_puntos_lecturas_nivelacion(rows),
+        "verified": True,
+        "fingerprint_orden": sorted(
+            f"{int(r.get('orden') or 0)}|{r.get('tipo_lectura') or ''}|"
+            f"{(r.get('nombre_punto') or '').strip()}"
+            for r in rows
+        ),
     }
 
 

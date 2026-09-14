@@ -4,7 +4,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { filasToLecturas, nuevaFilaPunto } from '../../../utils/topografia_nivelacion.js'
-import { resolverPayloadLecturasNivelacionOffline } from './topoNivelacionLecturasPayload.js'
+import {
+  preferPendingNivelacionDetail,
+  resolverPayloadLecturasNivelacionOffline,
+} from './topoNivelacionLecturasPayload.js'
 
 describe('resolverPayloadLecturasNivelacionOffline', () => {
   it('acepta el body online { lecturas, tipo_nivel } sin tratarlo como filas UI', () => {
@@ -49,5 +52,23 @@ describe('resolverPayloadLecturasNivelacionOffline', () => {
     assert.equal(resolved.filas[0].nombre_punto, 'BM-X')
     assert.ok(resolved.lecturas.length >= 1)
     assert.equal(resolved.lecturas[0].tipo_lectura, 'V+')
+  })
+})
+
+describe('preferPendingNivelacionDetail (anti-overwrite)', () => {
+  it('no deja que un GET vacío pise cartera pendiente de sync', () => {
+    const server = { nivelacion: { id: 'n1', nombre: 'Circuito A' }, lecturas: [] }
+    const pending = {
+      _pending_sync: true,
+      lecturas: [
+        { orden: 1, tipo_lectura: 'V+', nombre_punto: 'BM1', lectura: 1.5 },
+        { orden: 11, tipo_lectura: 'V−', nombre_punto: 'TP1', lectura: 1.1 },
+      ],
+      nivelacion: { id: 'n1', tipo_nivel: 'electronico' },
+    }
+    const out = preferPendingNivelacionDetail(server, pending)
+    assert.equal(out.lecturas.length, 2)
+    assert.equal(out._pending_sync, true)
+    assert.equal(Number(out.lecturas[0].lectura), 1.5)
   })
 })

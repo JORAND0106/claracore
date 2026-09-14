@@ -1,5 +1,5 @@
 /**
- * Round-trip de persistencia cartera (filas → lecturas → filas).
+ * Round-trip de persistencia cartera + confirmación estricta de guardado.
  * node --test frontend/src/utils/topografia_nivelacion_guardar_cartera.test.mjs
  */
 import assert from 'node:assert/strict'
@@ -11,6 +11,13 @@ import {
   nuevaFilaPunto,
   prepararBorradorBmInicial,
 } from './topografia_nivelacion.js'
+import {
+  borradorPendienteDeAgregar,
+  confirmarRespuestaGuardadoLecturas,
+  fingerprintLecturasOrden,
+  verificarDetalleTrasGuardado,
+} from './topografia_nivelacion_guardar.js'
+import { preferPendingNivelacionDetail } from '../components/topografia/offline/topoNivelacionLecturasPayload.js'
 
 describe('Guardar cartera — round-trip de persistencia', () => {
   it('no pierde V+/Vi/V− ni fila de cierre al serializar', () => {
@@ -82,5 +89,110 @@ describe('Guardar cartera — round-trip de persistencia', () => {
     const back = lecturasToFilas(lecturas, 'electronico')
     assert.equal(back.length, 2)
     assert.equal(back[1].es_fila_cierre, true)
+  })
+})
+
+describe('Guardar cartera — confirmación estricta', () => {
+  const payload = [
+    { orden: 1, tipo_lectura: 'V+', nombre_punto: 'BM1', lectura: 1.5 },
+    { orden: 2, tipo_lectura: 'V−', nombre_punto: 'TP1', lectura: 1.2 },
+  ]
+
+  it('rechaza respuesta vacía (no asume éxito por payload local)', () => {
+    const r = confirmarRespuestaGuardadoLecturas(null, payload)
+    assert.equal(r.ok, false)
+    assert.equal(r.reason, 'empty_response')
+  })
+
+  it('rechaza respuesta sin count (no usa payload.length)', () => {
+    const r = confirmarRespuestaGuardadoLecturas({}, payload)
+    assert.equal(r.ok, false)
+    assert.equal(r.reason, 'missing_count')
+  })
+
+  it('rechaza conteo distinto al enviado', () => {
+    const r = confirmarRespuestaGuardadoLecturas({ count: 1, lecturas: [payload[0]] }, payload)
+    assert.equal(r.ok, false)
+    assert.equal(r.reason, 'count_mismatch')
+  })
+
+  it('acepta count + fingerprint coincidente', () => {
+    const fp = fingerprintLecturasOrden(payload)
+    const r = confirmarRespuestaGuardadoLecturas({
+      count: 2,
+      lecturas: payload,
+      fingerprint_orden: fp,
+      verified: true,
+    }, payload)
+    assert.equal(r.ok, true)
+    assert.equal(r.count, 2)
+  })
+
+  it('acepta respuesta offline con _offline', () => {
+    const r = confirmarRespuestaGuardadoLecturas({
+      count: 2,
+      lecturas: payload,
+      _offline: true,
+    }, payload)
+    assert.equal(r.ok, true)
+    assert.equal(r.offline, true)
+  })
+
+  it('verificarDetalleTrasGuardado detecta GET más pobre', () => {
+    const v = verificarDetalleTrasGuardado({ lecturas: [payload[0]] }, 2)
+    assert.equal(v.ok, false)
+    assert.equal(v.reason, 'count_short')
+  })
+
+  it('verificarDetalleTrasGuardado OK con misma huella', () => {
+    const fp = fingerprintLecturasOrden(payload)
+    const v = verificarDetalleTrasGuardado({ lecturas: payload }, 2, fp)
+    assert.equal(v.ok, true)
+  })
+})
+
+describe('Guardar cartera — borrador pendiente y merge pending', () => {
+  it('detecta lectura en panel de captura sin agregar', () => {
+    const b = {
+      ...nuevaFilaPunto(2, false),
+      nombre_punto: 'X',
+      vplus: { lectura: '1.2', hS: '', hM: '', hI: '' },
+    }
+    assert.equal(borradorPendienteDeAgregar(b, 'electronico'), true)
+  })
+
+  it('no marca pendiente un borrador vacío/BM solo nombre', () => {
+    const b = prepararBorradorBmInicial('BM1')
+    assert.equal(borradorPendienteDeAgregar(b, 'electronico'), false)
+  })
+
+  it('preferPendingNivelacionDetail conserva lecturas locales más ricas', () => {
+    const server = {
+      nivelacion: { id: 'n1', nombre: 'A' },
+      lecturas: [],
+    }
+    const existing = {
+      _pending_sync: true,
+      lecturas: [
+        { orden: 1, tipo_lectura: 'V+', nombre_punto: 'BM1' },
+        { orden: 2, tipo_lectura: 'V−', nombre_punto: 'TP1' },
+      ],
+      nivelacion: { id: 'n1', tipo_nivel: 'electronico' },
+    }
+    const merged = preferPendingNivelacionDetail(server, existing)
+    assert.equal(merged.lecturas.length, 2)
+    assert.equal(merged._pending_sync, true)
+  })
+
+  it('preferPendingNivelacionDetail cede cuando el servidor ya alcanzó o superó', () => {
+    const lecturas = [
+      { orden: 1, tipo_lectura: 'V+', nombre_punto: 'BM1' },
+      { orden: 2, tipo_lectura: 'V−', nombre_punto: 'TP1' },
+    ]
+    const server = { nivelacion: { id: 'n1' }, lecturas }
+    const existing = { _pending_sync: true, lecturas: [lecturas[0]] }
+    const merged = preferPendingNivelacionDetail(server, existing)
+    assert.equal(merged.lecturas.length, 2)
+    assert.equal(merged._pending_sync, undefined)
   })
 })

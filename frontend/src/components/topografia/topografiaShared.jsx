@@ -3,7 +3,9 @@ import { API_BASE } from '../../apiBase'
 import { useClaraViewport } from '../../useClaraViewport'
 import {
   cacheOnlineResponse,
+  cacheNivelacionLecturasAfterPut,
   handleOfflineMutation,
+  mergeNivelacionGetWithPendingCache,
   readTopoOffline,
 } from './offline/topoOfflineRouter.js'
 import { useTopoOffline } from './offline/TopoOfflineContext.jsx'
@@ -509,6 +511,26 @@ export function useTopografiaApi(contratoId, token) {
       const data = await res.json()
       if (method === 'GET') {
         await cacheOnlineResponse(contratoId, pathOnly, data)
+        if (/^\/nivelaciones\/[^/]+$/.test(pathOnly)) {
+          try {
+            return await mergeNivelacionGetWithPendingCache(contratoId, pathOnly, data)
+          } catch (mergeErr) {
+            console.warn('[useTopografiaApi] merge pending nivelación falló:', mergeErr)
+          }
+        }
+      } else if (
+        method === 'PUT'
+        && /^\/nivelaciones\/[^/]+\/lecturas$/.test(pathOnly)
+        && data
+        && Array.isArray(data.lecturas)
+        && data.lecturas.length
+      ) {
+        const nivId = pathOnly.split('/')[2]
+        try {
+          await cacheNivelacionLecturasAfterPut(contratoId, nivId, data)
+        } catch (cacheErr) {
+          console.warn('[useTopografiaApi] No se pudo actualizar caché post-PUT lecturas:', cacheErr)
+        }
       }
       return data
     } catch (e) {
