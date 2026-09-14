@@ -13,7 +13,14 @@ function niceStep(span) {
   return 10 * mag
 }
 
-export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto = 360 }) {
+export default function NivelacionGrafico({
+  filasVista = [],
+  puntos: puntosProp = null,
+  titulo = 'Perfil del circuito de nivelación',
+  ejeXLabel = 'Distancia acumulada (m) →',
+  ancho = 560,
+  alto = 360,
+}) {
   const ui = useTopoTheme()
   const bloques = coloresBloqueNiv(ui.t)
   const [scale, setScale] = useState(1)
@@ -21,7 +28,9 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
   const panRef = useRef({ dragging: false, x0: 0, y0: 0, pan0: { x: 0, y: 0 } })
 
   const plot = useMemo(() => {
-    const pts = puntosPerfilNivelacion(filasVista)
+    const pts = Array.isArray(puntosProp) && puntosProp.length
+      ? puntosProp
+      : puntosPerfilNivelacion(filasVista)
     if (pts.length < 2) return null
 
     const absVals = pts.map((p) => p.abscisa)
@@ -67,7 +76,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
       h,
       north: { x: margin.l + w - 28, y: margin.t + 18, tip: margin.t + 2 },
     }
-  }, [filasVista, ancho, alto])
+  }, [filasVista, puntosProp, ancho, alto])
 
   const onWheel = useCallback((e) => {
     e.preventDefault()
@@ -108,7 +117,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
   return (
     <div style={{ ...ui.card, marginTop: 12 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', marginBottom: 10 }}>
-        <span style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>Perfil del circuito de nivelación</span>
+        <span style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>{titulo}</span>
         <button
           type="button"
           onClick={resetVista}
@@ -158,7 +167,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
             ),
           )}
 
-          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle">Distancia acumulada (m) →</text>
+          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle">{ejeXLabel}</text>
           <text x={14} y={plot.margin.t + plot.h / 2} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle" transform={`rotate(-90 14 ${plot.margin.t + plot.h / 2})`}>Cota (m) →</text>
 
           <g>

@@ -672,8 +672,9 @@ export function procesarFilaNivelacion(fila, hi, cotas, tipoNivel, idx, avisos) 
   return { hi, rowHi, rowCota, cotas: cotasLocal }
 }
 
-export function filasToLecturas(filas, tipoNivel) {
+export function filasToLecturas(filas, tipoNivel, opts = {}) {
   const tipoExport = inferirTipoNivelFilas(filas, tipoNivel)
+  const ordenBase = Number(opts.ordenBase) || 0
   const out = []
   const filasConOrden = (filas || []).map((fila, rowIdx) => ({ fila, rowIdx }))
 
@@ -688,7 +689,7 @@ export function filasToLecturas(filas, tipoNivel) {
       const lectura = lecturaMedioEfectiva(bloque, tipoExport)
       const distLect = tipo === 'V+' ? distVplus : tipo === 'V-' ? distVminus : null
       const item = {
-        orden: rowIdx * 10 + TIPO_ORDEN[tipo],
+        orden: ordenBase + rowIdx * 10 + TIPO_ORDEN[tipo],
         nombre_punto: fila.nombre_punto.trim(),
         tipo_punto: fila.tipo_punto || (rowIdx === 0 ? 'BM' : 'estacion'),
         tipo_lectura: tipo,
@@ -718,9 +719,9 @@ export function filasToLecturas(filas, tipoNivel) {
   filasConOrden.forEach(({ fila, rowIdx }) => {
     const nombre = (fila.nombre_punto || '').trim()
     if (!nombre || !fila.es_fila_cierre) return
-    if (out.some((l) => Math.floor(((l.orden || 1) - 1) / 10) === rowIdx)) return
+    if (out.some((l) => Math.floor(((l.orden || 1) - 1 - ordenBase) / 10) === rowIdx)) return
     out.push({
-      orden: rowIdx * 10 + 2,
+      orden: ordenBase + rowIdx * 10 + 2,
       nombre_punto: nombre,
       tipo_punto: fila.tipo_punto || 'estacion',
       tipo_lectura: 'Vi',
@@ -742,11 +743,18 @@ export function filasToLecturas(filas, tipoNivel) {
   return out.sort((a, b) => a.orden - b.orden)
 }
 
-export function lecturasToFilas(lecturas, tipoNivel) {
+export function lecturasToFilas(lecturas, tipoNivel, opts = {}) {
   // Cartera vacía: el panel de ingreso compacto captura la primera lectura (patrón Poligonal).
   if (!lecturas?.length) return []
-  const sorted = [...lecturas].sort((a, b) => (a.orden || 0) - (b.orden || 0))
-  const legacy = sorted.every((l) => (l.orden || 0) < 10)
+  const ordenBase = Number(opts.ordenBase) || 0
+  const forceGrouped = Boolean(opts.forceGrouped)
+  const sorted = [...lecturas]
+    .map((l) => ({
+      ...l,
+      orden: Math.max(0, (Number(l.orden) || 0) - ordenBase),
+    }))
+    .sort((a, b) => (a.orden || 0) - (b.orden || 0))
+  const legacy = !forceGrouped && sorted.every((l) => (l.orden || 0) < 10)
 
   const assignLectura = (fila, l) => {
     fila.nombre_punto = l.nombre_punto || fila.nombre_punto
@@ -1006,4 +1014,253 @@ export function prepararBorradorBmInicial(bmNombre) {
     tipo_punto: 'BM',
     descripcion_punto: 'BM inicial',
   }
+}
+
+/** Lecturas de contranivelación se persisten con orden ≥ este valor (misma tabla). */
+export const ORDEN_CONTRA_BASE = 100000
+
+export function esLecturaContranivelacion(lect) {
+  return (Number(lect?.orden) || 0) >= ORDEN_CONTRA_BASE
+}
+
+export function separarLecturasIdaContra(lecturas) {
+  const ida = []
+  const contra = []
+  for (const l of lecturas || []) {
+    ;(esLecturaContranivelacion(l) ? contra : ida).push(l)
+  }
+  return { ida, contra }
+}
+
+/** Reescribe orden de lecturas contra a base 0 para `lecturasToFilas`. */
+export function normalizarOrdenContra(lecturas) {
+  return (lecturas || []).map((l) => ({
+    ...l,
+    orden: Math.max(0, (Number(l.orden) || 0) - ORDEN_CONTRA_BASE),
+  }))
+}
+
+function normNombrePunto(nombre) {
+  return String(nombre || '').trim().toLowerCase()
+}
+
+/** Catálogo de puntos de la nivelación de ida (último registro por nombre gana). */
+export function catalogoPuntosIda(filasIda) {
+  const map = new Map()
+  for (const f of filasIda || []) {
+    const nombre = (f?.nombre_punto || '').trim()
+    if (!nombre) continue
+    map.set(normNombrePunto(nombre), {
+      nombre_punto: nombre,
+      tipo_punto: f.tipo_punto || '',
+      abscisa: f.abscisa ?? '',
+      descripcion_punto: f.descripcion_punto || '',
+      punto_biblioteca_id: f.punto_biblioteca_id || null,
+      ubicacion_pk_id: f.ubicacion_pk_id || null,
+      ubicacion_pk: f.ubicacion_pk || '',
+      ubicacion_tramo: f.ubicacion_tramo || '',
+      ubicacion_costado: f.ubicacion_costado || '',
+      ubicacion_infraestructura: f.ubicacion_infraestructura || '',
+      ubicacion_lat: f.ubicacion_lat ?? null,
+      ubicacion_lng: f.ubicacion_lng ?? null,
+    })
+  }
+  return map
+}
+
+export function nombresPuntosIda(filasIda) {
+  return [...catalogoPuntosIda(filasIda).values()].map((p) => p.nombre_punto)
+}
+
+/** Autocompleta meta desde la ida al escribir el nombre (match exacto, case-insensitive). */
+export function autocompletarDesdeIda(nombre, filasIda) {
+  const hit = catalogoPuntosIda(filasIda).get(normNombrePunto(nombre))
+  if (!hit) return null
+  return { ...hit }
+}
+
+export const MSG_PUNTO_NO_EN_IDA =
+  'Solo se admiten puntos ya registrados en la nivelación de ida. Escriba el nombre exacto de un punto existente.'
+
+/**
+ * Valida borrador de contranivelación: puntos solo de la ida; meta autocompletable.
+ * No bloquea por cierre de ida ni por Δcota.
+ */
+export function validarBorradorContranivelacion(borrador, filasContra, filasIda, tipoNivel) {
+  if (!borradorTieneLectura(borrador, tipoNivel)) {
+    return { ok: false, msg: 'Registre al menos una lectura (V+, Vi o V−) antes de agregar.' }
+  }
+  const tieneVp = filaTieneVplus(borrador, tipoNivel)
+  const tieneVi = filaTieneVi(borrador, tipoNivel)
+  const tieneVm = filaTieneVminus(borrador, tipoNivel)
+  if (tieneVi && (tieneVp || tieneVm)) {
+    return { ok: false, msg: MSG_VI_FILA_INDEPENDIENTE }
+  }
+
+  const nombre = (borrador.nombre_punto || '').trim()
+  if (!nombre) {
+    return { ok: false, msg: 'Escriba el nombre del punto (debe existir en la nivelación de ida).' }
+  }
+  const meta = autocompletarDesdeIda(nombre, filasIda)
+  if (!meta) {
+    return { ok: false, msg: MSG_PUNTO_NO_EN_IDA }
+  }
+
+  const idx = (filasContra || []).length
+  const filaCheck = {
+    ...borrador,
+    ...meta,
+    nombre_punto: meta.nombre_punto,
+    vplus: borrador.vplus,
+    vi: borrador.vi,
+    vminus: borrador.vminus,
+    dist_vplus_m: borrador.dist_vplus_m,
+    dist_vminus_m: borrador.dist_vminus_m,
+  }
+
+  const esVistaIntermedia = tieneVi && !tieneVp && !tieneVm
+  const insertAt = esVistaIntermedia ? indiceInsercionVistaIntermedia(filasContra, tipoNivel) : idx
+  const metaIdx = esVistaIntermedia ? Math.max(insertAt, 1) : idx
+
+  if (!metadatosFilaCompletos(filaCheck, metaIdx, '')) {
+    return { ok: false, msg: 'Complete el nombre del punto para autocompletar tipo, PK y descripción.' }
+  }
+
+  if (esVistaIntermedia) {
+    if (!(filasContra || []).some((f) => filaTieneVplus(f, tipoNivel))) {
+      return { ok: false, msg: 'Registre V+ antes de una vista intermedia en la contranivelación.' }
+    }
+  }
+
+  const avisosHilos = []
+  if (tipoNivel === 'automatico') {
+    for (const [bk, label] of [['vplus', 'V+'], ['vi', 'Vi'], ['vminus', 'V−']]) {
+      const diag = diagnosticoHilosIncongruentes(filaCheck[bk], tipoNivel)
+      if (diag?.msg) avisosHilos.push(`${label}: ${diag.msg}`)
+    }
+  }
+
+  return {
+    ok: true,
+    avisosHilos,
+    fila: filaCheck,
+    ...(esVistaIntermedia ? { esVistaIntermedia: true, insertAt } : {}),
+  }
+}
+
+/** Prefill del primer punto de contranivelación (= punto de cierre / BM final de la ida). */
+export function prepararBorradorContraInicio(filasIda, bmFinalNombre = '') {
+  const cierre = (filasIda || []).find((f) => f.es_fila_cierre)
+  const nombre = (cierre?.nombre_punto || bmFinalNombre || '').trim()
+  const base = nuevaFilaPunto(1, false)
+  if (!nombre) return base
+  const meta = autocompletarDesdeIda(nombre, filasIda)
+  return {
+    ...base,
+    ...(meta || { nombre_punto: nombre }),
+    descripcion_punto: meta?.descripcion_punto || 'Inicio contranivelación',
+  }
+}
+
+/**
+ * Semilla de cotas para calcular la contra: biblioteca + cota de cierre de la ida.
+ * No inyecta el resto de cotas de ida para no contaminar la verificación.
+ */
+export function cotasSemillaContranivelacion(filasIda, filasVistaIda, cotasBiblioteca = {}, bmFinalNombre = '') {
+  const m = { ...cotasBiblioteca }
+  const idx = (filasIda || []).findIndex((f) => f.es_fila_cierre)
+  const nombre = idx >= 0
+    ? ((filasIda[idx].nombre_punto || '').trim() || bmFinalNombre)
+    : (bmFinalNombre || '').trim()
+  if (!nombre) return m
+  const cotaVista = filasVistaIda?.[idx]?.cota
+  if (cotaVista != null && Number.isFinite(Number(cotaVista))) {
+    m[nombre] = Number(cotaVista)
+  }
+  return m
+}
+
+/**
+ * Δcota de verificación: cota al volver al punto inicial (contra) − cota de cierre (ida).
+ * Informativo; no bloquea guardado.
+ */
+export function deltaCotaContranivelacion({
+  filasIda,
+  filasVistaIda,
+  filasContra,
+  filasVistaContra,
+  bmInicialNombre = '',
+}) {
+  const idxCierre = (filasIda || []).findIndex((f) => f.es_fila_cierre)
+  const cotaCierreIda = idxCierre >= 0 ? filasVistaIda?.[idxCierre]?.cota : null
+  const nombreInicio = (bmInicialNombre
+    || (filasIda?.[0]?.nombre_punto || '')).trim()
+  if (!nombreInicio) {
+    return { ok: false, cotaCierreIda, cotaContraInicio: null, deltaM: null, deltaMm: null }
+  }
+  let cotaContraInicio = null
+  for (let i = (filasVistaContra || []).length - 1; i >= 0; i -= 1) {
+    const n = (filasContra?.[i]?.nombre_punto || filasVistaContra[i]?.nombre_punto || '').trim()
+    if (normNombrePunto(n) !== normNombrePunto(nombreInicio)) continue
+    const c = filasVistaContra[i]?.cota
+    if (c != null && Number.isFinite(Number(c))) {
+      cotaContraInicio = Number(c)
+      break
+    }
+  }
+  if (cotaCierreIda == null || cotaContraInicio == null) {
+    return { ok: false, cotaCierreIda, cotaContraInicio, deltaM: null, deltaMm: null, nombreInicio }
+  }
+  const deltaM = Number(cotaContraInicio) - Number(cotaCierreIda)
+  return {
+    ok: true,
+    nombreInicio,
+    cotaCierreIda: Number(cotaCierreIda),
+    cotaContraInicio,
+    deltaM,
+    deltaMm: deltaM * 1000,
+  }
+}
+
+/**
+ * Perfil de contranivelación: parte de la abscisa final de la ida y descuenta
+ * V+(origen)+V−(destino) en cada tramo (abscisado inverso).
+ */
+export function puntosPerfilContranivelacion(filasVistaContra, abscisaFinalIda = 0) {
+  const pts = []
+  let prevDVp = 0
+  let accum = Number(abscisaFinalIda) || 0
+  let first = true
+
+  for (let i = 0; i < (filasVistaContra || []).length; i += 1) {
+    const f = filasVistaContra[i]
+    const cota = f?.cota != null ? Number(f.cota) : null
+    if (cota == null || Number.isNaN(cota)) continue
+
+    const dVpRaw = f.distancia_vplus_calc != null ? Number(f.distancia_vplus_calc) : NaN
+    const dVmRaw = f.distancia_vminus_calc != null ? Number(f.distancia_vminus_calc) : NaN
+    const dVp = Number.isFinite(dVpRaw) ? Math.abs(dVpRaw) : 0
+    const dVm = Number.isFinite(dVmRaw) ? Math.abs(dVmRaw) : 0
+
+    if (first) {
+      first = false
+    } else {
+      accum -= prevDVp + dVm
+    }
+
+    pts.push({
+      nombre: (f.nombre_punto || `#${i + 1}`).trim() || `#${i + 1}`,
+      abscisa: accum,
+      cota,
+      esCierre: Boolean(f.es_fila_cierre),
+    })
+    prevDVp = dVp
+  }
+  return pts
+}
+
+export function abscisaFinalPerfilIda(filasVistaIda) {
+  const pts = puntosPerfilNivelacion(filasVistaIda)
+  if (!pts.length) return 0
+  return pts[pts.length - 1].abscisa
 }
