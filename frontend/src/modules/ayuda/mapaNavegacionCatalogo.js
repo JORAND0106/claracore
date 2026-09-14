@@ -1,5 +1,5 @@
 /**
- * Catálogo fijo del mapa panorámico de navegación (15 módulos funcionales).
+ * Catálogo fijo del mapa panorámico de navegación (módulos funcionales).
  * Los ids son estables; el contenido educativo (texto + pantallazos) vive fuera
  * del código en /ayuda/mapa-navegacion.json o en el API (blob).
  */

@@ -1,4 +1,10 @@
 import { useMemo, useState } from 'react'
+import CapacitacionReporteCantidadesWalkthrough, {
+  CapacitacionReporteCantidadesLaunchButton,
+} from './CapacitacionReporteCantidadesWalkthrough'
+
+/** Módulo del mapa con capacitación interactiva nativa. */
+export const MAPA_MODULO_CAPACITACION_RC = 'reporte_cantidades'
 
 /**
  * Vista índice del mapa panorámico (informativa; sin deep links).
@@ -14,6 +20,7 @@ export default function MapaNavegacionVista({
 }) {
   const [abiertoId, setAbiertoId] = useState(null)
   const [lightbox, setLightbox] = useState(null)
+  const [capRcOpen, setCapRcOpen] = useState(false)
 
   const total = useMemo(
     () => grupos.reduce((acc, g) => acc + (g.modulos?.length || 0), 0),
@@ -176,8 +183,19 @@ export default function MapaNavegacionVista({
                         lineHeight: 1.5,
                         whiteSpace: 'pre-wrap',
                       }}>
-                        {mod.descripcion || 'Aún no hay descripción educativa para este módulo. Se publicará aquí cuando esté lista.'}
+                        {mod.descripcion
+                          || (mod.id === MAPA_MODULO_CAPACITACION_RC
+                            ? 'Asistente de creación de reportes de cantidades en obra: Info General, Plantilla, Localización, Registros y Topografía.'
+                            : 'Aún no hay descripción educativa para este módulo. Se publicará aquí cuando esté lista.')}
                       </p>
+
+                      {mod.id === MAPA_MODULO_CAPACITACION_RC ? (
+                        <CapacitacionReporteCantidadesLaunchButton
+                          t={t}
+                          compact={compact}
+                          onClick={() => setCapRcOpen(true)}
+                        />
+                      ) : null}
 
                       {(mod.imagenes || []).length > 0 ? (
                         <div style={{
@@ -225,7 +243,7 @@ export default function MapaNavegacionVista({
                             </button>
                           ))}
                         </div>
-                      ) : (
+                      ) : mod.id === MAPA_MODULO_CAPACITACION_RC ? null : (
                         <div style={{
                           border: `1px dashed ${t.border}`,
                           borderRadius: 10,
@@ -279,6 +297,12 @@ export default function MapaNavegacionVista({
           />
         </div>
       )}
+
+      <CapacitacionReporteCantidadesWalkthrough
+        t={t}
+        open={capRcOpen}
+        onClose={() => setCapRcOpen(false)}
+      />
     </div>
   )
 }
