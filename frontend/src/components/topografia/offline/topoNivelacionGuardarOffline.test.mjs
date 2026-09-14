@@ -54,3 +54,21 @@ describe('resolverPayloadLecturasNivelacionOffline', () => {
     assert.equal(resolved.lecturas[0].tipo_lectura, 'V+')
   })
 })
+
+describe('preferPendingNivelacionDetail (anti-overwrite)', () => {
+  it('no deja que un GET vacío pise cartera pendiente de sync', () => {
+    const server = { nivelacion: { id: 'n1', nombre: 'Circuito A' }, lecturas: [] }
+    const pending = {
+      _pending_sync: true,
+      lecturas: [
+        { orden: 1, tipo_lectura: 'V+', nombre_punto: 'BM1', lectura: 1.5 },
+        { orden: 11, tipo_lectura: 'V−', nombre_punto: 'TP1', lectura: 1.1 },
+      ],
+      nivelacion: { id: 'n1', tipo_nivel: 'electronico' },
+    }
+    const out = preferPendingNivelacionDetail(server, pending)
+    assert.equal(out.lecturas.length, 2)
+    assert.equal(out._pending_sync, true)
+    assert.equal(Number(out.lecturas[0].lectura), 1.5)
+  })
+})
