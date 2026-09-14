@@ -161,7 +161,7 @@ describe('preview Abscisado captura en tiempo real (bajo V−)', () => {
       { vminus: { hS: '1.450', hM: '', hI: '1.250' }, dist_vminus_m: '' },
       'automatico',
     )
-    assert.equal(d, 20) // |1.250-1.450|*100
+    assert.ok(Math.abs(d - 20) < 1e-9) // |1.250-1.450|*100
   })
 
   it('en edición (replaceIdx) refleja el Dist V− modificado', () => {
