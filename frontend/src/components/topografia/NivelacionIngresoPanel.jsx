@@ -4,6 +4,7 @@
 import { useMemo } from 'react'
 import {
   ABSCISA_NUMERICA_MSG,
+  autocompletarDesdeIda,
   diagnosticoHilosIncongruentes,
   distanciaTaquimetrica,
   hilosIncongruentes,
@@ -119,14 +120,45 @@ export default function NivelacionIngresoPanel({
   esPrimeraFila = false,
   puedeAgregar = true,
   tituloHint = '',
+  modoContra = false,
+  filasIdaParaAutocomplete = null,
+  sugerenciasPuntos = null,
 }) {
   const panelCol = { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }
 
   const updateBloque = (bk, bloque) => onChange({ ...borrador, [bk]: bloque })
   const patch = (p) => onChange({ ...borrador, ...p })
 
-  const nombreLocked = esPrimeraFila && Boolean(bmInicialNombre)
-  const tipoLocked = esPrimeraFila
+  const nombreLocked = !modoContra && esPrimeraFila && Boolean(bmInicialNombre)
+  const tipoLocked = !modoContra && esPrimeraFila
+  const metaDesdeIda = modoContra
+  const listId = modoContra ? 'topo-niv-contra-puntos' : undefined
+
+  const onNombreInput = (valor) => {
+    if (!modoContra || !filasIdaParaAutocomplete) {
+      patch({ nombre_punto: valor })
+      return
+    }
+    const meta = autocompletarDesdeIda(valor, filasIdaParaAutocomplete)
+    if (meta) {
+      patch({ ...meta, nombre_punto: meta.nombre_punto })
+    } else {
+      patch({
+        nombre_punto: valor,
+        tipo_punto: '',
+        abscisa: '',
+        descripcion_punto: '',
+        ubicacion_pk_id: null,
+        ubicacion_pk: '',
+        ubicacion_tramo: '',
+        ubicacion_costado: '',
+        ubicacion_infraestructura: '',
+        ubicacion_lat: null,
+        ubicacion_lng: null,
+        punto_biblioteca_id: null,
+      })
+    }
+  }
 
   const hilosAvisos = useMemo(() => {
     if (!esAutomatico) return []
@@ -139,6 +171,11 @@ export default function NivelacionIngresoPanel({
       .filter(Boolean)
   }, [borrador, esAutomatico])
 
+  const nombresSugeridos = sugerenciasPuntos
+    || (filasIdaParaAutocomplete
+      ? [...new Set((filasIdaParaAutocomplete || []).map((f) => (f.nombre_punto || '').trim()).filter(Boolean))]
+      : [])
+
   return (
     <div
       style={{
@@ -147,15 +184,15 @@ export default function NivelacionIngresoPanel({
         gap: 10,
         padding: 10,
         borderRadius: 10,
-        border: `1px solid ${ui.accent}55`,
-        background: `${ui.accent}08`,
+        border: `1px solid ${modoContra ? '#7c3aed55' : `${ui.accent}55`}`,
+        background: modoContra ? 'rgba(124,58,237,0.06)' : `${ui.accent}08`,
         marginBottom: 12,
       }}
     >
       {/* Identificación del punto */}
       <div style={{ ...panelCol, ...(!isCompact ? { borderRight: `1px solid ${sheet.border}`, paddingRight: 10 } : null) }}>
         <TopoExcelSheet
-          title="Lectura actual — identificación"
+          title={modoContra ? 'Contranivelación — identificación' : 'Lectura actual — identificación'}
           columns={[
             { key: 'c', label: 'Campo', width: '38%' },
             { key: 'v', label: 'Valor', width: '62%' },
@@ -169,21 +206,32 @@ export default function NivelacionIngresoPanel({
               {nombreLocked ? (
                 <span style={{ fontWeight: 700 }} title="BM de amarre (biblioteca)">{bmInicialNombre}</span>
               ) : (
-                <input
-                  value={borrador.nombre_punto || ''}
-                  disabled={disabled}
-                  onChange={(e) => patch({ nombre_punto: e.target.value })}
-                  style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, false)}
-                  placeholder="Nombre del punto"
-                />
+                <>
+                  <input
+                    value={borrador.nombre_punto || ''}
+                    disabled={disabled}
+                    list={listId}
+                    onChange={(e) => onNombreInput(e.target.value)}
+                    style={estiloCampo({ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }, false)}
+                    placeholder={modoContra ? 'Nombre (solo puntos de la ida)' : 'Nombre del punto'}
+                    autoComplete="off"
+                  />
+                  {listId && nombresSugeridos.length > 0 && (
+                    <datalist id={listId}>
+                      {nombresSugeridos.map((n) => (
+                        <option key={n} value={n} />
+                      ))}
+                    </datalist>
+                  )}
+                </>
               )}
             </td>
           </tr>
           <tr>
             <td style={sheet.td}>Tipo</td>
             <td style={sheet.td}>
-              {tipoLocked ? (
-                <span style={{ fontWeight: 700 }}>BM</span>
+              {tipoLocked || metaDesdeIda ? (
+                <span style={{ fontWeight: 700 }}>{tipoLocked ? 'BM' : (borrador.tipo_punto || '—')}</span>
               ) : (
                 <select
                   value={borrador.tipo_punto || ''}
@@ -202,34 +250,44 @@ export default function NivelacionIngresoPanel({
           <tr>
             <td style={sheet.td}>Abscisa / PK</td>
             <td style={sheet.td}>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={onElegirPk}
-                style={{
-                  ...ui.btnSecondary,
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  fontSize: 'var(--cc-xs)',
-                  padding: '4px 6px',
-                  textAlign: 'left',
-                }}
-                title={borrador.ubicacion_pk ? `PK ${borrador.ubicacion_pk}` : ABSCISA_NUMERICA_MSG}
-              >
-                {borrador.ubicacion_pk || borrador.abscisa || '📍 Elegir PK'}
-              </button>
+              {metaDesdeIda ? (
+                <span style={{ fontSize: 'var(--cc-sm)' }}>
+                  {borrador.ubicacion_pk || borrador.abscisa || '—'}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={onElegirPk}
+                  style={{
+                    ...ui.btnSecondary,
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    fontSize: 'var(--cc-xs)',
+                    padding: '4px 6px',
+                    textAlign: 'left',
+                  }}
+                  title={borrador.ubicacion_pk ? `PK ${borrador.ubicacion_pk}` : ABSCISA_NUMERICA_MSG}
+                >
+                  {borrador.ubicacion_pk || borrador.abscisa || '📍 Elegir PK'}
+                </button>
+              )}
             </td>
           </tr>
           <tr>
             <td style={sheet.td}>Descripción</td>
             <td style={sheet.td}>
-              <input
-                value={borrador.descripcion_punto || ''}
-                disabled={disabled}
-                onChange={(e) => patch({ descripcion_punto: e.target.value })}
-                style={{ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }}
-                placeholder="Descripción del punto"
-              />
+              {metaDesdeIda ? (
+                <span style={{ fontSize: 'var(--cc-sm)' }}>{borrador.descripcion_punto || '—'}</span>
+              ) : (
+                <input
+                  value={borrador.descripcion_punto || ''}
+                  disabled={disabled}
+                  onChange={(e) => patch({ descripcion_punto: e.target.value })}
+                  style={{ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }}
+                  placeholder="Descripción del punto"
+                />
+              )}
             </td>
           </tr>
         </TopoExcelSheet>
@@ -237,7 +295,9 @@ export default function NivelacionIngresoPanel({
           <p style={{ margin: 0, fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.35 }}>{tituloHint}</p>
         ) : (
           <p style={{ margin: 0, fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.35 }}>
-            Vi se agrega como fila propia (punto distinto), justo después de la estación con V+.
+            {modoContra
+              ? 'Escriba el nombre de un punto de la ida: Tipo, PK y Descripción se completan solos.'
+              : 'Vi se agrega como fila propia (punto distinto), justo después de la estación con V+.'}
           </p>
         )}
       </div>

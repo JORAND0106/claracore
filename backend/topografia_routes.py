@@ -3203,11 +3203,48 @@ def _insertar_comentario_nivelacion(
     ).execute()
 
 
+ORDEN_CONTRA_BASE = 100_000
+
+
+def _es_lectura_contranivelacion(lect: dict) -> bool:
+    try:
+        return int(lect.get("orden") or 0) >= ORDEN_CONTRA_BASE
+    except (TypeError, ValueError):
+        return False
+
+
+def _lecturas_ida_nivelacion(lecturas: list[dict]) -> list[dict]:
+    return [l for l in (lecturas or []) if not _es_lectura_contranivelacion(l)]
+
+
+def _lecturas_contra_nivelacion(lecturas: list[dict]) -> list[dict]:
+    return [l for l in (lecturas or []) if _es_lectura_contranivelacion(l)]
+
+
+def _validar_nombres_contranivelacion(lecturas_ida: list[dict], lecturas_contra: list[dict]) -> list[str]:
+    """Solo puntos presentes en la ida; la Δcota nunca se valida aquí."""
+    nombres_ida = {
+        (l.get("nombre_punto") or "").strip().lower()
+        for l in lecturas_ida
+        if (l.get("nombre_punto") or "").strip()
+    }
+    errores: list[str] = []
+    for l in lecturas_contra:
+        nombre = (l.get("nombre_punto") or "").strip()
+        if not nombre:
+            continue
+        if nombre.lower() not in nombres_ida:
+            errores.append(
+                f"Contranivelación: el punto «{nombre}» no existe en la nivelación de ida."
+            )
+    return errores
+
+
 def _ejecutar_calculo_nivelacion(contrato_id: int, nivelacion_id: str) -> dict:
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
-    lecturas = (
+    lecturas_all = (
         supabase.table("topo_nivelacion_lecturas")
         .select("*")
         .eq("nivelacion_id", nivelacion_id)
@@ -3216,6 +3253,8 @@ def _ejecutar_calculo_nivelacion(contrato_id: int, nivelacion_id: str) -> dict:
         .data
         or []
     )
+    # El cierre geométrico usa solo la ida; la contranivelación es verificación aparte.
+    lecturas = _lecturas_ida_nivelacion(lecturas_all)
     cotas, bm_ini, bm_fin = _resolver_bms_nivelacion(niv, contrato_id)
     resultado = calcular_nivelacion_geometrica(niv, lecturas, cotas, bm_ini, bm_fin)
     if resultado.get("errores"):
@@ -3481,16 +3520,19 @@ def sincronizar_lecturas_nivelacion(
         if p:
             bm_ini_nombre = (p.get("nombre") or "").strip()
     lect_dicts = [_payload_lectura_nivel(lect, tipo_nivel) for lect in body.lecturas]
+    lect_ida = _lecturas_ida_nivelacion(lect_dicts)
+    lect_contra = _lecturas_contra_nivelacion(lect_dicts)
     tiene_util = any(
         lectura_efectiva_nivelacion(d, tipo_nivel) is not None or d.get("punto_biblioteca_id")
-        for d in lect_dicts
+        for d in lect_ida
     )
     if not tiene_util:
         raise HTTPException(status_code=422, detail="No hay lecturas ni fila de cierre para guardar.")
-    apertura = modo_apertura_nivelacion(niv, lect_dicts, tipo_nivel)
+    apertura = modo_apertura_nivelacion(niv, lect_ida, tipo_nivel)
     reglas = validar_lecturas_nivelacion(
-        lect_dicts, tipo_nivel, bm_ini_nombre, modo_apertura=apertura
+        lect_ida, tipo_nivel, bm_ini_nombre, modo_apertura=apertura
     )
+    reglas.extend(_validar_nombres_contranivelacion(lect_ida, lect_contra))
     if reglas:
         raise HTTPException(status_code=422, detail="; ".join(reglas))
     previas = (

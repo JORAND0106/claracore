@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { coloresBloqueNiv, useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
+import { puntosPerfilNivelacion } from '../../utils/topografia_nivelacion'
 
 function niceStep(span) {
   const raw = span / 8
@@ -12,13 +13,14 @@ function niceStep(span) {
   return 10 * mag
 }
 
-function parseAbscisa(val, fallback) {
-  if (val == null || val === '') return fallback
-  const n = Number(String(val).replace(',', '.'))
-  return Number.isFinite(n) ? n : fallback
-}
-
-export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto = 360 }) {
+export default function NivelacionGrafico({
+  filasVista = [],
+  puntos: puntosProp = null,
+  titulo = 'Perfil del circuito de nivelación',
+  ejeXLabel = 'Distancia acumulada (m) →',
+  ancho = 560,
+  alto = 360,
+}) {
   const ui = useTopoTheme()
   const bloques = coloresBloqueNiv(ui.t)
   const [scale, setScale] = useState(1)
@@ -26,23 +28,9 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
   const panRef = useRef({ dragging: false, x0: 0, y0: 0, pan0: { x: 0, y: 0 } })
 
   const plot = useMemo(() => {
-    let prog = 0
-    const pts = []
-    for (let i = 0; i < filasVista.length; i += 1) {
-      const f = filasVista[i]
-      const cota = f.cota != null ? Number(f.cota) : null
-      if (cota == null || Number.isNaN(cota)) continue
-      const distVp = f.distancia_vplus_calc != null ? Math.abs(Number(f.distancia_vplus_calc)) : 0
-      const distVm = f.distancia_vminus_calc != null ? Math.abs(Number(f.distancia_vminus_calc)) : 0
-      prog += distVp || distVm || 0
-      const abs = parseAbscisa(f.abscisa, prog)
-      pts.push({
-        nombre: f.nombre_punto || `#${i + 1}`,
-        abscisa: abs,
-        cota,
-        esCierre: Boolean(f.es_fila_cierre),
-      })
-    }
+    const pts = Array.isArray(puntosProp) && puntosProp.length
+      ? puntosProp
+      : puntosPerfilNivelacion(filasVista)
     if (pts.length < 2) return null
 
     const absVals = pts.map((p) => p.abscisa)
@@ -88,7 +76,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
       h,
       north: { x: margin.l + w - 28, y: margin.t + 18, tip: margin.t + 2 },
     }
-  }, [filasVista, ancho, alto])
+  }, [filasVista, puntosProp, ancho, alto])
 
   const onWheel = useCallback((e) => {
     e.preventDefault()
@@ -129,7 +117,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
   return (
     <div style={{ ...ui.card, marginTop: 12 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', marginBottom: 10 }}>
-        <span style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>Perfil del circuito de nivelación</span>
+        <span style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>{titulo}</span>
         <button
           type="button"
           onClick={resetVista}
@@ -179,7 +167,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
             ),
           )}
 
-          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle">Abscisa (m) →</text>
+          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle">{ejeXLabel}</text>
           <text x={14} y={plot.margin.t + plot.h / 2} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle" transform={`rotate(-90 14 ${plot.margin.t + plot.h / 2})`}>Cota (m) →</text>
 
           <g>
@@ -190,8 +178,8 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
 
           <polyline points={plot.polyStr} fill="none" stroke={ui.accent} strokeWidth="2" />
 
-          {plot.coords.map(({ x, y, p }) => (
-            <g key={p.nombre}>
+          {plot.coords.map(({ x, y, p }, idx) => (
+            <g key={`${p.nombre}-${idx}`}>
               <circle
                 cx={x}
                 cy={y}
