@@ -1,7 +1,11 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { coloresBloqueNiv, useTopoTheme } from './topografiaShared'
 import { fmtNum } from '../../utils/topografia_angular'
-import { puntosPerfilNivelacion } from '../../utils/topografia_nivelacion'
+import {
+  DIST_MAX_VISUAL_ALERT_M,
+  distanciaExcedeAlerta,
+  puntosPerfilNivelacion,
+} from '../../utils/topografia_nivelacion'
 
 function niceStep(span) {
   const raw = span / 8
@@ -11,6 +15,25 @@ function niceStep(span) {
   if (norm <= 2) return 2 * mag
   if (norm <= 5) return 5 * mag
   return 10 * mag
+}
+
+const STROKE_ALERTA = 'rgba(220, 38, 38, 0.55)'
+
+/** Distancias V+/V− de filas con cota (mismo filtro que puntosPerfilNivelacion). */
+function distanciasPerfilDesdeFilas(filasVista) {
+  const out = []
+  for (let i = 0; i < (filasVista || []).length; i += 1) {
+    const f = filasVista[i]
+    const cota = f?.cota != null ? Number(f.cota) : null
+    if (cota == null || Number.isNaN(cota)) continue
+    const distVp = f.distancia_vplus_calc != null ? Math.abs(Number(f.distancia_vplus_calc)) : 0
+    const distVm = f.distancia_vminus_calc != null ? Math.abs(Number(f.distancia_vminus_calc)) : 0
+    out.push({
+      dVp: Number.isFinite(distVp) ? distVp : 0,
+      dVm: Number.isFinite(distVm) ? distVm : 0,
+    })
+  }
+  return out
 }
 
 export default function NivelacionGrafico({
@@ -28,9 +51,15 @@ export default function NivelacionGrafico({
   const panRef = useRef({ dragging: false, x0: 0, y0: 0, pan0: { x: 0, y: 0 } })
 
   const plot = useMemo(() => {
-    const pts = Array.isArray(puntosProp) && puntosProp.length
+    const base = Array.isArray(puntosProp) && puntosProp.length
       ? puntosProp
       : puntosPerfilNivelacion(filasVista)
+    const dists = distanciasPerfilDesdeFilas(filasVista)
+    const pts = base.map((p, i) => ({
+      ...p,
+      dVp: p.dVp ?? dists[i]?.dVp ?? 0,
+      dVm: p.dVm ?? dists[i]?.dVm ?? 0,
+    }))
     if (pts.length < 2) return null
 
     const absVals = pts.map((p) => p.abscisa)
@@ -65,16 +94,30 @@ export default function NivelacionGrafico({
     }
 
     const coords = pts.map((p) => ({ x: tx(p.abscisa), y: ty(p.cota), p }))
-    const polyStr = coords.map((c) => `${c.x},${c.y}`).join(' ')
+    // Tramo origen→destino: alerta si V+ del origen o V− del destino > umbral
+    const segmentos = []
+    for (let i = 1; i < coords.length; i += 1) {
+      const prev = coords[i - 1]
+      const curr = coords[i]
+      const alerta = distanciaExcedeAlerta(prev.p.dVp) || distanciaExcedeAlerta(curr.p.dVm)
+      segmentos.push({
+        x1: prev.x,
+        y1: prev.y,
+        x2: curr.x,
+        y2: curr.y,
+        alerta,
+      })
+    }
 
     return {
       coords,
-      polyStr,
+      segmentos,
       gridLines,
       margin,
       w,
       h,
       north: { x: margin.l + w - 28, y: margin.t + 18, tip: margin.t + 2 },
+      hayAlertaDist: segmentos.some((s) => s.alerta),
     }
   }, [filasVista, puntosProp, ancho, alto])
 
@@ -126,6 +169,11 @@ export default function NivelacionGrafico({
           Restablecer zoom
         </button>
         <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Rueda: zoom · Arrastrar: pan</span>
+        {plot.hayAlertaDist && (
+          <span style={{ fontSize: 'var(--cc-xs)', color: '#dc2626', fontWeight: 600 }}>
+            Tramos en rojo: Dist V+/V− &gt; {DIST_MAX_VISUAL_ALERT_M} m (advertencia; no bloquea)
+          </span>
+        )}
       </div>
 
       <div
@@ -176,7 +224,18 @@ export default function NivelacionGrafico({
             <text x={plot.north.x} y={plot.north.tip - 5} fontSize="12" fill="#1e40af" fontWeight="700" textAnchor="middle">N</text>
           </g>
 
-          <polyline points={plot.polyStr} fill="none" stroke={ui.accent} strokeWidth="2" />
+          {plot.segmentos.map((s, i) => (
+            <line
+              key={`seg-${i}`}
+              x1={s.x1}
+              y1={s.y1}
+              x2={s.x2}
+              y2={s.y2}
+              stroke={s.alerta ? STROKE_ALERTA : ui.accent}
+              strokeWidth={s.alerta ? 3.5 : 2}
+              strokeLinecap="round"
+            />
+          ))}
 
           {plot.coords.map(({ x, y, p }, idx) => (
             <g key={`${p.nombre}-${idx}`}>

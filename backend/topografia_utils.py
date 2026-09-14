@@ -1838,8 +1838,9 @@ def calcular_nivelacion_geometrica(
             else:
                 dist_vminus_m += d
             if d > dist_max:
-                errores.append(
-                    f"Fila {g_idx + 1}: Dist ({tipo_lect}) {d:.2f} m supera el tope de {dist_max:.0f} m."
+                avisos.append(
+                    f"Fila {g_idx + 1}: Dist ({tipo_lect}) {d:.2f} m supera {dist_max:.0f} m "
+                    f"(advertencia visual; no bloquea el registro)."
                 )
 
         cota_calculada_fila: float | None = None
