@@ -3,6 +3,7 @@ import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { BookOpen, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { MSG_ACTA_ACCESO_RESTRINGIDO } from './ActasRepositorio'
 import BitacoraAuthThumb from './BitacoraAuthThumb'
+import BitacoraExportRangoBar from './BitacoraExportRangoBar'
 import { accesoBitacora } from './bitacoraPermisos'
 import { labelClima, labelEventoTipo } from './bitacoraConstants'
 import { labelTramoBitacora } from './bitacoraTramoHelpers'
@@ -912,6 +913,14 @@ export default function LibroDigitalVista({
           </button>
         </div>
       </div>
+      {modo === 'bitacora' && canViewBitacora && permisosBitacora.exportar ? (
+        <BitacoraExportRangoBar
+          t={t}
+          api={api}
+          variant="libro"
+          compact
+        />
+      ) : null}
       {fechaSaltoMsg ? (
         <div className="cc-libro-fecha-msg" role="status">{fechaSaltoMsg}</div>
       ) : null}
