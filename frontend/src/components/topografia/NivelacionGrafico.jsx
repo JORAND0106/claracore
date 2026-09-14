@@ -36,7 +36,14 @@ function distanciasPerfilDesdeFilas(filasVista) {
   return out
 }
 
-export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto = 360 }) {
+export default function NivelacionGrafico({
+  filasVista = [],
+  puntos: puntosProp = null,
+  titulo = 'Perfil del circuito de nivelación',
+  ejeXLabel = 'Distancia acumulada (m) →',
+  ancho = 560,
+  alto = 360,
+}) {
   const ui = useTopoTheme()
   const bloques = coloresBloqueNiv(ui.t)
   const [scale, setScale] = useState(1)
@@ -44,12 +51,14 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
   const panRef = useRef({ dragging: false, x0: 0, y0: 0, pan0: { x: 0, y: 0 } })
 
   const plot = useMemo(() => {
-    const base = puntosPerfilNivelacion(filasVista)
+    const base = Array.isArray(puntosProp) && puntosProp.length
+      ? puntosProp
+      : puntosPerfilNivelacion(filasVista)
     const dists = distanciasPerfilDesdeFilas(filasVista)
     const pts = base.map((p, i) => ({
       ...p,
-      dVp: dists[i]?.dVp ?? 0,
-      dVm: dists[i]?.dVm ?? 0,
+      dVp: p.dVp ?? dists[i]?.dVp ?? 0,
+      dVm: p.dVm ?? dists[i]?.dVm ?? 0,
     }))
     if (pts.length < 2) return null
 
@@ -110,7 +119,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
       north: { x: margin.l + w - 28, y: margin.t + 18, tip: margin.t + 2 },
       hayAlertaDist: segmentos.some((s) => s.alerta),
     }
-  }, [filasVista, ancho, alto])
+  }, [filasVista, puntosProp, ancho, alto])
 
   const onWheel = useCallback((e) => {
     e.preventDefault()
@@ -151,7 +160,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
   return (
     <div style={{ ...ui.card, marginTop: 12 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', marginBottom: 10 }}>
-        <span style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>Perfil del circuito de nivelación</span>
+        <span style={{ fontWeight: 600, fontSize: 'var(--cc-sm)' }}>{titulo}</span>
         <button
           type="button"
           onClick={resetVista}
@@ -206,7 +215,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
             ),
           )}
 
-          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle">Distancia acumulada (m) →</text>
+          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle">{ejeXLabel}</text>
           <text x={14} y={plot.margin.t + plot.h / 2} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle" transform={`rotate(-90 14 ${plot.margin.t + plot.h / 2})`}>Cota (m) →</text>
 
           <g>

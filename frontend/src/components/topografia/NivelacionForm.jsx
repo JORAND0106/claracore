@@ -32,6 +32,8 @@ import {
   convertirFilasTipoNivel,
   contarPuntosFilas,
   cotasDesdePuntos,
+  cotasSemillaContranivelacion,
+  deltaCotaContranivelacion,
   filasToLecturas,
   filaTieneVminus,
   lecturasToFilas,
@@ -40,12 +42,19 @@ import {
   nombreBmDesdeId,
   nuevaFilaCierre,
   nuevaFilaPunto,
+  ORDEN_CONTRA_BASE,
+  abscisaFinalPerfilIda,
+  puntosPerfilContranivelacion,
+  puntosPerfilNivelacion,
   puedeAbrirCircuito,
   puedeAgregarFila,
   puedeIngresarCierre,
   puntosBmParaNivelacion,
   prepararBorradorBmInicial,
+  prepararBorradorContraInicio,
   prepararBorradorSiguiente,
+  separarLecturasIdaContra,
+  validarBorradorContranivelacion,
   validarBorradorParaAgregar,
 } from '../../utils/topografia_nivelacion'
 
@@ -83,8 +92,12 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   const [error, setError] = useState('')
   const [filas, setFilas] = useState([])
   const [borrador, setBorrador] = useState(() => nuevaFilaPunto(1, true))
+  const [filasContra, setFilasContra] = useState([])
+  const [borradorContra, setBorradorContra] = useState(() => nuevaFilaPunto(1, false))
+  const [contraActiva, setContraActiva] = useState(false)
   const [pkMapTarget, setPkMapTarget] = useState(null) // 'borrador' | number idx
   const [editIdx, setEditIdx] = useState(null)
+  const [editScope, setEditScope] = useState('ida') // 'ida' | 'contra'
   const [guardando, setGuardando] = useState(false)
   const [pulsoValidacion, setPulsoValidacion] = useState(false)
   const [modalCierre, setModalCierre] = useState(false)
@@ -138,6 +151,34 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     [filas, tipoNivel, cotasBib],
   )
 
+  const cotasContraSeed = useMemo(
+    () => cotasSemillaContranivelacion(filas, vista.filasVista, cotasBib, bmFinalNombre),
+    [filas, vista.filasVista, cotasBib, bmFinalNombre],
+  )
+
+  const vistaContra = useMemo(
+    () => calcularVistaNivelacion(filasContra, tipoNivel, cotasContraSeed, { distMax: 50 }),
+    [filasContra, tipoNivel, cotasContraSeed],
+  )
+
+  const puntosPerfilIda = useMemo(() => puntosPerfilNivelacion(vista.filasVista), [vista.filasVista])
+  const abscisaFinIda = useMemo(() => abscisaFinalPerfilIda(vista.filasVista), [vista.filasVista])
+  const puntosPerfilContra = useMemo(
+    () => puntosPerfilContranivelacion(vistaContra.filasVista, abscisaFinIda),
+    [vistaContra.filasVista, abscisaFinIda],
+  )
+
+  const verificacionContra = useMemo(
+    () => deltaCotaContranivelacion({
+      filasIda: filas,
+      filasVistaIda: vista.filasVista,
+      filasContra,
+      filasVistaContra: vistaContra.filasVista,
+      bmInicialNombre,
+    }),
+    [filas, vista.filasVista, filasContra, vistaContra.filasVista, bmInicialNombre],
+  )
+
   const cargarLista = useCallback(async () => {
     const data = await api('/nivelaciones')
     setLista(data || [])
@@ -159,10 +200,23 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setDetalle(data)
     setSel(id)
     const tn = data.nivelacion?.tipo_nivel || 'electronico'
-    const nextFilas = lecturasToFilas(data.lecturas || [], tn)
+    const { ida, contra } = separarLecturasIdaContra(data.lecturas || [])
+    const nextFilas = lecturasToFilas(ida, tn)
+    const nextContra = lecturasToFilas(contra, tn, {
+      ordenBase: ORDEN_CONTRA_BASE,
+      forceGrouped: true,
+    })
     setFilas(nextFilas)
+    setFilasContra(nextContra)
+    setContraActiva(nextContra.length > 0)
     setBorrador(nextFilas.length ? prepararBorradorSiguiente(nextFilas.length) : nuevaFilaPunto(1, true))
+    setBorradorContra(
+      nextContra.length
+        ? prepararBorradorSiguiente(nextContra.length)
+        : prepararBorradorContraInicio(nextFilas, ''),
+    )
     setEditIdx(null)
+    setEditScope('ida')
     setUndoToast(null)
     setResultado(null)
     if (data.nivelacion) {
@@ -199,6 +253,15 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
       return { ...prepararBorradorBmInicial(bmInicialNombre), abscisa: b.abscisa, ubicacion_pk_id: b.ubicacion_pk_id, ubicacion_pk: b.ubicacion_pk, ubicacion_tramo: b.ubicacion_tramo, ubicacion_costado: b.ubicacion_costado, ubicacion_infraestructura: b.ubicacion_infraestructura, ubicacion_lat: b.ubicacion_lat, ubicacion_lng: b.ubicacion_lng, vplus: b.vplus, vi: b.vi, vminus: b.vminus, dist_vplus_m: b.dist_vplus_m, dist_vminus_m: b.dist_vminus_m }
     })
   }, [bmInicialNombre, sellada, filas.length])
+
+  useEffect(() => {
+    if (filasContra.length > 0) return
+    if (!bmFinalNombre && !filas.some((f) => f.es_fila_cierre)) return
+    setBorradorContra((b) => {
+      if ((b.nombre_punto || '').trim()) return b
+      return prepararBorradorContraInicio(filas, bmFinalNombre)
+    })
+  }, [bmFinalNombre, filas, filasContra.length])
 
   useEffect(() => {
     cargarLista().catch((e) => setError(e.message))
@@ -249,8 +312,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     const anterior = form.tipo_nivel
     if (anterior === nuevo) return
     setForm({ ...form, tipo_nivel: nuevo })
-    if (filas.length) {
+    if (filas.length || filasContra.length) {
       setFilas((rows) => convertirFilasTipoNivel(rows, anterior, nuevo))
+      setFilasContra((rows) => convertirFilasTipoNivel(rows, anterior, nuevo))
     }
   }
 
@@ -346,8 +410,10 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
       return { ok: false, error: msg }
     }
     const preparadas = prepararFilasGuardado()
-    const payload = filasToLecturas(preparadas, tipoExport)
-    if (!payload.length) {
+    const payloadIda = filasToLecturas(preparadas, tipoExport)
+    const payloadContra = filasToLecturas(filasContra, tipoExport, { ordenBase: ORDEN_CONTRA_BASE })
+    const payload = [...payloadIda, ...payloadContra]
+    if (!payloadIda.length) {
       const msg = 'No hay datos para guardar. Registre al menos una lectura (V+, Vi o V−).'
       setError(msg)
       return { ok: false, error: msg }
@@ -524,8 +590,58 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     })
   }
 
-  const abrirEdicion = (idx) => {
+  const iniciarContranivelacion = () => {
     if (!editableCartera) return
+    const cierreOk = filas.some((f) => f.es_fila_cierre && filaTieneVminus(f, tipoNivel))
+    if (!cierreOk) {
+      setError('Ingrese el cierre (V− en BM final) antes de iniciar la contranivelación.')
+      return
+    }
+    setContraActiva(true)
+    setError('')
+    setOkMsg('Contranivelación iniciada. Escriba nombres de puntos de la ida; Tipo/PK/Descripción se autocompletan.')
+    setBorradorContra((b) => {
+      if ((b.nombre_punto || '').trim()) return b
+      return prepararBorradorContraInicio(filas, bmFinalNombre)
+    })
+  }
+
+  const agregarLecturaContra = () => {
+    if (!editableCartera) {
+      setError('No tiene permiso para editar.')
+      return
+    }
+    const gate = validarBorradorContranivelacion(borradorContra, filasContra, filas, tipoNivel)
+    if (!gate.ok) {
+      setPulsoValidacion(true)
+      setError(gate.msg)
+      return
+    }
+    if (gate.avisosHilos?.length) {
+      setOkMsg(`Contranivelación: lectura agregada con aviso: ${gate.avisosHilos[0]}`)
+    } else {
+      setOkMsg('Lectura agregada a la contranivelación.')
+    }
+    setPulsoValidacion(false)
+    setError('')
+    setFilasContra((rows) => {
+      const nueva = { ...gate.fila }
+      let next
+      if (gate.esVistaIntermedia && gate.insertAt != null) {
+        next = [...rows]
+        next.splice(gate.insertAt, 0, nueva)
+      } else {
+        next = [...rows, nueva]
+      }
+      next = next.map((r, i) => ({ ...r, orden: i + 1 }))
+      setBorradorContra(prepararBorradorSiguiente(next.length))
+      return next
+    })
+  }
+
+  const abrirEdicion = (idx, scope = 'ida') => {
+    if (!editableCartera) return
+    setEditScope(scope)
     setEditIdx(idx)
   }
 
@@ -533,7 +649,11 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     if (editIdx == null) return
     const avisos = patch.avisosHilos || []
     const { avisosHilos: _a, ...rest } = patch
-    setFilas((rows) => rows.map((r, i) => (i === editIdx ? { ...r, ...rest } : r)))
+    if (editScope === 'contra') {
+      setFilasContra((rows) => rows.map((r, i) => (i === editIdx ? { ...r, ...rest } : r)))
+    } else {
+      setFilas((rows) => rows.map((r, i) => (i === editIdx ? { ...r, ...rest } : r)))
+    }
     setEditIdx(null)
     setError('')
     setOkMsg(avisos.length
@@ -541,18 +661,38 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
       : 'Lectura actualizada. H. Instrumento, cota y cierre se recalculan automáticamente.')
   }
 
-  const solicitarEliminarFila = (idx) => {
+  const solicitarEliminarFila = (idx, scope = 'ida') => {
     if (!editableCartera) return
-    const fila = filas[idx]
+    const fila = scope === 'contra' ? filasContra[idx] : filas[idx]
     setConfirmEliminarFila({
       idx,
+      scope,
       nombre: fila?.nombre_punto || `#${idx + 1}`,
     })
   }
 
   const confirmarEliminarFila = () => {
     if (confirmEliminarFila == null) return
-    const { idx } = confirmEliminarFila
+    const { idx, scope = 'ida' } = confirmEliminarFila
+    if (scope === 'contra') {
+      const snapshot = filasContra[idx]
+      setFilasContra((rows) => {
+        const next = rows.filter((_, i) => i !== idx)
+        setBorradorContra(next.length
+          ? prepararBorradorSiguiente(next.length)
+          : prepararBorradorContraInicio(filas, bmFinalNombre))
+        return next.map((r, i) => ({ ...r, orden: i + 1 }))
+      })
+      setConfirmEliminarFila(null)
+      setEditIdx(null)
+      setUndoToast({
+        message: `Contranivelación «${snapshot?.nombre_punto || `#${idx + 1}`}» eliminada`,
+        snapshot,
+        idx,
+        scope: 'contra',
+      })
+      return
+    }
     const snapshot = filas[idx]
     setFilas((rows) => {
       const next = rows.filter((_, i) => i !== idx)
@@ -567,19 +707,30 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
       message: `Lectura «${snapshot?.nombre_punto || `#${idx + 1}`}» eliminada`,
       snapshot,
       idx,
+      scope: 'ida',
     })
   }
 
   const deshacerEliminarFila = () => {
     if (!undoToast) return
-    const { snapshot, idx } = undoToast
-    setFilas((rows) => {
-      const next = [...rows]
-      const at = Math.min(Math.max(0, idx), next.length)
-      next.splice(at, 0, snapshot)
-      setBorrador(prepararBorradorSiguiente(next.length))
-      return next
-    })
+    const { snapshot, idx, scope = 'ida' } = undoToast
+    if (scope === 'contra') {
+      setFilasContra((rows) => {
+        const next = [...rows]
+        const at = Math.min(Math.max(0, idx), next.length)
+        next.splice(at, 0, snapshot)
+        setBorradorContra(prepararBorradorSiguiente(next.length))
+        return next.map((r, i) => ({ ...r, orden: i + 1 }))
+      })
+    } else {
+      setFilas((rows) => {
+        const next = [...rows]
+        const at = Math.min(Math.max(0, idx), next.length)
+        next.splice(at, 0, snapshot)
+        setBorrador(prepararBorradorSiguiente(next.length))
+        return next
+      })
+    }
     setUndoToast(null)
     setOkMsg('Lectura restaurada.')
   }
@@ -1258,16 +1409,120 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                   bloques={bloques}
                   isCompact={isCompact}
                   bmInicialNombre={bmInicialNombre}
-                  editandoIdx={editIdx}
+                  editandoIdx={editScope === 'ida' ? editIdx : null}
                   editable={editableCartera}
-                  onEditar={editableCartera ? (idx) => abrirEdicion(idx) : null}
-                  onEliminar={editableCartera ? solicitarEliminarFila : null}
+                  onEditar={editableCartera ? (idx) => abrirEdicion(idx, 'ida') : null}
+                  onEliminar={editableCartera ? (idx) => solicitarEliminarFila(idx, 'ida') : null}
                 />
+
+                {(hayCierreReal || contraActiva || filasContra.length > 0) && (
+                  <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    {editableCartera && hayCierreReal && (
+                      <button
+                        type="button"
+                        className="cc-topo-touch-btn"
+                        style={contraActiva ? ui.btnSecondary : { ...ui.btnPrimary, background: '#7c3aed' }}
+                        onClick={iniciarContranivelacion}
+                        disabled={contraActiva}
+                        title={contraActiva
+                          ? 'Contranivelación ya iniciada'
+                          : 'Iniciar verificación de vuelta con los mismos puntos de la ida'}
+                      >
+                        {contraActiva ? 'Contranivelación activa' : 'Contranivelación'}
+                      </button>
+                    )}
+                    <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                      Verificación de vuelta al punto inicial (no bloquea el circuito).
+                    </span>
+                  </div>
+                )}
+
+                {(contraActiva || filasContra.length > 0) && (
+                  <div style={{ marginTop: 16 }}>
+                    <h4 style={{ margin: '0 0 8px', fontSize: 'var(--cc-sm)', color: '#7c3aed' }}>
+                      Cartera de contranivelación
+                    </h4>
+                    {editableCartera && (
+                      <NivelacionIngresoPanel
+                        borrador={borradorContra}
+                        onChange={setBorradorContra}
+                        onAgregar={agregarLecturaContra}
+                        onElegirPk={() => {}}
+                        esAutomatico={esAutomatico}
+                        disabled={!editableCartera}
+                        ui={ui}
+                        bloques={bloques}
+                        sheet={sheet}
+                        isCompact={isCompact}
+                        modoContra
+                        filasIdaParaAutocomplete={filas}
+                        puedeAgregar={editableCartera}
+                        tituloHint="Solo puntos de la ida. Escriba el nombre; Tipo, PK y Descripción se autocompletan."
+                      />
+                    )}
+                    <NivelacionCarteraTable
+                      filas={filasContra}
+                      filasVista={vistaContra.filasVista}
+                      tipoNivel={tipoNivel}
+                      ui={ui}
+                      bloques={bloques}
+                      isCompact={isCompact}
+                      bmInicialNombre=""
+                      editandoIdx={editScope === 'contra' ? editIdx : null}
+                      editable={editableCartera}
+                      onEditar={editableCartera ? (idx) => abrirEdicion(idx, 'contra') : null}
+                      onEliminar={editableCartera ? (idx) => solicitarEliminarFila(idx, 'contra') : null}
+                    />
+                    {verificacionContra.ok && (
+                      <div
+                        role="status"
+                        style={{
+                          marginTop: 10,
+                          padding: '10px 12px',
+                          borderRadius: 8,
+                          border: '1px solid #c4b5fd',
+                          background: 'rgba(124,58,237,0.08)',
+                          fontSize: 'var(--cc-sm)',
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        <strong>Verificación (informativa)</strong>
+                        {' — '}
+                        Cota cierre ida: {fmtN(verificacionContra.cotaCierreIda, 4)} m
+                        {' · '}
+                        Cota al volver a {verificacionContra.nombreInicio}: {fmtN(verificacionContra.cotaContraInicio, 4)} m
+                        {' · '}
+                        Δcota: {fmtN(verificacionContra.deltaMm, 2)} mm
+                        <div style={{ marginTop: 4, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                          La diferencia no bloquea ni impide guardar o continuar el circuito.
+                        </div>
+                      </div>
+                    )}
+                    {!verificacionContra.ok && filasContra.length > 0 && (
+                      <p style={{ margin: '8px 0 0', fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                        Cuando la contranivelación vuelva al punto inicial ({bmInicialNombre || 'BM inicial'}),
+                        se mostrará la Δcota de verificación.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </PermisoAviso>
 
-            {vista.filasVista.length >= 2 && (
-              <NivelacionGrafico filasVista={vista.filasVista} />
+            {puntosPerfilIda.length >= 2 && (
+              <NivelacionGrafico
+                puntos={puntosPerfilIda}
+                titulo="Perfil del circuito de nivelación"
+                ejeXLabel="Distancia acumulada (m) →"
+              />
+            )}
+
+            {(contraActiva || filasContra.length > 0) && puntosPerfilContra.length >= 2 && (
+              <NivelacionGrafico
+                puntos={puntosPerfilContra}
+                titulo="Perfil de contranivelación (abscisado inverso)"
+                ejeXLabel="Distancia acumulada inversa (m) →"
+              />
             )}
 
             <PermisoAviso permisos={permisos} accion="editar">
@@ -1332,19 +1587,19 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
         />
       )}
 
-      {editIdx != null && filas[editIdx] && (
+      {editIdx != null && (editScope === 'contra' ? filasContra[editIdx] : filas[editIdx]) && (
         <NivelacionLecturaEditModal
           theme={ui.t}
           ui={ui}
           bloques={bloques}
-          fila={filas[editIdx]}
+          fila={editScope === 'contra' ? filasContra[editIdx] : filas[editIdx]}
           idx={editIdx}
           esAutomatico={esAutomatico}
-          bmInicialNombre={bmInicialNombre}
-          vistaRow={vista.filasVista[editIdx]}
+          bmInicialNombre={editScope === 'contra' ? '' : bmInicialNombre}
+          vistaRow={editScope === 'contra' ? vistaContra.filasVista[editIdx] : vista.filasVista[editIdx]}
           onClose={() => setEditIdx(null)}
           onError={(e) => setError(e?.mensaje || e?.message || 'Error al editar')}
-          onElegirPk={() => setPkMapTarget(editIdx)}
+          onElegirPk={editScope === 'contra' ? undefined : () => setPkMapTarget(editIdx)}
           onSave={guardarEdicionPopup}
         />
       )}
