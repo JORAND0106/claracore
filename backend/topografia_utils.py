@@ -1938,13 +1938,55 @@ def _fila_tiene_lectura_vplus(lecturas_grupo: list[dict], tipo_nivel: str) -> bo
 
 
 def _fila_tiene_lectura_vi(lecturas_grupo: list[dict], tipo_nivel: str) -> bool:
-    for l in lecturas_grupo:
-        t = (l.get("tipo_lectura") or "").strip().upper()
-        if t not in ("VI",):
-            continue
-        if lectura_efectiva_nivelacion(l, tipo_nivel) is not None:
+    for lect in lecturas_grupo:
+        t = (lect.get("tipo_lectura") or "").strip().replace("V−", "V-")
+        if t.upper() == "VI" and lectura_efectiva_nivelacion(lect, tipo_nivel) is not None:
             return True
     return False
+
+
+def _es_grupo_solo_vi(grupo: list[dict], tipo_nivel: str) -> bool:
+    return (
+        _fila_tiene_lectura_vi(grupo, tipo_nivel)
+        and not _fila_tiene_lectura_vplus(grupo, tipo_nivel)
+        and not _fila_tiene_lectura_vminus(grupo, tipo_nivel)
+    )
+
+
+def _fila_tiene_vista_adelante(
+    grupos: list,
+    g_idx: int,
+    tipo_nivel: str,
+) -> bool:
+    """Vista adelante en la misma fila (legado) o Vi/V− en filas siguientes antes del próximo V+."""
+    if g_idx < 0 or g_idx >= len(grupos):
+        return False
+    grupo = grupos[g_idx]
+    if _fila_tiene_lectura_vminus(grupo, tipo_nivel) or _fila_tiene_lectura_vi(grupo, tipo_nivel):
+        return True
+    for j in range(g_idx + 1, len(grupos)):
+        g = grupos[j]
+        if _grupo_es_cierre(g):
+            break
+        if _es_grupo_solo_vi(g, tipo_nivel):
+            return True
+        if _fila_tiene_lectura_vminus(g, tipo_nivel):
+            return True
+        if _fila_tiene_lectura_vplus(g, tipo_nivel):
+            break
+    return False
+
+
+def _fila_vplus_sin_vista(grupo: list[dict], g_idx: int, tipo_nivel: str, grupos: list | None = None) -> bool:
+    if g_idx == 0:
+        return False
+    if not _fila_tiene_lectura_vplus(grupo, tipo_nivel):
+        return False
+    if grupos and g_idx + 1 < len(grupos) and _grupo_es_cierre(grupos[g_idx + 1]):
+        return False
+    if grupos:
+        return not _fila_tiene_vista_adelante(grupos, g_idx, tipo_nivel)
+    return not _fila_tiene_lectura_vminus(grupo, tipo_nivel) and not _fila_tiene_lectura_vi(grupo, tipo_nivel)
 
 
 def _grupo_es_cierre(grupo: list[dict], bm_fin: str | None = None) -> bool:
@@ -1972,16 +2014,6 @@ def _cota_vminus_cierre(filas_calc: list[dict]) -> float | None:
         if cc is not None:
             return float(cc)
     return None
-
-
-def _fila_vplus_sin_vista(grupo: list[dict], g_idx: int, tipo_nivel: str, grupos: list | None = None) -> bool:
-    if g_idx == 0:
-        return False
-    if not _fila_tiene_lectura_vplus(grupo, tipo_nivel):
-        return False
-    if grupos and g_idx + 1 < len(grupos) and _grupo_es_cierre(grupos[g_idx + 1]):
-        return False
-    return not _fila_tiene_lectura_vminus(grupo, tipo_nivel) and not _fila_tiene_lectura_vi(grupo, tipo_nivel)
 
 
 def _abscisa_numerica_valida(abscisa: str) -> bool:
@@ -2038,7 +2070,7 @@ def validar_lecturas_nivelacion(
                 errores.append(f"Fila {g_idx + 1}: V+ requiere V− en la misma fila (cambio).")
             if not modo_apertura and _fila_vplus_sin_vista(grupo, g_idx, tipo_nivel, grupos):
                 errores.append(
-                    f"Fila {g_idx + 1}: V+ sin Vi ni V−. Registre vista adelante o borre la V+."
+                    f"Fila {g_idx + 1}: V+ sin vista adelante (Vi o V−). Registre Vi/V− o borre la V+."
                 )
     for g_idx, grupo in enumerate(grupos):
         if _grupo_es_cierre(grupo) and not _fila_tiene_lectura_vminus(grupo, tipo_nivel):
@@ -2053,14 +2085,14 @@ def validar_lecturas_nivelacion(
                     "La última fila tiene V− sin V+. Complete el cambio o el cierre del tramo."
                 )
             # BM sola (única fila) con V+ de amarre: siempre permitida.
+            # Vi en fila siguiente también cierra la V+ de la última estación.
             if (
                 len(grupos) > 1
                 and _fila_tiene_lectura_vplus(ultimo, tipo_nivel)
-                and not _fila_tiene_lectura_vminus(ultimo, tipo_nivel)
-                and not _fila_tiene_lectura_vi(ultimo, tipo_nivel)
+                and not _fila_tiene_vista_adelante(grupos, len(grupos) - 1, tipo_nivel)
             ):
                 errores.append(
-                    "La última fila tiene V+ sin Vi ni V−. Complete el tramo o ingrese cierre."
+                    "La última fila tiene V+ sin vista adelante (Vi o V−). Complete el tramo o ingrese cierre."
                 )
     return errores
 

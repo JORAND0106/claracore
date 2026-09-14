@@ -189,12 +189,56 @@ export function filaTieneVi(fila, tipoNivel) {
   return bloqueTieneLecturaCalculo(fila?.vi, tipoNivel)
 }
 
-/** V+ sin Vi ni V− en la misma fila (tramo abierto). Fila 1 (BM) puede iniciar solo con V+. */
+/** Fila de cartera que solo registra vista intermedia (punto distinto a la estación V+/V−). */
+export function esFilaSoloVi(fila, tipoNivel) {
+  return filaTieneVi(fila, tipoNivel)
+    && !filaTieneVplus(fila, tipoNivel)
+    && !filaTieneVminus(fila, tipoNivel)
+}
+
+/**
+ * ¿La estación con V+ en `idx` ya tiene vista adelante?
+ * Cuenta Vi/V− en la misma fila (legado) o filas siguientes de solo-Vi / V− antes del próximo V+.
+ */
+export function filaTieneVistaAdelante(filas, idx, tipoNivel) {
+  const rows = filas || []
+  const fila = rows[idx]
+  if (!fila) return false
+  if (filaTieneVminus(fila, tipoNivel) || filaTieneVi(fila, tipoNivel)) return true
+  for (let j = idx + 1; j < rows.length; j++) {
+    const f = rows[j]
+    if (f?.es_fila_cierre) break
+    if (esFilaSoloVi(f, tipoNivel)) return true
+    if (filaTieneVminus(f, tipoNivel)) return true
+    if (filaTieneVplus(f, tipoNivel)) break
+  }
+  return false
+}
+
+/**
+ * Índice de inserción de una Vi: justo después de la última estación con V+
+ * (y de las Vi ya asociadas a esa estación), antes de V−/cierre siguientes.
+ */
+export function indiceInsercionVistaIntermedia(filas, tipoNivel) {
+  const rows = filas || []
+  let lastVp = -1
+  for (let i = 0; i < rows.length; i++) {
+    if (filaTieneVplus(rows[i], tipoNivel)) lastVp = i
+  }
+  if (lastVp < 0) return rows.length
+  let insertAt = lastVp + 1
+  while (insertAt < rows.length && esFilaSoloVi(rows[insertAt], tipoNivel)) {
+    insertAt += 1
+  }
+  return insertAt
+}
+
+/** V+ sin vista adelante (misma fila o Vi independiente siguiente). Fila 1 (BM) no se marca aquí. */
 export function filaVplusSinVistaAdelante(fila, idx, tipoNivel, filas = null) {
   if (idx === 0) return false
   if (!filaTieneVplus(fila, tipoNivel)) return false
   if (filas?.[idx + 1]?.es_fila_cierre) return false
-  return !filaTieneVminus(fila, tipoNivel) && !filaTieneVi(fila, tipoNivel)
+  return !filaTieneVistaAdelante(filas || [fila], idx, tipoNivel)
 }
 
 export function ultimaFilaVplusSinVista(filas, tipoNivel) {
@@ -202,7 +246,7 @@ export function ultimaFilaVplusSinVista(filas, tipoNivel) {
   const last = filas[filas.length - 1]
   if (last.es_fila_cierre) return false
   if (!filaTieneVplus(last, tipoNivel)) return false
-  return !filaTieneVminus(last, tipoNivel) && !filaTieneVi(last, tipoNivel)
+  return !filaTieneVistaAdelante(filas, filas.length - 1, tipoNivel)
 }
 
 export function carteraVplusSinVista(filas, tipoNivel) {
@@ -235,7 +279,10 @@ export function puedeIngresarCierre(filas, tipoNivel, bmInicialNombre) {
 }
 
 export const MSG_VPLUS_SIN_VISTA =
-  'Hay V+ sin Vi ni V− en la misma fila. Registre vista adelante o borre la V+ antes de continuar.'
+  'Hay V+ sin vista adelante (Vi o V−). Registre una vista intermedia o V−, o borre la V+ antes de continuar.'
+
+export const MSG_VI_FILA_INDEPENDIENTE =
+  'La vista intermedia (Vi) debe registrarse como lectura independiente, sin V+ ni V− en la misma fila.'
 
 export const COLORES_BLOQUE_NIV = {
   vplus: { bg: '#eff6ff', border: '#93c5fd', header: '#dbeafe' },
@@ -355,7 +402,18 @@ export function puedeAgregarFila(filas, tipoNivel, bmInicialNombre, opts = {}) {
       msg: 'La última fila tiene V− sin V+. Cierre el tramo con V+ (cambio) o quite la V− antes de continuar.',
     }
   }
-  if (ultimaFilaVplusSinVista(filas, tipoNivel)) {
+  if (!apertura && ultimaFilaVplusSinVista(filas, tipoNivel)) {
+    const lastIdx = filas.length - 1
+    // BM con solo V+: permitir agregar Vi como fila independiente.
+    if (lastIdx === 0) return { ok: true }
+    // Cambio con V+ sin V− en la misma fila: inválido; no agregar más hasta corregir.
+    const last = filas[lastIdx]
+    if (filaTieneVplus(last, tipoNivel) && !filaTieneVminus(last, tipoNivel)) {
+      return {
+        ok: false,
+        msg: 'Registre V− en esta fila antes de V+ (cambio de instrumento), o agregue la V+ en la fila de cambio correcta.',
+      }
+    }
     return { ok: false, msg: MSG_VPLUS_SIN_VISTA }
   }
   return { ok: true }
@@ -388,7 +446,7 @@ export function validarCarteraNivelacion(filas, tipoNivel, bmInicialNombre, opts
       errores.push(`Fila ${idx + 1}: V+ requiere V− previa en la misma fila (cambio).`)
     }
     if (!apertura && filaVplusSinVistaAdelante(fila, idx, tipoNivel, filas)) {
-      errores.push(`Fila ${idx + 1}: V+ sin Vi ni V−. Registre vista adelante o borre la V+.`)
+      errores.push(`Fila ${idx + 1}: V+ sin vista adelante (Vi o V−). Registre Vi/V− o borre la V+.`)
     }
   })
   const cierre = filas.find((f) => f.es_fila_cierre)
@@ -809,7 +867,7 @@ export function borradorTieneLectura(borrador, tipoNivel) {
 /**
  * Valida el borrador del panel compacto antes de «Agregar lectura».
  * No altera fórmulas de HI/cota; solo reglas de captura ya existentes.
- * @returns {{ ok: boolean, msg?: string, avisosHilos?: string[] }}
+ * @returns {{ ok: boolean, msg?: string, avisosHilos?: string[], fila?: object, insertAt?: number, esVistaIntermedia?: boolean }}
  */
 export function validarBorradorParaAgregar(borrador, filas, tipoNivel, bmInicialNombre, opts = {}) {
   const apertura = Boolean(opts.modoApertura)
@@ -827,6 +885,13 @@ export function validarBorradorParaAgregar(borrador, filas, tipoNivel, bmInicial
     return { ok: false, msg: 'Registre al menos una lectura (V+, Vi o V−) antes de agregar.' }
   }
 
+  const tieneVp = filaTieneVplus(borrador, tipoNivel)
+  const tieneVi = filaTieneVi(borrador, tipoNivel)
+  const tieneVm = filaTieneVminus(borrador, tipoNivel)
+  if (tieneVi && (tieneVp || tieneVm)) {
+    return { ok: false, msg: MSG_VI_FILA_INDEPENDIENTE }
+  }
+
   const idx = (filas || []).length
   const nombreEfectivo = idx === 0
     ? (bmInicialNombre || (borrador.nombre_punto || '').trim())
@@ -834,16 +899,33 @@ export function validarBorradorParaAgregar(borrador, filas, tipoNivel, bmInicial
   const filaCheck = {
     ...borrador,
     nombre_punto: nombreEfectivo,
-    tipo_punto: idx === 0 ? (borrador.tipo_punto || 'BM') : borrador.tipo_punto,
+    tipo_punto: idx === 0
+      ? (borrador.tipo_punto || 'BM')
+      : (borrador.tipo_punto || (tieneVi && !tieneVp && !tieneVm ? 'auxiliar' : borrador.tipo_punto)),
   }
-  if (!metadatosFilaCompletos(filaCheck, idx, bmInicialNombre)) {
+
+  // Metadatos: para Vi insertada a mitad de cartera el índice efectivo no es `filas.length`
+  const esVistaIntermedia = tieneVi && !tieneVp && !tieneVm
+  const insertAt = esVistaIntermedia ? indiceInsercionVistaIntermedia(filas, tipoNivel) : idx
+  const metaIdx = esVistaIntermedia ? Math.max(insertAt, 1) : idx
+
+  if (!metadatosFilaCompletos(filaCheck, metaIdx, bmInicialNombre)) {
     return { ok: false, msg: 'Complete nombre, abscisa (PK), descripción y tipo antes de agregar.' }
   }
   if (abscisaInvalida(filaCheck)) {
     return { ok: false, msg: ABSCISA_NUMERICA_MSG }
   }
 
-  const vplusGate = puedeRegistrarVplus(filaCheck, idx, tipoNivel)
+  if (esVistaIntermedia) {
+    if (!(filas || []).some((f) => filaTieneVplus(f, tipoNivel))) {
+      return { ok: false, msg: 'Registre V+ (BM o cambio) antes de una vista intermedia.' }
+    }
+    if (!String(filaCheck.tipo_punto || '').trim()) {
+      filaCheck.tipo_punto = 'auxiliar'
+    }
+  }
+
+  const vplusGate = puedeRegistrarVplus(filaCheck, metaIdx, tipoNivel)
   if (!apertura && !vplusGate.ok && filaTieneVplus(filaCheck, tipoNivel)) {
     return { ok: false, msg: vplusGate.msg }
   }
@@ -856,7 +938,12 @@ export function validarBorradorParaAgregar(borrador, filas, tipoNivel, bmInicial
     }
   }
 
-  return { ok: true, avisosHilos, fila: filaCheck }
+  return {
+    ok: true,
+    avisosHilos,
+    fila: filaCheck,
+    ...(esVistaIntermedia ? { esVistaIntermedia: true, insertAt } : {}),
+  }
 }
 
 /** Siguiente borrador vacío tras agregar (no BM si ya hay filas). */

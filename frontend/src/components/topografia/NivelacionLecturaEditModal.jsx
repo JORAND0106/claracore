@@ -1,6 +1,6 @@
 /**
- * Popup de edición integral de una lectura de la Cartera de Nivelación
- * (mismo patrón visual que PoligonalPuntoEditModal).
+ * Popup de edición integral de una lectura de la Cartera de Nivelación.
+ * Formato tabular tipo Excel: fila de metadatos + fila de lecturas V+/Vi/V−.
  */
 import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
@@ -9,6 +9,7 @@ import {
   bloqueVacio,
   diagnosticoHilosIncongruentes,
   distanciaTaquimetrica,
+  esFilaSoloVi,
   hilosIncongruentes,
 } from '../../utils/topografia_nivelacion'
 import {
@@ -19,27 +20,39 @@ import {
   fmtN,
   styleInputCartera,
 } from './nivelacionUiShared'
+import { useTopoViewport } from './topografiaShared'
 
-function BloqueEdit({ bk, label, form, setForm, esAutomatico, ui, bloques, busy, conDistancia, soloLectura }) {
+function CeldaLectura({
+  bk,
+  label,
+  form,
+  setForm,
+  esAutomatico,
+  ui,
+  bloques,
+  busy,
+  conDistancia,
+  soloLectura,
+}) {
   const bloque = form[bk] || bloqueVacio()
   const diag = esAutomatico ? diagnosticoHilosIncongruentes(bloque, 'automatico') : null
   const alerta = Boolean(diag)
   const distKey = bk === 'vplus' ? 'dist_vplus_m' : 'dist_vminus_m'
   const distCalc = conDistancia && esAutomatico ? distanciaTaquimetrica(bloque.hS, bloque.hI) : null
-
+  const accent = bloques[bk]?.accent || '#0E7C86'
   const onBloque = (b) => setForm((f) => ({ ...f, [bk]: b }))
 
   return (
-    <div
+    <td
       style={{
-        gridColumn: '1 / -1',
-        padding: 10,
-        borderRadius: 8,
+        padding: 8,
+        verticalAlign: 'top',
         border: `1px solid ${bloques[bk]?.border || '#CBD5E1'}`,
         background: bloques[bk]?.bg || '#F8FAFC',
+        minWidth: 0,
       }}
     >
-      <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', color: bloques[bk]?.accent || '#0E7C86', marginBottom: 8 }}>
+      <div style={{ fontWeight: 800, fontSize: 'var(--cc-xxs)', color: accent, marginBottom: 6, letterSpacing: '0.02em' }}>
         {label}
       </div>
       {soloLectura ? (
@@ -72,18 +85,23 @@ function BloqueEdit({ bk, label, form, setForm, esAutomatico, ui, bloques, busy,
         />
       )}
       {conDistancia && !esAutomatico && !soloLectura && (
-        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <label style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: ui.textMuted }}>Distancia (m)</label>
+        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label style={{ fontSize: 'var(--cc-xxs)', fontWeight: 700, color: ui.textMuted }}>Dist</label>
           <input
             value={form[distKey] ?? ''}
             disabled={busy}
             onChange={(e) => setForm((f) => ({ ...f, [distKey]: e.target.value }))}
-            style={styleInputCartera(ui, bloques, bk, { width: 100, textAlign: 'center' })}
+            style={styleInputCartera(ui, bloques, bk, { width: 72, textAlign: 'center' })}
           />
         </div>
       )}
+      {conDistancia && esAutomatico && !soloLectura && (
+        <div style={{ marginTop: 4, fontSize: 'var(--cc-xxs)', color: ui.textMuted }}>
+          Dist {fmtN(distCalc, 2)} m
+        </div>
+      )}
       {alerta && <AlertaHilos title={diag.msg} compact />}
-    </div>
+    </td>
   )
 }
 
@@ -103,6 +121,7 @@ export default function NivelacionLecturaEditModal({
   vistaRow = null,
 }) {
   const t = theme || ui?.t || {}
+  const { isCompact } = useTopoViewport()
   const [form, setForm] = useState(null)
 
   useEffect(() => {
@@ -136,6 +155,8 @@ export default function NivelacionLecturaEditModal({
 
   const esPrimera = idx === 0
   const esCierre = Boolean(form.es_fila_cierre)
+  const tipoNivelForm = esAutomatico ? 'automatico' : 'electronico'
+  const soloVi = !esCierre && esFilaSoloVi(form, tipoNivelForm)
   const nombreLocked = esPrimera && Boolean(bmInicialNombre)
   const tipoLocked = esPrimera || esCierre
 
@@ -143,28 +164,42 @@ export default function NivelacionLecturaEditModal({
     width: '100%',
     boxSizing: 'border-box',
     border: `1px solid ${t.border || '#CBD5E1'}`,
-    borderRadius: 8,
-    padding: '8px 10px',
+    borderRadius: 6,
+    padding: isCompact ? '8px 10px' : '6px 8px',
     fontSize: 'var(--cc-sm)',
     fontFamily: 'inherit',
     color: t.text || '#0F172A',
     background: '#fff',
   }
-  const label = {
-    display: 'block',
-    fontSize: 'var(--cc-xs)',
-    fontWeight: 700,
-    color: t.textMuted || '#64748B',
-    marginBottom: 4,
-  }
   const readonlyBox = {
-    padding: '8px 10px',
-    borderRadius: 8,
+    padding: isCompact ? '8px 10px' : '6px 8px',
+    borderRadius: 6,
     background: t.bgMuted || '#F8FAFC',
     border: `1px solid ${t.border || '#E2E8F0'}`,
     fontSize: 'var(--cc-sm)',
     color: t.text || '#0F172A',
   }
+  const thMeta = {
+    padding: '6px 8px',
+    fontSize: 'var(--cc-xxs)',
+    fontWeight: 800,
+    color: t.textMuted || '#64748B',
+    textAlign: 'left',
+    background: t.bgMuted || '#F1F5F9',
+    border: `1px solid ${t.border || '#E2E8F0'}`,
+    whiteSpace: 'nowrap',
+  }
+  const tdMeta = {
+    padding: 6,
+    border: `1px solid ${t.border || '#E2E8F0'}`,
+    background: t.bgCard || '#fff',
+    verticalAlign: 'middle',
+  }
+
+  const mostrarVplus = !esCierre && !soloVi
+  const mostrarVi = !esCierre
+  const mostrarVminus = !soloVi
+  const colLecturas = [mostrarVplus, mostrarVi, mostrarVminus].filter(Boolean).length || 1
 
   const handleSave = () => {
     const nombre = nombreLocked
@@ -213,7 +248,7 @@ export default function NivelacionLecturaEditModal({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 16,
+        padding: isCompact ? 10 : 16,
       }}
       onClick={busy ? undefined : onClose}
     >
@@ -224,8 +259,8 @@ export default function NivelacionLecturaEditModal({
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',
-          maxWidth: 640,
-          maxHeight: '90vh',
+          maxWidth: isCompact ? 560 : 920,
+          maxHeight: '92vh',
           overflow: 'auto',
           background: t.bgCard || '#fff',
           border: `1px solid ${t.border || '#E2E8F0'}`,
@@ -236,7 +271,7 @@ export default function NivelacionLecturaEditModal({
         <CcModalBrandHeader theme={theme} />
         <div
           style={{
-            padding: '14px 18px',
+            padding: '12px 16px',
             background: '#E6F4F5',
             borderBottom: '1px solid #BCE3E6',
             display: 'flex',
@@ -247,7 +282,7 @@ export default function NivelacionLecturaEditModal({
         >
           <div id="topo-niv-edit-title" style={{ fontSize: 'var(--cc-body)', fontWeight: 800, color: '#0E7C86' }}>
             Editar lectura — {form.nombre_punto || `#${idx + 1}`}
-            {esCierre ? ' (cierre)' : ''}
+            {esCierre ? ' (cierre)' : soloVi ? ' (Vi)' : ''}
           </div>
           <button
             type="button"
@@ -260,121 +295,158 @@ export default function NivelacionLecturaEditModal({
           </button>
         </div>
 
-        <div style={{ padding: '16px 18px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div style={{ gridColumn: '1 / -1' }}>
-            <div style={readonlyBox}>
-              <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>Fila en cartera</span>
-              <div>
-                #{idx + 1}
-                {vistaRow?.altura_instrumento != null ? ` · H.ins. ${fmtN(vistaRow.altura_instrumento)}` : ''}
-                {vistaRow?.cota != null ? ` · Cota ${fmtN(vistaRow.cota)}` : ''}
-              </div>
+        <div style={{ padding: isCompact ? '12px' : '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={readonlyBox}>
+            <span style={{ color: t.textMuted, fontSize: 'var(--cc-xxs)', fontWeight: 700 }}>Fila en cartera</span>
+            <div style={{ fontSize: 'var(--cc-sm)' }}>
+              #{idx + 1}
+              {vistaRow?.altura_instrumento != null ? ` · H.ins. ${fmtN(vistaRow.altura_instrumento)}` : ''}
+              {vistaRow?.cota != null ? ` · Cota ${fmtN(vistaRow.cota)}` : ''}
             </div>
           </div>
 
-          <div>
-            <label style={label} htmlFor="niv-nombre">Punto</label>
-            {nombreLocked ? (
-              <div style={readonlyBox}>{bmInicialNombre}</div>
-            ) : (
-              <input
-                id="niv-nombre"
-                value={form.nombre_punto}
-                onChange={(e) => setForm({ ...form, nombre_punto: e.target.value })}
-                style={inp}
-                disabled={busy || esCierre}
-              />
-            )}
-          </div>
-          <div>
-            <label style={label} htmlFor="niv-tipo">Tipo</label>
-            {tipoLocked ? (
-              <div style={readonlyBox}>{esPrimera ? 'BM' : (form.tipo_punto || '—')}</div>
-            ) : (
-              <select
-                id="niv-tipo"
-                value={form.tipo_punto}
-                onChange={(e) => setForm({ ...form, tipo_punto: e.target.value })}
-                style={inp}
-                disabled={busy}
-              >
-                <option value="">—</option>
-                {TIPOS_PUNTO_NIV.map(({ v, l }) => (
-                  <option key={v} value={v}>{l}</option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <div>
-            <label style={label}>Abscisa / PK</label>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onElegirPk}
-              style={{ ...inp, textAlign: 'left', cursor: 'pointer', background: t.bgMuted || '#F8FAFC' }}
-              title={ABSCISA_NUMERICA_MSG}
+          {/* Fila superior: Punto | Tipo | Abscisa/PK | Descripción */}
+          <div style={{ overflowX: 'auto' }}>
+            <table
+              style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                tableLayout: isCompact ? 'auto' : 'fixed',
+                minWidth: isCompact ? undefined : 640,
+              }}
             >
-              {form.ubicacion_pk || form.abscisa || '📍 Elegir PK'}
-            </button>
-          </div>
-          <div>
-            <label style={label} htmlFor="niv-desc">Descripción</label>
-            <input
-              id="niv-desc"
-              value={form.descripcion_punto}
-              onChange={(e) => setForm({ ...form, descripcion_punto: e.target.value })}
-              style={inp}
-              disabled={busy}
-            />
+              <thead>
+                <tr>
+                  <th style={thMeta}>Punto</th>
+                  <th style={thMeta}>Tipo</th>
+                  <th style={thMeta}>Abscisa / PK</th>
+                  <th style={thMeta}>Descripción</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={tdMeta}>
+                    {nombreLocked ? (
+                      <div style={readonlyBox}>{bmInicialNombre}</div>
+                    ) : (
+                      <input
+                        id="niv-nombre"
+                        value={form.nombre_punto}
+                        onChange={(e) => setForm({ ...form, nombre_punto: e.target.value })}
+                        style={inp}
+                        disabled={busy || esCierre}
+                      />
+                    )}
+                  </td>
+                  <td style={tdMeta}>
+                    {tipoLocked ? (
+                      <div style={readonlyBox}>{esPrimera ? 'BM' : (form.tipo_punto || '—')}</div>
+                    ) : (
+                      <select
+                        id="niv-tipo"
+                        value={form.tipo_punto}
+                        onChange={(e) => setForm({ ...form, tipo_punto: e.target.value })}
+                        style={inp}
+                        disabled={busy}
+                      >
+                        <option value="">—</option>
+                        {TIPOS_PUNTO_NIV.map(({ v, l }) => (
+                          <option key={v} value={v}>{l}</option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                  <td style={tdMeta}>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={onElegirPk}
+                      style={{ ...inp, textAlign: 'left', cursor: 'pointer', background: t.bgMuted || '#F8FAFC' }}
+                      title={ABSCISA_NUMERICA_MSG}
+                    >
+                      {form.ubicacion_pk || form.abscisa || '📍 Elegir PK'}
+                    </button>
+                  </td>
+                  <td style={tdMeta}>
+                    <input
+                      id="niv-desc"
+                      value={form.descripcion_punto}
+                      onChange={(e) => setForm({ ...form, descripcion_punto: e.target.value })}
+                      style={inp}
+                      disabled={busy}
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
-          {!esCierre && (
-            <BloqueEdit
-              bk="vplus"
-              label="V+ (vista atrás)"
-              form={form}
-              setForm={setForm}
-              esAutomatico={esAutomatico}
-              ui={ui}
-              bloques={bloques}
-              busy={busy}
-              conDistancia
-            />
-          )}
-          {!esCierre && (
-            <BloqueEdit
-              bk="vi"
-              label="Vi (intermedia)"
-              form={form}
-              setForm={setForm}
-              esAutomatico={esAutomatico}
-              ui={ui}
-              bloques={bloques}
-              busy={busy}
-              conDistancia={false}
-            />
-          )}
-          <BloqueEdit
-            bk="vminus"
-            label="V− (vista adelante)"
-            form={form}
-            setForm={setForm}
-            esAutomatico={esAutomatico}
-            ui={ui}
-            bloques={bloques}
-            busy={busy}
-            conDistancia
-          />
+          {/* Fila de lecturas: V+ | Vi | V− */}
+          <div style={{ overflowX: 'auto' }}>
+            <table
+              style={{
+                width: '100%',
+                borderCollapse: 'separate',
+                borderSpacing: isCompact ? '0 8px' : 8,
+                tableLayout: isCompact && colLecturas > 1 ? 'auto' : 'fixed',
+                minWidth: isCompact ? undefined : Math.min(860, colLecturas * 220),
+              }}
+            >
+              <tbody>
+                <tr style={isCompact ? { display: 'flex', flexDirection: 'column', gap: 8 } : undefined}>
+                  {mostrarVplus && (
+                    <CeldaLectura
+                      bk="vplus"
+                      label="V+ (vista atrás)"
+                      form={form}
+                      setForm={setForm}
+                      esAutomatico={esAutomatico}
+                      ui={ui}
+                      bloques={bloques}
+                      busy={busy}
+                      conDistancia
+                    />
+                  )}
+                  {mostrarVi && (
+                    <CeldaLectura
+                      bk="vi"
+                      label="Vi (intermedia)"
+                      form={form}
+                      setForm={setForm}
+                      esAutomatico={esAutomatico}
+                      ui={ui}
+                      bloques={bloques}
+                      busy={busy}
+                      conDistancia={false}
+                    />
+                  )}
+                  {mostrarVminus && (
+                    <CeldaLectura
+                      bk="vminus"
+                      label="V− (vista adelante)"
+                      form={form}
+                      setForm={setForm}
+                      esAutomatico={esAutomatico}
+                      ui={ui}
+                      bloques={bloques}
+                      busy={busy}
+                      conDistancia
+                    />
+                  )}
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div
           style={{
-            padding: '12px 18px 16px',
+            padding: '12px 16px 16px',
             borderTop: `1px solid ${t.border || '#E2E8F0'}`,
             display: 'flex',
             justifyContent: 'flex-end',
             gap: 8,
+            flexWrap: 'wrap',
           }}
         >
           <button type="button" onClick={onClose} disabled={busy} style={ui?.btnSecondary || inp}>
