@@ -1223,44 +1223,6 @@ export function deltaCotaContranivelacion({
 }
 
 /**
- * Eje X del perfil (ida): distancia acumulada, no PK.
- * Tramo origen→destino = V+(origen) + V−(destino). Primer punto en 0.
- */
-export function puntosPerfilNivelacion(filasVista) {
-  const pts = []
-  let prevDVp = 0
-  let accum = 0
-  let first = true
-
-  for (let i = 0; i < (filasVista || []).length; i += 1) {
-    const f = filasVista[i]
-    const cota = f?.cota != null ? Number(f.cota) : null
-    if (cota == null || Number.isNaN(cota)) continue
-
-    const dVpRaw = f.distancia_vplus_calc != null ? Number(f.distancia_vplus_calc) : NaN
-    const dVmRaw = f.distancia_vminus_calc != null ? Number(f.distancia_vminus_calc) : NaN
-    const dVp = Number.isFinite(dVpRaw) ? Math.abs(dVpRaw) : 0
-    const dVm = Number.isFinite(dVmRaw) ? Math.abs(dVmRaw) : 0
-
-    if (first) {
-      accum = 0
-      first = false
-    } else {
-      accum += prevDVp + dVm
-    }
-
-    pts.push({
-      nombre: (f.nombre_punto || `#${i + 1}`).trim() || `#${i + 1}`,
-      abscisa: accum,
-      cota,
-      esCierre: Boolean(f.es_fila_cierre),
-    })
-    prevDVp = dVp
-  }
-  return pts
-}
-
-/**
  * Perfil de contranivelación: parte de la abscisa final de la ida y descuenta
  * V+(origen)+V−(destino) en cada tramo (abscisado inverso).
  */
