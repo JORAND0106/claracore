@@ -42,11 +42,11 @@ export const CALENDARIO_KIND = {
   },
   bitacora_evento: {
     id: 'bitacora_evento',
-    label: 'Bitácora',
+    label: 'Evento de bitácora',
     icon: '📎',
     color: '#a78bfa',
     textColor: '#1e1b4b',
-    tooltip: 'Bitácora',
+    tooltip: 'Reporte de evento (actividades, recorrido, SST, novedades)',
   },
 }
 
@@ -174,8 +174,37 @@ export function actaToEvent(acta) {
  */
 export function bitacoraToEvent(entrada) {
   if (!entrada?.id) return null
-  // Unificación: solo diarios en calendario; eventos se muestran como contador.
-  if (String(entrada.tipo || '') === 'evento') return null
+  const tipo = String(entrada.tipo || '')
+  // Eventos independientes aún no consolidados: visibles en calendario.
+  if (tipo === 'evento') {
+    const meta = CALENDARIO_KIND.bitacora_evento
+    const start = buildStart(entrada.fecha, null)
+    if (!start) return null
+    const elaborador = String(entrada.created_by_nombre || '').trim()
+    const tipoEv = String(entrada.evento_tipo || 'evento').replace(/_/g, ' ')
+    const texto = elaborador
+      ? `${tipoEv} · ${elaborador}`
+      : tipoEv
+    return {
+      id: `bitacora-evento-${entrada.id}`,
+      title: titleWithIcon(meta.icon, texto),
+      start,
+      allDay: true,
+      backgroundColor: meta.color,
+      borderColor: meta.color,
+      textColor: meta.textColor,
+      extendedProps: {
+        kind: 'bitacora_evento',
+        sourceId: entrada.id,
+        icon: meta.icon,
+        label: meta.label,
+        elaborador,
+        eventosCount: 1,
+        eventoTipo: entrada.evento_tipo,
+        raw: entrada,
+      },
+    }
+  }
   const kind = 'bitacora_diario'
   const meta = CALENDARIO_KIND[kind]
   const start = buildStart(entrada.fecha, null) // agrupación por día (all-day)
@@ -261,10 +290,15 @@ export function buildCalendarioEvents(bandejaRows = [], actasRows = [], bitacora
     const ev = actaToEvent(row)
     if (ev) out.push(ev)
   }
-  // Bitácora: una entrada de calendario por fecha (agrupa tramos).
+  // Bitácora: diarios agrupados por fecha + eventos independientes aún visibles.
   const byFecha = new Map()
+  const eventosIndep = []
   for (const row of bitacoraRows || []) {
-    if (!row?.id || String(row.tipo || '') === 'evento') continue
+    if (!row?.id) continue
+    if (String(row.tipo || '') === 'evento') {
+      eventosIndep.push(row)
+      continue
+    }
     const f = String(row.fecha || '').slice(0, 10)
     if (!f) continue
     if (!byFecha.has(f)) byFecha.set(f, [])
@@ -272,6 +306,10 @@ export function buildCalendarioEvents(bandejaRows = [], actasRows = [], bitacora
   }
   for (const [, list] of byFecha) {
     const ev = bitacoraGroupToEvent(list)
+    if (ev) out.push(ev)
+  }
+  for (const row of eventosIndep) {
+    const ev = bitacoraToEvent(row)
     if (ev) out.push(ev)
   }
   return out
@@ -283,6 +321,20 @@ export function buildCalendarioEvents(bandejaRows = [], actasRows = [], bitacora
  */
 export function filterEventsByOrigen(events, origen) {
   if (!origen) return events
+  if (origen === 'bitacora_evento') {
+    // Eventos independientes + diarios que ya llevan bloques embebidos.
+    return (events || []).filter((ev) => {
+      const kind = ev?.extendedProps?.kind
+      if (kind === 'bitacora_evento') return true
+      if (kind === 'bitacora_diario') {
+        return Number(ev?.extendedProps?.eventosCount || 0) > 0
+      }
+      return false
+    })
+  }
+  if (origen === 'bitacora_diario') {
+    return (events || []).filter((ev) => ev?.extendedProps?.kind === 'bitacora_diario')
+  }
   return (events || []).filter((ev) => ev?.extendedProps?.kind === origen)
 }
 

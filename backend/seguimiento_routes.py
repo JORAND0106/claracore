@@ -981,6 +981,7 @@ def route_firmar_acta(
 
 from bitacora_service import (  # noqa: E402
     adjuntar_imagen_entrada,
+    auditar_integridad_eventos,
     cerrar_diarios_vencidos,
     cerrar_reporte_diario,
     crear_reporte_diario,
@@ -998,6 +999,7 @@ from bitacora_service import (  # noqa: E402
     list_galeria,
     list_tipos_material,
     list_visitantes,
+    migrar_eventos_legacy_contrato,
     plantilla_autocompletar_diario,
     plantilla_personal_contrato,
     revertir_cierre_diario,
@@ -1153,6 +1155,36 @@ def route_plantilla_autocompletar(
     _check_contrato(current_user, contrato_id)
     data = plantilla_autocompletar_diario(supabase, contrato_id, tramo=tramo)
     return data or {}
+
+
+@router.get("/{contrato_id}/bitacora/integridad-eventos")
+def route_bitacora_integridad_eventos(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """
+    Auditoría de integridad/visibilidad de eventos (independientes vs embebidos).
+    Solo lectura. Útil para confirmar que no hubo pérdida de datos tras la unificación.
+    """
+    require_permiso_bitacora(current_user, "ver", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    return auditar_integridad_eventos(supabase, contrato_id)
+
+
+@router.post("/{contrato_id}/bitacora/migrar-eventos-legacy")
+def route_bitacora_migrar_eventos_legacy(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Ejecuta migración idempotente de eventos independientes → bloques del diario."""
+    require_permiso_bitacora(current_user, "editar", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    from bitacora_service import es_desarrollador_bitacora
+    if not es_desarrollador_bitacora(current_user):
+        raise HTTPException(status_code=403, detail="Solo Desarrollador puede forzar la migración")
+    n = migrar_eventos_legacy_contrato(supabase, contrato_id)
+    audit = auditar_integridad_eventos(supabase, contrato_id)
+    return {"migrados": n, "integridad": audit}
 
 
 @router.get("/{contrato_id}/bitacora/export/pdf")

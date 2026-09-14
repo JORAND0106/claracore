@@ -51,18 +51,29 @@ export function buildActasPages(actas) {
 }
 
 /**
- * Bitácora unificada: una página por Reporte Diario (eventos embebidos en data.eventos).
- * Ignora filas legacy tipo=evento (ya consolidadas o fuera del hilo).
+ * Bitácora unificada: una página por Reporte Diario (eventos embebidos)
+ * + páginas para Reportes de Evento independientes aún no consolidados
+ * (visibilidad de transición mientras el esquema/migración se completa).
  *
  * @param {object[]} entradas
  * @returns {Array<{ kind: LibroPageKind, id: string, fecha: string, meta: object, data: object }>}
  */
 export function buildBitacoraPages(entradas) {
   const rows = Array.isArray(entradas) ? [...entradas] : []
-  const diarios = rows.filter((r) => {
-    if (String(r?.tipo || '') === 'evento') return false
-    return Boolean(String(r?.fecha || '').slice(0, 10))
-  })
+  const diarios = []
+  const eventosIndep = []
+  for (const r of rows) {
+    const fecha = String(r?.fecha || '').slice(0, 10)
+    if (!fecha) continue
+    if (String(r?.tipo || '') === 'evento') {
+      // Ocultar solo si ya está marcado como consolidado en un diario.
+      if (r?.consolidado_en_diario_id != null && r?.consolidado_en_diario_id !== '') continue
+      eventosIndep.push(r)
+      continue
+    }
+    diarios.push(r)
+  }
+  const pages = []
   diarios.sort((a, b) => {
     const fa = String(a?.fecha || '').slice(0, 10)
     const fb = String(b?.fecha || '').slice(0, 10)
@@ -74,10 +85,10 @@ export function buildBitacoraPages(entradas) {
     if (ca !== cb) return ca.localeCompare(cb)
     return Number(a?.id || 0) - Number(b?.id || 0)
   })
-  return diarios.map((d) => {
+  for (const d of diarios) {
     const fecha = String(d?.fecha || '').slice(0, 10)
     const nEv = Array.isArray(d?.eventos) ? d.eventos.length : 0
-    return {
+    pages.push({
       kind: 'diario',
       id: `diario-${d.id}`,
       fecha,
@@ -91,8 +102,39 @@ export function buildBitacoraPages(entradas) {
       },
       data: d,
       sourceId: d?.id,
-    }
+    })
+  }
+  eventosIndep.sort((a, b) => {
+    const fa = String(a?.fecha || '').slice(0, 10)
+    const fb = String(b?.fecha || '').slice(0, 10)
+    if (fa !== fb) return fa.localeCompare(fb)
+    return String(a?.created_at || '').localeCompare(String(b?.created_at || ''))
+      || (Number(a?.id || 0) - Number(b?.id || 0))
   })
+  for (const e of eventosIndep) {
+    const fecha = String(e?.fecha || '').slice(0, 10)
+    pages.push({
+      kind: 'evento',
+      id: `evento-${e.id}`,
+      fecha,
+      meta: {
+        evento_tipo: e?.evento_tipo,
+        created_by_nombre: e?.created_by_nombre,
+        dirigido_a: e?.dirigido_a,
+      },
+      data: e,
+      sourceId: e?.id,
+    })
+  }
+  pages.sort((a, b) => {
+    const fa = String(a?.fecha || '').slice(0, 10)
+    const fb = String(b?.fecha || '').slice(0, 10)
+    if (fa !== fb) return fa.localeCompare(fb)
+    // Mismo día: diarios primero, luego eventos independientes.
+    if (a.kind !== b.kind) return a.kind === 'diario' ? -1 : 1
+    return Number(a.sourceId || 0) - Number(b.sourceId || 0)
+  })
+  return pages
 }
 
 /**

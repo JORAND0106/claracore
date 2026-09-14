@@ -141,8 +141,9 @@ export default function SeguimientoCalendario({
           fecha_hasta: range.fecha_hasta,
         }
         if (filtros.q) bitParams.q = filtros.q
+        // bitacora_evento: pedir diarios+eventos (default API) para ver
+        // bloques embebidos e independientes; el filtro client-side afina.
         if (origen === 'bitacora_diario') bitParams.tipo = 'diario'
-        if (origen === 'bitacora_evento') bitParams.tipo = 'evento'
         jobs.push(api.listBitacora(bitParams).catch(() => []))
       } else {
         jobs.push(Promise.resolve([]))
@@ -451,8 +452,8 @@ export default function SeguimientoCalendario({
                   <option value="compromiso">Compromisos</option>
                   <option value="tarea">Tareas</option>
                   <option value="acta">Actas</option>
-                  <option value="bitacora_diario">Bitácora</option>
-                  <option value="bitacora_evento">Bitácora</option>
+                  <option value="bitacora_diario">Bitácora (diario)</option>
+                  <option value="bitacora_evento">Bitácora (eventos)</option>
                 </select>
               </Filter>
               <Filter t={t} label="Tipo de acta" className="cc-seguim-filter">
