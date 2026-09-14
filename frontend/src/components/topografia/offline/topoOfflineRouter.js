@@ -8,7 +8,7 @@ import {
 } from '../../../utils/topografia_newpoint.js'
 import {
   calcularVistaNivelacion,
-  filasToLecturas,
+  contarPuntosFilas,
 } from '../../../utils/topografia_nivelacion.js'
 import {
   cacheTopoEntityDetail,
@@ -18,6 +18,9 @@ import {
   entityDetailKey,
   topoDb,
 } from './topoDb.js'
+import { resolverPayloadLecturasNivelacionOffline } from './topoNivelacionLecturasPayload.js'
+
+export { resolverPayloadLecturasNivelacionOffline } from './topoNivelacionLecturasPayload.js'
 
 export const TOPO_SUBMODULES = {
   biblioteca: 'biblioteca',
@@ -811,21 +814,40 @@ export async function handleOfflineMutation(contratoId, path, method, body, opti
     return { ok: true, nivelacion: nivUp, ya_abierto: Boolean(niv.circuito_abierto_at), _offline: true }
   }
 
-  // Nivelación calc local preview al guardar lecturas
+  // Nivelación: persistir lecturas en caché local y encolar el mismo body del API
   if (path.match(/^\/nivelaciones\/[^/]+\/lecturas$/) && m === 'PUT') {
     const nivId = path.split('/')[2]
     const parsed = parseBody(body)
+    const { lecturas, filas, tipo_nivel: tipoNiv } = resolverPayloadLecturasNivelacionOffline(parsed)
+    if (!lecturas.length) {
+      throw new Error('No hay lecturas para guardar en la cartera offline.')
+    }
     const puntos = await topoDb.topo_puntos.where('contrato_id').equals(Number(contratoId)).filter((p) => p.verificado).toArray()
     const cotasBib = Object.fromEntries(puntos.filter((p) => p.cota != null).map((p) => [p.nombre, p.cota]))
-    const vista = calcularVistaNivelacion(parsed.filas || parsed, parsed.tipo_nivel || 'electronico', cotasBib)
+    const vista = calcularVistaNivelacion(filas, tipoNiv || 'electronico', cotasBib)
+    const prev = (await getCachedTopoEntityDetail(contratoId, 'nivelacion', nivId)) || {}
+    const niv = {
+      ...(prev.nivelacion || { id: nivId }),
+      tipo_nivel: tipoNiv || prev.nivelacion?.tipo_nivel || 'electronico',
+      estado: 'borrador',
+      _pending_sync: true,
+    }
     await cacheTopoEntityDetail(contratoId, 'nivelacion', nivId, {
-      ...(await getCachedTopoEntityDetail(contratoId, 'nivelacion', nivId) || {}),
-      lecturas: filasToLecturas(parsed.filas || parsed, parsed.tipo_nivel),
+      ...prev,
+      nivelacion: niv,
+      lecturas,
       vista_local: vista,
       _pending_sync: true,
     })
     await enqueueTopoOperation(contratoId, path, method, body, { localEntityId: nivId })
-    return { ok: true, vista: vista, _offline: true }
+    return {
+      ok: true,
+      lecturas,
+      count: lecturas.length,
+      puntos: contarPuntosFilas(filas),
+      vista,
+      _offline: true,
+    }
   }
 
   // Encolar operación genérica

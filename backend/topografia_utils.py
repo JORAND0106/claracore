@@ -1671,6 +1671,63 @@ def distancia_lectura_nivelacion(lect: dict, tipo_nivel: str) -> float | None:
     return float(d) if d is not None else None
 
 
+# Columnas persistibles de topo_nivelacion_lecturas (sin calculados).
+LECTURA_NIVEL_COLS = frozenset(
+    {
+        "orden",
+        "nombre_punto",
+        "tipo_punto",
+        "tipo_lectura",
+        "abscisa",
+        "descripcion_punto",
+        "ubicacion",
+        "punto_biblioteca_id",
+        "ubicacion_pk_id",
+        "ubicacion_pk",
+        "ubicacion_tramo",
+        "ubicacion_costado",
+        "ubicacion_infraestructura",
+        "ubicacion_lat",
+        "ubicacion_lng",
+        "hilo_superior",
+        "hilo_medio",
+        "hilo_inferior",
+        "lectura",
+        "distancia_m",
+        "lectura_atras",
+        "lectura_adelante",
+        "distancia_atras",
+        "distancia_adelante",
+        "nivelacion_id",
+    }
+)
+LECTURA_NIVEL_TIPOS_PUNTO = frozenset({"BM", "TP", "cambio", "estacion", "auxiliar"})
+
+
+def sanitizar_fila_lectura_nivelacion(row: dict, *, keep_id: bool = False) -> dict:
+    """Limpia un dict de lectura para INSERT en topo_nivelacion_lecturas."""
+    out = {k: v for k, v in (row or {}).items() if k in LECTURA_NIVEL_COLS and v is not None}
+    if keep_id and row.get("id"):
+        out["id"] = row["id"]
+    tp = (out.get("tipo_punto") or "").strip()
+    if tp == "TP":
+        out["tipo_punto"] = "estacion"
+    elif tp and tp not in LECTURA_NIVEL_TIPOS_PUNTO:
+        out["tipo_punto"] = "estacion"
+    elif not tp:
+        out.pop("tipo_punto", None)
+    return out
+
+
+def contar_puntos_lecturas_nivelacion(rows: list[dict]) -> int:
+    """Cuenta puntos/filas de cartera a partir de lecturas con orden *10+tipo."""
+    keys = set()
+    for l in rows or []:
+        o = int(l.get("orden") or 0)
+        keys.add(((o - 1) // 10) if o >= 10 else (o or 1))
+    return len(keys)
+
+
 def lectura_efectiva_nivelacion(lect: dict, tipo_nivel: str) -> float | None:
     """Lectura de cálculo: hilo medio (automático) o lectura directa (electrónico)."""
     h_med = lect.get("hilo_medio")
