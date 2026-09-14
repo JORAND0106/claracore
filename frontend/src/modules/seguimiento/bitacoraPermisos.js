@@ -58,7 +58,8 @@ export function fechaCreacionBogotaISO(entrada) {
 
 /**
  * Bitácora edita el Diario (y sus bloques de evento) mientras esté abierto
- * dentro de la ventana de gracia D+1; cerrado → solo Desarrollador.
+ * dentro de la ventana efectiva (D+1 normal, o día de creación si atrasado);
+ * cerrado → solo Desarrollador.
  */
 export function puedeEditarEntradaBitacora(entrada, permisos) {
   if (!entrada) return false
@@ -72,4 +73,26 @@ export function puedeEditarEntradaBitacora(entrada, permisos) {
   if (String(entrada.estado || '') === 'cerrado') return false
   if (entrada.puede_autocerrar) return false
   return true
+}
+
+/**
+ * ¿El reporte se creó cuando su Fecha ya estaba fuera de la gracia D+1?
+ * (creación > Fecha + 1 día calendario Bogotá)
+ */
+export function esReporteAtrasadoLocal(entrada, { hoyISO } = {}) {
+  if (!entrada || String(entrada.tipo || '') === 'evento') return false
+  if (entrada.es_atrasado === true) return true
+  if (entrada.es_atrasado === false) return false
+  const fecha = String(entrada.fecha || '').slice(0, 10)
+  const creacion = fechaCreacionBogotaISO(entrada)
+  if (!fecha || !creacion) return false
+  try {
+    const f = new Date(`${fecha}T12:00:00`)
+    const c = new Date(`${creacion}T12:00:00`)
+    const limite = new Date(f)
+    limite.setDate(limite.getDate() + 1)
+    return c > limite
+  } catch {
+    return false
+  }
 }

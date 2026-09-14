@@ -14,6 +14,17 @@ function fmtFecha(iso) {
   }
 }
 
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename || 'bitacora_export'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1500)
+}
+
 /**
  * Hilo cronológico Bitácora: diarios + grilla Excel de eventos.
  */
@@ -33,6 +44,8 @@ export default function BitacoraPanel({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filtros, setFiltros] = useState({ tipo: '', fecha_desde: '', fecha_hasta: '', q: '' })
+  const [exportFmt, setExportFmt] = useState('pdf')
+  const [exporting, setExporting] = useState(false)
   const [editor, setEditor] = useState(null)
 
   const load = useCallback(async () => {
@@ -59,6 +72,30 @@ export default function BitacoraPanel({
   useEffect(() => { void load() }, [load, refreshKey])
 
   const diarios = useMemo(() => rows.filter((r) => r.tipo !== 'evento'), [rows])
+
+  const exportarRango = useCallback(async () => {
+    if (!api?.exportBitacoraRangoBlob) return
+    const d0 = String(filtros.fecha_desde || '').slice(0, 10)
+    const d1 = String(filtros.fecha_hasta || '').slice(0, 10)
+    if (!d0 || !d1) {
+      setError('Indique fecha Desde y Hasta para exportar el rango.')
+      return
+    }
+    if (d1 < d0) {
+      setError('La fecha Hasta debe ser posterior o igual a Desde.')
+      return
+    }
+    setExporting(true)
+    setError('')
+    try {
+      const { blob, filename } = await api.exportBitacoraRangoBlob(d0, d1, exportFmt)
+      triggerDownload(blob, filename)
+    } catch (e) {
+      setError(e.message || 'No se pudo exportar el rango')
+    } finally {
+      setExporting(false)
+    }
+  }, [api, filtros.fecha_desde, filtros.fecha_hasta, exportFmt])
 
   if (!permisos.ver) {
     return (
@@ -95,7 +132,7 @@ export default function BitacoraPanel({
             Bitácora
           </div>
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, maxWidth: 560 }}>
-            Un documento por fecha · Eventos como bloques dentro del mismo documento · Ventana de gracia de un día
+            Un documento por fecha · Eventos embebidos · Gracia D+1 (atrasados: hasta fin del día de creación)
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -132,6 +169,36 @@ export default function BitacoraPanel({
           />
         </label>
         <button type="button" onClick={() => void load()} style={btnGhost}>Buscar</button>
+        {permisos.exportar && (
+          <>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: t.textMuted }}>
+              Formato
+              <select
+                value={exportFmt}
+                onChange={(e) => setExportFmt(e.target.value)}
+                style={inp}
+                aria-label="Formato de exportación"
+              >
+                <option value="pdf">PDF</option>
+                <option value="docx">Word (.docx)</option>
+                <option value="md">Markdown (.md)</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void exportarRango()}
+              style={{
+                ...btnGhost,
+                opacity: exporting ? 0.7 : 1,
+                cursor: exporting ? 'wait' : 'pointer',
+              }}
+              disabled={exporting}
+              title="Exporta todos los Reportes Diarios del rango (omitiendo días vacíos)"
+            >
+              {exporting ? 'Exportando…' : 'Exportar rango'}
+            </button>
+          </>
+        )}
       </div>
 
       {error && (
@@ -193,7 +260,10 @@ export default function BitacoraPanel({
                               color: cerrado ? '#92400E' : '#047857',
                             }}>
                               {cerrado
-                                ? (row.cierre_motivo === 'automatico_dia' ? 'Cerrado (auto)' : 'Cerrado')
+                                ? (row.cierre_motivo === 'automatico_dia'
+                                  || row.cierre_motivo === 'automatico_atrasado'
+                                  ? 'Cerrado (auto)'
+                                  : 'Cerrado')
                                 : 'Abierto'}
                             </span>
                           </td>

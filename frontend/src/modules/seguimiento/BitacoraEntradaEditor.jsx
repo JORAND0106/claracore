@@ -27,7 +27,7 @@ import {
   puedeUsarCargoCantidadTemporal,
   recoverPersonalManual,
 } from './personalAsistenciaHelpers'
-import { puedeEditarEntradaBitacora } from './bitacoraPermisos'
+import { puedeEditarEntradaBitacora, esReporteAtrasadoLocal } from './bitacoraPermisos'
 import {
   EVENTO_TIPOS,
   eventoTieneDestinatario,
@@ -774,7 +774,9 @@ export default function BitacoraEntradaEditor({
             <div style={{ fontSize: 11, color: t.textMuted }}>
               {tipo === 'diario'
                 ? (editable
-                  ? 'Abierta — editable dentro de la ventana de gracia (hasta 23:59:59 del día siguiente)'
+                  ? (esReporteAtrasadoLocal(entrada) || (!esNuevo && entrada?.es_atrasado)
+                    ? 'Atrasada — editable hasta las 23:59:59 del día en que se creó'
+                    : 'Abierta — editable dentro de la ventana de gracia (hasta 23:59:59 del día siguiente)')
                   : 'Cerrada / bloqueada — solo lectura')
                 : 'Inmutable desde su creación'}
             </div>

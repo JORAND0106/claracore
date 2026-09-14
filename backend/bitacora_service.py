@@ -143,6 +143,11 @@ def momento_cierre_diario(fecha: date) -> datetime:
     )
 
 
+def momento_cierre_dia_calendario(dia: date) -> datetime:
+    """23:59:59 America/Bogota del día calendario indicado."""
+    return datetime(dia.year, dia.month, dia.day, 23, 59, 59, tzinfo=BOGOTA)
+
+
 def fecha_en_ventana_gracia(fecha: date, *, ahora: Optional[datetime] = None) -> bool:
     """True si la fecha del diario aún puede crearse/editarse (antes del cierre D+1)."""
     now = ahora or ahora_bogota()
@@ -151,6 +156,47 @@ def fecha_en_ventana_gracia(fecha: date, *, ahora: Optional[datetime] = None) ->
     if fecha > now.date():
         return False
     return now < momento_cierre_diario(fecha)
+
+
+def es_reporte_atrasado(entrada: dict, *, ahora: Optional[datetime] = None) -> bool:
+    """
+    True si el diario se creó cuando su Fecha ya no estaba en la ventana D+1
+    (creación más de un día calendario después de la Fecha del reporte).
+    """
+    del ahora  # reserved for symmetry / tests
+    if str(entrada.get("tipo") or "diario") == "evento":
+        return False
+    try:
+        f = _parse_fecha(entrada.get("fecha"))
+    except ValueError:
+        return False
+    creacion = _fecha_creacion_bogota(entrada)
+    if creacion is None:
+        return False
+    return creacion > (f + timedelta(days=1))
+
+
+def momento_cierre_efectivo(
+    entrada: dict,
+    *,
+    ahora: Optional[datetime] = None,
+) -> Optional[datetime]:
+    """
+    Instantáneo de sellado:
+    - Flujo normal: 23:59:59 del día siguiente a la Fecha del reporte.
+    - Atrasado: 23:59:59 del mismo día calendario de creación (Bogotá).
+    """
+    del ahora
+    try:
+        f = _parse_fecha(entrada.get("fecha"))
+    except ValueError:
+        return None
+    if es_reporte_atrasado(entrada):
+        creacion = _fecha_creacion_bogota(entrada)
+        if creacion is None:
+            return momento_cierre_diario(f)
+        return momento_cierre_dia_calendario(creacion)
+    return momento_cierre_diario(f)
 
 
 def es_desarrollador_bitacora(current_user: Optional[dict] = None) -> bool:
@@ -654,19 +700,18 @@ def entrada_esta_cerrada(entrada: Optional[dict]) -> bool:
 
 
 def _debe_autocerrar(entrada: dict, ahora: Optional[datetime] = None) -> bool:
-    """True cuando ya llegó (o pasó) el cierre de gracia D+1 del Reporte Diario."""
+    """True cuando ya venció la ventana de edición efectiva (normal D+1 o atrasado=día creación)."""
     if str(entrada.get("tipo") or "") != "diario":
         return False
     if entrada_esta_cerrada(entrada):
         return False
-    try:
-        f = _parse_fecha(entrada.get("fecha"))
-    except ValueError:
+    cierre = momento_cierre_efectivo(entrada)
+    if cierre is None:
         return False
     now = ahora or ahora_bogota()
     if now.tzinfo is None:
         now = now.replace(tzinfo=BOGOTA)
-    return now >= momento_cierre_diario(f)
+    return now >= cierre
 
 
 def _aplicar_cierre(sb, entrada_id: int, user_id: Optional[int], motivo: str) -> dict:
@@ -692,10 +737,11 @@ def _aplicar_cierre(sb, entrada_id: int, user_id: Optional[int], motivo: str) ->
 
 
 def asegurar_autocierre_entrada(sb, entrada: dict, *, user_id: Optional[int] = None) -> dict:
-    """Cierra el Reporte Diario al vencer la ventana de gracia D+1 (lazy ensure)."""
+    """Cierra el Reporte Diario al vencer su ventana de edición efectiva (lazy ensure)."""
     if not _debe_autocerrar(entrada):
         return entrada
-    closed = _aplicar_cierre(sb, int(entrada["id"]), user_id, "automatico_dia")
+    motivo = "automatico_atrasado" if es_reporte_atrasado(entrada) else "automatico_dia"
+    closed = _aplicar_cierre(sb, int(entrada["id"]), user_id, motivo)
     return {**entrada, **closed}
 
 
@@ -736,7 +782,9 @@ def assert_puede_editar_entrada(
     current_user: Optional[dict] = None,
 ) -> None:
     """
-    Diario abierto dentro de ventana D+1: editable con permiso Editar (caller).
+    Diario abierto dentro de ventana efectiva: editable con permiso Editar (caller).
+    - Flujo normal: hasta 23:59:59 del día siguiente a la Fecha.
+    - Atrasado: hasta 23:59:59 del día de creación.
     Diario cerrado / vencido: inmutable salvo Desarrollador.
     Evento legacy independiente: ya no se edita (usar bloques en el Diario);
     Desarrollador puede intervenir.
@@ -753,6 +801,12 @@ def assert_puede_editar_entrada(
         )
     # diario
     if _debe_autocerrar(entrada) and not es_dev:
+        if es_reporte_atrasado(entrada):
+            raise ValueError(
+                "El Reporte Diario atrasado se cerró automáticamente al final del día "
+                "en que fue creado (23:59:59) y es inmutable. "
+                "Solo el rol Desarrollador puede modificarlo."
+            )
         raise ValueError(
             "El Reporte Diario se cerró automáticamente al vencer su ventana de gracia "
             "(23:59:59 del día siguiente a su fecha) y es inmutable. "
@@ -2520,6 +2574,7 @@ def _enrich_entrada(
         out["evento_editable_hoy"] = False
         out["inmutable"] = entrada_esta_cerrada(out) or _debe_autocerrar(out)
     out["puede_autocerrar"] = _debe_autocerrar(out)
+    out["es_atrasado"] = bool(es_reporte_atrasado(out))
     if out.get("clima_codigo") is not None and not out.get("clima_descripcion"):
         out["clima_descripcion"] = clima_label(out.get("clima_codigo"))
     return out
@@ -2738,12 +2793,8 @@ def crear_reporte_diario(
         hoy = ahora.date()
         if fecha > hoy:
             raise ValueError("No se puede crear un Reporte Diario con fecha futura")
-        if not fecha_en_ventana_gracia(fecha, ahora=ahora) and not es_desarrollador_bitacora(current_user):
-            raise ValueError(
-                "No se puede crear un Reporte Diario fuera de su ventana de gracia "
-                "(fecha del reporte o el día siguiente, hasta las 23:59:59). "
-                "Solo el rol Desarrollador puede crear fechas ya cerradas."
-            )
+        # Fechas pasadas (incl. atrasadas fuera de D+1) se permiten crear; el sellado
+        # del atrasado ocurre a las 23:59:59 del día de creación (ver momento_cierre_efectivo).
         tramo = _require_tramo_nuevo(data.get("tramo"))
         if _diario_existe_fecha_tramo(sb, contrato_id, fecha.isoformat(), tramo):
             raise ValueError(

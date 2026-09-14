@@ -1009,6 +1009,7 @@ from bitacora_service import (  # noqa: E402
     upsert_visitante,
 )
 from bitacora_pdf import generar_pdf_bitacora_dia  # noqa: E402
+from bitacora_export_rango import exportar_bitacora_rango  # noqa: E402
 from bitacora_permissions import require_permiso_bitacora  # noqa: E402
 
 
@@ -1184,6 +1185,45 @@ def route_bitacora_export_pdf(
     except Exception as exc:
         logging.getLogger("claracore.bitacora").exception("export pdf bitácora: %s", exc)
         raise HTTPException(status_code=500, detail="No se pudo generar el PDF de bitácora") from exc
+
+
+@router.get("/{contrato_id}/bitacora/export/rango")
+def route_bitacora_export_rango(
+    contrato_id: int,
+    fecha_desde: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    fecha_hasta: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    formato: str = Query("pdf", description="pdf | docx | md"),
+    current_user=Depends(get_current_user),
+):
+    """Exportación consolidada de Bitácora por rango (PDF, Word o Markdown)."""
+    require_permiso_bitacora(current_user, "exportar", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    try:
+        data, media_type, fname = exportar_bitacora_rango(
+            supabase,
+            contrato_id,
+            fecha_desde,
+            fecha_hasta,
+            formato=formato,
+        )
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "no-store",
+            },
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        logging.getLogger("claracore.bitacora").exception(
+            "export rango bitácora: %s", exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar la exportación consolidada de bitácora",
+        ) from exc
 
 
 @router.get("/{contrato_id}/bitacora/equipos")
