@@ -319,5 +319,52 @@ export function createSeguimientoApi(contratoId, token) {
         throw mapNetworkError(e)
       }
     },
+    /**
+     * Exportación consolidada por rango: pdf | docx | md.
+     * @returns {{ blob: Blob, filename: string }}
+     */
+    exportBitacoraRangoBlob: async (fechaDesde, fechaHasta, formato = 'pdf') => {
+      const d0 = String(fechaDesde || '').slice(0, 10)
+      const d1 = String(fechaHasta || '').slice(0, 10)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d0) || !/^\d{4}-\d{2}-\d{2}$/.test(d1)) {
+        throw new Error('Indique un rango de fechas válido (desde / hasta)')
+      }
+      const fmt = String(formato || 'pdf').toLowerCase()
+      if (!['pdf', 'docx', 'md', 'markdown'].includes(fmt)) {
+        throw new Error('Formato inválido (use PDF, Word o Markdown)')
+      }
+      const q = new URLSearchParams({
+        fecha_desde: d0,
+        fecha_hasta: d1,
+        formato: fmt === 'markdown' ? 'md' : fmt,
+      })
+      const sig = apiFetchSignal(180000)
+      try {
+        const res = await fetch(
+          `${API_BASE}/seguimiento/${cid}/bitacora/export/rango?${q.toString()}`,
+          {
+            headers: authHeaders(t, false),
+            ...(sig ? { signal: sig } : {}),
+          },
+        )
+        if (!res.ok) {
+          await parseOrThrow(res)
+        }
+        const buf = await res.arrayBuffer()
+        if (!buf || buf.byteLength < 8) throw new Error('El archivo exportado está vacío')
+        const cd = res.headers.get('Content-Disposition') || ''
+        const m = /filename="?([^";]+)"?/i.exec(cd)
+        const filename = (m && m[1]) || `bitacora_${cid}_${d0}_${d1}.${fmt === 'markdown' ? 'md' : fmt}`
+        const mime = res.headers.get('Content-Type')
+          || (fmt === 'pdf'
+            ? 'application/pdf'
+            : fmt === 'docx'
+              ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+              : 'text/markdown;charset=utf-8')
+        return { blob: new Blob([buf], { type: mime }), filename }
+      } catch (e) {
+        throw mapNetworkError(e)
+      }
+    },
   }
 }

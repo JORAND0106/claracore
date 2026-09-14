@@ -49,7 +49,7 @@ def test_debe_autocerrar_ventana_d_mas_1():
     hoy = svc.hoy_bogota()
     ayer = hoy - timedelta(days=1)
     anteayer = hoy - timedelta(days=2)
-    # Anteayer: cierre fue fin de ayer → ya vencido
+    # Anteayer sin created_at: flujo normal → cierre fue fin de ayer → ya vencido
     assert svc._debe_autocerrar({
         "tipo": "diario", "estado": "abierto", "fecha": anteayer.isoformat(),
     }) is True
@@ -68,6 +68,54 @@ def test_debe_autocerrar_ventana_d_mas_1():
     assert svc._debe_autocerrar(
         {"tipo": "evento", "estado": "cerrado", "fecha": ayer.isoformat()},
     ) is False
+
+
+def test_atrasado_cierra_fin_dia_creacion():
+    hoy = svc.hoy_bogota()
+    vieja = hoy - timedelta(days=20)
+    created = datetime(hoy.year, hoy.month, hoy.day, 9, 0, 0, tzinfo=svc.BOGOTA).astimezone(
+        timezone.utc
+    ).isoformat()
+    entrada = {
+        "tipo": "diario",
+        "estado": "abierto",
+        "fecha": vieja.isoformat(),
+        "created_at": created,
+    }
+    assert svc.es_reporte_atrasado(entrada) is True
+    cierre = svc.momento_cierre_efectivo(entrada)
+    assert cierre.date() == hoy
+    assert cierre.hour == 23 and cierre.minute == 59
+    ahora_medio = datetime(hoy.year, hoy.month, hoy.day, 12, 0, 0, tzinfo=svc.BOGOTA)
+    assert svc._debe_autocerrar(entrada, ahora=ahora_medio) is False
+    assert svc._debe_autocerrar(entrada, ahora=cierre) is True
+    # Desarrollador sigue pudiendo editar tras el sellado
+    sellado = {**entrada, "estado": "cerrado", "cierre_motivo": "automatico_atrasado"}
+    with pytest.raises(ValueError, match="atrasado|inmutable"):
+        svc.assert_puede_editar_entrada(sellado, {"rol_nombre": "Contratista"})
+    svc.assert_puede_editar_entrada(sellado, {"cargo_nombre": "Desarrollador"})
+
+
+def test_flujo_normal_mismo_dia_o_siguiente_no_es_atrasado():
+    hoy = svc.hoy_bogota()
+    ayer = hoy - timedelta(days=1)
+    created_hoy = datetime(hoy.year, hoy.month, hoy.day, 10, 0, 0, tzinfo=svc.BOGOTA).astimezone(
+        timezone.utc
+    ).isoformat()
+    # Creado el mismo día que representa
+    e_hoy = {
+        "tipo": "diario", "estado": "abierto",
+        "fecha": hoy.isoformat(), "created_at": created_hoy,
+    }
+    assert svc.es_reporte_atrasado(e_hoy) is False
+    assert svc.momento_cierre_efectivo(e_hoy).date() == hoy + timedelta(days=1)
+    # Creado al día siguiente de su Fecha (flujo normal D+1)
+    e_ayer = {
+        "tipo": "diario", "estado": "abierto",
+        "fecha": ayer.isoformat(), "created_at": created_hoy,
+    }
+    assert svc.es_reporte_atrasado(e_ayer) is False
+    assert svc.momento_cierre_efectivo(e_ayer).date() == hoy
 
 
 def test_fecha_en_ventana_gracia():
@@ -223,8 +271,9 @@ def test_catalogo_tipo_material_sin_relacion_almacen():
 
 
 def test_diario_vencido_bloquea_edicion_no_dev():
-    ayer = (svc.hoy_bogota() - timedelta(days=1)).isoformat()
-    entrada = {"tipo": "diario", "estado": "abierto", "fecha": ayer}
+    # Fuera de gracia D+1: anteayer ya cerró ayer a las 23:59:59
+    anteayer = (svc.hoy_bogota() - timedelta(days=2)).isoformat()
+    entrada = {"tipo": "diario", "estado": "abierto", "fecha": anteayer}
     with pytest.raises(ValueError, match="automáticamente"):
         svc.assert_puede_editar_entrada(entrada, {"rol_nombre": "Contratista"})
     svc.assert_puede_editar_entrada(entrada, {"cargo_nombre": "Desarrollador"})
@@ -334,8 +383,8 @@ def test_strip_autocompletar_excluye_materiales():
 
 
 def test_asegurar_autocierre_llama_cierre(monkeypatch):
-    ayer = (svc.hoy_bogota() - timedelta(days=1)).isoformat()
-    entrada = {"id": 9, "tipo": "diario", "estado": "abierto", "fecha": ayer}
+    anteayer = (svc.hoy_bogota() - timedelta(days=2)).isoformat()
+    entrada = {"id": 9, "tipo": "diario", "estado": "abierto", "fecha": anteayer}
     called = {}
 
     def fake_cierre(sb, eid, uid, motivo):
@@ -615,9 +664,10 @@ def test_normalizar_asistencia_y_personal_agregado():
     assert rows[0]["documento_numero"] == "1234"
     assert rows[0]["hora_salida"] == "16:30"
     assert rows[0]["fecha_ingreso"] == "2026-01-10"
-    assert rows[1]["hora_ingreso"] is None
-    assert rows[1]["hora_salida"] is None
-    assert rows[3]["hora_ingreso"] is None
+    # Horario operativo se conserva independientemente del estado RRHH
+    assert rows[1]["hora_ingreso"] == "07:00"
+    assert rows[1]["hora_salida"] == "16:30"
+    assert rows[3]["hora_ingreso"] == "07:00"
     assert rows[3]["fecha_retiro"] == "2026-08-27"
     agg = svc._personal_desde_asistencia(rows)
     assert agg == [
