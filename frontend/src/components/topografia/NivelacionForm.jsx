@@ -57,6 +57,12 @@ import {
   validarBorradorContranivelacion,
   validarBorradorParaAgregar,
 } from '../../utils/topografia_nivelacion'
+import {
+  borradorPendienteDeAgregar,
+  confirmarRespuestaGuardadoLecturas,
+  fingerprintLecturasOrden,
+  verificarDetalleTrasGuardado,
+} from '../../utils/topografia_nivelacion_guardar'
 
 const FORM_VACIO_NIV = {
   nombre: '',
@@ -338,17 +344,88 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
   }
 
   const prepararFilasGuardado = useCallback(
-    () => filas.map((r, i) => {
-      let row = i === 0 && bmInicialNombre
-        ? { ...r, nombre_punto: bmInicialNombre, tipo_punto: r.tipo_punto || 'BM' }
-        : r
-      if (row.es_fila_cierre && !String(row.abscisa ?? '').trim()) {
-        row = { ...row, abscisa: '0' }
-      }
-      return row
-    }),
+    (filasFuente = null) => {
+      const fuente = Array.isArray(filasFuente) ? filasFuente : filas
+      return fuente.map((r, i) => {
+        let row = i === 0 && bmInicialNombre
+          ? { ...r, nombre_punto: bmInicialNombre, tipo_punto: r.tipo_punto || 'BM' }
+          : r
+        if (row.es_fila_cierre && !String(row.abscisa ?? '').trim()) {
+          row = { ...row, abscisa: '0' }
+        }
+        return row
+      })
+    },
     [filas, bmInicialNombre],
   )
+
+  /**
+   * Incorpora paneles de captura pendientes a las filas locales antes de persistir.
+   * Si hay datos incompletos, bloquea el guardado (no descarta trabajo de campo en silencio).
+   */
+  const flushBorradoresParaGuardado = useCallback(() => {
+    let nextFilas = filas.map((r, i) => ({ ...r, orden: i + 1 }))
+    let nextContra = filasContra.map((r, i) => ({ ...r, orden: i + 1 }))
+    let nextBorrador = borrador
+    let nextBorradorContra = borradorContra
+
+    if (borradorPendienteDeAgregar(borrador, tipoNivel)) {
+      const gate = validarBorradorParaAgregar(borrador, nextFilas, tipoNivel, bmInicialNombre, {
+        modoApertura,
+        circuitoAbierto,
+      })
+      if (!gate.ok) {
+        return {
+          ok: false,
+          error: `Hay datos en captura (ida) sin agregar a la cartera: ${gate.msg}`,
+        }
+      }
+      const nueva = { ...gate.fila }
+      if (gate.esVistaIntermedia && gate.insertAt != null) {
+        nextFilas = [...nextFilas]
+        nextFilas.splice(gate.insertAt, 0, nueva)
+      } else {
+        nextFilas = [...nextFilas, nueva]
+      }
+      nextFilas = nextFilas.map((r, i) => ({ ...r, orden: i + 1 }))
+      nextBorrador = prepararBorradorSiguiente(nextFilas.length)
+    }
+
+    if (contraActiva && borradorPendienteDeAgregar(borradorContra, tipoNivel)) {
+      const gate = validarBorradorContranivelacion(borradorContra, nextContra, nextFilas, tipoNivel)
+      if (!gate.ok) {
+        return {
+          ok: false,
+          error: `Hay datos en captura (contranivelación) sin agregar: ${gate.msg}`,
+        }
+      }
+      const nueva = { ...gate.fila }
+      if (gate.esVistaIntermedia && gate.insertAt != null) {
+        nextContra = [...nextContra]
+        nextContra.splice(gate.insertAt, 0, nueva)
+      } else {
+        nextContra = [...nextContra, nueva]
+      }
+      nextContra = nextContra.map((r, i) => ({ ...r, orden: i + 1 }))
+      nextBorradorContra = prepararBorradorSiguiente(nextContra.length)
+    }
+
+    setFilas(nextFilas)
+    setFilasContra(nextContra)
+    setBorrador(nextBorrador)
+    setBorradorContra(nextBorradorContra)
+    return { ok: true, filas: nextFilas, filasContra: nextContra }
+  }, [
+    borrador,
+    borradorContra,
+    bmInicialNombre,
+    circuitoAbierto,
+    contraActiva,
+    filas,
+    filasContra,
+    modoApertura,
+    tipoNivel,
+  ])
 
   const aplicarResultadoCalc = useCallback((calc) => {
     if (!calc) return
@@ -403,38 +480,59 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     }
   }
 
-  const guardarLecturas = async (tipoExport = tipoNivel) => {
+  const guardarLecturas = async (
+    tipoExport = tipoNivel,
+    { filasFuente = null, filasContraFuente = null } = {},
+  ) => {
     if (!sel) {
       const msg = 'Seleccione una nivelación en las pestañas.'
       setError(msg)
       return { ok: false, error: msg }
     }
-    const preparadas = prepararFilasGuardado()
+    const preparadas = prepararFilasGuardado(filasFuente)
+    const contraPrep = Array.isArray(filasContraFuente) ? filasContraFuente : filasContra
     const payloadIda = filasToLecturas(preparadas, tipoExport)
-    const payloadContra = filasToLecturas(filasContra, tipoExport, { ordenBase: ORDEN_CONTRA_BASE })
+    const payloadContra = filasToLecturas(contraPrep, tipoExport, { ordenBase: ORDEN_CONTRA_BASE })
     const payload = [...payloadIda, ...payloadContra]
     if (!payloadIda.length) {
       const msg = 'No hay datos para guardar. Registre al menos una lectura (V+, Vi o V−).'
       setError(msg)
       return { ok: false, error: msg }
     }
+    const expectedFp = fingerprintLecturasOrden(payload)
     try {
+      console.info('[NivelacionForm] Guardar cartera →', {
+        nivelacionId: sel,
+        count: payload.length,
+        fingerprint: expectedFp,
+      })
       const res = await api(`/nivelaciones/${sel}/lecturas`, {
         method: 'PUT',
         body: JSON.stringify({ lecturas: payload, tipo_nivel: tipoExport }),
       })
-      const n = res?.count ?? res?.lecturas?.length ?? payload.length
-      const puntos = res?.puntos ?? contarPuntosFilas(preparadas)
-      if (!n) {
-        const msg = 'El servidor no confirmó el guardado. Reinicie backend (dev-stop → dev-start).'
+      const confirm = confirmarRespuestaGuardadoLecturas(res, payload)
+      console.info('[NivelacionForm] Respuesta guardado →', {
+        nivelacionId: sel,
+        ok: confirm.ok,
+        reason: confirm.reason,
+        count: confirm.count,
+        offline: confirm.offline,
+        verified: res?.verified,
+        fingerprint: res?.fingerprint_orden,
+      })
+      if (!confirm.ok) {
+        const msg = confirm.error || 'El servidor no confirmó el guardado. Reinicie backend (dev-stop → dev-start).'
         setError(msg)
-        return { ok: false, error: msg }
+        return { ok: false, error: msg, reason: confirm.reason }
       }
+      const puntos = res?.puntos ?? contarPuntosFilas(preparadas)
       return {
         ok: true,
-        count: n,
+        count: confirm.count,
         puntos,
-        lecturas: Array.isArray(res?.lecturas) && res.lecturas.length ? res.lecturas : payload,
+        offline: confirm.offline,
+        fingerprint: expectedFp,
+        lecturas: confirm.lecturas,
       }
     } catch (e) {
       setError(e.message)
@@ -451,21 +549,88 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setError('')
     setOkMsg('')
     try {
-      const preparadas = prepararFilasGuardado()
+      const flush = flushBorradoresParaGuardado()
+      if (!flush.ok) {
+        setError(flush.error)
+        return
+      }
+      const preparadas = prepararFilasGuardado(flush.filas)
       const tipoExport = inferirTipoNivelFilas(preparadas, tipoNivelDeclarado)
       if (!(await guardarCabecera(tipoExport))) return
-      const lectRes = await guardarLecturas(tipoExport)
+      const lectRes = await guardarLecturas(tipoExport, {
+        filasFuente: flush.filas,
+        filasContraFuente: flush.filasContra,
+      })
       if (!lectRes.ok) return
-      // No vaciar la UI si el recargo falla: el PUT ya confirmó persistencia (o cola offline).
-      try {
-        await cargarDetalle(sel)
-      } catch (reloadErr) {
-        if (Array.isArray(lectRes.lecturas) && lectRes.lecturas.length) {
-          setFilas(lecturasToFilas(lectRes.lecturas, tipoExport))
-        }
-        setError(
-          `Cartera guardada, pero no se pudo recargar el detalle: ${reloadErr.message || reloadErr}`,
+
+      // Offline / cola: no recargar desde servidor (GET online vaciaría la UI).
+      if (lectRes.offline) {
+        console.warn('[NivelacionForm] Guardado en cola offline; se conservan filas locales.')
+        setOkMsg(
+          `Cartera en cola de sincronización (${lectRes.puntos} ${lectRes.puntos === 1 ? 'punto' : 'puntos'}). Se subirá al recuperar conexión.`,
         )
+        return
+      }
+
+      // Online: verificar GET antes de declarar éxito y aplicar detalle.
+      try {
+        const data = await api(`/nivelaciones/${sel}`)
+        const verify = verificarDetalleTrasGuardado(data, lectRes.count, lectRes.fingerprint)
+        console.info('[NivelacionForm] Verificación GET post-guardado →', {
+          nivelacionId: sel,
+          verify,
+          lecturasGet: Array.isArray(data?.lecturas) ? data.lecturas.length : null,
+        })
+        if (!verify.ok) {
+          const { ida, contra } = separarLecturasIdaContra(lectRes.lecturas || [])
+          setFilas(lecturasToFilas(ida, tipoExport))
+          setFilasContra(lecturasToFilas(contra, tipoExport, {
+            ordenBase: ORDEN_CONTRA_BASE,
+            forceGrouped: true,
+          }))
+          setError(
+            `${verify.error} Revise conexión y pulse de nuevo «Guardar cartera».`,
+          )
+          return
+        }
+        setDetalle(data)
+        const { ida, contra } = separarLecturasIdaContra(data.lecturas || [])
+        setFilas(lecturasToFilas(ida, tipoExport))
+        setFilasContra(lecturasToFilas(contra, tipoExport, {
+          ordenBase: ORDEN_CONTRA_BASE,
+          forceGrouped: true,
+        }))
+        if (data.nivelacion) {
+          const n = data.nivelacion
+          setForm((f) => ({
+            ...f,
+            nombre: n.nombre || f.nombre,
+            tipo_contranivelacion: n.tipo_contranivelacion || 'circuito',
+            tipo_nivel: n.tipo_nivel || 'electronico',
+            bm_inicial_id: n.bm_inicial_id != null && n.bm_inicial_id !== '' ? String(n.bm_inicial_id) : '',
+            bm_final_id: n.bm_final_id != null && n.bm_final_id !== '' ? String(n.bm_final_id) : '',
+            tolerancia_mm_km: n.tolerancia_mm_km ?? 1,
+            operador: n.operador || '',
+            equipo_marca: n.equipo_marca || '',
+            equipo_referencia: n.equipo_referencia || '',
+            equipo_serial: n.equipo_serial || '',
+            fecha_campo: n.fecha_campo || '',
+          }))
+        }
+      } catch (reloadErr) {
+        console.warn('[NivelacionForm] Recarga post-guardado falló; se conservan filas locales:', reloadErr)
+        if (Array.isArray(lectRes.lecturas) && lectRes.lecturas.length) {
+          const { ida, contra } = separarLecturasIdaContra(lectRes.lecturas)
+          setFilas(lecturasToFilas(ida, tipoExport))
+          setFilasContra(lecturasToFilas(contra, tipoExport, {
+            ordenBase: ORDEN_CONTRA_BASE,
+            forceGrouped: true,
+          }))
+        }
+        setOkMsg(
+          `Cartera enviada (${lectRes.puntos} ${lectRes.puntos === 1 ? 'punto' : 'puntos'}), pero no se pudo verificar al recargar. Conserve la pantalla y reintente si al reabrir faltan datos.`,
+        )
+        return
       }
       setOkMsg(`Cartera guardada correctamente (${lectRes.puntos} ${lectRes.puntos === 1 ? 'punto' : 'puntos'}).`)
     } catch (e) {
