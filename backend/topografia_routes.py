@@ -95,6 +95,8 @@ from topografia_utils import (
     lectura_efectiva_nivelacion,
     media_hilos_nivelacion,
     modo_apertura_nivelacion,
+    sanitizar_fila_lectura_nivelacion,
+    contar_puntos_lecturas_nivelacion,
     validar_lecturas_nivelacion,
     perimetro_por_coordenadas,
     radiar_armadas,
@@ -3150,6 +3152,115 @@ def _validar_distancia_lectura_nivel(lect: dict, dist_max: float) -> None:
         )
 
 
+# Columnas persistibles de topo_nivelacion_lecturas (evitar campos basura / calculados).
+# Ver sanitizar_fila_lectura_nivelacion / contar_puntos_lecturas_nivelacion en topografia_utils.
+
+
+def _reemplazar_lecturas_nivelacion_db(nivelacion_id: str, payloads: list[dict]) -> list[dict]:
+    """Reemplaza la cartera sin ventana vacía destructiva.
+
+    Inserta primero las filas nuevas, verifica el conteo con SELECT (no confía en
+    ``insert().data``, que a menudo vuelve vacío en supabase-py), y solo entonces
+    elimina las lecturas previas. Si algo falla, deja intactas las previas o las
+    restaura.
+    """
+    previas = (
+        supabase.table("topo_nivelacion_lecturas")
+        .select("*")
+        .eq("nivelacion_id", nivelacion_id)
+        .execute()
+        .data
+        or []
+    )
+    previa_ids = [p["id"] for p in previas if p.get("id")]
+    previa_id_set = set(previa_ids)
+    clean = [sanitizar_fila_lectura_nivelacion({**p, "nivelacion_id": nivelacion_id}) for p in payloads]
+    if not clean:
+        raise HTTPException(status_code=422, detail="La cartera no puede quedar vacía.")
+
+    nuevas_ids: list[str] = []
+    try:
+        supabase.table("topo_nivelacion_lecturas").insert(clean).execute()
+        todas = (
+            supabase.table("topo_nivelacion_lecturas")
+            .select("*")
+            .eq("nivelacion_id", nivelacion_id)
+            .execute()
+            .data
+            or []
+        )
+        nuevas = [r for r in todas if r.get("id") and r["id"] not in previa_id_set]
+        # Primera cartera: no había previas → todas son nuevas
+        if not previa_id_set:
+            nuevas = list(todas)
+        if len(nuevas) != len(clean):
+            raise RuntimeError(
+                f"Inserción incompleta de lecturas ({len(nuevas)}/{len(clean)})."
+            )
+        nuevas_ids = [r["id"] for r in nuevas if r.get("id")]
+
+        if previa_ids:
+            # Borrar solo las previas; las nuevas ya están confirmadas en BD
+            for i in range(0, len(previa_ids), 100):
+                chunk = previa_ids[i : i + 100]
+                supabase.table("topo_nivelacion_lecturas").delete().in_("id", chunk).execute()
+
+        rows = (
+            supabase.table("topo_nivelacion_lecturas")
+            .select("*")
+            .eq("nivelacion_id", nivelacion_id)
+            .order("orden")
+            .execute()
+            .data
+            or []
+        )
+        if len(rows) != len(clean):
+            raise RuntimeError(
+                f"La cartera quedó inconsistente tras sincronizar ({len(rows)}/{len(clean)})."
+            )
+        return rows
+    except Exception:
+        # Compensación: quitar parciales nuevas y restaurar previas si hace falta
+        try:
+            if nuevas_ids:
+                for i in range(0, len(nuevas_ids), 100):
+                    supabase.table("topo_nivelacion_lecturas").delete().in_(
+                        "id", nuevas_ids[i : i + 100]
+                    ).execute()
+            elif not previa_id_set:
+                # Insert falló sin ids conocidos: limpiar lo que haya quedado vacío/parcial
+                actuales = (
+                    supabase.table("topo_nivelacion_lecturas")
+                    .select("id")
+                    .eq("nivelacion_id", nivelacion_id)
+                    .execute()
+                    .data
+                    or []
+                )
+                ids = [r["id"] for r in actuales if r.get("id")]
+                for i in range(0, len(ids), 100):
+                    supabase.table("topo_nivelacion_lecturas").delete().in_(
+                        "id", ids[i : i + 100]
+                    ).execute()
+            quedan = (
+                supabase.table("topo_nivelacion_lecturas")
+                .select("id")
+                .eq("nivelacion_id", nivelacion_id)
+                .execute()
+                .data
+                or []
+            )
+            if previas and not quedan:
+                restore = [
+                    sanitizar_fila_lectura_nivelacion(p, keep_id=True) for p in previas
+                ]
+                if restore:
+                    supabase.table("topo_nivelacion_lecturas").insert(restore).execute()
+        except Exception:
+            pass
+        raise
+
+
 def _payload_lectura_nivel(body: LecturaNivelBody, tipo_nivel: str) -> dict:
     data = body.model_dump(exclude_none=True)
     if body.tipo_punto == "TP":
@@ -3170,7 +3281,7 @@ def _payload_lectura_nivel(body: LecturaNivelBody, tipo_nivel: str) -> dict:
         d = distancia_taquimetrica_nivelacion(body.hilo_superior, body.hilo_inferior)
         if d is not None:
             data["distancia_m"] = round(d, 3)
-    return data
+    return sanitizar_fila_lectura_nivelacion(data)
 
 
 def _insertar_comentario_nivelacion(
@@ -3493,35 +3604,32 @@ def sincronizar_lecturas_nivelacion(
     )
     if reglas:
         raise HTTPException(status_code=422, detail="; ".join(reglas))
-    previas = (
-        supabase.table("topo_nivelacion_lecturas")
-        .select("*")
-        .eq("nivelacion_id", nivelacion_id)
-        .execute()
-        .data
-        or []
-    )
-    payloads = [{**_payload_lectura_nivel(lect, tipo_nivel), "nivelacion_id": nivelacion_id} for lect in body.lecturas]
-    supabase.table("topo_nivelacion_lecturas").delete().eq("nivelacion_id", nivelacion_id).execute()
-    rows: list[dict] = []
+    payloads = [
+        {**_payload_lectura_nivel(lect, tipo_nivel), "nivelacion_id": nivelacion_id}
+        for lect in body.lecturas
+    ]
     try:
-        ins = supabase.table("topo_nivelacion_lecturas").insert(payloads).execute().data or []
-        rows = ins
-        if len(rows) != len(payloads):
-            raise HTTPException(status_code=500, detail="No se guardaron todas las lecturas de la cartera.")
+        rows = _reemplazar_lecturas_nivelacion_db(nivelacion_id, payloads)
     except HTTPException:
         raise
     except Exception as exc:
-        if previas:
-            try:
-                supabase.table("topo_nivelacion_lecturas").insert(previas).execute()
-            except Exception:
-                pass
-        raise HTTPException(status_code=500, detail=f"Error al guardar lecturas: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al guardar lecturas: {exc}",
+        ) from exc
     supabase.table("topo_nivelaciones").update(
-        {**_reset_validacion_nivelacion_update(), "estado": "borrador", "error_cierre": None, "tolerancia_calculada": None}
+        {
+            **_reset_validacion_nivelacion_update(),
+            "estado": "borrador",
+            "error_cierre": None,
+            "tolerancia_calculada": None,
+        }
     ).eq("id", nivelacion_id).execute()
-    return {"lecturas": rows, "count": len(rows), "puntos": len({((l.get("orden") or 1) - 1) // 10 if (l.get("orden") or 0) >= 10 else (l.get("orden") or 1) for l in rows})}
+    return {
+        "lecturas": rows,
+        "count": len(rows),
+        "puntos": contar_puntos_lecturas_nivelacion(rows),
+    }
 
 
 @router.post("/{contrato_id}/nivelaciones/{nivelacion_id}/lecturas")
