@@ -1,21 +1,32 @@
 /**
  * Abscisado en vivo: abscisa inicial + dist. acum. / abs. circuito.
+ * Incluye preview en tiempo real bajo V− y contrato Enter→Tab.
  * node --test frontend/src/utils/topografia_nivelacion_abscisa_vivo.test.mjs
  */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   abscisaInicialCircuito,
   calcularVistaNivelacion,
   cotasDesdePuntos,
+  distanciaVminusEnVivo,
   enriquecerFilasVistaAbscisado,
   filasToLecturas,
   lecturasToFilas,
   nuevaFilaPunto,
   prepararBorradorBmInicial,
+  previewAbscisadoCaptura,
   puntosPerfilNivelacion,
   validarBorradorParaAgregar,
 } from './topografia_nivelacion.js'
+
+const dir = dirname(fileURLToPath(import.meta.url))
+const sharedSrc = readFileSync(join(dir, '../components/topografia/nivelacionUiShared.jsx'), 'utf8')
+const ingresoSrc = readFileSync(join(dir, '../components/topografia/NivelacionIngresoPanel.jsx'), 'utf8')
+const editSrc = readFileSync(join(dir, '../components/topografia/NivelacionLecturaEditModal.jsx'), 'utf8')
 
 function circuitoConInicial(abscisaInicial = 1000) {
   const cotasBib = cotasDesdePuntos([{ nombre: 'BM1', cota: 100, verificado: true }])
@@ -116,5 +127,73 @@ describe('abscisado en vivo — abscisa inicial + acumulación', () => {
     const back = lecturasToFilas(lect, tipoNivel)
     assert.equal(abscisaInicialCircuito(back), 2500)
     assert.equal(Number(back[0].abscisa_inicial), 2500)
+  })
+})
+
+describe('preview Abscisado captura en tiempo real (bajo V−)', () => {
+  it('recalcula al cambiar Dist de V− sin completar aún la fila', () => {
+    const { cotasBib, filas, tipoNivel } = circuitoConInicial(1000)
+    const previas = filas.slice(0, 1) // solo BM con V+ = 40
+    const borrador = {
+      ...nuevaFilaPunto(2, false),
+      nombre_punto: 'TP1',
+      tipo_punto: 'cambio',
+      descripcion_punto: 'en captura',
+      vminus: { lectura: '', hS: '', hM: '', hI: '' },
+      dist_vminus_m: '30',
+    }
+    const p1 = previewAbscisadoCaptura(previas, borrador, tipoNivel, cotasBib)
+    assert.equal(p1.distancia_acumulada, 70) // 0 + 40 + 30
+    assert.equal(p1.abscisa_circuito, 1070)
+
+    const p2 = previewAbscisadoCaptura(
+      previas,
+      { ...borrador, dist_vminus_m: '45' },
+      tipoNivel,
+      cotasBib,
+    )
+    assert.equal(p2.distancia_acumulada, 85)
+    assert.equal(p2.abscisa_circuito, 1085)
+  })
+
+  it('distanciaVminusEnVivo usa taquimétrica S/I en automático sin exigir M', () => {
+    const d = distanciaVminusEnVivo(
+      { vminus: { hS: '1.450', hM: '', hI: '1.250' }, dist_vminus_m: '' },
+      'automatico',
+    )
+    assert.equal(d, 20) // |1.250-1.450|*100
+  })
+
+  it('en edición (replaceIdx) refleja el Dist V− modificado', () => {
+    const { cotasBib, filas, tipoNivel } = circuitoConInicial(1000)
+    const edit = {
+      ...filas[1],
+      dist_vminus_m: 50, // era 30 → tramo 40+50=90
+    }
+    const p = previewAbscisadoCaptura(filas, edit, tipoNivel, cotasBib, { replaceIdx: 1 })
+    assert.equal(p.distancia_acumulada, 90)
+    assert.equal(p.abscisa_circuito, 1090)
+  })
+})
+
+describe('Enter como Tab + preview bajo V− (contrato UI)', () => {
+  it('exporta handleEnterAsTab y PreviewAbscisadoVminus', () => {
+    assert.match(sharedSrc, /export function handleEnterAsTab/)
+    assert.match(sharedSrc, /export function PreviewAbscisadoVminus/)
+    assert.match(sharedSrc, /niv-preview-abscisado-vminus/)
+  })
+
+  it('panel de ingreso usa Enter→Tab y preview bajo V−', () => {
+    assert.match(ingresoSrc, /handleEnterAsTab/)
+    assert.match(ingresoSrc, /previewAbscisadoCaptura/)
+    assert.match(ingresoSrc, /previewAbscisado=\{previewAbscisado\}/)
+    assert.match(ingresoSrc, /bk === 'vminus' && previewAbscisado/)
+  })
+
+  it('modal de edición usa Enter→Tab y preview bajo V−', () => {
+    assert.match(editSrc, /handleEnterAsTab/)
+    assert.match(editSrc, /previewAbscisadoCaptura/)
+    assert.match(editSrc, /replaceIdx:\s*idx/)
+    assert.match(editSrc, /previewAbscisado=\{previewAbscisado\}/)
   })
 })

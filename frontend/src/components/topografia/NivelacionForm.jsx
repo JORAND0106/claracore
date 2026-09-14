@@ -1397,6 +1397,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                     tituloHint={filas.length === 0
                       ? 'Primera lectura: V+ sobre el BM inicial.'
                       : 'Complete V+/Vi/V− según el punto y pulse Agregar lectura.'}
+                    filas={filas}
+                    tipoNivel={tipoNivel}
+                    cotasBiblioteca={cotasBib}
                   />
                 )}
 
@@ -1458,6 +1461,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                         filasIdaParaAutocomplete={filas}
                         puedeAgregar={editableCartera}
                         tituloHint="Solo puntos de la ida. Escriba el nombre; Tipo, PK y Descripción se autocompletan."
+                        filas={filasContra}
+                        tipoNivel={tipoNivel}
+                        cotasBiblioteca={cotasContraSeed}
                       />
                     )}
                     <NivelacionCarteraTable
@@ -1597,6 +1603,9 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
           esAutomatico={esAutomatico}
           bmInicialNombre={editScope === 'contra' ? '' : bmInicialNombre}
           vistaRow={editScope === 'contra' ? vistaContra.filasVista[editIdx] : vista.filasVista[editIdx]}
+          filas={editScope === 'contra' ? filasContra : filas}
+          tipoNivel={tipoNivel}
+          cotasBiblioteca={editScope === 'contra' ? cotasContraSeed : cotasBib}
           onClose={() => setEditIdx(null)}
           onError={(e) => setError(e?.mensaje || e?.message || 'Error al editar')}
           onElegirPk={editScope === 'contra' ? undefined : () => setPkMapTarget(editIdx)}
