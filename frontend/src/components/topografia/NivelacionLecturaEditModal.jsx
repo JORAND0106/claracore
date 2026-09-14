@@ -76,7 +76,7 @@ function CeldaLectura({
           alerta={alerta}
           bloques={bloques}
           bk={bk}
-          diagMsg={diag?.msg}
+          diagMsg={diag?.tooltip || diag?.msg}
         />
       ) : (
         <LecturaInput
@@ -108,7 +108,7 @@ function CeldaLectura({
       {bk === 'vminus' && previewAbscisado ? (
         <PreviewAbscisadoVminus preview={previewAbscisado} ui={ui} />
       ) : null}
-      {alerta && <AlertaHilos title={diag.msg} compact />}
+      {alerta && <AlertaHilos title={diag.msg} tip={diag.tooltip || diag.msg} compact />}
     </td>
   )
 }
