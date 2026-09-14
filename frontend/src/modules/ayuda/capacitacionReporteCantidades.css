@@ -1,0 +1,381 @@
+/* Capacitación interactiva — Reporte de Cantidades (Mapa de Funcionalidades) */
+
+@keyframes cc-cap-rc-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cc-cap-rc-pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--cc-cap-accent, #4dc4cc) 55%, transparent); }
+  70% { box-shadow: 0 0 0 12px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@keyframes cc-cap-rc-spot {
+  0%, 100% { outline-color: color-mix(in srgb, var(--cc-cap-accent, #4dc4cc) 85%, white); }
+  50% { outline-color: color-mix(in srgb, var(--cc-cap-accent, #4dc4cc) 40%, transparent); }
+}
+
+@keyframes cc-cap-rc-logo-spin-in {
+  from { opacity: 0; transform: scale(0.35) rotate(-48deg); }
+  to { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+
+@keyframes cc-cap-rc-word-in {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes cc-cap-rc-line-draw {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes cc-cap-rc-wizard-enter {
+  from { opacity: 0; transform: translateY(28px) scale(0.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.cc-cap-rc-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100200;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+  background: color-mix(in srgb, #000 62%, transparent);
+  animation: cc-cap-rc-fade-in 220ms ease-out;
+}
+
+.cc-cap-rc-shell {
+  width: min(1100px, 100%);
+  max-height: 100%;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  animation: cc-cap-rc-wizard-enter 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cc-cap-rc-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cc-cap-rc-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px 20px;
+  text-align: center;
+  width: 100%;
+}
+
+.cc-cap-rc-intro-lockup {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.cc-cap-rc-intro-logo {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  animation: cc-cap-rc-logo-spin-in 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.cc-cap-rc-intro-word {
+  font-weight: 800;
+  font-size: clamp(1.4rem, 4vw, 2.2rem);
+  letter-spacing: 0.04em;
+  animation: cc-cap-rc-word-in 700ms ease-out 200ms both;
+}
+
+.cc-cap-rc-intro-line {
+  width: min(220px, 50vw);
+  height: 2px;
+  transform-origin: left center;
+  background: var(--cc-cap-accent, #4dc4cc);
+  animation: cc-cap-rc-line-draw 600ms ease-out both;
+}
+
+.cc-cap-rc-intro-sub {
+  font-size: clamp(0.85rem, 2.4vw, 1.05rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  animation: cc-cap-rc-fade-in 500ms ease-out 200ms both;
+}
+
+.cc-cap-rc-mock-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: auto;
+}
+
+.cc-cap-rc-mock {
+  width: min(780px, 100%);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  transform-origin: center center;
+  transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.cc-cap-rc-mock-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 16px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cc-cap-rc-tabs {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.cc-cap-rc-tab {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 12px;
+  font-size: var(--cc-sm, 13px);
+  white-space: nowrap;
+  cursor: default;
+  transition: color 200ms ease, border-color 200ms ease, background 200ms ease;
+}
+
+.cc-cap-rc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 10px;
+  padding: 6px;
+  margin: -6px;
+  transition: background 280ms ease, outline-color 280ms ease, transform 280ms ease;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.cc-cap-rc-field.is-hot {
+  background: color-mix(in srgb, var(--cc-cap-accent, #4dc4cc) 14%, transparent);
+  outline-color: var(--cc-cap-accent, #4dc4cc);
+  animation: cc-cap-rc-spot 1.4s ease-in-out infinite, cc-cap-rc-pulse-ring 1.8s ease-out infinite;
+  z-index: 2;
+  position: relative;
+}
+
+.cc-cap-rc-label {
+  font-size: var(--cc-sm, 13px);
+  font-weight: 600;
+}
+
+.cc-cap-rc-input,
+.cc-cap-rc-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: var(--cc-sm, 13px);
+  font-family: inherit;
+  pointer-events: none;
+}
+
+.cc-cap-rc-textarea {
+  resize: none;
+  min-height: 56px;
+}
+
+.cc-cap-rc-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cc-cap-rc-chip {
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: var(--cc-sm, 13px);
+  font-weight: 700;
+  border: 1.5px solid transparent;
+  transition: border-color 200ms ease, background 200ms ease, color 200ms ease;
+}
+
+.cc-cap-rc-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.cc-cap-rc-map-stub {
+  border-radius: 10px;
+  min-height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--cc-caption, 12px);
+  border: 1px dashed transparent;
+}
+
+.cc-cap-rc-footer-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.cc-cap-rc-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-weight: 700;
+  font-size: var(--cc-sm, 13px);
+  cursor: default;
+  transition: transform 200ms ease, box-shadow 200ms ease, opacity 200ms ease;
+}
+
+.cc-cap-rc-btn.is-hot {
+  animation: cc-cap-rc-pulse-ring 1.6s ease-out infinite;
+  transform: scale(1.04);
+}
+
+.cc-cap-rc-coach {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid transparent;
+}
+
+.cc-cap-rc-coach-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cc-cap-rc-coach-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.cc-cap-rc-coach-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 320ms ease;
+}
+
+.cc-cap-rc-coach-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.cc-cap-rc-coach-actions button {
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: var(--cc-sm, 13px);
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.cc-cap-rc-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 700;
+  font-size: var(--cc-sm, 13px);
+  cursor: pointer;
+  border: 1px solid transparent;
+  min-height: 44px;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.cc-cap-rc-launch:hover {
+  transform: translateY(-1px);
+}
+
+.cc-cap-rc-launch:focus-visible {
+  outline: 2px solid var(--cc-cap-accent, #4dc4cc);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .cc-cap-rc-overlay {
+    padding: 0;
+  }
+
+  .cc-cap-rc-shell {
+    width: 100%;
+    max-height: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .cc-cap-rc-grid2 {
+    grid-template-columns: 1fr;
+  }
+
+  .cc-cap-rc-intro-logo {
+    width: 56px;
+    height: 56px;
+  }
+
+  .cc-cap-rc-mock {
+    transform: none !important;
+  }
+
+  .cc-cap-rc-tab {
+    padding: 10px 10px;
+    font-size: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-cap-rc-overlay,
+  .cc-cap-rc-shell,
+  .cc-cap-rc-intro-logo,
+  .cc-cap-rc-intro-word,
+  .cc-cap-rc-intro-line,
+  .cc-cap-rc-intro-sub,
+  .cc-cap-rc-field.is-hot,
+  .cc-cap-rc-btn.is-hot,
+  .cc-cap-rc-mock {
+    animation: none !important;
+    transition: none !important;
+  }
+}

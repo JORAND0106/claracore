@@ -8,10 +8,11 @@ import {
 } from './mapaNavegacionMerge.js'
 
 describe('mapaNavegacionCatalogo', () => {
-  it('tiene exactamente 15 módulos con ids únicos', () => {
-    assert.equal(MAPA_NAVEGACION_MODULOS.length, 15)
+  it('tiene módulos con ids únicos', () => {
+    const n = MAPA_NAVEGACION_MODULOS.length
+    assert.ok(n >= 15)
     const ids = MAPA_NAVEGACION_MODULOS.map((m) => m.id)
-    assert.equal(new Set(ids).size, 15)
+    assert.equal(new Set(ids).size, n)
   })
 })
 
@@ -43,7 +44,7 @@ describe('fusionarMapaNavegacion', () => {
         dashboard: { descripcion: 'Vista gerencial', imagenes: [{ url: '/a.png' }] },
       },
     })
-    assert.equal(vista.modulos.length, 15)
+    assert.equal(vista.modulos.length, MAPA_NAVEGACION_MODULOS.length)
     const dash = vista.modulos.find((m) => m.id === 'dashboard')
     assert.equal(dash.descripcion, 'Vista gerencial')
     assert.equal(dash.contenidoPendiente, false)
@@ -54,9 +55,9 @@ describe('fusionarMapaNavegacion', () => {
 })
 
 describe('contenidoEditableCompleto', () => {
-  it('garantiza las 15 claves del catálogo', () => {
+  it('garantiza las claves del catálogo', () => {
     const doc = contenidoEditableCompleto({ modulos: { actas: { descripcion: 'x' } } })
-    assert.equal(Object.keys(doc.modulos).length, 15)
+    assert.equal(Object.keys(doc.modulos).length, MAPA_NAVEGACION_MODULOS.length)
     assert.equal(doc.modulos.actas.descripcion, 'x')
     assert.equal(doc.modulos.dashboard.descripcion, '')
   })

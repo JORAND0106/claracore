@@ -7,7 +7,7 @@
       "imagenes": []
     },
     "reporte_cantidades": {
-      "descripcion": "",
+      "descripcion": "Asistente de creación de reportes de cantidades en obra: Info General, Plantilla, Localización, Registros y Topografía. Incluye capacitación interactiva guiada desde este mapa.",
       "imagenes": []
     },
     "programacion_obra": {
@@ -55,6 +55,10 @@
       "imagenes": []
     },
     "subcontratistas": {
+      "descripcion": "",
+      "imagenes": []
+    },
+    "rrhh": {
       "descripcion": "",
       "imagenes": []
     },
