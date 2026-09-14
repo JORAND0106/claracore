@@ -32,8 +32,8 @@ describe('diagnosticoHilosIncongruentes', () => {
     const d = diagnosticoHilosIncongruentes({ hS: 1.5, hM: 1.2, hI: 0.8 }, 'automatico')
     assert.ok(d)
     assert.equal(d.bloqueante, true)
-    assert.match(d.msg, /\|S−M\|=/)
-    assert.match(d.msg, /\|M−I\|=/)
+    assert.match(d.msg, /S − M =/)
+    assert.match(d.msg, /M − I =/)
     assert.equal(hilosIncongruentes({ hS: 1.5, hM: 1.2, hI: 0.8 }, 'automatico'), true)
   })
 

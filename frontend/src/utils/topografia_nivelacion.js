@@ -49,21 +49,35 @@ function fmtHiloMm(v, dec = 1) {
 }
 
 /**
- * Mensaje de separación desigual con |S−M|, |M−I| y Δ explícitos.
+ * Mensaje corto visible: solo los dos valores de separación.
  * @param {number} sepSM
  * @param {number} sepMI
  */
-export function mensajeSeparacionDesigual(sepSM, sepMI) {
+export function mensajeSeparacionCorto(sepSM, sepMI) {
+  return `S − M = ${fmtHiloM(sepSM)} | M − I = ${fmtHiloM(sepMI)}`
+}
+
+/**
+ * Tooltip / ayuda: qué significa Δ y qué revisar (no se muestra como párrafo en UI).
+ * @param {number} sepSM
+ * @param {number} sepMI
+ */
+export function tooltipSeparacionDesigual(sepSM, sepMI) {
   const a = Number(sepSM)
   const b = Number(sepMI)
   const diff = Math.abs(a - b)
-  const mayor = a >= b ? '|S−M|' : '|M−I|'
-  const menor = a >= b ? '|M−I|' : '|S−M|'
+  const mayor = a >= b ? 'S−M' : 'M−I'
+  const menor = a >= b ? 'M−I' : 'S−M'
   return (
-    `Separación desigual: |S−M|=${fmtHiloM(a)} m, |M−I|=${fmtHiloM(b)} m; `
+    `Separación desigual: |S−M|=${fmtHiloM(a)} m y |M−I|=${fmtHiloM(b)} m; `
     + `${mayor} supera a ${menor} por ${fmtHiloM(diff)} m (${fmtHiloMm(diff)} mm > 2 mm). `
-    + 'Corrija HS, HM o HI.'
+    + 'Corrija HS, HM o HI hasta que ambas separaciones coincidan (tolerancia 2 mm).'
   )
+}
+
+/** @deprecated Use `mensajeSeparacionCorto` + `tooltipSeparacionDesigual`. */
+export function mensajeSeparacionDesigual(sepSM, sepMI) {
+  return mensajeSeparacionCorto(sepSM, sepMI)
 }
 
 /**
@@ -73,6 +87,7 @@ export function mensajeSeparacionDesigual(sepSM, sepMI) {
  * @returns {null | {
  *   tipo: 'separacion'|'orden'|'ambos',
  *   msg: string,
+ *   tooltip?: string,
  *   sepSM?: number,
  *   sepMI?: number,
  *   diffSep?: number,
@@ -96,11 +111,13 @@ export function diagnosticoHilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_
   const hi = Math.max(s, i)
   const ordenOk = m >= lo - tol && m <= hi + tol
   if (sepOk && ordenOk) return null
-  const sepMsg = mensajeSeparacionDesigual(sepSM, sepMI)
+  const sepMsg = mensajeSeparacionCorto(sepSM, sepMI)
+  const sepTip = tooltipSeparacionDesigual(sepSM, sepMI)
   if (!sepOk && !ordenOk) {
     return {
       tipo: 'ambos',
-      msg: `${sepMsg} Además, ${HILO_INCONGRUENCIA_ORDEN_MSG}`,
+      msg: sepMsg,
+      tooltip: `${sepTip} Además, ${HILO_INCONGRUENCIA_ORDEN_MSG}`,
       sepSM,
       sepMI,
       diffSep,
@@ -111,6 +128,7 @@ export function diagnosticoHilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_
     return {
       tipo: 'separacion',
       msg: sepMsg,
+      tooltip: sepTip,
       sepSM,
       sepMI,
       diffSep,
@@ -120,6 +138,7 @@ export function diagnosticoHilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_
   return {
     tipo: 'orden',
     msg: HILO_INCONGRUENCIA_ORDEN_MSG,
+    tooltip: HILO_INCONGRUENCIA_ORDEN_MSG,
     sepSM,
     sepMI,
     diffSep,
