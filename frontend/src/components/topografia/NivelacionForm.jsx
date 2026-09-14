@@ -495,7 +495,15 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
     setPulsoValidacion(false)
     setError('')
     setFilas((rows) => {
-      const next = [...rows, { ...gate.fila, orden: rows.length + 1 }]
+      const nueva = { ...gate.fila }
+      let next
+      if (gate.esVistaIntermedia && gate.insertAt != null) {
+        next = [...rows]
+        next.splice(gate.insertAt, 0, nueva)
+      } else {
+        next = [...rows, nueva]
+      }
+      next = next.map((r, i) => ({ ...r, orden: i + 1 }))
       setBorrador(prepararBorradorSiguiente(next.length))
       return next
     })

@@ -63,11 +63,14 @@ describe('Nivelación — patrón Poligonal (estructura)', () => {
     assert.match(src, /Cartera consolidada|Sin lecturas en la cartera/)
   })
 
-  it('popup de edición cubre los tres hilos', () => {
+  it('popup de edición usa formato tabular (meta + lecturas)', () => {
     const src = read('NivelacionLecturaEditModal.jsx')
     assert.match(src, /Editar lectura/)
     assert.match(src, /vplus/)
     assert.match(src, /vminus/)
     assert.match(src, /Guardar cambios/)
+    assert.match(src, /<table/)
+    assert.match(src, /Abscisa \/ PK/)
+    assert.match(src, /useTopoViewport/)
   })
 })

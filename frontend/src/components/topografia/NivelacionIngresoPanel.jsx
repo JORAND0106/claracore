@@ -235,7 +235,11 @@ export default function NivelacionIngresoPanel({
         </TopoExcelSheet>
         {tituloHint ? (
           <p style={{ margin: 0, fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.35 }}>{tituloHint}</p>
-        ) : null}
+        ) : (
+          <p style={{ margin: 0, fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.35 }}>
+            Vi se agrega como fila propia (punto distinto), justo después de la estación con V+.
+          </p>
+        )}
       </div>
 
       {/* V+ | Vi | V− */}
