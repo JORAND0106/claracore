@@ -650,6 +650,86 @@ export function enriquecerFilasVistaAbscisado(filasVista, abscisaInicial) {
 }
 
 /**
+ * Distancia V− en vivo mientras se escribe (no exige lectura M completa).
+ * Electrónico: Dist manual o taquimétrica S/I. Automático: taquimétrica S/I.
+ */
+export function distanciaVminusEnVivo(fila, tipoNivel) {
+  if (!fila) return null
+  if (tipoNivel === 'electronico') {
+    const manual = numOrNull(fila.dist_vminus_m)
+    if (manual != null) return manual
+  }
+  return distanciaTaquimetrica(fila.vminus?.hS, fila.vminus?.hI)
+}
+
+/**
+ * Preview Dist. acum. / Abs. circuito para el borrador o fila en edición.
+ * Recalcula en tiempo real conforme cambian los campos de V−.
+ *
+ * @param {Array} filas cartera ya agregada
+ * @param {object} borrador fila provisional (panel o modal)
+ * @param {string} tipoNivel
+ * @param {object} cotasBiblioteca
+ * @param {{ replaceIdx?: number|null }} [opts] si se edita, índice a reemplazar
+ * @returns {{ distancia_acumulada: number|null, abscisa_circuito: number|null }}
+ */
+export function previewAbscisadoCaptura(filas, borrador, tipoNivel, cotasBiblioteca = {}, opts = {}) {
+  const replaceIdx = opts.replaceIdx
+  const draft = borrador || {}
+  const base = Array.isArray(filas) ? filas : []
+  const provisional = replaceIdx == null
+    ? [...base, draft]
+    : base.map((f, i) => (i === replaceIdx ? { ...f, ...draft } : f))
+  if (!provisional.length) {
+    return { distancia_acumulada: null, abscisa_circuito: null }
+  }
+  const targetIdx = replaceIdx == null ? provisional.length - 1 : replaceIdx
+  if (targetIdx < 0 || targetIdx >= provisional.length) {
+    return { distancia_acumulada: null, abscisa_circuito: null }
+  }
+
+  const vista = calcularVistaNivelacion(provisional, tipoNivel, cotasBiblioteca)
+  const row = vista.filasVista[targetIdx]
+  if (row?.distancia_acumulada != null) {
+    return {
+      distancia_acumulada: row.distancia_acumulada,
+      abscisa_circuito: row.abscisa_circuito ?? null,
+    }
+  }
+
+  // Fallback: fila aún sin cota (p. ej. falta M) pero ya hay Dist / S-I de V−
+  const ini = abscisaInicialCircuito(provisional)
+  if (targetIdx === 0) {
+    return {
+      distancia_acumulada: 0,
+      abscisa_circuito: ini != null ? ini : null,
+    }
+  }
+
+  let prevAccum = null
+  let prevDVp = 0
+  for (let i = 0; i < targetIdx; i += 1) {
+    const r = vista.filasVista[i]
+    if (r?.distancia_acumulada != null) {
+      prevAccum = r.distancia_acumulada
+      const dVpRaw = r.distancia_vplus_calc != null ? Number(r.distancia_vplus_calc) : NaN
+      prevDVp = Number.isFinite(dVpRaw) ? Math.abs(dVpRaw) : 0
+    }
+  }
+  if (prevAccum == null) {
+    return { distancia_acumulada: null, abscisa_circuito: null }
+  }
+
+  const dVmLive = distanciaVminusEnVivo(draft, tipoNivel)
+  const dVm = dVmLive != null && Number.isFinite(Number(dVmLive)) ? Math.abs(Number(dVmLive)) : 0
+  const acum = prevAccum + prevDVp + dVm
+  return {
+    distancia_acumulada: acum,
+    abscisa_circuito: ini != null ? ini + acum : null,
+  }
+}
+
+/**
  * Puntos del perfil del circuito: eje X = distancia acumulada (m), no PK/abscisa de cartera.
  *
  * Primer punto en 0. Cada tramo origen→destino suma:

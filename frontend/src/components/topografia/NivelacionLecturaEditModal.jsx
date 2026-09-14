@@ -2,7 +2,7 @@
  * Popup de edición integral de una lectura de la Cartera de Nivelación.
  * Formato tabular tipo Excel: fila de metadatos + fila de lecturas V+/Vi/V−.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import {
   ABSCISA_NUMERICA_MSG,
@@ -12,13 +12,16 @@ import {
   esFilaSoloVi,
   hilosIncongruentes,
   parseAbscisa,
+  previewAbscisadoCaptura,
 } from '../../utils/topografia_nivelacion'
 import {
   AlertaHilos,
   HilosInputs,
   LecturaInput,
+  PreviewAbscisadoVminus,
   TIPOS_PUNTO_NIV,
   fmtN,
+  handleEnterAsTab,
   styleInputCartera,
 } from './nivelacionUiShared'
 import { useTopoViewport } from './topografiaShared'
@@ -34,6 +37,7 @@ function CeldaLectura({
   busy,
   conDistancia,
   soloLectura,
+  previewAbscisado = null,
 }) {
   const bloque = form[bk] || bloqueVacio()
   const diag = esAutomatico ? diagnosticoHilosIncongruentes(bloque, 'automatico') : null
@@ -101,6 +105,9 @@ function CeldaLectura({
           Dist {fmtN(distCalc, 2)} m
         </div>
       )}
+      {bk === 'vminus' && previewAbscisado ? (
+        <PreviewAbscisadoVminus preview={previewAbscisado} ui={ui} />
+      ) : null}
       {alerta && <AlertaHilos title={diag.msg} compact />}
     </td>
   )
@@ -120,9 +127,13 @@ export default function NivelacionLecturaEditModal({
   onError,
   onElegirPk,
   vistaRow = null,
+  filas = [],
+  tipoNivel = 'electronico',
+  cotasBiblioteca = {},
 }) {
   const t = theme || ui?.t || {}
   const { isCompact } = useTopoViewport()
+  const rootRef = useRef(null)
   const [form, setForm] = useState(null)
 
   useEffect(() => {
@@ -153,11 +164,19 @@ export default function NivelacionLecturaEditModal({
     })
   }, [fila, idx])
 
+  const tipoNivelEfectivo = tipoNivel || (esAutomatico ? 'automatico' : 'electronico')
+  const previewAbscisado = useMemo(() => {
+    if (!form) return null
+    return previewAbscisadoCaptura(filas, form, tipoNivelEfectivo, cotasBiblioteca, {
+      replaceIdx: idx,
+    })
+  }, [filas, form, tipoNivelEfectivo, cotasBiblioteca, idx])
+
   if (!fila || !form) return null
 
   const esPrimera = idx === 0
   const esCierre = Boolean(form.es_fila_cierre)
-  const tipoNivelForm = esAutomatico ? 'automatico' : 'electronico'
+  const tipoNivelForm = tipoNivelEfectivo
   const soloVi = !esCierre && esFilaSoloVi(form, tipoNivelForm)
   const nombreLocked = esPrimera && Boolean(bmInicialNombre)
   const tipoLocked = esPrimera || esCierre
@@ -259,10 +278,12 @@ export default function NivelacionLecturaEditModal({
       onClick={busy ? undefined : onClose}
     >
       <div
+        ref={rootRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="topo-niv-edit-title"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => handleEnterAsTab(e, rootRef.current)}
         style={{
           width: '100%',
           maxWidth: isCompact ? 560 : 920,
@@ -457,6 +478,7 @@ export default function NivelacionLecturaEditModal({
                       bloques={bloques}
                       busy={busy}
                       conDistancia
+                      previewAbscisado={previewAbscisado}
                     />
                   )}
                 </tr>

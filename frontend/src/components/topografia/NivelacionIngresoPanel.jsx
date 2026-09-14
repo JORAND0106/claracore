@@ -1,22 +1,25 @@
 /**
  * Panel de ingreso compacto V+ | Vi | V− (patrón Poligonal → dominio nivelación).
  */
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import {
   ABSCISA_NUMERICA_MSG,
   autocompletarDesdeIda,
   diagnosticoHilosIncongruentes,
   distanciaTaquimetrica,
   hilosIncongruentes,
+  previewAbscisadoCaptura,
 } from '../../utils/topografia_nivelacion'
 import TopoExcelSheet from './TopoExcelSheet'
 import {
   AlertaHilos,
   HilosInputs,
   LecturaInput,
+  PreviewAbscisadoVminus,
   TIPOS_PUNTO_NIV,
   estiloCampo,
   fmtN,
+  handleEnterAsTab,
   styleInputCartera,
 } from './nivelacionUiShared'
 
@@ -32,6 +35,7 @@ function BloqueVista({
   bloques,
   disabled,
   conDistancia,
+  previewAbscisado = null,
 }) {
   const bloque = borrador[bk] || {}
   const diag = esAutomatico ? diagnosticoHilosIncongruentes(bloque, 'automatico') : null
@@ -99,6 +103,9 @@ function BloqueVista({
           )}
         </div>
       )}
+      {bk === 'vminus' && previewAbscisado ? (
+        <PreviewAbscisadoVminus preview={previewAbscisado} ui={ui} />
+      ) : null}
       {alerta && <AlertaHilos title={diag.msg} compact />}
     </div>
   )
@@ -123,7 +130,11 @@ export default function NivelacionIngresoPanel({
   modoContra = false,
   filasIdaParaAutocomplete = null,
   sugerenciasPuntos = null,
+  filas = [],
+  tipoNivel = 'electronico',
+  cotasBiblioteca = {},
 }) {
+  const rootRef = useRef(null)
   const panelCol = { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }
 
   const updateBloque = (bk, bloque) => onChange({ ...borrador, [bk]: bloque })
@@ -133,6 +144,11 @@ export default function NivelacionIngresoPanel({
   const tipoLocked = !modoContra && esPrimeraFila
   const metaDesdeIda = modoContra
   const listId = modoContra ? 'topo-niv-contra-puntos' : undefined
+
+  const previewAbscisado = useMemo(
+    () => previewAbscisadoCaptura(filas, borrador, tipoNivel, cotasBiblioteca),
+    [filas, borrador, tipoNivel, cotasBiblioteca],
+  )
 
   const onNombreInput = (valor) => {
     if (!modoContra || !filasIdaParaAutocomplete) {
@@ -178,6 +194,8 @@ export default function NivelacionIngresoPanel({
 
   return (
     <div
+      ref={rootRef}
+      onKeyDown={(e) => handleEnterAsTab(e, rootRef.current)}
       style={{
         display: 'grid',
         gridTemplateColumns: isCompact ? '1fr' : 'minmax(0, 1fr) minmax(0, 1.4fr)',
@@ -363,6 +381,7 @@ export default function NivelacionIngresoPanel({
             bloques={bloques}
             disabled={disabled}
             conDistancia
+            previewAbscisado={previewAbscisado}
           />
         </div>
         {hilosAvisos.length > 0 && (
