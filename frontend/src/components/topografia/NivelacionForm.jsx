@@ -423,14 +423,19 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
         method: 'PUT',
         body: JSON.stringify({ lecturas: payload, tipo_nivel: tipoExport }),
       })
-      const n = res?.count ?? res?.lecturas?.length ?? 0
+      const n = res?.count ?? res?.lecturas?.length ?? payload.length
       const puntos = res?.puntos ?? contarPuntosFilas(preparadas)
-      if (n === 0) {
+      if (!n) {
         const msg = 'El servidor no confirmó el guardado. Reinicie backend (dev-stop → dev-start).'
         setError(msg)
         return { ok: false, error: msg }
       }
-      return { ok: true, count: n, puntos }
+      return {
+        ok: true,
+        count: n,
+        puntos,
+        lecturas: Array.isArray(res?.lecturas) && res.lecturas.length ? res.lecturas : payload,
+      }
     } catch (e) {
       setError(e.message)
       return { ok: false, error: e.message }
@@ -451,7 +456,17 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
       if (!(await guardarCabecera(tipoExport))) return
       const lectRes = await guardarLecturas(tipoExport)
       if (!lectRes.ok) return
-      await cargarDetalle(sel)
+      // No vaciar la UI si el recargo falla: el PUT ya confirmó persistencia (o cola offline).
+      try {
+        await cargarDetalle(sel)
+      } catch (reloadErr) {
+        if (Array.isArray(lectRes.lecturas) && lectRes.lecturas.length) {
+          setFilas(lecturasToFilas(lectRes.lecturas, tipoExport))
+        }
+        setError(
+          `Cartera guardada, pero no se pudo recargar el detalle: ${reloadErr.message || reloadErr}`,
+        )
+      }
       setOkMsg(`Cartera guardada correctamente (${lectRes.puntos} ${lectRes.puntos === 1 ? 'punto' : 'puntos'}).`)
     } catch (e) {
       setError(e.message)

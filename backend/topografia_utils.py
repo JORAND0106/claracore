@@ -1671,6 +1671,63 @@ def distancia_lectura_nivelacion(lect: dict, tipo_nivel: str) -> float | None:
     return float(d) if d is not None else None
 
 
+# Columnas persistibles de topo_nivelacion_lecturas (sin calculados).
+LECTURA_NIVEL_COLS = frozenset(
+    {
+        "orden",
+        "nombre_punto",
+        "tipo_punto",
+        "tipo_lectura",
+        "abscisa",
+        "descripcion_punto",
+        "ubicacion",
+        "punto_biblioteca_id",
+        "ubicacion_pk_id",
+        "ubicacion_pk",
+        "ubicacion_tramo",
+        "ubicacion_costado",
+        "ubicacion_infraestructura",
+        "ubicacion_lat",
+        "ubicacion_lng",
+        "hilo_superior",
+        "hilo_medio",
+        "hilo_inferior",
+        "lectura",
+        "distancia_m",
+        "lectura_atras",
+        "lectura_adelante",
+        "distancia_atras",
+        "distancia_adelante",
+        "nivelacion_id",
+    }
+)
+LECTURA_NIVEL_TIPOS_PUNTO = frozenset({"BM", "TP", "cambio", "estacion", "auxiliar"})
+
+
+def sanitizar_fila_lectura_nivelacion(row: dict, *, keep_id: bool = False) -> dict:
+    """Limpia un dict de lectura para INSERT en topo_nivelacion_lecturas."""
+    out = {k: v for k, v in (row or {}).items() if k in LECTURA_NIVEL_COLS and v is not None}
+    if keep_id and row.get("id"):
+        out["id"] = row["id"]
+    tp = (out.get("tipo_punto") or "").strip()
+    if tp == "TP":
+        out["tipo_punto"] = "estacion"
+    elif tp and tp not in LECTURA_NIVEL_TIPOS_PUNTO:
+        out["tipo_punto"] = "estacion"
+    elif not tp:
+        out.pop("tipo_punto", None)
+    return out
+
+
+def contar_puntos_lecturas_nivelacion(rows: list[dict]) -> int:
+    """Cuenta puntos/filas de cartera a partir de lecturas con orden *10+tipo."""
+    keys = set()
+    for l in rows or []:
+        o = int(l.get("orden") or 0)
+        keys.add(((o - 1) // 10) if o >= 10 else (o or 1))
+    return len(keys)
+
+
 def lectura_efectiva_nivelacion(lect: dict, tipo_nivel: str) -> float | None:
     """Lectura de cálculo: hilo medio (automático) o lectura directa (electrónico)."""
     h_med = lect.get("hilo_medio")
@@ -3729,29 +3786,52 @@ def _admisible_nivelacion_pdf(niv: dict) -> bool | None:
     return None
 
 
+def _dist_lectura_nivelacion_m(lect: dict, tipo_nivel: str) -> float:
+    if lectura_efectiva_nivelacion(lect, tipo_nivel) is None:
+        return 0.0
+    dist = lect.get("distancia_m")
+    if dist is None and tipo_nivel == "automatico":
+        dist = distancia_taquimetrica_nivelacion(lect.get("hilo_superior"), lect.get("hilo_inferior"))
+    if dist is None:
+        return 0.0
+    try:
+        return abs(float(dist))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _distancia_grupo_nivelacion_m(grupo: list[dict], tipo_nivel: str) -> float:
     total = 0.0
     for lect in grupo:
         tl = (lect.get("tipo_lectura") or "").strip().replace("V−", "V-")
         if tl not in ("V+", "V-"):
             continue
-        if lectura_efectiva_nivelacion(lect, tipo_nivel) is None:
-            continue
-        dist = lect.get("distancia_m")
-        if dist is None and tipo_nivel == "automatico":
-            dist = distancia_taquimetrica_nivelacion(lect.get("hilo_superior"), lect.get("hilo_inferior"))
-        if dist is not None:
-            total += abs(float(dist))
+        total += _dist_lectura_nivelacion_m(lect, tipo_nivel)
     return total
 
 
+def _dist_tipo_grupo_m(grupo: list[dict], tipo_lectura: str, tipo_nivel: str) -> float:
+    want = tipo_lectura.replace("V−", "V-")
+    for lect in grupo:
+        tl = (lect.get("tipo_lectura") or "").strip().replace("V−", "V-")
+        if tl.upper() == "VI":
+            tl = "Vi"
+        if tl != want:
+            continue
+        return _dist_lectura_nivelacion_m(lect, tipo_nivel)
+    return 0.0
+
+
 def _puntos_perfil_nivelacion(lecturas: list[dict], niv: dict) -> list[dict]:
+    """Puntos del perfil: eje X = distancia acumulada (V+ origen + V− destino), no PK/abscisa."""
     tipo_nivel = niv.get("tipo_nivel") or "electronico"
     grupos = _agrupar_lecturas_por_fila(lecturas)
-    bm_ini = niv.get("bm_inicial")
-    bm_fin = niv.get("bm_final") or bm_ini
+    bm_fin = niv.get("bm_final") or niv.get("bm_inicial")
     pts: list[dict] = []
-    prog = 0.0
+    prev_d_vp = 0.0
+    accum = 0.0
+    first = True
+
     for g_idx, grupo in enumerate(grupos):
         base = grupo[0]
         nombre = (base.get("nombre_punto") or f"P{g_idx + 1}").strip()
@@ -3766,24 +3846,31 @@ def _puntos_perfil_nivelacion(lecturas: list[dict], niv: dict) -> list[dict]:
             cotas_map = niv.get("_cotas_calc") or {}
             if nombre in cotas_map:
                 cota = float(cotas_map[nombre])
-        abscisa_raw = base.get("abscisa")
-        if abscisa_raw is not None and str(abscisa_raw).strip() and _abscisa_numerica_valida(str(abscisa_raw)):
-            abs_val = float(str(abscisa_raw).strip().replace(",", "."))
+        if cota is None:
+            continue
+
+        d_vp = _dist_tipo_grupo_m(grupo, "V+", tipo_nivel)
+        d_vm = _dist_tipo_grupo_m(grupo, "V-", tipo_nivel)
+
+        if first:
+            accum = 0.0
+            first = False
         else:
-            abs_val = prog
-        if cota is not None:
-            pts.append({
-                "nombre": nombre,
-                "abscisa": abs_val,
-                "cota": cota,
-                "cierre": _grupo_es_cierre(grupo, bm_fin),
-            })
-        prog += _distancia_grupo_nivelacion_m(grupo, tipo_nivel)
+            accum += prev_d_vp + d_vm
+
+        pts.append({
+            "nombre": nombre,
+            "abscisa": accum,
+            "cota": cota,
+            "cierre": _grupo_es_cierre(grupo, bm_fin),
+        })
+        prev_d_vp = d_vp
+
     return pts
 
 
 def svg_perfil_nivelacion_pdf(lecturas: list[dict], niv: dict, *, width: int = 720, height: int = 200) -> str:
-    """Perfil abscisa–cota del circuito para PDF."""
+    """Perfil distancia acumulada–cota del circuito para PDF."""
     pts = _puntos_perfil_nivelacion(lecturas, niv)
     if len(pts) < 2:
         return f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><text x="8" y="20" font-size="10" fill="#64748b">Sin cotas suficientes para el perfil</text></svg>'
@@ -3812,7 +3899,7 @@ def svg_perfil_nivelacion_pdf(lecturas: list[dict], niv: dict, *, width: int = 7
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         f'<rect width="100%" height="100%" fill="#fafafa"/>',
-        f'<text x="{width / 2:.0f}" y="14" text-anchor="middle" font-size="9" font-weight="600" fill="#334155">Perfil del circuito (Abscisa vs Cota)</text>',
+        f'<text x="{width / 2:.0f}" y="14" text-anchor="middle" font-size="9" font-weight="600" fill="#334155">Perfil del circuito (Distancia acumulada vs Cota)</text>',
     ]
 
     span_a = max(max_a - min_a, 1)
@@ -3868,7 +3955,7 @@ def svg_perfil_nivelacion_pdf(lecturas: list[dict], niv: dict, *, width: int = 7
     cy = margin["t"] + h / 2
     parts.append(
         f'<text x="{cx:.0f}" y="{height - 6}" font-size="7.5" fill="#334155" text-anchor="middle" font-weight="700">'
-        f'X · Abscisa (m)</text>'
+        f'X · Distancia acumulada (m)</text>'
     )
     parts.append(
         f'<text x="14" y="{cy:.0f}" font-size="7.5" fill="#334155" text-anchor="middle" font-weight="700" '

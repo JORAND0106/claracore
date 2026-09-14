@@ -575,6 +575,53 @@ export function distanciaFila(fila, tipoNivel) {
   return dVp ?? dVm
 }
 
+/**
+ * Puntos del perfil del circuito: eje X = distancia acumulada (m), no PK/abscisa de cartera.
+ *
+ * Primer punto en 0. Cada tramo origen→destino suma:
+ *   dist(V+ del origen) + dist(V− del destino)
+ * (vista atrás de la estación que mira al origen + vista adelante que fija el destino).
+ * El PK_ID / abscisa de plataforma no intervienen.
+ *
+ * @param {Array} filasVista filas de `calcularVistaNivelacion` (con cota y distancias calc).
+ * @returns {Array<{ nombre: string, abscisa: number, cota: number, esCierre: boolean }>}
+ */
+export function puntosPerfilNivelacion(filasVista) {
+  const pts = []
+  let prevDVp = 0
+  let accum = 0
+  let first = true
+
+  for (let i = 0; i < (filasVista || []).length; i += 1) {
+    const f = filasVista[i]
+    const cota = f?.cota != null ? Number(f.cota) : null
+    if (cota == null || Number.isNaN(cota)) continue
+
+    const dVpRaw = f.distancia_vplus_calc != null ? Number(f.distancia_vplus_calc) : NaN
+    const dVmRaw = f.distancia_vminus_calc != null ? Number(f.distancia_vminus_calc) : NaN
+    const dVp = Number.isFinite(dVpRaw) ? Math.abs(dVpRaw) : 0
+    const dVm = Number.isFinite(dVmRaw) ? Math.abs(dVmRaw) : 0
+
+    if (first) {
+      accum = 0
+      first = false
+    } else {
+      // Tramo: V+ del punto de origen + V− del punto de destino
+      accum += prevDVp + dVm
+    }
+
+    pts.push({
+      nombre: (f.nombre_punto || `#${i + 1}`).trim() || `#${i + 1}`,
+      abscisa: accum,
+      cota,
+      esCierre: Boolean(f.es_fila_cierre),
+    })
+    prevDVp = dVp
+  }
+
+  return pts
+}
+
 const TIPO_KEYS = { 'V+': 'vplus', Vi: 'vi', 'V-': 'vminus' }
 /** Cambio: V− → Vi → V+ (V+ actualiza H.I. con cota de la misma fila). */
 const ORDEN_LECTURAS = ['V-', 'Vi', 'V+']
