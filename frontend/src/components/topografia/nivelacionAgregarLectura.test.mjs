@@ -57,7 +57,7 @@ describe('Agregar lectura — blank screen (MSG_VPLUS_SIN_VISTA)', () => {
     assert.match(MSG_VPLUS_SIN_VISTA, /V\+/)
   })
 
-  it('hilos inconsistentes: validación agrega aviso sin bloquear el alta', () => {
+  it('hilos con separación > 2 mm: validación bloquea el alta', () => {
     const borrador = {
       ...prepararBorradorBmInicial('BM-INI'),
       abscisa: '0',
@@ -65,16 +65,39 @@ describe('Agregar lectura — blank screen (MSG_VPLUS_SIN_VISTA)', () => {
       ubicacion_pk_id: 'pk-0',
       ubicacion_pk: '525250',
       descripcion_punto: 'Amarre BM',
+      // |S−M|=0.250, |M−I|=0.200 → Δ=50 mm > 2 mm
       vplus: { hS: '1.500', hM: '1.250', hI: '1.050', lectura: '' },
     }
     const diag = diagnosticoHilosIncongruentes(borrador.vplus, 'automatico')
     assert.ok(diag?.msg)
+    assert.equal(diag.bloqueante, true)
+    assert.match(diag.msg, /\|S−M\|=/)
+    assert.match(diag.msg, /\|M−I\|=/)
     const gate = validarBorradorParaAgregar(borrador, [], 'automatico', 'BM-INI', {
       modoApertura: true,
       circuitoAbierto: true,
     })
-    assert.equal(gate.ok, true, 'inconsistencia de hilos avisa, no bloquea')
-    assert.ok(gate.avisosHilos?.length)
-    assert.match(gate.avisosHilos[0], /Separación|incongruen|hilos|HS|HM|HI/i)
+    assert.equal(gate.ok, false, 'separación > 2 mm debe bloquear')
+    assert.match(gate.msg, /Separación desigual|S−M|M−I/i)
+  })
+
+  it('hilos con separación ≤ 2 mm: no bloquea (dentro de tolerancia)', () => {
+    const borrador = {
+      ...prepararBorradorBmInicial('BM-INI'),
+      abscisa: '0',
+      abscisa_inicial: '0',
+      ubicacion_pk_id: 'pk-0',
+      ubicacion_pk: '525250',
+      descripcion_punto: 'Amarre BM',
+      // |S−M|=0.200, |M−I|=0.198 → Δ=2 mm exacto
+      vplus: { hS: '1.400', hM: '1.200', hI: '1.002', lectura: '' },
+    }
+    const diag = diagnosticoHilosIncongruentes(borrador.vplus, 'automatico')
+    assert.equal(diag, null)
+    const gate = validarBorradorParaAgregar(borrador, [], 'automatico', 'BM-INI', {
+      modoApertura: true,
+      circuitoAbierto: true,
+    })
+    assert.equal(gate.ok, true, gate.msg)
   })
 })

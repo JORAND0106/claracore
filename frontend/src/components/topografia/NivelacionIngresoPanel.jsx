@@ -7,7 +7,7 @@ import {
   autocompletarDesdeIda,
   diagnosticoHilosIncongruentes,
   distanciaTaquimetrica,
-  hilosIncongruentes,
+  filaHilosSeparacionBloqueante,
   previewAbscisadoCaptura,
 } from '../../utils/topografia_nivelacion'
 import TopoExcelSheet from './TopoExcelSheet'
@@ -176,16 +176,10 @@ export default function NivelacionIngresoPanel({
     }
   }
 
-  const hilosAvisos = useMemo(() => {
-    if (!esAutomatico) return []
-    return ['vplus', 'vi', 'vminus']
-      .map((bk) => {
-        if (!hilosIncongruentes(borrador[bk], 'automatico')) return null
-        const d = diagnosticoHilosIncongruentes(borrador[bk], 'automatico')
-        return d?.msg ? `${LABELS[bk].split(' ')[0]}: ${d.msg}` : null
-      })
-      .filter(Boolean)
-  }, [borrador, esAutomatico])
+  const hilosBloqueantes = useMemo(
+    () => (esAutomatico ? filaHilosSeparacionBloqueante(borrador, 'automatico') : false),
+    [borrador, esAutomatico],
+  )
 
   const nombresSugeridos = sugerenciasPuntos
     || (filasIdaParaAutocomplete
@@ -384,28 +378,16 @@ export default function NivelacionIngresoPanel({
             previewAbscisado={previewAbscisado}
           />
         </div>
-        {hilosAvisos.length > 0 && (
-          <div
-            role="status"
-            style={{
-              padding: '6px 8px',
-              borderRadius: 6,
-              fontSize: 'var(--cc-xs)',
-              color: '#991b1b',
-              background: 'rgba(220,38,38,0.1)',
-              border: '1px solid rgba(220,38,38,0.3)',
-            }}
-          >
-            {hilosAvisos[0]}
-          </div>
-        )}
         <button
           type="button"
           className="cc-topo-touch-btn"
           style={{ ...ui.btnPrimary, alignSelf: isCompact ? 'stretch' : 'flex-end', minWidth: 160 }}
-          disabled={disabled || busy || !puedeAgregar}
+          disabled={disabled || busy || !puedeAgregar || hilosBloqueantes}
           onClick={onAgregar}
-          title={!puedeAgregar ? 'No se puede agregar en el estado actual' : 'Validar y agregar a la cartera'}
+          title={hilosBloqueantes
+            ? 'Corrija la separación de hilos (Δ > 2 mm) antes de agregar'
+            : (!puedeAgregar ? 'No se puede agregar en el estado actual' : 'Validar y agregar a la cartera')}
+          data-testid={hilosBloqueantes ? 'niv-hilos-sep-bloqueo' : undefined}
         >
           Agregar lectura
         </button>

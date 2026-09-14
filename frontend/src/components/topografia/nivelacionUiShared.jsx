@@ -186,11 +186,6 @@ export function HilosInputs({ bloque, onChange, disabled, ui, alerta, bloques, b
           </span>
         ))}
       </div>
-      {alerta && diagMsg && (
-        <span style={{ fontSize: 'var(--cc-xxs)', color: '#991b1b', fontWeight: 600, textAlign: 'center', lineHeight: 1.25 }}>
-          {String(diagMsg).split(':')[0]}
-        </span>
-      )}
     </div>
   )
 }
