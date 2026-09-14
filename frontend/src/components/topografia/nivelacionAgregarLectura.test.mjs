@@ -71,14 +71,14 @@ describe('Agregar lectura — blank screen (MSG_VPLUS_SIN_VISTA)', () => {
     const diag = diagnosticoHilosIncongruentes(borrador.vplus, 'automatico')
     assert.ok(diag?.msg)
     assert.equal(diag.bloqueante, true)
-    assert.match(diag.msg, /\|S−M\|=/)
-    assert.match(diag.msg, /\|M−I\|=/)
+    assert.match(diag.msg, /S − M =/)
+    assert.match(diag.msg, /M − I =/)
     const gate = validarBorradorParaAgregar(borrador, [], 'automatico', 'BM-INI', {
       modoApertura: true,
       circuitoAbierto: true,
     })
     assert.equal(gate.ok, false, 'separación > 2 mm debe bloquear')
-    assert.match(gate.msg, /Separación desigual|S−M|M−I/i)
+    assert.match(gate.msg, /S − M =|M − I =/i)
   })
 
   it('hilos con separación ≤ 2 mm: no bloquea (dentro de tolerancia)', () => {

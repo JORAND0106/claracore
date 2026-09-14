@@ -71,7 +71,7 @@ function BloqueVista({
           alerta={alerta}
           bloques={bloques}
           bk={bk}
-          diagMsg={diag?.msg}
+          diagMsg={diag?.tooltip || diag?.msg}
         />
       ) : (
         <LecturaInput
@@ -106,7 +106,9 @@ function BloqueVista({
       {bk === 'vminus' && previewAbscisado ? (
         <PreviewAbscisadoVminus preview={previewAbscisado} ui={ui} />
       ) : null}
-      {alerta && <AlertaHilos title={diag.msg} compact />}
+      {alerta && (
+        <AlertaHilos title={diag.msg} tip={diag.tooltip || diag.msg} compact />
+      )}
     </div>
   )
 }
