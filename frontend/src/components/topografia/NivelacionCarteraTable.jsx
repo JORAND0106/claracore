@@ -200,7 +200,7 @@ export default function NivelacionCarteraTable({
                   )}
                 </div>
               ))}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginTop: 6, fontSize: 'var(--cc-xs)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 6, marginTop: 6, fontSize: 'var(--cc-xs)' }}>
                 <div>
                   <div style={{ color: ui.textMuted, fontWeight: 700 }}>H. ins.</div>
                   <div style={{ fontWeight: 700, color: ui.accent }}>{fmtN(vistaRow.altura_instrumento)}</div>
@@ -210,9 +210,21 @@ export default function NivelacionCarteraTable({
                   <div style={{ fontWeight: 700 }}>{fmtN(vistaRow.cota)}</div>
                 </div>
                 <div>
-                  <div style={{ color: ui.textMuted, fontWeight: 700 }}>PK</div>
-                  <div>{fila.ubicacion_pk || fila.abscisa || '—'}</div>
+                  <div style={{ color: ui.textMuted, fontWeight: 700 }}>Dist. acum.</div>
+                  <div style={{ fontWeight: 700 }}>
+                    {vistaRow.distancia_acumulada != null ? fmtN(vistaRow.distancia_acumulada, 2) : '—'}
+                  </div>
                 </div>
+                <div>
+                  <div style={{ color: ui.textMuted, fontWeight: 700 }}>Abs. circuito</div>
+                  <div style={{ fontWeight: 700 }}>
+                    {vistaRow.abscisa_circuito != null ? fmtN(vistaRow.abscisa_circuito, 2) : '—'}
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop: 4, fontSize: 'var(--cc-xs)' }}>
+                <span style={{ color: ui.textMuted, fontWeight: 700 }}>PK: </span>
+                {fila.ubicacion_pk || fila.abscisa || '—'}
               </div>
               {fila.descripcion_punto ? (
                 <div style={{ marginTop: 4, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>{fila.descripcion_punto}</div>
@@ -240,6 +252,8 @@ export default function NivelacionCarteraTable({
             <th style={thGroupColor('vminus')} colSpan={esAutomatico ? 4 : 2}>V−</th>
             <th style={thGroup} rowSpan={2}>H. ins.</th>
             <th style={thGroup} rowSpan={2}>Cota</th>
+            <th style={thBase} rowSpan={2} title="Distancia acumulada del circuito (misma del perfil)">Dist. acum.</th>
+            <th style={thBase} rowSpan={2} title="Abscisa inicial + distancia acumulada">Abs. circuito</th>
             <th style={thBase} rowSpan={2}>Abscisa/PK</th>
             <th style={thBase} rowSpan={2}>Descripción</th>
             {editable && <th style={thBase} rowSpan={2} />}
@@ -349,6 +363,12 @@ export default function NivelacionCarteraTable({
                 </td>
                 <td style={{ ...tdBase, textAlign: 'center', fontWeight: 700, color: ui.accent }}>{fmtN(vistaRow.altura_instrumento)}</td>
                 <td style={{ ...tdBase, textAlign: 'center', fontWeight: 700 }}>{fmtN(vistaRow.cota)}</td>
+                <td style={{ ...tdBase, textAlign: 'center', fontWeight: 600 }}>
+                  {vistaRow.distancia_acumulada != null ? fmtN(vistaRow.distancia_acumulada, 2) : '—'}
+                </td>
+                <td style={{ ...tdBase, textAlign: 'center', fontWeight: 600 }}>
+                  {vistaRow.abscisa_circuito != null ? fmtN(vistaRow.abscisa_circuito, 2) : '—'}
+                </td>
                 <td style={tdBase}>{fila.ubicacion_pk || fila.abscisa || '—'}</td>
                 <td style={tdBase}>{fila.descripcion_punto || '—'}</td>
                 {editable && (

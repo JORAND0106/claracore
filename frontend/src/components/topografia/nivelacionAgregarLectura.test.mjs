@@ -36,6 +36,7 @@ describe('Agregar lectura — blank screen (MSG_VPLUS_SIN_VISTA)', () => {
     const borrador = {
       ...prepararBorradorBmInicial('BM-INI'),
       abscisa: '0',
+      abscisa_inicial: '0',
       ubicacion_pk_id: 'pk-0',
       ubicacion_pk: '525250',
       descripcion_punto: 'Amarre BM',
@@ -60,6 +61,7 @@ describe('Agregar lectura — blank screen (MSG_VPLUS_SIN_VISTA)', () => {
     const borrador = {
       ...prepararBorradorBmInicial('BM-INI'),
       abscisa: '0',
+      abscisa_inicial: '0',
       ubicacion_pk_id: 'pk-0',
       ubicacion_pk: '525250',
       descripcion_punto: 'Amarre BM',

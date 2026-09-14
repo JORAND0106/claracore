@@ -104,6 +104,7 @@ describe('patrón panel+cartera — flujo agregar lecturas', () => {
     let borrador = {
       ...prepararBorradorBmInicial('BM-INI'),
       abscisa: '0',
+      abscisa_inicial: '0',
       ubicacion_pk_id: 'pk-0',
       ubicacion_pk: '525250',
       descripcion_punto: 'Amarre BM inicial',
