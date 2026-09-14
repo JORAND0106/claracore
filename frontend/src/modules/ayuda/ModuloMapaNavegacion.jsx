@@ -3,8 +3,9 @@ import { API_BASE } from '../../apiBase'
 import { prepararImagenParaUpload } from '../../comprimirImagen'
 import {
   MAPA_NAVEGACION_API_URL,
-  MAPA_NAVEGACION_MODULOS,
+  MAPA_NAVEGACION_SECCIONES,
   MAPA_NAVEGACION_STATIC_URL,
+  MAPA_NAVEGACION_SUBTEMAS,
 } from './mapaNavegacionCatalogo'
 import {
   contenidoEditableCompleto,
@@ -56,8 +57,9 @@ export async function cargarContenidoMapaNavegacion(token) {
 }
 
 function EditorMapa({ t, draft, setDraft, onGuardar, onSubirImagen, guardando, msg }) {
-  const [modId, setModId] = useState(MAPA_NAVEGACION_MODULOS[0]?.id || '')
-  const actual = draft.modulos[modId] || { descripcion: '', imagenes: [] }
+  const [modId, setModId] = useState(MAPA_NAVEGACION_SUBTEMAS[0]?.id || '')
+  const actual = draft.modulos[modId] || { descripcion: '', imagenes: [], videoUrl: '' }
+  const seccionPorId = Object.fromEntries(MAPA_NAVEGACION_SECCIONES.map((s) => [s.id, s]))
 
   return (
     <div style={{
@@ -74,11 +76,11 @@ function EditorMapa({ t, draft, setDraft, onGuardar, onSubirImagen, guardando, m
         Editar contenido del mapa (Desarrollador)
       </div>
       <p style={{ margin: 0, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-        Actualiza descripción y pantallazos sin tocar código. Al guardar se publica en el API
-        (Azure Blob). También puedes editar <code>/ayuda/mapa-navegacion.json</code> en el repo.
+        Actualiza descripción, video y pantallazos por subtema sin tocar código. Al guardar se publica
+        en el API (Azure Blob). También puedes editar <code>/ayuda/mapa-navegacion.json</code> en el repo.
       </p>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)', color: t.text }}>
-        Módulo
+        Subtema
         <select
           value={modId}
           onChange={(e) => setModId(e.target.value)}
@@ -91,9 +93,14 @@ function EditorMapa({ t, draft, setDraft, onGuardar, onSubirImagen, guardando, m
             fontSize: 16,
           }}
         >
-          {MAPA_NAVEGACION_MODULOS.map((m) => (
-            <option key={m.id} value={m.id}>{m.icono} {m.nombre}</option>
-          ))}
+          {MAPA_NAVEGACION_SUBTEMAS.map((m) => {
+            const sec = seccionPorId[m.grupo]
+            return (
+              <option key={m.id} value={m.id}>
+                {sec?.icono || ''} {sec?.label || m.grupo} · {m.nombre}
+              </option>
+            )
+          })}
         </select>
       </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)', color: t.text }}>
@@ -111,7 +118,7 @@ function EditorMapa({ t, draft, setDraft, onGuardar, onSubirImagen, guardando, m
               },
             }))
           }}
-          placeholder="Qué es y para qué sirve este módulo, en lenguaje simple…"
+          placeholder="Qué es y para qué sirve este subtema, en lenguaje simple…"
           style={{
             padding: '10px 12px',
             borderRadius: 8,
@@ -122,6 +129,31 @@ function EditorMapa({ t, draft, setDraft, onGuardar, onSubirImagen, guardando, m
             lineHeight: 1.45,
             resize: 'vertical',
             fontFamily: 'inherit',
+          }}
+        />
+      </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)', color: t.text }}>
+        URL de video de capacitación (opcional)
+        <input
+          value={actual.videoUrl || ''}
+          onChange={(e) => {
+            const videoUrl = e.target.value
+            setDraft((prev) => ({
+              ...prev,
+              modulos: {
+                ...prev.modulos,
+                [modId]: { ...prev.modulos[modId], videoUrl },
+              },
+            }))
+          }}
+          placeholder="https://… (se alojará aquí cuando el video esté listo)"
+          style={{
+            padding: '10px 12px',
+            borderRadius: 8,
+            border: `1px solid ${t.border}`,
+            background: t.bg,
+            color: t.text,
+            fontSize: 'var(--cc-sm)',
           }}
         />
       </label>

@@ -5597,22 +5597,104 @@ async def guias_subir_imagen_bloque(file: UploadFile = File(...), current_user=D
 # ── Ayuda contextual: mapa panorámico de navegación ───────────────────────────
 
 _MAPA_NAVEGACION_MODULOS_IDS = frozenset({
-    "dashboard",
-    "reporte_cantidades",
-    "programacion_obra",
-    "topografia",
-    "seguimiento",
-    "editar_registros_presupuesto",
-    "listado_precios",
-    "informes_ccd",
-    "almacen",
-    "catalogo_insumos",
-    "contratos",
-    "actas",
-    "contabilidad",
-    "subcontratistas",
-    "auditor_sst",
+    # Dashboard
+    "dash_obra_ejecutada_presupuesto",
+    "dash_resumen_desviaciones",
+    "dash_aprobacion_sicoe_ppto",
+    "dash_obra_acta_capitulo_rol",
+    # Presupuesto
+    "ppto_crear_obra_ejecutada",
+    "ppto_nueva_version_versiones",
+    "ppto_descargar_excel",
+    "ppto_analisis_datos",
+    "ppto_filtros",
+    "ppto_panel_dinamico",
+    "ppto_edicion_individual_masiva",
+    "ppto_consulta_registro",
+    "ppto_conexion_autocad",
+    "ppto_graficos_bibliotecas",
+    "ppto_cierre_financiero",
+    # SICOE Obra
+    "sicoe_viz_reportes_cantidades",
+    "sicoe_filtros",
+    "sicoe_panel_dinamico",
+    "sicoe_crear_reporte_registros",
+    "sicoe_consulta_registros",
+    "sicoe_validacion_cantidades_masiva",
+    "sicoe_descarga_plantillas",
+    # Informes
+    "informes_biblioteca",
+    "informes_firmas_formatos",
+    "informes_tipos_descarga",
+    "informes_firma_documentos",
+    # Almacén
+    "almacen_crear_insumo",
+    "almacen_plantillas",
+    "almacen_solicitud_borrador_aprobacion",
+    "almacen_aprobacion_oc",
+    "almacen_entradas",
+    "almacen_despachador",
+    "almacen_devoluciones",
+    "almacen_salidas",
+    "almacen_inventario",
+    # Seguimiento
+    "seg_calendario",
+    "seg_nueva_tarea",
+    "seg_nueva_acta",
+    "seg_bitacora",
+    "seg_libro_digital",
+    # Topografía
+    "topo_biblioteca_puntos",
+    "topo_crear_poligonal",
+    "topo_crear_punto",
+    "topo_circuito_nivelacion",
+    "topo_estructura_diseno",
+    "topo_carteras_via",
 })
+
+# Ids del catálogo anterior → subtema actual (conserva blob publicado).
+_MAPA_NAVEGACION_ID_LEGACY = {
+    "reporte_cantidades": "sicoe_crear_reporte_registros",
+    "dashboard": "dash_obra_ejecutada_presupuesto",
+    "topografia": "topo_biblioteca_puntos",
+    "seguimiento": "seg_calendario",
+    "editar_registros_presupuesto": "ppto_edicion_individual_masiva",
+    "informes_ccd": "informes_biblioteca",
+    "almacen": "almacen_inventario",
+}
+
+
+def _mapa_navegacion_entrada_vacia() -> Dict[str, Any]:
+    return {"descripcion": "", "imagenes": [], "videoUrl": ""}
+
+
+def _mapa_navegacion_normalizar_entrada(src: Any) -> Dict[str, Any]:
+    if not isinstance(src, dict):
+        return _mapa_navegacion_entrada_vacia()
+    imgs = []
+    for img in (src.get("imagenes") or []):
+        if not isinstance(img, dict):
+            continue
+        url = str(img.get("url") or "").strip()
+        if not url:
+            continue
+        imgs.append({
+            "url": url,
+            "caption": str(img.get("caption") or "").strip(),
+        })
+    return {
+        "descripcion": str(src.get("descripcion") or "").strip(),
+        "imagenes": imgs,
+        "videoUrl": str(src.get("videoUrl") or src.get("video_url") or "").strip(),
+    }
+
+
+def _mapa_navegacion_entrada_pendiente(entrada: Dict[str, Any]) -> bool:
+    return (
+        not str(entrada.get("descripcion") or "").strip()
+        and not (entrada.get("imagenes") or [])
+        and not str(entrada.get("videoUrl") or "").strip()
+    )
 
 
 def _mapa_navegacion_contenido_vacio() -> Dict[str, Any]:
@@ -5620,7 +5702,7 @@ def _mapa_navegacion_contenido_vacio() -> Dict[str, Any]:
         "version": 1,
         "updated_at": None,
         "modulos": {
-            mid: {"descripcion": "", "imagenes": []}
+            mid: _mapa_navegacion_entrada_vacia()
             for mid in sorted(_MAPA_NAVEGACION_MODULOS_IDS)
         },
     }
@@ -5631,23 +5713,16 @@ def _mapa_navegacion_normalizar(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return base
     mods_in = raw.get("modulos") if isinstance(raw.get("modulos"), dict) else {}
+    # Migración de claves legacy hacia subtemas actuales (sin pisar destino poblado).
+    for legacy_id, nuevo_id in _MAPA_NAVEGACION_ID_LEGACY.items():
+        if legacy_id not in mods_in or nuevo_id not in _MAPA_NAVEGACION_MODULOS_IDS:
+            continue
+        legacy = _mapa_navegacion_normalizar_entrada(mods_in.get(legacy_id))
+        actual = _mapa_navegacion_normalizar_entrada(mods_in.get(nuevo_id))
+        if _mapa_navegacion_entrada_pendiente(actual) and not _mapa_navegacion_entrada_pendiente(legacy):
+            mods_in = {**mods_in, nuevo_id: legacy}
     for mid in _MAPA_NAVEGACION_MODULOS_IDS:
-        src = mods_in.get(mid) if isinstance(mods_in.get(mid), dict) else {}
-        imgs = []
-        for img in (src.get("imagenes") or []):
-            if not isinstance(img, dict):
-                continue
-            url = str(img.get("url") or "").strip()
-            if not url:
-                continue
-            imgs.append({
-                "url": url,
-                "caption": str(img.get("caption") or "").strip(),
-            })
-        base["modulos"][mid] = {
-            "descripcion": str(src.get("descripcion") or "").strip(),
-            "imagenes": imgs,
-        }
+        base["modulos"][mid] = _mapa_navegacion_normalizar_entrada(mods_in.get(mid))
     try:
         base["version"] = int(raw.get("version") or 1)
     except (TypeError, ValueError):
