@@ -10,9 +10,9 @@ import {
   diagnosticoHilosIncongruentes,
   distanciaTaquimetrica,
   esFilaSoloVi,
-  hilosIncongruentes,
   parseAbscisa,
   previewAbscisadoCaptura,
+  recolectarDiagnosticosHilosFila,
 } from '../../utils/topografia_nivelacion'
 import {
   AlertaHilos,
@@ -246,20 +246,19 @@ export default function NivelacionLecturaEditModal({
       onError?.({ titulo: 'Abscisa inicial', mensaje: 'Indique la abscisa inicial del circuito (m).' })
       return
     }
-    const avisos = []
-    if (esAutomatico) {
-      for (const [bk, lab] of [['vplus', 'V+'], ['vi', 'Vi'], ['vminus', 'V−']]) {
-        if (hilosIncongruentes(form[bk], 'automatico')) {
-          const d = diagnosticoHilosIncongruentes(form[bk], 'automatico')
-          if (d?.msg) avisos.push(`${lab}: ${d.msg}`)
-        }
-      }
+    const { avisosHilos, erroresHilos } = recolectarDiagnosticosHilosFila(
+      form,
+      esAutomatico ? 'automatico' : 'electronico',
+    )
+    if (erroresHilos.length) {
+      onError?.({ titulo: 'Hilos', mensaje: erroresHilos[0] })
+      return
     }
     onSave?.({
       ...form,
       nombre_punto: nombre,
       tipo_punto: esPrimera ? 'BM' : (form.tipo_punto || ''),
-      avisosHilos: avisos,
+      avisosHilos,
     })
   }
 

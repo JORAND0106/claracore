@@ -28,16 +28,21 @@ function fila({ nombre = 'P1', tipo = 'estacion', vplus = null, vminus = null, v
 }
 
 describe('diagnosticoHilosIncongruentes', () => {
-  it('detecta separación desigual', () => {
+  it('detecta separación desigual con valores y bloqueo', () => {
     const d = diagnosticoHilosIncongruentes({ hS: 1.5, hM: 1.2, hI: 0.8 }, 'automatico')
     assert.ok(d)
-    assert.match(d.msg, /Separación|Hilos inconsistentes/)
+    assert.equal(d.bloqueante, true)
+    assert.match(d.msg, /\|S−M\|=/)
+    assert.match(d.msg, /\|M−I\|=/)
     assert.equal(hilosIncongruentes({ hS: 1.5, hM: 1.2, hI: 0.8 }, 'automatico'), true)
   })
 
-  it('detecta HM fuera de rango HS–HI', () => {
-    const d = diagnosticoHilosIncongruentes({ hS: 1.0, hM: 1.5, hI: 0.8 }, 'automatico')
+  it('detecta HM fuera de rango HS–HI (aviso no bloqueante si sep OK)', () => {
+    // |S−M|=|M−I|=0.3, M fuera del intervalo [0.5, 0.5]
+    const d = diagnosticoHilosIncongruentes({ hS: 0.5, hM: 0.8, hI: 0.5 }, 'automatico')
     assert.ok(d)
+    assert.equal(d.tipo, 'orden')
+    assert.equal(d.bloqueante, false)
     assert.match(d.msg, /medio|inconsistentes/i)
   })
 

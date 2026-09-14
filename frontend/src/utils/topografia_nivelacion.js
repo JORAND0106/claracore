@@ -25,21 +25,59 @@ export function distanciaTaquimetrica(hSup, hInf, k = STADIA_K) {
   return Math.abs(i - s) * k
 }
 
-/** Tolerancia (m) para comparar separación S–M vs M–I en nivel automático. */
+/** Tolerancia (m) para comparar separación S–M vs M–I en nivel automático (= 2 mm). */
 export const HILO_PAR_TOL = 0.002
 
 export const HILO_INCONGRUENCIA_MSG =
   'Hilos inconsistentes: |S−M| debe igualar |M−I| y el medio debe quedar entre superior e inferior.'
 
+/** @deprecated Prefer `mensajeSeparacionDesigual(sepSM, sepMI)`. */
 export const HILO_INCONGRUENCIA_SEP_MSG =
   'Separación desigual: |S−M| ≠ |M−I|. Revise HS, HM e HI.'
 
 export const HILO_INCONGRUENCIA_ORDEN_MSG =
   'El hilo medio (HM) debe quedar entre el superior (HS) y el inferior (HI).'
 
+function fmtHiloM(v, dec = 3) {
+  if (v == null || !Number.isFinite(Number(v))) return '—'
+  return Number(v).toFixed(dec)
+}
+
+function fmtHiloMm(v, dec = 1) {
+  if (v == null || !Number.isFinite(Number(v))) return '—'
+  return (Number(v) * 1000).toFixed(dec)
+}
+
+/**
+ * Mensaje de separación desigual con |S−M|, |M−I| y Δ explícitos.
+ * @param {number} sepSM
+ * @param {number} sepMI
+ */
+export function mensajeSeparacionDesigual(sepSM, sepMI) {
+  const a = Number(sepSM)
+  const b = Number(sepMI)
+  const diff = Math.abs(a - b)
+  const mayor = a >= b ? '|S−M|' : '|M−I|'
+  const menor = a >= b ? '|M−I|' : '|S−M|'
+  return (
+    `Separación desigual: |S−M|=${fmtHiloM(a)} m, |M−I|=${fmtHiloM(b)} m; `
+    + `${mayor} supera a ${menor} por ${fmtHiloM(diff)} m (${fmtHiloMm(diff)} mm > 2 mm). `
+    + 'Corrija HS, HM o HI.'
+  )
+}
+
 /**
  * Diagnóstico de inconsistencia S/M/I (nivel automático).
- * @returns {null | { tipo: 'separacion'|'orden'|'ambos', msg: string }}
+ * Separación |S−M| vs |M−I|: si Δ ≤ 2 mm se considera OK; si Δ > 2 mm es bloqueante.
+ * La comparación se hace en mm para evitar artefactos IEEE-754 en el umbral.
+ * @returns {null | {
+ *   tipo: 'separacion'|'orden'|'ambos',
+ *   msg: string,
+ *   sepSM?: number,
+ *   sepMI?: number,
+ *   diffSep?: number,
+ *   bloqueante: boolean,
+ * }}
  */
 export function diagnosticoHilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_TOL) {
   if (tipoNivel !== 'automatico' || !bloque) return null
@@ -47,21 +85,80 @@ export function diagnosticoHilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_
   const m = numOrNull(bloque.hM)
   const i = numOrNull(bloque.hI)
   if (s == null || m == null || i == null) return null
-  const sepOk = Math.abs(Math.abs(m - s) - Math.abs(i - m)) <= tol
+  const sepSM = Math.abs(m - s)
+  const sepMI = Math.abs(i - m)
+  const diffSep = Math.abs(sepSM - sepMI)
+  // Umbral en mm (tol por defecto 0.002 m = 2 mm)
+  const tolMm = Number(tol) * 1000
+  const diffMm = Math.abs(sepSM * 1000 - sepMI * 1000)
+  const sepOk = diffMm <= tolMm + 1e-9
   const lo = Math.min(s, i)
   const hi = Math.max(s, i)
   const ordenOk = m >= lo - tol && m <= hi + tol
   if (sepOk && ordenOk) return null
+  const sepMsg = mensajeSeparacionDesigual(sepSM, sepMI)
   if (!sepOk && !ordenOk) {
-    return { tipo: 'ambos', msg: HILO_INCONGRUENCIA_MSG }
+    return {
+      tipo: 'ambos',
+      msg: `${sepMsg} Además, ${HILO_INCONGRUENCIA_ORDEN_MSG}`,
+      sepSM,
+      sepMI,
+      diffSep,
+      bloqueante: true,
+    }
   }
-  if (!sepOk) return { tipo: 'separacion', msg: HILO_INCONGRUENCIA_SEP_MSG }
-  return { tipo: 'orden', msg: HILO_INCONGRUENCIA_ORDEN_MSG }
+  if (!sepOk) {
+    return {
+      tipo: 'separacion',
+      msg: sepMsg,
+      sepSM,
+      sepMI,
+      diffSep,
+      bloqueante: true,
+    }
+  }
+  return {
+    tipo: 'orden',
+    msg: HILO_INCONGRUENCIA_ORDEN_MSG,
+    sepSM,
+    sepMI,
+    diffSep,
+    bloqueante: false,
+  }
 }
 
 /** True si los tres hilos están diligenciados y hay incongruencia taquimétrica u orden. */
 export function hilosIncongruentes(bloque, tipoNivel, tol = HILO_PAR_TOL) {
   return diagnosticoHilosIncongruentes(bloque, tipoNivel, tol) != null
+}
+
+/** True si la separación |S−M| vs |M−I| supera 2 mm (bloquea alta/edición). */
+export function hilosSeparacionBloqueante(bloque, tipoNivel, tol = HILO_PAR_TOL) {
+  const d = diagnosticoHilosIncongruentes(bloque, tipoNivel, tol)
+  return Boolean(d?.bloqueante)
+}
+
+/**
+ * Recorre V+/Vi/V− y separa avisos (no bloquean) vs errores de separación (> 2 mm).
+ * @returns {{ avisosHilos: string[], erroresHilos: string[] }}
+ */
+export function recolectarDiagnosticosHilosFila(fila, tipoNivel) {
+  const avisosHilos = []
+  const erroresHilos = []
+  if (tipoNivel !== 'automatico' || !fila) return { avisosHilos, erroresHilos }
+  for (const [bk, label] of [['vplus', 'V+'], ['vi', 'Vi'], ['vminus', 'V−']]) {
+    const diag = diagnosticoHilosIncongruentes(fila[bk], tipoNivel)
+    if (!diag?.msg) continue
+    const line = `${label}: ${diag.msg}`
+    if (diag.bloqueante) erroresHilos.push(line)
+    else avisosHilos.push(line)
+  }
+  return { avisosHilos, erroresHilos }
+}
+
+/** True si algún bloque V+/Vi/V− del borrador/fila tiene separación > 2 mm. */
+export function filaHilosSeparacionBloqueante(fila, tipoNivel) {
+  return recolectarDiagnosticosHilosFila(fila, tipoNivel).erroresHilos.length > 0
 }
 
 export const ABSCISA_NUMERICA_MSG = 'Seleccione la ubicación en el plano PK.'
@@ -1153,12 +1250,9 @@ export function validarBorradorParaAgregar(borrador, filas, tipoNivel, bmInicial
     return { ok: false, msg: vplusGate.msg }
   }
 
-  const avisosHilos = []
-  if (tipoNivel === 'automatico') {
-    for (const [bk, label] of [['vplus', 'V+'], ['vi', 'Vi'], ['vminus', 'V−']]) {
-      const diag = diagnosticoHilosIncongruentes(filaCheck[bk], tipoNivel)
-      if (diag?.msg) avisosHilos.push(`${label}: ${diag.msg}`)
-    }
+  const { avisosHilos, erroresHilos } = recolectarDiagnosticosHilosFila(filaCheck, tipoNivel)
+  if (erroresHilos.length) {
+    return { ok: false, msg: erroresHilos[0], avisosHilos, erroresHilos }
   }
 
   return {
@@ -1300,12 +1394,9 @@ export function validarBorradorContranivelacion(borrador, filasContra, filasIda,
     }
   }
 
-  const avisosHilos = []
-  if (tipoNivel === 'automatico') {
-    for (const [bk, label] of [['vplus', 'V+'], ['vi', 'Vi'], ['vminus', 'V−']]) {
-      const diag = diagnosticoHilosIncongruentes(filaCheck[bk], tipoNivel)
-      if (diag?.msg) avisosHilos.push(`${label}: ${diag.msg}`)
-    }
+  const { avisosHilos, erroresHilos } = recolectarDiagnosticosHilosFila(filaCheck, tipoNivel)
+  if (erroresHilos.length) {
+    return { ok: false, msg: erroresHilos[0], avisosHilos, erroresHilos }
   }
 
   return {

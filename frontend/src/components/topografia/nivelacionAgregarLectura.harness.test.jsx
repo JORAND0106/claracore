@@ -186,17 +186,18 @@ describe('Agregar lectura — harness cartera+panel', () => {
     assert.equal(fatals.length, 0, fatals.join('\n'))
   })
 
-  it('hilos inconsistentes: alerta/aviso sin romper pantalla', async () => {
+  it('hilos separación > 2 mm: bloquea agregar sin romper pantalla', async () => {
     const cap = captureErrors()
     const rootEl = document.getElementById('root')
     const root = createRoot(rootEl)
     const borrador = {
       ...prepararBorradorBmInicial('BM-INI'),
       abscisa: '0',
+      abscisa_inicial: '0',
       ubicacion_pk_id: 'pk-0',
       ubicacion_pk: '525250',
       descripcion_punto: 'Amarre BM',
-      // |S-M|≠|M-I|
+      // |S-M|≠|M-I| → Δ=50 mm > 2 mm
       vplus: { hS: '1.500', hM: '1.250', hI: '1.050', lectura: '' },
     }
     await act(async () => {
@@ -207,18 +208,22 @@ describe('Agregar lectura — harness cartera+panel', () => {
       )
     })
     const btn = [...rootEl.querySelectorAll('button')].find((b) => /Agregar lectura/i.test(b.textContent || ''))
+    assert.ok(btn?.disabled, 'botón Agregar debe quedar deshabilitado')
     await act(async () => { btn.click() })
     await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
 
     const fatals = cap.fatal()
-    const ok = rootEl.querySelector('[data-testid="ok"]')?.textContent || ''
     const n = rootEl.querySelector('[data-testid="nfilas"]')?.textContent
+    const bloqueoBtn = rootEl.querySelector('[data-testid="niv-hilos-sep-bloqueo"]')
     const htmlLen = rootEl.innerHTML.length
+    // Mensaje detallado una sola vez (compacto bajo el bloque)
+    const sepCount = (rootEl.textContent.match(/Separación desigual/g) || []).length
     cap.restore()
     await act(async () => root.unmount())
 
-    assert.equal(n, '1')
-    assert.match(ok, /aviso|Separación|incongruen|hilos/i)
+    assert.equal(n, '0', 'no debe agregar la lectura')
+    assert.ok(bloqueoBtn?.disabled, 'botón marcado como bloqueo por separación')
+    assert.equal(sepCount, 1, `mensaje "Separación desigual" una vez, got ${sepCount}`)
     assert.ok(htmlLen > 200)
     assert.equal(fatals.length, 0, fatals.join('\n'))
   })
