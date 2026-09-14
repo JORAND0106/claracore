@@ -8,6 +8,7 @@ import interactionPlugin from '@fullcalendar/interaction'
 import esLocale from '@fullcalendar/core/locales/es'
 import ItemDetalleModal from './ItemDetalleModal'
 import TareaFormModal from './TareaFormModal'
+import BitacoraExportRangoBar from './BitacoraExportRangoBar'
 import { MSG_ACTA_ACCESO_RESTRINGIDO } from './ActasRepositorio'
 import { ACTA_TIPOS, ESTADOS } from './seguimientoTheme'
 import { hoyBogotaDate } from './vencimientoLevels'
@@ -512,6 +513,23 @@ export default function SeguimientoCalendario({
               <div className="cc-seguim-filter-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 <button type="button" onClick={() => setReloadTick((n) => n + 1)} style={ghost(t)}>Buscar</button>
               </div>
+              {canExportBitacora ? (
+                <div style={{
+                  flex: '1 1 100%',
+                  marginTop: 4,
+                  paddingTop: 10,
+                  borderTop: `1px dashed ${t.border}`,
+                }}>
+                  <BitacoraExportRangoBar
+                    t={t}
+                    api={api}
+                    variant="inline"
+                    compact={viewportCompact}
+                    initialDesde={filtros.fecha_desde}
+                    initialHasta={filtros.fecha_hasta}
+                  />
+                </div>
+              ) : null}
             </div>
           )}
         </div>

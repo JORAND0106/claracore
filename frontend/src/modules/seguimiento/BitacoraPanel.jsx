@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import BitacoraEntradaEditor from './BitacoraEntradaEditor'
+import BitacoraExportRangoBar from './BitacoraExportRangoBar'
 import { accesoBitacora } from './bitacoraPermisos'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import { createSeguimientoApi } from './seguimientoApi'
@@ -14,19 +15,10 @@ function fmtFecha(iso) {
   }
 }
 
-function triggerDownload(blob, filename) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename || 'bitacora_export'
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 1500)
-}
-
 /**
  * Hilo cronológico Bitácora: diarios + grilla Excel de eventos.
+ * Nota: el módulo Seguimiento usa Calendario + Libro digital como entrada
+ * principal; este panel conserva el listado y reutiliza Exportar rango.
  */
 export default function BitacoraPanel({
   t,
@@ -44,8 +36,6 @@ export default function BitacoraPanel({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filtros, setFiltros] = useState({ tipo: '', fecha_desde: '', fecha_hasta: '', q: '' })
-  const [exportFmt, setExportFmt] = useState('pdf')
-  const [exporting, setExporting] = useState(false)
   const [editor, setEditor] = useState(null)
 
   const load = useCallback(async () => {
@@ -72,30 +62,6 @@ export default function BitacoraPanel({
   useEffect(() => { void load() }, [load, refreshKey])
 
   const diarios = useMemo(() => rows.filter((r) => r.tipo !== 'evento'), [rows])
-
-  const exportarRango = useCallback(async () => {
-    if (!api?.exportBitacoraRangoBlob) return
-    const d0 = String(filtros.fecha_desde || '').slice(0, 10)
-    const d1 = String(filtros.fecha_hasta || '').slice(0, 10)
-    if (!d0 || !d1) {
-      setError('Indique fecha Desde y Hasta para exportar el rango.')
-      return
-    }
-    if (d1 < d0) {
-      setError('La fecha Hasta debe ser posterior o igual a Desde.')
-      return
-    }
-    setExporting(true)
-    setError('')
-    try {
-      const { blob, filename } = await api.exportBitacoraRangoBlob(d0, d1, exportFmt)
-      triggerDownload(blob, filename)
-    } catch (e) {
-      setError(e.message || 'No se pudo exportar el rango')
-    } finally {
-      setExporting(false)
-    }
-  }, [api, filtros.fecha_desde, filtros.fecha_hasta, exportFmt])
 
   if (!permisos.ver) {
     return (
@@ -169,37 +135,19 @@ export default function BitacoraPanel({
           />
         </label>
         <button type="button" onClick={() => void load()} style={btnGhost}>Buscar</button>
-        {permisos.exportar && (
-          <>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: t.textMuted }}>
-              Formato
-              <select
-                value={exportFmt}
-                onChange={(e) => setExportFmt(e.target.value)}
-                style={inp}
-                aria-label="Formato de exportación"
-              >
-                <option value="pdf">PDF</option>
-                <option value="docx">Word (.docx)</option>
-                <option value="md">Markdown (.md)</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => void exportarRango()}
-              style={{
-                ...btnGhost,
-                opacity: exporting ? 0.7 : 1,
-                cursor: exporting ? 'wait' : 'pointer',
-              }}
-              disabled={exporting}
-              title="Exporta todos los Reportes Diarios del rango (omitiendo días vacíos)"
-            >
-              {exporting ? 'Exportando…' : 'Exportar rango'}
-            </button>
-          </>
-        )}
       </div>
+
+      {permisos.exportar ? (
+        <div style={{ marginBottom: 14 }}>
+          <BitacoraExportRangoBar
+            t={t}
+            api={api}
+            variant="panel"
+            initialDesde={filtros.fecha_desde}
+            initialHasta={filtros.fecha_hasta}
+          />
+        </div>
+      ) : null}
 
       {error && (
         <div style={{
