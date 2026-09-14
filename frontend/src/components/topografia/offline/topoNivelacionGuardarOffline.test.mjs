@@ -4,7 +4,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { filasToLecturas, nuevaFilaPunto } from '../../../utils/topografia_nivelacion.js'
-import { resolverPayloadLecturasNivelacionOffline } from './topoNivelacionLecturasPayload.js'
+import {
+  preferPendingNivelacionDetail,
+  resolverPayloadLecturasNivelacionOffline,
+} from './topoNivelacionLecturasPayload.js'
 
 describe('resolverPayloadLecturasNivelacionOffline', () => {
   it('acepta el body online { lecturas, tipo_nivel } sin tratarlo como filas UI', () => {
