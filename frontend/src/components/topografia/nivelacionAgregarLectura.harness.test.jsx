@@ -216,14 +216,17 @@ describe('Agregar lectura — harness cartera+panel', () => {
     const n = rootEl.querySelector('[data-testid="nfilas"]')?.textContent
     const bloqueoBtn = rootEl.querySelector('[data-testid="niv-hilos-sep-bloqueo"]')
     const htmlLen = rootEl.innerHTML.length
-    // Mensaje detallado una sola vez (compacto bajo el bloque)
-    const sepCount = (rootEl.textContent.match(/Separación desigual/g) || []).length
+    // Mensaje corto visible una sola vez; detalle solo en tooltip (?)
+    const sepCount = (rootEl.textContent.match(/S − M =/g) || []).length
+    const help = rootEl.querySelector('[data-testid="niv-alerta-hilos-help"]')
     cap.restore()
     await act(async () => root.unmount())
 
     assert.equal(n, '0', 'no debe agregar la lectura')
     assert.ok(bloqueoBtn?.disabled, 'botón marcado como bloqueo por separación')
-    assert.equal(sepCount, 1, `mensaje "Separación desigual" una vez, got ${sepCount}`)
+    assert.equal(sepCount, 1, `mensaje corto "S − M =" una vez, got ${sepCount}`)
+    assert.ok(help, 'debe haber ícono de ayuda (?)')
+    assert.match(help.getAttribute('title') || '', /Separación desigual|Corrija/i)
     assert.ok(htmlLen > 200)
     assert.equal(fatals.length, 0, fatals.join('\n'))
   })

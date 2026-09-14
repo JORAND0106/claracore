@@ -120,11 +120,13 @@ export function styleInputCartera(ui, bloques, bk, extra = {}, alerta = false) {
   }, alerta)
 }
 
-export function AlertaHilos({ title, compact = false }) {
+export function AlertaHilos({ title, tip = null, compact = false }) {
+  const help = tip || title
   if (compact) {
     return (
       <div
         role="status"
+        data-testid="niv-alerta-hilos-compact"
         style={{
           marginTop: 4,
           padding: '4px 6px',
@@ -135,16 +137,43 @@ export function AlertaHilos({ title, compact = false }) {
           color: '#991b1b',
           background: 'rgba(220,38,38,0.12)',
           border: '1px solid rgba(220,38,38,0.35)',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          maxWidth: '100%',
         }}
       >
-        {title}
+        <span style={{ minWidth: 0 }}>{title}</span>
+        {help ? (
+          <span
+            title={help}
+            aria-label={help}
+            data-testid="niv-alerta-hilos-help"
+            style={{
+              display: 'inline-flex',
+              width: 14,
+              height: 14,
+              borderRadius: '50%',
+              background: '#991b1b',
+              color: '#fff',
+              fontSize: 9,
+              fontWeight: 700,
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'help',
+              flexShrink: 0,
+            }}
+          >
+            ?
+          </span>
+        ) : null}
       </div>
     )
   }
   return (
     <span
-      title={title}
-      aria-label={title}
+      title={help}
+      aria-label={help}
       style={{
         display: 'inline-flex',
         width: 14,
