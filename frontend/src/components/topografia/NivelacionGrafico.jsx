@@ -4,6 +4,7 @@ import { fmtNum } from '../../utils/topografia_angular'
 import {
   DIST_MAX_VISUAL_ALERT_M,
   distanciaExcedeAlerta,
+  puntosPerfilNivelacion,
 } from '../../utils/topografia_nivelacion'
 
 function niceStep(span) {
@@ -16,13 +17,24 @@ function niceStep(span) {
   return 10 * mag
 }
 
-function parseAbscisa(val, fallback) {
-  if (val == null || val === '') return fallback
-  const n = Number(String(val).replace(',', '.'))
-  return Number.isFinite(n) ? n : fallback
-}
-
 const STROKE_ALERTA = 'rgba(220, 38, 38, 0.55)'
+
+/** Distancias V+/V− de filas con cota (mismo filtro que puntosPerfilNivelacion). */
+function distanciasPerfilDesdeFilas(filasVista) {
+  const out = []
+  for (let i = 0; i < (filasVista || []).length; i += 1) {
+    const f = filasVista[i]
+    const cota = f?.cota != null ? Number(f.cota) : null
+    if (cota == null || Number.isNaN(cota)) continue
+    const distVp = f.distancia_vplus_calc != null ? Math.abs(Number(f.distancia_vplus_calc)) : 0
+    const distVm = f.distancia_vminus_calc != null ? Math.abs(Number(f.distancia_vminus_calc)) : 0
+    out.push({
+      dVp: Number.isFinite(distVp) ? distVp : 0,
+      dVm: Number.isFinite(distVm) ? distVm : 0,
+    })
+  }
+  return out
+}
 
 export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto = 360 }) {
   const ui = useTopoTheme()
@@ -32,27 +44,13 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
   const panRef = useRef({ dragging: false, x0: 0, y0: 0, pan0: { x: 0, y: 0 } })
 
   const plot = useMemo(() => {
-    let prog = 0
-    const pts = []
-    for (let i = 0; i < filasVista.length; i += 1) {
-      const f = filasVista[i]
-      const cota = f.cota != null ? Number(f.cota) : null
-      if (cota == null || Number.isNaN(cota)) continue
-      const distVp = f.distancia_vplus_calc != null ? Math.abs(Number(f.distancia_vplus_calc)) : 0
-      const distVm = f.distancia_vminus_calc != null ? Math.abs(Number(f.distancia_vminus_calc)) : 0
-      const dVpFinite = Number.isFinite(distVp) ? distVp : 0
-      const dVmFinite = Number.isFinite(distVm) ? distVm : 0
-      prog += dVpFinite || dVmFinite || 0
-      const abs = parseAbscisa(f.abscisa, prog)
-      pts.push({
-        nombre: f.nombre_punto || `#${i + 1}`,
-        abscisa: abs,
-        cota,
-        esCierre: Boolean(f.es_fila_cierre),
-        dVp: dVpFinite,
-        dVm: dVmFinite,
-      })
-    }
+    const base = puntosPerfilNivelacion(filasVista)
+    const dists = distanciasPerfilDesdeFilas(filasVista)
+    const pts = base.map((p, i) => ({
+      ...p,
+      dVp: dists[i]?.dVp ?? 0,
+      dVm: dists[i]?.dVm ?? 0,
+    }))
     if (pts.length < 2) return null
 
     const absVals = pts.map((p) => p.abscisa)
@@ -208,7 +206,7 @@ export default function NivelacionGrafico({ filasVista = [], ancho = 560, alto =
             ),
           )}
 
-          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle">Abscisa (m) →</text>
+          <text x={plot.margin.l + plot.w / 2} y={alto - 6} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle">Distancia acumulada (m) →</text>
           <text x={14} y={plot.margin.t + plot.h / 2} fontSize="9" fill={ui.grafico.labelFill} textAnchor="middle" transform={`rotate(-90 14 ${plot.margin.t + plot.h / 2})`}>Cota (m) →</text>
 
           <g>
