@@ -19,7 +19,7 @@ describe('Operador / Abscisa PK', () => {
   it('NivelacionForm usa select de operadores y modal PK', () => {
     const src = readFileSync(join(dir, 'NivelacionForm.jsx'), 'utf8')
     assert.match(src, /BitacoraMaterialUbicacionModal/)
-    assert.match(src, /setPkMapIdx/)
+    assert.match(src, /setPkMapTarget/)
     assert.match(src, /Solo usuarios con cargo de topografía/)
     assert.doesNotMatch(src, /list="topo-operadores-niv"/)
   })

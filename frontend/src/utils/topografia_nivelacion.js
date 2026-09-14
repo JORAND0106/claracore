@@ -116,6 +116,8 @@ export function nuevaFilaPunto(orden = 1, esPrimera = false) {
     nombre_punto: '',
     tipo_punto: esPrimera ? 'BM' : '',
     abscisa: '',
+    /** Abscisa de circuito (m) del punto de inicio; solo fila 0. */
+    abscisa_inicial: '',
     descripcion_punto: '',
     dist_vplus_m: '',
     dist_vminus_m: '',
@@ -300,13 +302,15 @@ export function faltantesMetadatosFila(fila, idx, bmInicialNombre) {
   const nombre = idx === 0
     ? (bmInicialNombre || (fila.nombre_punto || '').trim())
     : (fila.nombre_punto || '').trim()
+  const abscisaCircuito = parseAbscisa(fila?.abscisa_inicial)
   const abscisaVal = fila?.ubicacion_pk_id
     ? String(fila.ubicacion_pk || fila.abscisa || '').trim() || 'pk'
-    : parseAbscisa(fila.abscisa)
+    : (abscisaCircuito ?? parseAbscisa(fila.abscisa))
   const descripcion = (fila.descripcion_punto || '').trim()
   let tipo = (fila.tipo_punto || '').trim()
   if (idx === 0 && !tipo) tipo = 'BM'
   const abscisaNoNumerica = abscisaInvalida(fila)
+    && abscisaCircuito == null
   return {
     nombre: !nombre,
     abscisa: abscisaVal == null,
@@ -576,23 +580,19 @@ export function distanciaFila(fila, tipoNivel) {
 }
 
 /**
- * Puntos del perfil del circuito: eje X = distancia acumulada (m), no PK/abscisa de cartera.
+ * Acumulación de distancias del perfil (misma regla que el eje X del gráfico).
+ * Alineado 1:1 con índices de `filasVista`; `null` si la fila aún no tiene cota.
  *
- * Primer punto en 0. Cada tramo origen→destino suma:
- *   dist(V+ del origen) + dist(V− del destino)
- * (vista atrás de la estación que mira al origen + vista adelante que fija el destino).
- * El PK_ID / abscisa de plataforma no intervienen.
- *
- * @param {Array} filasVista filas de `calcularVistaNivelacion` (con cota y distancias calc).
- * @returns {Array<{ nombre: string, abscisa: number, cota: number, esCierre: boolean }>}
+ * Primer punto con cota → 0. Cada tramo origen→destino = V+(origen) + V−(destino).
  */
-export function puntosPerfilNivelacion(filasVista) {
-  const pts = []
+export function distanciasAcumuladasPorFila(filasVista) {
+  const n = (filasVista || []).length
+  const out = Array.from({ length: n }, () => null)
   let prevDVp = 0
   let accum = 0
   let first = true
 
-  for (let i = 0; i < (filasVista || []).length; i += 1) {
+  for (let i = 0; i < n; i += 1) {
     const f = filasVista[i]
     const cota = f?.cota != null ? Number(f.cota) : null
     if (cota == null || Number.isNaN(cota)) continue
@@ -606,19 +606,74 @@ export function puntosPerfilNivelacion(filasVista) {
       accum = 0
       first = false
     } else {
-      // Tramo: V+ del punto de origen + V− del punto de destino
       accum += prevDVp + dVm
     }
 
-    pts.push({
-      nombre: (f.nombre_punto || `#${i + 1}`).trim() || `#${i + 1}`,
-      abscisa: accum,
-      cota,
-      esCierre: Boolean(f.es_fila_cierre),
-    })
+    out[i] = { distancia_acumulada: accum, dVp, dVm }
     prevDVp = dVp
   }
+  return out
+}
 
+/** Abscisa inicial del circuito (m), capturada en la primera V+. */
+export function abscisaInicialCircuito(filas) {
+  const first = (filas || [])[0]
+  if (!first) return null
+  const fromIni = parseAbscisa(first.abscisa_inicial)
+  if (fromIni != null) return fromIni
+  // Compat: abscisa numérica en fila 0 si no hay PK de mapa
+  if (first.ubicacion_pk_id) return null
+  return parseAbscisa(first.abscisa)
+}
+
+/**
+ * Añade distancia acumulada y abscisa de circuito (= inicial + acum) a cada fila vista.
+ * Misma acumulación que `puntosPerfilNivelacion`.
+ */
+export function enriquecerFilasVistaAbscisado(filasVista, abscisaInicial) {
+  const dists = distanciasAcumuladasPorFila(filasVista)
+  const ini = abscisaInicial == null || abscisaInicial === ''
+    ? null
+    : Number(abscisaInicial)
+  const hasIni = Number.isFinite(ini)
+  return (filasVista || []).map((f, i) => {
+    const d = dists[i]
+    if (!d) {
+      return { ...f, distancia_acumulada: null, abscisa_circuito: null }
+    }
+    return {
+      ...f,
+      distancia_acumulada: d.distancia_acumulada,
+      abscisa_circuito: hasIni ? ini + d.distancia_acumulada : null,
+    }
+  })
+}
+
+/**
+ * Puntos del perfil del circuito: eje X = distancia acumulada (m), no PK/abscisa de cartera.
+ *
+ * Primer punto en 0. Cada tramo origen→destino suma:
+ *   dist(V+ del origen) + dist(V− del destino)
+ * (vista atrás de la estación que mira al origen + vista adelante que fija el destino).
+ * El PK_ID / abscisa de plataforma no intervienen.
+ *
+ * @param {Array} filasVista filas de `calcularVistaNivelacion` (con cota y distancias calc).
+ * @returns {Array<{ nombre: string, abscisa: number, cota: number, esCierre: boolean }>}
+ */
+export function puntosPerfilNivelacion(filasVista) {
+  const dists = distanciasAcumuladasPorFila(filasVista)
+  const pts = []
+  for (let i = 0; i < (filasVista || []).length; i += 1) {
+    const d = dists[i]
+    if (!d) continue
+    const f = filasVista[i]
+    pts.push({
+      nombre: (f.nombre_punto || `#${i + 1}`).trim() || `#${i + 1}`,
+      abscisa: d.distancia_acumulada,
+      cota: Number(f.cota),
+      esCierre: Boolean(f.es_fila_cierre),
+    })
+  }
   return pts
 }
 
@@ -688,12 +743,15 @@ export function filasToLecturas(filas, tipoNivel, opts = {}) {
       if (!bloqueTieneLecturaCalculo(bloque, tipoExport)) return
       const lectura = lecturaMedioEfectiva(bloque, tipoExport)
       const distLect = tipo === 'V+' ? distVplus : tipo === 'V-' ? distVminus : null
+      const abscisaPersist = rowIdx === 0 && parseAbscisa(fila.abscisa_inicial) != null
+        ? String(parseAbscisa(fila.abscisa_inicial))
+        : ((fila.ubicacion_pk || fila.abscisa)?.trim?.() || fila.abscisa?.trim?.() || null)
       const item = {
         orden: ordenBase + rowIdx * 10 + TIPO_ORDEN[tipo],
         nombre_punto: fila.nombre_punto.trim(),
         tipo_punto: fila.tipo_punto || (rowIdx === 0 ? 'BM' : 'estacion'),
         tipo_lectura: tipo,
-        abscisa: (fila.ubicacion_pk || fila.abscisa)?.trim?.() || fila.abscisa?.trim?.() || null,
+        abscisa: abscisaPersist,
         descripcion_punto: fila.descripcion_punto?.trim() || null,
         distancia_m: distLect,
         lectura,
@@ -797,6 +855,10 @@ export function lecturasToFilas(lecturas, tipoNivel, opts = {}) {
         fila.es_fila_cierre = true
       }
       if (i > 0 && !fila.tipo_punto) fila.tipo_punto = l.tipo_punto === 'TP' ? 'estacion' : (l.tipo_punto || '')
+      if (i === 0) {
+        const n = parseAbscisa(fila.abscisa)
+        if (n != null) fila.abscisa_inicial = n
+      }
       return fila
     })
   }
@@ -821,6 +883,12 @@ export function lecturasToFilas(lecturas, tipoNivel, opts = {}) {
   return [...rowMap.entries()]
     .sort(([a], [b]) => a - b)
     .map(([, f]) => f)
+    .map((fila, idx) => {
+      if (idx !== 0) return fila
+      const n = parseAbscisa(fila.abscisa_inicial) ?? parseAbscisa(fila.abscisa)
+      if (n == null) return fila
+      return { ...fila, abscisa_inicial: n }
+    })
 }
 
 /** Umbral de advertencia visual (m) para distancias V+/V−. No bloquea registro. */
@@ -874,9 +942,13 @@ export function calcularVistaNivelacion(filas, tipoNivel, cotasBiblioteca = {}, 
   })
 
   const distTotal = distVplusTotal + distVminusTotal
+  const filasVistaAbs = enriquecerFilasVistaAbscisado(
+    filasVista,
+    abscisaInicialCircuito(filas),
+  )
 
   return {
-    filasVista,
+    filasVista: filasVistaAbs,
     cotas,
     distancia_vplus_m: distVplusTotal,
     distancia_vminus_m: distVminusTotal,
@@ -980,8 +1052,11 @@ export function validarBorradorParaAgregar(borrador, filas, tipoNivel, bmInicial
   if (!metadatosFilaCompletos(filaCheck, metaIdx, bmInicialNombre)) {
     return { ok: false, msg: 'Complete nombre, abscisa (PK), descripción y tipo antes de agregar.' }
   }
-  if (abscisaInvalida(filaCheck)) {
+  if (abscisaInvalida(filaCheck) && parseAbscisa(filaCheck.abscisa_inicial) == null) {
     return { ok: false, msg: ABSCISA_NUMERICA_MSG }
+  }
+  if (idx === 0 && filaTieneVplus(filaCheck, tipoNivel) && parseAbscisa(filaCheck.abscisa_inicial) == null) {
+    return { ok: false, msg: 'Indique la abscisa inicial del circuito (m) en la primera V+.' }
   }
 
   if (esVistaIntermedia) {

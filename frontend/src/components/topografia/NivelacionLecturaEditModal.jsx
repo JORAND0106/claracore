@@ -11,6 +11,7 @@ import {
   distanciaTaquimetrica,
   esFilaSoloVi,
   hilosIncongruentes,
+  parseAbscisa,
 } from '../../utils/topografia_nivelacion'
 import {
   AlertaHilos,
@@ -134,6 +135,7 @@ export default function NivelacionLecturaEditModal({
       tipo_punto: fila.tipo_punto || (idx === 0 ? 'BM' : ''),
       descripcion_punto: fila.descripcion_punto || '',
       abscisa: fila.abscisa || '',
+      abscisa_inicial: fila.abscisa_inicial ?? '',
       dist_vplus_m: fila.dist_vplus_m ?? '',
       dist_vminus_m: fila.dist_vminus_m ?? '',
       vplus: { ...bloqueVacio(), ...(fila.vplus || {}) },
@@ -217,8 +219,12 @@ export default function NivelacionLecturaEditModal({
       onError?.({ titulo: 'Descripción', mensaje: 'Complete la descripción del punto.' })
       return
     }
-    if (!form.ubicacion_pk_id && !String(form.abscisa || '').trim()) {
+    if (!form.ubicacion_pk_id && !String(form.abscisa || '').trim() && parseAbscisa(form.abscisa_inicial) == null) {
       onError?.({ titulo: 'Abscisa', mensaje: ABSCISA_NUMERICA_MSG })
+      return
+    }
+    if (esPrimera && parseAbscisa(form.abscisa_inicial) == null) {
+      onError?.({ titulo: 'Abscisa inicial', mensaje: 'Indique la abscisa inicial del circuito (m).' })
       return
     }
     const avisos = []
@@ -302,6 +308,8 @@ export default function NivelacionLecturaEditModal({
               #{idx + 1}
               {vistaRow?.altura_instrumento != null ? ` · H.ins. ${fmtN(vistaRow.altura_instrumento)}` : ''}
               {vistaRow?.cota != null ? ` · Cota ${fmtN(vistaRow.cota)}` : ''}
+              {vistaRow?.distancia_acumulada != null ? ` · Dist.acum. ${fmtN(vistaRow.distancia_acumulada, 2)}` : ''}
+              {vistaRow?.abscisa_circuito != null ? ` · Abs.circuito ${fmtN(vistaRow.abscisa_circuito, 2)}` : ''}
             </div>
           </div>
 
@@ -377,6 +385,24 @@ export default function NivelacionLecturaEditModal({
                     />
                   </td>
                 </tr>
+                {esPrimera ? (
+                  <tr>
+                    <td style={{ ...tdMeta, ...thMeta }} colSpan={2}>Abscisa inicial (m)</td>
+                    <td style={tdMeta} colSpan={2}>
+                      <input
+                        type="number"
+                        step="any"
+                        inputMode="decimal"
+                        value={form.abscisa_inicial ?? ''}
+                        onChange={(e) => setForm({ ...form, abscisa_inicial: e.target.value })}
+                        style={inp}
+                        disabled={busy}
+                        placeholder="Punto de partida del circuito"
+                        title="Abscisa de campo del BM. Dist. acum. del perfil parte de 0 desde aquí."
+                      />
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>

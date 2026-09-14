@@ -274,6 +274,24 @@ export default function NivelacionIngresoPanel({
               )}
             </td>
           </tr>
+          {esPrimeraFila && !modoContra ? (
+            <tr>
+              <td style={sheet.td}>Abscisa inicial</td>
+              <td style={sheet.td}>
+                <input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  value={borrador.abscisa_inicial ?? ''}
+                  disabled={disabled}
+                  onChange={(e) => patch({ abscisa_inicial: e.target.value })}
+                  style={{ ...ui.compactInput, color: ui.text, width: '100%', boxSizing: 'border-box' }}
+                  placeholder="m (punto de partida del circuito)"
+                  title="Abscisa de campo del BM / punto de inicio. La distancia acumulada del perfil parte de aquí."
+                />
+              </td>
+            </tr>
+          ) : null}
           <tr>
             <td style={sheet.td}>Descripción</td>
             <td style={sheet.td}>
@@ -297,7 +315,9 @@ export default function NivelacionIngresoPanel({
           <p style={{ margin: 0, fontSize: 'var(--cc-xs)', color: ui.textMuted, lineHeight: 1.35 }}>
             {modoContra
               ? 'Escriba el nombre de un punto de la ida: Tipo, PK y Descripción se completan solos.'
-              : 'Vi se agrega como fila propia (punto distinto), justo después de la estación con V+.'}
+              : esPrimeraFila
+                ? 'Indique la abscisa inicial (m) del BM: es el origen del abscisado acumulado del circuito.'
+                : 'Vi se agrega como fila propia (punto distinto), justo después de la estación con V+.'}
           </p>
         )}
       </div>
