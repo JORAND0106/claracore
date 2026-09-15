@@ -1,15 +1,11 @@
 /**
  * Flujo secuencial de pestañas del editor de actas.
  *
- * Aplica SOLO en el primer diligenciamiento (acta nueva, aún no liberada):
+ * Aplica SOLO en el primer diligenciamiento (acta nueva con flujo v>=1, aún no liberada):
  *   encabezado → orden → asistentes → compromisos → ideas → Vista previa
  *
  * Al guardar Temas (ideas) se marca `liberado` y todo el documento queda
- * editable sin restricción de orden. Las actas existentes se migran con
- * liberado=true.
- *
- * Compromisos: en primer diligenciamiento no se avanza mientras exista al
- * menos un compromiso previo con estado_gestion === 'abierto'.
+ * editable. Actas legacy (sin `v`, sin hitos, o `{}`) se tratan como liberadas.
  */
 
 export const FLUJO_TAB_KEYS = ['orden', 'asistentes', 'compromisos', 'ideas']
@@ -33,37 +29,89 @@ export const TAB_MARCA_FLUJO = {
   ideas: 'ideas',
 }
 
-export function emptyFlujoTabs(partial = null) {
+/** Flujo inicial de un acta NUEVA (siempre versionado, no liberado). */
+export function flujoInicialNuevaActa(partial = null) {
   const base = {
     orden: false,
     asistentes: false,
     compromisos: false,
     ideas: false,
     liberado: false,
+    v: 1,
   }
   if (!partial || typeof partial !== 'object') return base
   for (const k of FLUJO_TAB_KEYS) {
     if (partial[k]) base[k] = true
   }
-  // ideas completado (= llegó a Vista previa) o flag explícito → edición libre
   if (partial.liberado || base.ideas) base.liberado = true
   return base
 }
 
+/**
+ * Normaliza un mapa de flujo.
+ * - partial null → estado local por defecto (nueva / secuencial v1)
+ * - {} o sin `v` ni hitos → legacy liberado
+ */
+export function emptyFlujoTabs(partial = null) {
+  if (partial == null) return flujoInicialNuevaActa()
+  if (typeof partial !== 'object') return flujoInicialNuevaActa()
+
+  const hasV = partial.v != null && partial.v !== ''
+  const hasHitos = FLUJO_TAB_KEYS.some((k) => !!partial[k])
+  const keys = Object.keys(partial)
+
+  // Legacy: objeto vacío o sin versión/hitos/liberado → edición libre
+  if (keys.length === 0 || (!hasV && !hasHitos && !partial.liberado)) {
+    return {
+      orden: false,
+      asistentes: false,
+      compromisos: false,
+      ideas: false,
+      liberado: true,
+      v: null,
+    }
+  }
+
+  return flujoInicialNuevaActa(partial)
+}
+
 export function parseFlujoTabs(raw) {
-  if (!raw) return emptyFlujoTabs()
+  if (raw == null || raw === '') return emptyFlujoTabs(null)
   if (typeof raw === 'string') {
+    const s = raw.trim()
+    if (!s || s === '{}' || s === 'null') return emptyFlujoTabs({})
     try {
-      return emptyFlujoTabs(JSON.parse(raw))
+      return emptyFlujoTabs(JSON.parse(s))
     } catch {
-      return emptyFlujoTabs()
+      return emptyFlujoTabs({})
     }
   }
   return emptyFlujoTabs(raw)
 }
 
+/** Une mapas de progreso sin regresar hitos. El primer argumento es la base. */
+export function mergeFlujoProgress(primary, ...rest) {
+  const out = parseFlujoTabs(primary == null ? flujoInicialNuevaActa() : primary)
+  const baseActiva = out.v != null && !out.liberado
+  for (const src of rest) {
+    if (src == null) continue
+    const f = parseFlujoTabs(src)
+    const legacyVacio = f.liberado && f.v == null && !FLUJO_TAB_KEYS.some((k) => f[k])
+    // No dejar que un {} liberado del server borre el progreso de un acta nueva.
+    if (baseActiva && legacyVacio) continue
+    for (const k of FLUJO_TAB_KEYS) {
+      if (f[k]) out[k] = true
+    }
+    if (f.liberado) out.liberado = true
+    if (f.v != null) out.v = f.v
+  }
+  if (out.ideas) out.liberado = true
+  if (out.v == null && !out.liberado) out.v = 1
+  return out
+}
+
 export function flujoLiberado(flujo) {
-  return !!emptyFlujoTabs(flujo).liberado
+  return !!parseFlujoTabs(flujo).liberado
 }
 
 /** Compromisos que aún bloquean el avance (estado literal «abierto»). */
@@ -86,7 +134,7 @@ export function puedeAvanzarDesdeCompromisos(items = []) {
  */
 export function tabDesbloqueada(tabId, { encabezadoGuardado, flujo }) {
   if (!encabezadoGuardado) return tabId === 'encabezado'
-  const f = emptyFlujoTabs(flujo)
+  const f = parseFlujoTabs(flujo)
   // Tras Vista previa (o actas legacy liberadas): todo el documento libre.
   if (f.liberado) return true
   const req = TAB_REQUIERE_FLUJO[tabId]
@@ -112,7 +160,7 @@ export function mensajeTabBloqueada(tabId, { encabezadoGuardado, flujo, tieneAbi
     compromisos: 'Compromisos abiertos',
     ideas: 'Temas y Compromisos',
   }
-  if (req && !emptyFlujoTabs(flujo)[req]) {
+  if (req && !parseFlujoTabs(flujo)[req]) {
     return `Guarde «${labels[req] || req}» para habilitar esta pestaña`
   }
   return 'Pestaña bloqueada'
@@ -123,7 +171,9 @@ export function mensajeTabBloqueada(tabId, { encabezadoGuardado, flujo, tieneAbi
  * Devuelve null nextTab si no debe avanzar (p. ej. bloqueo por compromisos abiertos).
  */
 export function avanceTrasGuardar(tabId, flujoActual, { compromisPrevios = [] } = {}) {
-  const flujo = emptyFlujoTabs(flujoActual)
+  const flujo = parseFlujoTabs(flujoActual)
+  // Asegurar versión de acta en secuencia (nunca “legacy vacío”).
+  if (flujo.v == null && !flujo.liberado) flujo.v = 1
   const marca = TAB_MARCA_FLUJO[tabId]
 
   // Edición libre: no aplicar gate de compromisos ni forzar hitos.

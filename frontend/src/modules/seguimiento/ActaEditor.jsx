@@ -13,8 +13,9 @@ import { formatMinutosCupo } from './actaGrabacionHelpers'
 import { mergeTemasGrabacionViva } from './actaGrabacionLive'
 import {
   avanceTrasGuardar,
-  emptyFlujoTabs,
+  flujoInicialNuevaActa,
   flujoLiberado,
+  mergeFlujoProgress,
   mensajeTabBloqueada,
   normalizeOrdenItem,
   parseFlujoTabs,
@@ -347,7 +348,7 @@ export default function ActaEditor({
     proxima_hora: '',
     proxima_lugar: '',
   })
-  const [flujoTabs, setFlujoTabs] = useState(() => emptyFlujoTabs())
+  const [flujoTabs, setFlujoTabs] = useState(() => flujoInicialNuevaActa())
   const [claraIdx, setClaraIdx] = useState(null)
   /** Índice de idea cuyo editor de esquema está abierto. */
   const [esquemaIdeaIdx, setEsquemaIdeaIdx] = useState(null)
@@ -670,7 +671,7 @@ export default function ActaEditor({
     ubicacion: formSrc.ubicacion,
     tipo_acta: formSrc.tipo_acta || 'interna',
     orden_del_dia: serializeOrdenItems(formSrc.orden_items || []),
-    flujo_tabs: emptyFlujoTabs(flujoSrc),
+    flujo_tabs: mergeFlujoProgress(flujoInicialNuevaActa(), flujoSrc),
     elaborador_id: formSrc.elaborador_id,
     elaborador_nombre: formSrc.elaborador_nombre,
     proxima_fecha: (formSrc.proxima_fecha || '').trim() || null,
@@ -725,7 +726,7 @@ export default function ActaEditor({
 
   const buildPayloadReservaOrden = (flujoSrc = flujoTabs) => ({
     orden_del_dia: serializeOrdenItems(form.orden_items || []),
-    flujo_tabs: emptyFlujoTabs(flujoSrc),
+    flujo_tabs: mergeFlujoProgress(flujoInicialNuevaActa(), flujoSrc),
   })
 
   const applySavedActa = (row) => {
@@ -734,7 +735,8 @@ export default function ActaEditor({
     setLocalActaId(row.id)
     setConsecutivo(row.consecutivo)
     if (row.flujo_tabs != null) {
-      setFlujoTabs(parseFlujoTabs(row.flujo_tabs))
+      // Nunca regresar hitos locales: el server puede devolver {} si la columna no persistió.
+      setFlujoTabs((prev) => mergeFlujoProgress(prev, row.flujo_tabs))
     }
     // Solo sincroniza metadatos e IDs; no reemplaza el contenido local diligeniado.
     setForm((f) => ({
@@ -920,8 +922,10 @@ export default function ActaEditor({
         null,
         { flujoOverride: avance.flujo, reservaOrdenOnly },
       )
-      setFlujoTabs(emptyFlujoTabs(row.flujo_tabs != null ? row.flujo_tabs : avance.flujo))
-      const liberadoAhora = !flujoLiberado(flujoTabs) && flujoLiberado(avance.flujo)
+      // El avance local manda: si el backend aún no persistió flujo_tabs, no se pierde el progreso.
+      const flujoMerged = mergeFlujoProgress(avance.flujo, row.flujo_tabs)
+      setFlujoTabs(flujoMerged)
+      const liberadoAhora = !flujoLiberado(flujoTabs) && flujoLiberado(flujoMerged)
       const msg = estadoExtra === 'realizada'
         ? 'Acta marcada como Realizada.'
         : (liberadoAhora
@@ -931,7 +935,7 @@ export default function ActaEditor({
       onSaved?.(row, { stay: true, enviada: estadoExtra === 'realizada' })
       if (avance.nextTab && tabDesbloqueada(avance.nextTab, {
         encabezadoGuardado: true,
-        flujo: emptyFlujoTabs(row.flujo_tabs != null ? row.flujo_tabs : avance.flujo),
+        flujo: flujoMerged,
       })) {
         setTab(avance.nextTab)
       }
