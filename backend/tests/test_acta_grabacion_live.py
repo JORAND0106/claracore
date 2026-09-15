@@ -1,10 +1,15 @@
 """Tests: STT + checkpoints manuales de Temas (sin síntesis periódica)."""
 from __future__ import annotations
 
+import pytest
+from fastapi import HTTPException
+
 from acta_grabacion_live_service import (
     MAX_TEMAS,
     MAX_TRANSCRIPT_CHARS,
+    MSG_SCHEMA_LIVE,
     TRAMO_MIN_CHARS,
+    _is_missing_live_column_error,
     _merge_temas_por_clave,
     _normalize_temas,
     _parse_temas_json,
@@ -133,11 +138,137 @@ class _FakeSB:
     def table(self, name):
         return _FakeQ(self.store, name)
 
+    def rpc(self, *_a, **_k):
+        raise RuntimeError("rpc no disponible en fake")
+
+
+class _MissingLiveColError(Exception):
+    """Simula APIError PostgREST PGRST204."""
+
+    def __init__(self, message: str, code: str = "PGRST204"):
+        super().__init__({"message": message, "code": code, "hint": None, "details": None})
+        self.code = code
+        self.message = message
+
+
+class _FakeQMissingLive(_FakeQ):
+    """Select/update de columnas live falla con PGRST204 (schema sin migración)."""
+
+    def select(self, cols="*", *_a, **_k):
+        self._op = "select"
+        self._select_cols = cols
+        return self
+
+    def execute(self):
+        cols = getattr(self, "_select_cols", "*") or "*"
+        if self._op == "select" and cols != "*" and "transcripcion" in str(cols):
+            raise _MissingLiveColError(
+                "Could not find the 'transcripcion' column of "
+                "'acta_grabacion_sesion' in the schema cache"
+            )
+        if self._op == "update" and self._payload is not None:
+            for key in ("transcripcion", "temas_propuestos", "checkpoint_chars",
+                        "temas_escucha_activa", "ultima_sintesis_en"):
+                if key in self._payload:
+                    raise _MissingLiveColError(
+                        f"Could not find the '{key}' column of "
+                        "'acta_grabacion_sesion' in the schema cache"
+                    )
+        return super().execute()
+
+
+class _FakeSBMissingLive(_FakeSB):
+    def table(self, name):
+        return _FakeQMissingLive(self.store, name)
+
+
+def test_is_missing_live_column_detecta_pgrst204():
+    exc = _MissingLiveColError(
+        "Could not find the 'transcripcion' column of "
+        "'acta_grabacion_sesion' in the schema cache"
+    )
+    assert _is_missing_live_column_error(exc) is True
+    assert _is_missing_live_column_error(RuntimeError("otro error")) is False
+
+
+def test_ingest_soft_fail_si_faltan_columnas_live(monkeypatch):
+    """La grabación (cupo) no debe tumbarse por PGRST204 en transcripcion."""
+    import asyncio
+    import acta_grabacion_live_service as svc
+
+    svc._live_schema_ok = None
+    store = {
+        "acta_grabacion_sesion": [{
+            "id": 1,
+            "contrato_id": 10,
+            "usuario_id": 5,
+            "estado": "activa",
+            "transcripcion": "",
+            "temas_propuestos": [],
+            "checkpoint_chars": 0,
+            "temas_escucha_activa": False,
+        }],
+    }
+    sb = _FakeSBMissingLive(store)
+    out = asyncio.run(
+        svc.ingest_transcript_delta(sb, 10, 1, 5, "Texto de prueba de la reunión en curso.")
+    )
+    assert out.get("schema_live_ok") is False
+    assert MSG_SCHEMA_LIVE in (out.get("detalle") or "")
+    # No se escribió (columna ausente); sesión sigue activa
+    assert store["acta_grabacion_sesion"][0]["transcripcion"] == ""
+    assert store["acta_grabacion_sesion"][0]["estado"] == "activa"
+
+
+def test_armar_checkpoint_503_si_faltan_columnas_live():
+    import acta_grabacion_live_service as svc
+
+    svc._live_schema_ok = None
+    store = {
+        "acta_grabacion_sesion": [{
+            "id": 1,
+            "contrato_id": 10,
+            "usuario_id": 5,
+            "estado": "activa",
+            "transcripcion": "algo",
+            "temas_propuestos": [],
+            "checkpoint_chars": 0,
+            "temas_escucha_activa": False,
+        }],
+    }
+    sb = _FakeSBMissingLive(store)
+    with pytest.raises(HTTPException) as ei:
+        svc.armar_checkpoint_temas(sb, 10, 1, 5)
+    assert ei.value.status_code == 503
+    assert "transcripcion" in str(ei.value.detail).lower() or "columnas" in str(ei.value.detail).lower()
+
+
+def test_leer_estado_vivo_reporta_schema_live_ok_false():
+    import acta_grabacion_live_service as svc
+
+    svc._live_schema_ok = None
+    store = {
+        "acta_grabacion_sesion": [{
+            "id": 1,
+            "contrato_id": 10,
+            "usuario_id": 5,
+            "estado": "activa",
+            "transcripcion": "",
+            "temas_propuestos": [],
+            "checkpoint_chars": 0,
+            "temas_escucha_activa": False,
+        }],
+    }
+    out = svc.leer_estado_vivo(_FakeSBMissingLive(store), 10, 1, 5)
+    assert out["schema_live_ok"] is False
+    assert MSG_SCHEMA_LIVE in (out.get("detalle") or "")
+
 
 def test_armar_y_actualizar_avanza_checkpoint_sin_reprocesar(monkeypatch):
     import asyncio
     import acta_grabacion_live_service as svc
 
+    svc._live_schema_ok = None
     store = {
         "acta_grabacion_sesion": [{
             "id": 1,

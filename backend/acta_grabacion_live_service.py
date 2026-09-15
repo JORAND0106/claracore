@@ -26,6 +26,95 @@ MAX_AUDIO_BYTES = 4_500_000  # ~4.5 MB por chunk
 TRAMO_MIN_CHARS = 40
 MAX_TEMAS = 12
 
+_LIVE_COLS = (
+    "transcripcion",
+    "temas_propuestos",
+    "ultima_sintesis_en",
+    "checkpoint_chars",
+    "temas_escucha_activa",
+)
+_live_schema_ok: Optional[bool] = None
+
+MSG_SCHEMA_LIVE = (
+    "Faltan columnas de grabación en vivo en acta_grabacion_sesion "
+    "(p. ej. transcripcion). Ejecute en Supabase el script "
+    "backend/sql/ops_acta_grabacion_live_columns.sql y reintente."
+)
+
+
+def _is_missing_live_column_error(exc: BaseException) -> bool:
+    msg = str(exc) or ""
+    low = msg.lower()
+    if "pgrst204" in low:
+        return True
+    if "could not find" in low and "acta_grabacion_sesion" in low:
+        return True
+    for col in _LIVE_COLS:
+        if col in low and ("column" in low or "schema cache" in low):
+            return True
+    # APIError de postgrest a veces expone .code / .message
+    code = getattr(exc, "code", None) or getattr(exc, "args", [None])[0]
+    if code == "PGRST204":
+        return True
+    if isinstance(code, dict) and code.get("code") == "PGRST204":
+        return True
+    return False
+
+
+def _try_reload_postgrest_schema(sb: Any) -> bool:
+    try:
+        sb.rpc("sicoe_reload_postgrest_schema").execute()
+        return True
+    except Exception:
+        pass
+    try:
+        sb.rpc("pg_notify", {"channel": "pgrst", "payload": "reload schema"}).execute()
+        return True
+    except Exception:
+        return False
+
+
+def _probe_live_columns(sb: Any) -> bool:
+    """True si PostgREST acepta un update vacío de las columnas live (probe barato vía select)."""
+    try:
+        sb.table("acta_grabacion_sesion").select(
+            "id,transcripcion,temas_propuestos,ultima_sintesis_en,checkpoint_chars,temas_escucha_activa"
+        ).limit(1).execute()
+        return True
+    except Exception as exc:
+        if _is_missing_live_column_error(exc):
+            return False
+        # Error ambiguo (RLS, red): no bloquear grabación.
+        _log.warning("probe live columns ambiguo: %s", exc)
+        return True
+
+
+def ensure_live_columns(sb: Any, *, force: bool = False) -> bool:
+    """Confirma columnas live; intenta reload de schema cache si faltan."""
+    global _live_schema_ok
+    if not force and _live_schema_ok is True:
+        return True
+    if _probe_live_columns(sb):
+        _live_schema_ok = True
+        return True
+    if _try_reload_postgrest_schema(sb):
+        try:
+            import time as _time
+            _time.sleep(0.2)
+        except Exception:
+            pass
+        if _probe_live_columns(sb):
+            _live_schema_ok = True
+            return True
+    _live_schema_ok = False
+    return False
+
+
+def _require_live_columns(sb: Any) -> None:
+    if ensure_live_columns(sb):
+        return
+    raise HTTPException(status_code=503, detail=MSG_SCHEMA_LIVE)
+
 
 def speech_configured() -> bool:
     return bool((os.getenv("AZURE_SPEECH_KEY") or "").strip())
@@ -326,8 +415,32 @@ def _live_payload(
 
 
 def _patch_sesion(sb: Any, sesion_id: int, patch: dict) -> None:
+    """Actualiza sesión; reintenta una vez tras reload si falta columna en schema cache."""
+    global _live_schema_ok
     payload = {**patch, "updated_at": _now_iso()}
-    sb.table("acta_grabacion_sesion").update(payload).eq("id", int(sesion_id)).execute()
+    try:
+        sb.table("acta_grabacion_sesion").update(payload).eq("id", int(sesion_id)).execute()
+        _live_schema_ok = True
+        return
+    except Exception as exc:
+        if not _is_missing_live_column_error(exc):
+            raise
+        _live_schema_ok = False
+        _log.warning("patch sesión live: columna ausente en schema cache (%s)", exc)
+        if _try_reload_postgrest_schema(sb):
+            try:
+                import time as _time
+                _time.sleep(0.2)
+            except Exception:
+                pass
+            try:
+                sb.table("acta_grabacion_sesion").update(payload).eq("id", int(sesion_id)).execute()
+                _live_schema_ok = True
+                return
+            except Exception as exc2:
+                _log.error("patch sesión live tras reload: %s", exc2)
+                raise HTTPException(status_code=503, detail=MSG_SCHEMA_LIVE) from exc2
+        raise HTTPException(status_code=503, detail=MSG_SCHEMA_LIVE) from exc
 
 
 async def ingest_transcript_delta(
@@ -350,11 +463,27 @@ async def ingest_transcript_delta(
     if not delta:
         return _live_payload(sesion)
 
+    # No tumbar la grabación (cupo + descarga) si falta la migración live.
+    if not ensure_live_columns(sb):
+        _log.error("ingest transcript omitido: %s", MSG_SCHEMA_LIVE)
+        return {
+            **_live_payload(sesion, sintetizado=False, delta=delta, detalle=MSG_SCHEMA_LIVE),
+            "schema_live_ok": False,
+        }
+
     prev = sesion.get("transcripcion") or ""
     cp = int(sesion.get("checkpoint_chars") or 0)
     merged, new_cp = append_transcript_tracking_checkpoint(prev, delta, cp)
     patch = {"transcripcion": merged, "checkpoint_chars": new_cp}
-    _patch_sesion(sb, sesion_id, patch)
+    try:
+        _patch_sesion(sb, sesion_id, patch)
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            return {
+                **_live_payload(sesion, sintetizado=False, delta=delta, detalle=MSG_SCHEMA_LIVE),
+                "schema_live_ok": False,
+            }
+        raise
     sesion["transcripcion"] = merged
     sesion["checkpoint_chars"] = new_cp
     return _live_payload(sesion, sintetizado=False, delta=delta)
@@ -383,6 +512,12 @@ async def ingest_audio_chunk(
             "detalle": "AZURE_SPEECH_KEY no configurada; use transcripción del navegador.",
         }
 
+    if not ensure_live_columns(sb):
+        return {
+            **_live_payload(sesion, sintetizado=False, detalle=MSG_SCHEMA_LIVE),
+            "schema_live_ok": False,
+        }
+
     text = await transcribe_audio_azure(audio_bytes, content_type=content_type)
     if not text:
         return _live_payload(sesion, sintetizado=False, delta="")
@@ -402,6 +537,7 @@ def armar_checkpoint_temas(
     usuario_id: int,
 ) -> dict:
     """Checkpoint inicial: a partir de ahora se escucha el audio para Temas (sin sintetizar)."""
+    _require_live_columns(sb)
     sesion = _sesion_row(sb, sesion_id)
     if not sesion:
         raise HTTPException(status_code=404, detail="Sesión no encontrada.")
@@ -429,15 +565,13 @@ async def actualizar_temas_desde_checkpoint(
     usuario_id: int,
 ) -> dict:
     """Analiza el tramo desde el checkpoint vigente hasta ahora y avanza el checkpoint."""
+    _require_live_columns(sb)
     sesion = _sesion_row(sb, sesion_id)
     if not sesion:
         raise HTTPException(status_code=404, detail="Sesión no encontrada.")
     _assert_sesion_activa(sesion, contrato_id, usuario_id)
 
     if not sesion.get("temas_escucha_activa"):
-        # Primer Actualizar sin armado explícito: arma al inicio del tramo actual (0..ahora no).
-        # Mejor: armar checkpoint en el punto actual y no sintetizar aún (sin tramo nuevo).
-        # Si el usuario pulsa Actualizar sin haber pasado por Compromisos, arma y analiza desde 0.
         trans0 = sesion.get("transcripcion") or ""
         if not trans0.strip():
             return _live_payload(
@@ -492,4 +626,8 @@ def leer_estado_vivo(
         raise HTTPException(status_code=404, detail="Sesión no encontrada.")
     if int(sesion.get("usuario_id") or 0) != int(usuario_id):
         raise HTTPException(status_code=403, detail="Sesión de otro usuario.")
-    return _live_payload(sesion)
+    out = _live_payload(sesion)
+    out["schema_live_ok"] = ensure_live_columns(sb)
+    if not out["schema_live_ok"]:
+        out["detalle"] = MSG_SCHEMA_LIVE
+    return out
