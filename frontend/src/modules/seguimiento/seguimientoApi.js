@@ -200,6 +200,10 @@ export function createSeguimientoApi(contratoId, token) {
         texto_delta: String(body.texto_delta || '').slice(0, 8000),
         forzar_sintesis: !!body.forzar_sintesis,
       }, 120000),
+    grabacionCheckpointTemas: (sesionId) =>
+      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/checkpoint-temas`, {}),
+    grabacionActualizarTemas: (sesionId) =>
+      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/actualizar-temas`, {}, 120000),
     async grabacionChunk(sesionId, blob, { forzarSintesis = false } = {}) {
       const fd = new FormData()
       fd.append('archivo', blob, 'chunk.webm')

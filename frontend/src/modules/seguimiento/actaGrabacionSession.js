@@ -1,6 +1,6 @@
 /**
  * Orquestación de una sesión de grabación (cupo + MediaRecorder + descarga local)
- * + pipeline en vivo (STT/síntesis de Temas).
+ * + pipeline STT para Temas por checkpoints manuales (sin síntesis periódica).
  */
 import {
   HEARTBEAT_MS,
@@ -32,7 +32,8 @@ export function createGrabacionSessionController({
   download = downloadBlob,
   heartbeatMs = HEARTBEAT_MS,
   chunkIntervalMs = 15000,
-  enableLive = true,
+  /** Si true, inicia STT al start; si false, solo tras armTemasCheckpoint. */
+  enableLiveOnStart = false,
 } = {}) {
   let closed = false
   let sesionId = null
@@ -48,6 +49,8 @@ export function createGrabacionSessionController({
   let audioBatcher = null
   let webSpeech = null
   let liveMode = 'none' // azure | webspeech | none
+  let liveStarted = false
+  let temasCheckpointArmed = false
 
   const emitState = (patch) => {
     try { onState?.(patch) } catch { /* ignore */ }
@@ -70,12 +73,18 @@ export function createGrabacionSessionController({
     try { await audioBatcher?.flush?.() } catch { /* ignore */ }
     try { audioBatcher?.stop?.() } catch { /* ignore */ }
     audioBatcher = null
+    liveStarted = false
   }
 
-  const applyLivePayload = (payload) => {
+  const applyLivePayload = (payload, { applyTemas = false } = {}) => {
     if (!payload) return
     try { onLiveInfo?.(payload) } catch { /* ignore */ }
-    if (Array.isArray(payload.temas) && payload.temas.length) {
+    if (
+      applyTemas
+      && payload.sintetizado
+      && Array.isArray(payload.temas)
+      && payload.temas.length
+    ) {
       try { onTemasVivos?.(payload.temas, payload) } catch { /* ignore */ }
     }
   }
@@ -113,7 +122,8 @@ export function createGrabacionSessionController({
   }
 
   async function startLivePipeline() {
-    if (!enableLive || !sesionId || !api) return
+    if (!sesionId || !api || liveStarted || closed || stopping) return liveMode
+    liveStarted = true
     let sttAzure = false
     try {
       const st = await api.grabacionLiveStatus?.()
@@ -131,22 +141,23 @@ export function createGrabacionSessionController({
           if (closed || stopping || !sesionId) return
           try {
             const payload = await api.grabacionChunk(sesionId, blob)
-            applyLivePayload(payload)
+            // Solo acumula STT; no aplica temas hasta Actualizar.
+            applyLivePayload(payload, { applyTemas: false })
           } catch (e) {
             onError?.(e?.message || 'No se pudo transcribir el audio en vivo')
           }
         },
       })
-      return
+      emitState({ liveMode })
+      return liveMode
     }
 
-    // Fallback: Web Speech del navegador → texto al backend → síntesis Clara
     webSpeech = startWebSpeechTranscript({
       onDelta: async (text) => {
         if (closed || stopping || !sesionId) return
         try {
           const payload = await api.grabacionTranscripcion(sesionId, { texto_delta: text })
-          applyLivePayload(payload)
+          applyLivePayload(payload, { applyTemas: false })
         } catch (e) {
           onError?.(e?.message || 'No se pudo enviar la transcripción en vivo')
         }
@@ -165,6 +176,46 @@ export function createGrabacionSessionController({
         detalle: 'Sin Azure Speech ni Web Speech en este navegador.',
       })
     }
+    emitState({ liveMode })
+    return liveMode
+  }
+
+  /**
+   * Al habilitar TAB Temas: inicia STT (si hace falta) y fija el checkpoint inicial.
+   */
+  async function armTemasCheckpoint() {
+    if (closed || stopping || !sesionId) {
+      return { ok: false, detalle: 'No hay sesión de grabación activa.' }
+    }
+    await startLivePipeline()
+    try {
+      const payload = await api.grabacionCheckpointTemas?.(sesionId)
+      temasCheckpointArmed = true
+      applyLivePayload(payload, { applyTemas: false })
+      emitState({ temasCheckpointArmed: true })
+      return { ok: true, payload }
+    } catch (e) {
+      const msg = e?.message || 'No se pudo armar el checkpoint de Temas'
+      onError?.(msg)
+      return { ok: false, detalle: msg }
+    }
+  }
+
+  /**
+   * Botón Actualizar: flush STT pendiente + analiza tramo desde checkpoint.
+   */
+  async function actualizarTemas() {
+    if (closed || stopping || !sesionId) {
+      throw new Error('No hay sesión de grabación activa para actualizar Temas.')
+    }
+    if (!liveStarted) {
+      await startLivePipeline()
+    }
+    try { await audioBatcher?.flush?.() } catch { /* ignore */ }
+    const payload = await api.grabacionActualizarTemas(sesionId)
+    if (payload?.temas_escucha_activa) temasCheckpointArmed = true
+    applyLivePayload(payload, { applyTemas: true })
+    return payload
   }
 
   async function start({ includeTabAudio = true } = {}) {
@@ -207,6 +258,7 @@ export function createGrabacionSessionController({
       sesionId,
       tabAudioOk: !!handles.tabAudioOk,
       elapsedSec: 0,
+      temasCheckpointArmed: false,
     })
 
     tickTimer = setInterval(() => {
@@ -221,8 +273,11 @@ export function createGrabacionSessionController({
 
     setTimeout(() => { heartbeat() }, Math.min(2000, heartbeatMs))
 
-    await startLivePipeline()
-    emitState({ liveMode })
+    if (enableLiveOnStart) {
+      await startLivePipeline()
+    } else {
+      emitState({ liveMode: 'none' })
+    }
 
     return { sesionId, tabAudioOk: !!handles.tabAudioOk, liveMode }
   }
@@ -233,17 +288,7 @@ export function createGrabacionSessionController({
     emitState({ phase: 'stopping', stopping: true })
     clearTimers()
     await stopLivePipeline()
-
-    // Última síntesis forzada si hay sesión
-    if (sesionId && api?.grabacionTranscripcion) {
-      try {
-        const payload = await api.grabacionTranscripcion(sesionId, {
-          texto_delta: '',
-          forzar_sintesis: true,
-        })
-        applyLivePayload(payload)
-      } catch { /* ignore */ }
-    }
+    // Sin síntesis forzada al detener: Temas solo avanzan con Actualizar.
 
     const blob = await new Promise((resolve) => {
       if (!recorder || recorder.state === 'inactive') {
@@ -296,6 +341,7 @@ export function createGrabacionSessionController({
       downloaded,
       autoStop: auto,
       liveMode: 'none',
+      temasCheckpointArmed: false,
     })
     return { blob, cupoFinal, downloaded, auto }
   }
@@ -308,5 +354,14 @@ export function createGrabacionSessionController({
     closed = true
   }
 
-  return { start, stop, dispose, getSesionId: () => sesionId, getLiveMode: () => liveMode }
+  return {
+    start,
+    stop,
+    dispose,
+    armTemasCheckpoint,
+    actualizarTemas,
+    getSesionId: () => sesionId,
+    getLiveMode: () => liveMode,
+    isTemasCheckpointArmed: () => temasCheckpointArmed,
+  }
 }

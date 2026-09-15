@@ -23,6 +23,8 @@ from acta_grabacion_cupo_service import (
     reclamar_segundos as grabacion_reclamar_segundos,
 )
 from acta_grabacion_live_service import (
+    actualizar_temas_desde_checkpoint as grabacion_actualizar_temas,
+    armar_checkpoint_temas as grabacion_armar_checkpoint,
     ingest_audio_chunk as grabacion_ingest_audio_chunk,
     ingest_transcript_delta as grabacion_ingest_transcript_delta,
     leer_estado_vivo as grabacion_leer_estado_vivo,
@@ -794,7 +796,7 @@ async def route_grabacion_transcripcion(
     body: GrabacionTranscripcionBody,
     current_user=Depends(get_current_user),
 ):
-    """Ingesta texto STT del cliente (Web Speech) y sintetiza Temas si corresponde."""
+    """Ingesta texto STT del cliente (Web Speech). No sintetiza Temas (usar Actualizar)."""
     require_permiso_seguimiento(current_user, "crear")
     _check_contrato(current_user, contrato_id)
     return await grabacion_ingest_transcript_delta(
@@ -815,7 +817,7 @@ async def route_grabacion_chunk(
     archivo: UploadFile = File(...),
     forzar_sintesis: bool = Form(False),
 ):
-    """Chunk de audio → Azure Speech → (opcional) síntesis de Temas. No persiste el audio."""
+    """Chunk de audio → Azure Speech. No persiste audio ni sintetiza Temas."""
     require_permiso_seguimiento(current_user, "crear")
     _check_contrato(current_user, contrato_id)
     raw = await archivo.read()
@@ -827,6 +829,40 @@ async def route_grabacion_chunk(
         raw,
         content_type=archivo.content_type or "audio/webm",
         forzar_sintesis=bool(forzar_sintesis),
+    )
+
+
+@router.post("/{contrato_id}/grabacion/sesiones/{sesion_id}/checkpoint-temas")
+def route_grabacion_checkpoint_temas(
+    contrato_id: int,
+    sesion_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Checkpoint inicial al habilitar TAB Temas: escucha audio sin generar temas aún."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    return grabacion_armar_checkpoint(
+        supabase,
+        contrato_id,
+        sesion_id,
+        _uid(current_user),
+    )
+
+
+@router.post("/{contrato_id}/grabacion/sesiones/{sesion_id}/actualizar-temas")
+async def route_grabacion_actualizar_temas(
+    contrato_id: int,
+    sesion_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Analiza el tramo desde el checkpoint hasta ahora y avanza el checkpoint."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    return await grabacion_actualizar_temas(
+        supabase,
+        contrato_id,
+        sesion_id,
+        _uid(current_user),
     )
 
 
