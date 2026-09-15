@@ -1172,8 +1172,13 @@ _FLUJO_TAB_KEYS = ("orden", "asistentes", "compromisos", "ideas")
 
 
 def _norm_flujo_tabs(raw) -> dict:
-    """Normaliza el mapa de avance secuencial de pestañas del editor."""
+    """Normaliza el mapa de avance secuencial de pestañas del editor.
+
+    `liberado=True` = el acta ya llegó a Vista previa (o es legacy): edición libre.
+    Si el hito `ideas` está marcado, también se considera liberado.
+    """
     out = {k: False for k in _FLUJO_TAB_KEYS}
+    out["liberado"] = False
     if not raw:
         return out
     if isinstance(raw, str):
@@ -1188,6 +1193,8 @@ def _norm_flujo_tabs(raw) -> dict:
     for k in _FLUJO_TAB_KEYS:
         if raw.get(k):
             out[k] = True
+    if raw.get("liberado") or out.get("ideas"):
+        out["liberado"] = True
     return out
 
 
@@ -1198,6 +1205,8 @@ def _merge_flujo_tabs(prev, incoming) -> dict:
     for k in _FLUJO_TAB_KEYS:
         if nxt.get(k):
             base[k] = True
+    if nxt.get("liberado") or base.get("ideas"):
+        base["liberado"] = True
     return base
 
 

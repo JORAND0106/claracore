@@ -4,6 +4,7 @@ import {
   avanceTrasGuardar,
   compromisosQueBloqueanAvance,
   emptyFlujoTabs,
+  flujoLiberado,
   normalizeOrdenItem,
   parseFlujoTabs,
   puedeAvanzarDesdeCompromisos,
@@ -12,17 +13,20 @@ import {
 } from './actaFlujoTabs.js'
 
 describe('actaFlujoTabs', () => {
-  it('parseFlujoTabs normaliza flags', () => {
+  it('parseFlujoTabs normaliza flags e incluye liberado', () => {
     assert.deepEqual(parseFlujoTabs(null), emptyFlujoTabs())
     assert.deepEqual(parseFlujoTabs({ orden: 1, ideas: true }), {
       orden: true,
       asistentes: false,
       compromisos: false,
       ideas: true,
+      liberado: true, // ideas implica liberado
     })
+    assert.equal(flujoLiberado({ liberado: true }), true)
+    assert.equal(flujoLiberado({}), false)
   })
 
-  it('tabDesbloqueada respeta secuencia', () => {
+  it('tabDesbloqueada respeta secuencia en primer diligenciamiento', () => {
     assert.equal(tabDesbloqueada('orden', { encabezadoGuardado: false, flujo: {} }), false)
     assert.equal(tabDesbloqueada('encabezado', { encabezadoGuardado: false, flujo: {} }), true)
     assert.equal(tabDesbloqueada('orden', { encabezadoGuardado: true, flujo: {} }), true)
@@ -56,7 +60,14 @@ describe('actaFlujoTabs', () => {
     )
   })
 
-  it('bloquea avance desde compromisos si hay abiertos', () => {
+  it('liberado desbloquea todas las pestañas', () => {
+    const ctx = { encabezadoGuardado: true, flujo: { liberado: true } }
+    for (const id of ['encabezado', 'orden', 'asistentes', 'compromisos', 'ideas', 'apartados', 'acciones']) {
+      assert.equal(tabDesbloqueada(id, ctx), true, id)
+    }
+  })
+
+  it('bloquea avance desde compromisos si hay abiertos (solo si no liberado)', () => {
     const items = [
       { id: 1, estado_gestion: 'cumplido' },
       { id: 2, estado_gestion: 'abierto' },
@@ -79,9 +90,13 @@ describe('actaFlujoTabs', () => {
     assert.equal(ok.ok, true)
     assert.equal(ok.flujo.compromisos, true)
     assert.equal(ok.nextTab, 'ideas')
+
+    const libre = avanceTrasGuardar('compromisos', { liberado: true }, { compromisPrevios: items })
+    assert.equal(libre.ok, true)
+    assert.equal(libre.flujo.liberado, true)
   })
 
-  it('avanceTrasGuardar marca hitos y desbloquea apartados tras temas', () => {
+  it('guardar Temas libera el documento e ir a Vista previa', () => {
     const a = avanceTrasGuardar('orden', {})
     assert.equal(a.flujo.orden, true)
     assert.equal(a.nextTab, 'asistentes')
@@ -92,7 +107,8 @@ describe('actaFlujoTabs', () => {
 
     const c = avanceTrasGuardar('ideas', { ...b.flujo, compromisos: true })
     assert.equal(c.flujo.ideas, true)
-    assert.equal(c.nextTab, 'apartados')
+    assert.equal(c.flujo.liberado, true)
+    assert.equal(c.nextTab, 'acciones')
   })
 
   it('serialize/normalize orden con expositor', () => {
