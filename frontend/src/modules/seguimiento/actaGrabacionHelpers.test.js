@@ -185,6 +185,58 @@ describe('createGrabacionSessionController', () => {
     assert.match(downloads[0].filename, /claracore-grabacion-acta-3-2026-09-12_/)
   })
 
+  it('pide permisos (openStreams) antes de iniciarGrabacion en servidor', async () => {
+    const order = []
+    const api = {
+      async iniciarGrabacion() {
+        order.push('api')
+        return { sesion: { id: 2 }, segundos_restantes: 100 }
+      },
+      async reclamarGrabacion() {
+        return { claimed: 0, debe_cerrar: false }
+      },
+      async finalizarGrabacion() {
+        return { claimed: 0 }
+      },
+    }
+    class FakeRecorder {
+      constructor() {
+        this.state = 'inactive'
+        this.mimeType = 'audio/webm'
+        this.ondataavailable = null
+        this.onstop = null
+      }
+      start() {
+        this.state = 'recording'
+        order.push('recorder')
+      }
+      stop() {
+        this.state = 'inactive'
+        this.onstop?.()
+      }
+    }
+    const ctrl = createGrabacionSessionController({
+      api,
+      heartbeatMs: 60_000,
+      openStreams: async () => {
+        order.push('permissions')
+        return {
+          micStream: { getTracks: () => [], getAudioTracks: () => [] },
+          displayStream: null,
+          mixedStream: { getTracks: () => [], getAudioTracks: () => [] },
+          audioCtx: null,
+          tabAudioOk: true,
+          mimeType: 'audio/webm',
+        }
+      },
+      createRecorder: () => new FakeRecorder(),
+      download: () => true,
+    })
+    await ctrl.start({ includeTabAudio: true })
+    assert.deepEqual(order, ['permissions', 'api', 'recorder'])
+    ctrl.dispose()
+  })
+
   it('cierra en orden si el cupo responde debe_cerrar', async () => {
     let reclamos = 0
     const api = {

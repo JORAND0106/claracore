@@ -89,15 +89,28 @@ export function createGrabacionSessionController({
     if (closed) throw new Error('Sesión cerrada')
     emitState({ phase: 'starting', stopping: false })
 
-    const cupoInicio = await api.iniciarGrabacion()
+    // 1) Permisos de micrófono / pestaña ANTES de consumir cupo.
+    handles = await openStreams({ includeTabAudio })
+    mimeType = handles.mimeType || ''
+
+    // 2) Reservar/abrir sesión de cupo en servidor.
+    let cupoInicio
+    try {
+      cupoInicio = await api.iniciarGrabacion()
+    } catch (err) {
+      cleanupMedia()
+      emitState({ phase: 'idle', stopping: false })
+      throw err
+    }
     onCupo?.(cupoInicio)
     sesionId = cupoInicio?.sesion?.id
     if (sesionId == null) {
+      cleanupMedia()
+      emitState({ phase: 'idle', stopping: false })
       throw new Error('El servidor no devolvió la sesión de grabación')
     }
 
-    handles = await openStreams({ includeTabAudio })
-    mimeType = handles.mimeType || ''
+    // 3) Iniciar captura de inmediato (el modal de consentimiento se muestra después).
     chunks = []
     recorder = createRecorder(handles.mixedStream, mimeType)
     recorder.ondataavailable = (ev) => {

@@ -10,8 +10,8 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './segu
 const MODAL_WIDTH_DESKTOP = 'min(1120px, 98vw)'
 
 /**
- * Consentimiento previo a grabar (Ley 1581) + aviso de cupo y captura.
- * El guion del moderador se muestra completo, sin scroll interno.
+ * Consentimiento DURANTE la grabación (Ley 1581).
+ * La lectura del guion debe quedar capturada en el audio ya iniciado.
  */
 export default function ActaGrabacionConsentModal({
   t,
@@ -19,6 +19,8 @@ export default function ActaGrabacionConsentModal({
   busy = false,
   error = '',
   viewportCompact = false,
+  /** true = mic+pestaña; false = solo mic (informativo; ya no se elige aquí). */
+  tabAudioOk = false,
   onCancel,
   onConfirm,
   zIndex = 13000,
@@ -27,7 +29,6 @@ export default function ActaGrabacionConsentModal({
 }) {
   const [leido, setLeido] = useState(false)
   const [ronda, setRonda] = useState(false)
-  const [tabAudio, setTabAudio] = useState(true)
 
   const guion = useMemo(
     () => buildGuionModeradorGrabacion(now || new Date()),
@@ -37,12 +38,11 @@ export default function ActaGrabacionConsentModal({
   useEffect(() => {
     setLeido(false)
     setRonda(false)
-    setTabAudio(true)
   }, [])
 
   const restantes = cupo?.segundos_restantes
   const bloqueado = cupo?.blocked === true || (restantes != null && restantes <= 0)
-  const canStart = leido && ronda && !bloqueado && !busy
+  const canContinue = leido && ronda && !busy
 
   return (
     <div
@@ -50,9 +50,7 @@ export default function ActaGrabacionConsentModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="cc-grabacion-consent-title"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onCancel?.()
-      }}
+      // No cerrar al clic fuera: la grabación ya corre; exige Continuar o Detener.
     >
       <div
         style={{
@@ -81,33 +79,32 @@ export default function ActaGrabacionConsentModal({
         >
           <div>
             <h2 id="cc-grabacion-consent-title" style={{ margin: '0 0 4px', fontSize: 'var(--cc-title)', color: t.text }}>
-              Grabar reunión
+              Grabación en curso — consentimiento
             </h2>
             <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.4 }}>
-              Lea el aviso en voz alta, confirme la ronda de consentimiento y continúe.
-              La grabación coexiste con «Redactar con Clara».
+              La captura ya está activa. Lea el aviso en voz alta para que quede registrado en el audio,
+              confirme la ronda de consentimiento y continúe la reunión.
             </p>
           </div>
 
-          {cupo && (
-            <div style={{
-              padding: '8px 10px',
-              borderRadius: 8,
-              border: `1px solid ${bloqueado ? 'var(--cc-color-danger,#b91c1c)' : t.border}`,
-              background: bloqueado
-                ? 'color-mix(in srgb, var(--cc-color-danger,#b91c1c) 10%, transparent)'
-                : (t.bg || '#fff'),
-              fontSize: 'var(--cc-sm)',
-              color: t.text,
-              flexShrink: 0,
-            }}
-            >
-              Cupo del contrato hoy:{' '}
-              <strong>{formatMinutosCupo(cupo.segundos_restantes)} min</strong>
-              {' '}restantes de {cupo.limite_minutos ?? 180} min (hora Colombia).
-              {bloqueado && ' El cupo está agotado; podrá grabar mañana.'}
-            </div>
-          )}
+          <div style={{
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: `1px solid ${t.border}`,
+            background: 'color-mix(in srgb, var(--cc-color-danger,#b91c1c) 8%, transparent)',
+            fontSize: 'var(--cc-sm)',
+            color: t.text,
+            fontWeight: 600,
+            flexShrink: 0,
+          }}
+          >
+            ● Grabando ahora · {tabAudioOk ? 'Micrófono + pestaña' : 'Solo micrófono'}
+            {cupo && !bloqueado && (
+              <span style={{ fontWeight: 500, color: t.textMuted }}>
+                {' '}· Cupo restante: {formatMinutosCupo(cupo.segundos_restantes)} min
+              </span>
+            )}
+          </div>
 
           <div
             style={{
@@ -155,12 +152,6 @@ export default function ActaGrabacionConsentModal({
                   Cada asistente indicó nombre, entidad y consentimiento (o negativa) conforme a la Ley 1581 de 2012.
                 </span>
               </label>
-              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 'var(--cc-sm)', color: t.text, cursor: 'pointer' }}>
-                <input type="checkbox" checked={tabAudio} onChange={(e) => setTabAudio(e.target.checked)} disabled={busy} style={{ marginTop: 2 }} />
-                <span>
-                  Incluir audio de pestaña/ventana del navegador (Meet, Teams web, etc.). Si cancela el diálogo del navegador, se grabará solo el micrófono.
-                </span>
-              </label>
               <p style={{ margin: 0, fontSize: 'var(--cc-xs, 11px)', color: t.textMuted, lineHeight: 1.4 }}>
                 Al detener, el archivo se descarga en su equipo. ClaraCore no lo guarda en servidores.
                 Conserve esa copia usted mismo si necesita un archivo de la reunión. Apps nativas fuera del navegador no se capturan.
@@ -198,25 +189,25 @@ export default function ActaGrabacionConsentModal({
                 fontSize: 'var(--cc-sm)',
               }}
             >
-              Cancelar
+              Detener grabación
             </button>
             <button
               type="button"
-              disabled={!canStart}
-              onClick={() => onConfirm?.({ includeTabAudio: tabAudio })}
+              disabled={!canContinue}
+              onClick={() => onConfirm?.()}
               style={{
                 border: 'none',
                 borderRadius: 8,
                 padding: '8px 14px',
-                cursor: canStart ? 'pointer' : 'not-allowed',
-                background: canStart ? t.primary : `${t.border}`,
-                color: canStart ? '#fff' : t.textMuted,
+                cursor: canContinue ? 'pointer' : 'not-allowed',
+                background: canContinue ? t.primary : `${t.border}`,
+                color: canContinue ? '#fff' : t.textMuted,
                 fontWeight: 700,
                 fontSize: 'var(--cc-sm)',
-                opacity: canStart ? 1 : 0.7,
+                opacity: canContinue ? 1 : 0.7,
               }}
             >
-              {busy ? 'Iniciando…' : 'Continuar y grabar'}
+              Continuar la reunión
             </button>
           </div>
         </div>

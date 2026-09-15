@@ -387,24 +387,27 @@ export default function ActaEditor({
     grabacionCtrlRef.current = null
   }, [])
 
-  const abrirConsentimientoGrabacion = async () => {
+  const iniciarGrabacionYMostrarConsentimiento = async () => {
     setGrabacionError('')
+    setError('')
     setGrabacionBusy(true)
-    setGrabacionConsentOpen(true)
     try {
-      const cupo = await apiRef.current.grabacionCupo()
-      setGrabacionCupo(cupo)
-    } catch (e) {
-      setGrabacionError(friendlyFetchError(e, 'No se pudo consultar el cupo de grabación'))
-    } finally {
-      setGrabacionBusy(false)
-    }
-  }
+      // Cupo previo: evita pedir permisos si ya está agotado.
+      try {
+        const cupo = await apiRef.current.grabacionCupo()
+        setGrabacionCupo(cupo)
+        if (cupo?.blocked || (cupo?.segundos_restantes != null && cupo.segundos_restantes <= 0)) {
+          setError(
+            cupo?.detail
+            || 'El cupo diario de grabación de este contrato está agotado. Podrá grabar de nuevo mañana.',
+          )
+          return
+        }
+      } catch (e) {
+        // Si falla la consulta, intentamos iniciar igual (el POST de sesión validará).
+        setGrabacionError(friendlyFetchError(e, 'No se pudo consultar el cupo de grabación'))
+      }
 
-  const iniciarGrabacionDesdeConsent = async ({ includeTabAudio } = {}) => {
-    setGrabacionError('')
-    setGrabacionBusy(true)
-    try {
       try { grabacionCtrlRef.current?.dispose?.() } catch { /* ignore */ }
       const ctrl = createGrabacionSessionController({
         api: apiRef.current,
@@ -421,6 +424,7 @@ export default function ActaEditor({
           if (st.elapsedSec != null) setGrabacionElapsed(st.elapsedSec)
           if (st.phase === 'idle') {
             setGrabacionStopping(false)
+            setGrabacionConsentOpen(false)
           }
         },
         onError: (msg) => setError(msg || 'Error de grabación'),
@@ -433,21 +437,30 @@ export default function ActaEditor({
         },
       })
       grabacionCtrlRef.current = ctrl
-      await ctrl.start({ includeTabAudio })
-      setGrabacionConsentOpen(false)
+      // Permisos → MediaRecorder.start; luego el modal (lectura queda en el audio).
+      await ctrl.start({ includeTabAudio: true })
+      setGrabacionConsentOpen(true)
     } catch (e) {
       const msg = friendlyFetchError(e, 'No se pudo iniciar la grabación')
-      setGrabacionError(msg)
+      setError(msg)
       try { grabacionCtrlRef.current?.dispose?.() } catch { /* ignore */ }
       grabacionCtrlRef.current = null
       setGrabacionPhase('idle')
+      setGrabacionConsentOpen(false)
     } finally {
       setGrabacionBusy(false)
     }
   }
 
+  const confirmarConsentimientoYContinuar = () => {
+    setGrabacionConsentOpen(false)
+    setGrabacionError('')
+    setOkMsg('Consentimiento registrado en el audio. La grabación continúa.')
+  }
+
   const detenerGrabacion = async () => {
     setGrabacionStopping(true)
+    setGrabacionConsentOpen(false)
     try {
       await grabacionCtrlRef.current?.stop?.({ motivo: 'usuario' })
     } catch (e) {
@@ -1067,11 +1080,11 @@ export default function ActaEditor({
             <button
               type="button"
               disabled={grabacionBusy}
-              onClick={abrirConsentimientoGrabacion}
-              title="Grabar micrófono y audio de pestaña (cupo diario del contrato)"
+              onClick={iniciarGrabacionYMostrarConsentimiento}
+              title="Solicita permisos, inicia la grabación y luego muestra el consentimiento"
               style={ghost(t)}
             >
-              Grabar reunión
+              {grabacionBusy ? 'Iniciando…' : 'Grabar reunión'}
             </button>
           )}
           {puedeEditar && (permisos?.crear || permisos?.editar) && (
@@ -1825,15 +1838,12 @@ export default function ActaEditor({
         <ActaGrabacionConsentModal
           t={t}
           cupo={grabacionCupo}
-          busy={grabacionBusy}
+          busy={grabacionBusy || grabacionStopping}
           error={grabacionError}
           viewportCompact={viewportCompact}
-          onCancel={() => {
-            if (grabacionBusy) return
-            setGrabacionConsentOpen(false)
-            setGrabacionError('')
-          }}
-          onConfirm={iniciarGrabacionDesdeConsent}
+          tabAudioOk={grabacionTabAudioOk}
+          onCancel={detenerGrabacion}
+          onConfirm={confirmarConsentimientoYContinuar}
         />
       )}
 
