@@ -463,6 +463,64 @@ export function formatDayCountLabelShort({
 }
 
 /**
+ * Indicadores compactos (puntos de color) para el mini-calendario del widget.
+ * Misma convención que la leyenda; un punto por tipo presente (+ vencidos).
+ * @returns {{ id: string, color: string, label: string, count: number }[]}
+ */
+export function dayKindIndicators(summary = {}, { hasVencidos = false } = {}) {
+  const {
+    tareas = 0,
+    compromisos = 0,
+    actas = 0,
+    diarios = 0,
+    eventosBit = 0,
+  } = summary
+  const bitacora = Number(diarios) + Number(eventosBit)
+  const out = []
+  if (tareas > 0) {
+    out.push({
+      id: 'tarea',
+      color: CALENDARIO_KIND.tarea.color,
+      label: CALENDARIO_KIND.tarea.label,
+      count: tareas,
+    })
+  }
+  if (compromisos > 0) {
+    out.push({
+      id: 'compromiso',
+      color: CALENDARIO_KIND.compromiso.color,
+      label: CALENDARIO_KIND.compromiso.label,
+      count: compromisos,
+    })
+  }
+  if (actas > 0) {
+    out.push({
+      id: 'acta',
+      color: CALENDARIO_KIND.acta.color,
+      label: CALENDARIO_KIND.acta.label,
+      count: actas,
+    })
+  }
+  if (bitacora > 0) {
+    out.push({
+      id: 'bitacora',
+      color: CALENDARIO_KIND.bitacora_diario.color,
+      label: CALENDARIO_KIND.bitacora_diario.label,
+      count: bitacora,
+    })
+  }
+  if (hasVencidos) {
+    out.push({
+      id: 'vencidos',
+      color: CALENDARIO_VENCIDOS_LEGEND.color,
+      label: CALENDARIO_VENCIDOS_LEGEND.label,
+      count: 1,
+    })
+  }
+  return out
+}
+
+/**
  * Tarea/compromiso vencido: fecha del evento &lt; hoy (Bogotá) y no cumplido/cancelado.
  * Las actas no marcan el día como vencido.
  */

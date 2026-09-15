@@ -17,12 +17,12 @@ import {
   CALENDARIO_VENCIDOS_LEGEND,
   buildCalendarioEvents,
   dayHasVencidos,
+  dayKindIndicators,
   eventDisplayTime,
   eventDisplayTitle,
   eventsForDate,
   filterEventsByOrigen,
   filterEventsSoloMias,
-  formatDayCountLabelShort,
   resolveFetchRange,
   sortDayEvents,
   summarizeDayCounts,
@@ -251,16 +251,32 @@ export default function SeguimientoCalendario({
     const isMonth = arg.view?.type === 'dayGridMonth'
     const dateStr = toDateOnly(arg.date)
     const summary = isMonth ? summarizeDayCounts(events, dateStr) : null
-    const countText = summary?.total > 0
-      ? (widgetMode
-        ? formatDayCountLabelShort(summary)
-        : summary.label)
-      : ''
+    const vencido = isMonth ? dayHasVencidos(events, dateStr, hoyBogotaDate()) : false
+    const indicators = (widgetMode && summary?.total > 0) || vencido
+      ? dayKindIndicators(summary || {}, { hasVencidos: vencido })
+      : []
+    const tip = [
+      summary?.label || '',
+      vencido ? CALENDARIO_VENCIDOS_LEGEND.label : '',
+    ].filter(Boolean).join(' · ')
+
     return (
       <div className={`cc-seguim-cal-daycell${widgetMode ? ' cc-seguim-cal-daycell--widget' : ''}`}>
         <span className="cc-seguim-cal-daynum">{arg.dayNumberText}</span>
-        {isMonth && countText ? (
-          <span className="cc-seguim-cal-daycount" title={summary.label}>{countText}</span>
+        {isMonth && widgetMode && indicators.length > 0 ? (
+          <span className="cc-seguim-cal-daydots" title={tip || undefined} aria-label={tip || undefined}>
+            {indicators.map((ind) => (
+              <span
+                key={ind.id}
+                className={`cc-seguim-cal-daydot${ind.id === 'vencidos' ? ' cc-seguim-cal-daydot--vencido' : ''}`}
+                style={{ background: ind.color }}
+                title={`${ind.label}${ind.count > 1 && ind.id !== 'vencidos' ? ` (${ind.count})` : ''}`}
+              />
+            ))}
+          </span>
+        ) : null}
+        {isMonth && !widgetMode && summary?.total > 0 ? (
+          <span className="cc-seguim-cal-daycount" title={summary.label}>{summary.label}</span>
         ) : null}
       </div>
     )
