@@ -3369,6 +3369,31 @@ select.cc-dashboard-acta-select--light option {
 .cc-seguim-cal--widget .cc-seguim-cal-daycell--widget {
   align-items: center;
   padding: 2px 1px 0;
+  gap: 3px;
+}
+
+.cc-seguim-cal--widget .cc-seguim-cal-daydots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  max-width: 100%;
+  line-height: 1;
+  min-height: 7px;
+}
+
+.cc-seguim-cal--widget .cc-seguim-cal-daydot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.12);
+}
+
+.cc-seguim-cal--widget .cc-seguim-cal-daydot--vencido {
+  box-shadow: 0 0 0 1px rgba(127, 29, 29, 0.35);
 }
 
 .cc-seguim-cal--widget .cc-seguim-cal-daycount {
@@ -3382,7 +3407,7 @@ select.cc-dashboard-acta-select--light option {
   width: 100% !important;
 }
 
-/* Mes en widget: solo contadores; semana/día conservan eventos */
+/* Mes en widget: puntos de color en la celda; semana/día conservan eventos */
 .cc-seguim-cal--widget .fc-dayGridMonth-view .fc-daygrid-event-harness,
 .cc-seguim-cal--widget .fc-dayGridMonth-view .fc-daygrid-more-link {
   display: none !important;
@@ -3412,9 +3437,9 @@ select.cc-dashboard-acta-select--light option {
   font-weight: 800;
 }
 
-.cc-seguim-cal--widget .fc-daygrid-day.cc-seguim-cal-day--vencido .cc-seguim-cal-daycount {
-  color: #1e3a8a;
-  font-weight: 700;
+.cc-seguim-cal--widget .fc-daygrid-day.cc-seguim-cal-day--vencido .cc-seguim-cal-daydots {
+  /* Los puntos de color ya comunican el tipo; el fondo rojo de la celda basta para vencidos. */
+  opacity: 1;
 }
 
 .cc-seguim-cal-daymodal-overlay {

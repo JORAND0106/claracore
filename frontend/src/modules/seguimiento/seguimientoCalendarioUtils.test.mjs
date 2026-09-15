@@ -8,6 +8,7 @@ import {
   bitacoraToEvent,
   buildCalendarioEvents,
   dayHasVencidos,
+  dayKindIndicators,
   filterEventsByOrigen,
   eventDisplayTime,
   eventDisplayTitle,
@@ -19,6 +20,7 @@ import {
   summarizeDayCounts,
   toDateOnly,
   CALENDARIO_KIND,
+  CALENDARIO_VENCIDOS_LEGEND,
 } from './seguimientoCalendarioUtils.js'
 
 function assert(cond, msg) {
@@ -127,7 +129,9 @@ const eventoBit = bitacoraToEvent({
   evento_tipo: 'visita_terceros',
   created_by_nombre: 'Luis Gómez',
 })
-assert(eventoBit == null, 'eventos legacy no aparecen como entrada de calendario')
+assert(eventoBit?.extendedProps?.kind === 'bitacora_evento', 'evento independiente visible en calendario')
+assert(eventoBit.title.includes('Luis Gómez'), 'elaborador en evento')
+assert(eventoBit.backgroundColor === CALENDARIO_KIND.bitacora_evento.color, 'color evento')
 
 assert(CALENDARIO_KIND.bitacora_diario.tooltip, 'tooltip diario')
 assert(CALENDARIO_KIND.bitacora_evento.tooltip, 'tooltip evento')
@@ -164,6 +168,20 @@ assert(daySum.tareas === 2 && daySum.actas === 1 && daySum.diarios === 3 && dayS
 assert(daySum.label === '2 tareas · 1 acta · Bitácora · 3 tramos', 'label día tramos')
 assert(formatDayCountLabel({ compromisos: 1 }) === '1 compromiso', 'label singular')
 assert(formatDayCountLabelShort({ tareas: 2, actas: 1, diarios: 1 }) === '2T · 1A · 1B', 'label corto widget')
+
+const dots = dayKindIndicators(
+  { tareas: 2, compromisos: 1, actas: 1, diarios: 1, eventosBit: 1, total: 6 },
+  { hasVencidos: true },
+)
+assert(dots.map((d) => d.id).join(',') === 'tarea,compromiso,acta,bitacora,vencidos', 'dots orden leyenda')
+assert(dots[0].color === CALENDARIO_KIND.tarea.color, 'dot tarea color')
+assert(dots[1].color === CALENDARIO_KIND.compromiso.color, 'dot compromiso color')
+assert(dots[2].color === CALENDARIO_KIND.acta.color, 'dot acta color')
+assert(dots[3].color === CALENDARIO_KIND.bitacora_diario.color, 'dot bitácora color')
+assert(dots[3].count === 2, 'bitácora agrupa diario+evento')
+assert(dots[4].color === CALENDARIO_VENCIDOS_LEGEND.color, 'dot vencidos color')
+assert(dayKindIndicators({}, { hasVencidos: false }).length === 0, 'sin indicadores si vacío')
+assert(dayKindIndicators({}, { hasVencidos: true }).map((d) => d.id).join(',') === 'vencidos', 'solo vencidos')
 
 const hoy = new Date(2026, 7, 20) // 20-ago-2026 local
 const evVenc = {
