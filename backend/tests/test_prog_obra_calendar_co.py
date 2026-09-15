@@ -8,7 +8,13 @@ from datetime import date
 
 import holidays
 
-from prog_obra_calendar import CalendarioNoHabilesCache, add_dias_habiles, festivos_colombia_año
+from prog_obra_calendar import (
+    CalendarioNoHabilesCache,
+    add_dias_habiles,
+    es_dia_habil_colombia,
+    festivos_colombia_año,
+    siguiente_dia_habil_colombia,
+)
 
 
 def _empty_loader(_cid, _a, _b):
@@ -47,3 +53,10 @@ def test_fin_de_semana_no_cuenta():
     sab = date(2025, 1, 11)
     fin = add_dias_habiles(1, sab, 1, cache)
     assert fin == date(2025, 1, 13)
+
+
+def test_es_dia_habil_colombia_finde_y_festivo():
+    assert es_dia_habil_colombia(date(2026, 9, 18)) is True  # viernes
+    assert es_dia_habil_colombia(date(2026, 9, 19)) is False  # sábado
+    assert es_dia_habil_colombia(date(2026, 12, 25)) is False  # navidad
+    assert siguiente_dia_habil_colombia(date(2026, 9, 19)) == date(2026, 9, 21)

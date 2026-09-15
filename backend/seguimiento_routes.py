@@ -31,6 +31,7 @@ from acta_grabacion_live_service import (
     speech_status as grabacion_speech_status,
 )
 from seguimiento_permissions import require_permiso_seguimiento, tiene_permiso_seguimiento
+from seguimiento_recordatorio_email import procesar_recordatorios_email_habil
 from seguimiento_service import (
     ActaAccesoDenegado,
     MSG_ACTA_ACCESO_RESTRINGIDO,
@@ -649,6 +650,25 @@ def route_cron_recordatorios_reunion(
     if not _cron_secret_ok(x_cron_secret):
         raise HTTPException(status_code=401, detail="Cron secret inválido")
     return procesar_recordatorios_reunion_acta(supabase, forzar_hora=bool(forzar))
+
+
+@router.post("/internal/cron/recordatorios-email-habil")
+def route_cron_recordatorios_email_habil(
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+    forzar: bool = Query(False, description="Ignorar ventana 15:30 / día hábil (pruebas)"),
+    dry_run: bool = Query(False, description="No envía SMTP; solo calcula destinatarios"),
+):
+    """
+    Recordatorio por correo el día hábil anterior al vencimiento (15:30 Bogotá).
+    Consolida tareas, compromisos y reuniones en un correo por destinatario.
+    """
+    if not _cron_secret_ok(x_cron_secret):
+        raise HTTPException(status_code=401, detail="Cron secret inválido")
+    return procesar_recordatorios_email_habil(
+        supabase,
+        forzar_hora=bool(forzar),
+        dry_run=bool(dry_run),
+    )
 
 
 # ── Actas ────────────────────────────────────────────────────────────────────
