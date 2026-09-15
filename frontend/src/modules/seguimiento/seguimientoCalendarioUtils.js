@@ -13,7 +13,7 @@ export const CALENDARIO_KIND = {
     icon: '✅',
     color: '#2563eb',
     textColor: '#ffffff',
-    tooltip: 'Tareas personales creadas o asignadas a usted',
+    tooltip: 'Tareas personales creadas, asignadas o notificadas a usted',
   },
   compromiso: {
     id: 'compromiso',

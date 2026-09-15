@@ -641,6 +641,26 @@ def _ids_asignados_tarea(item: Optional[dict]) -> Set[int]:
     return ids
 
 
+def _ids_notificados_tarea(item: Optional[dict]) -> Set[int]:
+    """Usuarios en «Notificar a» de sub-ítems (checklist). Ven la tarea en bandeja/calendario
+    sin ser responsables formales de ejecución."""
+    ids: Set[int] = set()
+    if not item or item.get("origen") != "tarea":
+        return ids
+    libres = item.get("campos_libres") if isinstance(item.get("campos_libres"), dict) else {}
+    checklist = libres.get("checklist") if isinstance((libres or {}).get("checklist"), list) else []
+    for it in checklist or []:
+        if not isinstance(it, dict):
+            continue
+        notif = _normalizar_notificar_subitem(it)
+        if notif and notif.get("id"):
+            try:
+                ids.add(int(notif["id"]))
+            except (TypeError, ValueError):
+                pass
+    return ids
+
+
 def _usuario_es_asignado_formal(item: Optional[dict], user_id: int) -> bool:
     return int(user_id) in _ids_asignados_tarea(item)
 
@@ -4011,6 +4031,7 @@ def list_bandeja(
             out.append(r)
             continue
         ids_asig = _ids_asignados_tarea(r)
+        ids_notif = _ids_notificados_tarea(r)
         scope = {int(user_id)} if solo_mias else visible_ids
         if (
             int(aid or 0) in scope
@@ -4018,6 +4039,7 @@ def list_bandeja(
             or int(referido or 0) in scope
             or int(r.get("solicitante_id") or 0) == int(user_id)
             or bool(ids_asig & scope)
+            or bool(ids_notif & scope)
         ):
             out.append(r)
             continue
