@@ -127,8 +127,8 @@ def test_list_bandeja_solo_mias_excluye_ajenos():
     assert ids == [1, 3]
 
 
-def test_list_actas_solo_mias_elaborador_o_asistente():
-    store = {
+def _store_actas_participacion():
+    return {
         "seguimiento_acta": [
             {"id": 100, "contrato_id": 10, "consecutivo": 1, "fecha_reunion": "2026-09-01",
              "elaborador_id": 5, "estado": "borrador", "tipo_acta": "interna", "orden_del_dia": "[]"},
@@ -136,16 +136,51 @@ def test_list_actas_solo_mias_elaborador_o_asistente():
              "elaborador_id": 9, "estado": "borrador", "tipo_acta": "interna", "orden_del_dia": "[]"},
             {"id": 102, "contrato_id": 10, "consecutivo": 3, "fecha_reunion": "2026-09-03",
              "elaborador_id": 9, "estado": "borrador", "tipo_acta": "interna", "orden_del_dia": "[]"},
+            {"id": 103, "contrato_id": 10, "consecutivo": 4, "fecha_reunion": "2026-09-04",
+             "elaborador_id": 9, "created_by": 5, "estado": "borrador", "tipo_acta": "interna",
+             "orden_del_dia": "[]"},
         ],
         "seguimiento_acta_asistente": [
             {"id": 1, "acta_id": 102, "usuario_id": 5, "nombre": "Yo"},
         ],
     }
-    sb = _FakeSB(store)
+
+
+def test_list_actas_solo_mias_elaborador_o_asistente():
+    sb = _FakeSB(_store_actas_participacion())
     user = {"id": 5, "rol_nombre": "interventoria"}
     out = list_actas(sb, 10, user_id=5, current_user=user, solo_mias=True)
     ids = sorted(r["id"] for r in out)
-    assert ids == [100, 102]
+    assert ids == [100, 102, 103]
+
+
+def test_list_actas_por_defecto_filtra_participacion():
+    """Usuarios normales solo ven actas donde participan (sin solo_mias)."""
+    sb = _FakeSB(_store_actas_participacion())
+    user = {"id": 5, "rol_nombre": "interventoria"}
+    out = list_actas(sb, 10, user_id=5, current_user=user, solo_mias=False)
+    ids = sorted(r["id"] for r in out)
+    assert ids == [100, 102, 103]
+    assert all(r.get("puede_abrir") is True for r in out)
+    # Acta ajena no aparece en el listado
+    assert 101 not in ids
+
+
+def test_list_actas_admin_ve_todas_salvo_solo_mias():
+    sb = _FakeSB(_store_actas_participacion())
+    admin = {"id": 5, "rol_nombre": "Administrador"}
+    out_all = list_actas(sb, 10, user_id=5, current_user=admin, solo_mias=False)
+    assert sorted(r["id"] for r in out_all) == [100, 101, 102, 103]
+
+    out_mias = list_actas(sb, 10, user_id=5, current_user=admin, solo_mias=True)
+    assert sorted(r["id"] for r in out_mias) == [100, 102, 103]
+
+
+def test_list_actas_desarrollador_ve_todas():
+    sb = _FakeSB(_store_actas_participacion())
+    dev = {"id": 99, "rol_nombre": "Desarrollador"}
+    out = list_actas(sb, 10, user_id=99, current_user=dev, solo_mias=False)
+    assert sorted(r["id"] for r in out) == [100, 101, 102, 103]
 
 
 def test_recordatorio_reunion_solo_asistentes_con_usuario_id():

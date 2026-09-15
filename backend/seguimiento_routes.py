@@ -665,7 +665,10 @@ def route_list_actas(
     tipo_acta: Optional[str] = Query(None),
     fecha_desde: Optional[str] = Query(None),
     fecha_hasta: Optional[str] = Query(None),
-    solo_mias: bool = Query(False, description="Solo actas donde es elaborador o asistente"),
+    solo_mias: bool = Query(
+        False,
+        description="Solo actas donde participa (también para Admin/Dev; por defecto ellos ven todas)",
+    ),
     q: Optional[str] = Query(None, description="Buscador de palabras clave sobre contenido del acta"),
     current_user=Depends(get_current_user),
 ):

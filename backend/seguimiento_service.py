@@ -138,8 +138,8 @@ def es_desarrollador_seguimiento(current_user: Optional[dict] = None) -> bool:
 
 
 MSG_ACTA_ACCESO_RESTRINGIDO = (
-    "No tiene acceso a esta acta. Solo el elaborador, los asistentes registrados "
-    "y los roles Administrador o Desarrollador pueden consultarla."
+    "No tiene acceso a esta acta. Solo el elaborador, el creador, los asistentes "
+    "registrados y los roles Administrador o Desarrollador pueden consultarla."
 )
 
 
@@ -213,8 +213,8 @@ def usuario_puede_ver_acta(
     current_user: Optional[dict] = None,
 ) -> bool:
     """
-    Contenido completo del acta: elaborador, asistente registrado (usuario_id),
-    o rol Administrador / Desarrollador.
+    Contenido completo del acta: elaborador, creador, asistente registrado
+    (usuario_id), o rol Administrador / Desarrollador.
     """
     if not acta:
         return False
@@ -224,10 +224,12 @@ def usuario_puede_ver_acta(
         uid = int(user_id)
     except (TypeError, ValueError):
         return False
-    elab = acta.get("elaborador_id")
-    if elab is not None:
+    for key in ("elaborador_id", "created_by"):
+        val = acta.get(key)
+        if val is None:
+            continue
         try:
-            if int(elab) == uid:
+            if int(val) == uid:
                 return True
         except (TypeError, ValueError):
             pass
@@ -295,20 +297,69 @@ def anexar_flags_acceso_actas(
     for r in rows:
         puede = privilegiado
         if not puede:
-            elab = r.get("elaborador_id")
-            try:
-                if elab is not None and int(elab) == uid:
-                    puede = True
-            except (TypeError, ValueError):
-                pass
+            for key in ("elaborador_id", "created_by"):
+                val = r.get(key)
+                if val is None:
+                    continue
+                try:
+                    if int(val) == uid:
+                        puede = True
+                        break
+                except (TypeError, ValueError):
+                    continue
         if not puede and r.get("id") is not None:
             puede = int(r["id"]) in asis_ids
         r["puede_abrir"] = bool(puede)
         r["acceso_restringido"] = not bool(puede)
         if not puede:
-            # No filtrar del listado: solo ocultar contenido interno expuesto en la fila.
+            # Contenido interno oculto; el listado aplica filtro de participación aparte.
             r["orden_del_dia"] = None
     return rows
+
+
+def _filtrar_actas_por_participacion(
+    sb,
+    rows: List[dict],
+    user_id: int,
+    current_user: Optional[dict] = None,
+    *,
+    forzar: bool = False,
+) -> List[dict]:
+    """Deja solo actas donde el usuario participa (elaborador, creador o asistente).
+
+    Admin / Desarrollador ven todas, salvo ``forzar=True`` (p. ej. «solo mis actividades»).
+    """
+    if not rows:
+        return rows
+    if not forzar and es_admin_o_desarrollador_seguimiento(current_user):
+        return rows
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return []
+    acta_ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+    asis_ids = _ids_actas_donde_es_asistente(sb, uid, acta_ids) if acta_ids else set()
+    filtered: List[dict] = []
+    for r in rows:
+        try:
+            aid = int(r["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        participa = aid in asis_ids
+        if not participa:
+            for key in ("elaborador_id", "created_by"):
+                val = r.get(key)
+                if val is None:
+                    continue
+                try:
+                    if int(val) == uid:
+                        participa = True
+                        break
+                except (TypeError, ValueError):
+                    continue
+        if participa:
+            filtered.append(r)
+    return filtered
 
 
 def ids_usuarios_bajo_gestion(sb, gerencial_id: int, contrato_id: Optional[int] = None) -> Set[int]:
@@ -1675,25 +1726,11 @@ def list_actas(
         out = [r for r in out if _norm_tipo_acta(r.get("tipo_acta") or "interna") == want_t]
     if user_id is not None:
         anexar_flags_acceso_actas(sb, out, int(user_id), current_user)
-    if solo_mias and user_id is not None:
-        uid = int(user_id)
-        acta_ids = [int(r["id"]) for r in out if r.get("id") is not None]
-        asis_ids = _ids_actas_donde_es_asistente(sb, uid, acta_ids)
-        filtered = []
-        for r in out:
-            try:
-                aid = int(r["id"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            elab = r.get("elaborador_id")
-            creador = r.get("created_by")
-            if (
-                (elab is not None and int(elab) == uid)
-                or (creador is not None and int(creador) == uid)
-                or aid in asis_ids
-            ):
-                filtered.append(r)
-        out = filtered
+        # Por defecto: solo actas en las que participa (elaborador/creador/asistente).
+        # Admin/Dev ven el repositorio completo; «solo_mias» fuerza el filtro también a ellos.
+        out = _filtrar_actas_por_participacion(
+            sb, out, int(user_id), current_user, forzar=bool(solo_mias),
+        )
     if not (q or "").strip():
         return out
     return _filtrar_actas_por_keywords(sb, out, q)
