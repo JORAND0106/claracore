@@ -1171,29 +1171,65 @@ def _estado_para_db(sb, estado_canonico: str) -> str:
 _FLUJO_TAB_KEYS = ("orden", "asistentes", "compromisos", "ideas")
 
 
+def _flujo_inicial_nueva_acta(raw=None) -> dict:
+    """Flujo para actas nuevas: versionado (v=1), secuencial, no liberado."""
+    out = {k: False for k in _FLUJO_TAB_KEYS}
+    out["liberado"] = False
+    out["v"] = 1
+    if isinstance(raw, dict):
+        for k in _FLUJO_TAB_KEYS:
+            if raw.get(k):
+                out[k] = True
+        if raw.get("liberado") or out.get("ideas"):
+            out["liberado"] = True
+    return out
+
+
 def _norm_flujo_tabs(raw) -> dict:
     """Normaliza el mapa de avance secuencial de pestañas del editor.
 
-    `liberado=True` = el acta ya llegó a Vista previa (o es legacy): edición libre.
-    Si el hito `ideas` está marcado, también se considera liberado.
+    - Actas nuevas llevan ``v: 1`` y arrancan con liberado=False.
+    - ``{}`` / null / sin versión ni hitos → legacy liberado (edición libre).
+    - ``ideas`` o ``liberado`` explícito → liberado.
     """
     out = {k: False for k in _FLUJO_TAB_KEYS}
     out["liberado"] = False
-    if not raw:
+    out["v"] = None
+
+    if raw is None or raw == "" or raw == {}:
+        out["liberado"] = True
         return out
     if isinstance(raw, str):
         import json
 
+        txt = raw.strip()
+        if not txt or txt in ("{}", "null"):
+            out["liberado"] = True
+            return out
         try:
-            raw = json.loads(raw)
+            raw = json.loads(txt)
         except Exception:
+            out["liberado"] = True
+            return out
+        if raw is None or raw == {}:
+            out["liberado"] = True
             return out
     if not isinstance(raw, dict):
+        out["liberado"] = True
         return out
+
     for k in _FLUJO_TAB_KEYS:
         if raw.get(k):
             out[k] = True
+    if raw.get("v") is not None and raw.get("v") != "":
+        try:
+            out["v"] = int(raw.get("v"))
+        except (TypeError, ValueError):
+            out["v"] = 1
     if raw.get("liberado") or out.get("ideas"):
+        out["liberado"] = True
+    elif out["v"] is None and not any(out[k] for k in _FLUJO_TAB_KEYS):
+        # Sin versión ni hitos → acta previa al flujo secuencial
         out["liberado"] = True
     return out
 
@@ -1201,13 +1237,38 @@ def _norm_flujo_tabs(raw) -> dict:
 def _merge_flujo_tabs(prev, incoming) -> dict:
     """Solo avanza hitos (no se revierten al guardar parcialmente)."""
     base = _norm_flujo_tabs(prev)
-    nxt = _norm_flujo_tabs(incoming)
+    if not isinstance(incoming, dict):
+        return base
+    # No pasar incoming por _norm_flujo_tabs solo: un {} liberaría por error.
     for k in _FLUJO_TAB_KEYS:
-        if nxt.get(k):
+        if incoming.get(k):
             base[k] = True
-    if nxt.get("liberado") or base.get("ideas"):
+    if incoming.get("liberado") or base.get("ideas"):
         base["liberado"] = True
+    if incoming.get("v") is not None and incoming.get("v") != "":
+        try:
+            base["v"] = int(incoming.get("v"))
+        except (TypeError, ValueError):
+            base["v"] = base.get("v") or 1
+    elif base.get("v") is None and not base.get("liberado"):
+        base["v"] = 1
     return base
+
+
+def _ensure_acta_flujo_tabs_column(sb) -> bool:
+    """Confirma columna flujo_tabs; reintenta tras reload de schema PostgREST."""
+    if _schema_has(sb, "acta_flujo_tabs"):
+        return True
+    _SCHEMA_CAPS["acta_flujo_tabs"] = None
+    reloaded = _try_reload_postgrest_schema(sb)
+    if reloaded:
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+        except Exception:
+            pass
+    return _schema_has(sb, "acta_flujo_tabs", force=True)
 
 
 def _normalize_orden_items_for_storage(orden) -> Any:
@@ -1279,7 +1340,7 @@ def _serialize_orden_del_dia(orden, *, tipo_acta: Optional[str] = None, embed_ti
 
 
 def _parse_orden_y_tipo(raw) -> tuple:
-    """Devuelve (orden_para_ui, tipo_acta_opcional) soportando envoltorio v2."""
+    """Devuelve (orden_para_ui, tipo_acta_opcional) soportando envoltorio v2/v3."""
     import json
 
     if raw is None:
@@ -1287,7 +1348,7 @@ def _parse_orden_y_tipo(raw) -> tuple:
     if isinstance(raw, list):
         return raw, None
     if isinstance(raw, dict):
-        if "orden" in raw or raw.get("v") == 2:
+        if "orden" in raw or "items" in raw or raw.get("v") in (2, 3):
             return raw.get("orden", raw.get("items", [])), raw.get("tipo_acta")
         return raw, raw.get("tipo_acta")
     s = str(raw).strip()
@@ -1302,11 +1363,54 @@ def _parse_orden_y_tipo(raw) -> tuple:
     return s, None
 
 
+def _extract_flujo_from_orden_raw(raw) -> Optional[dict]:
+    """Si el orden viene envuelto (v3) con flujo_tabs embebido, lo extrae."""
+    import json
+
+    if raw is None:
+        return None
+    obj = raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s.startswith("{"):
+            return None
+        try:
+            obj = json.loads(s)
+        except Exception:
+            return None
+    if isinstance(obj, dict) and isinstance(obj.get("flujo_tabs"), dict):
+        return obj.get("flujo_tabs")
+    return None
+
+
+def _embed_flujo_in_orden(orden_txt: Optional[str], flujo: dict, *, tipo_acta: Optional[str] = None) -> str:
+    """Persiste flujo dentro del JSON de orden_del_día cuando no hay columna flujo_tabs."""
+    import json
+
+    orden_ui, tipo_emb = _parse_orden_y_tipo(orden_txt)
+    if orden_ui is None:
+        orden_list: Any = []
+    elif isinstance(orden_ui, list):
+        orden_list = _normalize_orden_items_for_storage(orden_ui)
+    else:
+        orden_list = orden_ui
+    payload: Dict[str, Any] = {
+        "v": 3,
+        "orden": orden_list,
+        "flujo_tabs": dict(flujo) if isinstance(flujo, dict) else _norm_flujo_tabs(flujo),
+    }
+    tipo = tipo_acta or tipo_emb
+    if tipo:
+        payload["tipo_acta"] = tipo
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _enrich_acta_row(acta: dict) -> dict:
     """Normaliza estado/tipo/orden aunque la migración no esté aplicada."""
     if not acta:
         return acta
-    orden_ui, tipo_embedded = _parse_orden_y_tipo(acta.get("orden_del_dia"))
+    orden_raw = acta.get("orden_del_dia")
+    orden_ui, tipo_embedded = _parse_orden_y_tipo(orden_raw)
     if orden_ui is not None and not isinstance(orden_ui, str):
         import json
         acta["orden_del_dia"] = json.dumps(orden_ui, ensure_ascii=False) if not isinstance(orden_ui, str) else orden_ui
@@ -1322,7 +1426,13 @@ def _enrich_acta_row(acta: dict) -> dict:
         acta["estado"] = _norm_estado_acta(acta.get("estado") or "borrador")
     except ValueError:
         acta["estado"] = "borrador"
-    acta["flujo_tabs"] = _norm_flujo_tabs(acta.get("flujo_tabs"))
+    flujo_col = acta.get("flujo_tabs")
+    flujo_emb = _extract_flujo_from_orden_raw(orden_raw)
+    if flujo_col is None or flujo_col == {} or flujo_col == "{}":
+        # Columna vacía/ausente: usar embebido o marcar legacy liberado
+        acta["flujo_tabs"] = _norm_flujo_tabs(flujo_emb if flujo_emb is not None else {})
+    else:
+        acta["flujo_tabs"] = _merge_flujo_tabs(_norm_flujo_tabs(flujo_col), flujo_emb or {})
     return acta
 
 
@@ -1482,6 +1592,16 @@ def _persist_acta_row(sb, row: dict, *, acta_id: Optional[int] = None, contrato_
                     attempt.pop("hora_fin", None)
                     changed = True
                     break
+            if "flujo_tabs" in attempt and _is_missing_column_error(exc, "flujo_tabs"):
+                _SCHEMA_CAPS["acta_flujo_tabs"] = False
+                flujo = attempt.pop("flujo_tabs", None)
+                if flujo is not None:
+                    attempt["orden_del_dia"] = _embed_flujo_in_orden(
+                        attempt.get("orden_del_dia"),
+                        flujo if isinstance(flujo, dict) else _norm_flujo_tabs(flujo),
+                        tipo_acta=attempt.get("tipo_acta"),
+                    )
+                changed = True
             if not changed:
                 raise
     if last_exc:
@@ -1851,8 +1971,14 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
     }
     if has_tipo:
         row["tipo_acta"] = tipo
-    if _schema_has(sb, "acta_flujo_tabs"):
-        row["flujo_tabs"] = _norm_flujo_tabs(data.get("flujo_tabs"))
+    flujo_nuevo = _flujo_inicial_nueva_acta(data.get("flujo_tabs"))
+    if _ensure_acta_flujo_tabs_column(sb):
+        row["flujo_tabs"] = flujo_nuevo
+    else:
+        # Sin columna: embeber progreso en orden_del_dia
+        row["orden_del_dia"] = _embed_flujo_in_orden(
+            row.get("orden_del_dia"), flujo_nuevo, tipo_acta=tipo,
+        )
     if _ensure_acta_proxima_reunion_columns(sb):
         if "proxima_fecha" in data:
             pf = _parse_date(data.get("proxima_fecha")) if data.get("proxima_fecha") else None
@@ -1907,24 +2033,33 @@ def update_acta(
 
     if solo_reserva_orden:
         patch_res: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
+        tipo_res = None
+        if acta.get("tipo_acta"):
+            try:
+                tipo_res = _norm_tipo_acta(acta.get("tipo_acta"))
+            except ValueError:
+                tipo_res = "interna"
+        has_tipo_res = _schema_has(sb, "tipo_acta")
         if "orden_del_dia" in data:
-            tipo_res = None
-            if acta.get("tipo_acta"):
-                try:
-                    tipo_res = _norm_tipo_acta(acta.get("tipo_acta"))
-                except ValueError:
-                    tipo_res = "interna"
-            has_tipo_res = _schema_has(sb, "tipo_acta")
             patch_res["orden_del_dia"] = _serialize_orden_del_dia(
                 data.get("orden_del_dia"),
                 tipo_acta=tipo_res,
                 embed_tipo=not has_tipo_res,
             )
-        if "flujo_tabs" in data and _schema_has(sb, "acta_flujo_tabs"):
+        if "flujo_tabs" in data:
             # Invitado solo puede marcar el hito «orden» (no saltar la secuencia).
-            incoming = _norm_flujo_tabs(data.get("flujo_tabs"))
-            merged = _merge_flujo_tabs(acta.get("flujo_tabs"), {"orden": incoming.get("orden")})
-            patch_res["flujo_tabs"] = merged
+            incoming = data.get("flujo_tabs") if isinstance(data.get("flujo_tabs"), dict) else {}
+            merged = _merge_flujo_tabs(
+                acta.get("flujo_tabs"),
+                {"orden": bool(incoming.get("orden")), "v": incoming.get("v") or 1},
+            )
+            if _ensure_acta_flujo_tabs_column(sb):
+                patch_res["flujo_tabs"] = merged
+            else:
+                orden_base = patch_res.get("orden_del_dia", data.get("orden_del_dia", acta.get("orden_del_dia")))
+                patch_res["orden_del_dia"] = _embed_flujo_in_orden(
+                    orden_base, merged, tipo_acta=tipo_res,
+                )
         _persist_acta_row(sb, patch_res, acta_id=acta_id, contrato_id=contrato_id)
         return get_acta(sb, acta_id, contrato_id)
 
@@ -1950,8 +2085,15 @@ def update_acta(
             tipo_acta=tipo,
             embed_tipo=not has_tipo,
         )
-    if "flujo_tabs" in data and _schema_has(sb, "acta_flujo_tabs"):
-        patch["flujo_tabs"] = _merge_flujo_tabs(acta.get("flujo_tabs"), data.get("flujo_tabs"))
+    if "flujo_tabs" in data:
+        merged = _merge_flujo_tabs(acta.get("flujo_tabs"), data.get("flujo_tabs"))
+        if _ensure_acta_flujo_tabs_column(sb):
+            patch["flujo_tabs"] = merged
+        else:
+            orden_base = patch.get("orden_del_dia", data.get("orden_del_dia", acta.get("orden_del_dia")))
+            patch["orden_del_dia"] = _embed_flujo_in_orden(
+                orden_base, merged, tipo_acta=tipo,
+            )
     elaborador_id = None
     if "elaborador_id" in data:
         if data.get("elaborador_id") in (None, "", 0, "0"):

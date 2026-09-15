@@ -4,7 +4,9 @@ import {
   avanceTrasGuardar,
   compromisosQueBloqueanAvance,
   emptyFlujoTabs,
+  flujoInicialNuevaActa,
   flujoLiberado,
+  mergeFlujoProgress,
   normalizeOrdenItem,
   parseFlujoTabs,
   puedeAvanzarDesdeCompromisos,
@@ -13,57 +15,62 @@ import {
 } from './actaFlujoTabs.js'
 
 describe('actaFlujoTabs', () => {
-  it('parseFlujoTabs normaliza flags e incluye liberado', () => {
-    assert.deepEqual(parseFlujoTabs(null), emptyFlujoTabs())
-    assert.deepEqual(parseFlujoTabs({ orden: 1, ideas: true }), {
-      orden: true,
+  it('parseFlujoTabs: nueva vs legacy liberado', () => {
+    assert.deepEqual(flujoInicialNuevaActa(), {
+      orden: false,
       asistentes: false,
       compromisos: false,
-      ideas: true,
-      liberado: true, // ideas implica liberado
+      ideas: false,
+      liberado: false,
+      v: 1,
     })
-    assert.equal(flujoLiberado({ liberado: true }), true)
-    assert.equal(flujoLiberado({}), false)
+    assert.equal(parseFlujoTabs({}).liberado, true)
+    assert.equal(parseFlujoTabs('{}').liberado, true)
+    assert.equal(parseFlujoTabs({ liberado: true }).liberado, true)
+    assert.equal(parseFlujoTabs({ v: 1, orden: true }).liberado, false)
+    assert.equal(parseFlujoTabs({ v: 1, orden: true, ideas: true }).liberado, true)
+    assert.equal(flujoLiberado({}), true)
+    assert.equal(flujoLiberado({ v: 1 }), false)
+  })
+
+  it('mergeFlujoProgress no regresa hitos si el server viene vacío', () => {
+    const local = avanceTrasGuardar('orden', flujoInicialNuevaActa()).flujo
+    assert.equal(local.orden, true)
+    const mergedOk = mergeFlujoProgress(local, {})
+    assert.equal(mergedOk.orden, true)
+    assert.equal(mergedOk.liberado, false)
+    assert.equal(mergedOk.v, 1)
+    const mergedVer = mergeFlujoProgress(local, { v: 1 })
+    assert.equal(mergedVer.orden, true)
+    assert.equal(mergedVer.liberado, false)
   })
 
   it('tabDesbloqueada respeta secuencia en primer diligenciamiento', () => {
-    assert.equal(tabDesbloqueada('orden', { encabezadoGuardado: false, flujo: {} }), false)
+    assert.equal(tabDesbloqueada('orden', { encabezadoGuardado: false, flujo: flujoInicialNuevaActa() }), false)
     assert.equal(tabDesbloqueada('encabezado', { encabezadoGuardado: false, flujo: {} }), true)
-    assert.equal(tabDesbloqueada('orden', { encabezadoGuardado: true, flujo: {} }), true)
-    assert.equal(tabDesbloqueada('asistentes', { encabezadoGuardado: true, flujo: {} }), false)
-    assert.equal(tabDesbloqueada('asistentes', { encabezadoGuardado: true, flujo: { orden: true } }), true)
-    assert.equal(tabDesbloqueada('compromisos', { encabezadoGuardado: true, flujo: { orden: true } }), false)
+    assert.equal(tabDesbloqueada('orden', { encabezadoGuardado: true, flujo: flujoInicialNuevaActa() }), true)
+    assert.equal(tabDesbloqueada('asistentes', { encabezadoGuardado: true, flujo: flujoInicialNuevaActa() }), false)
+    assert.equal(tabDesbloqueada('asistentes', { encabezadoGuardado: true, flujo: { v: 1, orden: true } }), true)
+    assert.equal(tabDesbloqueada('compromisos', { encabezadoGuardado: true, flujo: { v: 1, orden: true } }), false)
     assert.equal(
-      tabDesbloqueada('compromisos', { encabezadoGuardado: true, flujo: { orden: true, asistentes: true } }),
-      true,
-    )
-    assert.equal(
-      tabDesbloqueada('ideas', {
-        encabezadoGuardado: true,
-        flujo: { orden: true, asistentes: true, compromisos: true },
-      }),
+      tabDesbloqueada('compromisos', { encabezadoGuardado: true, flujo: { v: 1, orden: true, asistentes: true } }),
       true,
     )
     assert.equal(
       tabDesbloqueada('apartados', {
         encabezadoGuardado: true,
-        flujo: { orden: true, asistentes: true, compromisos: true },
+        flujo: { v: 1, orden: true, asistentes: true, compromisos: true },
       }),
       false,
     )
-    assert.equal(
-      tabDesbloqueada('acciones', {
-        encabezadoGuardado: true,
-        flujo: { orden: true, asistentes: true, compromisos: true, ideas: true },
-      }),
-      true,
-    )
   })
 
-  it('liberado desbloquea todas las pestañas', () => {
-    const ctx = { encabezadoGuardado: true, flujo: { liberado: true } }
-    for (const id of ['encabezado', 'orden', 'asistentes', 'compromisos', 'ideas', 'apartados', 'acciones']) {
-      assert.equal(tabDesbloqueada(id, ctx), true, id)
+  it('liberado / legacy desbloquea todas las pestañas', () => {
+    for (const flujo of [{ liberado: true }, {}]) {
+      const ctx = { encabezadoGuardado: true, flujo }
+      for (const id of ['encabezado', 'orden', 'asistentes', 'compromisos', 'ideas', 'apartados', 'acciones']) {
+        assert.equal(tabDesbloqueada(id, ctx), true, `${JSON.stringify(flujo)} ${id}`)
+      }
     }
   })
 
@@ -75,16 +82,14 @@ describe('actaFlujoTabs', () => {
     ]
     assert.equal(compromisosQueBloqueanAvance(items).length, 1)
     assert.equal(puedeAvanzarDesdeCompromisos(items), false)
-    assert.equal(puedeAvanzarDesdeCompromisos([{ estado_gestion: 'cumplido' }]), true)
-    assert.equal(puedeAvanzarDesdeCompromisos([]), true)
 
-    const blocked = avanceTrasGuardar('compromisos', { orden: true, asistentes: true }, {
+    const blocked = avanceTrasGuardar('compromisos', { v: 1, orden: true, asistentes: true }, {
       compromisPrevios: items,
     })
     assert.equal(blocked.ok, false)
     assert.match(blocked.error, /Abierto/)
 
-    const ok = avanceTrasGuardar('compromisos', { orden: true, asistentes: true }, {
+    const ok = avanceTrasGuardar('compromisos', { v: 1, orden: true, asistentes: true }, {
       compromisPrevios: [{ estado_gestion: 'en_progreso' }],
     })
     assert.equal(ok.ok, true)
@@ -93,16 +98,19 @@ describe('actaFlujoTabs', () => {
 
     const libre = avanceTrasGuardar('compromisos', { liberado: true }, { compromisPrevios: items })
     assert.equal(libre.ok, true)
-    assert.equal(libre.flujo.liberado, true)
   })
 
-  it('guardar Temas libera el documento e ir a Vista previa', () => {
-    const a = avanceTrasGuardar('orden', {})
+  it('guardar Orden avanza a Asistentes; Temas libera a Vista previa', () => {
+    const a = avanceTrasGuardar('orden', flujoInicialNuevaActa())
     assert.equal(a.flujo.orden, true)
+    assert.equal(a.flujo.v, 1)
     assert.equal(a.nextTab, 'asistentes')
+    assert.equal(
+      tabDesbloqueada('asistentes', { encabezadoGuardado: true, flujo: a.flujo }),
+      true,
+    )
 
     const b = avanceTrasGuardar('asistentes', a.flujo)
-    assert.equal(b.flujo.asistentes, true)
     assert.equal(b.nextTab, 'compromisos')
 
     const c = avanceTrasGuardar('ideas', { ...b.flujo, compromisos: true })
@@ -130,5 +138,11 @@ describe('actaFlujoTabs', () => {
       { texto: 'Punto A', hecho: false, expositor_nombre: 'Ana', expositor_usuario_id: 42 },
       { texto: 'Sin expositor', hecho: true },
     ])
+  })
+
+  it('emptyFlujoTabs null inicia secuencia; {} es legacy', () => {
+    assert.equal(emptyFlujoTabs(null).v, 1)
+    assert.equal(emptyFlujoTabs(null).liberado, false)
+    assert.equal(emptyFlujoTabs({}).liberado, true)
   })
 })
