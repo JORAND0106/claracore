@@ -192,6 +192,30 @@ export function createSeguimientoApi(contratoId, token) {
         segundos_adicionales: Math.max(0, Math.min(120, Number(body.segundos_adicionales) || 0)),
         motivo: body.motivo || undefined,
       }),
+    grabacionLiveStatus: () => get(`/seguimiento/${cid}/grabacion/live-status`),
+    grabacionEstadoVivo: (sesionId) =>
+      get(`/seguimiento/${cid}/grabacion/sesiones/${sesionId}/vivo`),
+    grabacionTranscripcion: (sesionId, body = {}) =>
+      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/transcripcion`, {
+        texto_delta: String(body.texto_delta || '').slice(0, 8000),
+        forzar_sintesis: !!body.forzar_sintesis,
+      }, 120000),
+    async grabacionChunk(sesionId, blob, { forzarSintesis = false } = {}) {
+      const fd = new FormData()
+      fd.append('archivo', blob, 'chunk.webm')
+      if (forzarSintesis) fd.append('forzar_sintesis', 'true')
+      const sig = apiFetchSignal(120000)
+      const res = await fetch(
+        `${API_BASE}/seguimiento/${cid}/grabacion/sesiones/${sesionId}/chunk`,
+        {
+          method: 'POST',
+          headers: authHeaders(t, false),
+          body: fd,
+          ...(sig ? { signal: sig } : {}),
+        },
+      )
+      return parseOrThrow(res)
+    },
 
     // ── Bitácora de Obra ────────────────────────────────────────────────────
     listBitacora: (params = {}) => {
