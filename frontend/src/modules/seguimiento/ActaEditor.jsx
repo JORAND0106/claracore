@@ -2080,6 +2080,8 @@ export default function ActaEditor({
           t={t}
           api={api}
           textoInicial={htmlToPlainText(form.ideas[claraIdx]?.texto || '')}
+          /* Por encima de TemaEditorModal (12150) y galería de adjuntos (12200). */
+          zIndex={12300}
           onClose={() => setClaraIdx(null)}
           onEnviarAlActa={async (texto) => {
             const idx = claraIdx
