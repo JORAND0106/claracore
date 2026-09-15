@@ -72,6 +72,7 @@ function truncate(text, max = 90) {
 /**
  * Tabla compacta de Temas (ideas) del acta.
  * El diligenciamiento completo se abre en TemaEditorModal vía onOpenTema.
+ * La redacción desde audio usa el botón Actualizar (checkpoints manuales).
  */
 export default function ActaTemasTable({
   t,
@@ -81,7 +82,9 @@ export default function ActaTemasTable({
   saving = false,
   viewportCompact = false,
   onOpenTema,
-  onAgregarTema,
+  onActualizarTemas,
+  actualizandoTemas = false,
+  puedeActualizarTemas = false,
   onGenerarCompromiso,
   onVerAdjuntos,
 }) {
@@ -89,14 +92,25 @@ export default function ActaTemasTable({
     <div className="cc-seguim-temas-table">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
         {!soloLectura && (
-          <button type="button" style={primary(t)} onClick={() => onAgregarTema?.()}>
-            + Agregar tema
+          <button
+            type="button"
+            style={primary(t)}
+            disabled={saving || actualizandoTemas || !puedeActualizarTemas}
+            onClick={() => onActualizarTemas?.()}
+            title={
+              puedeActualizarTemas
+                ? 'Analiza el audio desde el último checkpoint hasta ahora'
+                : 'Inicie la grabación y habilite Temas (tras Compromisos abiertos) para actualizar'
+            }
+          >
+            {actualizandoTemas ? 'Actualizando…' : 'Actualizar'}
           </button>
         )}
       </div>
       {!ideas.length ? (
         <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-          No hay temas. Agregue uno para redactar con el editor enriquecido.
+          Aún no hay temas. Pulse «Actualizar» para sintetizar ideas del audio desde el checkpoint,
+          o abra un tema existente cuando aparezca. Adjuntos, esquemas y gráficos se agregan al editar cada tema.
         </div>
       ) : (
         <div

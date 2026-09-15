@@ -371,6 +371,7 @@ export default function ActaEditor({
   const [grabacionTabAudioOk, setGrabacionTabAudioOk] = useState(false)
   const [grabacionStopping, setGrabacionStopping] = useState(false)
   const [grabacionLiveInfo, setGrabacionLiveInfo] = useState(null)
+  const [actualizandoTemas, setActualizandoTemas] = useState(false)
   const grabacionCtrlRef = useRef(null)
   const esDev = !!permisos?.esDesarrollador
   const esElaborador = form.elaborador_id != null
@@ -453,7 +454,7 @@ export default function ActaEditor({
             if (nextIdeas === prev.ideas) return prev
             return { ...prev, ideas: nextIdeas }
           })
-          setTab((cur) => (cur === 'ideas' ? cur : 'ideas'))
+          // No forzar cambio de pestaña: el usuario ya está en Temas al pulsar Actualizar.
         },
         onLiveInfo: (info) => setGrabacionLiveInfo(info || null),
         onError: (msg) => setError(msg || 'Error de grabación'),
@@ -469,6 +470,13 @@ export default function ActaEditor({
       // Permisos → MediaRecorder.start; luego el modal (lectura queda en el audio).
       await ctrl.start({ includeTabAudio: true })
       setGrabacionConsentOpen(true)
+      // Si Temas ya está habilitado (o liberado), armar checkpoint de escucha ya.
+      const temasYaHabilitado = flujoLiberado(flujoTabs)
+        || !!flujoTabs?.compromisos
+        || tab === 'ideas'
+      if (temasYaHabilitado) {
+        await ctrl.armTemasCheckpoint?.()
+      }
     } catch (e) {
       const msg = friendlyFetchError(e, 'No se pudo iniciar la grabación')
       setError(msg)
@@ -939,6 +947,20 @@ export default function ActaEditor({
       })) {
         setTab(avance.nextTab)
       }
+      // Al habilitar Temas (tras guardar Compromisos abiertos): checkpoint inicial.
+      if (
+        (avance.nextTab === 'ideas' || (tab === 'compromisos' && flujoMerged?.compromisos))
+        && grabacionCtrlRef.current?.getSesionId?.()
+      ) {
+        try {
+          await grabacionCtrlRef.current.armTemasCheckpoint?.()
+          setOkMsg((prev) => (
+            prev
+              ? `${prev} Escucha de Temas activa: pulse Actualizar para sintetizar ideas.`
+              : 'Escucha de Temas activa: pulse Actualizar para sintetizar ideas.'
+          ))
+        } catch { /* ignore */ }
+      }
     } catch (e) {
       setError(friendlyFetchError(e, 'No se pudo guardar'))
     } finally {
@@ -1182,12 +1204,15 @@ export default function ActaEditor({
       )}
       {grabacionPhase === 'recording' && (
         <div style={{ fontSize: 'var(--cc-xs, 11px)', color: t.textMuted }}>
-          Temas en vivo:{' '}
+          Temas por checkpoint:{' '}
+          {grabacionLiveInfo?.temas_escucha_activa
+            ? 'escucha activa — pulse Actualizar en Temas'
+            : 'al guardar Compromisos abiertos se arma el checkpoint'}
           {grabacionLiveInfo?.stt_disponible
-            ? 'Azure Speech + síntesis Clara'
+            ? ' · Azure Speech'
             : (grabacionLiveInfo?.detalle
-              ? String(grabacionLiveInfo.detalle)
-              : 'reconocimiento del navegador + síntesis Clara')}
+              ? ` · ${String(grabacionLiveInfo.detalle)}`
+              : ' · reconocimiento del navegador')}
           {grabacionLiveInfo?.transcripcion_chars != null
             ? ` · ${grabacionLiveInfo.transcripcion_chars} caracteres transcritos`
             : ''}
@@ -1657,8 +1682,9 @@ export default function ActaEditor({
           )}
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-          Tabla compacta de temas. Pulse una fila o el icono de redacción para el editor completo
-          (interviniente, Clara, viñetas/numeración, esquema/gráfico y generar compromiso).
+          Pulse «Actualizar» para sintetizar ideas del audio desde el último checkpoint (sin reprocesar
+          tramos ya analizados). Adjuntos, esquemas y gráficos se agregan al abrir cada tema.
+          Los compromisos de esta acta se generan manualmente (botón abajo o desde el editor del tema).
         </p>
         <ActaTemasTable
           t={t}
@@ -1668,15 +1694,31 @@ export default function ActaEditor({
           saving={saving}
           viewportCompact={viewportCompact}
           onOpenTema={(idx) => setTemaEditIdx(idx)}
-          onAgregarTema={() => {
-            const neu = emptyIdea()
-            let newIdx = 0
-            patchList('ideas', (list) => {
-              const next = [...list, neu].map((row, i) => ({ ...row, orden: i }))
-              newIdx = next.length - 1
-              return next
-            })
-            setTemaEditIdx(newIdx)
+          puedeActualizarTemas={
+            !soloLectura
+            && grabacionPhase === 'recording'
+            && !!grabacionCtrlRef.current?.getSesionId?.()
+          }
+          actualizandoTemas={actualizandoTemas}
+          onActualizarTemas={async () => {
+            if (!grabacionCtrlRef.current?.actualizarTemas) {
+              setError('Inicie la grabación para actualizar Temas desde el audio.')
+              return
+            }
+            setActualizandoTemas(true)
+            setError('')
+            try {
+              const payload = await grabacionCtrlRef.current.actualizarTemas()
+              if (payload?.sintetizado) {
+                setOkMsg('Temas actualizados desde el audio (checkpoint avanzado).')
+              } else {
+                setOkMsg(payload?.detalle || 'Sin audio nuevo suficiente desde el último checkpoint.')
+              }
+            } catch (e) {
+              setError(friendlyFetchError(e, 'No se pudieron actualizar los Temas'))
+            } finally {
+              setActualizandoTemas(false)
+            }
           }}
           onGenerarCompromiso={(idx) => abrirCompromiso(idx, form.ideas[idx]?.texto)}
           onVerAdjuntos={(idx) => setTemaAdjuntosIdx(idx)}

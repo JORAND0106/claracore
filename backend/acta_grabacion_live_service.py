@@ -3,7 +3,7 @@ Grabación en vivo → STT (Azure Speech) + síntesis de Temas (Claude).
 
 - No almacena audio; solo texto de transcripción y JSON de temas propuestos.
 - NO genera compromisos (permanecen 100% manuales).
-- Síntesis periódica: ideas centrales, no dictado literal.
+- Síntesis de Temas solo por checkpoints manuales (botón Actualizar), nunca periódica.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import httpx
 from fastapi import HTTPException
@@ -22,8 +22,8 @@ _log = logging.getLogger("claracore.acta_grabacion_live")
 MAX_TRANSCRIPT_CHARS = 80_000
 MAX_DELTA_CHARS = 8_000
 MAX_AUDIO_BYTES = 4_500_000  # ~4.5 MB por chunk
-SYNTHESIS_MIN_INTERVAL_SEC = 40
-SYNTHESIS_MIN_NEW_CHARS = 350
+# Umbral mínimo de caracteres nuevos en el tramo para invocar IA.
+TRAMO_MIN_CHARS = 40
 MAX_TEMAS = 12
 
 
@@ -99,17 +99,42 @@ def _normalize_temas(raw: Any) -> list[dict]:
 
 
 def append_transcript(existing: str, delta: str) -> str:
+    merged, _ = append_transcript_tracking_checkpoint(existing, delta, 0)
+    return merged
+
+
+def append_transcript_tracking_checkpoint(
+    existing: str,
+    delta: str,
+    checkpoint_chars: int,
+) -> Tuple[str, int]:
+    """Une delta al transcript y ajusta el checkpoint si hay truncado por la izquierda."""
     base = (existing or "").rstrip()
     add = (delta or "").strip()
+    try:
+        cp = max(0, int(checkpoint_chars or 0))
+    except (TypeError, ValueError):
+        cp = 0
     if not add:
-        return base[:MAX_TRANSCRIPT_CHARS]
-    if not base:
-        merged = add
-    else:
-        merged = f"{base} {add}"
-    if len(merged) > MAX_TRANSCRIPT_CHARS:
-        merged = merged[-MAX_TRANSCRIPT_CHARS:]
-    return merged
+        merged = base[:MAX_TRANSCRIPT_CHARS]
+        return merged, min(cp, len(merged))
+    merged_full = add if not base else f"{base} {add}"
+    if len(merged_full) <= MAX_TRANSCRIPT_CHARS:
+        return merged_full, min(cp, len(merged_full))
+    merged = merged_full[-MAX_TRANSCRIPT_CHARS:]
+    dropped = len(merged_full) - len(merged)
+    return merged, max(0, cp - dropped)
+
+
+def tramo_desde_checkpoint(transcripcion: str, checkpoint_chars: int) -> str:
+    text = transcripcion or ""
+    try:
+        cp = max(0, int(checkpoint_chars or 0))
+    except (TypeError, ValueError):
+        cp = 0
+    if cp > len(text):
+        cp = len(text)
+    return text[cp:].strip()
 
 
 async def transcribe_audio_azure(
@@ -178,12 +203,14 @@ def _parse_temas_json(raw: str) -> list[dict]:
 async def sintetizar_temas(
     transcripcion: str,
     temas_previos: list[dict],
+    *,
+    solo_tramo: bool = False,
 ) -> list[dict]:
     api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY no está configurada.")
     texto = (transcripcion or "").strip()
-    if len(texto) < 40:
+    if len(texto) < TRAMO_MIN_CHARS:
         return _normalize_temas(temas_previos)
 
     import anthropic
@@ -194,7 +221,6 @@ async def sintetizar_temas(
         or "claude-haiku-4-5"
     ).strip()
     prev_json = json.dumps(temas_previos or [], ensure_ascii=False)
-    # Usar cola de transcripción si es muy larga
     if len(texto) > 14_000:
         texto = texto[-14_000:]
 
@@ -202,18 +228,34 @@ async def sintetizar_temas(
         "Eres Clara, redactora de actas de obra pública en ClaraCore. "
         "Tu salida es SOLO JSON válido, sin markdown ni explicaciones."
     )
-    user = (
-        "Analiza la transcripción parcial de una reunión y sintetiza las IDEAS CENTRALES "
-        "como Temas del acta. NO hagas dictado literal. NO inventes compromisos ni tareas. "
-        "Si hay temas previos, reutiliza su 'clave' y refínalos cuando la conversación los desarrolle; "
-        "agrega claves nuevas solo para ideas nuevas.\n\n"
-        f"Formato exacto:\n"
-        f'{{"temas":[{{"clave":"t1","titulo":"…","texto":"…","interviniente":null}}]}}\n'
-        f"Máximo {MAX_TEMAS} temas. Español formal. "
-        f"'interviniente' solo si se identifica con claridad (nombre/entidad); si no, null.\n\n"
-        f"Temas previos:\n{prev_json}\n\n"
-        f"Transcripción acumulada:\n{texto}"
-    )
+    if solo_tramo:
+        user = (
+            "Analiza ÚNICAMENTE el siguiente TRAMO NUEVO de transcripción de una reunión "
+            "(audio desde el último checkpoint hasta ahora). Sintetiza las IDEAS CENTRALES "
+            "como Temas del acta. NO hagas dictado literal. NO inventes compromisos ni tareas. "
+            "Si hay temas previos, reutiliza su 'clave' y refínalos solo cuando este tramo "
+            "los desarrolle; agrega claves nuevas solo para ideas nuevas de este tramo. "
+            "No reescribas temas previos que no se mencionen en el tramo.\n\n"
+            f"Formato exacto:\n"
+            f'{{"temas":[{{"clave":"t1","titulo":"…","texto":"…","interviniente":null}}]}}\n'
+            f"Máximo {MAX_TEMAS} temas. Español formal. "
+            f"'interviniente' solo si se identifica con claridad (nombre/entidad); si no, null.\n\n"
+            f"Temas previos (contexto, no reprocesar):\n{prev_json}\n\n"
+            f"Tramo nuevo a analizar:\n{texto}"
+        )
+    else:
+        user = (
+            "Analiza la transcripción parcial de una reunión y sintetiza las IDEAS CENTRALES "
+            "como Temas del acta. NO hagas dictado literal. NO inventes compromisos ni tareas. "
+            "Si hay temas previos, reutiliza su 'clave' y refínalos cuando la conversación los desarrolle; "
+            "agrega claves nuevas solo para ideas nuevas.\n\n"
+            f"Formato exacto:\n"
+            f'{{"temas":[{{"clave":"t1","titulo":"…","texto":"…","interviniente":null}}]}}\n'
+            f"Máximo {MAX_TEMAS} temas. Español formal. "
+            f"'interviniente' solo si se identifica con claridad (nombre/entidad); si no, null.\n\n"
+            f"Temas previos:\n{prev_json}\n\n"
+            f"Transcripción acumulada:\n{texto}"
+        )
     client = anthropic.AsyncAnthropic(api_key=api_key)
     try:
         msg = await client.messages.create(
@@ -236,41 +278,37 @@ async def sintetizar_temas(
         raise HTTPException(status_code=502, detail="No se pudo sintetizar los temas con IA.") from exc
 
 
-def _should_synthesize(sesion: dict, new_chars: int, force: bool) -> bool:
-    if force:
-        return True
-    if new_chars <= 0 and not (sesion.get("transcripcion") or "").strip():
-        return False
-    trans = sesion.get("transcripcion") or ""
-    if len(trans) < 80:
-        return False
-    last = sesion.get("ultima_sintesis_en")
-    if not last:
-        return len(trans) >= 120 or new_chars >= SYNTHESIS_MIN_NEW_CHARS
-    try:
-        if isinstance(last, str):
-            last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict]:
+    """Fusiona por clave: actualiza existentes y agrega nuevos; conserva previos no tocados."""
+    by_clave: dict[str, dict] = {}
+    order: list[str] = []
+    for t in previos or []:
+        k = str(t.get("clave") or "").strip()
+        if not k:
+            continue
+        by_clave[k] = dict(t)
+        order.append(k)
+    for t in nuevos or []:
+        k = str(t.get("clave") or "").strip()
+        if not k:
+            continue
+        if k in by_clave:
+            merged = {**by_clave[k], **t}
+            by_clave[k] = merged
         else:
-            last_dt = last
-        if last_dt.tzinfo is None:
-            last_dt = last_dt.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - last_dt).total_seconds()
-    except Exception:
-        age = SYNTHESIS_MIN_INTERVAL_SEC + 1
-    if age >= SYNTHESIS_MIN_INTERVAL_SEC and new_chars >= 80:
-        return True
-    if new_chars >= SYNTHESIS_MIN_NEW_CHARS:
-        return True
-    return False
+            by_clave[k] = dict(t)
+            order.append(k)
+    return _normalize_temas([by_clave[k] for k in order if k in by_clave])
 
 
-def _patch_sesion(sb: Any, sesion_id: int, patch: dict) -> None:
-    payload = {**patch, "updated_at": _now_iso()}
-    sb.table("acta_grabacion_sesion").update(payload).eq("id", int(sesion_id)).execute()
-
-
-def _live_payload(sesion: dict, *, sintetizado: bool = False, delta: str = "") -> dict:
-    return {
+def _live_payload(
+    sesion: dict,
+    *,
+    sintetizado: bool = False,
+    delta: str = "",
+    detalle: Optional[str] = None,
+) -> dict:
+    out = {
         "sesion_id": sesion.get("id"),
         "estado": sesion.get("estado"),
         "transcripcion_chars": len(sesion.get("transcripcion") or ""),
@@ -278,8 +316,18 @@ def _live_payload(sesion: dict, *, sintetizado: bool = False, delta: str = "") -
         "temas": _normalize_temas(sesion.get("temas_propuestos")),
         "sintetizado": bool(sintetizado),
         "ultima_sintesis_en": sesion.get("ultima_sintesis_en"),
+        "checkpoint_chars": int(sesion.get("checkpoint_chars") or 0),
+        "temas_escucha_activa": bool(sesion.get("temas_escucha_activa")),
         "stt": speech_status(),
     }
+    if detalle:
+        out["detalle"] = detalle
+    return out
+
+
+def _patch_sesion(sb: Any, sesion_id: int, patch: dict) -> None:
+    payload = {**patch, "updated_at": _now_iso()}
+    sb.table("acta_grabacion_sesion").update(payload).eq("id", int(sesion_id)).execute()
 
 
 async def ingest_transcript_delta(
@@ -291,34 +339,25 @@ async def ingest_transcript_delta(
     *,
     forzar_sintesis: bool = False,
 ) -> dict:
+    """Acumula transcripción. No sintetiza Temas (eso es solo vía Actualizar)."""
+    del forzar_sintesis  # legado: la síntesis automática quedó deshabilitada
     sesion = _sesion_row(sb, sesion_id)
     if not sesion:
         raise HTTPException(status_code=404, detail="Sesión no encontrada.")
     _assert_sesion_activa(sesion, contrato_id, usuario_id)
 
     delta = (texto_delta or "").strip()[:MAX_DELTA_CHARS]
-    if not delta and not forzar_sintesis:
+    if not delta:
         return _live_payload(sesion)
 
     prev = sesion.get("transcripcion") or ""
-    merged = append_transcript(prev, delta)
-    new_chars = max(0, len(merged) - len(prev))
+    cp = int(sesion.get("checkpoint_chars") or 0)
+    merged, new_cp = append_transcript_tracking_checkpoint(prev, delta, cp)
+    patch = {"transcripcion": merged, "checkpoint_chars": new_cp}
+    _patch_sesion(sb, sesion_id, patch)
     sesion["transcripcion"] = merged
-    _patch_sesion(sb, sesion_id, {"transcripcion": merged})
-
-    sintetizado = False
-    if _should_synthesize(sesion, new_chars, forzar_sintesis):
-        temas = await sintetizar_temas(merged, _normalize_temas(sesion.get("temas_propuestos")))
-        now = _now_iso()
-        _patch_sesion(sb, sesion_id, {
-            "temas_propuestos": temas,
-            "ultima_sintesis_en": now,
-        })
-        sesion["temas_propuestos"] = temas
-        sesion["ultima_sintesis_en"] = now
-        sintetizado = True
-
-    return _live_payload(sesion, sintetizado=sintetizado, delta=delta)
+    sesion["checkpoint_chars"] = new_cp
+    return _live_payload(sesion, sintetizado=False, delta=delta)
 
 
 async def ingest_audio_chunk(
@@ -331,13 +370,13 @@ async def ingest_audio_chunk(
     *,
     forzar_sintesis: bool = False,
 ) -> dict:
+    del forzar_sintesis
     sesion = _sesion_row(sb, sesion_id)
     if not sesion:
         raise HTTPException(status_code=404, detail="Sesión no encontrada.")
     _assert_sesion_activa(sesion, contrato_id, usuario_id)
 
     if not speech_configured():
-        # Sin Azure: el cliente puede enviar texto vía /transcripcion.
         return {
             **_live_payload(sesion),
             "stt_omitido": True,
@@ -353,8 +392,91 @@ async def ingest_audio_chunk(
         sesion_id,
         usuario_id,
         text,
-        forzar_sintesis=forzar_sintesis,
     )
+
+
+def armar_checkpoint_temas(
+    sb: Any,
+    contrato_id: int,
+    sesion_id: int,
+    usuario_id: int,
+) -> dict:
+    """Checkpoint inicial: a partir de ahora se escucha el audio para Temas (sin sintetizar)."""
+    sesion = _sesion_row(sb, sesion_id)
+    if not sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+    _assert_sesion_activa(sesion, contrato_id, usuario_id)
+
+    trans = sesion.get("transcripcion") or ""
+    cp = len(trans)
+    patch = {
+        "checkpoint_chars": cp,
+        "temas_escucha_activa": True,
+    }
+    _patch_sesion(sb, sesion_id, patch)
+    sesion["checkpoint_chars"] = cp
+    sesion["temas_escucha_activa"] = True
+    return _live_payload(
+        sesion,
+        detalle="Checkpoint de Temas armado. Pulse Actualizar para analizar el audio nuevo.",
+    )
+
+
+async def actualizar_temas_desde_checkpoint(
+    sb: Any,
+    contrato_id: int,
+    sesion_id: int,
+    usuario_id: int,
+) -> dict:
+    """Analiza el tramo desde el checkpoint vigente hasta ahora y avanza el checkpoint."""
+    sesion = _sesion_row(sb, sesion_id)
+    if not sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+    _assert_sesion_activa(sesion, contrato_id, usuario_id)
+
+    if not sesion.get("temas_escucha_activa"):
+        # Primer Actualizar sin armado explícito: arma al inicio del tramo actual (0..ahora no).
+        # Mejor: armar checkpoint en el punto actual y no sintetizar aún (sin tramo nuevo).
+        # Si el usuario pulsa Actualizar sin haber pasado por Compromisos, arma y analiza desde 0.
+        trans0 = sesion.get("transcripcion") or ""
+        if not trans0.strip():
+            return _live_payload(
+                sesion,
+                detalle="Aún no hay transcripción. Continúe la reunión y pulse Actualizar de nuevo.",
+            )
+        _patch_sesion(sb, sesion_id, {
+            "checkpoint_chars": 0,
+            "temas_escucha_activa": True,
+        })
+        sesion["checkpoint_chars"] = 0
+        sesion["temas_escucha_activa"] = True
+
+    trans = sesion.get("transcripcion") or ""
+    cp = int(sesion.get("checkpoint_chars") or 0)
+    tramo = tramo_desde_checkpoint(trans, cp)
+    if len(tramo) < TRAMO_MIN_CHARS:
+        return _live_payload(
+            sesion,
+            sintetizado=False,
+            detalle="No hay audio nuevo suficiente desde el último checkpoint.",
+        )
+
+    prev_temas = _normalize_temas(sesion.get("temas_propuestos"))
+    nuevos = await sintetizar_temas(tramo, prev_temas, solo_tramo=True)
+    merged = _merge_temas_por_clave(prev_temas, nuevos)
+    now = _now_iso()
+    new_cp = len(trans)
+    _patch_sesion(sb, sesion_id, {
+        "temas_propuestos": merged,
+        "ultima_sintesis_en": now,
+        "checkpoint_chars": new_cp,
+        "temas_escucha_activa": True,
+    })
+    sesion["temas_propuestos"] = merged
+    sesion["ultima_sintesis_en"] = now
+    sesion["checkpoint_chars"] = new_cp
+    sesion["temas_escucha_activa"] = True
+    return _live_payload(sesion, sintetizado=True, delta=tramo)
 
 
 def leer_estado_vivo(
