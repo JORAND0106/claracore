@@ -14,6 +14,7 @@ import { mergeTemasGrabacionViva } from './actaGrabacionLive'
 import {
   avanceTrasGuardar,
   emptyFlujoTabs,
+  flujoLiberado,
   mensajeTabBloqueada,
   normalizeOrdenItem,
   parseFlujoTabs,
@@ -390,6 +391,7 @@ export default function ActaEditor({
   const soloLecturaOrden = !puedeEditarOrden
   const flujoCtx = { encabezadoGuardado, flujo: flujoTabs }
   const isTabLocked = (tabId) => !tabDesbloqueada(tabId, flujoCtx)
+  const secuencialActivo = encabezadoGuardado && !flujoLiberado(flujoTabs)
   /** Evita re-hidratar desde API cuando el padre pasa actaId tras el primer guardado local. */
   const skipServerHydrateRef = useRef(false)
   /** Acta ya hidratada en esta sesión del popup — no volver a pisar el formulario. */
@@ -919,9 +921,12 @@ export default function ActaEditor({
         { flujoOverride: avance.flujo, reservaOrdenOnly },
       )
       setFlujoTabs(emptyFlujoTabs(row.flujo_tabs != null ? row.flujo_tabs : avance.flujo))
+      const liberadoAhora = !flujoLiberado(flujoTabs) && flujoLiberado(avance.flujo)
       const msg = estadoExtra === 'realizada'
         ? 'Acta marcada como Realizada.'
-        : 'Acta guardada correctamente.'
+        : (liberadoAhora
+          ? 'Acta guardada. Documento liberado: edición libre en todas las pestañas.'
+          : 'Acta guardada correctamente.')
       setOkMsg(msg)
       onSaved?.(row, { stay: true, enviada: estadoExtra === 'realizada' })
       if (avance.nextTab && tabDesbloqueada(avance.nextTab, {
@@ -1136,6 +1141,8 @@ export default function ActaEditor({
             {!sellada && encabezadoGuardado && soloLectura && !puedeEditarOrden ? ' · solo lectura (elaborador exclusivo)' : ''}
             {!sellada && encabezadoGuardado && soloLectura && puedeEditarOrden ? ' · puede reservar puntos del orden del día' : ''}
             {!encabezadoGuardado ? ' · guarde el encabezado para continuar' : ''}
+            {secuencialActivo ? ' · primer diligenciamiento (avance por pestañas)' : ''}
+            {!sellada && encabezadoGuardado && flujoLiberado(flujoTabs) ? ' · edición libre' : ''}
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
@@ -1327,7 +1334,9 @@ export default function ActaEditor({
         <h3 style={h3(t)}>Orden del día</h3>
         <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
           Antes de la reunión, cada invitado puede reservar los puntos que va a tratar e indicar quién los expone.
-          Al guardar esta pestaña se habilita «Asistentes».
+          {secuencialActivo
+            ? ' Al guardar esta pestaña se habilita «Asistentes».'
+            : ' Puede editar libremente en cualquier momento.'}
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {(form.orden_items || []).map((it, idx) => (
@@ -1705,9 +1714,9 @@ export default function ActaEditor({
         <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
           Exclusivamente compromisos arrastrados de actas anteriores del mismo tipo.
           Los compromisos de esta acta se gestionan en «Temas y Compromisos».
-          {' '}
-          No podrá avanzar mientras exista al menos un compromiso en estado «Abierto»;
-          actualice su estado y guarde para habilitar Temas.
+          {secuencialActivo
+            ? ' No podrá avanzar mientras exista al menos un compromiso en estado «Abierto»; actualice su estado y guarde para habilitar Temas.'
+            : ''}
         </p>
         <ActaCompromisosAbiertosTable
           t={t}
@@ -1779,6 +1788,12 @@ export default function ActaEditor({
       {tab === 'acciones' && (
       <section style={card(t)}>
         <h3 style={h3(t)}>Vista previa y acciones del sistema</h3>
+        {flujoLiberado(flujoTabs) && (
+          <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+            El bloqueo secuencial del primer diligenciamiento ya no aplica: puede editar libremente
+            cualquier pestaña del acta (notas adicionales, ajustes, etc.).
+          </p>
+        )}
         <div
           className="cc-seguim-acta-actions"
           style={{

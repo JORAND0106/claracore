@@ -1,16 +1,20 @@
 /**
  * Flujo secuencial de pestañas del editor de actas.
  *
- * Orden de desbloqueo:
- *   encabezado → orden → asistentes → compromisos → ideas → apartados + acciones
+ * Aplica SOLO en el primer diligenciamiento (acta nueva, aún no liberada):
+ *   encabezado → orden → asistentes → compromisos → ideas → Vista previa
  *
- * Compromisos: no se marca avance mientras exista al menos un compromiso
- * previo con estado_gestion === 'abierto'.
+ * Al guardar Temas (ideas) se marca `liberado` y todo el documento queda
+ * editable sin restricción de orden. Las actas existentes se migran con
+ * liberado=true.
+ *
+ * Compromisos: en primer diligenciamiento no se avanza mientras exista al
+ * menos un compromiso previo con estado_gestion === 'abierto'.
  */
 
 export const FLUJO_TAB_KEYS = ['orden', 'asistentes', 'compromisos', 'ideas']
 
-/** Mapa tab UI → hito de flujo requerido para abrirla. */
+/** Mapa tab UI → hito de flujo requerido para abrirla (solo si !liberado). */
 export const TAB_REQUIERE_FLUJO = {
   encabezado: null,
   orden: null, // solo encabezado guardado (actaId)
@@ -35,11 +39,14 @@ export function emptyFlujoTabs(partial = null) {
     asistentes: false,
     compromisos: false,
     ideas: false,
+    liberado: false,
   }
   if (!partial || typeof partial !== 'object') return base
   for (const k of FLUJO_TAB_KEYS) {
     if (partial[k]) base[k] = true
   }
+  // ideas completado (= llegó a Vista previa) o flag explícito → edición libre
+  if (partial.liberado || base.ideas) base.liberado = true
   return base
 }
 
@@ -53,6 +60,10 @@ export function parseFlujoTabs(raw) {
     }
   }
   return emptyFlujoTabs(raw)
+}
+
+export function flujoLiberado(flujo) {
+  return !!emptyFlujoTabs(flujo).liberado
 }
 
 /** Compromisos que aún bloquean el avance (estado literal «abierto»). */
@@ -75,12 +86,14 @@ export function puedeAvanzarDesdeCompromisos(items = []) {
  */
 export function tabDesbloqueada(tabId, { encabezadoGuardado, flujo }) {
   if (!encabezadoGuardado) return tabId === 'encabezado'
+  const f = emptyFlujoTabs(flujo)
+  // Tras Vista previa (o actas legacy liberadas): todo el documento libre.
+  if (f.liberado) return true
   const req = TAB_REQUIERE_FLUJO[tabId]
   if (req == null) {
     // encabezado u orden: basta con acta creada
     return tabId === 'encabezado' || tabId === 'orden'
   }
-  const f = emptyFlujoTabs(flujo)
   return !!f[req]
 }
 
@@ -88,6 +101,7 @@ export function mensajeTabBloqueada(tabId, { encabezadoGuardado, flujo, tieneAbi
   if (!encabezadoGuardado) {
     return 'Guarde el encabezado primero para definir el elaborador'
   }
+  if (flujoLiberado(flujo)) return ''
   if (tabId === 'ideas' && tieneAbiertos) {
     return 'Cierre o cambie el estado de todos los compromisos abiertos antes de continuar'
   }
@@ -111,6 +125,15 @@ export function mensajeTabBloqueada(tabId, { encabezadoGuardado, flujo, tieneAbi
 export function avanceTrasGuardar(tabId, flujoActual, { compromisPrevios = [] } = {}) {
   const flujo = emptyFlujoTabs(flujoActual)
   const marca = TAB_MARCA_FLUJO[tabId]
+
+  // Edición libre: no aplicar gate de compromisos ni forzar hitos.
+  if (flujo.liberado) {
+    const orderLibre = ['encabezado', 'orden', 'asistentes', 'compromisos', 'ideas', 'apartados', 'acciones']
+    const idxL = orderLibre.indexOf(tabId)
+    const nextLibre = idxL >= 0 && idxL < orderLibre.length - 1 ? orderLibre[idxL + 1] : null
+    return { ok: true, flujo, nextTab: nextLibre, error: null }
+  }
+
   if (tabId === 'compromisos') {
     if (!puedeAvanzarDesdeCompromisos(compromisPrevios)) {
       return {
@@ -123,10 +146,17 @@ export function avanceTrasGuardar(tabId, flujoActual, { compromisPrevios = [] } 
   }
   if (marca) flujo[marca] = true
 
+  // Al completar Temas se libera el documento (llegó a Vista previa).
+  if (tabId === 'ideas' || flujo.ideas) {
+    flujo.ideas = true
+    flujo.liberado = true
+  }
+
   const order = ['encabezado', 'orden', 'asistentes', 'compromisos', 'ideas', 'apartados', 'acciones']
   const idx = order.indexOf(tabId)
   let nextTab = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null
-  // Tras Temas, apartados y acciones quedan habilitados; avanzar a apartados.
+  // Tras Temas: ir a Vista previa (acciones); apartados también quedan libres por liberado.
+  if (tabId === 'ideas') nextTab = 'acciones'
   return { ok: true, flujo, nextTab, error: null }
 }
 

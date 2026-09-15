@@ -12,10 +12,13 @@ def test_norm_y_merge_flujo_tabs():
         "asistentes": False,
         "compromisos": False,
         "ideas": False,
+        "liberado": False,
     }
     assert svc._norm_flujo_tabs({"orden": True, "ideas": 1, "x": True})["orden"] is True
     assert svc._norm_flujo_tabs({"orden": True, "ideas": 1, "x": True})["ideas"] is True
     assert svc._norm_flujo_tabs({"orden": True, "ideas": 1, "x": True})["asistentes"] is False
+    assert svc._norm_flujo_tabs({"orden": True, "ideas": 1})["liberado"] is True
+    assert svc._norm_flujo_tabs({"liberado": True})["liberado"] is True
 
     merged = svc._merge_flujo_tabs(
         {"orden": True},
@@ -23,6 +26,10 @@ def test_norm_y_merge_flujo_tabs():
     )
     assert merged["orden"] is True  # no se revierte
     assert merged["asistentes"] is True
+
+    merged_lib = svc._merge_flujo_tabs({"orden": True}, {"liberado": True})
+    assert merged_lib["liberado"] is True
+    assert merged_lib["orden"] is True
 
 
 def test_normalize_orden_items_conserva_expositor():
@@ -63,6 +70,15 @@ def test_enrich_acta_incluye_flujo_tabs():
     })
     assert row["flujo_tabs"]["orden"] is True
     assert row["flujo_tabs"]["asistentes"] is False
+    assert row["flujo_tabs"]["liberado"] is False
+
+    legacy = svc._enrich_acta_row({
+        "orden_del_dia": "[]",
+        "tipo_acta": "interna",
+        "estado": "borrador",
+        "flujo_tabs": {"liberado": True},
+    })
+    assert legacy["flujo_tabs"]["liberado"] is True
 
 
 def test_assert_puede_reservar_orden_asistente(monkeypatch):
