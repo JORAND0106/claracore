@@ -884,6 +884,9 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
         elif cap == "acta_horas_reunion":
             sb.table("seguimiento_acta").select("id,hora_inicio,hora_fin").limit(1).execute()
             _SCHEMA_CAPS[cap] = True
+        elif cap == "acta_flujo_tabs":
+            sb.table("seguimiento_acta").select("id,flujo_tabs").limit(1).execute()
+            _SCHEMA_CAPS[cap] = True
         elif cap == "estado_realizada":
             # Si tipo_acta existe, la migración de ciclo de vida suele estar completa.
             _SCHEMA_CAPS[cap] = _schema_has(sb, "tipo_acta")
@@ -913,6 +916,8 @@ def _schema_has(sb, cap: str, *, force: bool = False) -> bool:
             _is_missing_column_error(exc, "hora_inicio")
             or _is_missing_column_error(exc, "hora_fin")
         ):
+            _SCHEMA_CAPS[cap] = False
+        elif cap == "acta_flujo_tabs" and _is_missing_column_error(exc, "flujo_tabs"):
             _SCHEMA_CAPS[cap] = False
         elif cap == "contacto_externo" and (
             "seguimiento_contacto_externo" in msg
@@ -1163,6 +1168,69 @@ def _estado_para_db(sb, estado_canonico: str) -> str:
     return e
 
 
+_FLUJO_TAB_KEYS = ("orden", "asistentes", "compromisos", "ideas")
+
+
+def _norm_flujo_tabs(raw) -> dict:
+    """Normaliza el mapa de avance secuencial de pestañas del editor."""
+    out = {k: False for k in _FLUJO_TAB_KEYS}
+    if not raw:
+        return out
+    if isinstance(raw, str):
+        import json
+
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return out
+    if not isinstance(raw, dict):
+        return out
+    for k in _FLUJO_TAB_KEYS:
+        if raw.get(k):
+            out[k] = True
+    return out
+
+
+def _merge_flujo_tabs(prev, incoming) -> dict:
+    """Solo avanza hitos (no se revierten al guardar parcialmente)."""
+    base = _norm_flujo_tabs(prev)
+    nxt = _norm_flujo_tabs(incoming)
+    for k in _FLUJO_TAB_KEYS:
+        if nxt.get(k):
+            base[k] = True
+    return base
+
+
+def _normalize_orden_items_for_storage(orden) -> Any:
+    """Conserva texto/hecho/expositor en checklist; deja texto libre intacto."""
+    if not isinstance(orden, list):
+        return orden
+    out = []
+    for it in orden:
+        if not isinstance(it, dict):
+            out.append(it)
+            continue
+        texto = (it.get("texto") or it.get("titulo") or "").strip()
+        if not texto and not (it.get("hecho") or it.get("checked") or it.get("done")):
+            # Conservar filas vacías no aporta; el FE ya filtra al serializar.
+            continue
+        row: Dict[str, Any] = {
+            "texto": texto or (it.get("texto") or it.get("titulo") or ""),
+            "hecho": bool(it.get("hecho") or it.get("checked") or it.get("done")),
+        }
+        exp_nombre = (it.get("expositor_nombre") or it.get("expositor") or "").strip()
+        if exp_nombre:
+            row["expositor_nombre"] = exp_nombre
+        exp_id = it.get("expositor_usuario_id", it.get("expositor_id"))
+        try:
+            if exp_id is not None and int(exp_id) > 0:
+                row["expositor_usuario_id"] = int(exp_id)
+        except (TypeError, ValueError):
+            pass
+        out.append(row)
+    return out
+
+
 def _serialize_orden_del_dia(orden, *, tipo_acta: Optional[str] = None, embed_tipo: bool = False) -> Optional[str]:
     import json
 
@@ -1180,11 +1248,17 @@ def _serialize_orden_del_dia(orden, *, tipo_acta: Optional[str] = None, embed_ti
                 payload = txt
         else:
             payload = txt
+    if isinstance(payload, list):
+        payload = _normalize_orden_items_for_storage(payload)
+    elif isinstance(payload, dict) and ("orden" in payload or payload.get("v") in (2, 3)):
+        inner = payload.get("orden", payload.get("items", []))
+        if isinstance(inner, list):
+            payload = {**payload, "orden": _normalize_orden_items_for_storage(inner)}
     if embed_tipo and tipo_acta:
         if isinstance(payload, list):
             payload = {"v": 2, "tipo_acta": tipo_acta, "orden": payload}
         elif isinstance(payload, dict):
-            if "orden" in payload or "items" in payload or payload.get("v") == 2:
+            if "orden" in payload or "items" in payload or payload.get("v") in (2, 3):
                 payload = {**payload, "tipo_acta": tipo_acta, "v": payload.get("v") or 2}
             else:
                 payload = {"v": 2, "tipo_acta": tipo_acta, "orden": payload}
@@ -1239,6 +1313,7 @@ def _enrich_acta_row(acta: dict) -> dict:
         acta["estado"] = _norm_estado_acta(acta.get("estado") or "borrador")
     except ValueError:
         acta["estado"] = "borrador"
+    acta["flujo_tabs"] = _norm_flujo_tabs(acta.get("flujo_tabs"))
     return acta
 
 
@@ -1290,6 +1365,50 @@ def _assert_puede_editar_acta(
     elab = acta.get("elaborador_id")
     if elab is None or int(elab) != int(user_id):
         raise ValueError("Solo el elaborador del acta puede editar su contenido")
+
+
+def _es_patch_reserva_orden(data: dict) -> bool:
+    """True si el patch solo toca orden del día / flujo (reserva de puntos por invitados)."""
+    if not isinstance(data, dict):
+        return False
+    allowed = {"orden_del_dia", "flujo_tabs"}
+    touched = {k for k, v in data.items() if v is not None or k in ("orden_del_dia", "flujo_tabs")}
+    # Ignorar claves vacías típicas del body pydantic
+    meaningful = set()
+    for k, v in data.items():
+        if k not in allowed:
+            if v is None:
+                continue
+            if k in ("asistentes", "ideas", "apartados") and v == []:
+                continue
+            meaningful.add(k)
+        else:
+            meaningful.add(k)
+    return bool(meaningful) and meaningful.issubset(allowed)
+
+
+def _assert_puede_reservar_orden_acta(
+    sb,
+    acta: dict,
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> None:
+    """Invitado (asistente registrado) puede reservar puntos del orden en borrador."""
+    if _acta_esta_sellada(acta):
+        raise ValueError("El acta está sellada y no admite reserva de orden del día")
+    if es_desarrollador_seguimiento(current_user):
+        return
+    elab = acta.get("elaborador_id")
+    try:
+        if elab is not None and int(elab) == int(user_id):
+            return
+    except (TypeError, ValueError):
+        pass
+    aid = acta.get("id")
+    if aid is None or not _usuario_es_asistente_registrado(sb, int(aid), int(user_id)):
+        raise ValueError(
+            "Solo el elaborador o un invitado registrado como asistente puede reservar el orden del día"
+        )
 
 
 def revertir_acta_a_borrador(
@@ -1723,6 +1842,8 @@ def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:
     }
     if has_tipo:
         row["tipo_acta"] = tipo
+    if _schema_has(sb, "acta_flujo_tabs"):
+        row["flujo_tabs"] = _norm_flujo_tabs(data.get("flujo_tabs"))
     if _ensure_acta_proxima_reunion_columns(sb):
         if "proxima_fecha" in data:
             pf = _parse_date(data.get("proxima_fecha")) if data.get("proxima_fecha") else None
@@ -1752,13 +1873,20 @@ def update_acta(
 ) -> dict:
     acta = get_acta(sb, acta_id, contrato_id)
     nuevo_estado_raw = data.get("estado") if "estado" in data else None
-    _assert_puede_editar_acta(
-        acta,
-        user_id,
-        current_user,
-        permitir_revertir_dev=True,
-        nuevo_estado=nuevo_estado_raw,
-    )
+    solo_reserva_orden = False
+    try:
+        _assert_puede_editar_acta(
+            acta,
+            user_id,
+            current_user,
+            permitir_revertir_dev=True,
+            nuevo_estado=nuevo_estado_raw,
+        )
+    except ValueError:
+        if not _es_patch_reserva_orden(data):
+            raise
+        _assert_puede_reservar_orden_acta(sb, acta, user_id, current_user)
+        solo_reserva_orden = True
     # Si es solo revertir (dev): permitir únicamente el cambio de estado a borrador.
     if _acta_esta_sellada(acta):
         patch = {
@@ -1766,6 +1894,29 @@ def update_acta(
             "updated_at": _now_utc().isoformat(),
         }
         _persist_acta_row(sb, patch, acta_id=acta_id, contrato_id=contrato_id)
+        return get_acta(sb, acta_id, contrato_id)
+
+    if solo_reserva_orden:
+        patch_res: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
+        if "orden_del_dia" in data:
+            tipo_res = None
+            if acta.get("tipo_acta"):
+                try:
+                    tipo_res = _norm_tipo_acta(acta.get("tipo_acta"))
+                except ValueError:
+                    tipo_res = "interna"
+            has_tipo_res = _schema_has(sb, "tipo_acta")
+            patch_res["orden_del_dia"] = _serialize_orden_del_dia(
+                data.get("orden_del_dia"),
+                tipo_acta=tipo_res,
+                embed_tipo=not has_tipo_res,
+            )
+        if "flujo_tabs" in data and _schema_has(sb, "acta_flujo_tabs"):
+            # Invitado solo puede marcar el hito «orden» (no saltar la secuencia).
+            incoming = _norm_flujo_tabs(data.get("flujo_tabs"))
+            merged = _merge_flujo_tabs(acta.get("flujo_tabs"), {"orden": incoming.get("orden")})
+            patch_res["flujo_tabs"] = merged
+        _persist_acta_row(sb, patch_res, acta_id=acta_id, contrato_id=contrato_id)
         return get_acta(sb, acta_id, contrato_id)
 
     patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
@@ -1790,6 +1941,8 @@ def update_acta(
             tipo_acta=tipo,
             embed_tipo=not has_tipo,
         )
+    if "flujo_tabs" in data and _schema_has(sb, "acta_flujo_tabs"):
+        patch["flujo_tabs"] = _merge_flujo_tabs(acta.get("flujo_tabs"), data.get("flujo_tabs"))
     elaborador_id = None
     if "elaborador_id" in data:
         if data.get("elaborador_id") in (None, "", 0, "0"):

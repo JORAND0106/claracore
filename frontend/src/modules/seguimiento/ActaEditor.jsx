@@ -11,6 +11,15 @@ import TemaEditorModal from './TemaEditorModal'
 import { createGrabacionSessionController } from './actaGrabacionSession'
 import { formatMinutosCupo } from './actaGrabacionHelpers'
 import { mergeTemasGrabacionViva } from './actaGrabacionLive'
+import {
+  avanceTrasGuardar,
+  emptyFlujoTabs,
+  mensajeTabBloqueada,
+  normalizeOrdenItem,
+  parseFlujoTabs,
+  serializeOrdenItems,
+  tabDesbloqueada,
+} from './actaFlujoTabs'
 import { htmlToPlainText, isRichTextEmpty, plainTextToHtml } from './richTextUtils'
 import UbicacionAutocomplete from './UbicacionAutocomplete'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
@@ -170,11 +179,7 @@ function mergeApartadoIds(local = [], server = []) {
 
 function parseOrdenDia(raw) {
   if (Array.isArray(raw)) {
-    return raw.map((x, i) => (
-      typeof x === 'object'
-        ? { texto: x.texto || x.titulo || '', hecho: !!(x.hecho || x.checked || x.done), key: x.key || newRowKey('ord') }
-        : { texto: String(x), hecho: false, key: newRowKey('ord') }
-    ))
+    return raw.map((x) => normalizeOrdenItem(x, () => newRowKey('ord')))
   }
   if (typeof raw === 'string' && raw.trim().startsWith('[')) {
     try {
@@ -182,9 +187,9 @@ function parseOrdenDia(raw) {
     } catch { /* fallthrough */ }
   }
   if (typeof raw === 'string' && raw.trim()) {
-    return raw.split(/\n+/).filter(Boolean).map((texto) => ({ texto, hecho: false, key: newRowKey('ord') }))
+    return raw.split(/\n+/).filter(Boolean).map((texto) => normalizeOrdenItem({ texto }, () => newRowKey('ord')))
   }
-  return [{ texto: '', hecho: false, key: newRowKey('ord') }]
+  return [normalizeOrdenItem({ texto: '' }, () => newRowKey('ord'))]
 }
 
 /** Altura de línea usada para auto-crecimiento del textarea de ideas. */
@@ -330,7 +335,7 @@ export default function ActaEditor({
       : new Date().toISOString().slice(0, 10)),
     ubicacion: '',
     tipo_acta: 'interna',
-    orden_items: [{ texto: '', hecho: false, key: newRowKey('ord') }],
+    orden_items: [normalizeOrdenItem({ texto: '' }, () => newRowKey('ord'))],
     elaborador_id: usuario?.id || null,
     elaborador_nombre: nombre(usuario),
     asistentes: [emptyAsistente()],
@@ -341,6 +346,7 @@ export default function ActaEditor({
     proxima_hora: '',
     proxima_lugar: '',
   })
+  const [flujoTabs, setFlujoTabs] = useState(() => emptyFlujoTabs())
   const [claraIdx, setClaraIdx] = useState(null)
   /** Índice de idea cuyo editor de esquema está abierto. */
   const [esquemaIdeaIdx, setEsquemaIdeaIdx] = useState(null)
@@ -375,8 +381,15 @@ export default function ActaEditor({
     || esElaborador
     || (esDev && form.estado === 'borrador')
   )
+  const esAsistenteInvitado = !!(usuario?.id && (form.asistentes || []).some(
+    (a) => a.usuario_id != null && Number(a.usuario_id) === Number(usuario.id),
+  ))
+  /** Invitados pueden reservar puntos del orden del día antes de la reunión. */
+  const puedeEditarOrden = puedeEditar || (!sellada && esAsistenteInvitado && encabezadoGuardado)
   const soloLectura = !puedeEditar
-  const tabsBloqueadas = !encabezadoGuardado
+  const soloLecturaOrden = !puedeEditarOrden
+  const flujoCtx = { encabezadoGuardado, flujo: flujoTabs }
+  const isTabLocked = (tabId) => !tabDesbloqueada(tabId, flujoCtx)
   /** Evita re-hidratar desde API cuando el padre pasa actaId tras el primer guardado local. */
   const skipServerHydrateRef = useRef(false)
   /** Acta ya hidratada en esta sesión del popup — no volver a pisar el formulario. */
@@ -553,6 +566,7 @@ export default function ActaEditor({
             proxima_hora: a.proxima_hora ? String(a.proxima_hora).slice(0, 5) : '',
             proxima_lugar: a.proxima_lugar || '',
           })
+          setFlujoTabs(parseFlujoTabs(a.flujo_tabs))
           setActaCompromisos(Array.isArray(a.compromisos) ? a.compromisos : [])
           hydratedActaIdRef.current = a.id
           try {
@@ -620,7 +634,16 @@ export default function ActaEditor({
 
   useEffect(() => {
     if (!encabezadoGuardado && tab !== 'encabezado') setTab('encabezado')
-  }, [encabezadoGuardado, tab])
+    else if (encabezadoGuardado && isTabLocked(tab)) {
+      // Si el flujo aún no habilita la pestaña actual, volver a la más avanzada abierta.
+      const order = TABS_ACTA.map((t) => t.id)
+      let fallback = 'encabezado'
+      for (const id of order) {
+        if (tabDesbloqueada(id, flujoCtx)) fallback = id
+      }
+      if (fallback !== tab) setTab(fallback)
+    }
+  }, [encabezadoGuardado, tab, flujoTabs])
 
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   /** Actualiza listas del formulario con updater funcional (evita carreras stale al agregar/seleccionar). */
@@ -640,13 +663,12 @@ export default function ActaEditor({
     })
   }
 
-  const buildPayload = (extra = {}, formSrc = form) => ({
+  const buildPayload = (extra = {}, formSrc = form, flujoSrc = flujoTabs) => ({
     fecha_reunion: formSrc.fecha_reunion,
     ubicacion: formSrc.ubicacion,
     tipo_acta: formSrc.tipo_acta || 'interna',
-    orden_del_dia: (formSrc.orden_items || [])
-      .filter((x) => (x.texto || '').trim())
-      .map((x) => ({ texto: x.texto.trim(), hecho: !!x.hecho })),
+    orden_del_dia: serializeOrdenItems(formSrc.orden_items || []),
+    flujo_tabs: emptyFlujoTabs(flujoSrc),
     elaborador_id: formSrc.elaborador_id,
     elaborador_nombre: formSrc.elaborador_nombre,
     proxima_fecha: (formSrc.proxima_fecha || '').trim() || null,
@@ -699,11 +721,19 @@ export default function ActaEditor({
     ...extra,
   })
 
+  const buildPayloadReservaOrden = (flujoSrc = flujoTabs) => ({
+    orden_del_dia: serializeOrdenItems(form.orden_items || []),
+    flujo_tabs: emptyFlujoTabs(flujoSrc),
+  })
+
   const applySavedActa = (row) => {
     skipServerHydrateRef.current = true
     hydratedActaIdRef.current = row.id
     setLocalActaId(row.id)
     setConsecutivo(row.consecutivo)
+    if (row.flujo_tabs != null) {
+      setFlujoTabs(parseFlujoTabs(row.flujo_tabs))
+    }
     // Solo sincroniza metadatos e IDs; no reemplaza el contenido local diligeniado.
     setForm((f) => ({
       ...f,
@@ -754,14 +784,22 @@ export default function ActaEditor({
     return out
   }
 
-  const persistActa = async (extra = {}, formSrc = null) => {
+  const persistActa = async (extra = {}, formSrc = null, { flujoOverride = null, reservaOrdenOnly = false } = {}) => {
     const src = formSrc || form
+    const flujoSrc = flujoOverride != null ? flujoOverride : flujoTabs
+    if (reservaOrdenOnly) {
+      if (!localActaId) throw new Error('Guarde el encabezado antes de reservar el orden del día')
+      const payload = { ...buildPayloadReservaOrden(flujoSrc), ...extra }
+      const row = await api.updateActa(localActaId, payload)
+      applySavedActa(row)
+      return row
+    }
     if (!src.elaborador_id) {
       throw new Error('Seleccione un elaborador registrado en el contrato')
     }
     const ideasConTitulo = await asegurarTitulosTema(src.ideas || [])
     patchList('ideas', () => ideasConTitulo)
-    const payload = buildPayload(extra, { ...src, ideas: ideasConTitulo })
+    const payload = buildPayload(extra, { ...src, ideas: ideasConTitulo }, flujoSrc)
     let row = localActaId
       ? await api.updateActa(localActaId, payload)
       : await api.createActa(payload)
@@ -867,19 +905,30 @@ export default function ActaEditor({
     setError('')
     setOkMsg('')
     try {
-      if (!form.elaborador_id) {
+      if (!form.elaborador_id && !(!puedeEditar && puedeEditarOrden && tab === 'orden')) {
         throw new Error('El elaborador es obligatorio')
       }
-      const row = await persistActa(estadoExtra ? { estado: estadoExtra } : {})
+      const avance = avanceTrasGuardar(tab, flujoTabs, { compromisPrevios: previos })
+      if (!avance.ok) {
+        throw new Error(avance.error || 'No se puede avanzar desde esta pestaña')
+      }
+      const reservaOrdenOnly = !puedeEditar && puedeEditarOrden && tab === 'orden'
+      const row = await persistActa(
+        estadoExtra ? { estado: estadoExtra } : {},
+        null,
+        { flujoOverride: avance.flujo, reservaOrdenOnly },
+      )
+      setFlujoTabs(emptyFlujoTabs(row.flujo_tabs != null ? row.flujo_tabs : avance.flujo))
       const msg = estadoExtra === 'realizada'
         ? 'Acta marcada como Realizada.'
         : 'Acta guardada correctamente.'
       setOkMsg(msg)
       onSaved?.(row, { stay: true, enviada: estadoExtra === 'realizada' })
-      // Tras guardado OK: avanzar a la siguiente pestaña (excepto en la última).
-      const idx = TABS_ACTA.findIndex((tb) => tb.id === tab)
-      if (idx >= 0 && idx < TABS_ACTA.length - 1) {
-        setTab(TABS_ACTA[idx + 1].id)
+      if (avance.nextTab && tabDesbloqueada(avance.nextTab, {
+        encabezadoGuardado: true,
+        flujo: emptyFlujoTabs(row.flujo_tabs != null ? row.flujo_tabs : avance.flujo),
+      })) {
+        setTab(avance.nextTab)
       }
     } catch (e) {
       setError(friendlyFetchError(e, 'No se pudo guardar'))
@@ -1084,7 +1133,8 @@ export default function ActaEditor({
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
             {labelEstadoActa(form.estado)} · {labelTipoActa(form.tipo_acta)}
             {sellada ? ' · sellada (solo lectura)' : ''}
-            {!sellada && encabezadoGuardado && soloLectura ? ' · solo lectura (elaborador exclusivo)' : ''}
+            {!sellada && encabezadoGuardado && soloLectura && !puedeEditarOrden ? ' · solo lectura (elaborador exclusivo)' : ''}
+            {!sellada && encabezadoGuardado && soloLectura && puedeEditarOrden ? ' · puede reservar puntos del orden del día' : ''}
             {!encabezadoGuardado ? ' · guarde el encabezado para continuar' : ''}
           </div>
         </div>
@@ -1100,7 +1150,7 @@ export default function ActaEditor({
               {grabacionBusy ? 'Iniciando…' : 'Grabar reunión'}
             </button>
           )}
-          {puedeEditar && (permisos?.crear || permisos?.editar) && (
+          {(puedeEditar || (puedeEditarOrden && tab === 'orden')) && (permisos?.crear || permisos?.editar || puedeEditarOrden) && (
             <button type="button" disabled={saving} onClick={() => guardar()} style={primary(t)}>
               {saving ? 'Guardando…' : 'Guardar'}
             </button>
@@ -1142,16 +1192,23 @@ export default function ActaEditor({
 
       <div className="cc-seguim-acta-tabs" style={{ display: 'flex', gap: 2, flexWrap: 'nowrap', borderBottom: `1px solid ${t.border}`, paddingBottom: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
         {TABS_ACTA.map((tb) => {
-          const locked = tabsBloqueadas && tb.id !== 'encabezado'
+          const locked = isTabLocked(tb.id)
           const label = tb.id === 'compromisos' && previos.length > 0
             ? `${tb.label} (${previos.length})`
             : tb.label
+          const lockTitle = locked
+            ? mensajeTabBloqueada(tb.id, {
+              encabezadoGuardado,
+              flujo: flujoTabs,
+              tieneAbiertos: tb.id === 'ideas',
+            })
+            : undefined
           return (
             <button
               key={tb.id}
               type="button"
               disabled={locked}
-              title={locked ? 'Guarde el encabezado primero para definir el elaborador' : undefined}
+              title={lockTitle}
               onClick={() => {
                 if (locked) return
                 setTab(tb.id)
@@ -1268,12 +1325,24 @@ export default function ActaEditor({
       {tab === 'orden' && (
       <section style={card(t)}>
         <h3 style={h3(t)}>Orden del día</h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+          Antes de la reunión, cada invitado puede reservar los puntos que va a tratar e indicar quién los expone.
+          Al guardar esta pestaña se habilita «Asistentes».
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {(form.orden_items || []).map((it, idx) => (
-            <div key={it.key ?? idx} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div
+              key={it.key ?? idx}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'auto minmax(160px, 1.4fr) minmax(160px, 1fr) auto',
+                gap: 8,
+                alignItems: 'center',
+              }}
+            >
               <input
                 type="checkbox"
-                disabled={soloLectura}
+                disabled={soloLecturaOrden}
                 checked={!!it.hecho}
                 onChange={(e) => {
                   const checked = e.target.checked
@@ -1283,7 +1352,7 @@ export default function ActaEditor({
                 }}
               />
               <input
-                disabled={soloLectura}
+                disabled={soloLecturaOrden}
                 value={it.texto}
                 placeholder={`Punto ${idx + 1}`}
                 onChange={(e) => {
@@ -1294,7 +1363,49 @@ export default function ActaEditor({
                 }}
                 style={{ ...inp(t), flex: 1 }}
               />
-              {!soloLectura && (
+              {soloLecturaOrden ? (
+                <div style={{ ...inp(t), opacity: 0.9 }}>
+                  {it.expositor_nombre || '—'}
+                </div>
+              ) : (
+                <UserSearchSelect
+                  t={t}
+                  usuarios={usuariosContrato}
+                  mode="free"
+                  valueId={it.expositor_usuario_id}
+                  valueNombre={it.expositor_nombre || ''}
+                  placeholder="Quién expone…"
+                  style={inp(t)}
+                  onSelect={(u) => {
+                    patchList('orden_items', (list) => list.map((row, i) => {
+                      if (i !== idx) return row
+                      if (!u) {
+                        return { ...row, expositor_usuario_id: null, expositor_nombre: '' }
+                      }
+                      if (u.es_externo || (u.externo_id != null && Number(u.id) < 0)) {
+                        return {
+                          ...row,
+                          expositor_usuario_id: null,
+                          expositor_nombre: nombreUser(u),
+                        }
+                      }
+                      return {
+                        ...row,
+                        expositor_usuario_id: u.id,
+                        expositor_nombre: nombreUser(u),
+                      }
+                    }))
+                  }}
+                  onFreeConfirm={({ nombre }) => {
+                    patchList('orden_items', (list) => list.map((row, i) => (
+                      i === idx
+                        ? { ...row, expositor_usuario_id: null, expositor_nombre: nombre }
+                        : row
+                    )))
+                  }}
+                />
+              )}
+              {!soloLecturaOrden && (
                 <button
                   type="button"
                   style={ghost(t)}
@@ -1305,17 +1416,104 @@ export default function ActaEditor({
               )}
             </div>
           ))}
-          {!soloLectura && (
+          {!soloLecturaOrden && (
             <button
               type="button"
               style={ghost(t)}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => patchList('orden_items', (list) => [...list, { texto: '', hecho: false, key: newRowKey('ord') }])}
+              onClick={() => patchList('orden_items', (list) => [
+                ...list,
+                normalizeOrdenItem({ texto: '' }, () => newRowKey('ord')),
+              ])}
             >
-              + Agregar punto
+              + Agregar / reservar punto
             </button>
           )}
         </div>
+
+        {puedeEditar && (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h4 style={{ ...h3(t), fontSize: 'var(--cc-md, 14px)', margin: 0 }}>Invitados a la convocatoria</h4>
+              <button
+                type="button"
+                style={ghost(t)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => patchList('asistentes', (list) => [...list, emptyAsistente()])}
+              >
+                + Invitar
+              </button>
+            </div>
+            <p style={{ margin: '6px 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+              Agregue aquí a los invitados (usuarios del contrato) para que puedan abrir el acta y reservar sus puntos antes de la reunión.
+            </p>
+            {(form.asistentes || []).map((a, idx) => (
+              <div
+                key={a._key || a.id || `inv-${idx}`}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.6fr) minmax(120px, 1fr) auto', gap: 8, marginBottom: 8, alignItems: 'center' }}
+              >
+                <UserSearchSelect
+                  t={t}
+                  usuarios={usuariosContrato}
+                  mode="free"
+                  valueId={a.usuario_id || (a.externo_id ? -Number(a.externo_id) : null)}
+                  valueNombre={a.nombre}
+                  placeholder="Invitado…"
+                  style={inp(t)}
+                  onSelect={(u) => {
+                    patchList('asistentes', (list) => list.map((row, i) => {
+                      if (i !== idx) return row
+                      if (u.es_externo || (u.externo_id != null && Number(u.id) < 0)) {
+                        return {
+                          ...row,
+                          usuario_id: null,
+                          externo_id: u.externo_id ?? Math.abs(Number(u.id)),
+                          nombre: nombreUser(u),
+                          cargo: u.cargo_nombre || '',
+                          entidad: u.empresa || '',
+                          email: u.email || '',
+                        }
+                      }
+                      return {
+                        ...row,
+                        usuario_id: u.id,
+                        externo_id: null,
+                        nombre: nombreUser(u),
+                        cargo: u.cargo_nombre || row.cargo || '',
+                        entidad: u.empresa || row.entidad || '',
+                        email: u.email || row.email || '',
+                      }
+                    }))
+                  }}
+                  onFreeConfirm={({ nombre }) => {
+                    patchList('asistentes', (list) => list.map((row, i) => (
+                      i === idx
+                        ? { ...row, usuario_id: null, externo_id: null, nombre }
+                        : row
+                    )))
+                  }}
+                />
+                <input
+                  placeholder="Cargo"
+                  value={a.cargo}
+                  onChange={(e) => {
+                    const cargo = e.target.value
+                    patchList('asistentes', (list) => list.map((row, i) => (i === idx ? { ...row, cargo } : row)))
+                  }}
+                  style={inp(t)}
+                />
+                <button
+                  type="button"
+                  style={ghost(t)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => patchList('asistentes', (list) => list.filter((_, i) => i !== idx))}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
       )}
 
@@ -1507,6 +1705,9 @@ export default function ActaEditor({
         <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
           Exclusivamente compromisos arrastrados de actas anteriores del mismo tipo.
           Los compromisos de esta acta se gestionan en «Temas y Compromisos».
+          {' '}
+          No podrá avanzar mientras exista al menos un compromiso en estado «Abierto»;
+          actualice su estado y guarde para habilitar Temas.
         </p>
         <ActaCompromisosAbiertosTable
           t={t}

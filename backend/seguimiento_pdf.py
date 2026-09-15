@@ -90,11 +90,18 @@ def _orden_del_dia_html(raw) -> str:
             if isinstance(it, dict):
                 texto = it.get("texto") or it.get("titulo") or ""
                 done = bool(it.get("hecho") or it.get("checked") or it.get("done"))
+                expositor = (it.get("expositor_nombre") or it.get("expositor") or "").strip()
             else:
                 texto = str(it)
                 done = False
+                expositor = ""
             mark = "☑" if done else "☐"
-            rows.append(f"<div style='margin:2pt 0;'>{mark} {_esc(texto)}</div>")
+            exp_html = (
+                f" <span style='color:#64748b;'>— Expone: {_esc(expositor)}</span>"
+                if expositor
+                else ""
+            )
+            rows.append(f"<div style='margin:2pt 0;'>{mark} {_esc(texto)}{exp_html}</div>")
         return "".join(rows) or "<div style='color:#94a3b8;'>—</div>"
     return f"<div style='white-space:pre-wrap;'>{_esc(raw or '—')}</div>"
 

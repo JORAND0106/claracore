@@ -151,6 +151,7 @@ class ActaCreateBody(BaseModel):
     proxima_fecha: Optional[str] = None
     proxima_hora: Optional[str] = None
     proxima_lugar: Optional[str] = None
+    flujo_tabs: Optional[Any] = None
 
 
 class ActaUpdateBody(BaseModel):
@@ -167,6 +168,7 @@ class ActaUpdateBody(BaseModel):
     proxima_fecha: Optional[str] = None
     proxima_hora: Optional[str] = None
     proxima_lugar: Optional[str] = None
+    flujo_tabs: Optional[Any] = None
 
 
 class IdeaTextoBody(BaseModel):
