@@ -75,6 +75,23 @@ class CalendarioNoHabilesCache:
             self._by_contract.pop(int(contrato_id), None)
 
 
+def es_dia_habil_colombia(d: date) -> bool:
+    """Día hábil nacional: no sábado/domingo ni festivo colombiano (sin extras de contrato)."""
+    if es_fin_de_semana(d):
+        return False
+    return d not in festivos_colombia_año(d.year)
+
+
+def siguiente_dia_habil_colombia(d: date) -> date:
+    """Primer día hábil colombiano en o después de ``d``."""
+    cur = d
+    for _ in range(20):
+        if es_dia_habil_colombia(cur):
+            return cur
+        cur += timedelta(days=1)
+    return d
+
+
 def es_dia_habil(d: date, contrato_id: int, cache: CalendarioNoHabilesCache) -> bool:
     if es_fin_de_semana(d):
         return False
