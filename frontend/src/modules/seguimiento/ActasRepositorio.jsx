@@ -9,11 +9,12 @@ import {
 } from './seguimientoTheme'
 
 export const MSG_ACTA_ACCESO_RESTRINGIDO =
-  'No tiene acceso a esta acta. Solo el elaborador, los asistentes registrados y los roles Administrador o Desarrollador pueden consultarla.'
+  'No tiene acceso a esta acta. Solo el elaborador, el creador, los asistentes registrados y los roles Administrador o Desarrollador pueden consultarla.'
 
 /**
  * Repositorio consultable de actas (grilla + filtros + palabras clave).
- * Las actas sin permiso de contenido siguen visibles pero bloqueadas al abrir.
+ * El listado ya viene filtrado por participación (elaborador, creador o asistente);
+ * Admin/Desarrollador ven todas las del contrato.
  */
 export default function ActasRepositorio({
   t,
@@ -73,7 +74,7 @@ export default function ActasRepositorio({
             value={filtros.q}
             onChange={(e) => setFiltros((f) => ({ ...f, q: e.target.value }))}
             onKeyDown={(e) => { if (e.key === 'Enter') load() }}
-            placeholder="Buscar en actas con acceso; en bloqueadas solo metadatos…"
+            placeholder="Buscar en actas donde participa…"
             style={{ ...inp(t), minWidth: viewportCompact ? 0 : 220, width: '100%' }}
           />
         </Field>
@@ -129,7 +130,9 @@ export default function ActasRepositorio({
       {loading ? (
         <div style={{ color: t.textMuted }}>Cargando repositorio…</div>
       ) : rows.length === 0 ? (
-        <div style={{ color: t.textMuted }}>No hay actas que coincidan con la consulta.</div>
+        <div style={{ color: t.textMuted }}>
+          No hay actas en las que figure como elaborador, creador o asistente.
+        </div>
       ) : (
         <div className="cc-seguim-table-scroll" style={{ overflowX: 'auto', border: `1px solid ${t.border}`, borderRadius: 10 }}>
           <table className="cc-seguim-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: viewportCompact ? 0 : 860 }}>
