@@ -1,6 +1,6 @@
 /**
- * Orquestación de una sesión de grabación (cupo + MediaRecorder + descarga local).
- * Pensado para usarse desde ActaEditor vía refs/callbacks.
+ * Orquestación de una sesión de grabación (cupo + MediaRecorder + descarga local)
+ * + pipeline en vivo (STT/síntesis de Temas).
  */
 import {
   HEARTBEAT_MS,
@@ -11,6 +11,10 @@ import {
   segundosAReclamar,
   stopMediaStream,
 } from './actaGrabacionHelpers.js'
+import {
+  createAudioBatcher,
+  startWebSpeechTranscript,
+} from './actaGrabacionLive.js'
 
 export function createGrabacionSessionController({
   api,
@@ -20,11 +24,15 @@ export function createGrabacionSessionController({
   onState,
   onError,
   onDownloaded,
+  onTemasVivos,
+  onLiveInfo,
   /** Inyectables para tests */
   openStreams = openGrabacionStreams,
   createRecorder = createMediaRecorder,
   download = downloadBlob,
   heartbeatMs = HEARTBEAT_MS,
+  chunkIntervalMs = 15000,
+  enableLive = true,
 } = {}) {
   let closed = false
   let sesionId = null
@@ -37,6 +45,9 @@ export function createGrabacionSessionController({
   let mimeType = ''
   let handles = null
   let stopping = false
+  let audioBatcher = null
+  let webSpeech = null
+  let liveMode = 'none' // azure | webspeech | none
 
   const emitState = (patch) => {
     try { onState?.(patch) } catch { /* ignore */ }
@@ -50,6 +61,22 @@ export function createGrabacionSessionController({
     if (tickTimer) {
       clearInterval(tickTimer)
       tickTimer = null
+    }
+  }
+
+  const stopLivePipeline = async () => {
+    try { webSpeech?.stop?.() } catch { /* ignore */ }
+    webSpeech = null
+    try { await audioBatcher?.flush?.() } catch { /* ignore */ }
+    try { audioBatcher?.stop?.() } catch { /* ignore */ }
+    audioBatcher = null
+  }
+
+  const applyLivePayload = (payload) => {
+    if (!payload) return
+    try { onLiveInfo?.(payload) } catch { /* ignore */ }
+    if (Array.isArray(payload.temas) && payload.temas.length) {
+      try { onTemasVivos?.(payload.temas, payload) } catch { /* ignore */ }
     }
   }
 
@@ -85,15 +112,68 @@ export function createGrabacionSessionController({
     }
   }
 
+  async function startLivePipeline() {
+    if (!enableLive || !sesionId || !api) return
+    let sttAzure = false
+    try {
+      const st = await api.grabacionLiveStatus?.()
+      sttAzure = !!st?.stt_disponible
+      onLiveInfo?.(st || {})
+    } catch {
+      sttAzure = false
+    }
+
+    if (sttAzure && typeof api.grabacionChunk === 'function') {
+      liveMode = 'azure'
+      audioBatcher = createAudioBatcher({
+        intervalMs: chunkIntervalMs,
+        onBatch: async (blob) => {
+          if (closed || stopping || !sesionId) return
+          try {
+            const payload = await api.grabacionChunk(sesionId, blob)
+            applyLivePayload(payload)
+          } catch (e) {
+            onError?.(e?.message || 'No se pudo transcribir el audio en vivo')
+          }
+        },
+      })
+      return
+    }
+
+    // Fallback: Web Speech del navegador → texto al backend → síntesis Clara
+    webSpeech = startWebSpeechTranscript({
+      onDelta: async (text) => {
+        if (closed || stopping || !sesionId) return
+        try {
+          const payload = await api.grabacionTranscripcion(sesionId, { texto_delta: text })
+          applyLivePayload(payload)
+        } catch (e) {
+          onError?.(e?.message || 'No se pudo enviar la transcripción en vivo')
+        }
+      },
+      onError: (code) => {
+        if (code === 'not-allowed') {
+          onError?.('Permiso de reconocimiento de voz denegado en el navegador.')
+        }
+      },
+    })
+    liveMode = webSpeech ? 'webspeech' : 'none'
+    if (!webSpeech) {
+      onLiveInfo?.({
+        stt_disponible: false,
+        acepta_transcripcion_cliente: false,
+        detalle: 'Sin Azure Speech ni Web Speech en este navegador.',
+      })
+    }
+  }
+
   async function start({ includeTabAudio = true } = {}) {
     if (closed) throw new Error('Sesión cerrada')
     emitState({ phase: 'starting', stopping: false })
 
-    // 1) Permisos de micrófono / pestaña ANTES de consumir cupo.
     handles = await openStreams({ includeTabAudio })
     mimeType = handles.mimeType || ''
 
-    // 2) Reservar/abrir sesión de cupo en servidor.
     let cupoInicio
     try {
       cupoInicio = await api.iniciarGrabacion()
@@ -110,11 +190,13 @@ export function createGrabacionSessionController({
       throw new Error('El servidor no devolvió la sesión de grabación')
     }
 
-    // 3) Iniciar captura de inmediato (el modal de consentimiento se muestra después).
     chunks = []
     recorder = createRecorder(handles.mixedStream, mimeType)
     recorder.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size > 0) chunks.push(ev.data)
+      if (ev.data && ev.data.size > 0) {
+        chunks.push(ev.data)
+        audioBatcher?.push(ev.data, mimeType || ev.data.type)
+      }
     }
     recorder.start(1000)
     startedAt = Date.now()
@@ -139,7 +221,10 @@ export function createGrabacionSessionController({
 
     setTimeout(() => { heartbeat() }, Math.min(2000, heartbeatMs))
 
-    return { sesionId, tabAudioOk: !!handles.tabAudioOk }
+    await startLivePipeline()
+    emitState({ liveMode })
+
+    return { sesionId, tabAudioOk: !!handles.tabAudioOk, liveMode }
   }
 
   async function stop({ motivo = 'usuario', auto = false } = {}) {
@@ -147,6 +232,18 @@ export function createGrabacionSessionController({
     stopping = true
     emitState({ phase: 'stopping', stopping: true })
     clearTimers()
+    await stopLivePipeline()
+
+    // Última síntesis forzada si hay sesión
+    if (sesionId && api?.grabacionTranscripcion) {
+      try {
+        const payload = await api.grabacionTranscripcion(sesionId, {
+          texto_delta: '',
+          forzar_sintesis: true,
+        })
+        applyLivePayload(payload)
+      } catch { /* ignore */ }
+    }
 
     const blob = await new Promise((resolve) => {
       if (!recorder || recorder.state === 'inactive') {
@@ -198,15 +295,18 @@ export function createGrabacionSessionController({
       stopping: false,
       downloaded,
       autoStop: auto,
+      liveMode: 'none',
     })
     return { blob, cupoFinal, downloaded, auto }
   }
 
   function dispose() {
     clearTimers()
+    try { webSpeech?.stop?.() } catch { /* ignore */ }
+    try { audioBatcher?.stop?.() } catch { /* ignore */ }
     cleanupMedia()
     closed = true
   }
 
-  return { start, stop, dispose, getSesionId: () => sesionId }
+  return { start, stop, dispose, getSesionId: () => sesionId, getLiveMode: () => liveMode }
 }

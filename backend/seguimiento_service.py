@@ -1686,6 +1686,12 @@ def compromisos_abiertos_contrato(
 
     Interna y externa no se mezclan: si se pide tipo_acta, solo se incluyen
     compromisos cuya acta de origen sea del mismo tipo (legacy sin tipo → interna).
+
+    Visibilidad cronológica: si se indica ``excluir_acta_id`` (acta que se está
+    consultando/editando), solo se incluyen compromisos creados en actas
+    *anteriores* (menor ``consecutivo``; desempate por ``fecha_reunion``).
+    Así un compromiso del acta N es visible desde N+1 en adelante, nunca en
+    actas anteriores a su creación ni en la propia N (esa lectura es de previos).
     """
     # Incluye cumplido/cancelado: el estado de gestión es informativo.
     # Solo se excluyen los archivados vía botón «marcar cumplido» (campos_libres.archivado_revision).
@@ -1701,8 +1707,39 @@ def compromisos_abiertos_contrato(
         .order("fecha_vencimiento")
     )
     rows = q.execute().data or []
+
+    ref_consecutivo: Optional[int] = None
+    ref_fecha: Optional[str] = None
     if excluir_acta_id is not None:
-        rows = [r for r in rows if int(r.get("acta_id") or 0) != int(excluir_acta_id)]
+        eid = int(excluir_acta_id)
+        rows = [r for r in rows if int(r.get("acta_id") or 0) != eid]
+        try:
+            ref_rows = (
+                sb.table("seguimiento_acta")
+                .select("id, consecutivo, fecha_reunion, tipo_acta")
+                .eq("id", eid)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            ref_rows = (
+                sb.table("seguimiento_acta")
+                .select("id, consecutivo, fecha_reunion")
+                .eq("id", eid)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+        if ref_rows:
+            try:
+                ref_consecutivo = int(ref_rows[0]["consecutivo"]) if ref_rows[0].get("consecutivo") is not None else None
+            except (TypeError, ValueError):
+                ref_consecutivo = None
+            ref_fecha = str(ref_rows[0].get("fecha_reunion") or "")[:10] or None
+
     acta_ids = list({int(r["acta_id"]) for r in rows if r.get("acta_id")})
     actas_map: Dict[int, dict] = {}
     if acta_ids:
@@ -1741,12 +1778,39 @@ def compromisos_abiertos_contrato(
         origen_tipo = _norm_tipo_acta((a or {}).get("tipo_acta") or "interna")
         if want_tipo and origen_tipo != want_tipo:
             continue
+        # Solo compromisos de actas anteriores a la que se está leyendo.
+        if excluir_acta_id is not None and a:
+            if not _acta_origen_es_anterior(a, ref_consecutivo=ref_consecutivo, ref_fecha=ref_fecha):
+                continue
+        elif excluir_acta_id is not None and not a:
+            # Sin acta origen resoluble: no mostrar (evita filtraciones).
+            continue
         r["acta_consecutivo"] = a.get("consecutivo") if a else None
         r["acta_fecha"] = a.get("fecha_reunion") if a else None
         r["acta_numero"] = f"Acta Nº {a['consecutivo']}" if a and a.get("consecutivo") is not None else None
         r["acta_tipo"] = origen_tipo if a else None
         out.append(r)
     return out
+
+
+def _acta_origen_es_anterior(
+    acta_origen: dict,
+    *,
+    ref_consecutivo: Optional[int],
+    ref_fecha: Optional[str],
+) -> bool:
+    """True si el acta origen es estrictamente anterior a la acta de referencia."""
+    try:
+        oc = int(acta_origen["consecutivo"]) if acta_origen.get("consecutivo") is not None else None
+    except (TypeError, ValueError):
+        oc = None
+    if ref_consecutivo is not None and oc is not None:
+        return oc < int(ref_consecutivo)
+    of = str(acta_origen.get("fecha_reunion") or "")[:10] or None
+    if ref_fecha and of:
+        return of < ref_fecha
+    # Sin criterio comparable: no incluir (seguro ante datos incompletos).
+    return False
 
 
 def create_acta(sb, contrato_id: int, data: dict, user_id: int) -> dict:

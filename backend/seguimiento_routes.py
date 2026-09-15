@@ -22,6 +22,12 @@ from acta_grabacion_cupo_service import (
     leer_cupo as grabacion_leer_cupo,
     reclamar_segundos as grabacion_reclamar_segundos,
 )
+from acta_grabacion_live_service import (
+    ingest_audio_chunk as grabacion_ingest_audio_chunk,
+    ingest_transcript_delta as grabacion_ingest_transcript_delta,
+    leer_estado_vivo as grabacion_leer_estado_vivo,
+    speech_status as grabacion_speech_status,
+)
 from seguimiento_permissions import require_permiso_seguimiento, tiene_permiso_seguimiento
 from seguimiento_service import (
     ActaAccesoDenegado,
@@ -697,6 +703,19 @@ class GrabacionFinalizarBody(BaseModel):
     motivo: Optional[str] = Field(None, max_length=80)
 
 
+class GrabacionTranscripcionBody(BaseModel):
+    texto_delta: str = Field("", max_length=8000)
+    forzar_sintesis: bool = False
+
+
+@router.get("/{contrato_id}/grabacion/live-status")
+def route_grabacion_live_status(contrato_id: int, current_user=Depends(get_current_user)):
+    """Capacidades STT/síntesis (Azure Speech + Claude)."""
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return grabacion_speech_status()
+
+
 @router.get("/{contrato_id}/grabacion/cupo")
 def route_grabacion_cupo(contrato_id: int, current_user=Depends(get_current_user)):
     """Cupo diario de grabación: 180 min/contrato (America/Bogota)."""
@@ -749,6 +768,62 @@ def route_grabacion_finalizar(
         _uid(current_user),
         segundos_adicionales=body.segundos_adicionales,
         motivo=body.motivo,
+    )
+
+
+@router.get("/{contrato_id}/grabacion/sesiones/{sesion_id}/vivo")
+def route_grabacion_vivo(
+    contrato_id: int,
+    sesion_id: int,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_seguimiento(current_user, "ver")
+    _check_contrato(current_user, contrato_id)
+    return grabacion_leer_estado_vivo(
+        supabase, contrato_id, sesion_id, _uid(current_user),
+    )
+
+
+@router.post("/{contrato_id}/grabacion/sesiones/{sesion_id}/transcripcion")
+async def route_grabacion_transcripcion(
+    contrato_id: int,
+    sesion_id: int,
+    body: GrabacionTranscripcionBody,
+    current_user=Depends(get_current_user),
+):
+    """Ingesta texto STT del cliente (Web Speech) y sintetiza Temas si corresponde."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    return await grabacion_ingest_transcript_delta(
+        supabase,
+        contrato_id,
+        sesion_id,
+        _uid(current_user),
+        body.texto_delta,
+        forzar_sintesis=bool(body.forzar_sintesis),
+    )
+
+
+@router.post("/{contrato_id}/grabacion/sesiones/{sesion_id}/chunk")
+async def route_grabacion_chunk(
+    contrato_id: int,
+    sesion_id: int,
+    current_user=Depends(get_current_user),
+    archivo: UploadFile = File(...),
+    forzar_sintesis: bool = Form(False),
+):
+    """Chunk de audio → Azure Speech → (opcional) síntesis de Temas. No persiste el audio."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    raw = await archivo.read()
+    return await grabacion_ingest_audio_chunk(
+        supabase,
+        contrato_id,
+        sesion_id,
+        _uid(current_user),
+        raw,
+        content_type=archivo.content_type or "audio/webm",
+        forzar_sintesis=bool(forzar_sintesis),
     )
 
 

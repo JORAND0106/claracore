@@ -10,6 +10,7 @@ import IdeaClaraModal from './IdeaClaraModal'
 import TemaEditorModal from './TemaEditorModal'
 import { createGrabacionSessionController } from './actaGrabacionSession'
 import { formatMinutosCupo } from './actaGrabacionHelpers'
+import { mergeTemasGrabacionViva } from './actaGrabacionLive'
 import {
   avanceTrasGuardar,
   emptyFlujoTabs,
@@ -367,6 +368,7 @@ export default function ActaEditor({
   const [grabacionElapsed, setGrabacionElapsed] = useState(0)
   const [grabacionTabAudioOk, setGrabacionTabAudioOk] = useState(false)
   const [grabacionStopping, setGrabacionStopping] = useState(false)
+  const [grabacionLiveInfo, setGrabacionLiveInfo] = useState(null)
   const grabacionCtrlRef = useRef(null)
   const esDev = !!permisos?.esDesarrollador
   const esElaborador = form.elaborador_id != null
@@ -440,6 +442,17 @@ export default function ActaEditor({
             setGrabacionConsentOpen(false)
           }
         },
+        onTemasVivos: (temas) => {
+          setForm((prev) => {
+            const nextIdeas = mergeTemasGrabacionViva(prev.ideas || [], temas, {
+              newRowKey: (p) => newRowKey(p || 'idea'),
+            })
+            if (nextIdeas === prev.ideas) return prev
+            return { ...prev, ideas: nextIdeas }
+          })
+          setTab((cur) => (cur === 'ideas' ? cur : 'ideas'))
+        },
+        onLiveInfo: (info) => setGrabacionLiveInfo(info || null),
         onError: (msg) => setError(msg || 'Error de grabación'),
         onDownloaded: ({ filename, auto }) => {
           setOkMsg(
@@ -1155,6 +1168,20 @@ export default function ActaEditor({
           stopping={grabacionStopping || grabacionPhase === 'stopping'}
           onStop={detenerGrabacion}
         />
+      )}
+      {grabacionPhase === 'recording' && (
+        <div style={{ fontSize: 'var(--cc-xs, 11px)', color: t.textMuted }}>
+          Temas en vivo:{' '}
+          {grabacionLiveInfo?.stt_disponible
+            ? 'Azure Speech + síntesis Clara'
+            : (grabacionLiveInfo?.detalle
+              ? String(grabacionLiveInfo.detalle)
+              : 'reconocimiento del navegador + síntesis Clara')}
+          {grabacionLiveInfo?.transcripcion_chars != null
+            ? ` · ${grabacionLiveInfo.transcripcion_chars} caracteres transcritos`
+            : ''}
+          {' · Compromisos siguen siendo manuales'}
+        </div>
       )}
       {grabacionCupo && grabacionPhase === 'idle' && !grabacionConsentOpen && (
         <div style={{ fontSize: 'var(--cc-xs, 11px)', color: t.textMuted }}>
@@ -1950,7 +1977,13 @@ export default function ActaEditor({
           onClose={() => setTemaEditIdx(null)}
           onPatch={(patch) => {
             const idx = temaEditIdx
-            patchList('ideas', (list) => list.map((row, i) => (i === idx ? { ...row, ...patch } : row)))
+            const locks = patch.texto != null || patch.titulo != null || patch.quien_dijo != null
+              || patch.interviniente != null
+            patchList('ideas', (list) => list.map((row, i) => (
+              i === idx
+                ? { ...row, ...patch, ...(locks ? { _editadoUsuario: true } : {}) }
+                : row
+            )))
           }}
           onAddImagen={(file) => addIdeaImagen(temaEditIdx, file)}
           onRemoveImagen={(imgIdx) => removeIdeaImagen(temaEditIdx, imgIdx)}
