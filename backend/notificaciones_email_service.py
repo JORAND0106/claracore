@@ -36,6 +36,30 @@ from usuarios_notif_elegibilidad import (
 
 _log = logging.getLogger("claracore.notificaciones_email")
 
+# Cache de esquema: True si la columna periodo existe en PostgREST.
+_snapshot_periodo_schema_ok: Optional[bool] = None
+
+
+def _is_missing_periodo_column_error(exc: BaseException) -> bool:
+    msg = str(exc) or ""
+    low = msg.lower()
+    if "pgrst204" in low and "periodo" in low:
+        return True
+    if "42703" in low and "periodo" in low:
+        return True
+    if "could not find" in low and "periodo" in low:
+        return True
+    if "column" in low and "periodo" in low and (
+        "does not exist" in low or "schema cache" in low
+    ):
+        return True
+    code = getattr(exc, "code", None)
+    if code in ("PGRST204", "42703"):
+        return "periodo" in low
+    if isinstance(code, dict) and code.get("code") in ("PGRST204", "42703"):
+        return "periodo" in low
+    return False
+
 
 def _bogota_now() -> datetime:
     return datetime.now(pytz.timezone(TZ_BOGOTA))
@@ -492,6 +516,30 @@ class NotificacionesEmailRunner:
             capitulos = {}
         return cnum, matriz, capitulos
 
+    def _snapshot_periodo_disponible(self) -> bool:
+        """True si PostgREST conoce la columna periodo (evita spam PGRST204/42703)."""
+        global _snapshot_periodo_schema_ok
+        if _snapshot_periodo_schema_ok is True:
+            return True
+        if _snapshot_periodo_schema_ok is False:
+            return False
+        try:
+            self.supabase.table("notificaciones_email_resumen_snapshot").select(
+                "periodo"
+            ).limit(1).execute()
+            _snapshot_periodo_schema_ok = True
+            return True
+        except Exception as exc:
+            if _is_missing_periodo_column_error(exc):
+                _snapshot_periodo_schema_ok = False
+                _log.warning(
+                    "Columna periodo ausente en notificaciones_email_resumen_snapshot; "
+                    "usando esquema legacy. Aplicar ops_fix_pgrst_diagnostico_tres_errores.sql"
+                )
+                return False
+            # Error ambiguo (RLS/red): intentar path con periodo.
+            return True
+
     def _admin_resumen_snapshot_para_periodo(
         self,
         contrato_id: int,
@@ -524,46 +572,63 @@ class NotificacionesEmailRunner:
         capitulos: dict,
         periodo: str = "apertura",
     ) -> None:
+        global _snapshot_periodo_schema_ok
         periodo_norm = "cierre" if periodo == "cierre" else "apertura"
-        row = {
-            "contrato_id": int(contrato_id),
-            "fecha": fecha,
-            "periodo": periodo_norm,
-            "matriz": matriz,
-            "capitulos": capitulos,
-        }
+        use_periodo = self._snapshot_periodo_disponible()
 
-        def _upsert():
+        def _upsert_with_periodo():
+            row = {
+                "contrato_id": int(contrato_id),
+                "fecha": fecha,
+                "periodo": periodo_norm,
+                "matriz": matriz,
+                "capitulos": capitulos,
+            }
             return (
                 self.supabase.table("notificaciones_email_resumen_snapshot")
                 .upsert(row, on_conflict="contrato_id,fecha,periodo")
                 .execute()
             )
 
-        try:
-            self.supabase_execute(_upsert)
-        except Exception:
-            # Compat: esquema legacy sin columna periodo (unique contrato_id,fecha)
-            if periodo_norm == "apertura":
-                try:
-                    row_legacy = {
-                        "contrato_id": int(contrato_id),
-                        "fecha": fecha,
-                        "matriz": matriz,
-                        "capitulos": capitulos,
-                    }
+        def _upsert_legacy():
+            row_legacy = {
+                "contrato_id": int(contrato_id),
+                "fecha": fecha,
+                "matriz": matriz,
+                "capitulos": capitulos,
+            }
+            return (
+                self.supabase.table("notificaciones_email_resumen_snapshot")
+                .upsert(row_legacy, on_conflict="contrato_id,fecha")
+                .execute()
+            )
 
-                    def _upsert_legacy():
-                        return (
-                            self.supabase.table("notificaciones_email_resumen_snapshot")
-                            .upsert(row_legacy, on_conflict="contrato_id,fecha")
-                            .execute()
-                        )
-
-                    self.supabase_execute(_upsert_legacy)
+        if use_periodo:
+            try:
+                self.supabase_execute(_upsert_with_periodo)
+                return
+            except Exception as exc:
+                if _is_missing_periodo_column_error(exc):
+                    _snapshot_periodo_schema_ok = False
+                elif periodo_norm != "apertura":
+                    _log.exception(
+                        "No se pudo guardar snapshot resumen contrato %s fecha %s periodo %s",
+                        contrato_id,
+                        fecha,
+                        periodo_norm,
+                    )
                     return
-                except Exception:
-                    pass
+                # caer a legacy solo para apertura
+                if periodo_norm != "apertura":
+                    return
+
+        if periodo_norm != "apertura" and not use_periodo:
+            # Sin columna periodo no hay cierre distinto; no spamear.
+            return
+
+        try:
+            self.supabase_execute(_upsert_legacy)
+        except Exception:
             _log.exception(
                 "No se pudo guardar snapshot resumen contrato %s fecha %s periodo %s",
                 contrato_id,
@@ -574,26 +639,31 @@ class NotificacionesEmailRunner:
     def _cargar_resumen_snapshot(
         self, contrato_id: int, fecha: str, periodo: str = "apertura"
     ) -> Optional[dict]:
+        global _snapshot_periodo_schema_ok
         periodo_norm = "cierre" if periodo == "cierre" else "apertura"
+        use_periodo = self._snapshot_periodo_disponible()
 
-        def _fetch():
-            return (
-                self.supabase.table("notificaciones_email_resumen_snapshot")
-                .select("matriz, capitulos, periodo")
-                .eq("contrato_id", int(contrato_id))
-                .eq("fecha", fecha)
-                .eq("periodo", periodo_norm)
-                .limit(1)
-                .execute()
-                .data
-            )
+        if use_periodo:
+            def _fetch():
+                return (
+                    self.supabase.table("notificaciones_email_resumen_snapshot")
+                    .select("matriz, capitulos, periodo")
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("fecha", fecha)
+                    .eq("periodo", periodo_norm)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
 
-        try:
-            rows = self.supabase_execute(_fetch) or []
-            if rows:
-                return rows[0]
-        except Exception:
-            pass
+            try:
+                rows = self.supabase_execute(_fetch) or []
+                if rows:
+                    return rows[0]
+            except Exception as exc:
+                if _is_missing_periodo_column_error(exc):
+                    _snapshot_periodo_schema_ok = False
+                # legacy abajo
 
         # Compat legacy: una sola fila por día (= apertura)
         if periodo_norm == "apertura":
@@ -624,9 +694,11 @@ class NotificacionesEmailRunner:
         self, contrato_id: int, fecha_desde: str, fecha_hasta: str
     ) -> Dict[Tuple[str, str], dict]:
         """Mapa (fecha_iso, periodo) → {matriz, capitulos}."""
+        global _snapshot_periodo_schema_ok
         out: Dict[Tuple[str, str], dict] = {}
+        use_periodo = self._snapshot_periodo_disponible()
 
-        def _fetch():
+        def _fetch_periodo():
             return (
                 self.supabase.table("notificaciones_email_resumen_snapshot")
                 .select("fecha, periodo, matriz, capitulos")
@@ -637,16 +709,54 @@ class NotificacionesEmailRunner:
                 .data
             )
 
-        try:
-            rows = self.supabase_execute(_fetch) or []
-        except Exception:
-            _log.exception(
-                "No se pudieron cargar snapshots contrato %s %s..%s",
-                contrato_id,
-                fecha_desde,
-                fecha_hasta,
+        def _fetch_legacy():
+            return (
+                self.supabase.table("notificaciones_email_resumen_snapshot")
+                .select("fecha, matriz, capitulos")
+                .eq("contrato_id", int(contrato_id))
+                .gte("fecha", fecha_desde)
+                .lte("fecha", fecha_hasta)
+                .execute()
+                .data
             )
-            return out
+
+        rows = []
+        if use_periodo:
+            try:
+                rows = self.supabase_execute(_fetch_periodo) or []
+            except Exception as exc:
+                if _is_missing_periodo_column_error(exc):
+                    _snapshot_periodo_schema_ok = False
+                    try:
+                        rows = self.supabase_execute(_fetch_legacy) or []
+                    except Exception:
+                        _log.exception(
+                            "No se pudieron cargar snapshots contrato %s %s..%s",
+                            contrato_id,
+                            fecha_desde,
+                            fecha_hasta,
+                        )
+                        return out
+                else:
+                    _log.exception(
+                        "No se pudieron cargar snapshots contrato %s %s..%s",
+                        contrato_id,
+                        fecha_desde,
+                        fecha_hasta,
+                    )
+                    return out
+        else:
+            try:
+                rows = self.supabase_execute(_fetch_legacy) or []
+            except Exception:
+                _log.exception(
+                    "No se pudieron cargar snapshots contrato %s %s..%s",
+                    contrato_id,
+                    fecha_desde,
+                    fecha_hasta,
+                )
+                return out
+
         for r in rows:
             f = str(r.get("fecha") or "")[:10]
             periodo = str(r.get("periodo") or "apertura").strip().lower()
