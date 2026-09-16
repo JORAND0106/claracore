@@ -38,7 +38,8 @@ _live_schema_ok: Optional[bool] = None
 MSG_SCHEMA_LIVE = (
     "Faltan columnas de grabación en vivo en acta_grabacion_sesion "
     "(p. ej. transcripcion). Ejecute en Supabase el script "
-    "backend/sql/ops_acta_grabacion_live_columns.sql y reintente."
+    "backend/sql/ops_fix_pgrst_diagnostico_tres_errores.sql "
+    "(o ops_acta_grabacion_live_columns.sql) y reintente."
 )
 
 

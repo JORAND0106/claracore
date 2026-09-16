@@ -28,6 +28,8 @@ COMMENT ON FUNCTION public.dash_costo_agregado(numeric, numeric) IS
 GRANT EXECUTE ON FUNCTION public.dash_costo_agregado(numeric, numeric) TO authenticated, service_role, anon;
 
 -- ── Recrear vista y funciones matriz (orden explícito, sin CASCADE) ──
+-- Dropear ambas firmas: la (bigint, text) histórica causa PGRST203 si convive con (bigint).
+DROP FUNCTION IF EXISTS public.dashboard_matriz_validacion_vigente_bundle(bigint, text);
 DROP FUNCTION IF EXISTS public.dashboard_matriz_validacion_vigente_bundle(bigint);
 DROP FUNCTION IF EXISTS public.dashboard_matriz_validacion_agg(bigint, bigint, text);
 DROP FUNCTION IF EXISTS public.dashboard_matriz_validacion_agg(bigint, bigint);

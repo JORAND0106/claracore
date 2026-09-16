@@ -28856,13 +28856,83 @@ def _dashboard_matriz_vigente_cached(contrato_id: int, campo_max: str) -> Any:
         if entry and entry["exp"] > now:
             return entry["data"]
 
-    def _rpc():
+    def _rpc_bundle():
         return supabase.rpc(
             "dashboard_matriz_validacion_vigente_bundle",
             {"p_contrato_id": contrato_id},
         ).execute().data
 
-    result = supabase_execute(_rpc, retries=1)
+    def _rpc_fallback_agg_bundle():
+        """
+        Mitiga PGRST203 cuando conviven firmas (bigint) y (bigint, text).
+        Resuelve acta vigente en Python y llama agg(bigint,bigint) — firma única.
+        """
+        vig = _acta_rpo_vigente_row(contrato_id)
+        aid = None
+        nr = None
+        nom_asig = None
+        if vig:
+            try:
+                aid = int(vig["id"]) if vig.get("id") is not None else None
+            except (TypeError, ValueError):
+                aid = None
+            nr = vig.get("numero_rpo")
+            nom_asig = vig.get("asignado_nombre")
+            if nom_asig is not None:
+                nom_asig = str(nom_asig).strip() or None
+        mat_raw = supabase.rpc(
+            "dashboard_matriz_validacion_agg",
+            {"p_contrato_id": contrato_id, "p_acta_id": aid},
+        ).execute().data
+        mat = _sicoe_parse_matriz_vigente_bundle_raw(mat_raw)
+        if not isinstance(mat, dict):
+            mat = {}
+        out = {
+            "obra_ejecutada_directo_sin_aiu": mat.get("obra_ejecutada_directo_sin_aiu"),
+            "ensayos_sondeos_directo_sin_iva": mat.get("ensayos_sondeos_directo_sin_iva"),
+            "_vigente": {
+                "acta_id": aid,
+                "numero_rpo": str(nr) if nr is not None else None,
+                "asignado_nombre": nom_asig,
+                "filtro": "vigente" if aid is not None else "sin_vigente_todo_contrato",
+            },
+        }
+        return out
+
+    def _is_pgrst203(exc: BaseException) -> bool:
+        msg = str(exc) or ""
+        low = msg.lower()
+        if "pgrst203" in low:
+            return True
+        if "could not choose the best candidate function" in low:
+            return True
+        code = getattr(exc, "code", None)
+        if code == "PGRST203":
+            return True
+        if isinstance(code, dict) and code.get("code") == "PGRST203":
+            return True
+        return False
+
+    try:
+        result = supabase_execute(_rpc_bundle, retries=1)
+    except Exception as exc:
+        if _is_pgrst203(exc):
+            # Log once-level warning; no rethrow — evita spam en diagnóstico tras fallback OK.
+            try:
+                import logging as _logging
+                _logging.getLogger("claracore.dashboard").warning(
+                    "dashboard_matriz_validacion_vigente_bundle PGRST203 (overloads); "
+                    "fallback agg contrato=%s. Aplicar ops_fix_pgrst_diagnostico_tres_errores.sql",
+                    contrato_id,
+                )
+            except Exception:
+                pass
+            result = supabase_execute(_rpc_fallback_agg_bundle, retries=1)
+        else:
+            raise
+
+    # campo_max reservado (caché key / futura firma única); la RPC vigente no lo usa.
+    _ = campo_max
     with _dashboard_rpc_cache_lock:
         _cache_dashboard_matriz[key] = {"data": result, "exp": now + _CACHE_RPC_MATRIZ_TTL_SEC}
     return result
