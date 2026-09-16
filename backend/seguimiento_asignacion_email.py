@@ -1,5 +1,8 @@
 """
-Correo inmediato al asignar una tarea o un compromiso.
+Correo inmediato al asignar una tarea o un compromiso (solo al responsable).
+
+Cubre también tareas personales autoasignadas (sin delegante distinto).
+No se envía a la persona «notificada» ni a referencias informativas.
 
 Se dispara en el momento de creación/asignación (o reasignación), con plantilla
 institucional alineada al recordatorio del día hábil anterior.
@@ -122,8 +125,12 @@ def build_asignacion_email_bodies(
     hora_vencimiento: Optional[str] = None,
     reasignacion: bool = False,
     contexto: Optional[str] = None,
+    es_personal: bool = False,
 ) -> Tuple[str, str, str]:
-    """Retorna (asunto, text, html). tipo: tarea | compromiso."""
+    """Retorna (asunto, text, html). tipo: tarea | compromiso.
+
+    ``es_personal``: tarea propia autoasignada (sin delegante distinto).
+    """
     tipo_n = (tipo or "tarea").strip().lower()
     if tipo_n not in ("tarea", "compromiso"):
         tipo_n = "tarea"
@@ -132,8 +139,32 @@ def build_asignacion_email_bodies(
     titulo_clean = (titulo or label).strip() or label
     fv = _fmt_fecha_es(fecha_vencimiento)
     hora = _fmt_hora(hora_vencimiento)
-    verbo = "reasignó" if reasignacion else "asignó"
-    accion = "reasignada" if reasignacion else "asignada"
+    personal = bool(es_personal) and tipo_n == "tarea"
+
+    if personal:
+        verbo_txt = "registró"
+        accion = "personal registrada"
+        intro_txt = (
+            f"Se registró la siguiente {label.lower()} personal en Seguimiento"
+        )
+        intro_html = (
+            f"Se registró la siguiente <strong>{html.escape(label.lower())} personal</strong> "
+            f"en el módulo de <strong>Seguimiento</strong> de ClaraCore."
+        )
+        # Sin delegante en tareas personales
+        delegado_por = None
+    else:
+        verbo_txt = "reasignó" if reasignacion else "asignó"
+        accion = "reasignada" if reasignacion else "asignada"
+        intro_txt = (
+            f"Se le {verbo_txt} la siguiente {label.lower()} en Seguimiento"
+        )
+        intro_html = (
+            f"Se le <strong>{html.escape(verbo_txt)}</strong> una "
+            f"{html.escape(label.lower())} en el módulo de <strong>Seguimiento</strong> "
+            f"de ClaraCore. Revise el detalle a continuación."
+        )
+
     asunto = f"ClaraCore — {label} {accion}: {titulo_clean[:80]}"
 
     hora_txt = f" a las {hora}" if hora else ""
@@ -143,7 +174,7 @@ def build_asignacion_email_bodies(
 
     text = (
         f"Hola {nombre_destinatario or ''},\n\n"
-        f"Se le {verbo} la siguiente {label.lower()} en Seguimiento:\n\n"
+        f"{intro_txt}:\n\n"
         f"«{titulo_clean}»{det_txt}{ctx_txt}\n"
         f"Vencimiento: {fv}{hora_txt}{delg_txt}\n\n"
         f"Consulte el detalle en ClaraCore: {_plataforma_url()}\n"
@@ -175,13 +206,14 @@ def build_asignacion_email_bodies(
             f"{det_esc}</div>"
         )
 
+    header_card = "Tarea personal" if personal else f"{label} {accion}"
     url = _plataforma_url()
     card = f"""
 <table cellpadding="0" cellspacing="0" border="0" width="100%"
        style="margin:18px 0 8px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
   <tr>
     <td style="background:{color};color:#fff;padding:10px 14px;font-weight:700;font-size:13px;letter-spacing:0.02em;">
-      {html.escape(label)} {accion}
+      {html.escape(header_card)}
     </td>
   </tr>
   <tr>
@@ -205,8 +237,7 @@ def build_asignacion_email_bodies(
   Hola <strong>{html.escape(nombre_destinatario or 'usuario')}</strong>,
 </p>
 <p style="margin:0 0 8px;line-height:1.6;color:#334155;">
-  Se le <strong>{html.escape(verbo)}</strong> una {html.escape(label.lower())} en el
-  módulo de <strong>Seguimiento</strong> de ClaraCore. Revise el detalle a continuación.
+  {intro_html}
 </p>
 {card}
 <p style="margin:20px 0 0;text-align:center;">
@@ -218,6 +249,7 @@ def build_asignacion_email_bodies(
 </p>
 {_firma_html()}
 """
+    h1 = "Tarea personal" if personal else f"{label} {accion}"
     html_doc = f"""<!DOCTYPE html>
 <html lang="es">
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -227,7 +259,7 @@ def build_asignacion_email_bodies(
       Seguimiento · Asignación
     </div>
     <h1 style="margin:0 0 18px;font-size:20px;line-height:1.3;color:#0f172a;">
-      {html.escape(label)} {accion}
+      {html.escape(h1)}
     </h1>
     {body}
   </div>
@@ -332,11 +364,13 @@ def enviar_email_asignacion_inmediata(
     detalle: Optional[str] = None,
     contexto: Optional[str] = None,
     reasignacion: bool = False,
-    permitir_autoenviado: bool = False,
+    es_personal: bool = False,
 ) -> bool:
     """
-    Envía el correo de asignación. Nunca lanza: fallos SMTP/BD se registran
-    y se retorna False para no tumbar la creación del ítem.
+    Envía el correo de asignación al responsable (nunca a «notificado»).
+
+    Incluye tareas personales autoasignadas (``es_personal=True`` o dest==remitente
+    en tarea). Nunca lanza: fallos SMTP/BD se registran y se retorna False.
     """
     try:
         dest_id = int(destinatario_id or 0)
@@ -345,12 +379,15 @@ def enviar_email_asignacion_inmediata(
         return False
     if dest_id <= 0:
         return False
-    if not permitir_autoenviado and rem_id and dest_id == rem_id:
-        return False
 
     tipo_n = (tipo or "tarea").strip().lower()
     if tipo_n not in ("tarea", "compromiso"):
         tipo_n = "tarea"
+
+    # Tarea personal: autoasignada (sin delegante distinto).
+    personal = bool(es_personal) or (tipo_n == "tarea" and rem_id and dest_id == rem_id)
+    # Compromiso autoasignado: también se notifica al responsable.
+    # (No hay «persona notificada» en este canal.)
 
     slot = _slot_key(
         tipo=tipo_n,
@@ -369,8 +406,9 @@ def enviar_email_asignacion_inmediata(
         )
         return False
 
-    rem = _load_usuario(sb, rem_id) if rem_id else None
+    rem = _load_usuario(sb, rem_id) if (rem_id and rem_id != dest_id and not personal) else None
     delegado = _nombre_usuario_row(rem) if rem else None
+
     nombre = _nombre_usuario_row(dest)
     email = (dest.get("email") or "").strip()
 
@@ -384,12 +422,14 @@ def enviar_email_asignacion_inmediata(
         hora_vencimiento=hora_vencimiento,
         reasignacion=bool(reasignacion),
         contexto=contexto,
+        es_personal=bool(personal),
     )
     meta = {
         "tipo": tipo_n,
         "item_id": int(item_id),
         "remitente_id": rem_id or None,
         "reasignacion": bool(reasignacion),
+        "es_personal": bool(personal),
         "fecha_vencimiento": (str(fecha_vencimiento)[:10] if fecha_vencimiento else None),
     }
     try:

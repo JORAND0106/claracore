@@ -181,20 +181,49 @@ def test_enviar_email_asignacion_ok(monkeypatch):
     assert len(sent) == 1
 
 
-def test_enviar_omite_autoasignacion():
+def test_build_email_tarea_personal_sin_delegado():
+    asunto, text, html = build_asignacion_email_bodies(
+        nombre_destinatario="Ana Pérez",
+        tipo="tarea",
+        titulo="Llamar al interventor",
+        detalle="Confirmar visita",
+        delegado_por="No debe aparecer",
+        fecha_vencimiento="2026-09-22",
+        hora_vencimiento="10:00",
+        es_personal=True,
+    )
+    assert "personal" in asunto.lower()
+    assert "registró" in text
+    assert "Delegado por" not in text
+    assert "Delegado por" not in html
+    assert "No debe aparecer" not in html
+    assert "Tarea personal" in html
+    assert "10:00" in html
+
+
+def test_enviar_tarea_personal_autoasignada(monkeypatch):
     store = {
         "usuarios": [
             {
                 "id": 10,
                 "email": "yo@example.com",
                 "nombre": "Yo",
-                "apellidos": "",
+                "apellidos": "Mismo",
                 "estado": "aprobado",
                 "activo": True,
             },
         ],
         "notificaciones_email_envio": [],
     }
+    sent = []
+    monkeypatch.setattr(
+        "seguimiento_asignacion_email._send_smtp",
+        lambda *a, **k: sent.append(a) or True,
+    )
+    monkeypatch.setattr(
+        "seguimiento_asignacion_email._contacto_smtp_configured",
+        lambda: True,
+    )
     ok = enviar_email_asignacion_inmediata(
         _FakeSB(store),
         destinatario_id=10,
@@ -202,8 +231,82 @@ def test_enviar_omite_autoasignacion():
         tipo="tarea",
         titulo="Personal",
         item_id=1,
+        fecha_vencimiento="2026-09-22",
+        es_personal=True,
     )
-    assert ok is False
+    assert ok is True
+    assert len(sent) == 1
+    assert sent[0][0] == "yo@example.com"
+    assert "personal" in sent[0][1].lower()
+    assert "Delegado por" not in sent[0][2]
+
+
+def test_crear_tarea_personal_dispara_email(monkeypatch):
+    import seguimiento_service as svc
+
+    emails = []
+    inserted = []
+
+    class FakeQ:
+        def __init__(self, name):
+            self.name = name
+            self._payload = None
+
+        def select(self, *_a, **_k):
+            return self
+
+        def insert(self, payload):
+            self._payload = payload
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            if self.name == "seguimiento_item" and self._payload is not None:
+                row = dict(self._payload)
+                row["id"] = 77
+                inserted.append(row)
+                return type("R", (), {"data": [row]})()
+            if self.name == "usuarios":
+                return type("R", (), {"data": [{
+                    "id": 3, "nombre": "Ana", "apellidos": "P",
+                    "email": "a@x.com", "contrato_id": 12, "estado": "aprobado",
+                }]})()
+            return type("R", (), {"data": []})()
+
+    class FakeSb:
+        def table(self, name):
+            return FakeQ(name)
+
+    monkeypatch.setattr(svc, "_usuario_row", lambda *_a, **_k: {
+        "id": 3, "nombre": "Ana", "apellidos": "P", "contrato_id": 12,
+    })
+    monkeypatch.setattr(svc, "_nombre_usuario", lambda *_a, **_k: "Ana P")
+    monkeypatch.setattr(svc, "_proximo_consecutivo_item", lambda *_a, **_k: 1)
+    monkeypatch.setattr(svc, "_registrar_evento", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        svc, "_try_email_asignacion_inmediata",
+        lambda *_a, **k: emails.append(k),
+    )
+    monkeypatch.setattr(svc, "_notificar", lambda *_a, **_k: True)
+
+    row = svc.crear_tarea(
+        FakeSb(),
+        {"titulo": "Mi tarea personal", "contrato_id": 12, "fecha_vencimiento": "2026-09-25"},
+        user_id=3,
+    )
+    assert row["id"] == 77
+    assert len(emails) == 1
+    assert emails[0]["es_personal"] is True
+    assert emails[0]["destinatario_id"] == 3
+    assert emails[0]["titulo"] == "Mi tarea personal"
 
 
 def test_notificar_compromiso_dispara_email(monkeypatch):
