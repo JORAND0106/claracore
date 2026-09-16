@@ -536,12 +536,46 @@ def _try_email_asignacion_inmediata(
     contexto: Optional[str] = None,
     reasignacion: bool = False,
     es_personal: bool = False,
+    destinatario_email: Optional[str] = None,
+    destinatario_nombre: Optional[str] = None,
 ) -> None:
-    """Correo institucional inmediato al responsable (SMTP contacto). Nunca tumba la operación."""
+    """
+    Encola correo institucional inmediato al responsable (SMTP contacto).
+    En producción corre en hilo de fondo para que el HTTP no cancele el SMTP.
+    Nunca tumba la operación de crear/asignar.
+    """
+    import os
+    import sys
+
     try:
-        from seguimiento_asignacion_email import enviar_email_asignacion_inmediata
-        enviar_email_asignacion_inmediata(
-            sb,
+        from seguimiento_asignacion_email import (
+            encolar_email_asignacion_inmediata,
+            enviar_email_asignacion_inmediata,
+        )
+        email = (destinatario_email or "").strip() or None
+        nombre = (destinatario_nombre or "").strip() or None
+        if not email:
+            try:
+                u = (
+                    sb.table("usuarios")
+                    .select("id,email,nombre,apellidos")
+                    .eq("id", int(destinatario_id))
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if u:
+                    email = (u[0].get("email") or "").strip() or None
+                    if not nombre:
+                        nombre = (
+                            f"{u[0].get('nombre') or ''} {u[0].get('apellidos') or ''}".strip()
+                            or None
+                        )
+            except Exception as exc:
+                _log.warning("prefetch email asignación dest=%s: %s", destinatario_id, exc)
+
+        payload = dict(
             destinatario_id=int(destinatario_id),
             remitente_id=int(remitente_id),
             tipo=tipo,
@@ -553,7 +587,18 @@ def _try_email_asignacion_inmediata(
             contexto=contexto,
             reasignacion=bool(reasignacion),
             es_personal=bool(es_personal),
+            destinatario_email=email,
+            destinatario_nombre=nombre,
         )
+        # Sync en tests / flag explícita; async en producción (evita cancelación HTTP).
+        sync = (
+            os.getenv("CLARACORE_ASIGNACION_EMAIL_SYNC", "").strip().lower() in ("1", "true", "yes")
+            or "pytest" in sys.modules
+        )
+        if sync:
+            enviar_email_asignacion_inmediata(sb, **payload)
+        else:
+            encolar_email_asignacion_inmediata(sb, **payload)
     except Exception as exc:
         _log.warning(
             "email asignación %s item=%s dest=%s: %s",
