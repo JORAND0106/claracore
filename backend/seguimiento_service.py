@@ -535,8 +535,9 @@ def _try_email_asignacion_inmediata(
     detalle: Optional[str] = None,
     contexto: Optional[str] = None,
     reasignacion: bool = False,
+    es_personal: bool = False,
 ) -> None:
-    """Correo institucional inmediato (SMTP contacto). Nunca tumba la operación."""
+    """Correo institucional inmediato al responsable (SMTP contacto). Nunca tumba la operación."""
     try:
         from seguimiento_asignacion_email import enviar_email_asignacion_inmediata
         enviar_email_asignacion_inmediata(
@@ -551,6 +552,7 @@ def _try_email_asignacion_inmediata(
             detalle=detalle,
             contexto=contexto,
             reasignacion=bool(reasignacion),
+            es_personal=bool(es_personal),
         )
     except Exception as exc:
         _log.warning(
@@ -3639,6 +3641,8 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
                 reasignacion=False,
             )
     elif relacion == "referencia" and referido_id:
+        # Solo buzón al referido; el correo inmediato es exclusivo del responsable
+        # (no se envía a «notificado» / referencia).
         _notificar(
             sb,
             destinatario_id=int(referido_id),
@@ -3648,6 +3652,20 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
             contrato_id=int(contrato_id),
             entidad_tipo="seguimiento_tarea",
             entidad_id=str(item["id"]),
+        )
+    else:
+        # Tarea personal autoasignada: correo al responsable (sí mismo).
+        _try_email_asignacion_inmediata(
+            sb,
+            destinatario_id=int(asignado_id or user_id),
+            remitente_id=int(user_id),
+            tipo="tarea",
+            titulo=titulo,
+            item_id=item["id"],
+            fecha_vencimiento=fv.isoformat() if fv else None,
+            hora_vencimiento=hora,
+            detalle=descripcion,
+            es_personal=True,
         )
     return item
 
