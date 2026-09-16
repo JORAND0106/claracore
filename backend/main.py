@@ -21561,12 +21561,15 @@ def _sicoe_analisis_verificacion_totales(
     usa_costo_matriz: bool = False,
     vu_map_matriz: Optional[Dict[Tuple[str, str, str], float]] = None,
 ) -> dict:
-    """Suma línea a línea + comparación con matriz Validación por rol cuando aplica."""
+    """Suma línea a línea + comparación con KPI Dashboard / matriz Validación por rol."""
+    from sicoe_costo_aprobado_nivel import costo_directo_linea
+
     if usa_costo_matriz and regs and vu_map_matriz is not None:
         suma = _sicoe_costo_regs_estilo_matriz(regs, vu_map_matriz)
         metodo = "net_cant_x_vu_matriz_por_item"
     else:
-        suma = round(sum(float(r.get("costo_directo") or 0) for r in regs), 0)
+        # Misma valuación de línea que el KPI canónico (fallback cant×vlr si CD nulo).
+        suma = round(sum(costo_directo_linea(r) for r in regs), 0)
         metodo = "suma_linea_a_linea_por_id_unico"
     ver: dict = {
         "suma_costo_directo_registros": suma,
@@ -21575,14 +21578,24 @@ def _sicoe_analisis_verificacion_totales(
     }
     if len(capas) == 1 and _sicoe_capa_alinea_dashboard_kpi(capas[0], contrato_id):
         try:
-            cm = _get_nivel_maximo_contrato(int(contrato_id))
-            na = _get_niveles_activos_contrato(int(contrato_id))
-            hit = _fetch_dashboard_resumen_sicoe_agg(int(contrato_id), cm, na)
-            if hit is not None and hit.get("total_cobrado") is not None:
-                kpi = round(float(hit["total_cobrado"]), 0)
-                ver["dashboard_kpi_cobrado"] = kpi
-                ver["delta_vs_dashboard"] = round(suma - kpi, 0)
-                ver["coherente_dashboard"] = ver["delta_vs_dashboard"] == 0
+            # Misma fuente que GET /dashboard-resumen (total_cobrado): scan canónico.
+            # NO usar el RPC/VM de resumen legacy (cant×listado VU sin prerreqs
+            # → Δ histórico $1.529.927 en Acta 620).
+            aid = None
+            if acta_id_filtro is not None:
+                try:
+                    aid = int(acta_id_filtro)
+                except (TypeError, ValueError):
+                    aid = None
+            sicoe_by = _dashboard_scan_sicoe_by_item(int(contrato_id), acta_id=aid)
+            kpi = round(sum(float(sg.get("ap_c") or 0) for sg in (sicoe_by or {}).values()), 0)
+            ver["dashboard_kpi_cobrado"] = kpi
+            ver["dashboard_kpi_fuente"] = "sicoe_costo_aprobado_nivel"
+            ver["dashboard_kpi_alcance"] = (
+                f"acta_id:{aid}" if aid is not None else "contrato"
+            )
+            ver["delta_vs_dashboard"] = round(suma - kpi, 0)
+            ver["coherente_dashboard"] = ver["delta_vs_dashboard"] == 0
         except Exception:
             pass
     elif len(capas) == 1:

@@ -11715,10 +11715,16 @@ function ModuloSicoeObra({
                 {analisis.total_registros.toLocaleString()} regs{nivelInfo.verValoresEconomicos ? ` · ${fmtPesos(analisis.total_costo_directo)}` : ''}
                 {analisis.verificacion?.dashboard_kpi_cobrado != null && nivelInfo.verValoresEconomicos ? (
                   <span style={{ display:'block', fontSize:'var(--cc-caption)', marginTop:2, color: analisis.verificacion.coherente_dashboard ? '#86efac' : '#fcd34d' }}>
-                    KPI dashboard {fmtPesos(analisis.verificacion.dashboard_kpi_cobrado)}
-                    {analisis.verificacion.delta_vs_dashboard != null && analisis.verificacion.delta_vs_dashboard !== 0
-                      ? ` · Δ ${fmtPesos(analisis.verificacion.delta_vs_dashboard)}`
-                      : ' · ✓ coincide'}
+                    {analisis.verificacion.coherente_dashboard
+                      ? `KPI dashboard ${fmtPesos(analisis.verificacion.dashboard_kpi_cobrado)} · ✓ coincide`
+                      : (
+                        <>
+                          KPI dashboard {fmtPesos(analisis.verificacion.dashboard_kpi_cobrado)}
+                          {analisis.verificacion.delta_vs_dashboard != null && analisis.verificacion.delta_vs_dashboard !== 0
+                            ? ` · Δ ${fmtPesos(analisis.verificacion.delta_vs_dashboard)} (revisar filtros del panel)`
+                            : ''}
+                        </>
+                      )}
                   </span>
                 ) : null}
               </span>
