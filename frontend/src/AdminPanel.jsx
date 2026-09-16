@@ -10,6 +10,8 @@ import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
 import { addMapboxGeolocateControl } from "./mapboxSafe";
 import CompetenciaSelect from "./components/CompetenciaSelect";
 import CcModalBrandHeader from "./components/CcModalBrandHeader";
+import TopoExcelSheet from "./components/topografia/TopoExcelSheet";
+import { topoSheetStyles } from "./components/topografia/topoSheetStyles";
 import { RefreshCw } from "lucide-react";
 import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
 import { comprimirImagenADataUrl, prepararImagenParaUpload } from "./comprimirImagen";
@@ -6326,8 +6328,10 @@ function _parseOptNum(v) {
 
 function SeccionActasRpo({ call, user, contratos, theme }) {
   const col = C(theme);
-  const tdStyle = S.td(theme);
   const tTok = tFrom(theme);
+  const sheet = useMemo(() => topoSheetStyles(tFrom(theme)), [theme]);
+  const { isMobile, isLandscapeMobile, isNavDrawer } = useClaraViewport();
+  const formCompact = !!(isNavDrawer || isMobile || isLandscapeMobile);
   const isDev = esDesarrolladorUsuario(user);
 
   const [contratoId, setContratoId] = useState(user?.contrato_id || null);
@@ -6707,7 +6711,6 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
   const inputStyle = !isDarkMode(theme)
     ? { ...S.input, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}`, width: "100%" }
     : { ...S.input, width: "100%" };
-  const subTitle = { fontSize: "var(--cc-sm)", fontWeight: 700, color: tTok.primary, letterSpacing: 0.4, marginTop: 10, marginBottom: 6 };
   /** Actas administrativas: solo catálogo, observación, asignación y enlace (sin RPO ni montos). */
   const esActaAdministrativa = String(formActa.tipo_grupo || "").toLowerCase() === "administrativa";
 
@@ -6779,12 +6782,12 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
             <div style={S.empty}>Ninguna acta coincide con el filtro.</div>
           ) : (
             <>
-            <div className="cc-admin-acta-table cc-admin-table-scroll">
-            <table style={{ ...S.table, minWidth: 720 }}>
+            <div className="cc-admin-acta-table cc-admin-table-scroll" style={{ ...sheet.sheetWrap, maxHeight: "min(70vh, 640px)" }}>
+            <table style={{ ...sheet.sheetTable, tableLayout: "auto", minWidth: 860 }}>
               <thead>
                 <tr>
                   {["Tipo", "RPO", "Período", "Consec.", "Tipo doc. / uso", "Costo (validación)", "Estado / Notas", "Acción"].map((h) => (
-                    <th key={h} style={S.th(theme)}>{h}</th>
+                    <th key={h} style={sheet.th}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -6793,8 +6796,8 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                   const esRpo = String(a.tipo_grupo || "").toUpperCase() === "RPO" && a.numero_rpo != null;
                   return (
                     <tr key={a.id}>
-                      <td style={tdStyle}>{labelTipoFila(a)}</td>
-                      <td style={tdStyle}>
+                      <td style={sheet.td}>{labelTipoFila(a)}</td>
+                      <td style={sheet.td}>
                         {esRpo ? (
                           <button
                             type="button"
@@ -6806,7 +6809,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                               padding: 0,
                               font: "inherit",
                               fontWeight: 700,
-                              color: "#00afc5",
+                              color: tTok.primary || "#00afc5",
                               cursor: "pointer",
                               textDecoration: "underline",
                               textUnderlineOffset: 3,
@@ -6818,20 +6821,20 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                           "—"
                         )}
                       </td>
-                      <td style={tdStyle}>
+                      <td style={sheet.td}>
                         {(a.fecha_inicio || "—").slice(0, 10)} → {(a.fecha_fin || "—").slice(0, 10)}
                       </td>
-                      <td style={tdStyle}>{a.consecutivo ?? "—"}</td>
-                      <td style={tdStyle}>
-                        <span style={{ fontSize: 11, color: col.textMuted, display: "inline-block", maxWidth: 160 }}>
+                      <td style={sheet.td}>{a.consecutivo ?? "—"}</td>
+                      <td style={sheet.td}>
+                        <span style={{ fontSize: "var(--cc-caption)", color: col.textMuted, display: "inline-block", maxWidth: 160 }}>
                           {a.tipo_nombre || "—"}
                           {a.es_cobro ? (
                             <span style={{ marginLeft: 4, ...S.badge("pendiente"), textTransform: "none", fontSize: 9 }}>cobro</span>
                           ) : null}
                         </span>
                       </td>
-                      <td style={tdStyle}>{fmtM(a.valor_total_acta)}</td>
-                      <td style={tdStyle}>
+                      <td style={sheet.td}>{fmtM(a.valor_total_acta)}</td>
+                      <td style={sheet.td}>
                         {esRpo ? (
                           esVigente(a) ? (
                             <span style={{ ...S.badge("aprobado"), textTransform: "none" }}>En período</span>
@@ -6839,13 +6842,13 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                             <span style={{ ...S.badge("pendiente"), textTransform: "none" }}>Historial</span>
                           )
                         ) : (
-                          <span style={{ fontSize: 11, color: col.textMuted, maxWidth: 180, display: "inline-block" }}>
+                          <span style={{ fontSize: "var(--cc-caption)", color: col.textMuted, maxWidth: 180, display: "inline-block" }}>
                             {(a.observacion || "—").slice(0, 72)}
                             {(a.observacion || "").length > 72 ? "…" : ""}
                           </span>
                         )}
                       </td>
-                      <td style={tdStyle}>
+                      <td style={sheet.td}>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
                           <button type="button" style={S.btn("ghost", true)} onClick={() => abrirEditar(a)}>
                             Editar
@@ -6946,11 +6949,12 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
               {actasTipos.length === 0 ? (
                 <div style={{ fontSize: 12, color: col.textMuted }}>Aún no hay tipos. Crea uno para vincularlo al crear actas administrativas.</div>
               ) : (
-                <table style={{ ...S.table, maxWidth: 620 }}>
+                <div style={{ ...sheet.sheetWrap, maxHeight: "min(280px, 40vh)", maxWidth: 720 }}>
+                <table style={{ ...sheet.sheetTable, tableLayout: "auto" }}>
                   <thead>
                     <tr>
                       {["Nombre", "Es cobro", "Usos en actas"].map((h) => (
-                        <th key={h} style={S.th(theme)}>{h}</th>
+                        <th key={h} style={sheet.th}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -6959,14 +6963,15 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                       const usos = actasTodas.filter((a) => a.tipo_acta_id != null && Number(a.tipo_acta_id) === Number(t.id)).length;
                       return (
                         <tr key={t.id}>
-                          <td style={tdStyle}>{t.nombre || `—`}</td>
-                          <td style={tdStyle}>{t.es_cobro ? "Sí" : "No"}</td>
-                          <td style={tdStyle}>{usos}</td>
+                          <td style={sheet.td}>{t.nombre || `—`}</td>
+                          <td style={sheet.td}>{t.es_cobro ? "Sí" : "No"}</td>
+                          <td style={sheet.td}>{usos}</td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
             </>
           )}
@@ -6983,233 +6988,315 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
             background: "rgba(5,12,18,0.88)",
             backdropFilter: "blur(6px)",
             display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
+            alignItems: formCompact ? "stretch" : "center",
+            justifyContent: formCompact ? "stretch" : "center",
+            padding: formCompact ? 0 : 16,
           }}
           onClick={(e) => e.target === e.currentTarget && !guardandoActa && setModalForm(false)}
         >
           <div
             className="cc-admin-modal-fs"
             style={{
-              width: "min(760px, 96vw)",
-              maxHeight: "92vh",
+              width: formCompact ? "100%" : "min(1120px, 98vw)",
+              maxHeight: formCompact ? "100dvh" : "94vh",
+              height: formCompact ? "100%" : undefined,
               overflowY: "auto",
               WebkitOverflowScrolling: "touch",
               background: isDarkMode(theme) ? "#0b1920" : tTok.bg,
-              border: "1px solid rgba(0,175,197,0.25)",
-              borderRadius: 14,
-              padding: "22px 26px",
-              boxShadow: "0 32px 80px rgba(0,0,0,0.55)",
+              border: formCompact ? "none" : "1px solid rgba(0,175,197,0.25)",
+              borderRadius: formCompact ? 0 : 14,
+              padding: 0,
+              boxShadow: formCompact ? "none" : "0 32px 80px rgba(0,0,0,0.55)",
+              display: "flex",
+              flexDirection: "column",
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ fontSize: 16, fontWeight: 700, color: col.textPrimary, marginBottom: 6 }}>
-              {editingActaId ? "Editar acta" : "Crear acta"}
-            </div>
-            <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 14 }}>
-              {!editingActaId ? (
-                <>Consecutivo sugerido: <strong>{proximoCons}</strong>. Puedes ajustarlo si hace falta.</>
-              ) : (
-                <>Puedes corregir el consecutivo si hubo un error; evita duplicar el mismo número en otra acta del contrato.</>
-              )}
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <div style={labelStyle}>Tipo de acta *</div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {[
-                  ["RPO", "RPO (período SICOE)"],
-                  ["administrativa", "Administrativa"],
-                ].map(([val, lab]) => {
-                  const raw = String(formActa.tipo_grupo || "");
-                  const sel = val === "RPO"
-                    ? raw.toUpperCase() === "RPO"
-                    : raw.toLowerCase() === val;
-                  return (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => setF("tipo_grupo", val)}
-                    style={{
-                      ...S.chip(sel),
-                      padding: "8px 14px",
-                      fontSize: 12,
-                    }}
-                  >
-                    {lab}
-                  </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+            <CcModalBrandHeader theme={theme} />
+            <div style={{
+              padding: formCompact ? "12px 14px 8px" : "16px 22px 10px",
+              borderBottom: `1px solid ${sheet.border}`,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: 10,
+              flexShrink: 0,
+            }}>
               <div>
-                <div style={labelStyle}>Consecutivo *</div>
-                <input
-                  style={inputStyle}
-                  type="number"
-                  min={1}
-                  value={formActa.consecutivo}
-                  onChange={(e) => setF("consecutivo", e.target.value)}
-                />
-              </div>
-              {actasTipos.length > 0 && (
-                <div>
-                  <div style={labelStyle}>Tipo documental (catálogo)</div>
-                  <select
-                    style={inputStyle}
-                    value={formActa.tipo_acta_id}
-                    onChange={(e) => setF("tipo_acta_id", e.target.value)}
-                  >
-                    <option value="">—</option>
-                    {actasTipos.map((t) => (
-                      <option key={t.id} value={t.id}>{t.nombre || `Tipo ${t.id}`}</option>
-                    ))}
-                  </select>
+                <div style={{ fontSize: "var(--cc-md)", fontWeight: 800, color: col.textPrimary }}>
+                  {editingActaId ? "Editar acta" : "Crear acta"}
                 </div>
-              )}
-            </div>
-
-            <div style={subTitle}>General</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
-              <div style={{ gridColumn: "1 / -1" }}>
-                <div style={labelStyle}>Observación</div>
-                <textarea
-                  style={{ ...inputStyle, resize: "vertical", minHeight: 64 }}
-                  value={formActa.observacion}
-                  onChange={(e) => setF("observacion", e.target.value)}
-                  placeholder="Notas o referencia"
-                />
-              </div>
-              {usuariosContrato.length > 0 && (
-                <div>
-                  <div style={labelStyle}>Asignado a</div>
-                  <select
-                    style={inputStyle}
-                    value={formActa.asignado_a}
-                    onChange={(e) => setF("asignado_a", e.target.value)}
-                  >
-                    <option value="">—</option>
-                    {usuariosContrato.map((u) => (
-                      <option key={u.id} value={u.id}>{u.nombre} {u.apellidos || ""}</option>
-                    ))}
-                  </select>
+                <div style={{ fontSize: "var(--cc-caption)", color: col.textMuted, marginTop: 4 }}>
+                  {!editingActaId ? (
+                    <>Consecutivo sugerido: <strong>{proximoCons}</strong>. Puedes ajustarlo si hace falta.</>
+                  ) : (
+                    <>Puedes corregir el consecutivo si hubo un error; evita duplicar el mismo número en otra acta del contrato.</>
+                  )}
                 </div>
-              )}
-              <div>
-                <div style={labelStyle}>Fecha asignación</div>
-                <ActasCalPicker
-                  value={formActa.fecha_asignacion}
-                  onChange={(v) => setF("fecha_asignacion", v || "")}
-                  isOpen={calFaOpen}
-                  onToggle={() => { setCalFaOpen((o) => !o); setCalIniOpen(false); setCalFinOpen(false); }}
-                  theme={theme}
-                />
               </div>
-              <div style={{ gridColumn: "1 / -1" }}>
-                <div style={labelStyle}>Enlace (URL)</div>
-                <input
-                  style={inputStyle}
-                  type="url"
-                  value={formActa.enlace}
-                  onChange={(e) => setF("enlace", e.target.value)}
-                  placeholder="https://…"
-                />
-              </div>
-            </div>
-
-            {!esActaAdministrativa && (
-              <>
-            <div style={subTitle}>RPO / período</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-              <div>
-                <div style={labelStyle}>Número RPO {String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? "*" : ""}</div>
-                <input
-                  style={inputStyle}
-                  type="number"
-                  min={1}
-                  value={formActa.numero_rpo}
-                  onChange={(e) => setF("numero_rpo", e.target.value)}
-                />
-              </div>
-              <div>
-                <div style={labelStyle}>Fecha inicio {String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? "*" : ""}</div>
-                <ActasCalPicker
-                  value={formActa.fecha_inicio}
-                  onChange={(v) => setF("fecha_inicio", v || "")}
-                  isOpen={calIniOpen}
-                  onToggle={() => { setCalIniOpen((o) => !o); setCalFinOpen(false); setCalFaOpen(false); }}
-                  theme={theme}
-                />
-              </div>
-              <div>
-                <div style={labelStyle}>Fecha fin {String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? "*" : ""}</div>
-                <ActasCalPicker
-                  value={formActa.fecha_fin}
-                  onChange={(v) => setF("fecha_fin", v || "")}
-                  isOpen={calFinOpen}
-                  onToggle={() => { setCalFinOpen((o) => !o); setCalIniOpen(false); setCalFaOpen(false); }}
-                  theme={theme}
-                />
-              </div>
-            </div>
-
-            <div style={subTitle}>Componentes y valores</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-              {[
-                ["valor_comp_ambiental", "Valor ambiental"],
-                ["calificacion_ambiental", "Calif. ambiental"],
-                ["valor_comp_social", "Valor social"],
-                ["calificacion_social", "Calif. social"],
-                ["valor_comp_pmt", "Valor PMT"],
-                ["calificacion_pmt", "Calif. PMT"],
-                ["valor_cobrado_adicional", "Cobrado adicional"],
-              ].map(([k, lab]) => (
-                <div key={k}>
-                  <div style={labelStyle}>{lab}</div>
-                  <input
-                    style={inputStyle}
-                    type="text"
-                    inputMode="decimal"
-                    value={formActa[k]}
-                    onChange={(e) => setF(k, e.target.value)}
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div style={subTitle}>Ajustes</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-              {[
-                ["ajuste_iccp", "Ajuste ICCP"],
-                ["ajuste_icociv", "Ajuste ICOCIV"],
-                ["ajuste_ipc", "Ajuste IPC"],
-                ["pct_proyectado_ajustes", "% proyectado ajustes"],
-              ].map(([k, lab]) => (
-                <div key={k}>
-                  <div style={labelStyle}>{lab}</div>
-                  <input
-                    style={inputStyle}
-                    type="text"
-                    inputMode="decimal"
-                    value={formActa[k]}
-                    onChange={(e) => setF(k, e.target.value)}
-                  />
-                </div>
-              ))}
-            </div>
-              </>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
-              <button type="button" style={S.btn("ghost")} disabled={guardandoActa} onClick={() => { setModalForm(false); setEditingActaId(null); }}>
-                Cancelar
+              <button
+                type="button"
+                style={S.closeBtn(theme)}
+                disabled={guardandoActa}
+                onClick={() => { setModalForm(false); setEditingActaId(null); }}
+                aria-label="Cerrar"
+              >
+                ✕
               </button>
-              <button type="button" style={S.btn("primary")} disabled={guardandoActa} onClick={guardarActa}>
-                {guardandoActa ? "Guardando…" : editingActaId ? "Guardar cambios" : "Crear acta"}
-              </button>
+            </div>
+
+            <div style={{ padding: formCompact ? "12px 14px 18px" : "14px 22px 22px", flex: 1, overflowY: "auto" }}>
+              <div style={{ marginBottom: 12 }}>
+                <div style={labelStyle}>Tipo de acta *</div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {[
+                    ["RPO", "RPO (período SICOE)"],
+                    ["administrativa", "Administrativa"],
+                  ].map(([val, lab]) => {
+                    const raw = String(formActa.tipo_grupo || "");
+                    const sel = val === "RPO"
+                      ? raw.toUpperCase() === "RPO"
+                      : raw.toLowerCase() === val;
+                    return (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setF("tipo_grupo", val)}
+                        style={{
+                          ...S.chip(sel),
+                          padding: formCompact ? "10px 14px" : "8px 14px",
+                          fontSize: "var(--cc-sm)",
+                          minHeight: formCompact ? 44 : undefined,
+                        }}
+                      >
+                        {lab}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <TopoExcelSheet
+                t={tTok}
+                sheet={sheet}
+                compact={formCompact}
+                title="Identificación"
+                columns={[
+                  { key: "consecutivo", label: "Consecutivo *", width: "22%" },
+                  ...(actasTipos.length > 0
+                    ? [{ key: "tipo_doc", label: "Tipo documental (catálogo)", width: "78%" }]
+                    : []),
+                ]}
+                cells={[
+                  <input
+                    key="consecutivo"
+                    style={sheet.cellInp}
+                    type="number"
+                    min={1}
+                    value={formActa.consecutivo}
+                    onChange={(e) => setF("consecutivo", e.target.value)}
+                  />,
+                  ...(actasTipos.length > 0
+                    ? [
+                        <select
+                          key="tipo_doc"
+                          style={sheet.cellSelect}
+                          value={formActa.tipo_acta_id}
+                          onChange={(e) => setF("tipo_acta_id", e.target.value)}
+                        >
+                          <option value="">—</option>
+                          {actasTipos.map((t) => (
+                            <option key={t.id} value={t.id}>{t.nombre || `Tipo ${t.id}`}</option>
+                          ))}
+                        </select>,
+                      ]
+                    : []),
+                ]}
+              />
+
+              <TopoExcelSheet
+                t={tTok}
+                sheet={sheet}
+                compact={formCompact}
+                title="General"
+                columns={[
+                  { key: "observacion", label: "Observación", width: "40%", compactFull: true },
+                  { key: "asignado", label: "Asignado a", width: "22%" },
+                  { key: "fecha_asig", label: "Fecha asignación", width: "18%" },
+                  { key: "enlace", label: "Enlace (URL)", width: "20%", compactFull: true },
+                ].filter((c) => c.key !== "asignado" || usuariosContrato.length > 0)}
+                cells={[
+                  <textarea
+                    key="observacion"
+                    style={{ ...sheet.cellInp, resize: "vertical", minHeight: formCompact ? 56 : 48, height: "auto" }}
+                    value={formActa.observacion}
+                    onChange={(e) => setF("observacion", e.target.value)}
+                    placeholder="Notas o referencia"
+                  />,
+                  ...(usuariosContrato.length > 0
+                    ? [
+                        <select
+                          key="asignado"
+                          style={sheet.cellSelect}
+                          value={formActa.asignado_a}
+                          onChange={(e) => setF("asignado_a", e.target.value)}
+                        >
+                          <option value="">—</option>
+                          {usuariosContrato.map((u) => (
+                            <option key={u.id} value={u.id}>{u.nombre} {u.apellidos || ""}</option>
+                          ))}
+                        </select>,
+                      ]
+                    : []),
+                  <ActasCalPicker
+                    key="fecha_asig"
+                    value={formActa.fecha_asignacion}
+                    onChange={(v) => setF("fecha_asignacion", v || "")}
+                    isOpen={calFaOpen}
+                    onToggle={() => { setCalFaOpen((o) => !o); setCalIniOpen(false); setCalFinOpen(false); }}
+                    theme={theme}
+                  />,
+                  <input
+                    key="enlace"
+                    style={sheet.cellInp}
+                    type="url"
+                    value={formActa.enlace}
+                    onChange={(e) => setF("enlace", e.target.value)}
+                    placeholder="https://…"
+                  />,
+                ]}
+              />
+
+              {!esActaAdministrativa && (
+                <>
+                  <TopoExcelSheet
+                    t={tTok}
+                    sheet={sheet}
+                    compact={formCompact}
+                    title="RPO / período"
+                    columns={[
+                      { key: "numero_rpo", label: `Número RPO${String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? " *" : ""}`, width: "28%" },
+                      { key: "fecha_inicio", label: `Fecha inicio${String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? " *" : ""}`, width: "36%" },
+                      { key: "fecha_fin", label: `Fecha fin${String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? " *" : ""}`, width: "36%" },
+                    ]}
+                    cells={[
+                      <input
+                        key="numero_rpo"
+                        style={sheet.cellInp}
+                        type="number"
+                        min={1}
+                        value={formActa.numero_rpo}
+                        onChange={(e) => setF("numero_rpo", e.target.value)}
+                      />,
+                      <ActasCalPicker
+                        key="fecha_inicio"
+                        value={formActa.fecha_inicio}
+                        onChange={(v) => setF("fecha_inicio", v || "")}
+                        isOpen={calIniOpen}
+                        onToggle={() => { setCalIniOpen((o) => !o); setCalFinOpen(false); setCalFaOpen(false); }}
+                        theme={theme}
+                      />,
+                      <ActasCalPicker
+                        key="fecha_fin"
+                        value={formActa.fecha_fin}
+                        onChange={(v) => setF("fecha_fin", v || "")}
+                        isOpen={calFinOpen}
+                        onToggle={() => { setCalFinOpen((o) => !o); setCalIniOpen(false); setCalFaOpen(false); }}
+                        theme={theme}
+                      />,
+                    ]}
+                  />
+
+                  <TopoExcelSheet
+                    t={tTok}
+                    sheet={sheet}
+                    compact={formCompact}
+                    title="Componentes y valores"
+                    columns={[
+                      ["valor_comp_ambiental", "Valor ambiental"],
+                      ["calificacion_ambiental", "Calif. ambiental"],
+                      ["valor_comp_social", "Valor social"],
+                      ["calificacion_social", "Calif. social"],
+                      ["valor_comp_pmt", "Valor PMT"],
+                      ["calificacion_pmt", "Calif. PMT"],
+                      ["valor_cobrado_adicional", "Cobrado adicional"],
+                    ].map(([k, lab]) => ({ key: k, label: lab }))}
+                    cells={[
+                      "valor_comp_ambiental",
+                      "calificacion_ambiental",
+                      "valor_comp_social",
+                      "calificacion_social",
+                      "valor_comp_pmt",
+                      "calificacion_pmt",
+                      "valor_cobrado_adicional",
+                    ].map((k) => (
+                      <input
+                        key={k}
+                        style={sheet.cellInp}
+                        type="text"
+                        inputMode="decimal"
+                        value={formActa[k]}
+                        onChange={(e) => setF(k, e.target.value)}
+                      />
+                    ))}
+                  />
+
+                  <TopoExcelSheet
+                    t={tTok}
+                    sheet={sheet}
+                    compact={formCompact}
+                    title="Ajustes"
+                    columns={[
+                      ["ajuste_iccp", "Ajuste ICCP"],
+                      ["ajuste_icociv", "Ajuste ICOCIV"],
+                      ["ajuste_ipc", "Ajuste IPC"],
+                      ["pct_proyectado_ajustes", "% proyectado ajustes"],
+                    ].map(([k, lab]) => ({ key: k, label: lab }))}
+                    cells={[
+                      "ajuste_iccp",
+                      "ajuste_icociv",
+                      "ajuste_ipc",
+                      "pct_proyectado_ajustes",
+                    ].map((k) => (
+                      <input
+                        key={k}
+                        style={sheet.cellInp}
+                        type="text"
+                        inputMode="decimal"
+                        value={formActa[k]}
+                        onChange={(e) => setF(k, e.target.value)}
+                      />
+                    ))}
+                  />
+                </>
+              )}
+
+              <div style={{
+                display: "flex",
+                justifyContent: formCompact ? "stretch" : "flex-end",
+                flexDirection: formCompact ? "column-reverse" : "row",
+                gap: 10,
+                marginTop: 8,
+                paddingTop: 12,
+                borderTop: `1px solid ${sheet.border}`,
+              }}>
+                <button
+                  type="button"
+                  style={{ ...S.btn("ghost"), minHeight: formCompact ? 44 : undefined, width: formCompact ? "100%" : undefined }}
+                  disabled={guardandoActa}
+                  onClick={() => { setModalForm(false); setEditingActaId(null); }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  style={{ ...S.btn("primary"), minHeight: formCompact ? 44 : undefined, width: formCompact ? "100%" : undefined }}
+                  disabled={guardandoActa}
+                  onClick={guardarActa}
+                >
+                  {guardandoActa ? "Guardando…" : editingActaId ? "Guardar cambios" : "Crear acta"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
