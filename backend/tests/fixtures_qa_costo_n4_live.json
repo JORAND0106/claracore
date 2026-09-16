@@ -1,0 +1,51 @@
+[
+  {
+    "case": "ICCU Acta620 contrato3",
+    "na": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "n_regs": 201,
+    "sql_crudo_n4": 78318891.0,
+    "canon_dashboard_panel": 78318891.0,
+    "panel_legacy_max_vu": 78858891.0,
+    "matriz_python_n4_aprobado": 78318891.0,
+    "parity_dash_panel_matriz": true,
+    "delta_legacy_panel_vs_canon": 540000.0,
+    "delta_sql_vs_canon": 0.0
+  },
+  {
+    "case": "Contrato2 Acta307",
+    "na": [
+      1,
+      2,
+      4
+    ],
+    "n_regs": 379,
+    "sql_crudo_n4": 215898183.0,
+    "canon_dashboard_panel": 215898183.0,
+    "panel_legacy_max_vu": 215898182.0,
+    "matriz_python_n4_aprobado": 215898183.0,
+    "parity_dash_panel_matriz": true,
+    "delta_legacy_panel_vs_canon": -1.0,
+    "delta_sql_vs_canon": 0.0
+  },
+  {
+    "case": "Contrato2 Acta308",
+    "na": [
+      1,
+      2,
+      4
+    ],
+    "n_regs": 247,
+    "sql_crudo_n4": 296067396.0,
+    "canon_dashboard_panel": 296067396.0,
+    "panel_legacy_max_vu": 296066559.0,
+    "matriz_python_n4_aprobado": 296067396.0,
+    "parity_dash_panel_matriz": true,
+    "delta_legacy_panel_vs_canon": -837.0,
+    "delta_sql_vs_canon": 0.0
+  }
+]

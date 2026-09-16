@@ -9,7 +9,11 @@ from sicoe_costo_aprobado_nivel import (
 # Caso ICCU-CTO-1614-2025 Acta RPO 1 (acta_rpo_id=620) — tres fuentes históricas.
 SQL_CRUDO_ACTA620 = 78_318_891  # SUM(CD) WHERE nivel4_estado='Aprobado' (sin prerreqs)
 DASHBOARD_LEGACY_ACTA620 = 76_788_964  # cant×listado VU sin prerreqs (KPI/CapFin)
-PANEL_LEGACY_ACTA620 = 78_855_123  # cant×MAX(VU) con prerreqs (RPC matriz)
+PANEL_LEGACY_ACTA620_REPORTADO = 78_855_123  # valor UI al reportar el incidente
+# Recálculo en vivo (anon Supabase, 2026-09-16): cant×MAX(VU) con cascada = +540.000
+# por ítems 2.1 y 2.3 (VU 45k vs 180k). Diff vs UI (~3.768) = drift de datos posterior.
+PANEL_LEGACY_MAXVU_LIVE = 78_858_891
+CANON_ACTA620_LIVE = 78_318_891  # = SQL crudo en este acta (0 filas N4 sin cascada)
 
 
 def test_criterio_documentado():
@@ -59,7 +63,7 @@ def test_sql_crudo_sin_prereqs_diverge_de_canonico():
     canon = sum_costo_aprobado_nivel_max(regs, na)
     assert sql_crudo == 78_318_891 + 536_232
     assert canon == 78_318_891
-    assert sql_crudo - canon == 536_232  # ≈ Panel−SQL del caso ICCU Acta 1 (orden inverso por VU)
+    assert sql_crudo - canon == 536_232  # divergencia estructural posible (N4 sin cascada)
 
 
 def test_agregacion_max_vu_diverge_de_sum_cd():
@@ -91,16 +95,16 @@ def test_tres_fuentes_historicas_divergen_y_canonico_unica():
     Evidencia numérica del incidente ICCU Acta 620:
     - SQL crudo (solo n4=Aprobado): 78.318.891
     - Dashboard legacy (cant×listado, sin prerreqs): 76.788.964
-    - Panel legacy (cant×MAX VU + prerreqs): 78.855.123
-    Tras unificación, Dashboard KPI/CapFin y Panel N4 Aprobado deben usar
-    sum_costo_aprobado_nivel_max (misma función).
+    - Panel legacy (cant×MAX VU + prerreqs): ~78.855.123 (live 78.858.891)
+    Tras unificación, Dashboard KPI/CapFin y Panel N4 Aprobado = 78.318.891
+    (sum_costo_aprobado_nivel_max; en este acta coincide con SQL crudo).
     """
     assert SQL_CRUDO_ACTA620 != DASHBOARD_LEGACY_ACTA620
-    assert SQL_CRUDO_ACTA620 != PANEL_LEGACY_ACTA620
-    assert DASHBOARD_LEGACY_ACTA620 != PANEL_LEGACY_ACTA620
-    # Deltas documentados del incidente
-    assert PANEL_LEGACY_ACTA620 - SQL_CRUDO_ACTA620 == 536_232
+    assert SQL_CRUDO_ACTA620 != PANEL_LEGACY_ACTA620_REPORTADO
+    assert DASHBOARD_LEGACY_ACTA620 != PANEL_LEGACY_ACTA620_REPORTADO
+    assert PANEL_LEGACY_MAXVU_LIVE - CANON_ACTA620_LIVE == 540_000
     assert SQL_CRUDO_ACTA620 - DASHBOARD_LEGACY_ACTA620 == 1_529_927
+    assert CANON_ACTA620_LIVE == SQL_CRUDO_ACTA620
 
     na = [1, 2, 3, 4]
     # Synthetic mix that reproduces the three formulas' relative ordering
@@ -192,3 +196,37 @@ def test_paridad_dashboard_panel_mismo_agregador():
         costo_directo_linea(r) for r in regs if registro_aprobado_nivel_max(r, na)
     )
     assert dash_total == panel_n4_aprobado == 150.0
+
+
+def test_acta620_inflacion_max_vu_items_2_1_y_2_3():
+    """Réplica mínima del +540.000 live: ítems 2.1/2.3 con VU 45k y 180k."""
+    na = [1, 2, 3, 4]
+    base_est = {
+        "nivel1_estado": "Aprobado",
+        "nivel2_estado": "Aprobado",
+        "nivel3_estado": "Aprobado",
+        "nivel4_estado": "Aprobado",
+    }
+    regs = []
+    for item in ("2.1.", "2.3."):
+        regs.append({
+            **base_est, "item_numero": item,
+            "cantidad_total": 2, "vlr_unitario": 45_000, "costo_directo": 90_000,
+        })
+        regs.append({
+            **base_est, "item_numero": item,
+            "cantidad_total": 2, "vlr_unitario": 180_000, "costo_directo": 360_000,
+        })
+    from collections import defaultdict
+    qty = defaultdict(float)
+    mx = defaultdict(float)
+    for r in regs:
+        assert registro_aprobado_nivel_max(r, na)
+        ik = r["item_numero"]
+        qty[ik] += float(r["cantidad_total"])
+        mx[ik] = max(mx[ik], float(r["vlr_unitario"]))
+    sum_cd = sum_costo_aprobado_nivel_max(regs, na)
+    panel = round(sum(q * mx[i] for i, q in qty.items()), 0)
+    assert sum_cd == 900_000  # 450k + 450k
+    assert panel == 1_440_000  # 4×180k × 2 ítems
+    assert panel - sum_cd == 540_000
