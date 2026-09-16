@@ -18,6 +18,7 @@ def test_notificar_compromiso_asignado_inmediato_en_borrador(monkeypatch):
         return True
 
     monkeypatch.setattr(svc, "_notificar", capture)
+    monkeypatch.setattr(svc, "_try_email_asignacion_inmediata", lambda *_a, **_k: None)
     ok = svc._notificar_compromiso_asignado(
         None,
         destinatario_id=20,
@@ -42,6 +43,7 @@ def test_notificar_compromiso_asignado_inmediato_en_borrador(monkeypatch):
 def test_notificar_compromiso_reasignacion(monkeypatch):
     calls = []
     monkeypatch.setattr(svc, "_notificar", lambda _sb, **k: calls.append(k) or True)
+    monkeypatch.setattr(svc, "_try_email_asignacion_inmediata", lambda *_a, **_k: None)
     svc._notificar_compromiso_asignado(
         None,
         destinatario_id=30,

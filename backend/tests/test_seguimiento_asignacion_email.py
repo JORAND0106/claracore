@@ -167,7 +167,7 @@ def test_enviar_email_asignacion_ok(monkeypatch):
     assert "Carlos" in sent[0][2]
     assert any(r.get("tipo") == JOB_TIPO for r in store["notificaciones_email_envio"])
 
-    # Idempotencia: no reenvía el mismo slot
+    # Idempotencia: no reenvía tras éxito
     ok2 = enviar_email_asignacion_inmediata(
         sb,
         destinatario_id=20,
@@ -179,6 +179,77 @@ def test_enviar_email_asignacion_ok(monkeypatch):
     )
     assert ok2 is False
     assert len(sent) == 1
+
+
+def test_fallo_smtp_no_bloquea_reintento(monkeypatch):
+    store = {
+        "usuarios": [
+            {
+                "id": 20,
+                "email": "ana@example.com",
+                "nombre": "Ana",
+                "apellidos": "P",
+                "estado": "aprobado",
+                "activo": True,
+            },
+            {
+                "id": 10,
+                "email": "c@example.com",
+                "nombre": "C",
+                "apellidos": "",
+                "estado": "aprobado",
+                "activo": True,
+            },
+        ],
+        "notificaciones_email_envio": [],
+    }
+    sb = _FakeSB(store)
+    calls = {"n": 0}
+
+    def flaky(*_a, **_k):
+        calls["n"] += 1
+        return calls["n"] > 1  # primer intento falla
+
+    monkeypatch.setattr("seguimiento_asignacion_email._send_smtp", flaky)
+    monkeypatch.setattr(
+        "seguimiento_asignacion_email._contacto_smtp_configured",
+        lambda: True,
+    )
+    assert enviar_email_asignacion_inmediata(
+        sb, destinatario_id=20, remitente_id=10, tipo="tarea",
+        titulo="X", item_id=9,
+    ) is False
+    assert enviar_email_asignacion_inmediata(
+        sb, destinatario_id=20, remitente_id=10, tipo="tarea",
+        titulo="X", item_id=9,
+    ) is True
+
+
+def test_email_override_si_usuario_sin_fila(monkeypatch):
+    store = {"usuarios": [], "notificaciones_email_envio": []}
+    sent = []
+    monkeypatch.setattr(
+        "seguimiento_asignacion_email._send_smtp",
+        lambda *a, **k: sent.append(a) or True,
+    )
+    monkeypatch.setattr(
+        "seguimiento_asignacion_email._contacto_smtp_configured",
+        lambda: True,
+    )
+    ok = enviar_email_asignacion_inmediata(
+        _FakeSB(store),
+        destinatario_id=99,
+        remitente_id=1,
+        tipo="tarea",
+        titulo="Personal",
+        item_id=3,
+        es_personal=True,
+        destinatario_email="yo@example.com",
+        destinatario_nombre="Yo Mismo",
+    )
+    assert ok is True
+    assert sent[0][0] == "yo@example.com"
+    assert "Yo Mismo" in sent[0][2]
 
 
 def test_build_email_tarea_personal_sin_delegado():

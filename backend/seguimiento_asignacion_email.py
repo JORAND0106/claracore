@@ -98,20 +98,33 @@ def _load_usuario(sb: Any, usuario_id: int) -> Optional[dict]:
 
 
 def _usuario_elegible(u: Optional[dict]) -> bool:
+    """Elegible para correo transaccional de asignación (responsable)."""
     if not u:
         return False
-    try:
-        from usuarios_notif_elegibilidad import usuario_puede_recibir_notificaciones_automaticas
-        if not usuario_puede_recibir_notificaciones_automaticas(u):
-            return False
-    except Exception:
-        # Si el helper no está disponible, exigir estado aprobado si viene en la fila
-        est = (str(u.get("estado") or "")).strip().lower()
-        if est and est != "aprobado":
-            return False
+    email = (u.get("email") or "").strip()
+    if not email or "@" not in email:
+        return False
     if u.get("activo") is False:
         return False
-    return bool((u.get("email") or "").strip())
+    try:
+        from usuarios_notif_elegibilidad import (
+            normalizar_estado_usuario,
+            usuario_estado_es_rechazado,
+            usuario_puede_recibir_notificaciones_automaticas,
+        )
+        if usuario_estado_es_rechazado(u.get("estado")):
+            return False
+        # Preferir gate canónico; si estado viene vacío/null, no bloquear
+        # (el usuario ya autenticado pudo crear/recibir la asignación).
+        est = normalizar_estado_usuario(u.get("estado"))
+        if not est:
+            return True
+        return bool(usuario_puede_recibir_notificaciones_automaticas(u))
+    except Exception:
+        est = (str(u.get("estado") or "")).strip().lower()
+        if est in ("rechazado", "pendiente"):
+            return False
+        return True
 
 
 def build_asignacion_email_bodies(
@@ -275,14 +288,15 @@ def _slot_key(*, tipo: str, item_id: int, destinatario_id: int, reasignacion: bo
 
 
 def _ya_enviado(sb: Any, *, usuario_id: int, slot_key: str) -> bool:
+    """True solo si ya hubo un envío exitoso (fallos previos no bloquean reintento)."""
     try:
         rows = (
             sb.table("notificaciones_email_envio")
-            .select("id")
+            .select("id,exito")
             .eq("tipo", JOB_TIPO)
             .eq("slot_key", slot_key)
             .eq("usuario_id", int(usuario_id))
-            .is_("contrato_id", "null")
+            .eq("exito", True)
             .limit(1)
             .execute()
             .data
@@ -351,6 +365,17 @@ def _send_smtp(to_addr: str, subject: str, text: str, html_body: str) -> bool:
     return True
 
 
+def _resolve_sb(sb: Any) -> Any:
+    """Prefiere el proxy thread-local de main (seguro en hilos de fondo)."""
+    if sb is not None:
+        return sb
+    try:
+        from main import supabase as _sb_main
+        return _sb_main
+    except Exception:
+        return None
+
+
 def enviar_email_asignacion_inmediata(
     sb: Any,
     *,
@@ -365,6 +390,8 @@ def enviar_email_asignacion_inmediata(
     contexto: Optional[str] = None,
     reasignacion: bool = False,
     es_personal: bool = False,
+    destinatario_email: Optional[str] = None,
+    destinatario_nombre: Optional[str] = None,
 ) -> bool:
     """
     Envía el correo de asignación al responsable (nunca a «notificado»).
@@ -378,6 +405,12 @@ def enviar_email_asignacion_inmediata(
     except (TypeError, ValueError):
         return False
     if dest_id <= 0:
+        _log.warning("email asignación omitido: destinatario_id inválido")
+        return False
+
+    sb = _resolve_sb(sb)
+    if sb is None:
+        _log.error("email asignación omitido: sin cliente Supabase")
         return False
 
     tipo_n = (tipo or "tarea").strip().lower()
@@ -386,8 +419,6 @@ def enviar_email_asignacion_inmediata(
 
     # Tarea personal: autoasignada (sin delegante distinto).
     personal = bool(es_personal) or (tipo_n == "tarea" and rem_id and dest_id == rem_id)
-    # Compromiso autoasignado: también se notifica al responsable.
-    # (No hay «persona notificada» en este canal.)
 
     slot = _slot_key(
         tipo=tipo_n,
@@ -396,21 +427,57 @@ def enviar_email_asignacion_inmediata(
         reasignacion=bool(reasignacion),
     )
     if _ya_enviado(sb, usuario_id=dest_id, slot_key=slot):
+        _log.info(
+            "email asignación ya enviado ok tipo=%s item=%s dest=%s",
+            tipo_n, item_id, dest_id,
+        )
         return False
 
     dest = _load_usuario(sb, dest_id)
+    email_override = (destinatario_email or "").strip()
+    if dest is None and email_override:
+        dest = {
+            "id": dest_id,
+            "email": email_override,
+            "nombre": (destinatario_nombre or "").strip() or None,
+            "apellidos": "",
+            "estado": "aprobado",
+            "activo": True,
+        }
+    elif dest is not None and email_override and not (dest.get("email") or "").strip():
+        dest = {**dest, "email": email_override}
+
     if not _usuario_elegible(dest):
-        _log.info(
-            "omitiendo email asignación dest=%s (sin email o no elegible)",
+        _log.warning(
+            "omitiendo email asignación dest=%s (sin email o no elegible; estado=%s activo=%s email=%s)",
             dest_id,
+            (dest or {}).get("estado"),
+            (dest or {}).get("activo"),
+            bool(((dest or {}).get("email") or "").strip()),
         )
         return False
 
     rem = _load_usuario(sb, rem_id) if (rem_id and rem_id != dest_id and not personal) else None
     delegado = _nombre_usuario_row(rem) if rem else None
 
-    nombre = _nombre_usuario_row(dest)
+    nombre = (destinatario_nombre or "").strip() or _nombre_usuario_row(dest)
     email = (dest.get("email") or "").strip()
+
+    if not _contacto_smtp_configured():
+        _log.error(
+            "email asignación NO enviado (SMTP contacto no configurado) dest=%s item=%s tipo=%s",
+            email, item_id, tipo_n,
+        )
+        _registrar_envio(
+            sb,
+            usuario_id=dest_id,
+            slot_key=slot,
+            destinatario=email,
+            exito=False,
+            error="smtp_contacto_no_configurado",
+            meta={"tipo": tipo_n, "item_id": int(item_id), "es_personal": bool(personal)},
+        )
+        return False
 
     asunto, text, html_body = build_asignacion_email_bodies(
         nombre_destinatario=nombre,
@@ -432,6 +499,10 @@ def enviar_email_asignacion_inmediata(
         "es_personal": bool(personal),
         "fecha_vencimiento": (str(fecha_vencimiento)[:10] if fecha_vencimiento else None),
     }
+    _log.info(
+        "enviando email asignación tipo=%s item=%s dest=%s personal=%s",
+        tipo_n, item_id, email, personal,
+    )
     try:
         ok = _send_smtp(email, asunto, text, html_body)
         _registrar_envio(
@@ -459,3 +530,42 @@ def enviar_email_asignacion_inmediata(
         except Exception:
             pass
         return False
+
+
+def encolar_email_asignacion_inmediata(
+    sb: Any,
+    **kwargs: Any,
+) -> None:
+    """
+    Dispara el envío en un hilo de fondo para no bloquear/cancelar con el HTTP.
+    Usa el cliente Supabase thread-local de ``main`` dentro del worker.
+    """
+    import threading
+
+    # No reutilizar el httpx del request (no es thread-safe).
+    kwargs = dict(kwargs)
+    kwargs.pop("sb", None)
+
+    def _work() -> None:
+        try:
+            from main import supabase as sb_bg
+            ok = enviar_email_asignacion_inmediata(sb_bg, **kwargs)
+            if not ok:
+                _log.warning(
+                    "email asignación encolado sin éxito item=%s dest=%s tipo=%s",
+                    kwargs.get("item_id"),
+                    kwargs.get("destinatario_id"),
+                    kwargs.get("tipo"),
+                )
+        except Exception as exc:
+            _log.exception(
+                "email asignación encolado falló item=%s: %s",
+                kwargs.get("item_id"),
+                exc,
+            )
+
+    threading.Thread(
+        target=_work,
+        name=f"seg-email-asig-{kwargs.get('tipo')}-{kwargs.get('item_id')}",
+        daemon=True,
+    ).start()
