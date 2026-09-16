@@ -3445,8 +3445,8 @@ def _get_nivel_maximo_contrato(contrato_id: int) -> str:
 
 def _sicoe_capa_alinea_dashboard_kpi(capa: dict, contrato_id: Optional[int]) -> bool:
     """
-    Una capa «Aprobado» en el nivel máximo del contrato usa la misma regla que
-    dashboard_resumen_sicoe_agg (solo nmax = Aprobado, sin prerrequisitos ni exigir ítem).
+    Capa «Aprobado» en el nivel máximo (= KPI Dashboard / Panel Validación).
+    Tras unificación: misma cascada canónica (ítem + prerrequisitos); ya no se omite.
     """
     if contrato_id is None or not isinstance(capa, dict):
         return False
@@ -3479,6 +3479,7 @@ def _matriz_validacion_norm_estado_nivel_final(row: Optional[dict], contrato_id:
 
 
 def _registro_nivel_max_aprobado(row: Optional[Dict[str, Any]], contrato_id: int) -> bool:
+    """Nivel máximo en Aprobado (sin cascada). Usado para sellado/bloqueo operativo."""
     if not row:
         return False
     try:
@@ -3487,6 +3488,19 @@ def _registro_nivel_max_aprobado(row: Optional[Dict[str, Any]], contrato_id: int
         cid = 0
     campo = _get_nivel_maximo_contrato(cid) if cid else "nivel3_estado"
     return (row.get(campo) or "").strip() == "Aprobado"
+
+
+def _registro_costo_aprobado_nivel_max(row: Optional[Dict[str, Any]], contrato_id: int) -> bool:
+    """Indicador financiero unificado: ítem + prerrequisitos + nmax Aprobado."""
+    from sicoe_costo_aprobado_nivel import registro_aprobado_nivel_max
+
+    if not row:
+        return False
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return False
+    return registro_aprobado_nivel_max(row, _get_niveles_activos_contrato(cid))
 
 
 def _registro_reversion_bloqueada_por_aprobacion_nivel6(
@@ -3979,17 +3993,17 @@ def _so_registros_q_y_capas_validacion(
         if not evp:
             continue
         alinea_dash = _sicoe_capa_alinea_dashboard_kpi(capa, contrato_id)
-        if not alinea_dash:
-            if contrato_id is not None:
-                try:
-                    for prereq in _sicoe_matriz_prereqs_activos_para_campo(fld, int(contrato_id)):
-                        q = q.eq(prereq[0], prereq[1])
-                except (TypeError, ValueError):
-                    pass
-            else:
-                prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
-                if prereq:
+        # Unificado: también el KPI Aprobado nivel máx. exige prerrequisitos + ítem.
+        if contrato_id is not None:
+            try:
+                for prereq in _sicoe_matriz_prereqs_activos_para_campo(fld, int(contrato_id)):
                     q = q.eq(prereq[0], prereq[1])
+            except (TypeError, ValueError):
+                pass
+        else:
+            prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
+            if prereq:
+                q = q.eq(prereq[0], prereq[1])
         if evp in ("No Revisado", "No Revisados"):
             q = _so_reg_or_pendiente_nivel(q, fld)
             # N1: misma lógica que "cola" N2/N3: sin ítem asignado no entra a revisión de inspector
@@ -3997,11 +4011,8 @@ def _so_registros_q_y_capas_validacion(
                 q = _so_reg_item_asignado(q)
         else:
             evq = _estado_registro_eq_desde_filtro_ui(evp)
-            if alinea_dash and evp == "Aprobado":
-                q = q.eq(fld, "Aprobado")
-            else:
-                q = q.eq(fld, evq)
-        if _es_validacion_avanzada(fld) and not alinea_dash:
+            q = q.eq(fld, "Aprobado" if (alinea_dash and evp == "Aprobado") else evq)
+        if _es_validacion_avanzada(fld) or alinea_dash:
             q = _so_reg_item_asignado(q)
     if pk_id_val is not None:
         q = q.eq("pk_id_id", pk_id_val)
@@ -21491,13 +21502,8 @@ def _sicoe_registro_cumple_capa_matriz(reg: dict, capa: dict, contrato_id: int) 
     if not fld or not ev:
         return False
 
-    alinea_dash = False
-    try:
-        alinea_dash = fld == _get_nivel_maximo_contrato(int(contrato_id)) and ev == "Aprobado"
-    except (TypeError, ValueError):
-        pass
-
-    if _es_validacion_avanzada(fld) and not alinea_dash:
+    # Unificado con KPI/Panel: Aprobado en nivel máx. también exige ítem + prerrequisitos.
+    if _es_validacion_avanzada(fld):
         if not (reg.get("item_numero") or "").strip():
             return False
 
@@ -21510,7 +21516,7 @@ def _sicoe_registro_cumple_capa_matriz(reg: dict, capa: dict, contrato_id: int) 
     n = _sicoe_nivel_num_desde_campo(fld)
     n_min = min(na) if na else 1
 
-    if n is not None and n > n_min and not alinea_dash:
+    if n is not None and n > n_min:
         if not _matriz_prereqs_aprobados(reg, na, n):
             return False
 
@@ -29559,7 +29565,6 @@ from dashboard_costo_agregado import (
     ppto_rows_with_resolved_vu,
     resolve_item_vu,
     rollup_gerencial_ppto_por_capitulo,
-    sicoe_finalize_costs,
     vu_item_rows,
 )
 
@@ -29886,20 +29891,30 @@ def _dash_agg_cache_set(kind: str, contrato_id: int, value: Any) -> None:
 def _dashboard_scan_sicoe_by_item(
     contrato_id: int, *, acta_id: Optional[int] = None
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
-    """Agrega SICOE por (capítulo_norm, ítem_norm) con costos/cantidades aprobados y en cola."""
-    cache_kind = "sicoe_by_item_v2" if acta_id is None else f"sicoe_by_item_v2_acta_{int(acta_id)}"
+    """
+    Agrega SICOE por (capítulo_norm, ítem_norm).
+
+    Aprobado (ap_*): regla canónica sicoe_costo_aprobado_nivel — ítem + prerrequisitos
+    + nmax Aprobado; dinero = SUM(costo_directo) por línea.
+    Cola (nr_*): ítem + prerrequisitos + nmax No Revisado; dinero = cant×listado VU
+    (la cola sigue midiendo cantidad pendiente valorizada a listado).
+    """
+    from sicoe_costo_aprobado_nivel import costo_directo_linea, registro_aprobado_nivel_max
+
+    cache_kind = "sicoe_by_item_v3" if acta_id is None else f"sicoe_by_item_v3_acta_{int(acta_id)}"
     cached = _dash_agg_cache_get(cache_kind, contrato_id)
     if cached is not None:
         return cached
     sicoe_by_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
     listado_idx = _listado_precios_vu_by_cap_item(contrato_id)
+    na = _get_niveles_activos_contrato(contrato_id)
     off = 0
     while True:
         def _b(o=off, _aid=acta_id):
             q = (
                 supabase.table("so_registros")
                 .select(
-                    "capitulo, cantidad_total, vlr_unitario, item_numero, "
+                    "capitulo, cantidad_total, vlr_unitario, costo_directo, item_numero, "
                     f"{SICOE_SELECT_NIVELES_ESTADO}"
                 )
                 .eq("contrato_id", contrato_id)
@@ -29926,30 +29941,40 @@ def _dashboard_scan_sicoe_by_item(
                     "nr_q": 0.0,
                 }
             cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
-            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
-            if nfin == "Aprobado":
+            if registro_aprobado_nivel_max(reg, na):
                 sicoe_by_item[k]["ap_q"] += cq
-            elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
+                sicoe_by_item[k]["ap_c"] += costo_directo_linea(reg)
+            elif _so_reg_en_cola_interventoria(reg, contrato_id):
                 sicoe_by_item[k]["nr_q"] += cq
         if len(batch) < 1000:
             break
         off += 1000
     for (ck, ik), sg in sicoe_by_item.items():
         lp_vu = _dash_listado_vu_resolved(contrato_id, ck, ik, full_listado_idx=listado_idx)
-        for qk in ("ap_q", "nr_q"):
-            sg[qk] = cantidad_dashboard(float(sg.get(qk) or 0))
-        sicoe_finalize_costs(sg, listado_vu=lp_vu)
+        sg["ap_q"] = cantidad_dashboard(float(sg.get("ap_q") or 0))
+        sg["nr_q"] = cantidad_dashboard(float(sg.get("nr_q") or 0))
+        sg["ap_c"] = float(round(float(sg.get("ap_c") or 0), 0))
+        # Cola: valorización a listado (cantidad pendiente × VU vigente).
+        sg["nr_c"] = float(costo_agregado_cant_vu(sg["nr_q"], lp_vu or 0))
     _dash_agg_cache_set(cache_kind, contrato_id, sicoe_by_item)
     return sicoe_by_item
 
 
 def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[str, str], Dict[str, Any]]:
-    """SICOE agregado por ítem solo para un capítulo (drill rápido)."""
+    """
+    SICOE agregado por ítem solo para un capítulo (drill rápido).
+
+    Misma regla canónica que `_dashboard_scan_sicoe_by_item` (v3):
+    Aprobado = ítem + prerrequisitos + nmax Aprobado; dinero = SUM(costo_directo).
+    Cola = ítem + prerrequisitos + nmax No Revisado; dinero = cant×listado VU.
+    """
+    from sicoe_costo_aprobado_nivel import costo_directo_linea, registro_aprobado_nivel_max
+
     cap_raw = (capitulo or "").strip()
     if not cap_raw:
         return {}
     cap_key = _dash_norm_capitulo_key_py(cap_raw)
-    cache_key = f"sicoe_by_item_cap:{int(contrato_id)}:{cap_key}"
+    cache_key = f"sicoe_by_item_cap_v3:{int(contrato_id)}:{cap_key}"
     now = time.time()
     with _DASH_AGG_CACHE_LOCK:
         hit = _DASH_AGG_CACHE.get(cache_key)
@@ -29958,10 +29983,13 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
 
     sicoe_by_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
     listado_idx = _listado_precios_vu_by_cap_item(contrato_id)
+    na = _get_niveles_activos_contrato(contrato_id)
 
     def _ingest_batch(batch: List[dict]) -> None:
         for reg in batch or []:
             if cap_key and _dash_norm_capitulo_key_py(reg.get("capitulo")) != cap_key:
+                continue
+            if not (reg.get("item_numero") or "").strip():
                 continue
             ik = _dash_norm_item_key_py(reg.get("item_numero"))
             if not ik:
@@ -29976,10 +30004,10 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
                     "nr_q": 0.0,
                 }
             cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
-            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
-            if nfin == "Aprobado":
+            if registro_aprobado_nivel_max(reg, na):
                 sicoe_by_item[k]["ap_q"] += cq
-            elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
+                sicoe_by_item[k]["ap_c"] += costo_directo_linea(reg)
+            elif _so_reg_en_cola_interventoria(reg, contrato_id):
                 sicoe_by_item[k]["nr_q"] += cq
 
     def _scan_pages(use_cap_filter: bool) -> None:
@@ -29989,7 +30017,7 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
                 q = (
                     supabase.table("so_registros")
                     .select(
-                        "capitulo, cantidad_total, vlr_unitario, item_numero, "
+                        "capitulo, cantidad_total, vlr_unitario, costo_directo, item_numero, "
                         f"{SICOE_SELECT_NIVELES_ESTADO}"
                     )
                     .eq("contrato_id", contrato_id)
@@ -30007,11 +30035,12 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
     _scan_pages(use_cap_filter=True)
     for (ck, ik), sg in sicoe_by_item.items():
         lp_vu = _dash_listado_vu_resolved(contrato_id, ck, ik, full_listado_idx=listado_idx)
-        for qk in ("ap_q", "nr_q"):
-            sg[qk] = cantidad_dashboard(float(sg.get(qk) or 0))
-        sicoe_finalize_costs(sg, listado_vu=lp_vu)
+        sg["ap_q"] = cantidad_dashboard(float(sg.get("ap_q") or 0))
+        sg["nr_q"] = cantidad_dashboard(float(sg.get("nr_q") or 0))
+        sg["ap_c"] = float(round(float(sg.get("ap_c") or 0), 0))
+        sg["nr_c"] = float(costo_agregado_cant_vu(sg["nr_q"], lp_vu or 0))
     if not sicoe_by_item:
-        full = _dash_agg_cache_get("sicoe_by_item_v2", contrato_id)
+        full = _dash_agg_cache_get("sicoe_by_item_v3", contrato_id)
         if full is not None:
             for k, v in full.items():
                 if k[0] == cap_key:
@@ -30027,14 +30056,14 @@ def _sicoe_by_item_for_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[s
     if not cap_raw:
         return {}
     cap_key = _dash_norm_capitulo_key_py(cap_raw)
-    cache_key = f"sicoe_by_item_cap:{int(contrato_id)}:{cap_key}"
+    cache_key = f"sicoe_by_item_cap_v3:{int(contrato_id)}:{cap_key}"
     now = time.time()
     with _DASH_AGG_CACHE_LOCK:
         hit = _DASH_AGG_CACHE.get(cache_key)
         if hit and now - hit[0] < _DASH_AGG_CACHE_TTL_SEC:
             return hit[1]
 
-    full = _dash_agg_cache_get("sicoe_by_item_v2", contrato_id)
+    full = _dash_agg_cache_get("sicoe_by_item_v3", contrato_id)
     if full is not None:
         filtered = {k: v for k, v in full.items() if k[0] == cap_key}
         if filtered:
@@ -30046,7 +30075,7 @@ def _sicoe_by_item_for_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[s
     if sicoe_by:
         return sicoe_by
 
-    full = _dash_agg_cache_get("sicoe_by_item_v2", contrato_id)
+    full = _dash_agg_cache_get("sicoe_by_item_v3", contrato_id)
     if full is not None:
         filtered = {k: v for k, v in full.items() if k[0] == cap_key}
         with _DASH_AGG_CACHE_LOCK:
@@ -30945,7 +30974,7 @@ def dashboard_resumen_obra(
 ):
     vista_n = parse_dash_vista(vista)
     cache_key = (
-        "dashboard_resumen_endpoint_v3",
+        "dashboard_resumen_endpoint_v4_cd",
         int(contrato_id),
         vista_n,
         _dashboard_resumen_user_cache_key(current_user),
@@ -30954,18 +30983,67 @@ def dashboard_resumen_obra(
     if cached is not None:
         return cached
     try:
+        # Fuente canónica de total_cobrado / por_acta: scan Python (ítem+prerreq+SUM CD).
+        # La RPC SQL histórica usaba cant×listado VU sin prerrequisitos.
+        sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id)
+        total_cobrado_can = sum(float(sg.get("ap_c") or 0) for sg in sicoe_by.values())
+
+        def _actas_map_can():
+            return supabase.table("actas").select("id, numero_rpo")\
+                .eq("contrato_id", contrato_id).execute().data
+        acta_rows_can = supabase_execute(_actas_map_can) or []
+        nr_to_aid_can = {
+            a.get("numero_rpo"): a.get("id")
+            for a in acta_rows_can
+            if a.get("id") is not None and a.get("numero_rpo") is not None
+        }
+        por_acta_can = []
+        for nr, aid in sorted(nr_to_aid_can.items(), key=lambda x: float(x[0]) if str(x[0]).replace('.','',1).isdigit() else 0, reverse=True):
+            by_a = _dashboard_scan_sicoe_by_item(contrato_id, acta_id=int(aid))
+            por_acta_can.append({
+                "acta": nr,
+                "cobrado": round(sum(float(sg.get("ap_c") or 0) for sg in by_a.values()), 2),
+            })
+
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         try:
             na = _get_niveles_activos_contrato(contrato_id)
             hit = _fetch_dashboard_resumen_sicoe_agg(contrato_id, campo_max, na)
             if hit is not None and isinstance(hit.get("comparativo_capitulos"), list):
+                hit["total_cobrado"] = round(total_cobrado_can, 2)
+                hit["por_acta"] = por_acta_can
+                hit["criterio_cobrado"] = (
+                    "sicoe_costo_aprobado_nivel: ítem + prerrequisitos + nmax Aprobado; "
+                    "SUM(costo_directo)"
+                )
+                # Reconstruir cobrado por capítulo del scan canónico
+                obra_caps_can: Dict[str, float] = {}
+                for (ck, _ik), sg in sicoe_by.items():
+                    cob = float(sg.get("ap_c") or 0)
+                    if cob:
+                        obra_caps_can[ck] = obra_caps_can.get(ck, 0.0) + cob
+                for row in hit.get("comparativo_capitulos") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    cap = row.get("capitulo")
+                    ck = _dash_norm_capitulo_key_py(cap)
+                    cob = float(obra_caps_can.get(ck) or 0)
+                    row["cobrado"] = round(cob, 2)
+                    if "presupuesto" in row or "claracore" in row:
+                        ppto_v = float(row.get("presupuesto") or row.get("claracore") or 0)
+                        row["delta"] = round(ppto_v - cob, 2)
+                ppto_total = float(hit.get("total_presupuesto") or 0)
+                hit["delta"] = round(ppto_total - total_cobrado_can, 2)
+                hit["consumo_pct"] = (
+                    round(total_cobrado_can / ppto_total * 100, 1) if ppto_total else 0
+                )
                 result = _dashboard_apply_vista_presupuesto(contrato_id, hit, vista, current_user)
                 _dashboard_response_cache_set(cache_key, result)
                 return result
         except Exception:
             pass
 
-        # 1. Obra aprobada: Σ cant × V.U. por ítem (nunca SUM(costo_directo) por línea).
+        # Fallback completo Python (sin RPC).
         def _actas_map():
             return supabase.table("actas").select("id, numero_rpo")\
                 .eq("contrato_id", contrato_id).execute().data
@@ -30973,22 +31051,17 @@ def dashboard_resumen_obra(
         acta_id_to_nr = {a["id"]: a.get("numero_rpo") for a in acta_rows if a.get("id") is not None}
         nr_to_aid = {v: k for k, v in acta_id_to_nr.items() if v is not None}
 
-        sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id)
-        total_cobrado = 0.0
+        total_cobrado = total_cobrado_can
         obra_caps: Dict[str, float] = {}
         for (ck, _ik), sg in sicoe_by.items():
             cob = float(sg.get("ap_c") or 0)
             if not cob:
                 continue
-            total_cobrado += cob
             obra_caps[ck] = obra_caps.get(ck, 0.0) + cob
 
-        acta_agg: Dict[Any, float] = {}
-        for nr, aid in nr_to_aid.items():
-            if aid is None:
-                continue
-            by_acta = _dashboard_scan_sicoe_by_item(contrato_id, acta_id=int(aid))
-            acta_agg[nr] = sum(float(sg.get("ap_c") or 0) for sg in by_acta.values())
+        acta_agg: Dict[Any, float] = {
+            row["acta"]: float(row["cobrado"]) for row in por_acta_can
+        }
 
         # 2. Presupuesto por capítulo
         def _ppto():
@@ -31110,11 +31183,11 @@ def _so_reg_en_cola_interventoria(reg: dict, contrato_id: int) -> bool:
 
 def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
     """
-    Por capítulo: costo/cant SICOE N3 aprobado, SICOE N3 no revisado (en cola),
+    Por capítulo: costo/cant SICOE aprobado nivel máx., SICOE en cola (no revisado),
     y presupuesto ClaraCore partido por columna revisado (aprobado vs resto).
-    SICOE: agrega por ítem (Σ cant × V.U., un redondeo) — nunca SUM(costo_directo).
+    SICOE aprobado: regla canónica sicoe_costo_aprobado_nivel (SUM costo_directo).
     """
-    cached = _dash_agg_cache_get("resumen_caps_v2", contrato_id)
+    cached = _dash_agg_cache_get("resumen_caps_v3_cd", contrato_id)
     if cached is not None:
         return cached
     sicoe_ap_c = defaultdict(float)
@@ -31163,7 +31236,7 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
         "ppto_ap_c": dict(ppto_ap_c),
         "ppto_nr_c": dict(ppto_nr_c),
     }
-    _dash_agg_cache_set("resumen_caps_v2", contrato_id, result)
+    _dash_agg_cache_set("resumen_caps_v3_cd", contrato_id, result)
     return result
 
 
@@ -31515,7 +31588,14 @@ def _dashboard_matriz_validacion_por_niveles(
     acta_id_filtro: Optional[int],
     niveles_activos: Optional[List[int]] = None,
 ) -> dict:
-    """Agrega matriz SICOE por cada nivel de validación activo del contrato (1..6)."""
+    """
+    Agrega matriz SICOE por cada nivel de validación activo del contrato (1..6).
+
+    Dinero = SUM(costo_directo) por línea (fallback cant×vlr vía costo_directo_linea).
+    Nivel máx. «Aprobado» coincide con sicoe_costo_aprobado_nivel (ítem + prerreqs).
+    """
+    from sicoe_costo_aprobado_nivel import costo_directo_linea
+
     na = sorted({int(x) for x in (niveles_activos or _get_niveles_activos_contrato(contrato_id)) if 1 <= int(x) <= 6})
     if not na:
         na = [1, 2, 3]
@@ -31533,7 +31613,7 @@ def _dashboard_matriz_validacion_por_niveles(
         return "no_revisado"
 
     def _acc_reg_en_matriz(Mroot: dict, reg: dict) -> None:
-        cd = float(reg.get("costo_directo") or 0)
+        cd = costo_directo_linea(reg)
         for n in na:
             col = _matriz_col_nivel(n)
             if n == n_min:
@@ -31586,7 +31666,7 @@ def _dashboard_matriz_validacion_por_niveles(
                 aid = reg.get("acta_rpo_id")
                 if aid is not None and aid == acta_id_filtro:
                     continue
-                cd = float(reg.get("costo_directo") or 0)
+                cd = costo_directo_linea(reg)
                 bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
                 Ox = ens_m if bloque == "ensayos" else obra_m
                 for n in na:
@@ -31647,7 +31727,7 @@ def dashboard_matriz_validacion_obra(
     Preferir función SQL dashboard_matriz_validacion_agg (rápido); si no existe, fallback en Python.
     """
     try:
-        matriz_key = ("dashboard_matriz_v2", int(contrato_id), bool(todo_contrato), acta_rpo)
+        matriz_key = ("dashboard_matriz_v3_cd", int(contrato_id), bool(todo_contrato), acta_rpo)
         cached_matriz = _dashboard_response_cache_get(matriz_key)
         if cached_matriz is not None:
             return cached_matriz
@@ -31660,8 +31740,10 @@ def dashboard_matriz_validacion_obra(
         payload_desde_sql = False
         niveles_activos = _get_niveles_activos_contrato(contrato_id)
         campo_max = _get_nivel_maximo_contrato(contrato_id)
-        # La RPC SQL lee niveles_activos del contrato (1–6); no limitar al trío clásico [1,2,3].
-        usar_sql_matriz = bool(niveles_activos) and all(1 <= int(n) <= 6 for n in niveles_activos)
+        # Preferir agregador Python (SUM costo_directo + prerrequisitos) hasta que la RPC SQL
+        # desplegada coincida con sicoe_costo_aprobado_nivel. Evita cant×MAX(VU) legacy.
+        usar_sql_matriz = False
+        _ = campo_max  # reserved for SQL path when re-enabled
 
         def _parse_rpc_matrix_raw(raw):
             if raw is None:
@@ -32034,6 +32116,8 @@ def _dashboard_pkid_tabla_obra_core(
     empty_m = _pkid_tabla_empty_metric
     agg_meta, agg_p_ap, agg_p_nr, agg_p_pd, agg_p_rj = _aggregate_pkid_ppto_rows(ppto)
 
+    from sicoe_costo_aprobado_nivel import costo_directo_linea
+
     agg_sicoe_ap: Dict[str, Any] = {}
     agg_sicoe_nr: Dict[str, Any] = {}
     agg_sicoe_pe: Dict[str, Any] = {}
@@ -32042,14 +32126,16 @@ def _dashboard_pkid_tabla_obra_core(
         pk_join = r.get("pk_ids") or {}
         pk_raw = pk_join.get("pk_id")
         pk = _dash_pk_disp_key_py(pk_raw) if pk_raw is not None and str(pk_raw).strip() != "" else _dash_pk_disp_key_py(r.get("pk_id_id"))
-        cd = float(r.get("costo_directo") or 0)
+        cd = costo_directo_linea(r)
         cq = cantidad_dashboard(float(r.get("cantidad_total") or 0))
         nfin = _matriz_validacion_norm_estado_nivel_final(r, contrato_id)
+        # Aprobado financiero: regla canónica (ítem + prerrequisitos + nmax).
         if nfin == "Aprobado":
-            if pk not in agg_sicoe_ap:
-                agg_sicoe_ap[pk] = empty_m()
-            agg_sicoe_ap[pk]["cant"] += cq
-            agg_sicoe_ap[pk]["costo"] += cd
+            if _registro_costo_aprobado_nivel_max(r, contrato_id):
+                if pk not in agg_sicoe_ap:
+                    agg_sicoe_ap[pk] = empty_m()
+                agg_sicoe_ap[pk]["cant"] += cq
+                agg_sicoe_ap[pk]["costo"] += cd
             continue
         if _so_reg_prereqs_activos_aprobados_antes_max(r, contrato_id):
             if nfin == "Pendiente":
@@ -32556,6 +32642,8 @@ def _build_pkid_tabla_item_export(
     empty_m = _pkid_tabla_empty_metric
     agg_meta, agg_p_ap, agg_p_nr, agg_p_pd, agg_p_rj = _aggregate_pkid_ppto_rows(ppto_rows)
 
+    from sicoe_costo_aprobado_nivel import costo_directo_linea
+
     agg_sicoe_ap: Dict[str, Any] = {}
     agg_sicoe_nr: Dict[str, Any] = {}
     agg_sicoe_pe: Dict[str, Any] = {}
@@ -32568,14 +32656,16 @@ def _build_pkid_tabla_item_export(
             if pk_raw is not None and str(pk_raw).strip() != ""
             else _dash_pk_disp_key_py(r.get("pk_id_id"))
         )
-        cd = float(r.get("costo_directo") or 0)
+        cd = costo_directo_linea(r)
         cq = cantidad_dashboard(float(r.get("cantidad_total") or 0))
         nfin = _matriz_validacion_norm_estado_nivel_final(r, contrato_id)
+        # Aprobado financiero: regla canónica (ítem + prerrequisitos + nmax).
         if nfin == "Aprobado":
-            if pk not in agg_sicoe_ap:
-                agg_sicoe_ap[pk] = empty_m()
-            agg_sicoe_ap[pk]["cant"] += cq
-            agg_sicoe_ap[pk]["costo"] += cd
+            if _registro_costo_aprobado_nivel_max(r, contrato_id):
+                if pk not in agg_sicoe_ap:
+                    agg_sicoe_ap[pk] = empty_m()
+                agg_sicoe_ap[pk]["cant"] += cq
+                agg_sicoe_ap[pk]["costo"] += cd
             continue
         if _so_reg_prereqs_activos_aprobados_antes_max(r, contrato_id):
             if nfin == "Pendiente":
@@ -34645,7 +34735,7 @@ def dashboard_capitulos_financiero_obra(
     vista_n = parse_dash_vista(vista)
     acta_id = _resolve_acta_rpo_id(contrato_id, acta_rpo) if acta_rpo is not None else None
     cache_key = (
-        "dashboard_capitulos_fin_v11",
+        "dashboard_capitulos_fin_v12_cd",
         int(contrato_id),
         vista_n,
         acta_rpo,
