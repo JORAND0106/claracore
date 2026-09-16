@@ -81,6 +81,7 @@ import {
   SICOE_LABELS_EXPORT,
   sicoePrettyCampoExport,
 } from './modules/sicoe-obra/sicoeExportCampos'
+import { downloadSicoeRegistrosExcel } from './modules/sicoe-obra/sicoeExportExcel'
 import {
   sicoeLocVacia,
   sicoeLocFromRegistro,
@@ -212,7 +213,6 @@ import ModuloSeguimiento from './modules/seguimiento/ModuloSeguimiento'
 import { accesoSeguimiento } from './modules/seguimiento/seguimientoPermisos'
 import ModuloRrhh, { accesoRrhh } from './modules/rrhh'
 import EmojiPicker from './EmojiPicker'
-import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import CompetenciaSelect from './components/CompetenciaSelect'
@@ -11063,88 +11063,12 @@ function ModuloSicoeObra({
         }
         return r?.[c] ?? ''
       }))
-      const hoy = new Date()
-      const fechaTxt = hoy.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
-      const horaTxt = hoy.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
-      const meta = exportMetaContrato || {}
-      const totalCols = Math.max(headers.length, 6)
-      const wb = new ExcelJS.Workbook()
-      const ws = wb.addWorksheet('SICOE Obra - Registros', {
-        views: [{ showGridLines: false }],
+      await downloadSicoeRegistrosExcel({
+        meta: exportMetaContrato || {},
+        headers,
+        bodyRows,
+        filename: `sicoe_obra_registros_${contrato_id ?? 'NA'}.xlsx`,
       })
-
-      ws.addRow(['CLARACORE - SICOE OBRA - EXPORTACION DE REGISTROS'])
-      ws.addRow([`Contrato: ${meta.numero || ''}`, '', '', '', '', `Generado: ${fechaTxt} ${horaTxt}`])
-      ws.addRow([`Contratista: ${meta.contratista || ''}`])
-      ws.addRow([`Interventoria: ${meta.interventoria || ''}`])
-      ws.addRow([`Objeto: ${meta.objeto || ''}`])
-      ws.addRow([])
-      ws.addRow(headers)
-      bodyRows.forEach(r => ws.addRow(r))
-
-      ws.mergeCells(1, 1, 1, totalCols)
-      ws.mergeCells(3, 1, 3, totalCols)
-      ws.mergeCells(4, 1, 4, totalCols)
-      ws.mergeCells(5, 1, 5, totalCols)
-
-      for (let c = 1; c <= totalCols; c += 1) {
-        ws.getColumn(c).width = c === 1 ? 24 : 18
-      }
-      ws.getRow(1).height = 28
-      ws.getRow(2).height = 22
-      ws.getRow(3).height = 20
-      ws.getRow(4).height = 20
-      ws.getRow(5).height = 20
-      ws.getRow(7).height = 22
-
-      const pastelTitle = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFDDEFF8' },
-      }
-      const pastelMeta = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFEEF7FB' },
-      }
-      const pastelHeader = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFE5F4FA' },
-      }
-
-      ws.getCell('A1').fill = pastelTitle
-      ws.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF0F2942' } }
-      ws.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' }
-
-      ws.getCell('A2').fill = pastelMeta
-      ws.getCell('F2').fill = pastelMeta
-      ws.getCell('A2').font = { bold: true, size: 11, color: { argb: 'FF1F4E70' } }
-      ws.getCell('F2').font = { bold: true, size: 11, color: { argb: 'FF1F4E70' } }
-
-      ;['A3', 'A4', 'A5'].forEach(addr => {
-        ws.getCell(addr).fill = pastelMeta
-        ws.getCell(addr).font = { bold: true, size: 11, color: { argb: 'FF1F4E70' } }
-      })
-
-      ws.getRow(7).eachCell(cell => {
-        cell.fill = pastelHeader
-        cell.font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
-        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
-      })
-
-      const buffer = await wb.xlsx.writeBuffer()
-      const blob = new Blob([buffer], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `sicoe_obra_registros_${contrato_id ?? 'NA'}.xlsx`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
       setExportModalOpen(false)
     } catch (e) {
       setExportError(e?.message || 'Error exportando Excel')
