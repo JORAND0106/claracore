@@ -522,6 +522,43 @@ def _fmt_fecha_notif(raw) -> str:
     return s
 
 
+def _try_email_asignacion_inmediata(
+    sb,
+    *,
+    destinatario_id: int,
+    remitente_id: int,
+    tipo: str,
+    titulo: str,
+    item_id,
+    fecha_vencimiento=None,
+    hora_vencimiento=None,
+    detalle: Optional[str] = None,
+    contexto: Optional[str] = None,
+    reasignacion: bool = False,
+) -> None:
+    """Correo institucional inmediato (SMTP contacto). Nunca tumba la operación."""
+    try:
+        from seguimiento_asignacion_email import enviar_email_asignacion_inmediata
+        enviar_email_asignacion_inmediata(
+            sb,
+            destinatario_id=int(destinatario_id),
+            remitente_id=int(remitente_id),
+            tipo=tipo,
+            titulo=titulo or "",
+            item_id=int(item_id),
+            fecha_vencimiento=str(fecha_vencimiento)[:10] if fecha_vencimiento else None,
+            hora_vencimiento=hora_vencimiento,
+            detalle=detalle,
+            contexto=contexto,
+            reasignacion=bool(reasignacion),
+        )
+    except Exception as exc:
+        _log.warning(
+            "email asignación %s item=%s dest=%s: %s",
+            tipo, item_id, destinatario_id, exc,
+        )
+
+
 def _notificar_compromiso_asignado(
     sb,
     *,
@@ -533,10 +570,13 @@ def _notificar_compromiso_asignado(
     item_id,
     acta: Optional[dict] = None,
     reasignacion: bool = False,
+    hora_vencimiento=None,
+    descripcion: Optional[str] = None,
 ) -> bool:
     """
     Aviso inmediato al asignado al crear (o reasignar) un compromiso.
     Independiente del estado del acta (borrador / realizada / firmada).
+    Incluye buzón + push y correo SMTP (contacto).
     """
     consec = (acta or {}).get("consecutivo")
     acta_txt = f"Acta Nº {consec}" if consec is not None else "un acta de Seguimiento"
@@ -555,7 +595,7 @@ def _notificar_compromiso_asignado(
         f"Revíselo en la bandeja de Seguimiento o en el widget de inicio."
     )
     slot = f"compromiso-{'reasign' if reasignacion else 'nuevo'}-{item_id}-{destinatario_id}"
-    return _notificar(
+    ok = _notificar(
         sb,
         destinatario_id=int(destinatario_id),
         remitente_id=int(remitente_id),
@@ -568,6 +608,20 @@ def _notificar_compromiso_asignado(
         push_tipo="seguimiento_compromiso",
         push_slot_key=slot,
     )
+    _try_email_asignacion_inmediata(
+        sb,
+        destinatario_id=int(destinatario_id),
+        remitente_id=int(remitente_id),
+        tipo="compromiso",
+        titulo=titulo_clean,
+        item_id=item_id,
+        fecha_vencimiento=fecha_vencimiento,
+        hora_vencimiento=hora_vencimiento,
+        detalle=descripcion,
+        contexto=f"Proveniente de {acta_txt}",
+        reasignacion=bool(reasignacion),
+    )
+    return ok
 
 
 def _norm_estado_gestion_val(raw: Optional[str], *, hecho: bool = False) -> str:
@@ -2860,6 +2914,8 @@ def _crear_un_compromiso(
             item_id=item["id"],
             acta=acta,
             reasignacion=False,
+            hora_vencimiento=hora,
+            descripcion=descripcion,
         )
     return item
 
@@ -3559,15 +3615,28 @@ def crear_tarea(sb, data: dict, user_id: int) -> dict:
     )
     if relacion == "asignacion":
         for a in campos.get("asignaciones") or []:
+            dest_uid = int(a["usuario_id"])
             _notificar(
                 sb,
-                destinatario_id=int(a["usuario_id"]),
+                destinatario_id=dest_uid,
                 remitente_id=user_id,
                 asunto=f"Tarea: {titulo[:80]}",
                 mensaje=f"Se le asignó formalmente la tarea «{titulo}».",
                 contrato_id=int(contrato_id),
                 entidad_tipo="seguimiento_tarea",
                 entidad_id=str(item["id"]),
+            )
+            _try_email_asignacion_inmediata(
+                sb,
+                destinatario_id=dest_uid,
+                remitente_id=user_id,
+                tipo="tarea",
+                titulo=titulo,
+                item_id=item["id"],
+                fecha_vencimiento=fv.isoformat() if fv else None,
+                hora_vencimiento=hora,
+                detalle=descripcion,
+                reasignacion=False,
             )
     elif relacion == "referencia" and referido_id:
         _notificar(
@@ -4233,6 +4302,8 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
             item_id=item_id,
             acta=acta,
             reasignacion=True,
+            hora_vencimiento=item.get("hora_vencimiento"),
+            descripcion=item.get("descripcion"),
         )
     else:
         _notificar(
@@ -4248,6 +4319,19 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
             entidad_tipo="seguimiento_item",
             entidad_id=str(item_id),
         )
+        if modo == "asignacion" and (item.get("origen") or "") == "tarea":
+            _try_email_asignacion_inmediata(
+                sb,
+                destinatario_id=dest_id,
+                remitente_id=user_id,
+                tipo="tarea",
+                titulo=item.get("titulo") or "",
+                item_id=item_id,
+                fecha_vencimiento=item.get("fecha_vencimiento"),
+                hora_vencimiento=item.get("hora_vencimiento"),
+                detalle=item.get("descripcion"),
+                reasignacion=True,
+            )
     return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
 
 
