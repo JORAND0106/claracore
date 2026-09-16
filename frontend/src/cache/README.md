@@ -21,7 +21,7 @@ Capa unificada en `vistaCache.js` para evitar refetch HTTP cuando la clave de vi
 
 ## TTL (ms)
 
-- **sicoe**: 10 min (navegación drill / reentrada módulo)
+- **sicoe**: 10 min (solo stack de navegación Atrás / rehidratación visual; **no** sustituye búsqueda en red)
 - **presupuesto_nav**: 8 min (volver a capítulo/ítem visitado)
 - **presupuesto_live**: 2 s (post-escritura / colaboración)
 - **dashboard**: 5 min
@@ -34,6 +34,7 @@ Capa unificada en `vistaCache.js` para evitar refetch HTTP cuando la clave de vi
 | Guardar/editar reporte SICOE | `invalidateSicoeVistaCache(contratoId)` + refetch |
 | Validación masiva / reversión SICOE | `invalidateSicoeVistaCache` + refetch |
 | Limpiar filtros SICOE | `sicoeClearNavegacion` + `invalidateSicoeVistaCache` |
+| Realtime `so_reportes` (grilla) | `invalidateSicoeVistaCache` + `buscarReportes` |
 | Guardar presupuesto (`_lastWriteAtRef`) | Borra `_pptoCachePorCap` del capítulo afectado; TTL live 2 s |
 | Limpiar filtros / búsqueda presupuesto | `invalidarCachePresupuestoContrato()` (grilla + panel + capítulos) |
 | Cambiar vista dashboard | `invalidateDashboardVistaCache` |
@@ -43,7 +44,13 @@ Capa unificada en `vistaCache.js` para evitar refetch HTTP cuando la clave de vi
 
 1. Tras `ejecutarBusquedaSicoeCompleta` exitosa → `sicoeSetVistaCache` + stack por contrato.
 2. `volverPanelAnterior` → `sicoePopNavegacion`; si hay entrada anterior, restaura sin red.
-3. Miss → intenta `sicoeGetVistaCache` con bundle calculado; si miss → fetch habitual.
+3. Sin stack → refetch en red (no se sirve la entrada TTL de `sicoeGetVistaCache` como fuente de verdad).
+
+## SICOE — frescura (búsqueda / reentrada)
+
+- `sicoeEjecutarBusquedaAhora` **siempre** llama a red (`ejecutarBusquedaSicoeCompleta`); no short-circuit por caché.
+- Reentrada con filtros de sesión: puede pintar caché al instante (SWR) y **siempre** refetch en red si hay conectividad.
+- Motivo: la caché en memoria (TTL 10 min) hacía que dos usuarios con el mismo rol vieran grillas distintas hasta Ctrl+Shift+R.
 
 ## SICOE — Realtime (optimizado)
 
@@ -61,15 +68,16 @@ Capa unificada en `vistaCache.js` para evitar refetch HTTP cuando la clave de vi
 
 ## Pruebas manuales (contrato grande ~45K)
 
-1. **SICOE Atrás**: Filtrar → capítulo → ítem → **Atrás** → Network sin `/buscar` ni `/analisis`; UI &lt; 200 ms.
-2. **SICOE reentrada**: Misma búsqueda → otro módulo → volver SICOE → sin refetch si TTL ok.
-3. **SICOE Realtime**: Validar línea en otro usuario → grilla se actualiza sin tormenta de `/analisis`.
-4. **Presupuesto**: Capítulo con muchos ítems → ítem → **Atrás** → grilla capítulo desde cache (8 min).
-5. **Presupuesto panel**: Buscar → capítulo → **Atrás** → panel sin segundo GET validación.
-6. **Dashboard**: Entrar → drill capítulo → salir → reentrar en 5 min → KPIs + drill desde cache.
-7. **Programación**: Cargar mapa → SICOE → volver Programación → mapa/estructura/actividades sin refetch inicial.
-8. **Mutación**: Validar una línea → siguiente búsqueda debe ir a red (cache invalidada).
-9. **Offline**: Modo offline sigue usando IndexedDB; cache no interfiere.
+1. **SICOE Atrás**: Filtrar → capítulo → ítem → **Atrás** → Network sin `/buscar` ni `/analisis`; UI &lt; 200 ms (stack).
+2. **SICOE reentrada**: Misma búsqueda → otro módulo → volver SICOE → UI puede pintar caché y **sí** refetch `/buscar`+`/analisis` en red.
+3. **SICOE Realtime**: Validar línea en otro usuario → grilla se actualiza sin tormenta de `/analisis`; caché de vista invalidada.
+4. **SICOE consistencia**: Dos usuarios mismo rol/filtros → misma grilla sin Ctrl+Shift+R (no depender de caché TTL como fuente de verdad).
+5. **Presupuesto**: Capítulo con muchos ítems → ítem → **Atrás** → grilla capítulo desde cache (8 min).
+6. **Presupuesto panel**: Buscar → capítulo → **Atrás** → panel sin segundo GET validación.
+7. **Dashboard**: Entrar → drill capítulo → salir → reentrar en 5 min → KPIs + drill desde cache.
+8. **Programación**: Cargar mapa → SICOE → volver Programación → mapa/estructura/actividades sin refetch inicial.
+9. **Mutación**: Validar una línea → siguiente búsqueda debe ir a red (cache invalidada).
+10. **Offline**: Modo offline sigue usando IndexedDB; cache no interfiere.
 
 ## Tests unitarios
 
