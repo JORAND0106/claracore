@@ -469,7 +469,7 @@ export default function TrabajadorFormSheet({
                 </SheetField>
               ) : (
                 <SheetField label="Salario" labelStyle={lbl} valueStyle={valCell}>
-                  <span style={{ color: tTok.textMuted }}>Restringido al cargo Administrativo</span>
+                  <span style={{ color: tTok.textMuted }}>Restringido al rol Administrativo</span>
                 </SheetField>
               )}
               <SheetField label="Periodicidad" labelStyle={lbl} valueStyle={valCell}>

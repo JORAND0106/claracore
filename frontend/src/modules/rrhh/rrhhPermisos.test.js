@@ -69,11 +69,18 @@ describe('rrhhPermisos', () => {
     assert.equal(permisoRrhh(u, 'editar', 10), false)
   })
 
-  it('Administrativo ve salario y entra al módulo', () => {
-    const a = accesoRrhh({ cargo_nombre: 'Administrativo', permisos: [] }, 1)
+  it('ROL Administrativo ve salario y entra al módulo', () => {
+    const a = accesoRrhh({ rol_nombre: 'Administrativo', cargo_nombre: 'Residente', permisos: [] }, 1)
     assert.equal(a.ver, true)
     assert.equal(a.verSalario, true)
     assert.equal(a.esAdministrativo, true)
+  })
+
+  it('cargo Administrativo ya no otorga acceso (usar rol)', () => {
+    const a = accesoRrhh({ cargo_nombre: 'Administrativo', permisos: [], contrato_id: 10 }, 10)
+    assert.equal(a.ver, false)
+    assert.equal(a.verSalario, false)
+    assert.equal(a.esAdministrativo, false)
   })
 
   it('Residente con Ver no ve salario', () => {
