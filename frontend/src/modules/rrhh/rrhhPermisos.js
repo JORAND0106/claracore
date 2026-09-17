@@ -1,5 +1,8 @@
 /**
  * Permisos Recursos Humanos — fila «Recursos Humanos» (legado «RRHH») en Control de accesos.
+ *
+ * El ROL «Administrativo» (tabla roles) ve salarios, nómina y liquidación, y tiene
+ * acceso amplio a módulos (inyectado en login/me). No confundir con un cargo.
  */
 import { esDesarrolladorUsuario, permisoFuncionContrato } from '../../utils/permisosContrato.js'
 
@@ -15,6 +18,14 @@ const TODOS = {
   exportar: true,
 }
 
+function _norm(txt) {
+  return String(txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
 function permisoFila(usuario, contratoId) {
   return (
     permisoFuncionContrato(usuario, RRHH_FUNCION, contratoId)
@@ -24,40 +35,42 @@ function permisoFila(usuario, contratoId) {
   )
 }
 
+/** ROL Administrativo (tabla `roles`), no cargo. */
+export function esRolAdministrativoUsuario(usuario) {
+  const rol = _norm(usuario?.rol_nombre || usuario?.rol)
+  return rol === 'administrativo'
+}
+
+/** @deprecated Usar esRolAdministrativoUsuario — alias de compatibilidad. */
 export function esAdministrativoUsuario(usuario) {
-  const cargo = String(usuario?.cargo_nombre || usuario?.cargo || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-  return cargo === 'administrativo'
+  return esRolAdministrativoUsuario(usuario)
 }
 
 export function esAdministradorUsuario(usuario) {
-  const cargo = String(usuario?.cargo_nombre || usuario?.cargo || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-  return cargo === 'administrador'
+  return _norm(usuario?.cargo_nombre || usuario?.cargo) === 'administrador'
 }
 
 export function puedeVerSalarioRrhh(usuario) {
-  return esDesarrolladorUsuario(usuario) || esAdministrativoUsuario(usuario) || esAdministradorUsuario(usuario)
+  return (
+    esDesarrolladorUsuario(usuario)
+    || esRolAdministrativoUsuario(usuario)
+    || esAdministradorUsuario(usuario)
+  )
 }
 
 export function permisoRrhh(usuario, accion, contratoId) {
   if (esDesarrolladorUsuario(usuario)) return true
+  if (esRolAdministrativoUsuario(usuario)) return true
   const cid = contratoId ?? usuario?.contrato_id
   const p = permisoFila(usuario, cid)
-  if (p && p[accion]) return true
-  return esAdministrativoUsuario(usuario)
+  return !!(p && p[accion])
 }
 
 export function accesoRrhh(usuario, contratoId) {
   const esDev = esDesarrolladorUsuario(usuario)
   const cid = contratoId ?? usuario?.contrato_id
   const verSalario = puedeVerSalarioRrhh(usuario)
+  const esAdminRol = esRolAdministrativoUsuario(usuario)
   if (esDev) {
     return {
       ...TODOS,
@@ -68,12 +81,7 @@ export function accesoRrhh(usuario, contratoId) {
       verSalario: true,
     }
   }
-  const cargo = String(usuario?.cargo_nombre || usuario?.cargo || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-  const esAdmin = cargo === 'administrador'
+  const esAdminCargo = esAdministradorUsuario(usuario)
   return {
     ver: permisoRrhh(usuario, 'ver', cid),
     crear: permisoRrhh(usuario, 'crear', cid),
@@ -83,8 +91,8 @@ export function accesoRrhh(usuario, contratoId) {
     exportar: permisoRrhh(usuario, 'exportar', cid),
     bloqueado: false,
     esDesarrollador: false,
-    esAdministrativo: esAdministrativoUsuario(usuario),
-    puedeAdminCatalogo: esAdmin || permisoRrhh(usuario, 'editar', cid),
+    esAdministrativo: esAdminRol,
+    puedeAdminCatalogo: esAdminCargo || permisoRrhh(usuario, 'editar', cid),
     verSalario,
   }
 }

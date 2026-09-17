@@ -6911,11 +6911,14 @@ def login(request: Request, body: LoginRequest):
         funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
     # Desarrollador: acceso total (sin depender de la matriz por función).
+    # ROL Administrativo: mismo alcance de módulos que el resto de roles de obra
+    # (más salarios/nómina vía rrhhPermisos / tiene_permiso_rrhh).
     es_dev_login = (
         (cargo_nombre or "").strip().lower() == "desarrollador"
         or (rol_nombre or "").strip().lower() == "desarrollador"
     )
-    if es_dev_login:
+    es_rol_admin_login = (rol_nombre or "").strip().lower() == "administrativo"
+    if es_dev_login or es_rol_admin_login:
         # Asegura «Seguimiento» (y demás requeridas) en `funciones` para filas sintéticas.
         try:
             funciones_rows = _ensure_funciones_requeridas()
@@ -7624,11 +7627,13 @@ def get_mi_usuario(
         except Exception:
             permisos_raw = []
     # Desarrollador: acceso total (sin depender de la matriz por función).
+    # ROL Administrativo: mismo alcance de módulos que el resto de roles de obra.
     es_dev_me = (
         (cargo_nombre or "").strip().lower() == "desarrollador"
         or (rol_nombre or "").strip().lower() == "desarrollador"
     )
-    if es_dev_me:
+    es_rol_admin_me = (rol_nombre or "").strip().lower() == "administrativo"
+    if es_dev_me or es_rol_admin_me:
         try:
             funciones_rows = _ensure_funciones_requeridas(sb)
         except Exception:

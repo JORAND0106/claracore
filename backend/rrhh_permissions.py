@@ -39,10 +39,10 @@ def _es_desarrollador_seguro(current_user) -> bool:
     return cargo == "desarrollador" or rol == "desarrollador"
 
 
-def _es_administrativo_seguro(current_user) -> bool:
-    """Cargo Administrativo — acceso pleno a RRHH (alineado con frontend)."""
-    cargo = _norm(current_user.get("cargo_nombre") or current_user.get("cargo") or "")
-    return cargo == "administrativo"
+def _es_rol_administrativo(current_user) -> bool:
+    """ROL Administrativo (tabla roles) — salarios, nómina, liquidación + acceso RRHH."""
+    rol = _norm(current_user.get("rol_nombre") or current_user.get("rol") or "")
+    return rol == "administrativo"
 
 
 def _es_funcion_rrhh(row: dict) -> bool:
@@ -132,7 +132,7 @@ def tiene_permiso_rrhh(
 ) -> bool:
     if _es_desarrollador_seguro(current_user):
         return True
-    if _es_administrativo_seguro(current_user):
+    if _es_rol_administrativo(current_user):
         return True
     return _cargo_permiso_rrhh(current_user, accion, contrato_id)
 
