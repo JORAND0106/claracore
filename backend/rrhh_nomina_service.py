@@ -927,3 +927,21 @@ def download_liquidacion_pdf(
         raise ValueError("PDF de liquidación no disponible.")
     data = download_blob_bytes_private(path)
     return data, liq.get("pdf_nombre") or f"liquidacion_{liq_id}.pdf"
+
+
+def purgar_nominas_prueba(sb, contrato_id: int) -> dict:
+    """Eliminación definitiva de nóminas del contrato (solo pruebas Desarrollador)."""
+    cid = int(contrato_id)
+    items = sb.table(_TABLE_ITEMS).delete().eq("contrato_id", cid).execute()
+    noms = sb.table(_TABLE_NOM).delete().eq("contrato_id", cid).execute()
+    return {
+        "items_eliminados": len(items.data or []),
+        "nominas_eliminadas": len(noms.data or []),
+    }
+
+
+def purgar_liquidaciones_prueba(sb, contrato_id: int) -> dict:
+    """Eliminación definitiva de liquidaciones del contrato (solo pruebas Desarrollador)."""
+    cid = int(contrato_id)
+    liqs = sb.table(_TABLE_LIQ).delete().eq("contrato_id", cid).execute()
+    return {"liquidaciones_eliminadas": len(liqs.data or [])}

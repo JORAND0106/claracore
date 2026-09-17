@@ -38,8 +38,14 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const api = useMemo(() => (cid && token ? createRrhhApi(cid, token) : null), [cid, token])
 
   const [items, setItems] = useState([])
+  const [grupos, setGrupos] = useState([])
+  const [empresaSel, setEmpresaSel] = useState(null)
+  const [page, setPage] = useState(0)
+  const [total, setTotal] = useState(0)
+  const PAGE = 50
   const [loading, setLoading] = useState(false)
   const [filtro, setFiltro] = useState('')
+  const [qAplicado, setQAplicado] = useState('')
   const [msg, setMsg] = useState(null)
   const [empresas, setEmpresas] = useState([])
   const [catalogo, setCatalogo] = useState({})
@@ -63,24 +69,57 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     if (!api || !permisos.ver) return
     setLoading(true)
     try {
-      const [trab, emp, cat] = await Promise.all([
-        api.listTrabajadores({ q: filtro || undefined }),
+      const [emp, cat, res] = await Promise.all([
         api.listEmpresas(),
         api.listCatalogoOpciones(),
+        api.resumenEmpresas(),
       ])
-      setItems(trab?.items || [])
       setEmpresas(emp?.opciones || [])
       setCatalogo(cat?.categorias || {})
+      setGrupos(res?.grupos || [])
     } catch (e) {
       flash('error', e.message || 'No se pudo cargar Recursos Humanos.')
     } finally {
       setLoading(false)
     }
-  }, [api, permisos.ver, filtro, flash])
+  }, [api, permisos.ver, flash])
+
+  const cargarDetalle = useCallback(async () => {
+    if (!api || !permisos.ver || !empresaSel?.empresa_key || seccionModulo !== 'documentacion') {
+      return
+    }
+    setLoading(true)
+    try {
+      const trab = await api.listTrabajadores({
+        q: qAplicado || undefined,
+        empresa_key: empresaSel.empresa_key,
+        limit: PAGE,
+        offset: page * PAGE,
+      })
+      setItems(trab?.items || [])
+      setTotal(trab?.total || 0)
+    } catch (e) {
+      flash('error', e.message || 'No se pudo cargar la grilla.')
+    } finally {
+      setLoading(false)
+    }
+  }, [api, permisos.ver, empresaSel, qAplicado, page, flash, seccionModulo])
 
   useEffect(() => {
     cargar()
   }, [cargar])
+
+  useEffect(() => {
+    cargarDetalle()
+  }, [cargarDetalle])
+
+  useEffect(() => {
+    if (seccionModulo !== 'nomina' && seccionModulo !== 'liquidacion') return
+    if (!api || !permisos.ver) return
+    api.listTrabajadores({ limit: 200, offset: 0 }).then((trab) => {
+      setItems(trab?.items || [])
+    }).catch(() => {})
+  }, [seccionModulo, api, permisos.ver])
 
   const addCatalogValue = useCallback(async (categoria, valor) => {
     if (!api) return
@@ -236,6 +275,23 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       await cargar()
       await abrirDetalle(created)
     } catch (e) {
+      if (e.codigo === 'reingreso' && e.trabajador?.id) {
+        const nombre = nombreCompleto(e.trabajador)
+        if (window.confirm(`Ya existe ${nombre} como retirado. ¿Actualizar ese registro (reingreso) en lugar de crear uno nuevo? Se conservarán datos personales y afiliaciones; deberá cargar la documentación laboral del nuevo ciclo.`)) {
+          try {
+            const updated = await api.reingresarTrabajador(e.trabajador.id, payloadFromForm(crearForm))
+            await persistMedia(updated.id, crearForm)
+            flash('success', `Reingreso registrado (ciclo ${updated.ciclo_documental || 2}). Cargue la documentación laboral del nuevo ingreso.`)
+            setShowCrear(false)
+            setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
+            await cargar()
+            await abrirDetalle(updated)
+          } catch (err) {
+            flash('error', err.message || 'No se pudo completar el reingreso.')
+          }
+        }
+        return
+      }
       flash('error', e.message || 'No se pudo registrar.')
     } finally {
       setBusy(false)
@@ -350,8 +406,10 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
         {[
           { id: 'documentacion', label: 'Documentación' },
-          { id: 'nomina', label: 'Nómina' },
-          { id: 'liquidacion', label: 'Liquidación' },
+          ...(permisos.verSalario ? [
+            { id: 'nomina', label: 'Nómina' },
+            { id: 'liquidacion', label: 'Liquidación' },
+          ] : []),
         ].map((sec) => (
           <button
             key={sec.id}
@@ -384,7 +442,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         </div>
       )}
 
-      {seccionModulo === 'nomina' && (
+      {seccionModulo === 'nomina' && permisos.verSalario && (
         <NominaPanel
           api={api}
           permisos={permisos}
@@ -396,7 +454,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         />
       )}
 
-      {seccionModulo === 'liquidacion' && (
+      {seccionModulo === 'liquidacion' && permisos.verSalario && (
         <LiquidacionPanel
           api={api}
           permisos={permisos}
@@ -411,68 +469,156 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
       {seccionModulo === 'documentacion' && (
         <>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {empresaSel && (
+          <button
+            type="button"
+            style={S.btnGhost}
+            onClick={() => { setEmpresaSel(null); setPage(0); setItems([]); }}
+          >
+            ← Empresas
+          </button>
+        )}
         <input
           style={{ ...S.input, maxWidth: 360 }}
           placeholder="Buscar por nombre, documento, cargo o empresa…"
           value={filtro}
           onChange={(e) => setFiltro(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              setPage(0)
+              setQAplicado(filtro)
+            }
+          }}
         />
-        <button type="button" style={S.btnGhost} onClick={cargar}>Actualizar</button>
+        <button
+          type="button"
+          style={S.btnGhost}
+          onClick={() => { setPage(0); setQAplicado(filtro); cargar(); }}
+        >
+          Actualizar
+        </button>
       </div>
-      <div style={{
-        flex: 1,
-        minHeight: 0,
-        overflow: 'auto',
-        background: tTok.bgCard,
-        border: `1px solid ${sheetUi.border}`,
-        borderRadius: 8,
-        ...sheetCssVars,
-      }}>
-        <table style={{ ...sheetUi.sheetTable, tableLayout: 'auto' }}>
-          <thead>
-            <tr>
-              <th style={sheetUi.th}>Trabajador</th>
-              <th style={sheetUi.th}>Documento</th>
-              <th style={sheetUi.th}>Cargo</th>
-              <th style={sheetUi.th}>Empresa</th>
-              <th style={sheetUi.th}>Salario</th>
-              <th style={sheetUi.th}>Estado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr><td style={sheetUi.td} colSpan={6}>Cargando…</td></tr>
-            )}
-            {!loading && items.length === 0 && (
-              <tr>
-                <td style={sheetUi.td} colSpan={6}>
-                  No hay colaboradores registrados. Use «Registrar colaborador» para iniciar la documentación de contratación.
-                </td>
-              </tr>
-            )}
-            {items.map((row) => (
-              <tr
-                key={row.id}
-                onClick={() => abrirDetalle(row)}
-                style={{ cursor: 'pointer' }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}10` }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-              >
-                <td style={sheetUi.td}>{nombreCompleto(row)}</td>
-                <td style={sheetUi.td}>{row.tipo_documento} {row.numero_documento}</td>
-                <td style={sheetUi.td}>{row.cargo_aspira || '—'}</td>
-                <td style={sheetUi.td}>
-                  {row.empresa_tipo === 'subcontratista' ? 'Sub · ' : 'Consorcio · '}
-                  {row.empresa_nombre}
-                </td>
-                <td style={sheetUi.td}>{fmtSalario(row.salario)}</td>
-                <td style={sheetUi.td}>{row.estado}</td>
-              </tr>
+      {!empresaSel && (
+        <div style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'auto',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+          gap: 12,
+          alignContent: 'start',
+        }}>
+          {loading && grupos.length === 0 && (
+            <div style={{ color: tTok.textMuted }}>Cargando empresas…</div>
+          )}
+          {!loading && grupos.length === 0 && (
+            <div style={{ color: tTok.textMuted, gridColumn: '1 / -1' }}>
+              No hay colaboradores registrados. Use «Registrar colaborador» para iniciar la documentación de contratación.
+            </div>
+          )}
+          {grupos.map((g) => (
+            <button
+              key={g.empresa_key}
+              type="button"
+              onClick={() => { setEmpresaSel(g); setPage(0); }}
+              style={{
+                textAlign: 'left',
+                background: tTok.bgCard,
+                border: `1px solid ${tTok.border}`,
+                borderRadius: 12,
+                padding: 16,
+                cursor: 'pointer',
+                color: tTok.text,
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-lg)', marginBottom: 4 }}>{g.nombre}</div>
+              <div style={{ fontSize: 'var(--cc-sm)', color: tTok.textMuted }}>
+                {g.empresa_tipo === 'subcontratista' ? 'Subcontratista' : 'Consorcio'} · {g.activos} activos / {g.total}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {empresaSel && (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{
+            background: tTok.bgCard,
+            border: `1px solid ${tTok.border}`,
+            borderRadius: 10,
+            padding: 14,
+          }}>
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>{empresaSel.nombre}</div>
+            <div style={{ fontSize: 'var(--cc-sm)', color: tTok.textMuted, marginBottom: 8 }}>
+              {empresaSel.activos} activos · {empresaSel.total} colaboradores
+              {permisos.verSalario && empresaSel.total_nomina != null ? ` · Nómina ${fmtSalario(empresaSel.total_nomina)}` : ''}
+            </div>
+            {(empresaSel.por_cargo || []).map((c) => (
+              <div key={c.cargo} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--cc-sm)', padding: '2px 0' }}>
+                <span>{c.cargo} ({c.cantidad})</span>
+                {permisos.verSalario && c.total_nomina != null ? <span>{fmtSalario(c.total_nomina)}</span> : null}
+              </div>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: 'auto',
+            background: tTok.bgCard,
+            border: `1px solid ${sheetUi.border}`,
+            borderRadius: 8,
+            ...sheetCssVars,
+          }}>
+            <table style={{ ...sheetUi.sheetTable, tableLayout: 'auto' }}>
+              <thead>
+                <tr>
+                  <th style={sheetUi.th}>Trabajador</th>
+                  <th style={sheetUi.th}>Documento</th>
+                  <th style={sheetUi.th}>Cargo</th>
+                  {permisos.verSalario && <th style={sheetUi.th}>Salario</th>}
+                  <th style={sheetUi.th}>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr><td style={sheetUi.td} colSpan={permisos.verSalario ? 5 : 4}>Cargando…</td></tr>
+                )}
+                {!loading && items.length === 0 && (
+                  <tr>
+                    <td style={sheetUi.td} colSpan={permisos.verSalario ? 5 : 4}>
+                      No hay colaboradores en esta empresa.
+                    </td>
+                  </tr>
+                )}
+                {items.map((row) => (
+                  <tr
+                    key={row.id}
+                    onClick={() => abrirDetalle(row)}
+                    style={{ cursor: 'pointer' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = `${tTok.primary}10` }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                  >
+                    <td style={sheetUi.td}>{nombreCompleto(row)}</td>
+                    <td style={sheetUi.td}>{row.tipo_documento} {row.numero_documento}</td>
+                    <td style={sheetUi.td}>{row.cargo_aspira || '—'}</td>
+                    {permisos.verSalario && <td style={sheetUi.td}>{fmtSalario(row.salario)}</td>}
+                    <td style={sheetUi.td}>{row.estado}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {total > PAGE && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
+              <button type="button" style={S.btnGhost} disabled={page <= 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Anterior</button>
+              <span style={{ fontSize: 'var(--cc-sm)', color: tTok.textMuted }}>
+                {page * PAGE + 1}–{Math.min(total, (page + 1) * PAGE)} de {total}
+              </span>
+              <button type="button" style={S.btnGhost} disabled={(page + 1) * PAGE >= total} onClick={() => setPage((p) => p + 1)}>Siguiente</button>
+            </div>
+          )}
+        </div>
+      )}
         </>
       )}
 
@@ -497,6 +643,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                 onAddCatalogValue={addCatalogValue}
                 api={api}
                 onMsg={(m) => flash(m.type, m.text)}
+                verSalario={permisos.verSalario}
               />
             </div>
             <div style={{
@@ -574,6 +721,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     trabajadorId={detalle.id}
                     docLocked={Boolean(detalle.doc_bloqueado)}
                     onMsg={(m) => flash(m.type, m.text)}
+                    verSalario={permisos.verSalario}
                   />
                   <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
                     {!editando && permisos.editar && (

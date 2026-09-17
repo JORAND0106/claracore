@@ -76,3 +76,11 @@ def test_pdf_incluye_marca_claracore_en_html_contexto():
     assert "Consorcio Demo" in html
     assert "pdf:pagenumber" in html
     assert "pdf:pagecount" in html
+
+
+def test_certificado_documental_incluye_ley_1581():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "assets", "rrhh_certificado_documental_plantilla.txt")
+    with open(path, encoding="utf-8") as fh:
+        txt = fh.read()
+    assert "Ley 1581 de 2012" in txt

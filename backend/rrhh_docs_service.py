@@ -638,6 +638,119 @@ def generar_contrato_laboral(
         except Exception:
             pass
         raise ValueError("No se pudo registrar el contrato generado.")
+    try:
+        from rrhh_ciclo_service import aplicar_campos_ciclo
+
+        aplicar_campos_ciclo(
+            sb,
+            contrato_id,
+            trabajador_id,
+            {
+                "tipo_contrato": tipo_nombre,
+                "fecha_fin_contrato": (fecha_fin or "").strip()[:10] or None,
+                "fecha_inicio": (fecha_inicio or "").strip()[:10] or None,
+            },
+            current_user,
+        )
+    except Exception as exc:
+        _log.debug("ciclo contrato sync: %s", exc)
+    return rows[0]
+
+
+def cargar_contrato_laboral(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+    *,
+    current_user,
+    archivo_bytes: bytes,
+    nombre_archivo: str,
+    mime_type: str,
+    tipo_contrato: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    es_otrosi: bool = False,
+) -> dict:
+    """Adjunta un contrato PDF/imagen elaborado fuera de la plataforma."""
+    trab = get_trabajador(sb, contrato_id, trabajador_id)
+    assert_documentacion_editable(trab)
+    if not archivo_bytes:
+        raise ValueError("El archivo del contrato está vacío.")
+    if len(archivo_bytes) > MAX_DOC_BYTES:
+        raise ValueError("El contrato supera el tamaño máximo permitido.")
+    mime = (mime_type or "application/pdf").split(";")[0].strip().lower()
+    if mime not in DOC_MIMES:
+        raise ValueError("Formato no permitido. Use PDF o imagen.")
+    tipo_nombre = (tipo_contrato or trab.get("tipo_contrato") or "Contrato laboral").strip()
+    prev = (
+        sb.table(_TABLE_CONTRATOS)
+        .select("id, version_num")
+        .eq("trabajador_id", int(trabajador_id))
+        .is_("eliminado_en", "null")
+        .order("version_num", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    next_ver = int(prev[0]["version_num"]) + 1 if prev else 1
+    vigentes = (
+        sb.table(_TABLE_CONTRATOS)
+        .select("id")
+        .eq("trabajador_id", int(trabajador_id))
+        .eq("vigente", True)
+        .is_("eliminado_en", "null")
+        .execute()
+        .data
+        or []
+    )
+    for v in vigentes:
+        sb.table(_TABLE_CONTRATOS).update({"vigente": False}).eq("id", v["id"]).execute()
+    safe_name = (nombre_archivo or f"contrato_cargado_v{next_ver}.pdf").strip()[:180]
+    blob_path = path_rrhh_contrato_laboral(int(contrato_id), int(trabajador_id), next_ver, safe_name)
+    upload_blob_private(blob_path, archivo_bytes, content_type=mime)
+    payload = {
+        "trabajador_id": int(trabajador_id),
+        "contrato_id": int(contrato_id),
+        "tipo_contrato_nombre": tipo_nombre,
+        "fecha_inicio": (fecha_inicio or "").strip()[:10] or None,
+        "fecha_fin": (fecha_fin or "").strip()[:10] or None,
+        "version_num": next_ver,
+        "vigente": True,
+        "azure_blob_path": blob_path,
+        "nombre_archivo": safe_name,
+        "mime_type": mime,
+        "tamano_bytes": len(archivo_bytes),
+        "estado": "generado",
+        "origen": "cargado",
+        "es_otrosi": bool(es_otrosi),
+        "created_by": _uid(current_user),
+    }
+    rows = sb.table(_TABLE_CONTRATOS).insert(payload).execute().data or []
+    if not rows:
+        try:
+            delete_blob_private(blob_path)
+        except Exception:
+            pass
+        raise ValueError("No se pudo registrar el contrato cargado.")
+    try:
+        from rrhh_ciclo_service import aplicar_campos_ciclo, marcar_renovacion_otrosi
+
+        aplicar_campos_ciclo(
+            sb,
+            contrato_id,
+            trabajador_id,
+            {
+                "tipo_contrato": tipo_nombre,
+                "fecha_fin_contrato": (fecha_fin or "").strip()[:10] or None,
+                "fecha_inicio": (fecha_inicio or "").strip()[:10] or None,
+            },
+            current_user,
+        )
+        if es_otrosi:
+            marcar_renovacion_otrosi(sb, contrato_id, trabajador_id, current_user, fecha_fin)
+    except Exception as exc:
+        _log.debug("ciclo contrato carga: %s", exc)
     return rows[0]
 
 

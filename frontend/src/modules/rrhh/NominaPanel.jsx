@@ -312,6 +312,27 @@ export default function NominaPanel({
 
       {tabSec === 'nominas' && (
         <>
+          {permisos.esDesarrollador && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                style={{ ...S.btnGhost, color: S.dangerColor }}
+                onClick={async () => {
+                  if (!window.confirm('¿Eliminar TODAS las nóminas de este contrato? Solo para pruebas.')) return
+                  try {
+                    const r = await api.purgarNominas()
+                    flash?.('success', `Nóminas eliminadas: ${r?.nominas_eliminadas ?? 0}`)
+                    setDetalle(null)
+                    await cargar()
+                  } catch (e) {
+                    flash?.('error', e.message || 'No se pudieron eliminar las nóminas.')
+                  }
+                }}
+              >
+                Eliminar nóminas (prueba)
+              </button>
+            </div>
+          )}
           {permisos.crear && (
             <div style={{
               display: 'flex',

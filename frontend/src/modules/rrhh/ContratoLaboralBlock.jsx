@@ -3,6 +3,7 @@ import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import CcDatePickerInput from '../../components/CcDatePickerInput'
 import { tFrom } from '../../theme/adminPanelTheme'
 import CatalogSelect from './CatalogSelect'
+import { PERIODICIDAD_MESES } from './rrhhCicloLogic'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 const iconBtn = (base, extra = {}) => ({
@@ -34,6 +35,8 @@ export default function ContratoLaboralBlock({
   canEdit = true,
   canExport = true,
   onMsg,
+  ciclo = {},
+  onCicloChange,
 }) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
@@ -49,6 +52,8 @@ export default function ContratoLaboralBlock({
     open: false, loading: false, error: '', nombre: '', mime: '', blobUrl: null,
   })
   const [previewUrl, setPreviewUrl] = useState(null)
+
+  const setCiclo = (key, val) => onCicloChange?.(key, val)
 
   const tipoOptions = (tiposContrato || [])
     .map((t) => (typeof t === 'string' ? t : t?.nombre))
@@ -101,6 +106,9 @@ export default function ContratoLaboralBlock({
         tipo_contrato: tipoContrato,
         fecha_inicio: fechaInicio || null,
         fecha_fin: fechaFin || null,
+        requiere_renovacion: !!ciclo.requiere_renovacion,
+        periodicidad_renovacion_meses: ciclo.requiere_renovacion ? Number(ciclo.periodicidad_renovacion_meses) || null : null,
+        periodo_prueba_dias: ciclo.periodo_prueba_dias ? Number(ciclo.periodo_prueba_dias) : null,
       })
       onMsg?.({ type: 'success', text: 'Contrato laboral generado en PDF.' })
       await cargar()
@@ -134,6 +142,26 @@ export default function ContratoLaboralBlock({
       await cargar()
     } catch (e) {
       onMsg?.({ type: 'error', text: e.message || 'No se pudo anular.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const cargarManual = async (file, esOtrosi = false) => {
+    if (!canEdit || !api || !file) return
+    setBusy(true)
+    try {
+      await api.cargarContratoLaboral(trabajadorId, {
+        archivo: file,
+        tipo_contrato: tipoContrato,
+        fecha_inicio: fechaInicio || null,
+        fecha_fin: fechaFin || null,
+        es_otrosi: esOtrosi,
+      })
+      onMsg?.({ type: 'success', text: esOtrosi ? 'Renovación / otrosí cargado.' : 'Contrato laboral adjuntado.' })
+      await cargar()
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudo adjuntar el contrato.' })
     } finally {
       setBusy(false)
     }
@@ -217,6 +245,83 @@ export default function ContratoLaboralBlock({
                 </div>
               </td>
             </tr>
+            <tr>
+              <td style={cellLabel}>Período de prueba (días)</td>
+              <td style={cell}>
+                <input
+                  type="number"
+                  min={1}
+                  style={{ ...ui.cellInp, maxWidth: 120 }}
+                  value={ciclo.periodo_prueba_dias || ''}
+                  disabled={!canEdit}
+                  onChange={(e) => setCiclo('periodo_prueba_dias', e.target.value)}
+                />
+              </td>
+            </tr>
+            <tr>
+              <td style={cellLabel}>Requiere renovación</td>
+              <td style={cell}>
+                <select
+                  style={{ ...ui.cellSelect, maxWidth: 140 }}
+                  value={ciclo.requiere_renovacion ? 'si' : 'no'}
+                  disabled={!canEdit}
+                  onChange={(e) => setCiclo('requiere_renovacion', e.target.value === 'si')}
+                >
+                  <option value="no">No</option>
+                  <option value="si">Sí</option>
+                </select>
+                {ciclo.requiere_renovacion && (
+                  <select
+                    style={{ ...ui.cellSelect, maxWidth: 160, marginLeft: 8 }}
+                    value={ciclo.periodicidad_renovacion_meses || ''}
+                    disabled={!canEdit}
+                    onChange={(e) => setCiclo('periodicidad_renovacion_meses', e.target.value)}
+                  >
+                    <option value="">Periodicidad…</option>
+                    {PERIODICIDAD_MESES.map((m) => (
+                      <option key={m} value={m}>{m} mes{m > 1 ? 'es' : ''}</option>
+                    ))}
+                  </select>
+                )}
+              </td>
+            </tr>
+            {canEdit && (
+              <tr>
+                <td style={cellLabel}>Adjuntar contrato</td>
+                <td style={cell}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <label style={{ ...S.btnGhost, cursor: busy ? 'not-allowed' : 'pointer' }}>
+                      Cargar PDF / imagen
+                      <input
+                        type="file"
+                        accept="application/pdf,image/jpeg,image/png,image/webp"
+                        hidden
+                        disabled={busy}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0]
+                          e.target.value = ''
+                          if (f) cargarManual(f, false)
+                        }}
+                      />
+                    </label>
+                    <label style={{ ...S.btnGhost, cursor: busy ? 'not-allowed' : 'pointer' }}>
+                      Cargar renovación / otrosí
+                      <input
+                        type="file"
+                        accept="application/pdf,image/jpeg,image/png,image/webp"
+                        hidden
+                        disabled={busy}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0]
+                          e.target.value = ''
+                          if (f) cargarManual(f, true)
+                        }}
+                      />
+                    </label>
+                  </div>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -242,6 +347,12 @@ export default function ContratoLaboralBlock({
                   {row.numero_contrato_laboral || '—'}
                   {row.vigente ? (
                     <span style={{ marginLeft: 6, color: tTok.primary, fontSize: 'var(--cc-caption)' }}>vigente</span>
+                  ) : null}
+                  {row.origen === 'cargado' ? (
+                    <span style={{ marginLeft: 6, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>cargado</span>
+                  ) : null}
+                  {row.es_otrosi ? (
+                    <span style={{ marginLeft: 6, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>otrosí</span>
                   ) : null}
                 </td>
                 <td style={ui.td}>{row.estado}</td>

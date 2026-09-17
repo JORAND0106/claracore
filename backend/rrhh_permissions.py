@@ -126,7 +126,10 @@ def tiene_permiso_rrhh(
 ) -> bool:
     if _es_desarrollador_seguro(current_user):
         return True
-    return _cargo_permiso_rrhh(current_user, accion, contrato_id)
+    if _cargo_permiso_rrhh(current_user, accion, contrato_id):
+        return True
+    # Fallback: cargo Administrativo opera RRHH si aún no hay fila en la matriz.
+    return es_administrativo_rrhh(current_user)
 
 
 def require_permiso_rrhh(
@@ -144,6 +147,27 @@ def require_permiso_rrhh(
 def es_desarrollador_rrhh(current_user) -> bool:
     """Acceso pleno fijo al panel de validación documental."""
     return _es_desarrollador_seguro(current_user)
+
+
+def es_administrativo_rrhh(current_user) -> bool:
+    cargo = _norm(current_user.get("cargo_nombre") or current_user.get("cargo") or "")
+    rol = _norm(current_user.get("rol_nombre") or current_user.get("rol") or "")
+    return cargo == "administrativo" or rol == "administrativo"
+
+
+def puede_ver_salario_rrhh(current_user) -> bool:
+    """Salario, Nómina y Liquidación: Administrativo, Desarrollador y Administrador."""
+    if _es_desarrollador_seguro(current_user) or es_admin_plataforma(current_user):
+        return True
+    return es_administrativo_rrhh(current_user)
+
+
+def require_ver_salario_rrhh(current_user) -> None:
+    if not puede_ver_salario_rrhh(current_user):
+        raise _http_exc(
+            403,
+            "La información salarial, Nómina y Liquidación está restringida al cargo Administrativo.",
+        )
 
 
 def es_admin_plataforma(current_user) -> bool:

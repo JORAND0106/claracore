@@ -24,18 +24,49 @@ function permisoFila(usuario, contratoId) {
   )
 }
 
+export function esAdministrativoUsuario(usuario) {
+  const cargo = String(usuario?.cargo_nombre || usuario?.cargo || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+  return cargo === 'administrativo'
+}
+
+export function esAdministradorUsuario(usuario) {
+  const cargo = String(usuario?.cargo_nombre || usuario?.cargo || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+  return cargo === 'administrador'
+}
+
+export function puedeVerSalarioRrhh(usuario) {
+  return esDesarrolladorUsuario(usuario) || esAdministrativoUsuario(usuario) || esAdministradorUsuario(usuario)
+}
+
 export function permisoRrhh(usuario, accion, contratoId) {
   if (esDesarrolladorUsuario(usuario)) return true
   const cid = contratoId ?? usuario?.contrato_id
   const p = permisoFila(usuario, cid)
-  return !!(p && p[accion])
+  if (p && p[accion]) return true
+  return esAdministrativoUsuario(usuario)
 }
 
 export function accesoRrhh(usuario, contratoId) {
   const esDev = esDesarrolladorUsuario(usuario)
   const cid = contratoId ?? usuario?.contrato_id
+  const verSalario = puedeVerSalarioRrhh(usuario)
   if (esDev) {
-    return { ...TODOS, bloqueado: false, esDesarrollador: true, puedeAdminCatalogo: true }
+    return {
+      ...TODOS,
+      bloqueado: false,
+      esDesarrollador: true,
+      esAdministrativo: false,
+      puedeAdminCatalogo: true,
+      verSalario: true,
+    }
   }
   const cargo = String(usuario?.cargo_nombre || usuario?.cargo || '')
     .normalize('NFD')
@@ -52,6 +83,8 @@ export function accesoRrhh(usuario, contratoId) {
     exportar: permisoRrhh(usuario, 'exportar', cid),
     bloqueado: false,
     esDesarrollador: false,
+    esAdministrativo: esAdministrativoUsuario(usuario),
     puedeAdminCatalogo: esAdmin || permisoRrhh(usuario, 'editar', cid),
+    verSalario,
   }
 }

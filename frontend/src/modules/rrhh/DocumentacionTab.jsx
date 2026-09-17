@@ -85,6 +85,13 @@ export default function DocumentacionTab({
         arl: editForm?.arl || null,
         cesantias: editForm?.cesantias || null,
         caja_compensacion: editForm?.caja_compensacion || null,
+        requiere_renovacion: !!editForm?.requiere_renovacion,
+        periodicidad_renovacion_meses: editForm?.requiere_renovacion
+          ? Number(editForm?.periodicidad_renovacion_meses) || null
+          : null,
+        periodo_prueba_dias: editForm?.periodo_prueba_dias === '' || editForm?.periodo_prueba_dias == null
+          ? null
+          : Number(editForm.periodo_prueba_dias),
       })
       const refs = [refSoporte, refIngreso, refAfiliacion]
       let files = 0
@@ -266,6 +273,12 @@ export default function DocumentacionTab({
           canEdit={canEdit}
           canExport={permisos.exportar || permisos.ver}
           onMsg={(m) => flash(m.type, m.text)}
+          ciclo={{
+            requiere_renovacion: !!editForm?.requiere_renovacion,
+            periodicidad_renovacion_meses: editForm?.periodicidad_renovacion_meses || '',
+            periodo_prueba_dias: editForm?.periodo_prueba_dias || '',
+          }}
+          onCicloChange={setField}
         />
       </div>
 

@@ -618,6 +618,65 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
     elif not partial:
         out["estado"] = "activo"
 
+    if "requiere_renovacion" in body or not partial:
+        out["requiere_renovacion"] = _parse_bool(body.get("requiere_renovacion"), False)
+    if "periodicidad_renovacion_meses" in body or not partial:
+        raw = body.get("periodicidad_renovacion_meses")
+        if raw in (None, ""):
+            out["periodicidad_renovacion_meses"] = None
+        else:
+            try:
+                meses = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError("Periodicidad de renovación inválida.") from None
+            if meses not in (1, 2, 3, 6, 12):
+                raise ValueError("Periodicidad de renovación inválida (1, 2, 3, 6 o 12 meses).")
+            out["periodicidad_renovacion_meses"] = meses
+        if out.get("requiere_renovacion") is False:
+            out["periodicidad_renovacion_meses"] = None
+    if "periodo_prueba_dias" in body or not partial:
+        raw = body.get("periodo_prueba_dias")
+        if raw in (None, ""):
+            out["periodo_prueba_dias"] = None
+            if not partial:
+                out["fecha_fin_periodo_prueba"] = None
+        else:
+            try:
+                dias = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError("Período de prueba inválido.") from None
+            if dias <= 0:
+                raise ValueError("El período de prueba debe ser mayor a 0.")
+            out["periodo_prueba_dias"] = dias
+            from rrhh_ciclo_logic import fecha_fin_periodo_prueba as _fin_prueba
+
+            ini = out.get("fecha_ingreso") or body.get("fecha_inicio") or body.get("fecha_ingreso")
+            fin = _fin_prueba(ini, dias)
+            out["fecha_fin_periodo_prueba"] = fin.isoformat() if fin else None
+    if "fecha_fin_contrato" in body:
+        ff = _trim(body.get("fecha_fin_contrato"), max_len=10)
+        out["fecha_fin_contrato"] = ff[:10] if ff else None
+    if "fecha_fin_periodo_prueba" in body:
+        fp = _trim(body.get("fecha_fin_periodo_prueba"), max_len=10)
+        out["fecha_fin_periodo_prueba"] = fp[:10] if fp else None
+    if "renovacion_otrosi_at" in body:
+        out["renovacion_otrosi_at"] = body.get("renovacion_otrosi_at")
+    if "ciclo_documental" in body:
+        try:
+            out["ciclo_documental"] = max(1, int(body.get("ciclo_documental") or 1))
+        except (TypeError, ValueError):
+            raise ValueError("Ciclo documental inválido.") from None
+    if "doc_bloqueado" in body:
+        out["doc_bloqueado"] = _parse_bool(body.get("doc_bloqueado"), False)
+    if "doc_validacion_estado" in body:
+        out["doc_validacion_estado"] = _trim(body.get("doc_validacion_estado"), max_len=20) or "pendiente"
+    if "doc_validacion_observacion" in body:
+        out["doc_validacion_observacion"] = _trim(body.get("doc_validacion_observacion"), max_len=4000)
+    if "doc_consolidado_blob_path" in body:
+        out["doc_consolidado_blob_path"] = body.get("doc_consolidado_blob_path")
+    if "doc_consolidado_nombre" in body:
+        out["doc_consolidado_nombre"] = body.get("doc_consolidado_nombre")
+
     if (
         "empresa_key" in body
         or "empresa_tipo" in body

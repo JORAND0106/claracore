@@ -67,6 +67,7 @@ export default function TrabajadorFormSheet({
   trabajadorId = null,
   docLocked = false,
   onMsg = null,
+  verSalario = true,
 }) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
@@ -455,16 +456,22 @@ export default function TrabajadorFormSheet({
               </td>
             </tr>
             <tr>
-              <SheetField label="Salario" labelStyle={lbl} valueStyle={valCell}>
-                <input
-                  style={{ ...ui.cellInp, textAlign: 'right' }}
-                  inputMode="numeric"
-                  placeholder="$ 0"
-                  value={f.salario ?? ''}
-                  disabled={!canEdit}
-                  onChange={(e) => setField('salario', formatSalarioInput(e.target.value))}
-                />
-              </SheetField>
+              {verSalario ? (
+                <SheetField label="Salario" labelStyle={lbl} valueStyle={valCell}>
+                  <input
+                    style={{ ...ui.cellInp, textAlign: 'right' }}
+                    inputMode="numeric"
+                    placeholder="$ 0"
+                    value={f.salario ?? ''}
+                    disabled={!canEdit}
+                    onChange={(e) => setField('salario', formatSalarioInput(e.target.value))}
+                  />
+                </SheetField>
+              ) : (
+                <SheetField label="Salario" labelStyle={lbl} valueStyle={valCell}>
+                  <span style={{ color: tTok.textMuted }}>Restringido al cargo Administrativo</span>
+                </SheetField>
+              )}
               <SheetField label="Periodicidad" labelStyle={lbl} valueStyle={valCell}>
                 <select
                   style={ui.cellSelect}
@@ -492,17 +499,19 @@ export default function TrabajadorFormSheet({
               </SheetField>
             </tr>
             <tr>
-              <SheetField label="Salario liquidable" labelStyle={lbl} valueStyle={valCell}>
-                <select
-                  style={ui.cellSelect}
-                  value={f.salario_liquidable !== false ? 'true' : 'false'}
-                  disabled={!canEdit}
-                  onChange={(e) => setField('salario_liquidable', e.target.value === 'true')}
-                >
-                  <option value="true">Sí</option>
-                  <option value="false">No</option>
-                </select>
-              </SheetField>
+              {verSalario ? (
+                <SheetField label="Salario liquidable" labelStyle={lbl} valueStyle={valCell}>
+                  <select
+                    style={ui.cellSelect}
+                    value={f.salario_liquidable !== false ? 'true' : 'false'}
+                    disabled={!canEdit}
+                    onChange={(e) => setField('salario_liquidable', e.target.value === 'true')}
+                  >
+                    <option value="true">Sí</option>
+                    <option value="false">No</option>
+                  </select>
+                </SheetField>
+              ) : null}
               <SheetField label="Subsidio transporte" labelStyle={lbl} valueStyle={valCell}>
                 <select
                   style={ui.cellSelect}

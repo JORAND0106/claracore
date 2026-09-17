@@ -2926,8 +2926,9 @@ app.include_router(catalogo_insumos_router)
 from seguimiento_routes import router as seguimiento_router
 app.include_router(seguimiento_router)
 
-from rrhh_routes import router as rrhh_router
+from rrhh_routes import router as rrhh_router, cron_router as rrhh_cron_router
 app.include_router(rrhh_router)
+app.include_router(rrhh_cron_router)
 
 from esquema_ia_routes import router as esquema_ia_router
 app.include_router(esquema_ia_router)

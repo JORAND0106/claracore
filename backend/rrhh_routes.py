@@ -8,13 +8,14 @@ import io
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from main import _require_contract_access, get_current_user, registrar_log, supabase
 from rrhh_docs_service import (
     catalogo_tipos_documento,
+    cargar_contrato_laboral,
     create_documento,
     download_contrato_generado,
     download_documento,
@@ -25,7 +26,24 @@ from rrhh_docs_service import (
     soft_delete_contrato_generado,
     soft_delete_documento,
 )
-from rrhh_permissions import require_permiso_rrhh, tiene_permiso_rrhh
+from rrhh_permissions import (
+    es_desarrollador_rrhh,
+    puede_ver_salario_rrhh,
+    require_permiso_rrhh,
+    require_ver_salario_rrhh,
+    tiene_permiso_rrhh,
+)
+from rrhh_ciclo_service import (
+    DocumentoActivoDuplicado,
+    ReingresoRequerido,
+    assert_alta_documento,
+    evaluar_alertas,
+    find_trabajador_por_documento,
+    list_trabajadores_liviano,
+    reingresar_trabajador,
+    resumen_empresas,
+    sanitizar_trabajador,
+)
 from rrhh_banco_ocr import ocr_certificacion_bancaria
 from rrhh_documentacion_service import (
     consolidar_documentacion,
@@ -52,6 +70,8 @@ from rrhh_nomina_service import (
     list_nomina_items,
     list_nominas,
     list_novedades,
+    purgar_liquidaciones_prueba,
+    purgar_nominas_prueba,
     regenerar_nomina_borrador,
     soft_delete_hora_extra,
     soft_delete_novedad,
@@ -65,7 +85,6 @@ from rrhh_service import (
     list_catalogo,
     list_catalogo_todos,
     list_empresas_contratantes,
-    list_trabajadores,
     set_trabajador_imagen,
     soft_delete_trabajador,
     update_trabajador,
@@ -133,6 +152,12 @@ class TrabajadorBody(BaseModel):
     empresa_nit: Optional[str] = None
     estado: Optional[str] = "activo"
     notas: Optional[str] = None
+    requiere_renovacion: Optional[bool] = None
+    periodicidad_renovacion_meses: Optional[int] = None
+    periodo_prueba_dias: Optional[int] = None
+    requiere_renovacion: Optional[bool] = None
+    periodicidad_renovacion_meses: Optional[int] = None
+    periodo_prueba_dias: Optional[int] = None
 
 
 class TrabajadorPatchBody(BaseModel):
@@ -175,6 +200,10 @@ class TrabajadorPatchBody(BaseModel):
     empresa_nit: Optional[str] = None
     estado: Optional[str] = None
     notas: Optional[str] = None
+    requiere_renovacion: Optional[bool] = None
+    periodicidad_renovacion_meses: Optional[int] = None
+    periodo_prueba_dias: Optional[int] = None
+    fecha_fin_contrato: Optional[str] = None
 
 
 class GenerarContratoBody(BaseModel):
@@ -183,6 +212,10 @@ class GenerarContratoBody(BaseModel):
     numero_contrato_laboral: Optional[str] = Field(None, max_length=80)
     fecha_inicio: Optional[str] = None
     fecha_fin: Optional[str] = None
+    requiere_renovacion: Optional[bool] = None
+    periodicidad_renovacion_meses: Optional[int] = None
+    periodo_prueba_dias: Optional[int] = None
+    es_otrosi: bool = False
 
 
 class ValidacionDocBody(BaseModel):
@@ -296,11 +329,52 @@ def route_list_trabajadores(
     contrato_id: int,
     q: Optional[str] = Query(None),
     estado: Optional[str] = Query(None),
+    empresa_key: Optional[str] = Query(None),
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
-    return {"items": list_trabajadores(supabase, contrato_id, q=q, estado=estado)}
+    ver_sal = puede_ver_salario_rrhh(current_user)
+    return list_trabajadores_liviano(
+        supabase,
+        contrato_id,
+        q=q,
+        estado=estado,
+        empresa_key=empresa_key,
+        limit=limit,
+        offset=offset,
+        ver_salario=ver_sal,
+    )
+
+
+@router.get("/{contrato_id}/trabajadores/resumen-empresas")
+def route_resumen_empresas(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    return resumen_empresas(supabase, contrato_id, ver_salario=puede_ver_salario_rrhh(current_user))
+
+
+@router.get("/{contrato_id}/trabajadores/por-documento")
+def route_por_documento(
+    contrato_id: int,
+    numero: str = Query(..., min_length=3),
+    tipo: str = Query("CC"),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    row = find_trabajador_por_documento(supabase, contrato_id, tipo, numero)
+    if not row:
+        return {"encontrado": False}
+    from rrhh_ciclo_logic import clasificar_documento_existente
+
+    return {
+        "encontrado": True,
+        "clasificacion": clasificar_documento_existente(row),
+        "trabajador": sanitizar_trabajador(row, ver_salario=puede_ver_salario_rrhh(current_user)),
+    }
 
 
 @router.post("/{contrato_id}/trabajadores")
@@ -311,8 +385,23 @@ def route_create_trabajador(
 ):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "crear", contrato_id)
+    payload = body.model_dump()
+    if not puede_ver_salario_rrhh(current_user):
+        payload.pop("salario", None)
     try:
-        row = create_trabajador(supabase, contrato_id, body.model_dump(), current_user)
+        assert_alta_documento(supabase, contrato_id, payload.get("tipo_documento") or "CC", payload.get("numero_documento") or "")
+        row = create_trabajador(supabase, contrato_id, payload, current_user)
+    except ReingresoRequerido as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "codigo": "reingreso",
+                "mensaje": "Ya existe un colaborador retirado con ese documento. Actualice el registro existente.",
+                "trabajador": sanitizar_trabajador(exc.trabajador, ver_salario=puede_ver_salario_rrhh(current_user)),
+            },
+        ) from exc
+    except DocumentoActivoDuplicado as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     registrar_log(
@@ -323,7 +412,34 @@ def route_create_trabajador(
         str(row.get("id")),
         f"Trabajador: {row.get('nombres')} {row.get('apellidos')}",
     )
-    return row
+    return sanitizar_trabajador(row, ver_salario=puede_ver_salario_rrhh(current_user))
+
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/reingreso")
+def route_reingreso(
+    contrato_id: int,
+    trabajador_id: int,
+    body: TrabajadorPatchBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "editar", contrato_id)
+    payload = body.model_dump(exclude_unset=True)
+    if not puede_ver_salario_rrhh(current_user):
+        payload.pop("salario", None)
+    try:
+        row = reingresar_trabajador(supabase, contrato_id, trabajador_id, payload, current_user)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "EDITAR",
+        "RRHH",
+        "rrhh_trabajadores",
+        str(row.get("id")),
+        f"Reingreso ciclo {row.get('ciclo_documental')}",
+    )
+    return sanitizar_trabajador(row, ver_salario=puede_ver_salario_rrhh(current_user))
 
 
 @router.get("/{contrato_id}/trabajadores/{trabajador_id}")
@@ -335,9 +451,10 @@ def route_get_trabajador(
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
     try:
-        return get_trabajador(supabase, contrato_id, trabajador_id)
+        row = get_trabajador(supabase, contrato_id, trabajador_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    return sanitizar_trabajador(row, ver_salario=puede_ver_salario_rrhh(current_user))
 
 
 @router.put("/{contrato_id}/trabajadores/{trabajador_id}")
@@ -350,11 +467,14 @@ def route_update_trabajador(
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "editar", contrato_id)
     try:
+        payload = body.model_dump(exclude_unset=True)
+        if not puede_ver_salario_rrhh(current_user):
+            payload.pop("salario", None)
         row = update_trabajador(
             supabase,
             contrato_id,
             trabajador_id,
-            body.model_dump(exclude_unset=True),
+            payload,
             current_user,
         )
     except ValueError as exc:
@@ -367,7 +487,7 @@ def route_update_trabajador(
         str(trabajador_id),
         f"Trabajador actualizado: {row.get('nombres')} {row.get('apellidos')}",
     )
-    return row
+    return sanitizar_trabajador(row, ver_salario=puede_ver_salario_rrhh(current_user))
 
 
 @router.delete("/{contrato_id}/trabajadores/{trabajador_id}")
@@ -710,6 +830,23 @@ def route_generar_contrato(
             fecha_inicio=body.fecha_inicio,
             fecha_fin=body.fecha_fin,
         )
+        from rrhh_ciclo_service import aplicar_campos_ciclo, marcar_renovacion_otrosi
+
+        ciclo = {}
+        if body.requiere_renovacion is not None:
+            ciclo["requiere_renovacion"] = body.requiere_renovacion
+        if body.periodicidad_renovacion_meses is not None:
+            ciclo["periodicidad_renovacion_meses"] = body.periodicidad_renovacion_meses
+        if body.periodo_prueba_dias is not None:
+            ciclo["periodo_prueba_dias"] = body.periodo_prueba_dias
+        if body.fecha_inicio:
+            ciclo["fecha_inicio"] = body.fecha_inicio
+        if body.fecha_fin:
+            ciclo["fecha_fin_contrato"] = body.fecha_fin
+        if ciclo:
+            aplicar_campos_ciclo(supabase, contrato_id, trabajador_id, ciclo, current_user)
+        if body.es_otrosi:
+            marcar_renovacion_otrosi(supabase, contrato_id, trabajador_id, current_user, body.fecha_fin)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     except Exception as exc:
@@ -722,6 +859,47 @@ def route_generar_contrato(
         "rrhh_contratos_generados",
         str(row.get("id")),
         f"Contrato laboral v{row.get('version_num')} trabajador {trabajador_id}",
+    )
+    return row
+
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/contratos-laborales/cargar")
+async def route_cargar_contrato(
+    contrato_id: int,
+    trabajador_id: int,
+    archivo: UploadFile = File(...),
+    tipo_contrato: Optional[str] = Form(None),
+    fecha_inicio: Optional[str] = Form(None),
+    fecha_fin: Optional[str] = Form(None),
+    es_otrosi: str = Form("false"),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "crear", contrato_id)
+    data = await archivo.read()
+    try:
+        row = cargar_contrato_laboral(
+            supabase,
+            contrato_id,
+            trabajador_id,
+            current_user=current_user,
+            archivo_bytes=data,
+            nombre_archivo=archivo.filename or "contrato.pdf",
+            mime_type=archivo.content_type or "application/pdf",
+            tipo_contrato=tipo_contrato,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            es_otrosi=str(es_otrosi).strip().lower() in ("1", "true", "si", "sí"),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "CREAR",
+        "RRHH",
+        "rrhh_contratos_generados",
+        str(row.get("id")),
+        f"Contrato laboral cargado trabajador {trabajador_id}",
     )
     return row
 
@@ -909,7 +1087,25 @@ def route_list_nominas(
 ):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
+    require_ver_salario_rrhh(current_user)
     return {"items": list_nominas(supabase, contrato_id)}
+
+
+@router.delete("/{contrato_id}/nominas")
+def route_purgar_nominas(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    if not es_desarrollador_rrhh(current_user):
+        raise HTTPException(status_code=403, detail="Solo Desarrollador puede eliminar nóminas de prueba.")
+    result = purgar_nominas_prueba(supabase, contrato_id)
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ELIMINAR",
+        "RRHH",
+        "rrhh_nominas",
+        str(contrato_id),
+        "Purga de nóminas de prueba",
+    )
+    return result
 
 
 @router.post("/{contrato_id}/nominas/generar")
@@ -920,6 +1116,7 @@ def route_generar_nomina(
 ):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "crear", contrato_id)
+    require_ver_salario_rrhh(current_user)
     try:
         result = generar_nomina(
             supabase,
@@ -953,6 +1150,7 @@ def route_get_nomina(
 ):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
+    require_ver_salario_rrhh(current_user)
     try:
         nomina = get_nomina(supabase, contrato_id, nomina_id)
         items = list_nomina_items(supabase, contrato_id, nomina_id)
@@ -1064,7 +1262,25 @@ def route_list_liquidaciones(
 ):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
+    require_ver_salario_rrhh(current_user)
     return {"items": list_liquidaciones(supabase, contrato_id)}
+
+
+@router.delete("/{contrato_id}/liquidaciones")
+def route_purgar_liquidaciones(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    if not es_desarrollador_rrhh(current_user):
+        raise HTTPException(status_code=403, detail="Solo Desarrollador puede eliminar liquidaciones de prueba.")
+    result = purgar_liquidaciones_prueba(supabase, contrato_id)
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ELIMINAR",
+        "RRHH",
+        "rrhh_liquidaciones",
+        str(contrato_id),
+        "Purga de liquidaciones de prueba",
+    )
+    return result
 
 
 @router.post("/{contrato_id}/liquidaciones")
@@ -1075,6 +1291,7 @@ def route_generar_liquidacion(
 ):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "crear", contrato_id)
+    require_ver_salario_rrhh(current_user)
     try:
         row = generar_liquidacion(
             supabase, contrato_id, body.model_dump(), current_user
@@ -1322,3 +1539,25 @@ def route_eliminar_tipo_otro(
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     return result
+
+
+def _cron_secret_ok_rrhh(x_cron_secret: Optional[str]) -> bool:
+    import os
+
+    expected = (os.getenv("CLARACORE_CRON_SECRET") or "").strip()
+    if not expected:
+        return False
+    return (x_cron_secret or "").strip() == expected
+
+
+cron_router = APIRouter(tags=["cron-rrhh"])
+
+
+@cron_router.post("/internal/cron/rrhh-alertas/run")
+def cron_rrhh_alertas_run(
+    x_cron_secret: Optional[str] = Header(default=None, alias="X-Cron-Secret"),
+):
+    """Alertas de vencimiento (35/10 días) y período de prueba (5 días)."""
+    if not _cron_secret_ok_rrhh(x_cron_secret):
+        raise HTTPException(status_code=403, detail="Cron secret inválido o no configurado")
+    return evaluar_alertas(supabase)
