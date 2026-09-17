@@ -63,6 +63,7 @@ describe('mapaNavegacionCatalogo', () => {
     const porId = Object.fromEntries(MAPA_NAVEGACION_SUBTEMAS.map((m) => [m.id, m.nombre]))
     assert.equal(porId.dash_leer_indicadores, 'Cómo leer tus indicadores')
     assert.equal(porId.ppto_arranca_versiona, 'Arranca y versiona tu presupuesto')
+    assert.equal(porId.ppto_edita_consulta, 'Edita, consulta y valida registros')
     assert.equal(porId.sicoe_crear_reporte_registros, 'Crea tu reporte de cantidades')
     assert.equal(porId.almacen_mueve_obra, 'Mueve materiales en obra')
     assert.equal(porId.topo_diseno_entrega, 'Del diseño a la entrega')
