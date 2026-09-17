@@ -2,16 +2,14 @@ import { useMemo, useState } from 'react'
 import {
   MAPA_SUBTEMA_CAPACITACION_RC,
 } from './mapaNavegacionCatalogo'
-import CapacitacionReporteCantidadesWalkthrough, {
-  CapacitacionReporteCantidadesLaunchButton,
-} from './CapacitacionReporteCantidadesWalkthrough'
+import CapacitacionReporteCantidadesWalkthrough from './CapacitacionReporteCantidadesWalkthrough'
 
 /** @deprecated usar MAPA_SUBTEMA_CAPACITACION_RC */
 export const MAPA_MODULO_CAPACITACION_RC = MAPA_SUBTEMA_CAPACITACION_RC
 
 /**
  * Vista del mapa interactivo: 7 íconos de módulo; al clic se expanden
- * solo los grupos temáticos de ese módulo.
+ * tarjetas de temas. Clic en tarjeta abre el video (o la capacitación RC).
  * Misma fuente para ícono de inicio y pestaña Mapa de Clara.
  */
 export default function MapaNavegacionVista({
@@ -23,8 +21,7 @@ export default function MapaNavegacionVista({
   fuente = '',
 }) {
   const [moduloActivoId, setModuloActivoId] = useState(null)
-  const [temaAbiertoId, setTemaAbiertoId] = useState(null)
-  const [lightbox, setLightbox] = useState(null)
+  const [videoTema, setVideoTema] = useState(null)
   const [capRcOpen, setCapRcOpen] = useState(false)
 
   const totalTemas = useMemo(
@@ -37,14 +34,16 @@ export default function MapaNavegacionVista({
   )
 
   function toggleModulo(id) {
-    setModuloActivoId((prev) => {
-      if (prev === id) {
-        setTemaAbiertoId(null)
-        return null
-      }
-      setTemaAbiertoId(null)
-      return id
-    })
+    setModuloActivoId((prev) => (prev === id ? null : id))
+  }
+
+  function abrirCapacitacion(tema) {
+    if (!tema) return
+    if (tema.id === MAPA_SUBTEMA_CAPACITACION_RC) {
+      setCapRcOpen(true)
+      return
+    }
+    setVideoTema(tema)
   }
 
   if (cargando) {
@@ -95,8 +94,8 @@ export default function MapaNavegacionVista({
           maxWidth: compact ? '100%' : 720,
         }}>
           {grupos.length} módulos · {totalTemas} temas de capacitación.
-          Elija un ícono para ver sus videos/temas. Solo consulta: no abre
-          pantallas ni cambia datos.
+          Elija un módulo y pulse una tarjeta para abrir su video.
+          Solo consulta: no abre pantallas ni cambia datos.
         </p>
         {fuente ? (
           <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
@@ -105,7 +104,6 @@ export default function MapaNavegacionVista({
         ) : null}
       </header>
 
-      {/* Vista compacta: solo íconos de módulo */}
       <div
         role="tablist"
         aria-label="Módulos del mapa"
@@ -159,11 +157,7 @@ export default function MapaNavegacionVista({
               }}>
                 {grupo.label}
               </span>
-              <span style={{
-                fontSize: 10,
-                fontWeight: 600,
-                color: t.textMuted,
-              }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: t.textMuted }}>
                 {nTemas} {nTemas === 1 ? 'tema' : 'temas'}
               </span>
             </button>
@@ -171,7 +165,6 @@ export default function MapaNavegacionVista({
         })}
       </div>
 
-      {/* Panel expandido: grupos temáticos del módulo activo */}
       {moduloActivo ? (
         <section
           id={`mapa-temas-${moduloActivo.id}`}
@@ -180,20 +173,18 @@ export default function MapaNavegacionVista({
           style={{
             display: 'flex',
             flexDirection: 'column',
-            gap: 8,
+            gap: 12,
             border: `1px solid ${t.border}`,
             borderRadius: 14,
             background: t.bgCard,
             overflow: 'hidden',
+            padding: compact ? 10 : 14,
           }}
         >
           <div style={{
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            padding: compact ? '10px 12px' : '12px 14px',
-            borderBottom: `1px solid ${t.border}`,
-            background: t.headerBg || t.bg,
           }}>
             <span aria-hidden style={{ fontSize: 'var(--cc-lg)' }}>{moduloActivo.icono}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -201,7 +192,7 @@ export default function MapaNavegacionVista({
                 {moduloActivo.label}
               </div>
               <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                Temas de capacitación de este módulo
+                Pulse una tarjeta para abrir su capacitación
               </div>
             </div>
             <button
@@ -223,198 +214,83 @@ export default function MapaNavegacionVista({
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {(moduloActivo.modulos || []).map((mod, idx) => {
-              const abierto = temaAbiertoId === mod.id
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: compact
+              ? '1fr'
+              : 'repeat(auto-fill, minmax(200px, 1fr))',
+            gap: compact ? 8 : 10,
+          }}>
+            {(moduloActivo.modulos || []).map((mod) => {
               const esCapRc = mod.id === MAPA_SUBTEMA_CAPACITACION_RC
+              const desc = mod.descripcion || mod.resumen || (
+                esCapRc
+                  ? 'Capacitación interactiva del asistente de creación.'
+                  : 'Video de capacitación pendiente.'
+              )
+              const disponible = esCapRc || !!mod.videoUrl
               return (
-                <div
+                <button
                   key={mod.id}
+                  type="button"
+                  onClick={() => abrirCapacitacion(mod)}
+                  aria-label={`${mod.nombre}. Abrir capacitación`}
                   style={{
-                    borderTop: idx === 0 ? 'none' : `1px solid ${t.border}`,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    textAlign: 'left',
+                    padding: compact ? '12px' : '14px',
+                    minHeight: compact ? 120 : 136,
+                    borderRadius: 12,
+                    border: `1px solid ${t.border}`,
+                    background: t.bg,
+                    color: t.text,
+                    cursor: 'pointer',
+                    transition: 'border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease',
+                    boxShadow: 'none',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = t.primary
+                    e.currentTarget.style.boxShadow = `0 4px 14px ${t.primary}22`
+                    e.currentTarget.style.transform = 'translateY(-1px)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = t.border
+                    e.currentTarget.style.boxShadow = 'none'
+                    e.currentTarget.style.transform = 'none'
                   }}
                 >
-                  <button
-                    type="button"
-                    onClick={() => setTemaAbiertoId(abierto ? null : mod.id)}
-                    aria-expanded={abierto}
-                    style={{
-                      width: '100%',
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: 10,
-                      padding: compact ? '10px 12px' : '12px 14px',
-                      background: abierto ? `${t.primary}10` : 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      color: t.text,
-                      minHeight: 48,
-                    }}
-                  >
-                    <span aria-hidden style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 99,
-                      marginTop: 6,
-                      flexShrink: 0,
-                      background: abierto ? t.primary : t.border,
-                    }} />
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{
-                        display: 'block',
-                        fontWeight: 700,
-                        fontSize: 'var(--cc-sm)',
-                        lineHeight: 1.35,
-                      }}>
-                        {mod.nombre}
-                      </span>
-                      {!abierto && (
-                        <span style={{
-                          display: 'block',
-                          marginTop: 3,
-                          fontSize: 'var(--cc-caption)',
-                          color: t.textMuted,
-                          lineHeight: 1.4,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {mod.descripcion
-                            || mod.resumen
-                            || (esCapRc
-                              ? 'Capacitación interactiva disponible'
-                              : 'Video de capacitación pendiente')}
-                        </span>
-                      )}
-                    </span>
-                    <span style={{
-                      color: t.textMuted,
-                      fontSize: 'var(--cc-sm)',
-                      flexShrink: 0,
-                      marginTop: 2,
-                    }}>
-                      {abierto ? '▾' : '▸'}
-                    </span>
-                  </button>
-
-                  {abierto && (
-                    <div style={{
-                      padding: compact ? '0 12px 12px 30px' : '0 14px 14px 32px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 10,
-                    }}>
-                      {mod.resumen && !mod.descripcion ? (
-                        <p style={{
-                          margin: 0,
-                          fontSize: 'var(--cc-sm)',
-                          color: t.textMuted,
-                          lineHeight: 1.45,
-                        }}>
-                          {mod.resumen}
-                        </p>
-                      ) : null}
-                      <p style={{
-                        margin: 0,
-                        fontSize: 'var(--cc-sm)',
-                        color: t.text,
-                        lineHeight: 1.5,
-                        whiteSpace: 'pre-wrap',
-                      }}>
-                        {mod.descripcion
-                          || (esCapRc
-                            ? 'Asistente de creación de reportes de cantidades: Info General, Plantilla, Localización, Registros y Topografía.'
-                            : 'Aún no hay descripción educativa para este tema. Se publicará aquí cuando esté lista.')}
-                      </p>
-
-                      {esCapRc ? (
-                        <CapacitacionReporteCantidadesLaunchButton
-                          t={t}
-                          compact={compact}
-                          onClick={() => setCapRcOpen(true)}
-                        />
-                      ) : null}
-
-                      {mod.videoUrl ? (
-                        <div style={{
-                          border: `1px solid ${t.border}`,
-                          borderRadius: 10,
-                          overflow: 'hidden',
-                          background: t.bg,
-                        }}>
-                          <video
-                            src={mod.videoUrl}
-                            controls
-                            preload="metadata"
-                            style={{ display: 'block', width: '100%', maxHeight: 280 }}
-                          >
-                            Su navegador no reproduce este video.
-                          </video>
-                        </div>
-                      ) : (
-                        <div style={{
-                          border: `1px dashed ${t.border}`,
-                          borderRadius: 10,
-                          padding: '10px 12px',
-                          fontSize: 'var(--cc-caption)',
-                          color: t.textMuted,
-                          background: t.bg,
-                        }}>
-                          Video de capacitación — pendiente (este tema ya está listo para alojarlo).
-                        </div>
-                      )}
-
-                      {(mod.imagenes || []).length > 0 ? (
-                        <div style={{
-                          display: 'grid',
-                          gridTemplateColumns: compact
-                            ? '1fr'
-                            : 'repeat(auto-fill, minmax(180px, 1fr))',
-                          gap: 8,
-                        }}>
-                          {mod.imagenes.map((img, i) => (
-                            <button
-                              key={`${mod.id}-img-${i}`}
-                              type="button"
-                              onClick={() => setLightbox(img)}
-                              style={{
-                                border: `1px solid ${t.border}`,
-                                borderRadius: 10,
-                                overflow: 'hidden',
-                                background: t.bg,
-                                padding: 0,
-                                cursor: 'zoom-in',
-                                textAlign: 'left',
-                              }}
-                            >
-                              <img
-                                src={img.url}
-                                alt={img.caption || `Pantallazo de ${mod.nombre}`}
-                                loading="lazy"
-                                style={{
-                                  display: 'block',
-                                  width: '100%',
-                                  height: compact ? 140 : 120,
-                                  objectFit: 'cover',
-                                }}
-                              />
-                              {img.caption ? (
-                                <div style={{
-                                  padding: '6px 8px',
-                                  fontSize: 'var(--cc-caption)',
-                                  color: t.textMuted,
-                                }}>
-                                  {img.caption}
-                                </div>
-                              ) : null}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
+                  <span aria-hidden style={{ fontSize: 28, lineHeight: 1 }}>
+                    {mod.icono || moduloActivo.icono}
+                  </span>
+                  <span style={{
+                    fontWeight: 800,
+                    fontSize: 'var(--cc-sm)',
+                    lineHeight: 1.3,
+                    color: t.text,
+                  }}>
+                    {mod.nombre}
+                  </span>
+                  <span style={{
+                    fontSize: 'var(--cc-caption)',
+                    color: t.textMuted,
+                    lineHeight: 1.4,
+                    flex: 1,
+                  }}>
+                    {desc}
+                  </span>
+                  <span style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: disponible ? t.primary : t.textMuted,
+                  }}>
+                    {esCapRc
+                      ? '▶ Abrir capacitación interactiva'
+                      : (mod.videoUrl ? '▶ Abrir video' : 'Video pendiente')}
+                  </span>
+                </button>
               )
             })}
           </div>
@@ -433,12 +309,12 @@ export default function MapaNavegacionVista({
         </div>
       )}
 
-      {lightbox && (
+      {videoTema && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Pantallazo ampliado"
-          onClick={() => setLightbox(null)}
+          aria-label={`Capacitación: ${videoTema.nombre}`}
+          onClick={() => setVideoTema(null)}
           style={{
             position: 'fixed',
             inset: 0,
@@ -448,22 +324,91 @@ export default function MapaNavegacionVista({
             alignItems: 'center',
             justifyContent: 'center',
             padding: 16,
-            cursor: 'zoom-out',
           }}
         >
-          <img
-            src={lightbox.url}
-            alt={lightbox.caption || 'Pantallazo'}
+          <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              maxWidth: 'min(1100px, 96vw)',
+              width: 'min(880px, 96vw)',
               maxHeight: '90vh',
-              borderRadius: 10,
-              boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
-              objectFit: 'contain',
-              background: '#111',
+              overflow: 'auto',
+              borderRadius: 14,
+              background: t.bgCard,
+              border: `1px solid ${t.border}`,
+              boxShadow: '0 16px 48px rgba(0,0,0,0.4)',
+              display: 'flex',
+              flexDirection: 'column',
             }}
-          />
+          >
+            <div style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 10,
+              padding: '12px 14px',
+              borderBottom: `1px solid ${t.border}`,
+            }}>
+              <span aria-hidden style={{ fontSize: 22 }}>{videoTema.icono}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', color: t.text }}>
+                  {videoTema.nombre}
+                </div>
+                <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
+                  {videoTema.descripcion || videoTema.resumen || 'Capacitación del mapa de funcionalidades'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVideoTema(null)}
+                aria-label="Cerrar video"
+                style={{
+                  border: `1px solid ${t.border}`,
+                  background: 'transparent',
+                  color: t.textMuted,
+                  borderRadius: 8,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ padding: 14, background: t.bg }}>
+              {videoTema.videoUrl ? (
+                <video
+                  key={videoTema.videoUrl}
+                  src={videoTema.videoUrl}
+                  controls
+                  autoPlay
+                  preload="metadata"
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    maxHeight: '70vh',
+                    borderRadius: 10,
+                    background: '#000',
+                  }}
+                >
+                  Su navegador no reproduce este video.
+                </video>
+              ) : (
+                <div style={{
+                  border: `1px dashed ${t.border}`,
+                  borderRadius: 10,
+                  padding: '28px 16px',
+                  textAlign: 'center',
+                  color: t.textMuted,
+                  fontSize: 'var(--cc-sm)',
+                  lineHeight: 1.5,
+                  background: t.bgCard,
+                }}>
+                  Video de capacitación pendiente.
+                  <br />
+                  Este tema ya está listo para alojarlo cuando esté publicado.
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
