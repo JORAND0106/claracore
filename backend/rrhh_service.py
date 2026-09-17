@@ -677,7 +677,32 @@ def list_trabajadores(
     *,
     q: Optional[str] = None,
     estado: Optional[str] = None,
+    empresa_key: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
 ) -> List[dict]:
+    rows, _total = list_trabajadores_paginado(
+        sb,
+        contrato_id,
+        q=q,
+        estado=estado,
+        empresa_key=empresa_key,
+        limit=limit,
+        offset=offset,
+    )
+    return rows
+
+
+def list_trabajadores_paginado(
+    sb,
+    contrato_id: int,
+    *,
+    q: Optional[str] = None,
+    estado: Optional[str] = None,
+    empresa_key: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> tuple:
     query = (
         sb.table(_TABLE_TRAB)
         .select("*")
@@ -699,7 +724,140 @@ def list_trabajadores(
             or needle in str(r.get("cargo_aspira") or "").lower()
             or needle in str(r.get("empresa_nombre") or "").lower()
         ]
-    return rows
+    ek = (empresa_key or "").strip()
+    if ek:
+        rows = [r for r in rows if _empresa_key_from_row(r) == ek]
+    total = len(rows)
+    if offset is not None or limit is not None:
+        start = max(0, int(offset or 0))
+        end = start + int(limit) if limit is not None else None
+        rows = rows[start:end]
+    return rows, total
+
+
+def _parse_salario_numero(valor: Any) -> float:
+    """Valor numérico real; ignora formato '$ 1.234.567' si llegara como texto."""
+    if valor is None or valor == "":
+        return 0.0
+    if isinstance(valor, (int, float)):
+        try:
+            n = float(valor)
+            return n if n == n else 0.0  # NaN → 0
+        except (TypeError, ValueError):
+            return 0.0
+    s = str(valor).strip()
+    if not s:
+        return 0.0
+    # Quitar moneda y separadores de miles (es-CO / en-US)
+    digits = re.sub(r"[^\d.,\-]", "", s)
+    if not digits or digits in {".", ",", "-", "-.", "-,"}:
+        return 0.0
+    # Si hay punto y coma, asumir formato es-CO: 1.234.567,89
+    if "," in digits and "." in digits:
+        digits = digits.replace(".", "").replace(",", ".")
+    elif "," in digits and "." not in digits:
+        # Solo coma: podría ser decimal o miles; si hay más de un grupo → miles
+        parts = digits.split(",")
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            digits = f"{parts[0]}.{parts[1]}"
+        else:
+            digits = digits.replace(",", "")
+    elif digits.count(".") > 1:
+        digits = digits.replace(".", "")
+    try:
+        n = float(digits)
+        return n if n == n else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _empresa_key_from_row(row: dict) -> str:
+    if not row:
+        return "consorcio"
+    if (row.get("empresa_tipo") or "").strip().lower() == "subcontratista":
+        sid = row.get("empresa_subcontratista_id")
+        if sid is not None and str(sid).strip() != "":
+            try:
+                return f"sub:{int(sid)}"
+            except (TypeError, ValueError):
+                return f"sub:{sid}"
+        nombre = (row.get("empresa_nombre") or "").strip().lower() or "sin_asignar"
+        return f"subnombre:{nombre}"
+    return "consorcio"
+
+
+def resumen_trabajadores_por_empresa(
+    sb,
+    contrato_id: int,
+    *,
+    incluir_nomina: bool = True,
+) -> List[dict]:
+    """
+    Tarjetas por contratista/consorcio con conteos y nómina consolidada por cargo.
+    Opera siempre sobre el valor numérico de salario (nunca texto formateado).
+    """
+    rows = list_trabajadores(sb, contrato_id)
+    grupos: Dict[str, dict] = {}
+    for row in rows:
+        key = _empresa_key_from_row(row)
+        g = grupos.get(key)
+        if not g:
+            g = {
+                "empresa_key": key,
+                "empresa_tipo": row.get("empresa_tipo") or "consorcio",
+                "nombre": ((row.get("empresa_nombre") or "Consorcio").strip() or "Consorcio"),
+                "empresa_nit": row.get("empresa_nit"),
+                "subcontratista_id": row.get("empresa_subcontratista_id"),
+                "activos": 0,
+                "total": 0,
+                "total_nomina": 0.0,
+                "por_cargo": {},
+            }
+            grupos[key] = g
+        g["total"] += 1
+        if str(row.get("estado") or "").strip().lower() == "activo":
+            g["activos"] += 1
+        cargo = ((row.get("cargo_aspira") or "Sin cargo").strip() or "Sin cargo")
+        c = g["por_cargo"].get(cargo)
+        if not c:
+            c = {"cargo": cargo, "cantidad": 0, "total_nomina": 0.0}
+            g["por_cargo"][cargo] = c
+        c["cantidad"] += 1
+        sal = _parse_salario_numero(row.get("salario"))
+        g["total_nomina"] += sal
+        c["total_nomina"] += sal
+
+    out: List[dict] = []
+    for g in grupos.values():
+        cargos = sorted(
+            g["por_cargo"].values(),
+            key=lambda x: (-int(x["cantidad"]), str(x["cargo"])),
+        )
+        out.append({
+            "empresa_key": g["empresa_key"],
+            "empresa_tipo": g["empresa_tipo"],
+            "nombre": g["nombre"],
+            "empresa_nit": g["empresa_nit"],
+            "subcontratista_id": g["subcontratista_id"],
+            "activos": g["activos"],
+            "total": g["total"],
+            "total_nomina": g["total_nomina"] if incluir_nomina else None,
+            "por_cargo": [
+                {
+                    "cargo": c["cargo"],
+                    "cantidad": c["cantidad"],
+                    "total_nomina": c["total_nomina"] if incluir_nomina else None,
+                }
+                for c in cargos
+            ],
+        })
+    out.sort(
+        key=lambda x: (
+            0 if x["empresa_key"] == "consorcio" else 1,
+            str(x.get("nombre") or "").lower(),
+        )
+    )
+    return out
 
 
 def get_trabajador(sb, contrato_id: int, trabajador_id: int) -> dict:

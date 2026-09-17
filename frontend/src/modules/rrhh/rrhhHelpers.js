@@ -289,17 +289,25 @@ export function payloadFromForm(form) {
     banco_numero_cuenta: form.banco_numero_cuenta || null,
     tipo_contrato: form.tipo_contrato || null,
     requiere_renovacion: Boolean(form.requiere_renovacion),
-    periodicidad_renovacion_meses: form.requiere_renovacion && form.periodicidad_renovacion_meses
-      ? Number(form.periodicidad_renovacion_meses)
-      : null,
-    periodo_prueba_dias: form.periodo_prueba_dias === '' || form.periodo_prueba_dias == null
-      ? null
-      : Number(form.periodo_prueba_dias),
+    periodicidad_renovacion_meses: (() => {
+      if (!form.requiere_renovacion || form.periodicidad_renovacion_meses == null || form.periodicidad_renovacion_meses === '') {
+        return null
+      }
+      const n = Number(form.periodicidad_renovacion_meses)
+      return Number.isFinite(n) ? n : null
+    })(),
+    periodo_prueba_dias: (() => {
+      if (form.periodo_prueba_dias === '' || form.periodo_prueba_dias == null) return null
+      const n = Number(form.periodo_prueba_dias)
+      return Number.isFinite(n) ? Math.trunc(n) : null
+    })(),
     empresa_key: empresaKey,
     empresa_tipo: form.empresa_tipo || (empresaKey.startsWith('sub:') ? 'subcontratista' : 'consorcio'),
-    empresa_subcontratista_id: empresaKey.startsWith('sub:')
-      ? Number(empresaKey.slice(4))
-      : null,
+    empresa_subcontratista_id: (() => {
+      if (!empresaKey.startsWith('sub:')) return null
+      const n = Number(empresaKey.slice(4))
+      return Number.isFinite(n) ? n : null
+    })(),
     estado: form.estado || 'activo',
     notas: form.notas || null,
   }

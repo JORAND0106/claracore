@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from main import _require_contract_access, get_current_user, registrar_log, supabase
 from rrhh_docs_service import (
@@ -74,7 +74,9 @@ from rrhh_service import (
     list_catalogo_todos,
     list_empresas_contratantes,
     list_trabajadores,
+    list_trabajadores_paginado,
     reiniciar_reingreso_trabajador,
+    resumen_trabajadores_por_empresa,
     set_trabajador_imagen,
     soft_delete_trabajador,
     update_trabajador,
@@ -146,6 +148,28 @@ class TrabajadorBody(BaseModel):
     estado: Optional[str] = "activo"
     notas: Optional[str] = None
 
+    @field_validator("periodo_prueba_dias", "empresa_subcontratista_id", mode="before")
+    @classmethod
+    def _empty_to_none_int(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("salario", mode="before")
+    @classmethod
+    def _parse_salario_body(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        # Aceptar "$ 1.234.567" sin romper el request
+        from rrhh_service import _parse_salario_numero
+
+        n = _parse_salario_numero(v)
+        return n if n else None
+
 
 class TrabajadorPatchBody(BaseModel):
     nombres: Optional[str] = Field(None, min_length=1, max_length=200)
@@ -190,6 +214,27 @@ class TrabajadorPatchBody(BaseModel):
     empresa_nit: Optional[str] = None
     estado: Optional[str] = None
     notas: Optional[str] = None
+
+    @field_validator("periodo_prueba_dias", "empresa_subcontratista_id", mode="before")
+    @classmethod
+    def _empty_to_none_int_patch(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("salario", mode="before")
+    @classmethod
+    def _parse_salario_patch(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        from rrhh_service import _parse_salario_numero
+
+        n = _parse_salario_numero(v)
+        return n if n else None
 
 
 class GenerarContratoBody(BaseModel):
@@ -306,16 +351,109 @@ def route_catalogo_add(
 
 # ── Trabajadores ──────────────────────────────────────────────────────────────
 
+@router.get("/{contrato_id}/trabajadores/resumen-empresas")
+def route_resumen_empresas(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Tarjetas por consorcio/subcontratista. Debe ir antes de /{trabajador_id}."""
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    from rrhh_permissions import puede_ver_salario_rrhh
+
+    grupos = resumen_trabajadores_por_empresa(
+        supabase,
+        contrato_id,
+        incluir_nomina=puede_ver_salario_rrhh(current_user),
+    )
+    return {"grupos": grupos}
+
+
 @router.get("/{contrato_id}/trabajadores")
 def route_list_trabajadores(
     contrato_id: int,
     q: Optional[str] = Query(None),
     estado: Optional[str] = Query(None),
+    empresa_key: Optional[str] = Query(None),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    offset: Optional[int] = Query(None, ge=0),
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
-    return {"items": list_trabajadores(supabase, contrato_id, q=q, estado=estado)}
+    items, total = list_trabajadores_paginado(
+        supabase,
+        contrato_id,
+        q=q,
+        estado=estado,
+        empresa_key=empresa_key,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": items, "total": total}
+
+
+@router.get("/{contrato_id}/trabajadores/por-documento")
+def route_por_documento_alias(
+    contrato_id: int,
+    numero: Optional[str] = Query(None),
+    tipo: Optional[str] = Query("CC"),
+    numero_documento: Optional[str] = Query(None),
+    tipo_documento: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """Alias del frontend (numero/tipo) hacia la búsqueda por cédula."""
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    num = (numero_documento or numero or "").strip()
+    td = (tipo_documento or tipo or "CC").strip() or "CC"
+    if len(num) < 3:
+        return {
+            "encontrado": False,
+            "reingreso_posible": False,
+            "activo": False,
+            "trabajador": None,
+        }
+    row = buscar_trabajador_por_documento(
+        supabase,
+        contrato_id,
+        tipo_documento=td,
+        numero_documento=num,
+        incluir_eliminados=True,
+    )
+    if not row:
+        return {
+            "encontrado": False,
+            "reingreso_posible": False,
+            "activo": False,
+            "trabajador": None,
+        }
+    reingreso = es_candidato_reingreso(row)
+    activo = (
+        not row.get("eliminado_en")
+        and (row.get("estado") or "").lower() == "activo"
+        and not reingreso
+    )
+    return {
+        "encontrado": True,
+        "reingreso_posible": reingreso,
+        "activo": activo,
+        "trabajador": {
+            "id": row.get("id"),
+            "nombres": row.get("nombres"),
+            "apellidos": row.get("apellidos"),
+            "tipo_documento": row.get("tipo_documento"),
+            "numero_documento": row.get("numero_documento"),
+            "estado": row.get("estado"),
+            "fecha_retiro": row.get("fecha_retiro"),
+            "eliminado_en": row.get("eliminado_en"),
+            "eps": row.get("eps"),
+            "pension": row.get("pension"),
+            "arl": row.get("arl"),
+            "cesantias": row.get("cesantias"),
+            "caja_compensacion": row.get("caja_compensacion"),
+        },
+    }
 
 
 @router.post("/{contrato_id}/trabajadores")
