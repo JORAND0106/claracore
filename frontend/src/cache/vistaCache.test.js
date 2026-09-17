@@ -19,6 +19,7 @@ import {
   sicoeClearNavegacion,
   sicoeSetVistaCache,
   sicoeGetVistaCache,
+  invalidateSicoeVistaCache,
 } from './sicoeVistaCache.js'
 
 describe('vistaCache', () => {
@@ -105,6 +106,21 @@ describe('sicoeVistaCache', () => {
       sicoeBundleCacheHash({ fSicoe: { item: '', capitulo: '01' }, itemsChips: [] }),
       sicoeBundleCacheHash({ itemsChips: [], fSicoe: { capitulo: '01', item: '' } }),
     )
+  })
+
+  it('invalidateSicoeVistaCache limpia entradas del contrato', () => {
+    clearVistaCache()
+    sicoeClearNavegacion(7)
+    sicoeSetVistaCache(7, {
+      bundle: bundleA,
+      reportes: [{ id: 9 }],
+      analisis: null,
+      hayMas: false,
+      offsetActual: 50,
+    })
+    assert.ok(sicoeGetVistaCache(7, bundleA))
+    invalidateSicoeVistaCache(7)
+    assert.equal(sicoeGetVistaCache(7, bundleA), null)
   })
 })
 

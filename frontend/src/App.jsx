@@ -8899,6 +8899,7 @@ function ModuloSicoeObra({
       const r = await fetch(urlDetalleReporteParaAbrir(repId, { aplicarFiltros }), {
         headers: { Authorization: `Bearer ${getToken()}` },
         signal: ac.signal,
+        cache: 'no-store',
       })
       const data = await r.json().catch(() => ({}))
       if (!r.ok || !data?.id) return null
@@ -9001,6 +9002,7 @@ function ModuloSicoeObra({
         const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/buscar?${p}`, {
           headers: { Authorization: `Bearer ${getToken()}` },
           signal: abortSignal,
+          cache: 'no-store',
         })
         return res.json()
       }
@@ -9249,6 +9251,7 @@ function ModuloSicoeObra({
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/analisis?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` },
         signal: abortSignal,
+        cache: 'no-store',
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -9690,10 +9693,20 @@ function ModuloSicoeObra({
       sicoeInitContratoFiltrosOnceRef.current = 'sesion'
       const savedDev = cargarSicoeFiltroSesion(contrato_id)
       if (!savedDev) return
+      // Restaurar filtros; si hay caché, mostrar UI al instante y siempre refetch en red
+      // (evita que dos usuarios vean datos distintos hasta Ctrl+Shift+R).
       aplicarSicoeFiltroBundle(savedDev, false)
       if (sicoeBundleTieneCriteriosUsuario(savedDev)) {
         const cached = sicoeGetVistaCache(contrato_id, savedDev)
         if (cached) restaurarSicoeDesdeEntrada(cached)
+        if (!efectivoOfflineRef.current) {
+          const b = sicoeFiltroFromSnapshot(savedDev)
+          void ejecutarBusquedaSicoeCompleta(
+            sicoeFSicoeToFiltros(b.fSicoe),
+            b.capasValidacion || [],
+            b.capasValidacionOp,
+          )
+        }
       }
       return
     }
@@ -9758,6 +9771,14 @@ function ModuloSicoeObra({
     if (sicoeBundleTieneCriteriosUsuario(saved)) {
       const cached = sicoeGetVistaCache(contrato_id, saved)
       if (cached) restaurarSicoeDesdeEntrada(cached)
+      if (!efectivoOfflineRef.current) {
+        const b = sicoeFiltroFromSnapshot(saved)
+        void ejecutarBusquedaSicoeCompleta(
+          sicoeFSicoeToFiltros(b.fSicoe),
+          b.capasValidacion || [],
+          b.capasValidacionOp,
+        )
+      }
     }
   }, [
     contrato_id,
@@ -9790,13 +9811,10 @@ function ModuloSicoeObra({
       setCargandoAnalisis(false)
       return
     }
-    if (!efectivoOfflineRef.current && contrato_id) {
-      const bundle = sicoeBundleDesdeRefs(f)
-      const cached = sicoeGetVistaCache(contrato_id, bundle)
-      if (cached && restaurarSicoeDesdeEntrada(cached)) return
-    }
+    // Nunca servir la búsqueda desde sicoeVistaCache: la caché es solo para
+    // navegación Atrás (stack). Servir aquí dejaba datos viejos hasta F5 duro.
     void ejecutarBusquedaSicoeCompleta(f, capas, capasOpOverride)
-  }, [nivelInfo.puedeValidar, nivelInfo.puedeEditar, nivelInfo.nivelValidacion, contrato_id, sicoeBundleDesdeRefs, restaurarSicoeDesdeEntrada])
+  }, [nivelInfo.puedeValidar, nivelInfo.puedeEditar, nivelInfo.nivelValidacion])
 
   const sicoeProgramarBusquedaAuto = useCallback(() => {
     if (sicoeAutoBusquedaTimerRef.current) clearTimeout(sicoeAutoBusquedaTimerRef.current)
@@ -10208,7 +10226,7 @@ function ModuloSicoeObra({
     if (!rid || !contrato_id) return
     const cid = String(contrato_id)
     const u = urlReporteDetalleRef.current?.(rid) ?? `${API_URL}/sicoe-obra/${cid}/reportes/${rid}`
-    fetch(u, { headers: { Authorization: `Bearer ${getToken()}` } })
+    fetch(u, { headers: { Authorization: `Bearer ${getToken()}` }, cache: 'no-store' })
       .then((r) => r.json())
       .then((data) => {
         if (!data?.id) return
@@ -10255,12 +10273,13 @@ function ModuloSicoeObra({
     if (sicoeRefrescoEnCursoRef.current || sicoeBusquedaEnCursoRef.current) return
     if (sicoeRealtimeReporteDetalleIdRef.current) return
     if (!busquedaRealizadaRef.current) return
+    try { invalidateSicoeVistaCache(contrato_id) } catch { /* noop */ }
     const f = filtrosSicoeRef.current
     const cap = capasSicoeRef.current
     const opSeq = ++sicoeOperacionSeqRef.current
     void buscarReportesSicoeRef.current?.(f, 0, cap, undefined, opSeq)
     void refrescarMatrizDashboardRef.current?.()
-  }, [])
+  }, [contrato_id])
 
   /** Canal 1 — grilla: so_reportes (MV refrescada por cron; sin escuchar so_registros aquí) */
   useEffect(() => {
@@ -10344,6 +10363,8 @@ function ModuloSicoeObra({
   /** Vuelve un nivel en el panel (ítem → capítulo → vista general) sin limpiar el resto de filtros. */
   const volverPanelAnterior = () => {
     if (cargando || cargandoAnalisis) return
+    // Solo el stack de navegación de esta sesión (instantáneo). Si no hay stack,
+    // refetch en red — no reutilizar sicoeGetVistaCache (TTL) que puede estar desfasado.
     const prevStack = sicoePopNavegacion(contrato_id)
     if (prevStack && restaurarSicoeDesdeEntradaRef.current?.(prevStack)) return
 
@@ -10372,9 +10393,6 @@ function ModuloSicoeObra({
       retroceder = true
     }
     if (!retroceder) return
-    const targetBundle = sicoeBundleDesdeRefs(nf, { clearItems: true, clearPanelChecks: true })
-    const cached = sicoeGetVistaCache(contrato_id, targetBundle)
-    if (cached && restaurarSicoeDesdeEntradaRef.current?.(cached)) return
     aplicarFiltrosSicoeYBuscar(nf, { clearItems: true, clearPanelChecks: true })
   }
   const puedeVolverPanel = !!(
