@@ -390,7 +390,7 @@ def list_empresas_contratantes(sb, contrato_id: int) -> dict:
     cid = int(contrato_id)
     crows = (
         sb.table("contratos")
-        .select("id, contratista, nit, numero")
+        .select("id, contratista, nit, numero, logo_contratista")
         .eq("id", cid)
         .limit(1)
         .execute()
@@ -401,12 +401,14 @@ def list_empresas_contratantes(sb, contrato_id: int) -> dict:
     consorcio_nombre = (c.get("contratista") or "Consorcio / Contratista principal").strip() or (
         "Consorcio / Contratista principal"
     )
+    logo_consorcio = (c.get("logo_contratista") or "").strip() or None
     consorcio = {
         "key": "consorcio",
         "tipo": "consorcio",
         "id": None,
         "nombre": consorcio_nombre,
         "nit": (c.get("nit") or "").strip() or None,
+        "logo_url": logo_consorcio,
         "label": f"Consorcio — {consorcio_nombre}",
     }
     subs = (
@@ -433,6 +435,7 @@ def list_empresas_contratantes(sb, contrato_id: int) -> dict:
                 "id": sid,
                 "nombre": nombre,
                 "nit": (s.get("nit") or "").strip() or None,
+                "logo_url": None,  # subcontratistas aún no tienen logo en esquema
                 "label": f"Subcontratista — {nombre}",
             }
         )
@@ -797,6 +800,19 @@ def resumen_trabajadores_por_empresa(
     Opera siempre sobre el valor numérico de salario (nunca texto formateado).
     """
     rows = list_trabajadores(sb, contrato_id)
+    logos_por_key: Dict[str, Optional[str]] = {}
+    nit_por_key: Dict[str, Optional[str]] = {}
+    try:
+        empresas = list_empresas_contratantes(sb, contrato_id)
+        for e in empresas.get("opciones") or []:
+            k = e.get("key")
+            if k:
+                sk = str(k)
+                logos_por_key[sk] = e.get("logo_url")
+                nit_por_key[sk] = e.get("nit")
+    except Exception:
+        pass
+
     grupos: Dict[str, dict] = {}
     for row in rows:
         key = _empresa_key_from_row(row)
@@ -806,14 +822,19 @@ def resumen_trabajadores_por_empresa(
                 "empresa_key": key,
                 "empresa_tipo": row.get("empresa_tipo") or "consorcio",
                 "nombre": ((row.get("empresa_nombre") or "Consorcio").strip() or "Consorcio"),
-                "empresa_nit": row.get("empresa_nit"),
+                "empresa_nit": row.get("empresa_nit") or nit_por_key.get(key),
                 "subcontratista_id": row.get("empresa_subcontratista_id"),
+                "logo_url": logos_por_key.get(key),
                 "activos": 0,
                 "total": 0,
                 "total_nomina": 0.0,
                 "por_cargo": {},
             }
             grupos[key] = g
+        if not g.get("empresa_nit"):
+            g["empresa_nit"] = nit_por_key.get(key) or row.get("empresa_nit")
+        if not g.get("logo_url") and logos_por_key.get(key):
+            g["logo_url"] = logos_por_key.get(key)
         g["total"] += 1
         if str(row.get("estado") or "").strip().lower() == "activo":
             g["activos"] += 1
@@ -839,6 +860,7 @@ def resumen_trabajadores_por_empresa(
             "nombre": g["nombre"],
             "empresa_nit": g["empresa_nit"],
             "subcontratista_id": g["subcontratista_id"],
+            "logo_url": g.get("logo_url"),
             "activos": g["activos"],
             "total": g["total"],
             "total_nomina": g["total_nomina"] if incluir_nomina else None,

@@ -22,6 +22,17 @@ import {
 } from './rrhhHelpers'
 import { accesoRrhh } from './rrhhPermisos'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
+import { pastelForEmpresa } from './rrhhTarjetaStyles'
+
+function EmpresaLogoPlaceholder({ accent = '#4A7C94', size = 44 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <rect x="6" y="14" width="36" height="28" rx="3" stroke={accent} strokeWidth="2.2" fill="none" />
+      <path d="M16 42V28h6v14M26 42V22h6v20" stroke={accent} strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M10 14l14-8 14 8" stroke={accent} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
 
 /**
  * Módulo Recursos Humanos — Documentación para contratación.
@@ -517,48 +528,115 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
               No hay colaboradores registrados. Use «Registrar colaborador» para iniciar la documentación de contratación.
             </div>
           )}
-          {grupos.map((g) => (
-            <button
-              key={g.empresa_key}
-              type="button"
-              onClick={() => { setEmpresaSel(g); setPage(0); }}
-              style={{
-                textAlign: 'left',
-                background: tTok.bgCard,
-                border: `1px solid ${tTok.border}`,
-                borderRadius: 12,
-                padding: 16,
-                cursor: 'pointer',
-                color: tTok.text,
-              }}
-            >
-              <div style={{ fontWeight: 800, fontSize: 'var(--cc-lg)', marginBottom: 4 }}>{g.nombre}</div>
-              <div style={{ fontSize: 'var(--cc-sm)', color: tTok.textMuted }}>
-                {g.empresa_tipo === 'subcontratista' ? 'Subcontratista' : 'Consorcio'} · {g.activos} activos / {g.total}
-              </div>
-            </button>
-          ))}
+          {grupos.map((g) => {
+            const pastel = pastelForEmpresa(g.empresa_key)
+            const nit = g.empresa_nit || empresas.find((e) => e.key === g.empresa_key)?.nit
+            const logoSrc = g.logo_url || empresas.find((e) => e.key === g.empresa_key)?.logo_url
+            return (
+              <button
+                key={g.empresa_key}
+                type="button"
+                onClick={() => { setEmpresaSel(g); setPage(0); setQAplicado(''); setFiltro(''); }}
+                style={{
+                  textAlign: 'left',
+                  background: pastel.bg,
+                  border: `1px solid ${pastel.border}`,
+                  borderRadius: 14,
+                  padding: '16px 16px 14px',
+                  cursor: 'pointer',
+                  color: pastel.text,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  minHeight: 148,
+                  transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                  boxShadow: '0 1px 2px rgba(30,40,60,0.04)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)'
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(30,40,60,0.08)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'none'
+                  e.currentTarget.style.boxShadow = '0 1px 2px rgba(30,40,60,0.04)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <div style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 10,
+                    background: '#fff',
+                    border: `1px solid ${pastel.border}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    overflow: 'hidden',
+                  }}>
+                    {logoSrc ? (
+                      <img
+                        src={logoSrc}
+                        alt=""
+                        style={{ maxWidth: '88%', maxHeight: '88%', objectFit: 'contain' }}
+                      />
+                    ) : (
+                      <EmpresaLogoPlaceholder accent={pastel.accent} size={30} />
+                    )}
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{
+                      fontWeight: 800,
+                      fontSize: 'var(--cc-lg)',
+                      lineHeight: 1.25,
+                      color: pastel.text,
+                      wordBreak: 'break-word',
+                    }}>
+                      {g.nombre}
+                    </div>
+                    <div style={{
+                      fontSize: 'var(--cc-sm)',
+                      color: pastel.accent,
+                      marginTop: 4,
+                      fontWeight: 600,
+                    }}>
+                      NIT {nit || '—'}
+                    </div>
+                  </div>
+                </div>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  marginTop: 'auto',
+                  paddingTop: 8,
+                  borderTop: `1px solid ${pastel.border}`,
+                }}>
+                  <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: pastel.text }}>
+                    {g.activos} colaborador{g.activos === 1 ? '' : 'es'} activo{g.activos === 1 ? '' : 's'}
+                  </div>
+                  <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: pastel.accent }}>
+                    {permisos.verSalario && g.total_nomina != null
+                      ? `Nómina ${fmtSalario(g.total_nomina)}`
+                      : 'Nómina: Acceso restringido'}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
         </div>
       )}
       {empresaSel && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{
-            background: tTok.bgCard,
-            border: `1px solid ${tTok.border}`,
-            borderRadius: 10,
-            padding: 14,
+            fontSize: 'var(--cc-sm)',
+            color: tTok.textMuted,
+            fontWeight: 600,
           }}>
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>{empresaSel.nombre}</div>
-            <div style={{ fontSize: 'var(--cc-sm)', color: tTok.textMuted, marginBottom: 8 }}>
-              {empresaSel.activos} activos · {empresaSel.total} colaboradores
-              {permisos.verSalario && empresaSel.total_nomina != null ? ` · Nómina ${fmtSalario(empresaSel.total_nomina)}` : ''}
-            </div>
-            {(empresaSel.por_cargo || []).map((c) => (
-              <div key={c.cargo} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--cc-sm)', padding: '2px 0' }}>
-                <span>{c.cargo} ({c.cantidad})</span>
-                {permisos.verSalario && c.total_nomina != null ? <span>{fmtSalario(c.total_nomina)}</span> : null}
-              </div>
-            ))}
+            {empresaSel.nombre}
+            {empresaSel.empresa_nit ? ` · NIT ${empresaSel.empresa_nit}` : ''}
+            {' · '}
+            {empresaSel.activos} activos
           </div>
           <div style={{
             flex: 1,
@@ -575,17 +653,17 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                   <th style={sheetUi.th}>Trabajador</th>
                   <th style={sheetUi.th}>Documento</th>
                   <th style={sheetUi.th}>Cargo</th>
-                  {permisos.verSalario && <th style={sheetUi.th}>Salario</th>}
+                  <th style={sheetUi.th}>Tipo de contrato</th>
                   <th style={sheetUi.th}>Estado</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td style={sheetUi.td} colSpan={permisos.verSalario ? 5 : 4}>Cargando…</td></tr>
+                  <tr><td style={sheetUi.td} colSpan={5}>Cargando…</td></tr>
                 )}
                 {!loading && items.length === 0 && (
                   <tr>
-                    <td style={sheetUi.td} colSpan={permisos.verSalario ? 5 : 4}>
+                    <td style={sheetUi.td} colSpan={5}>
                       No hay colaboradores en esta empresa.
                     </td>
                   </tr>
@@ -601,7 +679,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     <td style={sheetUi.td}>{nombreCompleto(row)}</td>
                     <td style={sheetUi.td}>{row.tipo_documento} {row.numero_documento}</td>
                     <td style={sheetUi.td}>{row.cargo_aspira || '—'}</td>
-                    {permisos.verSalario && <td style={sheetUi.td}>{fmtSalario(row.salario)}</td>}
+                    <td style={sheetUi.td}>{row.tipo_contrato || '—'}</td>
                     <td style={sheetUi.td}>{row.estado}</td>
                   </tr>
                 ))}
