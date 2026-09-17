@@ -1,21 +1,18 @@
 /**
  * Catálogo fijo del mapa interactivo de funcionalidades.
- * Única fuente de estructura para ambos accesos (ícono de inicio + asistente Clara).
+ * Única fuente para ambos accesos (ícono de inicio + asistente Clara).
  *
  * Jerarquía:
- *   sección (grupo) → subtemas (entradas individuales de capacitación futura)
+ *   módulo (ícono colapsable) → grupos temáticos (entrada de video futura)
  *
- * Los ids de subtema son estables; el contenido educativo (texto, pantallazos,
- * video futuro) vive en /ayuda/mapa-navegacion.json o en el API (blob).
+ * Vista inicial: solo los 7 íconos. Al hacer clic se expanden los grupos
+ * temáticos de ese módulo. Cada grupo aloja descripción / pantallazos / video.
  */
 
-/** @typedef {{ id: string, label: string, icono: string, orden: number }} MapaSeccionCatalogo */
-/** @typedef {{ id: string, nombre: string, icono: string, grupo: string, orden: number }} MapaSubtemaCatalogo */
+/** @typedef {{ id: string, label: string, icono: string, orden: number }} MapaModuloIcono */
+/** @typedef {{ id: string, nombre: string, icono: string, grupo: string, orden: number, resumen?: string }} MapaGrupoTematico */
 
-/** Alias histórico: los consumidores antiguos importaban MODULOS/GRUPOS. */
-/** @typedef {MapaSubtemaCatalogo} MapaModuloCatalogo */
-
-/** @type {MapaSeccionCatalogo[]} */
+/** @type {MapaModuloIcono[]} */
 export const MAPA_NAVEGACION_SECCIONES = [
   { id: 'dashboard', label: 'Dashboard', icono: '📊', orden: 1 },
   { id: 'presupuesto', label: 'Presupuesto', icono: '📋', orden: 2 },
@@ -26,372 +23,270 @@ export const MAPA_NAVEGACION_SECCIONES = [
   { id: 'topografia', label: 'Topografía', icono: '📐', orden: 7 },
 ]
 
-/** @deprecated usar MAPA_NAVEGACION_SECCIONES */
+/** @deprecated alias de compatibilidad */
 export const MAPA_NAVEGACION_GRUPOS = MAPA_NAVEGACION_SECCIONES
 
 /**
- * Subtemas exactos por sección (orden de producto).
- * Cada uno es punto de entrada individual para capacitación futura.
- * @type {MapaSubtemaCatalogo[]}
+ * Grupos temáticos por módulo (orden de producto).
+ * Un grupo = un futuro video que cubre varias funcionalidades afines.
+ * @type {MapaGrupoTematico[]}
  */
 export const MAPA_NAVEGACION_SUBTEMAS = [
-  // ── 1. Dashboard ──────────────────────────────────────────────────────────
+  // ── Dashboard ─────────────────────────────────────────────────────────────
   {
-    id: 'dash_obra_ejecutada_presupuesto',
-    nombre: 'Qué es obra ejecutada y qué es presupuesto de obra',
+    id: 'dash_leer_indicadores',
+    nombre: 'Cómo leer tus indicadores',
+    resumen:
+      'Obra ejecutada vs. presupuesto, resumen vs. desviaciones, y los dashboards de aprobación con sus indicadores.',
     icono: '📊',
     grupo: 'dashboard',
     orden: 1,
   },
+
+  // ── Presupuesto ───────────────────────────────────────────────────────────
   {
-    id: 'dash_resumen_desviaciones',
-    nombre: 'Qué se muestra en Resumen y qué en Desviaciones',
-    icono: '📊',
-    grupo: 'dashboard',
+    id: 'ppto_arranca_versiona',
+    nombre: 'Arranca y versiona tu presupuesto',
+    resumen: 'Crear presupuesto / obra ejecutada y gestionar versiones.',
+    icono: '📋',
+    grupo: 'presupuesto',
     orden: 2,
   },
   {
-    id: 'dash_aprobacion_sicoe_ppto',
-    nombre:
-      'Dashboard Aprobación: SICOE Máx Aprobado | PPTO ClaraCore Aprobado Nivel Máx | PPTO ClaraCore No Revisado Nivel Máx',
-    icono: '📊',
-    grupo: 'dashboard',
+    id: 'ppto_analiza_datos',
+    nombre: 'Analiza tus datos',
+    resumen: 'Análisis de datos, filtros y panel dinámico ClaraCore.',
+    icono: '📋',
+    grupo: 'presupuesto',
     orden: 3,
   },
   {
-    id: 'dash_obra_acta_capitulo_rol',
-    nombre:
-      'Dashboard: Obra Aprobada por Acta RPO | Presupuesto por Capítulo | Ppto vs Cobro por Capítulo | Validación por Rol · SICOE Obra',
-    icono: '📊',
-    grupo: 'dashboard',
+    id: 'ppto_edita_consulta',
+    nombre: 'Edita y consulta registros',
+    resumen: 'Edición individual/masiva y consulta de información de registro.',
+    icono: '📋',
+    grupo: 'presupuesto',
     orden: 4,
   },
-
-  // ── 2. Presupuesto ────────────────────────────────────────────────────────
   {
-    id: 'ppto_crear_obra_ejecutada',
-    nombre: 'Crear el presupuesto / Obra Ejecutada',
+    id: 'ppto_autocad_graficos',
+    nombre: 'Conecta AutoCAD y asigna gráficos',
+    resumen: 'Conexión AutoCAD–ClaraCore y bibliotecas de gráficos.',
     icono: '📋',
     grupo: 'presupuesto',
     orden: 5,
   },
   {
-    id: 'ppto_nueva_version_versiones',
-    nombre: 'Nueva versión - Versiones',
+    id: 'ppto_exporta_cierra',
+    nombre: 'Exporta y cierra tu presupuesto',
+    resumen: 'Descarga Excel y cierre financiero presupuestal.',
     icono: '📋',
     grupo: 'presupuesto',
     orden: 6,
   },
+
+  // ── SICOE Obra ────────────────────────────────────────────────────────────
   {
-    id: 'ppto_descargar_excel',
-    nombre: 'Descargar Excel',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'sicoe_crear_reporte_registros',
+    nombre: 'Crea tu reporte de cantidades',
+    resumen: 'Asistente de creación: Info General, Plantilla, Localización, Registros y Topografía.',
+    icono: '🏗️',
+    grupo: 'sicoe_obra',
     orden: 7,
   },
   {
-    id: 'ppto_analisis_datos',
-    nombre: 'Análisis de datos',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'sicoe_visualiza_filtra',
+    nombre: 'Visualiza y filtra tus registros',
+    resumen: 'Vista por Reportes o Cantidades, filtros y panel dinámico SICOE.',
+    icono: '🏗️',
+    grupo: 'sicoe_obra',
     orden: 8,
   },
   {
-    id: 'ppto_filtros',
-    nombre: 'Filtros',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'sicoe_consulta_valida',
+    nombre: 'Consulta y valida cantidades',
+    resumen: 'Consulta de registros y validación individual o masiva.',
+    icono: '🏗️',
+    grupo: 'sicoe_obra',
     orden: 9,
   },
   {
-    id: 'ppto_panel_dinamico',
-    nombre: 'Panel dinámico ClaraCore',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'sicoe_descarga_plantillas',
+    nombre: 'Descarga tus plantillas de información',
+    resumen: 'Descarga de información y plantillas de exportación.',
+    icono: '🏗️',
+    grupo: 'sicoe_obra',
     orden: 10,
   },
+
+  // ── Informes ──────────────────────────────────────────────────────────────
   {
-    id: 'ppto_edicion_individual_masiva',
-    nombre: 'Edición individual y edición masiva',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'informes_biblioteca_formatos',
+    nombre: 'Tu biblioteca de informes y formatos',
+    resumen: 'Biblioteca de informes, tipos de formato y descarga.',
+    icono: '📄',
+    grupo: 'informes',
     orden: 11,
   },
   {
-    id: 'ppto_consulta_registro',
-    nombre: 'Consulta de información de registro',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'informes_firmas_personalizacion',
+    nombre: 'Firmas y personalización de documentos',
+    resumen: 'Asignación de firmas, personalización de formatos y firma de documentos.',
+    icono: '📄',
+    grupo: 'informes',
     orden: 12,
   },
+
+  // ── Almacén ───────────────────────────────────────────────────────────────
   {
-    id: 'ppto_conexion_autocad',
-    nombre: 'Conexión AutoCAD - ClaraCore Presupuesto',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'almacen_catalogo_insumos',
+    nombre: 'Crea y carga tu catálogo de insumos',
+    resumen: 'Crear insumo y descargar/cargar plantillas.',
+    icono: '🏪',
+    grupo: 'almacen',
     orden: 13,
   },
   {
-    id: 'ppto_graficos_bibliotecas',
-    nombre: 'Asignación de gráficos y bibliotecas de gráficos',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'almacen_solicita_aprueba',
+    nombre: 'Solicita y aprueba materiales',
+    resumen: 'Nueva solicitud, borrador, aprobación de insumos y generación de OC.',
+    icono: '🏪',
+    grupo: 'almacen',
     orden: 14,
   },
   {
-    id: 'ppto_cierre_financiero',
-    nombre: 'Cierre financiero presupuestal',
-    icono: '📋',
-    grupo: 'presupuesto',
+    id: 'almacen_mueve_obra',
+    nombre: 'Mueve materiales en obra',
+    resumen: 'Entradas, despachador, devoluciones y salidas.',
+    icono: '🏪',
+    grupo: 'almacen',
     orden: 15,
   },
-
-  // ── 3. SICOE Obra ─────────────────────────────────────────────────────────
   {
-    id: 'sicoe_viz_reportes_cantidades',
-    nombre: 'Visualización de registros por Reportes o por Cantidades',
-    icono: '🏗️',
-    grupo: 'sicoe_obra',
+    id: 'almacen_consulta_inventario',
+    nombre: 'Consulta tu inventario',
+    resumen: 'Inventario de materiales en almacén.',
+    icono: '🏪',
+    grupo: 'almacen',
     orden: 16,
   },
+
+  // ── Seguimiento ───────────────────────────────────────────────────────────
   {
-    id: 'sicoe_filtros',
-    nombre: 'Filtros',
-    icono: '🏗️',
-    grupo: 'sicoe_obra',
+    id: 'seg_tareas_calendario',
+    nombre: 'Organiza tareas y calendario',
+    resumen: 'Calendario y nueva tarea.',
+    icono: '📌',
+    grupo: 'seguimiento',
     orden: 17,
   },
   {
-    id: 'sicoe_panel_dinamico',
-    nombre: 'Panel dinámico SICOE',
-    icono: '🏗️',
-    grupo: 'sicoe_obra',
+    id: 'seg_constancia_digital',
+    nombre: 'Deja constancia: actas, bitácora y libro digital',
+    resumen: 'Nueva acta, bitácora de obra y libro digital.',
+    icono: '📌',
+    grupo: 'seguimiento',
     orden: 18,
   },
+
+  // ── Topografía ────────────────────────────────────────────────────────────
   {
-    id: 'sicoe_crear_reporte_registros',
-    nombre: 'Crear Reporte - Registros',
-    icono: '🏗️',
-    grupo: 'sicoe_obra',
+    id: 'topo_administra_puntos',
+    nombre: 'Administra tus puntos topográficos',
+    resumen: 'Biblioteca de puntos y creación de un nuevo punto.',
+    icono: '📐',
+    grupo: 'topografia',
     orden: 19,
   },
   {
-    id: 'sicoe_consulta_registros',
-    nombre: 'Consulta de información de registros',
-    icono: '🏗️',
-    grupo: 'sicoe_obra',
+    id: 'topo_poligonales_nivelacion',
+    nombre: 'Poligonales y nivelación',
+    resumen: 'Crear poligonal y circuito de nivelación.',
+    icono: '📐',
+    grupo: 'topografia',
     orden: 20,
   },
   {
-    id: 'sicoe_validacion_cantidades_masiva',
-    nombre: 'Validación de cantidades - Validación masiva',
-    icono: '🏗️',
-    grupo: 'sicoe_obra',
+    id: 'topo_diseno_entrega',
+    nombre: 'Del diseño a la entrega',
+    resumen: 'Estructura de diseño / diseño geométrico y carteras de vía.',
+    icono: '📐',
+    grupo: 'topografia',
     orden: 21,
-  },
-  {
-    id: 'sicoe_descarga_plantillas',
-    nombre: 'Descarga de información (plantillas de información)',
-    icono: '🏗️',
-    grupo: 'sicoe_obra',
-    orden: 22,
-  },
-
-  // ── 4. Informes ───────────────────────────────────────────────────────────
-  {
-    id: 'informes_biblioteca',
-    nombre: 'Biblioteca de informes',
-    icono: '📄',
-    grupo: 'informes',
-    orden: 23,
-  },
-  {
-    id: 'informes_firmas_formatos',
-    nombre: 'Asignación de firmas y personalización de formatos',
-    icono: '📄',
-    grupo: 'informes',
-    orden: 24,
-  },
-  {
-    id: 'informes_tipos_descarga',
-    nombre: 'Tipo de formatos y descarga de información',
-    icono: '📄',
-    grupo: 'informes',
-    orden: 25,
-  },
-  {
-    id: 'informes_firma_documentos',
-    nombre: 'Firma de documentos',
-    icono: '📄',
-    grupo: 'informes',
-    orden: 26,
-  },
-
-  // ── 5. Almacén ────────────────────────────────────────────────────────────
-  {
-    id: 'almacen_crear_insumo',
-    nombre: 'Crear insumo',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 27,
-  },
-  {
-    id: 'almacen_plantillas',
-    nombre: 'Descargar y cargar plantillas',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 28,
-  },
-  {
-    id: 'almacen_solicitud_borrador_aprobacion',
-    nombre: 'Nueva solicitud | Guardar borrador | Solicitud de aprobación',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 29,
-  },
-  {
-    id: 'almacen_aprobacion_oc',
-    nombre: 'Aprobación de insumos y OC - Generación de OC',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 30,
-  },
-  {
-    id: 'almacen_entradas',
-    nombre: 'Entradas',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 31,
-  },
-  {
-    id: 'almacen_despachador',
-    nombre: 'Despachador: recibo de materiales | disposición de materiales',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 32,
-  },
-  {
-    id: 'almacen_devoluciones',
-    nombre: 'Devoluciones de materiales',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 33,
-  },
-  {
-    id: 'almacen_salidas',
-    nombre: 'Salidas',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 34,
-  },
-  {
-    id: 'almacen_inventario',
-    nombre: 'Inventario',
-    icono: '🏪',
-    grupo: 'almacen',
-    orden: 35,
-  },
-
-  // ── 6. Seguimiento ────────────────────────────────────────────────────────
-  {
-    id: 'seg_calendario',
-    nombre: 'Calendario',
-    icono: '📌',
-    grupo: 'seguimiento',
-    orden: 36,
-  },
-  {
-    id: 'seg_nueva_tarea',
-    nombre: 'Nueva tarea',
-    icono: '📌',
-    grupo: 'seguimiento',
-    orden: 37,
-  },
-  {
-    id: 'seg_nueva_acta',
-    nombre: 'Nueva acta',
-    icono: '📌',
-    grupo: 'seguimiento',
-    orden: 38,
-  },
-  {
-    id: 'seg_bitacora',
-    nombre: 'Bitácora de obra',
-    icono: '📌',
-    grupo: 'seguimiento',
-    orden: 39,
-  },
-  {
-    id: 'seg_libro_digital',
-    nombre: 'Libro digital',
-    icono: '📌',
-    grupo: 'seguimiento',
-    orden: 40,
-  },
-
-  // ── 7. Topografía ─────────────────────────────────────────────────────────
-  {
-    id: 'topo_biblioteca_puntos',
-    nombre: 'Biblioteca de puntos',
-    icono: '📐',
-    grupo: 'topografia',
-    orden: 41,
-  },
-  {
-    id: 'topo_crear_poligonal',
-    nombre: 'Crear poligonal',
-    icono: '📐',
-    grupo: 'topografia',
-    orden: 42,
-  },
-  {
-    id: 'topo_crear_punto',
-    nombre: 'Crear un nuevo punto',
-    icono: '📐',
-    grupo: 'topografia',
-    orden: 43,
-  },
-  {
-    id: 'topo_circuito_nivelacion',
-    nombre: 'Circuito de nivelación',
-    icono: '📐',
-    grupo: 'topografia',
-    orden: 44,
-  },
-  {
-    id: 'topo_estructura_diseno',
-    nombre: 'Crear estructura de diseño - cargar diseño geométrico',
-    icono: '📐',
-    grupo: 'topografia',
-    orden: 45,
-  },
-  {
-    id: 'topo_carteras_via',
-    nombre: 'Carteras de topografía que entregan estructura de vía',
-    icono: '📐',
-    grupo: 'topografia',
-    orden: 46,
   },
 ]
 
-/** @deprecated usar MAPA_NAVEGACION_SUBTEMAS */
+/** @deprecated alias: ahora son grupos temáticos */
 export const MAPA_NAVEGACION_MODULOS = MAPA_NAVEGACION_SUBTEMAS
 
-/** Subtema con capacitación interactiva nativa ya disponible. */
+/** Grupo temático con capacitación interactiva nativa ya disponible. */
 export const MAPA_SUBTEMA_CAPACITACION_RC = 'sicoe_crear_reporte_registros'
 
 /**
- * Migración de ids del catálogo anterior → subtema actual.
- * Conserva contenido publicado si el blob aún usa claves viejas.
+ * Migración de ids anteriores (subtemas sueltos o módulos viejos)
+ * → grupo temático actual. Conserva contenido publicado en blob/JSON.
  */
 export const MAPA_NAVEGACION_ID_LEGACY = {
+  // Módulos / ids muy antiguos
   reporte_cantidades: MAPA_SUBTEMA_CAPACITACION_RC,
-  dashboard: 'dash_obra_ejecutada_presupuesto',
-  topografia: 'topo_biblioteca_puntos',
-  seguimiento: 'seg_calendario',
-  editar_registros_presupuesto: 'ppto_edicion_individual_masiva',
-  informes_ccd: 'informes_biblioteca',
-  almacen: 'almacen_inventario',
+  dashboard: 'dash_leer_indicadores',
+  topografia: 'topo_administra_puntos',
+  seguimiento: 'seg_tareas_calendario',
+  editar_registros_presupuesto: 'ppto_edita_consulta',
+  informes_ccd: 'informes_biblioteca_formatos',
+  almacen: 'almacen_consulta_inventario',
+
+  // Subtemas de la versión intermedia (46 ítems) → grupos
+  dash_obra_ejecutada_presupuesto: 'dash_leer_indicadores',
+  dash_resumen_desviaciones: 'dash_leer_indicadores',
+  dash_aprobacion_sicoe_ppto: 'dash_leer_indicadores',
+  dash_obra_acta_capitulo_rol: 'dash_leer_indicadores',
+
+  ppto_crear_obra_ejecutada: 'ppto_arranca_versiona',
+  ppto_nueva_version_versiones: 'ppto_arranca_versiona',
+  ppto_analisis_datos: 'ppto_analiza_datos',
+  ppto_filtros: 'ppto_analiza_datos',
+  ppto_panel_dinamico: 'ppto_analiza_datos',
+  ppto_edicion_individual_masiva: 'ppto_edita_consulta',
+  ppto_consulta_registro: 'ppto_edita_consulta',
+  ppto_conexion_autocad: 'ppto_autocad_graficos',
+  ppto_graficos_bibliotecas: 'ppto_autocad_graficos',
+  ppto_descargar_excel: 'ppto_exporta_cierra',
+  ppto_cierre_financiero: 'ppto_exporta_cierra',
+
+  sicoe_viz_reportes_cantidades: 'sicoe_visualiza_filtra',
+  sicoe_filtros: 'sicoe_visualiza_filtra',
+  sicoe_panel_dinamico: 'sicoe_visualiza_filtra',
+  sicoe_consulta_registros: 'sicoe_consulta_valida',
+  sicoe_validacion_cantidades_masiva: 'sicoe_consulta_valida',
+
+  informes_biblioteca: 'informes_biblioteca_formatos',
+  informes_tipos_descarga: 'informes_biblioteca_formatos',
+  informes_firmas_formatos: 'informes_firmas_personalizacion',
+  informes_firma_documentos: 'informes_firmas_personalizacion',
+
+  almacen_crear_insumo: 'almacen_catalogo_insumos',
+  almacen_plantillas: 'almacen_catalogo_insumos',
+  almacen_solicitud_borrador_aprobacion: 'almacen_solicita_aprueba',
+  almacen_aprobacion_oc: 'almacen_solicita_aprueba',
+  almacen_entradas: 'almacen_mueve_obra',
+  almacen_despachador: 'almacen_mueve_obra',
+  almacen_devoluciones: 'almacen_mueve_obra',
+  almacen_salidas: 'almacen_mueve_obra',
+  almacen_inventario: 'almacen_consulta_inventario',
+
+  seg_calendario: 'seg_tareas_calendario',
+  seg_nueva_tarea: 'seg_tareas_calendario',
+  seg_nueva_acta: 'seg_constancia_digital',
+  seg_bitacora: 'seg_constancia_digital',
+  seg_libro_digital: 'seg_constancia_digital',
+
+  topo_biblioteca_puntos: 'topo_administra_puntos',
+  topo_crear_punto: 'topo_administra_puntos',
+  topo_crear_poligonal: 'topo_poligonales_nivelacion',
+  topo_circuito_nivelacion: 'topo_poligonales_nivelacion',
+  topo_estructura_diseno: 'topo_diseno_entrega',
+  topo_carteras_via: 'topo_diseno_entrega',
 }
 
 export function listarIdsSubtemasMapa() {
