@@ -3,63 +3,32 @@
 from __future__ import annotations
 
 IDS = frozenset({
-    # Dashboard
-    "dash_obra_ejecutada_presupuesto",
-    "dash_resumen_desviaciones",
-    "dash_aprobacion_sicoe_ppto",
-    "dash_obra_acta_capitulo_rol",
-    # Presupuesto
-    "ppto_crear_obra_ejecutada",
-    "ppto_nueva_version_versiones",
-    "ppto_descargar_excel",
-    "ppto_analisis_datos",
-    "ppto_filtros",
-    "ppto_panel_dinamico",
-    "ppto_edicion_individual_masiva",
-    "ppto_consulta_registro",
-    "ppto_conexion_autocad",
-    "ppto_graficos_bibliotecas",
-    "ppto_cierre_financiero",
-    # SICOE Obra
-    "sicoe_viz_reportes_cantidades",
-    "sicoe_filtros",
-    "sicoe_panel_dinamico",
+    "dash_leer_indicadores",
+    "ppto_arranca_versiona",
+    "ppto_analiza_datos",
+    "ppto_edita_consulta",
+    "ppto_autocad_graficos",
+    "ppto_exporta_cierra",
     "sicoe_crear_reporte_registros",
-    "sicoe_consulta_registros",
-    "sicoe_validacion_cantidades_masiva",
+    "sicoe_visualiza_filtra",
+    "sicoe_consulta_valida",
     "sicoe_descarga_plantillas",
-    # Informes
-    "informes_biblioteca",
-    "informes_firmas_formatos",
-    "informes_tipos_descarga",
-    "informes_firma_documentos",
-    # Almacén
-    "almacen_crear_insumo",
-    "almacen_plantillas",
-    "almacen_solicitud_borrador_aprobacion",
-    "almacen_aprobacion_oc",
-    "almacen_entradas",
-    "almacen_despachador",
-    "almacen_devoluciones",
-    "almacen_salidas",
-    "almacen_inventario",
-    # Seguimiento
-    "seg_calendario",
-    "seg_nueva_tarea",
-    "seg_nueva_acta",
-    "seg_bitacora",
-    "seg_libro_digital",
-    # Topografía
-    "topo_biblioteca_puntos",
-    "topo_crear_poligonal",
-    "topo_crear_punto",
-    "topo_circuito_nivelacion",
-    "topo_estructura_diseno",
-    "topo_carteras_via",
+    "informes_biblioteca_formatos",
+    "informes_firmas_personalizacion",
+    "almacen_catalogo_insumos",
+    "almacen_solicita_aprueba",
+    "almacen_mueve_obra",
+    "almacen_consulta_inventario",
+    "seg_tareas_calendario",
+    "seg_constancia_digital",
+    "topo_administra_puntos",
+    "topo_poligonales_nivelacion",
+    "topo_diseno_entrega",
 })
 
 LEGACY = {
     "reporte_cantidades": "sicoe_crear_reporte_registros",
+    "dash_resumen_desviaciones": "dash_leer_indicadores",
 }
 
 
@@ -119,8 +88,8 @@ def normalizar(raw):
     return base
 
 
-def test_mapa_navegacion_tiene_46_subtemas():
-    assert len(IDS) == 46
+def test_mapa_navegacion_tiene_21_temas():
+    assert len(IDS) == 21
 
 
 def test_mapa_navegacion_normalizar_contrato():
@@ -136,7 +105,7 @@ def test_mapa_navegacion_normalizar_contrato():
         },
     })
     assert out["version"] == 2
-    assert len(out["modulos"]) == 46
+    assert len(out["modulos"]) == 21
     assert out["modulos"]["sicoe_crear_reporte_registros"]["descripcion"] == "Crear reporte"
     assert out["modulos"]["sicoe_crear_reporte_registros"]["imagenes"] == [
         {"url": "https://x.png", "caption": "A"},
@@ -145,15 +114,17 @@ def test_mapa_navegacion_normalizar_contrato():
     assert "desconocido" not in out["modulos"]
 
 
-def test_mapa_navegacion_migra_legacy_reporte_cantidades():
+def test_mapa_navegacion_migra_legacy_a_grupos():
     out = normalizar({
         "modulos": {
             "reporte_cantidades": {
                 "descripcion": "Legacy RC",
                 "imagenes": [{"url": "https://old.png"}],
             },
+            "dash_resumen_desviaciones": {
+                "descripcion": "Legacy dash",
+            },
         },
     })
-    dest = out["modulos"]["sicoe_crear_reporte_registros"]
-    assert dest["descripcion"] == "Legacy RC"
-    assert dest["imagenes"] == [{"url": "https://old.png", "caption": ""}]
+    assert out["modulos"]["sicoe_crear_reporte_registros"]["descripcion"] == "Legacy RC"
+    assert out["modulos"]["dash_leer_indicadores"]["descripcion"] == "Legacy dash"

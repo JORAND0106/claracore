@@ -10,8 +10,9 @@ import CapacitacionReporteCantidadesWalkthrough, {
 export const MAPA_MODULO_CAPACITACION_RC = MAPA_SUBTEMA_CAPACITACION_RC
 
 /**
- * Vista índice del mapa interactivo (informativa; sin deep links).
- * Misma fuente/estructura para el módulo lateral (ícono inicio) y la pestaña Mapa de Clara.
+ * Vista del mapa interactivo: 7 íconos de módulo; al clic se expanden
+ * solo los grupos temáticos de ese módulo.
+ * Misma fuente para ícono de inicio y pestaña Mapa de Clara.
  */
 export default function MapaNavegacionVista({
   t,
@@ -21,15 +22,30 @@ export default function MapaNavegacionVista({
   error = '',
   fuente = '',
 }) {
-  const [abiertoId, setAbiertoId] = useState(null)
+  const [moduloActivoId, setModuloActivoId] = useState(null)
+  const [temaAbiertoId, setTemaAbiertoId] = useState(null)
   const [lightbox, setLightbox] = useState(null)
   const [capRcOpen, setCapRcOpen] = useState(false)
 
-  const totalSubtemas = useMemo(
+  const totalTemas = useMemo(
     () => grupos.reduce((acc, g) => acc + (g.modulos?.length || 0), 0),
     [grupos],
   )
-  const totalSecciones = grupos.length
+  const moduloActivo = useMemo(
+    () => grupos.find((g) => g.id === moduloActivoId) || null,
+    [grupos, moduloActivoId],
+  )
+
+  function toggleModulo(id) {
+    setModuloActivoId((prev) => {
+      if (prev === id) {
+        setTemaAbiertoId(null)
+        return null
+      }
+      setTemaAbiertoId(null)
+      return id
+    })
+  }
 
   if (cargando) {
     return (
@@ -78,9 +94,9 @@ export default function MapaNavegacionVista({
           lineHeight: 1.45,
           maxWidth: compact ? '100%' : 720,
         }}>
-          {totalSecciones} secciones · {totalSubtemas} subtemas. Solo consulta:
-          no abre pantallas ni cambia datos. Cada subtema es un punto de entrada
-          para su capacitación (texto, pantallazos o video) cuando esté lista.
+          {grupos.length} módulos · {totalTemas} temas de capacitación.
+          Elija un ícono para ver sus videos/temas. Solo consulta: no abre
+          pantallas ni cambia datos.
         </p>
         {fuente ? (
           <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
@@ -89,44 +105,127 @@ export default function MapaNavegacionVista({
         ) : null}
       </header>
 
-      {grupos.map((grupo) => (
-        <section key={grupo.id} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {/* Vista compacta: solo íconos de módulo */}
+      <div
+        role="tablist"
+        aria-label="Módulos del mapa"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: compact
+            ? 'repeat(auto-fill, minmax(88px, 1fr))'
+            : 'repeat(auto-fill, minmax(104px, 1fr))',
+          gap: compact ? 8 : 10,
+        }}
+      >
+        {grupos.map((grupo) => {
+          const activo = moduloActivoId === grupo.id
+          const nTemas = (grupo.modulos || []).length
+          return (
+            <button
+              key={grupo.id}
+              type="button"
+              role="tab"
+              aria-selected={activo}
+              aria-expanded={activo}
+              aria-controls={`mapa-temas-${grupo.id}`}
+              id={`mapa-mod-${grupo.id}`}
+              onClick={() => toggleModulo(grupo.id)}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                padding: compact ? '12px 8px' : '14px 10px',
+                minHeight: compact ? 88 : 100,
+                borderRadius: 14,
+                border: `1.5px solid ${activo ? t.primary : t.border}`,
+                background: activo ? `${t.primary}14` : t.bgCard,
+                color: t.text,
+                cursor: 'pointer',
+                boxShadow: activo ? `0 0 0 2px ${t.primary}33` : 'none',
+                transition: 'border-color 160ms ease, background 160ms ease, box-shadow 160ms ease',
+              }}
+            >
+              <span aria-hidden style={{ fontSize: compact ? 28 : 32, lineHeight: 1 }}>
+                {grupo.icono}
+              </span>
+              <span style={{
+                fontWeight: 800,
+                fontSize: 'var(--cc-caption)',
+                textAlign: 'center',
+                lineHeight: 1.25,
+                color: activo ? t.primary : t.text,
+              }}>
+                {grupo.label}
+              </span>
+              <span style={{
+                fontSize: 10,
+                fontWeight: 600,
+                color: t.textMuted,
+              }}>
+                {nTemas} {nTemas === 1 ? 'tema' : 'temas'}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Panel expandido: grupos temáticos del módulo activo */}
+      {moduloActivo ? (
+        <section
+          id={`mapa-temas-${moduloActivo.id}`}
+          role="tabpanel"
+          aria-labelledby={`mapa-mod-${moduloActivo.id}`}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            border: `1px solid ${t.border}`,
+            borderRadius: 14,
+            background: t.bgCard,
+            overflow: 'hidden',
+          }}
+        >
           <div style={{
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            fontSize: 'var(--cc-label)',
-            fontWeight: 800,
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            color: t.primary,
+            padding: compact ? '10px 12px' : '12px 14px',
+            borderBottom: `1px solid ${t.border}`,
+            background: t.headerBg || t.bg,
           }}>
-            <span aria-hidden style={{ fontSize: 'var(--cc-md)', letterSpacing: 0, textTransform: 'none' }}>
-              {grupo.icono || ''}
-            </span>
-            {grupo.label}
-            <span style={{
-              marginLeft: 'auto',
-              fontSize: 'var(--cc-caption)',
-              fontWeight: 600,
-              letterSpacing: 0,
-              textTransform: 'none',
-              color: t.textMuted,
-            }}>
-              {(grupo.modulos || []).length} subtemas
-            </span>
+            <span aria-hidden style={{ fontSize: 'var(--cc-lg)' }}>{moduloActivo.icono}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', color: t.text }}>
+                {moduloActivo.label}
+              </div>
+              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                Temas de capacitación de este módulo
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => toggleModulo(moduloActivo.id)}
+              aria-label={`Cerrar ${moduloActivo.label}`}
+              style={{
+                border: `1px solid ${t.border}`,
+                background: 'transparent',
+                color: t.textMuted,
+                borderRadius: 8,
+                padding: '6px 10px',
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: 'var(--cc-sm)',
+              }}
+            >
+              ✕
+            </button>
           </div>
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 0,
-            border: `1px solid ${t.border}`,
-            borderRadius: 12,
-            overflow: 'hidden',
-            background: t.bgCard,
-          }}>
-            {(grupo.modulos || []).map((mod, idx) => {
-              const abierto = abiertoId === mod.id
+
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {(moduloActivo.modulos || []).map((mod, idx) => {
+              const abierto = temaAbiertoId === mod.id
               const esCapRc = mod.id === MAPA_SUBTEMA_CAPACITACION_RC
               return (
                 <div
@@ -137,7 +236,7 @@ export default function MapaNavegacionVista({
                 >
                   <button
                     type="button"
-                    onClick={() => setAbiertoId(abierto ? null : mod.id)}
+                    onClick={() => setTemaAbiertoId(abierto ? null : mod.id)}
                     aria-expanded={abierto}
                     style={{
                       width: '100%',
@@ -182,9 +281,10 @@ export default function MapaNavegacionVista({
                           whiteSpace: 'nowrap',
                         }}>
                           {mod.descripcion
+                            || mod.resumen
                             || (esCapRc
                               ? 'Capacitación interactiva disponible'
-                              : (mod.contenidoPendiente ? 'Capacitación pendiente' : 'Contenido disponible'))}
+                              : 'Video de capacitación pendiente')}
                         </span>
                       )}
                     </span>
@@ -205,6 +305,16 @@ export default function MapaNavegacionVista({
                       flexDirection: 'column',
                       gap: 10,
                     }}>
+                      {mod.resumen && !mod.descripcion ? (
+                        <p style={{
+                          margin: 0,
+                          fontSize: 'var(--cc-sm)',
+                          color: t.textMuted,
+                          lineHeight: 1.45,
+                        }}>
+                          {mod.resumen}
+                        </p>
+                      ) : null}
                       <p style={{
                         margin: 0,
                         fontSize: 'var(--cc-sm)',
@@ -215,7 +325,7 @@ export default function MapaNavegacionVista({
                         {mod.descripcion
                           || (esCapRc
                             ? 'Asistente de creación de reportes de cantidades: Info General, Plantilla, Localización, Registros y Topografía.'
-                            : 'Aún no hay descripción educativa para este subtema. Se publicará aquí cuando esté lista.')}
+                            : 'Aún no hay descripción educativa para este tema. Se publicará aquí cuando esté lista.')}
                       </p>
 
                       {esCapRc ? (
@@ -251,7 +361,7 @@ export default function MapaNavegacionVista({
                           color: t.textMuted,
                           background: t.bg,
                         }}>
-                          Video de capacitación — pendiente (este subtema ya está listo para alojarlo).
+                          Video de capacitación — pendiente (este tema ya está listo para alojarlo).
                         </div>
                       )}
 
@@ -309,7 +419,19 @@ export default function MapaNavegacionVista({
             })}
           </div>
         </section>
-      ))}
+      ) : (
+        <div style={{
+          border: `1px dashed ${t.border}`,
+          borderRadius: 12,
+          padding: compact ? '14px 12px' : '18px 16px',
+          fontSize: 'var(--cc-sm)',
+          color: t.textMuted,
+          background: t.bgCard,
+          textAlign: 'center',
+        }}>
+          Pulse un módulo para ver sus temas de capacitación.
+        </div>
+      )}
 
       {lightbox && (
         <div

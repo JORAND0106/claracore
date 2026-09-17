@@ -2,92 +2,32 @@
   "version": 1,
   "updated_at": null,
   "modulos": {
-    "dash_obra_ejecutada_presupuesto": {
+    "dash_leer_indicadores": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "dash_resumen_desviaciones": {
+    "ppto_arranca_versiona": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "dash_aprobacion_sicoe_ppto": {
+    "ppto_analiza_datos": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "dash_obra_acta_capitulo_rol": {
+    "ppto_edita_consulta": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "ppto_crear_obra_ejecutada": {
+    "ppto_autocad_graficos": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "ppto_nueva_version_versiones": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_descargar_excel": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_analisis_datos": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_filtros": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_panel_dinamico": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_edicion_individual_masiva": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_consulta_registro": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_conexion_autocad": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_graficos_bibliotecas": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "ppto_cierre_financiero": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "sicoe_viz_reportes_cantidades": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "sicoe_filtros": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "sicoe_panel_dinamico": {
+    "ppto_exporta_cierra": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
@@ -97,12 +37,12 @@
       "imagenes": [],
       "videoUrl": ""
     },
-    "sicoe_consulta_registros": {
+    "sicoe_visualiza_filtra": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "sicoe_validacion_cantidades_masiva": {
+    "sicoe_consulta_valida": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
@@ -112,122 +52,57 @@
       "imagenes": [],
       "videoUrl": ""
     },
-    "informes_biblioteca": {
+    "informes_biblioteca_formatos": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "informes_firmas_formatos": {
+    "informes_firmas_personalizacion": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "informes_tipos_descarga": {
+    "almacen_catalogo_insumos": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "informes_firma_documentos": {
+    "almacen_solicita_aprueba": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "almacen_crear_insumo": {
+    "almacen_mueve_obra": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "almacen_plantillas": {
+    "almacen_consulta_inventario": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "almacen_solicitud_borrador_aprobacion": {
+    "seg_tareas_calendario": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "almacen_aprobacion_oc": {
+    "seg_constancia_digital": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "almacen_entradas": {
+    "topo_administra_puntos": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "almacen_despachador": {
+    "topo_poligonales_nivelacion": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""
     },
-    "almacen_devoluciones": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "almacen_salidas": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "almacen_inventario": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "seg_calendario": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "seg_nueva_tarea": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "seg_nueva_acta": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "seg_bitacora": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "seg_libro_digital": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "topo_biblioteca_puntos": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "topo_crear_poligonal": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "topo_crear_punto": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "topo_circuito_nivelacion": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "topo_estructura_diseno": {
-      "descripcion": "",
-      "imagenes": [],
-      "videoUrl": ""
-    },
-    "topo_carteras_via": {
+    "topo_diseno_entrega": {
       "descripcion": "",
       "imagenes": [],
       "videoUrl": ""

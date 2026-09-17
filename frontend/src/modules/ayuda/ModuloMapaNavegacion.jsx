@@ -80,7 +80,7 @@ function EditorMapa({ t, draft, setDraft, onGuardar, onSubirImagen, guardando, m
         en el API (Azure Blob). También puedes editar <code>/ayuda/mapa-navegacion.json</code> en el repo.
       </p>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)', color: t.text }}>
-        Subtema
+        Tema de capacitación
         <select
           value={modId}
           onChange={(e) => setModId(e.target.value)}
@@ -118,7 +118,7 @@ function EditorMapa({ t, draft, setDraft, onGuardar, onSubirImagen, guardando, m
               },
             }))
           }}
-          placeholder="Qué es y para qué sirve este subtema, en lenguaje simple…"
+          placeholder="Qué cubre este tema de capacitación, en lenguaje simple…"
           style={{
             padding: '10px 12px',
             borderRadius: 8,
