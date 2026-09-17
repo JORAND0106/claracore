@@ -213,6 +213,27 @@ export default function LiquidacionPanel({
         </div>
       )}
 
+      {permisos.esDesarrollador && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            style={{ ...S.btnGhost, color: S.dangerColor }}
+            onClick={async () => {
+              if (!window.confirm('¿Eliminar TODAS las liquidaciones de este contrato? Solo para pruebas.')) return
+              try {
+                const r = await api.purgarLiquidaciones()
+                flash?.('success', `Liquidaciones eliminadas: ${r?.liquidaciones_eliminadas ?? 0}`)
+                await cargar()
+              } catch (e) {
+                flash?.('error', e.message || 'No se pudieron eliminar las liquidaciones.')
+              }
+            }}
+          >
+            Eliminar liquidaciones (prueba)
+          </button>
+        </div>
+      )}
+
       <div style={{
         background: tTok.bgCard,
         border: `1px solid ${tTok.border}`,

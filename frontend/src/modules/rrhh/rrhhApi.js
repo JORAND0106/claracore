@@ -2,20 +2,21 @@ import { API_BASE } from '../../apiBase'
 
 async function parseError(res) {
   let detail = `Error ${res.status}`
-  let payload = null
   try {
     const j = await res.json()
-    payload = j
     if (typeof j?.detail === 'string') detail = j.detail
     else if (Array.isArray(j?.detail)) detail = j.detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
+    else if (j?.detail && typeof j.detail === 'object') {
+      const err = new Error(j.detail.mensaje || j.detail.detail || JSON.stringify(j.detail))
+      err.codigo = j.detail.codigo
+      err.trabajador = j.detail.trabajador
+      throw err
+    }
     else if (j?.message) detail = j.message
   } catch {
     /* ignore */
   }
-  const err = new Error(detail)
-  err.status = res.status
-  err.payload = payload
-  throw err
+  throw new Error(detail)
 }
 
 async function apiJson(path, { method = 'GET', token, body, formData } = {}) {
@@ -49,13 +50,23 @@ export function createRrhhApi(contratoId, token) {
         body: { valor },
       }),
 
-    listTrabajadores: ({ q, estado } = {}) => {
+    listTrabajadores: ({ q, estado, empresa_key, limit, offset } = {}) => {
       const qs = new URLSearchParams()
       if (q) qs.set('q', q)
       if (estado) qs.set('estado', estado)
+      if (empresa_key) qs.set('empresa_key', empresa_key)
+      if (limit != null) qs.set('limit', String(limit))
+      if (offset != null) qs.set('offset', String(offset))
       const s = qs.toString()
       return apiJson(`${base}/trabajadores${s ? `?${s}` : ''}`, { token })
     },
+    resumenEmpresas: () => apiJson(`${base}/trabajadores/resumen-empresas`, { token }),
+    buscarPorDocumento: (numero, tipo = 'CC') => {
+      const qs = new URLSearchParams({ numero, tipo })
+      return apiJson(`${base}/trabajadores/por-documento?${qs}`, { token })
+    },
+    reingresarTrabajador: (id, body) =>
+      apiJson(`${base}/trabajadores/${id}/reingreso`, { method: 'POST', token, body }),
     getTrabajador: (id) => apiJson(`${base}/trabajadores/${id}`, { token }),
     createTrabajador: (body) =>
       apiJson(`${base}/trabajadores`, { method: 'POST', token, body }),
@@ -63,14 +74,6 @@ export function createRrhhApi(contratoId, token) {
       apiJson(`${base}/trabajadores/${id}`, { method: 'PUT', token, body }),
     deleteTrabajador: (id) =>
       apiJson(`${base}/trabajadores/${id}`, { method: 'DELETE', token }),
-    buscarPorDocumento: ({ tipo_documento, numero_documento } = {}) => {
-      const qs = new URLSearchParams()
-      if (tipo_documento) qs.set('tipo_documento', tipo_documento)
-      if (numero_documento) qs.set('numero_documento', numero_documento)
-      return apiJson(`${base}/trabajadores/buscar-documento?${qs}`, { token })
-    },
-    reingresoTrabajador: (id, body) =>
-      apiJson(`${base}/trabajadores/${id}/reingreso`, { method: 'POST', token, body }),
 
     uploadFoto: async (trabajadorId, archivo) => {
       const fd = new FormData()
@@ -138,18 +141,6 @@ export function createRrhhApi(contratoId, token) {
         token,
         body,
       }),
-    cargarContratoLaboral: async (trabajadorId, { archivo, tipo_contrato, fecha_inicio, fecha_fin } = {}) => {
-      const fd = new FormData()
-      fd.append('archivo', archivo)
-      if (tipo_contrato) fd.append('tipo_contrato', tipo_contrato)
-      if (fecha_inicio) fd.append('fecha_inicio', fecha_inicio)
-      if (fecha_fin) fd.append('fecha_fin', fecha_fin)
-      return apiJson(`${base}/trabajadores/${trabajadorId}/contratos-laborales/cargar`, {
-        method: 'POST',
-        token,
-        formData: fd,
-      })
-    },
     contratoLaboralArchivoUrl: (trabajadorId, genId) =>
       `${API_BASE}${base}/trabajadores/${trabajadorId}/contratos-laborales/${genId}/archivo`,
     deleteContratoLaboral: (trabajadorId, genId) =>
@@ -157,6 +148,19 @@ export function createRrhhApi(contratoId, token) {
         method: 'DELETE',
         token,
       }),
+    cargarContratoLaboral: async (trabajadorId, { archivo, tipo_contrato, fecha_inicio, fecha_fin, es_otrosi }) => {
+      const fd = new FormData()
+      fd.append('archivo', archivo)
+      if (tipo_contrato) fd.append('tipo_contrato', tipo_contrato)
+      if (fecha_inicio) fd.append('fecha_inicio', fecha_inicio)
+      if (fecha_fin) fd.append('fecha_fin', fecha_fin)
+      fd.append('es_otrosi', es_otrosi ? 'true' : 'false')
+      return apiJson(`${base}/trabajadores/${trabajadorId}/contratos-laborales/cargar`, {
+        method: 'POST',
+        token,
+        formData: fd,
+      })
+    },
 
     // ── Nómina ──────────────────────────────────────────────────────────────
     listNovedades: ({ trabajadorId, fechaDesde, fechaHasta } = {}) => {
@@ -186,6 +190,7 @@ export function createRrhhApi(contratoId, token) {
       apiJson(`${base}/horas-extras/${id}`, { method: 'DELETE', token }),
 
     listNominas: () => apiJson(`${base}/nominas`, { token }),
+    purgarNominas: () => apiJson(`${base}/nominas`, { method: 'DELETE', token }),
     generarNomina: (body) =>
       apiJson(`${base}/nominas/generar`, { method: 'POST', token, body }),
     getNomina: (id) => apiJson(`${base}/nominas/${id}`, { token }),
@@ -200,6 +205,7 @@ export function createRrhhApi(contratoId, token) {
       `${API_BASE}${base}/nominas/${nominaId}/items/${itemId}/desprendible`,
 
     listLiquidaciones: () => apiJson(`${base}/liquidaciones`, { token }),
+    purgarLiquidaciones: () => apiJson(`${base}/liquidaciones`, { method: 'DELETE', token }),
     generarLiquidacion: (body) =>
       apiJson(`${base}/liquidaciones`, { method: 'POST', token, body }),
     getLiquidacion: (id) => apiJson(`${base}/liquidaciones/${id}`, { token }),

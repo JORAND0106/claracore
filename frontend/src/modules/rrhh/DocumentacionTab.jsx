@@ -80,18 +80,18 @@ export default function DocumentacionTab({
       await api.updateTrabajador(detalle.id, {
         fecha_ingreso: editForm?.fecha_ingreso || null,
         tipo_contrato: editForm?.tipo_contrato || null,
-        contrato_requiere_renovacion: Boolean(editForm?.contrato_requiere_renovacion),
-        contrato_periodicidad_renovacion: editForm?.contrato_requiere_renovacion
-          ? (editForm?.contrato_periodicidad_renovacion || null)
-          : null,
-        periodo_prueba_dias: editForm?.periodo_prueba_dias
-          ? Number(editForm.periodo_prueba_dias)
-          : null,
         eps: editForm?.eps || null,
         pension: editForm?.pension || null,
         arl: editForm?.arl || null,
         cesantias: editForm?.cesantias || null,
         caja_compensacion: editForm?.caja_compensacion || null,
+        requiere_renovacion: !!editForm?.requiere_renovacion,
+        periodicidad_renovacion_meses: editForm?.requiere_renovacion
+          ? Number(editForm?.periodicidad_renovacion_meses) || null
+          : null,
+        periodo_prueba_dias: editForm?.periodo_prueba_dias === '' || editForm?.periodo_prueba_dias == null
+          ? null
+          : Number(editForm.periodo_prueba_dias),
       })
       const refs = [refSoporte, refIngreso, refAfiliacion]
       let files = 0
@@ -270,15 +270,15 @@ export default function DocumentacionTab({
           onAddTipoContrato={async (v) => addCatalogValue('tipo_contrato', v)}
           fechaIngreso={editForm?.fecha_ingreso || ''}
           onFechaIngresoChange={(v) => setField('fecha_ingreso', v)}
-          requiereRenovacion={Boolean(editForm?.contrato_requiere_renovacion)}
-          onRequiereRenovacionChange={(v) => setField('contrato_requiere_renovacion', v)}
-          periodicidadRenovacion={editForm?.contrato_periodicidad_renovacion || ''}
-          onPeriodicidadRenovacionChange={(v) => setField('contrato_periodicidad_renovacion', v)}
-          periodoPruebaDias={editForm?.periodo_prueba_dias ?? ''}
-          onPeriodoPruebaDiasChange={(v) => setField('periodo_prueba_dias', v)}
           canEdit={canEdit}
           canExport={permisos.exportar || permisos.ver}
           onMsg={(m) => flash(m.type, m.text)}
+          ciclo={{
+            requiere_renovacion: !!editForm?.requiere_renovacion,
+            periodicidad_renovacion_meses: editForm?.periodicidad_renovacion_meses || '',
+            periodo_prueba_dias: editForm?.periodo_prueba_dias || '',
+          }}
+          onCicloChange={setField}
         />
       </div>
 

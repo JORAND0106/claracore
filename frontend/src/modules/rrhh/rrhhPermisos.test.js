@@ -19,6 +19,7 @@ describe('rrhhPermisos', () => {
     assert.equal(a.crear, true)
     assert.equal(a.eliminar, true)
     assert.equal(a.puedeAdminCatalogo, true)
+    assert.equal(a.verSalario, true)
   })
 
   it('sin permisos no ve el módulo', () => {
@@ -66,6 +67,33 @@ describe('rrhhPermisos', () => {
     assert.equal(permisoRrhh(u, 'ver', 10), true)
     assert.equal(permisoRrhh(u, 'crear', 10), true)
     assert.equal(permisoRrhh(u, 'editar', 10), false)
+  })
+
+  it('Administrativo ve salario y entra al módulo', () => {
+    const a = accesoRrhh({ cargo_nombre: 'Administrativo', permisos: [] }, 1)
+    assert.equal(a.ver, true)
+    assert.equal(a.verSalario, true)
+    assert.equal(a.esAdministrativo, true)
+  })
+
+  it('Residente con Ver no ve salario', () => {
+    const u = {
+      cargo_nombre: 'Residente',
+      contrato_id: 10,
+      permisos: [{
+        funcion_nombre: 'Recursos Humanos',
+        contrato_id: 10,
+        ver: true,
+        crear: true,
+        editar: false,
+        eliminar: false,
+        validar: false,
+        exportar: false,
+      }],
+    }
+    const a = accesoRrhh(u, 10)
+    assert.equal(a.ver, true)
+    assert.equal(a.verSalario, false)
   })
 })
 
