@@ -42,7 +42,15 @@ export function agruparPorEmpresa(items = [], { verSalario = true } = {}) {
       g.por_cargo.set(cargo, c)
     }
     c.cantidad += 1
-    const sal = Number(row.salario) || 0
+    // Nunca sumar texto formateado ("$ 1.234.567"); solo el valor numérico.
+    let sal = 0
+    if (typeof row.salario === 'number' && Number.isFinite(row.salario)) {
+      sal = row.salario
+    } else if (row.salario != null && row.salario !== '') {
+      const digits = String(row.salario).replace(/[^\d]/g, '')
+      const n = digits ? Number(digits) : NaN
+      sal = Number.isFinite(n) ? n : 0
+    }
     g.total_nomina += sal
     c.total_nomina += sal
   }

@@ -163,6 +163,16 @@ def es_admin_plataforma(current_user) -> bool:
     return cargo == "administrador" or rol == "administrador"
 
 
+def puede_ver_salario_rrhh(current_user) -> bool:
+    """Salarios / consolidado de nómina: Dev, ROL Administrativo o cargo Administrador."""
+    if _es_desarrollador_seguro(current_user):
+        return True
+    if _es_rol_administrativo(current_user):
+        return True
+    cargo = _norm(current_user.get("cargo_nombre") or current_user.get("cargo") or "")
+    return cargo == "administrador"
+
+
 def require_admin_catalogo_rrhh(current_user, contrato_id: Optional[int] = None) -> None:
     if es_admin_plataforma(current_user):
         return

@@ -22,4 +22,13 @@ describe('rrhhCicloLogic', () => {
     const hidden = agruparPorEmpresa(rows, { verSalario: false })
     assert.equal(hidden[0].total_nomina, null)
   })
+
+  it('suma nómina parseando salario formateado sin NaN', () => {
+    const rows = [
+      { id: 1, empresa_tipo: 'consorcio', empresa_nombre: 'C', cargo_aspira: 'A', estado: 'activo', salario: '$ 2.500.000' },
+      { id: 2, empresa_tipo: 'consorcio', empresa_nombre: 'C', cargo_aspira: 'A', estado: 'activo', salario: null },
+    ]
+    const g = agruparPorEmpresa(rows, { verSalario: true })
+    assert.equal(g[0].total_nomina, 2500000)
+  })
 })
