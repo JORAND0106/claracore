@@ -3,7 +3,7 @@ import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import CcDatePickerInput from '../../components/CcDatePickerInput'
 import { tFrom } from '../../theme/adminPanelTheme'
 import CatalogSelect from './CatalogSelect'
-import { PERIODICIDAD_MESES } from './rrhhCicloLogic'
+import { PERIODICIDAD_RENOVACION_OPTS } from './rrhhCicloLogic'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
 const iconBtn = (base, extra = {}) => ({
@@ -20,6 +20,10 @@ const iconBtn = (base, extra = {}) => ({
 /**
  * Generación de contrato laboral PDF + historial de versiones.
  * compact: omite título/leyenda (TAB Documentación).
+ *
+ * Filas:
+ * 1) Tipo de contrato + N.° contrato (+ generar / cargar)
+ * 2) Fechas + Período de prueba + Renovación
  */
 export default function ContratoLaboralBlock({
   theme,
@@ -59,9 +63,9 @@ export default function ContratoLaboralBlock({
     .map((t) => (typeof t === 'string' ? t : t?.nombre))
     .filter(Boolean)
 
-  const cellPad = compact ? { padding: '3px 6px', minHeight: 28, lineHeight: 1.25 } : {}
-  const cellLabel = { ...ui.tdLabel, ...cellPad }
-  const cell = { ...ui.td, ...cellPad }
+  const cellPad = compact ? { padding: '4px 6px', minHeight: 28, lineHeight: 1.25 } : { padding: '6px 8px' }
+  const cellLabel = { ...ui.tdLabel, ...cellPad, whiteSpace: 'nowrap', verticalAlign: 'middle' }
+  const cell = { ...ui.td, ...cellPad, verticalAlign: 'middle' }
 
   useEffect(() => {
     if (fechaIngreso && !fechaInicio) setFechaInicio(fechaIngreso)
@@ -106,9 +110,6 @@ export default function ContratoLaboralBlock({
         tipo_contrato: tipoContrato,
         fecha_inicio: fechaInicio || null,
         fecha_fin: fechaFin || null,
-        requiere_renovacion: !!ciclo.requiere_renovacion,
-        periodicidad_renovacion_meses: ciclo.requiere_renovacion ? Number(ciclo.periodicidad_renovacion_meses) || null : null,
-        periodo_prueba_dias: ciclo.periodo_prueba_dias ? Number(ciclo.periodo_prueba_dias) : null,
       })
       onMsg?.({ type: 'success', text: 'Contrato laboral generado en PDF.' })
       await cargar()
@@ -147,7 +148,7 @@ export default function ContratoLaboralBlock({
     }
   }
 
-  const cargarManual = async (file, esOtrosi = false) => {
+  const cargarManual = async (file) => {
     if (!canEdit || !api || !file) return
     setBusy(true)
     try {
@@ -156,9 +157,9 @@ export default function ContratoLaboralBlock({
         tipo_contrato: tipoContrato,
         fecha_inicio: fechaInicio || null,
         fecha_fin: fechaFin || null,
-        es_otrosi: esOtrosi,
+        es_otrosi: false,
       })
-      onMsg?.({ type: 'success', text: esOtrosi ? 'Renovación / otrosí cargado.' : 'Contrato laboral adjuntado.' })
+      onMsg?.({ type: 'success', text: 'Contrato laboral adjuntado. Aparece en la tabla de contratos.' })
       await cargar()
     } catch (e) {
       onMsg?.({ type: 'error', text: e.message || 'No se pudo adjuntar el contrato.' })
@@ -166,6 +167,8 @@ export default function ContratoLaboralBlock({
       setBusy(false)
     }
   }
+
+  const lblMini = { color: tTok.textMuted, fontSize: 'var(--cc-caption)', whiteSpace: 'nowrap' }
 
   return (
     <div style={{ ...cssVars, fontSize: 'var(--cc-sm)', color: 'var(--cc-text)' }}>
@@ -179,10 +182,17 @@ export default function ContratoLaboralBlock({
       )}
 
       <div style={{ ...ui.sheetWrap, maxHeight: 'none', marginBottom: 8 }}>
-        <table style={{ ...ui.sheetTable, tableLayout: 'fixed' }}>
+        <table style={{ ...ui.sheetTable, tableLayout: 'fixed', width: '100%' }}>
+          <colgroup>
+            <col style={{ width: '14%' }} />
+            <col style={{ width: '36%' }} />
+            <col style={{ width: '14%' }} />
+            <col style={{ width: '36%' }} />
+          </colgroup>
           <tbody>
+            {/* Fila 1: Tipo de contrato | Número de contrato */}
             <tr>
-              <td style={{ ...cellLabel, width: '28%' }}>Tipo de contrato *</td>
+              <td style={cellLabel}>Tipo de contrato *</td>
               <td style={cell}>
                 <CatalogSelect
                   value={tipoContrato || ''}
@@ -193,135 +203,130 @@ export default function ContratoLaboralBlock({
                   onAddNew={async (v) => { await onAddTipoContrato?.(v) }}
                 />
               </td>
-            </tr>
-            <tr>
-              <td style={cellLabel}>N.° contrato laboral</td>
+              <td style={cellLabel}>N.° contrato</td>
               <td style={cell}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ color: tTok.textMuted }}>Automático (CTO-LAB-0001, …)</span>
-                  {canEdit && (
-                    <button
-                      type="button"
-                      style={iconBtn(S.btnPrimary)}
-                      disabled={busy}
-                      title="Generar PDF del contrato laboral"
-                      aria-label="Generar PDF del contrato laboral"
-                      onClick={generar}
-                    >
-                      {busy ? (
-                        <span style={{ fontSize: 11 }}>…</span>
-                      ) : (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-                          <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-                          <path d="M12 18v-6M9 15h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                        </svg>
-                      )}
-                    </button>
-                  )}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>Automático (CTO-LAB-…)</span>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        style={iconBtn(S.btnPrimary)}
+                        disabled={busy}
+                        title="Generar PDF del contrato laboral"
+                        aria-label="Generar PDF del contrato laboral"
+                        onClick={generar}
+                      >
+                        {busy ? (
+                          <span style={{ fontSize: 11 }}>…</span>
+                        ) : (
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                            <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                            <path d="M12 18v-6M9 15h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
+                    {canEdit && (
+                      <label
+                        style={{
+                          ...S.btnGhost,
+                          cursor: busy ? 'not-allowed' : 'pointer',
+                          margin: 0,
+                          padding: '6px 10px',
+                          fontSize: 'var(--cc-caption)',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                        }}
+                        title="Cargar documento de contrato (aparece en la tabla)"
+                      >
+                        Cargar documento
+                        <input
+                          type="file"
+                          accept="application/pdf"
+                          hidden
+                          disabled={busy}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0]
+                            e.target.value = ''
+                            if (f) cargarManual(f)
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
                 </div>
               </td>
             </tr>
+            {/* Fila 2: Fechas | Período de prueba | Renovación */}
             <tr>
               <td style={cellLabel}>Fechas</td>
               <td style={cell}>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span style={{ color: tTok.textMuted, fontSize: 'var(--cc-caption)', whiteSpace: 'nowrap' }}>Inicio</span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={lblMini}>Inicio</span>
                   <CcDatePickerInput
                     value={fechaInicio}
                     disabled={!canEdit}
-                    style={{ ...ui.cellInp, minWidth: 130, flex: 1 }}
+                    style={{ ...ui.cellInp, minWidth: 118, flex: 1 }}
                     aria-label="Fecha inicio del contrato laboral"
                     onChange={setInicio}
                   />
-                  <span style={{ color: tTok.textMuted, fontSize: 'var(--cc-caption)', whiteSpace: 'nowrap' }}>Fin</span>
+                  <span style={lblMini}>Fin</span>
                   <CcDatePickerInput
                     value={fechaFin}
                     disabled={!canEdit}
-                    style={{ ...ui.cellInp, minWidth: 130, flex: 1 }}
+                    style={{ ...ui.cellInp, minWidth: 118, flex: 1 }}
                     aria-label="Fecha fin del contrato laboral"
                     onChange={setFechaFin}
                   />
                 </div>
               </td>
-            </tr>
-            <tr>
-              <td style={cellLabel}>Período de prueba (días)</td>
-              <td style={cell}>
-                <input
-                  type="number"
-                  min={1}
-                  style={{ ...ui.cellInp, maxWidth: 120 }}
-                  value={ciclo.periodo_prueba_dias || ''}
-                  disabled={!canEdit}
-                  onChange={(e) => setCiclo('periodo_prueba_dias', e.target.value)}
-                />
-              </td>
-            </tr>
-            <tr>
-              <td style={cellLabel}>Requiere renovación</td>
-              <td style={cell}>
-                <select
-                  style={{ ...ui.cellSelect, maxWidth: 140 }}
-                  value={ciclo.requiere_renovacion ? 'si' : 'no'}
-                  disabled={!canEdit}
-                  onChange={(e) => setCiclo('requiere_renovacion', e.target.value === 'si')}
-                >
-                  <option value="no">No</option>
-                  <option value="si">Sí</option>
-                </select>
-                {ciclo.requiere_renovacion && (
-                  <select
-                    style={{ ...ui.cellSelect, maxWidth: 160, marginLeft: 8 }}
-                    value={ciclo.periodicidad_renovacion_meses || ''}
-                    disabled={!canEdit}
-                    onChange={(e) => setCiclo('periodicidad_renovacion_meses', e.target.value)}
-                  >
-                    <option value="">Periodicidad…</option>
-                    {PERIODICIDAD_MESES.map((m) => (
-                      <option key={m} value={m}>{m} mes{m > 1 ? 'es' : ''}</option>
-                    ))}
-                  </select>
-                )}
-              </td>
-            </tr>
-            {canEdit && (
-              <tr>
-                <td style={cellLabel}>Adjuntar contrato</td>
-                <td style={cell}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <label style={{ ...S.btnGhost, cursor: busy ? 'not-allowed' : 'pointer' }}>
-                      Cargar PDF / imagen
-                      <input
-                        type="file"
-                        accept="application/pdf,image/jpeg,image/png,image/webp"
-                        hidden
-                        disabled={busy}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0]
-                          e.target.value = ''
-                          if (f) cargarManual(f, false)
-                        }}
-                      />
-                    </label>
-                    <label style={{ ...S.btnGhost, cursor: busy ? 'not-allowed' : 'pointer' }}>
-                      Cargar renovación / otrosí
-                      <input
-                        type="file"
-                        accept="application/pdf,image/jpeg,image/png,image/webp"
-                        hidden
-                        disabled={busy}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0]
-                          e.target.value = ''
-                          if (f) cargarManual(f, true)
-                        }}
-                      />
-                    </label>
+              <td style={cellLabel} colSpan={2}>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <span style={lblMini}>Período prueba (días)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={365}
+                      style={{ ...ui.cellInp, width: 72 }}
+                      value={ciclo.periodo_prueba_dias || ''}
+                      disabled={!canEdit}
+                      onChange={(e) => setCiclo('periodo_prueba_dias', e.target.value)}
+                      aria-label="Período de prueba en días"
+                    />
                   </div>
-                </td>
-              </tr>
-            )}
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={lblMini}>Renovación</span>
+                    <select
+                      style={{ ...ui.cellSelect, width: 72 }}
+                      value={ciclo.contrato_requiere_renovacion ? 'si' : 'no'}
+                      disabled={!canEdit}
+                      onChange={(e) => setCiclo('contrato_requiere_renovacion', e.target.value === 'si')}
+                      aria-label="Requiere renovación"
+                    >
+                      <option value="no">No</option>
+                      <option value="si">Sí</option>
+                    </select>
+                    {ciclo.contrato_requiere_renovacion && (
+                      <select
+                        style={{ ...ui.cellSelect, minWidth: 120 }}
+                        value={ciclo.contrato_periodicidad_renovacion || ''}
+                        disabled={!canEdit}
+                        onChange={(e) => setCiclo('contrato_periodicidad_renovacion', e.target.value)}
+                        aria-label="Periodicidad de renovación"
+                      >
+                        <option value="">Periodicidad…</option>
+                        {PERIODICIDAD_RENOVACION_OPTS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -332,14 +337,15 @@ export default function ContratoLaboralBlock({
             <tr>
               <th style={ui.th}>Número de contrato</th>
               <th style={ui.th}>Estado</th>
+              <th style={ui.th}>Origen</th>
               <th style={ui.th}>Fecha</th>
               <th style={{ ...ui.th, width: '22%' }}>Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td style={ui.td} colSpan={4}>Cargando…</td></tr>}
+            {loading && <tr><td style={ui.td} colSpan={5}>Cargando…</td></tr>}
             {!loading && items.length === 0 && (
-              <tr><td style={ui.td} colSpan={4}>Aún no hay contratos generados.</td></tr>
+              <tr><td style={ui.td} colSpan={5}>Aún no hay contratos generados ni cargados.</td></tr>
             )}
             {items.map((row) => (
               <tr key={row.id}>
@@ -348,14 +354,11 @@ export default function ContratoLaboralBlock({
                   {row.vigente ? (
                     <span style={{ marginLeft: 6, color: tTok.primary, fontSize: 'var(--cc-caption)' }}>vigente</span>
                   ) : null}
-                  {row.origen === 'cargado' ? (
-                    <span style={{ marginLeft: 6, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>cargado</span>
-                  ) : null}
-                  {row.es_otrosi ? (
-                    <span style={{ marginLeft: 6, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>otrosí</span>
-                  ) : null}
                 </td>
                 <td style={ui.td}>{row.estado}</td>
+                <td style={ui.td}>
+                  {row.origen === 'cargado' ? 'Cargado' : 'Generado'}
+                </td>
                 <td style={ui.td}>{(row.created_at || '').toString().slice(0, 19).replace('T', ' ')}</td>
                 <td style={ui.td}>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

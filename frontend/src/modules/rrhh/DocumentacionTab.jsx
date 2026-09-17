@@ -85,10 +85,17 @@ export default function DocumentacionTab({
         arl: editForm?.arl || null,
         cesantias: editForm?.cesantias || null,
         caja_compensacion: editForm?.caja_compensacion || null,
-        requiere_renovacion: !!editForm?.requiere_renovacion,
-        periodicidad_renovacion_meses: editForm?.requiere_renovacion
-          ? Number(editForm?.periodicidad_renovacion_meses) || null
-          : null,
+        contrato_requiere_renovacion: !!(
+          editForm?.contrato_requiere_renovacion ?? editForm?.requiere_renovacion
+        ),
+        contrato_periodicidad_renovacion: (() => {
+          const req = !!(editForm?.contrato_requiere_renovacion ?? editForm?.requiere_renovacion)
+          if (!req) return null
+          return editForm?.contrato_periodicidad_renovacion
+            || ({ 1: 'mensual', 2: 'bimestral', 3: 'trimestral', 6: 'semestral', 12: 'anual' }[
+              Number(editForm?.periodicidad_renovacion_meses)
+            ] || null)
+        })(),
         periodo_prueba_dias: editForm?.periodo_prueba_dias === '' || editForm?.periodo_prueba_dias == null
           ? null
           : Number(editForm.periodo_prueba_dias),
@@ -274,8 +281,10 @@ export default function DocumentacionTab({
           canExport={permisos.exportar || permisos.ver}
           onMsg={(m) => flash(m.type, m.text)}
           ciclo={{
-            requiere_renovacion: !!editForm?.requiere_renovacion,
-            periodicidad_renovacion_meses: editForm?.periodicidad_renovacion_meses || '',
+            contrato_requiere_renovacion: !!(
+              editForm?.contrato_requiere_renovacion ?? editForm?.requiere_renovacion
+            ),
+            contrato_periodicidad_renovacion: editForm?.contrato_periodicidad_renovacion || '',
             periodo_prueba_dias: editForm?.periodo_prueba_dias || '',
           }}
           onCicloChange={setField}
