@@ -35,6 +35,9 @@ export const EMPTY_TRABAJADOR_FORM = {
   _cert_bancaria_file: null,
   _cert_bancaria_nombre: '',
   tipo_contrato: '',
+  contrato_requiere_renovacion: false,
+  contrato_periodicidad_renovacion: '',
+  periodo_prueba_dias: '',
   empresa_key: 'consorcio',
   empresa_tipo: 'consorcio',
   empresa_subcontratista_id: '',
@@ -217,6 +220,9 @@ export function formFromTrabajador(t) {
     salario: t.salario != null ? formatSalarioInput(String(Math.round(Number(t.salario)))) : '',
     salario_liquidable: t.salario_liquidable !== false,
     tipo_contrato: t.tipo_contrato || '',
+    contrato_requiere_renovacion: Boolean(t.contrato_requiere_renovacion),
+    contrato_periodicidad_renovacion: t.contrato_periodicidad_renovacion || '',
+    periodo_prueba_dias: t.periodo_prueba_dias != null ? String(t.periodo_prueba_dias) : '',
     tipo_sangre: t.tipo_sangre || '',
     lugar_expedicion: t.lugar_expedicion || '',
     periodicidad: t.periodicidad || 'mensual',
@@ -282,6 +288,13 @@ export function payloadFromForm(form) {
     banco_tipo_cuenta: form.banco_tipo_cuenta || null,
     banco_numero_cuenta: form.banco_numero_cuenta || null,
     tipo_contrato: form.tipo_contrato || null,
+    contrato_requiere_renovacion: Boolean(form.contrato_requiere_renovacion),
+    contrato_periodicidad_renovacion: form.contrato_requiere_renovacion
+      ? (form.contrato_periodicidad_renovacion || null)
+      : null,
+    periodo_prueba_dias: form.periodo_prueba_dias
+      ? Number(form.periodo_prueba_dias)
+      : null,
     empresa_key: empresaKey,
     empresa_tipo: form.empresa_tipo || (empresaKey.startsWith('sub:') ? 'subcontratista' : 'consorcio'),
     empresa_subcontratista_id: empresaKey.startsWith('sub:')

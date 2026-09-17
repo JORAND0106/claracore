@@ -1,9 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import SoportePreviewModal from '../../contabilidad/SoportePreviewModal'
 import CcDatePickerInput from '../../components/CcDatePickerInput'
 import { tFrom } from '../../theme/adminPanelTheme'
 import CatalogSelect from './CatalogSelect'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
+
+const PERIODICIDADES = [
+  { value: 'mensual', label: 'Mensual' },
+  { value: 'bimestral', label: 'Bimestral' },
+  { value: 'trimestral', label: 'Trimestral' },
+  { value: 'semestral', label: 'Semestral' },
+  { value: 'anual', label: 'Anual' },
+]
 
 const iconBtn = (base, extra = {}) => ({
   ...base,
@@ -17,7 +25,7 @@ const iconBtn = (base, extra = {}) => ({
 })
 
 /**
- * Generación de contrato laboral PDF + historial de versiones.
+ * Generación / carga de contrato laboral PDF + historial de versiones.
  * compact: omite título/leyenda (TAB Documentación).
  */
 export default function ContratoLaboralBlock({
@@ -30,6 +38,12 @@ export default function ContratoLaboralBlock({
   onAddTipoContrato,
   fechaIngreso = null,
   onFechaIngresoChange = null,
+  requiereRenovacion = false,
+  onRequiereRenovacionChange = null,
+  periodicidadRenovacion = '',
+  onPeriodicidadRenovacionChange = null,
+  periodoPruebaDias = '',
+  onPeriodoPruebaDiasChange = null,
   compact = false,
   canEdit = true,
   canExport = true,
@@ -39,6 +53,7 @@ export default function ContratoLaboralBlock({
   const ui = rrhhSheetStyles(tTok)
   const S = rrhhUi(theme, tTok)
   const cssVars = rrhhSheetCssVars(tTok)
+  const fileRef = useRef(null)
 
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
@@ -89,6 +104,12 @@ export default function ContratoLaboralBlock({
     if (previewUrl) URL.revokeObjectURL(previewUrl)
   }, [previewUrl])
 
+  const payloadFechas = () => ({
+    tipo_contrato: tipoContrato,
+    fecha_inicio: fechaInicio || null,
+    fecha_fin: fechaFin || null,
+  })
+
   const generar = async () => {
     if (!canEdit || !api) return
     if (!tipoContrato) {
@@ -97,17 +118,35 @@ export default function ContratoLaboralBlock({
     }
     setBusy(true)
     try {
-      await api.generarContratoLaboral(trabajadorId, {
-        tipo_contrato: tipoContrato,
-        fecha_inicio: fechaInicio || null,
-        fecha_fin: fechaFin || null,
-      })
+      await api.generarContratoLaboral(trabajadorId, payloadFechas())
       onMsg?.({ type: 'success', text: 'Contrato laboral generado en PDF.' })
       await cargar()
     } catch (e) {
       onMsg?.({ type: 'error', text: e.message || 'No se pudo generar el contrato.' })
     } finally {
       setBusy(false)
+    }
+  }
+
+  const adjuntar = async (file) => {
+    if (!canEdit || !api || !file) return
+    if (!tipoContrato) {
+      onMsg?.({ type: 'error', text: 'Seleccione un tipo de contrato del catálogo.' })
+      return
+    }
+    setBusy(true)
+    try {
+      await api.cargarContratoLaboral(trabajadorId, {
+        archivo: file,
+        ...payloadFechas(),
+      })
+      onMsg?.({ type: 'success', text: 'Contrato laboral adjuntado.' })
+      await cargar()
+    } catch (e) {
+      onMsg?.({ type: 'error', text: e.message || 'No se pudo adjuntar el contrato.' })
+    } finally {
+      setBusy(false)
+      if (fileRef.current) fileRef.current.value = ''
     }
   }
 
@@ -145,7 +184,8 @@ export default function ContratoLaboralBlock({
         <>
           <div style={ui.sectionTitle}>Contrato laboral (PDF)</div>
           <div style={{ marginBottom: 8, color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
-            Se genera desde plantilla con marcadores tipo {'{{NOMBRE_TRABAJADOR}}'}. El número de contrato se asigna automáticamente con prefijo CTO-LAB-.
+            Puede generar el PDF desde plantilla o adjuntar un contrato elaborado externamente.
+            El número se asigna automáticamente con prefijo CTO-LAB-.
           </div>
         </>
       )}
@@ -169,27 +209,49 @@ export default function ContratoLaboralBlock({
             <tr>
               <td style={cellLabel}>N.° contrato laboral</td>
               <td style={cell}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ color: tTok.textMuted }}>Automático (CTO-LAB-0001, …)</span>
                   {canEdit && (
-                    <button
-                      type="button"
-                      style={iconBtn(S.btnPrimary)}
-                      disabled={busy}
-                      title="Generar PDF del contrato laboral"
-                      aria-label="Generar PDF del contrato laboral"
-                      onClick={generar}
-                    >
-                      {busy ? (
-                        <span style={{ fontSize: 11 }}>…</span>
-                      ) : (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        type="button"
+                        style={iconBtn(S.btnPrimary)}
+                        disabled={busy}
+                        title="Generar PDF del contrato laboral"
+                        aria-label="Generar PDF del contrato laboral"
+                        onClick={generar}
+                      >
+                        {busy ? (
+                          <span style={{ fontSize: 11 }}>…</span>
+                        ) : (
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                            <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                            <path d="M12 18v-6M9 15h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        style={iconBtn(S.btnGhost)}
+                        disabled={busy}
+                        title="Adjuntar contrato PDF elaborado externamente"
+                        aria-label="Adjuntar contrato PDF"
+                        onClick={() => fileRef.current?.click()}
+                      >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-                          <path d="M14 2v6h6" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-                          <path d="M12 18v-6M9 15h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          <path d="M17 8l-5-5-5 5M12 3v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
-                      )}
-                    </button>
+                      </button>
+                      <input
+                        ref={fileRef}
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        style={{ display: 'none' }}
+                        onChange={(e) => adjuntar(e.target.files?.[0])}
+                      />
+                    </div>
                   )}
                 </div>
               </td>
@@ -217,6 +279,61 @@ export default function ContratoLaboralBlock({
                 </div>
               </td>
             </tr>
+            <tr>
+              <td style={cellLabel}>Renovación</td>
+              <td style={cell}>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: canEdit ? 'pointer' : 'default' }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(requiereRenovacion)}
+                      disabled={!canEdit}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        onRequiereRenovacionChange?.(checked)
+                        if (!checked) onPeriodicidadRenovacionChange?.('')
+                      }}
+                    />
+                    <span>Requiere renovación</span>
+                  </label>
+                  {requiereRenovacion && (
+                    <select
+                      value={periodicidadRenovacion || ''}
+                      disabled={!canEdit}
+                      style={{ ...ui.cellSelect, minWidth: 140 }}
+                      aria-label="Periodicidad de renovación"
+                      onChange={(e) => onPeriodicidadRenovacionChange?.(e.target.value)}
+                    >
+                      <option value="">Periodicidad…</option>
+                      {PERIODICIDADES.map((p) => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style={cellLabel}>Período de prueba</td>
+              <td style={cell}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    disabled={!canEdit}
+                    value={periodoPruebaDias ?? ''}
+                    placeholder="Días"
+                    style={{ ...ui.cellInp, width: 100 }}
+                    aria-label="Período de prueba en días"
+                    onChange={(e) => onPeriodoPruebaDiasChange?.(e.target.value)}
+                  />
+                  <span style={{ color: tTok.textMuted, fontSize: 'var(--cc-caption)' }}>
+                    días desde la fecha de ingreso (alerta 5 días antes)
+                  </span>
+                </div>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -226,15 +343,16 @@ export default function ContratoLaboralBlock({
           <thead>
             <tr>
               <th style={ui.th}>Número de contrato</th>
+              <th style={ui.th}>Origen</th>
               <th style={ui.th}>Estado</th>
               <th style={ui.th}>Fecha</th>
               <th style={{ ...ui.th, width: '22%' }}>Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td style={ui.td} colSpan={4}>Cargando…</td></tr>}
+            {loading && <tr><td style={ui.td} colSpan={5}>Cargando…</td></tr>}
             {!loading && items.length === 0 && (
-              <tr><td style={ui.td} colSpan={4}>Aún no hay contratos generados.</td></tr>
+              <tr><td style={ui.td} colSpan={5}>Aún no hay contratos generados ni adjuntos.</td></tr>
             )}
             {items.map((row) => (
               <tr key={row.id}>
@@ -244,6 +362,7 @@ export default function ContratoLaboralBlock({
                     <span style={{ marginLeft: 6, color: tTok.primary, fontSize: 'var(--cc-caption)' }}>vigente</span>
                   ) : null}
                 </td>
+                <td style={ui.td}>{row.origen === 'cargado' ? 'Adjuntado' : 'Generado'}</td>
                 <td style={ui.td}>{row.estado}</td>
                 <td style={ui.td}>{(row.created_at || '').toString().slice(0, 19).replace('T', ' ')}</td>
                 <td style={ui.td}>

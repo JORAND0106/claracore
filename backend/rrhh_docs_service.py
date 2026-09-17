@@ -629,6 +629,7 @@ def generar_contrato_laboral(
         "mime_type": "application/pdf",
         "tamano_bytes": len(pdf_bytes),
         "estado": "generado",
+        "origen": "generado",
         "created_by": _uid(current_user),
     }
     rows = sb.table(_TABLE_CONTRATOS).insert(payload).execute().data or []
@@ -638,7 +639,221 @@ def generar_contrato_laboral(
         except Exception:
             pass
         raise ValueError("No se pudo registrar el contrato generado.")
+    try:
+        from rrhh_contrato_alertas_service import reset_flags_alerta_vencimiento
+
+        reset_flags_alerta_vencimiento(sb, trabajador_id)
+    except Exception as exc:
+        _log.warning("reset flags alerta vencimiento tras generar: %s", exc)
+    # Sincronizar fecha_ingreso si se envió inicio
+    if fecha_inicio:
+        try:
+            sb.table("rrhh_trabajadores").update({
+                "fecha_ingreso": (fecha_inicio or "").strip()[:10] or None,
+                "updated_at": _now_iso(),
+                "updated_by": _uid(current_user),
+            }).eq("id", int(trabajador_id)).execute()
+        except Exception:
+            pass
     return rows[0]
+
+
+def _next_version_and_desmarcar_vigentes(sb, trabajador_id: int) -> int:
+    prev = (
+        sb.table(_TABLE_CONTRATOS)
+        .select("id, version_num")
+        .eq("trabajador_id", int(trabajador_id))
+        .is_("eliminado_en", "null")
+        .order("version_num", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    next_ver = int(prev[0]["version_num"]) + 1 if prev else 1
+    vigentes = (
+        sb.table(_TABLE_CONTRATOS)
+        .select("id")
+        .eq("trabajador_id", int(trabajador_id))
+        .eq("vigente", True)
+        .is_("eliminado_en", "null")
+        .execute()
+        .data
+        or []
+    )
+    for v in vigentes:
+        sb.table(_TABLE_CONTRATOS).update({"vigente": False}).eq("id", v["id"]).execute()
+    return next_ver
+
+
+def cargar_contrato_laboral(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+    *,
+    current_user,
+    archivo_bytes: bytes,
+    nombre_archivo: str,
+    content_type: Optional[str] = None,
+    tipo_contrato: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+) -> dict:
+    """Adjunta un PDF de contrato elaborado externamente (coexiste con generación)."""
+    from rrhh_service import add_catalogo_opcion
+
+    trab = get_trabajador(sb, contrato_id, trabajador_id)
+    assert_documentacion_editable(trab)
+    mime = validate_upload(content_type, len(archivo_bytes or b""))
+    if mime != "application/pdf":
+        raise ValueError("El contrato adjunto debe ser un archivo PDF.")
+
+    tipo_nombre = (tipo_contrato or trab.get("tipo_contrato") or "").strip()
+    if not tipo_nombre:
+        raise ValueError("Seleccione un tipo de contrato laboral.")
+
+    if (trab.get("tipo_contrato") or "").strip() != tipo_nombre:
+        sb.table("rrhh_trabajadores").update(
+            {
+                "tipo_contrato": tipo_nombre,
+                "updated_at": _now_iso(),
+                "updated_by": _uid(current_user),
+            }
+        ).eq("id", int(trabajador_id)).execute()
+        trab["tipo_contrato"] = tipo_nombre
+
+    try:
+        add_catalogo_opcion(sb, contrato_id, "tipo_contrato", tipo_nombre, current_user)
+    except Exception:
+        pass
+
+    numero_auto = _siguiente_numero_cto_lab(sb, contrato_id)
+    next_ver = _next_version_and_desmarcar_vigentes(sb, trabajador_id)
+
+    data = archivo_bytes
+    try:
+        from pdf_prepare import prepare_pdf_for_storage
+
+        prepared = prepare_pdf_for_storage(data)
+        data = prepared.data
+    except Exception as exc:
+        _log.warning("rrhh contrato cargado pdf compress skip: %s", exc)
+
+    safe_name = (nombre_archivo or f"contrato_laboral_v{next_ver}.pdf").strip()[:255]
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name = f"{safe_name}.pdf"
+    blob_path = path_rrhh_contrato_laboral(int(contrato_id), int(trabajador_id), next_ver, safe_name)
+    upload_blob_private(blob_path, data, content_type="application/pdf")
+
+    payload = {
+        "trabajador_id": int(trabajador_id),
+        "contrato_id": int(contrato_id),
+        "tipo_contrato_nombre": tipo_nombre,
+        "numero_contrato_laboral": numero_auto,
+        "fecha_inicio": (fecha_inicio or "").strip()[:10] or None,
+        "fecha_fin": (fecha_fin or "").strip()[:10] or None,
+        "version_num": next_ver,
+        "vigente": True,
+        "azure_blob_path": blob_path,
+        "nombre_archivo": safe_name,
+        "mime_type": "application/pdf",
+        "tamano_bytes": len(data),
+        "estado": "generado",
+        "origen": "cargado",
+        "created_by": _uid(current_user),
+    }
+    rows = sb.table(_TABLE_CONTRATOS).insert(payload).execute().data or []
+    if not rows:
+        try:
+            delete_blob_private(blob_path)
+        except Exception:
+            pass
+        raise ValueError("No se pudo registrar el contrato cargado.")
+    try:
+        from rrhh_contrato_alertas_service import reset_flags_alerta_vencimiento
+
+        reset_flags_alerta_vencimiento(sb, trabajador_id)
+    except Exception as exc:
+        _log.warning("reset flags alerta vencimiento tras cargar: %s", exc)
+    if fecha_inicio:
+        try:
+            sb.table("rrhh_trabajadores").update({
+                "fecha_ingreso": (fecha_inicio or "").strip()[:10] or None,
+                "updated_at": _now_iso(),
+                "updated_by": _uid(current_user),
+            }).eq("id", int(trabajador_id)).execute()
+        except Exception:
+            pass
+    return rows[0]
+
+
+def invalidar_documentacion_para_reingreso(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+    *,
+    current_user,
+) -> dict:
+    """
+    Soft-delete de documentación laboral vigente y contratos, desbloquea el ciclo
+    documental. Conserva el historial anulado para auditoría.
+    """
+    now = _now_iso()
+    uid = _uid(current_user)
+    docs = (
+        sb.table(_TABLE_DOCS)
+        .select("id")
+        .eq("trabajador_id", int(trabajador_id))
+        .eq("contrato_id", int(contrato_id))
+        .is_("eliminado_en", "null")
+        .execute()
+        .data
+        or []
+    )
+    for d in docs:
+        sb.table(_TABLE_DOCS).update(
+            {
+                "eliminado_en": now,
+                "eliminado_por": uid,
+                "vigente": False,
+            }
+        ).eq("id", d["id"]).execute()
+
+    cascade_delete_contratos_trabajador(
+        sb, contrato_id, trabajador_id, current_user=current_user
+    )
+
+    patch = {
+        "doc_bloqueado": False,
+        "doc_validacion_estado": "pendiente",
+        "doc_validacion_observacion": None,
+        "doc_validacion_en": None,
+        "doc_validacion_por": None,
+        "doc_auditoria_ok": None,
+        "doc_auditoria_resultado": {},
+        "doc_auditoria_observaciones": None,
+        "doc_auditoria_en": None,
+        "doc_consolidado_blob_path": None,
+        "doc_consolidado_nombre": None,
+        "alerta_vencimiento_35_enviada_at": None,
+        "alerta_vencimiento_10_enviada_at": None,
+        "alerta_periodo_prueba_enviada_at": None,
+        "updated_at": now,
+        "updated_by": uid,
+    }
+    rows = (
+        sb.table("rrhh_trabajadores")
+        .update(patch)
+        .eq("id", int(trabajador_id))
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    return {
+        "documentos_anulados": len(docs),
+        "trabajador": rows[0] if rows else None,
+    }
 
 
 def download_contrato_generado(

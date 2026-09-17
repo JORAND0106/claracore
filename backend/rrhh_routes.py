@@ -8,12 +8,13 @@ import io
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from main import _require_contract_access, get_current_user, registrar_log, supabase
 from rrhh_docs_service import (
+    cargar_contrato_laboral,
     catalogo_tipos_documento,
     create_documento,
     download_contrato_generado,
@@ -27,6 +28,10 @@ from rrhh_docs_service import (
 )
 from rrhh_permissions import require_permiso_rrhh, tiene_permiso_rrhh
 from rrhh_banco_ocr import ocr_certificacion_bancaria
+from rrhh_contrato_alertas_service import (
+    cron_secret_ok,
+    emitir_notificaciones_contrato_laboral,
+)
 from rrhh_documentacion_service import (
     consolidar_documentacion,
     download_doc_consolidado,
@@ -57,15 +62,19 @@ from rrhh_nomina_service import (
     soft_delete_novedad,
 )
 from rrhh_service import (
+    ReingresoRequeridoError,
     add_catalogo_opcion,
+    buscar_trabajador_por_documento,
     clear_trabajador_imagen,
     create_trabajador,
     download_trabajador_imagen,
+    es_candidato_reingreso,
     get_trabajador,
     list_catalogo,
     list_catalogo_todos,
     list_empresas_contratantes,
     list_trabajadores,
+    reiniciar_reingreso_trabajador,
     set_trabajador_imagen,
     soft_delete_trabajador,
     update_trabajador,
@@ -126,6 +135,9 @@ class TrabajadorBody(BaseModel):
     banco_tipo_cuenta: Optional[str] = None
     banco_numero_cuenta: Optional[str] = None
     tipo_contrato: Optional[str] = None
+    contrato_requiere_renovacion: bool = False
+    contrato_periodicidad_renovacion: Optional[str] = None
+    periodo_prueba_dias: Optional[int] = None
     empresa_key: Optional[str] = Field(None, max_length=80)
     empresa_tipo: str = Field("consorcio", max_length=40)
     empresa_subcontratista_id: Optional[int] = None
@@ -168,6 +180,9 @@ class TrabajadorPatchBody(BaseModel):
     banco_tipo_cuenta: Optional[str] = None
     banco_numero_cuenta: Optional[str] = None
     tipo_contrato: Optional[str] = None
+    contrato_requiere_renovacion: Optional[bool] = None
+    contrato_periodicidad_renovacion: Optional[str] = None
+    periodo_prueba_dias: Optional[int] = None
     empresa_key: Optional[str] = Field(None, max_length=80)
     empresa_tipo: Optional[str] = Field(None, max_length=40)
     empresa_subcontratista_id: Optional[int] = None
@@ -313,6 +328,32 @@ def route_create_trabajador(
     require_permiso_rrhh(current_user, "crear", contrato_id)
     try:
         row = create_trabajador(supabase, contrato_id, body.model_dump(), current_user)
+    except ReingresoRequeridoError as exc:
+        t = exc.trabajador or {}
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": str(exc),
+                "code": exc.code,
+                "reingreso_requerido": True,
+                "trabajador_id": t.get("id"),
+                "trabajador": {
+                    "id": t.get("id"),
+                    "nombres": t.get("nombres"),
+                    "apellidos": t.get("apellidos"),
+                    "tipo_documento": t.get("tipo_documento"),
+                    "numero_documento": t.get("numero_documento"),
+                    "estado": t.get("estado"),
+                    "fecha_retiro": t.get("fecha_retiro"),
+                    "eliminado_en": t.get("eliminado_en"),
+                    "eps": t.get("eps"),
+                    "pension": t.get("pension"),
+                    "arl": t.get("arl"),
+                    "cesantias": t.get("cesantias"),
+                    "caja_compensacion": t.get("caja_compensacion"),
+                },
+            },
+        )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
     registrar_log(
@@ -322,6 +363,99 @@ def route_create_trabajador(
         "rrhh_trabajadores",
         str(row.get("id")),
         f"Trabajador: {row.get('nombres')} {row.get('apellidos')}",
+    )
+    return row
+
+
+@router.get("/{contrato_id}/trabajadores/buscar-documento")
+def route_buscar_documento(
+    contrato_id: int,
+    numero_documento: str = Query(..., min_length=3, max_length=40),
+    tipo_documento: str = Query("CC", max_length=20),
+    current_user=Depends(get_current_user),
+):
+    """Detecta coincidencias por cédula (incl. retirados) para el flujo de reingreso."""
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    row = buscar_trabajador_por_documento(
+        supabase,
+        contrato_id,
+        tipo_documento=tipo_documento,
+        numero_documento=numero_documento,
+        incluir_eliminados=True,
+    )
+    if not row:
+        return {
+            "encontrado": False,
+            "reingreso_posible": False,
+            "activo": False,
+            "trabajador": None,
+        }
+    reingreso = es_candidato_reingreso(row)
+    activo = (
+        not row.get("eliminado_en")
+        and (row.get("estado") or "").lower() == "activo"
+        and not reingreso
+    )
+    return {
+        "encontrado": True,
+        "reingreso_posible": reingreso,
+        "activo": activo,
+        "trabajador": {
+            "id": row.get("id"),
+            "nombres": row.get("nombres"),
+            "apellidos": row.get("apellidos"),
+            "tipo_documento": row.get("tipo_documento"),
+            "numero_documento": row.get("numero_documento"),
+            "estado": row.get("estado"),
+            "fecha_retiro": row.get("fecha_retiro"),
+            "eliminado_en": row.get("eliminado_en"),
+            "eps": row.get("eps"),
+            "pension": row.get("pension"),
+            "arl": row.get("arl"),
+            "cesantias": row.get("cesantias"),
+            "caja_compensacion": row.get("caja_compensacion"),
+            "direccion": row.get("direccion"),
+            "ciudad": row.get("ciudad"),
+            "telefono": row.get("telefono"),
+            "email": row.get("email"),
+            "fecha_nacimiento": row.get("fecha_nacimiento"),
+            "genero": row.get("genero"),
+            "lugar_expedicion": row.get("lugar_expedicion"),
+            "tipo_sangre": row.get("tipo_sangre"),
+            "emergencia_nombre": row.get("emergencia_nombre"),
+            "emergencia_parentesco": row.get("emergencia_parentesco"),
+            "emergencia_telefono": row.get("emergencia_telefono"),
+        },
+    }
+
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/reingreso")
+def route_reingreso_trabajador(
+    contrato_id: int,
+    trabajador_id: int,
+    body: TrabajadorBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "crear", contrato_id)
+    try:
+        row = reiniciar_reingreso_trabajador(
+            supabase,
+            contrato_id,
+            trabajador_id,
+            body.model_dump(),
+            current_user,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "EDITAR",
+        "RRHH",
+        "rrhh_trabajadores",
+        str(trabajador_id),
+        f"Reingreso colaborador: {row.get('nombres')} {row.get('apellidos')}",
     )
     return row
 
@@ -724,6 +858,79 @@ def route_generar_contrato(
         f"Contrato laboral v{row.get('version_num')} trabajador {trabajador_id}",
     )
     return row
+
+
+@router.post("/{contrato_id}/trabajadores/{trabajador_id}/contratos-laborales/cargar")
+async def route_cargar_contrato(
+    contrato_id: int,
+    trabajador_id: int,
+    archivo: UploadFile = File(...),
+    tipo_contrato: Optional[str] = Form(None),
+    fecha_inicio: Optional[str] = Form(None),
+    fecha_fin: Optional[str] = Form(None),
+    current_user=Depends(get_current_user),
+):
+    """Adjunta un PDF de contrato elaborado externamente."""
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "crear", contrato_id)
+    data = await archivo.read()
+    try:
+        row = cargar_contrato_laboral(
+            supabase,
+            contrato_id,
+            trabajador_id,
+            current_user=current_user,
+            archivo_bytes=data,
+            nombre_archivo=archivo.filename or "contrato.pdf",
+            content_type=archivo.content_type,
+            tipo_contrato=tipo_contrato,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        _log.exception("Error cargando contrato laboral RRHH")
+        raise HTTPException(status_code=500, detail=f"No se pudo cargar el PDF: {exc}") from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "CREAR",
+        "RRHH",
+        "rrhh_contratos_generados",
+        str(row.get("id")),
+        f"Contrato laboral cargado v{row.get('version_num')} trabajador {trabajador_id}",
+    )
+    return row
+
+
+@router.get("/{contrato_id}/alertas-contrato-laboral")
+def route_alertas_contrato_laboral(
+    contrato_id: int,
+    emitir: bool = Query(True, description="Si true, inserta notificaciones SISTEMA deduplicadas"),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        uid = None
+    return emitir_notificaciones_contrato_laboral(
+        supabase,
+        contrato_id=contrato_id,
+        destinatario_ids=None if emitir else [],
+        remitente_id=uid,
+        remitente_nombre=(current_user.get("nombre") or "Sistema"),
+    )
+
+
+@router.post("/internal/cron/alertas-contrato-laboral")
+def route_cron_alertas_contrato_laboral(
+    x_cron_secret: Optional[str] = Header(default=None, alias="X-Cron-Secret"),
+):
+    if not cron_secret_ok(x_cron_secret):
+        raise HTTPException(status_code=401, detail="Cron secret inválido")
+    return emitir_notificaciones_contrato_laboral(supabase)
 
 
 @router.get("/{contrato_id}/trabajadores/{trabajador_id}/contratos-laborales/{gen_id}/archivo")
