@@ -1,5 +1,14 @@
 export const PERIODICIDAD_MESES = [1, 2, 3, 6, 12]
 
+/** Periodicidades alineadas con backend (rrhh_trabajadores.contrato_periodicidad_renovacion). */
+export const PERIODICIDAD_RENOVACION_OPTS = [
+  { value: 'mensual', label: 'Mensual', meses: 1 },
+  { value: 'bimestral', label: 'Bimestral', meses: 2 },
+  { value: 'trimestral', label: 'Trimestral', meses: 3 },
+  { value: 'semestral', label: 'Semestral', meses: 6 },
+  { value: 'anual', label: 'Anual', meses: 12 },
+]
+
 export const CLAUSULA_LEY_1581 =
   'Asimismo, el colaborador autoriza el tratamiento de sus datos personales conforme a la Ley 1581 de 2012 y su reglamentación (Decreto 1377 de 2013 y normas que la complementen, modifiquen o sustituyan), para los fines propios de la relación laboral y las obligaciones legales derivadas de la misma.'
 

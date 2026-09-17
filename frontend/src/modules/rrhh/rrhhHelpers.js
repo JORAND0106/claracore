@@ -37,6 +37,8 @@ export const EMPTY_TRABAJADOR_FORM = {
   tipo_contrato: '',
   requiere_renovacion: false,
   periodicidad_renovacion_meses: '',
+  contrato_requiere_renovacion: false,
+  contrato_periodicidad_renovacion: '',
   periodo_prueba_dias: '',
   empresa_key: 'consorcio',
   empresa_tipo: 'consorcio',
@@ -220,7 +222,15 @@ export function formFromTrabajador(t) {
     salario: t.salario != null ? formatSalarioInput(String(Math.round(Number(t.salario)))) : '',
     salario_liquidable: t.salario_liquidable !== false,
     tipo_contrato: t.tipo_contrato || '',
-    requiere_renovacion: Boolean(t.requiere_renovacion),
+    contrato_requiere_renovacion: Boolean(
+      t.contrato_requiere_renovacion ?? t.requiere_renovacion,
+    ),
+    contrato_periodicidad_renovacion: t.contrato_periodicidad_renovacion
+      || (t.periodicidad_renovacion_meses
+        ? ({ 1: 'mensual', 2: 'bimestral', 3: 'trimestral', 6: 'semestral', 12: 'anual' }[Number(t.periodicidad_renovacion_meses)] || '')
+        : ''),
+    // aliases legacy (compat formularios antiguos)
+    requiere_renovacion: Boolean(t.contrato_requiere_renovacion ?? t.requiere_renovacion),
     periodicidad_renovacion_meses: t.periodicidad_renovacion_meses || '',
     periodo_prueba_dias: t.periodo_prueba_dias || '',
     tipo_sangre: t.tipo_sangre || '',
@@ -288,13 +298,17 @@ export function payloadFromForm(form) {
     banco_tipo_cuenta: form.banco_tipo_cuenta || null,
     banco_numero_cuenta: form.banco_numero_cuenta || null,
     tipo_contrato: form.tipo_contrato || null,
-    requiere_renovacion: Boolean(form.requiere_renovacion),
-    periodicidad_renovacion_meses: (() => {
-      if (!form.requiere_renovacion || form.periodicidad_renovacion_meses == null || form.periodicidad_renovacion_meses === '') {
-        return null
-      }
-      const n = Number(form.periodicidad_renovacion_meses)
-      return Number.isFinite(n) ? n : null
+    contrato_requiere_renovacion: Boolean(
+      form.contrato_requiere_renovacion ?? form.requiere_renovacion,
+    ),
+    contrato_periodicidad_renovacion: (() => {
+      const requiere = Boolean(form.contrato_requiere_renovacion ?? form.requiere_renovacion)
+      if (!requiere) return null
+      const per = form.contrato_periodicidad_renovacion
+        || ({ 1: 'mensual', 2: 'bimestral', 3: 'trimestral', 6: 'semestral', 12: 'anual' }[
+          Number(form.periodicidad_renovacion_meses)
+        ] || null)
+      return per || null
     })(),
     periodo_prueba_dias: (() => {
       if (form.periodo_prueba_dias === '' || form.periodo_prueba_dias == null) return null

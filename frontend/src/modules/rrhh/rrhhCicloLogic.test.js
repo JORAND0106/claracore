@@ -9,6 +9,15 @@ import { agruparPorEmpresa, CLAUSULA_LEY_1581 } from './rrhhCicloLogic.js'
 describe('rrhhCicloLogic', () => {
   it('incluye cláusula Ley 1581 de 2012', () => {
     assert.match(CLAUSULA_LEY_1581, /Ley 1581 de 2012/)
+    assert.match(CLAUSULA_LEY_1581, /datos personales/)
+  })
+
+  it('expone periodicidades de renovación alineadas al backend', async () => {
+    const { PERIODICIDAD_RENOVACION_OPTS } = await import('./rrhhCicloLogic.js')
+    assert.deepEqual(
+      PERIODICIDAD_RENOVACION_OPTS.map((o) => o.value),
+      ['mensual', 'bimestral', 'trimestral', 'semestral', 'anual'],
+    )
   })
 
   it('agrupa consorcio y subcontratista y oculta nómina sin salario', () => {
