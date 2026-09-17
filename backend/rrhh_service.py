@@ -596,6 +596,44 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
         fr = _trim(body.get("fecha_retiro"), max_len=10)
         out["fecha_retiro"] = fr[:10] if fr else None
 
+    if "contrato_requiere_renovacion" in body or not partial:
+        out["contrato_requiere_renovacion"] = _parse_bool(
+            body.get("contrato_requiere_renovacion"), False
+        )
+
+    if "contrato_periodicidad_renovacion" in body or not partial:
+        from rrhh_contrato_alertas_service import PERIODICIDADES_RENOVACION
+
+        per = _trim(body.get("contrato_periodicidad_renovacion"), max_len=40)
+        requiere = out.get("contrato_requiere_renovacion")
+        if requiere is False:
+            out["contrato_periodicidad_renovacion"] = None
+        elif per:
+            per = per.lower()
+            if per not in PERIODICIDADES_RENOVACION:
+                raise ValueError(
+                    "Periodicidad de renovación inválida "
+                    "(mensual, bimestral, trimestral, semestral o anual)."
+                )
+            out["contrato_periodicidad_renovacion"] = per
+        else:
+            out["contrato_periodicidad_renovacion"] = None
+    elif "contrato_requiere_renovacion" in body and out.get("contrato_requiere_renovacion") is False:
+        out["contrato_periodicidad_renovacion"] = None
+
+    if "periodo_prueba_dias" in body or not partial:
+        raw = body.get("periodo_prueba_dias")
+        if raw is None or raw == "":
+            out["periodo_prueba_dias"] = None
+        else:
+            try:
+                dias = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Período de prueba inválido (días enteros).") from exc
+            if dias < 1 or dias > 365:
+                raise ValueError("Período de prueba debe estar entre 1 y 365 días.")
+            out["periodo_prueba_dias"] = dias
+
     if "banco_entidad" in body or not partial:
         out["banco_entidad"] = _trim(body.get("banco_entidad"), max_len=200)
     if "banco_tipo_cuenta" in body or not partial:
@@ -681,8 +719,89 @@ def get_trabajador(sb, contrato_id: int, trabajador_id: int) -> dict:
     return rows[0]
 
 
+class ReingresoRequeridoError(ValueError):
+    """El documento pertenece a un colaborador retirado/finalizado; usar flujo de reingreso."""
+
+    def __init__(self, message: str, *, trabajador: dict):
+        super().__init__(message)
+        self.trabajador = trabajador
+        self.code = "REINGRESO_REQUERIDO"
+
+
+def _norm_doc(valor: Any) -> str:
+    return re.sub(r"\s+", "", str(valor or "").strip())
+
+
+def buscar_trabajador_por_documento(
+    sb,
+    contrato_id: int,
+    *,
+    tipo_documento: Optional[str],
+    numero_documento: str,
+    incluir_eliminados: bool = True,
+) -> Optional[dict]:
+    """Busca por documento en el contrato (activo, retirado o soft-deleted)."""
+    num = _norm_doc(numero_documento)
+    if len(num) < 3:
+        return None
+    td = (tipo_documento or "CC").strip().upper() or "CC"
+    q = (
+        sb.table(_TABLE_TRAB)
+        .select("*")
+        .eq("contrato_id", int(contrato_id))
+        .order("id", desc=True)
+    )
+    rows = q.execute().data or []
+    matches = []
+    for r in rows:
+        if _norm_doc(r.get("numero_documento")) != num:
+            continue
+        rtd = str(r.get("tipo_documento") or "CC").strip().upper()
+        if rtd != td:
+            continue
+        if not incluir_eliminados and r.get("eliminado_en"):
+            continue
+        matches.append(r)
+    if not matches:
+        return None
+    # Preferir no eliminados; luego el más reciente
+    vivos = [r for r in matches if not r.get("eliminado_en")]
+    return (vivos or matches)[0]
+
+
+def es_candidato_reingreso(trab: Optional[dict]) -> bool:
+    if not trab:
+        return False
+    if trab.get("eliminado_en"):
+        return True
+    estado = (trab.get("estado") or "").strip().lower()
+    if estado == "retirado":
+        return True
+    # Contrato finalizado: activo/inactivo con fecha_retiro
+    if trab.get("fecha_retiro") and estado in ("inactivo", "retirado"):
+        return True
+    return False
+
+
 def create_trabajador(sb, contrato_id: int, body: dict, current_user) -> dict:
-    payload = _payload_trabajador(sb, contrato_id, body or {}, partial=False)
+    body = body or {}
+    prev = buscar_trabajador_por_documento(
+        sb,
+        contrato_id,
+        tipo_documento=body.get("tipo_documento"),
+        numero_documento=body.get("numero_documento") or "",
+        incluir_eliminados=True,
+    )
+    if prev and es_candidato_reingreso(prev):
+        raise ReingresoRequeridoError(
+            "Ya existe un colaborador retirado o con contrato finalizado con este "
+            "documento. Use el flujo de actualización / reingreso.",
+            trabajador=prev,
+        )
+    if prev and not prev.get("eliminado_en"):
+        raise ValueError("Ya existe un trabajador con ese documento en este contrato.")
+
+    payload = _payload_trabajador(sb, contrato_id, body, partial=False)
     payload["contrato_id"] = int(contrato_id)
     payload["created_by"] = _uid(current_user)
     _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
@@ -698,11 +817,103 @@ def create_trabajador(sb, contrato_id: int, body: dict, current_user) -> dict:
     return rows[0]
 
 
+def reiniciar_reingreso_trabajador(
+    sb,
+    contrato_id: int,
+    trabajador_id: int,
+    body: dict,
+    current_user,
+) -> dict:
+    """
+    Reactiva un colaborador retirado/eliminado para un nuevo ciclo de ingreso.
+    Conserva datos personales y afiliaciones; exige nueva documentación laboral.
+    """
+    rows = (
+        sb.table(_TABLE_TRAB)
+        .select("*")
+        .eq("id", int(trabajador_id))
+        .eq("contrato_id", int(contrato_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Trabajador no encontrado.")
+    prev = rows[0]
+    if not es_candidato_reingreso(prev) and (prev.get("estado") or "").lower() == "activo":
+        # Permitir reingreso explícito solo si no está activo sin retiro
+        if not prev.get("fecha_retiro") and not prev.get("eliminado_en"):
+            raise ValueError(
+                "Este colaborador ya está activo. Edite el registro existente."
+            )
+
+    body = dict(body or {})
+    # No permitir cambiar el documento a uno distinto del registro
+    body["tipo_documento"] = prev.get("tipo_documento") or body.get("tipo_documento") or "CC"
+    body["numero_documento"] = prev.get("numero_documento") or body.get("numero_documento")
+
+    # Conservar afiliaciones si el cliente no las envía
+    for k in ("eps", "pension", "cesantias", "arl", "caja_compensacion"):
+        if not body.get(k) and prev.get(k):
+            body[k] = prev.get(k)
+
+    payload = _payload_trabajador(sb, contrato_id, body, partial=True)
+    payload.update({
+        "estado": "activo",
+        "fecha_retiro": None,
+        "eliminado_en": None,
+        "eliminado_por": None,
+        "updated_at": _now_iso(),
+        "updated_by": _uid(current_user),
+        "alerta_vencimiento_35_enviada_at": None,
+        "alerta_vencimiento_10_enviada_at": None,
+        "alerta_periodo_prueba_enviada_at": None,
+    })
+    # Nuevo ciclo: limpiar período de prueba previo si no viene en body
+    if "periodo_prueba_dias" not in body:
+        payload["periodo_prueba_dias"] = None
+    if "contrato_requiere_renovacion" not in body:
+        payload["contrato_requiere_renovacion"] = False
+        payload["contrato_periodicidad_renovacion"] = None
+
+    _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
+
+    from rrhh_docs_service import invalidar_documentacion_para_reingreso
+
+    invalidar_documentacion_para_reingreso(
+        sb, contrato_id, trabajador_id, current_user=current_user
+    )
+
+    updated = (
+        sb.table(_TABLE_TRAB)
+        .update(payload)
+        .eq("id", int(trabajador_id))
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    if not updated:
+        raise ValueError("No se pudo completar el reingreso del colaborador.")
+    return updated[0]
+
+
 def update_trabajador(sb, contrato_id: int, trabajador_id: int, body: dict, current_user) -> dict:
-    get_trabajador(sb, contrato_id, trabajador_id)
+    prev = get_trabajador(sb, contrato_id, trabajador_id)
     payload = _payload_trabajador(sb, contrato_id, body or {}, partial=True)
     payload["updated_at"] = _now_iso()
     payload["updated_by"] = _uid(current_user)
+
+    # Si cambia período de prueba o fecha de ingreso, reiniciar alerta de prueba
+    if "periodo_prueba_dias" in payload or "fecha_ingreso" in payload:
+        old_dias = prev.get("periodo_prueba_dias")
+        old_fi = (prev.get("fecha_ingreso") or "")
+        new_dias = payload.get("periodo_prueba_dias", old_dias)
+        new_fi = payload.get("fecha_ingreso", old_fi)
+        if new_dias != old_dias or str(new_fi or "")[:10] != str(old_fi or "")[:10]:
+            payload["alerta_periodo_prueba_enviada_at"] = None
+
     _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
     try:
         rows = (

@@ -67,6 +67,7 @@ export default function TrabajadorFormSheet({
   trabajadorId = null,
   docLocked = false,
   onMsg = null,
+  onDocumentoBlur = null,
 }) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
@@ -248,6 +249,7 @@ export default function TrabajadorFormSheet({
                   value={f.numero_documento ?? ''}
                   disabled={!canEdit}
                   onChange={(e) => setField('numero_documento', e.target.value.replace(/\D/g, ''))}
+                  onBlur={() => onDocumentoBlur?.(f)}
                 />
               </SheetField>
               <SheetField label="Lugar expedición" labelStyle={lbl} valueStyle={valCell}>

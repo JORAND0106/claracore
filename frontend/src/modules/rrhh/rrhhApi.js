@@ -2,15 +2,20 @@ import { API_BASE } from '../../apiBase'
 
 async function parseError(res) {
   let detail = `Error ${res.status}`
+  let payload = null
   try {
     const j = await res.json()
+    payload = j
     if (typeof j?.detail === 'string') detail = j.detail
     else if (Array.isArray(j?.detail)) detail = j.detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
     else if (j?.message) detail = j.message
   } catch {
     /* ignore */
   }
-  throw new Error(detail)
+  const err = new Error(detail)
+  err.status = res.status
+  err.payload = payload
+  throw err
 }
 
 async function apiJson(path, { method = 'GET', token, body, formData } = {}) {
@@ -58,6 +63,14 @@ export function createRrhhApi(contratoId, token) {
       apiJson(`${base}/trabajadores/${id}`, { method: 'PUT', token, body }),
     deleteTrabajador: (id) =>
       apiJson(`${base}/trabajadores/${id}`, { method: 'DELETE', token }),
+    buscarPorDocumento: ({ tipo_documento, numero_documento } = {}) => {
+      const qs = new URLSearchParams()
+      if (tipo_documento) qs.set('tipo_documento', tipo_documento)
+      if (numero_documento) qs.set('numero_documento', numero_documento)
+      return apiJson(`${base}/trabajadores/buscar-documento?${qs}`, { token })
+    },
+    reingresoTrabajador: (id, body) =>
+      apiJson(`${base}/trabajadores/${id}/reingreso`, { method: 'POST', token, body }),
 
     uploadFoto: async (trabajadorId, archivo) => {
       const fd = new FormData()
@@ -125,6 +138,18 @@ export function createRrhhApi(contratoId, token) {
         token,
         body,
       }),
+    cargarContratoLaboral: async (trabajadorId, { archivo, tipo_contrato, fecha_inicio, fecha_fin } = {}) => {
+      const fd = new FormData()
+      fd.append('archivo', archivo)
+      if (tipo_contrato) fd.append('tipo_contrato', tipo_contrato)
+      if (fecha_inicio) fd.append('fecha_inicio', fecha_inicio)
+      if (fecha_fin) fd.append('fecha_fin', fecha_fin)
+      return apiJson(`${base}/trabajadores/${trabajadorId}/contratos-laborales/cargar`, {
+        method: 'POST',
+        token,
+        formData: fd,
+      })
+    },
     contratoLaboralArchivoUrl: (trabajadorId, genId) =>
       `${API_BASE}${base}/trabajadores/${trabajadorId}/contratos-laborales/${genId}/archivo`,
     deleteContratoLaboral: (trabajadorId, genId) =>

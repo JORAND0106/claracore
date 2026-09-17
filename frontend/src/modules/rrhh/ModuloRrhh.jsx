@@ -47,6 +47,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const [showCrear, setShowCrear] = useState(false)
   const [crearForm, setCrearForm] = useState({ ...EMPTY_TRABAJADOR_FORM })
+  const [reingresoId, setReingresoId] = useState(null)
+  const [reingresoInfo, setReingresoInfo] = useState(null)
 
   const [detalle, setDetalle] = useState(null)
   const [tabDetalle, setTabDetalle] = useState('datos')
@@ -217,6 +219,75 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     }
     setShowCrear(false)
     setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
+    setReingresoId(null)
+    setReingresoInfo(null)
+  }
+
+  const activarModoReingreso = (trabResumen) => {
+    if (!trabResumen?.id) return
+    setReingresoId(trabResumen.id)
+    setReingresoInfo(trabResumen)
+    setCrearForm((prev) => ({
+      ...prev,
+      ...formFromTrabajador({
+        ...trabResumen,
+        tipo_documento: trabResumen.tipo_documento || prev.tipo_documento,
+        numero_documento: trabResumen.numero_documento || prev.numero_documento,
+        empresa_key: prev.empresa_key,
+        empresa_tipo: prev.empresa_tipo,
+        empresa_subcontratista_id: prev.empresa_subcontratista_id,
+        empresa_nombre: prev.empresa_nombre,
+        empresa_nit: prev.empresa_nit,
+        fecha_ingreso: prev.fecha_ingreso || '',
+        fecha_retiro: '',
+        estado: 'activo',
+        tipo_contrato: '',
+        contrato_requiere_renovacion: false,
+        contrato_periodicidad_renovacion: '',
+        periodo_prueba_dias: '',
+      }),
+      // Conservar datos personales / afiliaciones del registro previo
+      nombres: trabResumen.nombres || prev.nombres,
+      apellidos: trabResumen.apellidos || prev.apellidos,
+      eps: trabResumen.eps || prev.eps,
+      pension: trabResumen.pension || prev.pension,
+      arl: trabResumen.arl || prev.arl,
+      cesantias: trabResumen.cesantias || prev.cesantias,
+      caja_compensacion: trabResumen.caja_compensacion || prev.caja_compensacion,
+      direccion: trabResumen.direccion || prev.direccion,
+      ciudad: trabResumen.ciudad || prev.ciudad,
+      telefono: trabResumen.telefono || prev.telefono,
+      email: trabResumen.email || prev.email,
+    }))
+  }
+
+  const verificarDocumentoCrear = async (formPatch = null) => {
+    if (!api || !permisos.crear) return
+    const form = { ...crearForm, ...(formPatch || {}) }
+    const doc = String(form.numero_documento || '').trim()
+    if (doc.length < 3 || !/^\d+$/.test(doc)) return
+    try {
+      const res = await api.buscarPorDocumento({
+        tipo_documento: form.tipo_documento || 'CC',
+        numero_documento: doc,
+      })
+      if (res?.reingreso_posible && res.trabajador) {
+        activarModoReingreso(res.trabajador)
+        flash(
+          'info',
+          'Se encontró un colaborador retirado con este documento. Se actualizará el registro existente (reingreso).',
+        )
+      } else if (res?.activo && res.trabajador) {
+        setReingresoId(null)
+        setReingresoInfo(null)
+        flash('error', 'Ya existe un colaborador activo con este documento.')
+      } else if (!res?.encontrado) {
+        setReingresoId(null)
+        setReingresoInfo(null)
+      }
+    } catch {
+      /* ignore lookup errors on blur */
+    }
   }
 
   const guardarCrear = async () => {
@@ -228,13 +299,39 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     }
     setBusy(true)
     try {
-      const created = await api.createTrabajador(payloadFromForm(crearForm))
-      await persistMedia(created.id, crearForm)
-      flash('success', 'Colaborador registrado.')
+      let created
+      if (reingresoId) {
+        created = await api.reingresoTrabajador(reingresoId, payloadFromForm(crearForm))
+        await persistMedia(created.id, crearForm)
+        flash(
+          'success',
+          'Reingreso registrado. Complete la documentación laboral del nuevo ciclo (contrato, exámenes, certificados).',
+        )
+      } else {
+        try {
+          created = await api.createTrabajador(payloadFromForm(crearForm))
+        } catch (e) {
+          const p = e.payload
+          if (e.status === 409 && (p?.reingreso_requerido || p?.code === 'REINGRESO_REQUERIDO')) {
+            activarModoReingreso(p.trabajador || { id: p.trabajador_id })
+            flash(
+              'info',
+              'Este documento corresponde a un colaborador retirado. Confirme el reingreso con Guardar.',
+            )
+            return
+          }
+          throw e
+        }
+        await persistMedia(created.id, crearForm)
+        flash('success', 'Colaborador registrado.')
+      }
       setShowCrear(false)
       setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
+      setReingresoId(null)
+      setReingresoInfo(null)
       await cargar()
       await abrirDetalle(created)
+      setTabDetalle('documentacion')
     } catch (e) {
       flash('error', e.message || 'No se pudo registrar.')
     } finally {
@@ -375,8 +472,16 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
           marginBottom: 10,
           padding: '10px 12px',
           borderRadius: 8,
-          background: msg.type === 'error' ? 'rgba(220,38,38,0.12)' : 'rgba(4,120,87,0.12)',
-          color: msg.type === 'error' ? S.dangerColor : S.successColor,
+          background: msg.type === 'error'
+            ? 'rgba(220,38,38,0.12)'
+            : msg.type === 'info'
+              ? 'rgba(37,99,235,0.12)'
+              : 'rgba(4,120,87,0.12)',
+          color: msg.type === 'error'
+            ? S.dangerColor
+            : msg.type === 'info'
+              ? (tTok.primary || '#2563eb')
+              : S.successColor,
           fontWeight: 600,
           fontSize: 'var(--cc-sm)',
         }}>
@@ -483,9 +588,25 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             <CcModalBrandHeader theme={theme} />
             <div style={modalHead}>
               <div style={{ fontWeight: 800, fontSize: 'var(--cc-h2)', color: tTok.text }}>
-                Registrar colaborador
+                {reingresoId ? 'Reingreso de colaborador' : 'Registrar colaborador'}
               </div>
             </div>
+            {reingresoId && (
+              <div style={{
+                margin: '0 20px 8px',
+                padding: '10px 12px',
+                borderRadius: 8,
+                background: 'rgba(37,99,235,0.10)',
+                color: tTok.text,
+                fontSize: 'var(--cc-sm)',
+                border: `1px solid ${tTok.border}`,
+              }}>
+                Se actualizará el registro existente
+                {reingresoInfo ? ` de ${reingresoInfo.nombres || ''} ${reingresoInfo.apellidos || ''}`.trim() : ''}.
+                Se conservan datos personales y afiliaciones; deberá cargar toda la documentación
+                laboral del nuevo ingreso (contrato, exámenes, certificados).
+              </div>
+            )}
             <div style={modalScroll}>
               <TrabajadorFormSheet
                 theme={theme}
@@ -497,6 +618,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                 onAddCatalogValue={addCatalogValue}
                 api={api}
                 onMsg={(m) => flash(m.type, m.text)}
+                onDocumentoBlur={() => verificarDocumentoCrear()}
               />
             </div>
             <div style={{
@@ -509,7 +631,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             }}>
               <button type="button" style={S.btnGhost} disabled={busy} onClick={cerrarCrear}>Cancelar</button>
               <button type="button" style={S.btnPrimary} disabled={busy} onClick={guardarCrear}>
-                {busy ? 'Guardando…' : 'Guardar'}
+                {busy ? 'Guardando…' : (reingresoId ? 'Confirmar reingreso' : 'Guardar')}
               </button>
             </div>
           </div>
