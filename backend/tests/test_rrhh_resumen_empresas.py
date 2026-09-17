@@ -77,3 +77,4 @@ def test_resumen_usa_salario_numerico_y_texto():
     assert grupos[0]["total_nomina"] == 3500000.0
     assert grupos[0]["por_cargo"][0]["cargo"] == "Oficial"
     assert grupos[0]["por_cargo"][0]["total_nomina"] == 3500000.0
+    assert "logo_url" in grupos[0]
