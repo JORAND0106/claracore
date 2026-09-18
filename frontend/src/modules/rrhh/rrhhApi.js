@@ -197,6 +197,8 @@ export function createRrhhApi(contratoId, token) {
     getNomina: (id) => apiJson(`${base}/nominas/${id}`, { token }),
     regenerarNomina: (id) =>
       apiJson(`${base}/nominas/${id}/regenerar`, { method: 'POST', token }),
+    actualizarNomina: (id) =>
+      apiJson(`${base}/nominas/${id}/actualizar`, { method: 'POST', token }),
     cerrarNomina: (id) =>
       apiJson(`${base}/nominas/${id}/cerrar`, { method: 'POST', token }),
     anularNomina: (id) =>

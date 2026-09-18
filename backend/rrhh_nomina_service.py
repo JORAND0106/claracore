@@ -692,6 +692,51 @@ def anular_nomina(sb, contrato_id: int, nomina_id: int, current_user=None) -> di
     return rows[0] if rows else nomina
 
 
+def purgar_nominas_contrato(sb, contrato_id: int, current_user=None) -> dict:
+    """
+    Elimina TODAS las nóminas e ítems del contrato (solo Desarrollador / pruebas).
+    Hard-delete: no deja borradores ocultos.
+    """
+    noms = (
+        sb.table(_TABLE_NOM)
+        .select("id")
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    ids = [int(n["id"]) for n in noms if n.get("id") is not None]
+    for nid in ids:
+        try:
+            sb.table(_TABLE_ITEMS).delete().eq("nomina_id", nid).execute()
+        except Exception as exc:
+            _log.warning("purgar items nomina %s: %s", nid, exc)
+        try:
+            sb.table(_TABLE_NOM).delete().eq("id", nid).eq("contrato_id", int(contrato_id)).execute()
+        except Exception as exc:
+            _log.warning("purgar nomina %s: %s", nid, exc)
+    return {"ok": True, "nominas_eliminadas": len(ids)}
+
+
+def purgar_liquidaciones_contrato(sb, contrato_id: int, current_user=None) -> dict:
+    """Elimina TODAS las liquidaciones del contrato (solo Desarrollador / pruebas)."""
+    liqs = (
+        sb.table(_TABLE_LIQ)
+        .select("id")
+        .eq("contrato_id", int(contrato_id))
+        .execute()
+        .data
+        or []
+    )
+    ids = [int(n["id"]) for n in liqs if n.get("id") is not None]
+    for lid in ids:
+        try:
+            sb.table(_TABLE_LIQ).delete().eq("id", lid).eq("contrato_id", int(contrato_id)).execute()
+        except Exception as exc:
+            _log.warning("purgar liquidacion %s: %s", lid, exc)
+    return {"ok": True, "liquidaciones_eliminadas": len(ids)}
+
+
 def download_nomina_xlsx(sb, contrato_id: int, nomina_id: int) -> tuple[bytes, str]:
     nomina = get_nomina(sb, contrato_id, nomina_id)
     path = nomina.get("xlsx_blob_path")

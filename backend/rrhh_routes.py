@@ -26,7 +26,7 @@ from rrhh_docs_service import (
     soft_delete_contrato_generado,
     soft_delete_documento,
 )
-from rrhh_permissions import require_permiso_rrhh, tiene_permiso_rrhh
+from rrhh_permissions import es_desarrollador_rrhh, require_permiso_rrhh, tiene_permiso_rrhh
 from rrhh_banco_ocr import ocr_certificacion_bancaria
 from rrhh_contrato_alertas_service import (
     cron_secret_ok,
@@ -57,6 +57,8 @@ from rrhh_nomina_service import (
     list_nomina_items,
     list_nominas,
     list_novedades,
+    purgar_liquidaciones_contrato,
+    purgar_nominas_contrato,
     regenerar_nomina_borrador,
     soft_delete_hora_extra,
     soft_delete_novedad,
@@ -1287,6 +1289,27 @@ def route_list_nominas(
     return {"items": list_nominas(supabase, contrato_id)}
 
 
+@router.delete("/{contrato_id}/nominas")
+def route_purgar_nominas(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Elimina todas las nóminas del contrato — solo Desarrollador (pruebas)."""
+    _require_contract_access(current_user, contrato_id)
+    if not es_desarrollador_rrhh(current_user):
+        raise HTTPException(403, detail="Solo el rol Desarrollador puede eliminar todas las nóminas.")
+    result = purgar_nominas_contrato(supabase, contrato_id, current_user)
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ELIMINAR",
+        "RRHH",
+        "rrhh_nominas",
+        "*",
+        f"Purga de nóminas: {result.get('nominas_eliminadas', 0)}",
+    )
+    return result
+
+
 @router.post("/{contrato_id}/nominas/generar")
 def route_generar_nomina(
     contrato_id: int,
@@ -1350,7 +1373,25 @@ def route_regenerar_nomina(
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ACTUALIZAR",
+        "RRHH",
+        "rrhh_nominas",
+        str(nomina_id),
+        "Nómina actualizada / recalculada",
+    )
     return result
+
+
+@router.post("/{contrato_id}/nominas/{nomina_id}/actualizar")
+def route_actualizar_nomina(
+    contrato_id: int,
+    nomina_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Alias explícito de regenerar — recalcula una nómina en borrador."""
+    return route_regenerar_nomina(contrato_id, nomina_id, current_user)
 
 
 @router.post("/{contrato_id}/nominas/{nomina_id}/cerrar")
@@ -1440,6 +1481,27 @@ def route_list_liquidaciones(
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
     return {"items": list_liquidaciones(supabase, contrato_id)}
+
+
+@router.delete("/{contrato_id}/liquidaciones")
+def route_purgar_liquidaciones(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Elimina todas las liquidaciones del contrato — solo Desarrollador (pruebas)."""
+    _require_contract_access(current_user, contrato_id)
+    if not es_desarrollador_rrhh(current_user):
+        raise HTTPException(403, detail="Solo el rol Desarrollador puede eliminar todas las liquidaciones.")
+    result = purgar_liquidaciones_contrato(supabase, contrato_id, current_user)
+    registrar_log(
+        _audit(current_user, contrato_id),
+        "ELIMINAR",
+        "RRHH",
+        "rrhh_liquidaciones",
+        "*",
+        f"Purga de liquidaciones: {result.get('liquidaciones_eliminadas', 0)}",
+    )
+    return result
 
 
 @router.post("/{contrato_id}/liquidaciones")

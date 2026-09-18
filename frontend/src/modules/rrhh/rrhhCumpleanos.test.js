@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   CUMPLE_PLANTILLAS,
+  mensajeMotivacionalConTitular,
   nombreMesEs,
   plantillaCumpleanosFromPayload,
   plantillaCumpleanosIndex,
@@ -30,6 +31,23 @@ describe('rrhhCumpleanos', () => {
     const pal = plantillaCumpleanosFromPayload({ plantilla_id: 2, mes: 9 })
     assert.equal(pal.id, 2)
     assert.ok(pal.accent)
+  })
+
+  it('plantillas usan paleta ClaraCore (azul/cyan/teal)', () => {
+    const accents = CUMPLE_PLANTILLAS.map((p) => p.accent)
+    assert.ok(accents.includes('#0077B6'))
+    assert.ok(accents.includes('#00B4C6'))
+    for (const p of CUMPLE_PLANTILLAS) {
+      assert.equal(p.cardBg, '#FFFFFF')
+      assert.ok(p.decor.length >= 5)
+      assert.ok((p.decorExtra || []).length >= 3)
+    }
+  })
+
+  it('mensaje motivacional incluye titular del contrato', () => {
+    const msg = mensajeMotivacionalConTitular('Consorcio Pajarito Pérez')
+    assert.ok(msg.startsWith('Consorcio Pajarito Pérez les desea'))
+    assert.ok(msg.toLowerCase().includes('feliz cumpleaños'))
   })
 })
 

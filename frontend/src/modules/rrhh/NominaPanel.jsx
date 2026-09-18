@@ -162,13 +162,17 @@ export default function NominaPanel({
 
   const regenerar = async () => {
     if (!api || !detalle?.nomina?.id || !permisos.editar) return
+    if (!window.confirm(
+      '¿Actualizar esta nómina? Se recalcularán todos los valores del periodo con los datos actuales (novedades, horas extras y salarios).',
+    )) return
     setBusy(true)
     try {
-      const r = await api.regenerarNomina(detalle.nomina.id)
+      const r = await (api.actualizarNomina || api.regenerarNomina)(detalle.nomina.id)
       setDetalle(r)
-      flash?.('success', 'Nómina recalculada.')
+      flash?.('success', 'Nómina actualizada.')
+      await cargarNominas()
     } catch (e) {
-      flash?.('error', e.message || 'No se pudo regenerar.')
+      flash?.('error', e.message || 'No se pudo actualizar la nómina.')
     } finally {
       setBusy(false)
     }
@@ -461,10 +465,10 @@ export default function NominaPanel({
                   </div>
                   {detalle.nomina.estado === 'borrador' && permisos.editar && (
                     <>
-                      <button type="button" style={S.btnGhost} disabled={busy} onClick={regenerar}>
-                        Recalcular
+                      <button type="button" style={S.btnPrimary} disabled={busy} onClick={regenerar}>
+                        Actualizar nómina
                       </button>
-                      <button type="button" style={S.btnPrimary} disabled={busy} onClick={cerrar}>
+                      <button type="button" style={S.btnGhost} disabled={busy} onClick={cerrar}>
                         Cerrar / aprobar
                       </button>
                     </>

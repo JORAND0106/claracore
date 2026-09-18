@@ -27,10 +27,21 @@ def test_parse_fecha_nacimiento():
 
 def test_abreviar_empresa():
     short = abreviar_empresa("OC INGENIERIA Y CONSULTORIA SAS")
-    assert len(short) <= 28
+    assert len(short) <= 18
     assert "OC" in short.upper()
     assert abreviar_empresa("") == "—"
     assert abreviar_empresa(None) == "—"
+    assert abreviar_empresa("Consorcio Pajarito Pérez SAS", max_len=18)
+    assert "…" in abreviar_empresa("Nombre Extremadamente Largo De Empresa Contratante")
+
+
+def test_mensaje_con_titular():
+    from rrhh_service import mensaje_motivacional_cumpleanos
+
+    msg = mensaje_motivacional_cumpleanos("Consorcio Pajarito Pérez")
+    assert msg.startswith("Consorcio Pajarito Pérez les desea")
+    assert "feliz cumpleaños" in msg.lower()
+    assert "En este mes celebramos" in mensaje_motivacional_cumpleanos("")
 
 
 def test_plantilla_rota_cada_4_meses():
@@ -108,9 +119,23 @@ def test_html_pdf_incluye_collage_y_plantilla():
             }
         ],
         mensaje="¡Feliz cumpleaños!",
+        titular="Consorcio Demo",
     )
     assert "Cumpleaños de septiembre" in html
     assert "Ana Pérez" in html
     assert "Consorcio X" in html
     assert "¡Feliz cumpleaños!" in html
     assert plantilla_por_id(2)["accent"] in html
+    assert plantilla_por_id(2)["accent"] == "#0284C7"  # ClaraCore cielo
+    assert "decor2" in html or "🎀" in html or "🥳" in html
+    assert "Consorcio Demo" in html
+    # Tarjetas blancas como el popup
+    assert "#FFFFFF" in html or plantilla_por_id(2)["card"] == "#FFFFFF"
+
+
+def test_plantillas_paleta_claracore():
+    for i in range(4):
+        pal = plantilla_por_id(i)
+        assert pal["accent"].startswith("#")
+        assert pal["card"] == "#FFFFFF"
+        assert "decor" in pal and "decor2" in pal
