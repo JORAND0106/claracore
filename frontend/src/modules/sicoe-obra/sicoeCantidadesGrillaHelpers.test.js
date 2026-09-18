@@ -5,6 +5,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  chipValidacionNivel,
   etiquetaValidacionConsolidada,
   nivelMaximoAprobado,
   registroTieneFoto,
@@ -37,6 +38,39 @@ describe('sicoeCantidadesGrillaHelpers', () => {
       etiquetaValidacionConsolidada({ nivel1_estado: 'Aprobado' }, [1, 2, 3]),
       'Aprobado hasta N1',
     )
+  })
+
+  it('chipValidacionNivel: N3 verde (aprobado) o N4 amarillo (pendiente)', () => {
+    const soloAprob = {
+      nivel1_estado: 'Aprobado',
+      nivel2_estado: 'Aprobado',
+      nivel3_estado: 'Aprobado',
+      nivel4_estado: 'No Revisado',
+    }
+    const chipApr = chipValidacionNivel(soloAprob, [1, 2, 3, 4])
+    assert.equal(chipApr.label, 'N3')
+    assert.equal(chipApr.estado, 'Aprobado')
+
+    const conPend = {
+      nivel1_estado: 'Aprobado',
+      nivel2_estado: 'Aprobado',
+      nivel3_estado: 'Aprobado',
+      nivel4_estado: 'Pendiente',
+    }
+    const chipPend = chipValidacionNivel(conPend, [1, 2, 3, 4])
+    assert.equal(chipPend.label, 'N4')
+    assert.equal(chipPend.estado, 'Pendiente')
+
+    const vacio = chipValidacionNivel({}, [1, 2, 3])
+    assert.equal(vacio.label, '—')
+    assert.equal(vacio.estado, 'No Revisado')
+
+    const rech = chipValidacionNivel({
+      nivel1_estado: 'Aprobado',
+      nivel2_estado: 'Rechazado',
+    }, [1, 2, 3])
+    assert.equal(rech.label, 'N2')
+    assert.equal(rech.estado, 'Rechazado')
   })
 
   it('arma textos de ítem y tramo', () => {
