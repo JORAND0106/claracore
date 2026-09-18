@@ -6,6 +6,7 @@ import { useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import {
   MENSAJE_MOTIVACIONAL_DEFAULT,
+  mensajeMotivacionalConTitular,
   nombreMesEs,
   plantillaCumpleanosFromPayload,
 } from './rrhhCumpleanos'
@@ -28,7 +29,9 @@ export default function CumpleanosFestivoModal({
   const titulo = mesLabel
     ? `Cumpleaños de ${mesLabel}${cumpleanos?.anio ? ` ${cumpleanos.anio}` : ''}`
     : 'Cumpleaños del mes'
-  const mensaje = (cumpleanos?.mensaje_motivacional || '').trim() || MENSAJE_MOTIVACIONAL_DEFAULT
+  const mensaje = (cumpleanos?.mensaje_motivacional || '').trim()
+    || mensajeMotivacionalConTitular(cumpleanos?.titular_contrato)
+    || MENSAJE_MOTIVACIONAL_DEFAULT
 
   const descargarPdf = async () => {
     if (!api?.downloadBlob || !api?.cumpleanosMesPdfUrl) return
@@ -90,20 +93,40 @@ export default function CumpleanosFestivoModal({
             position: 'relative',
           }}
         >
-          {/* Decoración festiva */}
+          {/* Decoración festiva (doble franja de serpentinas) */}
           <div
             aria-hidden
             style={{
               display: 'flex',
               justifyContent: 'center',
-              gap: 10,
+              gap: 8,
               fontSize: 22,
-              marginBottom: 6,
-              letterSpacing: 2,
+              marginBottom: 2,
+              letterSpacing: 1,
+              flexWrap: 'wrap',
             }}
           >
-            {pal.decor.map((d, i) => (
-              <span key={`${d}-${i}`} style={{ transform: i % 2 ? 'rotate(-8deg)' : 'rotate(8deg)', display: 'inline-block' }}>
+            {(pal.decor || []).map((d, i) => (
+              <span key={`d1-${d}-${i}`} style={{ transform: i % 2 ? 'rotate(-10deg)' : 'rotate(10deg)', display: 'inline-block' }}>
+                {d}
+              </span>
+            ))}
+          </div>
+          <div
+            aria-hidden
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              gap: 8,
+              fontSize: 16,
+              marginBottom: 8,
+              letterSpacing: 2,
+              opacity: 0.92,
+              flexWrap: 'wrap',
+            }}
+          >
+            {(pal.decorExtra || pal.decor || []).map((d, i) => (
+              <span key={`d2-${d}-${i}`} style={{ transform: i % 2 ? 'rotate(8deg)' : 'rotate(-8deg)', display: 'inline-block' }}>
                 {d}
               </span>
             ))}

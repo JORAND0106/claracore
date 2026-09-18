@@ -928,8 +928,8 @@ _EMPRESA_SUFIJO_RE = re.compile(
 )
 
 
-def abreviar_empresa(nombre: Any, *, max_len: int = 28) -> str:
-    """Nombre corto de empresa contratante para collage / PDF."""
+def abreviar_empresa(nombre: Any, *, max_len: int = 18) -> str:
+    """Nombre corto de empresa contratante para collage / PDF (más compacto)."""
     s = str(nombre or "").strip()
     if not s:
         return "—"
@@ -940,6 +940,40 @@ def abreviar_empresa(nombre: Any, *, max_len: int = 28) -> str:
     if len(limpio) <= max_len:
         return limpio
     return limpio[: max(1, max_len - 1)].rstrip() + "…"
+
+
+def titular_contrato(sb, contrato_id: int) -> str:
+    """Nombre del contratista / titular del contrato (módulo Contratos)."""
+    try:
+        rows = (
+            sb.table("contratos")
+            .select("contratista, numero")
+            .eq("id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    return str(rows[0].get("contratista") or "").strip()
+
+
+def mensaje_motivacional_cumpleanos(titular: Optional[str] = None) -> str:
+    """Mensaje del popup/PDF; incluye titular del contrato cuando existe."""
+    t = str(titular or "").strip()
+    if t:
+        return (
+            f"{t} les desea a nuestros colaboradores un feliz cumpleaños. "
+            "En este mes celebramos a quienes hacen posible nuestro día a día. "
+            "Gracias por su compromiso y por aportar su talento a nuestro equipo."
+        )
+    return (
+        "En este mes celebramos a quienes hacen posible nuestro día a día. "
+        "¡Feliz cumpleaños! Gracias por su compromiso y por aportar su talento a nuestro equipo."
+    )
 
 
 def plantilla_cumpleanos_index(*, mes: int, anio: Optional[int] = None) -> int:
@@ -1021,14 +1055,13 @@ def list_cumpleanos_mes(
         anio = int(datetime.now(timezone.utc).year)
     rows = list_trabajadores(sb, contrato_id, estado="activo")
     items = filtrar_cumpleanos_mes(rows, mes=mes_eff)
+    titular = titular_contrato(sb, contrato_id)
     return {
         "mes": mes_eff,
         "anio": anio,
         "plantilla_id": plantilla_cumpleanos_index(mes=mes_eff, anio=anio),
-        "mensaje_motivacional": (
-            "En este mes celebramos a quienes hacen posible nuestro día a día. "
-            "¡Feliz cumpleaños! Gracias por su compromiso y por aportar su talento a nuestro equipo."
-        ),
+        "titular_contrato": titular or None,
+        "mensaje_motivacional": mensaje_motivacional_cumpleanos(titular),
         "items": items,
     }
 

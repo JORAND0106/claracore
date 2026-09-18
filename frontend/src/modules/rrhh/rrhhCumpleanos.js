@@ -1,5 +1,6 @@
 /**
  * Cumpleaños del mes — helpers FE (plantillas, rotación, etiquetas).
+ * Paleta alineada a ClaraCore (#0077B6 / cyan); decoración festiva como excepción visual.
  */
 
 export const MESES_ES = [
@@ -16,51 +17,55 @@ export function nombreMesEs(mes) {
 export const CUMPLE_PLANTILLAS = [
   {
     id: 0,
-    nombre: 'Confeti coral',
-    bg: 'linear-gradient(145deg, #FFF1F2 0%, #FFE4E6 55%, #FECDD3 100%)',
-    accent: '#E11D48',
+    nombre: 'Azul ClaraCore',
+    bg: 'linear-gradient(145deg, #E0F2FE 0%, #BAE6FD 55%, #7DD3FC 100%)',
+    accent: '#0077B6',
     cardBg: '#FFFFFF',
-    cardBorder: '#FB7185',
-    text: '#881337',
-    muted: '#9F1239',
-    decor: ['🎈', '🎉', '🎂', '🎊', '✨'],
-    btn: '#E11D48',
+    cardBorder: '#7DD3FC',
+    text: '#0F2942',
+    muted: '#4A7FA5',
+    decor: ['🎊', '🎉', '🎂', '🎈', '✨', '🎁', '🌟'],
+    decorExtra: ['🎀', '🥳', '🎈', '🎊', '✨'],
+    btn: '#0077B6',
   },
   {
     id: 1,
-    nombre: 'Fiesta cyan',
+    nombre: 'Cyan ClaraCore',
     bg: 'linear-gradient(145deg, #ECFEFF 0%, #CFFAFE 55%, #A5F3FC 100%)',
-    accent: '#0891B2',
+    accent: '#00B4C6',
     cardBg: '#FFFFFF',
-    cardBorder: '#22D3EE',
+    cardBorder: '#67E8F9',
     text: '#164E63',
-    muted: '#155E75',
-    decor: ['🎊', '🎈', '✨', '🎁', '🎂'],
-    btn: '#0891B2',
+    muted: '#0E7490',
+    decor: ['🎈', '🎂', '🎊', '✨', '🎁', '🎉', '🌟'],
+    decorExtra: ['🥳', '🎀', '🎈', '🎊', '✨'],
+    btn: '#00B4C6',
   },
   {
     id: 2,
-    nombre: 'Globos violeta',
-    bg: 'linear-gradient(145deg, #F5F3FF 0%, #EDE9FE 55%, #DDD6FE 100%)',
-    accent: '#7C3AED',
+    nombre: 'Cielo ClaraCore',
+    bg: 'linear-gradient(145deg, #F0F9FF 0%, #E0F2FE 55%, #BAE6FD 100%)',
+    accent: '#0284C7',
     cardBg: '#FFFFFF',
-    cardBorder: '#A78BFA',
-    text: '#4C1D95',
-    muted: '#5B21B6',
-    decor: ['🎈', '💜', '🎂', '🎉', '✨'],
-    btn: '#7C3AED',
+    cardBorder: '#93C5FD',
+    text: '#0C4A6E',
+    muted: '#0369A1',
+    decor: ['🎉', '✨', '🎂', '🎈', '🎊', '🎁', '🌟'],
+    decorExtra: ['🥳', '🎀', '🎈', '🎊', '✨'],
+    btn: '#0284C7',
   },
   {
     id: 3,
-    nombre: 'Sol dorado',
-    bg: 'linear-gradient(145deg, #FFFBEB 0%, #FEF3C7 55%, #FDE68A 100%)',
-    accent: '#D97706',
+    nombre: 'Teal ClaraCore',
+    bg: 'linear-gradient(145deg, #F0FDFA 0%, #CCFBF1 55%, #99F6E4 100%)',
+    accent: '#0E7490',
     cardBg: '#FFFFFF',
-    cardBorder: '#FBBF24',
-    text: '#78350F',
-    muted: '#92400E',
-    decor: ['🌟', '🎂', '🎁', '✨', '🎈'],
-    btn: '#D97706',
+    cardBorder: '#5EEAD4',
+    text: '#134E4A',
+    muted: '#0F766E',
+    decor: ['🌟', '🎂', '🎁', '✨', '🎈', '🎊', '🎉'],
+    decorExtra: ['🥳', '🎀', '🎈', '🎊', '✨'],
+    btn: '#0E7490',
   },
 ]
 
@@ -87,6 +92,21 @@ export function plantillaCumpleanosFromPayload(cumpleanos) {
   return CUMPLE_PLANTILLAS[idx]
 }
 
+/** Mensaje FE de respaldo (el backend envía el mensaje con titular). */
 export const MENSAJE_MOTIVACIONAL_DEFAULT =
   'En este mes celebramos a quienes hacen posible nuestro día a día. '
   + '¡Feliz cumpleaños! Gracias por su compromiso y por aportar su talento a nuestro equipo.'
+
+/**
+ * Construye mensaje con titular del contrato (misma lógica que backend).
+ * @param {string} [titular]
+ */
+export function mensajeMotivacionalConTitular(titular) {
+  const t = String(titular || '').trim()
+  if (!t) return MENSAJE_MOTIVACIONAL_DEFAULT
+  return (
+    `${t} les desea a nuestros colaboradores un feliz cumpleaños. `
+    + 'En este mes celebramos a quienes hacen posible nuestro día a día. '
+    + 'Gracias por su compromiso y por aportar su talento a nuestro equipo.'
+  )
+}
