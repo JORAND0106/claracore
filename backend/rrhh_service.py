@@ -922,6 +922,45 @@ def primer_nombre_colaborador(nombres: Any) -> str:
     return parts[0] if parts else "—"
 
 
+_EMPRESA_SUFIJO_RE = re.compile(
+    r"\b(S\.?\s*A\.?\s*S\.?|S\.?\s*A\.?S\.?|S\.?\s*A\.?|LTDA\.?|S\.?\s*A\.?\s*S)\b",
+    re.IGNORECASE,
+)
+
+
+def abreviar_empresa(nombre: Any, *, max_len: int = 28) -> str:
+    """Nombre corto de empresa contratante para collage / PDF."""
+    s = str(nombre or "").strip()
+    if not s:
+        return "—"
+    limpio = _EMPRESA_SUFIJO_RE.sub("", s)
+    limpio = re.sub(r"\s{2,}", " ", limpio).strip(" -–,.")
+    if not limpio:
+        limpio = s
+    if len(limpio) <= max_len:
+        return limpio
+    return limpio[: max(1, max_len - 1)].rstrip() + "…"
+
+
+def plantilla_cumpleanos_index(*, mes: int, anio: Optional[int] = None) -> int:
+    """
+    Rotación automática de 4 plantillas cada 4 meses calendario.
+    Índice estable 0–3 según (año*12 + mes).
+    """
+    m = int(mes)
+    if m < 1 or m > 12:
+        raise ValueError("mes debe estar entre 1 y 12.")
+    if anio is None:
+        try:
+            import pytz
+
+            anio = int(datetime.now(pytz.timezone("America/Bogota")).year)
+        except Exception:
+            anio = int(datetime.now(timezone.utc).year)
+    slot = (int(anio) * 12 + m - 1) // 4
+    return int(slot) % 4
+
+
 def filtrar_cumpleanos_mes(
     rows: List[dict],
     *,
@@ -929,7 +968,7 @@ def filtrar_cumpleanos_mes(
 ) -> List[dict]:
     """
     Activos cuyo mes de nacimiento == mes (1–12).
-    Devuelve {id, primer_nombre, empresa_nombre, dia} ordenado por día.
+    Devuelve collage-ready: nombre_completo, empresa_abrev, dia, …
     """
     m = int(mes)
     if m < 1 or m > 12:
@@ -942,16 +981,21 @@ def filtrar_cumpleanos_mes(
         if not fn or fn.month != m:
             continue
         empresa = ((row.get("empresa_nombre") or "Consorcio").strip() or "Consorcio")
+        nombres = str(row.get("nombres") or "").strip()
+        apellidos = str(row.get("apellidos") or "").strip()
+        completo = f"{nombres} {apellidos}".strip() or primer_nombre_colaborador(nombres)
         out.append({
             "id": row.get("id"),
-            "primer_nombre": primer_nombre_colaborador(row.get("nombres")),
+            "primer_nombre": primer_nombre_colaborador(nombres),
+            "nombre_completo": completo,
             "empresa_nombre": empresa,
+            "empresa_abrev": abreviar_empresa(empresa),
             "dia": int(fn.day),
         })
     out.sort(
         key=lambda x: (
             int(x.get("dia") or 0),
-            str(x.get("primer_nombre") or "").lower(),
+            str(x.get("nombre_completo") or "").lower(),
             str(x.get("empresa_nombre") or "").lower(),
         )
     )
@@ -966,12 +1010,27 @@ def list_cumpleanos_mes(
 ) -> dict:
     """
     Cumpleaños del mes calendario (Bogotá) entre colaboradores activos.
-    Recalcula según el mes en curso si mes no se indica.
+    Incluye plantilla_id (0–3) rotada cada 4 meses.
     """
     mes_eff = int(mes) if mes is not None else _mes_calendario_actual()
+    try:
+        import pytz
+
+        anio = int(datetime.now(pytz.timezone("America/Bogota")).year)
+    except Exception:
+        anio = int(datetime.now(timezone.utc).year)
     rows = list_trabajadores(sb, contrato_id, estado="activo")
     items = filtrar_cumpleanos_mes(rows, mes=mes_eff)
-    return {"mes": mes_eff, "items": items}
+    return {
+        "mes": mes_eff,
+        "anio": anio,
+        "plantilla_id": plantilla_cumpleanos_index(mes=mes_eff, anio=anio),
+        "mensaje_motivacional": (
+            "En este mes celebramos a quienes hacen posible nuestro día a día. "
+            "¡Feliz cumpleaños! Gracias por su compromiso y por aportar su talento a nuestro equipo."
+        ),
+        "items": items,
+    }
 
 
 def get_trabajador(sb, contrato_id: int, trabajador_id: int) -> dict:

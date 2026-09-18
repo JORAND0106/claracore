@@ -371,6 +371,34 @@ def route_resumen_empresas(
     return {"grupos": grupos, "cumpleanos_mes": cumple}
 
 
+@router.get("/{contrato_id}/trabajadores/cumpleanos-mes/pdf")
+def route_cumpleanos_mes_pdf(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """PDF festivo imprimible de cumpleaños del mes (plantilla rotativa)."""
+    from fastapi.responses import Response
+    from rrhh_cumpleanos_pdf import generar_pdf_cumpleanos_mes
+
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    try:
+        payload = list_cumpleanos_mes(supabase, contrato_id)
+        pdf = generar_pdf_cumpleanos_mes(payload)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        _log.exception("Error generando PDF cumpleaños RRHH")
+        raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+    mes = payload.get("mes") or 0
+    fname = f"cumpleanos_mes_{mes:02d}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @router.get("/{contrato_id}/trabajadores")
 def route_list_trabajadores(
     contrato_id: int,

@@ -23,7 +23,7 @@ import {
 import { accesoRrhh } from './rrhhPermisos'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 import { pastelForEmpresa } from './rrhhTarjetaStyles'
-import CumpleanosMesCard from './CumpleanosMesCard'
+import CumpleanosFestivoModal, { CumpleanosMesButton } from './CumpleanosFestivoModal'
 
 function EmpresaLogoPlaceholder({ accent = '#4A7C94', size = 44 }) {
   return (
@@ -52,6 +52,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const [items, setItems] = useState([])
   const [grupos, setGrupos] = useState([])
   const [cumpleanosMes, setCumpleanosMes] = useState({ mes: null, items: [] })
+  const [showCumpleanos, setShowCumpleanos] = useState(false)
   const [empresaSel, setEmpresaSel] = useState(null)
   const [page, setPage] = useState(0)
   const [total, setTotal] = useState(0)
@@ -396,25 +397,34 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             Documentación, nómina y liquidación de colaboradores
           </div>
         </div>
-        {seccionModulo === 'documentacion' && permisos.crear && (
-          <button
-            type="button"
-            style={S.btnPrimary}
-            onClick={() => {
-              const cons = empresas.find((e) => e.tipo === 'consorcio')
-              setCrearForm({
-                ...EMPTY_TRABAJADOR_FORM,
-                empresa_key: 'consorcio',
-                empresa_tipo: 'consorcio',
-                empresa_nombre: cons?.nombre || '',
-                empresa_nit: cons?.nit || '',
-              })
-              setShowCrear(true)
-            }}
-          >
-            + Registrar colaborador
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {seccionModulo === 'documentacion' && !empresaSel && (
+            <CumpleanosMesButton
+              count={(cumpleanosMes?.items || []).length}
+              onClick={() => setShowCumpleanos(true)}
+              tTok={tTok}
+            />
+          )}
+          {seccionModulo === 'documentacion' && permisos.crear && (
+            <button
+              type="button"
+              style={S.btnPrimary}
+              onClick={() => {
+                const cons = empresas.find((e) => e.tipo === 'consorcio')
+                setCrearForm({
+                  ...EMPTY_TRABAJADOR_FORM,
+                  empresa_key: 'consorcio',
+                  empresa_tipo: 'consorcio',
+                  empresa_nombre: cons?.nombre || '',
+                  empresa_nit: cons?.nit || '',
+                })
+                setShowCrear(true)
+              }}
+            >
+              + Registrar colaborador
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -530,9 +540,6 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             <div style={{ color: tTok.textMuted, gridColumn: '1 / -1' }}>
               No hay colaboradores registrados. Use «Registrar colaborador» para iniciar la documentación de contratación.
             </div>
-          )}
-          {!loading && (
-            <CumpleanosMesCard cumpleanos={cumpleanosMes} />
           )}
           {grupos.map((g) => {
             const pastel = pastelForEmpresa(g.empresa_key)
@@ -862,6 +869,16 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
           </div>
         </div>
       )}
+
+      <CumpleanosFestivoModal
+        open={showCumpleanos}
+        onClose={() => setShowCumpleanos(false)}
+        cumpleanos={cumpleanosMes}
+        api={api}
+        theme={theme}
+        tTok={tTok}
+        flash={flash}
+      />
     </div>
   )
 }

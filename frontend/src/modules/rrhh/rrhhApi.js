@@ -61,6 +61,7 @@ export function createRrhhApi(contratoId, token) {
       return apiJson(`${base}/trabajadores${s ? `?${s}` : ''}`, { token })
     },
     resumenEmpresas: () => apiJson(`${base}/trabajadores/resumen-empresas`, { token }),
+    cumpleanosMesPdfUrl: () => `${API_BASE}${base}/trabajadores/cumpleanos-mes/pdf`,
     buscarPorDocumento: (numero, tipo = 'CC') => {
       const qs = new URLSearchParams({ numero, tipo })
       return apiJson(`${base}/trabajadores/por-documento?${qs}`, { token })
