@@ -75,6 +75,7 @@ from rrhh_service import (
     list_empresas_contratantes,
     list_trabajadores,
     list_trabajadores_paginado,
+    list_cumpleanos_mes,
     reiniciar_reingreso_trabajador,
     resumen_trabajadores_por_empresa,
     set_trabajador_imagen,
@@ -356,7 +357,7 @@ def route_resumen_empresas(
     contrato_id: int,
     current_user=Depends(get_current_user),
 ):
-    """Tarjetas por consorcio/subcontratista. Debe ir antes de /{trabajador_id}."""
+    """Tarjetas por consorcio/subcontratista + cumpleaños del mes. Antes de /{trabajador_id}."""
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
     from rrhh_permissions import puede_ver_salario_rrhh
@@ -366,7 +367,8 @@ def route_resumen_empresas(
         contrato_id,
         incluir_nomina=puede_ver_salario_rrhh(current_user),
     )
-    return {"grupos": grupos}
+    cumple = list_cumpleanos_mes(supabase, contrato_id)
+    return {"grupos": grupos, "cumpleanos_mes": cumple}
 
 
 @router.get("/{contrato_id}/trabajadores")

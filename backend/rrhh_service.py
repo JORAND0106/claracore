@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 _log = logging.getLogger("claracore.rrhh")
@@ -880,6 +880,98 @@ def resumen_trabajadores_por_empresa(
         )
     )
     return out
+
+
+def _mes_calendario_actual() -> int:
+    """Mes 1–12 en zona America/Bogota (fallback UTC)."""
+    try:
+        import pytz
+
+        now = datetime.now(pytz.timezone("America/Bogota"))
+    except Exception:
+        now = datetime.now(timezone.utc)
+    return int(now.month)
+
+
+def _parse_fecha_nacimiento(valor: Any) -> Optional[date]:
+    if valor is None or valor == "":
+        return None
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    s = str(valor).strip()
+    if not s:
+        return None
+    # ISO date o datetime
+    s10 = s[:10]
+    try:
+        return date.fromisoformat(s10)
+    except ValueError:
+        pass
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s10 if len(s10) == 10 else s[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def primer_nombre_colaborador(nombres: Any) -> str:
+    parts = str(nombres or "").strip().split()
+    return parts[0] if parts else "—"
+
+
+def filtrar_cumpleanos_mes(
+    rows: List[dict],
+    *,
+    mes: int,
+) -> List[dict]:
+    """
+    Activos cuyo mes de nacimiento == mes (1–12).
+    Devuelve {id, primer_nombre, empresa_nombre, dia} ordenado por día.
+    """
+    m = int(mes)
+    if m < 1 or m > 12:
+        raise ValueError("mes debe estar entre 1 y 12.")
+    out: List[dict] = []
+    for row in rows or []:
+        if str(row.get("estado") or "").strip().lower() != "activo":
+            continue
+        fn = _parse_fecha_nacimiento(row.get("fecha_nacimiento"))
+        if not fn or fn.month != m:
+            continue
+        empresa = ((row.get("empresa_nombre") or "Consorcio").strip() or "Consorcio")
+        out.append({
+            "id": row.get("id"),
+            "primer_nombre": primer_nombre_colaborador(row.get("nombres")),
+            "empresa_nombre": empresa,
+            "dia": int(fn.day),
+        })
+    out.sort(
+        key=lambda x: (
+            int(x.get("dia") or 0),
+            str(x.get("primer_nombre") or "").lower(),
+            str(x.get("empresa_nombre") or "").lower(),
+        )
+    )
+    return out
+
+
+def list_cumpleanos_mes(
+    sb,
+    contrato_id: int,
+    *,
+    mes: Optional[int] = None,
+) -> dict:
+    """
+    Cumpleaños del mes calendario (Bogotá) entre colaboradores activos.
+    Recalcula según el mes en curso si mes no se indica.
+    """
+    mes_eff = int(mes) if mes is not None else _mes_calendario_actual()
+    rows = list_trabajadores(sb, contrato_id, estado="activo")
+    items = filtrar_cumpleanos_mes(rows, mes=mes_eff)
+    return {"mes": mes_eff, "items": items}
 
 
 def get_trabajador(sb, contrato_id: int, trabajador_id: int) -> dict:
