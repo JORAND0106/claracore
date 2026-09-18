@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useClaraViewport } from '../../useClaraViewport'
 import {
   analizarCantidadesPorItem,
   costoDirectoDesdeListado,
@@ -8,6 +9,14 @@ import {
   resolverModoCantidadesPorItem,
   vuEfectivoFila,
 } from './sicoeCantidadesPorItemHelpers'
+import {
+  etiquetaValidacionConsolidada,
+  registroTieneFoto,
+  registroTieneGrafico,
+  textoItemCompacto,
+  textoItemDescripcion,
+  textoTramoTooltip,
+} from './sicoeCantidadesGrillaHelpers'
 import { pastelDeEstadoValidacion, estadoNivelRegistro } from './sicoeReporteItemsTablaHelpers'
 import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
 
@@ -23,6 +32,73 @@ function fmtPesos(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return '—'
   return `$ ${Math.round(n).toLocaleString('es-CO')}`
+}
+
+const cellEllipsis = {
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+function CeldaTooltip({ title, children, style, align = 'left' }) {
+  return (
+    <td
+      title={title || undefined}
+      style={{
+        ...style,
+        textAlign: align,
+        ...cellEllipsis,
+      }}
+    >
+      {children}
+    </td>
+  )
+}
+
+/** Ícono de soporte con indicador de ausencia (🚫). */
+function IconoSoporte({ tiene, emoji, titleOk, titleMissing, onClick, t }) {
+  const tip = tiene ? titleOk : titleMissing
+  return (
+    <button
+      type="button"
+      title={tip}
+      aria-label={tip}
+      disabled={!tiene}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!tiene) return
+        onClick?.(e)
+      }}
+      style={{
+        position: 'relative',
+        background: 'transparent',
+        border: 'none',
+        cursor: tiene ? 'pointer' : 'default',
+        fontSize: 16,
+        lineHeight: 1,
+        padding: '2px 4px',
+        color: tiene ? t.primary : t.textMuted,
+        opacity: tiene ? 1 : 0.85,
+      }}
+    >
+      <span aria-hidden>{emoji}</span>
+      {!tiene && (
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute',
+            right: -2,
+            bottom: -2,
+            fontSize: 11,
+            lineHeight: 1,
+            filter: 'drop-shadow(0 0 1px #fff)',
+          }}
+        >
+          🚫
+        </span>
+      )}
+    </button>
+  )
 }
 
 /**
@@ -93,7 +169,6 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
         </span>
       </div>
 
-      {/* Chips rellenos junto a su marca + eje Abs delgado */}
       <div style={{ position: 'relative', height: 32, paddingTop: 16 }}>
         <div
           style={{
@@ -134,7 +209,6 @@ function FranjaCoberturaGrupo({ grupo, t, seleccionadoId, onSelectSegmento }) {
           const st = estiloAlertaSegmento(m)
           const num = `#${m.numero_registro ?? m.id}`
           const title = `${num} ${st.tag} · Abs ${fmtNum(m.a0, 3)}–${fmtNum(m.a1, 3)}`
-          // izq → a la izquierda de la marca; cen → centrada; der → a la derecha
           const transform =
             m.tercio === 'izq'
               ? 'translateX(-100%)'
@@ -243,6 +317,8 @@ export default function SicoeCantidadesPorItemVista({
   refreshNonce = 0,
   filtrosVersion = 0,
 }) {
+  const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport()
+  const vistaCompacta = vpMobile || isLandscapeMobile
   const [cargando, setCargando] = useState(false)
   const [error, setError] = useState(null)
   const [payload, setPayload] = useState(null)
@@ -336,22 +412,31 @@ export default function SicoeCantidadesPorItemVista({
     !reg?.bloqueado &&
     !!String(reg?.item_numero || '').trim()
 
-  const colCount = (modo === 'analisis' ? 1 : 0) + 14 + (modo === 'general' ? 2 : 0) + (verEco ? 1 : 0) + 3
+  const colCount = (modo === 'analisis' ? 1 : 0) + 13 + (verEco ? 1 : 0)
 
   const headers = useMemo(() => {
     const base = []
     if (modo === 'analisis') base.push('Alertas')
-    base.push('Reporte', 'Reg.')
-    if (modo === 'general') base.push('Capítulo', 'Ítem')
-    base.push('Tramo', 'Infraestructura', 'Abs Inicio', 'Abs Fin', 'Long', 'Ancho', 'Espesor', 'Cantidad', 'Cant. Total')
+    base.push(
+      'N° Rep. & Reg.',
+      'Capítulo',
+      'Ítem & Descripción',
+      'Tramo',
+      'Abs Inicio & Fin',
+      'Long',
+      'Ancho',
+      'Espesor',
+      'Cantidad',
+      'Cant. Total',
+    )
     if (verEco) base.push('Costo Directo')
-    base.push('Observación', 'Foto', 'Gráfico', 'Validación')
+    base.push('Observación', 'Foto', 'Gráfico', 'Estado')
     return base
   }, [modo, verEco])
 
   const sheetGrid = t.sheetGridBorder || SHEET_CELL_BORDER
   const sheetTh = {
-    padding: '7px 8px',
+    padding: vistaCompacta ? '5px 6px' : '7px 8px',
     fontSize: 11,
     fontWeight: 800,
     color: t.textMuted,
@@ -365,13 +450,15 @@ export default function SicoeCantidadesPorItemVista({
     zIndex: 2,
   }
   const sheetTd = {
-    padding: '6px 8px',
+    padding: vistaCompacta ? '5px 6px' : '6px 8px',
     fontSize: 'var(--cc-sm)',
     color: t.text,
     border: `1px solid ${sheetGrid}`,
     verticalAlign: 'middle',
     lineHeight: 1.25,
   }
+
+  const leftHeaders = new Set(['Observación', 'Tramo', 'Capítulo', 'Ítem & Descripción', 'Alertas', 'N° Rep. & Reg.', 'Estado'])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -551,11 +638,76 @@ export default function SicoeCantidadesPorItemVista({
       )}
 
       {(modo === 'analisis' || modo === 'general') && (
+        vistaCompacta ? (
+          <div className="cc-sicoe-items-mobile" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {filas.length === 0 ? (
+              <div
+                style={{
+                  background: t.bgCard,
+                  border: `2px solid ${t.border}`,
+                  borderRadius: 10,
+                  padding: 20,
+                  textAlign: 'center',
+                  color: t.textMuted,
+                  fontSize: 'var(--cc-sm)',
+                }}
+              >
+                {filtroAlerta !== 'todos'
+                  ? 'Ningún registro coincide con el filtro de alerta seleccionado.'
+                  : 'No hay registros con ítem asignado para esta consulta.'}
+              </div>
+            ) : (
+              filas.map((reg) => (
+                <MobileCantidadesCard
+                  key={reg.id}
+                  reg={reg}
+                  t={t}
+                  modo={modo}
+                  verEco={verEco}
+                  payload={payload}
+                  seleccionadoId={seleccionadoId}
+                  onSelect={seleccionar}
+                  onAbrirRegistro={onAbrirRegistro}
+                  onValidarRapido={onValidarRapido}
+                  puedeValidar={puedeValidarFila(reg)}
+                  ejecutandoValidacion={ejecutandoValidacion}
+                  nivelesActivos={nivelesActivos}
+                  nvUsuario={nvUsuario}
+                  filaRefs={filaRefs}
+                />
+              ))
+            )}
+          </div>
+        ) : (
         <div style={{ background: t.bgCard, border: `1px solid ${sheetGrid}`, borderRadius: 4, overflow: 'auto' }}>
           <table
             className="cc-sicoe-items-sheet"
-            style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)', minWidth: verEco ? 1380 : 1180 }}
+            style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: 'var(--cc-sm)',
+              minWidth: verEco ? 1180 : 1040,
+              tableLayout: 'fixed',
+            }}
           >
+            <colgroup>
+              {modo === 'analisis' && <col style={{ width: 72 }} />}
+              <col style={{ width: 88 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 160 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 56 }} />
+              <col style={{ width: 56 }} />
+              <col style={{ width: 64 }} />
+              <col style={{ width: 70 }} />
+              <col style={{ width: 78 }} />
+              {verEco && <col style={{ width: 100 }} />}
+              <col style={{ width: 88 }} />
+              <col style={{ width: 44 }} />
+              <col style={{ width: 44 }} />
+              <col style={{ width: 130 }} />
+            </colgroup>
             <thead>
               <tr>
                 {headers.map((h) => (
@@ -563,7 +715,7 @@ export default function SicoeCantidadesPorItemVista({
                     key={h}
                     style={{
                       ...sheetTh,
-                      textAlign: ['Observación', 'Tramo', 'Infraestructura', 'Capítulo', 'Ítem', 'Alertas'].includes(h) ? 'left' : 'right',
+                      textAlign: leftHeaders.has(h) || h === 'Foto' || h === 'Gráfico' ? (h === 'Foto' || h === 'Gráfico' ? 'center' : 'left') : 'right',
                     }}
                   >
                     {h}
@@ -596,10 +748,19 @@ export default function SicoeCantidadesPorItemVista({
                   const cd = verEco
                     ? (reg.costo_directo_calc ?? costoDirectoDesdeListado(reg.cantidad_total ?? reg.cantidad, vu))
                     : null
-                  const est = nvUsuario ? estadoNivelRegistro(reg, nvUsuario) : 'No Revisado'
-                  const pastel = pastelDeEstadoValidacion(est)
-                  const fotoOk = !!String(reg.foto_url || '').trim()
-                  const grafOk = !!String(reg.grafico_url || '').trim() || (Array.isArray(reg.graficos_historial) && reg.graficos_historial.length > 0)
+                  const estMi = nvUsuario ? estadoNivelRegistro(reg, nvUsuario) : 'No Revisado'
+                  const labelVal = etiquetaValidacionConsolidada(reg, nivelesActivos)
+                  const pastel = pastelDeEstadoValidacion(
+                    labelVal.startsWith('Aprobado') ? 'Aprobado' : (estMi === 'Rechazado' || estMi === 'Pendiente' ? estMi : 'No Revisado'),
+                  )
+                  const fotoOk = registroTieneFoto(reg)
+                  const grafOk = registroTieneGrafico(reg)
+                  const capFull = String(reg.capitulo || '').trim() || '—'
+                  const itemFull = textoItemDescripcion(reg)
+                  const itemShort = textoItemCompacto(reg)
+                  const obsFull = String(reg.observacion || '').trim()
+                  const tramoTip = textoTramoTooltip(reg)
+                  const absTip = `Abs ${fmtNum(reg.abs_inicio, 3)} – ${fmtNum(reg.abs_final, 3)}`
                   const td = { ...sheetTd, background: sel ? `${t.primary}22` : bg }
                   return (
                     <tr
@@ -636,20 +797,28 @@ export default function SicoeCantidadesPorItemVista({
                           )}
                         </td>
                       )}
-                      <td style={{ ...td, textAlign: 'right', color: t.primary, fontWeight: 700 }}>
-                        #{reg.numero_reporte ?? '—'}
+                      <td style={{ ...td, textAlign: 'left', whiteSpace: 'nowrap', fontWeight: 700 }}>
+                        <span style={{ color: t.primary }}>#{reg.numero_reporte ?? '—'}</span>
+                        <span style={{ color: t.textMuted, margin: '0 3px' }}>·</span>
+                        <span>#{reg.numero_registro ?? '—'}</span>
                       </td>
-                      <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>#{reg.numero_registro ?? '—'}</td>
-                      {modo === 'general' && (
-                        <>
-                          <td style={{ ...td, textAlign: 'left' }}>{reg.capitulo || '—'}</td>
-                          <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{reg.item_numero || '—'}</td>
-                        </>
-                      )}
-                      <td style={{ ...td, textAlign: 'left', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.tramo || ''}>{reg.tramo || '—'}</td>
-                      <td style={{ ...td, textAlign: 'left', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.infraestructura || ''}>{reg.infraestructura || '—'}</td>
-                      <td style={{ ...td, textAlign: 'right', fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(reg.abs_inicio, 3)}</td>
-                      <td style={{ ...td, textAlign: 'right', fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(reg.abs_final, 3)}</td>
+                      <CeldaTooltip title={capFull} style={{ ...td, maxWidth: 100 }}>{capFull}</CeldaTooltip>
+                      <CeldaTooltip title={itemFull} style={{ ...td, maxWidth: 160, fontWeight: 700 }}>{itemShort}</CeldaTooltip>
+                      <CeldaTooltip title={tramoTip || '—'} style={{ ...td, maxWidth: 90 }}>
+                        {reg.tramo || '—'}
+                      </CeldaTooltip>
+                      <td
+                        title={absTip}
+                        style={{
+                          ...td,
+                          textAlign: 'right',
+                          fontFamily: 'ui-monospace, Consolas, monospace',
+                          whiteSpace: 'nowrap',
+                          fontSize: 'var(--cc-caption)',
+                        }}
+                      >
+                        {fmtNum(reg.abs_inicio, 3)}–{fmtNum(reg.abs_final, 3)}
+                      </td>
                       <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.longitud)}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.ancho)}</td>
                       <td
@@ -667,36 +836,50 @@ export default function SicoeCantidadesPorItemVista({
                       {verEco && (
                         <td style={{ ...td, textAlign: 'right', color: t.primary, fontWeight: 700 }}>{fmtPesos(cd)}</td>
                       )}
-                      <td style={{ ...td, textAlign: 'left', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={reg.observacion || ''}>
-                        {reg.observacion || '—'}
+                      <td style={{ ...td, textAlign: 'left', padding: '4px 6px' }}>
+                        <div
+                          title={obsFull || 'Sin observación'}
+                          style={{
+                            maxWidth: 80,
+                            minHeight: 22,
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            border: `1px solid ${sheetGrid}`,
+                            background: t.bg || t.inputBg || '#f8fafc',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            fontSize: 'var(--cc-caption)',
+                            color: obsFull ? t.text : t.textMuted,
+                          }}
+                        >
+                          {obsFull || '—'}
+                        </div>
                       </td>
-                      <td style={{ ...td, textAlign: 'center' }}>
-                        {fotoOk ? (
-                          <button
-                            type="button"
-                            title="Ver fotografía en carpeta del reporte"
-                            onClick={(e) => { e.stopPropagation(); onAbrirRegistro?.(reg) }}
-                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
-                          >
-                            📷
-                          </button>
-                        ) : '—'}
+                      <td style={{ ...td, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                        <IconoSoporte
+                          tiene={fotoOk}
+                          emoji="📷"
+                          titleOk="Ver fotografía en carpeta del reporte"
+                          titleMissing="Sin fotografía adjunta"
+                          t={t}
+                          onClick={() => onAbrirRegistro?.(reg)}
+                        />
                       </td>
-                      <td style={{ ...td, textAlign: 'center' }}>
-                        {grafOk ? (
-                          <button
-                            type="button"
-                            title="Ver gráfico/esquema en carpeta del reporte"
-                            onClick={(e) => { e.stopPropagation(); onAbrirRegistro?.(reg) }}
-                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
-                          >
-                            📐
-                          </button>
-                        ) : '—'}
+                      <td style={{ ...td, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                        <IconoSoporte
+                          tiene={grafOk}
+                          emoji="📐"
+                          titleOk="Ver gráfico/esquema en carpeta del reporte"
+                          titleMissing="Sin gráfico/esquema adjunto"
+                          t={t}
+                          onClick={() => onAbrirRegistro?.(reg)}
+                        />
                       </td>
-                      <td style={{ ...td, textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <td style={{ ...td, textAlign: 'left' }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           <span
+                            title={`${labelVal}${estMi && estMi !== 'No Revisado' ? ` · Mi nivel: ${estMi}` : ''}`}
                             style={{
                               fontSize: 'var(--cc-caption)',
                               fontWeight: 700,
@@ -705,14 +888,15 @@ export default function SicoeCantidadesPorItemVista({
                               background: pastel.bg,
                               border: pastel.border !== 'transparent' ? `1px solid ${pastel.border}` : '1px solid transparent',
                               color: pastel.color || t.textMuted,
+                              whiteSpace: 'nowrap',
                             }}
                           >
-                            {est === 'No Revisado' ? 'Sin rev.' : est}
+                            {labelVal}
                           </span>
                           {puedeValidarFila(reg) && (
                             <button
                               type="button"
-                              disabled={ejecutandoValidacion || est === 'Aprobado'}
+                              disabled={ejecutandoValidacion || estMi === 'Aprobado'}
                               title="Aprobar en mi nivel"
                               onClick={() => onValidarRapido?.(reg, 'Aprobado')}
                               style={{
@@ -723,8 +907,8 @@ export default function SicoeCantidadesPorItemVista({
                                 padding: '3px 8px',
                                 fontSize: 'var(--cc-caption)',
                                 fontWeight: 800,
-                                cursor: ejecutandoValidacion || est === 'Aprobado' ? 'not-allowed' : 'pointer',
-                                opacity: ejecutandoValidacion || est === 'Aprobado' ? 0.45 : 1,
+                                cursor: ejecutandoValidacion || estMi === 'Aprobado' ? 'not-allowed' : 'pointer',
+                                opacity: ejecutandoValidacion || estMi === 'Aprobado' ? 0.45 : 1,
                               }}
                             >
                               ✓
@@ -759,10 +943,186 @@ export default function SicoeCantidadesPorItemVista({
             <div style={{ padding: '8px 12px', fontSize: 'var(--cc-caption)', color: t.textMuted, borderTop: `1px solid ${sheetGrid}` }}>
               Costo directo = Cant. Total × VU de listado de precios (por capítulo+ítem de cada fila).
               {modo === 'analisis' ? ' Contadores Solapes/Vacíos/Espesores filtran la grilla al hacer clic.' : ''}
+              {' '}Estado = nivel máximo ya aprobado.
             </div>
           )}
         </div>
+        )
       )}
+    </div>
+  )
+}
+
+function MobileCantidadesCard({
+  reg,
+  t,
+  modo,
+  verEco,
+  payload,
+  seleccionadoId,
+  onSelect,
+  onAbrirRegistro,
+  onValidarRapido,
+  puedeValidar,
+  ejecutandoValidacion,
+  nivelesActivos,
+  nvUsuario,
+  filaRefs,
+}) {
+  const sel = String(seleccionadoId) === String(reg.id)
+  const vu = vuEfectivoFila(reg, payload?.vlr_unitario_listado)
+  const cd = verEco
+    ? (reg.costo_directo_calc ?? costoDirectoDesdeListado(reg.cantidad_total ?? reg.cantidad, vu))
+    : null
+  const estMi = nvUsuario ? estadoNivelRegistro(reg, nvUsuario) : 'No Revisado'
+  const labelVal = etiquetaValidacionConsolidada(reg, nivelesActivos)
+  const pastel = pastelDeEstadoValidacion(
+    labelVal.startsWith('Aprobado') ? 'Aprobado' : (estMi === 'Rechazado' || estMi === 'Pendiente' ? estMi : 'No Revisado'),
+  )
+  const fotoOk = registroTieneFoto(reg)
+  const grafOk = registroTieneGrafico(reg)
+  const itemFull = textoItemDescripcion(reg)
+  const obsFull = String(reg.observacion || '').trim()
+
+  return (
+    <div
+      ref={(el) => {
+        if (el) filaRefs.current.set(String(reg.id), el)
+        else filaRefs.current.delete(String(reg.id))
+      }}
+      onClick={() => onSelect(reg.id, { scroll: false })}
+      style={{
+        background: sel ? `${t.primary}14` : t.bgCard,
+        border: `2px solid ${sel ? t.primary : t.border}`,
+        borderRadius: 10,
+        padding: '12px 14px',
+        cursor: 'pointer',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-sm)' }}>
+            #{reg.numero_reporte ?? '—'} · #{reg.numero_registro ?? '—'}
+          </div>
+          <div title={String(reg.capitulo || '')} style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2, ...cellEllipsis, maxWidth: '100%' }}>
+            {reg.capitulo || '—'}
+          </div>
+          <div title={itemFull} style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginTop: 4, lineHeight: 1.3 }}>
+            {textoItemCompacto(reg)}
+          </div>
+        </div>
+        <span
+          title={labelVal}
+          style={{
+            flexShrink: 0,
+            fontSize: 'var(--cc-caption)',
+            fontWeight: 700,
+            padding: '3px 8px',
+            borderRadius: 999,
+            background: pastel.bg,
+            border: pastel.border !== 'transparent' ? `1px solid ${pastel.border}` : '1px solid transparent',
+            color: pastel.color || t.textMuted,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {labelVal}
+        </span>
+      </div>
+
+      {modo === 'analisis' && (reg._alertaSolape || reg._alertaVacioAntes || reg._alertaEspesorAtipico) && (
+        <div style={{ marginTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {reg._alertaSolape && <Badge color="#dc2626">Solape</Badge>}
+          {reg._alertaVacioAntes && <Badge color="#d97706">Vacío</Badge>}
+          {reg._alertaEspesorAtipico && <Badge color="#7c3aed">Esp.≠</Badge>}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 12px', marginTop: 8, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+        <span title={textoTramoTooltip(reg)}>Tramo <strong style={{ color: t.text }}>{reg.tramo || '—'}</strong></span>
+        <span>Abs <strong style={{ color: t.text, fontFamily: 'ui-monospace, Consolas, monospace' }}>{fmtNum(reg.abs_inicio, 3)}–{fmtNum(reg.abs_final, 3)}</strong></span>
+        <span>Cant <strong style={{ color: t.text }}>{formatearCantidadTotal(reg.cantidad_total)}</strong></span>
+        {verEco && <span>CD <strong style={{ color: t.primary }}>{fmtPesos(cd)}</strong></span>}
+      </div>
+
+      {obsFull && (
+        <div
+          title={obsFull}
+          style={{
+            marginTop: 8,
+            padding: '6px 8px',
+            borderRadius: 6,
+            border: `2px solid ${t.border}`,
+            fontSize: 'var(--cc-caption)',
+            color: t.text,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {obsFull}
+        </div>
+      )}
+
+      <div
+        style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <IconoSoporte
+          tiene={fotoOk}
+          emoji="📷"
+          titleOk="Ver fotografía"
+          titleMissing="Sin fotografía adjunta"
+          t={t}
+          onClick={() => onAbrirRegistro?.(reg)}
+        />
+        <IconoSoporte
+          tiene={grafOk}
+          emoji="📐"
+          titleOk="Ver gráfico"
+          titleMissing="Sin gráfico/esquema adjunto"
+          t={t}
+          onClick={() => onAbrirRegistro?.(reg)}
+        />
+        {puedeValidar && (
+          <button
+            type="button"
+            disabled={ejecutandoValidacion || estMi === 'Aprobado'}
+            title="Aprobar en mi nivel"
+            onClick={() => onValidarRapido?.(reg, 'Aprobado')}
+            style={{
+              background: '#16a34a',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: '8px 12px',
+              fontSize: 'var(--cc-caption)',
+              fontWeight: 800,
+              minHeight: 44,
+              cursor: ejecutandoValidacion || estMi === 'Aprobado' ? 'not-allowed' : 'pointer',
+              opacity: ejecutandoValidacion || estMi === 'Aprobado' ? 0.45 : 1,
+            }}
+          >
+            ✓ Aprobar
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onAbrirRegistro?.(reg)}
+          style={{
+            background: 'transparent',
+            border: `2px solid ${t.border}`,
+            borderRadius: 8,
+            padding: '8px 12px',
+            fontSize: 'var(--cc-caption)',
+            fontWeight: 700,
+            color: t.primary,
+            minHeight: 44,
+            cursor: 'pointer',
+          }}
+        >
+          Abrir
+        </button>
+      </div>
     </div>
   )
 }
