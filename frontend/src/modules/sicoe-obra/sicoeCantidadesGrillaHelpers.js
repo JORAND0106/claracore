@@ -12,17 +12,20 @@ export function registroTieneGrafico(reg) {
   return Array.isArray(reg?.graficos_historial) && reg.graficos_historial.length > 0
 }
 
+function nivelesActivosOrdenados(nivelesActivos = [1, 2, 3]) {
+  return [...(nivelesActivos || [])]
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 6)
+    .sort((a, b) => a - b)
+}
+
 /**
  * Mayor nivel (entre activos del contrato) cuyo estado es Aprobado.
  * @returns {number|null}
  */
 export function nivelMaximoAprobado(reg, nivelesActivos = [1, 2, 3]) {
-  const niveles = [...(nivelesActivos || [])]
-    .map((n) => Number(n))
-    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 6)
-    .sort((a, b) => a - b)
   let max = null
-  for (const n of niveles) {
+  for (const n of nivelesActivosOrdenados(nivelesActivos)) {
     if (String(reg?.[`nivel${n}_estado`] || '').trim() === 'Aprobado') {
       max = n
     }
@@ -31,7 +34,51 @@ export function nivelMaximoAprobado(reg, nivelesActivos = [1, 2, 3]) {
 }
 
 /**
- * Etiqueta única: «Aprobado hasta N2» o «Sin aprobación».
+ * Chip corto de validación para la grilla.
+ * - Pendiente/Rechazado en un nivel → `N4` con color de ese estado (amarillo/rojo).
+ * - Solo aprobados → `N3` verde (último nivel revisado/aprobado).
+ * - Sin revisión → `—` gris.
+ *
+ * @returns {{ label: string, estado: string, tooltip: string, nivel: number|null }}
+ */
+export function chipValidacionNivel(reg, nivelesActivos = [1, 2, 3]) {
+  const niveles = nivelesActivosOrdenados(nivelesActivos)
+  let maxApr = null
+  let alerta = null
+  for (const n of niveles) {
+    const est = String(reg?.[`nivel${n}_estado`] || '').trim() || 'No Revisado'
+    if (est === 'Aprobado') {
+      maxApr = n
+    } else if (est === 'Pendiente' || est === 'Rechazado' || est === 'No Objeto de Cobro') {
+      alerta = { nivel: n, estado: est }
+    }
+  }
+  if (alerta) {
+    return {
+      nivel: alerta.nivel,
+      label: `N${alerta.nivel}`,
+      estado: alerta.estado,
+      tooltip: `${alerta.estado} en N${alerta.nivel}`,
+    }
+  }
+  if (maxApr != null) {
+    return {
+      nivel: maxApr,
+      label: `N${maxApr}`,
+      estado: 'Aprobado',
+      tooltip: `Último nivel revisado: N${maxApr} (Aprobado)`,
+    }
+  }
+  return {
+    nivel: null,
+    label: '—',
+    estado: 'No Revisado',
+    tooltip: 'Sin revisión',
+  }
+}
+
+/**
+ * Etiqueta larga (legacy / tooltips). Preferir `chipValidacionNivel` en la grilla.
  */
 export function etiquetaValidacionConsolidada(reg, nivelesActivos = [1, 2, 3]) {
   const max = nivelMaximoAprobado(reg, nivelesActivos)

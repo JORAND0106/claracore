@@ -10,7 +10,7 @@ import {
   vuEfectivoFila,
 } from './sicoeCantidadesPorItemHelpers'
 import {
-  etiquetaValidacionConsolidada,
+  chipValidacionNivel,
   registroTieneFoto,
   registroTieneGrafico,
   textoItemCompacto,
@@ -40,17 +40,35 @@ const cellEllipsis = {
   whiteSpace: 'nowrap',
 }
 
+/**
+ * Celda compacta con tooltip fiable: el `title` va en un span interno a ancho completo
+ * (en varios navegadores `title` en `<td overflow:hidden>` no se muestra).
+ */
 function CeldaTooltip({ title, children, style, align = 'left' }) {
+  const tip = String(title || '').trim()
   return (
     <td
-      title={title || undefined}
       style={{
         ...style,
         textAlign: align,
-        ...cellEllipsis,
+        maxWidth: style?.maxWidth,
+        overflow: 'hidden',
+        verticalAlign: 'middle',
       }}
     >
-      {children}
+      <span
+        title={tip || undefined}
+        style={{
+          display: 'block',
+          width: '100%',
+          maxWidth: '100%',
+          ...cellEllipsis,
+          fontWeight: style?.fontWeight,
+          color: 'inherit',
+        }}
+      >
+        {children}
+      </span>
     </td>
   )
 }
@@ -749,10 +767,8 @@ export default function SicoeCantidadesPorItemVista({
                     ? (reg.costo_directo_calc ?? costoDirectoDesdeListado(reg.cantidad_total ?? reg.cantidad, vu))
                     : null
                   const estMi = nvUsuario ? estadoNivelRegistro(reg, nvUsuario) : 'No Revisado'
-                  const labelVal = etiquetaValidacionConsolidada(reg, nivelesActivos)
-                  const pastel = pastelDeEstadoValidacion(
-                    labelVal.startsWith('Aprobado') ? 'Aprobado' : (estMi === 'Rechazado' || estMi === 'Pendiente' ? estMi : 'No Revisado'),
-                  )
+                  const chipVal = chipValidacionNivel(reg, nivelesActivos)
+                  const pastel = pastelDeEstadoValidacion(chipVal.estado)
                   const fotoOk = registroTieneFoto(reg)
                   const grafOk = registroTieneGrafico(reg)
                   const capFull = String(reg.capitulo || '').trim() || '—'
@@ -879,19 +895,24 @@ export default function SicoeCantidadesPorItemVista({
                       <td style={{ ...td, textAlign: 'left' }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           <span
-                            title={`${labelVal}${estMi && estMi !== 'No Revisado' ? ` · Mi nivel: ${estMi}` : ''}`}
+                            title={`${chipVal.tooltip}${estMi && estMi !== 'No Revisado' ? ` · Mi nivel: ${estMi}` : ''}`}
                             style={{
                               fontSize: 'var(--cc-caption)',
-                              fontWeight: 700,
+                              fontWeight: 800,
                               padding: '2px 8px',
-                              borderRadius: 999,
-                              background: pastel.bg,
-                              border: pastel.border !== 'transparent' ? `1px solid ${pastel.border}` : '1px solid transparent',
+                              borderRadius: 6,
+                              background: pastel.bg !== 'transparent' ? pastel.bg : `${t.textMuted}18`,
+                              border: pastel.border !== 'transparent'
+                                ? `1px solid ${pastel.border}`
+                                : `1px solid ${t.border}`,
                               color: pastel.color || t.textMuted,
                               whiteSpace: 'nowrap',
+                              letterSpacing: '0.02em',
+                              minWidth: 28,
+                              textAlign: 'center',
                             }}
                           >
-                            {labelVal}
+                            {chipVal.label}
                           </span>
                           {puedeValidarFila(reg) && (
                             <button
@@ -943,7 +964,7 @@ export default function SicoeCantidadesPorItemVista({
             <div style={{ padding: '8px 12px', fontSize: 'var(--cc-caption)', color: t.textMuted, borderTop: `1px solid ${sheetGrid}` }}>
               Costo directo = Cant. Total × VU de listado de precios (por capítulo+ítem de cada fila).
               {modo === 'analisis' ? ' Contadores Solapes/Vacíos/Espesores filtran la grilla al hacer clic.' : ''}
-              {' '}Estado = nivel máximo ya aprobado.
+              {' '}Estado = Nn (verde = aprobado; amarillo = pendiente; rojo = rechazado).
             </div>
           )}
         </div>
@@ -975,10 +996,8 @@ function MobileCantidadesCard({
     ? (reg.costo_directo_calc ?? costoDirectoDesdeListado(reg.cantidad_total ?? reg.cantidad, vu))
     : null
   const estMi = nvUsuario ? estadoNivelRegistro(reg, nvUsuario) : 'No Revisado'
-  const labelVal = etiquetaValidacionConsolidada(reg, nivelesActivos)
-  const pastel = pastelDeEstadoValidacion(
-    labelVal.startsWith('Aprobado') ? 'Aprobado' : (estMi === 'Rechazado' || estMi === 'Pendiente' ? estMi : 'No Revisado'),
-  )
+  const chipVal = chipValidacionNivel(reg, nivelesActivos)
+  const pastel = pastelDeEstadoValidacion(chipVal.estado)
   const fotoOk = registroTieneFoto(reg)
   const grafOk = registroTieneGrafico(reg)
   const itemFull = textoItemDescripcion(reg)
@@ -1007,25 +1026,28 @@ function MobileCantidadesCard({
           <div title={String(reg.capitulo || '')} style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2, ...cellEllipsis, maxWidth: '100%' }}>
             {reg.capitulo || '—'}
           </div>
-          <div title={itemFull} style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginTop: 4, lineHeight: 1.3 }}>
+          <div title={itemFull} style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginTop: 4, lineHeight: 1.3, ...cellEllipsis, maxWidth: '100%' }}>
             {textoItemCompacto(reg)}
           </div>
         </div>
         <span
-          title={labelVal}
+          title={chipVal.tooltip}
           style={{
             flexShrink: 0,
             fontSize: 'var(--cc-caption)',
-            fontWeight: 700,
+            fontWeight: 800,
             padding: '3px 8px',
-            borderRadius: 999,
-            background: pastel.bg,
-            border: pastel.border !== 'transparent' ? `1px solid ${pastel.border}` : '1px solid transparent',
+            borderRadius: 6,
+            background: pastel.bg !== 'transparent' ? pastel.bg : `${t.textMuted}18`,
+            border: pastel.border !== 'transparent'
+              ? `1px solid ${pastel.border}`
+              : `1px solid ${t.border}`,
             color: pastel.color || t.textMuted,
             whiteSpace: 'nowrap',
+            letterSpacing: '0.02em',
           }}
         >
-          {labelVal}
+          {chipVal.label}
         </span>
       </div>
 
