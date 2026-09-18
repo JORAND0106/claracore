@@ -13,3 +13,9 @@ export {
   makeHatchPattern,
   preloadHatchRegions,
 } from './esquemaHatch'
+export {
+  LINE_STYLE_OPTIONS,
+  normalizeLineStyle,
+  strokeStyledPolyline,
+  strokeStyledSegment,
+} from './esquemaLineStyle'

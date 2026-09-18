@@ -91,6 +91,16 @@ import {
 } from './esquemaCota'
 import { createAreaLabelFromClick, drawAreaLabel } from './esquemaArea'
 import { esquemaEntityInk, esquemaUiTheme, resolveEsquemaUi } from './esquemaTheme'
+import {
+  LINE_STYLE_OPTIONS,
+  LINE_STYLE_CONTINUA,
+  normalizeLineStyle,
+  strokeStyledPolyline,
+  strokeStyledSegment,
+  applyClosedStrokeStyle,
+  lineDashForStyle,
+} from './esquemaLineStyle'
+import { imagenDesdePasteEvent, imagenDesdeClipboard } from '../../modules/presupuesto/pptoPasteImage'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -257,6 +267,7 @@ function renumberCoordRows(rows) {
 }
 
 const WIDTH_TYPES = new Set(['linea', 'flecha', 'rect', 'elipse', 'triangulo', 'stroke', 'polilinea', 'cota'])
+const LINE_STYLE_TYPES = new Set(['linea', 'flecha', 'rect', 'elipse', 'triangulo', 'stroke', 'polilinea'])
 
 export default function EsquemaEditorModal({
   t,
@@ -286,6 +297,7 @@ export default function EsquemaEditorModal({
   const toolRef = useRef('lapiz')
   const colorRef = useRef(ui.ink)
   const widthRef = useRef(3)
+  const lineStyleRef = useRef(LINE_STYLE_CONTINUA)
   const hatchRef = useRef(0)
   const measureWRef = useRef('')
   const measureHRef = useRef('')
@@ -295,6 +307,7 @@ export default function EsquemaEditorModal({
   const clipboardRef = useRef(null)
   const copySelectedRef = useRef(() => false)
   const pasteClipboardRef = useRef(() => false)
+  const pasteImageFromFileRef = useRef(async () => false)
   const deleteSelectedRef = useRef(() => false)
   const escapeActionRef = useRef(() => false)
   const enterActionRef = useRef(() => false)
@@ -317,6 +330,7 @@ export default function EsquemaEditorModal({
   const [tool, setTool] = useState('lapiz')
   const [color, setColor] = useState(ui.ink)
   const [width, setWidth] = useState(3)
+  const [lineStyle, setLineStyle] = useState(LINE_STYLE_CONTINUA)
   const [hatch, setHatch] = useState(0)
   const [measureW, setMeasureW] = useState('')
   const [measureH, setMeasureH] = useState('')
@@ -382,6 +396,7 @@ export default function EsquemaEditorModal({
   toolRef.current = tool
   colorRef.current = color
   widthRef.current = width
+  lineStyleRef.current = lineStyle
   hatchRef.current = hatch
   measureWRef.current = measureW
   measureHRef.current = measureH
@@ -442,9 +457,10 @@ export default function EsquemaEditorModal({
     && (tool === 'seleccion' || tool === 'tabla')
     && !selectedObj.rotation
   )
+  // Editable con cualquier herramienta activa: al pegar una copia el usuario
+  // no debe quedar bloqueado si el tool no es texto/seleccion.
   const editingTexto = (
     selectedObj?.type === 'texto'
-    && (tool === 'seleccion' || tool === 'texto')
     && !selectedObj.rotation
   )
   const needsBoxMeasure = (
@@ -491,16 +507,21 @@ export default function EsquemaEditorModal({
     }, gridStepWorld(zGrid), zGrid, uiNow)
     const list = [...objectsRef.current]
     if (extraDraft) list.push(extraDraft)
+    const hideSel = selectedId
+      ? objectsRef.current.find((o) => o.id === selectedId)
+      : null
     const hideOverlayTextId = (
+      hideSel?.type === 'texto' && !hideSel.rotation
+    ) ? selectedId : null
+    const hideOverlayTablaId = (
       toolRef.current === 'seleccion'
       || toolRef.current === 'tabla'
-      || toolRef.current === 'texto'
     ) ? selectedId : null
     const selSet = selectedIdsRef.current
     const multi = selSet.size > 1
     for (const obj of list) {
       drawObject(ctx, obj, selSet.has(obj.id), {
-        skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTextId,
+        skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTablaId,
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
         zoom: zoomRef.current,
         skipResize: toolRef.current === 'girar-escalar'
@@ -912,6 +933,15 @@ export default function EsquemaEditorModal({
     if (!obj || !SHAPE_TOOLS.has(obj.type)) return
     // Rellena la barra para «Aplicar a selección», pero NO arma la medida del próximo trazo
     setMeasureArmedBoth(false)
+    if (obj.lineStyle) {
+      const ls = normalizeLineStyle(obj.lineStyle)
+      setLineStyle(ls)
+      lineStyleRef.current = ls
+    }
+    if (obj.width != null && Number.isFinite(Number(obj.width))) {
+      setWidth(Number(obj.width))
+      widthRef.current = Number(obj.width)
+    }
     if (LINE_TOOLS.has(obj.type)) {
       setMeasureW(worldToMeters(dist({ x: obj.x1, y: obj.y1 }, { x: obj.x2, y: obj.y2 })).toFixed(2))
       setMeasureH('')
@@ -948,7 +978,23 @@ export default function EsquemaEditorModal({
     setHasClipboard(true)
     objectsRef.current = [...objectsRef.current, ...copies]
     selectIds(copies.map((c) => c.id))
-    if (copies.length === 1 && SHAPE_TOOLS.has(copies[0].type)) syncMeasureFromObject(copies[0])
+    if (copies.some((c) => c.type === 'texto')) {
+      // Asegura overlay de edición tras copiar/pegar texto
+      setTool('seleccion')
+      toolRef.current = 'seleccion'
+    }
+    if (copies.length === 1) {
+      if (SHAPE_TOOLS.has(copies[0].type)) syncMeasureFromObject(copies[0])
+      if (copies[0].lineStyle) {
+        const ls = normalizeLineStyle(copies[0].lineStyle)
+        setLineStyle(ls)
+        lineStyleRef.current = ls
+      }
+      if (copies[0].width != null) {
+        setWidth(copies[0].width)
+        widthRef.current = copies[0].width
+      }
+    }
     setDirty(true)
     setPanTick((n) => n + 1)
     return true
@@ -1198,6 +1244,7 @@ export default function EsquemaEditorModal({
         y2: b.y,
         color: colorRef.current,
         width: widthRef.current,
+        lineStyle: lineStyleRef.current,
         rotation: 0,
       })
     }
@@ -1480,6 +1527,7 @@ export default function EsquemaEditorModal({
           points: [p],
           color: colorRef.current,
           width: widthRef.current,
+          lineStyle: lineStyleRef.current,
           rotation: 0,
         }
       } else {
@@ -1500,7 +1548,14 @@ export default function EsquemaEditorModal({
       if (hit) {
         const already = selectedIdsRef.current.has(hit.id)
         if (!already) selectOne(hit.id)
-        if (SHAPE_TOOLS.has(hit.type) && selectedIdsRef.current.size === 1) syncMeasureFromObject(hit)
+        if (selectedIdsRef.current.size === 1) {
+          if (SHAPE_TOOLS.has(hit.type)) syncMeasureFromObject(hit)
+          else if (LINE_STYLE_TYPES.has(hit.type) && hit.lineStyle) {
+            const ls = normalizeLineStyle(hit.lineStyle)
+            setLineStyle(ls)
+            lineStyleRef.current = ls
+          }
+        }
         if (selectModeRef.current === 'dimensionar') {
           selectOne(hit.id)
           const handle = hit.type !== 'image' ? nearestResizeHandle(p, hit) : null
@@ -1740,6 +1795,7 @@ export default function EsquemaEditorModal({
         points: [p],
         color: colorRef.current,
         width: widthRef.current,
+        lineStyle: currentTool === 'borrador' ? LINE_STYLE_CONTINUA : lineStyleRef.current,
         erase: currentTool === 'borrador',
       }
       return
@@ -1755,6 +1811,7 @@ export default function EsquemaEditorModal({
         y2: p.y,
         color: colorRef.current,
         width: currentTool === 'cota' ? Math.min(1.5, widthRef.current) : widthRef.current,
+        lineStyle: LINE_STYLE_TYPES.has(currentTool) ? lineStyleRef.current : undefined,
         rotation: 0,
         hatch: null,
         label: '0',
@@ -2280,6 +2337,92 @@ export default function EsquemaEditorModal({
     setPanTick((n) => n + 1)
   }
 
+  const applySelectedLineStyle = (nextStyle) => {
+    const id = selectedIdRef.current
+    const ls = normalizeLineStyle(nextStyle)
+    if (!id) return
+    const obj = objectsRef.current.find((o) => o.id === id)
+    if (!obj || !LINE_STYLE_TYPES.has(obj.type)) return
+    pushHistory()
+    objectsRef.current = objectsRef.current.map((o) => (
+      o.id === id ? { ...o, lineStyle: ls } : o
+    ))
+    setLineStyle(ls)
+    lineStyleRef.current = ls
+    setDirty(true)
+    setPanTick((n) => n + 1)
+  }
+
+  const pasteImageFromFile = async (file) => {
+    if (!file) return false
+    const dataUri = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(reader.error || new Error('read-failed'))
+      reader.readAsDataURL(file)
+    })
+    if (!dataUri) return false
+    const size = await new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve({
+        w: img.naturalWidth || img.width || 400,
+        h: img.naturalHeight || img.height || 300,
+      })
+      img.onerror = () => resolve({ w: 400, h: 300 })
+      img.src = dataUri
+    })
+    const { w: cw, h: ch } = cssSize()
+    const z = zoomRef.current || 1
+    const maxW = Math.max(80, (cw * 0.72) / z)
+    const maxH = Math.max(60, (ch * 0.72) / z)
+    const scale = Math.min(1, maxW / size.w, maxH / size.h)
+    const dw = Math.max(24, size.w * scale)
+    const dh = Math.max(24, size.h * scale)
+    const viewX = -panRef.current.x / z
+    const viewY = -panRef.current.y / z
+    const wx = viewX + Math.max(0, ((cw / z) - dw) / 2)
+    const wy = viewY + Math.max(0, ((ch / z) - dh) / 2)
+    pushHistory()
+    const imgObj = {
+      id: uid(),
+      type: 'image',
+      dataUri,
+      x: wx,
+      y: wy,
+      w: dw,
+      h: dh,
+      fit: false,
+    }
+    const list = objectsRef.current
+    let insertAt = 0
+    while (insertAt < list.length && list[insertAt]?.type === 'image' && list[insertAt]?.fit) {
+      insertAt += 1
+    }
+    // Fondo editable debajo de dibujos existentes → se puede trazar encima
+    objectsRef.current = [
+      ...list.slice(0, insertAt),
+      imgObj,
+      ...list.slice(insertAt),
+    ]
+    selectOne(imgObj.id)
+    setTool('seleccion')
+    toolRef.current = 'seleccion'
+    setDirty(true)
+    setPanTick((n) => n + 1)
+    return true
+  }
+  pasteImageFromFileRef.current = pasteImageFromFile
+
+  const pasteFromToolbar = async () => {
+    try {
+      const file = await imagenDesdeClipboard()
+      if (file && await pasteImageFromFile(file)) return
+    } catch {
+      /* sin permiso o sin imagen: cae a portapapeles de escena */
+    }
+    pasteClipboard()
+  }
+
   const applyRotationDeg = (raw) => {
     const ids = [...selectedIdsRef.current]
     if (!ids.length) return
@@ -2666,12 +2809,28 @@ export default function EsquemaEditorModal({
       const k = key.toLowerCase()
       if (k === 'c') {
         if (copySelectedRef.current()) e.preventDefault()
-      } else if (k === 'v') {
-        if (pasteClipboardRef.current()) e.preventDefault()
       }
+      // Ctrl+V: lo maneja el listener `paste` (imagen del SO o portapapeles de escena)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Pegar imagen (Ctrl+V) o entidades del portapapeles interno del editor
+  useEffect(() => {
+    const onPaste = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return
+      const file = imagenDesdePasteEvent(e)
+      if (file) {
+        e.preventDefault()
+        Promise.resolve(pasteImageFromFileRef.current(file)).catch(() => {})
+        return
+      }
+      if (pasteClipboardRef.current()) e.preventDefault()
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
   }, [])
 
   const fitViewToObjects = (objs) => {
@@ -2990,6 +3149,18 @@ export default function EsquemaEditorModal({
           <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 4, alignItems: 'center' }} title="Grosor">
             <input type="range" min={1} max={16} step={0.5} value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ width: 72 }} />
           </label>
+          <label style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, display: 'inline-flex', gap: 4, alignItems: 'center' }} title="Tipo de línea">
+            <select
+              value={lineStyle}
+              onChange={(e) => setLineStyle(normalizeLineStyle(e.target.value))}
+              disabled={tool === 'borrador'}
+              style={{ fontSize: 'var(--cc-xs)', padding: '4px 6px', borderRadius: 6, border: `1px solid ${t.border}`, color: t.text, background: t.bgCard, maxWidth: 148 }}
+            >
+              {LINE_STYLE_OPTIONS.map((o) => (
+                <option key={o.id} value={o.id}>{o.label}</option>
+              ))}
+            </select>
+          </label>
           {(tool === 'hatch' || tool === 'rect' || tool === 'elipse' || tool === 'triangulo') && (
             <select
               title="Textura hatch"
@@ -3080,11 +3251,10 @@ export default function EsquemaEditorModal({
           </button>
           <button
             type="button"
-            title="Pegar (Ctrl/⌘+V)"
+            title="Pegar (Ctrl/⌘+V) · imagen o selección copiada"
             aria-label="Pegar"
-            disabled={!hasClipboard}
-            onClick={() => pasteClipboard()}
-            style={{ ...iconBtn(t, false), opacity: hasClipboard ? 1 : 0.4 }}
+            onClick={() => { pasteFromToolbar() }}
+            style={iconBtn(t, false)}
           >
             <IconPegar />
           </button>
@@ -3311,6 +3481,7 @@ export default function EsquemaEditorModal({
               onApplyDims={(w, h) => applyMeasureToSelected(w, h)}
               onColor={applySelectedColor}
               onWidth={applySelectedWidth}
+              onLineStyle={applySelectedLineStyle}
               onFontSize={applyFontSize}
               onRotationDeg={applyRotationDeg}
             />
@@ -3795,7 +3966,7 @@ function SelectModeRadios({
 
 function PropiedadesPanel({
   t, ui, obj, measureW, measureH, onMeasureW, onMeasureH, onApplyDims, onColor, onWidth,
-  onFontSize, onRotationDeg, selectMode, onSelectMode,
+  onLineStyle, onFontSize, onRotationDeg, selectMode, onSelectMode,
 }) {
   const isShape = SHAPE_TOOLS.has(obj.type)
   const isBox = BOX_TOOLS.has(obj.type)
@@ -3919,6 +4090,20 @@ function PropiedadesPanel({
           <span style={{ color: t.text, minWidth: 22, textAlign: 'right' }}>{obj.width || 3}</span>
         </label>
       ) : null}
+      {LINE_STYLE_TYPES.has(obj.type) ? (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: t.textMuted, fontWeight: 600 }}>
+          Línea
+          <select
+            value={normalizeLineStyle(obj.lineStyle)}
+            onChange={(e) => onLineStyle?.(e.target.value)}
+            style={{ flex: 1, fontSize: 11, padding: '4px 6px', borderRadius: 6, border: `1px solid ${t.border}`, color: t.text, background: t.bgCard }}
+          >
+            {LINE_STYLE_OPTIONS.map((o) => (
+              <option key={o.id} value={o.id}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+      ) : null}
     </div>
   )
 }
@@ -4040,36 +4225,41 @@ function drawObject(ctx, obj, selected, opts = {}) {
     ctx.translate(-center.x, -center.y)
   }
   if (PATH_TYPES.has(obj.type)) {
-    ctx.lineCap = obj.type === 'polilinea' ? 'round' : 'round'
+    ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
-    ctx.lineWidth = obj.erase ? Math.max(8, (obj.width || 3) * 3) : (obj.width || 3)
+    const lw = obj.erase ? Math.max(8, (obj.width || 3) * 3) : (obj.width || 3)
+    ctx.lineWidth = lw
     ctx.globalCompositeOperation = obj.erase ? 'destination-out' : 'source-over'
     ctx.strokeStyle = ink
     const pts = obj.points || []
-    if (pts.length) {
-      ctx.beginPath()
-      ctx.moveTo(pts[0].x, pts[0].y)
-      for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
-      ctx.stroke()
+    if (pts.length >= 2) {
+      if (obj.erase) {
+        ctx.beginPath()
+        ctx.moveTo(pts[0].x, pts[0].y)
+        for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
+        ctx.stroke()
+      } else {
+        strokeStyledPolyline(ctx, pts, obj.lineStyle, lw)
+      }
     }
   } else if (SHAPE_TOOLS.has(obj.type) || obj.type === 'linea' || obj.type === 'flecha') {
     ctx.globalCompositeOperation = 'source-over'
     ctx.strokeStyle = ink
     ctx.fillStyle = ink
-    ctx.lineWidth = obj.width || 3
+    const lw = obj.width || 3
+    ctx.lineWidth = lw
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     const a = { x: obj.x1, y: obj.y1 }
     const b = { x: obj.x2, y: obj.y2 }
+    const style = obj.lineStyle
     if (obj.hatch != null && ['rect', 'elipse', 'triangulo'].includes(obj.type)) {
       fillHatch(ctx, obj, ui)
     }
     if (obj.type === 'linea' || obj.type === 'flecha') {
-      ctx.beginPath()
-      ctx.moveTo(a.x, a.y)
-      ctx.lineTo(b.x, b.y)
-      ctx.stroke()
+      strokeStyledSegment(ctx, a, b, style, lw)
       if (obj.type === 'flecha') {
+        ctx.setLineDash([])
         const ang = Math.atan2(b.y - a.y, b.x - a.x)
         const len = arrowHeadLength(obj)
         ctx.beginPath()
@@ -4079,22 +4269,8 @@ function drawObject(ctx, obj, selected, opts = {}) {
         ctx.closePath()
         ctx.fill()
       }
-    } else if (obj.type === 'rect') {
-      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y)
-    } else if (obj.type === 'elipse') {
-      const cx = (a.x + b.x) / 2
-      const cy = (a.y + b.y) / 2
-      ctx.beginPath()
-      ctx.ellipse(cx, cy, Math.max(Math.abs(b.x - a.x) / 2, 0.5), Math.max(Math.abs(b.y - a.y) / 2, 0.5), 0, 0, Math.PI * 2)
-      ctx.stroke()
-    } else if (obj.type === 'triangulo') {
-      const midX = (a.x + b.x) / 2
-      ctx.beginPath()
-      ctx.moveTo(midX, a.y)
-      ctx.lineTo(b.x, b.y)
-      ctx.lineTo(a.x, b.y)
-      ctx.closePath()
-      ctx.stroke()
+    } else {
+      strokeClosedStyled(ctx, obj, style, lw)
     }
   }
   if (selected) {
@@ -4159,6 +4335,51 @@ function drawImageObj(ctx, obj) {
   cache[key] = image
   image.onload = () => paint(image)
   image.src = key
+}
+
+function strokeClosedStyled(ctx, obj, style, width = 3) {
+  const st = normalizeLineStyle(style)
+  const w = Math.max(1, Number(width) || 3)
+  const a = { x: obj.x1, y: obj.y1 }
+  const b = { x: obj.x2, y: obj.y2 }
+  const cx = (a.x + b.x) / 2
+  const cy = (a.y + b.y) / 2
+  const hw = Math.max(Math.abs(b.x - a.x) / 2, 0.5)
+  const hh = Math.max(Math.abs(b.y - a.y) / 2, 0.5)
+  const info = applyClosedStrokeStyle(ctx, st, w)
+  const strokeOnce = () => {
+    if (obj.type === 'rect') {
+      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y)
+    } else if (obj.type === 'elipse') {
+      ctx.beginPath()
+      ctx.ellipse(cx, cy, hw, hh, 0, 0, Math.PI * 2)
+      ctx.stroke()
+    } else if (obj.type === 'triangulo') {
+      const midX = (a.x + b.x) / 2
+      ctx.beginPath()
+      ctx.moveTo(midX, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.lineTo(a.x, b.y)
+      ctx.closePath()
+      ctx.stroke()
+    }
+  }
+  if (info.double) {
+    const off = Math.max(1.5, w * 0.9)
+    for (const side of [1, -1]) {
+      ctx.save()
+      ctx.translate(cx, cy)
+      ctx.scale((hw + side * off) / hw, (hh + side * off) / hh)
+      ctx.translate(-cx, -cy)
+      if (info.dashSeg) ctx.setLineDash(lineDashForStyle(st, w))
+      strokeOnce()
+      ctx.restore()
+    }
+    ctx.setLineDash([])
+    return
+  }
+  strokeOnce()
+  ctx.setLineDash([])
 }
 
 function pathForClosed(ctx, obj) {
@@ -4263,11 +4484,7 @@ function drawTexto(ctx, obj, { skipText = false, ui } = {}) {
   const fontSize = Math.max(10, obj.fontSize || 16)
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.strokeStyle = palette.border
-  ctx.lineWidth = 1
-  ctx.setLineDash([3, 3])
-  ctx.strokeRect(x, y, w, h)
-  ctx.setLineDash([])
+  // Sin recuadro permanente: el contenedor solo guía en edición/selección (overlay o handles).
   if (!skipText) {
     ctx.fillStyle = ink
     ctx.font = `${fontSize}px sans-serif`
@@ -4928,9 +5145,9 @@ function TextoOverlay({ obj, ui, pan, zoom = 1, canvasEl, onTextChange }) {
           boxSizing: 'border-box',
           margin: 0,
           padding: `${4 * z}px`,
-          border: `1px solid ${resolveEsquemaUi(ui).primary}`,
+          border: `1px dashed ${resolveEsquemaUi(ui).primary}`,
           borderRadius: 4,
-          background: resolveEsquemaUi(ui).cellBg,
+          background: 'transparent',
           color: esquemaEntityInk(obj.color, ui),
           fontSize,
           fontFamily: 'sans-serif',
