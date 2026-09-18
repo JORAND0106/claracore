@@ -1,17 +1,17 @@
 /**
- * Paleta pastel sincronizada para tarjetas de contratista (RRHH).
- * Colores armónicos (misma saturación/luminosidad); asignación estable por clave.
+ * Paleta de tarjetas contratista — alineada a tokens ClaraCore (#0077B6 / cyan).
+ * Variaciones armónicas de la misma familia azul; asignación estable por clave.
  */
 
 export const RRHH_TARJETA_PASTEL = [
-  { bg: '#E8F4F8', border: '#A8C9D8', accent: '#4A7C94', text: '#1E3A4A' },
-  { bg: '#F0EAF6', border: '#C4B3D9', accent: '#6B5B8A', text: '#2E2440' },
-  { bg: '#EAF6EE', border: '#A8D0B8', accent: '#4A8A62', text: '#1E3A2A' },
-  { bg: '#F8F0E8', border: '#D8C0A8', accent: '#9A6B45', text: '#3A2A1E' },
-  { bg: '#F6EAEF', border: '#D4A8BC', accent: '#8A4A66', text: '#3A1E2A' },
-  { bg: '#EEF2F8', border: '#B0BDD4', accent: '#4A5F8A', text: '#1E2840' },
-  { bg: '#F4F6EA', border: '#C8D0A0', accent: '#6B7A3A', text: '#2E3418' },
-  { bg: '#F8ECEC', border: '#D8B0B0', accent: '#8A4A4A', text: '#3A1E1E' },
+  { bg: '#E0F2FE', border: '#7DD3FC', accent: '#0077B6', text: '#0F2942' },
+  { bg: '#ECFEFF', border: '#67E8F9', accent: '#0891B2', text: '#164E63' },
+  { bg: '#F0F9FF', border: '#BAE6FD', accent: '#0284C7', text: '#0C4A6E' },
+  { bg: '#E0F7FA', border: '#80DEEA', accent: '#00B4C6', text: '#0F2942' },
+  { bg: '#EFF6FF', border: '#93C5FD', accent: '#2563EB', text: '#1E3A5F' },
+  { bg: '#F0FDFA', border: '#99F6E4', accent: '#0E7490', text: '#134E4A' },
+  { bg: '#F8FAFC', border: '#CBD5E1', accent: '#0369A1', text: '#0F2942' },
+  { bg: '#E8F4FC', border: '#A5D8F3', accent: '#0077B6', text: '#0F2942' },
 ]
 
 export function pastelIndexFromKey(key) {
