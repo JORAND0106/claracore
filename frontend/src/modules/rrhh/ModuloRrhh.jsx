@@ -23,6 +23,7 @@ import {
 import { accesoRrhh } from './rrhhPermisos'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 import { pastelForEmpresa } from './rrhhTarjetaStyles'
+import CumpleanosMesCard from './CumpleanosMesCard'
 
 function EmpresaLogoPlaceholder({ accent = '#4A7C94', size = 44 }) {
   return (
@@ -50,6 +51,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const [items, setItems] = useState([])
   const [grupos, setGrupos] = useState([])
+  const [cumpleanosMes, setCumpleanosMes] = useState({ mes: null, items: [] })
   const [empresaSel, setEmpresaSel] = useState(null)
   const [page, setPage] = useState(0)
   const [total, setTotal] = useState(0)
@@ -88,6 +90,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
       setEmpresas(emp?.opciones || [])
       setCatalogo(cat?.categorias || {})
       setGrupos(res?.grupos || [])
+      setCumpleanosMes(res?.cumpleanos_mes || { mes: null, items: [] })
     } catch (e) {
       flash('error', e.message || 'No se pudo cargar Recursos Humanos.')
     } finally {
@@ -527,6 +530,9 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
             <div style={{ color: tTok.textMuted, gridColumn: '1 / -1' }}>
               No hay colaboradores registrados. Use «Registrar colaborador» para iniciar la documentación de contratación.
             </div>
+          )}
+          {!loading && (
+            <CumpleanosMesCard cumpleanos={cumpleanosMes} />
           )}
           {grupos.map((g) => {
             const pastel = pastelForEmpresa(g.empresa_key)
