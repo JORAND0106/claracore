@@ -24,3 +24,9 @@ export {
   imageScaleFactorFromReference,
   scaleSceneByImageReference,
 } from './esquemaImageScale'
+export {
+  captureMapAreaToDataUrl,
+  normalizeMapLocation,
+  normalizePrintAreaRect,
+  printAreaToWorldRect,
+} from './esquemaMapaCapture'

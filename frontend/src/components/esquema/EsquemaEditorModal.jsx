@@ -104,6 +104,25 @@ import {
 } from './esquemaLineStyle'
 import { imagenDesdePasteEvent, imagenDesdeClipboard } from '../../modules/presupuesto/pptoPasteImage'
 import { scaleSceneByImageReference } from './esquemaImageScale'
+import mapboxgl from 'mapbox-gl'
+import 'mapbox-gl/dist/mapbox-gl.css'
+import { crearMapboxMapSeguro } from '../../mapboxSafe'
+import {
+  SICOE_MAPA_VISTAS_CALLE,
+  applySicoeBasemapTerrain,
+  normalizarVistaBasemap,
+  sicoeBasemapLabel,
+  sicoeBasemapStyleUrl,
+} from '../../modules/sicoe-obra/sicoeMapaBasemap'
+import {
+  ESQUEMA_MAPA_CENTER_DEFAULT,
+  ESQUEMA_MAPA_ZOOM_CON_UBICACION,
+  ESQUEMA_MAPA_ZOOM_DEFAULT,
+  captureMapAreaToDataUrl,
+  normalizeMapLocation,
+  normalizePrintAreaRect,
+  printAreaToWorldRect,
+} from './esquemaMapaCapture'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -278,11 +297,18 @@ export default function EsquemaEditorModal({
   initialDataUri = null,
   contratoId: contratoIdProp = null,
   iaDoc = null,
+  /** Ubicación del reporte/registro asociado: { lat, lng }. Si falta, el usuario elige el sector. */
+  mapLocation = null,
   onSave,
   onClose,
 }) {
   const canvasRef = useRef(null)
   const wrapRef = useRef(null)
+  const mapHostRef = useRef(null)
+  const mapRef = useRef(null)
+  const mapActiveRef = useRef(false)
+  const printAreaSelectingRef = useRef(false)
+  const printAreaDraftRef = useRef(null)
   const objectsRef = useRef([])
   const historyRef = useRef([])
   const drawing = useRef(false)
@@ -388,6 +414,12 @@ export default function EsquemaEditorModal({
   const [arrayCount, setArrayCount] = useState('4')
   const [arrayAngle, setArrayAngle] = useState('360')
   const [cotaMode, setCotaMode] = useState('linear')
+  const [mapActive, setMapActive] = useState(false)
+  const [mapOpacity, setMapOpacity] = useState(0.72)
+  const [mapBasemap, setMapBasemap] = useState('calle')
+  const [mapError, setMapError] = useState('')
+  const [printAreaSelecting, setPrintAreaSelecting] = useState(false)
+  const [printAreaTick, setPrintAreaTick] = useState(0)
   const rotatePivotRef = useRef(null)
   const mirrorAxisRef = useRef(null)
   const arrayModeRef = useRef('rect')
@@ -414,6 +446,8 @@ export default function EsquemaEditorModal({
   scaleImgDraftRef.current = scaleImgDraft
   arrayModeRef.current = arrayMode
   cotaModeRef.current = cotaMode
+  mapActiveRef.current = mapActive
+  printAreaSelectingRef.current = printAreaSelecting
 
   useEffect(() => {
     themeRef.current = ui
@@ -501,18 +535,24 @@ export default function EsquemaEditorModal({
     const ctx = c.getContext('2d')
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const uiNow = themeRef.current
-    ctx.fillStyle = uiNow.canvas
-    ctx.fillRect(0, 0, w, h)
+    if (mapActiveRef.current) {
+      ctx.clearRect(0, 0, w, h)
+    } else {
+      ctx.fillStyle = uiNow.canvas
+      ctx.fillRect(0, 0, w, h)
+    }
     ctx.save()
     ctx.translate(panRef.current.x, panRef.current.y)
     ctx.scale(zoomRef.current, zoomRef.current)
     const zGrid = zoomRef.current || 1
-    drawDotGrid(ctx, {
-      x: -panRef.current.x / zGrid,
-      y: -panRef.current.y / zGrid,
-      w: w / zGrid,
-      h: h / zGrid,
-    }, gridStepWorld(zGrid), zGrid, uiNow)
+    if (!mapActiveRef.current) {
+      drawDotGrid(ctx, {
+        x: -panRef.current.x / zGrid,
+        y: -panRef.current.y / zGrid,
+        w: w / zGrid,
+        h: h / zGrid,
+      }, gridStepWorld(zGrid), zGrid, uiNow)
+    }
     const list = [...objectsRef.current]
     if (extraDraft) list.push(extraDraft)
     const hideSel = selectedId
@@ -577,8 +617,25 @@ export default function EsquemaEditorModal({
     }
     if (snapRef.current) drawSnapMarker(ctx, snapRef.current, zoomRef.current, uiNow)
     ctx.restore()
+    if (printAreaSelectingRef.current && printAreaDraftRef.current?.from) {
+      const d = printAreaDraftRef.current
+      const a = d.from
+      const b = d.to || d.from
+      const x = Math.min(a.x, b.x)
+      const y = Math.min(a.y, b.y)
+      const rw = Math.abs(b.x - a.x)
+      const rh = Math.abs(b.y - a.y)
+      ctx.save()
+      ctx.strokeStyle = uiNow.primary || '#0077B6'
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 4])
+      ctx.fillStyle = 'rgba(0, 119, 182, 0.12)'
+      ctx.fillRect(x, y, rw, rh)
+      ctx.strokeRect(x, y, rw, rh)
+      ctx.restore()
+    }
     drawNorthIndicator(ctx, w, h, null, uiNow)
-  }, [selectedId, selectedIds, panTick, selectMode])
+  }, [selectedId, selectedIds, panTick, selectMode, printAreaTick])
 
   redrawRef.current = redraw
 
@@ -701,9 +758,246 @@ export default function EsquemaEditorModal({
   }
 
   const setZoomAroundCenter = (nextZoom) => {
+    if (mapActiveRef.current && mapRef.current) {
+      try {
+        const map = mapRef.current
+        const z0 = zoomRef.current || 1
+        const z1 = clampZoom(nextZoom)
+        if (Math.abs(z1 - 1) < 0.02) {
+          const loc = normalizeMapLocation(mapLocation)
+          map.easeTo({
+            zoom: loc ? ESQUEMA_MAPA_ZOOM_CON_UBICACION : ESQUEMA_MAPA_ZOOM_DEFAULT,
+            duration: 220,
+          })
+        } else if (z1 > z0 + 0.01) {
+          map.zoomIn({ duration: 180 })
+        } else if (z1 < z0 - 0.01) {
+          map.zoomOut({ duration: 180 })
+        }
+        zoomRef.current = z1
+        setZoomPct(Math.round(z1 * 100))
+      } catch { /* ignore */ }
+      return
+    }
     const { w, h } = cssSize()
     setZoomAtScreenPoint(nextZoom, w / 2, h / 2)
   }
+
+  const destroyMap = useCallback(() => {
+    const map = mapRef.current
+    mapRef.current = null
+    if (map) {
+      try { map.remove() } catch { /* ignore */ }
+    }
+  }, [])
+
+  const insertBackgroundImageFromDataUri = async (dataUri, placement = null) => {
+    if (!dataUri) return false
+    const size = await new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve({
+        w: img.naturalWidth || img.width || 400,
+        h: img.naturalHeight || img.height || 300,
+      })
+      img.onerror = () => resolve({ w: 400, h: 300 })
+      img.src = dataUri
+    })
+    let wx
+    let wy
+    let dw
+    let dh
+    if (placement && Number.isFinite(placement.x) && Number.isFinite(placement.w)) {
+      wx = placement.x
+      wy = placement.y
+      dw = Math.max(24, placement.w)
+      dh = Math.max(24, placement.h)
+    } else {
+      const { w: cw, h: ch } = cssSize()
+      const z = zoomRef.current || 1
+      const maxW = Math.max(80, (cw * 0.72) / z)
+      const maxH = Math.max(60, (ch * 0.72) / z)
+      const scale = Math.min(1, maxW / size.w, maxH / size.h)
+      dw = Math.max(24, size.w * scale)
+      dh = Math.max(24, size.h * scale)
+      const viewX = -panRef.current.x / z
+      const viewY = -panRef.current.y / z
+      wx = viewX + Math.max(0, ((cw / z) - dw) / 2)
+      wy = viewY + Math.max(0, ((ch / z) - dh) / 2)
+    }
+    pushHistory()
+    const imgObj = {
+      id: uid(),
+      type: 'image',
+      dataUri,
+      x: wx,
+      y: wy,
+      w: dw,
+      h: dh,
+      fit: false,
+    }
+    const list = objectsRef.current
+    let insertAt = 0
+    while (insertAt < list.length && list[insertAt]?.type === 'image' && list[insertAt]?.fit) {
+      insertAt += 1
+    }
+    objectsRef.current = [
+      ...list.slice(0, insertAt),
+      imgObj,
+      ...list.slice(insertAt),
+    ]
+    selectOne(imgObj.id)
+    setTool('seleccion')
+    toolRef.current = 'seleccion'
+    setDirty(true)
+    setPanTick((n) => n + 1)
+    return true
+  }
+
+  const deactivateMap = useCallback(() => {
+    destroyMap()
+    mapActiveRef.current = false
+    setMapActive(false)
+    setMapError('')
+    printAreaSelectingRef.current = false
+    setPrintAreaSelecting(false)
+    printAreaDraftRef.current = null
+    setToolHint('')
+    setPanTick((n) => n + 1)
+  }, [destroyMap])
+
+  const activateMap = useCallback(() => {
+    if (mapActiveRef.current) {
+      setToolHint('Mapa ya activo. Use Paneo para mover el sector, o Guardar para capturar el área de impresión.')
+      return
+    }
+    panRef.current = { x: 0, y: 0 }
+    zoomRef.current = 1
+    setZoomPct(100)
+    setMapError('')
+    setMapBasemap('calle')
+    setMapOpacity(0.72)
+    mapActiveRef.current = true
+    setMapActive(true)
+    setTool('paneo')
+    toolRef.current = 'paneo'
+    const loc = normalizeMapLocation(mapLocation)
+    setToolHint(loc
+      ? 'Mapa centrado en la ubicación del reporte. Dibuje encima; Paneo mueve el mapa. Al Guardar seleccione el área de impresión.'
+      : 'Sin ubicación del reporte: use Paneo / zoom para elegir el sector. Al Guardar seleccione el área de impresión.')
+    setPanTick((n) => n + 1)
+  }, [mapLocation])
+
+  const applyMapBasemap = useCallback((mode) => {
+    const next = normalizarVistaBasemap(mode)
+    const safe = SICOE_MAPA_VISTAS_CALLE.includes(next) ? next : 'calle'
+    setMapBasemap(safe)
+    const map = mapRef.current
+    if (!map) return
+    try {
+      map.setStyle(sicoeBasemapStyleUrl(safe))
+      map.once('style.load', () => {
+        try { applySicoeBasemapTerrain(map, safe) } catch { /* ignore */ }
+      })
+    } catch { /* ignore */ }
+  }, [])
+
+  const finishPrintAreaCapture = async () => {
+    const draft = printAreaDraftRef.current
+    printAreaDraftRef.current = null
+    printAreaSelectingRef.current = false
+    setPrintAreaSelecting(false)
+    const { w: cw, h: ch } = cssSize()
+    const area = draft?.from && draft?.to
+      ? normalizePrintAreaRect(draft.from, draft.to, { w: cw, h: ch })
+      : null
+    if (!area) {
+      setToolHint('Área de impresión demasiado pequeña. Arrastre un rectángulo más grande o pulse Guardar de nuevo.')
+      setPanTick((n) => n + 1)
+      return
+    }
+    const map = mapRef.current
+    if (!map) {
+      setToolHint('Mapa no disponible para capturar.')
+      deactivateMap()
+      return
+    }
+    setBusy(true)
+    try {
+      await new Promise((r) => requestAnimationFrame(r))
+      await new Promise((r) => setTimeout(r, 120))
+      const dataUri = captureMapAreaToDataUrl(
+        map.getCanvas(),
+        area,
+        mapOpacity,
+        { mime: 'image/png' },
+      )
+      if (!dataUri) {
+        setToolHint('No se pudo capturar el mapa. Intente de nuevo.')
+        return
+      }
+      const placement = printAreaToWorldRect(area, panRef.current, zoomRef.current || 1)
+      deactivateMap()
+      await insertBackgroundImageFromDataUri(dataUri, placement)
+      setToolHint('Mapa insertado como fondo. Puede dibujar encima y guardar el esquema.')
+      setSavePrompt({ title: '' })
+    } finally {
+      setBusy(false)
+      setPanTick((n) => n + 1)
+    }
+  }
+
+  useEffect(() => {
+    if (!mapActive) {
+      destroyMap()
+      return undefined
+    }
+    const host = mapHostRef.current
+    if (!host) return undefined
+    const loc = normalizeMapLocation(mapLocation)
+    const center = loc
+      ? [loc.lng, loc.lat]
+      : [ESQUEMA_MAPA_CENTER_DEFAULT.lng, ESQUEMA_MAPA_CENTER_DEFAULT.lat]
+    const zoom = loc ? ESQUEMA_MAPA_ZOOM_CON_UBICACION : ESQUEMA_MAPA_ZOOM_DEFAULT
+    const style = sicoeBasemapStyleUrl(mapBasemap)
+    const { map, error } = crearMapboxMapSeguro(host, {
+      style,
+      center,
+      zoom,
+      preserveDrawingBuffer: true,
+      attributionControl: true,
+      interactive: true,
+    })
+    if (error || !map) {
+      setMapError(error || 'Mapa no disponible')
+      mapActiveRef.current = false
+      setMapActive(false)
+      return undefined
+    }
+    mapRef.current = map
+    try { map.dragRotate.disable() } catch { /* ignore */ }
+    try { map.touchZoomRotate.disableRotation() } catch { /* ignore */ }
+    try { map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right') } catch { /* ignore */ }
+    const onLoad = () => {
+      try { applySicoeBasemapTerrain(map, mapBasemap) } catch { /* ignore */ }
+      try { map.resize() } catch { /* ignore */ }
+    }
+    if (map.loaded()) onLoad()
+    else map.once('load', onLoad)
+
+    const ro = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+        try { map.resize() } catch { /* ignore */ }
+      })
+      : null
+    if (ro) ro.observe(host)
+
+    return () => {
+      ro?.disconnect()
+      destroyMap()
+    }
+    // Solo al activar/desactivar: cambios de capa van por applyMapBasemap
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapActive, destroyMap])
 
   const pointerDistance = () => {
     const pts = [...pointersRef.current.values()]
@@ -1390,6 +1684,22 @@ export default function EsquemaEditorModal({
     lastScreenRef.current = screen
     pointersRef.current.set(e.pointerId, screen)
 
+    // Área de impresión del mapa: marquee en píxeles de pantalla
+    if (printAreaSelectingRef.current) {
+      printAreaDraftRef.current = { from: { ...screen }, to: { ...screen } }
+      drawing.current = true
+      setPrintAreaTick((n) => n + 1)
+      return
+    }
+
+    // Con mapa activo + Paneo: el mapa recibe el arrastre (canvas sin captura)
+    if (mapActiveRef.current && toolRef.current === 'paneo') {
+      try { c.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
+      pointersRef.current.delete(e.pointerId)
+      drawing.current = false
+      return
+    }
+
     // Dos dedos → pellizco (zoom). No iniciar dibujo ni pan con el segundo puntero.
     if (pointersRef.current.size >= 2) {
       beginPinchIfNeeded()
@@ -1937,6 +2247,18 @@ export default function EsquemaEditorModal({
       pointersRef.current.set(e.pointerId, screenPosFromEvent(e))
     }
 
+    if (printAreaSelectingRef.current && printAreaDraftRef.current?.from) {
+      e.preventDefault()
+      const screen = screenPosFromEvent(e)
+      lastScreenRef.current = screen
+      printAreaDraftRef.current = {
+        ...printAreaDraftRef.current,
+        to: { ...screen },
+      }
+      setPrintAreaTick((n) => n + 1)
+      return
+    }
+
     // Pellizco: zoom anclado al punto medio; pan sigue el centro del gesto
     if (pinchRef.current && pointersRef.current.size >= 2) {
       e.preventDefault()
@@ -2242,6 +2564,19 @@ export default function EsquemaEditorModal({
     pointersRef.current.delete(e.pointerId)
     try { canvasRef.current.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
 
+    if (printAreaSelectingRef.current && printAreaDraftRef.current?.from) {
+      e.preventDefault()
+      drawing.current = false
+      const screen = screenPosFromEvent(e)
+      printAreaDraftRef.current = {
+        ...printAreaDraftRef.current,
+        to: { ...screen },
+      }
+      setPrintAreaTick((n) => n + 1)
+      Promise.resolve(finishPrintAreaCapture()).catch(() => {})
+      return
+    }
+
     // Fin de pellizco: al quedar menos de 2 punteros, liberar el gesto
     if (pinchRef.current) {
       e.preventDefault()
@@ -2484,55 +2819,7 @@ export default function EsquemaEditorModal({
       reader.onerror = () => reject(reader.error || new Error('read-failed'))
       reader.readAsDataURL(file)
     })
-    if (!dataUri) return false
-    const size = await new Promise((resolve) => {
-      const img = new Image()
-      img.onload = () => resolve({
-        w: img.naturalWidth || img.width || 400,
-        h: img.naturalHeight || img.height || 300,
-      })
-      img.onerror = () => resolve({ w: 400, h: 300 })
-      img.src = dataUri
-    })
-    const { w: cw, h: ch } = cssSize()
-    const z = zoomRef.current || 1
-    const maxW = Math.max(80, (cw * 0.72) / z)
-    const maxH = Math.max(60, (ch * 0.72) / z)
-    const scale = Math.min(1, maxW / size.w, maxH / size.h)
-    const dw = Math.max(24, size.w * scale)
-    const dh = Math.max(24, size.h * scale)
-    const viewX = -panRef.current.x / z
-    const viewY = -panRef.current.y / z
-    const wx = viewX + Math.max(0, ((cw / z) - dw) / 2)
-    const wy = viewY + Math.max(0, ((ch / z) - dh) / 2)
-    pushHistory()
-    const imgObj = {
-      id: uid(),
-      type: 'image',
-      dataUri,
-      x: wx,
-      y: wy,
-      w: dw,
-      h: dh,
-      fit: false,
-    }
-    const list = objectsRef.current
-    let insertAt = 0
-    while (insertAt < list.length && list[insertAt]?.type === 'image' && list[insertAt]?.fit) {
-      insertAt += 1
-    }
-    // Fondo editable debajo de dibujos existentes → se puede trazar encima
-    objectsRef.current = [
-      ...list.slice(0, insertAt),
-      imgObj,
-      ...list.slice(insertAt),
-    ]
-    selectOne(imgObj.id)
-    setTool('seleccion')
-    toolRef.current = 'seleccion'
-    setDirty(true)
-    setPanTick((n) => n + 1)
-    return true
+    return insertBackgroundImageFromDataUri(dataUri)
   }
   pasteImageFromFileRef.current = pasteImageFromFile
 
@@ -2879,6 +3166,14 @@ export default function EsquemaEditorModal({
   pasteClipboardRef.current = pasteClipboard
   deleteSelectedRef.current = deleteSelected
   escapeActionRef.current = () => {
+    if (printAreaSelectingRef.current) {
+      printAreaSelectingRef.current = false
+      setPrintAreaSelecting(false)
+      printAreaDraftRef.current = null
+      setToolHint('Selección de área cancelada. Pulse Guardar para intentar de nuevo o Quitar mapa.')
+      setPanTick((n) => n + 1)
+      return true
+    }
     if (dynBufferRef.current || polyDistRef.current || polyAngRef.current) {
       clearDynBuffer()
       previewDynLive()
@@ -3137,7 +3432,16 @@ export default function EsquemaEditorModal({
   const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || insertHint
 
   const pedirGuardar = () => {
-    if (busy || !dirty) return
+    if (busy) return
+    if (mapActiveRef.current) {
+      printAreaDraftRef.current = null
+      printAreaSelectingRef.current = true
+      setPrintAreaSelecting(true)
+      setToolHint('Seleccione el área de impresión: arrastre un rectángulo sobre el mapa y suelte para capturar el fondo.')
+      setPanTick((n) => n + 1)
+      return
+    }
+    if (!dirty) return
     setSavePrompt({ title: '' })
   }
 
@@ -3460,6 +3764,17 @@ export default function EsquemaEditorModal({
           </button>
           <button
             type="button"
+            title={mapActive
+              ? 'Mapa activo — use Paneo para mover el sector; Guardar captura el área de impresión'
+              : 'Insertar mapa como fondo (ubicación del reporte o selección manual)'}
+            aria-label="Insertar mapa"
+            onClick={() => { if (mapActive) deactivateMap(); else activateMap() }}
+            style={iconBtn(t, mapActive)}
+          >
+            <IconInsertarMapa />
+          </button>
+          <button
+            type="button"
             title="Limpiar lienzo"
             aria-label="Limpiar lienzo"
             onClick={clearAll}
@@ -3492,26 +3807,114 @@ export default function EsquemaEditorModal({
             <button type="button" style={ghost(t)} onClick={onClose}>Cancelar</button>
             <button
               type="button"
-              title={busy ? 'Guardando…' : 'Guardar esquema (PNG con título y tabla)'}
+              title={busy
+                ? 'Guardando…'
+                : mapActive
+                  ? 'Seleccionar área de impresión del mapa y guardar'
+                  : 'Guardar esquema (PNG con título y tabla)'}
               aria-label="Guardar esquema"
-              disabled={busy || !dirty}
+              disabled={busy || (!dirty && !mapActive)}
               onClick={pedirGuardar}
-              style={{ ...iconBtn(t, false), opacity: dirty ? 1 : 0.4 }}
+              style={{ ...iconBtn(t, printAreaSelecting), opacity: (dirty || mapActive) ? 1 : 0.4 }}
             >
               <IconGuardar />
             </button>
           </div>
         </div>
 
+        {mapActive ? (
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+            padding: '8px 14px', borderBottom: `1px solid ${t.border}`, flexShrink: 0,
+            background: t.bg || ui.wrap,
+          }}>
+            <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted || t.text }}>Capas</span>
+            {SICOE_MAPA_VISTAS_CALLE.map((vista) => (
+              <button
+                key={vista}
+                type="button"
+                title={`Capa ${sicoeBasemapLabel(vista)}`}
+                onClick={() => applyMapBasemap(vista)}
+                style={{
+                  ...ghost(t),
+                  padding: '4px 10px',
+                  fontSize: 'var(--cc-xs)',
+                  fontWeight: 700,
+                  background: mapBasemap === vista ? `${t.primary}22` : 'transparent',
+                  color: mapBasemap === vista ? (t.primary || '#0077B6') : t.text,
+                  borderColor: mapBasemap === vista ? (t.primary || '#0077B6') : t.border,
+                }}
+              >
+                {sicoeBasemapLabel(vista)}
+              </button>
+            ))}
+            <label style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 8,
+              fontSize: 'var(--cc-xs)', color: t.text, fontWeight: 600,
+            }}>
+              Opacidad
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(mapOpacity * 100)}
+                onChange={(e) => setMapOpacity(Math.max(0, Math.min(1, Number(e.target.value) / 100)))}
+                style={{ width: 120, accentColor: t.primary || '#0077B6' }}
+                aria-label="Opacidad del mapa de fondo"
+              />
+              <span style={{ minWidth: 36, color: t.textMuted }}>{Math.round(mapOpacity * 100)}%</span>
+            </label>
+            {mapError ? (
+              <span style={{ color: t.danger || '#b91c1c', fontSize: 'var(--cc-xs)' }}>{mapError}</span>
+            ) : (
+              <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+                {printAreaSelecting
+                  ? 'Arrastre el área de impresión sobre el mapa'
+                  : (normalizeMapLocation(mapLocation)
+                    ? 'Centrado en ubicación del reporte · Paneo mueve el mapa'
+                    : 'Elija el sector con Paneo / zoom · luego Guardar')}
+              </span>
+            )}
+            <button type="button" style={{ ...ghost(t), marginLeft: 'auto', fontSize: 'var(--cc-xs)' }} onClick={deactivateMap}>
+              Quitar mapa
+            </button>
+          </div>
+        ) : null}
+
         <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: ui.wrap, padding: 10, position: 'relative' }}>
+          {mapActive ? (
+            <div
+              ref={mapHostRef}
+              data-testid="esquema-mapa-host"
+              style={{
+                position: 'absolute',
+                left: 10,
+                right: 10,
+                top: 10,
+                bottom: 10,
+                borderRadius: 8,
+                overflow: 'hidden',
+                opacity: mapOpacity,
+                zIndex: 0,
+                pointerEvents: (tool === 'paneo' && !printAreaSelecting) ? 'auto' : 'none',
+                background: '#fff',
+              }}
+            />
+          ) : null}
           <canvas
             ref={canvasRef}
             tabIndex={0}
             style={{
               display: 'block', width: '100%', height: '100%',
-              background: ui.canvas, borderRadius: 8, touchAction: 'none',
+              position: 'relative',
+              zIndex: 1,
+              background: mapActive ? 'transparent' : ui.canvas,
+              borderRadius: 8, touchAction: 'none',
               outline: 'none',
-              cursor: hoverCursor
+              pointerEvents: (mapActive && tool === 'paneo' && !printAreaSelecting) ? 'none' : 'auto',
+              cursor: printAreaSelecting
+                ? 'crosshair'
+                : hoverCursor
                 || (tool === 'paneo' ? 'grab'
                   : tool === 'seleccion' ? 'default'
                     : tool === 'girar-escalar' ? 'alias'
@@ -5734,6 +6137,16 @@ function IconPegar() {
     <svg {...iconProps()}>
       <path d="M8 4h2a2 2 0 0 1 4 0h2a1 1 0 0 1 1 1v2H7V5a1 1 0 0 1 1-1Z" />
       <path d="M7 7h10v13H7Z" />
+    </svg>
+  )
+}
+function IconInsertarMapa() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M9 18 3 15.5V5.5L9 8" />
+      <path d="M9 8v10l6 3V11" />
+      <path d="m15 11 6-3v10l-6 3" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   )
 }
