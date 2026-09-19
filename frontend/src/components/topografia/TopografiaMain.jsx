@@ -7,6 +7,7 @@ import DisenoGeometricoForm from './DisenoGeometricoForm'
 import EntregaDgObraForm from './EntregaDgObraForm'
 import TuberiaForm from './TuberiaForm'
 import TuberiaRegistroDiario from './TuberiaRegistroDiario'
+import PlanillaTuberiaForm from './planillaTuberia/PlanillaTuberiaForm'
 import AreasForm from './AreasForm'
 import EquiposForm from './EquiposForm'
 import TopoConfirmModal from './TopoConfirmModal'
@@ -60,6 +61,11 @@ const VIAS = [
 ]
 
 const OTROS = [
+  {
+    id: 'topo_planillas_tuberia',
+    label: 'Planillas de Tubería',
+    ayuda: 'Alcantarillas y filtros: cartera de campo, sección típica, perfil, cantidades y consolidado del tramo.',
+  },
   { id: 'topo_tuberia', label: 'Tuberia' },
   { id: 'topo_areas', label: 'Areas por Coordenadas' },
   { id: 'topo_equipos', label: 'Equipos' },
@@ -211,6 +217,8 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
         return <DisenoGeometricoForm {...props} />
       case 'topo_entrega_dg':
         return <EntregaDgObraForm {...props} registerUnsavedGuard={registerUnsavedGuard} />
+      case 'topo_planillas_tuberia':
+        return <PlanillaTuberiaForm {...props} />
       case 'topo_tuberia':
         return (
           <div>

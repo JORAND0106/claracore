@@ -2907,6 +2907,8 @@ app.include_router(notificaciones_push_router)
 
 from topografia_routes import router as topografia_router
 app.include_router(topografia_router, prefix="/topografia")
+from topografia_planilla_tuberia_routes import router as topografia_planilla_tuberia_router
+app.include_router(topografia_planilla_tuberia_router, prefix="/topografia")
 
 from contrato_documentos_routes import router as contrato_documentos_router
 app.include_router(contrato_documentos_router)
