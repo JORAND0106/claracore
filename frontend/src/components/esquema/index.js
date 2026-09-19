@@ -25,6 +25,12 @@ export {
   scaleSceneByImageReference,
 } from './esquemaImageScale'
 export {
+  captureMapAreaToDataUrl,
+  normalizeMapLocation,
+  normalizePrintAreaRect,
+  printAreaToWorldRect,
+} from './esquemaMapaCapture'
+export {
   isBackgroundImage,
   isAnchoredLayer,
   partitionBackgroundFirst,

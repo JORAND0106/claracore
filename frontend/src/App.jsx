@@ -4881,6 +4881,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               initialDataUri={esquemaInitialDataUri}
               contratoId={registro?.contrato_id}
               iaDoc={{ ambito: 'sicoe_registro', docKey: `sicoe-reg-${registro?.id || registro?.numero_registro || 'local'}` }}
+              mapLocation={(() => {
+                const lat = Number(locRegistro?.coordLat ?? registro?.coord_lat)
+                const lng = Number(locRegistro?.coordLng ?? registro?.coord_lng)
+                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+                return { lat, lng }
+              })()}
               onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
               onSave={guardarEsquemaComoGrafico}
             />
