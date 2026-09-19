@@ -12,6 +12,7 @@ import {
   repositionCota,
   rotateSelectionAroundPivot,
   objectWorldPoint,
+  objectWorldAABB,
   degToRad,
   ellipseFromCenter,
   findSnap,
@@ -561,13 +562,46 @@ describe('esquemaGeometry', () => {
     assert.ok(snapThresholdWorld(z) >= markerWu * 0.8, 'aperture must cover the visible marker disc')
   })
 
-  it('soft ortho on rotation uses the same 8° tolerance as lines', () => {
-    const snapped = applySoftOrthoAngle(degToRad(7))
-    assert.ok(Math.abs(snapped) < 1e-9)
+  it('soft ortho on rotation keeps a free zone near ortho for fine angles', () => {
+    // ≤ 2.5° del ortho: sin atracción (ajuste fino)
+    const near = applySoftOrthoAngle(degToRad(2))
+    assert.ok(Math.abs(near - degToRad(2)) < 1e-9)
+    // 45°: libre
     const free = applySoftOrthoAngle(degToRad(45))
     assert.ok(Math.abs(free - degToRad(45)) < 1e-9)
-    const ninety = applySoftOrthoAngle(degToRad(86))
-    assert.ok(Math.abs(ninety - Math.PI / 2) < 1e-9)
+    // ~7°: dentro de banda → atrae hacia 0 (snap pleno ≥ 5.5°)
+    const snapped = applySoftOrthoAngle(degToRad(7))
+    assert.ok(Math.abs(snapped) < 1e-9)
+    // 86° (=4° de 90): en zona de mezcla, no queda clavado en 90
+    const blend = applySoftOrthoAngle(degToRad(86))
+    assert.ok(blend > degToRad(86) - 0.01)
+    assert.ok(blend < Math.PI / 2)
+  })
+
+  it('resize hit-test uses rotated geometry (world → local)', () => {
+    const rect = {
+      id: 'r',
+      type: 'rect',
+      x1: 0,
+      y1: 0,
+      x2: 100,
+      y2: 40,
+      rotation: Math.PI / 2,
+    }
+    // Esquina SE local (100,40) tras rotar 90° CCW alrededor de (50,20) → mundo (30,70)
+    const seWorld = objectWorldPoint(rect, { x: 100, y: 40 })
+    const hit = hitResizeHandle(seWorld, rect, 12)
+    assert.equal(hit?.id, 'se')
+    // Clic en la esquina del AABB no rotado no debe confundirse con SE local
+    const wrong = hitResizeHandle({ x: 100, y: 40 }, rect, 8)
+    assert.equal(wrong, null)
+  })
+
+  it('objectWorldAABB grows with rotation', () => {
+    const rect = { type: 'rect', x1: 0, y1: 0, x2: 100, y2: 20, rotation: Math.PI / 4 }
+    const bb = objectWorldAABB(rect)
+    assert.ok(bb.w > 100 - 1e-6 || bb.h > 20 + 1)
+    assert.ok(bb.w > 80)
   })
 
   it('arrow head grows with body length when scaled', () => {

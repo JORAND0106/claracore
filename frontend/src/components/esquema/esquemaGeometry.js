@@ -438,11 +438,12 @@ export function resizeHandleWorldSize(obj, zoom = 1) {
 }
 
 export function hitResizeHandle(p, obj, threshold = 10) {
+  const localP = objectLocalPoint(obj, p)
   const handles = getResizeHandles(obj)
   let best = null
   let bestD = threshold
   for (const h of handles) {
-    const d = Math.hypot(p.x - h.x, p.y - h.y)
+    const d = Math.hypot(localP.x - h.x, localP.y - h.y)
     if (d <= bestD) {
       bestD = d
       best = h
@@ -579,7 +580,7 @@ export function resizeAnchorPoint(origin, handleId) {
   const otherId = opp[handleId]
   if (!otherId) return null
   const h = getResizeHandles(origin).find((x) => x.id === otherId)
-  return h ? { x: h.x, y: h.y } : null
+  return h ? objectWorldPoint(origin, { x: h.x, y: h.y }) : null
 }
 
 /** Snap al redimensionar: mismos kinds que al dibujar, excluyendo la entidad en edición. */
@@ -680,6 +681,13 @@ export function cursorForHandle(handleId) {
 
 /** Margen angular (grados) para atraer a 0/90/180/270 sin bloquear ángulos intermedios. */
 export const SOFT_ORTHO_TOLERANCE_DEG = 8
+/**
+ * Zona libre cerca del ortho (grados): permite ajuste fino sin que la atracción
+ * domine cuando el ángulo ya está muy cerca de 0/90/180/270.
+ */
+export const SOFT_ORTHO_FINE_FREE_DEG = 2.5
+/** A partir de este delta (grados) dentro de la tolerancia, el snap es total. */
+export const SOFT_ORTHO_FULL_SNAP_DEG = 5.5
 
 /** Etiquetas cortas tipo CAD junto al marcador. */
 export const SNAP_KIND_LABEL = {
@@ -856,13 +864,22 @@ export function lastLineReferenceAngle(objects) {
  * si el ángulo cae dentro de `toleranceDeg`. No es un forzado rígido.
  * Devuelve null si el usuario está claramente en un ángulo intermedio.
  */
-/** Atrae un ángulo de giro a 0/90/180/270 si cae dentro de la tolerancia. */
-export function applySoftOrthoAngle(radians, toleranceDeg = SOFT_ORTHO_TOLERANCE_DEG) {
+/**
+ * Atrae un ángulo de giro a 0/90/180/270 si cae dentro de la tolerancia.
+ * Cerca del ortho (≤ fineFree) deja el ángulo libre para ajuste fino;
+ * entre fineFree y fullSnap mezcla; más allá (hasta tolerance) fija el ortho.
+ */
+export function applySoftOrthoAngle(radians, toleranceDeg = SOFT_ORTHO_TOLERANCE_DEG, {
+  fineFreeDeg = SOFT_ORTHO_FINE_FREE_DEG,
+  fullSnapDeg = SOFT_ORTHO_FULL_SNAP_DEG,
+} = {}) {
   const n = Number(radians)
   if (!Number.isFinite(n)) return 0
   const twoPi = Math.PI * 2
   const ang = ((n % twoPi) + twoPi) % twoPi
   const tol = (toleranceDeg * Math.PI) / 180
+  const fineFree = (Math.max(0, fineFreeDeg) * Math.PI) / 180
+  const fullSnap = Math.max(fineFree, (fullSnapDeg * Math.PI) / 180)
   let bestDelta = Infinity
   let best = ang
   for (let k = 0; k < 4; k += 1) {
@@ -874,7 +891,16 @@ export function applySoftOrthoAngle(radians, toleranceDeg = SOFT_ORTHO_TOLERANCE
     }
   }
   if (bestDelta > tol) return n
-  return best
+  if (bestDelta <= fineFree) return n
+  if (bestDelta >= fullSnap) return best
+  const t = (bestDelta - fineFree) / Math.max(1e-9, fullSnap - fineFree)
+  // ease-in: atracción suave cerca de la zona libre, más firme al acercarse al snap pleno
+  const strength = t * t
+  // Interpolar en el sentido angular más corto
+  let diff = best - ang
+  if (diff > Math.PI) diff -= twoPi
+  if (diff < -Math.PI) diff += twoPi
+  return n + diff * strength
 }
 
 export function applySoftOrtho(from, to, {
@@ -1196,6 +1222,38 @@ export function objectWorldPoint(obj, p) {
   return rotatePointAround(p, objectCenterOf(obj), rot)
 }
 
+/** Inversa de objectWorldPoint: mundo → espacio local de la entidad. */
+export function objectLocalPoint(obj, p) {
+  if (!p) return { x: 0, y: 0 }
+  const rot = obj?.rotation || 0
+  if (!rot) return { x: p.x || 0, y: p.y || 0 }
+  return rotatePointAround(p, objectCenterOf(obj), -rot)
+}
+
+/** AABB en coordenadas de mundo (respeta rotation). */
+export function objectWorldAABB(obj) {
+  const bb = objectBoundsOf(obj)
+  if (!bb) return null
+  if (!obj?.rotation) return { ...bb }
+  const corners = [
+    { x: bb.x, y: bb.y },
+    { x: bb.x + bb.w, y: bb.y },
+    { x: bb.x + bb.w, y: bb.y + bb.h },
+    { x: bb.x, y: bb.y + bb.h },
+  ].map((c) => objectWorldPoint(obj, c))
+  let minX = corners[0].x
+  let maxX = corners[0].x
+  let minY = corners[0].y
+  let maxY = corners[0].y
+  for (const c of corners) {
+    minX = Math.min(minX, c.x)
+    maxX = Math.max(maxX, c.x)
+    minY = Math.min(minY, c.y)
+    maxY = Math.max(maxY, c.y)
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
 /** Segmentos de línea / polilínea en geometría vigente (post-rotación). */
 export function objectWorldSegments(obj) {
   if (!obj) return []
@@ -1343,7 +1401,7 @@ export function objectBoundsOf(obj) {
 
 /** Manijas dedicadas: rotación (arriba del centro) y escala uniforme (esquina NE). */
 export function getTransformHandles(obj, zoom = 1) {
-  const bb = objectBoundsOf(obj)
+  const bb = objectWorldAABB(obj)
   const c = objectCenterOf(obj)
   if (!bb || !c) return []
   const lift = Math.max(22, 26 / (zoom || 1))
