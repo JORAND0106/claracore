@@ -30,8 +30,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _uid(user) -> Optional[str]:
-    return (user or {}).get("sub") or (user or {}).get("id")
+def _uid(user) -> int:
+    """ID numérico de public.usuarios (JWT sub), no UUID."""
+    raw = (user or {}).get("sub") or (user or {}).get("id")
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(401, "Token inválido: usuario_id no numérico") from exc
 
 
 def _row(table: str, **eq) -> Optional[dict]:
@@ -266,12 +271,11 @@ def crear(contrato_id: int, body: CrearBody, current_user=Depends(get_current_us
     tipo = (body.tipo or "ALCANTARILLA").upper()
     if tipo not in TIPOS_PLANILLA:
         raise HTTPException(422, f"Tipo inválido: {tipo}")
-    row = supabase.table("topo_planillas_tuberia").insert({
+    # creado_por = usuarios.id (INTEGER). No enviar UUID ni strings no numéricos.
+    payload: dict[str, Any] = {
         "contrato_id": contrato_id,
         "tipo": tipo,
         "nombre": body.nombre or f"Planilla {tipo}",
-        "pk_id": body.pk_id,
-        "costado": body.costado,
         "estado": "borrador",
         "version": 1,
         "relacion_atraque": "1:3",
@@ -279,7 +283,12 @@ def crear(contrato_id: int, body: CrearBody, current_user=Depends(get_current_us
         "creado_por": _uid(current_user),
         "created_at": _now(),
         "updated_at": _now(),
-    }).execute().data
+    }
+    if body.pk_id:
+        payload["pk_id"] = body.pk_id
+    if body.costado:
+        payload["costado"] = body.costado
+    row = supabase.table("topo_planillas_tuberia").insert(payload).execute().data
     if not row:
         raise HTTPException(500, "No se pudo crear la planilla")
     return _detalle(contrato_id, row[0]["id"])
