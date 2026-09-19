@@ -1,5 +1,6 @@
 /**
- * Área de una región cerrada: reutiliza detectClosedRegionFromClick del hatch.
+ * Área de una región cerrada (tipo de acotación «Área» en la herramienta Acotado).
+ * Reutiliza detectClosedRegionFromClick del hatch.
  */
 import { detectClosedRegionFromClick } from './esquemaHatch.js'
 import { floodPixelsToM2, formatAreaM2 } from './esquemaGeometry.js'
