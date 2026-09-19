@@ -387,6 +387,20 @@ export function getResizeHandles(obj) {
     const y = obj.y || 0
     return boxHandles(x, y, x + (obj.w || 0), y + (obj.h || 0))
   }
+  // Imagen pegada (no fondo fit): solo esquinas para redimensión libre
+  if (obj.type === 'image') {
+    if (obj.fit) return []
+    const x = obj.x || 0
+    const y = obj.y || 0
+    const w = Math.max(1, obj.w || 0)
+    const h = Math.max(1, obj.h || 0)
+    return [
+      { id: 'nw', x, y },
+      { id: 'ne', x: x + w, y },
+      { id: 'se', x: x + w, y: y + h },
+      { id: 'sw', x, y: y + h },
+    ]
+  }
   if (obj.x1 == null || obj.x2 == null) return []
   return boxHandles(obj.x1, obj.y1, obj.x2, obj.y2)
 }
@@ -445,8 +459,9 @@ export function nearestResizeHandle(p, obj) {
 /**
  * Aplica arrastre de manija. Conserva el lado/esquina opuesta fija.
  * Para tablas/hatchRegion ajusta x/y/w/h (o cellW/cellH de tabla).
+ * `opts.lockAspect` (Shift): mantiene proporción en cajas/imagen.
  */
-export function applyResizeHandle(origin, handleId, point) {
+export function applyResizeHandle(origin, handleId, point, opts = {}) {
   if (!origin || !handleId) return origin
   if (origin.type === 'cota') {
     if (handleId === 'dim') return repositionCota(origin, point)
@@ -477,6 +492,42 @@ export function applyResizeHandle(origin, handleId, point) {
       cellW: w / cols,
       cellH: h / rows,
     }
+  }
+  if (origin.type === 'image' && !origin.fit) {
+    const w0 = Math.max(1, origin.w || 1)
+    const h0 = Math.max(1, origin.h || 1)
+    const x0 = origin.x || 0
+    const y0 = origin.y || 0
+    const box = resizeBox(x0, y0, x0 + w0, y0 + h0, handleId, point)
+    let nw = Math.max(16, Math.abs(box.x2 - box.x1))
+    let nh = Math.max(16, Math.abs(box.y2 - box.y1))
+    let nx = Math.min(box.x1, box.x2)
+    let ny = Math.min(box.y1, box.y2)
+    if (opts.lockAspect && w0 > 0 && h0 > 0 && isCornerHandle(handleId)) {
+      const aspect = w0 / h0
+      const opp = { nw: 'se', ne: 'sw', se: 'nw', sw: 'ne' }[handleId]
+      const corners = {
+        nw: { x: x0, y: y0 },
+        ne: { x: x0 + w0, y: y0 },
+        se: { x: x0 + w0, y: y0 + h0 },
+        sw: { x: x0, y: y0 + h0 },
+      }
+      const anchor = corners[opp]
+      const dx = Math.abs(point.x - anchor.x)
+      const dy = Math.abs(point.y - anchor.y)
+      if (dx / aspect >= dy) {
+        nw = Math.max(16, dx)
+        nh = Math.max(16, nw / aspect)
+      } else {
+        nh = Math.max(16, dy)
+        nw = Math.max(16, nh * aspect)
+      }
+      if (handleId === 'nw') { nx = anchor.x - nw; ny = anchor.y - nh }
+      else if (handleId === 'ne') { nx = anchor.x; ny = anchor.y - nh }
+      else if (handleId === 'se') { nx = anchor.x; ny = anchor.y }
+      else if (handleId === 'sw') { nx = anchor.x - nw; ny = anchor.y }
+    }
+    return { ...origin, fit: false, x: nx, y: ny, w: nw, h: nh }
   }
   if (origin.type === 'hatchRegion' || origin.type === 'texto' || origin.type === 'bloque') {
     const w0 = Math.max(1, origin.w || 1)

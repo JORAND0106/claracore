@@ -30,6 +30,7 @@ import {
   formatMeters,
   gridStepWorld,
   nearestResizeHandle,
+  hitResizeHandle,
   hitTransformHandle,
   metersToWorld,
   objectBoundsOf,
@@ -101,6 +102,7 @@ import {
   lineDashForStyle,
 } from './esquemaLineStyle'
 import { imagenDesdePasteEvent, imagenDesdeClipboard } from '../../modules/presupuesto/pptoPasteImage'
+import { scaleSceneByImageReference } from './esquemaImageScale'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -152,6 +154,7 @@ const TOOL_GROUPS = [
       { id: 'espejo', label: 'Espejo (eje de reflexión)', Icon: IconEspejo },
       { id: 'matriz', label: 'Matriz (rectangular o polar)', Icon: IconMatriz },
       { id: 'offset', label: 'Offset / equidistancia', Icon: IconOffset },
+      { id: 'escalar-imagen', label: 'Escalar imagen (distancia real)', Icon: IconEscalarImagen },
       { id: 'borrador', label: 'Borrador', Icon: IconBorrador },
     ],
   },
@@ -308,6 +311,7 @@ export default function EsquemaEditorModal({
   const copySelectedRef = useRef(() => false)
   const pasteClipboardRef = useRef(() => false)
   const pasteImageFromFileRef = useRef(async () => false)
+  const pasteGuardRef = useRef(0)
   const deleteSelectedRef = useRef(() => false)
   const escapeActionRef = useRef(() => false)
   const enterActionRef = useRef(() => false)
@@ -373,6 +377,8 @@ export default function EsquemaEditorModal({
   const [selectMode, setSelectMode] = useState('mover')
   const [rotatePivot, setRotatePivot] = useState(null)
   const [toolHint, setToolHint] = useState('')
+  const [scaleImgDraft, setScaleImgDraft] = useState(null) // { imageId, p1?, p2? }
+  const [scaleImgPrompt, setScaleImgPrompt] = useState(null) // { imageId, p1, p2, meters }
   const [mirrorPrompt, setMirrorPrompt] = useState(null)
   const [arrayMode, setArrayMode] = useState('rect')
   const [arrayRows, setArrayRows] = useState('2')
@@ -387,6 +393,7 @@ export default function EsquemaEditorModal({
   const arrayModeRef = useRef('rect')
   const cotaModeRef = useRef('linear')
   const anglePickRef = useRef({ lines: [], points: [] })
+  const scaleImgDraftRef = useRef(null)
   const selectModeRef = useRef('mover')
   const selectedIdRef = useRef(null)
   const selectedIdsRef = useRef(new Set())
@@ -404,6 +411,7 @@ export default function EsquemaEditorModal({
   selectedIdsRef.current = new Set(selectedIds)
   joinSeqRef.current = joinSeq
   selectModeRef.current = selectMode
+  scaleImgDraftRef.current = scaleImgDraft
   arrayModeRef.current = arrayMode
   cotaModeRef.current = cotaMode
 
@@ -524,9 +532,13 @@ export default function EsquemaEditorModal({
         skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTablaId,
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
         zoom: zoomRef.current,
-        skipResize: toolRef.current === 'girar-escalar'
-          || multi
-          || (toolRef.current === 'seleccion' && selectModeRef.current !== 'dimensionar'),
+        skipResize: (() => {
+          const isPasteImg = obj.type === 'image' && !obj.fit
+          if (isPasteImg && !multi && toolRef.current === 'seleccion') return false
+          return toolRef.current === 'girar-escalar'
+            || multi
+            || (toolRef.current === 'seleccion' && selectModeRef.current !== 'dimensionar')
+        })(),
         ui: uiNow,
       })
     }
@@ -544,6 +556,11 @@ export default function EsquemaEditorModal({
     if (toolRef.current === 'espejo' && mirrorAxisRef.current?.a) {
       const b = mirrorAxisRef.current.b || lastPt.current
       if (b) drawMoveGuide(ctx, mirrorAxisRef.current.a, b, zoomRef.current, uiNow)
+    }
+    if (toolRef.current === 'escalar-imagen' && scaleImgDraftRef.current?.p1) {
+      const d = scaleImgDraftRef.current
+      const b = d.p2 || lastPt.current
+      if (b) drawMoveGuide(ctx, d.p1, b, zoomRef.current, uiNow)
     }
     if (marqueeRef.current?.from && marqueeRef.current?.to) {
       drawSelectionMarquee(ctx, marqueeRef.current.from, marqueeRef.current.to, zoomRef.current, uiNow)
@@ -1556,9 +1573,31 @@ export default function EsquemaEditorModal({
             lineStyleRef.current = ls
           }
         }
+        // Imagen pegada: manijas de esquina siempre disponibles en selección
+        if (hit.type === 'image' && !hit.fit) {
+          selectOne(hit.id)
+          const imgHandle = hitResizeHandle(p, hit, handleHitThreshold() + 6)
+          if (imgHandle) {
+            dragRef.current = {
+              id: hit.id,
+              mode: 'resize',
+              handle: imgHandle.id,
+              origin: cloneScene([hit])[0],
+              lockAspect: !!(e.shiftKey),
+            }
+            pushHistory()
+            drawing.current = true
+            startPt.current = p
+            lastPt.current = p
+            moveGuideRef.current = null
+            snapRef.current = null
+            redraw()
+            return
+          }
+        }
         if (selectModeRef.current === 'dimensionar') {
           selectOne(hit.id)
-          const handle = hit.type !== 'image' ? nearestResizeHandle(p, hit) : null
+          const handle = hit.type === 'image' ? null : nearestResizeHandle(p, hit)
           if (handle) {
             dragRef.current = {
               id: hit.id,
@@ -1670,6 +1709,47 @@ export default function EsquemaEditorModal({
       const hit = hitTest(p)
       if (hit?.type === 'nodo') appendJoinNode(hit)
       drawing.current = false
+      return
+    }
+
+    if (currentTool === 'escalar-imagen') {
+      const hit = hitTest(p)
+      const img = (hit?.type === 'image' && !hit.fit)
+        ? hit
+        : (selectedIdRef.current
+          ? objectsRef.current.find((o) => o.id === selectedIdRef.current && o.type === 'image' && !o.fit)
+          : null)
+      if (!img) {
+        setToolHint('Seleccione o haga clic sobre una imagen pegada')
+        drawing.current = false
+        redraw()
+        return
+      }
+      selectOne(img.id)
+      const draft = scaleImgDraftRef.current
+      if (!draft || draft.imageId !== img.id || !draft.p1) {
+        const next = { imageId: img.id, p1: { x: p.x, y: p.y } }
+        scaleImgDraftRef.current = next
+        setScaleImgDraft(next)
+        setToolHint('Segundo punto: extremo opuesto de la distancia conocida')
+        drawing.current = false
+        lastPt.current = p
+        redraw()
+        return
+      }
+      const p1 = draft.p1
+      const p2 = { x: p.x, y: p.y }
+      if (Math.hypot(p2.x - p1.x, p2.y - p1.y) < 2) {
+        setToolHint('Los dos puntos deben estar separados')
+        drawing.current = false
+        return
+      }
+      scaleImgDraftRef.current = { imageId: img.id, p1, p2 }
+      setScaleImgDraft(scaleImgDraftRef.current)
+      setScaleImgPrompt({ imageId: img.id, p1, p2, meters: '' })
+      setToolHint('')
+      drawing.current = false
+      redraw()
       return
     }
 
@@ -1855,7 +1935,12 @@ export default function EsquemaEditorModal({
       const selId = selectedIdRef.current
       const sel = selId ? objectsRef.current.find((o) => o.id === selId) : null
       if (currentTool === 'seleccion') {
-        if (selectModeRef.current === 'dimensionar' && sel && selectedIdsRef.current.size <= 1) {
+        if (sel && sel.type === 'image' && !sel.fit && selectedIdsRef.current.size <= 1) {
+          const imgH = hitResizeHandle(raw, sel, handleHitThreshold() + 6)
+          if (imgH) setHoverCursor(cursorForHandle(imgH.id))
+          else if (hitTest(raw)) setHoverCursor('move')
+          else setHoverCursor('crosshair')
+        } else if (selectModeRef.current === 'dimensionar' && sel && selectedIdsRef.current.size <= 1) {
           const handle = nearestResizeHandle(raw, sel)
           setHoverCursor(handle ? cursorForHandle(handle.id) : (hitTest(raw) ? 'nwse-resize' : 'crosshair'))
         } else if (hitTest(raw)) setHoverCursor('move')
@@ -1922,7 +2007,10 @@ export default function EsquemaEditorModal({
     if (dragRef.current?.mode === 'resize') {
       const d = dragRef.current
       const others = objectsRef.current.filter((o) => o && o.id !== d.id)
-      const hit = d.handle === 'dim'
+      const lockAspect = !!(e.shiftKey || d.lockAspect)
+      d.lockAspectLive = lockAspect
+      const isImg = d.origin?.type === 'image'
+      const hit = (d.handle === 'dim' || isImg)
         ? null
         : snapResizePoint(raw, d.origin, d.handle, others, snapThreshold())
       const pResize = hit ? { x: hit.x, y: hit.y } : raw
@@ -1930,7 +2018,7 @@ export default function EsquemaEditorModal({
       lastPt.current = pResize
       objectsRef.current = objectsRef.current.map((o) => {
         if (o.id !== d.id) return o
-        const next = applyResizeHandle(d.origin, d.handle, pResize)
+        const next = applyResizeHandle(d.origin, d.handle, pResize, { lockAspect })
         if (next.type === 'cota') next.text = cotaText(next)
         if (SHAPE_TOOLS.has(next.type)) {
           next.label = measureLabelFor(
@@ -2423,6 +2511,30 @@ export default function EsquemaEditorModal({
     pasteClipboard()
   }
 
+  const confirmarEscalaImagen = () => {
+    const prompt = scaleImgPrompt
+    if (!prompt?.imageId || !prompt.p1 || !prompt.p2) return
+    const meters = parsePositive(prompt.meters)
+    if (meters == null) {
+      setToolHint('Indique una distancia real en metros (p. ej. 4.50)')
+      return
+    }
+    pushHistory()
+    objectsRef.current = scaleSceneByImageReference(
+      objectsRef.current,
+      prompt.imageId,
+      prompt.p1,
+      prompt.p2,
+      meters,
+    )
+    scaleImgDraftRef.current = null
+    setScaleImgDraft(null)
+    setScaleImgPrompt(null)
+    setToolHint('Imagen escalada a la distancia real')
+    setDirty(true)
+    setPanTick((n) => n + 1)
+  }
+
   const applyRotationDeg = (raw) => {
     const ids = [...selectedIdsRef.current]
     if (!ids.length) return
@@ -2733,6 +2845,16 @@ export default function EsquemaEditorModal({
       previewDynLive()
       return true
     }
+    if (scaleImgPrompt || scaleImgDraftRef.current) {
+      setScaleImgPrompt(null)
+      scaleImgDraftRef.current = null
+      setScaleImgDraft(null)
+      if (toolRef.current === 'escalar-imagen') {
+        setToolHint('Clic en 1.er extremo de una distancia conocida sobre la imagen')
+      }
+      redraw()
+      return true
+    }
     if (mirrorPrompt || mirrorAxisRef.current) {
       setMirrorPrompt(null)
       mirrorAxisRef.current = null
@@ -2809,18 +2931,33 @@ export default function EsquemaEditorModal({
       const k = key.toLowerCase()
       if (k === 'c') {
         if (copySelectedRef.current()) e.preventDefault()
+      } else if (k === 'v') {
+        // Atajo directo sobre el lienzo: Clipboard API (mismo camino que el botón Pegar)
+        e.preventDefault()
+        pasteGuardRef.current = Date.now()
+        Promise.resolve((async () => {
+          try {
+            const file = await imagenDesdeClipboard()
+            if (file && await pasteImageFromFileRef.current(file)) return true
+          } catch { /* sin permiso / sin imagen */ }
+          return pasteClipboardRef.current()
+        })()).catch(() => {})
       }
-      // Ctrl+V: lo maneja el listener `paste` (imagen del SO o portapapeles de escena)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Pegar imagen (Ctrl+V) o entidades del portapapeles interno del editor
+  // También escucha `paste` (clipboardData) por si el SO entrega la imagen ahí
   useEffect(() => {
     const onPaste = (e) => {
       const tag = (e.target?.tagName || '').toLowerCase()
       if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return
+      // Evita doble pegado si Ctrl+V ya se resolvió en keydown
+      if (Date.now() - (pasteGuardRef.current || 0) < 500) {
+        e.preventDefault()
+        return
+      }
       const file = imagenDesdePasteEvent(e)
       if (file) {
         e.preventDefault()
@@ -2830,8 +2967,26 @@ export default function EsquemaEditorModal({
       if (pasteClipboardRef.current()) e.preventDefault()
     }
     window.addEventListener('paste', onPaste)
-    return () => window.removeEventListener('paste', onPaste)
+    const canvas = canvasRef.current
+    canvas?.addEventListener?.('paste', onPaste)
+    return () => {
+      window.removeEventListener('paste', onPaste)
+      canvas?.removeEventListener?.('paste', onPaste)
+    }
   }, [])
+
+  useEffect(() => {
+    if (tool === 'escalar-imagen') {
+      setToolHint('Clic en 1.er extremo de una distancia conocida sobre la imagen')
+      return undefined
+    }
+    if (scaleImgDraftRef.current) {
+      scaleImgDraftRef.current = null
+      setScaleImgDraft(null)
+      setScaleImgPrompt(null)
+    }
+    return undefined
+  }, [tool])
 
   const fitViewToObjects = (objs) => {
     const bb = sceneExportBounds(objs)
@@ -3315,6 +3470,7 @@ export default function EsquemaEditorModal({
                 || (tool === 'paneo' ? 'grab'
                   : tool === 'seleccion' ? 'default'
                     : tool === 'girar-escalar' ? 'alias'
+                      : tool === 'escalar-imagen' ? 'crosshair'
                       : tool === 'texto' ? 'text'
                         : tool === 'hatch' || tool === 'area' || tool === 'tabla' ? 'cell'
                           : 'crosshair'),
@@ -3651,6 +3807,80 @@ export default function EsquemaEditorModal({
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
                 <button type="button" style={ghost(t)} onClick={() => setSavePrompt(null)}>Cancelar</button>
                 <button type="button" style={primary(t)} onClick={confirmarGuardar}>Guardar</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {scaleImgPrompt && (
+          <div
+            style={{
+              position: 'absolute', inset: 0, zIndex: 20,
+              background: t.overlay || ui.overlay,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="cc-esquema-scale-img"
+              style={{
+                width: 400, padding: 16, borderRadius: 12,
+                background: t.bgCard || '#fff', border: `1px solid ${t.border}`,
+                boxShadow: '0 12px 32px rgba(15,23,42,0.2)',
+                color: t.text,
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <div id="cc-esquema-scale-img" style={{ fontWeight: 800, marginBottom: 8 }}>
+                Escalar imagen
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.45, marginBottom: 12, color: t.textMuted }}>
+                Indique la distancia real en metros entre los dos puntos seleccionados
+                (ej. 4.50). La imagen y los dibujos sobre ella se ajustarán a esa escala.
+              </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, fontWeight: 700 }}>
+                Distancia real (m)
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  autoFocus
+                  placeholder="4.50"
+                  value={scaleImgPrompt.meters}
+                  onChange={(e) => setScaleImgPrompt({ ...scaleImgPrompt, meters: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      confirmarEscalaImagen()
+                    }
+                  }}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: t.inputBg || '#fff',
+                    color: t.text,
+                    fontSize: 14,
+                    fontWeight: 700,
+                  }}
+                />
+              </label>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+                <button
+                  type="button"
+                  style={ghost(t)}
+                  onClick={() => {
+                    setScaleImgPrompt(null)
+                    scaleImgDraftRef.current = null
+                    setScaleImgDraft(null)
+                    setToolHint('Clic en 1.er extremo de una distancia conocida sobre la imagen')
+                    redraw()
+                  }}
+                >
+                  Cancelar
+                </button>
+                <button type="button" style={primary(t)} onClick={confirmarEscalaImagen}>
+                  Aplicar escala
+                </button>
               </div>
             </div>
           </div>
@@ -4123,6 +4353,14 @@ function drawObject(ctx, obj, selected, opts = {}) {
   }
   if (obj.type === 'image') {
     drawImageObj(ctx, obj)
+    if (selected && !obj.fit) {
+      ctx.strokeStyle = selColor
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.strokeRect((obj.x || 0) - 4, (obj.y || 0) - 4, (obj.w || 0) + 8, (obj.h || 0) + 8)
+      ctx.setLineDash([])
+      if (!opts.skipResize) drawResizeHandles(ctx, obj, opts.zoom || 1, ui)
+    }
     ctx.restore()
     return
   }
@@ -4547,7 +4785,7 @@ function objectBounds(obj) {
     const h = obj.h || 24
     return { x: (obj.x || 0) - w / 2, y: (obj.y || 0) - h / 2, w, h }
   }
-  if (obj.type === 'texto' || obj.type === 'hatchRegion' || obj.type === 'bloque') {
+  if (obj.type === 'texto' || obj.type === 'hatchRegion' || obj.type === 'bloque' || obj.type === 'image') {
     return { x: obj.x || 0, y: obj.y || 0, w: obj.w || 0, h: obj.h || 0 }
   }
   if (obj.x1 == null) return null
@@ -5329,6 +5567,18 @@ function IconGirarEscalar() {
       <path d="M21 12a9 9 0 1 1-3-6.7" />
       <path d="M21 3v6h-6" />
       <path d="M8 16h5v5" />
+    </svg>
+  )
+}
+function IconEscalarImagen() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="3" y="5" width="14" height="12" rx="1" />
+      <path d="M9 17v2" />
+      <path d="M5 21h8" />
+      <path d="M17 8h4" />
+      <path d="M19 6v4" />
+      <path d="m14 11 7 7" />
     </svg>
   )
 }
