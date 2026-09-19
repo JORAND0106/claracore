@@ -4,8 +4,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  CALC_CELL_BG,
   confirmarGuardadoCartera,
   payloadFilas,
+  tieneDatosExportables,
   TIPOS_PLANILLA,
   RELACIONES_ATRAQUE,
 } from './planillaTuberiaUtils.js'
@@ -39,5 +41,19 @@ describe('planillaTuberiaUtils', () => {
     ], 'FILTRO')
     assert.equal(fil[0].terminado_filtro, 99.5)
     assert.equal(fil[0].subrasante_via, null)
+  })
+
+  it('tieneDatosExportables y fondo calculado #F2F2F2', () => {
+    assert.equal(CALC_CELL_BG, '#F2F2F2')
+    assert.equal(tieneDatosExportables([], null), false)
+    assert.equal(tieneDatosExportables([
+      { abscisa: '', terreno_natural: '', subrasante_via: '', terminado_filtro: '', cota_fondo_excavacion: '' },
+    ], {}), false)
+    assert.equal(tieneDatosExportables([
+      { abscisa: '0', terreno_natural: '', subrasante_via: '', terminado_filtro: '', cota_fondo_excavacion: '' },
+    ], {}), true)
+    assert.equal(tieneDatosExportables([], {
+      calculo: { cartera: { filas: [{ orden: 1, vacio: false, abscisa: 1 }] } },
+    }), true)
   })
 })

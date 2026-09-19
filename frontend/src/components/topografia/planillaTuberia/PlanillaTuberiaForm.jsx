@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import TopoExcelSheet from '../TopoExcelSheet'
+import { topoSheetStyles } from '../topoSheetStyles'
 import {
   esDesarrolladorTopo,
   puede,
   useTopoTheme,
+  useTopoViewport,
   useTopografiaApi,
 } from '../topografiaShared'
 import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
 import {
+  CALC_CELL_BG,
   RELACIONES_ATRAQUE,
   TIPOS_PLANILLA,
   confirmarGuardadoCartera,
@@ -16,10 +20,15 @@ import {
   fmtNDash,
   handleEnterAsTab,
   payloadFilas,
+  tieneDatosExportables,
 } from './planillaTuberiaUtils'
+
+const CARTERA_MIN_WIDTH = 720
 
 export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
+  const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
+  const { isCompact } = useTopoViewport()
   const { api, downloadPdf, downloadExcel } = useTopografiaApi(contratoId, token)
   const esDev = esDesarrolladorTopo(usuario)
   const editablePerm = puede(permisos, 'editar')
@@ -51,13 +60,9 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const calculo = detalle?.calculo
   const sellada = ['cerrado', 'validado'].includes(String(planilla?.estado || '').toLowerCase())
   const editable = editablePerm && !sellada
-
-  const inputStyle = (readOnly) => ({
-    ...(ui.inputStyle || {}),
-    width: '100%',
-    boxSizing: 'border-box',
-    background: readOnly ? '#f1f5f9' : '#fff',
-  })
+  const conDatos = useMemo(() => tieneDatosExportables(filas, detalle), [filas, detalle])
+  const puedeExportar = puede(permisos, 'exportar') || esDev
+  const exportPlantillaVacia = esDev && !conDatos
 
   const cargarLista = useCallback(async () => {
     const data = await api('/planillas-tuberia')
@@ -215,10 +220,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
   const exportarPdf = async () => {
     if (!planilla?.id) return
+    if (!conDatos && !esDev) {
+      setErr('Sin datos para exportar. Complete la cartera o use un rol Desarrollador para plantilla vacía.')
+      return
+    }
     try {
+      const suffix = exportPlantillaVacia ? '_plantilla' : ''
       await downloadPdf(
         `/planillas-tuberia/${planilla.id}/pdf`,
-        `planilla_tuberia_${String(planilla.id).slice(0, 8)}.pdf`,
+        `planilla_tuberia_${String(planilla.id).slice(0, 8)}${suffix}.pdf`,
       )
     } catch (e) {
       setErr(e.message)
@@ -227,10 +237,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
   const exportarExcel = async () => {
     if (!planilla?.id) return
+    if (!conDatos && !esDev) {
+      setErr('Sin datos para exportar. Complete la cartera o use un rol Desarrollador para plantilla vacía.')
+      return
+    }
     try {
+      const suffix = exportPlantillaVacia ? '_plantilla' : ''
       await downloadExcel(
         `/planillas-tuberia/${planilla.id}/excel`,
-        `planilla_tuberia_${String(planilla.id).slice(0, 8)}.xlsx`,
+        `planilla_tuberia_${String(planilla.id).slice(0, 8)}${suffix}.xlsx`,
       )
     } catch (e) {
       setErr(e.message)
@@ -249,22 +264,62 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const nivelLabel = params.tipo === 'FILTRO' ? 'Terminado filtro' : 'Subrasante vía'
   const nivelKey = params.tipo === 'FILTRO' ? 'terminado_filtro' : 'subrasante_via'
 
+  const tdCalc = {
+    ...sheet.td,
+    background: CALC_CELL_BG,
+    textAlign: 'right',
+    fontFamily: 'ui-monospace, Consolas, monospace',
+    fontVariantNumeric: 'tabular-nums',
+    fontWeight: 700,
+    whiteSpace: 'nowrap',
+    minWidth: 72,
+  }
+  const thCalc = {
+    ...sheet.th,
+    background: CALC_CELL_BG,
+    textAlign: 'center',
+  }
+  const thEdit = { ...sheet.th, textAlign: 'center' }
+  const tdEdit = { ...sheet.td, padding: 0, minWidth: 88 }
+
+  const layoutMain = isCompact
+    ? { display: 'flex', flexDirection: 'column', gap: 12 }
+    : { display: 'grid', gridTemplateColumns: 'minmax(200px, 280px) 1fr', gap: 12 }
+
+  const layoutCharts = isCompact
+    ? { display: 'flex', flexDirection: 'column', gap: 12 }
+    : { display: 'grid', gridTemplateColumns: 'minmax(240px, 1fr) minmax(280px, 1.2fr)', gap: 12 }
+
+  const layoutTables = isCompact
+    ? { display: 'flex', flexDirection: 'column', gap: 12 }
+    : { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }
+
+  const cardPad = isCompact ? { ...ui.card, padding: 12 } : ui.card
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ ...ui.card, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-        <strong>Planillas de Tubería</strong>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
+      <div
+        style={{
+          ...cardPad,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          alignItems: 'center',
+        }}
+      >
+        <strong style={{ fontSize: isCompact ? 'var(--cc-base)' : undefined }}>Planillas de Tubería</strong>
         <select
           value={params.tipo}
           disabled={!!planilla && !editable}
           onChange={(e) => setParams((p) => ({ ...p, tipo: e.target.value }))}
-          style={inputStyle(false)}
+          style={{ ...sheet.cellSelect, border: `1px solid ${sheet.border}`, borderRadius: 6, minWidth: 140, height: 36 }}
         >
           {TIPOS_PLANILLA.map((t) => (
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
         {puede(permisos, 'crear') && (
-          <button type="button" style={ui.btnPrimary} disabled={busy} onClick={crear}>
+          <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} disabled={busy} onClick={crear}>
             Nueva planilla
           </button>
         )}
@@ -287,20 +342,21 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 280px) 1fr', gap: 12 }}>
-        <div style={{ ...ui.card, maxHeight: 520, overflow: 'auto' }}>
+      <div style={layoutMain}>
+        <div style={{ ...cardPad, maxHeight: isCompact ? 220 : 520, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Planillas del contrato</div>
           {lista.map((p) => (
             <button
               key={p.id}
               type="button"
+              className="cc-topo-touch-btn"
               onClick={() => abrir(p.id)}
               style={{
                 display: 'block',
                 width: '100%',
                 textAlign: 'left',
                 marginBottom: 6,
-                padding: '8px 10px',
+                padding: isCompact ? '10px 12px' : '8px 10px',
                 borderRadius: 8,
                 cursor: 'pointer',
                 border: planilla?.id === p.id ? `2px solid ${ui.accent}` : `1px solid ${ui.t?.border || '#e2e8f0'}`,
@@ -316,53 +372,45 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           {!lista.length && <div style={{ color: ui.textMuted }}>Sin planillas aún.</div>}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
           {!planilla ? (
-            <div style={{ ...ui.card, color: ui.textMuted }}>Seleccione o cree una planilla.</div>
+            <div style={{ ...cardPad, color: ui.textMuted }}>Seleccione o cree una planilla.</div>
           ) : (
             <>
-              <div
-                style={{
-                  ...ui.card,
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))',
-                  gap: 8,
-                }}
-              >
-                {[
-                  ['nombre', 'Nombre', 'text'],
-                  ['pk_id', 'PK / ID', 'text'],
-                  ['costado', 'Costado', 'text'],
-                  ['diametro_m', 'Ø (m)', 'number'],
-                  ['espesor_m', 'Espesor (m)', 'number'],
-                  ['ancho_excavacion_m', 'Ancho exc. B (m)', 'number'],
-                  ['material', 'Material', 'text'],
-                  ['norte_ref', 'Norte ref.', 'number'],
-                  ['este_ref', 'Este ref.', 'number'],
-                ].map(([k, lab, typ]) => (
-                  <label key={k} style={{ fontSize: 'var(--cc-xs)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {lab}
-                    <input
-                      type={typ}
-                      disabled={!editable}
-                      value={params[k]}
-                      onChange={(e) => setParams((p) => ({ ...p, [k]: e.target.value }))}
-                      style={inputStyle(!editable)}
-                    />
-                  </label>
-                ))}
-                <label style={{ fontSize: 'var(--cc-xs)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  Relación atraque
-                  <select
-                    disabled={!editable}
-                    value={params.relacion_atraque}
-                    onChange={(e) => setParams((p) => ({ ...p, relacion_atraque: e.target.value }))}
-                    style={inputStyle(!editable)}
-                  >
-                    {RELACIONES_ATRAQUE.map((r) => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                </label>
-                <div style={{ fontSize: 'var(--cc-xs)', gridColumn: '1 / -1', color: ui.textMuted }}>
+              <div style={cardPad}>
+                <TopoExcelSheet
+                  sheet={sheet}
+                  title="Cabecera / tramo"
+                  minWidth={isCompact ? undefined : 640}
+                  compact={isCompact}
+                  columns={[
+                    { key: 'nombre', label: 'Nombre', compactFull: true },
+                    { key: 'pk_id', label: 'PK / ID' },
+                    { key: 'costado', label: 'Costado' },
+                    { key: 'diametro_m', label: 'Ø (m)' },
+                    { key: 'espesor_m', label: 'Espesor (m)' },
+                    { key: 'ancho_excavacion_m', label: 'Ancho exc. B (m)' },
+                    { key: 'relacion_atraque', label: 'Relación atraque' },
+                    { key: 'material', label: 'Material' },
+                    { key: 'norte_ref', label: 'Norte ref.' },
+                    { key: 'este_ref', label: 'Este ref.' },
+                  ]}
+                  cells={[
+                    <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="pk" disabled={!editable} value={params.pk_id} onChange={(e) => setParams((p) => ({ ...p, pk_id: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="cost" disabled={!editable} value={params.costado} onChange={(e) => setParams((p) => ({ ...p, costado: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="dia" type="number" step="any" disabled={!editable} value={params.diametro_m} onChange={(e) => setParams((p) => ({ ...p, diametro_m: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="esp" type="number" step="any" disabled={!editable} value={params.espesor_m} onChange={(e) => setParams((p) => ({ ...p, espesor_m: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="b" type="number" step="any" disabled={!editable} value={params.ancho_excavacion_m} onChange={(e) => setParams((p) => ({ ...p, ancho_excavacion_m: e.target.value }))} style={sheet.cellInp} />,
+                    <select key="rel" disabled={!editable} value={params.relacion_atraque} onChange={(e) => setParams((p) => ({ ...p, relacion_atraque: e.target.value }))} style={sheet.cellSelect}>
+                      {RELACIONES_ATRAQUE.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>,
+                    <input key="mat" disabled={!editable} value={params.material} onChange={(e) => setParams((p) => ({ ...p, material: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="n" type="number" step="any" disabled={!editable} value={params.norte_ref} onChange={(e) => setParams((p) => ({ ...p, norte_ref: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="e" type="number" step="any" disabled={!editable} value={params.este_ref} onChange={(e) => setParams((p) => ({ ...p, este_ref: e.target.value }))} style={sheet.cellInp} />,
+                  ]}
+                />
+                <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
                   H.Relleno={fmtNDash(planilla.altura_relleno_m, 4)} ·
                   A1={fmtNDash(planilla.area_1_m2, 4)} ·
                   A2={fmtNDash(planilla.area_2_m2, 4)}
@@ -370,91 +418,135 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                     <> · WGS84 {fmtNDash(detalle.coords_wgs84.lat, 6)}, {fmtNDash(detalle.coords_wgs84.lon, 6)}</>
                   )}
                 </div>
-                <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
                   {editable && (
-                    <button type="button" style={ui.btnSecondary} disabled={busy} onClick={guardarParams}>
+                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} disabled={busy} onClick={guardarParams}>
                       Guardar parámetros
                     </button>
                   )}
                   {editable && (
-                    <button type="button" style={ui.btnPrimary} disabled={busy} onClick={guardarCartera}>
+                    <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} disabled={busy} onClick={guardarCartera}>
                       Guardar cartera
                     </button>
                   )}
                   {editable && (
-                    <button type="button" style={ui.btnSecondary} disabled={busy} onClick={cerrar}>
+                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} disabled={busy} onClick={cerrar}>
                       Cerrar planilla
                     </button>
                   )}
                   {esDev && sellada && (
-                    <button type="button" style={ui.btnSecondary} disabled={busy} onClick={reabrir}>
+                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} disabled={busy} onClick={reabrir}>
                       Reabrir (Dev)
                     </button>
                   )}
                   {esDev && String(planilla?.estado || '').toLowerCase() === 'validado' && (
-                    <button type="button" style={ui.btnSecondary} disabled={busy} onClick={revocar}>
+                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} disabled={busy} onClick={revocar}>
                       Revocar validación (Dev)
                     </button>
                   )}
-                  {puede(permisos, 'exportar') && (
+                  {puedeExportar && (
                     <>
-                      <button type="button" style={ui.btnSecondary} onClick={exportarPdf}>PDF</button>
-                      <button type="button" style={ui.btnSecondary} onClick={exportarExcel}>Excel</button>
+                      <button
+                        type="button"
+                        className="cc-topo-touch-btn"
+                        style={ui.btnSecondary}
+                        disabled={!conDatos && !esDev}
+                        title={exportPlantillaVacia ? 'Plantilla vacía — solo Desarrollador (verificación de formato)' : undefined}
+                        onClick={exportarPdf}
+                      >
+                        {exportPlantillaVacia ? 'PDF (plantilla)' : 'PDF'}
+                      </button>
+                      <button
+                        type="button"
+                        className="cc-topo-touch-btn"
+                        style={ui.btnSecondary}
+                        disabled={!conDatos && !esDev}
+                        title={exportPlantillaVacia ? 'Plantilla vacía — solo Desarrollador (verificación de formato)' : undefined}
+                        onClick={exportarExcel}
+                      >
+                        {exportPlantillaVacia ? 'Excel (plantilla)' : 'Excel'}
+                      </button>
                     </>
                   )}
                 </div>
+                {exportPlantillaVacia && (
+                  <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: '#92400e', background: '#fffbeb', padding: '6px 8px', borderRadius: 6 }}>
+                    Sin datos diligenciados: como Desarrollador puede descargar PDF/Excel vacíos para verificar formato (sin valores de ejemplo).
+                  </div>
+                )}
               </div>
 
               <div
                 ref={tableRef}
                 onKeyDown={(e) => handleEnterAsTab(e, tableRef.current)}
-                style={{ ...ui.card, overflow: 'auto' }}
+                style={{ ...cardPad, minWidth: 0 }}
               >
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Cartera de campo</div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
-                  <thead>
-                    <tr style={{ background: ui.t?.inputBg || '#f8fafc' }}>
-                      {['#', 'Abscisa', 'TN', nivelLabel, 'CFE', 'H.Exc', 'H.Trit', 'H.Rell', 'Ancho Geo'].map((h) => (
-                        <th
-                          key={h}
-                          style={{
-                            padding: 4,
-                            borderBottom: `1px solid ${ui.t?.border || '#e2e8f0'}`,
-                            textAlign: 'center',
-                          }}
-                        >
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filas.map((f, idx) => {
-                      const c = calcFilas[idx] || {}
-                      return (
-                        <tr key={idx}>
-                          <td style={{ padding: 2, textAlign: 'center' }}>{idx + 1}</td>
-                          {['abscisa', 'terreno_natural', nivelKey, 'cota_fondo_excavacion'].map((k) => (
-                            <td key={k} style={{ padding: 2 }}>
-                              <input
-                                type="number"
-                                step="any"
-                                disabled={!editable}
-                                value={f[k]}
-                                onChange={(e) => setFila(idx, k, e.target.value)}
-                                style={inputStyle(!editable)}
-                              />
-                            </td>
-                          ))}
-                          <td style={{ padding: 2, textAlign: 'right', background: '#f8fafc' }}>{fmtNDash(c.altura_excavacion)}</td>
-                          <td style={{ padding: 2, textAlign: 'right', background: '#f8fafc' }}>{fmtNDash(c.altura_triturado)}</td>
-                          <td style={{ padding: 2, textAlign: 'right', background: '#f8fafc' }}>{fmtNDash(c.altura_relleno)}</td>
-                          <td style={{ padding: 2, textAlign: 'right', background: '#f8fafc' }}>{fmtNDash(c.ancho_geotextil)}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                <div style={sheet.sectionTitle}>Cartera de campo</div>
+                <div
+                  style={{
+                    ...sheet.sheetWrap,
+                    WebkitOverflowScrolling: 'touch',
+                    maxWidth: '100%',
+                  }}
+                  className="cc-topo-table-scroll"
+                >
+                  <table
+                    style={{
+                      ...sheet.sheetTable,
+                      tableLayout: 'auto',
+                      minWidth: CARTERA_MIN_WIDTH,
+                    }}
+                  >
+                    <thead>
+                      <tr>
+                        <th style={{ ...thEdit, width: 36 }}>#</th>
+                        <th style={thEdit}>Abscisa</th>
+                        <th style={thEdit}>TN</th>
+                        <th style={thEdit}>{nivelLabel}</th>
+                        <th style={thEdit}>CFE</th>
+                        <th style={thCalc}>H.Exc</th>
+                        <th style={thCalc}>H.Trit</th>
+                        <th style={thCalc}>H.Rell</th>
+                        <th style={thCalc}>Ancho Geo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filas.map((f, idx) => {
+                        const c = calcFilas[idx] || {}
+                        return (
+                          <tr key={idx}>
+                            <td style={{ ...sheet.td, textAlign: 'center', fontWeight: 700 }}>{idx + 1}</td>
+                            {['abscisa', 'terreno_natural', nivelKey, 'cota_fondo_excavacion'].map((k) => (
+                              <td key={k} style={tdEdit}>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  inputMode="decimal"
+                                  disabled={!editable}
+                                  value={f[k]}
+                                  onChange={(e) => setFila(idx, k, e.target.value)}
+                                  style={{
+                                    ...sheet.cellInp,
+                                    background: editable ? 'transparent' : CALC_CELL_BG,
+                                  }}
+                                />
+                              </td>
+                            ))}
+                            <td style={tdCalc}>{fmtNDash(c.altura_excavacion)}</td>
+                            <td style={tdCalc}>{fmtNDash(c.altura_triturado)}</td>
+                            <td style={tdCalc}>{fmtNDash(c.altura_relleno)}</td>
+                            <td style={tdCalc}>{fmtNDash(c.ancho_geotextil)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {isCompact && (
+                  <div style={{ marginTop: 6, fontSize: 'var(--cc-xxs)', color: ui.textMuted }}>
+                    Deslice horizontalmente para ver todas las columnas (formato hoja de cálculo).
+                  </div>
+                )}
                 {calculo?.cartera?.totales && (
                   <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
                     L={fmtNDash(calculo.cartera.totales.longitud_m, 2)} m ·
@@ -465,6 +557,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 {editable && (
                   <button
                     type="button"
+                    className="cc-topo-touch-btn"
                     style={{ ...ui.btnSecondary, marginTop: 8 }}
                     onClick={() => setFilas((prev) => [...prev, filaCampoVacia(prev.length + 1)])}
                   >
@@ -473,58 +566,88 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 )}
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 1fr) minmax(280px, 1.2fr)', gap: 12 }}>
+              <div style={layoutCharts}>
                 <PlanillaTuberiaSeccionSvg seccionTipica={calculo?.seccion_tipica} ui={ui} />
                 <PlanillaTuberiaPerfil perfil={calculo?.perfil} ui={ui} />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <div style={ui.card}>
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Resumen de cantidades</div>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
-                    <thead>
-                      <tr>
-                        {['Cód', 'Ítem', 'Ud', 'Bruto', 'Desc', 'Neto'].map((h) => (
-                          <th key={h} style={{ textAlign: 'left', borderBottom: '1px solid #e2e8f0', padding: 4 }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(calculo?.netos || []).map((n) => (
-                        <tr key={n.codigo}>
-                          <td style={{ padding: 4 }}>{n.codigo}</td>
-                          <td style={{ padding: 4 }}>{n.nombre}</td>
-                          <td style={{ padding: 4 }}>{n.unidad}</td>
-                          <td style={{ padding: 4, textAlign: 'right' }}>{fmtNDash(n.bruto)}</td>
-                          <td style={{ padding: 4, textAlign: 'right' }}>{fmtNDash(n.descuentos)}</td>
-                          <td style={{ padding: 4, textAlign: 'right', fontWeight: 600 }}>{fmtNDash(n.neto)}</td>
+              <div style={layoutTables}>
+                <div style={cardPad}>
+                  <div style={sheet.sectionTitle}>Resumen de cantidades</div>
+                  <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
+                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 420 }}>
+                      <thead>
+                        <tr>
+                          {['Cód', 'Ítem', 'Ud', 'Bruto', 'Desc', 'Neto'].map((h, i) => (
+                            <th key={h} style={i >= 3 ? thCalc : thEdit}>{h}</th>
+                          ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div style={ui.card}>
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Descuentos (por código de ítem)</div>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
-                    <thead>
-                      <tr>
-                        {['Cód', 'Nombre', 'Ítem cant.', 'Cantidad'].map((h) => (
-                          <th key={h} style={{ textAlign: 'left', borderBottom: '1px solid #e2e8f0', padding: 4 }}>{h}</th>
+                      </thead>
+                      <tbody>
+                        {(calculo?.netos || []).map((n) => (
+                          <tr key={n.codigo}>
+                            <td style={sheet.td}>{n.codigo}</td>
+                            <td style={sheet.td}>{n.nombre}</td>
+                            <td style={sheet.td}>{n.unidad}</td>
+                            <td style={tdCalc}>{fmtNDash(n.bruto)}</td>
+                            <td style={tdCalc}>{fmtNDash(n.descuentos)}</td>
+                            <td style={tdCalc}>{fmtNDash(n.neto)}</td>
+                          </tr>
                         ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(calculo?.descuentos || []).map((d) => (
-                        <tr key={d.codigo}>
-                          <td style={{ padding: 4 }}>{d.codigo}</td>
-                          <td style={{ padding: 4 }}>{d.nombre}</td>
-                          <td style={{ padding: 4 }}>{d.item_cant_codigo}</td>
-                          <td style={{ padding: 4, textAlign: 'right' }}>{fmtNDash(d.cantidad)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
+                <div style={cardPad}>
+                  <div style={sheet.sectionTitle}>Descuentos (por código de ítem)</div>
+                  <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
+                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 360 }}>
+                      <thead>
+                        <tr>
+                          {['Cód', 'Nombre', 'Ítem cant.', 'Cantidad'].map((h, i) => (
+                            <th key={h} style={i === 3 ? thCalc : thEdit}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(calculo?.descuentos || []).map((d) => (
+                          <tr key={d.codigo}>
+                            <td style={sheet.td}>{d.codigo}</td>
+                            <td style={sheet.td}>{d.nombre}</td>
+                            <td style={sheet.td}>{d.item_cant_codigo}</td>
+                            <td style={tdCalc}>{fmtNDash(d.cantidad)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  ...cardPad,
+                  display: 'flex',
+                  flexDirection: isCompact ? 'column' : 'row',
+                  gap: isCompact ? 16 : 24,
+                  marginTop: 4,
+                }}
+              >
+                {['Topógrafo / Cadenero', 'Residente / Contratista', 'Interventoría'].map((label) => (
+                  <div
+                    key={label}
+                    style={{
+                      flex: 1,
+                      borderTop: `1px solid ${sheet.border}`,
+                      paddingTop: 8,
+                      minHeight: 48,
+                      fontSize: 'var(--cc-xs)',
+                      color: ui.textMuted,
+                    }}
+                  >
+                    {label}
+                  </div>
+                ))}
               </div>
             </>
           )}

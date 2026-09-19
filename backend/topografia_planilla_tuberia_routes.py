@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field
 from main import _es_desarrollador, _require_contract_access, get_current_user, supabase
 from topografia_permissions import require_permiso_topografia
 from topografia_planilla_tuberia import (
+    ITEMS_CANTIDADES,
+    ITEMS_DESCUENTOS_ALCANTARILLA,
+    ITEMS_DESCUENTOS_FILTRO,
     RELACIONES_ATRAQUE,
     TIPOS_PLANILLA,
     calcular_planilla_completa,
@@ -505,34 +508,88 @@ def consolidado(contrato_id: int, current_user=Depends(get_current_user)):
     )
 
 
+def _tiene_datos_exportables(det: dict) -> bool:
+    """True si hay al menos una fila de cartera con dato de campo (no plantilla vacía)."""
+    calc = det.get("calculo") or {}
+    for f in (calc.get("cartera") or {}).get("filas") or []:
+        if not f.get("vacio"):
+            return True
+    for f in det.get("filas_campo") or []:
+        if any(f.get(k) is not None for k in (
+            "abscisa", "terreno_natural", "subrasante_via", "terminado_filtro", "cota_fondo_excavacion"
+        )):
+            return True
+    return False
+
+
+def _assert_export_permitido(current_user, det: dict) -> bool:
+    """
+    Exportación con datos: permiso exportar.
+    Plantilla vacía (sin datos): solo Desarrollador (para verificar formato).
+    Returns True si es plantilla vacía.
+    """
+    vacia = not _tiene_datos_exportables(det)
+    if vacia:
+        if not _es_desarrollador(current_user):
+            raise HTTPException(
+                422,
+                "Sin datos para exportar. Solo Desarrollador puede descargar la plantilla vacía.",
+            )
+        return True
+    _perm(current_user, "exportar")
+    return False
+
+
+def _catalogo_descuentos(tipo: str):
+    return ITEMS_DESCUENTOS_FILTRO if tipo == "FILTRO" else ITEMS_DESCUENTOS_ALCANTARILLA
+
+
 @router.get("/{contrato_id}/planillas-tuberia/{planilla_id}/excel")
 def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
     det = _detalle(contrato_id, planilla_id)
-    calc = det.get("calculo")
-    if not calc:
-        raise HTTPException(422, "Sin cálculo para exportar.")
+    vacia = _assert_export_permitido(current_user, det)
     try:
         from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
         from openpyxl.worksheet.datavalidation import DataValidation
     except ImportError as exc:
         raise HTTPException(500, "openpyxl no disponible") from exc
 
     p = det["planilla"]
+    calc = det.get("calculo") or {}
+    tipo = p.get("tipo") or "ALCANTARILLA"
+    fill_hdr = PatternFill("solid", fgColor="E2E8F0")
+    fill_calc = PatternFill("solid", fgColor="F2F2F2")
+    thin = Border(
+        left=Side(style="thin", color="94A3B8"),
+        right=Side(style="thin", color="94A3B8"),
+        top=Side(style="thin", color="94A3B8"),
+        bottom=Side(style="thin", color="94A3B8"),
+    )
+    font_hdr = Font(bold=True, size=10, color="475569")
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Planilla"
     ws.sheet_view.showGridLines = False
     ws.sheet_view.showZeros = False
-    ws["A1"] = "PLANILLA DE TUBERÍA"
+    ws["A1"] = "PLANILLA DE TUBERÍA" + (" — PLANTILLA VACÍA (Dev)" if vacia else "")
+    ws["A1"].font = Font(bold=True, size=14)
     ws["A2"] = "Tipo:"
-    ws["B2"] = p.get("tipo")
+    ws["B2"] = tipo
     ws["C2"] = "PK:"
     ws["D2"] = p.get("pk_id") or ""
+    ws["E2"] = "Costado:"
+    ws["F2"] = p.get("costado") or ""
     ws["A3"] = (
-        f"Ø={p.get('diametro_m')} esp={p.get('espesor_m')} B={p.get('ancho_excavacion_m')} "
-        f"Rel={p.get('relacion_atraque')} H.Relleno={p.get('altura_relleno_m')}"
+        f"Ø={p.get('diametro_m') if p.get('diametro_m') is not None else ''} "
+        f"esp={p.get('espesor_m') if p.get('espesor_m') is not None else ''} "
+        f"B={p.get('ancho_excavacion_m') if p.get('ancho_excavacion_m') is not None else ''} "
+        f"Rel={p.get('relacion_atraque') or '1:3'} "
+        f"H.Relleno={p.get('altura_relleno_m') if p.get('altura_relleno_m') is not None else ''} "
+        f"A1={p.get('area_1_m2') if p.get('area_1_m2') is not None else ''} "
+        f"A2={p.get('area_2_m2') if p.get('area_2_m2') is not None else ''}"
     )
     ws["A4"] = "Relación atraque:"
     ws["B4"] = p.get("relacion_atraque") or "1:3"
@@ -548,101 +605,199 @@ def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_u
     dv_tipo.add(ws["B2"])
     dv_rel.add(ws["B4"])
 
-    for c, h in enumerate(["#", "Abscisa", "TN", "Nivel", "CFE", "H.Exc", "H.Trit", "H.Rell", "Ancho Geo"], 1):
-        ws.cell(5, c, h)
-    d_ext = calc["seccion"]["diametro_externo_m"]
-    b = calc["seccion"]["ancho_excavacion_m"]
+    headers = ["#", "Abscisa", "TN", "Nivel", "CFE", "H.Exc", "H.Trit", "H.Rell", "Ancho Geo"]
+    for c, h in enumerate(headers, 1):
+        cell = ws.cell(5, c, h)
+        cell.fill = fill_hdr
+        cell.font = font_hdr
+        cell.border = thin
+        cell.alignment = Alignment(horizontal="center")
+
+    sec = calc.get("seccion") or {}
+    d_ext = sec.get("diametro_externo_m")
+    b = sec.get("ancho_excavacion_m")
     h_atr = p.get("altura_relleno_m")
+    filas_calc = [f for f in (calc.get("cartera") or {}).get("filas") or [] if not f.get("vacio")]
+    # Plantilla vacía: 8 filas en blanco para ver formato (sin inventar valores).
+    n_rows = len(filas_calc) if filas_calc else (8 if vacia else 0)
     r = 6
-    for f in calc["cartera"]["filas"]:
-        if f.get("vacio"):
-            continue
-        ws.cell(r, 1, f.get("orden"))
-        ws.cell(r, 2, f.get("abscisa"))
-        ws.cell(r, 3, f.get("terreno_natural"))
-        ws.cell(r, 4, f.get("nivel_referencia"))
-        ws.cell(r, 5, f.get("cota_fondo_excavacion"))
-        ws.cell(r, 6, f'=IF(OR(C{r}="",E{r}=""),"",C{r}-E{r})')
-        ws.cell(r, 7, h_atr)
-        ws.cell(r, 8, f'=IF(OR(D{r}="",E{r}=""),"",D{r}-(E{r}+{d_ext}))')
-        if p.get("tipo") == "FILTRO":
-            ws.cell(r, 9, f'=IF(F{r}="","",{b}+2*(G{r}+MAX(0,H{r})))')
-        else:
-            ws.cell(r, 9, f'=IF(F{r}="","",{b}+2*F{r})')
+    for i in range(n_rows):
+        f = filas_calc[i] if i < len(filas_calc) else {}
+        ws.cell(r, 1, f.get("orden") if f else i + 1).border = thin
+        for col in range(2, 6):
+            ws.cell(r, col).border = thin
+        if f:
+            ws.cell(r, 2, f.get("abscisa"))
+            ws.cell(r, 3, f.get("terreno_natural"))
+            ws.cell(r, 4, f.get("nivel_referencia"))
+            ws.cell(r, 5, f.get("cota_fondo_excavacion"))
+        # Columnas calculadas: fondo #F2F2F2 + fórmulas vivas cuando hay sección
+        for col in range(6, 10):
+            cell = ws.cell(r, col)
+            cell.fill = fill_calc
+            cell.border = thin
+        if d_ext is not None and b is not None:
+            ws.cell(r, 6, f'=IF(OR(C{r}="",E{r}=""),"",C{r}-E{r})')
+            ws.cell(r, 7, h_atr if h_atr is not None else "")
+            ws.cell(r, 8, f'=IF(OR(D{r}="",E{r}=""),"",D{r}-(E{r}+{d_ext}))')
+            if tipo == "FILTRO":
+                ws.cell(r, 9, f'=IF(F{r}="","",{b}+2*(G{r}+MAX(0,H{r})))')
+            else:
+                ws.cell(r, 9, f'=IF(F{r}="","",{b}+2*F{r})')
         r += 1
 
     ws2 = wb.create_sheet("Cantidades")
     ws2.sheet_view.showGridLines = False
     ws2.sheet_view.showZeros = False
-    ws2.append(["Código", "Nombre", "Unidad", "Bruto", "Descuentos", "Neto"])
-    for i, n in enumerate(calc.get("netos") or [], 2):
-        ws2.cell(i, 1, n["codigo"]); ws2.cell(i, 2, n["nombre"]); ws2.cell(i, 3, n["unidad"])
-        ws2.cell(i, 4, n["bruto"]); ws2.cell(i, 5, n["descuentos"]); ws2.cell(i, 6, f"=D{i}-E{i}")
+    for c, h in enumerate(["Código", "Nombre", "Unidad", "Bruto", "Descuentos", "Neto"], 1):
+        cell = ws2.cell(1, c, h)
+        cell.fill = fill_hdr
+        cell.font = font_hdr
+        cell.border = thin
+    netos = calc.get("netos") or [
+        {**it, "bruto": None, "descuentos": None, "neto": None} for it in ITEMS_CANTIDADES
+    ]
+    for i, n in enumerate(netos, 2):
+        for c, val in enumerate(
+            [n["codigo"], n["nombre"], n["unidad"], n.get("bruto"), n.get("descuentos"), None], 1
+        ):
+            cell = ws2.cell(i, c, val)
+            cell.border = thin
+            if c >= 4:
+                cell.fill = fill_calc
+        ws2.cell(i, 6, f"=IF(OR(D{i}=\"\",E{i}=\"\"),\"\",D{i}-E{i})")
+        ws2.cell(i, 6).fill = fill_calc
+        ws2.cell(i, 6).border = thin
 
-    ws3 = wb.create_sheet("_Perfil"); ws3.sheet_state = "hidden"
+    ws_desc = wb.create_sheet("Descuentos")
+    ws_desc.sheet_view.showGridLines = False
+    for c, h in enumerate(["Código", "Nombre", "Ítem cant.", "Cantidad"], 1):
+        cell = ws_desc.cell(1, c, h)
+        cell.fill = fill_hdr
+        cell.font = font_hdr
+        cell.border = thin
+    descuentos = calc.get("descuentos") or [
+        {**it, "cantidad": None} for it in _catalogo_descuentos(tipo)
+    ]
+    for i, d in enumerate(descuentos, 2):
+        for c, val in enumerate(
+            [d["codigo"], d["nombre"], d.get("item_cant_codigo"), d.get("cantidad")], 1
+        ):
+            cell = ws_desc.cell(i, c, val)
+            cell.border = thin
+            if c == 4:
+                cell.fill = fill_calc
+
+    ws3 = wb.create_sheet("_Perfil")
+    ws3.sheet_state = "hidden"
     ws3.append(["Abscisa", "TN", "Nivel", "CFE"])
+    perfil = calc.get("perfil") or {
+        "abscisas": [], "terreno_natural": [], "nivel_referencia": [], "cota_fondo_excavacion": [],
+    }
     for a, tn, nv, cfe in zip(
-        calc["perfil"]["abscisas"], calc["perfil"]["terreno_natural"],
-        calc["perfil"]["nivel_referencia"], calc["perfil"]["cota_fondo_excavacion"],
+        perfil.get("abscisas") or [],
+        perfil.get("terreno_natural") or [],
+        perfil.get("nivel_referencia") or [],
+        perfil.get("cota_fondo_excavacion") or [],
     ):
         ws3.append([a, tn, nv, cfe])
 
-    ws4 = wb.create_sheet("_Consolidado"); ws4.sheet_state = "hidden"
-    fila_c = construir_fila_consolidado(p, calc)
-    ws4.append(list(fila_c.keys())); ws4.append(list(fila_c.values()))
+    ws4 = wb.create_sheet("_Consolidado")
+    ws4.sheet_state = "hidden"
+    if calc.get("seccion") and calc.get("cartera"):
+        fila_c = construir_fila_consolidado(p, calc)
+        ws4.append(list(fila_c.keys()))
+        ws4.append(list(fila_c.values()))
+    else:
+        ws4.append(["c01_planilla_id", "c02_tipo", "c03_pk_id", "c04_nombre", "c05_costado",
+                     "c06_abscisa_inicial", "c07_abscisa_final", "c08_longitud_m",
+                     "c09_diametro_m", "c10_espesor_m", "c11_relacion_atraque",
+                     "c12_ancho_excavacion_m", "c13_vol_excavacion_m3", "c14_vol_triturado_m3",
+                     "c15_vol_relleno_m3", "c16_area_geotextil_m2", "c17_long_tuberia_m",
+                     "c18_norte_ref", "c19_este_ref", "c20_estado", "c21_cerrado_at", "c22_contrato_id"])
+        ws4.append([p.get("id"), tipo, p.get("pk_id"), p.get("nombre"), p.get("costado"),
+                    None, None, None, p.get("diametro_m"), p.get("espesor_m"),
+                    p.get("relacion_atraque"), p.get("ancho_excavacion_m"),
+                    None, None, None, None, None,
+                    p.get("norte_ref"), p.get("este_ref"), p.get("estado"), None, contrato_id])
 
-    buf = io.BytesIO(); wb.save(buf)
+    buf = io.BytesIO()
+    wb.save(buf)
+    suffix = "_plantilla" if vacia else ""
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="planilla_tuberia_{planilla_id[:8]}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="planilla_tuberia_{planilla_id[:8]}{suffix}.xlsx"'},
     )
 
 
 @router.get("/{contrato_id}/planillas-tuberia/{planilla_id}/pdf")
 def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
     det = _detalle(contrato_id, planilla_id)
-    calc = det.get("calculo")
-    if not calc:
-        raise HTTPException(422, "Sin cálculo para exportar.")
+    vacia = _assert_export_permitido(current_user, det)
     p = det["planilla"]
+    calc = det.get("calculo") or {}
+    tipo = p.get("tipo") or "ALCANTARILLA"
 
     def fmt(v, d=3):
         if v is None:
-            return "—"
+            return ""
         try:
             return f"{float(v):.{d}f}"
         except Exception:
             return str(v)
 
+    filas = [f for f in (calc.get("cartera") or {}).get("filas") or [] if not f.get("vacio")]
+    if vacia and not filas:
+        # Filas vacías estructurales (sin inventar valores) para ver el layout.
+        filas = [{"orden": i, "vacio": True} for i in range(1, 9)]
+
     rows = "".join(
         f"<tr><td>{f.get('orden')}</td><td>{fmt(f.get('abscisa'),2)}</td>"
         f"<td>{fmt(f.get('terreno_natural'))}</td><td>{fmt(f.get('nivel_referencia'))}</td>"
-        f"<td>{fmt(f.get('cota_fondo_excavacion'))}</td><td>{fmt(f.get('altura_excavacion'))}</td>"
-        f"<td>{fmt(f.get('altura_triturado'))}</td><td>{fmt(f.get('altura_relleno'))}</td>"
-        f"<td>{fmt(f.get('ancho_geotextil'))}</td></tr>"
-        for f in calc["cartera"]["filas"] if not f.get("vacio")
+        f"<td>{fmt(f.get('cota_fondo_excavacion'))}</td>"
+        f"<td class='calc'>{fmt(f.get('altura_excavacion'))}</td>"
+        f"<td class='calc'>{fmt(f.get('altura_triturado'))}</td>"
+        f"<td class='calc'>{fmt(f.get('altura_relleno'))}</td>"
+        f"<td class='calc'>{fmt(f.get('ancho_geotextil'))}</td></tr>"
+        for f in filas
     )
+    netos = calc.get("netos") or [
+        {**it, "bruto": None, "descuentos": None, "neto": None} for it in ITEMS_CANTIDADES
+    ]
     cants = "".join(
         f"<tr><td>{n['codigo']}</td><td>{n['nombre']}</td><td>{n['unidad']}</td>"
-        f"<td>{fmt(n['bruto'])}</td><td>{fmt(n['descuentos'])}</td><td>{fmt(n['neto'])}</td></tr>"
-        for n in calc.get("netos") or []
+        f"<td class='calc'>{fmt(n.get('bruto'))}</td>"
+        f"<td class='calc'>{fmt(n.get('descuentos'))}</td>"
+        f"<td class='calc'>{fmt(n.get('neto'))}</td></tr>"
+        for n in netos
     )
+    descuentos = calc.get("descuentos") or [
+        {**it, "cantidad": None} for it in _catalogo_descuentos(tipo)
+    ]
     descs = "".join(
         f"<tr><td>{d['codigo']}</td><td>{d['nombre']}</td><td>{d.get('item_cant_codigo','')}</td>"
-        f"<td>{fmt(d['cantidad'])}</td></tr>"
-        for d in calc.get("descuentos") or []
+        f"<td class='calc'>{fmt(d.get('cantidad'))}</td></tr>"
+        for d in descuentos
     )
+    badge = "<p class='badge'>PLANTILLA VACÍA — solo Desarrollador (verificación de formato)</p>" if vacia else ""
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
-    <style>body{{font-family:Arial,sans-serif;font-size:11px}}
-    table{{border-collapse:collapse;width:100%;margin-bottom:12px}} th,td{{border:1px solid #cbd5e1;padding:3px 5px}}
-    th{{background:#e2e8f0}} .meta{{color:#475569}}</style></head><body>
-    <h1>Planilla de Tubería — {p.get('tipo')}</h1>
-    <p class="meta">{p.get('nombre') or ''} · PK {p.get('pk_id') or ''} · Costado {p.get('costado') or '—'}
-    · Ø={fmt(p.get('diametro_m'))} · Rel={p.get('relacion_atraque') or ''}
+    <style>
+    body{{font-family:Arial,sans-serif;font-size:11px;color:#0f172a}}
+    table{{border-collapse:collapse;width:100%;margin-bottom:12px}}
+    th,td{{border:1px solid #94a3b8;padding:3px 5px}}
+    th{{background:#e2e8f0;color:#475569;font-size:10px;text-transform:uppercase}}
+    td.calc{{background:#F2F2F2;text-align:right;font-family:Consolas,monospace}}
+    .meta{{color:#475569}} .badge{{background:#fef3c7;border:1px solid #f59e0b;padding:6px 8px;border-radius:4px}}
+    .firmas{{display:flex;gap:24px;margin-top:28px}} .firma{{flex:1;border-top:1px solid #94a3b8;padding-top:6px;min-height:48px}}
+    </style></head><body>
+    <h1>Planilla de Tubería — {tipo}</h1>
+    {badge}
+    <p class="meta">{p.get('nombre') or ''} · PK {p.get('pk_id') or ''} · Costado {p.get('costado') or ''}
+    · Ø={fmt(p.get('diametro_m'))} · Rel={p.get('relacion_atraque') or '1:3'}
     · H.Relleno={fmt(p.get('altura_relleno_m'),4)} · A1={fmt(p.get('area_1_m2'),4)} · A2={fmt(p.get('area_2_m2'),4)}</p>
+    <h2>Cartera de campo</h2>
     <table><thead><tr><th>#</th><th>Abs</th><th>TN</th><th>Nivel</th><th>CFE</th>
     <th>H.Exc</th><th>H.Trit</th><th>H.Rell</th><th>Geo</th></tr></thead><tbody>{rows}</tbody></table>
     <h2>Resumen de cantidades</h2>
@@ -651,6 +806,11 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     <h2>Descuentos específicos (por código de ítem)</h2>
     <table><thead><tr><th>Cód</th><th>Nombre</th><th>Ítem cant.</th><th>Cantidad</th></tr></thead>
     <tbody>{descs}</tbody></table>
+    <div class="firmas">
+      <div class="firma">Topógrafo / Cadenero</div>
+      <div class="firma">Residente / Contratista</div>
+      <div class="firma">Interventoría</div>
+    </div>
     <p class="meta">Estado: {p.get('estado') or ''} · Firmas resueltas por rol en ClaraCore al validar.</p>
     </body></html>"""
     try:
@@ -658,7 +818,9 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         content, media = to_pdf_bytes(html), "application/pdf"
     except Exception:
         content, media = html.encode("utf-8"), "text/html; charset=utf-8"
+    suffix = "_plantilla" if vacia else ""
     return Response(
         content=content, media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="planilla_tuberia_{planilla_id[:8]}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="planilla_tuberia_{planilla_id[:8]}{suffix}.pdf"'},
     )
+
