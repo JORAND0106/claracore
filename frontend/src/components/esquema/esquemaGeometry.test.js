@@ -638,6 +638,19 @@ describe('esquemaGeometry', () => {
     assert.ok(next.offset < 0)
     assert.equal(next.text, '2.00 m')
   })
+
+  it('image corner handles and free resize (Shift locks aspect)', () => {
+    const img = { type: 'image', fit: false, x: 0, y: 0, w: 100, h: 40 }
+    const handles = getResizeHandles(img)
+    assert.deepEqual(handles.map((h) => h.id), ['nw', 'ne', 'se', 'sw'])
+    assert.equal(getResizeHandles({ ...img, fit: true }).length, 0)
+    const free = applyResizeHandle(img, 'se', { x: 200, y: 100 })
+    assert.equal(free.w, 200)
+    assert.equal(free.h, 100)
+    const locked = applyResizeHandle(img, 'se', { x: 200, y: 200 }, { lockAspect: true })
+    assert.ok(Math.abs((locked.w / locked.h) - (100 / 40)) < 1e-6)
+  })
+
 })
 
 

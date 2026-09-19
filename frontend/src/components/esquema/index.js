@@ -19,3 +19,7 @@ export {
   strokeStyledPolyline,
   strokeStyledSegment,
 } from './esquemaLineStyle'
+export {
+  imageScaleFactorFromReference,
+  scaleSceneByImageReference,
+} from './esquemaImageScale'
