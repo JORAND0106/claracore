@@ -725,7 +725,7 @@ export function collectSnapGeometry(objects, excludeId = null) {
   const curves = []
   for (const obj of objects || []) {
     if (!obj || isExcludedSnapId(obj.id, excludeId)) continue
-    if (obj.type === 'image' && obj.fit) continue
+    if (obj.type === 'image') continue
     if (obj.type === 'nodo') {
       points.push({ x: obj.x || 0, y: obj.y || 0, kind: 'node' })
       continue
@@ -1318,7 +1318,7 @@ function rectsIntersect(a, b) {
 }
 
 export function objectMatchesSelectionRect(obj, rect, crossing) {
-  if (!obj || (obj.type === 'image' && obj.fit)) return false
+  if (!obj || obj.type === 'image') return false
   if (obj.type === 'nodo') {
     return pointInRect({ x: obj.x || 0, y: obj.y || 0 }, rect)
   }

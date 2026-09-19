@@ -1,11 +1,31 @@
 /**
  * Z-order del editor de esquema: el índice en `objects` es el apilamiento.
- * Primero se dibuja (fondo); último queda al frente. El fondo raster (`image`+fit)
- * permanece anclado debajo de las entidades editables.
+ * Primero se dibuja (fondo); último queda al frente.
+ * Toda `image` (fondo fit o pegada) es capa anclada debajo de las entidades editables.
  */
 
+/** Imagen de fondo (inicial fit o pegada): sin interacción con dibujo/hatch. */
+export function isBackgroundImage(obj) {
+  return !!(obj && obj.type === 'image')
+}
+
 export function isAnchoredLayer(obj) {
-  return !!(obj && obj.type === 'image' && obj.fit)
+  return isBackgroundImage(obj)
+}
+
+/**
+ * Garantiza que las imágenes queden debajo del resto al dibujar/exportar,
+ * sin mutar el arreglo original.
+ */
+export function partitionBackgroundFirst(objects) {
+  const list = Array.isArray(objects) ? objects : []
+  const bg = []
+  const rest = []
+  for (const o of list) {
+    if (isBackgroundImage(o)) bg.push(o)
+    else rest.push(o)
+  }
+  return bg.length ? [...bg, ...rest] : list
 }
 
 export function zOrderIds(objects) {
