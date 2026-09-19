@@ -36,6 +36,7 @@ export default function EventoBloquesSection({
   disabled = false,
   compact = false,
   onPickMapActividad,
+  contratoId = null,
 }) {
   const list = Array.isArray(eventos) ? eventos : []
   /** @type {[null|string, Function]} id del bloque con Clara abierta */
@@ -342,6 +343,21 @@ export default function EventoBloquesSection({
                         onChange={(imgs) => patchBloque(bloque.id, { imagenes: imgs })}
                         disabled={disabled}
                         singleLine
+                        contratoId={contratoId}
+                        mapLocation={(() => {
+                          const acts = bloque?.evento_detalle?.actividades || []
+                          const withPk = acts.find((a) => (
+                            a?.ubicacion_pk
+                            || (a?.ubicacion_lat != null && a?.ubicacion_lng != null)
+                          ))
+                          if (!withPk) return null
+                          const lat = Number(withPk.ubicacion_lat)
+                          const lng = Number(withPk.ubicacion_lng)
+                          return {
+                            pkId: String(withPk.ubicacion_pk || '').trim() || undefined,
+                            ...(Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : {}),
+                          }
+                        })()}
                       />
                     </div>
                   </div>

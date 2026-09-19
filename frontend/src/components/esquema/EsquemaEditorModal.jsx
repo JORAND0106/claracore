@@ -119,10 +119,22 @@ import {
   ESQUEMA_MAPA_ZOOM_CON_UBICACION,
   ESQUEMA_MAPA_ZOOM_DEFAULT,
   captureMapAreaToDataUrl,
-  normalizeMapLocation,
   normalizePrintAreaRect,
   printAreaToWorldRect,
 } from './esquemaMapaCapture'
+import {
+  ESQUEMA_MAPA_NORTH_BEARING,
+  ESQUEMA_MAPA_PK_FILL,
+  applyEsquemaPkSelectionStyle,
+  buildEsquemaPlanoFc,
+  ensureEsquemaPkLayers,
+  featurePkId,
+  fitEsquemaMapCamera,
+  normalizeMapContext,
+  queryPkYAbscisaEnPunto,
+} from './esquemaMapaPkLayers'
+import { API_BASE } from '../../apiBase'
+import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
 
 const HATCHES = [
   { id: 0, label: 'Diagonal /' },
@@ -297,11 +309,19 @@ export default function EsquemaEditorModal({
   initialDataUri = null,
   contratoId: contratoIdProp = null,
   iaDoc = null,
-  /** Ubicación del reporte/registro asociado: { lat, lng }. Si falta, el usuario elige el sector. */
+  /** Ubicación / PK del reporte asociado: { lat, lng, pkId?, absInicio?, absFinal? }. */
   mapLocation = null,
   onSave,
   onClose,
 }) {
+  const mapCtx = useMemo(() => normalizeMapContext(mapLocation), [mapLocation])
+  const authToken = useMemo(() => {
+    try {
+      return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
+    } catch {
+      return ''
+    }
+  }, [])
   const canvasRef = useRef(null)
   const wrapRef = useRef(null)
   const mapHostRef = useRef(null)
@@ -418,8 +438,12 @@ export default function EsquemaEditorModal({
   const [mapOpacity, setMapOpacity] = useState(0.72)
   const [mapBasemap, setMapBasemap] = useState('calle')
   const [mapError, setMapError] = useState('')
+  const [mapPickInfo, setMapPickInfo] = useState(null) // { pkId, abscisa, lat, lng }
   const [printAreaSelecting, setPrintAreaSelecting] = useState(false)
   const [printAreaTick, setPrintAreaTick] = useState(0)
+  const mapPlanoFcRef = useRef(null)
+  const mapContratoMetaRef = useRef({})
+  const mapClickBoundRef = useRef(false)
   const rotatePivotRef = useRef(null)
   const mirrorAxisRef = useRef(null)
   const arrayModeRef = useRef('rect')
@@ -764,11 +788,15 @@ export default function EsquemaEditorModal({
         const z0 = zoomRef.current || 1
         const z1 = clampZoom(nextZoom)
         if (Math.abs(z1 - 1) < 0.02) {
-          const loc = normalizeMapLocation(mapLocation)
-          map.easeTo({
-            zoom: loc ? ESQUEMA_MAPA_ZOOM_CON_UBICACION : ESQUEMA_MAPA_ZOOM_DEFAULT,
-            duration: 220,
-          })
+          if (mapPlanoFcRef.current) {
+            fitEsquemaMapCamera(map, mapPlanoFcRef.current, mapCtx, mapContratoMetaRef.current)
+          } else {
+            const loc = mapCtx.hasPoint ? mapCtx : null
+            map.easeTo({
+              zoom: loc ? ESQUEMA_MAPA_ZOOM_CON_UBICACION : ESQUEMA_MAPA_ZOOM_DEFAULT,
+              duration: 220,
+            })
+          }
         } else if (z1 > z0 + 0.01) {
           map.zoomIn({ duration: 180 })
         } else if (z1 < z0 - 0.01) {
@@ -855,6 +883,9 @@ export default function EsquemaEditorModal({
     mapActiveRef.current = false
     setMapActive(false)
     setMapError('')
+    setMapPickInfo(null)
+    mapPlanoFcRef.current = null
+    mapClickBoundRef.current = false
     printAreaSelectingRef.current = false
     setPrintAreaSelecting(false)
     printAreaDraftRef.current = null
@@ -864,7 +895,7 @@ export default function EsquemaEditorModal({
 
   const activateMap = useCallback(() => {
     if (mapActiveRef.current) {
-      setToolHint('Mapa ya activo. Use Paneo para mover el sector, o Guardar para capturar el área de impresión.')
+      setToolHint('Mapa ya activo. Use Paneo para mover/consultar PK; al Guardar capture el área de impresión.')
       return
     }
     panRef.current = { x: 0, y: 0 }
@@ -873,16 +904,48 @@ export default function EsquemaEditorModal({
     setMapError('')
     setMapBasemap('calle')
     setMapOpacity(0.72)
+    setMapPickInfo(null)
     mapActiveRef.current = true
     setMapActive(true)
     setTool('paneo')
     toolRef.current = 'paneo'
-    const loc = normalizeMapLocation(mapLocation)
-    setToolHint(loc
-      ? 'Mapa centrado en la ubicación del reporte. Dibuje encima; Paneo mueve el mapa. Al Guardar seleccione el área de impresión.'
-      : 'Sin ubicación del reporte: use Paneo / zoom para elegir el sector. Al Guardar seleccione el área de impresión.')
+    setToolHint(mapCtx.hasPk
+      ? `Mapa centrado en PK ${mapCtx.pkId}. Paneo para mover/consultar; capas y opacidad en el panel Propiedades.`
+      : mapCtx.hasPoint
+        ? 'Mapa centrado en la ubicación del reporte. Paneo para mover/consultar PK; capas en Propiedades.'
+        : 'Vista general del contrato. Paneo para explorar; capas y opacidad en el panel Propiedades.')
     setPanTick((n) => n + 1)
-  }, [mapLocation])
+  }, [mapCtx])
+
+  const bindMapPkClick = useCallback((map) => {
+    if (!map || mapClickBoundRef.current) return
+    if (!map.getLayer(ESQUEMA_MAPA_PK_FILL)) return
+    const onClick = (e) => {
+      const f = e.features?.[0]
+      const pk = f ? featurePkId(f) : ''
+      const lng = e.lngLat?.lng
+      const lat = e.lngLat?.lat
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
+      const q = queryPkYAbscisaEnPunto(mapPlanoFcRef.current, lng, lat, pk)
+      setMapPickInfo({
+        pkId: q.pkId || pk || '—',
+        abscisa: q.abscisa || '—',
+        lat,
+        lng,
+      })
+      setToolHint(q.pkId || pk
+        ? `PK ${q.pkId || pk}${q.abscisa ? ` · Abs. ${q.abscisa}` : ''}`
+        : (q.abscisa ? `Abs. ${q.abscisa}` : 'Sin PK en este punto'))
+    }
+    map.on('click', ESQUEMA_MAPA_PK_FILL, onClick)
+    map.on('mouseenter', ESQUEMA_MAPA_PK_FILL, () => {
+      try { map.getCanvas().style.cursor = 'pointer' } catch { /* ignore */ }
+    })
+    map.on('mouseleave', ESQUEMA_MAPA_PK_FILL, () => {
+      try { map.getCanvas().style.cursor = '' } catch { /* ignore */ }
+    })
+    mapClickBoundRef.current = true
+  }, [])
 
   const applyMapBasemap = useCallback((mode) => {
     const next = normalizarVistaBasemap(mode)
@@ -891,12 +954,27 @@ export default function EsquemaEditorModal({
     const map = mapRef.current
     if (!map) return
     try {
-      map.setStyle(sicoeBasemapStyleUrl(safe))
+      const url = sicoeBasemapStyleUrl(safe)
+      const cam = {
+        center: map.getCenter(),
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      }
       map.once('style.load', () => {
-        try { applySicoeBasemapTerrain(map, safe) } catch { /* ignore */ }
+        try { map.jumpTo(cam) } catch { /* ignore */ }
+        try {
+          if (mapPlanoFcRef.current) {
+            mapClickBoundRef.current = false
+            ensureEsquemaPkLayers(map, mapPlanoFcRef.current, mapCtx.pkId)
+            bindMapPkClick(map)
+          }
+          applySicoeBasemapTerrain(map, safe)
+        } catch { /* ignore */ }
       })
+      map.setStyle(url)
     } catch { /* ignore */ }
-  }, [])
+  }, [mapCtx.pkId, bindMapPkClick])
 
   const finishPrintAreaCapture = async () => {
     const draft = printAreaDraftRef.current
@@ -946,20 +1024,25 @@ export default function EsquemaEditorModal({
   useEffect(() => {
     if (!mapActive) {
       destroyMap()
+      mapClickBoundRef.current = false
       return undefined
     }
     const host = mapHostRef.current
     if (!host) return undefined
-    const loc = normalizeMapLocation(mapLocation)
-    const center = loc
-      ? [loc.lng, loc.lat]
+    let cancelled = false
+    const ctx = mapCtx
+    const center = ctx.hasPoint
+      ? [ctx.lng, ctx.lat]
       : [ESQUEMA_MAPA_CENTER_DEFAULT.lng, ESQUEMA_MAPA_CENTER_DEFAULT.lat]
-    const zoom = loc ? ESQUEMA_MAPA_ZOOM_CON_UBICACION : ESQUEMA_MAPA_ZOOM_DEFAULT
+    const zoom = ctx.hasPoint || ctx.hasPk
+      ? ESQUEMA_MAPA_ZOOM_CON_UBICACION
+      : ESQUEMA_MAPA_ZOOM_DEFAULT
     const style = sicoeBasemapStyleUrl(mapBasemap)
     const { map, error } = crearMapboxMapSeguro(host, {
       style,
       center,
       zoom,
+      bearing: ESQUEMA_MAPA_NORTH_BEARING,
       preserveDrawingBuffer: true,
       attributionControl: true,
       interactive: true,
@@ -974,10 +1057,37 @@ export default function EsquemaEditorModal({
     try { map.dragRotate.disable() } catch { /* ignore */ }
     try { map.touchZoomRotate.disableRotation() } catch { /* ignore */ }
     try { map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right') } catch { /* ignore */ }
-    const onLoad = () => {
+
+    const loadPlanoYCapas = async () => {
       try { applySicoeBasemapTerrain(map, mapBasemap) } catch { /* ignore */ }
       try { map.resize() } catch { /* ignore */ }
+      if (!contratoId) {
+        setToolHint((h) => h || 'Sin contrato: mapa sin polígonos PK. Use Paneo para elegir el sector.')
+        return
+      }
+      try {
+        const row = await getContratoPlanoGeojson(API_BASE, contratoId, authToken)
+        if (cancelled || mapRef.current !== map) return
+        mapContratoMetaRef.current = {
+          centro_lat: row?.centro_lat,
+          centro_lng: row?.centro_lng,
+        }
+        const planoFc = buildEsquemaPlanoFc(row?.plano_geojson)
+        mapPlanoFcRef.current = planoFc
+        mapClickBoundRef.current = false
+        ensureEsquemaPkLayers(map, planoFc, ctx.pkId)
+        bindMapPkClick(map)
+        fitEsquemaMapCamera(map, planoFc, ctx, {
+          centro_lat: row?.centro_lat,
+          centro_lng: row?.centro_lng,
+        })
+        if (ctx.hasPk) applyEsquemaPkSelectionStyle(map, ctx.pkId)
+      } catch {
+        if (!cancelled) setMapError('No se pudo cargar el plano PK del contrato')
+      }
     }
+
+    const onLoad = () => { loadPlanoYCapas() }
     if (map.loaded()) onLoad()
     else map.once('load', onLoad)
 
@@ -989,12 +1099,14 @@ export default function EsquemaEditorModal({
     if (ro) ro.observe(host)
 
     return () => {
+      cancelled = true
       ro?.disconnect()
       destroyMap()
+      mapClickBoundRef.current = false
     }
-    // Solo al activar/desactivar: cambios de capa van por applyMapBasemap
+    // Solo al activar/desactivar: capa vía applyMapBasemap; contexto se lee al montar
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapActive, destroyMap])
+  }, [mapActive, destroyMap, contratoId, authToken, bindMapPkClick])
 
   const pointerDistance = () => {
     const pts = [...pointersRef.current.values()]
@@ -3826,65 +3938,6 @@ export default function EsquemaEditorModal({
           </div>
         </div>
 
-        {mapActive ? (
-          <div style={{
-            display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
-            padding: '8px 14px', borderBottom: `1px solid ${t.border}`, flexShrink: 0,
-            background: t.bg || ui.wrap,
-          }}>
-            <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted || t.text }}>Capas</span>
-            {SICOE_MAPA_VISTAS_CALLE.map((vista) => (
-              <button
-                key={vista}
-                type="button"
-                title={`Capa ${sicoeBasemapLabel(vista)}`}
-                onClick={() => applyMapBasemap(vista)}
-                style={{
-                  ...ghost(t),
-                  padding: '4px 10px',
-                  fontSize: 'var(--cc-xs)',
-                  fontWeight: 700,
-                  background: mapBasemap === vista ? `${t.primary}22` : 'transparent',
-                  color: mapBasemap === vista ? (t.primary || '#0077B6') : t.text,
-                  borderColor: mapBasemap === vista ? (t.primary || '#0077B6') : t.border,
-                }}
-              >
-                {sicoeBasemapLabel(vista)}
-              </button>
-            ))}
-            <label style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 8,
-              fontSize: 'var(--cc-xs)', color: t.text, fontWeight: 600,
-            }}>
-              Opacidad
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={Math.round(mapOpacity * 100)}
-                onChange={(e) => setMapOpacity(Math.max(0, Math.min(1, Number(e.target.value) / 100)))}
-                style={{ width: 120, accentColor: t.primary || '#0077B6' }}
-                aria-label="Opacidad del mapa de fondo"
-              />
-              <span style={{ minWidth: 36, color: t.textMuted }}>{Math.round(mapOpacity * 100)}%</span>
-            </label>
-            {mapError ? (
-              <span style={{ color: t.danger || '#b91c1c', fontSize: 'var(--cc-xs)' }}>{mapError}</span>
-            ) : (
-              <span style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
-                {printAreaSelecting
-                  ? 'Arrastre el área de impresión sobre el mapa'
-                  : (normalizeMapLocation(mapLocation)
-                    ? 'Centrado en ubicación del reporte · Paneo mueve el mapa'
-                    : 'Elija el sector con Paneo / zoom · luego Guardar')}
-              </span>
-            )}
-            <button type="button" style={{ ...ghost(t), marginLeft: 'auto', fontSize: 'var(--cc-xs)' }} onClick={deactivateMap}>
-              Quitar mapa
-            </button>
-          </div>
-        ) : null}
-
         <div ref={wrapRef} style={{ flex: 1, minHeight: 0, background: ui.wrap, padding: 10, position: 'relative' }}>
           {mapActive ? (
             <div
@@ -4075,6 +4128,24 @@ export default function EsquemaEditorModal({
               </div>
             </div>
           )}
+          {mapActive ? (
+            <MapaPropiedadesPanel
+              t={t}
+              basemap={mapBasemap}
+              opacity={mapOpacity}
+              error={mapError}
+              pickInfo={mapPickInfo}
+              printAreaSelecting={printAreaSelecting}
+              contextHint={mapCtx.hasPk
+                ? `PK ${mapCtx.pkId} resaltado`
+                : mapCtx.hasPoint
+                  ? 'Centrado en ubicación del reporte'
+                  : 'Vista general del contrato'}
+              onBasemap={applyMapBasemap}
+              onOpacity={setMapOpacity}
+              onRemove={deactivateMap}
+            />
+          ) : null}
           {selectedObj && selectedObj.type !== 'image' && (
             <PropiedadesPanel
               t={t}
@@ -4642,6 +4713,111 @@ function SelectModeRadios({
       style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
     >
       {options.map((o) => opt(o.id, o.label))}
+    </div>
+  )
+}
+
+function MapaPropiedadesPanel({
+  t,
+  basemap,
+  opacity,
+  error,
+  pickInfo,
+  printAreaSelecting,
+  contextHint,
+  onBasemap,
+  onOpacity,
+  onRemove,
+}) {
+  return (
+    <div
+      data-testid="esquema-mapa-props"
+      style={{
+        position: 'absolute',
+        top: 18,
+        right: 18,
+        zIndex: 6,
+        width: 240,
+        padding: '10px 12px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bgCard || 'rgba(255,255,255,0.96)',
+        boxShadow: '0 8px 24px rgba(15,23,42,0.14)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
+        Propiedades · Mapa
+      </div>
+      <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>
+        {printAreaSelecting
+          ? 'Arrastre el área de impresión sobre el mapa'
+          : (contextHint || 'Paneo para mover o consultar PK / abscisa')}
+      </div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted }}>Capa</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {SICOE_MAPA_VISTAS_CALLE.map((vista) => (
+          <button
+            key={vista}
+            type="button"
+            title={sicoeBasemapLabel(vista)}
+            onClick={() => onBasemap?.(vista)}
+            style={{
+              ...ghost(t),
+              padding: '4px 8px',
+              fontSize: 11,
+              fontWeight: 700,
+              background: basemap === vista ? `${t.primary}22` : 'transparent',
+              color: basemap === vista ? (t.primary || '#0077B6') : t.text,
+              borderColor: basemap === vista ? (t.primary || '#0077B6') : t.border,
+            }}
+          >
+            {sicoeBasemapLabel(vista)}
+          </button>
+        ))}
+      </div>
+      <label style={{
+        display: 'flex', flexDirection: 'column', gap: 4,
+        fontSize: 11, color: t.textMuted, fontWeight: 600,
+      }}>
+        <span style={{ display: 'flex', justifyContent: 'space-between' }}>
+          Opacidad
+          <span style={{ color: t.text }}>{Math.round((opacity ?? 0) * 100)}%</span>
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round((opacity ?? 0) * 100)}
+          onChange={(e) => onOpacity?.(Math.max(0, Math.min(1, Number(e.target.value) / 100)))}
+          style={{ width: '100%', accentColor: t.primary || '#0077B6' }}
+          aria-label="Opacidad del mapa de fondo"
+        />
+      </label>
+      {pickInfo ? (
+        <div style={{
+          fontSize: 11, lineHeight: 1.4, color: t.text,
+          padding: '6px 8px', borderRadius: 8,
+          background: `${t.primary || '#0077B6'}14`,
+          border: `1px solid ${t.border}`,
+        }}>
+          <div><b>PK</b> {pickInfo.pkId || '—'}</div>
+          <div><b>Abscisa</b> {pickInfo.abscisa || '—'}</div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: t.textMuted }}>
+          Clic en un polígono (modo Paneo) para ver PK y abscisa.
+        </div>
+      )}
+      {error ? (
+        <div style={{ fontSize: 11, color: t.danger || '#b91c1c', fontWeight: 600 }}>{error}</div>
+      ) : null}
+      <button type="button" style={{ ...ghost(t), fontSize: 11, marginTop: 2 }} onClick={onRemove}>
+        Quitar mapa
+      </button>
     </div>
   )
 }

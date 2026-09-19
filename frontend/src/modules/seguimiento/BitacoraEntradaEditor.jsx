@@ -1245,6 +1245,7 @@ export default function BitacoraEntradaEditor({
                 onChange={setEventos}
                 disabled={!editable}
                 compact={grillaCompacta}
+                contratoId={contratoId}
                 onPickMapActividad={(bloqueId, idx) => setMapTarget({ kind: 'actividad', idx, bloqueId })}
               />
             </>
@@ -1445,6 +1446,20 @@ export default function BitacoraEntradaEditor({
                     disabled={!(editable || esNuevo)}
                     entradaId={localId}
                     singleLine
+                    contratoId={contratoId}
+                    mapLocation={(() => {
+                      const withPk = (materiales || []).find((m) => (
+                        m?.ubicacion_pk
+                        || (m?.ubicacion_lat != null && m?.ubicacion_lng != null)
+                      ))
+                      if (!withPk) return null
+                      const lat = Number(withPk.ubicacion_lat)
+                      const lng = Number(withPk.ubicacion_lng)
+                      return {
+                        pkId: String(withPk.ubicacion_pk || '').trim() || undefined,
+                        ...(Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : {}),
+                      }
+                    })()}
                     onUploadPersisted={localId != null ? async (body) => {
                       const row = await api.pegarImagenBitacora(localId, body)
                       setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
@@ -1489,6 +1504,20 @@ export default function BitacoraEntradaEditor({
                     disabled={!(editable || esNuevo)}
                     entradaId={localId}
                     singleLine
+                    contratoId={contratoId}
+                    mapLocation={(() => {
+                      const withPk = (materiales || []).find((m) => (
+                        m?.ubicacion_pk
+                        || (m?.ubicacion_lat != null && m?.ubicacion_lng != null)
+                      ))
+                      if (!withPk) return null
+                      const lat = Number(withPk.ubicacion_lat)
+                      const lng = Number(withPk.ubicacion_lng)
+                      return {
+                        pkId: String(withPk.ubicacion_pk || '').trim() || undefined,
+                        ...(Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : {}),
+                      }
+                    })()}
                     onUploadPersisted={localId != null ? async (body) => {
                       const row = await api.pegarImagenBitacora(localId, body)
                       setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])

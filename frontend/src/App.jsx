@@ -4884,8 +4884,23 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               mapLocation={(() => {
                 const lat = Number(locRegistro?.coordLat ?? registro?.coord_lat)
                 const lng = Number(locRegistro?.coordLng ?? registro?.coord_lng)
-                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
-                return { lat, lng }
+                const pkId = String(
+                  locRegistro?.pkSeleccionado?.pk_id
+                  ?? locRegistro?.pkSeleccionado?.civ
+                  ?? registro?.pk_id_valor
+                  ?? registro?.pk_id
+                  ?? '',
+                ).trim()
+                const absInicio = locRegistro?.absInicio ?? registro?.abs_inicio ?? null
+                const absFinal = locRegistro?.absFinal ?? registro?.abs_final ?? null
+                const hasPoint = Number.isFinite(lat) && Number.isFinite(lng)
+                if (!hasPoint && !pkId) return null
+                return {
+                  ...(hasPoint ? { lat, lng } : {}),
+                  ...(pkId ? { pkId } : {}),
+                  absInicio,
+                  absFinal,
+                }
               })()}
               onClose={() => { setEsquemaOpen(false); setEsquemaInitialDataUri(null) }}
               onSave={guardarEsquemaComoGrafico}
