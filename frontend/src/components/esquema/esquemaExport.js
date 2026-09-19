@@ -3,6 +3,7 @@
  * Única fuente para Guardar desde cualquier módulo (Seguimiento, SicoeObra, Presupuesto).
  */
 import { drawNorthIndicator, landscapeExportSize, objectBoundsOf } from './esquemaGeometry.js'
+import { partitionBackgroundFirst } from './esquemaZOrder.js'
 
 export const EXPORT_MARGIN = 48
 export const EXPORT_TITLE_H = 56
@@ -125,7 +126,7 @@ export function composeEsquemaExport({ title, objects, nodes, drawObject }) {
   ctx.clip()
   ctx.translate(drawX + margin - bb.x * scale, titleH + margin - bb.y * scale)
   ctx.scale(scale, scale)
-  for (const obj of objects || []) {
+  for (const obj of partitionBackgroundFirst(objects || [])) {
     if (obj?.type === 'image' && obj.fit) continue
     drawObject?.(ctx, obj, false, { skipResize: true, zoom: scale })
   }

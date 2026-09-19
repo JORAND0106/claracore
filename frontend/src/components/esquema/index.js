@@ -24,3 +24,9 @@ export {
   imageScaleFactorFromReference,
   scaleSceneByImageReference,
 } from './esquemaImageScale'
+export {
+  isBackgroundImage,
+  isAnchoredLayer,
+  partitionBackgroundFirst,
+  reorderZOrder,
+} from './esquemaZOrder'
