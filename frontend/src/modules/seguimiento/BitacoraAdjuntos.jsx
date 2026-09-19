@@ -23,6 +23,8 @@ export default function BitacoraAdjuntos({
   disabled = false,
   entradaId = null,
   singleLine = true,
+  contratoId = null,
+  mapLocation = null,
 }) {
   const ui = bitacoraSheetStyles(t)
   const [esquemaOpen, setEsquemaOpen] = useState(false)
@@ -352,6 +354,8 @@ export default function BitacoraAdjuntos({
         <EsquemaEditorModal
           t={t}
           title="Esquema · Bitácora"
+          contratoId={contratoId}
+          mapLocation={mapLocation}
           iaDoc={{ ambito: 'bitacora', docKey: `bitacora-${entradaId != null ? entradaId : 'draft'}` }}
           onClose={() => setEsquemaOpen(false)}
           onSave={async (dataUrl) => {

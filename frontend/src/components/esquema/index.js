@@ -31,6 +31,12 @@ export {
   printAreaToWorldRect,
 } from './esquemaMapaCapture'
 export {
+  normalizeMapContext,
+  buildEsquemaPlanoFc,
+  queryPkYAbscisaEnPunto,
+  featurePkId,
+} from './esquemaMapaPkLayers'
+export {
   isBackgroundImage,
   isAnchoredLayer,
   partitionBackgroundFirst,
