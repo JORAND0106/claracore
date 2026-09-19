@@ -264,6 +264,9 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const nivelLabel = params.tipo === 'FILTRO' ? 'Terminado filtro' : 'Subrasante vía'
   const nivelKey = params.tipo === 'FILTRO' ? 'terminado_filtro' : 'subrasante_via'
 
+  const thBase = { ...sheet.th, textAlign: 'center' }
+  const thCalc = { ...thBase, background: CALC_CELL_BG }
+  const tdEdit = { ...sheet.td, padding: 0, minWidth: 88 }
   const tdCalc = {
     ...sheet.td,
     background: CALC_CELL_BG,
@@ -274,45 +277,34 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     whiteSpace: 'nowrap',
     minWidth: 72,
   }
-  const thCalc = {
-    ...sheet.th,
-    background: CALC_CELL_BG,
-    textAlign: 'center',
-  }
-  const thEdit = { ...sheet.th, textAlign: 'center' }
-  const tdEdit = { ...sheet.td, padding: 0, minWidth: 88 }
 
   const layoutMain = isCompact
     ? { display: 'flex', flexDirection: 'column', gap: 12 }
     : { display: 'grid', gridTemplateColumns: 'minmax(200px, 280px) 1fr', gap: 12 }
-
   const layoutCharts = isCompact
     ? { display: 'flex', flexDirection: 'column', gap: 12 }
     : { display: 'grid', gridTemplateColumns: 'minmax(240px, 1fr) minmax(280px, 1.2fr)', gap: 12 }
-
   const layoutTables = isCompact
     ? { display: 'flex', flexDirection: 'column', gap: 12 }
     : { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }
-
   const cardPad = isCompact ? { ...ui.card, padding: 12 } : ui.card
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-      <div
-        style={{
-          ...cardPad,
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 8,
-          alignItems: 'center',
-        }}
-      >
+      <div style={{ ...cardPad, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
         <strong style={{ fontSize: isCompact ? 'var(--cc-base)' : undefined }}>Planillas de Tubería</strong>
         <select
           value={params.tipo}
           disabled={!!planilla && !editable}
           onChange={(e) => setParams((p) => ({ ...p, tipo: e.target.value }))}
-          style={{ ...sheet.cellSelect, border: `1px solid ${sheet.border}`, borderRadius: 6, minWidth: 140, height: 36 }}
+          style={{
+            ...sheet.cellSelect,
+            border: `1px solid ${sheet.border}`,
+            borderRadius: 6,
+            minWidth: 140,
+            height: 36,
+            background: ui.t?.inputBg || '#fff',
+          }}
         >
           {TIPOS_PLANILLA.map((t) => (
             <option key={t.value} value={t.value}>{t.label}</option>
@@ -483,27 +475,17 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               >
                 <div style={sheet.sectionTitle}>Cartera de campo</div>
                 <div
-                  style={{
-                    ...sheet.sheetWrap,
-                    WebkitOverflowScrolling: 'touch',
-                    maxWidth: '100%',
-                  }}
+                  style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}
                   className="cc-topo-table-scroll"
                 >
-                  <table
-                    style={{
-                      ...sheet.sheetTable,
-                      tableLayout: 'auto',
-                      minWidth: CARTERA_MIN_WIDTH,
-                    }}
-                  >
+                  <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: CARTERA_MIN_WIDTH }}>
                     <thead>
                       <tr>
-                        <th style={{ ...thEdit, width: 36 }}>#</th>
-                        <th style={thEdit}>Abscisa</th>
-                        <th style={thEdit}>TN</th>
-                        <th style={thEdit}>{nivelLabel}</th>
-                        <th style={thEdit}>CFE</th>
+                        <th style={{ ...thBase, width: 36 }}>#</th>
+                        <th style={thBase}>Abscisa</th>
+                        <th style={thBase}>TN</th>
+                        <th style={thBase}>{nivelLabel}</th>
+                        <th style={thBase}>CFE</th>
                         <th style={thCalc}>H.Exc</th>
                         <th style={thCalc}>H.Trit</th>
                         <th style={thCalc}>H.Rell</th>
@@ -579,7 +561,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       <thead>
                         <tr>
                           {['Cód', 'Ítem', 'Ud', 'Bruto', 'Desc', 'Neto'].map((h, i) => (
-                            <th key={h} style={i >= 3 ? thCalc : thEdit}>{h}</th>
+                            <th key={h} style={i >= 3 ? thCalc : thBase}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -605,7 +587,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       <thead>
                         <tr>
                           {['Cód', 'Nombre', 'Ítem cant.', 'Cantidad'].map((h, i) => (
-                            <th key={h} style={i === 3 ? thCalc : thEdit}>{h}</th>
+                            <th key={h} style={i === 3 ? thCalc : thBase}>{h}</th>
                           ))}
                         </tr>
                       </thead>
