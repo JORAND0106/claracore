@@ -29,6 +29,9 @@ export {
   normalizeMapLocation,
   normalizePrintAreaRect,
   printAreaToWorldRect,
+  printAreaToScaledWorldRect,
+  geoSpanMetersFromLngLatCorners,
+  haversineMeters,
 } from './esquemaMapaCapture'
 export {
   normalizeMapContext,

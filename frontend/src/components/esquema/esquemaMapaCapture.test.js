@@ -3,10 +3,16 @@ import { describe, it } from 'node:test'
 import {
   ESQUEMA_MAPA_CENTER_DEFAULT,
   captureMapAreaToDataUrl,
+  entityFractionOfMapWidth,
+  geoSpanMetersFromLngLatCorners,
+  haversineMeters,
+  mapCssRectToLngLatCorners,
   normalizeMapLocation,
   normalizePrintAreaRect,
+  printAreaToScaledWorldRect,
   printAreaToWorldRect,
 } from './esquemaMapaCapture.js'
+import { PX_PER_METER, metersToWorld, worldToMeters } from './esquemaGeometry.js'
 
 describe('normalizeMapLocation', () => {
   it('acepta lat/lng y aliases de registro', () => {
@@ -57,6 +63,71 @@ describe('printAreaToWorldRect', () => {
       printAreaToWorldRect({ x: 100, y: 100, w: 200, h: 100 }, { x: 20, y: 40 }, 2),
       { x: 40, y: 30, w: 100, h: 50 },
     )
+  })
+})
+
+describe('escala real del mapa insertado', () => {
+  it('haversine ~111.2 km por grado en ecuador', () => {
+    const d = haversineMeters({ lng: 0, lat: 0 }, { lng: 1, lat: 0 })
+    assert.ok(Math.abs(d - 111319) < 200)
+  })
+
+  it('geoSpanMetersFromLngLatCorners calcula ancho/alto', () => {
+    // ~100 m este-oeste y ~50 m norte-sur cerca del ecuador
+    const degE = 100 / 111319
+    const degN = 50 / 110574
+    const span = geoSpanMetersFromLngLatCorners({
+      nw: { lng: 0, lat: degN },
+      ne: { lng: degE, lat: degN },
+      sw: { lng: 0, lat: 0 },
+      se: { lng: degE, lat: 0 },
+    })
+    assert.ok(span)
+    assert.ok(Math.abs(span.widthM - 100) < 2)
+    assert.ok(Math.abs(span.heightM - 50) < 2)
+  })
+
+  it('printAreaToScaledWorldRect usa PX_PER_METER (no el tamaño en pantalla)', () => {
+    const area = { x: 50, y: 40, w: 400, h: 200 } // píxeles pantalla
+    const span = { widthM: 80, heightM: 40 } // metros reales
+    const placement = printAreaToScaledWorldRect(area, { x: 0, y: 0 }, 1, span)
+    assert.ok(placement)
+    assert.equal(placement.w, metersToWorld(80))
+    assert.equal(placement.h, metersToWorld(40))
+    assert.equal(placement.pxPerMeter, PX_PER_METER)
+    // Centrado sobre el área de impresión en pantalla
+    assert.equal(placement.x + placement.w / 2, 50 + 200)
+    assert.equal(placement.y + placement.h / 2, 40 + 100)
+  })
+
+  it('entidad 20×3 m es proporción correcta sobre mapa de 80×40 m', () => {
+    const mapW = 80
+    const mapH = 40
+    const placement = printAreaToScaledWorldRect(
+      { x: 0, y: 0, w: 400, h: 200 },
+      { x: 0, y: 0 },
+      1,
+      { widthM: mapW, heightM: mapH },
+    )
+    const entW = metersToWorld(20)
+    const entH = metersToWorld(3)
+    assert.equal(entityFractionOfMapWidth(20, mapW), 20 / 80)
+    assert.ok(Math.abs(entW / placement.w - 0.25) < 1e-9)
+    assert.ok(Math.abs(entH / placement.h - 3 / 40) < 1e-9)
+    // worldToMeters es independiente del zoom visual del lienzo
+    assert.equal(worldToMeters(entW), 20)
+    assert.equal(worldToMeters(entH), 3)
+  })
+
+  it('mapCssRectToLngLatCorners usa unproject del mapa', () => {
+    const map = {
+      unproject([x, y]) {
+        return { lng: x / 1000, lat: 4 + y / 1000 }
+      },
+    }
+    const c = mapCssRectToLngLatCorners(map, { x: 0, y: 0, w: 100, h: 50 })
+    assert.deepEqual(c.nw, { lng: 0, lat: 4 })
+    assert.deepEqual(c.se, { lng: 0.1, lat: 4.05 })
   })
 })
 
