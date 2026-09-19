@@ -3,22 +3,34 @@ import assert from 'node:assert/strict'
 import {
   canReorderZOrder,
   isAnchoredLayer,
+  isBackgroundImage,
+  partitionBackgroundFirst,
   reorderZOrder,
   zOrderEquals,
   zOrderIds,
 } from './esquemaZOrder.js'
 
 const bg = { id: 'bg', type: 'image', fit: true }
+const pic = { id: 'pic', type: 'image', fit: false }
 const a = { id: 'a', type: 'rect' }
 const b = { id: 'b', type: 'hatchRegion' }
 const c = { id: 'c', type: 'texto' }
 const d = { id: 'd', type: 'nodo' }
 
 describe('esquemaZOrder', () => {
-  it('ancla solo el fondo raster fit', () => {
+  it('ancla toda imagen (fit o pegada) como fondo', () => {
+    assert.equal(isBackgroundImage(bg), true)
+    assert.equal(isBackgroundImage(pic), true)
     assert.equal(isAnchoredLayer(bg), true)
-    assert.equal(isAnchoredLayer({ id: 'pic', type: 'image', fit: false }), false)
+    assert.equal(isAnchoredLayer(pic), true)
     assert.equal(isAnchoredLayer(a), false)
+  })
+
+  it('partitionBackgroundFirst deja imágenes debajo sin mutar', () => {
+    const scene = [a, pic, b, bg]
+    const next = partitionBackgroundFirst(scene)
+    assert.deepEqual(zOrderIds(next), ['pic', 'bg', 'a', 'b'])
+    assert.deepEqual(zOrderIds(scene), ['a', 'pic', 'b', 'bg'])
   })
 
   it('traer al frente mueve la selección al final y conserva su orden relativo', () => {
@@ -31,15 +43,18 @@ describe('esquemaZOrder', () => {
     assert.deepEqual(zOrderIds(next), ['bg', 'c', 'a', 'b'])
   })
 
-  it('no coloca geometría detrás del fondo raster', () => {
-    const next = reorderZOrder([bg, a, b], ['b'], 'back')
-    assert.equal(next[0].id, 'bg')
-    assert.deepEqual(zOrderIds(next), ['bg', 'b', 'a'])
+  it('no coloca geometría detrás de imágenes de fondo', () => {
+    const next = reorderZOrder([bg, pic, a, b], ['b'], 'back')
+    assert.equal(next[0].type, 'image')
+    assert.equal(next[1].type, 'image')
+    assert.deepEqual(zOrderIds(next), ['bg', 'pic', 'b', 'a'])
   })
 
-  it('ignora el fondo raster si está en la selección', () => {
+  it('ignora imágenes de fondo si están en la selección', () => {
     const next = reorderZOrder([bg, a, b], ['bg', 'a'], 'front')
     assert.deepEqual(zOrderIds(next), ['bg', 'b', 'a'])
+    const nextPic = reorderZOrder([pic, a, b], ['pic', 'a'], 'front')
+    assert.deepEqual(zOrderIds(nextPic), ['pic', 'b', 'a'])
   })
 
   it('no muta si no hay cambio o la selección no es reordenable', () => {
@@ -48,6 +63,7 @@ describe('esquemaZOrder', () => {
     assert.equal(reorderZOrder(scene, [], 'back'), scene)
     assert.equal(reorderZOrder(scene, ['bg'], 'back'), scene)
     assert.equal(canReorderZOrder([bg, a], ['bg']), false)
+    assert.equal(canReorderZOrder([pic, a], ['pic']), false)
     assert.equal(canReorderZOrder([bg, a], ['a']), true)
     assert.equal(zOrderEquals([a, b], [{ id: 'a' }, { id: 'b' }]), true)
   })

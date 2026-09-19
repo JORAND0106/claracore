@@ -80,7 +80,7 @@ import {
   sceneForIa,
   writeLocalIaUsos,
 } from './esquemaIa'
-import { canReorderZOrder, reorderZOrder } from './esquemaZOrder'
+import { canReorderZOrder, partitionBackgroundFirst, reorderZOrder } from './esquemaZOrder'
 import { canOffsetEntity, offsetEntity, signedOffsetDistance } from './esquemaOffset'
 import {
   cotaText,
@@ -553,7 +553,7 @@ export default function EsquemaEditorModal({
         h: h / zGrid,
       }, gridStepWorld(zGrid), zGrid, uiNow)
     }
-    const list = [...objectsRef.current]
+    const list = partitionBackgroundFirst(objectsRef.current)
     if (extraDraft) list.push(extraDraft)
     const hideSel = selectedId
       ? objectsRef.current.find((o) => o.id === selectedId)
@@ -834,20 +834,17 @@ export default function EsquemaEditorModal({
       w: dw,
       h: dh,
       fit: false,
+      background: true,
     }
+    // Capa de fondo: todas las imágenes quedan debajo del dibujo
     const list = objectsRef.current
-    let insertAt = 0
-    while (insertAt < list.length && list[insertAt]?.type === 'image' && list[insertAt]?.fit) {
-      insertAt += 1
-    }
-    objectsRef.current = [
-      ...list.slice(0, insertAt),
-      imgObj,
-      ...list.slice(insertAt),
-    ]
+    const bg = list.filter((o) => o?.type === 'image')
+    const rest = list.filter((o) => o?.type !== 'image')
+    objectsRef.current = [...bg, imgObj, ...rest]
     selectOne(imgObj.id)
     setTool('seleccion')
     toolRef.current = 'seleccion'
+    setSelectMode('mover')
     setDirty(true)
     setPanTick((n) => n + 1)
     return true
@@ -1535,11 +1532,18 @@ export default function EsquemaEditorModal({
     return true
   }
 
-  const hitTest = (p) => {
+  /** Imágenes = fondo: solo seleccionables en Selección / Escalar imagen. */
+  const hitTest = (p, { includeImages = null } = {}) => {
+    const tool = toolRef.current
+    const allowImg = includeImages != null
+      ? !!includeImages
+      : (tool === 'seleccion' || tool === 'escalar-imagen')
     const objs = objectsRef.current
     for (let i = objs.length - 1; i >= 0; i -= 1) {
       const o = objs[i]
-      if (o.type === 'image' && o.fit) continue
+      if (o.type === 'image') {
+        if (!allowImg || o.fit) continue
+      }
       if (pointInObject(p, o)) return o
     }
     return null

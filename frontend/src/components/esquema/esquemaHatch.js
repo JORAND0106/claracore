@@ -92,6 +92,7 @@ function expandBounds(objects, clickX, clickY, pad = 24) {
     maxY = Math.max(maxY, y)
   }
   for (const obj of objects || []) {
+    if (obj.type === 'image') continue
     if (obj.type === 'hatchRegion') {
       include(obj.x, obj.y)
       include(obj.x + obj.w, obj.y + obj.h)
