@@ -144,8 +144,7 @@ const TOOL_GROUPS = [
       { id: 'texto', label: 'Texto', Icon: IconTexto },
       { id: 'tabla', label: 'Tabla', Icon: IconTabla },
       { id: 'hatch', label: 'Relleno hatch (región)', Icon: IconHatch },
-      { id: 'area', label: 'Área de región cerrada', Icon: IconArea },
-      { id: 'cota', label: 'Acotado (línea de cota)', Icon: IconCota },
+      { id: 'cota', label: 'Acotado', Icon: IconCota },
     ],
   },
   {
@@ -1136,6 +1135,22 @@ export default function EsquemaEditorModal({
 
   const placeSpecialCota = (p) => {
     const mode = cotaModeRef.current
+    if (mode === 'area') {
+      const label = createAreaLabelFromClick(objectsRef.current, p.x, p.y, colorRef.current)
+      if (!label) {
+        setToolHint('Área: clic dentro de una región cerrada (rectas y curvas)')
+        return false
+      }
+      pushHistory()
+      const withId = { ...label, id: uid() }
+      objectsRef.current = [...objectsRef.current, withId]
+      selectOne(withId.id)
+      setDirty(true)
+      setLiveMeasure(withId.text)
+      setToolHint('')
+      redraw()
+      return true
+    }
     if (mode === 'radio' || mode === 'diametro') {
       const hit = hitTest(p)
       if (!hit || hit.type !== 'elipse') {
@@ -1824,24 +1839,6 @@ export default function EsquemaEditorModal({
       return
     }
 
-    if (currentTool === 'area') {
-      const label = createAreaLabelFromClick(objectsRef.current, p.x, p.y, colorRef.current)
-      if (label) {
-        pushHistory()
-        const withId = { ...label, id: uid() }
-        objectsRef.current = [...objectsRef.current, withId]
-        selectOne(withId.id)
-        setDirty(true)
-        setLiveMeasure(withId.text)
-        setToolHint('')
-        redraw()
-      } else {
-        setToolHint('No hay una región cerrada bajo el clic')
-      }
-      drawing.current = false
-      return
-    }
-
     if (currentTool === 'cota' && cotaModeRef.current !== 'linear') {
       const placed = placeSpecialCota(p)
       drawing.current = false
@@ -1988,7 +1985,7 @@ export default function EsquemaEditorModal({
       } else {
         setHoverCursor(null)
       }
-      if (TWO_POINT_TOOLS.has(currentTool) || currentTool === 'polilinea' || currentTool === 'seleccion' || currentTool === 'nodo' || currentTool === 'offset' || currentTool === 'girar-escalar' || currentTool === 'espejo' || currentTool === 'matriz' || currentTool === 'area') {
+      if (TWO_POINT_TOOLS.has(currentTool) || currentTool === 'polilinea' || currentTool === 'seleccion' || currentTool === 'nodo' || currentTool === 'offset' || currentTool === 'girar-escalar' || currentTool === 'espejo' || currentTool === 'matriz' || (currentTool === 'cota' && cotaModeRef.current === 'area')) {
         const prevSnap = snapRef.current
         const lastPoly = (
           currentTool === 'polilinea'
@@ -3126,17 +3123,18 @@ export default function EsquemaEditorModal({
       ? 'Matriz polar: defina copias y ángulo, luego clic en el centro (snap activo).'
       : 'Matriz rectangular: defina filas, columnas y espaciado en metros, luego Aplicar.')
     : ''
-  const areaHint = tool === 'area'
-    ? 'Área: clic dentro de una región cerrada (rectas y curvas). El valor queda en m².'
-    : ''
   const cotaKindHint = tool === 'cota' && cotaMode !== 'linear'
     ? (cotaMode === 'angle'
       ? 'Ángulo: dos líneas que se cruzan, o tres puntos (vértice y dos rayos).'
       : cotaMode === 'radio'
         ? 'Radio: clic en un círculo o elipse.'
-        : 'Diámetro: clic en un círculo o elipse.')
+        : cotaMode === 'diametro'
+          ? 'Diámetro: clic en un círculo o elipse.'
+          : cotaMode === 'area'
+            ? 'Área: clic dentro de una región cerrada (rectas y curvas). El valor queda en m².'
+            : '')
     : ''
-  const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || areaHint || cotaKindHint || insertHint
+  const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || insertHint
 
   const pedirGuardar = () => {
     if (busy || !dirty) return
@@ -3275,7 +3273,9 @@ export default function EsquemaEditorModal({
               onChange={(id) => {
                 setCotaMode(id)
                 anglePickRef.current = { lines: [], points: [] }
-                setToolHint('')
+                setToolHint(id === 'area'
+                  ? 'Área: clic dentro de una región cerrada (rectas y curvas). El valor queda en m².'
+                  : '')
               }}
               compact
               name="cc-esquema-cota-mode"
@@ -3285,6 +3285,7 @@ export default function EsquemaEditorModal({
                 { id: 'angle', label: 'Ángulo' },
                 { id: 'radio', label: 'Radio' },
                 { id: 'diametro', label: 'Diámetro' },
+                { id: 'area', label: 'Área' },
               ]}
             />
           ) : null}
@@ -3516,7 +3517,7 @@ export default function EsquemaEditorModal({
                     : tool === 'girar-escalar' ? 'alias'
                       : tool === 'escalar-imagen' ? 'crosshair'
                       : tool === 'texto' ? 'text'
-                        : tool === 'hatch' || tool === 'area' || tool === 'tabla' ? 'cell'
+                        : tool === 'hatch' || tool === 'tabla' || (tool === 'cota' && cotaMode === 'area') ? 'cell'
                           : 'crosshair'),
             }}
             onPointerDown={onPointerDown}
@@ -5556,13 +5557,6 @@ function IconOffset() {
       <path d="M19 5v14" />
       <path d="m16 8 3-3 3 3" />
       <path d="m16 16 3 3 3-3" />
-    </svg>
-  )
-}
-function IconArea() {
-  return (
-    <svg {...iconProps()}>
-      <path d="M4 16 8 6l6 4 6-6v16H4Z" />
     </svg>
   )
 }
