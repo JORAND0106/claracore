@@ -439,6 +439,7 @@ export default function EsquemaEditorModal({
   const [mapBasemap, setMapBasemap] = useState('calle')
   const [mapError, setMapError] = useState('')
   const [mapPickInfo, setMapPickInfo] = useState(null) // { pkId, abscisa, lat, lng }
+  const [mapPropsOpen, setMapPropsOpen] = useState(true)
   const [printAreaSelecting, setPrintAreaSelecting] = useState(false)
   const [printAreaTick, setPrintAreaTick] = useState(0)
   const mapPlanoFcRef = useRef(null)
@@ -884,6 +885,7 @@ export default function EsquemaEditorModal({
     setMapActive(false)
     setMapError('')
     setMapPickInfo(null)
+    setMapPropsOpen(true)
     mapPlanoFcRef.current = null
     mapClickBoundRef.current = false
     printAreaSelectingRef.current = false
@@ -895,6 +897,7 @@ export default function EsquemaEditorModal({
 
   const activateMap = useCallback(() => {
     if (mapActiveRef.current) {
+      setMapPropsOpen(true)
       setToolHint('Mapa ya activo. Use Paneo para mover/consultar PK; al Guardar capture el área de impresión.')
       return
     }
@@ -905,6 +908,7 @@ export default function EsquemaEditorModal({
     setMapBasemap('calle')
     setMapOpacity(0.72)
     setMapPickInfo(null)
+    setMapPropsOpen(true)
     mapActiveRef.current = true
     setMapActive(true)
     setTool('paneo')
@@ -933,6 +937,7 @@ export default function EsquemaEditorModal({
         lat,
         lng,
       })
+      setMapPropsOpen(true)
       setToolHint(q.pkId || pk
         ? `PK ${q.pkId || pk}${q.abscisa ? ` · Abs. ${q.abscisa}` : ''}`
         : (q.abscisa ? `Abs. ${q.abscisa}` : 'Sin PK en este punto'))
@@ -1799,6 +1804,9 @@ export default function EsquemaEditorModal({
     const screen = screenPosFromEvent(e)
     lastScreenRef.current = screen
     pointersRef.current.set(e.pointerId, screen)
+
+    // Clic sobre el lienzo con mapa activo → reabrir panel de propiedades del mapa
+    if (mapActiveRef.current) setMapPropsOpen(true)
 
     // Área de impresión del mapa: marquee en píxeles de pantalla
     if (printAreaSelectingRef.current) {
@@ -3943,6 +3951,7 @@ export default function EsquemaEditorModal({
             <div
               ref={mapHostRef}
               data-testid="esquema-mapa-host"
+              onPointerDown={() => setMapPropsOpen(true)}
               style={{
                 position: 'absolute',
                 left: 10,
@@ -4128,7 +4137,7 @@ export default function EsquemaEditorModal({
               </div>
             </div>
           )}
-          {mapActive ? (
+          {mapActive && mapPropsOpen ? (
             <MapaPropiedadesPanel
               t={t}
               basemap={mapBasemap}
@@ -4136,6 +4145,7 @@ export default function EsquemaEditorModal({
               error={mapError}
               pickInfo={mapPickInfo}
               printAreaSelecting={printAreaSelecting}
+              dodgeCoords={coordPanelOpen}
               contextHint={mapCtx.hasPk
                 ? `PK ${mapCtx.pkId} resaltado`
                 : mapCtx.hasPoint
@@ -4143,6 +4153,7 @@ export default function EsquemaEditorModal({
                   : 'Vista general del contrato'}
               onBasemap={applyMapBasemap}
               onOpacity={setMapOpacity}
+              onClose={() => setMapPropsOpen(false)}
               onRemove={deactivateMap}
             />
           ) : null}
@@ -4725,17 +4736,24 @@ function MapaPropiedadesPanel({
   pickInfo,
   printAreaSelecting,
   contextHint,
+  dodgeCoords = false,
   onBasemap,
   onOpacity,
+  onClose,
   onRemove,
 }) {
+  // Izquierda: no compite con Propiedades de entidad (derecha) ni Biblioteca (abajo-derecha).
+  // Si el panel de coordenadas está abierto (también izquierda-arriba), baja el panel del mapa.
+  const anchor = dodgeCoords
+    ? { left: 18, bottom: 18, top: 'auto' }
+    : { left: 18, top: 18, bottom: 'auto' }
+
   return (
     <div
       data-testid="esquema-mapa-props"
       style={{
         position: 'absolute',
-        top: 18,
-        right: 18,
+        ...anchor,
         zIndex: 6,
         width: 240,
         padding: '10px 12px',
@@ -4749,8 +4767,32 @@ function MapaPropiedadesPanel({
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
-        Propiedades · Mapa
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
+          Propiedades · Mapa
+        </div>
+        <button
+          type="button"
+          title="Cerrar panel"
+          aria-label="Cerrar panel de propiedades del mapa"
+          onClick={onClose}
+          style={{
+            ...ghost(t),
+            padding: 0,
+            width: 26,
+            height: 26,
+            minWidth: 26,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 16,
+            fontWeight: 700,
+            lineHeight: 1,
+            color: t.textMuted || t.text,
+          }}
+        >
+          ×
+        </button>
       </div>
       <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>
         {printAreaSelecting
