@@ -6,6 +6,9 @@ import { drawNorthIndicator, landscapeExportSize, objectBoundsOf } from './esque
 
 export const EXPORT_MARGIN = 48
 export const EXPORT_TITLE_H = 56
+/** Contorno del margen / área imprimible (contenido + margen). */
+export const EXPORT_MARGIN_CONTOUR_COLOR = '#1e293b'
+export const EXPORT_MARGIN_CONTOUR_WIDTH = 2
 
 export function sceneExportBounds(objects) {
   let minX = Infinity
@@ -28,6 +31,35 @@ export function sceneExportBounds(objects) {
     w: Math.max(40, maxX - minX),
     h: Math.max(40, maxY - minY),
   }
+}
+
+/**
+ * Marco del margen en la imagen exportada: delimita el área imprimible
+ * (contenido + EXPORT_MARGIN) sin alterar el tamaño del margen.
+ * El trazo queda inset para no recortarse en el borde del canvas.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{ x: number, y: number, w: number, h: number }} rect
+ * @param {{ color?: string, lineWidth?: number }} [style]
+ */
+export function drawExportMarginContour(ctx, rect, style = {}) {
+  if (!ctx || !rect) return
+  const x = Number(rect.x)
+  const y = Number(rect.y)
+  const w = Number(rect.w)
+  const h = Number(rect.h)
+  if (![x, y, w, h].every(Number.isFinite) || w < 4 || h < 4) return
+  const color = style.color || EXPORT_MARGIN_CONTOUR_COLOR
+  const lineWidth = Math.max(1, Number(style.lineWidth) || EXPORT_MARGIN_CONTOUR_WIDTH)
+  const hw = lineWidth / 2
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = lineWidth
+  ctx.lineJoin = 'miter'
+  ctx.lineCap = 'square'
+  try { ctx.setLineDash([]) } catch { /* ignore */ }
+  ctx.strokeRect(x + hw, y + hw, Math.max(1, w - lineWidth), Math.max(1, h - lineWidth))
+  ctx.restore()
 }
 
 export function drawExportCoordTable(ctx, nodes, x, y, width) {
@@ -130,11 +162,8 @@ export function composeEsquemaExport({ title, objects, nodes, drawObject }) {
     drawObject?.(ctx, obj, false, { skipResize: true, zoom: scale })
   }
   ctx.restore()
-  ctx.save()
-  ctx.strokeStyle = '#334155'
-  ctx.lineWidth = 1.5
-  ctx.strokeRect(drawX + 0.75, titleH + 0.75, drawW - 1.5, drawH - 1.5)
-  ctx.restore()
+  // Contorno del margen / área imprimible (después del clip, sin tapar el dibujo)
+  drawExportMarginContour(ctx, { x: drawX, y: titleH, w: drawW, h: drawH })
   drawNorthIndicator(ctx, drawW, drawH, { x: drawX, y: titleH })
 
   if (rows.length) {
