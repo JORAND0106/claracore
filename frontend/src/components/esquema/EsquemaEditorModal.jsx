@@ -30,6 +30,7 @@ import {
   formatMeters,
   gridStepWorld,
   nearestResizeHandle,
+  objectLocalPoint,
   hitResizeHandle,
   hitTransformHandle,
   metersToWorld,
@@ -535,9 +536,16 @@ export default function EsquemaEditorModal({
         skipResize: (() => {
           const isPasteImg = obj.type === 'image' && !obj.fit
           if (isPasteImg && !multi && toolRef.current === 'seleccion') return false
-          return toolRef.current === 'girar-escalar'
-            || multi
-            || (toolRef.current === 'seleccion' && selectModeRef.current !== 'dimensionar')
+          if (toolRef.current === 'girar-escalar') return true
+          if (multi) return true
+          if (toolRef.current === 'seleccion') {
+            // Tras rotar: manijas sobre la geometría real también en «Mover»
+            // si la entidad ya tiene rotation; Dimensionar siempre las muestra.
+            if (selectModeRef.current === 'dimensionar') return false
+            if (obj.rotation) return false
+            return true
+          }
+          return true
         })(),
         ui: uiNow,
       })
@@ -1398,6 +1406,9 @@ export default function EsquemaEditorModal({
         const hit = hitTest(p)
         selectOne(hit ? hit.id : null)
         if (hit && SHAPE_TOOLS.has(hit.type)) syncMeasureFromObject(hit)
+        setToolHint(hit
+          ? 'Seleccione el punto de giro (clic en el lienzo). Luego gire por ángulo o arrastrando.'
+          : 'Girar: seleccione una entidad y luego indique el punto de giro.')
         drawing.current = false
         redraw()
         return
@@ -1406,7 +1417,7 @@ export default function EsquemaEditorModal({
         p = snapWorldPoint(p)
         rotatePivotRef.current = { x: p.x, y: p.y }
         setRotatePivot(rotatePivotRef.current)
-        setToolHint('')
+        setToolHint('Punto de giro fijado. Arrastre para girar o indique el ángulo en grados.')
         drawing.current = false
         redraw()
         return
@@ -1571,6 +1582,30 @@ export default function EsquemaEditorModal({
             const ls = normalizeLineStyle(hit.lineStyle)
             setLineStyle(ls)
             lineStyleRef.current = ls
+          }
+        }
+        // Manijas sobre geometría rotada (mundo→local) o modo Dimensionar
+        if (hit.type !== 'image' && (
+          selectModeRef.current === 'dimensionar' || hit.rotation
+        )) {
+          selectOne(hit.id)
+          const h = hitResizeHandle(p, hit, handleHitThreshold() + 6)
+          if (h) {
+            dragRef.current = {
+              id: hit.id,
+              mode: 'resize',
+              handle: h.id,
+              origin: cloneScene([hit])[0],
+              lockAspect: !!(e.shiftKey),
+            }
+            pushHistory()
+            drawing.current = true
+            startPt.current = p
+            lastPt.current = p
+            moveGuideRef.current = null
+            snapRef.current = null
+            redraw()
+            return
           }
         }
         // Imagen pegada: manijas de esquina siempre disponibles en selección
@@ -1940,9 +1975,11 @@ export default function EsquemaEditorModal({
           if (imgH) setHoverCursor(cursorForHandle(imgH.id))
           else if (hitTest(raw)) setHoverCursor('move')
           else setHoverCursor('crosshair')
-        } else if (selectModeRef.current === 'dimensionar' && sel && selectedIdsRef.current.size <= 1) {
-          const handle = nearestResizeHandle(raw, sel)
-          setHoverCursor(handle ? cursorForHandle(handle.id) : (hitTest(raw) ? 'nwse-resize' : 'crosshair'))
+        } else if (sel && selectedIdsRef.current.size <= 1 && (
+          selectModeRef.current === 'dimensionar' || sel.rotation
+        )) {
+          const handle = hitResizeHandle(raw, sel, handleHitThreshold() + 6)
+          setHoverCursor(handle ? cursorForHandle(handle.id) : (hitTest(raw) ? 'move' : 'crosshair'))
         } else if (hitTest(raw)) setHoverCursor('move')
         else setHoverCursor('crosshair')
       } else if (currentTool === 'girar-escalar') {
@@ -2018,7 +2055,8 @@ export default function EsquemaEditorModal({
       lastPt.current = pResize
       objectsRef.current = objectsRef.current.map((o) => {
         if (o.id !== d.id) return o
-        const next = applyResizeHandle(d.origin, d.handle, pResize, { lockAspect })
+        const localPt = objectLocalPoint(d.origin, pResize)
+        const next = applyResizeHandle(d.origin, d.handle, localPt, { lockAspect })
         if (next.type === 'cota') next.text = cotaText(next)
         if (SHAPE_TOOLS.has(next.type)) {
           next.label = measureLabelFor(
@@ -2538,13 +2576,17 @@ export default function EsquemaEditorModal({
   const applyRotationDeg = (raw) => {
     const ids = [...selectedIdsRef.current]
     if (!ids.length) return
+    if (!rotatePivotRef.current) {
+      setToolHint('Primero seleccione el punto de giro en el lienzo.')
+      return
+    }
     const n = Number(String(raw ?? '').trim().replace(',', '.'))
     if (!Number.isFinite(n)) return
     const primary = objectsRef.current.find((o) => o.id === (selectedIdRef.current || ids[0]))
     if (!primary || (primary.type === 'image' && primary.fit)) return
     const target = degToRad(n)
     const delta = target - (primary.rotation || 0)
-    const pivot = rotatePivotRef.current || objectCenter(primary)
+    const pivot = rotatePivotRef.current
     pushHistory()
     objectsRef.current = rotateSelectionAroundPivot(objectsRef.current, ids, pivot, delta)
     setDirty(true)
@@ -3059,12 +3101,14 @@ export default function EsquemaEditorModal({
   const canvasLineCount = objectsRef.current.filter(isJoinable).length
   const canJoinLines = selectedLineCount >= 2 || canvasLineCount >= 2
   const rotateHint = (
-    tool === 'girar-escalar' && selectedIds.length
-      ? (rotatePivot
-        ? (selectedIds.length > 1
-          ? 'Punto base fijado. Arrastre para girar todo el conjunto.'
-          : 'Punto base de giro fijado. Arrastre la manija o indique otro punto.')
-        : 'Indique el punto base de giro (clic en el lienzo; puede usar snap)')
+    tool === 'girar-escalar'
+      ? (!selectedIds.length
+        ? 'Girar: seleccione una entidad y luego indique el punto de giro.'
+        : (rotatePivot
+          ? (selectedIds.length > 1
+            ? 'Punto de giro fijado. Arrastre para girar el conjunto, o indique el ángulo en grados.'
+            : 'Punto de giro fijado. Arrastre desde el punto/manija para girar, o indique el ángulo en grados.')
+          : 'Seleccione el punto de giro (clic en el lienzo; puede usar snap). Luego podrá girar por ángulo o arrastrando.'))
       : ''
   )
   const polyHint = tool === 'polilinea'
@@ -3264,10 +3308,10 @@ export default function EsquemaEditorModal({
               onApplyRect={applyArrayRect}
             />
           ) : null}
-          {tool === 'girar-escalar' && selectedIds.length > 0 && (!selectedObj || selectedObj.type !== 'image') ? (
+          {tool === 'girar-escalar' && rotatePivot && selectedIds.length > 0 && (!selectedObj || selectedObj.type !== 'image') ? (
             <DraftPropField
               t={t}
-              label="Giro"
+              label="Ángulo"
               suffix="°"
               initial={Math.round(radToDeg(selectedObj?.rotation || 0) * 10) / 10}
               onCommit={applyRotationDeg}

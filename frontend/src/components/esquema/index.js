@@ -12,6 +12,7 @@ export {
   drawHatchRegion,
   makeHatchPattern,
   preloadHatchRegions,
+  dilateVisitedIntoBarriers,
 } from './esquemaHatch'
 export {
   LINE_STYLE_OPTIONS,

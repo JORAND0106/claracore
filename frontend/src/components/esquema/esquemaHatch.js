@@ -3,6 +3,7 @@
  * desde el clic, de modo que líneas/círculos superpuestos actúan como fronteras.
  */
 import { esquemaEntityInk } from './esquemaTheme.js'
+import { objectWorldPoint } from './esquemaGeometry.js'
 
 function strokeObjectEdges(ctx, obj) {
   if (!obj || obj.type === 'hatchRegion' || obj.type === 'image' || obj.type === 'cota' || obj.type === 'areaLabel') return
@@ -17,8 +18,8 @@ function strokeObjectEdges(ctx, obj) {
   ctx.fillStyle = '#000000'
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
-  // Grosor suficiente para que el flood-fill no “cruce” el trazo
-  ctx.lineWidth = Math.max(3, (obj.width || 3) + 1)
+  // Barrera ≈ contorno visible; la dilatación post-flood cubre el semiancho
+  ctx.lineWidth = Math.max(2, obj.width || 3)
 
   if (obj.type === 'stroke') {
     const pts = obj.points || []
@@ -84,28 +85,36 @@ function expandBounds(objects, clickX, clickY, pad = 24) {
   let maxX = clickX
   let minY = clickY
   let maxY = clickY
+  const include = (x, y) => {
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y)
+  }
   for (const obj of objects || []) {
     if (obj.type === 'hatchRegion') {
-      minX = Math.min(minX, obj.x)
-      maxX = Math.max(maxX, obj.x + obj.w)
-      minY = Math.min(minY, obj.y)
-      maxY = Math.max(maxY, obj.y + obj.h)
+      include(obj.x, obj.y)
+      include(obj.x + obj.w, obj.y + obj.h)
       continue
     }
     if (obj.type === 'stroke' || obj.type === 'polilinea') {
       for (const p of obj.points || []) {
-        minX = Math.min(minX, p.x)
-        maxX = Math.max(maxX, p.x)
-        minY = Math.min(minY, p.y)
-        maxY = Math.max(maxY, p.y)
+        const w = objectWorldPoint(obj, p)
+        include(w.x, w.y)
       }
       continue
     }
     if (obj.x1 == null) continue
-    minX = Math.min(minX, obj.x1, obj.x2)
-    maxX = Math.max(maxX, obj.x1, obj.x2)
-    minY = Math.min(minY, obj.y1, obj.y2)
-    maxY = Math.max(maxY, obj.y1, obj.y2)
+    const corners = [
+      { x: obj.x1, y: obj.y1 },
+      { x: obj.x2, y: obj.y1 },
+      { x: obj.x2, y: obj.y2 },
+      { x: obj.x1, y: obj.y2 },
+    ]
+    for (const c of corners) {
+      const w = objectWorldPoint(obj, c)
+      include(w.x, w.y)
+    }
   }
   return {
     minX: Math.floor(minX - pad),
@@ -113,6 +122,41 @@ function expandBounds(objects, clickX, clickY, pad = 24) {
     maxX: Math.ceil(maxX + pad),
     maxY: Math.ceil(maxY + pad),
   }
+}
+
+/**
+ * Dilata la máscara de flood-fill hacia píxeles-barrera (el trazo grueso),
+ * para que el relleno llegue al contorno visual real sin quedar inset.
+ * No cruza hacia el exterior (solo vecinos ya marcados como barrera).
+ */
+export function dilateVisitedIntoBarriers(visited, data, rw, rh, maxSteps) {
+  const steps = Math.max(0, Math.floor(Number(maxSteps) || 0))
+  if (!visited || !data || !rw || !rh || steps <= 0) return 0
+  let added = 0
+  for (let step = 0; step < steps; step += 1) {
+    const batch = []
+    for (let y = 0; y < rh; y += 1) {
+      for (let x = 0; x < rw; x += 1) {
+        const i = y * rw + x
+        if (!visited[i]) continue
+        const neighbors = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]
+        for (const [nx, ny] of neighbors) {
+          if (nx < 0 || ny < 0 || nx >= rw || ny >= rh) continue
+          const ni = ny * rw + nx
+          if (visited[ni]) continue
+          if (!isBarrier(data, ni * 4)) continue
+          batch.push(ni)
+        }
+      }
+    }
+    if (!batch.length) break
+    for (const ni of batch) {
+      if (visited[ni]) continue
+      visited[ni] = 1
+      added += 1
+    }
+  }
+  return added
 }
 
 function isBarrier(data, idx) {
@@ -200,6 +244,25 @@ export function detectClosedRegionFromClick(objects, worldX, worldY) {
 
   if (count < 8) return null
   if (count > rw * rh * 0.85) return null
+
+  // El trazo-barrera es más grueso que el contorno visible: dilatar hacia la
+  // barrera acerca el relleno al límite real (centro del trazo dibujado).
+  const dilatePx = Math.max(1, Math.ceil(2.0 * scale))
+  const grown = dilateVisitedIntoBarriers(visited, data, rw, rh, dilatePx)
+  count += grown
+  // Recalcular AABB de la máscara tras la dilatación
+  minX = rw; maxX = 0; minY = rh; maxY = 0
+  for (let y = 0; y < rh; y += 1) {
+    for (let x = 0; x < rw; x += 1) {
+      if (!visited[y * rw + x]) continue
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
+  }
+  if (maxX < minX) return null
+
   return { count, scale, ox, oy, minX, maxX, minY, maxY, visited, rw, rh }
 }
 
