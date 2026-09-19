@@ -119,7 +119,10 @@ import {
   ESQUEMA_MAPA_ZOOM_CON_UBICACION,
   ESQUEMA_MAPA_ZOOM_DEFAULT,
   captureMapAreaToDataUrl,
+  geoSpanMetersFromLngLatCorners,
+  mapCssRectToLngLatCorners,
   normalizePrintAreaRect,
+  printAreaToScaledWorldRect,
   printAreaToWorldRect,
 } from './esquemaMapaCapture'
 import {
@@ -863,6 +866,13 @@ export default function EsquemaEditorModal({
       h: dh,
       fit: false,
       background: true,
+      ...(placement?.widthM != null ? {
+        mapGeoScale: {
+          widthM: placement.widthM,
+          heightM: placement.heightM,
+          pxPerMeter: placement.pxPerMeter,
+        },
+      } : {}),
     }
     // Capa de fondo: todas las imágenes quedan debajo del dibujo
     const list = objectsRef.current
@@ -1010,10 +1020,23 @@ export default function EsquemaEditorModal({
         setToolHint('No se pudo capturar el mapa. Intente de nuevo.')
         return
       }
-      const placement = printAreaToWorldRect(area, panRef.current, zoomRef.current || 1)
+      const corners = mapCssRectToLngLatCorners(map, area)
+      const span = corners ? geoSpanMetersFromLngLatCorners(corners) : null
+      const placement = span
+        ? printAreaToScaledWorldRect(area, panRef.current, zoomRef.current || 1, span)
+        : printAreaToWorldRect(area, panRef.current, zoomRef.current || 1)
+      if (!placement) {
+        setToolHint('No se pudo calcular la escala real del mapa. Intente de nuevo.')
+        return
+      }
       deactivateMap()
       await insertBackgroundImageFromDataUri(dataUri, placement)
-      setToolHint('Mapa insertado como fondo. Puede dibujar encima y guardar el esquema.')
+      // Ajusta la vista (zoom visual) al fondo escalado; no altera PX_PER_METER.
+      fitViewToObjects(objectsRef.current.filter((o) => !(o.type === 'image' && o.fit)))
+      const scaleHint = span
+        ? ` Escala real: ${span.widthM.toFixed(1)} m × ${span.heightM.toFixed(1)} m.`
+        : ''
+      setToolHint(`Mapa insertado como fondo.${scaleHint} Puede dibujar encima y guardar el esquema.`)
       setSavePrompt({ title: '' })
     } finally {
       setBusy(false)
