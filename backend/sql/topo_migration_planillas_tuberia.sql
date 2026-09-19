@@ -25,17 +25,18 @@ CREATE TABLE IF NOT EXISTS topo_planillas_tuberia (
     version                INTEGER NOT NULL DEFAULT 1,
     nivel_validacion       INTEGER NOT NULL DEFAULT 0,
     cerrado_at             TIMESTAMPTZ,
-    cerrado_por            UUID,
+    -- usuarios.id en ClaraCore es INTEGER (no UUID)
+    cerrado_por            INTEGER,
     validado_at            TIMESTAMPTZ,
-    validado_por           UUID,
+    validado_por           INTEGER,
     reabierto_at           TIMESTAMPTZ,
-    reabierto_por          UUID,
+    reabierto_por          INTEGER,
     validacion_revocada_at TIMESTAMPTZ,
-    validacion_revocada_por UUID,
+    validacion_revocada_por INTEGER,
     calculo_snapshot       JSONB,
     meta_cabecera          JSONB DEFAULT '{}'::jsonb,
     firmas                 JSONB DEFAULT '{}'::jsonb,
-    creado_por             UUID,
+    creado_por             INTEGER,
     created_at             TIMESTAMPTZ DEFAULT NOW(),
     updated_at             TIMESTAMPTZ DEFAULT NOW()
 );
@@ -105,7 +106,33 @@ CREATE TABLE IF NOT EXISTS topo_planilla_tuberia_auditoria (
     planilla_id     UUID NOT NULL REFERENCES topo_planillas_tuberia(id) ON DELETE CASCADE,
     contrato_id     INTEGER NOT NULL,
     accion          VARCHAR(40) NOT NULL,
-    usuario_id      UUID,
+    usuario_id      INTEGER,
     detalle         JSONB DEFAULT '{}'::jsonb,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Si la tabla ya existía con columnas UUID (error 22P02 al insertar usuario_id=3),
+-- convertirlas a INTEGER. Seguro re-ejecutar.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'topo_planillas_tuberia'
+      AND column_name = 'creado_por' AND data_type = 'uuid'
+  ) THEN
+    ALTER TABLE topo_planillas_tuberia
+      ALTER COLUMN creado_por TYPE INTEGER USING NULL,
+      ALTER COLUMN cerrado_por TYPE INTEGER USING NULL,
+      ALTER COLUMN validado_por TYPE INTEGER USING NULL,
+      ALTER COLUMN reabierto_por TYPE INTEGER USING NULL,
+      ALTER COLUMN validacion_revocada_por TYPE INTEGER USING NULL;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'topo_planilla_tuberia_auditoria'
+      AND column_name = 'usuario_id' AND data_type = 'uuid'
+  ) THEN
+    ALTER TABLE topo_planilla_tuberia_auditoria
+      ALTER COLUMN usuario_id TYPE INTEGER USING NULL;
+  END IF;
+END $$;

@@ -99,6 +99,30 @@ export function payloadFilas(filas, tipo) {
   ))
 }
 
+/** True si hay al menos un dato de campo diligenciado (exportable). */
+export function tieneDatosExportables(filas, detalle) {
+  for (const f of filas || []) {
+    if ([f.abscisa, f.terreno_natural, f.subrasante_via, f.terminado_filtro, f.cota_fondo_excavacion]
+      .some((v) => v !== '' && v != null)) {
+      return true
+    }
+  }
+  const calcFilas = (detalle?.calculo?.cartera?.filas) || []
+  for (const f of calcFilas) {
+    if (!f?.vacio) return true
+  }
+  for (const f of detalle?.filas_campo || []) {
+    if ([f.abscisa, f.terreno_natural, f.subrasante_via, f.terminado_filtro, f.cota_fondo_excavacion]
+      .some((v) => v != null)) {
+      return true
+    }
+  }
+  return false
+}
+
+/** Fondo distintivo de columnas calculadas (mismo criterio Excel/PDF). */
+export const CALC_CELL_BG = '#F2F2F2'
+
 /** Confirma guardado solo si el backend devolvió verified + count. */
 export function confirmarGuardadoCartera(res, expectedCount) {
   if (!res || typeof res !== 'object') {
