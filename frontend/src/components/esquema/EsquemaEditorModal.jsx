@@ -2845,6 +2845,16 @@ export default function EsquemaEditorModal({
       previewDynLive()
       return true
     }
+    if (scaleImgPrompt || scaleImgDraftRef.current) {
+      setScaleImgPrompt(null)
+      scaleImgDraftRef.current = null
+      setScaleImgDraft(null)
+      if (toolRef.current === 'escalar-imagen') {
+        setToolHint('Clic en 1.er extremo de una distancia conocida sobre la imagen')
+      }
+      redraw()
+      return true
+    }
     if (mirrorPrompt || mirrorAxisRef.current) {
       setMirrorPrompt(null)
       mirrorAxisRef.current = null
@@ -2970,7 +2980,7 @@ export default function EsquemaEditorModal({
       setToolHint('Clic en 1.er extremo de una distancia conocida sobre la imagen')
       return undefined
     }
-    if (scaleImgDraftRef.current || scaleImgPrompt) {
+    if (scaleImgDraftRef.current) {
       scaleImgDraftRef.current = null
       setScaleImgDraft(null)
       setScaleImgPrompt(null)
