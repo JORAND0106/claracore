@@ -1,16 +1,9 @@
 """
-Motor único de cálculo — Planillas de Tubería (ALCANTARILLA / FILTRO).
+Motor de cálculo — Planillas de Tubería (ALCANTARILLA / FILTRO).
 
-Fuente de verdad para sección, cartera calculada, cantidades y descuentos.
-Frontend y exportaciones NO recalculan: consumen estos resultados.
-
-Convenciones
-------------
-- Campo (inviolable): abscisa, terreno_natural, nivel_referencia
-  (subrasante_via | terminado_filtro), cota_fondo_excavacion.
-- Calculados: altura_excavacion, altura_triturado, altura_relleno, ancho_geotextil.
-- Altura Relleno (atraque): 2·(θ/2 + esp) / denominador
-  (denominador = segundo número de la relación 1:N).
+Fórmulas alineadas al inventario literal de Planilla_Tuberia_original.xlsm
+(docs/topografia/planillas_tuberia/). Frontend y exportaciones consumen
+estos resultados; no recalculan.
 """
 from __future__ import annotations
 
@@ -20,25 +13,43 @@ from typing import Any, Optional
 TIPOS_PLANILLA = ("ALCANTARILLA", "FILTRO")
 RELACIONES_ATRAQUE = ("1:1", "1:2", "1:3", "1:4", "1:6")
 
+# Rótulos literales del XLSM (sharedStrings / planilla)
+TITULO_ALCANTARILLA = "PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS"
+TITULO_FILTRO = "PLANILLA DE INSTALACIÓN DE FILTROS"
+CODIGO_DOCUMENTO = "INF-ING - TOP - 001 - V0"
+
 ITEMS_CANTIDADES = (
-    {"codigo": "EXC", "nombre": "Excavación", "unidad": "m³"},
-    {"codigo": "TRI", "nombre": "Triturado / cama de atraque", "unidad": "m³"},
-    {"codigo": "REL", "nombre": "Relleno compactado", "unidad": "m³"},
+    {"codigo": "EXC", "nombre": "Excavación Varias", "unidad": "m³"},
+    {"codigo": "EXC_ROC", "nombre": "Excavación Roca", "unidad": "m³"},
+    {"codigo": "TUB", "nombre": "Long Tubería", "unidad": "m"},
+    {"codigo": "TRI", "nombre": "Triturado / Atraque", "unidad": "m³"},
+    {"codigo": "REL", "nombre": "Relleno Gran.", "unidad": "m³"},
     {"codigo": "GEO", "nombre": "Geotextil", "unidad": "m²"},
-    {"codigo": "TUB", "nombre": "Tubería instalada", "unidad": "m"},
 )
 
-# Descuentos vinculados por codigo de ítem (nunca por posición de fila).
-# DESC_TUB descuenta Area2 del relleno (Area1 ya descuenta la fracción embebida).
+# Descuentos específicos (I43:N50). Vinculados por codigo de ítem de cantidad.
 ITEMS_DESCUENTOS_ALCANTARILLA = (
-    {"codigo": "DESC_TUB", "nombre": "Descuento volumen tubería", "unidad": "m³", "item_cant_codigo": "REL"},
-    {"codigo": "DESC_POZO", "nombre": "Descuento pozos / estructuras", "unidad": "m³", "item_cant_codigo": "EXC"},
+    {"codigo": "DESC_A1", "nombre": "Area 1", "unidad": "m³", "item_cant_codigo": "TRI"},
+    {"codigo": "DESC_A2", "nombre": "Area 2", "unidad": "m³", "item_cant_codigo": "REL"},
+    {"codigo": "DESC_OTROS", "nombre": "Otros", "unidad": "m³", "item_cant_codigo": "EXC"},
 )
 
 ITEMS_DESCUENTOS_FILTRO = (
-    {"codigo": "DESC_TUB", "nombre": "Descuento volumen tubería", "unidad": "m³", "item_cant_codigo": "REL"},
-    {"codigo": "DESC_FILT", "nombre": "Descuento material filtro", "unidad": "m³", "item_cant_codigo": "REL"},
+    {"codigo": "DESC_TUB_FILT", "nombre": "Tubería Filtro", "unidad": "m³", "item_cant_codigo": "TRI"},
+    {"codigo": "DESC_OTROS", "nombre": "Otros", "unidad": "m³", "item_cant_codigo": "EXC"},
 )
+
+# Compat: tests / rutas antiguas esperaban DESC_TUB / DESC_POZO / DESC_FILT
+ITEMS_DESCUENTOS_ALCANTARILLA_LEGACY_ALIAS = {
+    "DESC_TUB": "DESC_A2",
+    "DESC_POZO": "DESC_OTROS",
+}
+ITEMS_DESCUENTOS_FILTRO_LEGACY_ALIAS = {
+    "DESC_TUB": "DESC_TUB_FILT",
+    "DESC_FILT": "DESC_OTROS",
+}
+
+ESPESOR_ROCA_M = 0.05  # F46 literal del XLSM
 
 
 def _f(v: Any) -> Optional[float]:
@@ -53,6 +64,14 @@ def _f(v: Any) -> Optional[float]:
         return None
 
 
+def _r3(v: Optional[float]) -> Optional[float]:
+    return round(v, 3) if v is not None else None
+
+
+def _r2(v: Optional[float]) -> Optional[float]:
+    return round(v, 2) if v is not None else None
+
+
 def _r4(v: Optional[float]) -> Optional[float]:
     return round(v, 4) if v is not None else None
 
@@ -60,6 +79,17 @@ def _r4(v: Optional[float]) -> Optional[float]:
 def _avg(vals: list[Optional[float]]) -> Optional[float]:
     xs = [v for v in vals if v is not None]
     return (sum(xs) / len(xs)) if xs else None
+
+
+def _product(vals: list[Optional[float]]) -> Optional[float]:
+    """PRODUCT de Excel: ignora vacíos; si no queda ningún factor → None."""
+    xs = [float(v) for v in vals if v is not None]
+    if not xs:
+        return None
+    p = 1.0
+    for x in xs:
+        p *= x
+    return p
 
 
 def parse_denominador_relacion(relacion: str) -> int:
@@ -70,30 +100,66 @@ def parse_denominador_relacion(relacion: str) -> int:
 
 
 def diametro_externo_m(theta_m: float, espesor_m: float) -> float:
+    """Diámetro externo = θ + 2·esp (equiv. 2·(θ/2+esp))."""
     return float(theta_m) + 2.0 * float(espesor_m)
 
 
+def radio_externo_m(theta_m: float, espesor_m: float) -> float:
+    """r = I13/2 + J13."""
+    return float(theta_m) / 2.0 + float(espesor_m)
+
+
+def area_tuberia_m2(theta_m: float, espesor_m: float) -> float:
+    """K13: =ROUND(PI()*((I13/2)+J13)^2, 3)."""
+    r = radio_externo_m(theta_m, espesor_m)
+    return round(math.pi * r * r, 3)
+
+
 def altura_relleno_atraque_m(theta_m: float, espesor_m: float, relacion: str) -> float:
-    """2·(θ/2 + esp) / denominador."""
+    """E15: =ROUND(2*(I13/2+J13)/N, 3) donde N = denominador de D15."""
     den = parse_denominador_relacion(relacion)
-    return 2.0 * (float(theta_m) / 2.0 + float(espesor_m)) / den
+    return round(2.0 * radio_externo_m(theta_m, espesor_m) / den, 3)
 
 
-def area_1_m2(theta_m: float, espesor_m: float, ancho_excavacion_m: float, relacion: str) -> float:
-    """Área atraque: B·h − (área tubo)/denominador."""
-    h = altura_relleno_atraque_m(theta_m, espesor_m, relacion)
-    den = parse_denominador_relacion(relacion)
-    d_ext = diametro_externo_m(theta_m, espesor_m)
-    area_tubo = math.pi * (d_ext / 2.0) ** 2
-    return max(0.0, float(ancho_excavacion_m) * h - area_tubo / den)
+def area_1_m2(
+    theta_m: float,
+    espesor_m: float,
+    ancho_excavacion_m: float = 0.0,  # no usado (compat firma); segmento circular
+    relacion: str = "1:3",
+    *,
+    altura_relleno_m: Optional[float] = None,
+) -> float:
+    """
+    B15 (segmento circular):
+    r=I13/2+J13; h=E15;
+    ROUND(r²·ACOS((r−h)/r) − (r−h)·√(2rh−h²), 3)
+    """
+    r = radio_externo_m(theta_m, espesor_m)
+    h = float(altura_relleno_m) if altura_relleno_m is not None else altura_relleno_atraque_m(
+        theta_m, espesor_m, relacion
+    )
+    if r <= 0 or h <= 0:
+        return 0.0
+    if h >= 2.0 * r:
+        return area_tuberia_m2(theta_m, espesor_m)
+    h = min(h, 2.0 * r)
+    # Evitar dominio inválido de acos
+    arg = max(-1.0, min(1.0, (r - h) / r))
+    seg = r * r * math.acos(arg) - (r - h) * math.sqrt(max(0.0, 2.0 * r * h - h * h))
+    return max(0.0, round(seg, 3))
 
 
-def area_2_m2(theta_m: float, espesor_m: float, relacion: str) -> float:
-    """Fracción del tubo sobre el atraque."""
-    den = parse_denominador_relacion(relacion)
-    d_ext = diametro_externo_m(theta_m, espesor_m)
-    area_tubo = math.pi * (d_ext / 2.0) ** 2
-    return max(0.0, area_tubo * (1.0 - 1.0 / den))
+def area_2_m2(
+    theta_m: float,
+    espesor_m: float,
+    relacion: str = "1:3",
+    *,
+    area_1: Optional[float] = None,
+) -> float:
+    """C15: =IFERROR(ROUND(K13−B15, 3), \"\")."""
+    a_tub = area_tuberia_m2(theta_m, espesor_m)
+    a1 = float(area_1) if area_1 is not None else area_1_m2(theta_m, espesor_m, 0.0, relacion)
+    return max(0.0, round(a_tub - a1, 3))
 
 
 def calcular_seccion(
@@ -103,6 +169,7 @@ def calcular_seccion(
     espesor_m: float,
     ancho_excavacion_m: float,
     relacion_atraque: str,
+    cama_triturado_m: float = 0.0,
 ) -> dict[str, Any]:
     tipo_u = (tipo or "ALCANTARILLA").upper()
     if tipo_u not in TIPOS_PLANILLA:
@@ -110,20 +177,33 @@ def calcular_seccion(
     theta = float(diametro_m)
     esp = float(espesor_m)
     b = float(ancho_excavacion_m)
+    cama = float(cama_triturado_m or 0.0)
     if theta <= 0 or esp < 0 or b <= 0:
         raise ValueError("Diámetro > 0, espesor ≥ 0 y ancho excavación > 0.")
+    if cama < 0:
+        raise ValueError("Cama triturado ≥ 0.")
     h = altura_relleno_atraque_m(theta, esp, relacion_atraque)
+    a_tub = area_tuberia_m2(theta, esp)
+    a1 = area_1_m2(theta, esp, b, relacion_atraque, altura_relleno_m=h)
+    a2 = area_2_m2(theta, esp, relacion_atraque, area_1=a1)
     return {
         "tipo": tipo_u,
+        "titulo": TITULO_FILTRO if tipo_u == "FILTRO" else TITULO_ALCANTARILLA,
+        "codigo_documento": CODIGO_DOCUMENTO,
+        "tipo_red": "FILTRO" if tipo_u == "FILTRO" else "ALCANTARILLA",
         "diametro_m": theta,
         "espesor_m": esp,
         "diametro_externo_m": diametro_externo_m(theta, esp),
+        "radio_externo_m": round(radio_externo_m(theta, esp), 6),
         "ancho_excavacion_m": b,
         "relacion_atraque": relacion_atraque,
         "denominador_atraque": parse_denominador_relacion(relacion_atraque),
-        "altura_relleno_m": round(h, 6),
-        "area_1_m2": round(area_1_m2(theta, esp, b, relacion_atraque), 6),
-        "area_2_m2": round(area_2_m2(theta, esp, relacion_atraque), 6),
+        "altura_relleno_m": h,
+        "cama_triturado_m": round(cama, 6) if tipo_u == "ALCANTARILLA" else 0.0,
+        "etiqueta_cama": "Cama Triturado" if tipo_u == "ALCANTARILLA" else "",
+        "area_tuberia_m2": a_tub,
+        "area_1_m2": a1,
+        "area_2_m2": a2,
     }
 
 
@@ -139,39 +219,77 @@ def _nivel_ref(fila: dict, tipo: str) -> Optional[float]:
     return _f(v)
 
 
-def calcular_fila_cartera(fila_campo: dict, seccion: dict) -> dict[str, Any]:
+def _cota_lomo_o_terminado(fila: dict, tipo: str) -> Optional[float]:
+    """Columna E: Cota Lomo (ALC) o Terminado Filtro (FIL)."""
+    if tipo == "FILTRO":
+        return _nivel_ref(fila, tipo)
+    v = fila.get("cota_lomo")
+    if v in (None, ""):
+        v = fila.get("terminado_filtro")
+    return _f(v)
+
+
+def calcular_fila_cartera(
+    fila_campo: dict,
+    seccion: dict,
+    *,
+    h_trit_prev: Optional[float] = None,
+) -> dict[str, Any]:
+    """
+    Fórmulas G/H/I/J del XLSM (filas 17–36):
+    G = C−F
+    H ALC = $E$15+$F$15; FIL = E−F
+    I ALC = G−($E$15+$F$15); FIL = 0
+    J ALC = \"\"; FIL = AVERAGE(Hprev:H)·2+$G$15·2 (desde 2ª fila con dato)
+    """
     tipo = seccion["tipo"]
     abscisa = _f(fila_campo.get("abscisa"))
     tn = _f(fila_campo.get("terreno_natural"))
     cfe = _f(fila_campo.get("cota_fondo_excavacion"))
+    sub = _f(fila_campo.get("subrasante_via")) if tipo == "ALCANTARILLA" else None
+    term = _cota_lomo_o_terminado(fila_campo, tipo)
     nivel = _nivel_ref(fila_campo, tipo)
     h_atr = float(seccion["altura_relleno_m"])
-    d_ext = float(seccion["diametro_externo_m"])
+    cama = float(seccion.get("cama_triturado_m") or 0.0)
     b = float(seccion["ancho_excavacion_m"])
 
-    vacio = all(v is None for v in (abscisa, tn, cfe, nivel))
-    h_exc = (tn - cfe) if tn is not None and cfe is not None else None
-    h_trit = None if vacio else h_atr
+    vacio = all(v is None for v in (abscisa, tn, cfe, nivel, term, sub))
 
+    h_exc = None
+    if abscisa is not None and abscisa != 0 and tn is not None and cfe is not None:
+        h_exc = tn - cfe
+    elif tn is not None and cfe is not None and abscisa is None:
+        # fila parcial: aún así TN−CFE si hay cotas
+        h_exc = tn - cfe
+
+    h_trit = None
     h_rel = None
-    if cfe is not None and nivel is not None:
-        h_rel = nivel - (cfe + d_ext)
-
     ancho_geo = None
+
     if h_exc is not None:
-        if tipo == "FILTRO":
-            extra = (h_trit or 0.0) + max(h_rel or 0.0, 0.0)
-            ancho_geo = b + 2.0 * extra
+        if tipo == "ALCANTARILLA":
+            h_trit = h_atr + cama
+            h_rel = h_exc - (h_atr + cama)
+            ancho_geo = None  # ALC: vacío en Excel
         else:
-            ancho_geo = b + 2.0 * h_exc
+            # FILTRO: H = E−F; I = 0; J = avg*2 + B*2
+            if term is not None and cfe is not None:
+                h_trit = term - cfe
+            h_rel = 0.0
+            if h_trit is not None:
+                if h_trit_prev is not None:
+                    ancho_geo = ((h_trit_prev + h_trit) / 2.0) * 2.0 + b * 2.0
+                else:
+                    ancho_geo = None  # J17 vacío en plantilla
 
     return {
         "orden": int(fila_campo.get("orden") or 0),
         "abscisa": abscisa,
         "terreno_natural": tn,
         "nivel_referencia": nivel,
-        "subrasante_via": _f(fila_campo.get("subrasante_via")) if tipo == "ALCANTARILLA" else None,
-        "terminado_filtro": _f(fila_campo.get("terminado_filtro")) if tipo == "FILTRO" else None,
+        "subrasante_via": sub,
+        "terminado_filtro": term if tipo == "FILTRO" else None,
+        "cota_lomo": term if tipo == "ALCANTARILLA" else None,
         "cota_fondo_excavacion": cfe,
         "altura_excavacion": _r4(h_exc),
         "altura_triturado": _r4(h_trit),
@@ -185,7 +303,13 @@ def calcular_fila_cartera(fila_campo: dict, seccion: dict) -> dict[str, Any]:
 
 
 def calcular_cartera(filas_campo: list[dict], seccion: dict) -> dict[str, Any]:
-    filas = [calcular_fila_cartera(f, seccion) for f in (filas_campo or [])]
+    filas: list[dict] = []
+    h_prev: Optional[float] = None
+    for f in filas_campo or []:
+        row = calcular_fila_cartera(f, seccion, h_trit_prev=h_prev)
+        filas.append(row)
+        if row.get("altura_triturado") is not None and not row.get("vacio"):
+            h_prev = row["altura_triturado"]
     activas = [f for f in filas if not f.get("vacio")]
     abs_vals = [f["abscisa"] for f in activas if f.get("abscisa") is not None]
     longitud = abs(max(abs_vals) - min(abs_vals)) if len(abs_vals) >= 2 else None
@@ -193,7 +317,7 @@ def calcular_cartera(filas_campo: list[dict], seccion: dict) -> dict[str, Any]:
         "filas": filas,
         "totales": {
             "n_filas": len(activas),
-            "longitud_m": _r4(longitud),
+            "longitud_m": _r4(longitud),  # B41 = MAX−MIN
             "prom_altura_excavacion": _r4(_avg([f["altura_excavacion"] for f in activas])),
             "prom_altura_triturado": _r4(_avg([f["altura_triturado"] for f in activas])),
             "prom_altura_relleno": _r4(_avg([f["altura_relleno"] for f in activas])),
@@ -204,14 +328,22 @@ def calcular_cartera(filas_campo: list[dict], seccion: dict) -> dict[str, Any]:
     }
 
 
-def _formula(codigo: str, tipo: str) -> str:
-    return {
-        "EXC": "B · prom(h_exc) · L",
-        "TRI": "Area1 · L",
-        "REL": "B · prom(h_relleno) · L" + (" (mín. Area2·L en FILTRO)" if tipo == "FILTRO" else ""),
-        "GEO": "prom(ancho_geotextil) · L",
-        "TUB": "L (abscisa_final − abscisa_inicial)",
-    }.get(codigo, "")
+def _normalize_manual_descuentos(
+    tipo: str, descuentos_manuales: Optional[list[dict]]
+) -> dict[str, float]:
+    alias = (
+        ITEMS_DESCUENTOS_FILTRO_LEGACY_ALIAS
+        if tipo == "FILTRO"
+        else ITEMS_DESCUENTOS_ALCANTARILLA_LEGACY_ALIAS
+    )
+    out: dict[str, float] = {}
+    for d in descuentos_manuales or []:
+        cod = str(d.get("codigo") or "")
+        cod = alias.get(cod, cod)
+        cant = _f(d.get("cantidad"))
+        if cod and cant is not None:
+            out[cod] = float(cant)
+    return out
 
 
 def calcular_cantidades_y_descuentos(
@@ -220,73 +352,149 @@ def calcular_cantidades_y_descuentos(
     *,
     descuentos_manuales: Optional[list[dict]] = None,
 ) -> dict[str, Any]:
+    """
+    Resumen B45:H50 y Descuentos I45:N50 del XLSM.
+    Cantidad = ROUND(PRODUCT(Long,Ancho,Espesor),2) − Desc (solo Triturado).
+    """
     tipo = seccion["tipo"]
     tot = cartera.get("totales") or {}
     L = float(tot.get("longitud_m") or 0.0)
     B = float(seccion["ancho_excavacion_m"])
     a1 = float(seccion["area_1_m2"])
     a2 = float(seccion["area_2_m2"])
+    a_tub = float(seccion["area_tuberia_m2"])
     h_exc = float(tot.get("prom_altura_excavacion") or 0.0)
-    h_rel = max(float(tot.get("prom_altura_relleno") or 0.0), 0.0)
+    h_trit = float(tot.get("prom_altura_triturado") or 0.0)
+    h_rel = float(tot.get("prom_altura_relleno") or 0.0)
     ancho_geo = float(tot.get("prom_ancho_geotextil") or 0.0)
 
-    vols = {
-        "EXC": B * h_exc * L,
-        "TRI": a1 * L,
-        "REL": max(B * h_rel * L, a2 * L) if tipo == "FILTRO" else B * h_rel * L,
-        "GEO": ancho_geo * L,
-        "TUB": L,
-    }
+    # Descuentos dimensionales automáticos
+    if tipo == "ALCANTARILLA":
+        desc_a1 = _r2(_product([L, a1])) or 0.0  # N46 ≈ L·Area1 (Ancho vacío)
+        # PRODUCT(K46:M46) with K=L, L empty, M=Area1 → L*Area1
+        desc_a2 = _r2(_product([L, a2])) or 0.0
+        desc_tub_filt = 0.0
+        desc_tri = desc_a1  # G48 = N46
+        desc_rel = desc_a2  # G49 = N47 (mostrado; H49 NO lo resta)
+    else:
+        desc_a1 = 0.0
+        desc_a2 = 0.0
+        desc_tub_filt = _r2(_product([L, a_tub])) or 0.0  # N45
+        desc_tri = desc_tub_filt  # G48 = N45
+        desc_rel = 0.0
+
+    manual = _normalize_manual_descuentos(tipo, descuentos_manuales)
+    desc_otros = float(manual.get("DESC_OTROS") or 0.0)
+
+    def _row(codigo: str, long: Optional[float], ancho: Optional[float],
+             espesor: Optional[float], desc: float = 0.0, restar_desc: bool = False) -> dict:
+        meta = next(it for it in ITEMS_CANTIDADES if it["codigo"] == codigo)
+        prod = _product([long, ancho, espesor])
+        bruto = _r2(prod) if prod is not None else 0.0
+        if bruto is None:
+            bruto = 0.0
+        cant = round(bruto - desc, 2) if restar_desc else bruto
+        return {
+            **meta,
+            "long": _r4(long),
+            "ancho": _r4(ancho),
+            "espesor": _r4(espesor),
+            "desc": round(desc, 2),
+            "cantidad": round(cant, 2),
+            "bruto": round(bruto, 2),
+            "formula": f"ROUND(PRODUCT({long},{ancho},{espesor}),2)"
+            + (f"-{desc}" if restar_desc and desc else ""),
+        }
+
     cantidades = [
-        {**it, "cantidad": round(vols[it["codigo"]], 4), "formula": _formula(it["codigo"], tipo)}
-        for it in ITEMS_CANTIDADES
+        _row("EXC", L, B, h_exc),
+        _row("EXC_ROC", L, B, ESPESOR_ROCA_M),
+        _row("TUB", L, None, None),  # PRODUCT solo Long → L
+        _row("TRI", L, B, h_trit, desc=desc_tri, restar_desc=True),
+        _row("REL", L, B, h_rel, desc=desc_rel, restar_desc=False),
+        _row("GEO", L, ancho_geo if ancho_geo else None, None),
     ]
 
     catalogo = ITEMS_DESCUENTOS_FILTRO if tipo == "FILTRO" else ITEMS_DESCUENTOS_ALCANTARILLA
-    manual = {
-        str(d.get("codigo")): _f(d.get("cantidad"))
-        for d in (descuentos_manuales or [])
-        if d.get("codigo")
-    }
-    descuentos = []
+    descuentos: list[dict] = []
     for it in catalogo:
         cod = it["codigo"]
-        if cod == "DESC_TUB":
-            cant = a2 * L
-        elif cod in manual and manual[cod] is not None:
-            cant = float(manual[cod])
+        if cod == "DESC_A1":
+            cant, long, ancho, esp = desc_a1, L, None, a1
+        elif cod == "DESC_A2":
+            cant, long, ancho, esp = desc_a2, L, None, a2
+        elif cod == "DESC_TUB_FILT":
+            cant, long, ancho, esp = desc_tub_filt, L, None, a_tub
+        elif cod == "DESC_OTROS":
+            cant, long, ancho, esp = desc_otros, None, None, None
         else:
-            cant = 0.0
-        descuentos.append({**it, "cantidad": round(float(cant), 4)})
+            cant, long, ancho, esp = float(manual.get(cod) or 0.0), None, None, None
+        descuentos.append({
+            **it,
+            "long": _r4(long),
+            "ancho": _r4(ancho),
+            "espesor": _r4(esp),
+            "cantidad": round(float(cant), 2),
+        })
 
+    # Netos: para TRI el desc ya está en cantidad; para REL el desc XLSM no se resta.
     netos = []
     for c in cantidades:
-        resta = sum(d["cantidad"] for d in descuentos if d.get("item_cant_codigo") == c["codigo"])
+        if c["codigo"] == "TRI":
+            descuento = c["desc"]
+            bruto = c["bruto"]
+            neto = c["cantidad"]
+        elif c["codigo"] == "REL":
+            # Excel muestra Desc pero no lo resta de Cantidad
+            descuento = 0.0
+            bruto = c["cantidad"]
+            neto = c["cantidad"]
+        elif c["codigo"] == "EXC":
+            descuento = desc_otros
+            bruto = c["cantidad"]
+            neto = round(bruto - descuento, 2)
+        else:
+            descuento = 0.0
+            bruto = c["cantidad"]
+            neto = c["cantidad"]
         netos.append({
             "codigo": c["codigo"],
             "nombre": c["nombre"],
             "unidad": c["unidad"],
-            "bruto": c["cantidad"],
-            "descuentos": round(resta, 4),
-            "neto": round(c["cantidad"] - resta, 4),
+            "long": c.get("long"),
+            "ancho": c.get("ancho"),
+            "espesor": c.get("espesor"),
+            "bruto": bruto,
+            "descuentos": round(descuento, 2),
+            "neto": round(neto, 2),
         })
     return {"cantidades": cantidades, "descuentos": descuentos, "netos": netos}
 
 
 def perfil_longitudinal(cartera: dict, seccion: dict) -> dict[str, Any]:
+    """Series del ScatterChart: TN / Terminado Filtro|Cota Lomo / Cota Fondo."""
+    etiqueta = "Terminado Filtro" if seccion["tipo"] == "FILTRO" else "Cota Lomo"
     series = {
         "abscisas": [],
         "terreno_natural": [],
         "nivel_referencia": [],
         "cota_fondo_excavacion": [],
-        "etiqueta_nivel": "Terminado filtro" if seccion["tipo"] == "FILTRO" else "Subrasante vía",
+        "etiqueta_nivel": etiqueta,
+        "titulo_grafico": "Perfil Longitudinal de Tubería",
+        "eje_x": "longitud de tramo",
+        "eje_y": "cota",
     }
     for f in cartera.get("filas") or []:
         if f.get("vacio"):
             continue
         series["abscisas"].append(f.get("abscisa"))
         series["terreno_natural"].append(f.get("terreno_natural"))
-        series["nivel_referencia"].append(f.get("nivel_referencia"))
+        if seccion["tipo"] == "FILTRO":
+            series["nivel_referencia"].append(f.get("terminado_filtro") or f.get("nivel_referencia"))
+        else:
+            series["nivel_referencia"].append(
+                f.get("cota_lomo") or f.get("subrasante_via") or f.get("nivel_referencia")
+            )
         series["cota_fondo_excavacion"].append(f.get("cota_fondo_excavacion"))
     return series
 
@@ -298,6 +506,8 @@ def seccion_tipica_params(seccion: dict, cartera: dict) -> dict[str, Any]:
         "diametro_externo_m": seccion["diametro_externo_m"],
         "ancho_excavacion_m": seccion["ancho_excavacion_m"],
         "altura_relleno_m": seccion["altura_relleno_m"],
+        "cama_triturado_m": seccion.get("cama_triturado_m"),
+        "area_tuberia_m2": seccion.get("area_tuberia_m2"),
         "area_1_m2": seccion["area_1_m2"],
         "area_2_m2": seccion["area_2_m2"],
         "prom_altura_excavacion": tot.get("prom_altura_excavacion"),
@@ -305,6 +515,7 @@ def seccion_tipica_params(seccion: dict, cartera: dict) -> dict[str, Any]:
         "prom_altura_relleno": tot.get("prom_altura_relleno"),
         "prom_ancho_geotextil": tot.get("prom_ancho_geotextil"),
         "relacion_atraque": seccion["relacion_atraque"],
+        "titulo_panel": "GRAFICO",
     }
 
 
@@ -317,6 +528,7 @@ def calcular_planilla_completa(
     relacion_atraque: str,
     filas_campo: list[dict],
     descuentos_manuales: Optional[list[dict]] = None,
+    cama_triturado_m: float = 0.0,
 ) -> dict[str, Any]:
     seccion = calcular_seccion(
         tipo=tipo,
@@ -324,6 +536,7 @@ def calcular_planilla_completa(
         espesor_m=espesor_m,
         ancho_excavacion_m=ancho_excavacion_m,
         relacion_atraque=relacion_atraque,
+        cama_triturado_m=cama_triturado_m,
     )
     cartera = calcular_cartera(filas_campo, seccion)
     cant = calcular_cantidades_y_descuentos(
@@ -346,6 +559,8 @@ def construir_fila_consolidado(planilla: dict, calculo: dict) -> dict[str, Any]:
     sec = calculo.get("seccion") or {}
     tot = (calculo.get("cartera") or {}).get("totales") or {}
     netos = {n["codigo"]: n for n in (calculo.get("netos") or [])}
+    vol_exc = (netos.get("EXC") or {}).get("neto") or 0.0
+    vol_roc = (netos.get("EXC_ROC") or {}).get("neto") or 0.0
     return {
         "c01_planilla_id": cab.get("id"),
         "c02_tipo": sec.get("tipo") or cab.get("tipo"),
@@ -359,7 +574,7 @@ def construir_fila_consolidado(planilla: dict, calculo: dict) -> dict[str, Any]:
         "c10_espesor_m": sec.get("espesor_m"),
         "c11_relacion_atraque": sec.get("relacion_atraque"),
         "c12_ancho_excavacion_m": sec.get("ancho_excavacion_m"),
-        "c13_vol_excavacion_m3": (netos.get("EXC") or {}).get("neto"),
+        "c13_vol_excavacion_m3": round(float(vol_exc) + float(vol_roc), 4),
         "c14_vol_triturado_m3": (netos.get("TRI") or {}).get("neto"),
         "c15_vol_relleno_m3": (netos.get("REL") or {}).get("neto"),
         "c16_area_geotextil_m2": (netos.get("GEO") or {}).get("neto"),
@@ -390,10 +605,9 @@ def validar_fila_campo(fila: dict, tipo: str) -> list[dict]:
     if cfe is None:
         avisos.append({"severity": "error", "campo": "cota_fondo_excavacion", "msg": "CFE requerida",
                        "detalle": "Indique cota fondo de excavación."})
-    if nivel is None:
-        label = "Terminado filtro" if tipo_u == "FILTRO" else "Subrasante"
-        avisos.append({"severity": "info", "campo": "nivel_referencia", "msg": f"{label} vacío",
-                       "detalle": f"Sin {label} no se calcula altura de relleno ni geotextil completo."})
+    if nivel is None and tipo_u == "FILTRO":
+        avisos.append({"severity": "info", "campo": "nivel_referencia", "msg": "Terminado Filtro vacío",
+                       "detalle": "Sin Terminado Filtro no se calcula Altura Triturado (E−F)."})
     if tn is not None and cfe is not None and cfe > tn:
         avisos.append({"severity": "error", "campo": "cota_fondo_excavacion", "msg": "CFE > TN",
                        "detalle": "La cota fondo no puede superar el terreno natural."})

@@ -1,0 +1,537 @@
+# Inventario Planilla Tubería — Planilla_Tuberia_original.xlsm
+
+Hojas (3): Tbl_Auxiliares, planilla, Resumen_BASE
+
+## Hoja: Tbl_Auxiliares  (state=veryHidden, 28×7)
+- Merges (0): 
+- Fórmulas: 99
+- Validaciones: 0
+- Formato condicional: 0
+- Gráficos: 0
+- Imágenes: 0
+
+### Rótulos / textos (literal)
+- B3: 'APOYO GRÁFICO PERFIL (no editar - se alimenta de la hoja planilla)'  nf='General'
+- B4: 'ABSCISA'  nf='General'
+
+### Fórmulas (literal)
+- C4: =planilla!$C$16
+- D4: =planilla!$E$16
+- E4: =planilla!$F$16
+- B5: =IF(planilla!$B17="",NA(),planilla!$B17)
+- C5: =IF(OR(planilla!$B17="",planilla!C17=""),NA(),planilla!C17)
+- D5: =IF(OR(planilla!$B17="",planilla!E17=""),NA(),planilla!E17)
+- E5: =IF(OR(planilla!$B17="",planilla!F17=""),NA(),planilla!F17)
+- B6: =IF(planilla!$B18="",NA(),planilla!$B18)
+- C6: =IF(OR(planilla!$B18="",planilla!C18=""),NA(),planilla!C18)
+- D6: =IF(OR(planilla!$B18="",planilla!E18=""),NA(),planilla!E18)
+- E6: =IF(OR(planilla!$B18="",planilla!F18=""),NA(),planilla!F18)
+- B7: =IF(planilla!$B19="",NA(),planilla!$B19)
+- C7: =IF(OR(planilla!$B19="",planilla!C19=""),NA(),planilla!C19)
+- D7: =IF(OR(planilla!$B19="",planilla!E19=""),NA(),planilla!E19)
+- E7: =IF(OR(planilla!$B19="",planilla!F19=""),NA(),planilla!F19)
+- B8: =IF(planilla!$B20="",NA(),planilla!$B20)
+- C8: =IF(OR(planilla!$B20="",planilla!C20=""),NA(),planilla!C20)
+- D8: =IF(OR(planilla!$B20="",planilla!E20=""),NA(),planilla!E20)
+- E8: =IF(OR(planilla!$B20="",planilla!F20=""),NA(),planilla!F20)
+- B9: =IF(planilla!$B21="",NA(),planilla!$B21)
+- C9: =IF(OR(planilla!$B21="",planilla!C21=""),NA(),planilla!C21)
+- D9: =IF(OR(planilla!$B21="",planilla!E21=""),NA(),planilla!E21)
+- E9: =IF(OR(planilla!$B21="",planilla!F21=""),NA(),planilla!F21)
+- B10: =IF(planilla!$B22="",NA(),planilla!$B22)
+- C10: =IF(OR(planilla!$B22="",planilla!C22=""),NA(),planilla!C22)
+- D10: =IF(OR(planilla!$B22="",planilla!E22=""),NA(),planilla!E22)
+- E10: =IF(OR(planilla!$B22="",planilla!F22=""),NA(),planilla!F22)
+- B11: =IF(planilla!$B23="",NA(),planilla!$B23)
+- C11: =IF(OR(planilla!$B23="",planilla!C23=""),NA(),planilla!C23)
+- D11: =IF(OR(planilla!$B23="",planilla!E23=""),NA(),planilla!E23)
+- E11: =IF(OR(planilla!$B23="",planilla!F23=""),NA(),planilla!F23)
+- B12: =IF(planilla!$B24="",NA(),planilla!$B24)
+- C12: =IF(OR(planilla!$B24="",planilla!C24=""),NA(),planilla!C24)
+- D12: =IF(OR(planilla!$B24="",planilla!E24=""),NA(),planilla!E24)
+- E12: =IF(OR(planilla!$B24="",planilla!F24=""),NA(),planilla!F24)
+- B13: =IF(planilla!$B25="",NA(),planilla!$B25)
+- C13: =IF(OR(planilla!$B25="",planilla!C25=""),NA(),planilla!C25)
+- D13: =IF(OR(planilla!$B25="",planilla!E25=""),NA(),planilla!E25)
+- E13: =IF(OR(planilla!$B25="",planilla!F25=""),NA(),planilla!F25)
+- B14: =IF(planilla!$B26="",NA(),planilla!$B26)
+- C14: =IF(OR(planilla!$B26="",planilla!C26=""),NA(),planilla!C26)
+- D14: =IF(OR(planilla!$B26="",planilla!E26=""),NA(),planilla!E26)
+- E14: =IF(OR(planilla!$B26="",planilla!F26=""),NA(),planilla!F26)
+- B15: =IF(planilla!$B27="",NA(),planilla!$B27)
+- C15: =IF(OR(planilla!$B27="",planilla!C27=""),NA(),planilla!C27)
+- D15: =IF(OR(planilla!$B27="",planilla!E27=""),NA(),planilla!E27)
+- E15: =IF(OR(planilla!$B27="",planilla!F27=""),NA(),planilla!F27)
+- B16: =IF(planilla!$B28="",NA(),planilla!$B28)
+- C16: =IF(OR(planilla!$B28="",planilla!C28=""),NA(),planilla!C28)
+- D16: =IF(OR(planilla!$B28="",planilla!E28=""),NA(),planilla!E28)
+- E16: =IF(OR(planilla!$B28="",planilla!F28=""),NA(),planilla!F28)
+- B17: =IF(planilla!$B29="",NA(),planilla!$B29)
+- C17: =IF(OR(planilla!$B29="",planilla!C29=""),NA(),planilla!C29)
+- D17: =IF(OR(planilla!$B29="",planilla!E29=""),NA(),planilla!E29)
+- E17: =IF(OR(planilla!$B29="",planilla!F29=""),NA(),planilla!F29)
+- B18: =IF(planilla!$B30="",NA(),planilla!$B30)
+- C18: =IF(OR(planilla!$B30="",planilla!C30=""),NA(),planilla!C30)
+- D18: =IF(OR(planilla!$B30="",planilla!E30=""),NA(),planilla!E30)
+- E18: =IF(OR(planilla!$B30="",planilla!F30=""),NA(),planilla!F30)
+- B19: =IF(planilla!$B31="",NA(),planilla!$B31)
+- C19: =IF(OR(planilla!$B31="",planilla!C31=""),NA(),planilla!C31)
+- D19: =IF(OR(planilla!$B31="",planilla!E31=""),NA(),planilla!E31)
+- E19: =IF(OR(planilla!$B31="",planilla!F31=""),NA(),planilla!F31)
+- B20: =IF(planilla!$B32="",NA(),planilla!$B32)
+- C20: =IF(OR(planilla!$B32="",planilla!C32=""),NA(),planilla!C32)
+- D20: =IF(OR(planilla!$B32="",planilla!E32=""),NA(),planilla!E32)
+- E20: =IF(OR(planilla!$B32="",planilla!F32=""),NA(),planilla!F32)
+- B21: =IF(planilla!$B33="",NA(),planilla!$B33)
+- C21: =IF(OR(planilla!$B33="",planilla!C33=""),NA(),planilla!C33)
+- D21: =IF(OR(planilla!$B33="",planilla!E33=""),NA(),planilla!E33)
+- E21: =IF(OR(planilla!$B33="",planilla!F33=""),NA(),planilla!F33)
+- B22: =IF(planilla!$B34="",NA(),planilla!$B34)
+- C22: =IF(OR(planilla!$B34="",planilla!C34=""),NA(),planilla!C34)
+- D22: =IF(OR(planilla!$B34="",planilla!E34=""),NA(),planilla!E34)
+- E22: =IF(OR(planilla!$B34="",planilla!F34=""),NA(),planilla!F34)
+- B23: =IF(planilla!$B35="",NA(),planilla!$B35)
+- C23: =IF(OR(planilla!$B35="",planilla!C35=""),NA(),planilla!C35)
+- D23: =IF(OR(planilla!$B35="",planilla!E35=""),NA(),planilla!E35)
+- E23: =IF(OR(planilla!$B35="",planilla!F35=""),NA(),planilla!F35)
+- B24: =IF(planilla!$B36="",NA(),planilla!$B36)
+- C24: =IF(OR(planilla!$B36="",planilla!C36=""),NA(),planilla!C36)
+- D24: =IF(OR(planilla!$B36="",planilla!E36=""),NA(),planilla!E36)
+- E24: =IF(OR(planilla!$B36="",planilla!F36=""),NA(),planilla!F36)
+- B25: =IF(planilla!$B37="",NA(),planilla!$B37)
+- C25: =IF(OR(planilla!$B37="",planilla!C37=""),NA(),planilla!C37)
+- D25: =IF(OR(planilla!$B37="",planilla!E37=""),NA(),planilla!E37)
+- E25: =IF(OR(planilla!$B37="",planilla!F37=""),NA(),planilla!F37)
+- B26: =IF(planilla!$B38="",NA(),planilla!$B38)
+- C26: =IF(OR(planilla!$B38="",planilla!C38=""),NA(),planilla!C38)
+- D26: =IF(OR(planilla!$B38="",planilla!E38=""),NA(),planilla!E38)
+- E26: =IF(OR(planilla!$B38="",planilla!F38=""),NA(),planilla!F38)
+- B27: =IF(planilla!$B39="",NA(),planilla!$B39)
+- C27: =IF(OR(planilla!$B39="",planilla!C39=""),NA(),planilla!C39)
+- D27: =IF(OR(planilla!$B39="",planilla!E39=""),NA(),planilla!E39)
+- E27: =IF(OR(planilla!$B39="",planilla!F39=""),NA(),planilla!F39)
+- B28: =IF(planilla!$B40="",NA(),planilla!$B40)
+- C28: =IF(OR(planilla!$B40="",planilla!C40=""),NA(),planilla!C40)
+- D28: =IF(OR(planilla!$B40="",planilla!E40=""),NA(),planilla!E40)
+- E28: =IF(OR(planilla!$B40="",planilla!F40=""),NA(),planilla!F40)
+
+### Anchos de columna (no default)
+- A: width=11.5546875 hidden=False
+
+### Altos de fila (explicitos)
+
+## Hoja: planilla  (state=visible, 66×29)
+- Merges (55): F1:L4, B47:C47, K30:K31, B7:C7, I46:J46, H65:N65, N41:N42, B46:C46, I45:J45, H41:H42, I41:I42, I43:N43, D7:F7, K41:K42, A63:G63, B48:C48, I47:J47, K16:N16, F41:F42, A64:G64, D8:F8, B8:C8, M13:N13, H63:N63, B44:C44, D5:F5, M12:N12, K23:K24, L18:N19, G6:N8, L41:L42, J41:J42, E41:E42, M3:N3, A65:G65, G41:G42, G5:N5, M41:M42, B49:C49, I48:J48 ...
+- Fórmulas: 176
+- Validaciones: 3
+- Formato condicional: 2
+- Gráficos: 1
+- Imágenes: 0
+
+### Rótulos / textos (literal)
+- A1: '#VALUE!'  nf='#,##0.00'
+- F1: 'PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS'  nf='#,##0.00'
+- M1: 'INF-ING - TOP - 001 - V0'  nf='#,##0.00'
+- P1: 'PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS'  nf='General'
+- P2: 'PLANILLA DE INSTALACIÓN DE FILTROS'  nf='General'
+- M4: '2026-09-01T00:00:00'  nf='mmm-yy'
+- B5: 'Contratista:'  nf='General'
+- D5: 'CONSORCIO SILVANIA MC SAS'  nf='General'
+- G5: 'INFORMACION DEL CONTRATO'  nf='General'
+- B6: 'Interventoría:'  nf='General'
+- D6: 'GS VIAS Y ESTRUCTURAS SAS'  nf='General'
+- G6: 'ICCU - CTO - 1614 - 2026\nMEJORAMIENTO DE LA VÍA QUE COMUNICA A LOS MUNICIPIOS DE SILVANIA Y TIBACUY, TRAMO CUMACA – TIBACUY – CLUB EL BOSQUE, DEPARTAMENTO DE CUNDINAMARCA'  nf='General'
+- B7: 'Apoyo a la Supervisión'  nf='General'
+- D7: 'JAIRO ANTONIO NOVA RODRIGUEZ'  nf='General'
+- B8: 'FECHA DE ELABORACIÓN'  nf='General'
+- I10: 'Abs Inicial'  nf='General'
+- J10: 'Abs Final'  nf='General'
+- L10: 'PK_ID'  nf='General'
+- M10: 'Costado'  nf='General'
+- B12: 'Abscisa Inicial'  nf='General'
+- C12: 'Norte Abs Inicial'  nf='General'
+- D12: 'Este Abs Incial'  nf='General'
+- E12: 'Abscisa Final'  nf='General'
+- F12: 'Norte Abs Final'  nf='General'
+- G12: 'Este Abs Final'  nf='General'
+- I12: 'θ TUBERÍA\n(Mts)'  nf='General'
+- J12: 'ESP. TUBERÍA'  nf='General'
+- K12: 'AREA TUBERÍA'  nf='General'
+- L12: 'MATERIAL'  nf='General'
+- M12: 'TIPO DE RED'  nf='General'
+- L13: 'CONCRETO'  nf='General'
+- B14: 'Area 1'  nf='General'
+- C14: 'Area 2'  nf='General'
+- D14: 'Altura Atraque'  nf='General'
+- E14: 'Altura Relleno'  nf='General'
+- G14: 'Anc. Excavación'  nf='General'
+- D15: '1:1'  nf='@'
+- B16: 'Abscisa'  nf='@'
+- C16: 'Terreno Natural'  nf='@'
+- F16: 'Cota Fondo Excavación'  nf='@'
+- G16: 'Altura Excavacion'  nf='@'
+- H16: 'Altura Triturado'  nf='@'
+- I16: 'Altura Relleno'  nf='@'
+- J16: 'Ancho Geotextil'  nf='@'
+- K16: 'GRAFICO'  nf='@'
+- B43: 'Resumen de Cantidades'  nf='General'
+- I43: 'Descuentos Específicos'  nf='General'
+- B44: 'Item'  nf='General'
+- D44: 'Long'  nf='0.000" m3"'
+- E44: 'Ancho'  nf='General'
+- F44: 'Espesor'  nf='General'
+- G44: 'Desc.'  nf='General'
+- H44: 'Cantidad'  nf='0.000" m3"'
+- I44: 'Item'  nf='General'
+- K44: 'Long'  nf='0.000" m3"'
+- L44: 'Ancho'  nf='General'
+- M44: 'Espesor'  nf='General'
+- N44: 'Cantidad'  nf='0.000" m3"'
+- B45: 'Excavación Varias'  nf='General'
+- B46: 'Excavación Roca'  nf='General'
+- B47: 'Long Tubería'  nf='General'
+- B48: 'Triturado / Atraque'  nf='General'
+- I48: 'Otros'  nf='General'
+- B49: 'Relleno Gran.'  nf='General'
+- B50: 'Geotextil'  nf='General'
+- A64: 'Elaboró'  nf='General'
+- H64: 'Aprobó:'  nf='General'
+- A65: 'Rigoberto Sinchacá'  nf='General'
+- H65: 'Nathalia Jimenez'  nf='General'
+- A66: 'Topografo de Obra (Contratista)'  nf='General'
+- H66: 'Topografo Interventoria'  nf='General'
+
+### Fórmulas (literal)
+- D8: =TODAY()
+- I11: =MIN(B17:B36)
+- J11: =MAX(B17:B36)
+- B13: =I11
+- E13: =J11
+- K13: =ROUND((PI()*((I13/2)+J13)^2),3)
+- M13: =IF(F1=P1,"ALCANTARILLA","FILTRO")
+- F14: =IF(F1=P1,"Cama Triturado","")
+- B15: =IFERROR(IF($E$15="","",_xlfn.LET(_xlpm.r,$I$13/2+$J$13,_xlpm.h,$E$15,ROUND(_xlpm.r^2*ACOS((_xlpm.r-_xlpm.h)/_xlpm.r)-(_xlpm.r-_xlpm.h)*SQRT(2*_xlpm.r*_xlpm.h-_xlpm.h^2),3))),"")
+- C15: =IFERROR(ROUND(K13-B15,3),"")
+- E15: =IFERROR(IF($D$15="","",ROUND(2*($I$13/2+$J$13)/VALUE(MID($D$15,FIND(":",$D$15)+1,10)),3)),"")
+- D16: =IF(F1=P2,"","Subrasante de Vía")
+- E16: =IF(F1=Q1,"Cota Lomo","Terminado Filtro")
+- G17: =IFERROR(IF(B17<>0,(C17-F17),""),"")
+- H17: =IFERROR(IF(G17<>"",IF($F$1=$P$1,$E$15+$F$15,E17-F17),""),"")
+- I17: =IFERROR(IF(G17<>"",IF($F$1=$P$1,G17-($E$15+$F$15),0),""),"")
+- G18: =IFERROR(IF(B18<>0,(C18-F18),""),"")
+- H18: =IFERROR(IF(G18<>"",IF($F$1=$P$1,$E$15+$F$15,E18-F18),""),"")
+- I18: =IFERROR(IF(G18<>"",IF($F$1=$P$1,G18-($E$15+$F$15),0),""),"")
+- J18: =IFERROR(IF(B18<>"",IF($F$1=$P$1,"",AVERAGE(H17:H18)*2+$G$15*2),""),"")
+- L18: ="Ancho "&G15
+- B19: =B18+5
+- G19: =IFERROR(IF(B19<>0,(C19-F19),""),"")
+- H19: =IFERROR(IF(G19<>"",IF($F$1=$P$1,$E$15+$F$15,E19-F19),""),"")
+- I19: =IFERROR(IF(G19<>"",IF($F$1=$P$1,G19-($E$15+$F$15),0),""),"")
+- J19: =IFERROR(IF(B19<>"",IF($F$1=$P$1,"",AVERAGE(H18:H19)*2+$G$15*2),""),"")
+- B20: =B19+5
+- G20: =IFERROR(IF(B20<>0,(C20-F20),""),"")
+- H20: =IFERROR(IF(G20<>"",IF($F$1=$P$1,$E$15+$F$15,E20-F20),""),"")
+- I20: =IFERROR(IF(G20<>"",IF($F$1=$P$1,G20-($E$15+$F$15),0),""),"")
+- J20: =IFERROR(IF(B20<>"",IF($F$1=$P$1,"",AVERAGE(H19:H20)*2+$G$15*2),""),"")
+- B21: =B20+5
+- G21: =IFERROR(IF(B21<>0,(C21-F21),""),"")
+- H21: =IFERROR(IF(G21<>"",IF($F$1=$P$1,$E$15+$F$15,E21-F21),""),"")
+- I21: =IFERROR(IF(G21<>"",IF($F$1=$P$1,G21-($E$15+$F$15),0),""),"")
+- J21: =IFERROR(IF(B21<>"",IF($F$1=$P$1,"",AVERAGE(H20:H21)*2+$G$15*2),""),"")
+- B22: =B21+5
+- G22: =IFERROR(IF(B22<>0,(C22-F22),""),"")
+- H22: =IFERROR(IF(G22<>"",IF($F$1=$P$1,$E$15+$F$15,E22-F22),""),"")
+- I22: =IFERROR(IF(G22<>"",IF($F$1=$P$1,G22-($E$15+$F$15),0),""),"")
+- J22: =IFERROR(IF(B22<>"",IF($F$1=$P$1,"",AVERAGE(H21:H22)*2+$G$15*2),""),"")
+- B23: =B22+5
+- G23: =IFERROR(IF(B23<>0,(C23-F23),""),"")
+- H23: =IFERROR(IF(G23<>"",IF($F$1=$P$1,$E$15+$F$15,E23-F23),""),"")
+- I23: =IFERROR(IF(G23<>"",IF($F$1=$P$1,G23-($E$15+$F$15),0),""),"")
+- J23: =IFERROR(IF(B23<>"",IF($F$1=$P$1,"",AVERAGE(H22:H23)*2+$G$15*2),""),"")
+- K23: =IFERROR(IF(G17<>"",IF($F$1=$P$1,"Alt Rell. "&ROUND(I41,3),"Anc. Geot "&ROUND(J41,3)),""),"")
+- B24: =B23+5
+- G24: =IFERROR(IF(B24<>0,(C24-F24),""),"")
+- H24: =IFERROR(IF(G24<>"",IF($F$1=$P$1,$E$15+$F$15,E24-F24),""),"")
+- I24: =IFERROR(IF(G24<>"",IF($F$1=$P$1,G24-($E$15+$F$15),0),""),"")
+- J24: =IFERROR(IF(B24<>"",IF($F$1=$P$1,"",AVERAGE(H23:H24)*2+$G$15*2),""),"")
+- G25: =IFERROR(IF(B25<>0,(C25-F25),""),"")
+- H25: =IFERROR(IF(G25<>"",IF($F$1=$P$1,$E$15+$F$15,E25-F25),""),"")
+- I25: =IFERROR(IF(G25<>"",IF($F$1=$P$1,G25-($E$15+$F$15),0),""),"")
+- J25: =IFERROR(IF(B25<>"",IF($F$1=$P$1,"",AVERAGE(H24:H25)*2+$G$15*2),""),"")
+- G26: =IFERROR(IF(B26<>0,(C26-F26),""),"")
+- H26: =IFERROR(IF(G26<>"",IF($F$1=$P$1,$E$15+$F$15,E26-F26),""),"")
+- I26: =IFERROR(IF(G26<>"",IF($F$1=$P$1,G26-($E$15+$F$15),0),""),"")
+- J26: =IFERROR(IF(B26<>"",IF($F$1=$P$1,"",AVERAGE(H25:H26)*2+$G$15*2),""),"")
+- G27: =IFERROR(IF(B27<>0,(C27-F27),""),"")
+- H27: =IFERROR(IF(G27<>"",IF($F$1=$P$1,$E$15+$F$15,E27-F27),""),"")
+- I27: =IFERROR(IF(G27<>"",IF($F$1=$P$1,G27-($E$15+$F$15),0),""),"")
+- J27: =IFERROR(IF(B27<>"",IF($F$1=$P$1,"",AVERAGE(H26:H27)*2+$G$15*2),""),"")
+- G28: =IFERROR(IF(B28<>0,(C28-F28),""),"")
+- H28: =IFERROR(IF(G28<>"",IF($F$1=$P$1,$E$15+$F$15,E28-F28),""),"")
+- I28: =IFERROR(IF(G28<>"",IF($F$1=$P$1,G28-($E$15+$F$15),0),""),"")
+- J28: =IFERROR(IF(B28<>"",IF($F$1=$P$1,"",AVERAGE(H27:H28)*2+$G$15*2),""),"")
+- G29: =IFERROR(IF(B29<>0,(C29-F29),""),"")
+- H29: =IFERROR(IF(G29<>"",IF($F$1=$P$1,$E$15+$F$15,E29-F29),""),"")
+- I29: =IFERROR(IF(G29<>"",IF($F$1=$P$1,G29-($E$15+$F$15),0),""),"")
+- J29: =IFERROR(IF(B29<>"",IF($F$1=$P$1,"",AVERAGE(H28:H29)*2+$G$15*2),""),"")
+- G30: =IFERROR(IF(B30<>0,(C30-F30),""),"")
+- H30: =IFERROR(IF(G30<>"",IF($F$1=$P$1,$E$15+$F$15,E30-F30),""),"")
+- I30: =IFERROR(IF(G30<>"",IF($F$1=$P$1,G30-($E$15+$F$15),0),""),"")
+- J30: =IFERROR(IF(B30<>"",IF($F$1=$P$1,"",AVERAGE(H29:H30)*2+$G$15*2),""),"")
+- K30: =IFERROR(IF(G17<>"",IF($F$1=$P$1,"Alt Tritur. "&ROUND(H41,3),"Alt Tritur. "&ROUND(H41,3)),""),"")
+- G31: =IFERROR(IF(B31<>0,(C31-F31),""),"")
+- H31: =IFERROR(IF(G31<>"",IF($F$1=$P$1,$E$15+$F$15,E31-F31),""),"")
+- I31: =IFERROR(IF(G31<>"",IF($F$1=$P$1,G31-($E$15+$F$15),0),""),"")
+- J31: =IFERROR(IF(B31<>"",IF($F$1=$P$1,"",AVERAGE(H30:H31)*2+$G$15*2),""),"")
+- G32: =IFERROR(IF(B32<>0,(C32-F32),""),"")
+- H32: =IFERROR(IF(G32<>"",IF($F$1=$P$1,$E$15+$F$15,E32-F32),""),"")
+- I32: =IFERROR(IF(G32<>"",IF($F$1=$P$1,G32-($E$15+$F$15),0),""),"")
+- J32: =IFERROR(IF(B32<>"",IF($F$1=$P$1,"",AVERAGE(H31:H32)*2+$G$15*2),""),"")
+- G33: =IFERROR(IF(B33<>0,(C33-F33),""),"")
+- H33: =IFERROR(IF(G33<>"",IF($F$1=$P$1,$E$15+$F$15,E33-F33),""),"")
+- I33: =IFERROR(IF(G33<>"",IF($F$1=$P$1,G33-($E$15+$F$15),0),""),"")
+- J33: =IFERROR(IF(B33<>"",IF($F$1=$P$1,"",AVERAGE(H32:H33)*2+$G$15*2),""),"")
+- G34: =IFERROR(IF(B34<>0,(C34-F34),""),"")
+- H34: =IFERROR(IF(G34<>"",IF($F$1=$P$1,$E$15+$F$15,E34-F34),""),"")
+- I34: =IFERROR(IF(G34<>"",IF($F$1=$P$1,G34-($E$15+$F$15),0),""),"")
+- J34: =IFERROR(IF(B34<>"",IF($F$1=$P$1,"",AVERAGE(H33:H34)*2+$G$15*2),""),"")
+- G35: =IFERROR(IF(B35<>0,(C35-F35),""),"")
+- H35: =IFERROR(IF(G35<>"",IF($F$1=$P$1,$E$15+$F$15,E35-F35),""),"")
+- I35: =IFERROR(IF(G35<>"",IF($F$1=$P$1,G35-($E$15+$F$15),0),""),"")
+- J35: =IFERROR(IF(B35<>"",IF($F$1=$P$1,"",AVERAGE(H34:H35)*2+$G$15*2),""),"")
+- G36: =IFERROR(IF(B36<>0,(C36-F36),""),"")
+- H36: =IFERROR(IF(G36<>"",IF($F$1=$P$1,$E$15+$F$15,E36-F36),""),"")
+- I36: =IFERROR(IF(G36<>"",IF($F$1=$P$1,G36-($E$15+$F$15),0),""),"")
+- J36: =IFERROR(IF(B36<>"",IF($F$1=$P$1,"",AVERAGE(H35:H36)*2+$G$15*2),""),"")
+- B37: =IF(B36="","",IF(B36=$B$15-$J$15,"",IF(B36+6.3<$B$15,B36+6.3,$B$15-$J$15)))
+- C37: =IF(B37="","",$E$13+((#REF!-$E$13)/$B$15)*B37)
+- D37: =IF(B37="","",($G$13+$N$15)+(B37*#REF!))
+- E37: =IF(B37="","",F37+($F$15+$E$15))
+- F37: =IFERROR(IF($E$15<>0,IF(B37="","",D37-(($M$15+$N$15*2)+$F$15+$E$15)),IF(B37="","",D37-(($M$15+$N$15*2)+$F$15+$E$15))),"")
+- G37: =IF(B37="","",AVERAGE(IF(B36="","",ROUND((C36-F36),3)),IF(B37="","",ROUND((C37-F37),3)))*(B37-B36)*#REF!)
+- H37: =IF(B37<>"",ROUND(#REF!*$F$15,3),0)
+- I37: =IF(B37="","",AVERAGE(H36:H37)*(B37-B36))
+- J37: =IF(D37<>"",ROUND(#REF!*$E$15,3),0)
+- B38: =IF(B37="","",IF(B37=$B$15-$J$15,"",IF(B37+6.3<$B$15,B37+6.3,$B$15-$J$15)))
+- C38: =IF(B38="","",$E$13+((#REF!-$E$13)/$B$15)*B38)
+- D38: =IF(B38="","",($G$13+$N$15)+(B38*#REF!))
+- E38: =IF(B38="","",F38+($F$15+$E$15))
+- F38: =IFERROR(IF($E$15<>0,IF(B38="","",D38-(($M$15+$N$15*2)+$F$15+$E$15)),IF(B38="","",D38-(($M$15+$N$15*2)+$F$15+$E$15))),"")
+- G38: =IF(B38="","",AVERAGE(IF(B37="","",ROUND((C37-F37),3)),IF(B38="","",ROUND((C38-F38),3)))*(B38-B37)*#REF!)
+- H38: =IF(B38<>"",ROUND(#REF!*$F$15,3),0)
+- I38: =IF(B38="","",AVERAGE(H37:H38)*(B38-B37))
+- J38: =IF(D38<>"",ROUND(#REF!*$E$15,3),0)
+- B39: =IF(B38="","",IF(B38=$B$15-$J$15,"",IF(B38+6.3<$B$15,B38+6.3,$B$15-$J$15)))
+- C39: =IF(B39="","",$E$13+((#REF!-$E$13)/$B$15)*B39)
+- D39: =IF(B39="","",($G$13+$N$15)+(B39*#REF!))
+- E39: =IF(B39="","",F39+($F$15+$E$15))
+- F39: =IFERROR(IF($E$15<>0,IF(B39="","",D39-(($M$15+$N$15*2)+$F$15+$E$15)),IF(B39="","",D39-(($M$15+$N$15*2)+$F$15+$E$15))),"")
+- G39: =IF(B39="","",AVERAGE(IF(B38="","",ROUND((C38-F38),3)),IF(B39="","",ROUND((C39-F39),3)))*(B39-B38)*#REF!)
+- H39: =IF(B39<>"",ROUND(#REF!*$F$15,3),0)
+- I39: =IF(B39="","",AVERAGE(H38:H39)*(B39-B38))
+- J39: =IF(D39<>"",ROUND(#REF!*$E$15,3),0)
+- B40: =IF(B39="","",IF(B39=$B$15-$J$15,"",IF(B39+6.3<$B$15,B39+6.3,$B$15-$J$15)))
+- C40: =IF(B40="","",$E$13+((#REF!-$E$13)/$B$15)*B40)
+- D40: =IF(B40="","",($G$13+$N$15)+(B40*#REF!))
+- E40: =IF(B40="","",F40+($F$15+$E$15))
+- F40: =IFERROR(IF($E$15<>0,IF(B40="","",D40-(($M$15+$N$15*2)+$F$15+$E$15)),IF(B40="","",D40-(($M$15+$N$15*2)+$F$15+$E$15))),"")
+- G40: =IF(B40="","",AVERAGE(IF(B39="","",ROUND((C39-F39),3)),IF(B40="","",ROUND((C40-F40),3)))*(B40-B39)*#REF!)
+- H40: =IF(B40<>"",ROUND(#REF!*$F$15,3),0)
+- I40: =IF(B40="","",AVERAGE(H39:H40)*(B40-B39))
+- J40: =IF(D40<>"",ROUND(#REF!*$E$15,3),0)
+- B41: =MAX(B17:B36)-MIN(B17:B36)
+- G41: =IFERROR(AVERAGE(G17:G36),"")
+- H41: =IFERROR(AVERAGE(H17:H36),"")
+- I41: =IFERROR(AVERAGE(I17:I36),"")
+- J41: =IFERROR(AVERAGE(J17:J36),"")
+- D45: =B41
+- E45: =G15
+- F45: =IFERROR(G41,0)
+- H45: =ROUND(PRODUCT(D45:F45),2)
+- I45: =IF($F$1=$P$1,"","Tubería Filtro")
+- K45: =IF(I45<>"",$B$41,"")
+- M45: =IF(I45<>"",$K$13,"")
+- N45: =PRODUCT(K45:M45)
+- D46: =D45
+- E46: =E45
+- H46: =ROUND(PRODUCT(D46:F46),2)
+- I46: =IF($F$1=$P$1,"Area 1","")
+- K46: =IF(I46<>"",$B$41,"")
+- M46: =IF(I46<>"",$B$15,"")
+- N46: =IF(I46<>"",PRODUCT(K46:M46),"")
+- D47: =D45
+- H47: =ROUND(PRODUCT(D47:F47),2)
+- I47: =IF($F$1=$P$1,"Area 2","")
+- K47: =IF(I47<>"",$B$41,"")
+- M47: =IF(I47<>"",$C$15,"")
+- N47: =IF(I47<>"",PRODUCT(K47:M47),"")
+- D48: =D45
+- E48: =E45
+- F48: =IFERROR(H41,0)
+- G48: =IF($F$1=$P$1,N46,N45)
+- H48: =ROUND(PRODUCT(D48:F48),2)-G48
+- D49: =D45
+- E49: =E45
+- F49: =IFERROR(I41,0)
+- G49: =IF($F$1=$P$1,N47,0)
+- H49: =ROUND(PRODUCT(D49:F49),2)
+- D50: =D45
+- E50: =J41
+- H50: =ROUND(PRODUCT(D50:F50),2)
+
+### Validaciones
+- {'type': 'list', 'operator': None, 'formula1': '$P$1:$P$2', 'formula2': None, 'allow_blank': True, 'showDropDown': False, 'showErrorMessage': True, 'errorTitle': None, 'error': None, 'promptTitle': None, 'prompt': None, 'sqref': 'F1:L4'}
+- {'type': 'list', 'operator': None, 'formula1': '"1:1,1:2,1:3,1:4,1:6"', 'formula2': None, 'allow_blank': True, 'showDropDown': False, 'showErrorMessage': True, 'errorTitle': 'Altura de atraque', 'error': 'Seleccione la relación de altura del atraque: 1:2 (medio tubo), 1:3 (altura al tercio) o 1:4.', 'promptTitle': None, 'prompt': None, 'sqref': 'D15'}
+- {'type': 'custom', 'operator': None, 'formula1': '$D$16<>""', 'formula2': None, 'allow_blank': True, 'showDropDown': False, 'showErrorMessage': True, 'errorTitle': 'Campo no editable', 'error': 'No se puede diligenciar la Subrasante de Vía porque la celda D18 está vacía (esta planilla no aplica Subrasante).', 'promptTitle': 'Subrasante de Vía', 'prompt': "Solo se diligencia si D18 muestra 'Subrasante de Vía'.", 'sqref': 'D25:D36'}
+
+### Formato condicional
+- {'range': '<ConditionalFormatting B17:D24 B25:N30 B31:J31 B32:N40 E17:N17 E18:L18 E19:K20 E21:N23 E24:J24 L24:N24 L31:N31>', 'rules': [{'type': 'cellIs', 'operator': 'equal', 'formula': ['0'], 'dxf': {'font': {'name': None, 'size': None, 'bold': False, 'italic': False, 'underline': None, 'strike': False, 'color': {'theme': 0, 'indexed': "Values must be of type <class 'int'>"}}, 'fill': None, 'border': None, 'alignment': None, 'number_format': None}, 'priority': 1, 'stopIfTrue': None, 'text': None}]}
+- {'range': '<ConditionalFormatting D5:F7>', 'rules': [{'type': 'cellIs', 'operator': 'equal', 'formula': ['0'], 'dxf': {'font': {'name': None, 'size': None, 'bold': False, 'italic': False, 'underline': None, 'strike': False, 'color': {'theme': 0, 'indexed': "Values must be of type <class 'int'>"}}, 'fill': None, 'border': None, 'alignment': None, 'number_format': None}, 'priority': 6, 'stopIfTrue': None, 'text': None}]}
+
+### Gráficos
+- {'index': 0, 'type': 'ScatterChart', 'title': 'Perfil Longitudinal de Tubería', 'style': None, 'anchor': '<openpyxl.drawing.spreadsheet_drawing.TwoCellAnchor object>\nParameters:\neditAs=None, contentPart=None, _from=<openpyxl.drawing.spreadsheet_drawing.AnchorMarker object>\nParameters:\ncol=0, colOff=1, row=51, rowOff=0, to=<openpyxl.drawing.spreadsheet_drawing.AnchorMarker object>\nParameters:\ncol=14, colOff=0, row=63, rowOff=0, sp=None, grpSp=None, graphicFrame=None, cxnSp=None, pic=None, contentPart=None, clientData=<openpyxl.drawing.spreadsheet_drawing.AnchorClientData object>\nParameters:\nfLocksWithSheet=None, fPrintsWithSheet=None', 'series': [{'index': 0, 'title': 'Terreno Natural', 'val': None, 'cat': None, 'tx': "<openpyxl.chart.series.SeriesLabel object>\nParameters:\nstrRef=None, v='Terreno Natural'"}, {'index': 1, 'title': 'Terminado Filtro', 'val': None, 'cat': None, 'tx': "<openpyxl.chart.series.SeriesLabel object>\nParameters:\nstrRef=None, v='Terminado Filtro'"}, {'index': 2, 'title': 'Cota Fondo Excavación', 'val': None, 'cat': None, 'tx': "<openpyxl.chart.series.SeriesLabel object>\nParameters:\nstrRef=None, v='Cota Fondo Excavación'"}], 'x_axis': {'title': 'longitud de tramo', 'scaling': {'min': None, 'max': None}}, 'y_axis': {'title': 'cota', 'scaling': {'min': None, 'max': None}}}
+
+### Anchos de columna (no default)
+- A: width=2.33203125 hidden=False
+- B: width=17.77734375 hidden=False
+- C: width=13.6640625 hidden=False
+- D: width=14.88671875 hidden=False
+- E: width=16.5546875 hidden=False
+- F: width=15.88671875 hidden=False
+- G: width=16.33203125 hidden=False
+- H: width=15.0 hidden=False
+- I: width=16.6640625 hidden=False
+- J: width=16.44140625 hidden=False
+- K: width=17.88671875 hidden=False
+- L: width=16.44140625 hidden=False
+- M: width=13.5546875 hidden=False
+- N: width=13.88671875 hidden=False
+- O: width=25.0 hidden=False
+- P: width=28.33203125 hidden=False
+- Q: width=50.6640625 hidden=False
+- R: width=11.5546875 hidden=False
+
+### Altos de fila (explicitos)
+- R1: height=22.2 hidden=False
+- R2: height=22.2 hidden=False
+- R3: height=22.2 hidden=False
+- R4: height=22.2 hidden=False
+- R5: height=19.8 hidden=False
+- R6: height=19.8 hidden=False
+- R7: height=19.8 hidden=False
+- R8: height=37.2 hidden=False
+- R9: height=7.5 hidden=False
+- R10: height=15.75 hidden=False
+- R11: height=15.75 hidden=False
+- R12: height=44.4 hidden=False
+- R13: height=30.0 hidden=False
+- R14: height=30.0 hidden=False
+- R15: height=19.2 hidden=False
+- R16: height=32.4 hidden=False
+- R17: height=19.95 hidden=False
+- R18: height=19.95 hidden=False
+- R19: height=19.95 hidden=False
+- R20: height=19.95 hidden=False
+- R21: height=19.95 hidden=False
+- R22: height=19.95 hidden=False
+- R23: height=19.95 hidden=False
+- R24: height=19.95 hidden=False
+- R25: height=19.95 hidden=False
+- R26: height=19.95 hidden=False
+- R27: height=19.95 hidden=False
+- R28: height=19.95 hidden=False
+- R29: height=19.95 hidden=False
+- R30: height=19.95 hidden=False
+- R31: height=19.95 hidden=False
+- R32: height=19.95 hidden=False
+- R33: height=19.95 hidden=False
+- R34: height=19.95 hidden=False
+- R35: height=19.95 hidden=False
+- R36: height=19.95 hidden=False
+- R37: height=19.95 hidden=True
+- R38: height=19.95 hidden=True
+- R39: height=19.95 hidden=True
+- R40: height=19.95 hidden=True
+- R41: height=16.2 hidden=False
+- R42: height=33.0 hidden=False
+- R43: height=23.4 hidden=False
+- R44: height=23.4 hidden=False
+- R45: height=23.4 hidden=False
+- R46: height=23.4 hidden=False
+- R47: height=23.4 hidden=False
+- R48: height=21.6 hidden=False
+- R49: height=21.6 hidden=False
+- R50: height=18.75 hidden=False
+- R51: height=10.5 hidden=False
+- R52: height=21.6 hidden=False
+- R53: height=21.6 hidden=False
+- R54: height=21.6 hidden=False
+- R55: height=21.6 hidden=False
+- R56: height=21.6 hidden=False
+- R57: height=21.6 hidden=False
+- R58: height=21.6 hidden=False
+- R59: height=21.6 hidden=False
+- R60: height=21.6 hidden=False
+- R61: height=21.6 hidden=False
+- R62: height=21.6 hidden=False
+- R63: height=29.25 hidden=False
+- R64: height=18.6 hidden=False
+- R65: height=32.4 hidden=False
+- R66: height=17.4 hidden=False
+
+## Hoja: Resumen_BASE  (state=veryHidden, 8×22)
+- Merges (0): 
+- Fórmulas: 0
+- Validaciones: 0
+- Formato condicional: 0
+- Gráficos: 0
+- Imágenes: 0
+
+### Rótulos / textos (literal)
+- A7: 'TIPO ELEMENTO INICIAL'  nf='General'
+- B7: 'NORTE ELEMENTO INICIAL'  nf='General'
+- C7: 'ESTE ELEMENTO INICIAL'  nf='General'
+- D7: 'T. N. ELEMENTO INICIAL'  nf='General'
+- E7: 'RASANTE ELEMENTO INICIAL'  nf='General'
+- F7: 'CLAVE INICIAL'  nf='General'
+- G7: 'TIPO ELEMENTO FINAL'  nf='General'
+- H7: 'NORTE ELEMENTO FINAL'  nf='General'
+- I7: 'ESTE ELEMENTO FINAL'  nf='General'
+- J7: 'T.N. ELEMENTO FINAL'  nf='General'
+- K7: 'RASANTE ELEMENTO FINAL'  nf='General'
+- L7: 'CLAVE FINAL'  nf='General'
+- M7: 'LONGITUD UTIL TRAMO'  nf='General'
+- N7: 'MATERIAL'  nf='General'
+- O7: 'TIPO DE RED'  nf='General'
+- P7: 'θ TUBERÍA'  nf='General'
+- Q7: 'Volumen Excavacion'  nf='General'
+- R7: 'Volumen Triturado'  nf='General'
+- S7: 'Volumen Mejoramiento'  nf='General'
+- T7: 'Relleno B-200'  nf='General'
+- U7: 'Relleno Material Reciclado'  nf='General'
+- V7: 'Area Entibado'  nf='General'
+
+### Fórmulas (literal)
+
+### Anchos de columna (no default)
+- A: width=24.109375 hidden=False
+- B: width=26.0 hidden=False
+- C: width=24.0 hidden=False
+- E: width=28.109375 hidden=False
+- F: width=15.5546875 hidden=False
+- G: width=22.88671875 hidden=False
+- H: width=24.6640625 hidden=False
+- I: width=22.6640625 hidden=False
+- J: width=22.33203125 hidden=False
+- K: width=26.88671875 hidden=False
+- L: width=14.33203125 hidden=False
+- M: width=24.0 hidden=False
+- N: width=12.109375 hidden=False
+- O: width=13.88671875 hidden=False
+- P: width=12.33203125 hidden=False
+- Q: width=21.5546875 hidden=False
+- R: width=20.109375 hidden=False
+- S: width=25.0 hidden=False
+- T: width=22.6640625 hidden=False
+
+### Altos de fila (explicitos)
