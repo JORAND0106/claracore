@@ -18,12 +18,19 @@ from topografia_planilla_tuberia_excel import build_planilla_tuberia_xlsx, TITUL
 ROOT = Path(__file__).resolve().parents[2]
 INV = ROOT / "docs" / "topografia" / "planillas_tuberia" / "inventario_planilla_tuberia_xlsm.json"
 LAYOUT = ROOT / "docs" / "topografia" / "planillas_tuberia" / "layout_map_planilla_tuberia.json"
+INV_RUNTIME = (
+    ROOT / "backend" / "data" / "planillas_tuberia" / "inventario_planilla_tuberia_xlsm.json"
+)
 
 
 class TestInventarioPresente(unittest.TestCase):
     def test_artefactos(self):
         self.assertTrue(INV.exists())
         self.assertTrue(LAYOUT.exists())
+        self.assertTrue(
+            INV_RUNTIME.exists(),
+            "Copia runtime del inventario en backend/data (sin depender del .xlsm)",
+        )
         inv = json.loads(INV.read_text())
         self.assertEqual(inv["sheetnames"], ["Tbl_Auxiliares", "planilla", "Resumen_BASE"])
 
@@ -118,6 +125,52 @@ class TestExcelExportFidelidad(unittest.TestCase):
         self.assertTrue(str(ws["G17"].value).startswith("=IFERROR"))
         self.assertTrue(str(ws["H48"].value).startswith("=ROUND(PRODUCT"))
         self.assertGreaterEqual(len(ws._charts), 1)
+
+    def test_xlsx_sin_macros_ni_xlsm(self):
+        """Exportación vacía (Dev): .xlsx OOXML sin VBA; módulo no abre .xlsm."""
+        import io
+        from openpyxl import load_workbook
+        from topografia_planilla_tuberia_excel import __file__ as excel_mod
+
+        mod_src = Path(excel_mod).read_text(encoding="utf-8")
+        self.assertNotIn("load_workbook", mod_src)
+        self.assertNotIn("Planilla_Tuberia_original.xlsm", mod_src)
+
+        raw = build_planilla_tuberia_xlsx(
+            planilla={"tipo": "ALCANTARILLA", "meta_cabecera": {}},
+            calculo={"cartera": {"filas": []}},
+            vacia=True,
+        )
+        self.assertEqual(raw[:2], b"PK")
+        self.assertNotIn(b"macroEnabled", raw)
+        self.assertNotIn(b"vbaProject", raw)
+        wb = load_workbook(io.BytesIO(raw))
+        self.assertIn("planilla", wb.sheetnames)
+        self.assertIsNone(wb.vba_archive)
+        self.assertGreaterEqual(len(wb["planilla"]._charts), 1)
+        self.assertEqual(wb["planilla"]["G5"].value, "INFORMACION DEL CONTRATO")
+
+
+class TestPdfBloquesInventario(unittest.TestCase):
+    def test_cabecera_y_graficos_vacios(self):
+        from topografia_planilla_tuberia_pdf import (
+            html_bloque_graficos_pdf,
+            html_cabecera_planilla_tuberia,
+        )
+
+        cab = html_cabecera_planilla_tuberia(
+            contrato={"numero": "CTO-1", "objeto": "Obra demo", "contratista": "ACME"},
+            meta={},
+            titulo=TITULO_ALC,
+        )
+        self.assertIn("INFORMACION DEL CONTRATO", cab)
+        self.assertIn("CTO-1", cab)
+        self.assertIn(TITULO_ALC, cab)
+
+        graf = html_bloque_graficos_pdf({})
+        self.assertIn("data:image/svg+xml", graf)
+        # Dos paneles embebidos (sección + perfil) aunque no haya series.
+        self.assertGreaterEqual(graf.count("data:image/svg+xml"), 2)
 
 
 if __name__ == "__main__":
