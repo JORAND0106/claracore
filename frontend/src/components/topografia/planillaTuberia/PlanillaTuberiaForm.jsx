@@ -8,6 +8,7 @@ import {
   useTopoViewport,
   useTopografiaApi,
 } from '../topografiaShared'
+import TopoConfirmModal from '../TopoConfirmModal'
 import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
 import {
@@ -54,6 +55,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [err, setErr] = useState('')
   const [infos, setInfos] = useState([])
   const [busy, setBusy] = useState(false)
+  const [confirmEliminar, setConfirmEliminar] = useState(null) // null | 'vacia' | 'con_datos'
   const tableRef = useRef(null)
 
   const planilla = detalle?.planilla
@@ -62,6 +64,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const editable = editablePerm && !sellada
   const conDatos = useMemo(() => tieneDatosExportables(filas, detalle), [filas, detalle])
   const puedeExportar = puede(permisos, 'exportar') || esDev
+  const puedeEliminar = puede(permisos, 'eliminar')
   const exportPlantillaVacia = esDev && !conDatos
 
   const cargarLista = useCallback(async () => {
@@ -211,6 +214,31 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}/revocar-validacion`, { method: 'POST' }))
       setMsg('Validación revocada (Desarrollador).')
       await cargarLista()
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  
+  const solicitarEliminar = () => {
+    if (!planilla?.id) return
+    setConfirmEliminar(conDatos ? 'con_datos' : 'vacia')
+  }
+
+  const eliminarPlanilla = async () => {
+    if (!planilla?.id) return
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      await api(`/planillas-tuberia/${planilla.id}`, { method: 'DELETE' })
+      setConfirmEliminar(null)
+      setDetalle(null)
+      setFilas(Array.from({ length: 12 }, (_, i) => filaCampoVacia(i + 1)))
+      await cargarLista()
+      setMsg(conDatos
+        ? 'Planilla eliminada (incluía datos de cartera).'
+        : 'Planilla vacía eliminada.')
     } catch (e) {
       setErr(e.message)
     } finally {
@@ -436,6 +464,18 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       Revocar validación (Dev)
                     </button>
                   )}
+                  
+                  {puedeEliminar && planilla?.id && (
+                    <button
+                      type="button"
+                      className="cc-topo-touch-btn"
+                      style={{ ...ui.btnSecondary, color: '#b91c1c', borderColor: '#fca5a5' }}
+                      disabled={busy}
+                      onClick={solicitarEliminar}
+                    >
+                      Eliminar planilla
+                    </button>
+                  )}
                   {puedeExportar && (
                     <>
                       <button
@@ -658,6 +698,31 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           )}
         </div>
       </div>
+
+      {confirmEliminar && (
+        <TopoConfirmModal
+          theme={ui.t}
+          danger
+          titulo={confirmEliminar === 'con_datos' ? 'Eliminar planilla con datos' : 'Eliminar planilla'}
+          confirmLabel={busy ? 'Eliminando…' : 'Eliminar'}
+          cancelLabel="Cancelar"
+          onCancel={() => { if (!busy) setConfirmEliminar(null) }}
+          onConfirm={eliminarPlanilla}
+          busy={busy}
+        >
+          {confirmEliminar === 'con_datos' ? (
+            <p style={{ margin: 0 }}>
+              Esta planilla <strong>ya tiene datos diligenciados en la cartera</strong>.
+              Al eliminarla se perderán de forma permanente la cabecera, la cartera,
+              los cálculos, las cantidades y los descuentos. Esta acción no se puede deshacer.
+            </p>
+          ) : (
+            <p style={{ margin: 0 }}>
+              ¿Eliminar esta planilla vacía? No hay datos de cartera diligenciados.
+            </p>
+          )}
+        </TopoConfirmModal>
+      )}
     </div>
   )
 }

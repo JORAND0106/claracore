@@ -520,6 +520,44 @@ def revocar(contrato_id: int, planilla_id: str, current_user=Depends(get_current
     return _detalle(contrato_id, planilla_id)
 
 
+
+@router.delete("/{contrato_id}/planillas-tuberia/{planilla_id}")
+def eliminar(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
+    """Elimina la planilla y todos sus registros asociados (cartera, descuentos, consolidado).
+
+    La UI confirma de forma básica si la cartera está vacía, o con alerta
+    explícita si ya hay datos diligenciados. El backend reporta `tenia_datos`.
+    """
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "eliminar")
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Planilla no encontrada")
+
+    det = _detalle(contrato_id, planilla_id)
+    tenia_datos = _tiene_datos_exportables(det)
+    logger.info(
+        "eliminar planilla_tuberia id=%s contrato=%s tenia_datos=%s user=%s",
+        planilla_id, contrato_id, tenia_datos, _uid(current_user),
+    )
+
+    for table in (
+        "topo_planilla_tuberia_filas",
+        "topo_planilla_tuberia_descuentos",
+        "topo_planilla_tuberia_consolidado",
+        "topo_planilla_tuberia_auditoria",
+    ):
+        try:
+            supabase.table(table).delete().eq("planilla_id", planilla_id).execute()
+        except Exception:
+            logger.exception("eliminar %s planilla=%s", table, planilla_id)
+
+    supabase.table("topo_planillas_tuberia").delete().eq("id", planilla_id).eq(
+        "contrato_id", contrato_id
+    ).execute()
+    return {"ok": True, "id": planilla_id, "tenia_datos": tenia_datos}
+
+
 @router.get("/{contrato_id}/planillas-tuberia-consolidado")
 def consolidado(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -719,8 +757,11 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     body{{font-family:Arial,sans-serif;font-size:7pt;color:#0f172a;margin:0}}
     h2{{font-size:7.5pt;margin:2px 0 1px}}
     table.sheet{{border-collapse:collapse;width:100%;margin-bottom:2px}}
-    table.sheet th,table.sheet td{{border:0.4pt solid #64748b;padding:0 2px;font-size:6.5pt;line-height:1.15}}
-    table.sheet th{{background:#D9D9D9;font-size:6pt}}
+    table.sheet th,table.sheet td{{border:0.4pt solid #64748b;padding:4px 5px;font-size:7.5pt;line-height:1.45}}
+    table.sheet th{{background:#D9D9D9;font-size:6.5pt}}
+    .graficos-wrap{{width:100%;border-collapse:collapse;margin:2px 0 4px;table-layout:fixed}}
+    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:2px;vertical-align:top;height:100px}}
+    .graficos-wrap img{{display:block;width:100%;height:auto;margin:0 auto}}
     table.sheet th.desc{{background:#EA4296;color:#fff}}
     table.sheet th.cant{{background:#4472C4;color:#fff}}
     table.sheet td.calc{{background:#F2F2F2;text-align:right;font-family:Consolas,monospace}}
@@ -740,7 +781,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
       <th>Cota Fondo Excavación</th><th>Altura Excavacion</th><th>Altura Triturado</th>
       <th>Altura Relleno</th><th>Ancho Geotextil</th>
     </tr></thead><tbody>{rows}</tbody></table>
-    {graficos}
+    <div style="clear:both;height:2px;"></div>{graficos}<div style="clear:both;height:6px;">&nbsp;</div>
     <table class="grid2"><tr>
       <td width="55%">
         <h2>Resumen de Cantidades</h2>
