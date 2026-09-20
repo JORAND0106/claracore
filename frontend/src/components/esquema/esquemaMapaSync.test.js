@@ -7,8 +7,11 @@ import {
   canvasZoomFromMapPpm,
   entityScreenPxForMeters,
   mapCenterAsGeoOrigin,
+  mapRelativeZoomPercent,
   mapScreenPixelsPerMeter,
+  mapZoomAfterVisualFactor,
   syncCanvasTransformToMap,
+  visualZoomStillResponsive,
 } from './esquemaMapaSync.js'
 
 /** Mapa mock: proyección lineal local (1 m este = k px, 1 m sur = k px). */
@@ -147,5 +150,52 @@ describe('consistencia haversine con mock', () => {
     const b = map.unproject([100, 0])
     const m = haversineMeters(a, b)
     assert.ok(Math.abs(m - 100 / ppm) < 0.5)
+  })
+})
+
+describe('zoom visual independiente de la escala real', () => {
+  it('mapZoomAfterVisualFactor no depende del zoomRef del lienzo', () => {
+    const z16 = mapZoomAfterVisualFactor(16, 1.25)
+    const z16out = mapZoomAfterVisualFactor(16, 1 / 1.25)
+    assert.ok(z16 > 16)
+    assert.ok(z16out < 16)
+    // Simula zoomRef lienzo ≪ 1 tras sync: el factor sigue moviendo Mapbox
+    assert.equal(visualZoomStillResponsive(16, 1.25), true)
+    assert.equal(visualZoomStillResponsive(16, 1 / 1.25), true)
+    assert.equal(visualZoomStillResponsive(16, 1), false)
+  })
+
+  it('tras “dibujar” (estado idle) in/out repetidos siguen respondiendo', () => {
+    let mapZoom = 15.5
+    // zoomRef del lienzo típico tras sync a ese nivel (~ppm bajos)
+    let canvasZoom = 0.04
+    for (let i = 0; i < 8; i += 1) {
+      const factor = i % 2 === 0 ? 1.25 : 1 / 1.25
+      assert.equal(visualZoomStillResponsive(mapZoom, factor), true)
+      mapZoom = mapZoomAfterVisualFactor(mapZoom, factor)
+      // La escala real (world) no cambia: solo el zoom Mapbox / canvas derivado
+      canvasZoom = canvasZoom * factor
+      assert.ok(Number.isFinite(mapZoom))
+      assert.ok(canvasZoom > 0)
+    }
+  })
+
+  it('mapRelativeZoomPercent: baseline = 100 %, factor 1.25 → 125', () => {
+    assert.equal(mapRelativeZoomPercent(16, 16), 100)
+    const z = mapZoomAfterVisualFactor(16, 1.25)
+    assert.equal(mapRelativeZoomPercent(z, 16), 125)
+  })
+
+  it('escala real 20 m se mantiene al cambiar zoom visual (ppm proporcionales)', () => {
+    const origin = { lng: -74.1, lat: 4.6 }
+    const near = syncCanvasTransformToMap(makeLinearMap({ ppm: 4 }), origin)
+    const far = syncCanvasTransformToMap(makeLinearMap({ ppm: 1 }), origin)
+    assert.ok(near && far)
+    // world de 20 m es fijo (PX_PER_METER); solo cambia el tamaño en pantalla
+    const world20 = metersToWorld(20)
+    assert.equal(world20, metersToWorld(20))
+    const screenNear = world20 * near.zoom
+    const screenFar = world20 * far.zoom
+    assert.ok(Math.abs(screenNear / screenFar - 4) < 0.05)
   })
 })

@@ -2,6 +2,9 @@
  * Sincronización AutoCAD-style: escala del lienzo = escala real del mapa.
  * Mientras el mapa está activo, pan/zoom del editor se derivan de Mapbox
  * (metros por píxel + origen geográfico fijo ↔ origen mundo).
+ *
+ * El zoom *visual* del usuario se aplica zoomando el mapa (misma escala
+ * compartida); la escala real de las entidades (metros → world) no cambia.
  */
 import { PX_PER_METER } from './esquemaGeometry.js'
 import { haversineMeters } from './esquemaMapaCapture.js'
@@ -150,4 +153,48 @@ export function entityScreenPxForMeters(entityMeters, pixelsPerMeter) {
   const ppm = Number(pixelsPerMeter)
   if (!(m > 0) || !(ppm > 0)) return null
   return m * ppm
+}
+
+/**
+ * Convierte un factor de zoom visual del lienzo (p. ej. 1.25 = +25 %)
+ * en el nuevo nivel de zoom de Mapbox. Independiente del zoomRef del lienzo
+ * (que puede ser ≪ 1 tras sync) para que in/out nunca queden bloqueados.
+ *
+ * @param {number} mapZoom nivel actual Mapbox
+ * @param {number} factor >0 (1.25 acercar, 0.8 alejar)
+ * @returns {number | null}
+ */
+export function mapZoomAfterVisualFactor(mapZoom, factor) {
+  const z = Number(mapZoom)
+  const f = Number(factor)
+  if (!Number.isFinite(z) || !Number.isFinite(f) || !(f > 0)) return null
+  return z + Math.log2(f)
+}
+
+/**
+ * Porcentaje de zoom visual relativo al nivel Mapbox de referencia (encuadre
+ * inicial). 100 = vista al fijar el origen; no usa zoomRef del lienzo.
+ *
+ * @param {number} mapZoom
+ * @param {number} mapZoomBaseline
+ * @returns {number}
+ */
+export function mapRelativeZoomPercent(mapZoom, mapZoomBaseline) {
+  const z = Number(mapZoom)
+  const z0 = Number(mapZoomBaseline)
+  if (!Number.isFinite(z) || !Number.isFinite(z0)) return 100
+  const rel = 2 ** (z - z0)
+  if (!Number.isFinite(rel) || rel <= 0) return 100
+  const pct = rel * 100
+  return pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10
+}
+
+/**
+ * Tras dibujar, el zoom visual debe seguir respondiendo: un factor ≠ 1
+ * siempre produce un nivel Mapbox distinto (no se “traba” en MIN_ZOOM del lienzo).
+ */
+export function visualZoomStillResponsive(mapZoom, factor) {
+  const next = mapZoomAfterVisualFactor(mapZoom, factor)
+  if (next == null) return false
+  return Math.abs(next - Number(mapZoom)) > 1e-9
 }

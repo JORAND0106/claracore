@@ -37,6 +37,9 @@ export {
   syncCanvasTransformToMap,
   mapScreenPixelsPerMeter,
   canvasZoomFromMapPpm,
+  mapZoomAfterVisualFactor,
+  mapRelativeZoomPercent,
+  visualZoomStillResponsive,
 } from './esquemaMapaSync'
 export {
   normalizeMapContext,
