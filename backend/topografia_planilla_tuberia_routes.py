@@ -704,73 +704,67 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     from topografia_planilla_tuberia_pdf import (
         html_bloque_graficos_pdf,
         html_cabecera_planilla_tuberia,
+        html_franja_tramo_tuberia,
     )
 
     cabecera = html_cabecera_planilla_tuberia(
         contrato=contrato, meta=meta, titulo=titulo
     )
+    franja = html_franja_tramo_tuberia(planilla=p, calculo=calc, meta=meta)
     graficos = html_bloque_graficos_pdf(calc)
 
     html_doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
     <style>
-    body{{font-family:Arial,sans-serif;font-size:10px;color:#0f172a}}
-    h2{{font-size:11px;margin:8px 0 4px}}
-    table{{border-collapse:collapse;width:100%;margin-bottom:10px}}
-    th,td{{border:1px solid #64748b;padding:2px 4px}}
-    th{{background:#D9D9D9;font-size:9px}}
-    th.desc{{background:#EA4296;color:#fff}}
-    th.cant{{background:#4472C4;color:#fff}}
-    td.calc{{background:#F2F2F2;text-align:right;font-family:Consolas,monospace}}
-    .meta{{color:#334155;margin:2px 0}} .badge{{background:#fef3c7;border:1px solid #f59e0b;padding:6px 8px}}
-    .grid2{{display:flex;gap:12px}} .grid2>div{{flex:1}}
-    .firmas{{display:flex;gap:24px;margin-top:24px}} .firma{{flex:1;border-top:1px solid #94a3b8;padding-top:6px;min-height:52px}}
+    @page {{ size: letter landscape; margin: 4mm 5mm; }}
+    body{{font-family:Arial,sans-serif;font-size:7pt;color:#0f172a;margin:0}}
+    h2{{font-size:7.5pt;margin:2px 0 1px}}
+    table.sheet{{border-collapse:collapse;width:100%;margin-bottom:2px}}
+    table.sheet th,table.sheet td{{border:0.4pt solid #64748b;padding:0 2px;font-size:6.5pt;line-height:1.15}}
+    table.sheet th{{background:#D9D9D9;font-size:6pt}}
+    table.sheet th.desc{{background:#EA4296;color:#fff}}
+    table.sheet th.cant{{background:#4472C4;color:#fff}}
+    table.sheet td.calc{{background:#F2F2F2;text-align:right;font-family:Consolas,monospace}}
+    .meta{{color:#334155;margin:0;font-size:6.5pt}}
+    .badge{{background:#fef3c7;border:1px solid #f59e0b;padding:1px 5px;font-size:6.5pt;margin:1px 0}}
+    .grid2{{width:100%;border-collapse:collapse;margin-top:1px}}
+    .grid2 td{{vertical-align:top;padding:0 2px}}
+    .firmas{{width:100%;border-collapse:collapse;margin-top:4px}}
+    .firmas td{{width:50%;border-top:0.5pt solid #94a3b8;padding-top:2px;font-size:6.5pt;vertical-align:top}}
     </style></head><body>
     {cabecera}
     {badge}
-    <p class="meta">PK_ID {p.get('pk_id') or ''} · Costado {p.get('costado') or ''}
-    · θ={fmt(p.get('diametro_m'))} · ESP={fmt(p.get('espesor_m'))}
-    · AREA TUBERÍA={fmt(sec.get('area_tuberia_m2'))}
-    · Anc. Excavación={fmt(p.get('ancho_excavacion_m'))}
-    · Altura Atraque={p.get('relacion_atraque') or '1:3'}
-    · Cama Triturado={fmt(sec.get('cama_triturado_m'))}
-    · Area 1={fmt(sec.get('area_1_m2'))} · Area 2={fmt(sec.get('area_2_m2'))}</p>
-    <p class="meta">Abscisa Inicial {fmt(meta.get('abscisa_inicial') or (calc.get('cartera') or {}).get('totales',{}).get('abscisa_inicial'),2)}
-    · Norte Abs Inicial {fmt(meta.get('norte_abs_inicial', p.get('norte_ref')),3)}
-    · Este Abs Incial {fmt(meta.get('este_abs_inicial', p.get('este_ref')),3)}
-    · Abscisa Final {fmt(meta.get('abscisa_final') or (calc.get('cartera') or {}).get('totales',{}).get('abscisa_final'),2)}
-    · Norte Abs Final {fmt(meta.get('norte_abs_final'),3)}
-    · Este Abs Final {fmt(meta.get('este_abs_final'),3)}</p>
+    {franja}
     <h2>Cartera</h2>
-    <table><thead><tr>
+    <table class="sheet"><thead><tr>
       <th>#</th><th>Abscisa</th><th>Terreno Natural</th><th>{nivel_hdr}</th>
       <th>Cota Fondo Excavación</th><th>Altura Excavacion</th><th>Altura Triturado</th>
       <th>Altura Relleno</th><th>Ancho Geotextil</th>
     </tr></thead><tbody>{rows}</tbody></table>
     {graficos}
-    <div class="grid2">
-      <div>
+    <table class="grid2"><tr>
+      <td width="55%">
         <h2>Resumen de Cantidades</h2>
-        <table><thead><tr>
+        <table class="sheet"><thead><tr>
           <th class="cant">Item</th><th class="cant">Long</th><th class="cant">Ancho</th>
           <th class="cant">Espesor</th><th class="cant">Desc.</th><th class="cant">Cantidad</th>
         </tr></thead><tbody>{cants}</tbody></table>
-      </div>
-      <div>
+      </td>
+      <td width="45%">
         <h2>Descuentos Específicos</h2>
-        <table><thead><tr>
+        <table class="sheet"><thead><tr>
           <th class="desc">Item</th><th class="desc">Long</th><th class="desc">Ancho</th>
           <th class="desc">Espesor</th><th class="desc">Cantidad</th>
         </tr></thead><tbody>{descs}</tbody></table>
-      </div>
-    </div>
-    <div class="firmas">
-      <div class="firma"><b>Elaboró</b><br/>{elaboro}<br/><span class="meta">Topografo de Obra (Contratista)</span></div>
-      <div class="firma"><b>Aprobó:</b><br/>{aprobo}<br/><span class="meta">Topografo Interventoria</span></div>
-    </div>
+      </td>
+    </tr></table>
+    <table class="firmas"><tr>
+      <td><b>Elaboró</b><br/>{elaboro}<br/><span class="meta">Topografo de Obra (Contratista)</span></td>
+      <td><b>Aprobó:</b><br/>{aprobo}<br/><span class="meta">Topografo Interventoria</span></td>
+    </tr></table>
     </body></html>"""
     try:
         from topografia_utils import to_pdf_bytes
-        content, media = to_pdf_bytes(html_doc), "application/pdf"
+        content, media = to_pdf_bytes(html_doc, landscape=True), "application/pdf"
     except Exception:
         content, media = html_doc.encode("utf-8"), "text/html; charset=utf-8"
     suffix = "_plantilla" if vacia else ""

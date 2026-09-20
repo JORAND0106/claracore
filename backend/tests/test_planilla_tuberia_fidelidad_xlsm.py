@@ -172,6 +172,73 @@ class TestPdfBloquesInventario(unittest.TestCase):
         # Dos paneles embebidos (sección + perfil) aunque no haya series.
         self.assertGreaterEqual(graf.count("data:image/svg+xml"), 2)
 
+    def test_franja_tramo_tablas_estructura(self):
+        from topografia_planilla_tuberia_pdf import html_franja_tramo_tuberia
+
+        html = html_franja_tramo_tuberia(
+            planilla={
+                "pk_id": "PK-01",
+                "costado": "Izquierdo",
+                "diametro_m": 0.9,
+                "espesor_m": 0.075,
+                "material": "Concreto",
+                "tipo": "ALCANTARILLA",
+                "ancho_excavacion_m": 1.8,
+                "relacion_atraque": "1:3",
+            },
+            calculo={
+                "seccion": {
+                    "area_tuberia_m2": 0.636,
+                    "area_1_m2": 0.45,
+                    "area_2_m2": 0.32,
+                    "altura_relleno_m": 0.8,
+                    "cama_triturado_m": 0.1,
+                },
+                "cartera": {"totales": {"abscisa_inicial": 100.0, "abscisa_final": 120.0}},
+            },
+            meta={
+                "abscisa_inicial": 100.0,
+                "abscisa_final": 120.0,
+                "norte_abs_inicial": 1.0,
+                "este_abs_inicial": 2.0,
+                "norte_abs_final": 3.0,
+                "este_abs_final": 4.0,
+            },
+        )
+        # Tres tablas (Abs/PK, geo+tubo, áreas/sección) — no texto corrido.
+        self.assertGreaterEqual(html.count("<table"), 3)
+        for label in (
+            "Abs Inicial",
+            "Abs Final",
+            "PK_ID",
+            "Costado",
+            "Abscisa Inicial",
+            "Norte Abs Inicial",
+            "Este Abs Incial",
+            "Abscisa Final",
+            "Norte Abs Final",
+            "Este Abs Final",
+            "D. TUBERÍA",
+            "ESP. TUBERÍA",
+            "AREA TUBERÍA",
+            "MATERIAL",
+            "TIPO DE RED",
+            "Area 1",
+            "Area 2",
+            "Altura Atraque",
+            "Altura Relleno",
+            "Cama Triturado",
+            "Anc. Excavación",
+        ):
+            self.assertIn(label, html)
+        self.assertIn("PK-01", html)
+        self.assertIn("Izquierdo", html)
+        self.assertIn("ALCANTARILLA", html)
+        self.assertIn("#BDD7EE", html)  # franja Abs/PK
+        self.assertIn("#D9D9D9", html)  # cabeceras geo/params
+        self.assertNotIn("θ=", html)
+        self.assertNotIn(" · ", html)
+
 
 if __name__ == "__main__":
     unittest.main()
