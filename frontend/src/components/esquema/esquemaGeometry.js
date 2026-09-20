@@ -13,8 +13,8 @@ export const LINE_TOOLS = new Set(['linea', 'flecha'])
  * no se reescalan. Grosor, hatch y umbrales de snap siguen en unidades internas.
  */
 export const PX_PER_METER = 50
-/** Zoom 1 = 100 %. Máximo 4000 % para trabajar cotas de 1 m o menos. */
-export const MIN_ZOOM = 0.15
+/** Zoom 1 = 100 %. Mínimo bajo para encuadrar mapas georreferenciados grandes. */
+export const MIN_ZOOM = 0.02
 export const MAX_ZOOM = 40
 
 export function clampZoom(z) {

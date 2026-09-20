@@ -127,7 +127,10 @@ import {
 } from './esquemaMapaCapture'
 import {
   mapCenterAsGeoOrigin,
+  mapRelativeZoomPercent,
+  mapZoomAfterVisualFactor,
   syncCanvasTransformToMap,
+  visualZoomStillResponsive,
 } from './esquemaMapaSync'
 import {
   ESQUEMA_MAPA_NORTH_BEARING,
@@ -456,6 +459,8 @@ export default function EsquemaEditorModal({
   const mapGeoOriginRef = useRef(null)
   const syncCanvasToMapRef = useRef(() => {})
   const mapSyncZoomLabelRef = useRef(null)
+  /** Nivel Mapbox al fijar el origen (= 100 % visual). */
+  const mapZoomBaselineRef = useRef(null)
   const rotatePivotRef = useRef(null)
   const mirrorAxisRef = useRef(null)
   const arrayModeRef = useRef('rect')
@@ -733,30 +738,30 @@ export default function EsquemaEditorModal({
 
   // Zoom con rueda/scroll: listener nativo no-pasivo para poder preventDefault
   // (evita scroll de página y no depende de Ctrl/⌘).
-  // Con mapa activo: el zoom va al mapa; pan/zoom del lienzo se recalculan en sync.
+  // Con mapa activo: el zoom va al mapa (escala real + visual juntos).
+  // No se bloquea por drawing.current: tras dibujar el usuario debe poder zoom.
   useEffect(() => {
     const c = canvasRef.current
     if (!c) return undefined
     const onWheelNative = (e) => {
       e.preventDefault()
       e.stopPropagation()
-      if (pinchRef.current || drawing.current) return
+      if (pinchRef.current) return
       const r = c.getBoundingClientRect()
       const screenX = e.clientX - r.left
       const screenY = e.clientY - r.top
       if (mapActiveRef.current && mapRef.current) {
         const map = mapRef.current
         try {
-          const delta = e.deltaY > 0 ? -0.35 : 0.35
+          const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
+          const nextZ = mapZoomAfterVisualFactor(map.getZoom(), factor)
+          if (nextZ == null) return
           const around = map.unproject([screenX, screenY])
-          map.easeTo({
-            zoom: map.getZoom() + delta,
-            around,
-            duration: 0,
-          })
+          map.easeTo({ zoom: nextZ, around, duration: 0 })
         } catch { /* ignore */ }
         return
       }
+      if (drawing.current) return
       const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
       const z0 = zoomRef.current || 1
       const z1 = clampZoom(z0 * factor)
@@ -807,30 +812,70 @@ export default function EsquemaEditorModal({
     setPanTick((n) => n + 1)
   }
 
-  const setZoomAroundCenter = (nextZoom) => {
+  /**
+   * Zoom visual con mapa activo: opera sobre Mapbox (factor), no sobre zoomRef.
+   * Así no se bloquea cuando zoomRef ≪ MIN_ZOOM tras la sync de escala real.
+   */
+  const zoomMapByVisualFactor = useCallback((factor, screenAround = null) => {
+    const map = mapRef.current
+    if (!map || !mapActiveRef.current) return false
+    const f = Number(factor)
+    if (!Number.isFinite(f) || !(f > 0) || Math.abs(f - 1) < 0.001) return false
+    if (!visualZoomStillResponsive(map.getZoom(), f)) return false
+    try {
+      const nextZ = mapZoomAfterVisualFactor(map.getZoom(), f)
+      if (nextZ == null) return false
+      const opts = { zoom: nextZ, duration: 160 }
+      if (screenAround && Number.isFinite(screenAround.x) && Number.isFinite(screenAround.y)) {
+        try { opts.around = map.unproject([screenAround.x, screenAround.y]) } catch { /* ignore */ }
+      }
+      map.easeTo(opts)
+      return true
+    } catch {
+      return false
+    }
+  }, [])
+
+  const resetMapView = useCallback(() => {
+    const map = mapRef.current
+    if (!map || !mapActiveRef.current) return
+    try {
+      if (mapPlanoFcRef.current) {
+        fitEsquemaMapCamera(map, mapPlanoFcRef.current, mapCtx, mapContratoMetaRef.current)
+      } else {
+        const loc = mapCtx.hasPoint ? mapCtx : null
+        map.easeTo({
+          zoom: loc ? ESQUEMA_MAPA_ZOOM_CON_UBICACION : ESQUEMA_MAPA_ZOOM_DEFAULT,
+          duration: 220,
+        })
+      }
+      // Re-baseline 100 % al reencuadrar
+      map.once('moveend', () => {
+        try {
+          mapZoomBaselineRef.current = map.getZoom()
+          syncCanvasToMapRef.current()
+        } catch { /* ignore */ }
+      })
+    } catch { /* ignore */ }
+  }, [mapCtx])
+
+  const setZoomAroundCenter = (nextZoom, opts = {}) => {
     if (mapActiveRef.current && mapRef.current) {
-      try {
-        const map = mapRef.current
-        const z0 = zoomRef.current || 1
-        const z1 = Number(nextZoom)
-        if (Number.isFinite(z1) && Math.abs(z1 - 1) < 0.02) {
-          // Botón «100 %»: reencuadra el plano / ubicación, no fuerza zoom lienzo.
-          if (mapPlanoFcRef.current) {
-            fitEsquemaMapCamera(map, mapPlanoFcRef.current, mapCtx, mapContratoMetaRef.current)
-          } else {
-            const loc = mapCtx.hasPoint ? mapCtx : null
-            map.easeTo({
-              zoom: loc ? ESQUEMA_MAPA_ZOOM_CON_UBICACION : ESQUEMA_MAPA_ZOOM_DEFAULT,
-              duration: 220,
-            })
-          }
-        } else if (Number.isFinite(z1) && z1 > z0) {
-          map.zoomIn({ duration: 180 })
-        } else if (Number.isFinite(z1) && z1 < z0) {
-          map.zoomOut({ duration: 180 })
-        }
-        // pan/zoom del lienzo los actualiza syncCanvasToMap en el evento move/zoom
-      } catch { /* ignore */ }
+      if (opts.reset) {
+        resetMapView()
+        return
+      }
+      if (opts.factor != null) {
+        const { w, h } = cssSize()
+        zoomMapByVisualFactor(opts.factor, { x: w / 2, y: h / 2 })
+        return
+      }
+      // Compat: interpretar nextZoom como factor relativo al zoomRef actual
+      const z0 = zoomRef.current || 1
+      const z1 = Number(nextZoom)
+      if (!Number.isFinite(z1) || !(z0 > 0)) return
+      const { w, h } = cssSize()
+      zoomMapByVisualFactor(z1 / z0, { x: w / 2, y: h / 2 })
       return
     }
     const { w, h } = cssSize()
@@ -841,6 +886,7 @@ export default function EsquemaEditorModal({
    * Deriva pan/zoom del lienzo desde la escala real del mapa (m/px)
    * y un origen geográfico fijo ↔ mundo (0,0). Sin esto, el mapa y el
    * dibujo son dos escalas independientes.
+   * El % mostrado es zoom *visual* relativo al baseline Mapbox (no zoomRef).
    */
   const syncCanvasToMap = useCallback(() => {
     if (!mapActiveRef.current) return false
@@ -855,8 +901,14 @@ export default function EsquemaEditorModal({
     zoomRef.current = synced.zoom
     // Redibujar sin setState en cada frame de pan (el mapa dispara move muy seguido).
     try { redrawRef.current?.(draftRef.current) } catch { /* ignore */ }
-    const pct = synced.zoom * 100
-    const label = pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10
+    if (mapZoomBaselineRef.current == null) {
+      try { mapZoomBaselineRef.current = map.getZoom() } catch { /* ignore */ }
+    }
+    const baseline = mapZoomBaselineRef.current
+    let label = 100
+    try {
+      label = mapRelativeZoomPercent(map.getZoom(), baseline ?? map.getZoom())
+    } catch { /* ignore */ }
     if (mapSyncZoomLabelRef.current !== label) {
       mapSyncZoomLabelRef.current = label
       setZoomPct(label)
@@ -944,6 +996,8 @@ export default function EsquemaEditorModal({
     destroyMap()
     mapActiveRef.current = false
     mapGeoOriginRef.current = null
+    mapZoomBaselineRef.current = null
+    mapSyncZoomLabelRef.current = null
     setMapActive(false)
     setMapError('')
     setMapPickInfo(null)
@@ -991,6 +1045,8 @@ export default function EsquemaEditorModal({
     zoomRef.current = 1
     setZoomPct(100)
     mapGeoOriginRef.current = null
+    mapZoomBaselineRef.current = null
+    mapSyncZoomLabelRef.current = null
     setMapError('')
     setMapBasemap('calle')
     setMapOpacity(0.72)
@@ -998,7 +1054,6 @@ export default function EsquemaEditorModal({
     setMapPropsOpen(true)
     mapActiveRef.current = true
     setMapActive(true)
-    mapSyncZoomLabelRef.current = null
     setTool('paneo')
     toolRef.current = 'paneo'
     setToolHint(mapCtx.hasPk
@@ -1178,6 +1233,7 @@ export default function EsquemaEditorModal({
       if (!contratoId) {
         if (!cancelled && mapRef.current === map) {
           mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+          try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
           syncCanvasToMapRef.current()
         }
         setToolHint((h) => h || 'Sin contrato: mapa sin polígonos PK. Use Paneo para elegir el sector.')
@@ -1201,12 +1257,14 @@ export default function EsquemaEditorModal({
         })
         // Origen geo fijo tras el encuadre inicial (no re-fijar en pans posteriores).
         mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+        try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
         syncCanvasToMapRef.current()
         if (ctx.hasPk) applyEsquemaPkSelectionStyle(map, ctx.pkId)
       } catch {
         if (!cancelled) {
           setMapError('No se pudo cargar el plano PK del contrato')
           mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+          try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
           syncCanvasToMapRef.current()
         }
       }
@@ -2508,19 +2566,36 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Pellizco: zoom anclado al punto medio; pan sigue el centro del gesto.
-    // Con mapa activo el pellizco zoom/pan del lienzo desincronizaría la escala:
-    // se ignora (el mapa gestiona el gesto cuando el canvas deja pasar pointer-events).
+    // Pellizco: zoom anclado al punto medio.
+    // Con mapa activo: factor → Mapbox (misma escala compartida; no bloquea tras dibujar).
     if (pinchRef.current && pointersRef.current.size >= 2) {
       e.preventDefault()
-      if (mapActiveRef.current && mapRef.current) {
-        return
-      }
       const distNow = pointerDistance()
       if (distNow >= 8) {
         const pinch = pinchRef.current
+        const factor = distNow / pinch.dist0
+        if (mapActiveRef.current && mapRef.current) {
+          const mid = pointerMidpoint()
+          // Aplicar respecto al zoom Mapbox al inicio del pellizco
+          if (pinch.mapZoom0 == null) {
+            try { pinch.mapZoom0 = mapRef.current.getZoom() } catch { pinch.mapZoom0 = null }
+          }
+          if (pinch.mapZoom0 != null) {
+            try {
+              const nextZ = mapZoomAfterVisualFactor(pinch.mapZoom0, factor)
+              if (nextZ != null) {
+                mapRef.current.easeTo({
+                  zoom: nextZ,
+                  around: mapRef.current.unproject([mid.x, mid.y]),
+                  duration: 0,
+                })
+              }
+            } catch { /* ignore */ }
+          }
+          return
+        }
         const mid = pointerMidpoint()
-        const z1 = clampZoom(pinch.zoom0 * (distNow / pinch.dist0))
+        const z1 = clampZoom(pinch.zoom0 * factor)
         const wx = (pinch.midX - pinch.pan0.x) / pinch.zoom0
         const wy = (pinch.midY - pinch.pan0.y) / pinch.zoom0
         panRef.current = {
@@ -3788,13 +3863,22 @@ export default function EsquemaEditorModal({
               })}
               {group.id === 'vista' ? (
                 <>
-                  <button type="button" title="Alejar (zoom out)" aria-label="Alejar" onClick={() => setZoomAroundCenter(zoomRef.current / 1.25)} style={iconBtn(t, false)}>
+                  <button type="button" title="Alejar (zoom out)" aria-label="Alejar" onClick={() => {
+                    if (mapActiveRef.current) setZoomAroundCenter(null, { factor: 1 / 1.25 })
+                    else setZoomAroundCenter(zoomRef.current / 1.25)
+                  }} style={iconBtn(t, false)}>
                     <IconZoomOut />
                   </button>
-                  <button type="button" title="Acercar (zoom in)" aria-label="Acercar" onClick={() => setZoomAroundCenter(zoomRef.current * 1.25)} style={iconBtn(t, false)}>
+                  <button type="button" title="Acercar (zoom in)" aria-label="Acercar" onClick={() => {
+                    if (mapActiveRef.current) setZoomAroundCenter(null, { factor: 1.25 })
+                    else setZoomAroundCenter(zoomRef.current * 1.25)
+                  }} style={iconBtn(t, false)}>
                     <IconZoomIn />
                   </button>
-                  <button type="button" title="Restablecer zoom 100%" aria-label="Zoom 100%" onClick={() => setZoomAroundCenter(1)} style={{ ...ghost(t), padding: '6px 8px', fontSize: 'var(--cc-xs)', minWidth: 52 }}>
+                  <button type="button" title="Restablecer zoom 100%" aria-label="Zoom 100%" onClick={() => {
+                    if (mapActiveRef.current) setZoomAroundCenter(null, { reset: true })
+                    else setZoomAroundCenter(1)
+                  }} style={{ ...ghost(t), padding: '6px 8px', fontSize: 'var(--cc-xs)', minWidth: 52 }}>
                     {zoomPct}%
                   </button>
                 </>
