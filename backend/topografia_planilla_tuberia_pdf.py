@@ -7,13 +7,49 @@ sin abrir el .xlsm en runtime.
 """
 from __future__ import annotations
 
+import base64
 import html
+from pathlib import Path
 from typing import Any, Optional
 
 # Colores aproximados del inventario (theme Office → RGB).
 _FILL_ABS = "#BDD7EE"  # theme 4 tint ~0.4 — Abs/PK_ID/Costado
 _FILL_HDR = "#D9D9D9"  # theme 0 tint -0.15 — cabeceras geo/params
 _FILL_CALC = "#F2F2F2"  # celdas calculadas
+
+# PNGs del XLSM (drawing SeccionTub / SeccionFil) — toggled by tipo like VBA ActualizarSeccion.
+_MEDIA_DIR = Path(__file__).resolve().parent / "data" / "planillas_tuberia" / "media"
+_SECCION_PNG = {
+    "ALCANTARILLA": _MEDIA_DIR / "seccion_alcantarilla.png",
+    "FILTRO": _MEDIA_DIR / "seccion_filtro.png",
+}
+
+
+def _png_data_uri(path: Path, *, max_w: int | None = None, max_h: int | None = None) -> Optional[str]:
+    """Data-URI PNG; opcionalmente reescala para que xhtml2pdf no desborde la celda."""
+    try:
+        if not path.is_file():
+            return None
+        raw = path.read_bytes()
+        if max_w or max_h:
+            from io import BytesIO
+            from PIL import Image
+            im = Image.open(BytesIO(raw)).convert("RGBA")
+            tw = max_w or im.width
+            th = max_h or im.height
+            im.thumbnail((tw, th), Image.Resampling.LANCZOS)
+            # Lienzo exacto para fijar tamaño intrínseco del <img>.
+            canvas = Image.new("RGBA", (tw, th), (255, 255, 255, 0))
+            ox = (tw - im.width) // 2
+            oy = (th - im.height) // 2
+            canvas.paste(im, (ox, oy), im)
+            buf = BytesIO()
+            canvas.save(buf, format="PNG", optimize=True)
+            raw = buf.getvalue()
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+    except Exception:
+        return None
 
 
 def _fmt(v: Any, d: int = 3) -> str:
@@ -43,15 +79,15 @@ def _esc(v: Any) -> str:
 def _th(text: str, *, fill: str = _FILL_HDR, colspan: int = 1) -> str:
     cs = f' colspan="{colspan}"' if colspan > 1 else ""
     return (
-        f'<th{cs} style="background:{fill};border:0.4pt solid #64748b;padding:0 2px;'
-        f'font-size:6pt;font-weight:700;text-align:center;vertical-align:middle;line-height:1.1;">{text}</th>'
+        f'<th{cs} style="background:{fill};border:0.4pt solid #64748b;padding:2px 3px;'
+        f'font-size:6.5pt;font-weight:700;text-align:center;vertical-align:middle;line-height:1.1;">{text}</th>'
     )
 
 
 def _td(text: str, *, fill: str = "#FFFFFF", align: str = "center") -> str:
     return (
-        f'<td style="background:{fill};border:0.4pt solid #64748b;padding:0 2px;'
-        f'font-size:6.5pt;text-align:{align};vertical-align:middle;line-height:1.1;">{text}</td>'
+        f'<td style="background:{fill};border:0.4pt solid #64748b;padding:2px 3px;'
+        f'font-size:7pt;text-align:{align};vertical-align:middle;line-height:1.1;">{text}</td>'
     )
 
 
@@ -262,39 +298,106 @@ def html_franja_tramo_tuberia(
 
 
 def svg_seccion_tipica_pdf(seccion_tipica: Optional[dict], *, width: int = 320, height: int = 220) -> str:
-    """SVG paramétrico del panel GRAFICO (diámetro, espesor, ancho excavación, alturas)."""
+    """SVG tipado ALCANTARILLA / FILTRO (fallback si no hay PNG del XLSM).
+
+    ALCANTARILLA: relleno superior + cama/triturado inferior + tubo con pared.
+    FILTRO: excavación llena de triturado y tubo cerca del fondo (SeccionFil).
+    """
     st = seccion_tipica or {}
     B = max(_num(st.get("ancho_excavacion_m"), 1.2), 0.4)
     D = max(_num(st.get("diametro_externo_m"), 0.6), 0.2)
     h_rel = max(_num(st.get("altura_relleno_m"), 0.2), 0.05)
     h_exc = max(_num(st.get("prom_altura_excavacion"), B), 0.5)
     cama = max(_num(st.get("cama_triturado_m"), 0.0), 0.0)
-    tipo = str(st.get("tipo") or "ALCANTARILLA")
+    h_trit = max(_num(st.get("prom_altura_triturado"), h_rel + cama), 0.05)
+    tipo = str(st.get("tipo") or "ALCANTARILLA").upper()
+    es_filtro = tipo == "FILTRO"
     rel = html.escape(str(st.get("relacion_atraque") or ""))
+    titulo = "GRAFICO — Sección Filtro" if es_filtro else "GRAFICO — Sección Típica Tubería"
 
-    scale = min(180 / B, 140 / max(h_exc, D + h_rel + cama + 0.3))
+    scale = min((width - 40) / B, (height - 52) / max(h_exc, D + h_rel + cama + 0.3))
     cx = width / 2
     trench_w = B * scale
     trench_h = h_exc * scale
-    top = 28
+    top = 26
     left = cx - trench_w / 2
     pipe_r = (D / 2) * scale
-    bed_h = max((h_rel + cama) * scale, 4.0)
-    pipe_cy = top + trench_h - bed_h - pipe_r * 0.1
-    fill_pipe = "#7dd3fc" if tipo == "FILTRO" else "#94a3b8"
+    pipe_r_in = max(pipe_r * 0.78, pipe_r - 3.5)
 
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
-  <rect x="0" y="0" width="{width}" height="{height}" fill="#ffffff"/>
-  <text x="{cx}" y="14" text-anchor="middle" font-size="10" font-weight="700" fill="#334155">GRAFICO — Sección típica</text>
-  <rect x="{left:.1f}" y="{top}" width="{trench_w:.1f}" height="{trench_h:.1f}" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
-  <rect x="{left:.1f}" y="{top + trench_h - bed_h:.1f}" width="{trench_w:.1f}" height="{bed_h:.1f}" fill="#fde68a" stroke="#b45309" stroke-width="1" opacity="0.9"/>
-  <circle cx="{cx}" cy="{pipe_cy:.1f}" r="{pipe_r:.1f}" fill="{fill_pipe}" stroke="#0f172a" stroke-width="1.5"/>
-  <line x1="{left - 10:.1f}" y1="{top}" x2="{left - 10:.1f}" y2="{top + trench_h:.1f}" stroke="#0ea5e9" stroke-width="1.2"/>
-  <text x="{left - 14:.1f}" y="{top + trench_h / 2:.1f}" font-size="8" fill="#0369a1" text-anchor="end" dominant-baseline="middle">h_exc {_fmt(h_exc, 2)}</text>
-  <text x="{cx}" y="{top + trench_h + 16:.1f}" font-size="8" fill="#475569" text-anchor="middle">B={_fmt(B, 2)} m · Øext={_fmt(D, 3)} m · h_atr={_fmt(h_rel, 3)} m ({rel})</text>
-  <text x="{cx}" y="{height - 8}" font-size="8" fill="#64748b" text-anchor="middle">A1={_fmt(st.get("area_1_m2"), 4)} m² · A2={_fmt(st.get("area_2_m2"), 4)} m²</text>
-</svg>"""
+    if es_filtro:
+        bed_h = trench_h
+        pipe_cy = top + trench_h - max(pipe_r * 1.2, 8)
+        label_a = f"Anc. Geot {_fmt(st.get('prom_ancho_geotextil'), 3)}"
+        label_b = f"Alt Tritur. {_fmt(h_trit, 3)}"
+    else:
+        bed_h = max((h_rel + cama) * scale, trench_h * 0.28, 8.0)
+        pipe_cy = top + trench_h - bed_h - pipe_r * 0.05
+        label_a = f"Alt Rell. {_fmt(h_rel, 3)}"
+        label_b = f"Alt Tritur. {_fmt(h_trit, 3)}"
 
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        '<defs>',
+        '<pattern id="hatchBlue" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">',
+        '<line x1="0" y1="0" x2="0" y2="6" stroke="#1d4ed8" stroke-width="1.2"/></pattern>',
+        '<pattern id="hatchPink" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">',
+        '<line x1="0" y1="0" x2="0" y2="6" stroke="#db2777" stroke-width="1.2"/></pattern>',
+        '</defs>',
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="#ffffff"/>',
+        f'<text x="{cx}" y="14" text-anchor="middle" font-size="9" font-weight="700" fill="#334155">{titulo}</text>',
+        f'<rect x="{left:.1f}" y="{top}" width="{trench_w:.1f}" height="{trench_h:.1f}" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>',
+    ]
+    if es_filtro:
+        parts.append(
+            f'<rect x="{left:.1f}" y="{top:.1f}" width="{trench_w:.1f}" height="{trench_h:.1f}" '
+            f'fill="#f9a8d4" fill-opacity="0.55"/>'
+        )
+        parts.append(
+            f'<rect x="{left:.1f}" y="{top:.1f}" width="{trench_w:.1f}" height="{trench_h:.1f}" '
+            f'fill="url(#hatchPink)" fill-opacity="0.5"/>'
+        )
+    else:
+        relleno_h = max(trench_h - bed_h, 4)
+        parts.append(
+            f'<rect x="{left:.1f}" y="{top:.1f}" width="{trench_w:.1f}" height="{relleno_h:.1f}" '
+            f'fill="#bfdbfe" fill-opacity="0.7"/>'
+        )
+        parts.append(
+            f'<rect x="{left:.1f}" y="{top:.1f}" width="{trench_w:.1f}" height="{relleno_h:.1f}" '
+            f'fill="url(#hatchBlue)" fill-opacity="0.45"/>'
+        )
+        parts.append(
+            f'<rect x="{left:.1f}" y="{top + trench_h - bed_h:.1f}" width="{trench_w:.1f}" height="{bed_h:.1f}" '
+            f'fill="#f9a8d4" fill-opacity="0.75"/>'
+        )
+        parts.append(
+            f'<rect x="{left:.1f}" y="{top + trench_h - bed_h:.1f}" width="{trench_w:.1f}" height="{bed_h:.1f}" '
+            f'fill="url(#hatchPink)" fill-opacity="0.4"/>'
+        )
+
+    parts.append(
+        f'<circle cx="{cx}" cy="{pipe_cy:.1f}" r="{pipe_r:.1f}" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.4"/>'
+    )
+    parts.append(
+        f'<circle cx="{cx}" cy="{pipe_cy:.1f}" r="{pipe_r_in:.1f}" fill="#ffffff" stroke="#334155" stroke-width="1"/>'
+    )
+    parts.append(
+        f'<line x1="{left - 8:.1f}" y1="{top}" x2="{left - 8:.1f}" y2="{top + trench_h:.1f}" stroke="#0ea5e9" stroke-width="1.1"/>'
+    )
+    parts.append(
+        f'<text x="{left - 10:.1f}" y="{top + trench_h / 2:.1f}" font-size="7" fill="#0369a1" '
+        f'text-anchor="end" dominant-baseline="middle">h_exc {_fmt(h_exc, 2)}</text>'
+    )
+    parts.append(
+        f'<text x="{cx}" y="{top + trench_h + 12:.1f}" font-size="7" fill="#475569" text-anchor="middle">'
+        f'Ancho {_fmt(B, 2)} · Øext {_fmt(D, 3)} · {label_a} ({rel})</text>'
+    )
+    parts.append(
+        f'<text x="{cx}" y="{height - 6}" font-size="7" fill="#64748b" text-anchor="middle">'
+        f'{label_b} · A1={_fmt(st.get("area_1_m2"), 4)} · A2={_fmt(st.get("area_2_m2"), 4)}</text>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
 
 def svg_perfil_longitudinal_pdf(perfil: Optional[dict], *, width: int = 520, height: int = 200) -> str:
     """SVG del ScatterChart: Terreno Natural / Terminado Filtro|Cota Lomo / Cota Fondo."""
@@ -391,32 +494,47 @@ def svg_perfil_longitudinal_pdf(perfil: Optional[dict], *, width: int = 520, hei
 def html_bloque_graficos_pdf(
     calculo: dict,
     *,
-    sec_w: int = 180,
-    sec_h: int = 105,
-    perfil_w: int = 300,
-    perfil_h: int = 105,
+    sec_w: int = 190,
+    sec_h: int = 98,
+    perfil_w: int = 330,
+    perfil_h: int = 98,
 ) -> str:
     """Panel GRAFICO + Perfil longitudinal embebidos (xhtml2pdf).
 
-    Los tamaños por defecto están compactos para caber en una sola página landscape.
-    No altera la geometría SVG; solo el tamaño de incrustación.
+    Sección típica: PNG del XLSM según tipo (ALCANTARILLA→SeccionTub, FILTRO→SeccionFil).
+    Contenedor con altura fija para que el gráfico no se monte sobre cantidades.
     """
     from topografia_utils import svg_embed_pdf
 
     st = calculo.get("seccion_tipica") or calculo.get("seccion") or {}
-    sec = svg_seccion_tipica_pdf(st, width=sec_w, height=sec_h)
+    tipo = str(st.get("tipo") or (calculo.get("seccion") or {}).get("tipo") or "ALCANTARILLA").upper()
+    if tipo not in _SECCION_PNG:
+        tipo = "ALCANTARILLA"
+
+    titulo = "GRAFICO — Sección Filtro" if tipo == "FILTRO" else "GRAFICO — Sección típica Tubería"
+    png_uri = _png_data_uri(_SECCION_PNG[tipo], max_w=sec_w, max_h=max(sec_h - 12, 60))
+    if png_uri:
+        sec_html = (
+            f'<div style="font-size:7pt;font-weight:700;text-align:center;line-height:1.2;">{titulo}</div>'
+            f'<img src="{png_uri}" width="{sec_w}" height="{sec_h}" '
+            f'style="display:block;margin:0 auto;max-width:100%;max-height:{sec_h}px;" alt="{titulo}"/>'
+        )
+    else:
+        sec_html = svg_embed_pdf(
+            svg_seccion_tipica_pdf(st, width=sec_w, height=sec_h), sec_w, sec_h
+        )
+
     perfil = svg_perfil_longitudinal_pdf(
         calculo.get("perfil") or {}, width=perfil_w, height=perfil_h
     )
+    perfil_html = svg_embed_pdf(perfil, perfil_w, perfil_h)
+
     return f"""
-    <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:1px 0;">
+    <table class="graficos-wrap" width="100%" cellspacing="0" cellpadding="0">
       <tr>
-        <td width="38%" valign="top" style="border:0.4pt solid #94a3b8;padding:1px;">
-          {svg_embed_pdf(sec, sec_w, sec_h)}
-        </td>
-        <td width="62%" valign="top" style="border:0.4pt solid #94a3b8;padding:1px;">
-          {svg_embed_pdf(perfil, perfil_w, perfil_h)}
-        </td>
+        <td width="38%" height="{sec_h}">{sec_html}</td>
+        <td width="62%" height="{perfil_h}">{perfil_html}</td>
       </tr>
     </table>
+    <div style="font-size:1pt;line-height:4px;clear:both;">&nbsp;</div>
     """

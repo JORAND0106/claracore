@@ -254,7 +254,8 @@
         {
           "col": "K",
           "header": "GRAFICO",
-          "role": "panel_grafico_seccion"
+          "role": "panel_grafico_seccion",
+          "notes": "Gráfico dinámico XLSM: formas SeccionTub (image3.png=ALCANTARILLA) y SeccionFil (image2.png=FILTRO) con VBA ActualizarSeccion según F1 vs P1."
         }
       ],
       "totales_row": 41,
@@ -270,7 +271,7 @@
       "id": "panel_grafico_seccion",
       "range": "K16:N42",
       "title": "GRAFICO",
-      "notes": "Panel de sección típica por celdas/fórmulas/etiquetas (no es chart embebido)."
+      "notes": "Panel de sección típica por celdas/fórmulas/etiquetas (no es chart embebido). Gráfico dinámico XLSM: formas SeccionTub (image3.png=ALCANTARILLA) y SeccionFil (image2.png=FILTRO) con VBA ActualizarSeccion según F1 vs P1."
     },
     {
       "id": "resumen_cantidades",

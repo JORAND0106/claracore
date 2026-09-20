@@ -168,9 +168,18 @@ class TestPdfBloquesInventario(unittest.TestCase):
         self.assertIn(TITULO_ALC, cab)
 
         graf = html_bloque_graficos_pdf({})
-        self.assertIn("data:image/svg+xml", graf)
-        # Dos paneles embebidos (sección + perfil) aunque no haya series.
-        self.assertGreaterEqual(graf.count("data:image/svg+xml"), 2)
+        # Sección típica = PNG tipado del XLSM; perfil = SVG (aunque sin series).
+        self.assertIn("data:image/png", graf)
+        self.assertIn("graficos-wrap", graf)
+        self.assertTrue(
+            "Filtro" in graf or "Tuber" in graf or "GRAFICO" in graf
+        )
+
+        graf_fil = html_bloque_graficos_pdf({"seccion_tipica": {"tipo": "FILTRO"}})
+        graf_alc = html_bloque_graficos_pdf({"seccion_tipica": {"tipo": "ALCANTARILLA"}})
+        self.assertIn("Filtro", graf_fil)
+        self.assertIn("Tuber", graf_alc)
+        self.assertNotEqual(graf_fil, graf_alc)
 
     def test_franja_tramo_tablas_estructura(self):
         from topografia_planilla_tuberia_pdf import html_franja_tramo_tuberia
