@@ -566,9 +566,35 @@ def _catalogo_descuentos(tipo: str):
     return ITEMS_DESCUENTOS_FILTRO if tipo == "FILTRO" else ITEMS_DESCUENTOS_ALCANTARILLA
 
 
+def _contrato_para_pdf(contrato_id: int) -> dict:
+    row = _row(
+        "contratos",
+        id=contrato_id,
+    ) or {}
+    # Ampliar select de logos/número/objeto si la fila genérica no los trae.
+    if not row.get("numero") and not row.get("logo_contratista"):
+        try:
+            q = (
+                supabase.table("contratos")
+                .select(
+                    "id, numero, objeto, contratista, interventoria, "
+                    "logo_contratista, logo_interventoria, logo_entidad"
+                )
+                .eq("id", contrato_id)
+                .limit(1)
+                .execute()
+            )
+            data = q.data or []
+            if data:
+                return data[0]
+        except Exception:
+            logger.exception("contrato para pdf planilla tuberia")
+    return row
+
+
 @router.get("/{contrato_id}/planillas-tuberia/{planilla_id}/excel")
 def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
-    """Exporta XLSX clonando la plantilla XLSM (fórmulas vivas + gráfico de perfil)."""
+    """Exporta .xlsx (sin macros) construido desde el inventario JSON versionado."""
     _require_contract_access(current_user, contrato_id)
     det = _detalle(contrato_id, planilla_id)
     vacia = _assert_export_permitido(current_user, det)
@@ -587,7 +613,6 @@ def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_u
         logger.exception("excel planilla tuberia")
         raise HTTPException(500, f"No se pudo generar Excel: {exc}") from exc
 
-    # F2F2F2 permanece como color de celdas calculadas en la plantilla original.
     suffix = "_plantilla" if vacia else ""
     return Response(
         content=content,
@@ -608,6 +633,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     p = det["planilla"]
     calc = det.get("calculo") or {}
     tipo = p.get("tipo") or "ALCANTARILLA"
+    contrato = _contrato_para_pdf(contrato_id)
 
     def fmt(v, d=3):
         if v is None:
@@ -674,11 +700,21 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     sec = calc.get("seccion") or {}
     elaboro = firmas.get("elaboro_nombre") or ""
     aprobo = firmas.get("aprobo_nombre") or ""
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
+
+    from topografia_planilla_tuberia_pdf import (
+        html_bloque_graficos_pdf,
+        html_cabecera_planilla_tuberia,
+    )
+
+    cabecera = html_cabecera_planilla_tuberia(
+        contrato=contrato, meta=meta, titulo=titulo
+    )
+    graficos = html_bloque_graficos_pdf(calc)
+
+    html_doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
     <style>
     body{{font-family:Arial,sans-serif;font-size:10px;color:#0f172a}}
-    h1{{font-size:14px;margin:0 0 4px;text-align:center}}
-    .code{{text-align:right;font-size:9px;color:#475569}}
+    h2{{font-size:11px;margin:8px 0 4px}}
     table{{border-collapse:collapse;width:100%;margin-bottom:10px}}
     th,td{{border:1px solid #64748b;padding:2px 4px}}
     th{{background:#D9D9D9;font-size:9px}}
@@ -689,13 +725,8 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     .grid2{{display:flex;gap:12px}} .grid2>div{{flex:1}}
     .firmas{{display:flex;gap:24px;margin-top:24px}} .firma{{flex:1;border-top:1px solid #94a3b8;padding-top:6px;min-height:52px}}
     </style></head><body>
-    <div class="code">INF-ING - TOP - 001 - V0</div>
-    <h1>{titulo}</h1>
+    {cabecera}
     {badge}
-    <p class="meta"><b>Contratista:</b> {meta.get('contratista') or ''} &nbsp;
-    <b>Interventoría:</b> {meta.get('interventoria') or ''} &nbsp;
-    <b>Apoyo a la Supervisión:</b> {meta.get('apoyo_supervision') or ''}</p>
-    <p class="meta"><b>INFORMACION DEL CONTRATO</b><br/>{meta.get('info_contrato') or ''}</p>
     <p class="meta">PK_ID {p.get('pk_id') or ''} · Costado {p.get('costado') or ''}
     · θ={fmt(p.get('diametro_m'))} · ESP={fmt(p.get('espesor_m'))}
     · AREA TUBERÍA={fmt(sec.get('area_tuberia_m2'))}
@@ -715,6 +746,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
       <th>Cota Fondo Excavación</th><th>Altura Excavacion</th><th>Altura Triturado</th>
       <th>Altura Relleno</th><th>Ancho Geotextil</th>
     </tr></thead><tbody>{rows}</tbody></table>
+    {graficos}
     <div class="grid2">
       <div>
         <h2>Resumen de Cantidades</h2>
@@ -731,7 +763,6 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         </tr></thead><tbody>{descs}</tbody></table>
       </div>
     </div>
-    <p class="meta">Perfil Longitudinal de Tubería — series: Terreno Natural / Terminado Filtro / Cota Fondo Excavación</p>
     <div class="firmas">
       <div class="firma"><b>Elaboró</b><br/>{elaboro}<br/><span class="meta">Topografo de Obra (Contratista)</span></div>
       <div class="firma"><b>Aprobó:</b><br/>{aprobo}<br/><span class="meta">Topografo Interventoria</span></div>
@@ -739,9 +770,9 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     </body></html>"""
     try:
         from topografia_utils import to_pdf_bytes
-        content, media = to_pdf_bytes(html), "application/pdf"
+        content, media = to_pdf_bytes(html_doc), "application/pdf"
     except Exception:
-        content, media = html.encode("utf-8"), "text/html; charset=utf-8"
+        content, media = html_doc.encode("utf-8"), "text/html; charset=utf-8"
     suffix = "_plantilla" if vacia else ""
     return Response(
         content=content, media_type=media,
