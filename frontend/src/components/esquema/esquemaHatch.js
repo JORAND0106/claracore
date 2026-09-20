@@ -246,6 +246,9 @@ export function detectClosedRegionFromClick(objects, worldX, worldY) {
   if (count < 8) return null
   if (count > rw * rh * 0.85) return null
 
+  // Interior geométrico (antes de dilatar): para medición de área sin grosor.
+  const countInterior = count
+
   // El trazo-barrera es más grueso que el contorno visible: dilatar hacia la
   // barrera acerca el relleno al límite real (centro del trazo dibujado).
   const dilatePx = Math.max(1, Math.ceil(2.0 * scale))
@@ -264,7 +267,20 @@ export function detectClosedRegionFromClick(objects, worldX, worldY) {
   }
   if (maxX < minX) return null
 
-  return { count, scale, ox, oy, minX, maxX, minY, maxY, visited, rw, rh }
+  return {
+    count,
+    countInterior,
+    scale,
+    ox,
+    oy,
+    minX,
+    maxX,
+    minY,
+    maxY,
+    visited,
+    rw,
+    rh,
+  }
 }
 
 export function createHatchRegionFromClick(objects, worldX, worldY, hatchKind, color) {

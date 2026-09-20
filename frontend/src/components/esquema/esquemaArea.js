@@ -1,9 +1,18 @@
 /**
  * Área de una región cerrada (tipo de acotación «Área» en la herramienta Acotado).
- * Reutiliza detectClosedRegionFromClick del hatch.
+ *
+ * Preferencia: área geométrica exacta de la entidad vectorial que contiene el
+ * clic (Ancho×Alto, π·rx·ry, etc.). La rotación no altera ese valor.
+ *
+ * Fallback: flood-fill del hatch, usando el conteo *antes* de dilatar hacia el
+ * grosor del trazo (la dilatación es solo visual para el relleno).
  */
 import { detectClosedRegionFromClick } from './esquemaHatch.js'
-import { floodPixelsToM2, formatAreaM2 } from './esquemaGeometry.js'
+import {
+  exactClosedAreaM2AtPoint,
+  floodPixelsToM2,
+  formatAreaM2,
+} from './esquemaGeometry.js'
 import { esquemaEntityInk, resolveEsquemaUi } from './esquemaTheme.js'
 
 export function createAreaLabel({ x, y, areaM2, color } = {}) {
@@ -23,9 +32,17 @@ export function createAreaLabel({ x, y, areaM2, color } = {}) {
 }
 
 export function createAreaLabelFromClick(objects, worldX, worldY, color) {
+  // 1) Entidad cerrada vectorial → área exacta (sin grosor ni raster).
+  const exact = exactClosedAreaM2AtPoint(objects, worldX, worldY)
+  if (exact != null && exact > 0) {
+    return createAreaLabel({ x: worldX, y: worldY, areaM2: exact, color })
+  }
+
+  // 2) Región compuesta (líneas sueltas, etc.): flood-fill sin contar el trazo.
   const region = detectClosedRegionFromClick(objects, worldX, worldY)
   if (!region) return null
-  const areaM2 = floodPixelsToM2(region.count, region.scale)
+  const pixels = region.countInterior != null ? region.countInterior : region.count
+  const areaM2 = floodPixelsToM2(pixels, region.scale)
   if (!(areaM2 > 0)) return null
   return createAreaLabel({ x: worldX, y: worldY, areaM2, color })
 }

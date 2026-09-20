@@ -3,7 +3,19 @@ export { default as EsquemaEditorModal } from './EsquemaEditorModal'
 export { composeEsquemaExport, sceneExportBounds, drawExportMarginContour } from './esquemaExport'
 export { hydrateIaObjects, sceneForIa } from './esquemaIa'
 export { createCota, createCotaAngle, createCotaRadio, createCotaDiametro, drawCota } from './esquemaCota'
-export { createAreaLabel, createAreaLabelFromClick } from './esquemaArea'
+export {
+  createAreaLabel,
+  createAreaLabelFromClick,
+} from './esquemaArea'
+export {
+  closedEntityAreaM2,
+  exactClosedAreaM2AtPoint,
+  pointInsideClosedEntity,
+  floodPixelsToM2,
+  polygonAreaM2,
+  formatAreaM2,
+} from './esquemaGeometry'
+
 export { offsetEntity } from './esquemaOffset'
 export { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 export {
