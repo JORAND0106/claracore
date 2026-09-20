@@ -34,6 +34,11 @@ export {
   haversineMeters,
 } from './esquemaMapaCapture'
 export {
+  syncCanvasTransformToMap,
+  mapScreenPixelsPerMeter,
+  canvasZoomFromMapPpm,
+} from './esquemaMapaSync'
+export {
   normalizeMapContext,
   buildEsquemaPlanoFc,
   queryPkYAbscisaEnPunto,
