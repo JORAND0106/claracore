@@ -126,6 +126,10 @@ import {
   printAreaToWorldRect,
 } from './esquemaMapaCapture'
 import {
+  mapCenterAsGeoOrigin,
+  syncCanvasTransformToMap,
+} from './esquemaMapaSync'
+import {
   ESQUEMA_MAPA_NORTH_BEARING,
   ESQUEMA_MAPA_PK_FILL,
   applyEsquemaPkSelectionStyle,
@@ -448,6 +452,10 @@ export default function EsquemaEditorModal({
   const mapPlanoFcRef = useRef(null)
   const mapContratoMetaRef = useRef({})
   const mapClickBoundRef = useRef(false)
+  /** Origen geo fijo ↔ mundo (0,0) mientras el mapa está activo. */
+  const mapGeoOriginRef = useRef(null)
+  const syncCanvasToMapRef = useRef(() => {})
+  const mapSyncZoomLabelRef = useRef(null)
   const rotatePivotRef = useRef(null)
   const mirrorAxisRef = useRef(null)
   const arrayModeRef = useRef('rect')
@@ -725,6 +733,7 @@ export default function EsquemaEditorModal({
 
   // Zoom con rueda/scroll: listener nativo no-pasivo para poder preventDefault
   // (evita scroll de página y no depende de Ctrl/⌘).
+  // Con mapa activo: el zoom va al mapa; pan/zoom del lienzo se recalculan en sync.
   useEffect(() => {
     const c = canvasRef.current
     if (!c) return undefined
@@ -732,10 +741,23 @@ export default function EsquemaEditorModal({
       e.preventDefault()
       e.stopPropagation()
       if (pinchRef.current || drawing.current) return
-      const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
       const r = c.getBoundingClientRect()
       const screenX = e.clientX - r.left
       const screenY = e.clientY - r.top
+      if (mapActiveRef.current && mapRef.current) {
+        const map = mapRef.current
+        try {
+          const delta = e.deltaY > 0 ? -0.35 : 0.35
+          const around = map.unproject([screenX, screenY])
+          map.easeTo({
+            zoom: map.getZoom() + delta,
+            around,
+            duration: 0,
+          })
+        } catch { /* ignore */ }
+        return
+      }
+      const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
       const z0 = zoomRef.current || 1
       const z1 = clampZoom(z0 * factor)
       if (Math.abs(z1 - z0) < 0.0005) return
@@ -790,8 +812,9 @@ export default function EsquemaEditorModal({
       try {
         const map = mapRef.current
         const z0 = zoomRef.current || 1
-        const z1 = clampZoom(nextZoom)
-        if (Math.abs(z1 - 1) < 0.02) {
+        const z1 = Number(nextZoom)
+        if (Number.isFinite(z1) && Math.abs(z1 - 1) < 0.02) {
+          // Botón «100 %»: reencuadra el plano / ubicación, no fuerza zoom lienzo.
           if (mapPlanoFcRef.current) {
             fitEsquemaMapCamera(map, mapPlanoFcRef.current, mapCtx, mapContratoMetaRef.current)
           } else {
@@ -801,19 +824,47 @@ export default function EsquemaEditorModal({
               duration: 220,
             })
           }
-        } else if (z1 > z0 + 0.01) {
+        } else if (Number.isFinite(z1) && z1 > z0) {
           map.zoomIn({ duration: 180 })
-        } else if (z1 < z0 - 0.01) {
+        } else if (Number.isFinite(z1) && z1 < z0) {
           map.zoomOut({ duration: 180 })
         }
-        zoomRef.current = z1
-        setZoomPct(Math.round(z1 * 100))
+        // pan/zoom del lienzo los actualiza syncCanvasToMap en el evento move/zoom
       } catch { /* ignore */ }
       return
     }
     const { w, h } = cssSize()
     setZoomAtScreenPoint(nextZoom, w / 2, h / 2)
   }
+
+  /**
+   * Deriva pan/zoom del lienzo desde la escala real del mapa (m/px)
+   * y un origen geográfico fijo ↔ mundo (0,0). Sin esto, el mapa y el
+   * dibujo son dos escalas independientes.
+   */
+  const syncCanvasToMap = useCallback(() => {
+    if (!mapActiveRef.current) return false
+    const map = mapRef.current
+    if (!map) return false
+    const origin = mapGeoOriginRef.current
+    // Esperar a que loadPlanoYCapas fije el origen tras el encuadre inicial.
+    if (!origin) return false
+    const synced = syncCanvasTransformToMap(map, origin)
+    if (!synced) return false
+    panRef.current = synced.pan
+    zoomRef.current = synced.zoom
+    // Redibujar sin setState en cada frame de pan (el mapa dispara move muy seguido).
+    try { redrawRef.current?.(draftRef.current) } catch { /* ignore */ }
+    const pct = synced.zoom * 100
+    const label = pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10
+    if (mapSyncZoomLabelRef.current !== label) {
+      mapSyncZoomLabelRef.current = label
+      setZoomPct(label)
+    }
+    return true
+  }, [])
+
+  syncCanvasToMapRef.current = syncCanvasToMap
 
   const destroyMap = useCallback(() => {
     const map = mapRef.current
@@ -892,6 +943,7 @@ export default function EsquemaEditorModal({
   const deactivateMap = useCallback(() => {
     destroyMap()
     mapActiveRef.current = false
+    mapGeoOriginRef.current = null
     setMapActive(false)
     setMapError('')
     setMapPickInfo(null)
@@ -902,6 +954,29 @@ export default function EsquemaEditorModal({
     setPrintAreaSelecting(false)
     printAreaDraftRef.current = null
     setToolHint('')
+    // Vuelve a escala libre: encuadra el dibujo o restaura 100 %
+    const drawable = objectsRef.current.filter((o) => !(o.type === 'image' && o.fit))
+    if (drawable.length) {
+      const bb = sceneExportBounds(drawable)
+      const { w, h } = cssSize()
+      if (w >= 40 && h >= 40 && bb && bb.w > 0 && bb.h > 0) {
+        const z = clampZoom(Math.min(2.5, Math.min((w - 80) / bb.w, (h - 80) / bb.h)))
+        zoomRef.current = z
+        panRef.current = {
+          x: (w / 2) - (bb.x + bb.w / 2) * z,
+          y: (h / 2) - (bb.y + bb.h / 2) * z,
+        }
+        setZoomPct(Math.round(z * 100))
+      } else {
+        panRef.current = { x: 0, y: 0 }
+        zoomRef.current = 1
+        setZoomPct(100)
+      }
+    } else {
+      panRef.current = { x: 0, y: 0 }
+      zoomRef.current = 1
+      setZoomPct(100)
+    }
     setPanTick((n) => n + 1)
   }, [destroyMap])
 
@@ -911,9 +986,11 @@ export default function EsquemaEditorModal({
       setToolHint('Mapa ya activo. Use Paneo para mover/consultar PK; al Guardar capture el área de impresión.')
       return
     }
+    // El pan/zoom reales los fija syncCanvasToMap al cargar / mover el mapa.
     panRef.current = { x: 0, y: 0 }
     zoomRef.current = 1
     setZoomPct(100)
+    mapGeoOriginRef.current = null
     setMapError('')
     setMapBasemap('calle')
     setMapOpacity(0.72)
@@ -921,13 +998,14 @@ export default function EsquemaEditorModal({
     setMapPropsOpen(true)
     mapActiveRef.current = true
     setMapActive(true)
+    mapSyncZoomLabelRef.current = null
     setTool('paneo')
     toolRef.current = 'paneo'
     setToolHint(mapCtx.hasPk
-      ? `Mapa centrado en PK ${mapCtx.pkId}. Paneo para mover/consultar; capas y opacidad en el panel Propiedades.`
+      ? `Mapa centrado en PK ${mapCtx.pkId}. Escala del lienzo = escala del mapa. Paneo para mover; capas en Propiedades.`
       : mapCtx.hasPoint
-        ? 'Mapa centrado en la ubicación del reporte. Paneo para mover/consultar PK; capas en Propiedades.'
-        : 'Vista general del contrato. Paneo para explorar; capas y opacidad en el panel Propiedades.')
+        ? 'Mapa centrado en la ubicación del reporte. Escala del lienzo = escala del mapa. Paneo para mover; capas en Propiedades.'
+        : 'Vista general del contrato. Escala del lienzo = escala del mapa. Paneo para explorar; capas en Propiedades.')
     setPanTick((n) => n + 1)
   }, [mapCtx])
 
@@ -1086,10 +1164,22 @@ export default function EsquemaEditorModal({
     try { map.touchZoomRotate.disableRotation() } catch { /* ignore */ }
     try { map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right') } catch { /* ignore */ }
 
+    const onMapViewChange = () => {
+      if (cancelled || mapRef.current !== map) return
+      syncCanvasToMapRef.current()
+    }
+    map.on('move', onMapViewChange)
+    map.on('zoom', onMapViewChange)
+    map.on('resize', onMapViewChange)
+
     const loadPlanoYCapas = async () => {
       try { applySicoeBasemapTerrain(map, mapBasemap) } catch { /* ignore */ }
       try { map.resize() } catch { /* ignore */ }
       if (!contratoId) {
+        if (!cancelled && mapRef.current === map) {
+          mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+          syncCanvasToMapRef.current()
+        }
         setToolHint((h) => h || 'Sin contrato: mapa sin polígonos PK. Use Paneo para elegir el sector.')
         return
       }
@@ -1109,9 +1199,16 @@ export default function EsquemaEditorModal({
           centro_lat: row?.centro_lat,
           centro_lng: row?.centro_lng,
         })
+        // Origen geo fijo tras el encuadre inicial (no re-fijar en pans posteriores).
+        mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+        syncCanvasToMapRef.current()
         if (ctx.hasPk) applyEsquemaPkSelectionStyle(map, ctx.pkId)
       } catch {
-        if (!cancelled) setMapError('No se pudo cargar el plano PK del contrato')
+        if (!cancelled) {
+          setMapError('No se pudo cargar el plano PK del contrato')
+          mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
+          syncCanvasToMapRef.current()
+        }
       }
     }
 
@@ -1122,15 +1219,20 @@ export default function EsquemaEditorModal({
     const ro = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver(() => {
         try { map.resize() } catch { /* ignore */ }
+        if (!cancelled && mapRef.current === map) syncCanvasToMapRef.current()
       })
       : null
     if (ro) ro.observe(host)
 
     return () => {
       cancelled = true
+      try { map.off('move', onMapViewChange) } catch { /* ignore */ }
+      try { map.off('zoom', onMapViewChange) } catch { /* ignore */ }
+      try { map.off('resize', onMapViewChange) } catch { /* ignore */ }
       ro?.disconnect()
       destroyMap()
       mapClickBoundRef.current = false
+      mapGeoOriginRef.current = null
     }
     // Solo al activar/desactivar: capa vía applyMapBasemap; contexto se lee al montar
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2406,9 +2508,14 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Pellizco: zoom anclado al punto medio; pan sigue el centro del gesto
+    // Pellizco: zoom anclado al punto medio; pan sigue el centro del gesto.
+    // Con mapa activo el pellizco zoom/pan del lienzo desincronizaría la escala:
+    // se ignora (el mapa gestiona el gesto cuando el canvas deja pasar pointer-events).
     if (pinchRef.current && pointersRef.current.size >= 2) {
       e.preventDefault()
+      if (mapActiveRef.current && mapRef.current) {
+        return
+      }
       const distNow = pointerDistance()
       if (distNow >= 8) {
         const pinch = pinchRef.current
