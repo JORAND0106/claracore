@@ -11,6 +11,8 @@ import math
 from typing import Any, Optional
 
 TIPOS_PLANILLA = ("ALCANTARILLA", "FILTRO")
+# Filas mínimas al crear planilla / plantilla PDF vacía (UI + export).
+FILAS_INICIALES_CARTERA = 2
 RELACIONES_ATRAQUE = ("1:1", "1:2", "1:3", "1:4", "1:6")
 
 # Rótulos literales del XLSM (sharedStrings / planilla)

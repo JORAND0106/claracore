@@ -16,6 +16,7 @@ import {
   RELACIONES_ATRAQUE,
   TIPOS_PLANILLA,
   confirmarGuardadoCartera,
+  FILAS_INICIALES_CARTERA,
   filaCampoVacia,
   filasDesdeApi,
   fmtNDash,
@@ -36,7 +37,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
   const [lista, setLista] = useState([])
   const [detalle, setDetalle] = useState(null)
-  const [filas, setFilas] = useState(() => Array.from({ length: 12 }, (_, i) => filaCampoVacia(i + 1)))
+  const [filas, setFilas] = useState(() => Array.from({ length: FILAS_INICIALES_CARTERA }, (_, i) => filaCampoVacia(i + 1)))
   const [params, setParams] = useState({
     tipo: 'ALCANTARILLA',
     nombre: '',
@@ -234,7 +235,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       await api(`/planillas-tuberia/${planilla.id}`, { method: 'DELETE' })
       setConfirmEliminar(null)
       setDetalle(null)
-      setFilas(Array.from({ length: 12 }, (_, i) => filaCampoVacia(i + 1)))
+      setFilas(Array.from({ length: FILAS_INICIALES_CARTERA }, (_, i) => filaCampoVacia(i + 1)))
       await cargarLista()
       setMsg(conDatos
         ? 'Planilla eliminada (incluía datos de cartera).'
@@ -589,7 +590,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               </div>
 
               <div style={layoutCharts}>
-                <PlanillaTuberiaSeccionSvg seccionTipica={calculo?.seccion_tipica} ui={ui} />
+                <PlanillaTuberiaSeccionSvg seccionTipica={{ ...(calculo?.seccion_tipica || {}), tipo: params.tipo }} ui={ui} />
                 <PlanillaTuberiaPerfil perfil={calculo?.perfil} ui={ui} />
               </div>
 
