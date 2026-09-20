@@ -111,8 +111,6 @@ def html_cabecera_planilla_tuberia(
     apoyo = html.escape(str(meta.get("apoyo_supervision") or ""))
     numero = html.escape(str(contrato.get("numero") or ""))
     objeto = html.escape(str(contrato.get("objeto") or ""))
-    info_raw = meta.get("info_contrato") or f"{contrato.get('numero') or ''}\n{contrato.get('objeto') or ''}".strip()
-    info = html.escape(str(info_raw)).replace("\n", "<br/>")
     codigo = html.escape(str(meta.get("codigo_documento") or codigo_doc))
     fecha = html.escape(str(meta.get("fecha_elaboracion") or ""))
 
@@ -146,7 +144,6 @@ def html_cabecera_planilla_tuberia(
           <div style="padding:1px 4px;line-height:1.15;">
             <div><b>Nº:</b> {numero}</div>
             <div><b>Objeto:</b> {objeto}</div>
-            <div>{info}</div>
           </div>
         </td>
       </tr>
@@ -494,10 +491,12 @@ def svg_perfil_longitudinal_pdf(perfil: Optional[dict], *, width: int = 520, hei
 def html_bloque_graficos_pdf(
     calculo: dict,
     *,
-    sec_w: int = 190,
-    sec_h: int = 98,
-    perfil_w: int = 330,
-    perfil_h: int = 98,
+    tipo: Optional[str] = None,
+
+    sec_w: int = 160,
+    sec_h: int = 85,
+    perfil_w: int = 280,
+    perfil_h: int = 85,
 ) -> str:
     """Panel GRAFICO + Perfil longitudinal embebidos (xhtml2pdf).
 
@@ -507,7 +506,7 @@ def html_bloque_graficos_pdf(
     from topografia_utils import svg_embed_pdf
 
     st = calculo.get("seccion_tipica") or calculo.get("seccion") or {}
-    tipo = str(st.get("tipo") or (calculo.get("seccion") or {}).get("tipo") or "ALCANTARILLA").upper()
+    tipo = str(tipo or st.get("tipo") or (calculo.get("seccion") or {}).get("tipo") or "ALCANTARILLA").upper()
     if tipo not in _SECCION_PNG:
         tipo = "ALCANTARILLA"
 

@@ -75,7 +75,7 @@ class TestPdfCellPadding(unittest.TestCase):
     def test_routes_css_row_height(self):
         src = (ROOT / "topografia_planilla_tuberia_routes.py").read_text(encoding="utf-8")
         self.assertIn("padding:4px 5px", src)
-        self.assertIn("line-height:1.45", src)
+        self.assertIn("line-height:1.4", src)
         self.assertIn("graficos-wrap", src)
 
 

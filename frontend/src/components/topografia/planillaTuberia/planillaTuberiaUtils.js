@@ -2,6 +2,9 @@
  * Helpers de presentación — Planillas de Tubería (solo UI; sin recálculo).
  */
 
+/** Filas mínimas al crear planilla / plantilla vacía (alineado al backend). */
+export const FILAS_INICIALES_CARTERA = 2
+
 export const TIPOS_PLANILLA = [
   { value: 'ALCANTARILLA', label: 'PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS' },
   { value: 'FILTRO', label: 'PLANILLA DE INSTALACIÓN DE FILTROS' },
@@ -60,7 +63,7 @@ export function filaCampoVacia(orden) {
   }
 }
 
-export function filasDesdeApi(filasApi, tipo, minRows = 12) {
+export function filasDesdeApi(filasApi, tipo, minRows = FILAS_INICIALES_CARTERA) {
   const mapped = (filasApi || []).map((f, i) => ({
     orden: f.orden ?? i + 1,
     abscisa: f.abscisa ?? '',

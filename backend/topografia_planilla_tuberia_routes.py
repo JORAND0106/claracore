@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from main import _es_desarrollador, _require_contract_access, get_current_user, supabase
 from topografia_permissions import require_permiso_topografia
 from topografia_planilla_tuberia import (
+    FILAS_INICIALES_CARTERA,
     ITEMS_CANTIDADES,
     ITEMS_DESCUENTOS_ALCANTARILLA,
     ITEMS_DESCUENTOS_FILTRO,
@@ -683,7 +684,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
 
     filas = [f for f in (calc.get("cartera") or {}).get("filas") or [] if not f.get("vacio")]
     if vacia and not filas:
-        filas = [{"orden": i, "vacio": True} for i in range(1, 9)]
+        filas = [{"orden": i, "vacio": True} for i in range(1, FILAS_INICIALES_CARTERA + 1)]
 
     nivel_hdr = "Terminado Filtro" if tipo == "FILTRO" else "Subrasante de Vía"
     meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
@@ -749,18 +750,18 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         contrato=contrato, meta=meta, titulo=titulo
     )
     franja = html_franja_tramo_tuberia(planilla=p, calculo=calc, meta=meta)
-    graficos = html_bloque_graficos_pdf(calc)
+    graficos = html_bloque_graficos_pdf(calc, tipo=tipo)
 
     html_doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
     <style>
-    @page {{ size: letter landscape; margin: 4mm 5mm; }}
-    body{{font-family:Arial,sans-serif;font-size:7pt;color:#0f172a;margin:0}}
-    h2{{font-size:7.5pt;margin:2px 0 1px}}
+    @page {{ size: letter portrait; margin: 6mm 5mm; }}
+    body{{font-family:Arial,sans-serif;font-size:6.5pt;color:#0f172a;margin:0}}
+    h2{{font-size:7pt;margin:2px 0 1px}}
     table.sheet{{border-collapse:collapse;width:100%;margin-bottom:2px}}
-    table.sheet th,table.sheet td{{border:0.4pt solid #64748b;padding:4px 5px;font-size:7.5pt;line-height:1.45}}
-    table.sheet th{{background:#D9D9D9;font-size:6.5pt}}
-    .graficos-wrap{{width:100%;border-collapse:collapse;margin:2px 0 4px;table-layout:fixed}}
-    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:2px;vertical-align:top;height:100px}}
+    table.sheet th,table.sheet td{{border:0.4pt solid #64748b;padding:4px 5px;font-size:7.5pt;line-height:1.4}}
+    table.sheet th{{background:#D9D9D9;font-size:6pt}}
+    .graficos-wrap{{width:100%;border-collapse:collapse;margin:2px 0 3px;table-layout:fixed}}
+    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:1px;vertical-align:top;height:88px}}
     .graficos-wrap img{{display:block;width:100%;height:auto;margin:0 auto}}
     table.sheet th.desc{{background:#EA4296;color:#fff}}
     table.sheet th.cant{{background:#4472C4;color:#fff}}
@@ -805,7 +806,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     </body></html>"""
     try:
         from topografia_utils import to_pdf_bytes
-        content, media = to_pdf_bytes(html_doc, landscape=True), "application/pdf"
+        content, media = to_pdf_bytes(html_doc, landscape=False), "application/pdf"
     except Exception:
         content, media = html_doc.encode("utf-8"), "text/html; charset=utf-8"
     suffix = "_plantilla" if vacia else ""

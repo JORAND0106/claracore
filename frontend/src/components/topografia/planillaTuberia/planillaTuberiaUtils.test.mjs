@@ -10,9 +10,16 @@ import {
   tieneDatosExportables,
   TIPOS_PLANILLA,
   RELACIONES_ATRAQUE,
+  FILAS_INICIALES_CARTERA,
+  filasDesdeApi,
 } from './planillaTuberiaUtils.js'
 
 describe('planillaTuberiaUtils', () => {
+  it('filas iniciales = 2', () => {
+    assert.equal(FILAS_INICIALES_CARTERA, 2)
+    assert.equal(filasDesdeApi([], 'ALCANTARILLA').length, 2)
+  })
+
   it('tipos y relaciones de atraque', () => {
     assert.deepEqual(TIPOS_PLANILLA.map((t) => t.value), ['ALCANTARILLA', 'FILTRO'])
     assert.deepEqual(RELACIONES_ATRAQUE, ['1:1', '1:2', '1:3', '1:4', '1:6'])
