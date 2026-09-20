@@ -3,9 +3,11 @@
  */
 
 export const TIPOS_PLANILLA = [
-  { value: 'ALCANTARILLA', label: 'Alcantarilla' },
-  { value: 'FILTRO', label: 'Filtro' },
+  { value: 'ALCANTARILLA', label: 'PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS' },
+  { value: 'FILTRO', label: 'PLANILLA DE INSTALACIÓN DE FILTROS' },
 ]
+
+export const CODIGO_DOCUMENTO = 'INF-ING - TOP - 001 - V0'
 
 export const RELACIONES_ATRAQUE = ['1:1', '1:2', '1:3', '1:4', '1:6']
 

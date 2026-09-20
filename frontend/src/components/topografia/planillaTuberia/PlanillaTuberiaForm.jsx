@@ -261,7 +261,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     return filas.map((f, i) => map.get(i + 1) || map.get(f.orden) || {})
   }, [calculo, filas])
 
-  const nivelLabel = params.tipo === 'FILTRO' ? 'Terminado filtro' : 'Subrasante vía'
+  const nivelLabel = params.tipo === 'FILTRO' ? 'Terminado Filtro' : 'Subrasante de Vía'
   const nivelKey = params.tipo === 'FILTRO' ? 'terminado_filtro' : 'subrasante_via'
 
   const thBase = { ...sheet.th, textAlign: 'center' }
@@ -483,13 +483,13 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       <tr>
                         <th style={{ ...thBase, width: 36 }}>#</th>
                         <th style={thBase}>Abscisa</th>
-                        <th style={thBase}>TN</th>
+                        <th style={thBase}>Terreno Natural</th>
                         <th style={thBase}>{nivelLabel}</th>
-                        <th style={thBase}>CFE</th>
-                        <th style={thCalc}>H.Exc</th>
-                        <th style={thCalc}>H.Trit</th>
-                        <th style={thCalc}>H.Rell</th>
-                        <th style={thCalc}>Ancho Geo</th>
+                        <th style={thBase}>Cota Fondo Excavación</th>
+                        <th style={thCalc}>Altura Excavacion</th>
+                        <th style={thCalc}>Altura Triturado</th>
+                        <th style={thCalc}>Altura Relleno</th>
+                        <th style={thCalc}>Ancho Geotextil</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -555,23 +555,32 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
               <div style={layoutTables}>
                 <div style={cardPad}>
-                  <div style={sheet.sectionTitle}>Resumen de cantidades</div>
+                  <div style={sheet.sectionTitle}>Resumen de Cantidades</div>
                   <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 420 }}>
+                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 520 }}>
                       <thead>
                         <tr>
-                          {['Cód', 'Ítem', 'Ud', 'Bruto', 'Desc', 'Neto'].map((h, i) => (
-                            <th key={h} style={i >= 3 ? thCalc : thBase}>{h}</th>
+                          {['Item', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad'].map((h, i) => (
+                            <th
+                              key={h}
+                              style={{
+                                ...(i >= 1 ? thCalc : thBase),
+                                background: '#4472C4',
+                                color: '#fff',
+                              }}
+                            >
+                              {h}
+                            </th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {(calculo?.netos || []).map((n) => (
                           <tr key={n.codigo}>
-                            <td style={sheet.td}>{n.codigo}</td>
                             <td style={sheet.td}>{n.nombre}</td>
-                            <td style={sheet.td}>{n.unidad}</td>
-                            <td style={tdCalc}>{fmtNDash(n.bruto)}</td>
+                            <td style={tdCalc}>{fmtNDash(n.long)}</td>
+                            <td style={tdCalc}>{fmtNDash(n.ancho)}</td>
+                            <td style={tdCalc}>{fmtNDash(n.espesor)}</td>
                             <td style={tdCalc}>{fmtNDash(n.descuentos)}</td>
                             <td style={tdCalc}>{fmtNDash(n.neto)}</td>
                           </tr>
@@ -581,22 +590,32 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   </div>
                 </div>
                 <div style={cardPad}>
-                  <div style={sheet.sectionTitle}>Descuentos (por código de ítem)</div>
+                  <div style={sheet.sectionTitle}>Descuentos Específicos</div>
                   <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 360 }}>
+                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 420 }}>
                       <thead>
                         <tr>
-                          {['Cód', 'Nombre', 'Ítem cant.', 'Cantidad'].map((h, i) => (
-                            <th key={h} style={i === 3 ? thCalc : thBase}>{h}</th>
+                          {['Item', 'Long', 'Ancho', 'Espesor', 'Cantidad'].map((h, i) => (
+                            <th
+                              key={h}
+                              style={{
+                                ...(i >= 1 ? thCalc : thBase),
+                                background: '#EA4296',
+                                color: '#fff',
+                              }}
+                            >
+                              {h}
+                            </th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {(calculo?.descuentos || []).map((d) => (
+                        {(calculo?.descuentos || []).filter((d) => d.nombre).map((d) => (
                           <tr key={d.codigo}>
-                            <td style={sheet.td}>{d.codigo}</td>
                             <td style={sheet.td}>{d.nombre}</td>
-                            <td style={sheet.td}>{d.item_cant_codigo}</td>
+                            <td style={tdCalc}>{fmtNDash(d.long)}</td>
+                            <td style={tdCalc}>{fmtNDash(d.ancho)}</td>
+                            <td style={tdCalc}>{fmtNDash(d.espesor)}</td>
                             <td style={tdCalc}>{fmtNDash(d.cantidad)}</td>
                           </tr>
                         ))}
@@ -615,19 +634,23 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   marginTop: 4,
                 }}
               >
-                {['Topógrafo / Cadenero', 'Residente / Contratista', 'Interventoría'].map((label) => (
+                {[
+                  { title: 'Elaboró', role: 'Topografo de Obra (Contratista)' },
+                  { title: 'Aprobó:', role: 'Topografo Interventoria' },
+                ].map((f) => (
                   <div
-                    key={label}
+                    key={f.title}
                     style={{
                       flex: 1,
                       borderTop: `1px solid ${sheet.border}`,
                       paddingTop: 8,
-                      minHeight: 48,
+                      minHeight: 56,
                       fontSize: 'var(--cc-xs)',
                       color: ui.textMuted,
                     }}
                   >
-                    {label}
+                    <div style={{ fontWeight: 700, color: ui.text }}>{f.title}</div>
+                    <div>{f.role}</div>
                   </div>
                 ))}
               </div>

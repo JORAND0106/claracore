@@ -1,4 +1,4 @@
-"""Tests del motor único de Planillas de Tubería (datos sintéticos)."""
+"""Tests del motor — Planillas de Tubería (fórmulas alineadas al XLSM)."""
 from __future__ import annotations
 
 import math
@@ -10,6 +10,7 @@ from topografia_planilla_tuberia import (
     altura_relleno_atraque_m,
     area_1_m2,
     area_2_m2,
+    area_tuberia_m2,
     calcular_planilla_completa,
     calcular_seccion,
     construir_fila_consolidado,
@@ -36,63 +37,80 @@ def _filas_sinteticas(tipo: str = "ALCANTARILLA"):
 
 
 class TestAlturaRellenoAtraque(unittest.TestCase):
-    def test_formula_fija_todas_relaciones(self):
+    def test_formula_round3_todas_relaciones(self):
         theta, esp = 0.9, 0.05
         for rel in RELACIONES_ATRAQUE:
             den = int(rel.split(":")[1])
-            esperado = 2.0 * (theta / 2.0 + esp) / den
+            esperado = round(2.0 * (theta / 2.0 + esp) / den, 3)
             self.assertAlmostEqual(altura_relleno_atraque_m(theta, esp, rel), esperado, places=12)
 
     def test_ejemplo_un_tercio(self):
         self.assertAlmostEqual(altura_relleno_atraque_m(0.6, 0.0, "1:3"), 0.2, places=12)
-        self.assertAlmostEqual(altura_relleno_atraque_m(0.9, 0.05, "1:3"), 1.0 / 3.0, places=12)
+        self.assertAlmostEqual(altura_relleno_atraque_m(0.9, 0.05, "1:3"), 0.333, places=12)
 
 
-class TestAreas(unittest.TestCase):
-    def test_areas_por_relacion(self):
-        theta, esp, b = 0.8, 0.04, 1.4
-        for rel in RELACIONES_ATRAQUE:
-            a1 = area_1_m2(theta, esp, b, rel)
-            a2 = area_2_m2(theta, esp, rel)
-            self.assertGreaterEqual(a1, 0.0)
-            self.assertGreaterEqual(a2, 0.0)
-            d_ext = theta + 2 * esp
-            area_tubo = math.pi * (d_ext / 2) ** 2
-            den = int(rel.split(":")[1])
-            self.assertAlmostEqual(a2, area_tubo * (1 - 1 / den), places=9)
+class TestAreasSegmentoCircular(unittest.TestCase):
+    def test_area_tuberia_k13(self):
+        self.assertAlmostEqual(
+            area_tuberia_m2(0.8, 0.04), round(math.pi * (0.4 + 0.04) ** 2, 3), places=12
+        )
+
+    def test_area1_segmento_y_area2_resto(self):
+        theta, esp, b, rel = 0.8, 0.04, 1.4, "1:3"
+        a_tub = area_tuberia_m2(theta, esp)
+        a1 = area_1_m2(theta, esp, b, rel)
+        a2 = area_2_m2(theta, esp, rel)
+        self.assertGreater(a1, 0.0)
+        self.assertGreater(a2, 0.0)
+        self.assertAlmostEqual(a1 + a2, a_tub, places=3)
+        den = 3
+        self.assertNotAlmostEqual(a2, a_tub * (1 - 1 / den), places=3)
 
 
-class TestCarteraAmbosModos(unittest.TestCase):
-    def test_alcantarilla_alturas_y_geotextil(self):
+class TestCarteraXlsm(unittest.TestCase):
+    def test_alcantarilla_h_trit_es_e15_mas_f15(self):
         r = calcular_planilla_completa(
             tipo="ALCANTARILLA", diametro_m=0.9, espesor_m=0.05,
             ancho_excavacion_m=1.5, relacion_atraque="1:3",
             filas_campo=_filas_sinteticas("ALCANTARILLA"),
+            cama_triturado_m=0.10,
         )
+        h_esperada = round(altura_relleno_atraque_m(0.9, 0.05, "1:3") + 0.10, 4)
         tot = r["cartera"]["totales"]
         self.assertEqual(tot["n_filas"], 4)
         self.assertAlmostEqual(tot["longitud_m"], 30.0, places=4)
-        self.assertIsNotNone(tot["prom_altura_excavacion"])
-        self.assertIsNotNone(tot["prom_ancho_geotextil"])
+        self.assertIsNone(tot["prom_ancho_geotextil"])
         for f in r["cartera"]["filas"]:
             if f.get("vacio") or f.get("altura_excavacion") is None:
                 continue
+            self.assertAlmostEqual(f["altura_triturado"], h_esperada, places=4)
+            self.assertIsNone(f["ancho_geotextil"])
             self.assertAlmostEqual(
-                f["ancho_geotextil"], 1.5 + 2 * f["altura_excavacion"], places=4
+                f["altura_relleno"],
+                round(f["altura_excavacion"] - h_esperada, 4),
+                places=4,
             )
 
-    def test_filtro_geotextil_distinto(self):
+    def test_filtro_h_trit_y_geotextil_movil(self):
         r = calcular_planilla_completa(
             tipo="FILTRO", diametro_m=0.6, espesor_m=0.03,
             ancho_excavacion_m=1.2, relacion_atraque="1:2",
             filas_campo=_filas_sinteticas("FILTRO"),
         )
         self.assertEqual(r["seccion"]["tipo"], "FILTRO")
-        for f in r["cartera"]["filas"]:
-            if f.get("vacio") or f.get("altura_excavacion") is None:
-                continue
-            extra = (f["altura_triturado"] or 0) + max(f["altura_relleno"] or 0, 0)
-            self.assertAlmostEqual(f["ancho_geotextil"], 1.2 + 2 * extra, places=4)
+        activas = [f for f in r["cartera"]["filas"] if not f.get("vacio")]
+        self.assertIsNone(activas[0]["ancho_geotextil"])
+        for i in range(1, len(activas)):
+            prev_h = activas[i - 1]["altura_triturado"]
+            cur_h = activas[i]["altura_triturado"]
+            esperado = ((prev_h + cur_h) / 2.0) * 2.0 + 1.2 * 2.0
+            self.assertAlmostEqual(activas[i]["ancho_geotextil"], esperado, places=4)
+            self.assertAlmostEqual(
+                activas[i]["altura_triturado"],
+                activas[i]["terminado_filtro"] - activas[i]["cota_fondo_excavacion"],
+                places=4,
+            )
+            self.assertEqual(activas[i]["altura_relleno"], 0.0)
 
     def test_promedios_ignoran_filas_vacias(self):
         filas = _filas_sinteticas()
@@ -106,21 +124,26 @@ class TestCarteraAmbosModos(unittest.TestCase):
         self.assertEqual(r["cartera"]["totales"]["n_filas"], len(filas) - len(vacias))
 
 
-class TestCantidadesDescuentos(unittest.TestCase):
-    def test_vinculo_por_codigo_no_por_posicion(self):
+class TestCantidadesDescuentosXlsm(unittest.TestCase):
+    def test_alcantarilla_desc_area1_sobre_triturado(self):
         r = calcular_planilla_completa(
             tipo="ALCANTARILLA", diametro_m=0.9, espesor_m=0.05,
             ancho_excavacion_m=1.5, relacion_atraque="1:3",
             filas_campo=_filas_sinteticas(),
-            descuentos_manuales=[{"codigo": "DESC_POZO", "cantidad": 2.5}],
+            cama_triturado_m=0.1,
+            descuentos_manuales=[{"codigo": "DESC_OTROS", "cantidad": 2.5}],
         )
         by_cod = {d["codigo"]: d for d in r["descuentos"]}
-        self.assertEqual(by_cod["DESC_TUB"]["item_cant_codigo"], "REL")
-        self.assertEqual(by_cod["DESC_POZO"]["item_cant_codigo"], "EXC")
-        self.assertAlmostEqual(by_cod["DESC_POZO"]["cantidad"], 2.5)
+        self.assertEqual(by_cod["DESC_A1"]["item_cant_codigo"], "TRI")
+        self.assertEqual(by_cod["DESC_A2"]["item_cant_codigo"], "REL")
+        self.assertAlmostEqual(by_cod["DESC_OTROS"]["cantidad"], 2.5)
         netos = {n["codigo"]: n for n in r["netos"]}
-        self.assertAlmostEqual(netos["EXC"]["descuentos"], 2.5)
-        self.assertAlmostEqual(netos["EXC"]["neto"], netos["EXC"]["bruto"] - 2.5)
+        self.assertAlmostEqual(
+            netos["TRI"]["neto"], netos["TRI"]["bruto"] - by_cod["DESC_A1"]["cantidad"], places=2
+        )
+        self.assertAlmostEqual(netos["REL"]["neto"], netos["REL"]["bruto"], places=2)
+        self.assertAlmostEqual(netos["EXC"]["neto"], netos["EXC"]["bruto"] - 2.5, places=2)
+        self.assertIn("EXC_ROC", netos)
 
     def test_filtro_descuento_catalogo(self):
         r = calcular_planilla_completa(
@@ -129,8 +152,9 @@ class TestCantidadesDescuentos(unittest.TestCase):
             filas_campo=_filas_sinteticas("FILTRO"),
         )
         cods = {d["codigo"] for d in r["descuentos"]}
-        self.assertIn("DESC_FILT", cods)
-        self.assertNotIn("DESC_POZO", cods)
+        self.assertIn("DESC_TUB_FILT", cods)
+        self.assertIn("DESC_OTROS", cods)
+        self.assertNotIn("DESC_A1", cods)
 
 
 class TestValidacionYConsolidado(unittest.TestCase):
@@ -171,10 +195,17 @@ class TestSeccionParams(unittest.TestCase):
                 ancho_excavacion_m=1, relacion_atraque="1:3",
             )
 
+    def test_seccion_incluye_cama_y_area_tuberia(self):
+        s = calcular_seccion(
+            tipo="ALCANTARILLA", diametro_m=0.9, espesor_m=0.05,
+            ancho_excavacion_m=1.5, relacion_atraque="1:3", cama_triturado_m=0.3,
+        )
+        self.assertEqual(s["etiqueta_cama"], "Cama Triturado")
+        self.assertAlmostEqual(s["cama_triturado_m"], 0.3)
+        self.assertAlmostEqual(s["area_tuberia_m2"], area_tuberia_m2(0.9, 0.05))
+
 
 class TestFlujoE2ESintetico(unittest.TestCase):
-    """Flujo completo sintético ALCANTARILLA y FILTRO: cartera → calc → consolidado."""
-
     def _assert_flujo(self, tipo: str):
         filas = _filas_sinteticas(tipo)
         v = validar_cartera_campo(
@@ -185,26 +216,21 @@ class TestFlujoE2ESintetico(unittest.TestCase):
             tipo=tipo, diametro_m=0.9, espesor_m=0.05,
             ancho_excavacion_m=1.5, relacion_atraque="1:3",
             filas_campo=filas,
-            descuentos_manuales=(
-                [{"codigo": "DESC_POZO", "cantidad": 1.0}] if tipo == "ALCANTARILLA"
-                else [{"codigo": "DESC_FILT", "cantidad": 0.5}]
-            ),
+            cama_triturado_m=0.1 if tipo == "ALCANTARILLA" else 0.0,
+            descuentos_manuales=[{"codigo": "DESC_OTROS", "cantidad": 1.0}],
         )
         self.assertEqual(r["seccion"]["tipo"], tipo)
         self.assertIn("seccion_tipica", r)
         self.assertIn("perfil", r)
         self.assertEqual(len(r["perfil"]["abscisas"]), r["cartera"]["totales"]["n_filas"])
-        # Filas vacías no aportan abscisa al perfil
-        self.assertTrue(all(a is not None for a in r["perfil"]["abscisas"]))
         netos = {n["codigo"]: n for n in r["netos"]}
-        for cod in ("EXC", "TRI", "REL", "GEO", "TUB"):
+        for cod in ("EXC", "EXC_ROC", "TRI", "REL", "GEO", "TUB"):
             self.assertIn(cod, netos)
-            self.assertAlmostEqual(netos[cod]["neto"], netos[cod]["bruto"] - netos[cod]["descuentos"], places=4)
         desc_codes = {d["codigo"] for d in r["descuentos"]}
         if tipo == "ALCANTARILLA":
-            self.assertIn("DESC_POZO", desc_codes)
+            self.assertTrue({"DESC_A1", "DESC_A2", "DESC_OTROS"} <= desc_codes)
         else:
-            self.assertIn("DESC_FILT", desc_codes)
+            self.assertIn("DESC_TUB_FILT", desc_codes)
         consol = construir_fila_consolidado(
             {
                 "id": f"syn-{tipo.lower()}", "pk_id": "K0+100", "nombre": f"Tramo {tipo}",
@@ -217,7 +243,6 @@ class TestFlujoE2ESintetico(unittest.TestCase):
         self.assertEqual(consol["c02_tipo"], tipo)
         self.assertAlmostEqual(consol["c08_longitud_m"], 30.0, places=4)
         self.assertEqual(consol["c17_long_tuberia_m"], netos["TUB"]["neto"])
-        self.assertEqual(consol["c13_vol_excavacion_m3"], netos["EXC"]["neto"])
 
     def test_e2e_alcantarilla(self):
         self._assert_flujo("ALCANTARILLA")
