@@ -78,6 +78,159 @@ export function polygonAreaM2(points) {
   return polygonAreaWorld(points) / (PX_PER_METER * PX_PER_METER)
 }
 
+/**
+ * Área geométrica exacta (m²) de una entidad cerrada, en espacio local.
+ * La rotación no altera el área: Ancho×Alto de un rectángulo es invariante.
+ * @returns {number | null}
+ */
+export function closedEntityAreaM2(obj) {
+  if (!obj) return null
+  if (obj.type === 'rect') {
+    const w = Math.abs((Number(obj.x2) || 0) - (Number(obj.x1) || 0))
+    const h = Math.abs((Number(obj.y2) || 0) - (Number(obj.y1) || 0))
+    if (!(w > 0) || !(h > 0)) return null
+    return (w * h) / (PX_PER_METER * PX_PER_METER)
+  }
+  if (obj.type === 'elipse') {
+    const { rx, ry } = ellipseCenterRadii(obj)
+    if (!(rx > 0) || !(ry > 0)) return null
+    return (Math.PI * rx * ry) / (PX_PER_METER * PX_PER_METER)
+  }
+  if (obj.type === 'triangulo') {
+    const base = Math.abs((Number(obj.x2) || 0) - (Number(obj.x1) || 0))
+    const height = Math.abs((Number(obj.y2) || 0) - (Number(obj.y1) || 0))
+    if (!(base > 0) || !(height > 0)) return null
+    return (0.5 * base * height) / (PX_PER_METER * PX_PER_METER)
+  }
+  if (obj.type === 'polilinea' || obj.type === 'stroke') {
+    const pts = obj.points || []
+    if (pts.length < 3) return null
+    // Cerrada si el flag lo indica o el primer/último punto coinciden
+    const closed = !!obj.closed
+      || (
+        Math.hypot(
+          (pts[0].x || 0) - (pts[pts.length - 1].x || 0),
+          (pts[0].y || 0) - (pts[pts.length - 1].y || 0),
+        ) < 1e-6
+      )
+    if (!closed && obj.type === 'polilinea' && !obj.closed) {
+      // Polilínea abierta: no es una región por sí sola
+      return null
+    }
+    if (!closed && obj.type === 'stroke') return null
+    return polygonAreaM2(pts)
+  }
+  return null
+}
+
+/** Vértices locales del triángulo del editor (ápice arriba, base abajo). */
+export function triangleLocalVertices(obj) {
+  const x1 = Number(obj?.x1) || 0
+  const y1 = Number(obj?.y1) || 0
+  const x2 = Number(obj?.x2) || 0
+  const y2 = Number(obj?.y2) || 0
+  const midX = (x1 + x2) / 2
+  return [
+    { x: midX, y: y1 },
+    { x: x2, y: y2 },
+    { x: x1, y: y2 },
+  ]
+}
+
+function pointInTriangleLocal(p, a, b, c) {
+  const sign = (p1, p2, p3) => (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
+  const d1 = sign(p, a, b)
+  const d2 = sign(p, b, c)
+  const d3 = sign(p, c, a)
+  const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0)
+  const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0)
+  return !(hasNeg && hasPos)
+}
+
+function pointInPolygonLocal(p, pts) {
+  if (!p || !pts || pts.length < 3) return false
+  let inside = false
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i, i += 1) {
+    const xi = pts[i].x
+    const yi = pts[i].y
+    const xj = pts[j].x
+    const yj = pts[j].y
+    const intersect = ((yi > p.y) !== (yj > p.y))
+      && (p.x < ((xj - xi) * (p.y - yi)) / ((yj - yi) || 1e-12) + xi)
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+/**
+ * ¿El punto mundo cae en el interior geométrico (sin pad de hit-test)?
+ */
+export function pointInsideClosedEntity(obj, worldX, worldY) {
+  if (!obj || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return false
+  const local = objectLocalPoint(obj, { x: worldX, y: worldY })
+  if (obj.type === 'rect') {
+    const x0 = Math.min(obj.x1, obj.x2)
+    const x1 = Math.max(obj.x1, obj.x2)
+    const y0 = Math.min(obj.y1, obj.y2)
+    const y1 = Math.max(obj.y1, obj.y2)
+    return local.x >= x0 && local.x <= x1 && local.y >= y0 && local.y <= y1
+  }
+  if (obj.type === 'elipse') {
+    const { cx, cy, rx, ry } = ellipseCenterRadii(obj)
+    if (!(rx > 0) || !(ry > 0)) return false
+    const nx = (local.x - cx) / rx
+    const ny = (local.y - cy) / ry
+    return (nx * nx + ny * ny) <= 1 + 1e-9
+  }
+  if (obj.type === 'triangulo') {
+    const [a, b, c] = triangleLocalVertices(obj)
+    return pointInTriangleLocal(local, a, b, c)
+  }
+  if (obj.type === 'polilinea' || obj.type === 'stroke') {
+    const pts = obj.points || []
+    if (pts.length < 3) return false
+    const closed = !!obj.closed
+      || (
+        Math.hypot(
+          (pts[0].x || 0) - (pts[pts.length - 1].x || 0),
+          (pts[0].y || 0) - (pts[pts.length - 1].y || 0),
+        ) < 1e-6
+      )
+    if (!closed) return false
+    return pointInPolygonLocal(local, pts)
+  }
+  return false
+}
+
+/**
+ * Área exacta (m²) de la entidad cerrada más pequeña que contiene el punto.
+ * Ignora hatch/cota/imagen. null si no hay entidad vectorial contenedora.
+ */
+export function exactClosedAreaM2AtPoint(objects, worldX, worldY) {
+  let best = null
+  let bestArea = Infinity
+  for (const obj of objects || []) {
+    if (!obj) continue
+    if (
+      obj.type === 'hatchRegion'
+      || obj.type === 'image'
+      || obj.type === 'cota'
+      || obj.type === 'areaLabel'
+      || obj.type === 'nodo'
+      || obj.type === 'tabla'
+      || obj.type === 'texto'
+    ) continue
+    const area = closedEntityAreaM2(obj)
+    if (area == null || !(area > 0)) continue
+    if (!pointInsideClosedEntity(obj, worldX, worldY)) continue
+    if (area < bestArea) {
+      bestArea = area
+      best = area
+    }
+  }
+  return best
+}
+
 export function lineLineIntersection(a1, a2, b1, b2) {
   if (!a1 || !a2 || !b1 || !b2) return null
   const dax = a2.x - a1.x
