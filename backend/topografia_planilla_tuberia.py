@@ -210,15 +210,70 @@ def calcular_seccion(
 
 
 def _nivel_ref(fila: dict, tipo: str) -> Optional[float]:
+    """Nivel de referencia según tipo, con fallback cruzado al cambiar de tipo.
+
+    ALCANTARILLA: subrasante_via → nivel_referencia → terminado_filtro
+    FILTRO: terminado_filtro → nivel_referencia → subrasante_via
+    """
     if tipo == "FILTRO":
-        v = fila.get("terminado_filtro")
-        if v in (None, ""):
-            v = fila.get("nivel_referencia")
-        return _f(v)
-    v = fila.get("subrasante_via")
-    if v in (None, ""):
-        v = fila.get("nivel_referencia")
-    return _f(v)
+        for key in ("terminado_filtro", "nivel_referencia", "subrasante_via"):
+            v = fila.get(key)
+            if v not in (None, ""):
+                return _f(v)
+        return None
+    for key in ("subrasante_via", "nivel_referencia", "terminado_filtro"):
+        v = fila.get(key)
+        if v not in (None, ""):
+            return _f(v)
+    return None
+
+
+def migrar_filas_campo_al_cambiar_tipo(
+    filas: list[dict], tipo_nuevo: str
+) -> list[dict]:
+    """Copia el nivel entre subrasante_via ↔ terminado_filtro al cambiar de tipo.
+
+    Evita que queden cotas huérfanas del tipo anterior tras un cambio de selección.
+    """
+    tipo_u = (tipo_nuevo or "ALCANTARILLA").upper()
+    out: list[dict] = []
+    for f in filas or []:
+        row = dict(f)
+        sub = row.get("subrasante_via")
+        term = row.get("terminado_filtro")
+        if tipo_u == "FILTRO":
+            if term in (None, "") and sub not in (None, ""):
+                row["terminado_filtro"] = sub
+            # No borrar subrasante: el motor ya prioriza terminado_filtro en FILTRO
+        else:
+            if sub in (None, "") and term not in (None, ""):
+                row["subrasante_via"] = term
+        out.append(row)
+    return out
+
+
+def codigos_descuento_validos(tipo: str) -> set[str]:
+    cat = ITEMS_DESCUENTOS_FILTRO if (tipo or "").upper() == "FILTRO" else ITEMS_DESCUENTOS_ALCANTARILLA
+    return {it["codigo"] for it in cat}
+
+
+def filtrar_descuentos_manuales_por_tipo(
+    tipo: str, descuentos_manuales: Optional[list[dict]]
+) -> list[dict]:
+    """Conserva solo códigos válidos para el tipo (p.ej. DESC_OTROS); descarta residuos."""
+    valid = codigos_descuento_validos(tipo)
+    alias = (
+        ITEMS_DESCUENTOS_FILTRO_LEGACY_ALIAS
+        if (tipo or "").upper() == "FILTRO"
+        else ITEMS_DESCUENTOS_ALCANTARILLA_LEGACY_ALIAS
+    )
+    out: list[dict] = []
+    for d in descuentos_manuales or []:
+        cod = str(d.get("codigo") or "")
+        cod = alias.get(cod, cod)
+        if cod in valid:
+            out.append({**d, "codigo": cod})
+    return out
 
 
 def _cota_lomo_o_terminado(fila: dict, tipo: str) -> Optional[float]:
@@ -447,8 +502,8 @@ def calcular_cantidades_y_descuentos(
             bruto = c["bruto"]
             neto = c["cantidad"]
         elif c["codigo"] == "REL":
-            # Excel muestra Desc pero no lo resta de Cantidad
-            descuento = 0.0
+            # Excel G49 muestra Desc (Area 2 en ALC / 0 en FIL) pero H49 no lo resta
+            descuento = c["desc"]
             bruto = c["cantidad"]
             neto = c["cantidad"]
         elif c["codigo"] == "EXC":

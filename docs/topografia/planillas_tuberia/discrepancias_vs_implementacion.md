@@ -29,11 +29,11 @@ Implementación revisada: `backend/topografia_planilla_tuberia.py`, `backend/top
 
 | Excel | App |
 |---|---|
-| Area 1 = segmento circular LET/ACOS | Area1 = `B·h − tubo/N` |
-| Area 2 = AREA TUBERÍA − Area1 | Area2 = `tubo·(1−1/N)` |
+| Area 1 = segmento circular LET/ACOS | ✓ `area_1_m2` (mismo segmento) |
+| Area 2 = AREA TUBERÍA − Area1 | ✓ `area_2_m2` |
 | Altura Atraque `1:1…1:6` | `relacion_atraque` ✓ |
 | Altura Relleno `=2·(θ/2+esp)/N` | ✓ (`altura_relleno_m`) |
-| **Cama Triturado** (F15, solo ALCANTARILLA) | **Ausente** |
+| **Cama Triturado** (F15, solo ALCANTARILLA) | ✓ `meta_cabecera.cama_triturado_m` |
 | Anc. Excavación (G15) | `ancho_excavacion_m` ✓ |
 
 ## 5. Cartera (B16:J36) + panel GRAFICO (K16:N42)
@@ -50,18 +50,19 @@ Implementación revisada: `backend/topografia_planilla_tuberia.py`, `backend/top
 
 | Excel | App |
 |---|---|
-| Excavación Varias, Excavación Roca, Long Tubería, Triturado / Atraque, Relleno Gran., Geotextil | `EXC,TRI,REL,GEO,TUB` — nombres distintos; sin Roca |
-| Columnas Item, Long, Ancho, Espesor, Desc., Cantidad | Cód, Ítem, Ud, Bruto, Desc, Neto |
-| TRI = `L·B·prom(h_trit)−Desc` | TRI = `Area1·L` |
-| Roca espesor fijo `0.05` | No implementado |
+| Excavación Varias, Excavación Roca, Long Tubería, Triturado / Atraque, Relleno Gran., Geotextil | ✓ mismos literales (`EXC,EXC_ROC,TUB,TRI,REL,GEO`) |
+| Columnas Item, Long, Ancho, Espesor, Desc., Cantidad | Bruto/Desc/Neto + dims en cálculo |
+| TRI = `L·B·prom(h_trit)−Desc` (Desc=N46 ALC / N45 FIL) | ✓ tipado por tipo |
+| Roca espesor fijo `0.05` | ✓ `ESPESOR_ROCA_M` |
 
 ## 7. Descuentos Específicos (I43:N50)
 
 | Excel | App |
 |---|---|
-| Tubería Filtro / Area 1 / Area 2 / Otros | `DESC_TUB` (+ `DESC_POZO`/`DESC_FILT`) |
-| Columnas Long, Ancho, Espesor, Cantidad | Solo cantidad |
-| Editor dimensional | FE envía `descuentos_manuales: []` |
+| ALC: Area 1 / Area 2 (+ Otros); FIL: Tubería Filtro (+ Otros) | `DESC_A1`/`DESC_A2` (ALC) · `DESC_TUB_FILT` (FIL) · `DESC_OTROS` |
+| N46=L·Area1; N47=L·Area2; N45=L·AreaTubería; G48=N46\|N45; G49=N47\|0 | Motor tipado; Excel export con fórmulas fijas al tipo (sin IF F1=P1) |
+| Columnas Long, Ancho, Espesor, Cantidad | Devueltas en `descuentos[]` y mostradas en FE/PDF |
+| Cambio de tipo | API migra nivel cartera + filtra catálogo; FE recalcula al cambiar tipo |
 
 ## 8. Perfil + firmas
 

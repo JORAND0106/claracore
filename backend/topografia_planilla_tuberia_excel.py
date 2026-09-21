@@ -223,8 +223,10 @@ def _add_profile_chart(ws_planilla, wb) -> None:
 
 
 def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia: bool) -> None:
+    """Datos + fórmulas fijas al tipo (sin dropdown ni IF de tipo en descuentos/cartera)."""
     meta = _meta(planilla)
     firmas = _firmas(planilla)
+    es_alc = tipo == "ALCANTARILLA"
 
     _set(ws, "F1", TITULO_FIL if tipo == "FILTRO" else TITULO_ALC)
     _style(
@@ -233,13 +235,10 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         font=FONT_TITLE,
         alignment=Alignment(horizontal="center", vertical="center", wrap_text=True),
     )
+    # P1/P2 quedan como referencia documental; el título F1 ya está resuelto al exportar.
     _set(ws, "P1", TITULO_ALC)
     _set(ws, "P2", TITULO_FIL)
     _set(ws, "M1", meta.get("codigo_documento") or CODIGO_DOC)
-
-    dv = DataValidation(type="list", formula1="$P$1:$P$2", allow_blank=True)
-    ws.add_data_validation(dv)
-    dv.add("F1")
 
     if meta.get("contratista"):
         _set(ws, "D5", meta["contratista"])
@@ -270,7 +269,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     _set(ws, "K13", "=ROUND((PI()*((I13/2)+J13)^2),3)")
     if planilla.get("material"):
         _set(ws, "L13", planilla["material"])
-    _set(ws, "M13", '=IF(F1=P1,"ALCANTARILLA","FILTRO")')
+    _set(ws, "M13", tipo)
 
     rel = planilla.get("relacion_atraque") or "1:3"
     _set(ws, "D15", rel if ":" in str(rel) else f"1:{rel}")
@@ -278,7 +277,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     ws.add_data_validation(dv_atr)
     dv_atr.add("D15")
 
-    _set(ws, "F14", '=IF(F1=P1,"Cama Triturado","")')
+    _set(ws, "F14", "Cama Triturado" if es_alc else "")
     cama = meta.get("cama_triturado_m")
     if cama is None:
         cama = 0.0
@@ -300,21 +299,26 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         '=IFERROR(IF($D$15="","",ROUND(2*($I$13/2+$J$13)/'
         'VALUE(MID($D$15,FIND(":",$D$15)+1,10)),3)),"")',
     )
-    _set(ws, "D16", '=IF(F1=P2,"","Subrasante de Vía")')
-    _set(ws, "E16", '=IF(F1=P1,"Cota Lomo","Terminado Filtro")')
+    _set(ws, "D16", "Subrasante de Vía" if es_alc else "")
+    _set(ws, "E16", "Cota Lomo" if es_alc else "Terminado Filtro")
 
     for r in range(CARTERA_FIRST, CARTERA_LAST + 1):
         _set(ws, f"G{r}", f'=IFERROR(IF(B{r}<>0,(C{r}-F{r}),""),"")')
-        _set(ws, f"H{r}", f'=IFERROR(IF(G{r}<>"",IF($F$1=$P$1,$E$15+$F$15,E{r}-F{r}),""),"")')
-        _set(ws, f"I{r}", f'=IFERROR(IF(G{r}<>"",IF($F$1=$P$1,G{r}-($E$15+$F$15),0),""),"")')
-        if r == CARTERA_FIRST:
+        if es_alc:
+            _set(ws, f"H{r}", f'=IFERROR(IF(G{r}<>"",$E$15+$F$15,""),"")')
+            _set(ws, f"I{r}", f'=IFERROR(IF(G{r}<>"",G{r}-($E$15+$F$15),""),"")')
             _set(ws, f"J{r}", None)
         else:
-            _set(
-                ws,
-                f"J{r}",
-                f'=IFERROR(IF(B{r}<>"",IF($F$1=$P$1,"",AVERAGE(H{r-1}:H{r})*2+$G$15*2),""),"")',
-            )
+            _set(ws, f"H{r}", f'=IFERROR(IF(G{r}<>"",E{r}-F{r},""),"")')
+            _set(ws, f"I{r}", f'=IFERROR(IF(G{r}<>"",0,""),"")')
+            if r == CARTERA_FIRST:
+                _set(ws, f"J{r}", None)
+            else:
+                _set(
+                    ws,
+                    f"J{r}",
+                    f'=IFERROR(IF(B{r}<>"",AVERAGE(H{r-1}:H{r})*2+$G$15*2,""),"")',
+                )
         for col in ("B", "C", "D", "E", "F"):
             _set(ws, f"{col}{r}", None)
         for col in ("G", "H", "I", "J"):
@@ -385,44 +389,54 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     _set(ws, "D48", "=D45")
     _set(ws, "E48", "=E45")
     _set(ws, "F48", "=IFERROR(H41,0)")
-    _set(ws, "G48", '=IF($F$1=$P$1,N46,N45)')
+    # Descuento triturado: ALC → Area1 (N46); FIL → Tubería Filtro (N45)
+    _set(ws, "G48", "=N46" if es_alc else "=N45")
     _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)-G48")
     _set(ws, "D49", "=D45")
     _set(ws, "E49", "=E45")
     _set(ws, "F49", "=IFERROR(I41,0)")
-    _set(ws, "G49", '=IF($F$1=$P$1,N47,0)')
+    _set(ws, "G49", "=N47" if es_alc else 0)
     _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
     _set(ws, "D50", "=D45")
     _set(ws, "E50", "=J41")
     _set(ws, "H50", "=ROUND(PRODUCT(D50:F50),2)")
 
-    _set(ws, "I45", '=IF($F$1=$P$1,"","Tubería Filtro")')
-    _set(ws, "K45", '=IF(I45<>"",$B$41,"")')
-    _set(ws, "M45", '=IF(I45<>"",$K$13,"")')
-    _set(ws, "N45", "=PRODUCT(K45:M45)")
-    _set(ws, "I46", '=IF($F$1=$P$1,"Area 1","")')
-    _set(ws, "K46", '=IF(I46<>"",$B$41,"")')
-    _set(ws, "M46", '=IF(I46<>"",$B$15,"")')
-    _set(ws, "N46", '=IF(I46<>"",PRODUCT(K46:M46),"")')
-    _set(ws, "I47", '=IF($F$1=$P$1,"Area 2","")')
-    _set(ws, "K47", '=IF(I47<>"",$B$41,"")')
-    _set(ws, "M47", '=IF(I47<>"",$C$15,"")')
-    _set(ws, "N47", '=IF(I47<>"",PRODUCT(K47:M47),"")')
+    if es_alc:
+        _set(ws, "I45", "")
+        _set(ws, "K45", "")
+        _set(ws, "M45", "")
+        _set(ws, "N45", "")
+        _set(ws, "I46", "Area 1")
+        _set(ws, "K46", "=$B$41")
+        _set(ws, "M46", "=$B$15")
+        _set(ws, "N46", "=PRODUCT(K46:M46)")
+        _set(ws, "I47", "Area 2")
+        _set(ws, "K47", "=$B$41")
+        _set(ws, "M47", "=$C$15")
+        _set(ws, "N47", "=PRODUCT(K47:M47)")
+    else:
+        _set(ws, "I45", "Tubería Filtro")
+        _set(ws, "K45", "=$B$41")
+        _set(ws, "M45", "=$K$13")
+        _set(ws, "N45", "=PRODUCT(K45:M45)")
+        _set(ws, "I46", "")
+        _set(ws, "K46", "")
+        _set(ws, "M46", "")
+        _set(ws, "N46", "")
+        _set(ws, "I47", "")
+        _set(ws, "K47", "")
+        _set(ws, "M47", "")
+        _set(ws, "N47", "")
     _set(ws, "I48", "Otros")
 
     _set(ws, "L18", '="Ancho "&G15')
     _style(ws, "L18", fill=FILL_CALC)
-    _set(
-        ws,
-        "K23",
-        '=IFERROR(IF(G17<>"",IF($F$1=$P$1,"Alt Rell. "&ROUND(I41,3),"Anc. Geot "&ROUND(J41,3)),""),"")',
-    )
+    if es_alc:
+        _set(ws, "K23", '=IFERROR(IF(G17<>"","Alt Rell. "&ROUND(I41,3),""),"")')
+    else:
+        _set(ws, "K23", '=IFERROR(IF(G17<>"","Anc. Geot "&ROUND(J41,3),""),"")')
     _style(ws, "K23", fill=FILL_CALC)
-    _set(
-        ws,
-        "K30",
-        '=IFERROR(IF(G17<>"",IF($F$1=$P$1,"Alt Tritur. "&ROUND(H41,3),"Alt Tritur. "&ROUND(H41,3)),""),"")',
-    )
+    _set(ws, "K30", '=IFERROR(IF(G17<>"","Alt Tritur. "&ROUND(H41,3),""),"")')
     _style(ws, "K30", fill=FILL_CALC)
 
     _set(ws, "A65", firmas.get("elaboro_nombre") or firmas.get("elaboro") or "")

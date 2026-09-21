@@ -22,6 +22,8 @@ from topografia_planilla_tuberia import (
     TIPOS_PLANILLA,
     calcular_planilla_completa,
     construir_fila_consolidado,
+    filtrar_descuentos_manuales_por_tipo,
+    migrar_filas_campo_al_cambiar_tipo,
     validar_cartera_campo,
 )
 from topo_crs import gk_bogota_to_wgs84
@@ -370,6 +372,44 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
             "area_2_m2": sec["area_2_m2"],
         })
     supabase.table("topo_planillas_tuberia").update(patch).eq("id", planilla_id).execute()
+
+    # Al cambiar tipo: migrar nivel de cartera y depurar descuentos del catálogo anterior
+    tipo_prev = (p.get("tipo") or "ALCANTARILLA").upper()
+    if "tipo" in patch and patch["tipo"] != tipo_prev:
+        filas_db = _filas(planilla_id)
+        migradas = migrar_filas_campo_al_cambiar_tipo(_as_campo(filas_db), patch["tipo"])
+        if migradas:
+            _replace_filas(planilla_id, [
+                {
+                    "orden": f.get("orden"),
+                    "abscisa": f.get("abscisa"),
+                    "terreno_natural": f.get("terreno_natural"),
+                    "subrasante_via": f.get("subrasante_via"),
+                    "terminado_filtro": f.get("terminado_filtro"),
+                    "cota_fondo_excavacion": f.get("cota_fondo_excavacion"),
+                    "norte": f.get("norte"),
+                    "este": f.get("este"),
+                    "observacion": f.get("observacion"),
+                }
+                for f in migradas
+            ])
+        desc_db = _descuentos(planilla_id)
+        kept = filtrar_descuentos_manuales_por_tipo(
+            patch["tipo"],
+            [{"codigo": d.get("codigo"), "cantidad": d.get("cantidad")} for d in desc_db],
+        )
+        supabase.table("topo_planilla_tuberia_descuentos").delete().eq("planilla_id", planilla_id).execute()
+        if kept:
+            supabase.table("topo_planilla_tuberia_descuentos").insert([
+                {
+                    "planilla_id": planilla_id,
+                    "codigo": d["codigo"],
+                    "cantidad": float(d.get("cantidad") or 0),
+                    "nota": None,
+                }
+                for d in kept
+            ]).execute()
+
     return _detalle(contrato_id, planilla_id)
 
 

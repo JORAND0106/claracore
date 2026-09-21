@@ -88,6 +88,28 @@ export function filasDesdeApi(filasApi, tipo, minRows = FILAS_INICIALES_CARTERA)
   return mapped
 }
 
+
+/**
+ * Al cambiar ALCANTARILLA ↔ FILTRO, copia el nivel de referencia entre columnas
+ * para que no queden cotas huérfanas del tipo anterior.
+ */
+export function migrarFilasAlCambiarTipo(filas, tipoNuevo) {
+  const tipo = String(tipoNuevo || 'ALCANTARILLA').toUpperCase()
+  return (filas || []).map((f) => {
+    const row = { ...f }
+    const sub = row.subrasante_via
+    const term = row.terminado_filtro
+    if (tipo === 'FILTRO') {
+      if ((term === '' || term == null) && sub !== '' && sub != null) {
+        row.terminado_filtro = sub
+      }
+    } else if ((sub === '' || sub == null) && term !== '' && term != null) {
+      row.subrasante_via = term
+    }
+    return row
+  })
+}
+
 export function payloadFilas(filas, tipo) {
   return (filas || []).map((f, i) => {
     const base = {
