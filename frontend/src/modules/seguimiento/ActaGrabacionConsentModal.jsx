@@ -17,6 +17,8 @@ export default function ActaGrabacionConsentModal({
   t,
   cupo = null,
   busy = false,
+  /** Detener en curso: no bloquear Detener por busy de inicio/checkpoint. */
+  stopping = false,
   error = '',
   viewportCompact = false,
   /** true = mic+pestaña; false = solo mic (informativo; ya no se elige aquí). */
@@ -42,7 +44,7 @@ export default function ActaGrabacionConsentModal({
 
   const restantes = cupo?.segundos_restantes
   const bloqueado = cupo?.blocked === true || (restantes != null && restantes <= 0)
-  const canContinue = leido && ronda && !busy
+  const canContinue = leido && ronda && !busy && !stopping
 
   return (
     <div
@@ -177,19 +179,19 @@ export default function ActaGrabacionConsentModal({
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
             <button
               type="button"
-              disabled={busy}
+              disabled={stopping}
               onClick={onCancel}
               style={{
                 border: `1px solid ${t.border}`,
                 borderRadius: 8,
                 padding: '8px 12px',
-                cursor: busy ? 'wait' : 'pointer',
+                cursor: stopping ? 'wait' : 'pointer',
                 background: 'transparent',
                 color: t.text,
                 fontSize: 'var(--cc-sm)',
               }}
             >
-              Detener grabación
+              {stopping ? 'Deteniendo…' : 'Detener grabación'}
             </button>
             <button
               type="button"
