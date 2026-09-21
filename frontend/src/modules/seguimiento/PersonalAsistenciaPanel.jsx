@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { CARGOS_PERSONAL, personalEnColumnas } from './bitacoraConstants'
+import { HINT_DOCUMENTACION_NO_APROBADA } from './bitacoraAsistenciaRrhhPolicy'
 import {
   HINT_REGISTRAR_EN_RRHH,
   HORA_SALIDA_DEFAULT,
@@ -133,7 +134,7 @@ function NombreRrhhAutocomplete({
 
 /**
  * Personal en obra: asistencia diaria desde catálogo RRHH (sin popup de alta).
- * Opcional: captura temporal cargo/cantidad (solo Dev + contrato permitido).
+ * Opcional: captura temporal cargo/cantidad (Dev+ICCU o contrato exento ID 3).
  */
 export default function PersonalAsistenciaPanel({
   t,
@@ -150,6 +151,8 @@ export default function PersonalAsistenciaPanel({
   onChangePersonalManual,
   /** Mostrar botón «Registrar cargo y cantidad». */
   permitirCargoCantidad = false,
+  /** Gate post-corte: solo documentación Aprobada. */
+  gateRrhhAprobado = false,
   cargosOpciones = CARGOS_PERSONAL,
 }) {
   const ui = sheetStyles || {}
@@ -253,7 +256,9 @@ export default function PersonalAsistenciaPanel({
                 type="button"
                 onClick={() => setCargoFormOpen((v) => !v)}
                 style={btnGhost}
-                title="Temporal · solo Desarrollador · contrato ICCU-CTO-1574-2025"
+                title={gateRrhhAprobado
+                  ? 'Registro directo cargo/cantidad'
+                  : 'Registro por cargo y cantidad (sin identificación individual)'}
               >
                 Registrar cargo y cantidad
               </button>
@@ -265,6 +270,21 @@ export default function PersonalAsistenciaPanel({
         )}
       </div>
 
+      {gateRrhhAprobado && (
+        <div style={{
+          fontSize: 'var(--cc-caption)',
+          color: '#0F766E',
+          background: 'rgba(13,148,136,0.08)',
+          border: '1px solid rgba(13,148,136,0.25)',
+          borderRadius: 8,
+          padding: '8px 10px',
+          marginBottom: 8,
+          lineHeight: 1.4,
+        }}>
+          {HINT_DOCUMENTACION_NO_APROBADA}
+        </div>
+      )}
+
       {!disabled && (
         <div style={{
           fontSize: 'var(--cc-caption)',
@@ -272,8 +292,9 @@ export default function PersonalAsistenciaPanel({
           marginBottom: 6,
           lineHeight: 1.35,
         }}>
-          Busque por nombre en el catálogo de RRHH. Cargo y empresa se completan solos.
-          Los colaboradores nuevos se registran en Recursos Humanos.
+          {gateRrhhAprobado
+            ? 'Busque por nombre entre colaboradores con documentación Aprobada en RRHH. Cargo y empresa se completan solos.'
+            : 'Busque por nombre en el catálogo de RRHH. Cargo y empresa se completan solos. Los colaboradores nuevos se registran en Recursos Humanos.'}
         </div>
       )}
 
@@ -519,7 +540,9 @@ export default function PersonalAsistenciaPanel({
 
       <div style={{ ...ui.sectionTitle, marginTop: 12, marginBottom: 6 }}>
         Resumen por cargo (automático
-        {permitirCargoCantidad ? ' · RRHH + registro directo' : ' · solo Activos en RRHH'})
+        {permitirCargoCantidad
+          ? ' · RRHH + registro directo'
+          : (gateRrhhAprobado ? ' · solo Aprobados en RRHH' : ' · solo Activos en RRHH')})
       </div>
       <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
         {compact ? (

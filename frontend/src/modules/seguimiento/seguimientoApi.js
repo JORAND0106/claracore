@@ -285,6 +285,14 @@ export function createSeguimientoApi(contratoId, token) {
       const qs = q ? `?q=${encodeURIComponent(q)}` : ''
       return get(`/seguimiento/${cid}/bitacora/rrhh-trabajadores${qs}`)
     },
+    /** Política corte / contrato exento ID 3 / gate documentación Aprobada. */
+    getBitacoraAsistenciaRrhhPolicy: () =>
+      get(`/seguimiento/${cid}/bitacora/asistencia-rrhh-policy`),
+    /** Toggle Desarrollador (solo contrato ID 3). */
+    setBitacoraAsistenciaRrhhActiva: (activa) =>
+      send('PUT', `/seguimiento/${cid}/bitacora/asistencia-rrhh-activa`, {
+        activa: Boolean(activa),
+      }),
     listSubcontratistasActivos: () => get(`/sicoe-obra/${cid}/subcontratistas-activos`),
     plantillaAutocompletarDiario: (tramo) => {
       const q = tramo != null && String(tramo).trim() !== ''

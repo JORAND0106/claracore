@@ -282,3 +282,17 @@ export function puedeUsarCargoCantidadTemporal({ esDesarrollador, contratoNumero
   const num = String(contratoNumero || '').trim().toUpperCase()
   return num === String(BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO).toUpperCase()
 }
+
+/**
+ * Cargo/cuadrilla sin identificación individual:
+ * - Dev + contrato ICCU temporal, o
+ * - Contrato exento (ID 3) mientras el gate RRHH no esté activo.
+ */
+export function puedeUsarCargoCantidadAsistencia({
+  esDesarrollador,
+  contratoNumero,
+  permiteCargoCuadrilla = false,
+} = {}) {
+  if (permiteCargoCuadrilla) return true
+  return puedeUsarCargoCantidadTemporal({ esDesarrollador, contratoNumero })
+}

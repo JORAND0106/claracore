@@ -1532,6 +1532,62 @@ def route_list_bitacora_rrhh_trabajadores(
     return {"items": list_rrhh_trabajadores_para_bitacora(supabase, contrato_id, q or "")}
 
 
+@router.get("/{contrato_id}/bitacora/asistencia-rrhh-policy")
+def route_bitacora_asistencia_rrhh_policy(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Estado del gate Bitácora↔RRHH (corte, exento ID 3, toggle)."""
+    from bitacora_service import get_asistencia_rrhh_policy
+
+    require_permiso_bitacora(current_user, "ver", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    return get_asistencia_rrhh_policy(supabase, contrato_id)
+
+
+class BitacoraAsistenciaRrhhActivaBody(BaseModel):
+    activa: bool = False
+
+
+@router.put("/{contrato_id}/bitacora/asistencia-rrhh-activa")
+def route_bitacora_asistencia_rrhh_activa(
+    contrato_id: int,
+    body: BitacoraAsistenciaRrhhActivaBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Activa/desactiva el gate RRHH en el contrato exento (ID 3).
+    Solo Desarrollador. En otros contratos no aplica.
+    """
+    from bitacora_asistencia_rrhh_policy import (
+        BITACORA_ASISTENCIA_RRHH_EXENTO_CONTRATO_ID,
+        es_contrato_exento_asistencia_rrhh,
+    )
+    from bitacora_permissions import _es_desarrollador_seguro
+    from bitacora_service import get_asistencia_rrhh_policy, set_asistencia_rrhh_activa
+
+    if not _es_desarrollador_seguro(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el cargo Desarrollador puede activar o desactivar esta opción.",
+        )
+    _check_contrato(current_user, contrato_id)
+    if not es_contrato_exento_asistencia_rrhh(contrato_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Solo el contrato ID {BITACORA_ASISTENCIA_RRHH_EXENTO_CONTRATO_ID} "
+                "admite activación manual del gate Bitácora↔RRHH."
+            ),
+        )
+    try:
+        set_asistencia_rrhh_activa(supabase, contrato_id, bool(body.activa))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return get_asistencia_rrhh_policy(supabase, contrato_id)
+
+
+
 @router.post("/{contrato_id}/bitacora/colaboradores")
 def route_upsert_bitacora_colaborador(
     contrato_id: int,
