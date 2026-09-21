@@ -75,11 +75,12 @@ class TestFormulasVsInventario(unittest.TestCase):
             nombres,
             [
                 "Excavación Varias",
-                "Excavación Roca",
                 "Long Tubería",
                 "Triturado / Atraque",
                 "Relleno Gran.",
                 "Geotextil",
+                "Excavación Roca",
+                "Otros: ____",
             ],
         )
         desc = [d["nombre"] for d in r["descuentos"]]
@@ -327,16 +328,19 @@ class TestExcelDescuentosFijosPorTipo(unittest.TestCase):
 
     def test_descuentos_fijos_por_tipo(self):
         ws_alc = self._ws("ALCANTARILLA")
-        self.assertEqual(ws_alc["G48"].value, "=N46")
-        self.assertEqual(ws_alc["G49"].value, "=N47")
+        # Triturado en fila 47 y Relleno en 48 tras reordenar Excavación Roca al final.
+        self.assertEqual(ws_alc["G47"].value, "=N46")
+        self.assertEqual(ws_alc["G48"].value, "=N47")
         self.assertEqual(ws_alc["I46"].value, "Area 1")
         self.assertEqual(ws_alc["I47"].value, "Area 2")
         self.assertIn(ws_alc["I45"].value, (None, ""))
-        self.assertNotIn("$F$1=$P$1", str(ws_alc["G48"].value))
+        self.assertNotIn("$F$1=$P$1", str(ws_alc["G47"].value))
+        self.assertEqual(ws_alc["B50"].value, "Excavación Roca")
+        self.assertEqual(ws_alc["B51"].value, "Otros: ____")
 
         ws_fil = self._ws("FILTRO")
-        self.assertEqual(ws_fil["G48"].value, "=N45")
-        self.assertEqual(ws_fil["G49"].value, 0)
+        self.assertEqual(ws_fil["G47"].value, "=N45")
+        self.assertEqual(ws_fil["G48"].value, 0)
         self.assertEqual(ws_fil["I45"].value, "Tubería Filtro")
         self.assertIn(ws_fil["I46"].value, (None, ""))
         self.assertIn(ws_fil["I47"].value, (None, ""))

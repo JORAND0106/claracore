@@ -158,6 +158,35 @@ class TestCantidadesDescuentosXlsm(unittest.TestCase):
         self.assertIn("DESC_OTROS", cods)
         self.assertNotIn("DESC_A1", cods)
 
+    def test_exc_roc_al_final_y_dims_editables(self):
+        r = calcular_planilla_completa(
+            tipo="ALCANTARILLA",
+            diametro_m=0.9,
+            espesor_m=0.05,
+            ancho_excavacion_m=1.5,
+            relacion_atraque="1:3",
+            filas_campo=[
+                {"orden": 1, "abscisa": 100, "terreno_natural": 105, "subrasante_via": 104, "cota_fondo_excavacion": 103},
+                {"orden": 2, "abscisa": 120, "terreno_natural": 104.5, "subrasante_via": 103.5, "cota_fondo_excavacion": 102.5},
+            ],
+            cama_triturado_m=0.1,
+            cantidades_manuales=[
+                {"codigo": "EXC_ROC", "long": 8, "ancho": 1.5, "espesor": 0.2},
+                {"codigo": "OTROS", "nombre": "Caja de inspección", "long": 3, "ancho": 2, "espesor": 0.4},
+            ],
+        )
+        codigos = [n["codigo"] for n in r["netos"]]
+        self.assertEqual(codigos[-2:], ["EXC_ROC", "OTROS"])
+        self.assertTrue(all(c in codigos for c in ("EXC", "TUB", "TRI", "REL", "GEO")))
+        roc = next(n for n in r["netos"] if n["codigo"] == "EXC_ROC")
+        otr = next(n for n in r["netos"] if n["codigo"] == "OTROS")
+        self.assertTrue(roc["editable_dims"])
+        self.assertTrue(otr["editable_dims"] and otr["editable_nombre"])
+        self.assertAlmostEqual(roc["neto"], 2.4, places=2)
+        self.assertAlmostEqual(otr["neto"], 2.4, places=2)
+        self.assertEqual(otr["nombre"], "Otros: Caja de inspección")
+
+
 
 class TestValidacionYConsolidado(unittest.TestCase):
     def test_validacion_restrictiva_cfe_sobre_tn(self):
@@ -355,6 +384,7 @@ class TestCambioTipoDescuentos(unittest.TestCase):
         self.assertNotIn("DESC_A1", cods)
         self.assertIn("DESC_OTROS", cods)
         self.assertIn("DESC_TUB_FILT", cods)
+
 
 if __name__ == "__main__":
     unittest.main()

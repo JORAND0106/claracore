@@ -117,6 +117,7 @@ class CarteraBody(BaseModel):
     version: int
     filas: list[FilaBody]
     descuentos_manuales: list[DescBody] = Field(default_factory=list)
+    cantidades_manuales: Optional[list[dict[str, Any]]] = None
 
 
 def _filas(planilla_id: str) -> list[dict]:
@@ -157,6 +158,16 @@ def _cama_triturado_m(planilla: dict) -> float:
         return 0.0
 
 
+
+def _cantidades_manuales_from_meta(planilla: dict) -> list[dict]:
+    meta = planilla.get("meta_cabecera") or {}
+    if not isinstance(meta, dict):
+        return []
+    raw = meta.get("cantidades_manuales") or []
+    return raw if isinstance(raw, list) else []
+
+
+
 def _calcular(planilla: dict, filas_db: list[dict], desc_db: list[dict]) -> dict:
     diam = float(planilla.get("diametro_m") or 0)
     ancho = float(planilla.get("ancho_excavacion_m") or 0)
@@ -170,6 +181,7 @@ def _calcular(planilla: dict, filas_db: list[dict], desc_db: list[dict]) -> dict
         relacion_atraque=planilla.get("relacion_atraque") or "1:3",
         filas_campo=_as_campo(filas_db),
         descuentos_manuales=[{"codigo": d["codigo"], "cantidad": d.get("cantidad")} for d in desc_db],
+        cantidades_manuales=_cantidades_manuales_from_meta(planilla),
         cama_triturado_m=_cama_triturado_m(planilla),
     )
 
@@ -471,6 +483,15 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
         raise HTTPException(404, "Planilla no encontrada")
     _assert_editable(p)
     _assert_version(p, body.version)
+
+    if body.cantidades_manuales is not None:
+        prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+        new_meta = {**prev_meta, "cantidades_manuales": body.cantidades_manuales}
+        supabase.table("topo_planillas_tuberia").update({
+            "meta_cabecera": new_meta,
+            "updated_at": _now(),
+        }).eq("id", planilla_id).execute()
+        p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id) or {**p, "meta_cabecera": new_meta}
 
     filas_util = []
     for f in body.filas:
