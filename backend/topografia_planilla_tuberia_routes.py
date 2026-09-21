@@ -286,11 +286,51 @@ def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
 def listar(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "ver")
-    return (
+    rows = (
         supabase.table("topo_planillas_tuberia")
-        .select("id,tipo,nombre,pk_id,costado,estado,version,diametro_m,relacion_atraque,created_at,updated_at,cerrado_at")
+        .select(
+            "id,tipo,nombre,pk_id,costado,estado,version,diametro_m,relacion_atraque,"
+            "created_at,updated_at,cerrado_at,creado_por,cerrado_por,validado_por,validado_at"
+        )
         .eq("contrato_id", contrato_id).order("created_at", desc=True).execute().data or []
     )
+    uids = {
+        int(u)
+        for r in rows
+        for u in (r.get("validado_por"), r.get("cerrado_por"), r.get("creado_por"))
+        if u is not None and str(u).strip() != ""
+    }
+    nombres: dict[int, str] = {}
+    if uids:
+        try:
+            data = (
+                supabase.table("usuarios")
+                .select("id,nombre,apellidos")
+                .in_("id", list(uids))
+                .execute()
+                .data
+                or []
+            )
+            for u in data:
+                uid = int(u["id"])
+                nom = " ".join(
+                    x for x in (str(u.get("nombre") or "").strip(), str(u.get("apellidos") or "").strip()) if x
+                ).strip()
+                if nom:
+                    nombres[uid] = nom
+        except Exception:
+            logger.exception("No se pudieron resolver nombres de usuarios para listado de planillas")
+    out = []
+    for r in rows:
+        item = dict(r)
+        vid = r.get("validado_por") or r.get("cerrado_por")
+        try:
+            vid_i = int(vid) if vid is not None and str(vid).strip() != "" else None
+        except (TypeError, ValueError):
+            vid_i = None
+        item["validado_por_nombre"] = nombres.get(vid_i) if vid_i is not None else None
+        out.append(item)
+    return out
 
 
 @router.post("/{contrato_id}/planillas-tuberia")
