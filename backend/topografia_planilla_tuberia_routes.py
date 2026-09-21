@@ -250,8 +250,7 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
     }
 
 
-# Offset temporal para insertar filas nuevas sin chocar UNIQUE(planilla_id, orden)
-# mientras aún existen las previas (mismo patrón seguro que nivelación, adaptado).
+# Conservado por compatibilidad de tests / imports; el replace ya no usa offset temporal.
 _ORDEN_TEMP_OFFSET = 1_000_000
 
 
@@ -295,68 +294,86 @@ def _fila_payload_db(planilla_id: str, f: dict, *, orden: int, row_id: Optional[
 
 
 def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
-    """Reemplaza la cartera sin ventana vacía y sin chocar UNIQUE(planilla_id, orden).
+    """Reemplaza la cartera de forma idempotente por (planilla_id, orden).
 
-    1) Inserta filas nuevas (con orden temporal si hay previas).
-    2) Verifica conteo con SELECT (no confía en insert.data vacío de supabase-py).
-    3) Borra solo las previas ya confirmado el insert.
-    4) Remapea orden temporal → final.
-    5) Verifica huella; si falla, elimina parciales y restaura previas.
+    Evita el patrón insert+delete que chocaba con UNIQUE(planilla_id, orden) y
+    que, ante fallos de verificación, podía dejar la cartera vacía.
+
+    Estrategia:
+      1) UPDATE filas cuyo orden ya existe
+      2) INSERT órdenes nuevos
+      3) DELETE órdenes que ya no vienen en el payload
+      4) Verificar conteo + huella por SELECT (no confiar en insert.data)
     """
     prev = _filas(planilla_id)
-    prev_ids = [p["id"] for p in prev if p.get("id")]
-    use_temp_orden = bool(prev_ids)
+    prev_by_orden: dict[int, dict] = {}
+    for p in prev:
+        try:
+            prev_by_orden[int(p.get("orden"))] = p
+        except (TypeError, ValueError):
+            continue
 
     ordenes_finales = [int(f["orden"]) for f in filas]
-    payloads = [
-        _fila_payload_db(
-            planilla_id,
-            f,
-            orden=(o + _ORDEN_TEMP_OFFSET) if use_temp_orden else o,
-        )
-        for f, o in zip(filas, ordenes_finales)
-    ]
-    new_ids = [p["id"] for p in payloads]
+    wanted = set(ordenes_finales)
     expected_fp = fingerprint_filas_campo([
         {**f, "orden": o} for f, o in zip(filas, ordenes_finales)
     ])
 
     logger.info(
-        "planilla_tuberia_filas_replace start id=%s previas=%s payload=%s temp_orden=%s",
-        planilla_id, len(prev), len(payloads), use_temp_orden,
+        "planilla_tuberia_filas_replace start id=%s previas=%s payload=%s strategy=upsert_orden",
+        planilla_id, len(prev), len(filas),
     )
 
     try:
-        if payloads:
-            supabase.table("topo_planilla_tuberia_filas").insert(payloads).execute()
-            todas = (
-                supabase.table("topo_planilla_tuberia_filas")
-                .select("id").eq("planilla_id", planilla_id).execute().data or []
-            )
-            inserted = [r for r in todas if r.get("id") in set(new_ids)]
-            if len(inserted) != len(payloads):
-                raise RuntimeError(f"Inserción incompleta {len(inserted)}/{len(payloads)}")
-
-        if prev_ids:
-            for i in range(0, len(prev_ids), 100):
-                supabase.table("topo_planilla_tuberia_filas").delete().in_(
-                    "id", prev_ids[i:i + 100]
+        for f, o in zip(filas, ordenes_finales):
+            fields = {
+                "abscisa": f.get("abscisa"),
+                "terreno_natural": f.get("terreno_natural"),
+                "subrasante_via": f.get("subrasante_via"),
+                "terminado_filtro": f.get("terminado_filtro"),
+                "cota_fondo_excavacion": f.get("cota_fondo_excavacion"),
+                "norte": f.get("norte"),
+                "este": f.get("este"),
+                "observacion": f.get("observacion"),
+                "orden": o,
+            }
+            existing = prev_by_orden.get(o)
+            if existing and existing.get("id"):
+                supabase.table("topo_planilla_tuberia_filas").update(fields).eq(
+                    "id", existing["id"]
+                ).execute()
+            else:
+                supabase.table("topo_planilla_tuberia_filas").insert(
+                    _fila_payload_db(planilla_id, f, orden=o)
                 ).execute()
 
-        if use_temp_orden and payloads:
-            for p, o_final in zip(payloads, ordenes_finales):
-                supabase.table("topo_planilla_tuberia_filas").update(
-                    {"orden": o_final}
-                ).eq("id", p["id"]).execute()
+        obsolete_ids = [
+            p["id"] for o, p in prev_by_orden.items()
+            if o not in wanted and p.get("id")
+        ]
+        if obsolete_ids:
+            for i in range(0, len(obsolete_ids), 100):
+                supabase.table("topo_planilla_tuberia_filas").delete().in_(
+                    "id", obsolete_ids[i:i + 100]
+                ).execute()
 
         rows = _filas(planilla_id)
-        if len(rows) != len(payloads):
-            raise RuntimeError(f"Cartera inconsistente {len(rows)}/{len(payloads)}")
+        if len(rows) != len(filas):
+            raise RuntimeError(f"Cartera inconsistente {len(rows)}/{len(filas)}")
         got_fp = fingerprint_filas_campo(rows)
         if got_fp != expected_fp:
-            raise RuntimeError(
-                "La huella de filas persistidas no coincide con el payload enviado."
-            )
+            # Log detallado; reintento de lectura (eventual consistency) antes de fallar
+            rows2 = _filas(planilla_id)
+            got_fp2 = fingerprint_filas_campo(rows2)
+            if got_fp2 != expected_fp:
+                logger.error(
+                    "planilla_tuberia_filas_replace fingerprint mismatch id=%s expected=%s got=%s",
+                    planilla_id, expected_fp, got_fp2,
+                )
+                raise RuntimeError(
+                    "La huella de filas persistidas no coincide con el payload enviado."
+                )
+            rows = rows2
         logger.info(
             "planilla_tuberia_filas_replace ok id=%s saved=%s",
             planilla_id, len(rows),
@@ -366,29 +383,6 @@ def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
         logger.exception(
             "planilla_tuberia_filas_replace fail id=%s err=%s", planilla_id, exc,
         )
-        try:
-            if new_ids:
-                for i in range(0, len(new_ids), 100):
-                    supabase.table("topo_planilla_tuberia_filas").delete().in_(
-                        "id", new_ids[i:i + 100]
-                    ).execute()
-            quedan = (
-                supabase.table("topo_planilla_tuberia_filas")
-                .select("id").eq("planilla_id", planilla_id).execute().data or []
-            )
-            if prev and not quedan:
-                restore = [
-                    _fila_payload_db(
-                        planilla_id, p,
-                        orden=int(p.get("orden") or 0),
-                        row_id=p.get("id"),
-                    )
-                    for p in prev
-                ]
-                if restore:
-                    supabase.table("topo_planilla_tuberia_filas").insert(restore).execute()
-        except Exception:
-            logger.exception("planilla_tuberia_filas_replace compensación falló id=%s", planilla_id)
         raise
 
 
@@ -702,7 +696,10 @@ def cerrar(contrato_id: int, planilla_id: str, current_user=Depends(get_current_
         raise HTTPException(422, "Solo se cierran planillas en borrador.")
     filas = _filas(planilla_id)
     if not filas:
-        raise HTTPException(422, "No hay cartera para cerrar.")
+        raise HTTPException(
+            422,
+            "No hay cartera para cerrar. Guarde la cartera de campo (con datos) antes de cerrar la planilla.",
+        )
     calc = _calcular(p, filas, _descuentos(planilla_id))
     now = _now()
     consol = construir_fila_consolidado(
@@ -1064,7 +1061,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         <h2>Descuentos Específicos</h2>
         <table class="sheet resumen"><thead><tr>
           <th class="desc item" width="46%">Item</th><th class="desc num">Long</th><th class="desc num">Ancho</th>
-          <th class="desc num">Espesor</th><th class="desc num">Cantidad</th>
+          <th class="desc num">Área</th><th class="desc num">Cantidad</th>
         </tr></thead><tbody>{descs}</tbody></table>
       </td>
     </tr></table>

@@ -35,6 +35,8 @@ import {
   payloadFilas,
   tieneDatosExportables,
   validarNombrePlanilla,
+  agruparAlertasValidacion,
+  validarFilasCarteraLocal,
 } from './planillaTuberiaUtils'
 
 
@@ -503,6 +505,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   /** Preferir preview local; si faltan Ø/B, caer al último cálculo del servidor. */
   const calculoVista = calculoLocal || calculo
 
+  const avisosLocales = useMemo(
+    () => validarFilasCarteraLocal(filas, params.tipo),
+    [filas, params.tipo],
+  )
+  const alertasTabla = useMemo(
+    () => agruparAlertasValidacion(avisosLocales),
+    [avisosLocales],
+  )
+
   const calcFilas = useMemo(() => {
     const map = new Map((calculoVista?.cartera?.filas || []).map((row) => [row.orden, row]))
     return filas.map((row, i) => map.get(i + 1) || map.get(row.orden) || {})
@@ -955,7 +966,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 480 }}>
           <thead>
             <tr>
-              {['Item', 'Long', 'Ancho', 'Espesor', 'Cantidad'].map((h, i) => (
+              {['Item', 'Long', 'Ancho', 'Área', 'Cantidad'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -1196,13 +1207,50 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
             {err && <div style={{ color: '#dc2626', padding: 8, background: '#fef2f2', borderRadius: 8 }}>{err}</div>}
             {msg && <div style={{ color: '#166534', padding: 8, background: '#f0fdf4', borderRadius: 8 }}>{msg}</div>}
-            {infos?.length > 0 && (
-              <div style={{ color: '#92400e', padding: 8, background: '#fffbeb', borderRadius: 8, fontSize: 'var(--cc-sm)' }}>
-                {infos.map((a, i) => (
-                  <div key={i} title={a.detalle || ''}>
-                    ⚠ {a.msg}{a.detalle ? `: ${a.detalle}` : ''}
-                  </div>
-                ))}
+            {alertasTabla?.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {alertasTabla.map((g) => {
+                  const isErr = g.prioridad === 'error'
+                  const bg = isErr ? '#fef2f2' : '#fffbeb'
+                  const fg = isErr ? '#991b1b' : '#92400e'
+                  const border = isErr ? '#fecaca' : '#fde68a'
+                  const conDif = g.filas.some((r) => r.diferencia != null || r.abscisa != null)
+                  return (
+                    <div
+                      key={g.key}
+                      style={{
+                        color: fg,
+                        background: bg,
+                        border: `1px solid ${border}`,
+                        borderRadius: 8,
+                        padding: 8,
+                        fontSize: 'var(--cc-sm)',
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, marginBottom: conDif ? 6 : 0 }}>
+                        ⚠ {g.msg}{g.detalle ? ` — ${g.detalle}` : ''}
+                      </div>
+                      {conDif && (
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 'var(--cc-xs)' }}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: 'left', borderBottom: `1px solid ${border}`, padding: '2px 6px' }}>Abscisa</th>
+                              <th style={{ textAlign: 'right', borderBottom: `1px solid ${border}`, padding: '2px 6px' }}>Diferencia</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {g.filas.map((r, i) => (
+                              <tr key={`${g.key}-${i}`}>
+                                <td style={{ padding: '2px 6px' }}>{r.abscisa != null ? fmtNDash(r.abscisa, 3) : '—'}</td>
+                                <td style={{ padding: '2px 6px', textAlign: 'right' }}>{r.diferencia != null ? fmtNDash(r.diferencia, 4) : '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
 

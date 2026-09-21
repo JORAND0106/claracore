@@ -111,11 +111,10 @@ class TestPlanillaTuberiaGuardarCartera(unittest.TestCase):
         )
         self.assertIn("1|10|101|99||", self.mod.fingerprint_filas_campo(a)[0])
 
-    def test_orden_temp_offset_evita_colision_unique(self):
+    def test_orden_temp_offset_constante_compat(self):
         self.assertEqual(self.mod._ORDEN_TEMP_OFFSET, 1_000_000)
-        self.assertNotEqual(1, 1 + self.mod._ORDEN_TEMP_OFFSET)
 
-    def test_replace_filas_inserta_con_orden_temporal_si_hay_previas(self):
+    def test_replace_filas_actualiza_por_orden_sin_wipe(self):
         mod = self.mod
         planilla_id = "p-1"
         prev = [{
@@ -128,10 +127,15 @@ class TestPlanillaTuberiaGuardarCartera(unittest.TestCase):
             "orden": 1, "abscisa": 5.0, "terreno_natural": 11.0,
             "subrasante_via": 10.5, "terminado_filtro": None,
             "cota_fondo_excavacion": 9.5, "norte": None, "este": None, "observacion": None,
+        }, {
+            "orden": 2, "abscisa": 15.0, "terreno_natural": 12.0,
+            "subrasante_via": 11.0, "terminado_filtro": None,
+            "cota_fondo_excavacion": 10.0, "norte": None, "este": None, "observacion": None,
         }]
 
         store: dict[str, dict] = {prev[0]["id"]: dict(prev[0])}
-        inserted_payloads: list[dict] = []
+        updates = []
+        inserts = []
 
         class _Q:
             def __init__(self, table):
@@ -140,6 +144,7 @@ class TestPlanillaTuberiaGuardarCartera(unittest.TestCase):
                 self._eq = {}
                 self._update = None
                 self._action = "select"
+                self._rows = None
 
             def select(self, *_a, **_k):
                 self._action = "select"
@@ -174,7 +179,7 @@ class TestPlanillaTuberiaGuardarCartera(unittest.TestCase):
                 if self._action == "insert":
                     for r in self._rows:
                         store[r["id"]] = dict(r)
-                        inserted_payloads.append(dict(r))
+                        inserts.append(dict(r))
                     return types.SimpleNamespace(data=list(self._rows))
                 if self._action == "delete":
                     for i in (self._ids or []):
@@ -184,19 +189,16 @@ class TestPlanillaTuberiaGuardarCartera(unittest.TestCase):
                     rid = self._eq.get("id")
                     if rid and rid in store and self._update:
                         store[rid].update(self._update)
+                        updates.append({"id": rid, **self._update})
                     return types.SimpleNamespace(data=[store[rid]] if rid in store else [])
-                # select
                 rows = [dict(v) for v in store.values() if v.get("planilla_id") == planilla_id]
                 rows.sort(key=lambda r: int(r.get("orden") or 0))
-                if self.table and "id" in (getattr(self, "_select", "") or "id"):
-                    pass
                 return types.SimpleNamespace(data=rows)
 
         class _SB:
             def table(self, name):
                 return _Q(name)
 
-        # Monkeypatch supabase + _filas helper via module
         orig_sb = mod.supabase
         mod.supabase = _SB()
         try:
@@ -204,14 +206,15 @@ class TestPlanillaTuberiaGuardarCartera(unittest.TestCase):
         finally:
             mod.supabase = orig_sb
 
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["orden"], 1)
         self.assertEqual(rows[0]["abscisa"], 5.0)
-        self.assertNotIn("old-1", store)
-        # El insert usó orden temporal (> offset) antes del remap
-        self.assertTrue(any(
-            p["orden"] >= mod._ORDEN_TEMP_OFFSET for p in inserted_payloads
-        ))
+        self.assertEqual(rows[0]["id"], "old-1")  # misma fila actualizada
+        self.assertEqual(rows[1]["orden"], 2)
+        self.assertEqual(rows[1]["abscisa"], 15.0)
+        self.assertTrue(any(u["id"] == "old-1" and u.get("abscisa") == 5.0 for u in updates))
+        self.assertEqual(len(inserts), 1)
+        self.assertEqual(inserts[0]["orden"], 2)
 
 
 if __name__ == "__main__":
