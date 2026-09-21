@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { API_BASE } from '../../../apiBase'
 import BitacoraMaterialUbicacionModal from '../../../modules/seguimiento/BitacoraMaterialUbicacionModal'
 import TopoExcelSheet from '../TopoExcelSheet'
 import { topoSheetStyles } from '../topoSheetStyles'
@@ -221,6 +222,20 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [cantManuales, setCantManuales] = useState([])
   /** { cantidades: {CODIGO: [foto…]}, descuentos: {CODIGO: [foto…]} } */
   const [fotosLineas, setFotosLineas] = useState({ cantidades: {}, descuentos: {} })
+  const [modalReporteSicoe, setModalReporteSicoe] = useState(false)
+  const [reporteForm, setReporteForm] = useState({
+    subcontratista_id: '',
+    inspector_id: '',
+    capitulo: '',
+    nodo_ini: '',
+    nodo_fin: '',
+    abs_inicio: '',
+    abs_final: '',
+  })
+  const [catalogoSubs, setCatalogoSubs] = useState([])
+  const [catalogoInsp, setCatalogoInsp] = useState([])
+  const [catalogoCaps, setCatalogoCaps] = useState([])
+  const [reportesVinculados, setReportesVinculados] = useState([])
   const tableRef = useRef(null)
 
   const planilla = detalle?.planilla
@@ -266,6 +281,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       cantidades: (fl.cantidades && typeof fl.cantidades === 'object') ? fl.cantidades : {},
       descuentos: (fl.descuentos && typeof fl.descuentos === 'object') ? fl.descuentos : {},
     })
+    setReportesVinculados(Array.isArray(meta.sicoe_reportes) ? meta.sicoe_reportes : [])
   }, [])
 
   const abrir = async (id) => {
@@ -546,7 +562,85 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     }
   }
 
-  
+  const abscisasMinMax = useMemo(() => {
+    const vals = (filas || [])
+      .map((f) => (f.abscisa === '' || f.abscisa == null ? null : Number(f.abscisa)))
+      .filter((v) => v != null && Number.isFinite(v))
+    if (!vals.length) return { min: '', max: '' }
+    return { min: String(Math.min(...vals)), max: String(Math.max(...vals)) }
+  }, [filas])
+
+  const abrirModalReporteSicoe = async () => {
+    if (!planilla?.id) return
+    setErr(''); setMsg('')
+    setReporteForm({
+      subcontratista_id: '',
+      inspector_id: '',
+      capitulo: '',
+      nodo_ini: '',
+      nodo_fin: '',
+      abs_inicio: abscisasMinMax.min,
+      abs_final: abscisasMinMax.max,
+    })
+    setModalReporteSicoe(true)
+    const hdrs = { Authorization: `Bearer ${token}` }
+    try {
+      const [subs, insp, precios] = await Promise.all([
+        fetch(`${API_BASE}/sicoe-obra/${contratoId}/subcontratistas-activos`, { headers: hdrs }).then((r) => r.json()).catch(() => []),
+        fetch(`${API_BASE}/sicoe-obra/${contratoId}/inspectores`, { headers: hdrs }).then((r) => r.json()).catch(() => []),
+        fetch(`${API_BASE}/listado-precios/${contratoId}`, { headers: hdrs }).then((r) => r.json()).catch(() => []),
+      ])
+      setCatalogoSubs(Array.isArray(subs) ? subs : [])
+      setCatalogoInsp(Array.isArray(insp) ? insp : [])
+      if (Array.isArray(precios)) {
+        const caps = [...new Set(precios.map((r) => r.capitulo).filter(Boolean))]
+        caps.sort((a, b) => {
+          const na = parseInt(String(a).match(/^(\d+)/)?.[1] || '9999', 10)
+          const nb = parseInt(String(b).match(/^(\d+)/)?.[1] || '9999', 10)
+          return na - nb
+        })
+        setCatalogoCaps(caps.map((c) => ({ capitulo: c })))
+      } else {
+        setCatalogoCaps([])
+      }
+    } catch (e) {
+      setErr(e.message || 'No se pudieron cargar catálogos SICOE')
+    }
+  }
+
+  const crearReporteSicoe = async () => {
+    if (!planilla?.id) return
+    if (!reporteForm.subcontratista_id || !reporteForm.inspector_id || !String(reporteForm.capitulo || '').trim()) {
+      setErr('Subcontratista, Inspector y Capítulo son obligatorios.')
+      return
+    }
+    setBusy(true); setErr(''); setMsg('')
+    try {
+      const body = {
+        subcontratista_id: Number(reporteForm.subcontratista_id),
+        inspector_id: Number(reporteForm.inspector_id),
+        capitulo: String(reporteForm.capitulo).trim(),
+        nodo_ini: reporteForm.nodo_ini || null,
+        nodo_fin: reporteForm.nodo_fin || null,
+        abs_inicio: reporteForm.abs_inicio === '' ? null : Number(reporteForm.abs_inicio),
+        abs_final: reporteForm.abs_final === '' ? null : Number(reporteForm.abs_final),
+      }
+      const res = await api(`/planillas-tuberia/${planilla.id}/crear-reporte-sicoe`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      setModalReporteSicoe(false)
+      const num = res?.reporte?.numero_reporte
+      const nReg = res?.count_registros ?? (res?.registros || []).length
+      setMsg(`Reporte SICOE #${num ?? '—'} creado con ${nReg} registro(s) en Sin Asignar Ítem.`)
+      aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}`))
+    } catch (e) {
+      setErr(e.message || String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const solicitarEliminar = () => {
     if (!planilla?.id) return
     setConfirmEliminar(conDatos ? 'con_datos' : 'vacia')
@@ -798,6 +892,16 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M8 13h2l4 5h2" /><path d="M16 13h-2l-4 5H8" /></svg>
               </AccionIcono>
             </>
+          )}
+          {editablePerm && planilla?.id && (
+            <AccionIcono
+              title="Crear reporte SICOE"
+              primary
+              disabled={busy || !calculo?.netos?.length}
+              onClick={abrirModalReporteSicoe}
+            >
+              <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M12 18v-6" /><path d="M9 15h6" /></svg>
+            </AccionIcono>
           )}
         </div>
       )}
@@ -1331,6 +1435,141 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             </p>
           )}
         </TopoConfirmModal>
+      )}
+
+      {modalReporteSicoe && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Crear reporte SICOE"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 80,
+            background: 'rgba(15,23,42,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => { if (!busy) setModalReporteSicoe(false) }}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 14, maxWidth: 480, width: '100%',
+              padding: 20, boxShadow: '0 20px 40px rgba(15,23,42,0.2)',
+              display: 'flex', flexDirection: 'column', gap: 12,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)' }}>Crear reporte SICOE</div>
+            <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: ui.textMuted }}>
+              Se generará un reporte con un registro por cada línea de cantidades y descuentos
+              (sin ítem asignado). Nombre y localización se toman de la planilla.
+            </p>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
+              Subcontratista *
+              <select
+                value={reporteForm.subcontratista_id}
+                onChange={(e) => setReporteForm((f) => ({ ...f, subcontratista_id: e.target.value }))}
+                style={{ ...sheet.cellInp, height: 40 }}
+              >
+                <option value="">— Seleccione —</option>
+                {catalogoSubs.map((s) => (
+                  <option key={s.id} value={s.id}>{s.nombre || s.razon_social || `#${s.id}`}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
+              Inspector *
+              <select
+                value={reporteForm.inspector_id}
+                onChange={(e) => setReporteForm((f) => ({ ...f, inspector_id: e.target.value }))}
+                style={{ ...sheet.cellInp, height: 40 }}
+              >
+                <option value="">— Seleccione —</option>
+                {catalogoInsp.map((s) => (
+                  <option key={s.id} value={s.id}>{s.nombre || s.nombre_completo || `#${s.id}`}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
+              Capítulo *
+              <select
+                value={reporteForm.capitulo}
+                onChange={(e) => setReporteForm((f) => ({ ...f, capitulo: e.target.value }))}
+                style={{ ...sheet.cellInp, height: 40 }}
+              >
+                <option value="">— Seleccione —</option>
+                {catalogoCaps.map((c) => (
+                  <option key={c.capitulo} value={c.capitulo}>{c.capitulo}</option>
+                ))}
+              </select>
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
+                Nodo inicio
+                <input
+                  value={reporteForm.nodo_ini}
+                  onChange={(e) => setReporteForm((f) => ({ ...f, nodo_ini: e.target.value }))}
+                  style={{ ...sheet.cellInp, height: 40 }}
+                  placeholder="Opcional"
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
+                Nodo fin
+                <input
+                  value={reporteForm.nodo_fin}
+                  onChange={(e) => setReporteForm((f) => ({ ...f, nodo_fin: e.target.value }))}
+                  style={{ ...sheet.cellInp, height: 40 }}
+                  placeholder="Opcional"
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
+                Abs. inicio
+                <input
+                  type="number"
+                  step="any"
+                  value={reporteForm.abs_inicio}
+                  onChange={(e) => setReporteForm((f) => ({ ...f, abs_inicio: e.target.value }))}
+                  style={{ ...sheet.cellInp, height: 40 }}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--cc-sm)' }}>
+                Abs. final
+                <input
+                  type="number"
+                  step="any"
+                  value={reporteForm.abs_final}
+                  onChange={(e) => setReporteForm((f) => ({ ...f, abs_final: e.target.value }))}
+                  style={{ ...sheet.cellInp, height: 40 }}
+                />
+              </label>
+            </div>
+            {reportesVinculados.length > 0 && (
+              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
+                Reportes previos:{' '}
+                {reportesVinculados.map((r) => `#${r.numero_reporte}`).join(', ')}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+              <button
+                type="button"
+                className="cc-topo-touch-btn"
+                disabled={busy}
+                onClick={() => setModalReporteSicoe(false)}
+                style={ui.btnSecondary}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="cc-topo-touch-btn"
+                disabled={busy}
+                onClick={crearReporteSicoe}
+                style={ui.btnPrimary}
+              >
+                {busy ? 'Creando…' : 'Crear reporte'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {pkMapOpen && (
