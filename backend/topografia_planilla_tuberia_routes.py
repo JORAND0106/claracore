@@ -27,6 +27,11 @@ from topografia_planilla_tuberia import (
     validar_cartera_campo,
     validar_fotos_lineas,
 )
+from topografia_planilla_tuberia_sicoe import (
+    abscisas_minmax_cartera,
+    lineas_registros_desde_calculo,
+    marker_origen_planilla,
+)
 from topo_crs import gk_bogota_to_wgs84
 
 logger = logging.getLogger("claracore.topo.planilla_tuberia")
@@ -120,6 +125,17 @@ class CarteraBody(BaseModel):
     descuentos_manuales: list[DescBody] = Field(default_factory=list)
     cantidades_manuales: Optional[list[dict[str, Any]]] = None
     fotos_lineas: Optional[dict[str, Any]] = None
+
+
+class CrearReporteSicoeBody(BaseModel):
+    """Datos que no se pueden derivar solos de la planilla."""
+    subcontratista_id: int
+    inspector_id: int
+    capitulo: str
+    nodo_ini: Optional[str] = None
+    nodo_fin: Optional[str] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
 
 
 def _filas(planilla_id: str) -> list[dict]:
@@ -976,4 +992,189 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         content=content, media_type=media,
         headers={"Content-Disposition": f'attachment; filename="planilla_tuberia_{planilla_id[:8]}{suffix}.pdf"'},
     )
+
+
+def _parse_numeros_registro_rpc(raw: Any, n: int) -> list[int]:
+    def _one(x: Any) -> int:
+        if isinstance(x, (int, float)) and not isinstance(x, bool):
+            return int(x)
+        if isinstance(x, dict):
+            for k in ("numero", "siguiente_numero_registro", "siguiente", "id"):
+                if x.get(k) is not None:
+                    return int(x[k])
+        return int(x)
+
+    if isinstance(raw, list) and len(raw) == n:
+        return [_one(x) for x in raw]
+    if isinstance(raw, dict):
+        for k in ("siguiente_n_numeros_registro", "data", "result"):
+            if isinstance(raw.get(k), list) and len(raw[k]) == n:
+                return [_one(x) for x in raw[k]]
+    raise HTTPException(500, "No se pudieron reservar consecutivos de registro SICOE.")
+
+
+@router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/crear-reporte-sicoe")
+def crear_reporte_sicoe_desde_planilla(
+    contrato_id: int,
+    planilla_id: str,
+    body: CrearReporteSicoeBody,
+    current_user=Depends(get_current_user),
+):
+    """Crea so_reportes + so_registros (Sin Asignar Ítem) desde el resumen de la planilla."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    if not str(body.capitulo or "").strip():
+        raise HTTPException(422, "Capítulo obligatorio.")
+    if not body.subcontratista_id or not body.inspector_id:
+        raise HTTPException(422, "Subcontratista e Inspector son obligatorios.")
+
+    det = _detalle(contrato_id, planilla_id)
+    p = det["planilla"]
+    calc = det.get("calculo")
+    if not calc:
+        raise HTTPException(422, "La planilla no tiene cálculo (configure diámetro, ancho y cartera).")
+
+    filas = det.get("filas_campo") or []
+    abs_min, abs_max = abscisas_minmax_cartera(filas)
+    abs_inicio = body.abs_inicio if body.abs_inicio is not None else abs_min
+    abs_final = body.abs_final if body.abs_final is not None else abs_max
+    lineas = lineas_registros_desde_calculo(calc)
+    if not lineas:
+        raise HTTPException(422, "No hay cantidades/descuentos con valor ≠ 0 para generar registros.")
+
+    uid = _uid(current_user)
+    nombre_planilla = (p.get("nombre") or "").strip() or f"Planilla tubería {planilla_id[:8]}"
+    marker = marker_origen_planilla(planilla_id)
+    import json as _json
+    enlace = _json.dumps([marker])
+
+    try:
+        numero = supabase.rpc(
+            "siguiente_numero_reporte", {"p_contrato_id": contrato_id}
+        ).execute().data
+        if isinstance(numero, list):
+            numero = numero[0] if numero else None
+        if isinstance(numero, dict):
+            numero = numero.get("siguiente_numero_reporte") or numero.get("numero") or numero.get("id")
+        numero = int(numero)
+    except Exception as exc:
+        raise HTTPException(500, f"No se pudo asignar número de reporte: {exc}") from exc
+
+    reporte_data = {
+        "contrato_id": contrato_id,
+        "numero_reporte": numero,
+        "descripcion_actividad": nombre_planilla,
+        "subcontratista_id": int(body.subcontratista_id),
+        "inspector_id": int(body.inspector_id),
+        "capitulo": str(body.capitulo).strip(),
+        "margen": p.get("costado") or None,
+        "ubicacion": p.get("pk_id") or None,
+        "abs_inicio": abs_inicio,
+        "abs_final": abs_final,
+        "nodo_ini": (body.nodo_ini or "").strip() or None,
+        "nodo_fin": (body.nodo_fin or "").strip() or None,
+        "tipo_localizacion": "unica",
+        "estado": "Sin Asignar Ítem",
+        "enlace_soporte": enlace,
+        "creado_por": uid,
+    }
+    try:
+        from main import _so_reportes_normalizar_payload_cabecera
+        _so_reportes_normalizar_payload_cabecera(reporte_data)
+    except Exception:
+        pass
+
+    try:
+        ins = supabase.table("so_reportes").insert(reporte_data).execute().data or []
+    except Exception as exc:
+        raise HTTPException(500, f"Error creando so_reportes: {exc}") from exc
+    reporte = ins[0] if ins else {}
+    reporte_id = reporte.get("id")
+    if not reporte_id:
+        raise HTTPException(500, "so_reportes insertó sin id.")
+
+    try:
+        raw_nums = supabase.rpc(
+            "siguiente_n_numeros_registro",
+            {"p_contrato_id": contrato_id, "p_n": len(lineas)},
+        ).execute().data
+        numeros = _parse_numeros_registro_rpc(raw_nums, len(lineas))
+    except HTTPException:
+        numeros = []
+        for _ in range(len(lineas)):
+            raw = supabase.rpc(
+                "siguiente_numero_registro", {"p_contrato_id": contrato_id}
+            ).execute().data
+            if isinstance(raw, list):
+                raw = raw[0] if raw else None
+            if isinstance(raw, dict):
+                raw = raw.get("numero") or raw.get("siguiente") or raw.get("id")
+            numeros.append(int(raw))
+
+    regs_payload = []
+    for linea, num in zip(lineas, numeros):
+        regs_payload.append({
+            "reporte_id": reporte_id,
+            "contrato_id": contrato_id,
+            "numero_registro": num,
+            "nombre": linea.get("nombre"),
+            "descripcion": linea.get("descripcion"),
+            "observacion": linea.get("observacion"),
+            "longitud": linea.get("longitud"),
+            "ancho": linea.get("ancho"),
+            "espesor": linea.get("espesor"),
+            "cantidad": linea.get("cantidad"),
+            "cantidad_total": linea.get("cantidad_total"),
+            "unidad": linea.get("unidad"),
+            "item_numero": None,
+            "subcontratista_id": int(body.subcontratista_id),
+            "inspector_id": int(body.inspector_id),
+            "margen": p.get("costado") or None,
+            "ubicacion": p.get("pk_id") or None,
+            "abs_inicio": abs_inicio,
+            "abs_final": abs_final,
+            "nodo_ini": (body.nodo_ini or "").strip() or None,
+            "nodo_fin": (body.nodo_fin or "").strip() or None,
+            "creado_por_reg": uid,
+        })
+    try:
+        regs = supabase.table("so_registros").insert(regs_payload).execute().data or []
+    except Exception as exc:
+        # Mejor esfuerzo: marcar reporte; no borrar para auditoría.
+        raise HTTPException(500, f"Reporte #{numero} creado pero falló insert de registros: {exc}") from exc
+
+    # Cross-ref en meta_cabecera de la planilla
+    prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    prev_links = prev_meta.get("sicoe_reportes") if isinstance(prev_meta.get("sicoe_reportes"), list) else []
+    new_links = [
+        *prev_links,
+        {
+            "id": reporte_id,
+            "numero_reporte": numero,
+            "created_at": _now(),
+            "capitulo": str(body.capitulo).strip(),
+        },
+    ]
+    new_meta = {**prev_meta, "sicoe_reportes": new_links}
+    try:
+        supabase.table("topo_planillas_tuberia").update({
+            "meta_cabecera": new_meta,
+            "updated_at": _now(),
+        }).eq("id", planilla_id).execute()
+    except Exception:
+        logger.exception("No se pudo guardar cross-ref sicoe_reportes en meta_cabecera")
+
+    _audit(contrato_id, planilla_id, "crear_reporte_sicoe", current_user, {
+        "reporte_id": reporte_id,
+        "numero_reporte": numero,
+        "registros": len(regs),
+    })
+    return {
+        "ok": True,
+        "reporte": reporte,
+        "registros": regs,
+        "count_registros": len(regs),
+        "planilla_id": planilla_id,
+        "marker_origen": marker,
+    }
 

@@ -208,6 +208,7 @@ import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
 import TopografiaMain from './components/topografia/TopografiaMain'
+import { planillaIdDesdeEnlaceSoporte } from './components/topografia/planillaTuberia/planillaTuberiaSicoeOrigen'
 import AlmacenMain from './almacen/AlmacenMain'
 import ModuloSeguimiento from './modules/seguimiento/ModuloSeguimiento'
 import { accesoSeguimiento } from './modules/seguimiento/seguimientoPermisos'
@@ -5493,6 +5494,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [tabActiva, setTabActiva]                 = useState('portada')
   const [guardandoEnlace, setGuardandoEnlace]     = useState(false)
   const [enlaces, setEnlaces]                      = useState(() => parseEnlacesSoporteReporte(repoProp.enlace_soporte))
+  const planillaTuberiaOrigenId = useMemo(
+    () => planillaIdDesdeEnlaceSoporte(reporte?.enlace_soporte ?? repoProp?.enlace_soporte),
+    [reporte?.enlace_soporte, repoProp?.enlace_soporte],
+  )
+  const [planillaOrigenDet, setPlanillaOrigenDet] = useState(null)
+  const [planillaOrigenErr, setPlanillaOrigenErr] = useState('')
+  const [planillaOrigenBusy, setPlanillaOrigenBusy] = useState(false)
   const [enlaceInput, setEnlaceInput]              = useState('')
   const [editPkId, setEditPkId]                   = useState(repoProp.pk_id_id || '')
   const [editCivLocal, setEditCivLocal]            = useState(repoProp.civ || '')
@@ -5861,15 +5869,34 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   )
 
   // Si la vista filtrada deja fuera el tab activo, volver a Portada.
-  // Tabs fijos: portada | sin_asignar | items (ya no hay pestaña por ítem).
+  // Tabs fijos: portada | sin_asignar | items | planilla (origen tubería).
   useEffect(() => {
-    if (tabActiva === 'portada' || tabActiva === 'sin_asignar' || tabActiva === 'items') return
+    if (tabActiva === 'portada' || tabActiva === 'sin_asignar' || tabActiva === 'items' || tabActiva === 'planilla') return
     setTabActiva('portada')
   }, [tabActiva])
 
   useEffect(() => {
     setMsgMasivo('')
   }, [tabActiva])
+
+  useEffect(() => {
+    if (!planillaTuberiaOrigenId || tabActiva !== 'planilla') return
+    let cancelled = false
+    setPlanillaOrigenBusy(true)
+    setPlanillaOrigenErr('')
+    const tok = getToken?.() || localStorage.getItem('token') || ''
+    fetch(`${API_URL}/topografia/${contrato_id}/planillas-tuberia/${planillaTuberiaOrigenId}`, {
+      headers: { Authorization: `Bearer ${tok}` },
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((d) => { if (!cancelled) setPlanillaOrigenDet(d) })
+      .catch((e) => { if (!cancelled) setPlanillaOrigenErr(e.message || String(e)) })
+      .finally(() => { if (!cancelled) setPlanillaOrigenBusy(false) })
+    return () => { cancelled = true }
+  }, [planillaTuberiaOrigenId, tabActiva, API_URL, contrato_id])
 
   const nvMasivo = elevCapCarpeta ? nivelMasivoDevAdmin : nivelInfo.nivelValidacion
   const nivelEnRangoValidacionCarpeta =
@@ -7188,6 +7215,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               { key: 'portada',      label: '📋 Portada' },
               { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
               { key: 'items',        label: `${tienePendienteItems ? '🔴' : '🔖'} Ítems y registros${nItems > 0 ? ` (${nItems})` : ''}` },
+              ...(planillaTuberiaOrigenId
+                ? [{ key: 'planilla', label: '📐 Planilla tubería' }]
+                : []),
             ]
           })().map(tab => (
             <button key={tab.key} type="button" onClick={() => setTabActiva(tab.key)} style={{
@@ -7789,6 +7819,114 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   />
                 )}
               />
+            </div>
+          )}
+
+          {tabActiva === 'planilla' && planillaTuberiaOrigenId && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)' }}>Planilla de tubería de origen</div>
+              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+                ID: <code>{planillaTuberiaOrigenId}</code>
+              </div>
+              {planillaOrigenBusy && <div style={{ color: t.textMuted }}>Cargando planilla…</div>}
+              {planillaOrigenErr && (
+                <div style={{ color: '#b91c1c', background: '#fef2f2', padding: 10, borderRadius: 8 }}>
+                  {planillaOrigenErr}
+                </div>
+              )}
+              {planillaOrigenDet?.planilla && (
+                <div style={{
+                  background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 14,
+                  display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 'var(--cc-sm)',
+                }}>
+                  <div><b>Nombre:</b> {planillaOrigenDet.planilla.nombre || '—'}</div>
+                  <div><b>Tipo:</b> {planillaOrigenDet.planilla.tipo || '—'}</div>
+                  <div><b>PK / ID:</b> {planillaOrigenDet.planilla.pk_id || '—'}</div>
+                  <div><b>Costado:</b> {planillaOrigenDet.planilla.costado || '—'}</div>
+                  <div><b>Estado:</b> {planillaOrigenDet.planilla.estado || '—'}</div>
+                  <div><b>Ø / B:</b> {planillaOrigenDet.planilla.diametro_m ?? '—'} / {planillaOrigenDet.planilla.ancho_excavacion_m ?? '—'}</div>
+                </div>
+              )}
+              {Array.isArray(planillaOrigenDet?.filas_campo) && planillaOrigenDet.filas_campo.length > 0 && (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Cartera (campo)</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                    <thead>
+                      <tr style={{ background: '#64748b', color: '#fff' }}>
+                        {['#', 'Abscisa', 'TN', 'Nivel ref.', 'CFE'].map((h) => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: h === '#' ? 'left' : 'right' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {planillaOrigenDet.filas_campo
+                        .filter((f) => f.abscisa != null || f.terreno_natural != null)
+                        .map((f, i) => (
+                          <tr key={f.id || i} style={{ borderBottom: `1px solid ${t.border}` }}>
+                            <td style={{ padding: '6px 8px' }}>{f.orden ?? i + 1}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{f.abscisa ?? '—'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{f.terreno_natural ?? '—'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                              {f.subrasante_via ?? f.terminado_filtro ?? '—'}
+                            </td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{f.cota_fondo_excavacion ?? '—'}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {Array.isArray(planillaOrigenDet?.calculo?.netos) && planillaOrigenDet.calculo.netos.length > 0 && (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Resumen de cantidades</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                    <thead>
+                      <tr style={{ background: '#4472C4', color: '#fff' }}>
+                        {['Ítem', 'Long', 'Ancho', 'Espesor', 'Cantidad'].map((h) => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: h === 'Ítem' ? 'left' : 'right' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {planillaOrigenDet.calculo.netos.map((n) => (
+                        <tr key={n.codigo} style={{ borderBottom: `1px solid ${t.border}` }}>
+                          <td style={{ padding: '6px 8px' }}>{n.nombre}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{n.long ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{n.ancho ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{n.espesor ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{n.neto ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {Array.isArray(planillaOrigenDet?.calculo?.descuentos)
+                && planillaOrigenDet.calculo.descuentos.filter((d) => d.nombre).length > 0 && (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Descuentos específicos</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                    <thead>
+                      <tr style={{ background: '#EA4296', color: '#fff' }}>
+                        {['Ítem', 'Long', 'Ancho', 'Espesor', 'Cantidad'].map((h) => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: h === 'Ítem' ? 'left' : 'right' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {planillaOrigenDet.calculo.descuentos.filter((d) => d.nombre).map((d) => (
+                        <tr key={d.codigo} style={{ borderBottom: `1px solid ${t.border}` }}>
+                          <td style={{ padding: '6px 8px' }}>{d.nombre}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{d.long ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{d.ancho ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{d.espesor ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{d.cantidad ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>
