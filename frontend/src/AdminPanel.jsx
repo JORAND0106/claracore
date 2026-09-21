@@ -738,14 +738,14 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
         </select>
         <button type="button" style={touchBtn("primary", true)} onClick={() => agregarContrato(u.id)}>Asignar</button>
       </div>
-      {u.cargo_nombre && u.cargo_nombre.toLowerCase() === 'subcontratista' && (
+      {esCargoSubcontratistaEdit(u.id, u) && (
         <div style={{ marginTop: 16, borderTop: "1px solid rgba(0,175,197,0.15)", paddingTop: 12 }}>
           <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
             Subcontratista asignado:
           </div>
-          {u.subcontratista_id ? (
+          {(edits[u.id]?.subcontratista_id || u.subcontratista_id) ? (
             <div style={{ fontSize: 12, color: col.textSecondary, marginBottom: 8 }}>
-              Actual: {(subcontratistas[u.id] || []).find(s => s.id === u.subcontratista_id)?.razon_social || `ID ${u.subcontratista_id}`}
+              Actual: {(subcontratistas[u.id] || []).find(s => String(s.id) === String(edits[u.id]?.subcontratista_id || u.subcontratista_id))?.razon_social || `ID ${edits[u.id]?.subcontratista_id || u.subcontratista_id}`}
             </div>
           ) : (
             <div style={{ fontSize: 12, color: "#f59e0b", marginBottom: 8 }}>Sin subcontratista asignado — el usuario no tiene acceso.</div>
