@@ -189,7 +189,7 @@ function determinarNivelValidacion(usuario, contratoId) {
   const esSubcontratista         = esSubRol || cargo.includes('subcontratista')
   const esSoloComentarista       = esOperativoInterventoria  // puede ver y comentar, no valida ni edita
 
-  const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico)
+  const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico || esSubcontratista)
 
   let nivelValidacion = null
   const esDev = cargo.includes('desarrollador')

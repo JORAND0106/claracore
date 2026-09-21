@@ -42,6 +42,15 @@ from presupuesto_helpers import (
     presupuesto_estados_validacion_opciones,
     presupuesto_oficial_version_id,
 )
+from subcontratista_visibilidad import (
+    apply_subcontratista_filter_q,
+    es_cargo_subcontratista,
+    ocultar_costo_directo_reportes as _ocultar_costo_directo_reportes_vis,
+    redactar_filas_economicos_contrato,
+    resolver_filtro_subcontratista_solicitado,
+    scope_subcontratista,
+    validar_vinculo_subcontratista_en_contrato,
+)
 from presupuesto_panel_validacion import (
     fetch_panel_validacion_interv,
     presupuesto_filtros_a_jsonb,
@@ -4993,9 +5002,11 @@ def _sicoe_collect_reporte_ids_misma_linea(
 
 
 def _sicoe_ocultar_costo_directo_reportes(current_user) -> bool:
-    """Operativo Contratista / Interventoría no reciben montos en la grilla SICOE Obra."""
-    rol = (current_user.get("rol_nombre") or "").strip().lower()
-    return rol in ("operativo contratista", "operativo interventoria", "operativo interventoría")
+    """Operativo Contratista / Interventoría y cargo Subcontratista: sin montos de contrato."""
+    return _ocultar_costo_directo_reportes_vis(
+        current_user.get("cargo_nombre") if isinstance(current_user, dict) else None,
+        current_user.get("rol_nombre") if isinstance(current_user, dict) else None,
+    )
 
 
 def _filtrar_registros_validacion_por_campo(
@@ -6899,6 +6910,7 @@ def login(request: Request, body: LoginRequest):
         "rol_nombre": rol_nombre or "",
         "contrato_id": usuario.get("contrato_id"),
         "contrato_numero": contrato_numero or "",
+        "subcontratista_id": usuario.get("subcontratista_id"),
     })
 
     # Cargar permisos del cargo para control de acceso en el panel
@@ -8441,7 +8453,7 @@ def crear_competencia_contrato(
 def todos_usuarios(current_user=Depends(get_current_user)):
     """Lista solo usuarios vivos: pendiente y aprobado. Los rechazados no aparecen."""
     result = supabase.table("usuarios").select(
-        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at, politicas_aceptadas, politicas_fecha, politicas_version, politicas_ip"
+        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at, politicas_aceptadas, politicas_fecha, politicas_version, politicas_ip, subcontratista_id"
     ).order("nombre").execute()
     cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
     roles = {r["id"]: r["nombre"] for r in supabase.table("roles").select("id, nombre").execute().data}
@@ -8532,6 +8544,45 @@ def actualizar_usuario(
     for fk in ("cargo_id", "rol_id", "contrato_id", "subcontratista_id"):
         if fk in data:
             data[fk] = _admin_usuario_fk_int_o_none(data.get(fk))
+
+    # Resolver cargo/contrato/sub finales para validar vínculo obligatorio
+    final_cargo_id = data["cargo_id"] if "cargo_id" in data else prev_snap.get("cargo_id")
+    final_contrato_id = data["contrato_id"] if "contrato_id" in data else prev_snap.get("contrato_id")
+    final_sub_id = data["subcontratista_id"] if "subcontratista_id" in data else prev_snap.get("subcontratista_id")
+    cargo_nombre_final = None
+    if final_cargo_id is not None:
+        cargo_nombre_final = _admin_usuario_nombre_fk("cargos", "nombre", final_cargo_id)
+    if es_cargo_subcontratista(cargo_nombre_final):
+        sub_row = None
+        if final_sub_id is not None:
+            try:
+                sub_rows = (
+                    supabase.table("subcontratistas")
+                    .select("id, contrato_id")
+                    .eq("id", int(final_sub_id))
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+                sub_row = sub_rows[0] if sub_rows else None
+            except Exception:
+                sub_row = None
+        err = validar_vinculo_subcontratista_en_contrato(
+            cargo_nombre=cargo_nombre_final,
+            subcontratista_id=final_sub_id,
+            subcontratista_contrato_id=(sub_row or {}).get("contrato_id"),
+            usuario_contrato_id=final_contrato_id,
+        )
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        # Persistir sub_id normalizado si venía en el body o se revalidó
+        if "subcontratista_id" in data or final_sub_id is not None:
+            data["subcontratista_id"] = int(final_sub_id)
+    else:
+        # Cargo distinto de subcontratista: no debe conservar vínculo
+        if prev_snap.get("subcontratista_id") is not None or "subcontratista_id" in data:
+            data["subcontratista_id"] = None
+
     if body.estado == "aprobado":
         data["activo"] = True
     elif body.estado == "rechazado":
@@ -8833,6 +8884,7 @@ def refresh_token(current_user=Depends(get_current_user)):
             "rol_nombre": rol_nombre or "",
             "contrato_id": usuario.get("contrato_id"),
             "contrato_numero": contrato_numero or "",
+            "subcontratista_id": usuario.get("subcontratista_id"),
         })
         return {"access_token": new_token, "token_type": "bearer"}
     except HTTPException:
@@ -9467,12 +9519,14 @@ def _listado_precio_row(contrato_id: int, item: ListadoPrecioItem) -> dict:
 @app.get("/listado-precios/{contrato_id}/agrupadores")
 def get_listado_precios_agrupadores(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
     return _fetch_agrupadores_contrato(contrato_id)
 
 
 @app.get("/listado-precios/{contrato_id}/sin-agrupar")
 def get_listado_precios_sin_agrupar(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
     rows = (
         supabase.table("listado_precios")
         .select("id", count="exact")
@@ -9492,6 +9546,7 @@ def get_listado_precios_sin_agrupar_count(contrato_id: int, current_user=Depends
 @app.get("/listado-precios/{contrato_id}/count")
 def get_listado_precios_count(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
     rows = (
         supabase.table("listado_precios")
         .select("id", count="exact")
@@ -9738,6 +9793,7 @@ def get_listado_precios(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
     if offset < 0:
         offset = 0
     if limit is not None:
@@ -9777,6 +9833,7 @@ def get_listado_precios(
 @app.post("/listado-precios/{contrato_id}/bulk")
 def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
     """Reemplaza todos los precios del contrato con los items del CSV."""
     supabase.table("listado_precios").delete().eq("contrato_id", contrato_id).execute()
     if items:
@@ -9813,6 +9870,7 @@ def update_precio(
         raise HTTPException(status_code=404, detail="Ítem no encontrado")
     prev = prev_rows[0]
     _require_contract_access(current_user, int(prev["contrato_id"]))
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
 
     if "agrupador_id" in raw:
         data["agrupador_id"] = raw["agrupador_id"]
@@ -9950,6 +10008,7 @@ def _listado_precio_cant_lookup(cant_map: dict, capitulo: str, competencia: str,
 def get_listado_precios_cantidades(contrato_id: int, current_user=Depends(get_current_user)):
     """Cantidades calculadas (presupuesto) y aprobadas (so_registros, nivel máximo) por ítem del listado."""
     _require_contract_access(current_user, contrato_id)
+    _deny_listado_precios_contrato_si_subcontratista(current_user)
     items = []
     offset = 0
     while True:
@@ -10869,7 +10928,7 @@ def get_presupuesto(
             costo_directo_desde=costo_directo_desde,
             costo_directo_hasta=costo_directo_hasta,
         )
-        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+        q = _presupuesto_q_visibilidad_usuario(q, current_user)
         if papelera or dado_de_baja is True:
             # Papelera: más recientes primero (updated_at se toca en dar-baja / restaurar)
             return q.order("updated_at", desc=True).order("id", desc=True)
@@ -10882,7 +10941,8 @@ def get_presupuesto(
         else:
             rows = q.order("id").range(offset, offset + limit - 1).execute().data
         rows = _enrich_presupuesto_ubicacion_desde_pk_ids(contrato_id, rows or [])
-        return _overlay_presupuesto_meta_vivo(contrato_id, rows)
+        rows = _overlay_presupuesto_meta_vivo(contrato_id, rows)
+        return _redactar_presupuesto_si_subcontratista(rows, current_user)
 
     PAGE = 1000
     all_rows = []
@@ -10898,7 +10958,8 @@ def get_presupuesto(
             break
         off += PAGE
     all_rows = _enrich_presupuesto_ubicacion_desde_pk_ids(contrato_id, all_rows)
-    return _overlay_presupuesto_meta_vivo(contrato_id, all_rows)
+    all_rows = _overlay_presupuesto_meta_vivo(contrato_id, all_rows)
+    return _redactar_presupuesto_si_subcontratista(all_rows, current_user)
 
 
 @app.get("/presupuesto/{contrato_id}/conteo")
@@ -10995,7 +11056,7 @@ def get_presupuesto_conteo(
         costo_directo_desde=costo_directo_desde,
         costo_directo_hasta=costo_directo_hasta,
     )
-    q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+    q = _presupuesto_q_visibilidad_usuario(q, current_user)
     result = q.execute()
     return {"total": int(result.count or 0)}
 
@@ -11164,7 +11225,7 @@ def _presupuesto_filtros_opciones_legacy(
         .eq("contrato_id", contrato_id)
         .eq("dado_de_baja", False)
     )
-    tipos_q = _presupuesto_q_visibilidad_interventoria(tipos_q, current_user)
+    tipos_q = _presupuesto_q_visibilidad_usuario(tipos_q, current_user)
     tipos_rows: List[dict] = []
     tipos_off = 0
     while True:
@@ -11235,7 +11296,7 @@ def _presupuesto_fetch_filtros_source_rows(
             q = q.eq("tramo", tramo)
         if calzada:
             q = q.eq("calzada", calzada)
-        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+        q = _presupuesto_q_visibilidad_usuario(q, current_user)
         batch = q.order("id").range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:
@@ -11338,6 +11399,19 @@ def get_resumen_presupuesto(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
+    restricted, _forced = _scope_subcontratista_usuario(current_user)
+    if restricted:
+        # Sin totales contractuales: el subcontratista no ve economía del contrato principal.
+        return {
+            "total_registros": 0,
+            "costo_total": None,
+            "revisados": 0,
+            "campo": 0,
+            "pendientes": 0,
+            "por_capitulo": [],
+            "vista": parse_dash_vista(vista),
+            "ocultar_valores_economicos": True,
+        }
     scan = scan_presupuesto_vista(supabase, contrato_id, vista, current_user)
     por_cap = scan.get("por_capitulo_list") or []
     total = float(scan.get("costo_total") or 0)
@@ -11593,7 +11667,7 @@ def _presupuesto_agregar_por_capitulo_legacy(
             .eq("dado_de_baja", False)
         )
         q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
-        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+        q = _presupuesto_q_visibilidad_usuario(q, current_user)
         batch = q.order("id").range(offset, offset + 999).execute().data or []
         rows.extend(batch)
         if len(batch) < 1000:
@@ -11846,7 +11920,7 @@ def get_items_presupuesto(
             "item, descripcion, und, vlr_unitario, cant_total, costo_directo, revisado"
         ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False)
         q_it = _presupuesto_q_tipo_ejecucion(q_it, tipo_ejecucion)
-        q_it = _presupuesto_q_visibilidad_interventoria(q_it, current_user)
+        q_it = _presupuesto_q_visibilidad_usuario(q_it, current_user)
         batch = q_it.order("id").range(offset, offset + 999).execute().data
         rows.extend(batch)
         if len(batch) < 1000: break 
@@ -12085,7 +12159,7 @@ def _presupuesto_fetch_export_rows_crudo(
             costo_directo_desde=body.costo_directo_desde,
             costo_directo_hasta=body.costo_directo_hasta,
         )
-        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+        q = _presupuesto_q_visibilidad_usuario(q, current_user)
         return q.order("capitulo").order("item").order("pk_id")
 
     PAGE = 1000
@@ -12148,7 +12222,7 @@ def _presupuesto_fetch_export_rows(contrato_id: int, body: ExportarPresupuestoIn
             costo_directo_desde=body.costo_directo_desde,
             costo_directo_hasta=body.costo_directo_hasta,
         )
-        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+        q = _presupuesto_q_visibilidad_usuario(q, current_user)
         return q.order("capitulo").order("item").order("pk_id")
 
     PAGE = 1000
@@ -12198,7 +12272,7 @@ def _presupuesto_version_fetch_export_rows(
                 .eq("version_id", version_id)
                 .eq("dado_de_baja", False)
             )
-        q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+        q = _presupuesto_q_visibilidad_usuario(q, current_user)
         return q.order("capitulo").order("item").order("pk_id")
 
     off = 0
@@ -17863,6 +17937,68 @@ def _usuario_subcontratista_id(current_user) -> Optional[int]:
     return None
 
 
+def _es_usuario_cargo_subcontratista(current_user) -> bool:
+    """True si el cargo del usuario autenticado es «subcontratista»."""
+    if not isinstance(current_user, dict):
+        return False
+    cargo = (current_user.get("cargo_nombre") or "").strip().lower()
+    if cargo == "subcontratista":
+        return True
+    if cargo:
+        return False
+    try:
+        _, cargo_db = _caller_contract_scope(current_user)
+        return (cargo_db or "").strip().lower() == "subcontratista"
+    except Exception:
+        return False
+
+
+def _scope_subcontratista_usuario(current_user) -> Tuple[bool, Optional[int]]:
+    """
+    (restricted, forced_id) para el usuario autenticado.
+    Resuelve subcontratista_id desde JWT o BD si el cargo es subcontratista.
+    """
+    if not _es_usuario_cargo_subcontratista(current_user):
+        return False, None
+    own = _usuario_subcontratista_id(current_user)
+    cargo = (current_user.get("cargo_nombre") if isinstance(current_user, dict) else None) or "subcontratista"
+    return scope_subcontratista(cargo, own)
+
+
+def _presupuesto_q_visibilidad_usuario(q, current_user):
+    """Interventoría + aislamiento subcontratista sobre consultas de presupuesto."""
+    q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+    restricted, forced = _scope_subcontratista_usuario(current_user)
+    return apply_subcontratista_filter_q(q, restricted, forced)
+
+
+def _redactar_presupuesto_si_subcontratista(rows, current_user):
+    """Oculta VU/costos del contrato principal al cargo subcontratista."""
+    restricted, _ = _scope_subcontratista_usuario(current_user)
+    if not restricted:
+        return rows
+    return redactar_filas_economicos_contrato(rows)
+
+
+def _resolver_param_subcontratista_id(current_user, solicitado: Optional[int]) -> Optional[int]:
+    """Fuerza el propio subcontratista_id si el cargo es subcontratista."""
+    restricted, forced = _scope_subcontratista_usuario(current_user)
+    try:
+        return resolver_filtro_subcontratista_solicitado(restricted, forced, solicitado)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+def _deny_listado_precios_contrato_si_subcontratista(current_user):
+    """El subcontratista no puede leer/escribir el listado de precios de cobro del contrato."""
+    if _es_usuario_cargo_subcontratista(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Los usuarios subcontratista no pueden consultar el listado de precios del contrato. "
+            "Use los precios pactados de su subcontratista.",
+        )
+
+
 def _puede_gestionar_subcontratistas_admin(current_user, contrato_id: Optional[int] = None) -> bool:
     """Admin/desarrollador o matriz «subcontratistas» con ver/editar/crear."""
     if _es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user):
@@ -18655,6 +18791,12 @@ def listar_reportes_obra(contrato_id: int, current_user=Depends(get_current_user
             .eq("contrato_id", contrato_id)\
             .order("numero_reporte", desc=True).execute().data
     rows = supabase_execute(_q)
+    restricted, forced = _scope_subcontratista_usuario(current_user)
+    if restricted:
+        if forced is None:
+            rows = []
+        else:
+            rows = [r for r in (rows or []) if int(r.get("subcontratista_id") or 0) == int(forced)]
 
     # Batch-resolve semana_numero y acta_rpo (las FKs no están expuestas como JOINs implícitos en PostgREST)
     semana_ids = list({r["semana_id"] for r in rows if r.get("semana_id")})
@@ -18726,9 +18868,14 @@ def registros_bulk_offline(
         )
         if acta_id is not None:
             q = q.eq("acta_rpo_id", acta_id)
+        restricted, forced = _scope_subcontratista_usuario(current_user)
+        q = apply_subcontratista_filter_q(q, restricted, forced)
         return q.limit(5000).execute().data
     rows = supabase_execute(_q) or []
-    return _overlay_sicoe_meta_vivo(contrato_id, rows)
+    rows = _overlay_sicoe_meta_vivo(contrato_id, rows)
+    if _sicoe_ocultar_costo_directo_reportes(current_user):
+        rows = redactar_filas_economicos_contrato(rows)
+    return rows
 
 
 @app.get("/sicoe-obra/{contrato_id}/offline-pack")
@@ -19273,6 +19420,8 @@ def buscar_reportes_obra(
 ):
     limit = min(limit, 100)
     _ocultar_costo_rep = _sicoe_ocultar_costo_directo_reportes(current_user)
+    # Aislamiento: cargo subcontratista solo ve su propio subcontratista_id
+    subcontratista_id = _resolver_param_subcontratista_id(current_user, subcontratista_id)
     _amb_fu, _tip_fu, _fd_fu, _fh_fu, _uid_fu, _uacc_fu, _tiene_fu = _sicoe_parse_filtros_fecha_usuario(
         ambito_fecha, tipo_fecha, fecha_desde, fecha_hasta, usuario_id, usuario_accion
     )
