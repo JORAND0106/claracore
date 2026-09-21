@@ -1,5 +1,6 @@
 -- ClaraCore — ROL «Administrativo» (no cargo) + revertir cargo erróneo
 -- Mirror de migrations/20260917220000_rrhh_rol_administrativo.sql
+-- Fallback si GET /roles (roles_seed.ensure_rol_administrativo) no puede insertar.
 
 INSERT INTO public.roles (nombre)
 SELECT 'Administrativo'

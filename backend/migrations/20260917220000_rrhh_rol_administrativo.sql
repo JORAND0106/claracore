@@ -4,6 +4,10 @@
 -- El rol Administrativo puede ver salarios, nómina y liquidaciones, y debe
 -- acceder a la misma información de módulos que el resto de roles de obra
 -- (vía permisos sintéticos en login /me, no vía un cargo inventado).
+--
+-- Nota: GET /roles también siembra este rol vía roles_seed.ensure_rol_administrativo
+-- (no depende de aplicar este SQL a mano). Este script sigue siendo el fallback
+-- si el INSERT vía API falla por RLS.
 
 -- ── 1) Crear ROL Administrativo ──────────────────────────────────────────────
 INSERT INTO public.roles (nombre)

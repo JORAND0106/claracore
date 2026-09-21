@@ -1230,6 +1230,41 @@ function SeccionPermisos({ call, cargos, contratos, user, theme }) {
           No requiere configuración en esta matriz.
         </div>
       )}
+      <div style={{ ...S.card, marginBottom: 16, padding: '12px 16px', borderLeft: '3px solid #00afc5' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+          <strong>Rol Administrativo</strong>
+          <span style={{ fontSize: 12, color: col.textMuted }}>
+            (asignable en Usuarios · no es un cargo)
+          </span>
+        </div>
+        <div style={{ fontSize: 13, color: col.textSecondary, marginBottom: 10, lineHeight: 1.45 }}>
+          Fila fija en Recursos Humanos: Ver, Crear, Editar, Eliminar, Validar y Exportar.
+          También ve información salarial, Nómina y Liquidación. No se configura por cargo.
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: isDarkMode(theme) ? '#8acdd8' : col.textPrimary, fontWeight: 600, minWidth: 120 }}>
+            Recursos Humanos
+          </span>
+          {ACCIONES.map(a => (
+            <span
+              key={`admin-rol-${a}`}
+              style={{
+                fontSize: 11,
+                padding: '3px 10px',
+                borderRadius: 6,
+                background: `${accionColor[a]}18`,
+                border: `1px solid ${accionColor[a]}44`,
+                color: accionColor[a],
+                fontWeight: 600,
+                textTransform: 'capitalize',
+              }}
+              title={`${a}: activo`}
+            >
+              {a} ✓
+            </span>
+          ))}
+        </div>
+      </div>
       <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
         {(isDev || (contratos && contratos.length > 1)) && (
           <>
