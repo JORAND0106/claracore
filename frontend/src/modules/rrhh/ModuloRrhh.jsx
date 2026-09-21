@@ -74,6 +74,8 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
   const [editando, setEditando] = useState(false)
   const [seccionModulo, setSeccionModulo] = useState('documentacion') // documentacion | nomina | liquidacion
 
+  const [smmlvVigente, setSmmlvVigente] = useState(null)
+
   const flash = useCallback((type, text) => {
     setMsg({ type, text })
     window.setTimeout(() => setMsg(null), 4200)
@@ -83,15 +85,17 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     if (!api || !permisos.ver) return
     setLoading(true)
     try {
-      const [emp, cat, res] = await Promise.all([
+      const [emp, cat, res, params] = await Promise.all([
         api.listEmpresas(),
         api.listCatalogoOpciones(),
         api.resumenEmpresas(),
+        api.nominaParams().catch(() => null),
       ])
       setEmpresas(emp?.opciones || [])
       setCatalogo(cat?.categorias || {})
       setGrupos(res?.grupos || [])
       setCumpleanosMes(res?.cumpleanos_mes || { mes: null, items: [] })
+      if (params?.smmlv != null) setSmmlvVigente(Number(params.smmlv))
     } catch (e) {
       flash('error', e.message || 'No se pudo cargar Recursos Humanos.')
     } finally {
@@ -174,28 +178,46 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const persistMedia = useCallback(async (trabajadorId, form) => {
     if (!api || !trabajadorId || !form) return
+    const errors = []
     if (form._foto_file) {
-      await api.uploadFoto(trabajadorId, form._foto_file)
+      try {
+        await api.uploadFoto(trabajadorId, form._foto_file)
+      } catch (e) {
+        errors.push(e.message || 'No se pudo guardar la fotografía.')
+      }
     } else if (form._foto_clear) {
       try { await api.deleteFoto(trabajadorId) } catch { /* ignore */ }
     }
     if (form._firma_changed && form.firma_data_url && String(form.firma_data_url).startsWith('data:')) {
-      const blob = dataUrlToBlob(form.firma_data_url)
-      if (blob) {
-        const file = new File([blob], 'firma.png', { type: blob.type || 'image/png' })
-        await api.uploadFirma(trabajadorId, file)
+      try {
+        const blob = dataUrlToBlob(form.firma_data_url)
+        if (blob) {
+          const file = new File([blob], 'firma.png', { type: blob.type || 'image/png' })
+          await api.uploadFirma(trabajadorId, file)
+        }
+      } catch (e) {
+        errors.push(e.message || 'No se pudo guardar la firma.')
       }
     } else if (form._firma_changed && !form.firma_data_url) {
       try { await api.deleteFirma(trabajadorId) } catch { /* ignore */ }
     }
     if (form._cert_bancaria_file) {
-      await api.uploadDocumento(trabajadorId, {
-        categoria: 'bancario',
-        tipo: 'certificacion_bancaria',
-        archivo: form._cert_bancaria_file,
-        version_label: 'Original',
-        marcar_vigente: true,
-      })
+      try {
+        await api.uploadDocumento(trabajadorId, {
+          categoria: 'bancario',
+          tipo: 'certificacion_bancaria',
+          archivo: form._cert_bancaria_file,
+          version_label: 'Original',
+          marcar_vigente: true,
+        })
+      } catch (e) {
+        errors.push(e.message || 'No se pudo guardar la certificación bancaria.')
+      }
+    }
+    if (errors.length) {
+      const err = new Error(errors.join(' '))
+      err.partialMedia = true
+      throw err
     }
   }, [api])
 
@@ -275,7 +297,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const guardarCrear = async () => {
     if (!api || !permisos.crear) return
-    const v = validateTrabajadorForm(crearForm)
+    const v = validateTrabajadorForm(crearForm, { smmlv: smmlvVigente, validarSalario: true })
     if (!v.ok) {
       flash('error', v.mensaje)
       return
@@ -283,7 +305,16 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
     setBusy(true)
     try {
       const created = await api.createTrabajador(payloadFromForm(crearForm))
-      await persistMedia(created.id, crearForm)
+      try {
+        await persistMedia(created.id, crearForm)
+      } catch (mediaErr) {
+        flash('error', `Colaborador registrado, pero ${mediaErr.message || 'falló la carga de foto/firma/documentos.'}`)
+        setShowCrear(false)
+        setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
+        await cargar()
+        await abrirDetalle(created)
+        return
+      }
       flash('success', 'Colaborador registrado.')
       setShowCrear(false)
       setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
@@ -295,7 +326,16 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
         if (window.confirm(`Ya existe ${nombre} como retirado. ¿Actualizar ese registro (reingreso) en lugar de crear uno nuevo? Se conservarán datos personales y afiliaciones; deberá cargar la documentación laboral del nuevo ciclo.`)) {
           try {
             const updated = await api.reingresarTrabajador(e.trabajador.id, payloadFromForm(crearForm))
-            await persistMedia(updated.id, crearForm)
+            try {
+              await persistMedia(updated.id, crearForm)
+            } catch (mediaErr) {
+              flash('error', `Reingreso registrado, pero ${mediaErr.message || 'falló la carga de medios.'}`)
+              setShowCrear(false)
+              setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
+              await cargar()
+              await abrirDetalle(updated)
+              return
+            }
             flash('success', `Reingreso registrado (ciclo ${updated.ciclo_documental || 2}). Cargue la documentación laboral del nuevo ingreso.`)
             setShowCrear(false)
             setCrearForm({ ...EMPTY_TRABAJADOR_FORM })
@@ -315,15 +355,34 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const guardarEdicion = async () => {
     if (!api || !permisos.editar || !detalle) return
-    const v = validateTrabajadorForm(editForm)
+    const v = validateTrabajadorForm(editForm, {
+      smmlv: smmlvVigente,
+      validarSalario: Boolean(permisos.verSalario),
+    })
     if (!v.ok) {
       flash('error', v.mensaje)
       return
     }
     setBusy(true)
     try {
-      await api.updateTrabajador(detalle.id, payloadFromForm(editForm))
-      await persistMedia(detalle.id, editForm)
+      const payload = payloadFromForm(editForm)
+      // Quien no puede ver salario no debe sobrescribirlo en ediciones posteriores.
+      if (!permisos.verSalario) {
+        delete payload.salario
+        delete payload.salario_liquidable
+      }
+      await api.updateTrabajador(detalle.id, payload)
+      try {
+        await persistMedia(detalle.id, editForm)
+      } catch (mediaErr) {
+        flash('error', `Datos actualizados, pero ${mediaErr.message || 'falló la carga de medios.'}`)
+        const full = await api.getTrabajador(detalle.id)
+        setDetalle(full)
+        const withMedia = await syncMediaPreviews(full, formFromTrabajador(full))
+        setEditForm(withMedia)
+        await cargar()
+        return
+      }
       const full = await api.getTrabajador(detalle.id)
       setDetalle(full)
       const withMedia = await syncMediaPreviews(full, formFromTrabajador(full))
@@ -734,7 +793,9 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                 onAddCatalogValue={addCatalogValue}
                 api={api}
                 onMsg={(m) => flash(m.type, m.text)}
-                verSalario={permisos.verSalario}
+                verSalario={Boolean(permisos.verSalario || permisos.crear)}
+                diligenciarSalarioCreacion
+                smmlv={smmlvVigente}
               />
             </div>
             <div style={{
@@ -813,6 +874,7 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
                     docLocked={Boolean(detalle.doc_bloqueado)}
                     onMsg={(m) => flash(m.type, m.text)}
                     verSalario={permisos.verSalario}
+                    smmlv={smmlvVigente}
                   />
                   <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
                     {!editando && permisos.editar && (

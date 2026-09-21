@@ -26,7 +26,12 @@ from rrhh_docs_service import (
     soft_delete_contrato_generado,
     soft_delete_documento,
 )
-from rrhh_permissions import es_desarrollador_rrhh, require_permiso_rrhh, tiene_permiso_rrhh
+from rrhh_permissions import (
+    es_desarrollador_rrhh,
+    puede_ver_salario_rrhh,
+    require_permiso_rrhh,
+    tiene_permiso_rrhh,
+)
 from rrhh_banco_ocr import ocr_certificacion_bancaria
 from rrhh_contrato_alertas_service import (
     cron_secret_ok,
@@ -78,6 +83,8 @@ from rrhh_service import (
     list_trabajadores,
     list_trabajadores_paginado,
     list_cumpleanos_mes,
+    redactar_salario_lista,
+    redactar_salario_trabajador,
     reiniciar_reingreso_trabajador,
     resumen_trabajadores_por_empresa,
     set_trabajador_imagen,
@@ -140,6 +147,7 @@ class TrabajadorBody(BaseModel):
     banco_tipo_cuenta: Optional[str] = None
     banco_numero_cuenta: Optional[str] = None
     tipo_contrato: Optional[str] = None
+    dedicacion: Optional[str] = "tiempo_completo"
     contrato_requiere_renovacion: bool = False
     contrato_periodicidad_renovacion: Optional[str] = None
     periodo_prueba_dias: Optional[int] = None
@@ -156,14 +164,21 @@ class TrabajadorBody(BaseModel):
     def _empty_to_none_int(cls, v):
         if v is None or v == "":
             return None
+        if isinstance(v, float) and v != v:  # NaN
+            return None
         if isinstance(v, str) and not v.strip():
             return None
-        return v
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
 
     @field_validator("salario", mode="before")
     @classmethod
     def _parse_salario_body(cls, v):
         if v is None or v == "":
+            return None
+        if isinstance(v, float) and v != v:  # NaN
             return None
         if isinstance(v, (int, float)):
             return float(v)
@@ -172,6 +187,16 @@ class TrabajadorBody(BaseModel):
 
         n = _parse_salario_numero(v)
         return n if n else None
+
+    @field_validator("dedicacion", mode="before")
+    @classmethod
+    def _norm_dedicacion_body(cls, v):
+        if v is None or v == "":
+            return "tiempo_completo"
+        s = str(v).strip().lower().replace(" ", "_")
+        if s in ("parcial", "tiempo_parcial", "medio_tiempo"):
+            return "parcial"
+        return "tiempo_completo"
 
 
 class TrabajadorPatchBody(BaseModel):
@@ -207,6 +232,7 @@ class TrabajadorPatchBody(BaseModel):
     banco_tipo_cuenta: Optional[str] = None
     banco_numero_cuenta: Optional[str] = None
     tipo_contrato: Optional[str] = None
+    dedicacion: Optional[str] = None
     contrato_requiere_renovacion: Optional[bool] = None
     contrato_periodicidad_renovacion: Optional[str] = None
     periodo_prueba_dias: Optional[int] = None
@@ -223,14 +249,21 @@ class TrabajadorPatchBody(BaseModel):
     def _empty_to_none_int_patch(cls, v):
         if v is None or v == "":
             return None
+        if isinstance(v, float) and v != v:  # NaN
+            return None
         if isinstance(v, str) and not v.strip():
             return None
-        return v
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
 
     @field_validator("salario", mode="before")
     @classmethod
     def _parse_salario_patch(cls, v):
         if v is None or v == "":
+            return None
+        if isinstance(v, float) and v != v:  # NaN
             return None
         if isinstance(v, (int, float)):
             return float(v)
@@ -238,6 +271,16 @@ class TrabajadorPatchBody(BaseModel):
 
         n = _parse_salario_numero(v)
         return n if n else None
+
+    @field_validator("dedicacion", mode="before")
+    @classmethod
+    def _norm_dedicacion_patch(cls, v):
+        if v is None or v == "":
+            return None
+        s = str(v).strip().lower().replace(" ", "_")
+        if s in ("parcial", "tiempo_parcial", "medio_tiempo"):
+            return "parcial"
+        return "tiempo_completo"
 
 
 class GenerarContratoBody(BaseModel):
@@ -422,6 +465,8 @@ def route_list_trabajadores(
         limit=limit,
         offset=offset,
     )
+    if not puede_ver_salario_rrhh(current_user):
+        items = redactar_salario_lista(items)
     return {"items": items, "total": total}
 
 
@@ -534,6 +579,8 @@ def route_create_trabajador(
         str(row.get("id")),
         f"Trabajador: {row.get('nombres')} {row.get('apellidos')}",
     )
+    if not puede_ver_salario_rrhh(current_user):
+        return redactar_salario_trabajador(row)
     return row
 
 
@@ -627,6 +674,8 @@ def route_reingreso_trabajador(
         str(trabajador_id),
         f"Reingreso colaborador: {row.get('nombres')} {row.get('apellidos')}",
     )
+    if not puede_ver_salario_rrhh(current_user):
+        return redactar_salario_trabajador(row)
     return row
 
 
@@ -639,9 +688,12 @@ def route_get_trabajador(
     _require_contract_access(current_user, contrato_id)
     require_permiso_rrhh(current_user, "ver", contrato_id)
     try:
-        return get_trabajador(supabase, contrato_id, trabajador_id)
+        row = get_trabajador(supabase, contrato_id, trabajador_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
+    if not puede_ver_salario_rrhh(current_user):
+        return redactar_salario_trabajador(row)
+    return row
 
 
 @router.put("/{contrato_id}/trabajadores/{trabajador_id}")
@@ -671,6 +723,8 @@ def route_update_trabajador(
         str(trabajador_id),
         f"Trabajador actualizado: {row.get('nombres')} {row.get('apellidos')}",
     )
+    if not puede_ver_salario_rrhh(current_user):
+        return redactar_salario_trabajador(row)
     return row
 
 
@@ -1278,6 +1332,29 @@ def route_delete_hora_extra(
 
 
 # ── Nóminas ──────────────────────────────────────────────────────────────────
+
+@router.get("/{contrato_id}/nomina-params")
+def route_nomina_params(
+    contrato_id: int,
+    anio: Optional[int] = Query(None, ge=2020, le=2100),
+    current_user=Depends(get_current_user),
+):
+    """SMMLV y parámetros legales vigentes (para validación de salario en formularios)."""
+    _require_contract_access(current_user, contrato_id)
+    require_permiso_rrhh(current_user, "ver", contrato_id)
+    from datetime import datetime
+
+    from rrhh_nomina_params import params_for_year
+
+    y = int(anio) if anio else datetime.now().year
+    p = params_for_year(y)
+    return {
+        "anio": p.anio,
+        "smmlv": p.smmlv,
+        "auxilio_transporte": p.auxilio_transporte,
+        "horas_mes": p.horas_mes,
+    }
+
 
 @router.get("/{contrato_id}/nominas")
 def route_list_nominas(

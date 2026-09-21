@@ -68,6 +68,8 @@ export default function TrabajadorFormSheet({
   docLocked = false,
   onMsg = null,
   verSalario = true,
+  diligenciarSalarioCreacion = false,
+  smmlv = null,
 }) {
   const tTok = tFrom(theme)
   const ui = rrhhSheetStyles(tTok)
@@ -379,6 +381,20 @@ export default function TrabajadorFormSheet({
             <tr>
               <SheetField label="Cargo" labelStyle={lbl} valueStyle={valCell}>{catSelect('cargo_aspira', 'cargo')}</SheetField>
               <SheetField label="Tipo contrato" labelStyle={lbl} valueStyle={valCell}>{catSelect('tipo_contrato', 'tipo_contrato')}</SheetField>
+              <SheetField label="Dedicación" labelStyle={lbl} valueStyle={valCell}>
+                <select
+                  style={ui.cellSelect}
+                  value={f.dedicacion || 'tiempo_completo'}
+                  disabled={!canEdit}
+                  onChange={(e) => setField('dedicacion', e.target.value)}
+                  aria-label="Dedicación laboral"
+                >
+                  <option value="tiempo_completo">Tiempo completo</option>
+                  <option value="parcial">Parcial (menos de tiempo completo)</option>
+                </select>
+              </SheetField>
+            </tr>
+            <tr>
               <SheetField label="Estado" labelStyle={lbl} valueStyle={valCell}>
                 <select
                   style={ui.cellSelect}
@@ -391,6 +407,7 @@ export default function TrabajadorFormSheet({
                   <option value="retirado">Retirado</option>
                 </select>
               </SheetField>
+              <td style={lbl} /><td style={valCell} colSpan={3} />
             </tr>
             <tr>
               <td style={lbl}>Cuenta bancaria</td>
@@ -461,10 +478,16 @@ export default function TrabajadorFormSheet({
                   <input
                     style={{ ...ui.cellInp, textAlign: 'right' }}
                     inputMode="numeric"
-                    placeholder="$ 0"
+                    placeholder={smmlv ? `$ ${Math.round(smmlv).toLocaleString('es-CO')}` : '$ 0'}
                     value={f.salario ?? ''}
                     disabled={!canEdit}
                     onChange={(e) => setField('salario', formatSalarioInput(e.target.value))}
+                    aria-label={diligenciarSalarioCreacion ? 'Salario (diligenciamiento inicial)' : 'Salario'}
+                    title={
+                      diligenciarSalarioCreacion
+                        ? 'Visible al crear. Después solo roles Administrativo/Desarrollador.'
+                        : (smmlv ? `Mínimo legal vigente: $ ${Math.round(smmlv).toLocaleString('es-CO')}` : undefined)
+                    }
                   />
                 </SheetField>
               ) : (
