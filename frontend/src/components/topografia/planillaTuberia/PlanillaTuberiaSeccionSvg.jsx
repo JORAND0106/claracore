@@ -5,6 +5,7 @@
  */
 import seccionAlcantarillaPng from './media/seccion_alcantarilla.png'
 import seccionFiltroPng from './media/seccion_filtro.png'
+import { SECCION_MAX_HEIGHT } from './planillaTuberiaUtils'
 
 export default function PlanillaTuberiaSeccionSvg({ seccionTipica, ui }) {
   const st = seccionTipica || {}
@@ -28,7 +29,7 @@ export default function PlanillaTuberiaSeccionSvg({ seccionTipica, ui }) {
       <img
         src={png}
         alt={titulo}
-        style={{ width: '100%', maxHeight: 220, objectFit: 'contain', display: 'block', margin: '0 auto' }}
+        style={{ width: '100%', maxHeight: SECCION_MAX_HEIGHT, objectFit: 'contain', display: 'block', margin: '0 auto' }}
       />
       <div style={{ fontSize: 11, color: '#475569', textAlign: 'center', marginTop: 6 }}>
         {`B=${B.toFixed(2)} m · Øext=${D.toFixed(3)} m · h_exc=${hExc.toFixed(2)} m`}

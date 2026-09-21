@@ -710,25 +710,25 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         {**it, "long": None, "ancho": None, "espesor": None, "bruto": None, "descuentos": None, "neto": None}
         for it in ITEMS_CANTIDADES
     ]
-    cants = "".join(
-        f"<tr><td>{n['nombre']}</td>"
-        f"<td class='calc'>{fmt(n.get('long'))}</td>"
-        f"<td class='calc'>{fmt(n.get('ancho'))}</td>"
-        f"<td class='calc'>{fmt(n.get('espesor'))}</td>"
-        f"<td class='calc'>{fmt(n.get('descuentos'))}</td>"
-        f"<td class='calc'>{fmt(n.get('neto') if n.get('neto') is not None else n.get('bruto'))}</td></tr>"
+        cants = "".join(
+        f"<tr><td class='item'>{n['nombre']}</td>"
+        f"<td class='calc num'>{fmt(n.get('long'))}</td>"
+        f"<td class='calc num'>{fmt(n.get('ancho'))}</td>"
+        f"<td class='calc num'>{fmt(n.get('espesor'))}</td>"
+        f"<td class='calc num'>{fmt(n.get('descuentos'))}</td>"
+        f"<td class='calc num'>{fmt(n.get('neto') if n.get('neto') is not None else n.get('bruto'))}</td></tr>"
         for n in netos
     )
     descuentos = calc.get("descuentos") or [
         {**it, "cantidad": None, "long": None, "ancho": None, "espesor": None}
         for it in _catalogo_descuentos(tipo)
     ]
-    descs = "".join(
-        f"<tr><td>{d['nombre']}</td>"
-        f"<td class='calc'>{fmt(d.get('long'))}</td>"
-        f"<td class='calc'>{fmt(d.get('ancho'))}</td>"
-        f"<td class='calc'>{fmt(d.get('espesor'))}</td>"
-        f"<td class='calc'>{fmt(d.get('cantidad'))}</td></tr>"
+        descs = "".join(
+        f"<tr><td class='item'>{d['nombre']}</td>"
+        f"<td class='calc num'>{fmt(d.get('long'))}</td>"
+        f"<td class='calc num'>{fmt(d.get('ancho'))}</td>"
+        f"<td class='calc num'>{fmt(d.get('espesor'))}</td>"
+        f"<td class='calc num'>{fmt(d.get('cantidad'))}</td></tr>"
         for d in descuentos
         if d.get("nombre")
     )
@@ -760,8 +760,14 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     table.sheet{{border-collapse:collapse;width:100%;margin-bottom:2px}}
     table.sheet th,table.sheet td{{border:0.4pt solid #64748b;padding:4px 5px;font-size:7.5pt;line-height:1.4}}
     table.sheet th{{background:#D9D9D9;font-size:6pt}}
+    table.sheet.cartera th,table.sheet.cartera td{{padding:3px 4px;font-size:7pt;line-height:1.15}}
+    table.sheet.cartera th{{font-size:5.5pt;background:#B0B0B0;color:#1e293b}}
+    table.sheet.resumen th,table.sheet.resumen td{{padding:2px 3px;font-size:6.5pt;line-height:1.05}}
+    table.sheet.resumen th{{font-size:5.5pt}}
+    table.sheet.resumen th.item,table.sheet.resumen td.item{{width:42%;white-space:nowrap;text-align:left}}
+    table.sheet.resumen th.num,table.sheet.resumen td.num{{width:11%;white-space:nowrap}}
     .graficos-wrap{{width:100%;border-collapse:collapse;margin:2px 0 3px;table-layout:fixed}}
-    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:1px;vertical-align:top;height:88px}}
+    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:1px;vertical-align:top;height:141px}}
     .graficos-wrap img{{display:block;width:100%;height:auto;margin:0 auto}}
     table.sheet th.desc{{background:#EA4296;color:#fff}}
     table.sheet th.cant{{background:#4472C4;color:#fff}}
@@ -777,25 +783,25 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     {badge}
     {franja}
     <h2>Cartera</h2>
-    <table class="sheet"><thead><tr>
+    <table class="sheet cartera"><thead><tr>
       <th>#</th><th>Abscisa</th><th>Terreno Natural</th><th>{nivel_hdr}</th>
       <th>Cota Fondo Excavación</th><th>Altura Excavacion</th><th>Altura Triturado</th>
       <th>Altura Relleno</th><th>Ancho Geotextil</th>
     </tr></thead><tbody>{rows}</tbody></table>
     <div style="clear:both;height:2px;"></div>{graficos}<div style="clear:both;height:6px;">&nbsp;</div>
     <table class="grid2"><tr>
-      <td width="55%">
+      <td width="58%">
         <h2>Resumen de Cantidades</h2>
-        <table class="sheet"><thead><tr>
-          <th class="cant">Item</th><th class="cant">Long</th><th class="cant">Ancho</th>
-          <th class="cant">Espesor</th><th class="cant">Desc.</th><th class="cant">Cantidad</th>
+        <table class="sheet resumen"><thead><tr>
+          <th class="cant item" width="42%">Item</th><th class="cant num">Long</th><th class="cant num">Ancho</th>
+          <th class="cant num">Espesor</th><th class="cant num">Desc.</th><th class="cant num">Cantidad</th>
         </tr></thead><tbody>{cants}</tbody></table>
       </td>
-      <td width="45%">
+      <td width="42%">
         <h2>Descuentos Específicos</h2>
-        <table class="sheet"><thead><tr>
-          <th class="desc">Item</th><th class="desc">Long</th><th class="desc">Ancho</th>
-          <th class="desc">Espesor</th><th class="desc">Cantidad</th>
+        <table class="sheet resumen"><thead><tr>
+          <th class="desc item" width="46%">Item</th><th class="desc num">Long</th><th class="desc num">Ancho</th>
+          <th class="desc num">Espesor</th><th class="desc num">Cantidad</th>
         </tr></thead><tbody>{descs}</tbody></table>
       </td>
     </tr></table>

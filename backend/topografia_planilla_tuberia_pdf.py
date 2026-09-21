@@ -493,10 +493,10 @@ def html_bloque_graficos_pdf(
     *,
     tipo: Optional[str] = None,
 
-    sec_w: int = 160,
-    sec_h: int = 85,
-    perfil_w: int = 280,
-    perfil_h: int = 85,
+    sec_w: int = 256,  # 160 * 1.6
+    sec_h: int = 136,  # 85 * 1.6
+    perfil_w: int = 448,  # 280 * 1.6
+    perfil_h: int = 136,  # 85 * 1.6
 ) -> str:
     """Panel GRAFICO + Perfil longitudinal embebidos (xhtml2pdf).
 

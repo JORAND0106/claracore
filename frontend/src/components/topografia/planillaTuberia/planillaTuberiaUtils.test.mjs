@@ -11,12 +11,20 @@ import {
   TIPOS_PLANILLA,
   RELACIONES_ATRAQUE,
   FILAS_INICIALES_CARTERA,
+  CARTERA_ROW_SCALE,
+  RESUMEN_ROW_SCALE,
+  SECCION_GRAFICO_SCALE,
+  SECCION_MAX_HEIGHT,
   filasDesdeApi,
 } from './planillaTuberiaUtils.js'
 
 describe('planillaTuberiaUtils', () => {
-  it('filas iniciales = 2', () => {
+  it('filas iniciales = 2 y escalas de dimensión', () => {
     assert.equal(FILAS_INICIALES_CARTERA, 2)
+    assert.equal(CARTERA_ROW_SCALE, 0.7)
+    assert.equal(RESUMEN_ROW_SCALE, 0.5)
+    assert.equal(SECCION_GRAFICO_SCALE, 1.6)
+    assert.equal(SECCION_MAX_HEIGHT, 352)
     assert.equal(filasDesdeApi([], 'ALCANTARILLA').length, 2)
   })
 

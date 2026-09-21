@@ -17,6 +17,9 @@ import {
   TIPOS_PLANILLA,
   confirmarGuardadoCartera,
   FILAS_INICIALES_CARTERA,
+  CARTERA_ROW_HEIGHT,
+  CARTERA_INPUT_HEIGHT,
+  RESUMEN_ROW_HEIGHT,
   filaCampoVacia,
   filasDesdeApi,
   fmtNDash,
@@ -307,6 +310,23 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     minWidth: 72,
   }
 
+  // Cartera: 70% de altura de fila del sheet base (32 → 22)
+  // Encabezado cartera un tono más oscuro que el sheet base (#D9D9D9 → #B0B0B0)
+  const thCartera = { ...thBase, padding: '3px 4px', lineHeight: 1.1, height: CARTERA_ROW_HEIGHT, background: '#B0B0B0', color: '#1e293b' }
+  const thCarteraCalc = { ...thCalc, padding: '3px 4px', lineHeight: 1.1, height: CARTERA_ROW_HEIGHT, background: '#A3A3A3', color: '#1e293b' }
+  const tdCartera = { ...sheet.td, height: CARTERA_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.1 }
+  const tdCarteraEdit = { ...tdEdit, height: CARTERA_ROW_HEIGHT }
+  const tdCarteraCalc = { ...tdCalc, height: CARTERA_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.1 }
+  const inpCartera = { ...sheet.cellInp, height: CARTERA_INPUT_HEIGHT, padding: '2px 3px' }
+
+  // Resumen / Descuentos: 50% de altura (32 → 16)
+  const thResumen = { ...thBase, padding: '2px 4px', lineHeight: 1.05, height: RESUMEN_ROW_HEIGHT, fontSize: 9 }
+  const thResumenCalc = { ...thCalc, padding: '2px 4px', lineHeight: 1.05, height: RESUMEN_ROW_HEIGHT, fontSize: 9 }
+  const tdResumen = { ...sheet.td, height: RESUMEN_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.05, fontSize: 'var(--cc-xs)' }
+  const tdResumenItem = { ...tdResumen, whiteSpace: 'nowrap', minWidth: 148, width: '38%' }
+  const tdResumenCalc = { ...tdCalc, height: RESUMEN_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.05, fontSize: 'var(--cc-xs)' }
+  const thResumenItem = { ...thResumen, whiteSpace: 'nowrap', minWidth: 148, width: '38%', textAlign: 'left' }
+
   const layoutMain = isCompact
     ? { display: 'flex', flexDirection: 'column', gap: 12 }
     : { display: 'grid', gridTemplateColumns: 'minmax(200px, 280px) 1fr', gap: 12 }
@@ -522,15 +542,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: CARTERA_MIN_WIDTH }}>
                     <thead>
                       <tr>
-                        <th style={{ ...thBase, width: 36 }}>#</th>
-                        <th style={thBase}>Abscisa</th>
-                        <th style={thBase}>Terreno Natural</th>
-                        <th style={thBase}>{nivelLabel}</th>
-                        <th style={thBase}>Cota Fondo Excavación</th>
-                        <th style={thCalc}>Altura Excavacion</th>
-                        <th style={thCalc}>Altura Triturado</th>
-                        <th style={thCalc}>Altura Relleno</th>
-                        <th style={thCalc}>Ancho Geotextil</th>
+                        <th style={{ ...thCartera, width: 36 }}>#</th>
+                        <th style={thCartera}>Abscisa</th>
+                        <th style={thCartera}>Terreno Natural</th>
+                        <th style={thCartera}>{nivelLabel}</th>
+                        <th style={thCartera}>Cota Fondo Excavación</th>
+                        <th style={thCarteraCalc}>Altura Excavacion</th>
+                        <th style={thCarteraCalc}>Altura Triturado</th>
+                        <th style={thCarteraCalc}>Altura Relleno</th>
+                        <th style={thCarteraCalc}>Ancho Geotextil</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -538,9 +558,9 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                         const c = calcFilas[idx] || {}
                         return (
                           <tr key={idx}>
-                            <td style={{ ...sheet.td, textAlign: 'center', fontWeight: 700 }}>{idx + 1}</td>
+                            <td style={{ ...tdCartera, textAlign: 'center', fontWeight: 700 }}>{idx + 1}</td>
                             {['abscisa', 'terreno_natural', nivelKey, 'cota_fondo_excavacion'].map((k) => (
-                              <td key={k} style={tdEdit}>
+                              <td key={k} style={tdCarteraEdit}>
                                 <input
                                   type="number"
                                   step="any"
@@ -549,16 +569,16 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                                   value={f[k]}
                                   onChange={(e) => setFila(idx, k, e.target.value)}
                                   style={{
-                                    ...sheet.cellInp,
+                                    ...inpCartera,
                                     background: editable ? 'transparent' : CALC_CELL_BG,
                                   }}
                                 />
                               </td>
                             ))}
-                            <td style={tdCalc}>{fmtNDash(c.altura_excavacion)}</td>
-                            <td style={tdCalc}>{fmtNDash(c.altura_triturado)}</td>
-                            <td style={tdCalc}>{fmtNDash(c.altura_relleno)}</td>
-                            <td style={tdCalc}>{fmtNDash(c.ancho_geotextil)}</td>
+                            <td style={tdCarteraCalc}>{fmtNDash(c.altura_excavacion)}</td>
+                            <td style={tdCarteraCalc}>{fmtNDash(c.altura_triturado)}</td>
+                            <td style={tdCarteraCalc}>{fmtNDash(c.altura_relleno)}</td>
+                            <td style={tdCarteraCalc}>{fmtNDash(c.ancho_geotextil)}</td>
                           </tr>
                         )
                       })}
@@ -598,16 +618,17 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <div style={cardPad}>
                   <div style={sheet.sectionTitle}>Resumen de Cantidades</div>
                   <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 520 }}>
+                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 580 }}>
                       <thead>
                         <tr>
                           {['Item', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad'].map((h, i) => (
                             <th
                               key={h}
                               style={{
-                                ...(i >= 1 ? thCalc : thBase),
+                                ...(i === 0 ? thResumenItem : thResumenCalc),
                                 background: '#4472C4',
                                 color: '#fff',
+                                ...(i === 0 ? { textAlign: 'left' } : null),
                               }}
                             >
                               {h}
@@ -618,12 +639,12 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       <tbody>
                         {(calculo?.netos || []).map((n) => (
                           <tr key={n.codigo}>
-                            <td style={sheet.td}>{n.nombre}</td>
-                            <td style={tdCalc}>{fmtNDash(n.long)}</td>
-                            <td style={tdCalc}>{fmtNDash(n.ancho)}</td>
-                            <td style={tdCalc}>{fmtNDash(n.espesor)}</td>
-                            <td style={tdCalc}>{fmtNDash(n.descuentos)}</td>
-                            <td style={tdCalc}>{fmtNDash(n.neto)}</td>
+                            <td style={tdResumenItem}>{n.nombre}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(n.long)}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(n.ancho)}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(n.espesor)}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(n.descuentos)}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(n.neto)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -633,16 +654,17 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <div style={cardPad}>
                   <div style={sheet.sectionTitle}>Descuentos Específicos</div>
                   <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 420 }}>
+                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 480 }}>
                       <thead>
                         <tr>
                           {['Item', 'Long', 'Ancho', 'Espesor', 'Cantidad'].map((h, i) => (
                             <th
                               key={h}
                               style={{
-                                ...(i >= 1 ? thCalc : thBase),
+                                ...(i === 0 ? thResumenItem : thResumenCalc),
                                 background: '#EA4296',
                                 color: '#fff',
+                                ...(i === 0 ? { textAlign: 'left' } : null),
                               }}
                             >
                               {h}
@@ -653,11 +675,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       <tbody>
                         {(calculo?.descuentos || []).filter((d) => d.nombre).map((d) => (
                           <tr key={d.codigo}>
-                            <td style={sheet.td}>{d.nombre}</td>
-                            <td style={tdCalc}>{fmtNDash(d.long)}</td>
-                            <td style={tdCalc}>{fmtNDash(d.ancho)}</td>
-                            <td style={tdCalc}>{fmtNDash(d.espesor)}</td>
-                            <td style={tdCalc}>{fmtNDash(d.cantidad)}</td>
+                            <td style={tdResumenItem}>{d.nombre}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(d.long)}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(d.ancho)}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(d.espesor)}</td>
+                            <td style={tdResumenCalc}>{fmtNDash(d.cantidad)}</td>
                           </tr>
                         ))}
                       </tbody>
