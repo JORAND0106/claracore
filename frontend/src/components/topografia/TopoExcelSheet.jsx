@@ -3,6 +3,7 @@
  * Encabezados de columna + fila(s) de celdas compactas (mismo criterio que Bitácora / SicoeObra).
  * Con `compact`, apila campos en pares verticales (móvil) sin scroll horizontal.
  * Con `groups`, renderiza varias filas/bloques etiquetados (p. ej. cabecera de planilla).
+ * Con `rows`, apila filas Excel (encabezado+valores) sin títulos de grupo — cabecera compacta.
  */
 import { topoSheetStyles } from './topoSheetStyles'
 
@@ -96,6 +97,75 @@ function FieldsGrid({ columns, cells, sheet, compact }) {
   )
 }
 
+
+/**
+ * Varias filas Excel apiladas (cada una: encabezados cortos + 1 fila de valores).
+ * Sin títulos de grupo. Pensado para cabeceras compactas multilínea.
+ */
+function ExcelRowsLayout({ title, rows, sheet, minWidth, style, className, tableStyle }) {
+  return (
+    <div style={{ marginBottom: 12, width: '80%', maxWidth: '100%', ...style }} className={className}>
+      {title ? <div style={sheet.sectionTitle}>{title}</div> : null}
+      <div
+        style={{
+          ...sheet.sheetWrap,
+          overflowX: 'auto',
+          overflowY: 'visible',
+          WebkitOverflowScrolling: 'touch',
+        }}
+        className="cc-topo-sheet-rows cc-topo-table-scroll"
+      >
+        {rows.map((row, ri) => {
+          const cols = row.columns || []
+          const cells = row.cells || []
+          return (
+            <table
+              key={row.key || ri}
+              style={{
+                ...sheet.sheetTable,
+                tableLayout: 'auto',
+                width: '100%',
+                minWidth: minWidth || row.minWidth || undefined,
+                marginBottom: ri < rows.length - 1 ? 0 : undefined,
+                borderTop: ri > 0 ? 'none' : undefined,
+                ...tableStyle,
+              }}
+            >
+              <thead>
+                <tr>
+                  {cols.map((col) => (
+                    <th
+                      key={col.key}
+                      style={{
+                        ...sheet.th,
+                        ...(col.width != null ? { width: col.width } : null),
+                      }}
+                    >
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {col.label}
+                        <HeaderHelp ayuda={col.ayuda} />
+                      </span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  {cells.map((cell, i) => (
+                    <td key={cols[i]?.key || i} style={sheet.td}>
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function GroupsLayout({ title, groups, sheet, compact, style, className }) {
   return (
     <div style={{ marginBottom: 12, ...style }} className={className}>
@@ -151,6 +221,8 @@ function GroupsLayout({ title, groups, sheet, compact, style, className }) {
  * @param {import('react').ReactNode[]} [props.cells] Celdas de una sola fila (mismo orden que columns).
  * @param {{ key?: string, title?: string, columns: object[], cells: import('react').ReactNode[] }[]} [props.groups]
  *        Bloques multilínea con etiqueta visible (desktop y móvil). Si hay groups, se ignora columns/cells.
+ * @param {{ key?: string, columns: object[], cells: import('react').ReactNode[], minWidth?: string|number }[]} [props.rows]
+ *        Filas Excel apiladas (encabezado + valores por fila), sin títulos de grupo. Prioridad sobre groups/columns.
  * @param {import('react').ReactNode} [props.children] Filas personalizadas (<tr>…). Si hay children, se ignora cells.
  * @param {string|number} [props.minWidth]
  * @param {boolean} [props.compact] Layout vertical/pares para móvil (sin tabla horizontal).
@@ -165,6 +237,7 @@ export default function TopoExcelSheet({
   columns = [],
   cells,
   groups,
+  rows,
   children,
   minWidth,
   compact = false,
@@ -174,6 +247,20 @@ export default function TopoExcelSheet({
   sheet: sheetProp,
 }) {
   const sheet = sheetProp || topoSheetStyles(t)
+
+  if (Array.isArray(rows) && rows.length > 0) {
+    return (
+      <ExcelRowsLayout
+        title={title}
+        rows={rows}
+        sheet={sheet}
+        minWidth={minWidth}
+        style={style}
+        className={className}
+        tableStyle={tableStyle}
+      />
+    )
+  }
 
   if (Array.isArray(groups) && groups.length > 0) {
     return (

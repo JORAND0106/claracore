@@ -525,15 +525,19 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <TopoExcelSheet
                   sheet={sheet}
                   title="Cabecera / tramo"
-                  compact={isCompact}
-                  groups={[
+                  minWidth={960}
+                  rows={[
                     {
-                      key: 'identificacion',
-                      title: 'Identificación del tramo',
+                      key: 'tramo',
                       columns: [
-                        { key: 'nombre', label: 'Nombre', compactFull: true },
-                        { key: 'pk_id', label: 'PK / ID' },
-                        { key: 'costado', label: 'Costado' },
+                        { key: 'nombre', label: 'Nombre', width: '16%' },
+                        { key: 'pk_id', label: 'PK / ID', width: '12%' },
+                        { key: 'costado', label: 'Costado', width: '10%' },
+                        { key: 'diametro_m', label: 'Ø (m)', width: '8%' },
+                        { key: 'espesor_m', label: 'Espesor', width: '8%' },
+                        { key: 'ancho_excavacion_m', label: 'Ancho B', width: '10%' },
+                        { key: 'relacion_atraque', label: 'Rel. atraque', width: '10%' },
+                        { key: 'material', label: 'Material', width: '14%' },
                       ],
                       cells: [
                         <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
@@ -565,19 +569,6 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                           title={params.costado ? `Costado: ${params.costado}` : 'Se diligencia al elegir PK en el mapa'}
                           style={sheet.cellInp}
                         />,
-                      ],
-                    },
-                    {
-                      key: 'tuberia',
-                      title: 'Tubería / sección',
-                      columns: [
-                        { key: 'diametro_m', label: 'Ø (m)' },
-                        { key: 'espesor_m', label: 'Espesor (m)' },
-                        { key: 'ancho_excavacion_m', label: 'Ancho exc. B (m)' },
-                        { key: 'relacion_atraque', label: 'Relación atraque' },
-                        { key: 'material', label: 'Material' },
-                      ],
-                      cells: [
                         <input key="dia" type="number" step="any" disabled={!editable} value={params.diametro_m} onChange={(e) => setParams((p) => ({ ...p, diametro_m: e.target.value }))} style={sheet.cellInp} />,
                         <input key="esp" type="number" step="any" disabled={!editable} value={params.espesor_m} onChange={(e) => setParams((p) => ({ ...p, espesor_m: e.target.value }))} style={sheet.cellInp} />,
                         <input key="b" type="number" step="any" disabled={!editable} value={params.ancho_excavacion_m} onChange={(e) => setParams((p) => ({ ...p, ancho_excavacion_m: e.target.value }))} style={sheet.cellInp} />,
@@ -588,8 +579,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       ],
                     },
                     {
-                      key: 'coordenadas',
-                      title: 'Coordenadas (Abs Inicial / Final)',
+                      key: 'coords',
                       columns: [
                         { key: 'norte_abs_inicial', label: 'Norte Abs Inicial' },
                         { key: 'este_abs_inicial', label: 'Este Abs Inicial' },
