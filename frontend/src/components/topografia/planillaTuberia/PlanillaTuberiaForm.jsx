@@ -12,6 +12,7 @@ import {
 import TopoConfirmModal from '../TopoConfirmModal'
 import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
+import { calcularPlanillaLocal } from './planillaTuberiaCalc'
 import {
   CALC_CELL_BG,
   RELACIONES_ATRAQUE,
@@ -469,10 +470,32 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setFilas((prev) => aplicarPasteColumna(prev, idx, key, values))
   }
 
+  /** Recálculo local reactivo (perfil, cantidades, columnas calculadas) sin guardar. */
+  const calculoLocal = useMemo(() => {
+    const meta = (planilla?.meta_cabecera && typeof planilla.meta_cabecera === 'object')
+      ? planilla.meta_cabecera
+      : {}
+    const cama = meta.cama_triturado_m
+    return calcularPlanillaLocal({
+      tipo: params.tipo,
+      diametro_m: params.diametro_m,
+      espesor_m: params.espesor_m === '' ? 0 : params.espesor_m,
+      ancho_excavacion_m: params.ancho_excavacion_m,
+      relacion_atraque: params.relacion_atraque || '1:3',
+      filas_campo: (filas || []).map((row, i) => ({ ...row, orden: i + 1 })),
+      descuentos_manuales: detalle?.descuentos_manuales || [],
+      cantidades_manuales: cantManuales,
+      cama_triturado_m: cama ?? 0,
+    })
+  }, [filas, params, cantManuales, detalle?.descuentos_manuales, planilla?.meta_cabecera])
+
+  /** Preferir preview local; si faltan Ø/B, caer al último cálculo del servidor. */
+  const calculoVista = calculoLocal || calculo
+
   const calcFilas = useMemo(() => {
-    const map = new Map((calculo?.cartera?.filas || []).map((f) => [f.orden, f]))
-    return filas.map((f, i) => map.get(i + 1) || map.get(f.orden) || {})
-  }, [calculo, filas])
+    const map = new Map((calculoVista?.cartera?.filas || []).map((row) => [row.orden, row]))
+    return filas.map((row, i) => map.get(i + 1) || map.get(row.orden) || {})
+  }, [calculoVista, filas])
 
   const nivelLabel = params.tipo === 'FILTRO' ? 'Terminado Filtro' : 'Subrasante de Vía'
   const nivelKey = params.tipo === 'FILTRO' ? 'terminado_filtro' : 'subrasante_via'
@@ -810,11 +833,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         Deslice horizontalmente para ver todas las columnas (formato hoja de cálculo).
       </div>
     )}
-    {calculo?.cartera?.totales && (
+    {calculoVista?.cartera?.totales && (
       <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-        L={fmtNDash(calculo.cartera.totales.longitud_m, 2)} m ·
-        prom H.Exc={fmtNDash(calculo.cartera.totales.prom_altura_excavacion)} ·
-        prom Geo={fmtNDash(calculo.cartera.totales.prom_ancho_geotextil)}
+        L={fmtNDash(calculoVista.cartera.totales.longitud_m, 2)} m ·
+        prom H.Exc={fmtNDash(calculoVista.cartera.totales.prom_altura_excavacion)} ·
+        prom Geo={fmtNDash(calculoVista.cartera.totales.prom_ancho_geotextil)}
       </div>
     )}
     {editable && (
@@ -830,8 +853,8 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   </div>
 
   <div style={layoutCharts}>
-    <PlanillaTuberiaSeccionSvg seccionTipica={{ ...(calculo?.seccion_tipica || {}), tipo: params.tipo }} ui={ui} />
-    <PlanillaTuberiaPerfil perfil={calculo?.perfil} ui={ui} />
+    <PlanillaTuberiaSeccionSvg seccionTipica={{ ...(calculoVista?.seccion_tipica || {}), tipo: params.tipo }} ui={ui} />
+    <PlanillaTuberiaPerfil perfil={calculoVista?.perfil} ui={ui} />
   </div>
 
   <div style={layoutTables}>
@@ -857,7 +880,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             </tr>
           </thead>
           <tbody>
-            {(calculo?.netos || []).map((n) => {
+            {(calculoVista?.netos || []).map((n) => {
               const editDims = !!n.editable_dims && editable
               const editNom = !!n.editable_nombre && editable
               const inpStyle = {
@@ -932,7 +955,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             </tr>
           </thead>
           <tbody>
-            {(calculo?.descuentos || []).filter((d) => d.nombre).map((d) => (
+            {(calculoVista?.descuentos || []).filter((d) => d.nombre).map((d) => (
               <tr key={d.codigo}>
                 <td style={tdResumenItem}>{d.nombre}</td>
                 <td style={tdResumenCalc}>{fmtNDash(d.long)}</td>
