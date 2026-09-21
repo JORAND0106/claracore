@@ -20,14 +20,25 @@ TITULO_ALCANTARILLA = "PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS"
 TITULO_FILTRO = "PLANILLA DE INSTALACIÓN DE FILTROS"
 CODIGO_DOCUMENTO = "INF-ING - TOP - 001 - V0"
 
+# Orden UI: fijos primero; Excavación Roca y Otros al final (editables).
 ITEMS_CANTIDADES = (
     {"codigo": "EXC", "nombre": "Excavación Varias", "unidad": "m³"},
-    {"codigo": "EXC_ROC", "nombre": "Excavación Roca", "unidad": "m³"},
     {"codigo": "TUB", "nombre": "Long Tubería", "unidad": "m"},
     {"codigo": "TRI", "nombre": "Triturado / Atraque", "unidad": "m³"},
     {"codigo": "REL", "nombre": "Relleno Gran.", "unidad": "m³"},
     {"codigo": "GEO", "nombre": "Geotextil", "unidad": "m²"},
+    {"codigo": "EXC_ROC", "nombre": "Excavación Roca", "unidad": "m³", "editable_dims": True},
+    {
+        "codigo": "OTROS",
+        "nombre": "Otros: ____",
+        "unidad": "m³",
+        "editable_dims": True,
+        "editable_nombre": True,
+    },
 )
+
+# Códigos de Resumen de Cantidades con Long/Ancho/Espesor editables por el usuario.
+CODIGOS_CANTIDADES_EDITABLES = frozenset({"EXC_ROC", "OTROS"})
 
 # Descuentos específicos (I43:N50). Vinculados por codigo de ítem de cantidad.
 ITEMS_DESCUENTOS_ALCANTARILLA = (
@@ -403,15 +414,39 @@ def _normalize_manual_descuentos(
     return out
 
 
+def _normalize_cantidades_manuales(
+    cantidades_manuales: Optional[list[dict]],
+) -> dict[str, dict]:
+    """Overrides de Long/Ancho/Espesor (y nombre) para EXC_ROC / OTROS."""
+    out: dict[str, dict] = {}
+    for d in cantidades_manuales or []:
+        if not isinstance(d, dict):
+            continue
+        cod = str(d.get("codigo") or "").strip().upper()
+        if cod not in CODIGOS_CANTIDADES_EDITABLES:
+            continue
+        entry: dict[str, Any] = {}
+        for key in ("long", "ancho", "espesor"):
+            if key in d and d.get(key) is not None and d.get(key) != "":
+                entry[key] = _f(d.get(key))
+        if cod == "OTROS" and "nombre" in d:
+            nom = str(d.get("nombre") or "").strip()
+            entry["nombre"] = nom
+        out[cod] = entry
+    return out
+
+
 def calcular_cantidades_y_descuentos(
     seccion: dict,
     cartera: dict,
     *,
     descuentos_manuales: Optional[list[dict]] = None,
+    cantidades_manuales: Optional[list[dict]] = None,
 ) -> dict[str, Any]:
     """
-    Resumen B45:H50 y Descuentos I45:N50 del XLSM.
+    Resumen de Cantidades + Descuentos Específicos.
     Cantidad = ROUND(PRODUCT(Long,Ancho,Espesor),2) − Desc (solo Triturado).
+    EXC_ROC y OTROS admiten Long/Ancho/Espesor (y nombre en OTROS) por override.
     """
     tipo = seccion["tipo"]
     tot = cartera.get("totales") or {}
@@ -442,16 +477,25 @@ def calcular_cantidades_y_descuentos(
 
     manual = _normalize_manual_descuentos(tipo, descuentos_manuales)
     desc_otros = float(manual.get("DESC_OTROS") or 0.0)
+    overrides = _normalize_cantidades_manuales(cantidades_manuales)
 
-    def _row(codigo: str, long: Optional[float], ancho: Optional[float],
-             espesor: Optional[float], desc: float = 0.0, restar_desc: bool = False) -> dict:
+    def _row(
+        codigo: str,
+        long: Optional[float],
+        ancho: Optional[float],
+        espesor: Optional[float],
+        desc: float = 0.0,
+        restar_desc: bool = False,
+        *,
+        nombre: Optional[str] = None,
+    ) -> dict:
         meta = next(it for it in ITEMS_CANTIDADES if it["codigo"] == codigo)
         prod = _product([long, ancho, espesor])
         bruto = _r2(prod) if prod is not None else 0.0
         if bruto is None:
             bruto = 0.0
         cant = round(bruto - desc, 2) if restar_desc else bruto
-        return {
+        row = {
             **meta,
             "long": _r4(long),
             "ancho": _r4(ancho),
@@ -462,14 +506,35 @@ def calcular_cantidades_y_descuentos(
             "formula": f"ROUND(PRODUCT({long},{ancho},{espesor}),2)"
             + (f"-{desc}" if restar_desc and desc else ""),
         }
+        if nombre is not None:
+            row["nombre"] = nombre
+        return row
+
+    # Dimensiones EXC_ROC: override de campo o defaults de cartera/plantilla.
+    ov_roc = overrides.get("EXC_ROC") or {}
+    roc_long = ov_roc["long"] if "long" in ov_roc else L
+    roc_ancho = ov_roc["ancho"] if "ancho" in ov_roc else B
+    roc_esp = ov_roc["espesor"] if "espesor" in ov_roc else ESPESOR_ROCA_M
+
+    # OTROS: vacío por defecto; cantidad 0 hasta que el usuario diligencie L·A·E.
+    ov_otr = overrides.get("OTROS") or {}
+    otr_long = ov_otr.get("long")
+    otr_ancho = ov_otr.get("ancho")
+    otr_esp = ov_otr.get("espesor")
+    otr_nombre = ov_otr.get("nombre")
+    if otr_nombre:
+        otr_label = f"Otros: {otr_nombre}" if not otr_nombre.lower().startswith("otros") else otr_nombre
+    else:
+        otr_label = "Otros: ____"
 
     cantidades = [
         _row("EXC", L, B, h_exc),
-        _row("EXC_ROC", L, B, ESPESOR_ROCA_M),
         _row("TUB", L, None, None),  # PRODUCT solo Long → L
         _row("TRI", L, B, h_trit, desc=desc_tri, restar_desc=True),
         _row("REL", L, B, h_rel, desc=desc_rel, restar_desc=False),
         _row("GEO", L, ancho_geo if ancho_geo else None, None),
+        _row("EXC_ROC", roc_long, roc_ancho, roc_esp),
+        _row("OTROS", otr_long, otr_ancho, otr_esp, nombre=otr_label),
     ]
 
     catalogo = ITEMS_DESCUENTOS_FILTRO if tipo == "FILTRO" else ITEMS_DESCUENTOS_ALCANTARILLA
@@ -524,6 +589,8 @@ def calcular_cantidades_y_descuentos(
             "bruto": bruto,
             "descuentos": round(descuento, 2),
             "neto": round(neto, 2),
+            "editable_dims": bool(c.get("editable_dims")),
+            "editable_nombre": bool(c.get("editable_nombre")),
         })
     return {"cantidades": cantidades, "descuentos": descuentos, "netos": netos}
 
@@ -585,6 +652,7 @@ def calcular_planilla_completa(
     relacion_atraque: str,
     filas_campo: list[dict],
     descuentos_manuales: Optional[list[dict]] = None,
+    cantidades_manuales: Optional[list[dict]] = None,
     cama_triturado_m: float = 0.0,
 ) -> dict[str, Any]:
     seccion = calcular_seccion(
@@ -597,7 +665,10 @@ def calcular_planilla_completa(
     )
     cartera = calcular_cartera(filas_campo, seccion)
     cant = calcular_cantidades_y_descuentos(
-        seccion, cartera, descuentos_manuales=descuentos_manuales
+        seccion,
+        cartera,
+        descuentos_manuales=descuentos_manuales,
+        cantidades_manuales=cantidades_manuales,
     )
     return {
         "seccion": seccion,

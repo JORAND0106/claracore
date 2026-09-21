@@ -115,6 +115,8 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [editorOpen, setEditorOpen] = useState(false)
   const [confirmEliminar, setConfirmEliminar] = useState(null) // null | 'vacia' | 'con_datos'
   const [pkMapOpen, setPkMapOpen] = useState(false)
+  /** Overrides Long/Ancho/Espesor (+nombre OTROS) del Resumen de Cantidades. */
+  const [cantManuales, setCantManuales] = useState([])
   const tableRef = useRef(null)
 
   const planilla = detalle?.planilla
@@ -153,6 +155,8 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     })
     setFilas(filasDesdeApi(det?.filas_campo, p.tipo || 'ALCANTARILLA'))
     setInfos(det?.validacion?.infos || [])
+    const meta = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
+    setCantManuales(Array.isArray(meta.cantidades_manuales) ? meta.cantidades_manuales : [])
   }, [])
 
   const abrir = async (id) => {
@@ -173,6 +177,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setMsg(mensaje || '')
     setErr('')
     setInfos([])
+    setCantManuales([])
     setFilas(Array.from({ length: FILAS_INICIALES_CARTERA }, (_, i) => filaCampoVacia(i + 1)))
     setParams((p) => ({
       ...p,
@@ -223,6 +228,68 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     }
   }
 
+
+  const metaCabeceraActual = () => {
+    const prev = (planilla?.meta_cabecera && typeof planilla.meta_cabecera === 'object')
+      ? planilla.meta_cabecera
+      : {}
+    return { ...prev, cantidades_manuales: cantManuales }
+  }
+
+  const overrideCantidad = (codigo) => (
+    (cantManuales || []).find((c) => String(c.codigo || '').toUpperCase() === codigo) || null
+  )
+
+  const setOverrideCantidad = (codigo, patch) => {
+    setCantManuales((prev) => {
+      const list = Array.isArray(prev) ? [...prev] : []
+      const idx = list.findIndex((c) => String(c.codigo || '').toUpperCase() === codigo)
+      const base = idx >= 0 ? { ...list[idx] } : { codigo }
+      const next = { ...base, ...patch, codigo }
+      // Limpiar claves vacías de dims
+      ;['long', 'ancho', 'espesor'].forEach((k) => {
+        if (next[k] === '' || next[k] == null) delete next[k]
+      })
+      if (idx >= 0) list[idx] = next
+      else list.push(next)
+      return list
+    })
+  }
+
+  const cantidadDesdeDims = (long, ancho, espesor) => {
+    const xs = [long, ancho, espesor]
+      .map((v) => (v === '' || v == null ? null : Number(v)))
+      .filter((v) => v != null && !Number.isNaN(v))
+    if (!xs.length) return 0
+    return Math.round(xs.reduce((a, b) => a * b, 1) * 100) / 100
+  }
+
+  const cellValCant = (n, key) => {
+    const ov = overrideCantidad(n.codigo)
+    if (ov && Object.prototype.hasOwnProperty.call(ov, key) && ov[key] != null && ov[key] !== '') {
+      return ov[key]
+    }
+    return n[key] ?? ''
+  }
+
+  const displayNetoCant = (n) => {
+    if (!n?.editable_dims) return n?.neto
+    const long = cellValCant(n, 'long')
+    const ancho = cellValCant(n, 'ancho')
+    const espesor = cellValCant(n, 'espesor')
+    return cantidadDesdeDims(long, ancho, espesor)
+  }
+
+  const displayNombreCant = (n) => {
+    if (!n?.editable_nombre) return n?.nombre
+    const ov = overrideCantidad(n.codigo)
+    if (ov && ov.nombre != null && String(ov.nombre).trim() !== '') {
+      const nom = String(ov.nombre).trim()
+      return nom.toLowerCase().startsWith('otros') ? nom : `Otros: ${nom}`
+    }
+    return n?.nombre || 'Otros: ____'
+  }
+
   const guardarParams = async () => {
     if (!planilla?.id) return
     setBusy(true); setErr(''); setMsg('')
@@ -238,6 +305,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         ancho_excavacion_m: params.ancho_excavacion_m === '' ? null : Number(params.ancho_excavacion_m),
         relacion_atraque: params.relacion_atraque,
         material: params.material || null,
+        meta_cabecera: metaCabeceraActual(),
         ...payloadCoordsGeo(params),
       }
       aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}/params`, {
@@ -259,7 +327,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       const filasPayload = payloadFilas(filas, params.tipo)
       const res = await api(`/planillas-tuberia/${planilla.id}/cartera`, {
         method: 'PUT',
-        body: JSON.stringify({ version, filas: filasPayload, descuentos_manuales: [] }),
+        body: JSON.stringify({ version, filas: filasPayload, descuentos_manuales: [], cantidades_manuales: cantManuales }),
       })
       const conf = confirmarGuardadoCartera(res, filasPayload.length)
       if (!conf.ok) {
@@ -761,16 +829,55 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             </tr>
           </thead>
           <tbody>
-            {(calculo?.netos || []).map((n) => (
-              <tr key={n.codigo}>
-                <td style={tdResumenItem}>{n.nombre}</td>
-                <td style={tdResumenCalc}>{fmtNDash(n.long)}</td>
-                <td style={tdResumenCalc}>{fmtNDash(n.ancho)}</td>
-                <td style={tdResumenCalc}>{fmtNDash(n.espesor)}</td>
-                <td style={tdResumenCalc}>{fmtNDash(n.descuentos)}</td>
-                <td style={tdResumenCalc}>{fmtNDash(n.neto)}</td>
-              </tr>
-            ))}
+            {(calculo?.netos || []).map((n) => {
+              const editDims = !!n.editable_dims && editable
+              const editNom = !!n.editable_nombre && editable
+              const inpStyle = {
+                ...sheet.cellInp,
+                height: RESUMEN_ROW_HEIGHT,
+                padding: '1px 3px',
+                textAlign: 'right',
+                fontFamily: 'ui-monospace, Consolas, monospace',
+                fontVariantNumeric: 'tabular-nums',
+                fontWeight: 700,
+                background: editDims ? 'transparent' : undefined,
+              }
+              return (
+                <tr key={n.codigo}>
+                  <td style={tdResumenItem}>
+                    {editNom ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: '100%' }}>
+                        <span>Otros:</span>
+                        <input
+                          disabled={!editable}
+                          value={overrideCantidad('OTROS')?.nombre ?? ''}
+                          placeholder="____"
+                          onChange={(e) => setOverrideCantidad('OTROS', { nombre: e.target.value })}
+                          style={{ ...sheet.cellInp, height: RESUMEN_ROW_HEIGHT, padding: '1px 3px', textAlign: 'left', flex: 1 }}
+                        />
+                      </span>
+                    ) : displayNombreCant(n)}
+                  </td>
+                  {['long', 'ancho', 'espesor'].map((k) => (
+                    <td key={k} style={editDims ? { ...tdResumenCalc, padding: 0 } : tdResumenCalc}>
+                      {editDims ? (
+                        <input
+                          type="number"
+                          step="any"
+                          inputMode="decimal"
+                          disabled={!editable}
+                          value={cellValCant(n, k)}
+                          onChange={(e) => setOverrideCantidad(n.codigo, { [k]: e.target.value })}
+                          style={inpStyle}
+                        />
+                      ) : fmtNDash(n[k])}
+                    </td>
+                  ))}
+                  <td style={tdResumenCalc}>{fmtNDash(n.descuentos)}</td>
+                  <td style={tdResumenCalc}>{fmtNDash(displayNetoCant(n))}</td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

@@ -274,8 +274,8 @@ def _apply_sheet_borders(ws) -> None:
     _border_box(ws, 14, 15, 2, 7)  # áreas / sección
     _border_box(ws, 16, 41, 2, 10)  # cartera + totales
     _border_box(ws, 16, 40, 11, 14)  # panel gráfico
-    _border_box(ws, 43, 50, 2, 8)  # resumen cantidades
-    _border_box(ws, 43, 50, 9, 14)  # descuentos
+    _border_box(ws, 43, 51, 2, 8)  # resumen cantidades
+    _border_box(ws, 43, 51, 9, 14)  # descuentos
     _border_box(ws, 64, 66, 1, 7)  # elaboró
     _border_box(ws, 64, 66, 8, 14)  # aprobó
     # Celdas de captura de cartera: borde fino explícito
@@ -447,11 +447,12 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
 
     for addr, name in (
         ("B45", "Excavación Varias"),
-        ("B46", "Excavación Roca"),
-        ("B47", "Long Tubería"),
-        ("B48", "Triturado / Atraque"),
-        ("B49", "Relleno Gran."),
-        ("B50", "Geotextil"),
+        ("B46", "Long Tubería"),
+        ("B47", "Triturado / Atraque"),
+        ("B48", "Relleno Gran."),
+        ("B49", "Geotextil"),
+        ("B50", "Excavación Roca"),
+        ("B51", "Otros: ____"),
     ):
         _set(ws, addr, name)
 
@@ -460,25 +461,28 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     _set(ws, "F45", "=IFERROR(G41,0)")
     _set(ws, "H45", "=ROUND(PRODUCT(D45:F45),2)")
     _set(ws, "D46", "=D45")
-    _set(ws, "E46", "=E45")
-    _set(ws, "F46", 0.05)
     _set(ws, "H46", "=ROUND(PRODUCT(D46:F46),2)")
     _set(ws, "D47", "=D45")
-    _set(ws, "H47", "=ROUND(PRODUCT(D47:F47),2)")
+    _set(ws, "E47", "=E45")
+    _set(ws, "F47", "=IFERROR(H41,0)")
+    # Descuento triturado: ALC → Area1 (N46); FIL → Tubería Filtro (N45)
+    _set(ws, "G47", "=N46" if es_alc else "=N45")
+    _set(ws, "H47", "=ROUND(PRODUCT(D47:F47),2)-G47")
     _set(ws, "D48", "=D45")
     _set(ws, "E48", "=E45")
-    _set(ws, "F48", "=IFERROR(H41,0)")
-    # Descuento triturado: ALC → Area1 (N46); FIL → Tubería Filtro (N45)
-    _set(ws, "G48", "=N46" if es_alc else "=N45")
-    _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)-G48")
+    _set(ws, "F48", "=IFERROR(I41,0)")
+    _set(ws, "G48", "=N47" if es_alc else 0)
+    _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)")
     _set(ws, "D49", "=D45")
-    _set(ws, "E49", "=E45")
-    _set(ws, "F49", "=IFERROR(I41,0)")
-    _set(ws, "G49", "=N47" if es_alc else 0)
+    _set(ws, "E49", "=J41")
     _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
+    # Excavación Roca (editable en UI; defaults de plantilla)
     _set(ws, "D50", "=D45")
-    _set(ws, "E50", "=J41")
+    _set(ws, "E50", "=E45")
+    _set(ws, "F50", 0.05)
     _set(ws, "H50", "=ROUND(PRODUCT(D50:F50),2)")
+    # Otros: dims libres (sin fórmulas enlazadas)
+    _set(ws, "H51", "=ROUND(PRODUCT(D51:F51),2)")
 
     if es_alc:
         _set(ws, "I45", "")
