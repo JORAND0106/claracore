@@ -81,7 +81,7 @@ const ico = {
 }
 
 
-export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuario }) {
+export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuario, planillaIdFocus = null, onPlanillaFocusConsumed }) {
   const ui = useTopoTheme()
   const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { isCompact } = useTopoViewport()
@@ -89,7 +89,6 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const esDev = esDesarrolladorTopo(usuario)
   const editablePerm = puede(permisos, 'editar')
 
-  const [lista, setLista] = useState([])
   const [detalle, setDetalle] = useState(null)
   const [filas, setFilas] = useState(() => Array.from({ length: FILAS_INICIALES_CARTERA }, (_, i) => filaCampoVacia(i + 1)))
   const [params, setParams] = useState({
@@ -125,14 +124,8 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const puedeEliminar = puede(permisos, 'eliminar')
   const exportPlantillaVacia = esDev && !conDatos
 
-  const cargarLista = useCallback(async () => {
-    const data = await api('/planillas-tuberia')
-    setLista(Array.isArray(data) ? data : [])
-  }, [api])
-
-  useEffect(() => {
-    cargarLista().catch((e) => setErr(e.message))
-  }, [cargarLista])
+  /** El listado vive en Biblioteca de tramos; se mantiene el hook por llamadas post-guardar. */
+  const cargarLista = useCallback(async () => {}, [])
 
   const aplicarDetalle = useCallback((det) => {
     setDetalle(det)
@@ -164,6 +157,17 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       setBusy(false)
     }
   }
+
+  useEffect(() => {
+    if (planillaIdFocus == null || planillaIdFocus === '') return
+    let cancelled = false
+    ;(async () => {
+      await abrir(planillaIdFocus)
+      if (!cancelled) onPlanillaFocusConsumed?.()
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al recibir focus externo
+  }, [planillaIdFocus])
 
   const crear = async () => {
     setBusy(true); setErr(''); setMsg('')
@@ -379,9 +383,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const tdResumenCalc = { ...tdCalc, height: RESUMEN_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.05, fontSize: 'var(--cc-xs)' }
   const thResumenItem = { ...thResumen, whiteSpace: 'nowrap', minWidth: 148, width: '38%', textAlign: 'left' }
 
-  const layoutMain = isCompact
-    ? { display: 'flex', flexDirection: 'column', gap: 12 }
-    : { display: 'grid', gridTemplateColumns: 'minmax(200px, 280px) 1fr', gap: 12 }
+  const layoutMain = { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }
   const layoutCharts = isCompact
     ? { display: 'flex', flexDirection: 'column', gap: 12 }
     : { display: 'grid', gridTemplateColumns: 'minmax(240px, 1fr) minmax(280px, 1.2fr)', gap: 12 }
@@ -487,38 +489,10 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       )}
 
       <div style={layoutMain}>
-        <div style={{ ...cardPad, maxHeight: isCompact ? 220 : 520, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Planillas del contrato</div>
-          {lista.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className="cc-topo-touch-btn"
-              onClick={() => abrir(p.id)}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                marginBottom: 6,
-                padding: isCompact ? '10px 12px' : '8px 10px',
-                borderRadius: 8,
-                cursor: 'pointer',
-                border: planilla?.id === p.id ? `2px solid ${ui.accent}` : `1px solid ${ui.t?.border || '#e2e8f0'}`,
-                background: planilla?.id === p.id ? (ui.accentSoft || '#dbeafe') : '#fff',
-              }}
-            >
-              <div style={{ fontWeight: 600 }}>{p.nombre || p.tipo}</div>
-              <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
-                {p.tipo} · {p.estado} · {p.pk_id || 'sin PK'}
-              </div>
-            </button>
-          ))}
-          {!lista.length && <div style={{ color: ui.textMuted }}>Sin planillas aún.</div>}
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
           {!planilla ? (
-            <div style={{ ...cardPad, color: ui.textMuted }}>Seleccione o cree una planilla.</div>
+            <div style={{ ...cardPad, color: ui.textMuted }}>
+              Cree una planilla nueva o ábrala desde «Biblioteca de tramos».
+            </div>
           ) : (
             <>
               <div style={cardPad}>
@@ -859,7 +833,6 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               </div>
             </>
           )}
-        </div>
       </div>
 
       {confirmEliminar && (
