@@ -6,6 +6,7 @@ import { describe, it } from 'node:test'
 import {
   CALC_CELL_BG,
   confirmarGuardadoCartera,
+  fingerprintFilasCartera,
   payloadFilas,
   tieneDatosExportables,
   TIPOS_PLANILLA,
@@ -36,19 +37,41 @@ describe('planillaTuberiaUtils', () => {
     assert.deepEqual(RELACIONES_ATRAQUE, ['1:1', '1:2', '1:3', '1:4', '1:6'])
   })
 
-  it('confirmarGuardadoCartera exige verified + count', () => {
+  it('confirmarGuardadoCartera exige verified + count > 0 y huella', () => {
     assert.equal(confirmarGuardadoCartera(null, 2).ok, false)
     assert.equal(confirmarGuardadoCartera({ verified: false, count: 2 }, 2).ok, false)
     assert.equal(confirmarGuardadoCartera({ verified: true, count: 1 }, 2).ok, false)
+    assert.equal(confirmarGuardadoCartera({ verified: true, count: 0 }, 0).ok, false)
+    assert.equal(confirmarGuardadoCartera({ verified: true, count: 0 }, 2).ok, false)
     const ok = confirmarGuardadoCartera({ verified: true, count: 3, version: 5 }, 3)
     assert.equal(ok.ok, true)
     assert.equal(ok.version, 5)
+
+    const payload = [
+      { orden: 1, abscisa: 10, terreno_natural: 100, cota_fondo_excavacion: 98, subrasante_via: 99, terminado_filtro: null },
+    ]
+    const fp = fingerprintFilasCartera(payload)
+    assert.equal(confirmarGuardadoCartera({
+      verified: true,
+      count: 1,
+      fingerprint_orden: ['tampered'],
+      filas_campo: payload,
+    }, 1, payload).ok, false)
+    const okFp = confirmarGuardadoCartera({
+      verified: true,
+      count: 1,
+      version: 2,
+      fingerprint_orden: fp,
+      filas_campo: payload,
+    }, 1, payload)
+    assert.equal(okFp.ok, true)
   })
 
-  it('payloadFilas filtra vacías y mapea nivel por tipo', () => {
+  it('payloadFilas usa numOrNull (descarta NaN) y mapea nivel por tipo', () => {
     const filas = [
       { abscisa: '10', terreno_natural: '100', subrasante_via: '99', terminado_filtro: '', cota_fondo_excavacion: '98', norte: '', este: '', observacion: '' },
       { abscisa: '', terreno_natural: '', subrasante_via: '', terminado_filtro: '', cota_fondo_excavacion: '', norte: '', este: '', observacion: '' },
+      { abscisa: 'x', terreno_natural: '', subrasante_via: '', terminado_filtro: '', cota_fondo_excavacion: '', norte: '', este: '', observacion: '' },
     ]
     const alc = payloadFilas(filas, 'ALCANTARILLA')
     assert.equal(alc.length, 1)

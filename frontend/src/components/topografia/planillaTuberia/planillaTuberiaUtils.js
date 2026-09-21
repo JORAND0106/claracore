@@ -114,25 +114,87 @@ export function payloadFilas(filas, tipo) {
   return (filas || []).map((f, i) => {
     const base = {
       orden: i + 1,
-      abscisa: f.abscisa === '' ? null : Number(f.abscisa),
-      terreno_natural: f.terreno_natural === '' ? null : Number(f.terreno_natural),
-      cota_fondo_excavacion: f.cota_fondo_excavacion === '' ? null : Number(f.cota_fondo_excavacion),
-      norte: f.norte === '' ? null : Number(f.norte),
-      este: f.este === '' ? null : Number(f.este),
+      abscisa: numOrNull(f.abscisa),
+      terreno_natural: numOrNull(f.terreno_natural),
+      cota_fondo_excavacion: numOrNull(f.cota_fondo_excavacion),
+      norte: numOrNull(f.norte),
+      este: numOrNull(f.este),
       observacion: f.observacion || null,
       subrasante_via: null,
       terminado_filtro: null,
     }
     if (tipo === 'FILTRO') {
-      base.terminado_filtro = f.terminado_filtro === '' ? null : Number(f.terminado_filtro)
+      base.terminado_filtro = numOrNull(f.terminado_filtro)
     } else {
-      base.subrasante_via = f.subrasante_via === '' ? null : Number(f.subrasante_via)
+      base.subrasante_via = numOrNull(f.subrasante_via)
     }
     return base
   }).filter((f) => (
     f.abscisa != null || f.terreno_natural != null || f.cota_fondo_excavacion != null
     || f.subrasante_via != null || f.terminado_filtro != null
   ))
+}
+
+/** Huella estable de filas de cartera (alineada al backend). */
+export function fingerprintFilasCartera(filas) {
+  const num = (v) => {
+    if (v == null || v === '') return ''
+    const n = Number(v)
+    if (!Number.isFinite(n)) return String(v).trim()
+    const s = n.toFixed(6).replace(/\.?0+$/, '')
+    return s === '-0' ? '0' : s
+  }
+  return (filas || [])
+    .map((f) => (
+      `${Number(f?.orden) || 0}|${num(f?.abscisa)}|${num(f?.terreno_natural)}|`
+      + `${num(f?.cota_fondo_excavacion)}|${num(f?.subrasante_via)}|${num(f?.terminado_filtro)}`
+    ))
+    .sort()
+}
+
+/** Confirma guardado solo si el backend devolvió verified + count (+ huella si viene). */
+export function confirmarGuardadoCartera(res, expectedCount, payloadEnviado = null) {
+  const expected = Number(expectedCount)
+  if (!Number.isFinite(expected) || expected <= 0) {
+    return { ok: false, error: 'No hay filas con datos para guardar.', reason: 'empty_payload' }
+  }
+  if (!res || typeof res !== 'object') {
+    return { ok: false, error: 'Sin respuesta del servidor.', reason: 'empty_response' }
+  }
+  if (!res.verified) {
+    return { ok: false, error: 'El servidor no confirmó la persistencia (verified).', reason: 'not_verified' }
+  }
+  const got = Number(res.count)
+  if (!Number.isFinite(got) || got <= 0) {
+    return { ok: false, error: 'El servidor no confirmó el guardado (sin conteo de filas).', reason: 'missing_count' }
+  }
+  if (got !== expected) {
+    return {
+      ok: false,
+      error: `Conteo inconsistente: enviado ${expected}, confirmado ${got}.`,
+      reason: 'count_mismatch',
+    }
+  }
+  const echo = Array.isArray(res.filas_campo) ? res.filas_campo : null
+  if (echo && echo.length !== expected) {
+    return {
+      ok: false,
+      error: `El servidor devolvió ${echo.length} filas pero se enviaron ${expected}.`,
+      reason: 'echo_mismatch',
+    }
+  }
+  if (Array.isArray(res.fingerprint_orden) && res.fingerprint_orden.length && payloadEnviado) {
+    const expectedFp = fingerprintFilasCartera(payloadEnviado)
+    const gotFp = res.fingerprint_orden.map(String)
+    if (expectedFp.join('|') !== gotFp.join('|')) {
+      return {
+        ok: false,
+        error: 'La huella de filas guardadas no coincide con lo enviado.',
+        reason: 'fingerprint_mismatch',
+      }
+    }
+  }
+  return { ok: true, count: got, version: res.version }
 }
 
 /** True si hay al menos un dato de campo diligenciado (exportable). */
@@ -213,18 +275,3 @@ export function payloadCoordsGeo(params) {
 
 /** Fondo distintivo de columnas calculadas (mismo criterio Excel/PDF). */
 export const CALC_CELL_BG = '#F2F2F2'
-
-/** Confirma guardado solo si el backend devolvió verified + count. */
-export function confirmarGuardadoCartera(res, expectedCount) {
-  if (!res || typeof res !== 'object') {
-    return { ok: false, error: 'Sin respuesta del servidor.' }
-  }
-  if (!res.verified) {
-    return { ok: false, error: 'El servidor no confirmó la persistencia (verified).' }
-  }
-  const got = Number(res.count)
-  if (!Number.isFinite(got) || got !== expectedCount) {
-    return { ok: false, error: `Conteo inconsistente: enviado ${expectedCount}, confirmado ${got}.` }
-  }
-  return { ok: true, count: got, version: res.version }
-}

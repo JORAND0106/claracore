@@ -325,11 +325,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setBusy(true); setErr(''); setMsg('')
     try {
       const filasPayload = payloadFilas(filas, params.tipo)
+      if (!filasPayload.length) {
+        setErr('No hay filas con datos para guardar en la cartera.')
+        return
+      }
       const res = await api(`/planillas-tuberia/${planilla.id}/cartera`, {
         method: 'PUT',
         body: JSON.stringify({ version, filas: filasPayload, descuentos_manuales: [], cantidades_manuales: cantManuales }),
       })
-      const conf = confirmarGuardadoCartera(res, filasPayload.length)
+      const conf = confirmarGuardadoCartera(res, filasPayload.length, filasPayload)
       if (!conf.ok) {
         setErr(conf.error)
         return
@@ -544,6 +548,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               descuentos_manuales: [],
             }),
           })
+          const conf = confirmarGuardadoCartera(res, filasPayload.length, filasPayload)
+          if (!conf.ok) {
+            setErr(conf.error)
+            return
+          }
           aplicarDetalle(res)
         } else {
           aplicarDetalle(det)

@@ -250,13 +250,39 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
     }
 
 
-def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
-    prev = _filas(planilla_id)
-    prev_ids = [p["id"] for p in prev if p.get("id")]
-    payloads = [{
-        "id": str(uuid4()),
+# Offset temporal para insertar filas nuevas sin chocar UNIQUE(planilla_id, orden)
+# mientras aún existen las previas (mismo patrón seguro que nivelación, adaptado).
+_ORDEN_TEMP_OFFSET = 1_000_000
+
+
+def _num_fp(v: Any) -> str:
+    if v is None or v == "":
+        return ""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return str(v).strip()
+    if not (n == n):  # NaN
+        return ""
+    s = f"{n:.6f}".rstrip("0").rstrip(".")
+    return s if s not in ("", "-0") else "0"
+
+
+def fingerprint_filas_campo(filas: list[dict]) -> list[str]:
+    """Huella estable orden|abscisa|TN|CFE|subrasante|terminado (eco post-guardado)."""
+    return sorted(
+        f"{int(f.get('orden') or 0)}|{_num_fp(f.get('abscisa'))}|"
+        f"{_num_fp(f.get('terreno_natural'))}|{_num_fp(f.get('cota_fondo_excavacion'))}|"
+        f"{_num_fp(f.get('subrasante_via'))}|{_num_fp(f.get('terminado_filtro'))}"
+        for f in (filas or [])
+    )
+
+
+def _fila_payload_db(planilla_id: str, f: dict, *, orden: int, row_id: Optional[str] = None) -> dict:
+    return {
+        "id": row_id or str(uuid4()),
         "planilla_id": planilla_id,
-        "orden": int(f["orden"]),
+        "orden": int(orden),
         "abscisa": f.get("abscisa"),
         "terreno_natural": f.get("terreno_natural"),
         "subrasante_via": f.get("subrasante_via"),
@@ -265,32 +291,104 @@ def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
         "norte": f.get("norte"),
         "este": f.get("este"),
         "observacion": f.get("observacion"),
-    } for f in filas]
+    }
+
+
+def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
+    """Reemplaza la cartera sin ventana vacía y sin chocar UNIQUE(planilla_id, orden).
+
+    1) Inserta filas nuevas (con orden temporal si hay previas).
+    2) Verifica conteo con SELECT (no confía en insert.data vacío de supabase-py).
+    3) Borra solo las previas ya confirmado el insert.
+    4) Remapea orden temporal → final.
+    5) Verifica huella; si falla, elimina parciales y restaura previas.
+    """
+    prev = _filas(planilla_id)
+    prev_ids = [p["id"] for p in prev if p.get("id")]
+    use_temp_orden = bool(prev_ids)
+
+    ordenes_finales = [int(f["orden"]) for f in filas]
+    payloads = [
+        _fila_payload_db(
+            planilla_id,
+            f,
+            orden=(o + _ORDEN_TEMP_OFFSET) if use_temp_orden else o,
+        )
+        for f, o in zip(filas, ordenes_finales)
+    ]
     new_ids = [p["id"] for p in payloads]
+    expected_fp = fingerprint_filas_campo([
+        {**f, "orden": o} for f, o in zip(filas, ordenes_finales)
+    ])
+
+    logger.info(
+        "planilla_tuberia_filas_replace start id=%s previas=%s payload=%s temp_orden=%s",
+        planilla_id, len(prev), len(payloads), use_temp_orden,
+    )
+
     try:
         if payloads:
             supabase.table("topo_planilla_tuberia_filas").insert(payloads).execute()
-        all_rows = (
-            supabase.table("topo_planilla_tuberia_filas")
-            .select("id").eq("planilla_id", planilla_id).execute().data or []
-        )
-        inserted = [r for r in all_rows if r["id"] in set(new_ids)]
-        if len(inserted) != len(payloads):
-            raise RuntimeError(f"Inserción incompleta {len(inserted)}/{len(payloads)}")
+            todas = (
+                supabase.table("topo_planilla_tuberia_filas")
+                .select("id").eq("planilla_id", planilla_id).execute().data or []
+            )
+            inserted = [r for r in todas if r.get("id") in set(new_ids)]
+            if len(inserted) != len(payloads):
+                raise RuntimeError(f"Inserción incompleta {len(inserted)}/{len(payloads)}")
+
         if prev_ids:
             for i in range(0, len(prev_ids), 100):
-                supabase.table("topo_planilla_tuberia_filas").delete().in_("id", prev_ids[i:i + 100]).execute()
+                supabase.table("topo_planilla_tuberia_filas").delete().in_(
+                    "id", prev_ids[i:i + 100]
+                ).execute()
+
+        if use_temp_orden and payloads:
+            for p, o_final in zip(payloads, ordenes_finales):
+                supabase.table("topo_planilla_tuberia_filas").update(
+                    {"orden": o_final}
+                ).eq("id", p["id"]).execute()
+
         rows = _filas(planilla_id)
         if len(rows) != len(payloads):
             raise RuntimeError(f"Cartera inconsistente {len(rows)}/{len(payloads)}")
+        got_fp = fingerprint_filas_campo(rows)
+        if got_fp != expected_fp:
+            raise RuntimeError(
+                "La huella de filas persistidas no coincide con el payload enviado."
+            )
+        logger.info(
+            "planilla_tuberia_filas_replace ok id=%s saved=%s",
+            planilla_id, len(rows),
+        )
         return rows
-    except Exception:
+    except Exception as exc:
+        logger.exception(
+            "planilla_tuberia_filas_replace fail id=%s err=%s", planilla_id, exc,
+        )
         try:
             if new_ids:
                 for i in range(0, len(new_ids), 100):
-                    supabase.table("topo_planilla_tuberia_filas").delete().in_("id", new_ids[i:i + 100]).execute()
+                    supabase.table("topo_planilla_tuberia_filas").delete().in_(
+                        "id", new_ids[i:i + 100]
+                    ).execute()
+            quedan = (
+                supabase.table("topo_planilla_tuberia_filas")
+                .select("id").eq("planilla_id", planilla_id).execute().data or []
+            )
+            if prev and not quedan:
+                restore = [
+                    _fila_payload_db(
+                        planilla_id, p,
+                        orden=int(p.get("orden") or 0),
+                        row_id=p.get("id"),
+                    )
+                    for p in prev
+                ]
+                if restore:
+                    supabase.table("topo_planilla_tuberia_filas").insert(restore).execute()
         except Exception:
-            pass
+            logger.exception("planilla_tuberia_filas_replace compensación falló id=%s", planilla_id)
         raise
 
 
@@ -501,6 +599,10 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
         )):
             filas_util.append(d)
 
+    # Evita el wipe silencioso (mismo estándar que nivelación: cartera no vacía).
+    if not filas_util:
+        raise HTTPException(422, "No hay filas con datos para guardar en la cartera.")
+
     valid = validar_cartera_campo(filas_util, p.get("tipo") or "ALCANTARILLA")
     if not valid.get("ok"):
         raise HTTPException(422, {
@@ -525,10 +627,20 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
     nueva_v = int(p.get("version") or 1) + 1
     supabase.table("topo_planillas_tuberia").update({"version": nueva_v, "updated_at": _now()}).eq("id", planilla_id).execute()
     detalle = _detalle(contrato_id, planilla_id)
-    if len(detalle.get("filas_campo") or []) != len(rows):
-        raise HTTPException(500, "Verificación post-guardado falló.")
-    return {**detalle, "verified": True, "count": len(rows), "version": nueva_v,
-            "validacion": {"infos": valid.get("infos") or []}}
+    echo = detalle.get("filas_campo") or []
+    if len(echo) != len(rows):
+        raise HTTPException(500, "Verificación post-guardado falló (conteo).")
+    fp = fingerprint_filas_campo(rows)
+    if fingerprint_filas_campo(echo) != fp:
+        raise HTTPException(500, "Verificación post-guardado falló (huella).")
+    return {
+        **detalle,
+        "verified": True,
+        "count": len(rows),
+        "version": nueva_v,
+        "fingerprint_orden": fp,
+        "validacion": {"infos": valid.get("infos") or []},
+    }
 
 
 @router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/calcular")
