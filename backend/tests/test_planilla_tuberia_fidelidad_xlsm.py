@@ -120,8 +120,12 @@ class TestExcelExportFidelidad(unittest.TestCase):
         wb = load_workbook(io.BytesIO(raw))
         ws = wb["planilla"]
         self.assertEqual(ws["F1"].value, TITULO_ALC)
-        self.assertEqual(ws["P2"].value, TITULO_FIL)
+        self.assertEqual(ws["M13"].value, "ALCANTARILLA")
+        self.assertIsNone(ws["P1"].value)
+        self.assertIsNone(ws["P2"].value)
         self.assertEqual(ws["M1"].value, CODIGO_DOC)
+        self.assertEqual(ws["E16"].value, "Cota Lomo")
+        self.assertEqual(len(ws._images), 1)
         self.assertTrue(str(ws["G17"].value).startswith("=IFERROR"))
         self.assertTrue(str(ws["H48"].value).startswith("=ROUND(PRODUCT"))
         self.assertGreaterEqual(len(ws._charts), 1)
