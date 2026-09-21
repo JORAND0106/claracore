@@ -21,12 +21,15 @@ import {
   CARTERA_ROW_HEIGHT,
   CARTERA_INPUT_HEIGHT,
   RESUMEN_ROW_HEIGHT,
+  aplicarPasteColumna,
+  esPasteMasivo,
   filaCampoVacia,
   filasDesdeApi,
   fmtNDash,
   handleEnterAsTab,
   migrarFilasAlCambiarTipo,
   coordsGeoDesdePlanilla,
+  parseClipboardColumn,
   payloadCoordsGeo,
   payloadFilas,
   tieneDatosExportables,
@@ -447,6 +450,21 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setFilas((prev) => prev.map((f, i) => (i === idx ? { ...f, [key]: value } : f)))
   }
 
+  /**
+   * Pegado masivo desde Excel: una columna de N valores → N filas
+   * desde la celda de inicio (crea filas si hacen falta).
+   * Multi-columna: solo se toma la primera (mejora futura).
+   */
+  const onPasteCartera = (idx, key, e) => {
+    if (!editable) return
+    const text = e.clipboardData?.getData?.('text/plain')
+    if (!esPasteMasivo(text)) return
+    e.preventDefault()
+    const values = parseClipboardColumn(text)
+    if (!values.length) return
+    setFilas((prev) => aplicarPasteColumna(prev, idx, key, values))
+  }
+
   const calcFilas = useMemo(() => {
     const map = new Map((calculo?.cartera?.filas || []).map((f) => [f.orden, f]))
     return filas.map((f, i) => map.get(i + 1) || map.get(f.orden) || {})
@@ -760,6 +778,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       disabled={!editable}
                       value={f[k]}
                       onChange={(e) => setFila(idx, k, e.target.value)}
+                      onPaste={(e) => onPasteCartera(idx, k, e)}
                       style={{
                         ...inpCartera,
                         background: editable ? 'transparent' : CALC_CELL_BG,

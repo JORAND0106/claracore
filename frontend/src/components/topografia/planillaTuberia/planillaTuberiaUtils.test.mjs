@@ -16,9 +16,14 @@ import {
   SECCION_GRAFICO_SCALE,
   SECCION_MAX_HEIGHT,
   filasDesdeApi,
+  filaCampoVacia,
   migrarFilasAlCambiarTipo,
   coordsGeoDesdePlanilla,
   payloadCoordsGeo,
+  parseClipboardColumn,
+  normalizarValorCeldaPaste,
+  esPasteMasivo,
+  aplicarPasteColumna,
 } from './planillaTuberiaUtils.js'
 
 describe('planillaTuberiaUtils', () => {
@@ -124,5 +129,44 @@ describe('planillaTuberiaUtils', () => {
     assert.equal(tieneDatosExportables([], {
       calculo: { cartera: { filas: [{ orden: 1, vacio: false, abscisa: 1 }] } },
     }), true)
+  })
+
+  it('parseClipboardColumn: salto de línea, TSV y coma decimal Excel', () => {
+    assert.deepEqual(parseClipboardColumn('10\n20\n30\n'), ['10', '20', '30'])
+    assert.deepEqual(parseClipboardColumn('10\r\n20\r\n'), ['10', '20'])
+    // Varias columnas: solo la primera
+    assert.deepEqual(parseClipboardColumn('1\t100\n2\t200\n'), ['1', '2'])
+    assert.equal(normalizarValorCeldaPaste('10,5'), '10.5')
+    assert.equal(normalizarValorCeldaPaste('1.234,56'), '1234.56')
+    assert.deepEqual(parseClipboardColumn('10,25\n11,5\n'), ['10.25', '11.5'])
+  })
+
+  it('esPasteMasivo distingue pegado de una celda vs columna', () => {
+    assert.equal(esPasteMasivo('42'), false)
+    assert.equal(esPasteMasivo('10\n20'), true)
+    assert.equal(esPasteMasivo('10\n'), true)
+    assert.equal(esPasteMasivo(''), false)
+    assert.equal(esPasteMasivo(null), false)
+  })
+
+  it('aplicarPasteColumna reparte valores y crea filas si hacen falta', () => {
+    const base = [filaCampoVacia(1), filaCampoVacia(2)]
+    const vals = ['0', '10', '20', '30', '40', '50', '60', '70', '80', '90']
+    const out = aplicarPasteColumna(base, 0, 'abscisa', vals)
+    assert.equal(out.length, 10)
+    assert.deepEqual(out.map((f) => f.abscisa), vals)
+    assert.deepEqual(out.map((f) => f.orden), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+
+    const desdeMitad = aplicarPasteColumna(base, 1, 'terreno_natural', ['100.1', '100.2', '100.3'])
+    assert.equal(desdeMitad.length, 4)
+    assert.equal(desdeMitad[0].terreno_natural, '')
+    assert.equal(desdeMitad[1].terreno_natural, '100.1')
+    assert.equal(desdeMitad[3].terreno_natural, '100.3')
+
+    const cfe = aplicarPasteColumna(base, 0, 'cota_fondo_excavacion', ['90', '91'])
+    assert.equal(cfe[0].cota_fondo_excavacion, '90')
+    assert.equal(cfe[1].cota_fondo_excavacion, '91')
+    // No toca otras columnas
+    assert.equal(cfe[0].abscisa, '')
   })
 })

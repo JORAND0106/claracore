@@ -35,6 +35,75 @@ export function fmtNDash(v, dec = 3) {
 
 export { fmtNDash as fmtNOrDash }
 
+/**
+ * Normaliza un valor de celda pegado desde Excel (coma decimal, miles).
+ * Devuelve string listo para inputs numéricos de la cartera.
+ */
+export function normalizarValorCeldaPaste(v) {
+  let s = String(v ?? '').trim()
+  if (!s) return ''
+  // 1.234,56 (es-CO) → 1234.56
+  if (/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) {
+    s = s.replace(/\./g, '').replace(',', '.')
+  } else if (s.includes(',') && !s.includes('.')) {
+    // 10,5 → 10.5
+    s = s.replace(',', '.')
+  }
+  return s
+}
+
+/**
+ * Interpreta texto del portapapeles (Excel TSV) como una columna de valores.
+ * Solo usa la primera columna de cada fila (mejora futura: multi-columna).
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function parseClipboardColumn(text) {
+  if (text == null || text === '') return []
+  const raw = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const lines = raw.split('\n')
+  // Excel suele terminar el rango con un salto de línea final
+  while (lines.length && lines[lines.length - 1] === '') lines.pop()
+  if (!lines.length) return []
+  return lines.map((line) => normalizarValorCeldaPaste((line.split('\t')[0] ?? '')))
+}
+
+/**
+ * True si el pegado aporta más de un valor (columna Excel / varias filas).
+ * Un solo valor sin saltos se deja al comportamiento nativo del input.
+ */
+export function esPasteMasivo(text) {
+  const vals = parseClipboardColumn(text)
+  if (vals.length > 1) return true
+  if (vals.length === 1 && /[\n\r\t]/.test(String(text ?? ''))) return true
+  return false
+}
+
+/**
+ * Distribuye valores de una columna en `filas` desde `startIdx`,
+ * creando filas vacías si el rango pegado excede las existentes.
+ * @param {object[]} filas
+ * @param {number} startIdx
+ * @param {string} key
+ * @param {string[]} values
+ * @returns {object[]}
+ */
+export function aplicarPasteColumna(filas, startIdx, key, values) {
+  const start = Math.max(0, Number(startIdx) || 0)
+  const vals = Array.isArray(values) ? values : []
+  if (!vals.length || !key) return filas || []
+  const next = (filas || []).map((f) => ({ ...f }))
+  const needed = start + vals.length
+  while (next.length < needed) {
+    next.push(filaCampoVacia(next.length + 1))
+  }
+  for (let i = 0; i < vals.length; i += 1) {
+    const idx = start + i
+    next[idx] = { ...next[idx], orden: idx + 1, [key]: vals[i] }
+  }
+  return next
+}
+
 /** Enter avanza como Tab dentro de un contenedor tabular. */
 export function handleEnterAsTab(e, rootEl) {
   if (e.key !== 'Enter' || e.defaultPrevented) return
