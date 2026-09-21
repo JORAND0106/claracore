@@ -263,36 +263,91 @@ def _es_error_columna_ausente(exc: BaseException, columna: str) -> bool:
             "does not exist",
             "pgrst204",
             "undefined_column",
+            "42703",
         )
     )
 
 
-def _ejecutar_update_trabajador(sb, contrato_id: int, trabajador_id: int, payload: dict) -> List[dict]:
-    """UPDATE con reintento si faltan columnas nuevas (p. ej. dedicacion sin migrar)."""
+def _columna_ausente_desde_error(exc: BaseException) -> Optional[str]:
+    """
+    Extrae el nombre de columna faltante del error PostgREST/Postgres.
+
+    Ejemplos reales (producción ClaraCore, 2026-09-21):
+      Could not find the 'dedicacion' column of 'rrhh_trabajadores' in the schema cache
+      column rrhh_trabajadores.contrato_requiere_renovacion does not exist
+    """
+    m = str(exc or "")
+    patterns = (
+        r"Could not find the '([^']+)' column",
+        r'column\s+[a-z0-9_]+\.([a-z0-9_]+)\s+does not exist',
+        r'column\s+"([^"]+)"\s+(?:of relation|does not exist)',
+        r"column\s+'([^']+)'\s+(?:of relation|does not exist)",
+    )
+    for pat in patterns:
+        mo = re.search(pat, m, flags=re.IGNORECASE)
+        if mo:
+            return mo.group(1)
+    return None
+
+
+def _ejecutar_write_trabajador_omitendo_columnas_ausentes(
+    write_fn,
+    payload: dict,
+    *,
+    operacion: str,
+) -> List[dict]:
+    """
+    Ejecuta insert/update omitiendo columnas que PostgREST reporta como inexistentes.
+
+    Causa raíz confirmada en producción: faltan columnas de ciclo laboral
+    (contrato_requiere_renovacion, dedicacion, alertas, …) mientras el cliente
+    siempre las envía → PGRST204 / 42703 en cada guardado.
+    """
     data = dict(payload or {})
-    optional_cols = ("dedicacion",)
-    try:
-        return (
-            sb.table(_TABLE_TRAB)
-            .update(data)
-            .eq("id", int(trabajador_id))
-            .eq("contrato_id", int(contrato_id))
-            .execute()
-            .data
-            or []
-        )
-    except Exception as exc:
-        stripped = False
-        for col in optional_cols:
-            if col in data and _es_error_columna_ausente(exc, col):
+    last_exc: Optional[BaseException] = None
+    for _attempt in range(16):
+        try:
+            return write_fn(data) or []
+        except Exception as exc:
+            last_exc = exc
+            col = _columna_ausente_desde_error(exc)
+            if col and col in data:
                 _log.warning(
-                    "Columna %s ausente en rrhh_trabajadores; se omite del update (¿migración pendiente?)",
+                    "Columna %s ausente en rrhh_trabajadores (%s); se omite "
+                    "(ejecutar migraciones ciclo laboral / dedicacion en Supabase).",
                     col,
+                    operacion,
                 )
                 data.pop(col, None)
-                stripped = True
-        if not stripped:
+                continue
+            # Compat: lista conocida si el mensaje no trae el nombre parseable
+            stripped = False
+            for known in (
+                "dedicacion",
+                "contrato_requiere_renovacion",
+                "contrato_periodicidad_renovacion",
+                "alerta_vencimiento_35_enviada_at",
+                "alerta_vencimiento_10_enviada_at",
+                "alerta_periodo_prueba_enviada_at",
+            ):
+                if known in data and _es_error_columna_ausente(exc, known):
+                    _log.warning(
+                        "Columna %s ausente en rrhh_trabajadores (%s); se omite.",
+                        known,
+                        operacion,
+                    )
+                    data.pop(known, None)
+                    stripped = True
+            if stripped:
+                continue
             raise
+    if last_exc:
+        raise last_exc
+    return []
+
+
+def _ejecutar_update_trabajador(sb, contrato_id: int, trabajador_id: int, payload: dict) -> List[dict]:
+    def _write(data: dict) -> List[dict]:
         return (
             sb.table(_TABLE_TRAB)
             .update(data)
@@ -302,27 +357,19 @@ def _ejecutar_update_trabajador(sb, contrato_id: int, trabajador_id: int, payloa
             .data
             or []
         )
+
+    return _ejecutar_write_trabajador_omitendo_columnas_ausentes(
+        _write, payload, operacion="update"
+    )
 
 
 def _ejecutar_insert_trabajador(sb, payload: dict) -> List[dict]:
-    data = dict(payload or {})
-    optional_cols = ("dedicacion",)
-    try:
-        return sb.table(_TABLE_TRAB).insert(data).execute().data or []
-    except Exception as exc:
-        stripped = False
-        for col in optional_cols:
-            if col in data and _es_error_columna_ausente(exc, col):
-                _log.warning(
-                    "Columna %s ausente en rrhh_trabajadores; se omite del insert (¿migración pendiente?)",
-                    col,
-                )
-                data.pop(col, None)
-                stripped = True
-        if not stripped:
-            raise
+    def _write(data: dict) -> List[dict]:
         return sb.table(_TABLE_TRAB).insert(data).execute().data or []
 
+    return _ejecutar_write_trabajador_omitendo_columnas_ausentes(
+        _write, payload, operacion="insert"
+    )
 
 def _norm_valor(valor: str) -> str:
     s = str(valor or "").strip().lower()

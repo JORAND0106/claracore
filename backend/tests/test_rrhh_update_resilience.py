@@ -1,60 +1,100 @@
-"""Tests — resiliencia update RRHH (columna dedicacion) y permisos crear|editar."""
+"""Tests — resiliencia update RRHH ante columnas de ciclo ausentes en producción."""
 from rrhh_permissions import require_permiso_rrhh_any
-from rrhh_service import _es_error_columna_ausente, _ejecutar_update_trabajador
+from rrhh_service import (
+    _columna_ausente_desde_error,
+    _es_error_columna_ausente,
+    _ejecutar_update_trabajador,
+)
 
 
-def test_es_error_columna_ausente_postgrest():
-    exc = Exception("Could not find the 'dedicacion' column of 'rrhh_trabajadores' in the schema cache")
+def test_parse_pgrst204_dedicacion():
+    exc = Exception(
+        "Could not find the 'dedicacion' column of 'rrhh_trabajadores' in the schema cache"
+    )
+    assert _columna_ausente_desde_error(exc) == "dedicacion"
     assert _es_error_columna_ausente(exc, "dedicacion") is True
-    assert _es_error_columna_ausente(exc, "salario") is False
 
 
-def test_es_error_columna_ausente_postgres():
-    exc = Exception('column "dedicacion" of relation "rrhh_trabajadores" does not exist')
-    assert _es_error_columna_ausente(exc, "dedicacion") is True
+def test_parse_42703_contrato_requiere():
+    """Error real capturado en producción ClaraCore (Supabase) 2026-09-21."""
+    exc = Exception(
+        "column rrhh_trabajadores.contrato_requiere_renovacion does not exist"
+    )
+    assert _columna_ausente_desde_error(exc) == "contrato_requiere_renovacion"
 
 
-class _FakeQuery:
-    def __init__(self, table):
-        self.table = table
-        self._payload = None
+def test_update_omite_varias_columnas_ciclo_en_cadena():
+    """
+    Reproduce la secuencia real: el PUT envía dedicacion + contrato_requiere_* ;
+    PostgREST falla de a una columna; el writer debe omitirlas todas y completar.
+    """
 
-    def update(self, payload):
-        self._payload = dict(payload)
-        return self
+    class _FakeQuery:
+        def __init__(self, table):
+            self.table = table
+            self._payload = None
 
-    def eq(self, *a, **k):
-        return self
+        def update(self, payload):
+            self._payload = dict(payload)
+            return self
 
-    def execute(self):
-        if "dedicacion" in (self._payload or {}):
-            raise RuntimeError(
-                "Could not find the 'dedicacion' column of 'rrhh_trabajadores' in the schema cache"
-            )
-        self.table.calls.append(dict(self._payload or {}))
-        return type("R", (), {"data": [{"id": 1, **(self._payload or {})}]})()
+        def eq(self, *a, **k):
+            return self
 
+        def execute(self):
+            p = self._payload or {}
+            if "contrato_requiere_renovacion" in p:
+                raise RuntimeError(
+                    "Could not find the 'contrato_requiere_renovacion' column "
+                    "of 'rrhh_trabajadores' in the schema cache"
+                )
+            if "contrato_periodicidad_renovacion" in p:
+                raise RuntimeError(
+                    "column rrhh_trabajadores.contrato_periodicidad_renovacion does not exist"
+                )
+            if "dedicacion" in p:
+                raise RuntimeError(
+                    "Could not find the 'dedicacion' column of 'rrhh_trabajadores' "
+                    "in the schema cache"
+                )
+            if "alerta_periodo_prueba_enviada_at" in p:
+                raise RuntimeError(
+                    "column rrhh_trabajadores.alerta_periodo_prueba_enviada_at does not exist"
+                )
+            self.table.calls.append(dict(p))
+            return type("R", (), {"data": [{"id": 1, **p}]})()
 
-class _FakeSb:
-    def __init__(self):
-        self.calls = []
+    class _FakeSb:
+        def __init__(self):
+            self.calls = []
 
-    def table(self, name):
-        assert name == "rrhh_trabajadores"
-        return _FakeQuery(self)
+        def table(self, name):
+            assert name == "rrhh_trabajadores"
+            return _FakeQuery(self)
 
-
-def test_update_reintenta_sin_dedicacion_si_columna_ausente():
     sb = _FakeSb()
     rows = _ejecutar_update_trabajador(
         sb,
         10,
         5,
-        {"nombres": "Ana", "dedicacion": "tiempo_completo", "updated_by": 1},
+        {
+            "nombres": "Ana",
+            "dedicacion": "tiempo_completo",
+            "contrato_requiere_renovacion": False,
+            "contrato_periodicidad_renovacion": None,
+            "alerta_periodo_prueba_enviada_at": None,
+            "periodo_prueba_dias": 60,
+            "updated_by": 1,
+        },
     )
     assert len(rows) == 1
-    assert "dedicacion" not in sb.calls[0]
-    assert sb.calls[0]["nombres"] == "Ana"
+    saved = sb.calls[0]
+    assert saved["nombres"] == "Ana"
+    assert saved["periodo_prueba_dias"] == 60
+    assert "dedicacion" not in saved
+    assert "contrato_requiere_renovacion" not in saved
+    assert "contrato_periodicidad_renovacion" not in saved
+    assert "alerta_periodo_prueba_enviada_at" not in saved
 
 
 def test_require_permiso_rrhh_any_acepta_editar(monkeypatch):
