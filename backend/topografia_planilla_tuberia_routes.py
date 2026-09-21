@@ -760,8 +760,12 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     table.sheet{{border-collapse:collapse;width:100%;margin-bottom:2px}}
     table.sheet th,table.sheet td{{border:0.4pt solid #64748b;padding:4px 5px;font-size:7.5pt;line-height:1.4}}
     table.sheet th{{background:#D9D9D9;font-size:6pt}}
+    table.sheet.cartera th,table.sheet.cartera td{{padding:3px 4px;font-size:7pt;line-height:1.15}}
+    table.sheet.cartera th{{font-size:5.5pt}}
+    table.sheet.resumen th,table.sheet.resumen td{{padding:2px 3px;font-size:6.5pt;line-height:1.05}}
+    table.sheet.resumen th{{font-size:5.5pt}}
     .graficos-wrap{{width:100%;border-collapse:collapse;margin:2px 0 3px;table-layout:fixed}}
-    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:1px;vertical-align:top;height:88px}}
+    .graficos-wrap td{{border:0.4pt solid #94a3b8;padding:1px;vertical-align:top;height:141px}}
     .graficos-wrap img{{display:block;width:100%;height:auto;margin:0 auto}}
     table.sheet th.desc{{background:#EA4296;color:#fff}}
     table.sheet th.cant{{background:#4472C4;color:#fff}}
@@ -777,7 +781,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     {badge}
     {franja}
     <h2>Cartera</h2>
-    <table class="sheet"><thead><tr>
+    <table class="sheet cartera"><thead><tr>
       <th>#</th><th>Abscisa</th><th>Terreno Natural</th><th>{nivel_hdr}</th>
       <th>Cota Fondo Excavación</th><th>Altura Excavacion</th><th>Altura Triturado</th>
       <th>Altura Relleno</th><th>Ancho Geotextil</th>
@@ -786,14 +790,14 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     <table class="grid2"><tr>
       <td width="55%">
         <h2>Resumen de Cantidades</h2>
-        <table class="sheet"><thead><tr>
+        <table class="sheet resumen"><thead><tr>
           <th class="cant">Item</th><th class="cant">Long</th><th class="cant">Ancho</th>
           <th class="cant">Espesor</th><th class="cant">Desc.</th><th class="cant">Cantidad</th>
         </tr></thead><tbody>{cants}</tbody></table>
       </td>
       <td width="45%">
         <h2>Descuentos Específicos</h2>
-        <table class="sheet"><thead><tr>
+        <table class="sheet resumen"><thead><tr>
           <th class="desc">Item</th><th class="desc">Long</th><th class="desc">Ancho</th>
           <th class="desc">Espesor</th><th class="desc">Cantidad</th>
         </tr></thead><tbody>{descs}</tbody></table>

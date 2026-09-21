@@ -74,8 +74,12 @@ class TestGraficoDinamicoTipo(unittest.TestCase):
 class TestPdfCellPadding(unittest.TestCase):
     def test_routes_css_row_height(self):
         src = (ROOT / "topografia_planilla_tuberia_routes.py").read_text(encoding="utf-8")
-        self.assertIn("padding:4px 5px", src)
-        self.assertIn("line-height:1.4", src)
+        # Base sheet retained; cartera/resumen override heights; gráfico 160%.
+        self.assertIn("table.sheet.cartera th,table.sheet.cartera td", src)
+        self.assertIn("padding:3px 4px", src)
+        self.assertIn("table.sheet.resumen th,table.sheet.resumen td", src)
+        self.assertIn("padding:2px 3px", src)
+        self.assertIn("height:141px", src)
         self.assertIn("graficos-wrap", src)
 
 

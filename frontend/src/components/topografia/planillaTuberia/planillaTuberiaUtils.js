@@ -5,6 +5,15 @@
 /** Filas mínimas al crear planilla / plantilla vacía (alineado al backend). */
 export const FILAS_INICIALES_CARTERA = 2
 
+/** Escalas de altura vs. sheet base (td 32px / cellInp 28px / gráfico 220px). */
+export const CARTERA_ROW_SCALE = 0.7
+export const RESUMEN_ROW_SCALE = 0.5
+export const SECCION_GRAFICO_SCALE = 1.6
+export const CARTERA_ROW_HEIGHT = Math.round(32 * CARTERA_ROW_SCALE) // 22
+export const CARTERA_INPUT_HEIGHT = Math.round(28 * CARTERA_ROW_SCALE) // 20
+export const RESUMEN_ROW_HEIGHT = Math.round(32 * RESUMEN_ROW_SCALE) // 16
+export const SECCION_MAX_HEIGHT = Math.round(220 * SECCION_GRAFICO_SCALE) // 352
+
 export const TIPOS_PLANILLA = [
   { value: 'ALCANTARILLA', label: 'PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS' },
   { value: 'FILTRO', label: 'PLANILLA DE INSTALACIÓN DE FILTROS' },
