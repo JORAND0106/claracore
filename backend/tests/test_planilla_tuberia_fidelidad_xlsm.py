@@ -253,5 +253,43 @@ class TestPdfBloquesInventario(unittest.TestCase):
         self.assertNotIn(" · ", html)
 
 
+
+
+class TestExcelDescuentosFijosPorTipo(unittest.TestCase):
+    def _ws(self, tipo: str):
+        from openpyxl import load_workbook
+        import io
+        raw = build_planilla_tuberia_xlsx(
+            planilla={
+                "tipo": tipo,
+                "diametro_m": 0.9,
+                "espesor_m": 0.05,
+                "ancho_excavacion_m": 1.5,
+                "relacion_atraque": "1:3",
+                "meta_cabecera": {"cama_triturado_m": 0.1},
+            },
+            calculo={"cartera": {"filas": []}},
+        )
+        return load_workbook(io.BytesIO(raw))["planilla"]
+
+    def test_descuentos_fijos_por_tipo(self):
+        ws_alc = self._ws("ALCANTARILLA")
+        self.assertEqual(ws_alc["G48"].value, "=N46")
+        self.assertEqual(ws_alc["G49"].value, "=N47")
+        self.assertEqual(ws_alc["I46"].value, "Area 1")
+        self.assertEqual(ws_alc["I47"].value, "Area 2")
+        self.assertIn(ws_alc["I45"].value, (None, ""))
+        self.assertNotIn("$F$1=$P$1", str(ws_alc["G48"].value))
+
+        ws_fil = self._ws("FILTRO")
+        self.assertEqual(ws_fil["G48"].value, "=N45")
+        self.assertEqual(ws_fil["G49"].value, 0)
+        self.assertEqual(ws_fil["I45"].value, "Tubería Filtro")
+        self.assertIn(ws_fil["I46"].value, (None, ""))
+        self.assertIn(ws_fil["I47"].value, (None, ""))
+        # Cartera tipada: H ALC = E15+F15; H FIL = E-F
+        self.assertIn("$E$15+$F$15", str(ws_alc["H17"].value))
+        self.assertIn("E17-F17", str(ws_fil["H17"].value))
+
 if __name__ == "__main__":
     unittest.main()

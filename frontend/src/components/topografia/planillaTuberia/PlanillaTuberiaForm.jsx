@@ -24,6 +24,7 @@ import {
   filasDesdeApi,
   fmtNDash,
   handleEnterAsTab,
+  migrarFilasAlCambiarTipo,
   payloadFilas,
   tieneDatosExportables,
 } from './planillaTuberiaUtils'
@@ -345,7 +346,59 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         <select
           value={params.tipo}
           disabled={!!planilla && !editable}
-          onChange={(e) => setParams((p) => ({ ...p, tipo: e.target.value }))}
+          onChange={(e) => {
+            const nuevo = e.target.value
+            const filasMig = migrarFilasAlCambiarTipo(filas, nuevo)
+            setFilas(filasMig)
+            setParams((p) => ({ ...p, tipo: nuevo }))
+            // Recalcular al guardar params si ya hay planilla abierta (evita residuos del tipo anterior)
+            if (planilla?.id && editable) {
+              // defer: params state aún no actualizado; usamos valor nuevo explícito
+              ;(async () => {
+                try {
+                  setBusy(true); setErr(''); setMsg('')
+                  const body = {
+                    version,
+                    tipo: nuevo,
+                    nombre: params.nombre || null,
+                    pk_id: params.pk_id || null,
+                    costado: params.costado || null,
+                    diametro_m: params.diametro_m === '' ? null : Number(params.diametro_m),
+                    espesor_m: params.espesor_m === '' ? 0 : Number(params.espesor_m),
+                    ancho_excavacion_m: params.ancho_excavacion_m === '' ? null : Number(params.ancho_excavacion_m),
+                    relacion_atraque: params.relacion_atraque,
+                    material: params.material || null,
+                    norte_ref: params.norte_ref === '' ? null : Number(params.norte_ref),
+                    este_ref: params.este_ref === '' ? null : Number(params.este_ref),
+                  }
+                  const det = await api(`/planillas-tuberia/${planilla.id}/params`, {
+                    method: 'PUT',
+                    body: JSON.stringify(body),
+                  })
+                  // Reenviar cartera migrada para persistir nivel en la columna del nuevo tipo
+                  const filasPayload = payloadFilas(filasMig, nuevo)
+                  if (filasPayload.length) {
+                    const res = await api(`/planillas-tuberia/${planilla.id}/cartera`, {
+                      method: 'PUT',
+                      body: JSON.stringify({
+                        version: det?.planilla?.version ?? det?.version ?? body.version,
+                        filas: filasPayload,
+                        descuentos_manuales: [],
+                      }),
+                    })
+                    aplicarDetalle(res)
+                  } else {
+                    aplicarDetalle(det)
+                  }
+                  setMsg('Tipo actualizado; cálculos recalculados.')
+                } catch (err) {
+                  setErr(err.message || String(err))
+                } finally {
+                  setBusy(false)
+                }
+              })()
+            }
+          }}
           style={{
             ...sheet.cellSelect,
             border: `1px solid ${sheet.border}`,

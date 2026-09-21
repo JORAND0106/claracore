@@ -16,6 +16,7 @@ import {
   SECCION_GRAFICO_SCALE,
   SECCION_MAX_HEIGHT,
   filasDesdeApi,
+  migrarFilasAlCambiarTipo,
 } from './planillaTuberiaUtils.js'
 
 describe('planillaTuberiaUtils', () => {
@@ -56,6 +57,17 @@ describe('planillaTuberiaUtils', () => {
     ], 'FILTRO')
     assert.equal(fil[0].terminado_filtro, 99.5)
     assert.equal(fil[0].subrasante_via, null)
+  })
+
+  it('migrarFilasAlCambiarTipo copia nivel entre columnas', () => {
+    const desdeAlc = migrarFilasAlCambiarTipo([
+      { abscisa: '1', subrasante_via: '10.5', terminado_filtro: '' },
+    ], 'FILTRO')
+    assert.equal(desdeAlc[0].terminado_filtro, '10.5')
+    const desdeFil = migrarFilasAlCambiarTipo([
+      { abscisa: '1', subrasante_via: '', terminado_filtro: '11.2' },
+    ], 'ALCANTARILLA')
+    assert.equal(desdeFil[0].subrasante_via, '11.2')
   })
 
   it('tieneDatosExportables y fondo calculado #F2F2F2', () => {
