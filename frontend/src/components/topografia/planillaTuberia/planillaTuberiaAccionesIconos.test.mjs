@@ -1,5 +1,5 @@
 /**
- * Barra de acciones de planilla tubería: iconos + sin cinta amarilla.
+ * Barra de acciones de planilla tubería: iconos en la misma línea del título Cabecera / tramo.
  * node --test frontend/src/components/topografia/planillaTuberia/planillaTuberiaAccionesIconos.test.mjs
  */
 import { describe, it } from 'node:test'
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 const formSrc = readFileSync(join(dir, 'PlanillaTuberiaForm.jsx'), 'utf8')
+const sheetSrc = readFileSync(join(dir, '../TopoExcelSheet.jsx'), 'utf8')
 
 describe('Planilla tubería — acciones como iconos', () => {
   it('elimina la cinta amarilla informativa de plantilla vacía', () => {
@@ -28,6 +29,16 @@ describe('Planilla tubería — acciones como iconos', () => {
     assert.match(formSrc, /Exportar Excel/)
     assert.match(formSrc, /minWidth: 44/)
     assert.match(formSrc, /minHeight: 44/)
+  })
+
+  it('ubica el toolbar en titleRight (misma barra que Cabecera / tramo)', () => {
+    assert.match(formSrc, /title="Cabecera \/ tramo"/)
+    assert.match(formSrc, /titleRight=\{/)
+    assert.match(sheetSrc, /function SheetTitleBar/)
+    assert.match(sheetSrc, /titleRight/)
+    assert.match(sheetSrc, /cc-topo-sheet-title-bar/)
+    // Ya no queda una fila dedicada debajo de la tabla solo para iconos.
+    assert.doesNotMatch(formSrc, /marginTop: 10, alignItems: 'center'/)
   })
 
   it('conserva handlers y restricciones (dev / permisos)', () => {

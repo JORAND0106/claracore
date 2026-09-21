@@ -98,14 +98,53 @@ function FieldsGrid({ columns, cells, sheet, compact }) {
 }
 
 
+function SheetTitleBar({ title, titleRight, sheet }) {
+  if (!title && !titleRight) return null
+  return (
+    <div
+      className="cc-topo-sheet-title-bar"
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        marginBottom: 6,
+        minWidth: 0,
+      }}
+    >
+      {title ? (
+        <div style={{ ...sheet.sectionTitle, marginBottom: 0, flex: '1 1 auto', minWidth: 0 }}>
+          {title}
+        </div>
+      ) : <span style={{ flex: '1 1 auto' }} />}
+      {titleRight ? (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 8,
+            flex: '0 1 auto',
+            maxWidth: '100%',
+          }}
+        >
+          {titleRight}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /**
  * Varias filas Excel apiladas (cada una: encabezados cortos + 1 fila de valores).
  * Sin títulos de grupo. Pensado para cabeceras compactas multilínea.
  */
-function ExcelRowsLayout({ title, rows, sheet, minWidth, style, className, tableStyle }) {
+function ExcelRowsLayout({ title, titleRight, rows, sheet, minWidth, style, className, tableStyle }) {
   return (
     <div style={{ marginBottom: 12, width: '80%', maxWidth: '100%', ...style }} className={className}>
-      {title ? <div style={sheet.sectionTitle}>{title}</div> : null}
+      <SheetTitleBar title={title} titleRight={titleRight} sheet={sheet} />
       <div
         style={{
           ...sheet.sheetWrap,
@@ -166,10 +205,10 @@ function ExcelRowsLayout({ title, rows, sheet, minWidth, style, className, table
   )
 }
 
-function GroupsLayout({ title, groups, sheet, compact, style, className }) {
+function GroupsLayout({ title, titleRight, groups, sheet, compact, style, className }) {
   return (
     <div style={{ marginBottom: 12, ...style }} className={className}>
-      {title ? <div style={sheet.sectionTitle}>{title}</div> : null}
+      <SheetTitleBar title={title} titleRight={titleRight} sheet={sheet} />
       <div
         style={{
           ...sheet.sheetWrap,
@@ -217,6 +256,7 @@ function GroupsLayout({ title, groups, sheet, compact, style, className }) {
  * @param {object} props
  * @param {object} [props.t] Tema (border, text, …). Si no se pasa, usa defaults.
  * @param {string} [props.title] Título de sección sobre la grilla.
+ * @param {import('react').ReactNode} [props.titleRight] Acciones a la derecha del título (misma barra).
  * @param {{ key: string, label: string, ayuda?: string, width?: string|number, compactFull?: boolean }[]} [props.columns]
  * @param {import('react').ReactNode[]} [props.cells] Celdas de una sola fila (mismo orden que columns).
  * @param {{ key?: string, title?: string, columns: object[], cells: import('react').ReactNode[] }[]} [props.groups]
@@ -234,6 +274,7 @@ function GroupsLayout({ title, groups, sheet, compact, style, className }) {
 export default function TopoExcelSheet({
   t,
   title,
+  titleRight,
   columns = [],
   cells,
   groups,
@@ -252,6 +293,7 @@ export default function TopoExcelSheet({
     return (
       <ExcelRowsLayout
         title={title}
+        titleRight={titleRight}
         rows={rows}
         sheet={sheet}
         minWidth={minWidth}
@@ -266,6 +308,7 @@ export default function TopoExcelSheet({
     return (
       <GroupsLayout
         title={title}
+        titleRight={titleRight}
         groups={groups}
         sheet={sheet}
         compact={compact}
@@ -278,7 +321,7 @@ export default function TopoExcelSheet({
   if (compact && !children) {
     return (
       <div style={{ marginBottom: 12, ...style }} className={className}>
-        {title ? <div style={sheet.sectionTitle}>{title}</div> : null}
+        <SheetTitleBar title={title} titleRight={titleRight} sheet={sheet} />
         <div
           style={{
             ...sheet.sheetWrap,
@@ -296,7 +339,7 @@ export default function TopoExcelSheet({
 
   return (
     <div style={{ marginBottom: 12, ...style }} className={className}>
-      {title ? <div style={sheet.sectionTitle}>{title}</div> : null}
+      <SheetTitleBar title={title} titleRight={titleRight} sheet={sheet} />
       <div style={sheet.sheetWrap} className="cc-topo-table-scroll">
         <table
           style={{

@@ -499,6 +499,68 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <TopoExcelSheet
                   sheet={sheet}
                   title="Cabecera / tramo"
+                  titleRight={(
+                    <div
+                      role="toolbar"
+                      aria-label="Acciones de planilla"
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: isCompact ? 6 : 8,
+                        alignItems: 'center',
+                        justifyContent: 'flex-end',
+                      }}
+                    >
+                      {editable && (
+                        <AccionIcono title="Guardar parámetros" disabled={busy} onClick={guardarParams}>
+                          <svg {...ico}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
+                        </AccionIcono>
+                      )}
+                      {editable && (
+                        <AccionIcono title="Guardar cartera" primary disabled={busy} onClick={guardarCartera}>
+                          <svg {...ico}><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
+                        </AccionIcono>
+                      )}
+                      {editable && (
+                        <AccionIcono title="Cerrar planilla" disabled={busy} onClick={cerrar}>
+                          <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                        </AccionIcono>
+                      )}
+                      {esDev && sellada && (
+                        <AccionIcono title="Reabrir (Dev)" disabled={busy} onClick={reabrir}>
+                          <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>
+                        </AccionIcono>
+                      )}
+                      {esDev && String(planilla?.estado || '').toLowerCase() === 'validado' && (
+                        <AccionIcono title="Revocar validación (Dev)" disabled={busy} onClick={revocar}>
+                          <svg {...ico}><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+                        </AccionIcono>
+                      )}
+                      {puedeEliminar && planilla?.id && (
+                        <AccionIcono title="Eliminar planilla" danger disabled={busy} onClick={solicitarEliminar}>
+                          <svg {...ico}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+                        </AccionIcono>
+                      )}
+                      {puedeExportar && (
+                        <>
+                          <AccionIcono
+                            title={exportPlantillaVacia ? 'PDF (plantilla vacía — solo Desarrollador)' : 'Exportar PDF'}
+                            disabled={!conDatos && !esDev}
+                            onClick={exportarPdf}
+                          >
+                            <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M9 15h6" /><path d="M9 11h6" /></svg>
+                          </AccionIcono>
+                          <AccionIcono
+                            title={exportPlantillaVacia ? 'Excel (plantilla vacía — solo Desarrollador)' : 'Exportar Excel'}
+                            disabled={!conDatos && !esDev}
+                            onClick={exportarExcel}
+                          >
+                            <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M8 13h2l4 5h2" /><path d="M16 13h-2l-4 5H8" /></svg>
+                          </AccionIcono>
+                        </>
+                      )}
+                    </div>
+                  )}
                   minWidth={960}
                   rows={[
                     {
@@ -575,60 +637,6 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   A2={fmtNDash(planilla.area_2_m2, 4)}
                   {detalle?.coords_wgs84 && (
                     <> · WGS84 (inicio) {fmtNDash(detalle.coords_wgs84.lat, 6)}, {fmtNDash(detalle.coords_wgs84.lon, 6)}</>
-                  )}
-                </div>
-                <div
-                  role="toolbar"
-                  aria-label="Acciones de planilla"
-                  style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10, alignItems: 'center' }}
-                >
-                  {editable && (
-                    <AccionIcono title="Guardar parámetros" disabled={busy} onClick={guardarParams}>
-                      <svg {...ico}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
-                    </AccionIcono>
-                  )}
-                  {editable && (
-                    <AccionIcono title="Guardar cartera" primary disabled={busy} onClick={guardarCartera}>
-                      <svg {...ico}><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
-                    </AccionIcono>
-                  )}
-                  {editable && (
-                    <AccionIcono title="Cerrar planilla" disabled={busy} onClick={cerrar}>
-                      <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                    </AccionIcono>
-                  )}
-                  {esDev && sellada && (
-                    <AccionIcono title="Reabrir (Dev)" disabled={busy} onClick={reabrir}>
-                      <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>
-                    </AccionIcono>
-                  )}
-                  {esDev && String(planilla?.estado || '').toLowerCase() === 'validado' && (
-                    <AccionIcono title="Revocar validación (Dev)" disabled={busy} onClick={revocar}>
-                      <svg {...ico}><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
-                    </AccionIcono>
-                  )}
-                  {puedeEliminar && planilla?.id && (
-                    <AccionIcono title="Eliminar planilla" danger disabled={busy} onClick={solicitarEliminar}>
-                      <svg {...ico}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
-                    </AccionIcono>
-                  )}
-                  {puedeExportar && (
-                    <>
-                      <AccionIcono
-                        title={exportPlantillaVacia ? 'PDF (plantilla vacía — solo Desarrollador)' : 'Exportar PDF'}
-                        disabled={!conDatos && !esDev}
-                        onClick={exportarPdf}
-                      >
-                        <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M9 15h6" /><path d="M9 11h6" /></svg>
-                      </AccionIcono>
-                      <AccionIcono
-                        title={exportPlantillaVacia ? 'Excel (plantilla vacía — solo Desarrollador)' : 'Exportar Excel'}
-                        disabled={!conDatos && !esDev}
-                        onClick={exportarExcel}
-                      >
-                        <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M8 13h2l4 5h2" /><path d="M16 13h-2l-4 5H8" /></svg>
-                      </AccionIcono>
-                    </>
                   )}
                 </div>
               </div>
