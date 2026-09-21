@@ -7847,6 +7847,35 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <div><b>Ø / B:</b> {planillaOrigenDet.planilla.diametro_m ?? '—'} / {planillaOrigenDet.planilla.ancho_excavacion_m ?? '—'}</div>
                 </div>
               )}
+              {Array.isArray(planillaOrigenDet?.filas_campo) && planillaOrigenDet.filas_campo.length > 0 && (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Cartera (campo)</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                    <thead>
+                      <tr style={{ background: '#64748b', color: '#fff' }}>
+                        {['#', 'Abscisa', 'TN', 'Nivel ref.', 'CFE'].map((h) => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: h === '#' ? 'left' : 'right' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {planillaOrigenDet.filas_campo
+                        .filter((f) => f.abscisa != null || f.terreno_natural != null)
+                        .map((f, i) => (
+                          <tr key={f.id || i} style={{ borderBottom: `1px solid ${t.border}` }}>
+                            <td style={{ padding: '6px 8px' }}>{f.orden ?? i + 1}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{f.abscisa ?? '—'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{f.terreno_natural ?? '—'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                              {f.subrasante_via ?? f.terminado_filtro ?? '—'}
+                            </td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{f.cota_fondo_excavacion ?? '—'}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               {Array.isArray(planillaOrigenDet?.calculo?.netos) && planillaOrigenDet.calculo.netos.length > 0 && (
                 <div style={{ overflowX: 'auto' }}>
                   <div style={{ fontWeight: 700, marginBottom: 6 }}>Resumen de cantidades</div>
@@ -7866,6 +7895,32 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{n.ancho ?? '—'}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{n.espesor ?? '—'}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{n.neto ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {Array.isArray(planillaOrigenDet?.calculo?.descuentos)
+                && planillaOrigenDet.calculo.descuentos.filter((d) => d.nombre).length > 0 && (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Descuentos específicos</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                    <thead>
+                      <tr style={{ background: '#EA4296', color: '#fff' }}>
+                        {['Ítem', 'Long', 'Ancho', 'Espesor', 'Cantidad'].map((h) => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: h === 'Ítem' ? 'left' : 'right' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {planillaOrigenDet.calculo.descuentos.filter((d) => d.nombre).map((d) => (
+                        <tr key={d.codigo} style={{ borderBottom: `1px solid ${t.border}` }}>
+                          <td style={{ padding: '6px 8px' }}>{d.nombre}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{d.long ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{d.ancho ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{d.espesor ?? '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{d.cantidad ?? '—'}</td>
                         </tr>
                       ))}
                     </tbody>

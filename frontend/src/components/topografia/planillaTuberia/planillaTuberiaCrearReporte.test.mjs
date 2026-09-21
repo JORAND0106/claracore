@@ -37,5 +37,18 @@ describe('Planillas Tubería — Crear Reporte SICOE', () => {
     assert.match(formSrc, /capitulo/)
     assert.match(formSrc, /nodo_ini/)
     assert.match(formSrc, /nodo_fin/)
+    assert.match(formSrc, /reportesVinculados/)
+  })
+
+  it('CarpetaReporte: pestaña Planilla tubería de origen', () => {
+    const appSrc = readFileSync(
+      join(dir, '../../../App.jsx'),
+      'utf8',
+    )
+    assert.match(appSrc, /planillaIdDesdeEnlaceSoporte/)
+    assert.match(appSrc, /key: 'planilla'/)
+    assert.match(appSrc, /Planilla de tubería de origen/)
+    assert.match(appSrc, /Descuentos específicos/)
+    assert.match(appSrc, /Cartera \(campo\)/)
   })
 })

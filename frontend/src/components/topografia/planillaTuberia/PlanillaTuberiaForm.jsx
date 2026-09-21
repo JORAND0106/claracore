@@ -1393,6 +1393,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
             {err && <div style={{ color: '#dc2626', padding: 8, background: '#fef2f2', borderRadius: 8 }}>{err}</div>}
             {msg && <div style={{ color: '#166534', padding: 8, background: '#f0fdf4', borderRadius: 8 }}>{msg}</div>}
+            {reportesVinculados.length > 0 && (
+              <div style={{
+                color: '#0f4c81', padding: 8, background: '#eff6ff', borderRadius: 8,
+                fontSize: 'var(--cc-sm)', border: '1px solid #bfdbfe',
+              }}>
+                Reportes SICOE generados desde esta planilla:{' '}
+                <b>{reportesVinculados.map((r) => `#${r.numero_reporte}`).join(', ')}</b>
+              </div>
+            )}
             {infos?.length > 0 && (
               <div style={{ color: '#92400e', padding: 8, background: '#fffbeb', borderRadius: 8, fontSize: 'var(--cc-sm)' }}>
                 {infos.map((a, i) => (
