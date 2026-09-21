@@ -370,8 +370,11 @@ export default function ActaEditor({
   const [grabacionElapsed, setGrabacionElapsed] = useState(0)
   const [grabacionTabAudioOk, setGrabacionTabAudioOk] = useState(false)
   const [grabacionStopping, setGrabacionStopping] = useState(false)
+  const [grabacionSesionId, setGrabacionSesionId] = useState(null)
   const [grabacionLiveInfo, setGrabacionLiveInfo] = useState(null)
   const [actualizandoTemas, setActualizandoTemas] = useState(false)
+  /** Evita armar el checkpoint más de una vez por sesión. */
+  const temasCheckpointArmingRef = useRef(false)
   const grabacionCtrlRef = useRef(null)
   const esDev = !!permisos?.esDesarrollador
   const esElaborador = form.elaborador_id != null
@@ -406,6 +409,28 @@ export default function ActaEditor({
     grabacionCtrlRef.current = null
   }, [])
 
+  /** Arma checkpoint de Temas sin bloquear Guardar / Detener / busy de UI. */
+  const armTemasCheckpointEnBackground = (ctrl = grabacionCtrlRef.current) => {
+    if (!ctrl?.getSesionId?.() || !ctrl.armTemasCheckpoint) return
+    if (temasCheckpointArmingRef.current) return
+    if (ctrl.isTemasCheckpointArmed?.()) return
+    temasCheckpointArmingRef.current = true
+    Promise.resolve(ctrl.armTemasCheckpoint())
+      .then((r) => {
+        if (r?.ok) {
+          setOkMsg((prev) => (
+            prev && !String(prev).includes('Escucha de Temas')
+              ? `${prev} Escucha de Temas activa: pulse Actualizar para sintetizar ideas.`
+              : (prev || 'Escucha de Temas activa: pulse Actualizar para sintetizar ideas.')
+          ))
+        }
+      })
+      .catch(() => { /* ignore */ })
+      .finally(() => {
+        temasCheckpointArmingRef.current = false
+      })
+  }
+
   const iniciarGrabacionYMostrarConsentimiento = async () => {
     setGrabacionError('')
     setError('')
@@ -428,6 +453,7 @@ export default function ActaEditor({
       }
 
       try { grabacionCtrlRef.current?.dispose?.() } catch { /* ignore */ }
+      temasCheckpointArmingRef.current = false
       const ctrl = createGrabacionSessionController({
         api: apiRef.current,
         getMeta: () => ({
@@ -441,9 +467,11 @@ export default function ActaEditor({
           if (st.tabAudioOk != null) setGrabacionTabAudioOk(!!st.tabAudioOk)
           if (st.stopping != null) setGrabacionStopping(!!st.stopping)
           if (st.elapsedSec != null) setGrabacionElapsed(st.elapsedSec)
+          if (st.sesionId != null) setGrabacionSesionId(st.sesionId)
           if (st.phase === 'idle') {
             setGrabacionStopping(false)
             setGrabacionConsentOpen(false)
+            setGrabacionSesionId(null)
           }
         },
         onTemasVivos: (temas) => {
@@ -469,13 +497,15 @@ export default function ActaEditor({
       grabacionCtrlRef.current = ctrl
       // Permisos → MediaRecorder.start; luego el modal (lectura queda en el audio).
       await ctrl.start({ includeTabAudio: true })
+      setGrabacionSesionId(ctrl.getSesionId?.() ?? null)
       setGrabacionConsentOpen(true)
-      // Si Temas ya está habilitado (o liberado), armar checkpoint de escucha ya.
+      // Si Temas ya está habilitado (o liberado), armar checkpoint en background
+      // (no bloquear busy ni el botón Detener del modal de consentimiento).
       const temasYaHabilitado = flujoLiberado(flujoTabs)
         || !!flujoTabs?.compromisos
         || tab === 'ideas'
       if (temasYaHabilitado) {
-        await ctrl.armTemasCheckpoint?.()
+        armTemasCheckpointEnBackground(ctrl)
       }
     } catch (e) {
       const msg = friendlyFetchError(e, 'No se pudo iniciar la grabación')
@@ -483,6 +513,7 @@ export default function ActaEditor({
       try { grabacionCtrlRef.current?.dispose?.() } catch { /* ignore */ }
       grabacionCtrlRef.current = null
       setGrabacionPhase('idle')
+      setGrabacionSesionId(null)
       setGrabacionConsentOpen(false)
     } finally {
       setGrabacionBusy(false)
@@ -496,6 +527,7 @@ export default function ActaEditor({
   }
 
   const detenerGrabacion = async () => {
+    if (grabacionStopping) return
     setGrabacionStopping(true)
     setGrabacionConsentOpen(false)
     try {
@@ -505,7 +537,9 @@ export default function ActaEditor({
     } finally {
       grabacionCtrlRef.current = null
       setGrabacionPhase('idle')
+      setGrabacionSesionId(null)
       setGrabacionStopping(false)
+      temasCheckpointArmingRef.current = false
     }
   }
 
@@ -947,19 +981,13 @@ export default function ActaEditor({
       })) {
         setTab(avance.nextTab)
       }
-      // Al habilitar Temas (tras guardar Compromisos abiertos): checkpoint inicial.
+      // Al habilitar Temas (tras guardar Compromisos abiertos): checkpoint en background
+      // para no dejar Guardar/Actualizar colgados si STT o la red tardan.
       if (
         (avance.nextTab === 'ideas' || (tab === 'compromisos' && flujoMerged?.compromisos))
         && grabacionCtrlRef.current?.getSesionId?.()
       ) {
-        try {
-          await grabacionCtrlRef.current.armTemasCheckpoint?.()
-          setOkMsg((prev) => (
-            prev
-              ? `${prev} Escucha de Temas activa: pulse Actualizar para sintetizar ideas.`
-              : 'Escucha de Temas activa: pulse Actualizar para sintetizar ideas.'
-          ))
-        } catch { /* ignore */ }
+        armTemasCheckpointEnBackground()
       }
     } catch (e) {
       setError(friendlyFetchError(e, 'No se pudo guardar'))
@@ -1248,6 +1276,13 @@ export default function ActaEditor({
               onClick={() => {
                 if (locked) return
                 setTab(tb.id)
+                if (
+                  tb.id === 'ideas'
+                  && grabacionPhase === 'recording'
+                  && grabacionCtrlRef.current?.getSesionId?.()
+                ) {
+                  armTemasCheckpointEnBackground()
+                }
               }}
               style={{
                 border: 'none',
@@ -1697,7 +1732,7 @@ export default function ActaEditor({
           puedeActualizarTemas={
             !soloLectura
             && grabacionPhase === 'recording'
-            && !!grabacionCtrlRef.current?.getSesionId?.()
+            && grabacionSesionId != null
           }
           actualizandoTemas={actualizandoTemas}
           onActualizarTemas={async () => {
@@ -1708,6 +1743,10 @@ export default function ActaEditor({
             setActualizandoTemas(true)
             setError('')
             try {
+              // Si el checkpoint aún no se armó (p.ej. red lenta), armarlo al primer Actualizar.
+              if (!grabacionCtrlRef.current.isTemasCheckpointArmed?.()) {
+                await grabacionCtrlRef.current.armTemasCheckpoint?.()
+              }
               const payload = await grabacionCtrlRef.current.actualizarTemas()
               if (payload?.sintetizado) {
                 setOkMsg('Temas actualizados desde el audio (checkpoint avanzado).')
@@ -2135,7 +2174,8 @@ export default function ActaEditor({
         <ActaGrabacionConsentModal
           t={t}
           cupo={grabacionCupo}
-          busy={grabacionBusy || grabacionStopping}
+          busy={grabacionBusy}
+          stopping={grabacionStopping}
           error={grabacionError}
           viewportCompact={viewportCompact}
           tabAudioOk={grabacionTabAudioOk}

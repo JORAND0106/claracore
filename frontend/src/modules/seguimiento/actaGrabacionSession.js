@@ -16,6 +16,9 @@ import {
   startWebSpeechTranscript,
 } from './actaGrabacionLive.js'
 
+/** Tope para no dejar Detener colgado si MediaRecorder no dispara onstop. */
+export const RECORDER_STOP_TIMEOUT_MS = 4000
+
 export function createGrabacionSessionController({
   api,
   getMeta,
@@ -32,6 +35,7 @@ export function createGrabacionSessionController({
   download = downloadBlob,
   heartbeatMs = HEARTBEAT_MS,
   chunkIntervalMs = 15000,
+  recorderStopTimeoutMs = RECORDER_STOP_TIMEOUT_MS,
   /** Si true, inicia STT al start; si false, solo tras armTemasCheckpoint. */
   enableLiveOnStart = false,
 } = {}) {
@@ -126,9 +130,15 @@ export function createGrabacionSessionController({
     liveStarted = true
     let sttAzure = false
     try {
-      const st = await api.grabacionLiveStatus?.()
-      sttAzure = !!st?.stt_disponible
-      onLiveInfo?.(st || {})
+      // No bloquear la UI si live-status tarda: techo corto y seguir con Web Speech.
+      const st = await Promise.race([
+        Promise.resolve(api.grabacionLiveStatus?.()).then((r) => r),
+        new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+      ])
+      if (st) {
+        sttAzure = !!st?.stt_disponible
+        onLiveInfo?.(st || {})
+      }
     } catch {
       sttAzure = false
     }
@@ -187,7 +197,11 @@ export function createGrabacionSessionController({
     if (closed || stopping || !sesionId) {
       return { ok: false, detalle: 'No hay sesión de grabación activa.' }
     }
-    await startLivePipeline()
+    try {
+      await startLivePipeline()
+    } catch {
+      /* STT best-effort: el checkpoint puede armarse igual */
+    }
     try {
       const payload = await api.grabacionCheckpointTemas?.(sesionId)
       temasCheckpointArmed = true
@@ -287,19 +301,39 @@ export function createGrabacionSessionController({
     stopping = true
     emitState({ phase: 'stopping', stopping: true })
     clearTimers()
-    await stopLivePipeline()
+    try {
+      await stopLivePipeline()
+    } catch { /* ignore */ }
     // Sin síntesis forzada al detener: Temas solo avanzan con Actualizar.
 
     const blob = await new Promise((resolve) => {
+      let settled = false
+      const finish = (b) => {
+        if (settled) return
+        settled = true
+        resolve(b)
+      }
+      const fromChunks = () => (
+        chunks.length
+          ? new Blob(chunks, { type: mimeType || recorder?.mimeType || 'audio/webm' })
+          : null
+      )
       if (!recorder || recorder.state === 'inactive') {
-        resolve(chunks.length ? new Blob(chunks, { type: mimeType || 'audio/webm' }) : null)
+        finish(fromChunks())
         return
       }
+      const timer = setTimeout(() => {
+        finish(fromChunks())
+      }, Math.max(0, Number(recorderStopTimeoutMs) || RECORDER_STOP_TIMEOUT_MS))
       recorder.onstop = () => {
-        resolve(chunks.length ? new Blob(chunks, { type: mimeType || recorder.mimeType || 'audio/webm' }) : null)
+        clearTimeout(timer)
+        finish(fromChunks())
       }
-      try { recorder.stop() } catch {
-        resolve(chunks.length ? new Blob(chunks, { type: mimeType || 'audio/webm' }) : null)
+      try {
+        recorder.stop()
+      } catch {
+        clearTimeout(timer)
+        finish(fromChunks())
       }
     })
 

@@ -297,4 +297,58 @@ describe('createGrabacionSessionController', () => {
     assert.ok(reclamos >= 0)
     assert.equal(autoStop, true)
   })
+
+  it('resuelve stop aunque MediaRecorder no dispare onstop (timeout)', async () => {
+    const api = {
+      async iniciarGrabacion() {
+        return { sesion: { id: 42 }, segundos_restantes: 1000 }
+      },
+      async reclamarGrabacion() {
+        return { claimed: 0, debe_cerrar: false }
+      },
+      async finalizarGrabacion() {
+        return { claimed: 0 }
+      },
+    }
+    class HungRecorder {
+      constructor() {
+        this.state = 'inactive'
+        this.mimeType = 'audio/webm'
+        this.ondataavailable = null
+        this.onstop = null
+      }
+      start() {
+        this.state = 'recording'
+        // Emite un chunk para que haya blob al timeout
+        this.ondataavailable?.({ data: new Blob(['x'], { type: 'audio/webm' }) })
+      }
+      stop() {
+        // No cambia state ni dispara onstop → simula colgado del navegador
+      }
+    }
+    const phases = []
+    const ctrl = createGrabacionSessionController({
+      api,
+      heartbeatMs: 60_000,
+      recorderStopTimeoutMs: 80,
+      openStreams: async () => ({
+        micStream: { getTracks: () => [], getAudioTracks: () => [] },
+        displayStream: null,
+        mixedStream: { getTracks: () => [], getAudioTracks: () => [] },
+        audioCtx: null,
+        tabAudioOk: false,
+        mimeType: 'audio/webm',
+      }),
+      createRecorder: () => new HungRecorder(),
+      download: () => true,
+      onState: (st) => {
+        if (st.phase) phases.push(st.phase)
+      },
+    })
+    await ctrl.start({ includeTabAudio: false })
+    const out = await ctrl.stop({ motivo: 'usuario' })
+    assert.ok(out)
+    assert.equal(phases.includes('stopping'), true)
+    assert.equal(phases.at(-1), 'idle')
+  })
 })
