@@ -78,6 +78,29 @@ describe('RRHH mapping / filtro', () => {
   })
 })
 
+
+  it('encuentra Gustavo y arma cargo/empresa desde payload RRHH real', () => {
+    const cat = [{
+      id: 101,
+      nombres: 'Gustavo',
+      apellidos: 'Ramírez López',
+      nombre: 'Gustavo Ramírez López',
+      tipo_documento: 'CC',
+      numero_documento: '80123456',
+      cargo_aspira: 'Oficial de obra',
+      empresa_nombre: 'Constructora Demo S.A.S.',
+      empresa_subcontratista_id: 3,
+      estado: 'activo',
+    }]
+    const hits = filtrarTrabajadoresRrhh(cat, 'gustavo', [])
+    assert.equal(hits.length, 1)
+    const row = asistenciaRowFromRrhh(hits[0])
+    assert.equal(row.nombre, 'Gustavo Ramírez López')
+    assert.equal(row.cargo, 'Oficial de obra')
+    assert.equal(row.subcontratista_nombre, 'Constructora Demo S.A.S.')
+    assert.equal(filtrarTrabajadoresRrhh(cat, 'Zzzinexistente', []).length, 0)
+  })
+
 describe('personalAgregadoDesdeAsistencia', () => {
   it('cuenta solo activos por cargo (snapshot)', () => {
     const rows = personalAgregadoDesdeAsistencia([
