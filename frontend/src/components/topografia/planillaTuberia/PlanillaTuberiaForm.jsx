@@ -34,6 +34,7 @@ import {
   payloadCoordsGeo,
   payloadFilas,
   tieneDatosExportables,
+  validarNombrePlanilla,
 } from './planillaTuberiaUtils'
 
 
@@ -215,11 +216,16 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
 
   const crear = async () => {
+    const vNom = validarNombrePlanilla(params.nombre, lista)
+    if (!vNom.ok) {
+      setErr(vNom.error)
+      return
+    }
     setBusy(true); setErr(''); setMsg('')
     try {
       const det = await api('/planillas-tuberia', {
         method: 'POST',
-        body: JSON.stringify({ tipo: params.tipo, nombre: params.nombre || undefined }),
+        body: JSON.stringify({ tipo: params.tipo, nombre: vNom.nombre }),
       })
       aplicarDetalle(det)
       await cargarLista()
@@ -296,12 +302,17 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
   const guardarParams = async () => {
     if (!planilla?.id) return
+    const vNom = validarNombrePlanilla(params.nombre, lista, planilla.id)
+    if (!vNom.ok) {
+      setErr(vNom.error)
+      return
+    }
     setBusy(true); setErr(''); setMsg('')
     try {
       const body = {
         version,
         tipo: params.tipo,
-        nombre: params.nombre || null,
+        nombre: vNom.nombre,
         pk_id: params.pk_id || null,
         costado: params.costado || null,
         diametro_m: params.diametro_m === '' ? null : Number(params.diametro_m),
@@ -561,10 +572,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     ;(async () => {
       try {
         setBusy(true); setErr(''); setMsg('')
+        const vNom = validarNombrePlanilla(params.nombre, lista, planilla.id)
+        if (!vNom.ok) {
+          setErr(vNom.error)
+          return
+        }
         const body = {
           version,
           tipo: nuevo,
-          nombre: params.nombre || null,
+          nombre: vNom.nombre,
           pk_id: params.pk_id || null,
           costado: params.costado || null,
           diametro_m: params.diametro_m === '' ? null : Number(params.diametro_m),
@@ -1017,6 +1033,22 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
+        {!editorOpen && puede(permisos, 'crear') && (
+          <input
+            type="text"
+            value={params.nombre}
+            disabled={busy}
+            placeholder="Nombre (obligatorio)"
+            aria-label="Nombre de la nueva planilla"
+            onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))}
+            style={{
+              ...sheet.cellInp,
+              minWidth: isCompact ? 140 : 200,
+              height: 36,
+              padding: '4px 8px',
+            }}
+          />
+        )}
         {puede(permisos, 'crear') && (
           <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} disabled={busy || editorOpen} onClick={crear}>
             Nueva planilla

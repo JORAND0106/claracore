@@ -344,3 +344,30 @@ export function payloadCoordsGeo(params) {
 
 /** Fondo distintivo de columnas calculadas (mismo criterio Excel/PDF). */
 export const CALC_CELL_BG = '#F2F2F2'
+
+/**
+ * Nombre de planilla: obligatorio y único en el contrato (case-insensitive).
+ * @param {string} nombre
+ * @param {Array<{id?: string, nombre?: string}>} lista
+ * @param {string|null} excludeId
+ */
+export function validarNombrePlanilla(nombre, lista = [], excludeId = null) {
+  const nom = String(nombre ?? '').trim()
+  if (!nom) {
+    return { ok: false, error: 'El nombre de la planilla es obligatorio.' }
+  }
+  const low = nom.toLocaleLowerCase('es')
+  const dup = (lista || []).find((p) => {
+    if (!p) return false
+    if (excludeId != null && String(p.id) === String(excludeId)) return false
+    const other = String(p.nombre ?? '').trim()
+    return other && other.toLocaleLowerCase('es') === low
+  })
+  if (dup) {
+    return {
+      ok: false,
+      error: `Ya existe una planilla con el nombre «${nom}» en este contrato.`,
+    }
+  }
+  return { ok: true, nombre: nom }
+}

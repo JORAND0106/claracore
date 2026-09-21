@@ -443,6 +443,41 @@ def listar(contrato_id: int, current_user=Depends(get_current_user)):
     return out
 
 
+def _norm_nombre_planilla(nombre: Optional[str]) -> str:
+    return str(nombre or "").strip()
+
+
+def _assert_nombre_planilla_unico(
+    contrato_id: int,
+    nombre: Optional[str],
+    *,
+    exclude_id: Optional[str] = None,
+) -> str:
+    """Nombre obligatorio y único por contrato (comparación case-insensitive)."""
+    nom = _norm_nombre_planilla(nombre)
+    if not nom:
+        raise HTTPException(422, "El nombre de la planilla es obligatorio.")
+    rows = (
+        supabase.table("topo_planillas_tuberia")
+        .select("id,nombre")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    low = nom.casefold()
+    for r in rows:
+        if exclude_id and str(r.get("id")) == str(exclude_id):
+            continue
+        other = _norm_nombre_planilla(r.get("nombre"))
+        if other and other.casefold() == low:
+            raise HTTPException(
+                422,
+                f"Ya existe una planilla con el nombre «{nom}» en este contrato.",
+            )
+    return nom
+
+
 @router.post("/{contrato_id}/planillas-tuberia")
 def crear(contrato_id: int, body: CrearBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -450,11 +485,12 @@ def crear(contrato_id: int, body: CrearBody, current_user=Depends(get_current_us
     tipo = (body.tipo or "ALCANTARILLA").upper()
     if tipo not in TIPOS_PLANILLA:
         raise HTTPException(422, f"Tipo inválido: {tipo}")
+    nombre = _assert_nombre_planilla_unico(contrato_id, body.nombre)
     # creado_por = usuarios.id (INTEGER). No enviar UUID ni strings no numéricos.
     payload: dict[str, Any] = {
         "contrato_id": contrato_id,
         "tipo": tipo,
-        "nombre": body.nombre or f"Planilla {tipo}",
+        "nombre": nombre,
         "estado": "borrador",
         "version": 1,
         "relacion_atraque": "1:3",
@@ -502,6 +538,11 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
         val = getattr(body, field)
         if val is not None:
             patch[field] = val
+    # Nombre siempre obligatorio y único (aunque no venga en el body, validar el resultante).
+    nombre_final = patch.get("nombre", p.get("nombre"))
+    patch["nombre"] = _assert_nombre_planilla_unico(
+        contrato_id, nombre_final, exclude_id=planilla_id,
+    )
     if body.relacion_atraque is not None:
         if body.relacion_atraque not in RELACIONES_ATRAQUE:
             raise HTTPException(422, "Relación de atraque inválida")
