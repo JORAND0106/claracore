@@ -30,6 +30,7 @@ from rrhh_permissions import (
     es_desarrollador_rrhh,
     puede_ver_salario_rrhh,
     require_permiso_rrhh,
+    require_permiso_rrhh_any,
     tiene_permiso_rrhh,
 )
 from rrhh_banco_ocr import ocr_certificacion_bancaria
@@ -940,7 +941,7 @@ async def route_upload_doc(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    require_permiso_rrhh(current_user, "crear", contrato_id)
+    require_permiso_rrhh_any(current_user, ("crear", "editar"), contrato_id)
     data = await archivo.read()
     try:
         row = create_documento(
@@ -1056,7 +1057,7 @@ def route_generar_contrato(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    require_permiso_rrhh(current_user, "crear", contrato_id)
+    require_permiso_rrhh_any(current_user, ("crear", "editar"), contrato_id)
     try:
         row = generar_contrato_laboral(
             supabase,
@@ -1096,7 +1097,7 @@ async def route_cargar_contrato(
 ):
     """Adjunta un PDF de contrato elaborado externamente."""
     _require_contract_access(current_user, contrato_id)
-    require_permiso_rrhh(current_user, "crear", contrato_id)
+    require_permiso_rrhh_any(current_user, ("crear", "editar"), contrato_id)
     data = await archivo.read()
     try:
         row = cargar_contrato_laboral(

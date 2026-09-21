@@ -248,6 +248,82 @@ def redactar_salario_lista(rows: Optional[List[dict]]) -> List[dict]:
     return [redactar_salario_trabajador(r) or r for r in (rows or [])]
 
 
+def _es_error_columna_ausente(exc: BaseException, columna: str) -> bool:
+    """PostgREST / Postgres: columna aún no migrada en el esquema remoto."""
+    m = str(exc or "").lower()
+    col = (columna or "").lower()
+    if col not in m:
+        return False
+    return any(
+        tip in m
+        for tip in (
+            "column",
+            "schema cache",
+            "could not find",
+            "does not exist",
+            "pgrst204",
+            "undefined_column",
+        )
+    )
+
+
+def _ejecutar_update_trabajador(sb, contrato_id: int, trabajador_id: int, payload: dict) -> List[dict]:
+    """UPDATE con reintento si faltan columnas nuevas (p. ej. dedicacion sin migrar)."""
+    data = dict(payload or {})
+    optional_cols = ("dedicacion",)
+    try:
+        return (
+            sb.table(_TABLE_TRAB)
+            .update(data)
+            .eq("id", int(trabajador_id))
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        stripped = False
+        for col in optional_cols:
+            if col in data and _es_error_columna_ausente(exc, col):
+                _log.warning(
+                    "Columna %s ausente en rrhh_trabajadores; se omite del update (¿migración pendiente?)",
+                    col,
+                )
+                data.pop(col, None)
+                stripped = True
+        if not stripped:
+            raise
+        return (
+            sb.table(_TABLE_TRAB)
+            .update(data)
+            .eq("id", int(trabajador_id))
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+
+
+def _ejecutar_insert_trabajador(sb, payload: dict) -> List[dict]:
+    data = dict(payload or {})
+    optional_cols = ("dedicacion",)
+    try:
+        return sb.table(_TABLE_TRAB).insert(data).execute().data or []
+    except Exception as exc:
+        stripped = False
+        for col in optional_cols:
+            if col in data and _es_error_columna_ausente(exc, col):
+                _log.warning(
+                    "Columna %s ausente en rrhh_trabajadores; se omite del insert (¿migración pendiente?)",
+                    col,
+                )
+                data.pop(col, None)
+                stripped = True
+        if not stripped:
+            raise
+        return sb.table(_TABLE_TRAB).insert(data).execute().data or []
+
+
 def _norm_valor(valor: str) -> str:
     s = str(valor or "").strip().lower()
     s = re.sub(r"\s+", " ", s)
@@ -1254,12 +1330,13 @@ def create_trabajador(sb, contrato_id: int, body: dict, current_user) -> dict:
     )
     _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
     try:
-        rows = sb.table(_TABLE_TRAB).insert(payload).execute().data or []
+        rows = _ejecutar_insert_trabajador(sb, payload)
     except Exception as exc:
         msg = str(exc).lower()
         if "unique" in msg or "duplicate" in msg:
             raise ValueError("Ya existe un trabajador con ese documento en este contrato.") from exc
-        raise
+        _log.exception("Error insertando trabajador RRHH contrato=%s", contrato_id)
+        raise ValueError(f"No se pudo registrar el colaborador: {exc}") from exc
     if not rows:
         raise ValueError("No se pudo registrar el trabajador.")
     return rows[0]
@@ -1340,15 +1417,7 @@ def reiniciar_reingreso_trabajador(
         sb, contrato_id, trabajador_id, current_user=current_user
     )
 
-    updated = (
-        sb.table(_TABLE_TRAB)
-        .update(payload)
-        .eq("id", int(trabajador_id))
-        .eq("contrato_id", int(contrato_id))
-        .execute()
-        .data
-        or []
-    )
+    updated = _ejecutar_update_trabajador(sb, contrato_id, trabajador_id, payload)
     if not updated:
         raise ValueError("No se pudo completar el reingreso del colaborador.")
     return updated[0]
@@ -1392,20 +1461,17 @@ def update_trabajador(sb, contrato_id: int, trabajador_id: int, body: dict, curr
 
     _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
     try:
-        rows = (
-            sb.table(_TABLE_TRAB)
-            .update(payload)
-            .eq("id", int(trabajador_id))
-            .eq("contrato_id", int(contrato_id))
-            .execute()
-            .data
-            or []
-        )
+        rows = _ejecutar_update_trabajador(sb, contrato_id, trabajador_id, payload)
     except Exception as exc:
         msg = str(exc).lower()
         if "unique" in msg or "duplicate" in msg:
             raise ValueError("Ya existe un trabajador con ese documento en este contrato.") from exc
-        raise
+        _log.exception(
+            "Error actualizando trabajador RRHH id=%s contrato=%s",
+            trabajador_id,
+            contrato_id,
+        )
+        raise ValueError(f"No se pudo actualizar el colaborador: {exc}") from exc
     if not rows:
         raise ValueError("No se pudo actualizar el trabajador.")
     return rows[0]

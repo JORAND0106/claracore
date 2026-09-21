@@ -149,6 +149,22 @@ def require_permiso_rrhh(
         )
 
 
+def require_permiso_rrhh_any(
+    current_user,
+    acciones: tuple[RrhhAccion, ...] | list[RrhhAccion],
+    contrato_id: Optional[int] = None,
+) -> None:
+    """Exige al menos una de las acciones RRHH (p. ej. crear o editar)."""
+    acts = tuple(acciones or ())
+    if any(tiene_permiso_rrhh(current_user, a, contrato_id) for a in acts):
+        return
+    labels = " / ".join(acts) if acts else "—"
+    raise _http_exc(
+        403,
+        f"No tiene permiso (Recursos Humanos · {labels}). Configúrelo en Control de accesos.",
+    )
+
+
 def es_desarrollador_rrhh(current_user) -> bool:
     """Acceso pleno fijo al panel de validación documental."""
     return _es_desarrollador_seguro(current_user)
