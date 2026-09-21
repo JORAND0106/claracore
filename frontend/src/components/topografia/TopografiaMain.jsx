@@ -8,7 +8,6 @@ import EntregaDgObraForm from './EntregaDgObraForm'
 import TuberiaForm from './TuberiaForm'
 import TuberiaRegistroDiario from './TuberiaRegistroDiario'
 import PlanillaTuberiaForm from './planillaTuberia/PlanillaTuberiaForm'
-import BibliotecaTramos from './planillaTuberia/BibliotecaTramos'
 import AreasForm from './AreasForm'
 import EquiposForm from './EquiposForm'
 import TopoConfirmModal from './TopoConfirmModal'
@@ -66,11 +65,6 @@ const OTROS = [
     id: 'topo_planillas_tuberia',
     label: 'Planillas de Tubería',
     ayuda: 'Alcantarillas y filtros: cartera de campo, sección típica, perfil, cantidades y consolidado del tramo.',
-  },
-  {
-    id: 'topo_biblioteca_tramos',
-    label: 'Biblioteca de tramos',
-    ayuda: 'Listado de planillas de tubería del contrato (borradores y definitivas). Abra una para continuar su edición.',
   },
   { id: 'topo_tuberia', label: 'Tuberia' },
   { id: 'topo_areas', label: 'Areas por Coordenadas' },
@@ -154,7 +148,6 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
   const [conflictActivo, setConflictActivo] = useState(null)
   const [conflictBusy, setConflictBusy] = useState(false)
   const [submodulo, setSubmodulo] = useState('topo_biblioteca')
-  const [planillaTuberiaFocusId, setPlanillaTuberiaFocusId] = useState(null)
   const [navOpen, setNavOpen] = useState(false)
   const [salirModuloPendiente, setSalirModuloPendiente] = useState(null)
   const [guardSalidaBusy, setGuardSalidaBusy] = useState(false)
@@ -225,23 +218,7 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
       case 'topo_entrega_dg':
         return <EntregaDgObraForm {...props} registerUnsavedGuard={registerUnsavedGuard} />
       case 'topo_planillas_tuberia':
-        return (
-          <PlanillaTuberiaForm
-            {...props}
-            planillaIdFocus={planillaTuberiaFocusId}
-            onPlanillaFocusConsumed={() => setPlanillaTuberiaFocusId(null)}
-          />
-        )
-      case 'topo_biblioteca_tramos':
-        return (
-          <BibliotecaTramos
-            {...props}
-            onAbrirPlanilla={(id) => {
-              setPlanillaTuberiaFocusId(id)
-              intentarSubmodulo('topo_planillas_tuberia')
-            }}
-          />
-        )
+        return <PlanillaTuberiaForm {...props} />
       case 'topo_tuberia':
         return (
           <div>
