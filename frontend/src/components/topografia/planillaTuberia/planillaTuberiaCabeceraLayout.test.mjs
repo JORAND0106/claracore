@@ -18,6 +18,7 @@ describe('Planilla tubería — cabecera compacta 2 filas', () => {
     assert.match(sheetSrc, /Array\.isArray\(rows\)/)
     assert.match(sheetSrc, /cc-topo-sheet-rows/)
     assert.match(sheetSrc, /width: '80%'/)
+    assert.match(sheetSrc, /titleRight/)
   })
 
   it('cabecera usa exactamente 2 filas de datos (tramo + coords), sin groups', () => {
