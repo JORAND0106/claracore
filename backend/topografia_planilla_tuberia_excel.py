@@ -14,6 +14,7 @@ from typing import Any, Optional
 from openpyxl import Workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.chart import Reference, ScatterChart, Series
+from openpyxl.drawing.image import Image
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -49,6 +50,18 @@ THIN = Border(
     top=Side(style="thin", color="64748B"),
     bottom=Side(style="thin", color="64748B"),
 )
+MEDIUM = Border(
+    left=Side(style="medium", color="334155"),
+    right=Side(style="medium", color="334155"),
+    top=Side(style="medium", color="334155"),
+    bottom=Side(style="medium", color="334155"),
+)
+
+_MEDIA_DIR = Path(__file__).resolve().parent / "data" / "planillas_tuberia" / "media"
+_SECCION_PNG = {
+    "ALCANTARILLA": _MEDIA_DIR / "seccion_alcantarilla.png",
+    "FILTRO": _MEDIA_DIR / "seccion_filtro.png",
+}
 
 
 def _inventory_path() -> Path:
@@ -222,10 +235,76 @@ def _add_profile_chart(ws_planilla, wb) -> None:
     ws_planilla.add_chart(chart, "A52")
 
 
+
+def _side(style: str, color: str = "64748B") -> Side:
+    return Side(style=style, color=color)
+
+
+def _border_box(
+    ws,
+    min_row: int,
+    max_row: int,
+    min_col: int,
+    max_col: int,
+    *,
+    edge: Border = MEDIUM,
+    inner: Border = THIN,
+) -> None:
+    """Marco exterior más grueso + separadores finos internos (estilo plantilla)."""
+    for r in range(min_row, max_row + 1):
+        for c in range(min_col, max_col + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.border = Border(
+                left=edge.left if c == min_col else inner.left,
+                right=edge.right if c == max_col else inner.right,
+                top=edge.top if r == min_row else inner.top,
+                bottom=edge.bottom if r == max_row else inner.bottom,
+            )
+
+
+def _apply_sheet_borders(ws) -> None:
+    """Bordes de bloques: cabecera, franja, cartera, cantidades, descuentos, firmas."""
+    _border_box(ws, 1, 4, 6, 12)  # título F1:L4
+    _border_box(ws, 1, 2, 13, 14)  # código doc
+    _border_box(ws, 5, 8, 2, 6)  # partes contratista
+    _border_box(ws, 5, 8, 7, 14)  # info contrato
+    _border_box(ws, 10, 11, 9, 13)  # abs / pk franja
+    _border_box(ws, 12, 13, 2, 7)  # geo
+    _border_box(ws, 12, 13, 9, 13)  # params tubo
+    _border_box(ws, 14, 15, 2, 7)  # áreas / sección
+    _border_box(ws, 16, 41, 2, 10)  # cartera + totales
+    _border_box(ws, 16, 40, 11, 14)  # panel gráfico
+    _border_box(ws, 43, 50, 2, 8)  # resumen cantidades
+    _border_box(ws, 43, 50, 9, 14)  # descuentos
+    _border_box(ws, 64, 66, 1, 7)  # elaboró
+    _border_box(ws, 64, 66, 8, 14)  # aprobó
+    # Celdas de captura de cartera: borde fino explícito
+    for r in range(CARTERA_FIRST, CARTERA_LAST + 1):
+        for c in range(2, 11):  # B..J
+            cell = ws.cell(row=r, column=c)
+            if not cell.border or not cell.border.left:
+                cell.border = THIN
+
+
+def _embed_seccion_png(ws, tipo: str) -> None:
+    """Inserta el PNG de sección típica según tipo (sin lógica condicional en el archivo)."""
+    path = _SECCION_PNG.get(tipo) or _SECCION_PNG["ALCANTARILLA"]
+    if not path.is_file():
+        return
+    img = Image(str(path))
+    # Encaja en el panel K17:N39 aprox.
+    img.width = 220
+    img.height = 200
+    ws.add_image(img, "K17")
+
+
 def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia: bool) -> None:
+    """Datos + fórmulas fijas al tipo de planilla (sin dropdown ni IF de tipo)."""
     meta = _meta(planilla)
     firmas = _firmas(planilla)
+    es_alc = tipo == "ALCANTARILLA"
 
+    # Título fijo — ya resuelto al exportar (sin DataValidation de tipo).
     _set(ws, "F1", TITULO_FIL if tipo == "FILTRO" else TITULO_ALC)
     _style(
         ws,
@@ -233,13 +312,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         font=FONT_TITLE,
         alignment=Alignment(horizontal="center", vertical="center", wrap_text=True),
     )
-    _set(ws, "P1", TITULO_ALC)
-    _set(ws, "P2", TITULO_FIL)
     _set(ws, "M1", meta.get("codigo_documento") or CODIGO_DOC)
-
-    dv = DataValidation(type="list", formula1="$P$1:$P$2", allow_blank=True)
-    ws.add_data_validation(dv)
-    dv.add("F1")
 
     if meta.get("contratista"):
         _set(ws, "D5", meta["contratista"])
@@ -270,7 +343,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     _set(ws, "K13", "=ROUND((PI()*((I13/2)+J13)^2),3)")
     if planilla.get("material"):
         _set(ws, "L13", planilla["material"])
-    _set(ws, "M13", '=IF(F1=P1,"ALCANTARILLA","FILTRO")')
+    _set(ws, "M13", tipo)
 
     rel = planilla.get("relacion_atraque") or "1:3"
     _set(ws, "D15", rel if ":" in str(rel) else f"1:{rel}")
@@ -278,11 +351,12 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     ws.add_data_validation(dv_atr)
     dv_atr.add("D15")
 
-    _set(ws, "F14", '=IF(F1=P1,"Cama Triturado","")')
+    # Cama triturado solo aplica a ALCANTARILLA.
+    _set(ws, "F14", "Cama Triturado" if es_alc else "")
     cama = meta.get("cama_triturado_m")
     if cama is None:
         cama = 0.0
-    _set(ws, "F15", float(cama) if tipo == "ALCANTARILLA" else None)
+    _set(ws, "F15", float(cama) if es_alc else None)
     if planilla.get("ancho_excavacion_m") is not None:
         _set(ws, "G15", float(planilla["ancho_excavacion_m"]))
 
@@ -300,21 +374,30 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         '=IFERROR(IF($D$15="","",ROUND(2*($I$13/2+$J$13)/'
         'VALUE(MID($D$15,FIND(":",$D$15)+1,10)),3)),"")',
     )
-    _set(ws, "D16", '=IF(F1=P2,"","Subrasante de Vía")')
-    _set(ws, "E16", '=IF(F1=P1,"Cota Lomo","Terminado Filtro")')
+    # Encabezados de columna de cartera ya resueltos por tipo.
+    _set(ws, "D16", "Subrasante de Vía" if es_alc else "")
+    _set(ws, "E16", "Cota Lomo" if es_alc else "Terminado Filtro")
+    if es_alc:
+        _style(ws, "D16", fill=FILL_HDR, border=THIN, font=FONT_LABEL)
+    _style(ws, "E16", fill=FILL_HDR, border=THIN, font=FONT_LABEL)
 
     for r in range(CARTERA_FIRST, CARTERA_LAST + 1):
         _set(ws, f"G{r}", f'=IFERROR(IF(B{r}<>0,(C{r}-F{r}),""),"")')
-        _set(ws, f"H{r}", f'=IFERROR(IF(G{r}<>"",IF($F$1=$P$1,$E$15+$F$15,E{r}-F{r}),""),"")')
-        _set(ws, f"I{r}", f'=IFERROR(IF(G{r}<>"",IF($F$1=$P$1,G{r}-($E$15+$F$15),0),""),"")')
-        if r == CARTERA_FIRST:
+        if es_alc:
+            _set(ws, f"H{r}", f'=IFERROR(IF(G{r}<>"",$E$15+$F$15,""),"")')
+            _set(ws, f"I{r}", f'=IFERROR(IF(G{r}<>"",G{r}-($E$15+$F$15),""),"")')
             _set(ws, f"J{r}", None)
         else:
-            _set(
-                ws,
-                f"J{r}",
-                f'=IFERROR(IF(B{r}<>"",IF($F$1=$P$1,"",AVERAGE(H{r-1}:H{r})*2+$G$15*2),""),"")',
-            )
+            _set(ws, f"H{r}", f'=IFERROR(IF(G{r}<>"",E{r}-F{r},""),"")')
+            _set(ws, f"I{r}", f'=IFERROR(IF(G{r}<>"",0,""),"")')
+            if r == CARTERA_FIRST:
+                _set(ws, f"J{r}", None)
+            else:
+                _set(
+                    ws,
+                    f"J{r}",
+                    f'=IFERROR(IF(B{r}<>"",AVERAGE(H{r-1}:H{r})*2+$G$15*2,""),"")',
+                )
         for col in ("B", "C", "D", "E", "F"):
             _set(ws, f"{col}{r}", None)
         for col in ("G", "H", "I", "J"):
@@ -329,7 +412,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
             continue
         _set(ws, f"B{r}", f.get("abscisa"))
         _set(ws, f"C{r}", f.get("terreno_natural"))
-        if tipo == "ALCANTARILLA":
+        if es_alc:
             _set(ws, f"D{r}", f.get("subrasante_via") or f.get("nivel_referencia"))
             _set(ws, f"E{r}", f.get("cota_lomo"))
         else:
@@ -351,7 +434,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         ("H", "Cantidad"),
     ):
         _set(ws, f"{col}44", label)
-        _style(ws, f"{col}44", fill=FILL_CANT, font=FONT_HDR)
+        _style(ws, f"{col}44", fill=FILL_CANT, font=FONT_HDR, border=THIN)
     for col, label in (
         ("I", "Item"),
         ("K", "Long"),
@@ -360,7 +443,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         ("N", "Cantidad"),
     ):
         _set(ws, f"{col}44", label)
-        _style(ws, f"{col}44", fill=FILL_DESC, font=FONT_HDR)
+        _style(ws, f"{col}44", fill=FILL_DESC, font=FONT_HDR, border=THIN)
 
     for addr, name in (
         ("B45", "Excavación Varias"),
@@ -385,45 +468,55 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     _set(ws, "D48", "=D45")
     _set(ws, "E48", "=E45")
     _set(ws, "F48", "=IFERROR(H41,0)")
-    _set(ws, "G48", '=IF($F$1=$P$1,N46,N45)')
+    # Descuento triturado: ALC → Area1 (N46); FIL → Tubería Filtro (N45)
+    _set(ws, "G48", "=N46" if es_alc else "=N45")
     _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)-G48")
     _set(ws, "D49", "=D45")
     _set(ws, "E49", "=E45")
     _set(ws, "F49", "=IFERROR(I41,0)")
-    _set(ws, "G49", '=IF($F$1=$P$1,N47,0)')
+    _set(ws, "G49", "=N47" if es_alc else 0)
     _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
     _set(ws, "D50", "=D45")
     _set(ws, "E50", "=J41")
     _set(ws, "H50", "=ROUND(PRODUCT(D50:F50),2)")
 
-    _set(ws, "I45", '=IF($F$1=$P$1,"","Tubería Filtro")')
-    _set(ws, "K45", '=IF(I45<>"",$B$41,"")')
-    _set(ws, "M45", '=IF(I45<>"",$K$13,"")')
-    _set(ws, "N45", "=PRODUCT(K45:M45)")
-    _set(ws, "I46", '=IF($F$1=$P$1,"Area 1","")')
-    _set(ws, "K46", '=IF(I46<>"",$B$41,"")')
-    _set(ws, "M46", '=IF(I46<>"",$B$15,"")')
-    _set(ws, "N46", '=IF(I46<>"",PRODUCT(K46:M46),"")')
-    _set(ws, "I47", '=IF($F$1=$P$1,"Area 2","")')
-    _set(ws, "K47", '=IF(I47<>"",$B$41,"")')
-    _set(ws, "M47", '=IF(I47<>"",$C$15,"")')
-    _set(ws, "N47", '=IF(I47<>"",PRODUCT(K47:M47),"")')
+    if es_alc:
+        _set(ws, "I45", "")
+        _set(ws, "K45", "")
+        _set(ws, "M45", "")
+        _set(ws, "N45", "")
+        _set(ws, "I46", "Area 1")
+        _set(ws, "K46", '=$B$41')
+        _set(ws, "M46", '=$B$15')
+        _set(ws, "N46", "=PRODUCT(K46:M46)")
+        _set(ws, "I47", "Area 2")
+        _set(ws, "K47", '=$B$41')
+        _set(ws, "M47", '=$C$15')
+        _set(ws, "N47", "=PRODUCT(K47:M47)")
+    else:
+        _set(ws, "I45", "Tubería Filtro")
+        _set(ws, "K45", '=$B$41')
+        _set(ws, "M45", '=$K$13')
+        _set(ws, "N45", "=PRODUCT(K45:M45)")
+        _set(ws, "I46", "")
+        _set(ws, "K46", "")
+        _set(ws, "M46", "")
+        _set(ws, "N46", "")
+        _set(ws, "I47", "")
+        _set(ws, "K47", "")
+        _set(ws, "M47", "")
+        _set(ws, "N47", "")
     _set(ws, "I48", "Otros")
 
     _set(ws, "L18", '="Ancho "&G15')
-    _style(ws, "L18", fill=FILL_CALC)
-    _set(
-        ws,
-        "K23",
-        '=IFERROR(IF(G17<>"",IF($F$1=$P$1,"Alt Rell. "&ROUND(I41,3),"Anc. Geot "&ROUND(J41,3)),""),"")',
-    )
-    _style(ws, "K23", fill=FILL_CALC)
-    _set(
-        ws,
-        "K30",
-        '=IFERROR(IF(G17<>"",IF($F$1=$P$1,"Alt Tritur. "&ROUND(H41,3),"Alt Tritur. "&ROUND(H41,3)),""),"")',
-    )
-    _style(ws, "K30", fill=FILL_CALC)
+    _style(ws, "L18", fill=FILL_CALC, border=THIN)
+    if es_alc:
+        _set(ws, "K23", '=IFERROR(IF(G17<>"","Alt Rell. "&ROUND(I41,3),""),"")')
+    else:
+        _set(ws, "K23", '=IFERROR(IF(G17<>"","Anc. Geot "&ROUND(J41,3),""),"")')
+    _style(ws, "K23", fill=FILL_CALC, border=THIN)
+    _set(ws, "K30", '=IFERROR(IF(G17<>"","Alt Tritur. "&ROUND(H41,3),""),"")')
+    _style(ws, "K30", fill=FILL_CALC, border=THIN)
 
     _set(ws, "A65", firmas.get("elaboro_nombre") or firmas.get("elaboro") or "")
     _set(ws, "H65", firmas.get("aprobo_nombre") or firmas.get("aprobo") or "")
@@ -460,7 +553,11 @@ def build_planilla_tuberia_xlsx(
     _write_static_labels(ws)
 
     tipo = (planilla.get("tipo") or "ALCANTARILLA").upper()
+    if tipo not in ("ALCANTARILLA", "FILTRO"):
+        tipo = "ALCANTARILLA"
     _overlay_data(ws, planilla, calculo, tipo, vacia)
+    _embed_seccion_png(ws, tipo)
+    _apply_sheet_borders(ws)
     _add_profile_chart(ws, wb)
 
     base = sheets.get("Resumen_BASE")
