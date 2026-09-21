@@ -478,63 +478,84 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <TopoExcelSheet
                   sheet={sheet}
                   title="Cabecera / tramo"
-                  minWidth={isCompact ? undefined : 640}
                   compact={isCompact}
-                  columns={[
-                    { key: 'nombre', label: 'Nombre', compactFull: true },
-                    { key: 'pk_id', label: 'PK / ID' },
-                    { key: 'costado', label: 'Costado' },
-                    { key: 'diametro_m', label: 'Ø (m)' },
-                    { key: 'espesor_m', label: 'Espesor (m)' },
-                    { key: 'ancho_excavacion_m', label: 'Ancho exc. B (m)' },
-                    { key: 'relacion_atraque', label: 'Relación atraque' },
-                    { key: 'material', label: 'Material' },
-                    { key: 'norte_abs_inicial', label: 'Norte Abs Inicial' },
-                    { key: 'este_abs_inicial', label: 'Este Abs Inicial' },
-                    { key: 'norte_abs_final', label: 'Norte Abs Final' },
-                    { key: 'este_abs_final', label: 'Este Abs Final' },
-                  ]}
-                  cells={[
-                    <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
-                    <button
-                      key="pk"
-                      type="button"
-                      disabled={!editable}
-                      onClick={() => setPkMapOpen(true)}
-                      title={params.pk_id ? `PK ${params.pk_id}` : 'Seleccionar PK en el mapa'}
-                      style={{
-                        ...sheet.cellInp,
-                        display: 'block',
-                        width: '100%',
-                        boxSizing: 'border-box',
-                        textAlign: 'left',
-                        cursor: editable ? 'pointer' : 'default',
-                        color: params.pk_id ? (ui.t?.text || '#0f172a') : (ui.textMuted || '#64748b'),
-                        fontWeight: params.pk_id ? 700 : 600,
-                      }}
-                    >
-                      {params.pk_id || '📍 Elegir PK'}
-                    </button>,
-                    <input
-                      key="cost"
-                      disabled={!editable}
-                      value={params.costado}
-                      onChange={(e) => setParams((p) => ({ ...p, costado: e.target.value }))}
-                      placeholder="Desde mapa"
-                      title={params.costado ? `Costado: ${params.costado}` : 'Se diligencia al elegir PK en el mapa'}
-                      style={sheet.cellInp}
-                    />,
-                    <input key="dia" type="number" step="any" disabled={!editable} value={params.diametro_m} onChange={(e) => setParams((p) => ({ ...p, diametro_m: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="esp" type="number" step="any" disabled={!editable} value={params.espesor_m} onChange={(e) => setParams((p) => ({ ...p, espesor_m: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="b" type="number" step="any" disabled={!editable} value={params.ancho_excavacion_m} onChange={(e) => setParams((p) => ({ ...p, ancho_excavacion_m: e.target.value }))} style={sheet.cellInp} />,
-                    <select key="rel" disabled={!editable} value={params.relacion_atraque} onChange={(e) => setParams((p) => ({ ...p, relacion_atraque: e.target.value }))} style={sheet.cellSelect}>
-                      {RELACIONES_ATRAQUE.map((r) => <option key={r} value={r}>{r}</option>)}
-                    </select>,
-                    <input key="mat" disabled={!editable} value={params.material} onChange={(e) => setParams((p) => ({ ...p, material: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="nIni" type="number" step="any" disabled={!editable} value={params.norte_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, norte_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="eIni" type="number" step="any" disabled={!editable} value={params.este_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, este_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="nFin" type="number" step="any" disabled={!editable} value={params.norte_abs_final} onChange={(e) => setParams((p) => ({ ...p, norte_abs_final: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="eFin" type="number" step="any" disabled={!editable} value={params.este_abs_final} onChange={(e) => setParams((p) => ({ ...p, este_abs_final: e.target.value }))} style={sheet.cellInp} />,
+                  groups={[
+                    {
+                      key: 'identificacion',
+                      title: 'Identificación del tramo',
+                      columns: [
+                        { key: 'nombre', label: 'Nombre', compactFull: true },
+                        { key: 'pk_id', label: 'PK / ID' },
+                        { key: 'costado', label: 'Costado' },
+                      ],
+                      cells: [
+                        <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
+                        <button
+                          key="pk"
+                          type="button"
+                          disabled={!editable}
+                          onClick={() => setPkMapOpen(true)}
+                          title={params.pk_id ? `PK ${params.pk_id}` : 'Seleccionar PK en el mapa'}
+                          style={{
+                            ...sheet.cellInp,
+                            display: 'block',
+                            width: '100%',
+                            boxSizing: 'border-box',
+                            textAlign: 'left',
+                            cursor: editable ? 'pointer' : 'default',
+                            color: params.pk_id ? (ui.t?.text || '#0f172a') : (ui.textMuted || '#64748b'),
+                            fontWeight: params.pk_id ? 700 : 600,
+                          }}
+                        >
+                          {params.pk_id || '📍 Elegir PK'}
+                        </button>,
+                        <input
+                          key="cost"
+                          disabled={!editable}
+                          value={params.costado}
+                          onChange={(e) => setParams((p) => ({ ...p, costado: e.target.value }))}
+                          placeholder="Desde mapa"
+                          title={params.costado ? `Costado: ${params.costado}` : 'Se diligencia al elegir PK en el mapa'}
+                          style={sheet.cellInp}
+                        />,
+                      ],
+                    },
+                    {
+                      key: 'tuberia',
+                      title: 'Tubería / sección',
+                      columns: [
+                        { key: 'diametro_m', label: 'Ø (m)' },
+                        { key: 'espesor_m', label: 'Espesor (m)' },
+                        { key: 'ancho_excavacion_m', label: 'Ancho exc. B (m)' },
+                        { key: 'relacion_atraque', label: 'Relación atraque' },
+                        { key: 'material', label: 'Material' },
+                      ],
+                      cells: [
+                        <input key="dia" type="number" step="any" disabled={!editable} value={params.diametro_m} onChange={(e) => setParams((p) => ({ ...p, diametro_m: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="esp" type="number" step="any" disabled={!editable} value={params.espesor_m} onChange={(e) => setParams((p) => ({ ...p, espesor_m: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="b" type="number" step="any" disabled={!editable} value={params.ancho_excavacion_m} onChange={(e) => setParams((p) => ({ ...p, ancho_excavacion_m: e.target.value }))} style={sheet.cellInp} />,
+                        <select key="rel" disabled={!editable} value={params.relacion_atraque} onChange={(e) => setParams((p) => ({ ...p, relacion_atraque: e.target.value }))} style={sheet.cellSelect}>
+                          {RELACIONES_ATRAQUE.map((r) => <option key={r} value={r}>{r}</option>)}
+                        </select>,
+                        <input key="mat" disabled={!editable} value={params.material} onChange={(e) => setParams((p) => ({ ...p, material: e.target.value }))} style={sheet.cellInp} />,
+                      ],
+                    },
+                    {
+                      key: 'coordenadas',
+                      title: 'Coordenadas (Abs Inicial / Final)',
+                      columns: [
+                        { key: 'norte_abs_inicial', label: 'Norte Abs Inicial' },
+                        { key: 'este_abs_inicial', label: 'Este Abs Inicial' },
+                        { key: 'norte_abs_final', label: 'Norte Abs Final' },
+                        { key: 'este_abs_final', label: 'Este Abs Final' },
+                      ],
+                      cells: [
+                        <input key="nIni" type="number" step="any" disabled={!editable} value={params.norte_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, norte_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="eIni" type="number" step="any" disabled={!editable} value={params.este_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, este_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="nFin" type="number" step="any" disabled={!editable} value={params.norte_abs_final} onChange={(e) => setParams((p) => ({ ...p, norte_abs_final: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="eFin" type="number" step="any" disabled={!editable} value={params.este_abs_final} onChange={(e) => setParams((p) => ({ ...p, este_abs_final: e.target.value }))} style={sheet.cellInp} />,
+                      ],
+                    },
                   ]}
                 />
                 <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>

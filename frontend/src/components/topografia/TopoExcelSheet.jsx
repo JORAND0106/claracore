@@ -2,6 +2,7 @@
  * Grilla tipo Excel para captura de datos en Topografía.
  * Encabezados de columna + fila(s) de celdas compactas (mismo criterio que Bitácora / SicoeObra).
  * Con `compact`, apila campos en pares verticales (móvil) sin scroll horizontal.
+ * Con `groups`, renderiza varias filas/bloques etiquetados (p. ej. cabecera de planilla).
  */
 import { topoSheetStyles } from './topoSheetStyles'
 
@@ -34,7 +35,7 @@ function HeaderHelp({ ayuda }) {
 }
 
 /**
- * Campo etiquetado para layout móvil (pares / full-width).
+ * Campo etiquetado (label arriba, valor abajo).
  */
 function CompactField({ col, cell, sheet }) {
   const full = Boolean(col.compactFull)
@@ -82,12 +83,74 @@ function CompactField({ col, cell, sheet }) {
   )
 }
 
+function FieldsGrid({ columns, cells, sheet, compact }) {
+  const gridStyle = compact
+    ? { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, alignItems: 'start' }
+    : { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))', gap: 10, alignItems: 'start' }
+  return (
+    <div style={gridStyle}>
+      {columns.map((col, i) => (
+        <CompactField key={col.key || i} col={col} cell={(cells || [])[i]} sheet={sheet} />
+      ))}
+    </div>
+  )
+}
+
+function GroupsLayout({ title, groups, sheet, compact, style, className }) {
+  return (
+    <div style={{ marginBottom: 12, ...style }} className={className}>
+      {title ? <div style={sheet.sectionTitle}>{title}</div> : null}
+      <div
+        style={{
+          ...sheet.sheetWrap,
+          overflow: 'visible',
+          borderRadius: 10,
+          padding: 12,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+        }}
+        className="cc-topo-sheet-groups"
+      >
+        {groups.map((group, gi) => (
+          <div key={group.key || group.title || gi} className="cc-topo-sheet-group">
+            {group.title ? (
+              <div
+                style={{
+                  fontSize: 'var(--cc-xxs)',
+                  fontWeight: 800,
+                  color: sheet.textMuted,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  marginBottom: 8,
+                  paddingBottom: 4,
+                  borderBottom: `1px solid ${sheet.border}`,
+                }}
+              >
+                {group.title}
+              </div>
+            ) : null}
+            <FieldsGrid
+              columns={group.columns || []}
+              cells={group.cells || []}
+              sheet={sheet}
+              compact={compact}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /**
  * @param {object} props
  * @param {object} [props.t] Tema (border, text, …). Si no se pasa, usa defaults.
  * @param {string} [props.title] Título de sección sobre la grilla.
- * @param {{ key: string, label: string, ayuda?: string, width?: string|number, compactFull?: boolean }[]} props.columns
+ * @param {{ key: string, label: string, ayuda?: string, width?: string|number, compactFull?: boolean }[]} [props.columns]
  * @param {import('react').ReactNode[]} [props.cells] Celdas de una sola fila (mismo orden que columns).
+ * @param {{ key?: string, title?: string, columns: object[], cells: import('react').ReactNode[] }[]} [props.groups]
+ *        Bloques multilínea con etiqueta visible (desktop y móvil). Si hay groups, se ignora columns/cells.
  * @param {import('react').ReactNode} [props.children] Filas personalizadas (<tr>…). Si hay children, se ignora cells.
  * @param {string|number} [props.minWidth]
  * @param {boolean} [props.compact] Layout vertical/pares para móvil (sin tabla horizontal).
@@ -101,6 +164,7 @@ export default function TopoExcelSheet({
   title,
   columns = [],
   cells,
+  groups,
   children,
   minWidth,
   compact = false,
@@ -110,6 +174,19 @@ export default function TopoExcelSheet({
   sheet: sheetProp,
 }) {
   const sheet = sheetProp || topoSheetStyles(t)
+
+  if (Array.isArray(groups) && groups.length > 0) {
+    return (
+      <GroupsLayout
+        title={title}
+        groups={groups}
+        sheet={sheet}
+        compact={compact}
+        style={style}
+        className={className}
+      />
+    )
+  }
 
   if (compact && !children) {
     return (
@@ -124,18 +201,7 @@ export default function TopoExcelSheet({
           }}
           className="cc-topo-sheet-compact"
         >
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-              gap: 10,
-              alignItems: 'start',
-            }}
-          >
-            {columns.map((col, i) => (
-              <CompactField key={col.key || i} col={col} cell={(cells || [])[i]} sheet={sheet} />
-            ))}
-          </div>
+          <FieldsGrid columns={columns} cells={cells} sheet={sheet} compact />
         </div>
       </div>
     )
