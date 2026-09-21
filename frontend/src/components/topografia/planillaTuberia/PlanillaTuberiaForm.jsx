@@ -32,7 +32,54 @@ import {
   tieneDatosExportables,
 } from './planillaTuberiaUtils'
 
+
 const CARTERA_MIN_WIDTH = 720
+
+/** Botón de acción compacto (icono + tooltip nativo). */
+function AccionIcono({ title, onClick, disabled, danger, primary, children }) {
+  return (
+    <button
+      type="button"
+      className="cc-topo-touch-btn"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        width: 44,
+        height: 44,
+        minWidth: 44,
+        minHeight: 44,
+        padding: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 10,
+        border: `1px solid ${danger ? '#fca5a5' : (primary ? 'transparent' : '#cbd5e1')}`,
+        background: danger ? '#fff' : (primary ? '#2563eb' : '#fff'),
+        color: danger ? '#b91c1c' : (primary ? '#fff' : '#0f172a'),
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        boxShadow: '0 1px 2px rgba(15,23,42,0.06)',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+const ico = {
+  width: 22,
+  height: 22,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+  'aria-hidden': true,
+}
+
 
 export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
@@ -478,63 +525,84 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <TopoExcelSheet
                   sheet={sheet}
                   title="Cabecera / tramo"
-                  minWidth={isCompact ? undefined : 640}
                   compact={isCompact}
-                  columns={[
-                    { key: 'nombre', label: 'Nombre', compactFull: true },
-                    { key: 'pk_id', label: 'PK / ID' },
-                    { key: 'costado', label: 'Costado' },
-                    { key: 'diametro_m', label: 'Ø (m)' },
-                    { key: 'espesor_m', label: 'Espesor (m)' },
-                    { key: 'ancho_excavacion_m', label: 'Ancho exc. B (m)' },
-                    { key: 'relacion_atraque', label: 'Relación atraque' },
-                    { key: 'material', label: 'Material' },
-                    { key: 'norte_abs_inicial', label: 'Norte Abs Inicial' },
-                    { key: 'este_abs_inicial', label: 'Este Abs Inicial' },
-                    { key: 'norte_abs_final', label: 'Norte Abs Final' },
-                    { key: 'este_abs_final', label: 'Este Abs Final' },
-                  ]}
-                  cells={[
-                    <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
-                    <button
-                      key="pk"
-                      type="button"
-                      disabled={!editable}
-                      onClick={() => setPkMapOpen(true)}
-                      title={params.pk_id ? `PK ${params.pk_id}` : 'Seleccionar PK en el mapa'}
-                      style={{
-                        ...sheet.cellInp,
-                        display: 'block',
-                        width: '100%',
-                        boxSizing: 'border-box',
-                        textAlign: 'left',
-                        cursor: editable ? 'pointer' : 'default',
-                        color: params.pk_id ? (ui.t?.text || '#0f172a') : (ui.textMuted || '#64748b'),
-                        fontWeight: params.pk_id ? 700 : 600,
-                      }}
-                    >
-                      {params.pk_id || '📍 Elegir PK'}
-                    </button>,
-                    <input
-                      key="cost"
-                      disabled={!editable}
-                      value={params.costado}
-                      onChange={(e) => setParams((p) => ({ ...p, costado: e.target.value }))}
-                      placeholder="Desde mapa"
-                      title={params.costado ? `Costado: ${params.costado}` : 'Se diligencia al elegir PK en el mapa'}
-                      style={sheet.cellInp}
-                    />,
-                    <input key="dia" type="number" step="any" disabled={!editable} value={params.diametro_m} onChange={(e) => setParams((p) => ({ ...p, diametro_m: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="esp" type="number" step="any" disabled={!editable} value={params.espesor_m} onChange={(e) => setParams((p) => ({ ...p, espesor_m: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="b" type="number" step="any" disabled={!editable} value={params.ancho_excavacion_m} onChange={(e) => setParams((p) => ({ ...p, ancho_excavacion_m: e.target.value }))} style={sheet.cellInp} />,
-                    <select key="rel" disabled={!editable} value={params.relacion_atraque} onChange={(e) => setParams((p) => ({ ...p, relacion_atraque: e.target.value }))} style={sheet.cellSelect}>
-                      {RELACIONES_ATRAQUE.map((r) => <option key={r} value={r}>{r}</option>)}
-                    </select>,
-                    <input key="mat" disabled={!editable} value={params.material} onChange={(e) => setParams((p) => ({ ...p, material: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="nIni" type="number" step="any" disabled={!editable} value={params.norte_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, norte_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="eIni" type="number" step="any" disabled={!editable} value={params.este_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, este_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="nFin" type="number" step="any" disabled={!editable} value={params.norte_abs_final} onChange={(e) => setParams((p) => ({ ...p, norte_abs_final: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="eFin" type="number" step="any" disabled={!editable} value={params.este_abs_final} onChange={(e) => setParams((p) => ({ ...p, este_abs_final: e.target.value }))} style={sheet.cellInp} />,
+                  groups={[
+                    {
+                      key: 'identificacion',
+                      title: 'Identificación del tramo',
+                      columns: [
+                        { key: 'nombre', label: 'Nombre', compactFull: true },
+                        { key: 'pk_id', label: 'PK / ID' },
+                        { key: 'costado', label: 'Costado' },
+                      ],
+                      cells: [
+                        <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
+                        <button
+                          key="pk"
+                          type="button"
+                          disabled={!editable}
+                          onClick={() => setPkMapOpen(true)}
+                          title={params.pk_id ? `PK ${params.pk_id}` : 'Seleccionar PK en el mapa'}
+                          style={{
+                            ...sheet.cellInp,
+                            display: 'block',
+                            width: '100%',
+                            boxSizing: 'border-box',
+                            textAlign: 'left',
+                            cursor: editable ? 'pointer' : 'default',
+                            color: params.pk_id ? (ui.t?.text || '#0f172a') : (ui.textMuted || '#64748b'),
+                            fontWeight: params.pk_id ? 700 : 600,
+                          }}
+                        >
+                          {params.pk_id || '📍 Elegir PK'}
+                        </button>,
+                        <input
+                          key="cost"
+                          disabled={!editable}
+                          value={params.costado}
+                          onChange={(e) => setParams((p) => ({ ...p, costado: e.target.value }))}
+                          placeholder="Desde mapa"
+                          title={params.costado ? `Costado: ${params.costado}` : 'Se diligencia al elegir PK en el mapa'}
+                          style={sheet.cellInp}
+                        />,
+                      ],
+                    },
+                    {
+                      key: 'tuberia',
+                      title: 'Tubería / sección',
+                      columns: [
+                        { key: 'diametro_m', label: 'Ø (m)' },
+                        { key: 'espesor_m', label: 'Espesor (m)' },
+                        { key: 'ancho_excavacion_m', label: 'Ancho exc. B (m)' },
+                        { key: 'relacion_atraque', label: 'Relación atraque' },
+                        { key: 'material', label: 'Material' },
+                      ],
+                      cells: [
+                        <input key="dia" type="number" step="any" disabled={!editable} value={params.diametro_m} onChange={(e) => setParams((p) => ({ ...p, diametro_m: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="esp" type="number" step="any" disabled={!editable} value={params.espesor_m} onChange={(e) => setParams((p) => ({ ...p, espesor_m: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="b" type="number" step="any" disabled={!editable} value={params.ancho_excavacion_m} onChange={(e) => setParams((p) => ({ ...p, ancho_excavacion_m: e.target.value }))} style={sheet.cellInp} />,
+                        <select key="rel" disabled={!editable} value={params.relacion_atraque} onChange={(e) => setParams((p) => ({ ...p, relacion_atraque: e.target.value }))} style={sheet.cellSelect}>
+                          {RELACIONES_ATRAQUE.map((r) => <option key={r} value={r}>{r}</option>)}
+                        </select>,
+                        <input key="mat" disabled={!editable} value={params.material} onChange={(e) => setParams((p) => ({ ...p, material: e.target.value }))} style={sheet.cellInp} />,
+                      ],
+                    },
+                    {
+                      key: 'coordenadas',
+                      title: 'Coordenadas (Abs Inicial / Final)',
+                      columns: [
+                        { key: 'norte_abs_inicial', label: 'Norte Abs Inicial' },
+                        { key: 'este_abs_inicial', label: 'Este Abs Inicial' },
+                        { key: 'norte_abs_final', label: 'Norte Abs Final' },
+                        { key: 'este_abs_final', label: 'Este Abs Final' },
+                      ],
+                      cells: [
+                        <input key="nIni" type="number" step="any" disabled={!editable} value={params.norte_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, norte_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="eIni" type="number" step="any" disabled={!editable} value={params.este_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, este_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="nFin" type="number" step="any" disabled={!editable} value={params.norte_abs_final} onChange={(e) => setParams((p) => ({ ...p, norte_abs_final: e.target.value }))} style={sheet.cellInp} />,
+                        <input key="eFin" type="number" step="any" disabled={!editable} value={params.este_abs_final} onChange={(e) => setParams((p) => ({ ...p, este_abs_final: e.target.value }))} style={sheet.cellInp} />,
+                      ],
+                    },
                   ]}
                 />
                 <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
@@ -545,74 +613,60 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                     <> · WGS84 (inicio) {fmtNDash(detalle.coords_wgs84.lat, 6)}, {fmtNDash(detalle.coords_wgs84.lon, 6)}</>
                   )}
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                <div
+                  role="toolbar"
+                  aria-label="Acciones de planilla"
+                  style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10, alignItems: 'center' }}
+                >
                   {editable && (
-                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} disabled={busy} onClick={guardarParams}>
-                      Guardar parámetros
-                    </button>
+                    <AccionIcono title="Guardar parámetros" disabled={busy} onClick={guardarParams}>
+                      <svg {...ico}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
+                    </AccionIcono>
                   )}
                   {editable && (
-                    <button type="button" className="cc-topo-touch-btn" style={ui.btnPrimary} disabled={busy} onClick={guardarCartera}>
-                      Guardar cartera
-                    </button>
+                    <AccionIcono title="Guardar cartera" primary disabled={busy} onClick={guardarCartera}>
+                      <svg {...ico}><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
+                    </AccionIcono>
                   )}
                   {editable && (
-                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} disabled={busy} onClick={cerrar}>
-                      Cerrar planilla
-                    </button>
+                    <AccionIcono title="Cerrar planilla" disabled={busy} onClick={cerrar}>
+                      <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                    </AccionIcono>
                   )}
                   {esDev && sellada && (
-                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} disabled={busy} onClick={reabrir}>
-                      Reabrir (Dev)
-                    </button>
+                    <AccionIcono title="Reabrir (Dev)" disabled={busy} onClick={reabrir}>
+                      <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>
+                    </AccionIcono>
                   )}
                   {esDev && String(planilla?.estado || '').toLowerCase() === 'validado' && (
-                    <button type="button" className="cc-topo-touch-btn" style={ui.btnSecondary} disabled={busy} onClick={revocar}>
-                      Revocar validación (Dev)
-                    </button>
+                    <AccionIcono title="Revocar validación (Dev)" disabled={busy} onClick={revocar}>
+                      <svg {...ico}><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+                    </AccionIcono>
                   )}
-                  
                   {puedeEliminar && planilla?.id && (
-                    <button
-                      type="button"
-                      className="cc-topo-touch-btn"
-                      style={{ ...ui.btnSecondary, color: '#b91c1c', borderColor: '#fca5a5' }}
-                      disabled={busy}
-                      onClick={solicitarEliminar}
-                    >
-                      Eliminar planilla
-                    </button>
+                    <AccionIcono title="Eliminar planilla" danger disabled={busy} onClick={solicitarEliminar}>
+                      <svg {...ico}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+                    </AccionIcono>
                   )}
                   {puedeExportar && (
                     <>
-                      <button
-                        type="button"
-                        className="cc-topo-touch-btn"
-                        style={ui.btnSecondary}
+                      <AccionIcono
+                        title={exportPlantillaVacia ? 'PDF (plantilla vacía — solo Desarrollador)' : 'Exportar PDF'}
                         disabled={!conDatos && !esDev}
-                        title={exportPlantillaVacia ? 'Plantilla vacía — solo Desarrollador (verificación de formato)' : undefined}
                         onClick={exportarPdf}
                       >
-                        {exportPlantillaVacia ? 'PDF (plantilla)' : 'PDF'}
-                      </button>
-                      <button
-                        type="button"
-                        className="cc-topo-touch-btn"
-                        style={ui.btnSecondary}
+                        <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M9 15h6" /><path d="M9 11h6" /></svg>
+                      </AccionIcono>
+                      <AccionIcono
+                        title={exportPlantillaVacia ? 'Excel (plantilla vacía — solo Desarrollador)' : 'Exportar Excel'}
                         disabled={!conDatos && !esDev}
-                        title={exportPlantillaVacia ? 'Plantilla vacía — solo Desarrollador (verificación de formato)' : undefined}
                         onClick={exportarExcel}
                       >
-                        {exportPlantillaVacia ? 'Excel (plantilla)' : 'Excel'}
-                      </button>
+                        <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M8 13h2l4 5h2" /><path d="M16 13h-2l-4 5H8" /></svg>
+                      </AccionIcono>
                     </>
                   )}
                 </div>
-                {exportPlantillaVacia && (
-                  <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: '#92400e', background: '#fffbeb', padding: '6px 8px', borderRadius: 6 }}>
-                    Sin datos diligenciados: como Desarrollador puede descargar PDF/Excel vacíos para verificar formato (sin valores de ejemplo).
-                  </div>
-                )}
               </div>
 
               <div
