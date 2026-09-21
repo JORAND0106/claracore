@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import BitacoraMaterialUbicacionModal from '../../../modules/seguimiento/BitacoraMaterialUbicacionModal'
 import TopoExcelSheet from '../TopoExcelSheet'
 import { topoSheetStyles } from '../topoSheetStyles'
 import {
@@ -61,6 +62,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [infos, setInfos] = useState([])
   const [busy, setBusy] = useState(false)
   const [confirmEliminar, setConfirmEliminar] = useState(null) // null | 'vacia' | 'con_datos'
+  const [pkMapOpen, setPkMapOpen] = useState(false)
   const tableRef = useRef(null)
 
   const planilla = detalle?.planilla
@@ -491,8 +493,34 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   ]}
                   cells={[
                     <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="pk" disabled={!editable} value={params.pk_id} onChange={(e) => setParams((p) => ({ ...p, pk_id: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="cost" disabled={!editable} value={params.costado} onChange={(e) => setParams((p) => ({ ...p, costado: e.target.value }))} style={sheet.cellInp} />,
+                    <button
+                      key="pk"
+                      type="button"
+                      disabled={!editable}
+                      onClick={() => setPkMapOpen(true)}
+                      title={params.pk_id ? `PK ${params.pk_id}` : 'Seleccionar PK en el mapa'}
+                      style={{
+                        ...sheet.cellInp,
+                        display: 'block',
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        textAlign: 'left',
+                        cursor: editable ? 'pointer' : 'default',
+                        color: params.pk_id ? (ui.t?.text || '#0f172a') : (ui.textMuted || '#64748b'),
+                        fontWeight: params.pk_id ? 700 : 600,
+                      }}
+                    >
+                      {params.pk_id || '📍 Elegir PK'}
+                    </button>,
+                    <input
+                      key="cost"
+                      disabled={!editable}
+                      value={params.costado}
+                      onChange={(e) => setParams((p) => ({ ...p, costado: e.target.value }))}
+                      placeholder="Desde mapa"
+                      title={params.costado ? `Costado: ${params.costado}` : 'Se diligencia al elegir PK en el mapa'}
+                      style={sheet.cellInp}
+                    />,
                     <input key="dia" type="number" step="any" disabled={!editable} value={params.diametro_m} onChange={(e) => setParams((p) => ({ ...p, diametro_m: e.target.value }))} style={sheet.cellInp} />,
                     <input key="esp" type="number" step="any" disabled={!editable} value={params.espesor_m} onChange={(e) => setParams((p) => ({ ...p, espesor_m: e.target.value }))} style={sheet.cellInp} />,
                     <input key="b" type="number" step="any" disabled={!editable} value={params.ancho_excavacion_m} onChange={(e) => setParams((p) => ({ ...p, ancho_excavacion_m: e.target.value }))} style={sheet.cellInp} />,
@@ -798,6 +826,26 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             </p>
           )}
         </TopoConfirmModal>
+      )}
+
+      {pkMapOpen && (
+        <BitacoraMaterialUbicacionModal
+          t={ui.t}
+          token={token}
+          contratoId={contratoId}
+          pkLabel={params.pk_id || ''}
+          costado={params.costado || ''}
+          readOnly={!editable}
+          onClose={() => setPkMapOpen(false)}
+          onConfirm={(loc) => {
+            setParams((p) => ({
+              ...p,
+              pk_id: loc?.ubicacion_pk || '',
+              costado: loc?.ubicacion_costado || '',
+            }))
+            setPkMapOpen(false)
+          }}
+        />
       )}
     </div>
   )
