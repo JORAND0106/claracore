@@ -17,7 +17,7 @@ Implementación revisada: `backend/topografia_planilla_tuberia.py`, `backend/top
 
 | Excel | App |
 |---|---|
-| Abscisa Inicial, Norte Abs Inicial, Este Abs Incial, Abscisa Final, Norte Abs Final, Este Abs Final | Solo `norte_ref` / `este_ref`; sin bloque GEO de 6 celdas |
+| Abscisa Inicial, Norte Abs Inicial, Este Abs Incial, Abscisa Final, Norte Abs Final, Este Abs Final | Abs desde cartera; Norte/Este inicio+fin en `meta_cabecera` (+ `norte_ref`/`este_ref` = inicio para WGS84) |
 
 ## 3. Parámetros de tubería (I12:M13)
 

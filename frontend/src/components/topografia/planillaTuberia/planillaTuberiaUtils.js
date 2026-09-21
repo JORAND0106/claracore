@@ -156,6 +156,61 @@ export function tieneDatosExportables(filas, detalle) {
   return false
 }
 
+/** Claves de georreferenciación en meta_cabecera (bloque B12:G13 del XLSM). */
+export const GEO_META_KEYS = [
+  'norte_abs_inicial',
+  'este_abs_inicial',
+  'norte_abs_final',
+  'este_abs_final',
+]
+
+/**
+ * Lee Norte/Este inicio y fin desde planilla + meta_cabecera.
+ * Compat: si no hay meta de inicio, usa norte_ref / este_ref.
+ */
+export function coordsGeoDesdePlanilla(planilla) {
+  const p = planilla || {}
+  const meta = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
+  const pick = (metaKey, fallback) => {
+    const v = meta[metaKey]
+    if (v !== undefined && v !== null && v !== '') return String(v)
+    if (fallback !== undefined && fallback !== null && fallback !== '') return String(fallback)
+    return ''
+  }
+  return {
+    norte_abs_inicial: pick('norte_abs_inicial', p.norte_ref),
+    este_abs_inicial: pick('este_abs_inicial', p.este_ref),
+    norte_abs_final: pick('norte_abs_final'),
+    este_abs_final: pick('este_abs_final'),
+  }
+}
+
+/** Número o null para payload API ('' → null). */
+export function numOrNull(v) {
+  if (v === '' || v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Payload de params para georref: meta_cabecera con 4 coords +
+ * norte_ref/este_ref = inicio (WGS84 sin cambiar transform).
+ */
+export function payloadCoordsGeo(params) {
+  const nIni = numOrNull(params?.norte_abs_inicial)
+  const eIni = numOrNull(params?.este_abs_inicial)
+  return {
+    norte_ref: nIni,
+    este_ref: eIni,
+    meta_cabecera: {
+      norte_abs_inicial: nIni,
+      este_abs_inicial: eIni,
+      norte_abs_final: numOrNull(params?.norte_abs_final),
+      este_abs_final: numOrNull(params?.este_abs_final),
+    },
+  }
+}
+
 /** Fondo distintivo de columnas calculadas (mismo criterio Excel/PDF). */
 export const CALC_CELL_BG = '#F2F2F2'
 
