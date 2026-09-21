@@ -1,22 +1,16 @@
 import { API_BASE } from '../../apiBase'
+import { buildRrhhApiError } from './rrhhApiErrors.js'
+
+export { buildRrhhApiError } from './rrhhApiErrors.js'
 
 async function parseError(res) {
-  let detail = `Error ${res.status}`
+  let payload = null
   try {
-    const j = await res.json()
-    if (typeof j?.detail === 'string') detail = j.detail
-    else if (Array.isArray(j?.detail)) detail = j.detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
-    else if (j?.detail && typeof j.detail === 'object') {
-      const err = new Error(j.detail.mensaje || j.detail.detail || JSON.stringify(j.detail))
-      err.codigo = j.detail.codigo
-      err.trabajador = j.detail.trabajador
-      throw err
-    }
-    else if (j?.message) detail = j.message
+    payload = await res.json()
   } catch {
-    /* ignore */
+    /* ignore body parse */
   }
-  throw new Error(detail)
+  throw buildRrhhApiError(res, payload)
 }
 
 async function apiJson(path, { method = 'GET', token, body, formData } = {}) {
@@ -62,6 +56,10 @@ export function createRrhhApi(contratoId, token) {
     },
     resumenEmpresas: () => apiJson(`${base}/trabajadores/resumen-empresas`, { token }),
     cumpleanosMesPdfUrl: () => `${API_BASE}${base}/trabajadores/cumpleanos-mes/pdf`,
+    nominaParams: (anio) => {
+      const qs = anio != null ? `?anio=${encodeURIComponent(anio)}` : ''
+      return apiJson(`${base}/nomina-params${qs}`, { token })
+    },
     buscarPorDocumento: (numero, tipo = 'CC') => {
       const qs = new URLSearchParams({ numero, tipo })
       return apiJson(`${base}/trabajadores/por-documento?${qs}`, { token })

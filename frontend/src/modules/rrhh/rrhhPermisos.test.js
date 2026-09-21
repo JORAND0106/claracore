@@ -9,6 +9,8 @@ import {
   payloadFromForm,
   EMPTY_TRABAJADOR_FORM,
   validateTrabajadorForm,
+  aplicaSalarioMinimo,
+  safeIntOrNull,
 } from './rrhhHelpers.js'
 
 describe('rrhhPermisos', () => {
@@ -156,6 +158,59 @@ describe('rrhhHelpers payload', () => {
       empresa_key: 'consorcio',
     })
     assert.equal(nonDigits.ok, false)
+  })
+
+  it('safeIntOrNull evita NaN', () => {
+    assert.equal(safeIntOrNull(''), null)
+    assert.equal(safeIntOrNull(undefined), null)
+    assert.equal(safeIntOrNull(Number('x')), null)
+    assert.equal(safeIntOrNull('60'), 60)
+  })
+
+  it('valida SMMLV salvo prestación parcial', () => {
+    assert.equal(aplicaSalarioMinimo({
+      tipo_contrato: 'Prestación de servicios',
+      dedicacion: 'parcial',
+    }), false)
+    const low = validateTrabajadorForm({
+      ...EMPTY_TRABAJADOR_FORM,
+      nombres: 'Ana',
+      apellidos: 'Pérez',
+      tipo_documento: 'CC',
+      numero_documento: '123456',
+      empresa_key: 'consorcio',
+      salario: '$ 1.000.000',
+      tipo_contrato: 'Término fijo',
+      dedicacion: 'tiempo_completo',
+    }, { smmlv: 1_750_000 })
+    assert.equal(low.ok, false)
+    assert.match(low.mensaje, /mínimo/i)
+
+    const okPrest = validateTrabajadorForm({
+      ...EMPTY_TRABAJADOR_FORM,
+      nombres: 'Ana',
+      apellidos: 'Pérez',
+      tipo_documento: 'CC',
+      numero_documento: '123456',
+      empresa_key: 'consorcio',
+      salario: '$ 800.000',
+      tipo_contrato: 'Prestación de servicios',
+      dedicacion: 'parcial',
+    }, { smmlv: 1_750_000 })
+    assert.equal(okPrest.ok, true)
+  })
+
+  it('payload incluye dedicacion', () => {
+    const p = payloadFromForm({
+      ...EMPTY_TRABAJADOR_FORM,
+      nombres: 'Ana',
+      apellidos: 'Pérez',
+      numero_documento: '1',
+      dedicacion: 'parcial',
+      periodo_prueba_dias: 'abc',
+    })
+    assert.equal(p.dedicacion, 'parcial')
+    assert.equal(p.periodo_prueba_dias, null)
   })
 
   it('construye checklist con tipos extendidos y Otro al final', async () => {

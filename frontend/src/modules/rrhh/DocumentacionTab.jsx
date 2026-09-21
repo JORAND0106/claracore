@@ -77,29 +77,44 @@ export default function DocumentacionTab({
     if (!api || !detalle || !canEdit) return
     setBusy(true)
     try {
-      await api.updateTrabajador(detalle.id, {
-        fecha_ingreso: editForm?.fecha_ingreso || null,
-        tipo_contrato: editForm?.tipo_contrato || null,
-        eps: editForm?.eps || null,
-        pension: editForm?.pension || null,
-        arl: editForm?.arl || null,
-        cesantias: editForm?.cesantias || null,
-        caja_compensacion: editForm?.caja_compensacion || null,
-        contrato_requiere_renovacion: !!(
-          editForm?.contrato_requiere_renovacion ?? editForm?.requiere_renovacion
-        ),
-        contrato_periodicidad_renovacion: (() => {
-          const req = !!(editForm?.contrato_requiere_renovacion ?? editForm?.requiere_renovacion)
-          if (!req) return null
-          return editForm?.contrato_periodicidad_renovacion
-            || ({ 1: 'mensual', 2: 'bimestral', 3: 'trimestral', 6: 'semestral', 12: 'anual' }[
-              Number(editForm?.periodicidad_renovacion_meses)
-            ] || null)
-        })(),
-        periodo_prueba_dias: editForm?.periodo_prueba_dias === '' || editForm?.periodo_prueba_dias == null
-          ? null
-          : Number(editForm.periodo_prueba_dias),
-      })
+      const periodo = (() => {
+        const n = Number(editForm?.periodo_prueba_dias)
+        if (editForm?.periodo_prueba_dias === '' || editForm?.periodo_prueba_dias == null) return null
+        if (!Number.isFinite(n)) return null
+        const i = Math.trunc(n)
+        return i >= 1 && i <= 365 ? i : null
+      })()
+
+      // Metadata del ciclo / afiliaciones — no bloquear la carga de archivos si falla.
+      let metaOk = true
+      try {
+        await api.updateTrabajador(detalle.id, {
+          fecha_ingreso: editForm?.fecha_ingreso || null,
+          tipo_contrato: editForm?.tipo_contrato || null,
+          dedicacion: editForm?.dedicacion || 'tiempo_completo',
+          eps: editForm?.eps || null,
+          pension: editForm?.pension || null,
+          arl: editForm?.arl || null,
+          cesantias: editForm?.cesantias || null,
+          caja_compensacion: editForm?.caja_compensacion || null,
+          contrato_requiere_renovacion: !!(
+            editForm?.contrato_requiere_renovacion ?? editForm?.requiere_renovacion
+          ),
+          contrato_periodicidad_renovacion: (() => {
+            const req = !!(editForm?.contrato_requiere_renovacion ?? editForm?.requiere_renovacion)
+            if (!req) return null
+            return editForm?.contrato_periodicidad_renovacion
+              || ({ 1: 'mensual', 2: 'bimestral', 3: 'trimestral', 6: 'semestral', 12: 'anual' }[
+                Number(editForm?.periodicidad_renovacion_meses)
+              ] || null)
+          })(),
+          periodo_prueba_dias: periodo,
+        })
+      } catch (metaErr) {
+        metaOk = false
+        flash('error', metaErr.message || 'No se pudieron guardar los datos del ciclo laboral.')
+      }
+
       const refs = [refSoporte, refIngreso, refAfiliacion]
       let files = 0
       let tipos = 0
@@ -112,7 +127,11 @@ export default function DocumentacionTab({
       }
       const full = await api.getTrabajador(detalle.id)
       onTrabajadorUpdated?.(full)
-      flash('success', `Documentación guardada${files || tipos ? ` (${files} archivo(s)${tipos ? `, ${tipos} tipo(s)` : ''})` : ''}.`)
+      if (metaOk) {
+        flash('success', `Documentación guardada${files || tipos ? ` (${files} archivo(s)${tipos ? `, ${tipos} tipo(s)` : ''})` : ''}.`)
+      } else if (files || tipos) {
+        flash('success', `Archivos guardados (${files} archivo(s)${tipos ? `, ${tipos} tipo(s)` : ''}), pero revise los datos del ciclo laboral.`)
+      }
     } catch (e) {
       flash('error', e.message || 'No se pudo guardar la documentación.')
     } finally {

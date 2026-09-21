@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -176,9 +177,75 @@ def _parse_money(val: Any) -> Optional[float]:
         n = float(val)
     except (TypeError, ValueError) as exc:
         raise ValueError("Salario inválido.") from exc
+    if n != n:  # NaN
+        return None
     if n < 0:
         raise ValueError("El salario no puede ser negativo.")
     return round(n, 2)
+
+
+def _norm_tipo_contrato(valor: Any) -> str:
+    s = unicodedata.normalize("NFD", str(valor or ""))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return re.sub(r"\s+", " ", s).lower().strip()
+
+
+def es_prestacion_servicios(tipo_contrato: Any) -> bool:
+    n = _norm_tipo_contrato(tipo_contrato)
+    return "prestacion de servicios" in n
+
+
+def es_dedicacion_parcial(dedicacion: Any) -> bool:
+    d = _norm_tipo_contrato(dedicacion).replace("_", " ")
+    return d == "parcial" or "medio tiempo" in d or "tiempo parcial" in d
+
+
+def aplica_salario_minimo(*, tipo_contrato: Any, dedicacion: Any) -> bool:
+    """Piso SMMLV; exceptúa Prestación de servicios con dedicación parcial."""
+    if es_prestacion_servicios(tipo_contrato) and es_dedicacion_parcial(dedicacion):
+        return False
+    return True
+
+
+def _smmlv_vigente(anio: Optional[int] = None) -> float:
+    from datetime import datetime
+
+    from rrhh_nomina_params import params_for_year
+
+    y = int(anio) if anio else datetime.now().year
+    return float(params_for_year(y).smmlv)
+
+
+def validar_salario_minimo(
+    salario: Optional[float],
+    *,
+    tipo_contrato: Any = None,
+    dedicacion: Any = None,
+) -> None:
+    if salario is None:
+        return
+    if not aplica_salario_minimo(tipo_contrato=tipo_contrato, dedicacion=dedicacion):
+        return
+    smmlv = _smmlv_vigente()
+    if smmlv > 0 and float(salario) < smmlv:
+        raise ValueError(
+            f"El salario no puede ser inferior al salario mínimo legal vigente "
+            f"(${smmlv:,.0f}).".replace(",", ".")
+        )
+
+
+def redactar_salario_trabajador(row: Optional[dict]) -> Optional[dict]:
+    """Oculta campos salariales en respuestas a usuarios sin permiso."""
+    if not row:
+        return row
+    out = dict(row)
+    out["salario"] = None
+    out["salario_liquidable"] = None
+    return out
+
+
+def redactar_salario_lista(rows: Optional[List[dict]]) -> List[dict]:
+    return [redactar_salario_trabajador(r) or r for r in (rows or [])]
 
 
 def _norm_valor(valor: str) -> str:
@@ -579,6 +646,13 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
     if "subsidio_transporte" in body or not partial:
         out["subsidio_transporte"] = _parse_bool(body.get("subsidio_transporte"), False)
 
+    if "dedicacion" in body or not partial:
+        ded = (_trim(body.get("dedicacion"), max_len=40) or "tiempo_completo").lower().replace(" ", "_")
+        if ded in ("parcial", "tiempo_parcial", "medio_tiempo"):
+            out["dedicacion"] = "parcial"
+        else:
+            out["dedicacion"] = "tiempo_completo"
+
     if "periodicidad" in body or not partial:
         per = (_trim(body.get("periodicidad"), max_len=20) or "mensual").lower()
         if per not in ("quincenal", "mensual"):
@@ -630,12 +704,17 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
             out["periodo_prueba_dias"] = None
         else:
             try:
-                dias = int(raw)
+                if isinstance(raw, float) and raw != raw:  # NaN
+                    out["periodo_prueba_dias"] = None
+                else:
+                    dias = int(float(raw))
+                    if dias < 1 or dias > 365:
+                        raise ValueError("Período de prueba debe estar entre 1 y 365 días.")
+                    out["periodo_prueba_dias"] = dias
             except (TypeError, ValueError) as exc:
+                if "Período de prueba" in str(exc):
+                    raise
                 raise ValueError("Período de prueba inválido (días enteros).") from exc
-            if dias < 1 or dias > 365:
-                raise ValueError("Período de prueba debe estar entre 1 y 365 días.")
-            out["periodo_prueba_dias"] = dias
 
     if "banco_entidad" in body or not partial:
         out["banco_entidad"] = _trim(body.get("banco_entidad"), max_len=200)
@@ -1168,6 +1247,11 @@ def create_trabajador(sb, contrato_id: int, body: dict, current_user) -> dict:
     payload = _payload_trabajador(sb, contrato_id, body, partial=False)
     payload["contrato_id"] = int(contrato_id)
     payload["created_by"] = _uid(current_user)
+    validar_salario_minimo(
+        payload.get("salario"),
+        tipo_contrato=payload.get("tipo_contrato"),
+        dedicacion=payload.get("dedicacion") or "tiempo_completo",
+    )
     _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
     try:
         rows = sb.table(_TABLE_TRAB).insert(payload).execute().data or []
@@ -1241,6 +1325,13 @@ def reiniciar_reingreso_trabajador(
         payload["contrato_requiere_renovacion"] = False
         payload["contrato_periodicidad_renovacion"] = None
 
+    if "salario" in payload and payload.get("salario") is not None:
+        validar_salario_minimo(
+            payload.get("salario"),
+            tipo_contrato=payload.get("tipo_contrato", prev.get("tipo_contrato")),
+            dedicacion=payload.get("dedicacion", prev.get("dedicacion") or "tiempo_completo"),
+        )
+
     _maybe_persist_catalog_values(sb, contrato_id, payload, current_user)
 
     from rrhh_docs_service import invalidar_documentacion_para_reingreso
@@ -1265,7 +1356,28 @@ def reiniciar_reingreso_trabajador(
 
 def update_trabajador(sb, contrato_id: int, trabajador_id: int, body: dict, current_user) -> dict:
     prev = get_trabajador(sb, contrato_id, trabajador_id)
+
+    # Sin permiso salarial: no permitir modificar salario en ediciones posteriores.
+    try:
+        from rrhh_permissions import puede_ver_salario_rrhh
+
+        if not puede_ver_salario_rrhh(current_user):
+            body = dict(body or {})
+            body.pop("salario", None)
+            body.pop("salario_liquidable", None)
+    except Exception:
+        pass
+
     payload = _payload_trabajador(sb, contrato_id, body or {}, partial=True)
+
+    # Completar contexto SMMLV con valores previos si no vienen en el patch
+    if "salario" in payload and payload.get("salario") is not None:
+        validar_salario_minimo(
+            payload.get("salario"),
+            tipo_contrato=payload.get("tipo_contrato", prev.get("tipo_contrato")),
+            dedicacion=payload.get("dedicacion", prev.get("dedicacion") or "tiempo_completo"),
+        )
+
     payload["updated_at"] = _now_iso()
     payload["updated_by"] = _uid(current_user)
 
