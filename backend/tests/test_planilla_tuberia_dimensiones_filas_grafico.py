@@ -31,6 +31,8 @@ class TestDimensionesPdf(unittest.TestCase):
         self.assertIn("padding:3px 4px", src)  # cartera ~70%
         self.assertIn("padding:2px 3px", src)  # resumen ~50%
         self.assertIn("height:141px", src)  # gráfico ~160% de 88
+        self.assertIn("background:#B0B0B0", src)  # cartera header más oscuro
+        self.assertIn("td.item", src)  # columna Item ampliada sin wrap
 
     def test_bloque_graficos_defaults_160(self):
         mod = _load_pdf_mod()

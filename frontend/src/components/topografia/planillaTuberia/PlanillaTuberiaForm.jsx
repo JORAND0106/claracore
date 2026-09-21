@@ -311,8 +311,9 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   }
 
   // Cartera: 70% de altura de fila del sheet base (32 → 22)
-  const thCartera = { ...thBase, padding: '3px 4px', lineHeight: 1.1, height: CARTERA_ROW_HEIGHT }
-  const thCarteraCalc = { ...thCalc, padding: '3px 4px', lineHeight: 1.1, height: CARTERA_ROW_HEIGHT }
+  // Encabezado cartera un tono más oscuro que el sheet base (#D9D9D9 → #B0B0B0)
+  const thCartera = { ...thBase, padding: '3px 4px', lineHeight: 1.1, height: CARTERA_ROW_HEIGHT, background: '#B0B0B0', color: '#1e293b' }
+  const thCarteraCalc = { ...thCalc, padding: '3px 4px', lineHeight: 1.1, height: CARTERA_ROW_HEIGHT, background: '#A3A3A3', color: '#1e293b' }
   const tdCartera = { ...sheet.td, height: CARTERA_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.1 }
   const tdCarteraEdit = { ...tdEdit, height: CARTERA_ROW_HEIGHT }
   const tdCarteraCalc = { ...tdCalc, height: CARTERA_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.1 }
@@ -322,7 +323,9 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const thResumen = { ...thBase, padding: '2px 4px', lineHeight: 1.05, height: RESUMEN_ROW_HEIGHT, fontSize: 9 }
   const thResumenCalc = { ...thCalc, padding: '2px 4px', lineHeight: 1.05, height: RESUMEN_ROW_HEIGHT, fontSize: 9 }
   const tdResumen = { ...sheet.td, height: RESUMEN_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.05, fontSize: 'var(--cc-xs)' }
+  const tdResumenItem = { ...tdResumen, whiteSpace: 'nowrap', minWidth: 148, width: '38%' }
   const tdResumenCalc = { ...tdCalc, height: RESUMEN_ROW_HEIGHT, padding: '1px 3px', lineHeight: 1.05, fontSize: 'var(--cc-xs)' }
+  const thResumenItem = { ...thResumen, whiteSpace: 'nowrap', minWidth: 148, width: '38%', textAlign: 'left' }
 
   const layoutMain = isCompact
     ? { display: 'flex', flexDirection: 'column', gap: 12 }
@@ -615,16 +618,17 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <div style={cardPad}>
                   <div style={sheet.sectionTitle}>Resumen de Cantidades</div>
                   <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 520 }}>
+                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 580 }}>
                       <thead>
                         <tr>
                           {['Item', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad'].map((h, i) => (
                             <th
                               key={h}
                               style={{
-                                ...(i >= 1 ? thResumenCalc : thResumen),
+                                ...(i === 0 ? thResumenItem : thResumenCalc),
                                 background: '#4472C4',
                                 color: '#fff',
+                                ...(i === 0 ? { textAlign: 'left' } : null),
                               }}
                             >
                               {h}
@@ -635,7 +639,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       <tbody>
                         {(calculo?.netos || []).map((n) => (
                           <tr key={n.codigo}>
-                            <td style={tdResumen}>{n.nombre}</td>
+                            <td style={tdResumenItem}>{n.nombre}</td>
                             <td style={tdResumenCalc}>{fmtNDash(n.long)}</td>
                             <td style={tdResumenCalc}>{fmtNDash(n.ancho)}</td>
                             <td style={tdResumenCalc}>{fmtNDash(n.espesor)}</td>
@@ -650,16 +654,17 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <div style={cardPad}>
                   <div style={sheet.sectionTitle}>Descuentos Específicos</div>
                   <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 420 }}>
+                    <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 480 }}>
                       <thead>
                         <tr>
                           {['Item', 'Long', 'Ancho', 'Espesor', 'Cantidad'].map((h, i) => (
                             <th
                               key={h}
                               style={{
-                                ...(i >= 1 ? thResumenCalc : thResumen),
+                                ...(i === 0 ? thResumenItem : thResumenCalc),
                                 background: '#EA4296',
                                 color: '#fff',
+                                ...(i === 0 ? { textAlign: 'left' } : null),
                               }}
                             >
                               {h}
@@ -670,7 +675,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       <tbody>
                         {(calculo?.descuentos || []).filter((d) => d.nombre).map((d) => (
                           <tr key={d.codigo}>
-                            <td style={tdResumen}>{d.nombre}</td>
+                            <td style={tdResumenItem}>{d.nombre}</td>
                             <td style={tdResumenCalc}>{fmtNDash(d.long)}</td>
                             <td style={tdResumenCalc}>{fmtNDash(d.ancho)}</td>
                             <td style={tdResumenCalc}>{fmtNDash(d.espesor)}</td>
