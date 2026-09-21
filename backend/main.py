@@ -5476,9 +5476,23 @@ def healthz():
 def listar_cargos():
     return supabase.table("cargos").select("*").order("nombre").execute().data
 
+
+def _ensure_rol_administrativo(sb=None) -> list:
+    """Wrapper: siembra ROL Administrativo (ver roles_seed.ensure_rol_administrativo)."""
+    from roles_seed import ensure_rol_administrativo
+
+    return ensure_rol_administrativo(sb or supabase)
+
+
 @app.get("/roles")
 def listar_roles():
-    return supabase.table("roles").select("*").order("nombre").execute().data
+    """Catálogo de roles de plataforma (asignables en admin de usuarios).
+
+    Asegura el ROL Administrativo para que aparezca en el selector sin paso
+    manual en Supabase.
+    """
+    return _ensure_rol_administrativo()
+
 
 
 @app.get("/guias/admin/todas")

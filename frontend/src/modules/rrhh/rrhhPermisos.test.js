@@ -74,6 +74,11 @@ describe('rrhhPermisos', () => {
   it('ROL Administrativo ve salario y entra al módulo', () => {
     const a = accesoRrhh({ rol_nombre: 'Administrativo', cargo_nombre: 'Residente', permisos: [] }, 1)
     assert.equal(a.ver, true)
+    assert.equal(a.crear, true)
+    assert.equal(a.editar, true)
+    assert.equal(a.eliminar, true)
+    assert.equal(a.validar, true)
+    assert.equal(a.exportar, true)
     assert.equal(a.verSalario, true)
     assert.equal(a.esAdministrativo, true)
   })
