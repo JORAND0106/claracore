@@ -534,6 +534,18 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
     };
   }, [focusUsuarioId, usuarios.length]);
 
+  // Precargar listado de subcontratistas cuando el cargo editado es subcontratista
+  useEffect(() => {
+    usuarios.forEach((u) => {
+      if (!esCargoSubcontratistaEdit(u.id, u)) return;
+      const cid = edits[u.id]?.contrato_id || u.contrato_id;
+      if (!cid) return;
+      if (subcontratistas[u.id]) return;
+      void cargarSubcontratistas(u.id, cid);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usuarios, edits, cargos]);
+
   const ejecutarVerificarInactividad = async () => {
     if (!window.confirm(
       "Esta acción revisa usuarios aprobados (excepto cargos de dirección/admin) con más de 7 días sin un registro LOGIN en el sistema, y los pone en estado pendiente / inactivos.\n\n¿Ejecutar ahora?"
@@ -565,6 +577,17 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
     return Number.isFinite(n) ? n : null;
   };
 
+  const cargoNombreById = (cargoId) => {
+    const c = cargos.find((x) => String(x.id) === String(cargoId));
+    return (c?.nombre || "").trim();
+  };
+
+  const esCargoSubcontratistaEdit = (uid, u) => {
+    const cargoId = edits[uid]?.cargo_id ?? u?.cargo_id;
+    const nombre = cargoNombreById(cargoId) || (u?.cargo_nombre || "");
+    return String(nombre).trim().toLowerCase() === "subcontratista";
+  };
+
   const guardar = async (uid, override = null) => {
     setSaving(uid);
     const e = { ...edits[uid], ...(override || {}) };
@@ -577,6 +600,18 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
       estado:            e.estado            || null,
       subcontratista_id: toOptInt(e.subcontratista_id),
     };
+    const cargoNom = cargoNombreById(payload.cargo_id) || (orig?.cargo_nombre || "");
+    if (String(cargoNom).trim().toLowerCase() === "subcontratista" && !payload.subcontratista_id) {
+      setMsg({
+        type: "error",
+        text: "El cargo Subcontratista requiere seleccionar el subcontratista del contrato.",
+      });
+      setSaving(null);
+      return;
+    }
+    if (String(cargoNom).trim().toLowerCase() !== "subcontratista") {
+      payload.subcontratista_id = null;
+    }
     if (orig && e.politicas_aceptadas !== undefined && e.politicas_aceptadas !== (orig.politicas_aceptadas === true)) {
       payload.politicas_aceptadas = e.politicas_aceptadas;
     }
@@ -634,11 +669,33 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
   };
 
   const cargarSubcontratistas = async (uid, contrato_id) => {
-    if (!contrato_id) return;
+    if (!contrato_id) {
+      setSubcontratistas(p => ({ ...p, [uid]: [] }));
+      return;
+    }
     try {
       const data = await call("GET", `/subcontratistas/${contrato_id}`);
       setSubcontratistas(p => ({ ...p, [uid]: data }));
     } catch { setSubcontratistas(p => ({ ...p, [uid]: [] })); }
+  };
+
+  const onCargoChange = (uid, u, cargoId) => {
+    setEdit(uid, "cargo_id", cargoId);
+    const nombre = cargoNombreById(cargoId);
+    if (String(nombre).trim().toLowerCase() === "subcontratista") {
+      const cid = edits[uid]?.contrato_id || u.contrato_id;
+      cargarSubcontratistas(uid, cid);
+    } else {
+      setEdit(uid, "subcontratista_id", "");
+    }
+  };
+
+  const onContratoChange = (uid, u, contratoId) => {
+    setEdit(uid, "contrato_id", contratoId);
+    setEdit(uid, "subcontratista_id", "");
+    if (esCargoSubcontratistaEdit(uid, { ...u, cargo_id: edits[uid]?.cargo_id ?? u.cargo_id })) {
+      cargarSubcontratistas(uid, contratoId);
+    }
   };
 
   const asignarSubcontratista = async (uid, subcontratista_id) => {
@@ -697,7 +754,7 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
             <select style={sel({ minWidth: adminCompact ? "100%" : 220, flex: adminCompact ? "1 1 100%" : undefined })}
               value={edits[u.id]?.subcontratista_id || ""}
               onChange={e => setEdit(u.id, "subcontratista_id", e.target.value)}>
-              <option value="">Sin subcontratista</option>
+              <option value="">Seleccionar subcontratista…</option>
               {(subcontratistas[u.id] || []).map(s => (
                 <option key={s.id} value={s.id}>{s.razon_social}</option>
               ))}
@@ -713,6 +770,10 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
   );
 
   const renderCamposUsuario = (u, asCard) => {
+    const esSub = esCargoSubcontratistaEdit(u.id, u);
+    const labelSub = (subcontratistas[u.id] || []).find(
+      (s) => String(s.id) === String(edits[u.id]?.subcontratista_id || u.subcontratista_id || "")
+    )?.razon_social;
     const fields = [
       {
         key: "estado",
@@ -733,7 +794,7 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
         node: (
           <select style={sel({ minWidth: asCard ? undefined : 140 })}
             value={edits[u.id]?.cargo_id || ""}
-            onChange={e => setEdit(u.id, "cargo_id", e.target.value)}>
+            onChange={e => onCargoChange(u.id, u, e.target.value)}>
             <option value="">Sin cargo</option>
             {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
           </select>
@@ -757,10 +818,37 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
         node: (
           <select style={sel({ minWidth: asCard ? undefined : 150 })}
             value={edits[u.id]?.contrato_id || ""}
-            onChange={e => setEdit(u.id, "contrato_id", e.target.value)}>
+            onChange={e => onContratoChange(u.id, u, e.target.value)}>
             <option value="">Sin contrato</option>
             {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
           </select>
+        ),
+      },
+      {
+        key: "subcontratista",
+        label: esSub ? "Subcontratista *" : "Subcontratista",
+        node: esSub ? (
+          <>
+            <select
+              style={sel({ minWidth: asCard ? undefined : 180 })}
+              value={edits[u.id]?.subcontratista_id || ""}
+              onChange={(e) => setEdit(u.id, "subcontratista_id", e.target.value)}
+              required
+            >
+              <option value="">Seleccionar…</option>
+              {(subcontratistas[u.id] || []).map((s) => (
+                <option key={s.id} value={s.id}>{s.razon_social}</option>
+              ))}
+            </select>
+            {!edits[u.id]?.subcontratista_id && (
+              <div style={{ fontSize: 10, color: "#f59e0b", marginTop: 4 }}>Obligatorio</div>
+            )}
+            {labelSub && edits[u.id]?.subcontratista_id ? (
+              <div style={{ fontSize: 10, color: col.textSecondary, marginTop: 4 }}>{labelSub}</div>
+            ) : null}
+          </>
+        ) : (
+          <span style={{ color: col.textSecondary, fontSize: 12 }}>—</span>
         ),
       },
       {
@@ -789,7 +877,9 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
       },
     ];
     if (!asCard) return fields;
-    return fields.map((f) => (
+    // En tarjetas, ocultar la columna vacía si el cargo no es subcontratista
+    const cardFields = esSub ? fields : fields.filter((f) => f.key !== "subcontratista");
+    return cardFields.map((f) => (
       <div key={f.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <label style={{ fontSize: "var(--cc-caption)", color: col.textMuted }}>{f.label}</label>
         {f.node}
@@ -832,7 +922,7 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
             <table style={S.table}>
               <thead>
                 <tr>
-                  {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Políticas", "Acciones"].map(h => (
+                  {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Subcontratista", "Políticas", "Acciones"].map(h => (
                     <th key={h} style={S.th(theme)}>{h}</th>
                   ))}
                 </tr>
@@ -867,7 +957,7 @@ function SeccionUsuarios({ call, cargos, theme, userId, focusUsuarioId = null })
                     </tr>
                     {expandido === u.id && (
                       <tr>
-                        <td colSpan={7} style={{ ...tdStyle, background: "rgba(0,175,197,0.04)", padding: 0 }}>
+                        <td colSpan={8} style={{ ...tdStyle, background: "rgba(0,175,197,0.04)", padding: 0 }}>
                           {renderExpandido(u)}
                         </td>
                       </tr>

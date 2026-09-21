@@ -16,6 +16,10 @@ from presupuesto_helpers import (
     _presupuesto_q_visibilidad_interventoria,
     presupuesto_oficial_version_id,
 )
+from subcontratista_visibilidad import (
+    apply_subcontratista_filter_q,
+    scope_from_user_dict,
+)
 from dashboard_costo_agregado import (
     cantidad_dashboard,
     cantidad_dashboard_sum,
@@ -56,7 +60,9 @@ _CAP_VARIANTS_TTL_SEC = 300
 
 def _scan_cache_key(contrato_id: int, vista: str, current_user) -> str:
     interv = "1" if _presupuesto_aplica_filtro_interventoria(current_user) else "0"
-    return f"{int(contrato_id)}|{parse_dash_vista(vista)}|{interv}"
+    restricted, forced = scope_from_user_dict(current_user)
+    sub_key = f"s{forced}" if restricted and forced is not None else ("s0" if restricted else "s*")
+    return f"{int(contrato_id)}|{parse_dash_vista(vista)}|{interv}|{sub_key}"
 
 
 def invalidate_scan_presupuesto_cache(contrato_id: Optional[int] = None) -> None:
@@ -446,7 +452,9 @@ def _apply_capitulo_filter(q, sb, contrato_id: int, capitulo: str, *, tipo_ejecu
 
 
 def _apply_interventoria_filter(q, current_user):
-    return _presupuesto_q_visibilidad_interventoria(q, current_user)
+    q = _presupuesto_q_visibilidad_interventoria(q, current_user)
+    restricted, forced = scope_from_user_dict(current_user)
+    return apply_subcontratista_filter_q(q, restricted, forced)
 
 
 def _ingest_presupuesto_row(
@@ -727,7 +735,12 @@ def scan_presupuesto_resumen_bruto(sb, contrato_id: int, current_user) -> Dict[s
     agregación cant×V.U. por ítem, un redondeo; sin filtrar tipo_ejecucion.
     Usado en KPI y gráfico «Presupuesto por Capítulo» del dashboard.
     """
-    key = f"{int(contrato_id)}|bruto|{'1' if _presupuesto_aplica_filtro_interventoria(current_user) else '0'}"
+    restricted, forced = scope_from_user_dict(current_user)
+    sub_key = f"s{forced}" if restricted and forced is not None else ("s0" if restricted else "s*")
+    key = (
+        f"{int(contrato_id)}|bruto|"
+        f"{'1' if _presupuesto_aplica_filtro_interventoria(current_user) else '0'}|{sub_key}"
+    )
     now = time.time()
     with _SCAN_CACHE_LOCK:
         cached = _SCAN_CACHE.get(key)

@@ -2266,7 +2266,7 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null, nivelesContr
     (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
   const esSubcontratista = esSubRol || cargo.includes('subcontratista')
 
-  const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico)
+  const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico || esSubcontratista)
 
   const rolIdRaw = usuario?.rol_id
   const rid = rolIdRaw != null && String(rolIdRaw).trim() !== '' ? parseInt(String(rolIdRaw), 10) : NaN
