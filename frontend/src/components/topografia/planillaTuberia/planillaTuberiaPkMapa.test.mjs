@@ -22,6 +22,17 @@ describe('Planilla tubería — PK / ID por mapa', () => {
     assert.match(formSrc, /costado:\s*loc\?\.ubicacion_costado/)
   })
 
+  it('abre el selector de mapa por encima del popup de edición de la planilla', () => {
+    assert.match(formSrc, /zIndex:\s*100030/)
+    assert.match(formSrc, /zIndex=\{100050\}/)
+    const modalSrc = readFileSync(
+      join(dir, '../../../modules/seguimiento/BitacoraMaterialUbicacionModal.jsx'),
+      'utf8',
+    )
+    assert.match(modalSrc, /zIndex\s*=\s*5600/)
+    assert.match(modalSrc, /zIndex,\s*background:/)
+  })
+
   it('ya no usa input de texto libre para PK / ID', () => {
     assert.doesNotMatch(
       formSrc,

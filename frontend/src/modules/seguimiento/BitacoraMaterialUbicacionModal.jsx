@@ -32,6 +32,8 @@ export default function BitacoraMaterialUbicacionModal({
   costado = '',
   infraestructura = '',
   readOnly = false,
+  /** Apilamiento del overlay; subir cuando se abre desde otro modal (p. ej. planilla). */
+  zIndex = 5600,
   onConfirm,
   onClose,
 }) {
@@ -112,7 +114,7 @@ export default function BitacoraMaterialUbicacionModal({
       role="presentation"
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, zIndex: 5600, background: 'rgba(15,23,42,0.5)',
+        position: 'fixed', inset: 0, zIndex, background: 'rgba(15,23,42,0.5)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
       }}
     >
