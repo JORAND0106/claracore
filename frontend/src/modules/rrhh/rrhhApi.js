@@ -3,6 +3,18 @@ import { buildRrhhApiError } from './rrhhApiErrors.js'
 
 export { buildRrhhApiError } from './rrhhApiErrors.js'
 
+/** Token vigente: storage primero (tras /auth/refresh), luego prop. */
+function resolveToken(token) {
+  try {
+    const fromStorage = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
+    if (fromStorage) return fromStorage
+  } catch { /* ignore */ }
+  if (typeof token === 'function') {
+    try { return token() || '' } catch { return '' }
+  }
+  return token || ''
+}
+
 async function parseError(res) {
   let payload = null
   try {
@@ -15,7 +27,8 @@ async function parseError(res) {
 
 async function apiJson(path, { method = 'GET', token, body, formData } = {}) {
   const headers = {}
-  if (token) headers.Authorization = `Bearer ${token}`
+  const tok = resolveToken(token)
+  if (tok) headers.Authorization = `Bearer ${tok}`
   let payload
   if (formData) {
     payload = formData
@@ -249,8 +262,9 @@ export function createRrhhApi(contratoId, token) {
       }),
 
     async downloadBlob(url, filename) {
+      const tok = resolveToken(token)
       const res = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: tok ? { Authorization: `Bearer ${tok}` } : {},
       })
       if (!res.ok) await parseError(res)
       const blob = await res.blob()
@@ -264,8 +278,9 @@ export function createRrhhApi(contratoId, token) {
     },
 
     async fetchBlobUrl(url) {
+      const tok = resolveToken(token)
       const res = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: tok ? { Authorization: `Bearer ${tok}` } : {},
       })
       if (!res.ok) await parseError(res)
       const blob = await res.blob()
