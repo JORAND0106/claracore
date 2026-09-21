@@ -17,6 +17,8 @@ import {
   SECCION_MAX_HEIGHT,
   filasDesdeApi,
   migrarFilasAlCambiarTipo,
+  coordsGeoDesdePlanilla,
+  payloadCoordsGeo,
 } from './planillaTuberiaUtils.js'
 
 describe('planillaTuberiaUtils', () => {
@@ -68,6 +70,46 @@ describe('planillaTuberiaUtils', () => {
       { abscisa: '1', subrasante_via: '', terminado_filtro: '11.2' },
     ], 'ALCANTARILLA')
     assert.equal(desdeFil[0].subrasante_via, '11.2')
+  })
+
+  it('coordsGeoDesdePlanilla lee meta y hace fallback a norte/este ref', () => {
+    const fromMeta = coordsGeoDesdePlanilla({
+      norte_ref: 1,
+      este_ref: 2,
+      meta_cabecera: {
+        norte_abs_inicial: 10.5,
+        este_abs_inicial: 20.5,
+        norte_abs_final: 30.5,
+        este_abs_final: 40.5,
+      },
+    })
+    assert.equal(fromMeta.norte_abs_inicial, '10.5')
+    assert.equal(fromMeta.este_abs_inicial, '20.5')
+    assert.equal(fromMeta.norte_abs_final, '30.5')
+    assert.equal(fromMeta.este_abs_final, '40.5')
+
+    const fromRef = coordsGeoDesdePlanilla({ norte_ref: 9, este_ref: 8, meta_cabecera: {} })
+    assert.equal(fromRef.norte_abs_inicial, '9')
+    assert.equal(fromRef.este_abs_inicial, '8')
+    assert.equal(fromRef.norte_abs_final, '')
+    assert.equal(fromRef.este_abs_final, '')
+  })
+
+  it('payloadCoordsGeo sincroniza meta + norte_ref/este_ref de inicio', () => {
+    const payload = payloadCoordsGeo({
+      norte_abs_inicial: '100.25',
+      este_abs_inicial: '200.5',
+      norte_abs_final: '300',
+      este_abs_final: '',
+    })
+    assert.equal(payload.norte_ref, 100.25)
+    assert.equal(payload.este_ref, 200.5)
+    assert.deepEqual(payload.meta_cabecera, {
+      norte_abs_inicial: 100.25,
+      este_abs_inicial: 200.5,
+      norte_abs_final: 300,
+      este_abs_final: null,
+    })
   })
 
   it('tieneDatosExportables y fondo calculado #F2F2F2', () => {

@@ -251,8 +251,61 @@ class TestPdfBloquesInventario(unittest.TestCase):
         self.assertIn("#D9D9D9", html)  # cabeceras geo/params
         self.assertNotIn("θ=", html)
         self.assertNotIn(" · ", html)
+        # Valores de georref inicio/fin deben aparecer tal cual en el HTML.
+        self.assertIn("1.000", html)  # norte_abs_inicial
+        self.assertIn("2.000", html)  # este_abs_inicial
+        self.assertIn("3.000", html)  # norte_abs_final
+        self.assertIn("4.000", html)  # este_abs_final
 
 
+class TestExcelGeorrefInicioFin(unittest.TestCase):
+    def test_excel_muestra_ambos_pares_coordenadas(self):
+        from openpyxl import load_workbook
+        import io
+
+        raw = build_planilla_tuberia_xlsx(
+            planilla={
+                "tipo": "ALCANTARILLA",
+                "diametro_m": 0.9,
+                "espesor_m": 0.05,
+                "ancho_excavacion_m": 1.5,
+                "relacion_atraque": "1:3",
+                "norte_ref": 111.1,  # no debe preferirse sobre meta
+                "este_ref": 222.2,
+                "meta_cabecera": {
+                    "norte_abs_inicial": 1000001.25,
+                    "este_abs_inicial": 900002.5,
+                    "norte_abs_final": 1000100.75,
+                    "este_abs_final": 900150.0,
+                },
+            },
+            calculo={"cartera": {"filas": []}},
+        )
+        ws = load_workbook(io.BytesIO(raw))["planilla"]
+        self.assertEqual(ws["C13"].value, 1000001.25)
+        self.assertEqual(ws["D13"].value, 900002.5)
+        self.assertEqual(ws["F13"].value, 1000100.75)
+        self.assertEqual(ws["G13"].value, 900150.0)
+
+    def test_excel_fallback_inicio_a_norte_este_ref(self):
+        from openpyxl import load_workbook
+        import io
+
+        raw = build_planilla_tuberia_xlsx(
+            planilla={
+                "tipo": "FILTRO",
+                "norte_ref": 55.5,
+                "este_ref": 66.6,
+                "meta_cabecera": {},
+            },
+            calculo={"cartera": {"filas": []}},
+            vacia=True,
+        )
+        ws = load_workbook(io.BytesIO(raw))["planilla"]
+        self.assertEqual(ws["C13"].value, 55.5)
+        self.assertEqual(ws["D13"].value, 66.6)
+        self.assertIn(ws["F13"].value, (None, ""))
+        self.assertIn(ws["G13"].value, (None, ""))
 
 
 class TestExcelDescuentosFijosPorTipo(unittest.TestCase):

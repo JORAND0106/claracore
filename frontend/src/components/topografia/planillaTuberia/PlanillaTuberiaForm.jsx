@@ -25,6 +25,8 @@ import {
   fmtNDash,
   handleEnterAsTab,
   migrarFilasAlCambiarTipo,
+  coordsGeoDesdePlanilla,
+  payloadCoordsGeo,
   payloadFilas,
   tieneDatosExportables,
 } from './planillaTuberiaUtils'
@@ -52,8 +54,10 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     ancho_excavacion_m: '',
     relacion_atraque: '1:3',
     material: '',
-    norte_ref: '',
-    este_ref: '',
+    norte_abs_inicial: '',
+    este_abs_inicial: '',
+    norte_abs_final: '',
+    este_abs_final: '',
   })
   const [version, setVersion] = useState(1)
   const [msg, setMsg] = useState('')
@@ -95,8 +99,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       ancho_excavacion_m: p.ancho_excavacion_m ?? '',
       relacion_atraque: p.relacion_atraque || '1:3',
       material: p.material || '',
-      norte_ref: p.norte_ref ?? '',
-      este_ref: p.este_ref ?? '',
+      ...coordsGeoDesdePlanilla(p),
     })
     setFilas(filasDesdeApi(det?.filas_campo, p.tipo || 'ALCANTARILLA'))
     setInfos(det?.validacion?.infos || [])
@@ -145,8 +148,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         ancho_excavacion_m: params.ancho_excavacion_m === '' ? null : Number(params.ancho_excavacion_m),
         relacion_atraque: params.relacion_atraque,
         material: params.material || null,
-        norte_ref: params.norte_ref === '' ? null : Number(params.norte_ref),
-        este_ref: params.este_ref === '' ? null : Number(params.este_ref),
+        ...payloadCoordsGeo(params),
       }
       aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}/params`, {
         method: 'PUT',
@@ -368,8 +370,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                     ancho_excavacion_m: params.ancho_excavacion_m === '' ? null : Number(params.ancho_excavacion_m),
                     relacion_atraque: params.relacion_atraque,
                     material: params.material || null,
-                    norte_ref: params.norte_ref === '' ? null : Number(params.norte_ref),
-                    este_ref: params.este_ref === '' ? null : Number(params.este_ref),
+                    ...payloadCoordsGeo(params),
                   }
                   const det = await api(`/planillas-tuberia/${planilla.id}/params`, {
                     method: 'PUT',
@@ -486,8 +487,10 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                     { key: 'ancho_excavacion_m', label: 'Ancho exc. B (m)' },
                     { key: 'relacion_atraque', label: 'Relación atraque' },
                     { key: 'material', label: 'Material' },
-                    { key: 'norte_ref', label: 'Norte ref.' },
-                    { key: 'este_ref', label: 'Este ref.' },
+                    { key: 'norte_abs_inicial', label: 'Norte Abs Inicial' },
+                    { key: 'este_abs_inicial', label: 'Este Abs Inicial' },
+                    { key: 'norte_abs_final', label: 'Norte Abs Final' },
+                    { key: 'este_abs_final', label: 'Este Abs Final' },
                   ]}
                   cells={[
                     <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
@@ -500,8 +503,10 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       {RELACIONES_ATRAQUE.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>,
                     <input key="mat" disabled={!editable} value={params.material} onChange={(e) => setParams((p) => ({ ...p, material: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="n" type="number" step="any" disabled={!editable} value={params.norte_ref} onChange={(e) => setParams((p) => ({ ...p, norte_ref: e.target.value }))} style={sheet.cellInp} />,
-                    <input key="e" type="number" step="any" disabled={!editable} value={params.este_ref} onChange={(e) => setParams((p) => ({ ...p, este_ref: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="nIni" type="number" step="any" disabled={!editable} value={params.norte_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, norte_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="eIni" type="number" step="any" disabled={!editable} value={params.este_abs_inicial} onChange={(e) => setParams((p) => ({ ...p, este_abs_inicial: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="nFin" type="number" step="any" disabled={!editable} value={params.norte_abs_final} onChange={(e) => setParams((p) => ({ ...p, norte_abs_final: e.target.value }))} style={sheet.cellInp} />,
+                    <input key="eFin" type="number" step="any" disabled={!editable} value={params.este_abs_final} onChange={(e) => setParams((p) => ({ ...p, este_abs_final: e.target.value }))} style={sheet.cellInp} />,
                   ]}
                 />
                 <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
@@ -509,7 +514,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   A1={fmtNDash(planilla.area_1_m2, 4)} ·
                   A2={fmtNDash(planilla.area_2_m2, 4)}
                   {detalle?.coords_wgs84 && (
-                    <> · WGS84 {fmtNDash(detalle.coords_wgs84.lat, 6)}, {fmtNDash(detalle.coords_wgs84.lon, 6)}</>
+                    <> · WGS84 (inicio) {fmtNDash(detalle.coords_wgs84.lat, 6)}, {fmtNDash(detalle.coords_wgs84.lon, 6)}</>
                   )}
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
