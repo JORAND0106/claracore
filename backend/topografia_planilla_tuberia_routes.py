@@ -211,9 +211,18 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
         logger.warning("calculo %s: %s", planilla_id, exc)
 
     coords = None
-    if planilla.get("este_ref") is not None and planilla.get("norte_ref") is not None:
+    # WGS84 sigue usando el par de inicio (EPSG transform sin cambios).
+    # Preferir columnas norte_ref/este_ref; si faltan, meta_cabecera de Abs Inicial.
+    meta_geo = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
+    norte_wgs = planilla.get("norte_ref")
+    if norte_wgs is None:
+        norte_wgs = meta_geo.get("norte_abs_inicial")
+    este_wgs = planilla.get("este_ref")
+    if este_wgs is None:
+        este_wgs = meta_geo.get("este_abs_inicial")
+    if este_wgs is not None and norte_wgs is not None:
         try:
-            lon, lat = gk_bogota_to_wgs84(float(planilla["este_ref"]), float(planilla["norte_ref"]))
+            lon, lat = gk_bogota_to_wgs84(float(este_wgs), float(norte_wgs))
             coords = {"lon": lon, "lat": lat}
         except Exception:
             coords = None
