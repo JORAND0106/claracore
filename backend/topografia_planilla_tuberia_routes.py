@@ -710,7 +710,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         {**it, "long": None, "ancho": None, "espesor": None, "bruto": None, "descuentos": None, "neto": None}
         for it in ITEMS_CANTIDADES
     ]
-        cants = "".join(
+    cants = "".join(
         f"<tr><td class='item'>{n['nombre']}</td>"
         f"<td class='calc num'>{fmt(n.get('long'))}</td>"
         f"<td class='calc num'>{fmt(n.get('ancho'))}</td>"
@@ -723,7 +723,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         {**it, "cantidad": None, "long": None, "ancho": None, "espesor": None}
         for it in _catalogo_descuentos(tipo)
     ]
-        descs = "".join(
+    descs = "".join(
         f"<tr><td class='item'>{d['nombre']}</td>"
         f"<td class='calc num'>{fmt(d.get('long'))}</td>"
         f"<td class='calc num'>{fmt(d.get('ancho'))}</td>"
