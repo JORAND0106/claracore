@@ -1165,6 +1165,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           pkLabel={params.pk_id || ''}
           costado={params.costado || ''}
           readOnly={!editable}
+          zIndex={100050}
           onClose={() => setPkMapOpen(false)}
           onConfirm={(loc) => {
             setParams((p) => ({
