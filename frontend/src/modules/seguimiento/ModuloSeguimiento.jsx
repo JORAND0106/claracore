@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BookOpen } from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
+import BitacoraAsistenciaRrhhToggle from './BitacoraAsistenciaRrhhToggle'
 import { accesoBitacora } from './bitacoraPermisos'
 import LibroDigitalVista, { LibroDigitalSelector } from './LibroDigitalVista'
 import SeguimientoCalendarioPanel from './SeguimientoCalendarioPanel'
@@ -85,6 +86,12 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           </div>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <BitacoraAsistenciaRrhhToggle
+            t={t}
+            token={token}
+            contratoId={cid}
+            esDesarrollador={Boolean(permisosBitacora?.esDesarrollador)}
+          />
           <button
             type="button"
             className="cc-seguim-libro-btn"

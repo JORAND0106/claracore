@@ -366,6 +366,9 @@ def _merge_personal_por_cargo(*listas: List[dict]) -> List[dict]:
 # Contrato con botón temporal cargo/cantidad (Desarrollador). Por número único.
 BITACORA_CARGO_CANTIDAD_TEMP_CONTRATO_NUMERO = "ICCU-CTO-1574-2025"
 
+# Cache breve: columna bitacora_asistencia_rrhh_activa disponible en PostgREST.
+_FLAG_ASISTENCIA_RRHH_SCHEMA: Dict[str, Any] = {"ok": None, "ts": 0.0}
+
 
 def _contrato_numero(sb, contrato_id: int) -> str:
     try:
@@ -385,9 +388,86 @@ def _contrato_numero(sb, contrato_id: int) -> str:
     return ""
 
 
+def _leer_flag_asistencia_rrhh_activa(sb, contrato_id: int) -> bool:
+    """Lee contratos.bitacora_asistencia_rrhh_activa (False si columna ausente)."""
+    import time
+
+    cid = int(contrato_id)
+    cached = _FLAG_ASISTENCIA_RRHH_SCHEMA.get("ok")
+    ts = float(_FLAG_ASISTENCIA_RRHH_SCHEMA.get("ts") or 0)
+    if cached is False and (time.monotonic() - ts) < 60:
+        return False
+    try:
+        rows = (
+            sb.table("contratos")
+            .select("bitacora_asistencia_rrhh_activa")
+            .eq("id", cid)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
+        _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+        if not rows:
+            return False
+        return bool(rows[0].get("bitacora_asistencia_rrhh_activa"))
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "bitacora_asistencia_rrhh_activa" in msg or "pgrst204" in msg or "42703" in msg:
+            _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = False
+            _FLAG_ASISTENCIA_RRHH_SCHEMA["ts"] = time.monotonic()
+            _log.warning(
+                "columna bitacora_asistencia_rrhh_activa ausente; "
+                "aplicar backend/sql/bitacora_asistencia_rrhh_activa.sql (%s)",
+                exc,
+            )
+            return False
+        _log.warning("_leer_flag_asistencia_rrhh_activa: %s", exc)
+        return False
+
+
+def set_asistencia_rrhh_activa(sb, contrato_id: int, activa: bool) -> bool:
+    """Persiste el toggle del contrato exento. Devuelve el valor guardado."""
+    cid = int(contrato_id)
+    val = bool(activa)
+    try:
+        sb.table("contratos").update(
+            {"bitacora_asistencia_rrhh_activa": val}
+        ).eq("id", cid).execute()
+        _FLAG_ASISTENCIA_RRHH_SCHEMA["ok"] = True
+        return val
+    except Exception as exc:
+        raise ValueError(
+            "No se pudo guardar bitacora_asistencia_rrhh_activa. "
+            "Ejecute backend/sql/bitacora_asistencia_rrhh_activa.sql en Supabase. "
+            f"Detalle: {exc}"
+        ) from exc
+
+
+def get_asistencia_rrhh_policy(sb, contrato_id: int) -> dict:
+    from bitacora_asistencia_rrhh_policy import policy_snapshot
+
+    flag = _leer_flag_asistencia_rrhh_activa(sb, contrato_id)
+    return policy_snapshot(contrato_id, activa_en_exento=flag)
+
+
 def _puede_personal_manual(sb, current_user, contrato_id: int) -> bool:
-    """Solo Desarrollador + contrato ICCU-CTO-1574-2025."""
+    """
+    Cargo/cantidad manual permitido si:
+    - Desarrollador + contrato ICCU-CTO-1574-2025, o
+    - Contrato exento (ID 3) con gate RRHH aún no activo (periodo legado / no activado).
+    """
+    from bitacora_asistencia_rrhh_policy import (
+        es_contrato_exento_asistencia_rrhh,
+        requiere_asistencia_rrhh_aprobado,
+    )
     from bitacora_permissions import _es_desarrollador_seguro
+
+    if es_contrato_exento_asistencia_rrhh(contrato_id):
+        flag = _leer_flag_asistencia_rrhh_activa(sb, contrato_id)
+        if not requiere_asistencia_rrhh_aprobado(contrato_id, activa_en_exento=flag):
+            return True
 
     if not _es_desarrollador_seguro(current_user):
         return False
@@ -2198,10 +2278,13 @@ def enrich_asistencia_desde_rrhh(
     sb,
     contrato_id: int,
     asistencia: List[dict],
+    *,
+    exigir_aprobado: bool = False,
 ) -> List[dict]:
     """
     Enlaza filas con RRHH: snapshot de cargo/empresa/estado al guardar.
     Filas sin rrhh_trabajador_id (legado) se conservan tal cual.
+    Si exigir_aprobado=True, rechaza colaboradores sin documentación Aprobada.
     """
     try:
         from rrhh_service import list_trabajadores
@@ -2221,10 +2304,19 @@ def enrich_asistencia_desde_rrhh(
         except (TypeError, ValueError, KeyError):
             continue
 
+    from bitacora_asistencia_rrhh_policy import doc_validacion_es_aprobado
+
     out: List[dict] = []
     for item in asistencia or []:
         tid = item.get("rrhh_trabajador_id")
         if tid is None:
+            if exigir_aprobado and str(item.get("origen") or "").lower() != "legado":
+                nombre = str(item.get("nombre") or "").strip()
+                if nombre:
+                    raise ValueError(
+                        "Debe identificar a cada trabajador desde el catálogo de RRHH "
+                        "(documentación Aprobada)."
+                    )
             out.append({**item, "origen": item.get("origen") or "legado"})
             continue
         try:
@@ -2238,6 +2330,12 @@ def enrich_asistencia_desde_rrhh(
             raise ValueError(
                 f"El colaborador RRHH #{tid_i} no existe o fue eliminado. "
                 "Regístrelo primero en el módulo de Recursos Humanos."
+            )
+        if exigir_aprobado and not doc_validacion_es_aprobado(trab.get("doc_validacion_estado")):
+            nom = _nombre_completo_rrhh(trab) or f"#{tid_i}"
+            raise ValueError(
+                f"«{nom}» no tiene documentación Aprobada en RRHH. "
+                "Solo colaboradores Aprobados pueden registrarse en Bitácora."
             )
         estado = str(trab.get("estado") or "activo").strip().lower()
         if estado not in ESTADOS_COLABORADOR:
@@ -2265,12 +2363,13 @@ def enrich_asistencia_desde_rrhh(
             ).strip(),
             "estado": estado,  # snapshot al guardar → congela resumen al cerrar
             "origen": "rrhh",
+            "doc_validacion_estado": str(trab.get("doc_validacion_estado") or "pendiente").lower(),
         })
     return out
 
 
 def list_rrhh_trabajadores_para_bitacora(
-    sb, contrato_id: int, q: str = "",
+    sb, contrato_id: int, q: str = "", *, solo_aprobados: Optional[bool] = None,
 ) -> List[dict]:
     """Catálogo RRHH reducido para autocompletado de Personal en obra."""
     try:
@@ -2283,6 +2382,17 @@ def list_rrhh_trabajadores_para_bitacora(
     except Exception as exc:
         _log.warning("list_rrhh_trabajadores_para_bitacora: %s", exc)
         return []
+
+    if solo_aprobados is None:
+        from bitacora_asistencia_rrhh_policy import requiere_asistencia_rrhh_aprobado
+
+        flag = _leer_flag_asistencia_rrhh_activa(sb, contrato_id)
+        solo_aprobados = requiere_asistencia_rrhh_aprobado(
+            contrato_id, activa_en_exento=flag,
+        )
+
+    from bitacora_asistencia_rrhh_policy import doc_validacion_es_aprobado
+
     out: List[dict] = []
     for t in rows:
         if not isinstance(t, dict):
@@ -2290,6 +2400,9 @@ def list_rrhh_trabajadores_para_bitacora(
         try:
             tid = int(t["id"])
         except (TypeError, ValueError, KeyError):
+            continue
+        doc_est = str(t.get("doc_validacion_estado") or "pendiente").lower()
+        if solo_aprobados and not doc_validacion_es_aprobado(doc_est):
             continue
         out.append({
             "id": tid,
@@ -2302,6 +2415,7 @@ def list_rrhh_trabajadores_para_bitacora(
             "empresa_nombre": t.get("empresa_nombre") or "",
             "empresa_subcontratista_id": t.get("empresa_subcontratista_id"),
             "estado": str(t.get("estado") or "activo").lower(),
+            "doc_validacion_estado": doc_est,
         })
     return out
 
@@ -2330,10 +2444,17 @@ def _resolver_personal_y_asistencia(
 ) -> Tuple[List[dict], Optional[List[dict]]]:
     """
     Si viene asistencia_colaboradores, enriquece desde RRHH (snapshot de estado)
-    y deriva personal. Combina con personal_manual (temporal Dev+contrato)
-    cuando está autorizado. Si no hay asistencia, usa personal legacy.
+    y deriva personal. Combina con personal_manual (temporal Dev+contrato /
+    contrato exento) cuando está autorizado. Si no hay asistencia, usa personal legacy.
     Returns (personal, asistencia|None).
     """
+    from bitacora_asistencia_rrhh_policy import requiere_asistencia_rrhh_aprobado
+
+    flag = _leer_flag_asistencia_rrhh_activa(sb, contrato_id)
+    exigir_aprobado = requiere_asistencia_rrhh_aprobado(
+        contrato_id, activa_en_exento=flag,
+    )
+
     manual: List[dict] = []
     if current_user is not None and _puede_personal_manual(sb, current_user, contrato_id):
         manual = _expandir_personal_otro(
@@ -2342,7 +2463,9 @@ def _resolver_personal_y_asistencia(
 
     if "asistencia_colaboradores" in data:
         lista = _normalizar_asistencia_colaboradores(data.get("asistencia_colaboradores"))
-        synced = enrich_asistencia_desde_rrhh(sb, contrato_id, lista)
+        synced = enrich_asistencia_desde_rrhh(
+            sb, contrato_id, lista, exigir_aprobado=exigir_aprobado,
+        )
         from_rrhh = _expandir_personal_otro(_personal_desde_asistencia(synced))
         personal = _merge_personal_por_cargo(from_rrhh, manual)
         return personal, synced

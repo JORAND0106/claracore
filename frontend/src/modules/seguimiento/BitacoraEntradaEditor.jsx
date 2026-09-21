@@ -24,9 +24,14 @@ import {
   mapaEstadosRrhh,
   mergePersonalCantidades,
   personalAgregadoDesdeAsistencia,
-  puedeUsarCargoCantidadTemporal,
+  puedeUsarCargoCantidadAsistencia,
   recoverPersonalManual,
 } from './personalAsistenciaHelpers'
+import {
+  HINT_DOCUMENTACION_NO_APROBADA,
+  docValidacionEsAprobado,
+  policySnapshotAsistenciaRrhh,
+} from './bitacoraAsistenciaRrhhPolicy'
 import { puedeEditarEntradaBitacora, esReporteAtrasadoLocal } from './bitacoraPermisos'
 import {
   EVENTO_TIPOS,
@@ -239,6 +244,9 @@ export default function BitacoraEntradaEditor({
   ))
   const [rrhhCatalogo, setRrhhCatalogo] = useState([])
   const [contratoNumero, setContratoNumero] = useState('')
+  const [asistenciaRrhhPolicy, setAsistenciaRrhhPolicy] = useState(() =>
+    policySnapshotAsistenciaRrhh({ contratoId }),
+  )
   const [usos, setUsos] = useState(
     Array.isArray(entrada?.equipos_uso) && entrada.equipos_uso.length
       ? entrada.equipos_uso.map(usoFromApi)
@@ -326,13 +334,37 @@ export default function BitacoraEntradaEditor({
       } catch { /* sin permiso / red */ }
     })()
     return () => { cancelled = true }
-  }, [api, tipo])
+  }, [api, tipo, asistenciaRrhhPolicy?.requiere_rrhh_aprobado])
+
+  // Política Bitácora ↔ RRHH (corte / contrato 3 / toggle).
+  useEffect(() => {
+    if (!api?.getBitacoraAsistenciaRrhhPolicy) {
+      setAsistenciaRrhhPolicy(policySnapshotAsistenciaRrhh({ contratoId }))
+      return undefined
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await api.getBitacoraAsistenciaRrhhPolicy()
+        if (!cancelled && data && typeof data === 'object') {
+          setAsistenciaRrhhPolicy(data)
+        }
+      } catch {
+        if (!cancelled) {
+          setAsistenciaRrhhPolicy(policySnapshotAsistenciaRrhh({ contratoId }))
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [api, contratoId])
 
   // Resumen: live RRHH si abierto; snapshot si cerrado; + registro directo temporal.
   const resumenCongelado = !editable && String(entrada?.estado || '').toLowerCase() === 'cerrado'
-  const permitirCargoCantidad = puedeUsarCargoCantidadTemporal({
+  const gateRrhhAprobado = Boolean(asistenciaRrhhPolicy?.requiere_rrhh_aprobado)
+  const permitirCargoCantidad = puedeUsarCargoCantidadAsistencia({
     esDesarrollador: Boolean(permisos?.esDesarrollador),
     contratoNumero,
+    permiteCargoCuadrilla: Boolean(asistenciaRrhhPolicy?.permite_cargo_cuadrilla),
   })
   useEffect(() => {
     if (tipo !== 'diario') return
@@ -458,10 +490,25 @@ export default function BitacoraEntradaEditor({
       const sinRrhh = asistenciaPayload.filter(
         (r) => r.nombre && r.rrhh_trabajador_id == null && r.origen !== 'legado',
       )
-      if (sinRrhh.length) {
+      // Tras el corte (y en contrato 3 activado): identificación individual obligatoria.
+      // Antes del corte / contrato 3 exento: se permite cargo/cuadrilla sin RRHH id.
+      if (sinRrhh.length && (gateRrhhAprobado || !permitirCargoCantidad)) {
         setError(HINT_REGISTRAR_EN_RRHH)
         setBusy(false)
         return
+      }
+      if (gateRrhhAprobado) {
+        const noAprob = asistenciaPayload.filter((r) => {
+          if (r.rrhh_trabajador_id == null) return false
+          const trab = (rrhhCatalogo || []).find((t) => Number(t.id) === Number(r.rrhh_trabajador_id))
+          if (!trab) return false
+          return !docValidacionEsAprobado(trab.doc_validacion_estado)
+        })
+        if (noAprob.length) {
+          setError(HINT_DOCUMENTACION_NO_APROBADA)
+          setBusy(false)
+          return
+        }
       }
       const liveMap = mapaEstadosRrhh(rrhhCatalogo)
       const personalRrhh = personalAgregadoDesdeAsistencia(
@@ -938,6 +985,7 @@ export default function BitacoraEntradaEditor({
                 personalManual={personalManual}
                 onChangePersonalManual={setPersonalManual}
                 permitirCargoCantidad={permitirCargoCantidad && editable}
+                gateRrhhAprobado={gateRrhhAprobado}
               />
 
               {/* Maquinaria Excel */}
