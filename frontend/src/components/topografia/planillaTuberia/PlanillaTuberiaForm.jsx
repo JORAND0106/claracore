@@ -81,6 +81,108 @@ const ico = {
 }
 
 
+
+/** Clip fotográfico por línea de cantidad/descuento (data URI local + preview). */
+function FotoLineaBtn({ fotos = [], onChange, disabled, label }) {
+  const ref = useRef(null)
+  const list = Array.isArray(fotos) ? fotos : []
+  const addFiles = (fileList) => {
+    const readers = Array.from(fileList || []).map((file) => new Promise((resolve) => {
+      if (!String(file.type || '').startsWith('image/')) {
+        resolve(null)
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => resolve({
+        nombre: file.name || `foto-${Date.now()}.jpg`,
+        data_uri: reader.result,
+        mime_type: file.type || 'image/jpeg',
+        created_at: new Date().toISOString(),
+      })
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(file)
+    }))
+    Promise.all(readers).then((rows) => {
+      const ok = rows.filter(Boolean)
+      if (ok.length) onChange?.([...list, ...ok])
+    })
+  }
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, justifyContent: 'center' }}>
+      <button
+        type="button"
+        className="cc-topo-touch-btn"
+        title={list.length ? `${label || 'Fotos'}: ${list.length}` : `Adjuntar foto — ${label || 'línea'}`}
+        aria-label={list.length ? `Fotos (${list.length})` : `Adjuntar foto ${label || ''}`}
+        disabled={disabled && !list.length}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (!disabled) ref.current?.click()
+        }}
+        style={{
+          width: 32,
+          height: 32,
+          minWidth: 32,
+          minHeight: 32,
+          padding: 0,
+          borderRadius: 8,
+          border: `1px solid ${list.length ? '#86efac' : '#cbd5e1'}`,
+          background: list.length ? '#f0fdf4' : '#fff',
+          color: list.length ? '#166534' : '#64748b',
+          fontSize: 12,
+          fontWeight: 700,
+          cursor: disabled && !list.length ? 'default' : 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1,
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+          <circle cx="12" cy="13" r="4" />
+        </svg>
+        {list.length ? list.length : ''}
+      </button>
+      {list.length > 0 && !disabled && (
+        <button
+          type="button"
+          title="Quitar última foto"
+          aria-label="Quitar última foto"
+          onClick={(e) => {
+            e.stopPropagation()
+            onChange?.(list.slice(0, -1))
+          }}
+          style={{
+            width: 22,
+            height: 22,
+            border: 'none',
+            background: 'transparent',
+            color: '#b91c1c',
+            cursor: 'pointer',
+            fontSize: 14,
+            padding: 0,
+          }}
+        >
+          ×
+        </button>
+      )}
+      <input
+        ref={ref}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        multiple
+        hidden
+        onChange={(e) => {
+          addFiles(e.target.files)
+          e.target.value = ''
+        }}
+      />
+    </div>
+  )
+}
+
 export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
   const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
@@ -117,6 +219,8 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [pkMapOpen, setPkMapOpen] = useState(false)
   /** Overrides Long/Ancho/Espesor (+nombre OTROS) del Resumen de Cantidades. */
   const [cantManuales, setCantManuales] = useState([])
+  /** { cantidades: {CODIGO: [foto…]}, descuentos: {CODIGO: [foto…]} } */
+  const [fotosLineas, setFotosLineas] = useState({ cantidades: {}, descuentos: {} })
   const tableRef = useRef(null)
 
   const planilla = detalle?.planilla
@@ -157,6 +261,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setInfos(det?.validacion?.infos || [])
     const meta = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
     setCantManuales(Array.isArray(meta.cantidades_manuales) ? meta.cantidades_manuales : [])
+    const fl = meta.fotos_lineas && typeof meta.fotos_lineas === 'object' ? meta.fotos_lineas : {}
+    setFotosLineas({
+      cantidades: (fl.cantidades && typeof fl.cantidades === 'object') ? fl.cantidades : {},
+      descuentos: (fl.descuentos && typeof fl.descuentos === 'object') ? fl.descuentos : {},
+    })
   }, [])
 
   const abrir = async (id) => {
@@ -178,6 +287,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setErr('')
     setInfos([])
     setCantManuales([])
+    setFotosLineas({ cantidades: {}, descuentos: {} })
     setFilas(Array.from({ length: FILAS_INICIALES_CARTERA }, (_, i) => filaCampoVacia(i + 1)))
     setParams((p) => ({
       ...p,
@@ -233,7 +343,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     const prev = (planilla?.meta_cabecera && typeof planilla.meta_cabecera === 'object')
       ? planilla.meta_cabecera
       : {}
-    return { ...prev, cantidades_manuales: cantManuales }
+    return { ...prev, cantidades_manuales: cantManuales, fotos_lineas: fotosLineas }
   }
 
   const overrideCantidad = (codigo) => (
@@ -320,14 +430,64 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     }
   }
 
+
+  const fotosDeLinea = (grupo, codigo) => {
+    const bag = fotosLineas?.[grupo] || {}
+    const arr = bag[codigo]
+    return Array.isArray(arr) ? arr : []
+  }
+
+  const setFotosDeLinea = (grupo, codigo, fotos) => {
+    setFotosLineas((prev) => ({
+      ...prev,
+      [grupo]: {
+        ...(prev?.[grupo] || {}),
+        [codigo]: Array.isArray(fotos) ? fotos : [],
+      },
+    }))
+  }
+
+  const lineasSinFoto = () => {
+    const faltantes = []
+    for (const n of (calculo?.netos || [])) {
+      const cant = Number(displayNetoCant(n))
+      if (!Number.isFinite(cant) || Math.abs(cant) < 1e-9) continue
+      if (fotosDeLinea('cantidades', n.codigo).length < 1) {
+        faltantes.push(`Cantidades · ${displayNombreCant(n)}`)
+      }
+    }
+    for (const d of (calculo?.descuentos || []).filter((x) => x.nombre)) {
+      const cant = Number(d.cantidad)
+      if (!Number.isFinite(cant) || Math.abs(cant) < 1e-9) continue
+      if (fotosDeLinea('descuentos', d.codigo).length < 1) {
+        faltantes.push(`Descuentos · ${d.nombre}`)
+      }
+    }
+    return faltantes
+  }
+
   const guardarCartera = async () => {
     if (!planilla?.id) return
-    setBusy(true); setErr(''); setMsg('')
+    setErr(''); setMsg('')
+    const faltan = lineasSinFoto()
+    if (faltan.length) {
+      setErr(
+        `Registro fotográfico obligatorio: adjunte al menos una foto en: ${faltan.join('; ')}.`,
+      )
+      return
+    }
+    setBusy(true)
     try {
       const filasPayload = payloadFilas(filas, params.tipo)
       const res = await api(`/planillas-tuberia/${planilla.id}/cartera`, {
         method: 'PUT',
-        body: JSON.stringify({ version, filas: filasPayload, descuentos_manuales: [], cantidades_manuales: cantManuales }),
+        body: JSON.stringify({
+          version,
+          filas: filasPayload,
+          descuentos_manuales: [],
+          cantidades_manuales: cantManuales,
+          fotos_lineas: fotosLineas,
+        }),
       })
       const conf = confirmarGuardadoCartera(res, filasPayload.length)
       if (!conf.ok) {
@@ -813,7 +973,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 580 }}>
           <thead>
             <tr>
-              {['Item', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad'].map((h, i) => (
+              {['Item', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -875,6 +1035,14 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   ))}
                   <td style={tdResumenCalc}>{fmtNDash(n.descuentos)}</td>
                   <td style={tdResumenCalc}>{fmtNDash(displayNetoCant(n))}</td>
+                <td style={{ ...tdResumenCalc, textAlign: 'center', padding: 2 }}>
+                    <FotoLineaBtn
+                      label={displayNombreCant(n)}
+                      fotos={fotosDeLinea('cantidades', n.codigo)}
+                      disabled={!editable}
+                      onChange={(fotos) => setFotosDeLinea('cantidades', n.codigo, fotos)}
+                    />
+                  </td>
                 </tr>
               )
             })}
@@ -888,7 +1056,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 480 }}>
           <thead>
             <tr>
-              {['Item', 'Long', 'Ancho', 'Espesor', 'Cantidad'].map((h, i) => (
+              {['Item', 'Long', 'Ancho', 'Espesor', 'Cantidad', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -911,6 +1079,14 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <td style={tdResumenCalc}>{fmtNDash(d.ancho)}</td>
                 <td style={tdResumenCalc}>{fmtNDash(d.espesor)}</td>
                 <td style={tdResumenCalc}>{fmtNDash(d.cantidad)}</td>
+              <td style={{ ...tdResumenCalc, textAlign: 'center', padding: 2 }}>
+                  <FotoLineaBtn
+                    label={d.nombre}
+                    fotos={fotosDeLinea('descuentos', d.codigo)}
+                    disabled={!editable}
+                    onChange={(fotos) => setFotosDeLinea('descuentos', d.codigo, fotos)}
+                  />
+                </td>
               </tr>
             ))}
           </tbody>

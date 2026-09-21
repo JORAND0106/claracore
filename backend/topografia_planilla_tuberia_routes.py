@@ -25,6 +25,7 @@ from topografia_planilla_tuberia import (
     filtrar_descuentos_manuales_por_tipo,
     migrar_filas_campo_al_cambiar_tipo,
     validar_cartera_campo,
+    validar_fotos_lineas,
 )
 from topo_crs import gk_bogota_to_wgs84
 
@@ -118,6 +119,7 @@ class CarteraBody(BaseModel):
     filas: list[FilaBody]
     descuentos_manuales: list[DescBody] = Field(default_factory=list)
     cantidades_manuales: Optional[list[dict[str, Any]]] = None
+    fotos_lineas: Optional[dict[str, Any]] = None
 
 
 def _filas(planilla_id: str) -> list[dict]:
@@ -484,9 +486,14 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
     _assert_editable(p)
     _assert_version(p, body.version)
 
+    prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    meta_patch: dict[str, Any] = {}
     if body.cantidades_manuales is not None:
-        prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
-        new_meta = {**prev_meta, "cantidades_manuales": body.cantidades_manuales}
+        meta_patch["cantidades_manuales"] = body.cantidades_manuales
+    if body.fotos_lineas is not None:
+        meta_patch["fotos_lineas"] = body.fotos_lineas
+    if meta_patch:
+        new_meta = {**prev_meta, **meta_patch}
         supabase.table("topo_planillas_tuberia").update({
             "meta_cabecera": new_meta,
             "updated_at": _now(),
@@ -508,6 +515,45 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
             "errores": valid.get("errores") or [],
             "infos": valid.get("infos") or [],
         })
+
+    # Validación fotográfica cuando ya hay diámetro/ancho (hay cantidades calculables).
+    diam = float(p.get("diametro_m") or 0)
+    ancho = float(p.get("ancho_excavacion_m") or 0)
+    if diam > 0 and ancho > 0 and filas_util:
+        desc_preview = [
+            {"codigo": d.codigo, "cantidad": float(d.cantidad)}
+            for d in (body.descuentos_manuales or []) if d.codigo
+        ]
+        calc_preview = calcular_planilla_completa(
+            tipo=p.get("tipo") or "ALCANTARILLA",
+            diametro_m=diam,
+            espesor_m=float(p.get("espesor_m") or 0),
+            ancho_excavacion_m=ancho,
+            relacion_atraque=p.get("relacion_atraque") or "1:3",
+            filas_campo=filas_util,
+            descuentos_manuales=desc_preview,
+            cantidades_manuales=(
+                body.cantidades_manuales
+                if body.cantidades_manuales is not None
+                else _cantidades_manuales_from_meta(p)
+            ),
+            cama_triturado_m=_cama_triturado_m(p),
+        )
+        fotos_meta = (
+            body.fotos_lineas
+            if body.fotos_lineas is not None
+            else (
+                (p.get("meta_cabecera") or {}).get("fotos_lineas")
+                if isinstance(p.get("meta_cabecera"), dict)
+                else None
+            )
+        )
+        fotos_ok = validar_fotos_lineas(calc_preview, fotos_meta)
+        if not fotos_ok.get("ok"):
+            raise HTTPException(422, {
+                "mensaje": fotos_ok.get("mensaje") or "Faltan registros fotográficos.",
+                "faltantes": fotos_ok.get("faltantes") or [],
+            })
 
     try:
         rows = _replace_filas(planilla_id, filas_util)

@@ -17,6 +17,7 @@ from topografia_planilla_tuberia import (
     calcular_seccion,
     construir_fila_consolidado,
     validar_cartera_campo,
+    validar_fotos_lineas,
 )
 
 
@@ -186,6 +187,35 @@ class TestCantidadesDescuentosXlsm(unittest.TestCase):
         self.assertAlmostEqual(otr["neto"], 2.4, places=2)
         self.assertEqual(otr["nombre"], "Otros: Caja de inspección")
 
+    def test_validar_fotos_lineas_exige_foto_si_cantidad(self):
+        r = calcular_planilla_completa(
+            tipo="ALCANTARILLA",
+            diametro_m=0.9,
+            espesor_m=0.05,
+            ancho_excavacion_m=1.5,
+            relacion_atraque="1:3",
+            filas_campo=[
+                {"orden": 1, "abscisa": 100, "terreno_natural": 105, "subrasante_via": 104, "cota_fondo_excavacion": 103},
+                {"orden": 2, "abscisa": 120, "terreno_natural": 104.5, "subrasante_via": 103.5, "cota_fondo_excavacion": 102.5},
+            ],
+            cama_triturado_m=0.1,
+            cantidades_manuales=[
+                {"codigo": "EXC_ROC", "long": 0, "ancho": 0, "espesor": 0},
+                {"codigo": "OTROS", "long": 0, "ancho": 0, "espesor": 0},
+            ],
+        )
+        sin = validar_fotos_lineas(r, {"cantidades": {}, "descuentos": {}})
+        self.assertFalse(sin["ok"])
+        self.assertTrue(any("Cantidades" in f for f in sin["faltantes"]))
+        fotos = {"cantidades": {}, "descuentos": {}}
+        for n in r["netos"]:
+            if abs(float(n["neto"] or 0)) >= 1e-9:
+                fotos["cantidades"][n["codigo"]] = [{"data_uri": "data:image/png;base64,xx"}]
+        for d in r["descuentos"]:
+            if d.get("nombre") and abs(float(d.get("cantidad") or 0)) >= 1e-9:
+                fotos["descuentos"][d["codigo"]] = [{"data_uri": "data:image/png;base64,yy"}]
+        ok = validar_fotos_lineas(r, fotos)
+        self.assertTrue(ok["ok"], ok.get("faltantes"))
 
 
 class TestValidacionYConsolidado(unittest.TestCase):
