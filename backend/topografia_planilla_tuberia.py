@@ -773,6 +773,65 @@ def validar_cartera_campo(filas: list[dict], tipo: str) -> dict[str, Any]:
     return {"ok": len(errores) == 0, "errores": errores, "infos": infos}
 
 
+def _foto_linea_valida(item: Any) -> bool:
+    """True si el adjunto tiene contenido fotográfico usable (data URI o URL)."""
+    if not isinstance(item, dict):
+        return False
+    data = item.get("data_uri") or item.get("data_base64") or item.get("url") or item.get("blob_path")
+    return bool(data and str(data).strip())
+
+
+def _fotos_de_codigo(fotos_lineas: Optional[dict], grupo: str, codigo: str) -> list:
+    if not isinstance(fotos_lineas, dict):
+        return []
+    bag = fotos_lineas.get(grupo) or {}
+    if not isinstance(bag, dict):
+        return []
+    arr = bag.get(codigo) or bag.get(str(codigo or "").upper())
+    return arr if isinstance(arr, list) else []
+
+
+def validar_fotos_lineas(
+    calculo: dict,
+    fotos_lineas: Optional[dict] = None,
+) -> dict[str, Any]:
+    """Exige ≥1 foto en cada línea de cantidades/descuentos con cantidad ≠ 0."""
+    faltantes: list[str] = []
+    for n in (calculo or {}).get("netos") or []:
+        try:
+            cant = float(n.get("neto") or 0)
+        except (TypeError, ValueError):
+            cant = 0.0
+        if abs(cant) < 1e-9:
+            continue
+        codigo = str(n.get("codigo") or "")
+        fotos = _fotos_de_codigo(fotos_lineas, "cantidades", codigo)
+        if not any(_foto_linea_valida(f) for f in fotos):
+            nombre = n.get("nombre") or codigo or "ítem"
+            faltantes.append(f"Cantidades · {nombre}")
+    for d in (calculo or {}).get("descuentos") or []:
+        if not d.get("nombre"):
+            continue
+        try:
+            cant = float(d.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            cant = 0.0
+        if abs(cant) < 1e-9:
+            continue
+        codigo = str(d.get("codigo") or "")
+        fotos = _fotos_de_codigo(fotos_lineas, "descuentos", codigo)
+        if not any(_foto_linea_valida(f) for f in fotos):
+            faltantes.append(f"Descuentos · {d.get('nombre')}")
+    return {
+        "ok": len(faltantes) == 0,
+        "faltantes": faltantes,
+        "mensaje": (
+            f"Registro fotográfico obligatorio: adjunte al menos una foto en: {'; '.join(faltantes)}."
+            if faltantes else ""
+        ),
+    }
+
+
 # Aliases estables para rutas / tests
 calcular_seccion_planilla = calcular_seccion
 altura_relleno_m = altura_relleno_atraque_m

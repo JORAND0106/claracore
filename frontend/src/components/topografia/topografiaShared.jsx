@@ -497,7 +497,10 @@ export function useTopografiaApi(contratoId, token) {
             detail = text.slice(0, 200)
           }
         }
-        throw new Error(typeof detail === 'string' ? detail : 'Error en solicitud')
+        const msg = typeof detail === 'string'
+          ? detail
+          : (detail?.mensaje || detail?.message || JSON.stringify(detail) || 'Error en solicitud')
+        throw new Error(msg)
       }
       if (res.status === 204) return null
       if (isPdf || (isXlsx && accept.includes('spreadsheetml'))) return res.blob()
