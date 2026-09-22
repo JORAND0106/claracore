@@ -20,6 +20,7 @@ import {
   resolverCatalogoCargos,
   resumenCargosDesdeCatalogo,
   resumenEmpresasCargos,
+  cargosConColaboradoresRrhh,
 } from './personalAsistenciaHelpers'
 import { useSeguimientoCompact } from './seguimientoShared'
 
@@ -93,6 +94,12 @@ export default function PersonalAsistenciaPanel({
     [cargosCatalogo, rrhhCatalogo, cargosOpciones],
   )
 
+  /** Consolidado: cargos RRHH con ≥1 colaborador asignado (incluye contador 0). */
+  const cargosConsolidadoBase = useMemo(
+    () => cargosConColaboradoresRrhh(rrhhCatalogo),
+    [rrhhCatalogo],
+  )
+
   const resumenEmpresas = useMemo(
     () => resumenEmpresasCargos({
       rows: rowsVisibles,
@@ -103,8 +110,8 @@ export default function PersonalAsistenciaPanel({
   )
 
   const resumenConsolidado = useMemo(
-    () => resumenCargosDesdeCatalogo(cargosBase, agregado),
-    [cargosBase, agregado],
+    () => resumenCargosDesdeCatalogo(cargosConsolidadoBase, agregado),
+    [cargosConsolidadoBase, agregado],
   )
 
   const usedIds = useMemo(
@@ -364,8 +371,8 @@ export default function PersonalAsistenciaPanel({
           lineHeight: 1.35,
         }}>
           {gateRrhhAprobado
-            ? 'Consolidado y desglose por empresa: solo cargos con colaboradores nominados ese día.'
-            : 'Arriba: consolidado general (solo cargos con personas). Abajo: desglose por empresa con los cargos registrados.'}
+            ? 'Consolidado: cargos RRHH con colaboradores (contador del día). Por empresa: solo cargos registrados ese día.'
+            : 'Arriba: consolidado (cargos RRHH con personas; contador del día, puede ser 0). Abajo: por empresa solo con registros del día.'}
         </div>
       )}
 
@@ -541,7 +548,7 @@ export default function PersonalAsistenciaPanel({
           </div>
           {resumenConsolidado.length === 0 ? (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
-              Sin colaboradores nominados este día.
+              Sin cargos con colaboradores asignados en RRHH.
             </div>
           ) : renderCargoChips(resumenConsolidado, {
             keyPrefix: 'cons',

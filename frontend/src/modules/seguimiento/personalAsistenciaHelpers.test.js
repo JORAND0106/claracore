@@ -39,6 +39,7 @@ import {
   resolverCatalogoCargos,
   resumenCargosDesdeCatalogo,
   resumenEmpresasCargos,
+  cargosConColaboradoresRrhh,
   soloDigitosDocumento,
   stripTramoFilasAutocompletar,
   filasAsistenciaSinExcluidosRrhh,
@@ -259,18 +260,49 @@ describe('filasAsistenciaPorCargo / cantidadManualPorCargo', () => {
 })
 
 describe('resumenCargosDesdeCatalogo / filtro por cargo', () => {
-  it('solo muestra cargos con personas (omite ceros del catálogo) e incluye fuera de catálogo', () => {
+  it('lista cargos RRHH con colaboradores (incluye contador 0) y agrega fuera de catálogo', () => {
     const rows = resumenCargosDesdeCatalogo(
       ['Ayudante', 'Maestro', 'Topógrafo', 'Oficial'],
       [
         { cargo: 'Ayudante', cantidad: 3 },
         { cargo: 'Cadenero', cantidad: 1 },
-        { cargo: 'Oficial', cantidad: 0 },
       ],
     )
     assert.deepEqual(rows, [
       { cargo: 'Ayudante', cantidad: 3 },
       { cargo: 'Cadenero', cantidad: 1 },
+      { cargo: 'Maestro', cantidad: 0 },
+      { cargo: 'Oficial', cantidad: 0 },
+      { cargo: 'Topógrafo', cantidad: 0 },
+    ])
+  })
+
+  it('cargosConColaboradoresRrhh solo cargos con alguien asignado (omite vacío y Administrativo)', () => {
+    assert.deepEqual(
+      cargosConColaboradoresRrhh([
+        { cargo_aspira: 'Oficial' },
+        { cargo_aspira: 'oficial' },
+        { cargo_aspira: 'Ayudante' },
+        { cargo_aspira: '' },
+        { cargo_aspira: 'Administrativo' },
+        { cargo_aspira: 'Residente Administrativo' },
+        { cargo: 'Topógrafo' },
+      ]),
+      ['Ayudante', 'Oficial', 'Residente Administrativo', 'Topógrafo'],
+    )
+  })
+
+  it('día vacío: consolidado muestra cargos RRHH en cero', () => {
+    const base = cargosConColaboradoresRrhh([
+      { cargo_aspira: 'Ayudante' },
+      { cargo_aspira: 'Oficial' },
+      { cargo_aspira: 'Maestro' },
+    ])
+    const rows = resumenCargosDesdeCatalogo(base, [])
+    assert.deepEqual(rows, [
+      { cargo: 'Ayudante', cantidad: 0 },
+      { cargo: 'Maestro', cantidad: 0 },
+      { cargo: 'Oficial', cantidad: 0 },
     ])
   })
 
@@ -311,6 +343,7 @@ describe('resumenCargosDesdeCatalogo / filtro por cargo', () => {
     )
     assert.deepEqual(rows, [
       { cargo: 'Oficial', cantidad: 1 },
+      { cargo: 'Residente Administrativo', cantidad: 0 },
     ])
     const cat = [
       { id: 1, nombres: 'Ana', cargo_aspira: 'Oficial' },
