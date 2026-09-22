@@ -11,6 +11,7 @@ import {
   cantidadManualPorCargo,
   emptyAsistenciaRow,
   filasAsistenciaPorCargo,
+  filasAsistenciaSinExcluidosRrhh,
   mapaEstadosRrhh,
   mergePersonalCantidades,
   nombreEmpresaAsistencia,
@@ -49,6 +50,8 @@ export default function PersonalAsistenciaPanel({
   /** Gate post-corte: solo documentación Aprobada. */
   gateRrhhAprobado = false,
   cargosOpciones = CARGOS_PERSONAL,
+  /** IDs RRHH con rol plataforma Administrativo (no deben figurar en resumen). */
+  excluidosRrhhIds = [],
 }) {
   const ui = sheetStyles || {}
   const viewportCompact = useSeguimientoCompact() || compact
@@ -64,9 +67,14 @@ export default function PersonalAsistenciaPanel({
     () => (resumenCongelado ? null : mapaEstadosRrhh(rrhhCatalogo)),
     [resumenCongelado, rrhhCatalogo],
   )
+  /** Asistencia sin colaboradores con rol Administrativo (resumen + detalle). */
+  const rowsVisibles = useMemo(
+    () => filasAsistenciaSinExcluidosRrhh(rows, excluidosRrhhIds),
+    [rows, excluidosRrhhIds],
+  )
   const agregadoRrhh = useMemo(
-    () => personalAgregadoDesdeAsistencia(rows, { liveEstadosByRrhhId: liveMap }),
-    [rows, liveMap],
+    () => personalAgregadoDesdeAsistencia(rowsVisibles, { liveEstadosByRrhhId: liveMap }),
+    [rowsVisibles, liveMap],
   )
   const agregado = useMemo(
     () => mergePersonalCantidades(agregadoRrhh, personalManual),
@@ -84,11 +92,11 @@ export default function PersonalAsistenciaPanel({
 
   const resumenEmpresas = useMemo(
     () => resumenEmpresasCargos({
-      rows,
+      rows: rowsVisibles,
       personalManual: permitirCargoCantidad ? personalManual : [],
       liveEstadosByRrhhId: liveMap,
     }),
-    [rows, personalManual, permitirCargoCantidad, liveMap],
+    [rowsVisibles, personalManual, permitirCargoCantidad, liveMap],
   )
 
   const resumenConsolidado = useMemo(
@@ -105,12 +113,12 @@ export default function PersonalAsistenciaPanel({
     if (!cargoDetalle?.cargo) return []
     if (cargoDetalle.esRegistroDirecto) return []
     if (cargoDetalle.esConsolidado) {
-      return filasAsistenciaPorCargo(rows, cargoDetalle.cargo)
+      return filasAsistenciaPorCargo(rowsVisibles, cargoDetalle.cargo)
     }
-    return filasAsistenciaPorCargo(rows, cargoDetalle.cargo, {
+    return filasAsistenciaPorCargo(rowsVisibles, cargoDetalle.cargo, {
       empresa: cargoDetalle.empresa,
     })
-  }, [rows, cargoDetalle])
+  }, [rowsVisibles, cargoDetalle])
 
   const cantidadManualDetalle = useMemo(() => {
     if (!cargoDetalle?.cargo || !cargoDetalle.esRegistroDirecto) return 0

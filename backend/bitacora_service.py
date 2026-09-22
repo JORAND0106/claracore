@@ -49,12 +49,12 @@ SIN_TRAMO_ASIGNADO_LABEL = TRAMO_NO_ESPECIFICADO_LABEL
 
 _log = logging.getLogger("claracore.bitacora")
 
-# ROL de plataforma «Administrativo» (tabla ``roles``) — no entra en Bitácora.
-# La exclusión es por ROL (usuarios.rol_id → roles.nombre), no por el nombre
-# del cargo RRHH. P. ej. «Residente» se excluye solo si todos sus trabajadores
-# tienen ese rol; «Residente Administrativo» como cargo de obra puede quedar
-# si hay personal sin rol Administrativo.
+# ROL de plataforma «Administrativo» (tabla ``roles`` / ``usuarios.rol_id``
+# y, si existe, ``usuarios.rol_nombre``). No entra en Bitácora bajo ninguna
+# circunstancia. La exclusión NO se basa en el nombre del cargo RRHH.
 _ETIQUETA_ADMINISTRATIVO = "administrativo"
+_USUARIOS_SELECT_CON_ROL = "id, email, nombre, apellidos, rol_id, rol_nombre, roles(nombre)"
+_USUARIOS_SELECT_MIN = "id, email, nombre, apellidos, rol_id"
 
 
 def _norm_etiqueta_bitacora(txt: Any) -> str:
@@ -64,13 +64,27 @@ def _norm_etiqueta_bitacora(txt: Any) -> str:
 
 
 def es_etiqueta_administrativo_excluida(valor: Any) -> bool:
-    """True solo si la etiqueta es exactamente «Administrativo» (legado catálogo)."""
+    """True solo si la etiqueta es exactamente «Administrativo»."""
     return _norm_etiqueta_bitacora(valor) == _ETIQUETA_ADMINISTRATIVO
 
 
 def _norm_nombre_persona(*parts: Any) -> str:
     joined = " ".join(str(p or "").strip() for p in parts if str(p or "").strip())
     return _norm_etiqueta_bitacora(joined)
+
+
+def _variantes_nombre_persona(*parts: Any) -> Set[str]:
+    """Variantes normalizadas (orden nombres/apellidos) para cruce identidad."""
+    full = _norm_nombre_persona(*parts)
+    out: Set[str] = set()
+    if not full:
+        return out
+    out.add(full)
+    toks = full.split()
+    if len(toks) >= 2:
+        out.add(" ".join(toks[1:] + [toks[0]]))
+        out.add(" ".join([toks[-1]] + toks[:-1]))
+    return out
 
 
 def _ids_rol_administrativo(sb) -> Set[int]:
@@ -87,23 +101,62 @@ def _ids_rol_administrativo(sb) -> Set[int]:
     return out
 
 
-def _claves_usuarios_rol_administrativo(sb, contrato_id: int) -> Dict[str, Set[str]]:
+def _usuario_es_rol_administrativo(u: dict, admin_ids: Set[int]) -> bool:
+    """True si el usuario de plataforma tiene ROL Administrativo (fuente real)."""
+    if not isinstance(u, dict):
+        return False
+    try:
+        rid = int(u["rol_id"]) if u.get("rol_id") is not None else None
+    except (TypeError, ValueError):
+        rid = None
+    if rid is not None and rid in admin_ids:
+        return True
+    if es_etiqueta_administrativo_excluida(u.get("rol_nombre") or u.get("rol")):
+        return True
+    roles = u.get("roles")
+    if isinstance(roles, dict) and es_etiqueta_administrativo_excluida(roles.get("nombre")):
+        return True
+    if isinstance(roles, list):
+        for r in roles:
+            if isinstance(r, dict) and es_etiqueta_administrativo_excluida(r.get("nombre")):
+                return True
+    return False
+
+
+def _fetch_usuarios_rows(sb, *, eq: Optional[Tuple[str, Any]] = None, in_: Optional[Tuple[str, List[Any]]] = None):
+    """Select usuarios tolerando esquemas sin ``rol_nombre`` / embed ``roles``."""
+    for cols in (_USUARIOS_SELECT_CON_ROL, _USUARIOS_SELECT_MIN):
+        try:
+            q = sb.table("usuarios").select(cols)
+            if eq is not None:
+                q = q.eq(eq[0], eq[1])
+            if in_ is not None and in_[1]:
+                q = q.in_(in_[0], list(in_[1]))
+            return q.execute().data or []
+        except Exception as exc:
+            _log.debug("_fetch_usuarios_rows (%s): %s", cols, exc)
+            continue
+    return []
+
+
+def _claves_usuarios_rol_administrativo(
+    sb, contrato_id: int, trabajadores: Optional[List[dict]] = None,
+) -> Dict[str, Set[str]]:
     """
     Claves de usuarios con ROL de plataforma Administrativo.
 
-    Returns ``{"emails": set, "nombres": set}`` (ya normalizados) para cruzar
-    con ``rrhh_trabajadores`` (email y nombre completo). Incluye:
-    - usuarios del contrato (usuario_contratos / usuarios.contrato_id)
-    - cualquier usuario con rol_id Administrativo (por si el vínculo al
-      contrato solo existe vía RRHH y no en usuario_contratos)
+    Returns ``{"emails": set, "nombres": set}`` normalizados.
+    Fuente: ``roles`` + ``usuarios.rol_id`` y, si existe, ``rol_nombre`` /
+    embed ``roles(nombre)``. Incluye:
+    - usuarios del contrato
+    - usuarios con rol_id Administrativo
+    - usuarios con rol_nombre Administrativo
+    - usuarios cuyo email coincide con trabajadores del contrato (y son admin)
     """
     emails: Set[str] = set()
     nombres: Set[str] = set()
     try:
         admin_ids = _ids_rol_administrativo(sb)
-        if not admin_ids:
-            return {"emails": emails, "nombres": nombres}
-
         users_by_id: Dict[int, dict] = {}
 
         def _ingest(rows):
@@ -116,7 +169,6 @@ def _claves_usuarios_rol_administrativo(sb, contrato_id: int) -> Dict[str, Set[s
                     continue
                 users_by_id[uid] = {**users_by_id.get(uid, {}), **u}
 
-        # 1) Usuarios del contrato
         uids: Set[int] = set()
         try:
             ucs = (
@@ -136,66 +188,43 @@ def _claves_usuarios_rol_administrativo(sb, contrato_id: int) -> Dict[str, Set[s
         except Exception as exc:
             _log.warning("_claves_usuarios_rol_administrativo usuario_contratos: %s", exc)
 
-        try:
-            primary = (
-                sb.table("usuarios")
-                .select("id, email, nombre, apellidos, rol_id")
-                .eq("contrato_id", int(contrato_id))
-                .execute()
-                .data
-                or []
-            )
-            _ingest(primary)
-            for u in primary:
-                if u.get("id") is not None:
-                    try:
-                        uids.add(int(u["id"]))
-                    except (TypeError, ValueError):
-                        pass
-        except Exception as exc:
-            _log.warning("_claves_usuarios_rol_administrativo usuarios.contrato_id: %s", exc)
+        _ingest(_fetch_usuarios_rows(sb, eq=("contrato_id", int(contrato_id))))
+        for u in list(users_by_id.values()):
+            try:
+                uids.add(int(u["id"]))
+            except (TypeError, ValueError):
+                pass
 
         if uids:
-            try:
-                _ingest(
-                    sb.table("usuarios")
-                    .select("id, email, nombre, apellidos, rol_id")
-                    .in_("id", list(uids))
-                    .execute()
-                    .data
-                    or []
-                )
-            except Exception as exc:
-                _log.warning("_claves_usuarios_rol_administrativo usuarios.in_: %s", exc)
+            _ingest(_fetch_usuarios_rows(sb, in_=("id", list(uids))))
 
-        # 2) Todos los usuarios con rol Administrativo (cruce por email/nombre
-        #    contra trabajadores del contrato aunque no figuren en usuario_contratos)
-        try:
-            for rid in admin_ids:
-                _ingest(
-                    sb.table("usuarios")
-                    .select("id, email, nombre, apellidos, rol_id")
-                    .eq("rol_id", int(rid))
-                    .execute()
-                    .data
-                    or []
-                )
-        except Exception as exc:
-            _log.warning("_claves_usuarios_rol_administrativo usuarios.rol_id: %s", exc)
+        if admin_ids:
+            _ingest(_fetch_usuarios_rows(sb, in_=("rol_id", list(admin_ids))))
+
+        # rol_nombre denormalizado (algunos despliegues lo usan sin rol_id fiable)
+        for label in ("Administrativo", "administrativo", "ADMINISTRATIVO"):
+            _ingest(_fetch_usuarios_rows(sb, eq=("rol_nombre", label)))
+
+        # Invertido: usuarios con el mismo email que trabajadores del contrato
+        trab_emails = []
+        for t in trabajadores or []:
+            if not isinstance(t, dict):
+                continue
+            em = str(t.get("email") or "").strip().lower()
+            if em:
+                trab_emails.append(em)
+        if trab_emails:
+            # PostgREST in_ es case-sensitive; probar tal cual + lower ya normalizado
+            _ingest(_fetch_usuarios_rows(sb, in_=("email", list(set(trab_emails)))))
 
         for u in users_by_id.values():
-            try:
-                rid = int(u["rol_id"]) if u.get("rol_id") is not None else None
-            except (TypeError, ValueError):
-                rid = None
-            if rid not in admin_ids:
+            if not _usuario_es_rol_administrativo(u, admin_ids):
                 continue
             em = str(u.get("email") or "").strip().lower()
             if em:
                 emails.add(em)
-            nom = _norm_nombre_persona(u.get("nombre"), u.get("apellidos"))
-            if nom:
-                nombres.add(nom)
+            nombres |= _variantes_nombre_persona(u.get("nombre"), u.get("apellidos"))
+            nombres |= _variantes_nombre_persona(u.get("nombre"))
     except Exception as exc:
         _log.warning("_claves_usuarios_rol_administrativo: %s", exc)
     return {"emails": emails, "nombres": nombres}
@@ -210,17 +239,17 @@ def trabajador_tiene_rol_administrativo(trab: dict, claves: Dict[str, Set[str]])
     email = str(trab.get("email") or "").strip().lower()
     if email and email in emails:
         return True
-    nom = _norm_nombre_persona(
+    variantes = _variantes_nombre_persona(
         trab.get("nombres") or trab.get("nombre"),
         trab.get("apellidos"),
     )
-    if nom and nom in nombres:
+    if variantes & nombres:
         return True
     return False
 
 
 def _emails_usuarios_rol_administrativo(sb, contrato_id: int) -> Set[str]:
-    """Compat: solo emails (tests / callers antiguos)."""
+    """Compat: solo emails."""
     return set(_claves_usuarios_rol_administrativo(sb, contrato_id).get("emails") or [])
 
 
@@ -228,11 +257,7 @@ def cargos_exclusivos_rol_administrativo(
     trabajadores: List[dict],
     claves: Dict[str, Set[str]],
 ) -> Set[str]:
-    """
-    Cargos (casefold) asociados ÚNICAMENTE a trabajadores con rol Administrativo.
-
-    Si un cargo tiene al menos un colaborador sin ese rol, no se excluye.
-    """
+    """Cargos (casefold) asociados ÚNICAMENTE a trabajadores con rol Administrativo."""
     stats: Dict[str, Dict[str, bool]] = {}
     for t in trabajadores or []:
         if not isinstance(t, dict):
@@ -247,6 +272,86 @@ def cargos_exclusivos_rol_administrativo(
         else:
             st["obra"] = True
     return {k for k, st in stats.items() if st["admin"] and not st["obra"]}
+
+
+def ids_rrhh_excluidos_rol_administrativo(
+    sb, contrato_id: int, trabajadores: Optional[List[dict]] = None,
+) -> List[int]:
+    """IDs de ``rrhh_trabajadores`` con rol de plataforma Administrativo."""
+    if trabajadores is None:
+        try:
+            from rrhh_service import list_trabajadores
+
+            trabajadores = list_trabajadores(sb, int(contrato_id)) or []
+        except Exception as exc:
+            _log.warning("ids_rrhh_excluidos_rol_administrativo: %s", exc)
+            return []
+    claves = _claves_usuarios_rol_administrativo(sb, contrato_id, trabajadores)
+    out: List[int] = []
+    for t in trabajadores or []:
+        if not isinstance(t, dict):
+            continue
+        if not trabajador_tiene_rol_administrativo(t, claves):
+            continue
+        try:
+            out.append(int(t["id"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+def auditoria_exclusion_administrativo(
+    sb, contrato_id: int,
+) -> Dict[str, Any]:
+    """
+    Reporte verificable: incluidos / excluidos / cargos y violaciones.
+    Evidencia de que ningún incluido tiene rol Administrativo.
+    """
+    try:
+        from rrhh_service import list_trabajadores
+        trabajadores = list_trabajadores(sb, int(contrato_id)) or []
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "incluidos": [], "excluidos": [], "cargos": []}
+
+    claves = _claves_usuarios_rol_administrativo(sb, contrato_id, trabajadores)
+    incluidos: List[dict] = []
+    excluidos: List[dict] = []
+    for t in trabajadores:
+        if not isinstance(t, dict):
+            continue
+        try:
+            tid = int(t["id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        es_admin = trabajador_tiene_rol_administrativo(t, claves) or es_etiqueta_administrativo_excluida(
+            t.get("cargo_aspira")
+        )
+        row = {
+            "id": tid,
+            "nombre": (
+                str(t.get("nombre") or "").strip()
+                or f"{t.get('nombres') or ''} {t.get('apellidos') or ''}".strip()
+            ),
+            "email": t.get("email"),
+            "cargo_aspira": t.get("cargo_aspira"),
+            "match_admin": bool(es_admin),
+        }
+        (excluidos if es_admin else incluidos).append(row)
+
+    cargos = list_rrhh_cargos_para_bitacora(sb, contrato_id)
+    violaciones = [r for r in incluidos if trabajador_tiene_rol_administrativo(
+        next((t for t in trabajadores if str(t.get("id")) == str(r["id"])), {}),
+        claves,
+    )]
+    return {
+        "ok": len(violaciones) == 0,
+        "claves_emails": sorted(claves.get("emails") or []),
+        "claves_nombres_count": len(claves.get("nombres") or []),
+        "incluidos": incluidos,
+        "excluidos": excluidos,
+        "cargos": cargos,
+        "violaciones": violaciones,
+    }
 
 
 def _is_tramo_sentinel_invalido(value: Any) -> bool:
@@ -2559,6 +2664,8 @@ def enrich_asistencia_desde_rrhh(
 
     from bitacora_asistencia_rrhh_policy import doc_validacion_es_aprobado
 
+    claves_admin = _claves_usuarios_rol_administrativo(sb, contrato_id, todos)
+
     out: List[dict] = []
     for item in asistencia or []:
         tid = item.get("rrhh_trabajador_id")
@@ -2584,6 +2691,11 @@ def enrich_asistencia_desde_rrhh(
                 f"El colaborador RRHH #{tid_i} no existe o fue eliminado. "
                 "Regístrelo primero en el módulo de Recursos Humanos."
             )
+        if trabajador_tiene_rol_administrativo(trab, claves_admin) or es_etiqueta_administrativo_excluida(
+            trab.get("cargo_aspira")
+        ):
+            # No registrar ni conservar en Bitácora personal con rol Administrativo.
+            continue
         if exigir_aprobado and not doc_validacion_es_aprobado(trab.get("doc_validacion_estado")):
             nom = _nombre_completo_rrhh(trab) or f"#{tid_i}"
             raise ValueError(
@@ -2650,7 +2762,7 @@ def list_rrhh_trabajadores_para_bitacora(
 
     from bitacora_asistencia_rrhh_policy import doc_validacion_es_aprobado
 
-    claves_admin = _claves_usuarios_rol_administrativo(sb, contrato_id)
+    claves_admin = _claves_usuarios_rol_administrativo(sb, contrato_id, rows)
 
     out: List[dict] = []
     for t in rows:
@@ -2688,14 +2800,12 @@ def list_rrhh_trabajadores_para_bitacora(
 
 def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
     """
-    Catálogo de cargos RRHH para el resumen de Bitácora.
+    Cargos visibles en Bitácora (consolidado / por empresa / registrar cargo).
 
-    Excluye:
-    - la etiqueta exacta «Administrativo» (legado);
-    - cualquier cargo asociado **únicamente** a trabajadores con ROL de
-      plataforma Administrativo (verificado contra ``roles``, no por el
-      nombre del cargo). Si el cargo también lo tienen colaboradores de
-      obra, se mantiene.
+    Solo cargos con al menos un colaborador **sin** rol Administrativo, más
+    la plantilla de obra. Se excluyen cargos exclusivos de personal con ese
+    rol y la etiqueta exacta «Administrativo». No se listan títulos del
+    catálogo RRHH que solo existan para personal administrativo.
     """
     try:
         from rrhh_service import list_catalogo, list_trabajadores
@@ -2714,11 +2824,33 @@ def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
         _log.warning("list_rrhh_cargos_para_bitacora trabajadores: %s", exc)
         trabajadores = []
 
-    claves_admin = _claves_usuarios_rol_administrativo(sb, contrato_id)
+    claves_admin = _claves_usuarios_rol_administrativo(sb, contrato_id, trabajadores)
     excluidos = cargos_exclusivos_rol_administrativo(trabajadores, claves_admin)
+    plantilla = {c.casefold(): c for c in CARGOS_PERSONAL_PLANTILLA}
+
+    obra_labels: Dict[str, str] = {}
+    for t in trabajadores:
+        if not isinstance(t, dict):
+            continue
+        if trabajador_tiene_rol_administrativo(t, claves_admin):
+            continue
+        cargo = str(t.get("cargo_aspira") or "").strip()
+        if not cargo or es_etiqueta_administrativo_excluida(cargo):
+            continue
+        obra_labels[cargo.casefold()] = cargo
 
     out: List[str] = []
     seen = set()
+
+    def _add(val: str):
+        key = val.casefold()
+        if not val or key in seen:
+            return
+        if es_etiqueta_administrativo_excluida(val) or key in excluidos:
+            return
+        seen.add(key)
+        out.append(val)
+
     for r in rows:
         if isinstance(r, dict):
             val = str(r.get("valor") or "").strip()
@@ -2726,15 +2858,16 @@ def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
             val = str(r or "").strip()
         if not val:
             continue
-        if es_etiqueta_administrativo_excluida(val):
-            continue
         key = val.casefold()
-        if key in excluidos:
-            continue
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(val)
+        if key in obra_labels or key in plantilla:
+            _add(val)
+
+    for key, label in obra_labels.items():
+        _add(label)
+    for key, label in plantilla.items():
+        if key not in excluidos:
+            _add(label)
+
     out.sort(key=lambda s: s.casefold())
     return out
 

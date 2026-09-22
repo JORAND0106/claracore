@@ -3,12 +3,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bitacora_service import list_rrhh_cargos_para_bitacora
+from bitacora_service import CARGOS_PERSONAL_PLANTILLA, list_rrhh_cargos_para_bitacora
 
 
 class _FakeSb:
-    """SB mínimo: sin usuarios admin → no exclusiones por rol."""
-
     def table(self, name: str):
         store = {"roles": [], "usuarios": [], "usuario_contratos": []}
 
@@ -28,29 +26,14 @@ class _FakeSb:
         return Q()
 
 
-def test_list_rrhh_cargos_para_bitacora_dedupe_y_orden(monkeypatch):
+def test_list_rrhh_cargos_incluye_obra_y_plantilla(monkeypatch):
     rows = [
-        {"id": 1, "categoria": "cargo", "valor": "Topógrafo", "activo": True},
-        {"id": 2, "categoria": "cargo", "valor": "Ayudante", "activo": True},
-        {"id": 3, "categoria": "cargo", "valor": "ayudante", "activo": True},
-        {"id": 4, "categoria": "cargo", "valor": "  ", "activo": True},
-        {"id": 5, "categoria": "cargo", "valor": "Oficial", "activo": True},
-    ]
-
-    import rrhh_service as rrhh_mod
-
-    monkeypatch.setattr(rrhh_mod, "list_catalogo", lambda *_a, **_k: rows)
-    monkeypatch.setattr(rrhh_mod, "list_trabajadores", lambda *_a, **_k: [])
-
-    out = list_rrhh_cargos_para_bitacora(_FakeSb(), 10)
-    assert out == ["Ayudante", "Oficial", "Topógrafo"]
-
-
-def test_list_rrhh_cargos_para_bitacora_excluye_etiqueta_exacta_administrativo(monkeypatch):
-    rows = [
-        {"id": 1, "categoria": "cargo", "valor": "Administrativo", "activo": True},
-        {"id": 2, "categoria": "cargo", "valor": "Residente Administrativo", "activo": True},
-        {"id": 3, "categoria": "cargo", "valor": "Oficial", "activo": True},
+        {"valor": "Topógrafo"},
+        {"valor": "Ayudante"},
+        {"valor": "ayudante"},
+        {"valor": "  "},
+        {"valor": "Oficial"},
+        {"valor": "Gerente Administrativo"},  # sin trabajadores obra → no entra
     ]
     import rrhh_service as rrhh_mod
 
@@ -58,10 +41,16 @@ def test_list_rrhh_cargos_para_bitacora_excluye_etiqueta_exacta_administrativo(m
     monkeypatch.setattr(rrhh_mod, "list_trabajadores", lambda *_a, **_k: [])
 
     out = list_rrhh_cargos_para_bitacora(_FakeSb(), 10)
-    assert out == ["Oficial", "Residente Administrativo"]
+    assert "Gerente Administrativo" not in out
+    assert "Oficial" in out
+    assert "Ayudante" in out
+    assert "Topógrafo" in out
+    # Plantilla completa presente
+    for c in CARGOS_PERSONAL_PLANTILLA:
+        assert c in out
 
 
-def test_list_rrhh_cargos_para_bitacora_sin_rrhh_devuelve_vacio(monkeypatch):
+def test_list_rrhh_cargos_sin_rrhh_devuelve_vacio(monkeypatch):
     def _boom(*_a, **_k):
         raise RuntimeError("no db")
 
