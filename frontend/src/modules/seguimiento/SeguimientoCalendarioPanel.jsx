@@ -4,16 +4,10 @@ import ActaEditor from './ActaEditor'
 import BitacoraEntradaEditor from './BitacoraEntradaEditor'
 import SeguimientoCalendario from './SeguimientoCalendario'
 import { accesoBitacora } from './bitacoraPermisos'
+import { mergeDiariosParaEditor } from './bitacoraMergeDiarios'
 import { createSeguimientoApi } from './seguimientoApi'
 import { accesoSeguimiento } from './seguimientoPermisos'
 import { useSeguimientoCompact } from './seguimientoShared'
-
-/** Diario keeper = menor id (consolidación 1 diario / fecha). */
-function pickKeeperDiario(diarios) {
-  const list = Array.isArray(diarios) ? diarios.filter((d) => d?.id != null) : []
-  if (!list.length) return null
-  return [...list].sort((a, b) => Number(a.id) - Number(b.id))[0]
-}
 
 /**
  * Host reutilizable del calendario de Seguimiento + editores de Acta y Bitácora.
@@ -70,9 +64,41 @@ export default function SeguimientoCalendarioPanel({
     setLocalKey((n) => n + 1)
   }, [])
 
+  /** Abre el diario del día: si aún hay varios por tramo, fusiona en memoria para el editor. */
+  const openDiariosDeFecha = useCallback(async (fechaStr) => {
+    if (!fechaStr || !api?.getBitacoraDiariosFecha) return false
+    const data = await api.getBitacoraDiariosFecha(fechaStr)
+    const diarios = Array.isArray(data?.diarios) ? data.diarios : []
+    if (!diarios.length) return false
+
+    // Rehidratar cada diario (incluye equipos_uso) antes de fusionar.
+    const hydrated = []
+    for (const d of diarios) {
+      if (d?.id != null && api.getBitacoraEntrada) {
+        try {
+          hydrated.push(await api.getBitacoraEntrada(d.id))
+          continue
+        } catch { /* usar fila lista */ }
+      }
+      hydrated.push(d)
+    }
+
+    const merged = mergeDiariosParaEditor(hydrated)
+    if (!merged) return false
+    setBitacoraEditor({ modo: 'ver', entrada: merged, fechaInicial: null })
+    return true
+  }, [api])
+
   const openEditorConEntrada = useCallback(async (entradaIdOrRow, { modo = 'ver', fechaInicial = null } = {}) => {
     if (entradaIdOrRow && typeof entradaIdOrRow === 'object' && entradaIdOrRow.id != null) {
       const id = entradaIdOrRow.id
+      const fecha = entradaIdOrRow.fecha ? String(entradaIdOrRow.fecha).slice(0, 10) : fechaInicial
+      if (fecha) {
+        try {
+          const ok = await openDiariosDeFecha(fecha)
+          if (ok) return
+        } catch { /* caer a id */ }
+      }
       try {
         if (api.getBitacoraEntrada) {
           const row = await api.getBitacoraEntrada(id)
@@ -87,50 +113,45 @@ export default function SeguimientoCalendarioPanel({
     if (!entradaId || !api.getBitacoraEntrada) return
     try {
       const row = await api.getBitacoraEntrada(entradaId)
+      const fecha = row?.fecha ? String(row.fecha).slice(0, 10) : null
+      if (fecha) {
+        try {
+          const ok = await openDiariosDeFecha(fecha)
+          if (ok) return
+        } catch { /* usar row */ }
+      }
       setBitacoraEditor({ modo, entrada: row, fechaInicial })
     } catch {
       setBitacoraEditor({ modo, entrada: { id: entradaId }, fechaInicial })
     }
-  }, [api])
+  }, [api, openDiariosDeFecha])
 
   const openNuevaBitacora = useCallback(async (modo, fecha) => {
     void modo
     const fechaStr = fecha ? String(fecha).slice(0, 10) : null
     if (!fechaStr) return
     try {
-      if (api?.getBitacoraDiariosFecha) {
-        const data = await api.getBitacoraDiariosFecha(fechaStr)
-        const diarios = Array.isArray(data?.diarios) ? data.diarios : []
-        const keeper = pickKeeperDiario(diarios)
-        if (keeper) {
-          await openEditorConEntrada(keeper, { modo: 'ver', fechaInicial: null })
-          return
-        }
-      }
+      const ok = await openDiariosDeFecha(fechaStr)
+      if (ok) return
     } catch { /* crear nuevo */ }
     setBitacoraEditor({
       modo: 'diario',
       entrada: null,
       fechaInicial: fechaStr,
     })
-  }, [api, openEditorConEntrada])
+  }, [openDiariosDeFecha])
 
   const openBitacoraById = useCallback(async (entradaId, meta = null) => {
     const fechaMeta = meta?.fecha ? String(meta.fecha).slice(0, 10) : null
-    if (fechaMeta && api?.getBitacoraDiariosFecha) {
+    if (fechaMeta) {
       try {
-        const data = await api.getBitacoraDiariosFecha(fechaMeta)
-        const diarios = Array.isArray(data?.diarios) ? data.diarios : []
-        const keeper = pickKeeperDiario(diarios)
-        if (keeper) {
-          await openEditorConEntrada(keeper, { modo: 'ver', fechaInicial: null })
-          return
-        }
+        const ok = await openDiariosDeFecha(fechaMeta)
+        if (ok) return
       } catch { /* cargar por id */ }
     }
     if (!entradaId) return
     await openEditorConEntrada(entradaId, { modo: 'ver', fechaInicial: null })
-  }, [api, openEditorConEntrada])
+  }, [openDiariosDeFecha, openEditorConEntrada])
 
   if (permisos.bloqueado) {
     return (
