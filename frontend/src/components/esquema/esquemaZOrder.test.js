@@ -33,6 +33,21 @@ describe('esquemaZOrder', () => {
     assert.deepEqual(zOrderIds(scene), ['a', 'pic', 'b', 'bg'])
   })
 
+  it('sin imágenes siempre copia: push del draft de preview no ensucia la escena', () => {
+    // Regresión: abanico de líneas al dibujar. redraw hacía
+    // list = partitionBackgroundFirst(objects); list.push(draft). Si
+    // partition devolvía la misma referencia sin bg, cada mousemove
+    // metía el preview en objectsRef de forma permanente.
+    const scene = [a, b, c]
+    const drawList = partitionBackgroundFirst(scene)
+    assert.notEqual(drawList, scene)
+    const draft = { id: 'draft-line', type: 'linea', x1: 0, y1: 0, x2: 10, y2: 10 }
+    drawList.push(draft)
+    assert.deepEqual(zOrderIds(scene), ['a', 'b', 'c'])
+    assert.equal(scene.includes(draft), false)
+    assert.equal(drawList.length, 4)
+  })
+
   it('traer al frente mueve la selección al final y conserva su orden relativo', () => {
     const next = reorderZOrder([a, b, c, d], ['b', 'd'], 'front')
     assert.deepEqual(zOrderIds(next), ['a', 'c', 'b', 'd'])

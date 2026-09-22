@@ -594,7 +594,9 @@ export default function EsquemaEditorModal({
         h: h / zGrid,
       }, gridStepWorld(zGrid), zGrid, uiNow)
     }
-    const list = partitionBackgroundFirst(objectsRef.current)
+    // Copia local: el draft de preview NUNCA debe entrar en objectsRef.
+    // (partitionBackgroundFirst ya copia; el spread refuerza el contrato.)
+    const list = [...partitionBackgroundFirst(objectsRef.current)]
     if (extraDraft) list.push(extraDraft)
     const hideSel = selectedId
       ? objectsRef.current.find((o) => o.id === selectedId)

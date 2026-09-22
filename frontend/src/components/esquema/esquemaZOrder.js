@@ -16,6 +16,11 @@ export function isAnchoredLayer(obj) {
 /**
  * Garantiza que las imágenes queden debajo del resto al dibujar/exportar,
  * sin mutar el arreglo original.
+ *
+ * Siempre devuelve un arreglo nuevo. Si se reutilizara la referencia de
+ * `objects` cuando no hay imágenes, un `list.push(draft)` en el ciclo de
+ * redibujo (preview al arrastrar) ensuciaría la escena con decenas de trazos
+ * permanentes (abanico).
  */
 export function partitionBackgroundFirst(objects) {
   const list = Array.isArray(objects) ? objects : []
@@ -25,7 +30,7 @@ export function partitionBackgroundFirst(objects) {
     if (isBackgroundImage(o)) bg.push(o)
     else rest.push(o)
   }
-  return bg.length ? [...bg, ...rest] : list
+  return [...bg, ...rest]
 }
 
 export function zOrderIds(objects) {
