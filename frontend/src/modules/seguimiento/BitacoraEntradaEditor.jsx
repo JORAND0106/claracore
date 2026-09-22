@@ -256,6 +256,7 @@ export default function BitacoraEntradaEditor({
     recoverPersonalManual(entrada?.personal, entrada?.asistencia_colaboradores)
   ))
   const [rrhhCatalogo, setRrhhCatalogo] = useState([])
+  const [excluidosRrhhIds, setExcluidosRrhhIds] = useState([])
   const [cargosCatalogo, setCargosCatalogo] = useState([])
   const [contratoNumero, setContratoNumero] = useState('')
   const [asistenciaRrhhPolicy, setAsistenciaRrhhPolicy] = useState(() =>
@@ -344,7 +345,11 @@ export default function BitacoraEntradaEditor({
       try {
         const data = await api.listBitacoraRrhhTrabajadores()
         const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
-        if (!cancelled) setRrhhCatalogo(items)
+        const excluidos = Array.isArray(data?.excluidos_rrhh_ids) ? data.excluidos_rrhh_ids : []
+        if (!cancelled) {
+          setRrhhCatalogo(items)
+          setExcluidosRrhhIds(excluidos)
+        }
       } catch { /* sin permiso / red */ }
     })()
     return () => { cancelled = true }
@@ -1049,6 +1054,7 @@ export default function BitacoraEntradaEditor({
                 sheetStyles={ui}
                 compact={grillaCompacta}
                 rrhhCatalogo={rrhhCatalogo}
+                excluidosRrhhIds={excluidosRrhhIds}
                 cargosCatalogo={cargosCatalogo}
                 tramosCatalogo={tramosCatalogo}
                 resumenCongelado={resumenCongelado}

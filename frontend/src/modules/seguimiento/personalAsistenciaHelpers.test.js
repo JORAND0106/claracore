@@ -38,6 +38,7 @@ import {
   resumenEmpresasCargos,
   soloDigitosDocumento,
   stripTramoFilasAutocompletar,
+  filasAsistenciaSinExcluidosRrhh,
 } from './personalAsistenciaHelpers.js'
 
 describe('capitalizarNombrePropio / documento', () => {
@@ -501,5 +502,15 @@ describe('asistenciaFromEntrada / payload', () => {
     assert.equal(stripped[1].tramo, '')
     assert.equal(stripped[1].equipo_nombre, 'Excavadora')
     assert.deepEqual(stripTramoFilasAutocompletar(null), [])
+  })
+
+  it('filasAsistenciaSinExcluidosRrhh oculta ids con rol Administrativo', () => {
+    const rows = [
+      { rrhh_trabajador_id: 1, nombre: 'Ana', cargo: 'Oficial' },
+      { rrhh_trabajador_id: 9, nombre: 'Admin', cargo: 'Gerente Administrativo' },
+      { rrhh_trabajador_id: null, nombre: 'Legado', cargo: 'Ayudante' },
+    ]
+    const out = filasAsistenciaSinExcluidosRrhh(rows, [9, '9'])
+    assert.deepEqual(out.map((r) => r.nombre), ['Ana', 'Legado'])
   })
 })

@@ -668,3 +668,16 @@ export function puedeUsarCargoCantidadAsistencia({
   if (permiteCargoCuadrilla) return true
   return puedeUsarCargoCantidadTemporal({ esDesarrollador, contratoNumero })
 }
+
+/** Filtra asistencia excluyendo rrhh_trabajador_id con rol Administrativo. */
+export function filasAsistenciaSinExcluidosRrhh(rows = [], excluidosRrhhIds = []) {
+  const ban = new Set(
+    (excluidosRrhhIds || []).map((x) => Number(x)).filter((n) => Number.isFinite(n)),
+  )
+  if (!ban.size) return Array.isArray(rows) ? [...rows] : []
+  return (Array.isArray(rows) ? rows : []).filter((r) => {
+    const id = Number(r?.rrhh_trabajador_id)
+    if (!Number.isFinite(id)) return true
+    return !ban.has(id)
+  })
+}
