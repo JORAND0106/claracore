@@ -591,11 +591,44 @@ export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
   return out
 }
 
-/** Links SICOE guardados en meta_cabecera.sicoe_reportes */
+  /** Links SICOE guardados en meta_cabecera.sicoe_reportes */
 export function linksSicoeDesdeMeta(meta) {
   const raw = meta && typeof meta === 'object' ? meta.sicoe_reportes : null
   if (!Array.isArray(raw)) return []
   return raw.filter((x) => x && x.reporte_id != null)
+}
+
+/** Normaliza cantidades_manuales: OTROS → OTROS_1; garantiza EXC_ROC + ≥1 Otros. */
+export function normalizarCantidadesManuales(raw) {
+  const out = []
+  const seen = new Set()
+  for (const d of raw || []) {
+    if (!d || typeof d !== 'object') continue
+    let cod = String(d.codigo || '').trim().toUpperCase()
+    if (!cod) continue
+    if (cod === 'OTROS') cod = 'OTROS_1'
+    if (seen.has(cod)) continue
+    if (cod !== 'EXC_ROC' && !(cod === 'OTROS' || cod.startsWith('OTROS_'))) continue
+    seen.add(cod)
+    out.push({ ...d, codigo: cod })
+  }
+  if (!seen.has('EXC_ROC')) out.unshift({ codigo: 'EXC_ROC' })
+  if (![...seen].some((c) => c === 'OTROS' || c.startsWith('OTROS_'))) {
+    out.push({ codigo: 'OTROS_1' })
+  }
+  return out
+}
+
+/** Siguiente código OTROS_n libre. */
+export function siguienteCodigoOtros(cantManuales) {
+  let max = 0
+  for (const c of cantManuales || []) {
+    const cod = String(c?.codigo || '').toUpperCase()
+    const m = /^OTROS_(\d+)$/.exec(cod)
+    if (m) max = Math.max(max, Number(m[1]))
+    else if (cod === 'OTROS') max = Math.max(max, 1)
+  }
+  return `OTROS_${max + 1}`
 }
 
 /**

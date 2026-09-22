@@ -10,7 +10,7 @@ export const ESPESOR_ROCA_M = 0.05
 
 export const ITEMS_CANTIDADES = [
   { codigo: 'EXC', nombre: 'Excavación Varias', unidad: 'm³' },
-  { codigo: 'TUB', nombre: 'Long Tubería', unidad: 'm' },
+  { codigo: 'TUB', nombre: 'Long Tubería', unidad: 'ml' },
   { codigo: 'TRI', nombre: 'Triturado / Atraque', unidad: 'm³' },
   { codigo: 'REL', nombre: 'Relleno Gran.', unidad: 'm³' },
   { codigo: 'GEO', nombre: 'Geotextil', unidad: 'm²' },
@@ -29,9 +29,25 @@ export const ITEMS_DESCUENTOS_FILTRO = [
   { codigo: 'DESC_OTROS', nombre: 'Otros', unidad: 'm³', item_cant_codigo: 'EXC' },
 ]
 
+export const CAMPOS_DESCUENTO_ALTURA = [
+  { key: 'prom_altura_excavacion', label: 'Altura Excavación' },
+  { key: 'prom_altura_triturado', label: 'Altura Triturado' },
+  { key: 'prom_altura_relleno', label: 'Altura Relleno' },
+]
+
 const ALIAS_ALC = { DESC_TUB: 'DESC_A2', DESC_POZO: 'DESC_OTROS' }
 const ALIAS_FIL = { DESC_TUB: 'DESC_TUB_FILT', DESC_FILT: 'DESC_OTROS' }
-const EDITABLES = new Set(['EXC_ROC', 'OTROS'])
+const CAMPOS_DESC_SET = new Set(CAMPOS_DESCUENTO_ALTURA.map((c) => c.key))
+
+export function esCodigoOtros(codigo) {
+  const cod = String(codigo || '').trim().toUpperCase()
+  return cod === 'OTROS' || cod.startsWith('OTROS_')
+}
+
+export function esCodigoCantidadEditable(codigo) {
+  const cod = String(codigo || '').trim().toUpperCase()
+  return cod === 'EXC_ROC' || esCodigoOtros(cod)
+}
 
 function f(v) {
   if (v == null || v === '') return null
@@ -237,19 +253,36 @@ function normalizeManualDescuentos(tipo, descuentosManuales) {
 }
 
 function normalizeCantidadesManuales(cantidadesManuales) {
-  const out = {}
+  const out = []
+  const seen = new Set()
   for (const d of cantidadesManuales || []) {
     if (!d || typeof d !== 'object') continue
-    const cod = String(d.codigo || '').trim().toUpperCase()
-    if (!EDITABLES.has(cod)) continue
-    const entry = {}
+    let cod = String(d.codigo || '').trim().toUpperCase()
+    if (!esCodigoCantidadEditable(cod)) continue
+    if (cod === 'OTROS') cod = 'OTROS_1'
+    if (seen.has(cod)) continue
+    seen.add(cod)
+    const entry = { codigo: cod }
     for (const key of ['long', 'ancho', 'espesor']) {
       if (d[key] != null && d[key] !== '') entry[key] = f(d[key])
     }
-    if (cod === 'OTROS' && 'nombre' in d) entry.nombre = String(d.nombre || '').trim()
-    out[cod] = entry
+    if (esCodigoOtros(cod) && 'nombre' in d) entry.nombre = String(d.nombre || '').trim()
+    if (CAMPOS_DESC_SET.has(d.descontar_de)) entry.descontar_de = d.descontar_de
+    out.push(entry)
   }
+  if (!out.some((x) => esCodigoOtros(x.codigo))) out.push({ codigo: 'OTROS_1' })
+  if (!out.some((x) => x.codigo === 'EXC_ROC')) out.unshift({ codigo: 'EXC_ROC' })
+  else out.sort((a, b) => (a.codigo === 'EXC_ROC' ? 0 : 1) - (b.codigo === 'EXC_ROC' ? 0 : 1) || String(a.codigo).localeCompare(b.codigo))
   return out
+}
+
+function metaItemCantidad(codigo) {
+  if (codigo === 'EXC_ROC') return ITEMS_CANTIDADES.find((it) => it.codigo === 'EXC_ROC')
+  if (esCodigoOtros(codigo)) {
+    const base = ITEMS_CANTIDADES.find((it) => it.codigo === 'OTROS')
+    return { ...base, codigo }
+  }
+  return ITEMS_CANTIDADES.find((it) => it.codigo === codigo)
 }
 
 export function calcularCantidadesYDescuentos(seccion, cartera, {
@@ -263,10 +296,25 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   const a1 = Number(seccion.area_1_m2)
   const a2 = Number(seccion.area_2_m2)
   const aTub = Number(seccion.area_tuberia_m2)
-  const hExc = Number(tot.prom_altura_excavacion || 0)
-  const hTrit = Number(tot.prom_altura_triturado || 0)
-  const hRel = Number(tot.prom_altura_relleno || 0)
+  let hExc = Number(tot.prom_altura_excavacion || 0)
+  let hTrit = Number(tot.prom_altura_triturado || 0)
+  let hRel = Number(tot.prom_altura_relleno || 0)
   const anchoGeo = Number(tot.prom_ancho_geotextil || 0)
+
+  const overridesList = normalizeCantidadesManuales(cantidadesManuales)
+  const restas = {
+    prom_altura_excavacion: 0,
+    prom_altura_triturado: 0,
+    prom_altura_relleno: 0,
+  }
+  for (const ov of overridesList) {
+    if (ov.descontar_de && ov.espesor != null && restas[ov.descontar_de] != null) {
+      restas[ov.descontar_de] += Number(ov.espesor) || 0
+    }
+  }
+  hExc = Math.max(0, hExc - restas.prom_altura_excavacion)
+  hTrit = Math.max(0, hTrit - restas.prom_altura_triturado)
+  hRel = Math.max(0, hRel - restas.prom_altura_relleno)
 
   let descA1 = 0
   let descA2 = 0
@@ -285,10 +333,9 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
 
   const manual = normalizeManualDescuentos(tipo, descuentosManuales)
   const descOtros = Number(manual.DESC_OTROS || 0)
-  const overrides = normalizeCantidadesManuales(cantidadesManuales)
 
-  function row(codigo, long, ancho, espesor, desc = 0, restarDesc = false, nombre = null) {
-    const meta = ITEMS_CANTIDADES.find((it) => it.codigo === codigo)
+  function row(codigo, long, ancho, espesor, desc = 0, restarDesc = false, nombre = null, descontarDe = null) {
+    const meta = metaItemCantidad(codigo)
     const prod = product([long, ancho, espesor])
     const bruto = prod != null ? (r2(prod) ?? 0) : 0
     const cant = restarDesc ? Math.round((bruto - desc) * 100) / 100 : bruto
@@ -302,20 +349,15 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
       bruto: Math.round(bruto * 100) / 100,
     }
     if (nombre != null) out.nombre = nombre
+    if (descontarDe) out.descontar_de = descontarDe
     return out
   }
 
-  const ovRoc = overrides.EXC_ROC || {}
+  const ovByCod = Object.fromEntries(overridesList.map((o) => [o.codigo, o]))
+  const ovRoc = ovByCod.EXC_ROC || {}
   const rocLong = 'long' in ovRoc ? ovRoc.long : L
   const rocAncho = 'ancho' in ovRoc ? ovRoc.ancho : B
   const rocEsp = 'espesor' in ovRoc ? ovRoc.espesor : ESPESOR_ROCA_M
-  const ovOtr = overrides.OTROS || {}
-  let otrLabel = 'Otros: ____'
-  if (ovOtr.nombre) {
-    otrLabel = ovOtr.nombre.toLowerCase().startsWith('otros')
-      ? ovOtr.nombre
-      : `Otros: ${ovOtr.nombre}`
-  }
 
   const cantidades = [
     row('EXC', L, B, hExc),
@@ -323,9 +365,28 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
     row('TRI', L, B, hTrit, descTri, true),
     row('REL', L, B, hRel, descRel, false),
     row('GEO', L, anchoGeo || null, null),
-    row('EXC_ROC', rocLong, rocAncho, rocEsp),
-    row('OTROS', ovOtr.long ?? null, ovOtr.ancho ?? null, ovOtr.espesor ?? null, 0, false, otrLabel),
+    row('EXC_ROC', rocLong, rocAncho, rocEsp, 0, false, null, ovRoc.descontar_de || null),
   ]
+
+  for (const ov of overridesList) {
+    if (!esCodigoOtros(ov.codigo)) continue
+    let otrLabel = 'Otros: ____'
+    if (ov.nombre) {
+      otrLabel = ov.nombre.toLowerCase().startsWith('otros')
+        ? ov.nombre
+        : `Otros: ${ov.nombre}`
+    }
+    cantidades.push(row(
+      ov.codigo,
+      ov.long ?? null,
+      ov.ancho ?? null,
+      ov.espesor ?? null,
+      0,
+      false,
+      otrLabel,
+      ov.descontar_de || null,
+    ))
+  }
 
   const catalogo = tipo === 'FILTRO' ? ITEMS_DESCUENTOS_FILTRO : ITEMS_DESCUENTOS_ALCANTARILLA
   const descuentos = catalogo.map((it) => {
@@ -373,10 +434,18 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
       neto: Math.round(neto * 100) / 100,
       editable_dims: Boolean(c.editable_dims),
       editable_nombre: Boolean(c.editable_nombre),
+      descontar_de: c.descontar_de || null,
     }
   })
 
-  return { cantidades, descuentos, netos }
+  return {
+    cantidades,
+    descuentos,
+    netos,
+    descuentos_altura: Object.fromEntries(
+      Object.entries(restas).filter(([, v]) => v).map(([k, v]) => [k, Math.round(v * 10000) / 10000]),
+    ),
+  }
 }
 
 export function perfilLongitudinal(cartera, seccion) {
@@ -469,6 +538,7 @@ export function calcularPlanillaLocal({
       cantidades: cant.cantidades,
       descuentos: cant.descuentos,
       netos: cant.netos,
+      descuentos_altura: cant.descuentos_altura || {},
       perfil: perfilLongitudinal(cartera, seccion),
       seccion_tipica: seccionTipicaParams(seccion, cartera),
     }

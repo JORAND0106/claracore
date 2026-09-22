@@ -176,16 +176,19 @@ class TestCantidadesDescuentosXlsm(unittest.TestCase):
             ],
         )
         codigos = [n["codigo"] for n in r["netos"]]
-        self.assertEqual(codigos[-2:], ["EXC_ROC", "OTROS"])
+        self.assertEqual(codigos[-2:], ["EXC_ROC", "OTROS_1"])
         self.assertTrue(all(c in codigos for c in ("EXC", "TUB", "TRI", "REL", "GEO")))
         roc = next(n for n in r["netos"] if n["codigo"] == "EXC_ROC")
-        otr = next(n for n in r["netos"] if n["codigo"] == "OTROS")
+        otr = next(n for n in r["netos"] if n["codigo"] == "OTROS_1")
         self.assertTrue(roc["editable_dims"])
         self.assertTrue(otr["editable_dims"] and otr["editable_nombre"])
         self.assertAlmostEqual(roc["neto"], 2.4, places=2)
         self.assertAlmostEqual(otr["neto"], 2.4, places=2)
         self.assertEqual(otr["nombre"], "Otros: Caja de inspección")
-
+        self.assertEqual(
+            next(n for n in r["netos"] if n["codigo"] == "TUB")["unidad"],
+            "ml",
+        )
 
 
 class TestValidacionYConsolidado(unittest.TestCase):

@@ -39,5 +39,7 @@ describe('Resumen de Cantidades — Roca al final + Otros editable', () => {
     assert.match(formSrc, /cantidades_manuales: cantManuales/)
     assert.match(formSrc, /meta_cabecera: metaCabeceraActual\(\)/)
     assert.match(formSrc, /displayNetoCant/)
+    assert.match(formSrc, /agregarLineaOtros/)
+    assert.match(formSrc, /Und\./)
   })
 })

@@ -14,7 +14,7 @@ import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
 import PlanillaTuberiaCrearReporteModal from './PlanillaTuberiaCrearReporteModal'
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
-import { calcularPlanillaLocal } from './planillaTuberiaCalc'
+import { calcularPlanillaLocal, CAMPOS_DESCUENTO_ALTURA, esCodigoOtros } from './planillaTuberiaCalc'
 import {
   CALC_CELL_BG,
   RELACIONES_ATRAQUE,
@@ -45,6 +45,8 @@ import {
   normalizarEvidenciasFotograficas,
   validarEvidenciasFotograficas,
   lineasConCantidadCalculada,
+  normalizarCantidadesManuales,
+  siguienteCodigoOtros,
   desgloseAtraqueAlcantarilla,
 } from './planillaTuberiaUtils'
 
@@ -180,7 +182,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setFilas(filasDesdeApi(det?.filas_campo, p.tipo || 'ALCANTARILLA'))
     setInfos(det?.validacion?.infos || [])
     const meta = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
-    setCantManuales(Array.isArray(meta.cantidades_manuales) ? meta.cantidades_manuales : [])
+    setCantManuales(normalizarCantidadesManuales(meta.cantidades_manuales))
     setEvidencias(normalizarEvidenciasFotograficas(meta.evidencias_fotograficas))
   }, [])
 
@@ -202,7 +204,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setMsg(mensaje || '')
     setErr('')
     setInfos([])
-    setCantManuales([])
+    setCantManuales(normalizarCantidadesManuales(null))
     setEvidencias(normalizarEvidenciasFotograficas(null))
     setFilas(Array.from({ length: FILAS_INICIALES_CARTERA }, (_, i) => filaCampoVacia(i + 1)))
     setParams((p) => ({
@@ -276,21 +278,42 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   }
 
   const overrideCantidad = (codigo) => (
-    (cantManuales || []).find((c) => String(c.codigo || '').toUpperCase() === codigo) || null
+    (cantManuales || []).find((c) => String(c.codigo || '').toUpperCase() === String(codigo || '').toUpperCase()) || null
   )
 
   const setOverrideCantidad = (codigo, patch) => {
+    const cod = String(codigo || '').toUpperCase()
     setCantManuales((prev) => {
-      const list = Array.isArray(prev) ? [...prev] : []
-      const idx = list.findIndex((c) => String(c.codigo || '').toUpperCase() === codigo)
-      const base = idx >= 0 ? { ...list[idx] } : { codigo }
-      const next = { ...base, ...patch, codigo }
-      // Limpiar claves vacías de dims
+      const list = normalizarCantidadesManuales(prev)
+      const idx = list.findIndex((c) => String(c.codigo || '').toUpperCase() === cod)
+      const base = idx >= 0 ? { ...list[idx] } : { codigo: cod }
+      const next = { ...base, ...patch, codigo: cod }
       ;['long', 'ancho', 'espesor'].forEach((k) => {
         if (next[k] === '' || next[k] == null) delete next[k]
       })
+      if (Object.prototype.hasOwnProperty.call(patch, 'descontar_de')) {
+        if (!patch.descontar_de) delete next.descontar_de
+        else next.descontar_de = patch.descontar_de
+      }
       if (idx >= 0) list[idx] = next
       else list.push(next)
+      return list
+    })
+  }
+
+  const agregarLineaOtros = () => {
+    setCantManuales((prev) => {
+      const list = normalizarCantidadesManuales(prev)
+      return [...list, { codigo: siguienteCodigoOtros(list) }]
+    })
+  }
+
+  const eliminarLineaOtros = (codigo) => {
+    setCantManuales((prev) => {
+      const list = normalizarCantidadesManuales(prev).filter(
+        (c) => String(c.codigo || '').toUpperCase() !== String(codigo || '').toUpperCase(),
+      )
+      if (!list.some((c) => esCodigoOtros(c.codigo))) list.push({ codigo: 'OTROS_1' })
       return list
     })
   }
@@ -328,6 +351,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     }
     return n?.nombre || 'Otros: ____'
   }
+
+  const nOtrosLineas = useMemo(
+    () => (cantManuales || []).filter((c) => esCodigoOtros(c.codigo)).length,
+    [cantManuales],
+  )
 
   const guardarParams = async () => {
     if (!planilla?.id) return
@@ -1084,12 +1112,25 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
   <div style={layoutTables}>
     <div style={cardPad}>
-      <div style={sheet.sectionTitle}>Resumen de Cantidades</div>
+      <div style={{ ...sheet.sectionTitle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span>Resumen de Cantidades</span>
+        {editable && (
+          <button
+            type="button"
+            className="cc-topo-touch-btn"
+            style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }}
+            onClick={agregarLineaOtros}
+            title="Agregar otra línea Otros"
+          >
+            + Otros
+          </button>
+        )}
+      </div>
       <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-        <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 620 }}>
+        <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720 }}>
           <thead>
             <tr>
-              {['Item', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Foto'].map((h, i) => (
+              {['Item', 'Und.', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Δ Altura', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -1097,7 +1138,8 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                     background: '#4472C4',
                     color: '#fff',
                     ...(i === 0 ? { textAlign: 'left' } : null),
-                    ...(h === 'Foto' ? { width: 56, textAlign: 'center' } : null),
+                    ...(h === 'Foto' || h === 'Δ Altura' ? { width: h === 'Foto' ? 56 : 120, textAlign: 'center' } : null),
+                    ...(h === 'Und.' ? { width: 44, textAlign: 'center' } : null),
                   }}
                 >
                   {h}
@@ -1109,6 +1151,9 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             {(calculoVista?.netos || []).map((n) => {
               const editDims = !!n.editable_dims && editable
               const editNom = !!n.editable_nombre && editable
+              const esOtros = esCodigoOtros(n.codigo)
+              const ov = overrideCantidad(n.codigo)
+              const descontarDe = ov?.descontar_de || n.descontar_de || ''
               const inpStyle = {
                 ...sheet.cellInp,
                 height: RESUMEN_ROW_HEIGHT,
@@ -1117,7 +1162,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 fontFamily: 'ui-monospace, Consolas, monospace',
                 fontVariantNumeric: 'tabular-nums',
                 fontWeight: 700,
-                background: editDims ? 'transparent' : undefined,
+                fontSize: 'var(--cc-xs)',
+                lineHeight: 1.05,
+                background: 'transparent',
+                boxSizing: 'border-box',
+                width: '100%',
               }
               return (
                 <tr key={n.codigo}>
@@ -1127,20 +1176,44 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                         <span>Otros:</span>
                         <input
                           disabled={!editable}
-                          value={overrideCantidad('OTROS')?.nombre ?? ''}
+                          value={ov?.nombre ?? ''}
                           placeholder="____"
-                          onChange={(e) => setOverrideCantidad('OTROS', { nombre: e.target.value })}
-                          style={{ ...sheet.cellInp, height: RESUMEN_ROW_HEIGHT, padding: '1px 3px', textAlign: 'left', flex: 1 }}
+                          onChange={(e) => setOverrideCantidad(n.codigo, { nombre: e.target.value })}
+                          style={{
+                            ...sheet.cellInp,
+                            height: RESUMEN_ROW_HEIGHT,
+                            padding: '1px 3px',
+                            textAlign: 'left',
+                            flex: 1,
+                            fontSize: 'var(--cc-xs)',
+                            lineHeight: 1.05,
+                            fontWeight: 700,
+                            background: 'transparent',
+                          }}
                         />
+                        {editable && nOtrosLineas > 1 && (
+                          <button
+                            type="button"
+                            title="Quitar esta línea Otros"
+                            onClick={() => eliminarLineaOtros(n.codigo)}
+                            style={{
+                              border: 'none', background: 'transparent', color: '#b91c1c',
+                              cursor: 'pointer', fontWeight: 700, padding: '0 4px', fontSize: 12,
+                            }}
+                          >
+                            ×
+                          </button>
+                        )}
                       </span>
                     ) : displayNombreCant(n)}
                   </td>
+                  <td style={{ ...tdResumenCalc, textAlign: 'center' }}>{n.unidad || ''}</td>
                   {['long', 'ancho', 'espesor'].map((k) => (
                     <td key={k} style={editDims ? { ...tdResumenCalc, padding: 0 } : tdResumenCalc}>
                       {editDims ? (
                         <input
                           type="number"
-                          step="any"
+                          step="0.0001"
                           inputMode="decimal"
                           disabled={!editable}
                           value={cellValCant(n, k)}
@@ -1152,6 +1225,31 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   ))}
                   <td style={tdResumenCalc}>{fmtNDash(n.descuentos)}</td>
                   <td style={tdResumenCalc}>{fmtNDash(displayNetoCant(n))}</td>
+                  <td style={{ ...tdResumenCalc, padding: 2, textAlign: 'left' }}>
+                    {(n.codigo === 'EXC_ROC' || esOtros) ? (
+                      <select
+                        disabled={!editable}
+                        value={descontarDe || ''}
+                        title="Descontar el espesor de un promedio de la cartera"
+                        onChange={(e) => setOverrideCantidad(n.codigo, {
+                          descontar_de: e.target.value || null,
+                        })}
+                        style={{
+                          ...sheet.cellSelect,
+                          height: RESUMEN_ROW_HEIGHT,
+                          padding: '0 2px',
+                          fontSize: 'var(--cc-xxs)',
+                          width: '100%',
+                          background: editable ? 'transparent' : CALC_CELL_BG,
+                        }}
+                      >
+                        <option value="">—</option>
+                        {CAMPOS_DESCUENTO_ALTURA.map((c) => (
+                          <option key={c.key} value={c.key}>{c.label}</option>
+                        ))}
+                      </select>
+                    ) : '—'}
+                  </td>
                   <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
                     <PlanillaTuberiaEvidenciaBtn
                       scope="cantidades"
@@ -1171,6 +1269,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           </tbody>
         </table>
       </div>
+      {calculoVista?.descuentos_altura && Object.keys(calculoVista.descuentos_altura).length > 0 && (
+        <div style={{ marginTop: 6, fontSize: 'var(--cc-xxs)', color: ui.textMuted }}>
+          Descuentos de altura aplicados:{' '}
+          {Object.entries(calculoVista.descuentos_altura).map(([k, v]) => {
+            const lbl = CAMPOS_DESCUENTO_ALTURA.find((c) => c.key === k)?.label || k
+            return `${lbl} −${fmtNDash(v)}`
+          }).join(' · ')}
+        </div>
+      )}
     </div>
     <div style={cardPad}>
       <div style={sheet.sectionTitle}>Descuentos Específicos</div>
