@@ -81,7 +81,12 @@ def _load_routes_with_stubs():
     if "topografia_permissions" not in sys.modules:
         perm = types.ModuleType("topografia_permissions")
         perm.require_permiso_topografia = lambda *_a, **_k: None
+        perm.require_topo_puede_validar_nivel = lambda *_a, **_k: None
         sys.modules["topografia_permissions"] = perm
+    else:
+        perm = sys.modules["topografia_permissions"]
+        if not hasattr(perm, "require_topo_puede_validar_nivel"):
+            perm.require_topo_puede_validar_nivel = lambda *_a, **_k: None
     if "topo_crs" not in sys.modules:
         crs = types.ModuleType("topo_crs")
         crs.gk_bogota_to_wgs84 = lambda e, n: (e, n)
