@@ -104,19 +104,37 @@ export function aplicarPasteColumna(filas, startIdx, key, values) {
   return next
 }
 
-/** Enter avanza como Tab dentro de un contenedor tabular. */
+/** Selectores focuseables para Enter→Tab (misma idea que Circuito de Nivelación). */
+const ENTER_AS_TAB_SELECTOR = [
+  'input:not([disabled]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+].join(',')
+
+function esVisibleParaFoco(el) {
+  if (!el || el.disabled) return false
+  if (el.getAttribute?.('tabindex') === '-1') return false
+  if (el.offsetParent != null) return true
+  return el.getClientRects?.().length > 0
+}
+
+/**
+ * Enter avanza al siguiente campo (como Tab); Shift+Enter al anterior.
+ * No intercepta botones ni atajos con modificadores.
+ * Misma semántica que `nivelacionUiShared.handleEnterAsTab`.
+ */
 export function handleEnterAsTab(e, rootEl) {
   if (e.key !== 'Enter' || e.defaultPrevented) return
   if (e.ctrlKey || e.metaKey || e.altKey) return
   const target = e.target
-  if (!target || !rootEl?.contains?.(target)) return
+  if (!target || !rootEl || typeof rootEl.contains !== 'function' || !rootEl.contains(target)) return
   const tag = String(target.tagName || '').toUpperCase()
   if (tag === 'BUTTON' || tag === 'A') return
   const typ = String(target.type || '').toLowerCase()
-  if (['button', 'submit', 'reset', 'checkbox', 'radio'].includes(typ)) return
+  if (typ === 'button' || typ === 'submit' || typ === 'reset' || typ === 'checkbox' || typ === 'radio') return
+
   e.preventDefault()
-  const sel = 'input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled])'
-  const nodes = [...rootEl.querySelectorAll(sel)].filter((el) => el.offsetParent != null || el.getClientRects?.().length)
+  const nodes = [...rootEl.querySelectorAll(ENTER_AS_TAB_SELECTOR)].filter(esVisibleParaFoco)
   const idx = nodes.indexOf(target)
   if (idx < 0) return
   const next = e.shiftKey ? nodes[idx - 1] : nodes[idx + 1]
