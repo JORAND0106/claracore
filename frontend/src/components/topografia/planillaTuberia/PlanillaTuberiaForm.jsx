@@ -680,6 +680,18 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     [calculoVista, cantManuales],
   )
 
+  const seedTramoGk = useMemo(() => ({
+    norteIni: params.norte_abs_inicial,
+    esteIni: params.este_abs_inicial,
+    norteFin: params.norte_abs_final,
+    esteFin: params.este_abs_final,
+  }), [
+    params.norte_abs_inicial,
+    params.este_abs_inicial,
+    params.norte_abs_final,
+    params.este_abs_final,
+  ])
+
   const avisosLocales = useMemo(
     () => validarFilasCarteraLocal(filas, params.tipo),
     [filas, params.tipo],
@@ -888,6 +900,24 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 }
                 onClick={() => {
                   if (!puedeCrearReporte) return
+                  const evCheck = validarEvidenciasFotograficas(calculoVista, evidencias, {
+                    displayNeto: displayNetoCant,
+                  })
+                  if (evCheck?.faltantes?.length) {
+                    const lista = evCheck.faltantes
+                      .slice(0, 8)
+                      .map((f) => f.nombre || f.codigo)
+                      .join(', ')
+                    const extra = evCheck.faltantes.length > 8
+                      ? ` y ${evCheck.faltantes.length - 8} más`
+                      : ''
+                    setErr(
+                      `No se puede crear el reporte: faltan fotos en ${evCheck.faltantes.length} línea(s) `
+                      + `con cantidad (${lista}${extra}). Adjunte evidencias en Resumen de Cantidades / Descuentos.`,
+                    )
+                    setMsg('')
+                    return
+                  }
                   setErr('')
                   setMsg('')
                   setCrearReporteOpen(true)
@@ -1384,6 +1414,9 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                       requiere={lineasFotoReq.has(`cantidades:${n.codigo}`)}
                       onAdjuntar={adjuntarEvidencia}
                       onEliminar={eliminarEvidencia}
+                      contratoId={contratoId}
+                      token={token}
+                      theme={ui.t}
                     />
                   </td>
                 </tr>
@@ -1443,6 +1476,9 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                     requiere={lineasFotoReq.has(`descuentos:${d.codigo}`)}
                     onAdjuntar={adjuntarEvidencia}
                     onEliminar={eliminarEvidencia}
+                    contratoId={contratoId}
+                    token={token}
+                    theme={ui.t}
                   />
                 </td>
               </tr>
@@ -1820,7 +1856,12 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         onClose={() => setCrearReporteOpen(false)}
         contratoId={contratoId}
         token={token}
-        planilla={{ ...(planilla || {}), nombre: params.nombre || planilla?.nombre, pk_id: params.pk_id, costado: params.costado }}
+        planilla={{
+          ...(planilla || {}),
+          nombre: params.nombre || planilla?.nombre,
+          pk_id: params.pk_id,
+          costado: params.costado,
+        }}
         absInicioDefault={absExtremos.absInicio}
         absFinalDefault={absExtremos.absFinal}
         lineasPreview={lineasReporteSicoe}
@@ -1828,6 +1869,14 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         contratoMeta={{
           numero: usuario?.contrato_numero || usuario?.numero_contrato || null,
           nombre: usuario?.contrato_nombre || null,
+        }}
+        coordsWgs84Inicio={detalle?.coords_wgs84 || null}
+        coordsWgs84Fin={detalle?.coords_wgs84_fin || null}
+        seedTramoGk={{
+          norteIni: params.norte_abs_inicial,
+          esteIni: params.este_abs_inicial,
+          norteFin: params.norte_abs_final,
+          esteFin: params.este_abs_final,
         }}
         ui={{
           text: ui.text,
@@ -1837,6 +1886,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           cardBg: ui.t?.bgCard || '#fff',
           accent: ui.accent,
           accentSoft: ui.accentSoft,
+          t: ui.t,
         }}
         apiCrear={async (body) => {
           const res = await api(`/planillas-tuberia/${planilla.id}/crear-reporte-sicoe`, {

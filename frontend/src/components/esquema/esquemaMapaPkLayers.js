@@ -17,6 +17,10 @@ export const ESQUEMA_MAPA_PK_SOURCE = 'esquema-plano'
 export const ESQUEMA_MAPA_PK_FILL = 'esquema-plano-fill'
 export const ESQUEMA_MAPA_PK_LINE = 'esquema-plano-line'
 export const ESQUEMA_MAPA_PK_LABELS = 'esquema-labels-abscisa'
+export const ESQUEMA_MAPA_TRAMO_SOURCE = 'esquema-tramo-planilla'
+export const ESQUEMA_MAPA_TRAMO_LINE = 'esquema-tramo-line'
+export const ESQUEMA_MAPA_TRAMO_POINTS = 'esquema-tramo-points'
+export const ESQUEMA_MAPA_TRAMO_LABELS = 'esquema-tramo-labels'
 export const ESQUEMA_MAPA_NORTH_BEARING = 270
 
 export const ESQUEMA_MAPA_PK_COLOR = '#0077B6'
@@ -56,6 +60,9 @@ export function normalizeMapContext(raw) {
       absFinal: null,
       hasPk: false,
       hasPoint: false,
+      tramoInicio: null,
+      tramoFin: null,
+      hasTramo: false,
     }
   }
   const lat = Number(
@@ -71,14 +78,119 @@ export function normalizeMapContext(raw) {
   const absFinal = raw.absFinal ?? raw.abs_final ?? null
   const hasPoint = Number.isFinite(lat) && Number.isFinite(lng)
     && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+
+  const parsePt = (p) => {
+    if (!p || typeof p !== 'object') return null
+    const plat = Number(p.lat ?? p.latitude)
+    const plng = Number(p.lng ?? p.lon ?? p.longitude)
+    if (!Number.isFinite(plat) || !Number.isFinite(plng)) return null
+    if (plat < -90 || plat > 90 || plng < -180 || plng > 180) return null
+    return { lat: plat, lng: plng, label: String(p.label || '').trim() || null }
+  }
+  const tramoInicio = parsePt(raw.tramoInicio ?? raw.inicio ?? raw.puntoInicio)
+  const tramoFin = parsePt(raw.tramoFin ?? raw.fin ?? raw.puntoFin)
+  if (tramoInicio && !tramoInicio.label) tramoInicio.label = 'Inicio'
+  if (tramoFin && !tramoFin.label) tramoFin.label = 'Fin'
+
   return {
-    lat: hasPoint ? lat : null,
-    lng: hasPoint ? lng : null,
+    lat: hasPoint ? lat : (tramoInicio?.lat ?? null),
+    lng: hasPoint ? lng : (tramoInicio?.lng ?? null),
     pkId,
     absInicio,
     absFinal,
     hasPk: !!pkId,
-    hasPoint,
+    hasPoint: hasPoint || !!tramoInicio,
+    tramoInicio,
+    tramoFin,
+    hasTramo: !!(tramoInicio && tramoFin),
+  }
+}
+
+/**
+ * Capa GeoJSON Inicio→Fin (puntos etiquetados + línea) sobre el mapa del esquema.
+ */
+export function ensureEsquemaTramoLayers(map, ctx) {
+  if (!map || !ctx?.hasTramo) return
+  const ini = ctx.tramoInicio
+  const fin = ctx.tramoFin
+  const fc = {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: { role: 'line' },
+        geometry: {
+          type: 'LineString',
+          coordinates: [[ini.lng, ini.lat], [fin.lng, fin.lat]],
+        },
+      },
+      {
+        type: 'Feature',
+        properties: { label: ini.label || 'Inicio', role: 'inicio' },
+        geometry: { type: 'Point', coordinates: [ini.lng, ini.lat] },
+      },
+      {
+        type: 'Feature',
+        properties: { label: fin.label || 'Fin', role: 'fin' },
+        geometry: { type: 'Point', coordinates: [fin.lng, fin.lat] },
+      },
+    ],
+  }
+  try {
+    if (map.getSource(ESQUEMA_MAPA_TRAMO_SOURCE)) {
+      map.getSource(ESQUEMA_MAPA_TRAMO_SOURCE).setData(fc)
+    } else {
+      map.addSource(ESQUEMA_MAPA_TRAMO_SOURCE, { type: 'geojson', data: fc })
+    }
+    if (!map.getLayer(ESQUEMA_MAPA_TRAMO_LINE)) {
+      map.addLayer({
+        id: ESQUEMA_MAPA_TRAMO_LINE,
+        type: 'line',
+        source: ESQUEMA_MAPA_TRAMO_SOURCE,
+        filter: ['==', ['get', 'role'], 'line'],
+        paint: {
+          'line-color': '#dc2626',
+          'line-width': 3,
+          'line-opacity': 0.9,
+        },
+      })
+    }
+    if (!map.getLayer(ESQUEMA_MAPA_TRAMO_POINTS)) {
+      map.addLayer({
+        id: ESQUEMA_MAPA_TRAMO_POINTS,
+        type: 'circle',
+        source: ESQUEMA_MAPA_TRAMO_SOURCE,
+        filter: ['in', ['get', 'role'], ['literal', ['inicio', 'fin']]],
+        paint: {
+          'circle-radius': 7,
+          'circle-color': '#2563eb',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#fff',
+        },
+      })
+    }
+    if (!map.getLayer(ESQUEMA_MAPA_TRAMO_LABELS)) {
+      map.addLayer({
+        id: ESQUEMA_MAPA_TRAMO_LABELS,
+        type: 'symbol',
+        source: ESQUEMA_MAPA_TRAMO_SOURCE,
+        filter: ['in', ['get', 'role'], ['literal', ['inicio', 'fin']]],
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-size': 13,
+          'text-offset': [0, 1.2],
+          'text-anchor': 'top',
+          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+        },
+        paint: {
+          'text-color': '#0f172a',
+          'text-halo-color': '#fff',
+          'text-halo-width': 1.5,
+        },
+      })
+    }
+  } catch {
+    /* ignore */
   }
 }
 
@@ -270,6 +382,18 @@ export function fitEsquemaMapCamera(map, planoFc, ctx, contrato = {}) {
   if (!map) return
   const bearing = ESQUEMA_MAPA_NORTH_BEARING
   try {
+    if (ctx?.hasTramo) {
+      const ini = ctx.tramoInicio
+      const fin = ctx.tramoFin
+      map.fitBounds(
+        [
+          [Math.min(ini.lng, fin.lng), Math.min(ini.lat, fin.lat)],
+          [Math.max(ini.lng, fin.lng), Math.max(ini.lat, fin.lat)],
+        ],
+        { padding: 64, maxZoom: 17, bearing, pitch: 0, duration: 0 },
+      )
+      return
+    }
     if (ctx?.hasPk) {
       const bPk = boundsForSelectedPk(planoFc, ctx.pkId)
       if (bPk) {
