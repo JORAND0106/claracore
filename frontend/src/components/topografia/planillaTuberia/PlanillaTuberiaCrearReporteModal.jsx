@@ -1,14 +1,17 @@
 /**
  * Popup: Crear reporte SICOE Obra desde planilla de tubería.
  * Solo pide lo no derivado: Subcontratista, Inspector, Capítulo, Nodo ini/fin (editable).
+ * Exige esquema del tramo (EsquemaEditorModal) antes de confirmar.
  * z-index > editor de planilla (100030) y selector PK (100050).
  */
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { API_BASE } from '../../../apiBase'
+import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
 
 /** Por encima del editor de planilla (100030) y del mapa PK (100050). */
 export const CREAR_REPORTE_Z_INDEX = 100060
+/** Por encima del propio popup Crear reporte. */
+export const CREAR_REPORTE_ESQUEMA_Z_INDEX = 100070
 
 /**
  * Autocomplete de catálogo {id, nombre}: un solo input con sugerencias (sin dropdown aparte).
@@ -200,6 +203,12 @@ export default function PlanillaTuberiaCrearReporteModal({
   ui,
   logoUrl,
   contratoMeta,
+  /** { lon, lat } inicio WGS84 (detalle.coords_wgs84) */
+  coordsWgs84Inicio = null,
+  /** { lon, lat } fin WGS84 (detalle.coords_wgs84_fin) */
+  coordsWgs84Fin = null,
+  /** Magna GK para sembrar nodos Inicio/Fin en el lienzo */
+  seedTramoGk = null,
 }) {
   const [subs, setSubs] = useState([])
   const [insps, setInsps] = useState([])
@@ -211,6 +220,8 @@ export default function PlanillaTuberiaCrearReporteModal({
   const [nodoFin, setNodoFin] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [esquemaOpen, setEsquemaOpen] = useState(false)
+  const [esquemaDataUri, setEsquemaDataUri] = useState(null)
 
   useEffect(() => {
     if (!open) return
@@ -218,11 +229,49 @@ export default function PlanillaTuberiaCrearReporteModal({
     setSubId('')
     setInspId('')
     setCapitulo('')
+    setEsquemaOpen(false)
+    setEsquemaDataUri(null)
     const a0 = fmtAbs(absInicioDefault)
     const a1 = fmtAbs(absFinalDefault)
     setNodoIni(a0)
     setNodoFin(a1)
   }, [open, absInicioDefault, absFinalDefault, planilla?.id])
+
+  const mapLocation = useMemo(() => {
+    const ini = coordsWgs84Inicio && typeof coordsWgs84Inicio === 'object' ? coordsWgs84Inicio : null
+    const fin = coordsWgs84Fin && typeof coordsWgs84Fin === 'object' ? coordsWgs84Fin : null
+    const latIni = Number(ini?.lat ?? ini?.latitude)
+    const lngIni = Number(ini?.lng ?? ini?.lon ?? ini?.longitude)
+    const latFin = Number(fin?.lat ?? fin?.latitude)
+    const lngFin = Number(fin?.lng ?? fin?.lon ?? fin?.longitude)
+    const out = {
+      lat: Number.isFinite(latIni) ? latIni : undefined,
+      lng: Number.isFinite(lngIni) ? lngIni : undefined,
+      pkId: planilla?.pk_id || '',
+      absInicio: absInicioDefault,
+      absFinal: absFinalDefault,
+    }
+    if (Number.isFinite(latIni) && Number.isFinite(lngIni)) {
+      out.tramoInicio = { lat: latIni, lng: lngIni, label: 'Inicio' }
+    }
+    if (Number.isFinite(latFin) && Number.isFinite(lngFin)) {
+      out.tramoFin = { lat: latFin, lng: lngFin, label: 'Fin' }
+    }
+    return out
+  }, [coordsWgs84Inicio, coordsWgs84Fin, planilla?.pk_id, absInicioDefault, absFinalDefault])
+
+  const seedTramo = useMemo(() => {
+    const s = seedTramoGk && typeof seedTramoGk === 'object' ? seedTramoGk : null
+    if (!s) return null
+    const nIni = Number(s.norteIni ?? s.norte_abs_inicial)
+    const eIni = Number(s.esteIni ?? s.este_abs_inicial)
+    const nFin = Number(s.norteFin ?? s.norte_abs_final)
+    const eFin = Number(s.esteFin ?? s.este_abs_final)
+    if (![nIni, eIni, nFin, eFin].every(Number.isFinite)) return null
+    return { norteIni: nIni, esteIni: eIni, norteFin: nFin, esteFin: eFin }
+  }, [seedTramoGk])
+
+  const esquemaListo = Boolean(esquemaDataUri)
 
   useEffect(() => {
     if (!open || !contratoId || !token) return
@@ -276,6 +325,10 @@ export default function PlanillaTuberiaCrearReporteModal({
     if (!subId) { setErr('Seleccione subcontratista'); return }
     if (!inspId) { setErr('Seleccione inspector'); return }
     if (!String(capitulo || '').trim()) { setErr('Seleccione capítulo'); return }
+    if (!esquemaListo) {
+      setErr('Genere y guarde el esquema del tramo (Inicio → Fin) antes de crear el reporte.')
+      return
+    }
     setBusy(true); setErr('')
     try {
       const numOrNull = (v) => {
@@ -492,6 +545,66 @@ export default function PlanillaTuberiaCrearReporteModal({
             </div>
           )}
 
+          <div
+            data-esquema-tramo-obligatorio
+            style={{
+              border: `1px solid ${esquemaListo ? '#86efac' : (ui?.border || '#e2e8f0')}`,
+              borderRadius: 8,
+              padding: 10,
+              background: esquemaListo ? '#f0fdf4' : (ui?.inputBg || '#f8fafc'),
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', marginBottom: 4 }}>
+              Esquema del tramo *
+            </div>
+            <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', marginBottom: 8 }}>
+              Obligatorio. Se abre el editor de Esquemas con el mapa y los puntos Inicio / Fin (WGS84) unidos por una flecha.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => { setErr(''); setEsquemaOpen(true) }}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: ui?.accent || '#2563eb',
+                  color: '#fff',
+                  fontWeight: 700,
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                  fontSize: 'var(--cc-sm)',
+                }}
+              >
+                {esquemaListo ? '✎ Revisar / regenerar esquema' : '✎ Generar esquema del tramo'}
+              </button>
+              <span style={{
+                fontSize: 'var(--cc-xs)',
+                fontWeight: 700,
+                color: esquemaListo ? '#166534' : '#b45309',
+              }}
+              >
+                {esquemaListo ? 'Esquema guardado' : 'Pendiente de generar'}
+              </span>
+            </div>
+            {esquemaListo && esquemaDataUri && (
+              <img
+                src={esquemaDataUri}
+                alt="Vista previa esquema del tramo"
+                style={{
+                  display: 'block',
+                  marginTop: 8,
+                  maxWidth: '100%',
+                  maxHeight: 120,
+                  objectFit: 'contain',
+                  borderRadius: 6,
+                  border: `1px solid ${ui?.border || '#e2e8f0'}`,
+                  background: '#fff',
+                }}
+              />
+            )}
+          </div>
+
           {lineasPreview.length > 0 && (
             <div style={{
               border: `1px solid ${ui?.border || '#e2e8f0'}`,
@@ -535,11 +648,15 @@ export default function PlanillaTuberiaCrearReporteModal({
             </button>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || !esquemaListo}
               onClick={crear}
+              title={!esquemaListo ? 'Genere y guarde el esquema del tramo primero' : undefined}
               style={{
                 padding: '8px 14px', borderRadius: 8, border: 'none',
-                background: ui?.accent || '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 700,
+                background: ui?.accent || '#2563eb', color: '#fff',
+                cursor: (busy || !esquemaListo) ? 'not-allowed' : 'pointer',
+                fontWeight: 700,
+                opacity: !esquemaListo ? 0.55 : 1,
               }}
             >
               {busy ? 'Creando…' : 'Crear reporte'}
@@ -550,5 +667,38 @@ export default function PlanillaTuberiaCrearReporteModal({
     </div>
   )
 
-  return createPortal(overlay, document.body)
+  return (
+    <>
+      {createPortal(overlay, document.body)}
+      {esquemaOpen && createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: CREAR_REPORTE_ESQUEMA_Z_INDEX }}>
+          <EsquemaEditorModal
+            t={ui?.t || {
+              bg: ui?.cardBg || '#fff',
+              text: ui?.text || '#0f172a',
+              textMuted: ui?.textMuted || '#64748b',
+              border: ui?.border || '#e2e8f0',
+              primary: ui?.accent || '#2563eb',
+            }}
+            title="Esquema del tramo — planilla de tubería"
+            contratoId={contratoId}
+            mapLocation={mapLocation}
+            seedTramo={seedTramo}
+            autoActivateMap
+            onClose={() => setEsquemaOpen(false)}
+            onSave={async (dataUrl) => {
+              if (!dataUrl) {
+                setErr('El esquema no devolvió imagen. Guarde de nuevo.')
+                return
+              }
+              setEsquemaDataUri(dataUrl)
+              setEsquemaOpen(false)
+              setErr('')
+            }}
+          />
+        </div>,
+        document.body,
+      )}
+    </>
+  )
 }

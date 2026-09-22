@@ -138,6 +138,7 @@ import {
   applyEsquemaPkSelectionStyle,
   buildEsquemaPlanoFc,
   ensureEsquemaPkLayers,
+  ensureEsquemaTramoLayers,
   featurePkId,
   fitEsquemaMapCamera,
   normalizeMapContext,
@@ -319,8 +320,12 @@ export default function EsquemaEditorModal({
   initialDataUri = null,
   contratoId: contratoIdProp = null,
   iaDoc = null,
-  /** Ubicación / PK del reporte asociado: { lat, lng, pkId?, absInicio?, absFinal? }. */
+  /** Ubicación / PK del reporte asociado: { lat, lng, pkId?, absInicio?, absFinal?, tramoInicio?, tramoFin? }. */
   mapLocation = null,
+  /** Semilla de tramo Magna GK: { norteIni, esteIni, norteFin, esteFin }. Dibuja nodos Inicio/Fin + flecha. */
+  seedTramo = null,
+  /** Si true, activa el mapa al abrir (p. ej. flujo Crear reporte planilla tubería). */
+  autoActivateMap = false,
   onSave,
   onClose,
 }) {
@@ -736,6 +741,79 @@ export default function EsquemaEditorModal({
     requestAnimationFrame(() => redrawRef.current())
   }, [initialDataUri])
 
+  // Semilla de tramo (planilla tubería): nodos Inicio/Fin + flecha en canvas.
+  useEffect(() => {
+    const st = seedTramo
+    if (!st || typeof st !== 'object') return
+    const nIni = Number(st.norteIni ?? st.norte_ini)
+    const eIni = Number(st.esteIni ?? st.este_ini)
+    const nFin = Number(st.norteFin ?? st.norte_fin)
+    const eFin = Number(st.esteFin ?? st.este_fin)
+    if (![nIni, eIni, nFin, eFin].every(Number.isFinite)) return
+    const rows = [
+      { num: 'Inicio', norte: nIni, este: eIni, desc: 'Inicio' },
+      { num: 'Fin', norte: nFin, este: eFin, desc: 'Fin' },
+    ]
+    const origin = coordOriginFromRows(rows)
+    coordOriginRef.current = origin
+    const nodes = rows.map((r) => {
+      const pt = topoToWorld(r.este, r.norte, origin)
+      return {
+        id: uid(),
+        type: 'nodo',
+        x: pt.x,
+        y: pt.y,
+        nodeNum: r.num,
+        norte: r.norte,
+        este: r.este,
+        cota: null,
+        desc: r.desc,
+        color: colorRef.current,
+      }
+    })
+    const flecha = {
+      id: uid(),
+      type: 'flecha',
+      x1: nodes[0].x,
+      y1: nodes[0].y,
+      x2: nodes[1].x,
+      y2: nodes[1].y,
+      color: '#dc2626',
+      width: Math.max(2, widthRef.current),
+    }
+    const keepBg = (objectsRef.current || []).filter((o) => o.type === 'image' && o.fit)
+    objectsRef.current = [...keepBg, ...nodes, flecha]
+    setCoordRows(rows.map((r) => ({
+      num: r.num,
+      norte: r.norte,
+      este: r.este,
+      cota: '',
+      desc: r.desc,
+    })))
+    setCoordPanelOpen(true)
+    setDirty(true)
+    if (nodes.length) {
+      const xs = nodes.map((n) => n.x)
+      const ys = nodes.map((n) => n.y)
+      const minX = Math.min(...xs)
+      const maxX = Math.max(...xs)
+      const minY = Math.min(...ys)
+      const maxY = Math.max(...ys)
+      const { w, h } = cssSize()
+      const bw = Math.max(40, maxX - minX)
+      const bh = Math.max(40, maxY - minY)
+      const z = clampZoom(Math.min(2.5, Math.min((w - 80) / bw, (h - 80) / bh)))
+      zoomRef.current = z
+      panRef.current = {
+        x: w / 2 - ((minX + maxX) / 2) * z,
+        y: h / 2 - ((minY + maxY) / 2) * z,
+      }
+      setZoomPct(Math.round(z * 100))
+    }
+    setPanTick((n) => n + 1)
+    requestAnimationFrame(() => redrawRef.current())
+  }, [seedTramo])
+
   useEffect(() => { redraw(draftRef.current) }, [selectedId, redraw, panTick])
 
   // Zoom con rueda/scroll: listener nativo no-pasivo para poder preventDefault
@@ -1060,11 +1138,21 @@ export default function EsquemaEditorModal({
     toolRef.current = 'paneo'
     setToolHint(mapCtx.hasPk
       ? `Mapa centrado en PK ${mapCtx.pkId}. Escala del lienzo = escala del mapa. Paneo para mover; capas en Propiedades.`
+      : mapCtx.hasTramo
+        ? 'Mapa con tramo Inicio → Fin. Escala del lienzo = escala del mapa. Paneo para mover; capas en Propiedades.'
       : mapCtx.hasPoint
         ? 'Mapa centrado en la ubicación del reporte. Escala del lienzo = escala del mapa. Paneo para mover; capas en Propiedades.'
         : 'Vista general del contrato. Escala del lienzo = escala del mapa. Paneo para explorar; capas en Propiedades.')
     setPanTick((n) => n + 1)
   }, [mapCtx])
+
+  useEffect(() => {
+    if (!autoActivateMap) return undefined
+    const tmr = window.setTimeout(() => {
+      try { activateMap() } catch { /* ignore */ }
+    }, 160)
+    return () => window.clearTimeout(tmr)
+  }, [autoActivateMap, activateMap])
 
   const bindMapPkClick = useCallback((map) => {
     if (!map || mapClickBoundRef.current) return
@@ -1234,6 +1322,10 @@ export default function EsquemaEditorModal({
       try { map.resize() } catch { /* ignore */ }
       if (!contratoId) {
         if (!cancelled && mapRef.current === map) {
+          ensureEsquemaTramoLayers(map, ctx)
+          if (ctx.hasTramo) {
+            fitEsquemaMapCamera(map, { type: 'FeatureCollection', features: [] }, ctx, {})
+          }
           mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
           try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
           syncCanvasToMapRef.current()
@@ -1252,6 +1344,7 @@ export default function EsquemaEditorModal({
         mapPlanoFcRef.current = planoFc
         mapClickBoundRef.current = false
         ensureEsquemaPkLayers(map, planoFc, ctx.pkId)
+        ensureEsquemaTramoLayers(map, ctx)
         bindMapPkClick(map)
         fitEsquemaMapCamera(map, planoFc, ctx, {
           centro_lat: row?.centro_lat,

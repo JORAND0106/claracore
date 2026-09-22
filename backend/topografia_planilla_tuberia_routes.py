@@ -401,9 +401,19 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
     if este_wgs is not None and norte_wgs is not None:
         try:
             lon, lat = gk_bogota_to_wgs84(float(este_wgs), float(norte_wgs))
-            coords = {"lon": lon, "lat": lat}
+            coords = {"lon": lon, "lat": lat, "label": "Inicio"}
         except Exception:
             coords = None
+
+    coords_fin = None
+    norte_fin = meta_geo.get("norte_abs_final")
+    este_fin = meta_geo.get("este_abs_final")
+    if norte_fin is not None and este_fin is not None:
+        try:
+            lon_f, lat_f = gk_bogota_to_wgs84(float(este_fin), float(norte_fin))
+            coords_fin = {"lon": lon_f, "lat": lat_f, "label": "Fin"}
+        except Exception:
+            coords_fin = None
 
     return {
         "planilla": planilla,
@@ -411,6 +421,7 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
         "descuentos_manuales": descuentos,
         "calculo": calculo,
         "coords_wgs84": coords,
+        "coords_wgs84_fin": coords_fin,
         "relaciones_atraque": list(RELACIONES_ATRAQUE),
         "tipos": list(TIPOS_PLANILLA),
     }
