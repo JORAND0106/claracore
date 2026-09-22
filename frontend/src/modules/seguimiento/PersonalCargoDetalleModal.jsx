@@ -6,7 +6,9 @@ import {
   EMPRESA_REGISTRO_DIRECTO,
   HORA_INGRESO_DEFAULT,
   HORA_SALIDA_DEFAULT,
+  aplicarAutocompletarAsistenciaPorCargo,
   asistenciaRowFromRrhh,
+  cantidadManualDesdePlantillaPorCargo,
   emptyAsistenciaRow,
   filtrarCatalogoPorCargoYEmpresa,
   formatHorarioAsistencia,
@@ -17,6 +19,7 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './segu
 /**
  * Detalle por cargo (y empresa): popup con encabezado institucional y grilla
  * tipo Excel. Al agregar, el catálogo RRHH se filtra a cargo + empresa.
+ * Incluye «Autocompletar del día anterior» para ese cargo (tramo vacío).
  */
 export default function PersonalCargoDetalleModal({
   t,
@@ -32,6 +35,9 @@ export default function PersonalCargoDetalleModal({
   cantidadManual = 0,
   onChangeCantidadManual,
   permitirCargoCantidad = false,
+  /** () => Promise<plantilla> — último diario / día hábil anterior. */
+  fetchPlantillaAutocompletar = null,
+  excluidosRrhhIds = [],
   viewportCompact = false,
   zIndex = 12000,
   onClose,
@@ -39,6 +45,9 @@ export default function PersonalCargoDetalleModal({
   const ui = bitacoraSheetStyles(t)
   const [draftOpen, setDraftOpen] = useState(false)
   const [draft, setDraft] = useState(() => emptyAsistenciaRow({ cargo: cargo || '' }))
+  const [autoBusy, setAutoBusy] = useState(false)
+  const [autoMsg, setAutoMsg] = useState('')
+  const [autoErr, setAutoErr] = useState('')
 
   const usedIds = useMemo(
     () => (rows || []).map((r) => r.rrhh_trabajador_id).filter((x) => x != null),
@@ -108,8 +117,67 @@ export default function PersonalCargoDetalleModal({
     setDraftOpen(false)
   }
 
+  const autocompletarDiaAnterior = async () => {
+    if (disabled || !fetchPlantillaAutocompletar || autoBusy) return
+    setAutoBusy(true)
+    setAutoErr('')
+    setAutoMsg('')
+    try {
+      const plantilla = await fetchPlantillaAutocompletar()
+      if (!plantilla || typeof plantilla !== 'object') {
+        setAutoErr('No hay una Bitácora anterior para autocompletar este cargo.')
+        return
+      }
+      const empScope = esRegistroDirecto ? '' : empresa
+      const result = aplicarAutocompletarAsistenciaPorCargo({
+        currentRows: rows,
+        plantilla,
+        cargo,
+        empresa: empScope,
+        excluidosRrhhIds,
+      })
+      let manualN = 0
+      if (permitirCargoCantidad && esRegistroDirecto) {
+        manualN = cantidadManualDesdePlantillaPorCargo(plantilla, cargo)
+      }
+      if (result.empty && !(manualN > 0)) {
+        setAutoErr(
+          `No hay colaboradores de «${cargo}» en el reporte anterior`
+          + (result.fuenteFecha ? ` (${result.fuenteFecha})` : '')
+          + '.',
+        )
+        return
+      }
+      if (!result.empty) {
+        onChange?.(result.rows)
+      }
+      if (manualN > 0) {
+        onChangeCantidadManual?.(manualN)
+      }
+      const partes = []
+      if (result.added > 0) {
+        partes.push(
+          `${result.added} colaborador${result.added === 1 ? '' : 'es'} de «${cargo}»`,
+        )
+      }
+      if (manualN > 0) {
+        partes.push(`cantidad directa ${manualN}`)
+      }
+      setAutoMsg(
+        `Cargado desde el día anterior${result.fuenteFecha ? ` (${result.fuenteFecha})` : ''}: `
+        + `${partes.join(' · ')}. `
+        + 'Tramo queda vacío; asígnelo en cada fila.',
+      )
+    } catch (e) {
+      setAutoErr(e?.message || 'No se pudo autocompletar desde el día anterior')
+    } finally {
+      setAutoBusy(false)
+    }
+  }
+
   const totalNombrados = entries.length
   const totalResumen = totalNombrados + (Number(cantidadManual) > 0 ? Number(cantidadManual) : 0)
+  const puedeAutocompletar = !disabled && typeof fetchPlantillaAutocompletar === 'function'
 
   const sheet = (
     <div
@@ -161,6 +229,25 @@ export default function PersonalCargoDetalleModal({
             </div>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {puedeAutocompletar && (
+              <button
+                type="button"
+                data-testid="bitacora-cargo-autocompletar-dia-anterior"
+                onClick={() => void autocompletarDiaAnterior()}
+                disabled={autoBusy}
+                title="Carga los colaboradores de este cargo desde el último reporte diario (tramo vacío)"
+                style={{
+                  ...btnGhost,
+                  border: `1px dashed ${t.primary || t.border}`,
+                  color: t.primary,
+                  fontWeight: 700,
+                  opacity: autoBusy ? 0.65 : 1,
+                  cursor: autoBusy ? 'wait' : 'pointer',
+                }}
+              >
+                {autoBusy ? 'Cargando…' : 'Autocompletar del día anterior'}
+              </button>
+            )}
             {!disabled && (
               <button
                 type="button"
@@ -178,6 +265,23 @@ export default function PersonalCargoDetalleModal({
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {(autoMsg || autoErr) && (
+            <div
+              role="status"
+              style={{
+                fontSize: 'var(--cc-xs)',
+                lineHeight: 1.35,
+                padding: '8px 10px',
+                borderRadius: 8,
+                border: `1px solid ${autoErr ? (t.danger || '#dc2626') : t.border}`,
+                background: autoErr ? 'rgba(220, 38, 38, 0.06)' : (t.bg || '#fff'),
+                color: autoErr ? (t.danger || '#b91c1c') : t.textMuted,
+              }}
+            >
+              {autoErr || autoMsg}
+            </div>
+          )}
+
           {permitirCargoCantidad && (
             <div style={{
               display: 'flex',

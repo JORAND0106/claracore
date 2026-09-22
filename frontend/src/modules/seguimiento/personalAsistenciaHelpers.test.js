@@ -14,6 +14,8 @@ import {
   asistenciaFromEntrada,
   asistenciaParaPayload,
   asistenciaRowFromRrhh,
+  aplicarAutocompletarAsistenciaPorCargo,
+  cantidadManualDesdePlantillaPorCargo,
   cantidadManualPorCargo,
   capitalizarNombrePropio,
   emptyAsistenciaRow,
@@ -535,5 +537,100 @@ describe('asistenciaFromEntrada / payload', () => {
     ]
     const out = filasAsistenciaSinExcluidosRrhh(rows, [9, '9'])
     assert.deepEqual(out.map((r) => r.nombre), ['Ana', 'Legado'])
+  })
+})
+
+describe('aplicarAutocompletarAsistenciaPorCargo', () => {
+  const plantilla = {
+    fuente_fecha: '2026-09-21',
+    asistencia_colaboradores: [
+      {
+        nombre: 'Ana Ayudante',
+        cargo: 'Ayudante',
+        rrhh_trabajador_id: 1,
+        subcontratista_nombre: 'Empresa A',
+        tramo: 'Tramo Norte',
+        estado: 'activo',
+        hora_ingreso: '07:30',
+        hora_salida: '16:30',
+      },
+      {
+        nombre: 'Beto Ayudante',
+        cargo: 'AYUDANTE',
+        rrhh_trabajador_id: 2,
+        subcontratista_nombre: 'Empresa B',
+        tramo: 'Tramo Sur',
+        estado: 'activo',
+        hora_ingreso: '07:30',
+        hora_salida: '16:30',
+      },
+      {
+        nombre: 'Carla Oficial',
+        cargo: 'Oficial',
+        rrhh_trabajador_id: 3,
+        subcontratista_nombre: 'Empresa A',
+        tramo: 'Tramo Norte',
+        estado: 'activo',
+        hora_ingreso: '07:30',
+        hora_salida: '16:30',
+      },
+    ],
+    personal_manual: [{ cargo: 'Maestro', cantidad: 4 }],
+  }
+
+  it('carga solo el cargo pedido y limpia tramo', () => {
+    const current = [
+      { nombre: 'Hoy Oficial', cargo: 'Oficial', rrhh_trabajador_id: 9, tramo: 'Tramo X' },
+    ]
+    const out = aplicarAutocompletarAsistenciaPorCargo({
+      currentRows: current,
+      plantilla,
+      cargo: 'Ayudante',
+    })
+    assert.equal(out.added, 2)
+    assert.equal(out.empty, false)
+    assert.equal(out.fuenteFecha, '2026-09-21')
+    assert.equal(out.rows.length, 3) // Oficial de hoy + 2 ayudantes
+    const ayudantes = out.rows.filter((r) => r.cargo.toLowerCase() === 'ayudante')
+    assert.equal(ayudantes.length, 2)
+    assert.ok(ayudantes.every((r) => r.tramo === ''))
+    assert.equal(out.rows.find((r) => r.rrhh_trabajador_id === 9).tramo, 'Tramo X')
+  })
+
+  it('respeta filtro por empresa y no duplica personas ya nominadas', () => {
+    const current = [
+      {
+        nombre: 'Ana Ayudante',
+        cargo: 'Oficial',
+        rrhh_trabajador_id: 1,
+        tramo: 'Tramo Y',
+        subcontratista_nombre: 'Empresa A',
+      },
+    ]
+    const out = aplicarAutocompletarAsistenciaPorCargo({
+      currentRows: current,
+      plantilla,
+      cargo: 'Ayudante',
+      empresa: 'Empresa A',
+    })
+    // Ana (id 1) ya está en otro cargo → no se duplica; Beto es Empresa B → fuera de filtro
+    assert.equal(out.added, 0)
+    assert.equal(out.empty, true)
+    assert.equal(out.rows.length, 1)
+  })
+
+  it('sustituye filas previas del mismo cargo y lee cantidad manual', () => {
+    const current = [
+      { nombre: 'Viejo', cargo: 'Ayudante', rrhh_trabajador_id: 99, tramo: 'Z' },
+    ]
+    const out = aplicarAutocompletarAsistenciaPorCargo({
+      currentRows: current,
+      plantilla,
+      cargo: 'ayudante',
+    })
+    assert.equal(out.added, 2)
+    assert.equal(out.rows.some((r) => r.rrhh_trabajador_id === 99), false)
+    assert.equal(cantidadManualDesdePlantillaPorCargo(plantilla, 'Maestro'), 4)
+    assert.equal(cantidadManualDesdePlantillaPorCargo(plantilla, 'Ayudante'), 0)
   })
 })
