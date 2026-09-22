@@ -2758,22 +2758,64 @@ def enrich_asistencia_desde_rrhh(
 
 def list_rrhh_trabajadores_para_bitacora(
     sb, contrato_id: int, q: str = "", *, solo_aprobados: Optional[bool] = None,
+    trabajadores: Optional[List[dict]] = None,
 ) -> List[dict]:
     """Catálogo RRHH reducido para autocompletado de Personal en obra.
 
     Excluye colaboradores con ROL de plataforma Administrativo (cruce por
     email o nombre completo contra ``usuarios`` / ``roles``).
+
+    Si ``trabajadores`` viene precargado, no vuelve a consultar RRHH
+    (evita round-trip duplicado cuando el caller también pide excluidos).
     """
-    try:
-        from rrhh_service import list_trabajadores
-    except Exception as exc:  # pragma: no cover
-        _log.warning("list_rrhh_trabajadores_para_bitacora import: %s", exc)
-        return []
-    try:
-        rows = list_trabajadores(sb, int(contrato_id), q=q or None) or []
-    except Exception as exc:
-        _log.warning("list_rrhh_trabajadores_para_bitacora: %s", exc)
-        return []
+    payload = catalogo_rrhh_para_bitacora(
+        sb,
+        contrato_id,
+        q=q,
+        solo_aprobados=solo_aprobados,
+        trabajadores=trabajadores,
+    )
+    return list(payload.get("items") or [])
+
+
+def catalogo_rrhh_para_bitacora(
+    sb,
+    contrato_id: int,
+    q: str = "",
+    *,
+    solo_aprobados: Optional[bool] = None,
+    trabajadores: Optional[List[dict]] = None,
+) -> Dict[str, Any]:
+    """
+    Una sola pasada: items visibles + IDs excluidos por rol Administrativo.
+    Evita reconsultar trabajadores y recomputar claves de admin.
+    """
+    if trabajadores is None:
+        try:
+            from rrhh_service import list_trabajadores, _TRAB_COLS_BITACORA
+        except Exception as exc:  # pragma: no cover
+            _log.warning("catalogo_rrhh_para_bitacora import: %s", exc)
+            return {"items": [], "excluidos_rrhh_ids": []}
+        try:
+            rows = list_trabajadores(
+                sb, int(contrato_id), q=q or None, columns=_TRAB_COLS_BITACORA,
+            ) or []
+        except Exception as exc:
+            _log.warning("catalogo_rrhh_para_bitacora trabajadores: %s", exc)
+            return {"items": [], "excluidos_rrhh_ids": []}
+    else:
+        rows = list(trabajadores or [])
+        needle = (q or "").strip().lower()
+        if needle:
+            rows = [
+                r for r in rows
+                if isinstance(r, dict) and (
+                    needle in f"{r.get('nombres') or ''} {r.get('apellidos') or ''}".lower()
+                    or needle in str(r.get("numero_documento") or "").lower()
+                    or needle in str(r.get("cargo_aspira") or "").lower()
+                    or needle in str(r.get("empresa_nombre") or "").lower()
+                )
+            ]
 
     if solo_aprobados is None:
         from bitacora_asistencia_rrhh_policy import requiere_asistencia_rrhh_aprobado
@@ -2788,6 +2830,7 @@ def list_rrhh_trabajadores_para_bitacora(
     claves_admin = _claves_usuarios_rol_administrativo(sb, contrato_id, rows)
 
     out: List[dict] = []
+    excluidos: List[int] = []
     for t in rows:
         if not isinstance(t, dict):
             continue
@@ -2796,11 +2839,11 @@ def list_rrhh_trabajadores_para_bitacora(
         except (TypeError, ValueError, KeyError):
             continue
         if trabajador_tiene_rol_administrativo(t, claves_admin):
+            excluidos.append(tid)
             continue
         cargo_asp = _normalizar_nombre_cargo_propio(t.get("cargo_aspira") or "")
-        # Legado: cargo_aspira exactamente «Administrativo» (era el rol mal
-        # modelado como cargo).
         if es_etiqueta_administrativo_excluida(cargo_asp):
+            excluidos.append(tid)
             continue
         doc_est = str(t.get("doc_validacion_estado") or "pendiente").lower()
         if solo_aprobados and not doc_validacion_es_aprobado(doc_est):
@@ -2818,7 +2861,7 @@ def list_rrhh_trabajadores_para_bitacora(
             "estado": str(t.get("estado") or "activo").lower(),
             "doc_validacion_estado": doc_est,
         })
-    return out
+    return {"items": out, "excluidos_rrhh_ids": excluidos}
 
 
 def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
@@ -2827,25 +2870,23 @@ def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
 
     Solo cargos con al menos un colaborador **sin** rol Administrativo, más
     la plantilla de obra. Se excluyen cargos exclusivos de personal con ese
-    rol y la etiqueta exacta «Administrativo». No se listan títulos del
-    catálogo RRHH que solo existan para personal administrativo.
+    rol y la etiqueta exacta «Administrativo».
+
+    No consulta el catálogo de opciones RRHH (evita ensure-on-read y un
+    round-trip extra): la fuente es trabajadores + plantilla.
     """
     try:
-        from rrhh_service import list_catalogo, list_trabajadores
+        from rrhh_service import list_trabajadores, _TRAB_COLS_BITACORA
     except Exception as exc:  # pragma: no cover
         _log.warning("list_rrhh_cargos_para_bitacora import: %s", exc)
         return []
     try:
-        rows = list_catalogo(sb, int(contrato_id), "cargo") or []
-    except Exception as exc:
-        _log.warning("list_rrhh_cargos_para_bitacora: %s", exc)
-        return []
-
-    try:
-        trabajadores = list_trabajadores(sb, int(contrato_id)) or []
+        trabajadores = list_trabajadores(
+            sb, int(contrato_id), columns=_TRAB_COLS_BITACORA,
+        ) or []
     except Exception as exc:
         _log.warning("list_rrhh_cargos_para_bitacora trabajadores: %s", exc)
-        trabajadores = []
+        return []
 
     claves_admin = _claves_usuarios_rol_administrativo(sb, contrato_id, trabajadores)
     excluidos = cargos_exclusivos_rol_administrativo(trabajadores, claves_admin)
@@ -2857,7 +2898,7 @@ def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
             continue
         if trabajador_tiene_rol_administrativo(t, claves_admin):
             continue
-        cargo = str(t.get("cargo_aspira") or "").strip()
+        cargo = _normalizar_nombre_cargo_propio(t.get("cargo_aspira") or "")
         if not cargo or es_etiqueta_administrativo_excluida(cargo):
             continue
         obra_labels[cargo.casefold()] = cargo
@@ -2873,17 +2914,6 @@ def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
             return
         seen.add(key)
         out.append(val)
-
-    for r in rows:
-        if isinstance(r, dict):
-            val = _normalizar_nombre_cargo_propio(r.get("valor") or "")
-        else:
-            val = _normalizar_nombre_cargo_propio(r or "")
-        if not val:
-            continue
-        key = val.casefold()
-        if key in obra_labels or key in plantilla:
-            _add(val)
 
     for key, label in obra_labels.items():
         _add(label)

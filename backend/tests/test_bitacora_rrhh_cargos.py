@@ -27,21 +27,17 @@ class _FakeSb:
 
 
 def test_list_rrhh_cargos_incluye_obra_y_plantilla(monkeypatch):
-    rows = [
-        {"valor": "Topógrafo"},
-        {"valor": "Ayudante"},
-        {"valor": "ayudante"},
-        {"valor": "  "},
-        {"valor": "Oficial"},
-        {"valor": "Gerente Administrativo"},  # sin trabajadores obra → no entra
-    ]
     import rrhh_service as rrhh_mod
 
-    monkeypatch.setattr(rrhh_mod, "list_catalogo", lambda *_a, **_k: rows)
-    monkeypatch.setattr(rrhh_mod, "list_trabajadores", lambda *_a, **_k: [])
+    trabs = [
+        {"id": 1, "cargo_aspira": "Topógrafo", "email": "a@x.com"},
+        {"id": 2, "cargo_aspira": "Ayudante", "email": "b@x.com"},
+        {"id": 3, "cargo_aspira": "Oficial", "email": "c@x.com"},
+        {"id": 4, "cargo_aspira": "Gerente Administrativo", "email": "d@x.com"},
+    ]
+    monkeypatch.setattr(rrhh_mod, "list_trabajadores", lambda *_a, **_k: trabs)
 
     out = list_rrhh_cargos_para_bitacora(_FakeSb(), 10)
-    assert "Gerente Administrativo" not in out
     assert "Oficial" in out
     assert "Ayudante" in out
     assert "Topógrafo" in out
@@ -56,5 +52,38 @@ def test_list_rrhh_cargos_sin_rrhh_devuelve_vacio(monkeypatch):
 
     import rrhh_service as rrhh_mod
 
-    monkeypatch.setattr(rrhh_mod, "list_catalogo", _boom)
+    monkeypatch.setattr(rrhh_mod, "list_trabajadores", _boom)
     assert list_rrhh_cargos_para_bitacora(_FakeSb(), 1) == []
+
+
+def test_list_catalogo_cargo_no_dispara_ensure(monkeypatch):
+    """Hot path de listado no debe reescribir cargos (latencia)."""
+    import rrhh_service as rrhh_mod
+
+    calls = {"ensure": 0}
+
+    def _ensure(*_a, **_k):
+        calls["ensure"] += 1
+        return {"catalogo_actualizados": 0, "trabajadores_actualizados": 0}
+
+    class _Q:
+        def select(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+
+    class _Sb:
+        def table(self, *_a, **_k):
+            return _Q()
+
+    monkeypatch.setattr(rrhh_mod, "ensure_cargos_nombre_propio", _ensure)
+    monkeypatch.setattr(rrhh_mod, "ensure_catalogo_defaults", lambda *_a, **_k: None)
+    rrhh_mod.list_catalogo(_Sb(), 1, "cargo")
+    assert calls["ensure"] == 0

@@ -444,8 +444,8 @@ def _validate_categoria(categoria: str) -> str:
 def list_catalogo(sb, contrato_id: int, categoria: str) -> List[dict]:
     cat = _validate_categoria(categoria)
     ensure_catalogo_defaults(sb, contrato_id, cat)
-    if cat == "cargo":
-        ensure_cargos_nombre_propio(sb, contrato_id)
+    # No correr ensure_cargos_nombre_propio aquí: es costoso (N updates) y bloquea
+    # el listado ~segundos. La normalización vive en alta/edición y en lectura UI.
     return (
         sb.table(_TABLE_CATALOGO)
         .select("id, categoria, valor, activo")
@@ -463,7 +463,6 @@ def list_catalogo_todos(sb, contrato_id: int) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = {c: [] for c in sorted(CATALOG_CATEGORIAS)}
     for cat in CATALOG_CATEGORIAS:
         ensure_catalogo_defaults(sb, contrato_id, cat)
-    ensure_cargos_nombre_propio(sb, contrato_id)
     rows = (
         sb.table(_TABLE_CATALOGO)
         .select("categoria, valor")
@@ -1028,6 +1027,7 @@ def list_trabajadores(
     empresa_key: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    columns: Optional[str] = None,
 ) -> List[dict]:
     rows, _total = list_trabajadores_paginado(
         sb,
@@ -1037,8 +1037,17 @@ def list_trabajadores(
         empresa_key=empresa_key,
         limit=limit,
         offset=offset,
+        columns=columns,
     )
     return rows
+
+
+# Columnas suficientes para Bitácora (sin foto/firma ni notas pesadas).
+_TRAB_COLS_BITACORA = (
+    "id, nombres, apellidos, tipo_documento, numero_documento, email, "
+    "cargo_aspira, empresa_nombre, empresa_subcontratista_id, estado, "
+    "doc_validacion_estado"
+)
 
 
 def list_trabajadores_paginado(
@@ -1050,10 +1059,12 @@ def list_trabajadores_paginado(
     empresa_key: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    columns: Optional[str] = None,
 ) -> tuple:
+    select_cols = (columns or "*").strip() or "*"
     query = (
         sb.table(_TABLE_TRAB)
-        .select("*")
+        .select(select_cols)
         .eq("contrato_id", int(contrato_id))
         .is_("eliminado_en", "null")
         .order("apellidos")
