@@ -120,6 +120,7 @@ import { slidesFromRegistro } from './components/adjuntos/adjuntosMedia'
 import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import SicoeReporteItemsTabla from './modules/sicoe-obra/SicoeReporteItemsTabla'
+import SicoePlanillaTuberiaOrigenTab from './modules/sicoe-obra/SicoePlanillaTuberiaOrigenTab'
 import {
   sicoeAutoRegistroNavState,
   sicoeMatchRegistroAuto,
@@ -5491,6 +5492,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     : registros.filter((r) => esRegistroSinItemAsignado(r) || cumplePrereqsVerTodos(r))
 
   const [tabActiva, setTabActiva]                 = useState('portada')
+  const [tienePlanillaTuberiaOrigen, setTienePlanillaTuberiaOrigen] = useState(false)
   const [guardandoEnlace, setGuardandoEnlace]     = useState(false)
   const [enlaces, setEnlaces]                      = useState(() => parseEnlacesSoporteReporte(repoProp.enlace_soporte))
   const [enlaceInput, setEnlaceInput]              = useState('')
@@ -5860,12 +5862,32 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     [registrosVisibles],
   )
 
-  // Si la vista filtrada deja fuera el tab activo, volver a Portada.
-  // Tabs fijos: portada | sin_asignar | items (ya no hay pestaña por ítem).
+  // Tabs fijos: portada | sin_asignar | items | (planilla_tuberia si hay vínculo)
   useEffect(() => {
     if (tabActiva === 'portada' || tabActiva === 'sin_asignar' || tabActiva === 'items') return
+    if (tabActiva === 'planilla_tuberia' && tienePlanillaTuberiaOrigen) return
     setTabActiva('portada')
-  }, [tabActiva])
+  }, [tabActiva, tienePlanillaTuberiaOrigen])
+
+  useEffect(() => {
+    const rid = reporte?.id || repoProp?.id
+    if (!rid || !contrato_id) {
+      setTienePlanillaTuberiaOrigen(false)
+      return
+    }
+    let cancelled = false
+    const tok = getToken()
+    fetch(`${API_URL}/topografia/${contrato_id}/planillas-tuberia/por-reporte-sicoe/${rid}`, {
+      headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+    })
+      .then((r) => {
+        if (!cancelled) setTienePlanillaTuberiaOrigen(r.ok)
+      })
+      .catch(() => {
+        if (!cancelled) setTienePlanillaTuberiaOrigen(false)
+      })
+    return () => { cancelled = true }
+  }, [reporte?.id, repoProp?.id, contrato_id, API_URL])
 
   useEffect(() => {
     setMsgMasivo('')
@@ -7184,11 +7206,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               }),
             )
             const nItems = itemsAsignados.length
-            return [
+            const tabs = [
               { key: 'portada',      label: '📋 Portada' },
               { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
               { key: 'items',        label: `${tienePendienteItems ? '🔴' : '🔖'} Ítems y registros${nItems > 0 ? ` (${nItems})` : ''}` },
             ]
+            if (tienePlanillaTuberiaOrigen) {
+              tabs.push({ key: 'planilla_tuberia', label: '📐 Planilla tubería' })
+            }
+            return tabs
           })().map(tab => (
             <button key={tab.key} type="button" onClick={() => setTabActiva(tab.key)} style={{
               background:    tabActiva === tab.key ? '#E8F6F8' : '#2A3F52',
@@ -7790,6 +7816,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 )}
               />
             </div>
+          )}
+
+          {tabActiva === 'planilla_tuberia' && tienePlanillaTuberiaOrigen && (
+            <SicoePlanillaTuberiaOrigenTab
+              t={t}
+              contratoId={contrato_id}
+              token={getToken()}
+              reporteId={reporte?.id || repoProp?.id}
+            />
           )}
         </div>
       </div>
@@ -19087,6 +19122,7 @@ async function enviarZoomPkid(pkid) {
 
 const [navRegistroId, setNavRegistroId] = useState(null)
 const [navRegistroNumero, setNavRegistroNumero] = useState(null)
+const [navReporteId, setNavReporteId] = useState(null)
   const prevContratoDashRef = useRef(contratoIdDash)
 
   useEffect(() => {
@@ -19124,6 +19160,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       setDwgEnlazadoDash(false)
       setNavRegistroId(null)
       setNavRegistroNumero(null)
+      setNavReporteId(null)
       setNotifNavegar(null)
       if (contratoIdDash) invalidateDashboardVistaCache(contratoIdDash)
       dashDrillFetchSeqRef.current += 1
@@ -23269,8 +23306,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               usuario={usuario}
               token={getToken()}
               s={s}
+              navReporteId={navReporteId}
               navRegistroNumero={navRegistroNumero}
-              onNavReporteConsumed={() => setNavRegistroNumero(null)}
+              onNavReporteConsumed={() => {
+                setNavReporteId(null)
+                setNavRegistroNumero(null)
+              }}
               refrescarMatrizValidacionDashboard={cargarMatrizValidacionDashboard}
             />
           </OfflineProvider>
@@ -23338,6 +23379,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 validar: puedeValidarTopografia,
                 eliminar: puedeEliminarTopografia,
                 exportar: puedeExportarTopografia,
+              }}
+              onAbrirReporteSicoe={(reporteId) => {
+                const rid = Number(reporteId)
+                if (!Number.isFinite(rid) || rid <= 0) return
+                setNavReporteId(rid)
+                setModuloActivo('sicoe_obra')
               }}
             />
           ) : (

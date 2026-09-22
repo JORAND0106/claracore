@@ -781,6 +781,102 @@ def validar_cartera_campo(filas: list[dict], tipo: str) -> dict[str, Any]:
     return {"ok": len(errores) == 0, "errores": errores, "infos": infos}
 
 
+# --- Puente Planilla Tubería → SICOE Obra (so_reportes / so_registros) --------
+
+_EPS_CANTIDAD_SICOE = 1e-9
+
+
+def _cantidad_sicoe_no_cero(v: Any) -> bool:
+    try:
+        if v is None or v == "":
+            return False
+        return abs(float(v)) > _EPS_CANTIDAD_SICOE
+    except (TypeError, ValueError):
+        return False
+
+
+def abscisas_extremos_cartera(
+    calculo: Optional[dict], filas_campo: Optional[list[dict]] = None
+) -> tuple[Optional[float], Optional[float]]:
+    """Mínimo / máximo de abscisa (totales del cálculo o filas crudas)."""
+    tot = ((calculo or {}).get("cartera") or {}).get("totales") or {}
+    a0 = _f(tot.get("abscisa_inicial"))
+    a1 = _f(tot.get("abscisa_final"))
+    if a0 is not None and a1 is not None:
+        return a0, a1
+    vals: list[float] = []
+    for f in filas_campo or []:
+        if not isinstance(f, dict):
+            continue
+        v = _f(f.get("abscisa"))
+        if v is not None:
+            vals.append(v)
+    if not vals:
+        return None, None
+    return min(vals), max(vals)
+
+
+def lineas_planilla_a_registros_sicoe(calculo: Optional[dict]) -> list[dict[str, Any]]:
+    """
+    Cada línea de Resumen de Cantidades y Descuentos Específicos con cantidad ≠ 0
+    → payload de so_registros (sin ítem; texto Item → observacion/descripcion).
+    """
+    if not isinstance(calculo, dict):
+        return []
+    out: list[dict[str, Any]] = []
+
+    def _push(
+        nombre: Any, unidad: Any, long: Any, ancho: Any, espesor: Any, cant: Any,
+        *, origen: str, codigo: str,
+    ) -> None:
+        if not _cantidad_sicoe_no_cero(cant):
+            return
+        txt = str(nombre or codigo or "").strip() or codigo
+        c = float(cant)
+        out.append({
+            "nombre": txt,
+            "descripcion": txt,
+            "observacion": txt,
+            "unidad": (str(unidad).strip() if unidad not in (None, "") else None),
+            "longitud": _r4(long) if long is not None else None,
+            "ancho": _r4(ancho) if ancho is not None else None,
+            "espesor": _r4(espesor) if espesor is not None else None,
+            "cantidad": _r2(c),
+            "cantidad_total": _r2(c),
+            "item_numero": None,
+            "item_descripcion": None,
+            "_origen_codigo": codigo,
+            "_origen_tabla": origen,
+        })
+
+    for n in calculo.get("netos") or []:
+        if not isinstance(n, dict):
+            continue
+        codigo = str(n.get("codigo") or "").strip()
+        if not codigo:
+            continue
+        cant = n.get("neto")
+        if cant is None:
+            cant = n.get("cantidad")
+        _push(
+            n.get("nombre") or codigo, n.get("unidad"),
+            n.get("long"), n.get("ancho"), n.get("espesor"), cant,
+            origen="cantidades", codigo=codigo,
+        )
+    for d in calculo.get("descuentos") or []:
+        if not isinstance(d, dict) or not d.get("nombre"):
+            continue
+        codigo = str(d.get("codigo") or "").strip()
+        if not codigo:
+            continue
+        _push(
+            d.get("nombre") or codigo, d.get("unidad") or "m³",
+            d.get("long"), d.get("ancho"), d.get("espesor"), d.get("cantidad"),
+            origen="descuentos", codigo=codigo,
+        )
+    return out
+
+
 # Aliases estables para rutas / tests
 calcular_seccion_planilla = calcular_seccion
 altura_relleno_m = altura_relleno_atraque_m

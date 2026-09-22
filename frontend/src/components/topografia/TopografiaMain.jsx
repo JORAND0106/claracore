@@ -203,7 +203,7 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
   }
 
   const renderSubmodulo = () => {
-    const props = { contratoId, token, permisos, usuario }
+    const props = { contratoId, token, permisos, usuario, onAbrirReporteSicoe }
     switch (submodulo) {
       case 'topo_biblioteca':
         return <BibliiotecaPuntos {...props} permisos={permisos} />
@@ -398,7 +398,7 @@ function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuber
   )
 }
 
-export default function TopografiaMain({ t, usuario, token, permisos = defaultPermisos }) {
+export default function TopografiaMain({ t, usuario, token, permisos = defaultPermisos, onAbrirReporteSicoe }) {
   const contratoId = usuario?.contrato_id
   const [alertas, setAlertas] = useState(0)
   const [tuberiaSel, setTuberiaSel] = useState(null)

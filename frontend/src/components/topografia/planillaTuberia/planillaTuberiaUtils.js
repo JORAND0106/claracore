@@ -453,3 +453,54 @@ export function validarNombrePlanilla(nombre, lista = [], excludeId = null) {
   }
   return { ok: true, nombre: nom }
 }
+
+/** Extremos de abscisa desde cálculo local o filas. */
+export function abscisasExtremosPlanilla(calculo, filas = []) {
+  const tot = calculo?.cartera?.totales || {}
+  let a0 = tot.abscisa_inicial
+  let a1 = tot.abscisa_final
+  if (a0 != null && a1 != null) return { absInicio: Number(a0), absFinal: Number(a1) }
+  const vals = (filas || [])
+    .map((f) => Number(f?.abscisa))
+    .filter((n) => Number.isFinite(n))
+  if (!vals.length) return { absInicio: null, absFinal: null }
+  return { absInicio: Math.min(...vals), absFinal: Math.max(...vals) }
+}
+
+/**
+ * Preview de líneas que se convertirán en so_registros (cantidad ≠ 0).
+ * @param {object} calculo
+ * @param {{ displayNeto?: Function }} [opts]
+ */
+export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
+  const displayNeto = typeof opts.displayNeto === 'function' ? opts.displayNeto : null
+  const out = []
+  const push = (scope, codigo, nombre, unidad, cantidad) => {
+    const n = Number(cantidad)
+    if (!Number.isFinite(n) || Math.abs(n) <= 1e-9) return
+    out.push({
+      scope,
+      codigo,
+      nombre: nombre || codigo,
+      unidad: unidad || '',
+      cantidad: Math.round(n * 100) / 100,
+    })
+  }
+  for (const n of calculo?.netos || []) {
+    if (!n?.codigo) continue
+    const cant = displayNeto ? displayNeto(n) : (n.neto ?? n.cantidad)
+    push('cantidades', n.codigo, n.nombre, n.unidad, cant)
+  }
+  for (const d of calculo?.descuentos || []) {
+    if (!d?.nombre || !d?.codigo) continue
+    push('descuentos', d.codigo, d.nombre, d.unidad || 'm³', d.cantidad)
+  }
+  return out
+}
+
+/** Links SICOE guardados en meta_cabecera.sicoe_reportes */
+export function linksSicoeDesdeMeta(meta) {
+  const raw = meta && typeof meta === 'object' ? meta.sicoe_reportes : null
+  if (!Array.isArray(raw)) return []
+  return raw.filter((x) => x && x.reporte_id != null)
+}

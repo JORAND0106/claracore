@@ -20,9 +20,11 @@ from topografia_planilla_tuberia import (
     ITEMS_DESCUENTOS_FILTRO,
     RELACIONES_ATRAQUE,
     TIPOS_PLANILLA,
+    abscisas_extremos_cartera,
     calcular_planilla_completa,
     construir_fila_consolidado,
     filtrar_descuentos_manuales_por_tipo,
+    lineas_planilla_a_registros_sicoe,
     migrar_filas_campo_al_cambiar_tipo,
     validar_cartera_campo,
 )
@@ -118,6 +120,17 @@ class CarteraBody(BaseModel):
     filas: list[FilaBody]
     descuentos_manuales: list[DescBody] = Field(default_factory=list)
     cantidades_manuales: Optional[list[dict[str, Any]]] = None
+
+
+class CrearReporteSicoeBody(BaseModel):
+    """Datos que no se derivan de la planilla: actores + capítulo + nodos editables."""
+    subcontratista_id: int
+    inspector_id: int
+    capitulo: str
+    nodo_ini: Optional[str] = None
+    nodo_fin: Optional[str] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
 
 
 def _filas(planilla_id: str) -> list[dict]:
@@ -683,6 +696,342 @@ def calcular(contrato_id: int, planilla_id: str, current_user=Depends(get_curren
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "ver")
     return _detalle(contrato_id, planilla_id)
+
+
+def _resolver_pk_id_maestro(contrato_id: int, pk_label: Optional[str]) -> Optional[int]:
+    label = str(pk_label or "").strip()
+    if not label:
+        return None
+    rows = (
+        supabase.table("pk_ids")
+        .select("id,pk_id")
+        .eq("contrato_id", contrato_id)
+        .eq("pk_id", label)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if rows:
+        return int(rows[0]["id"])
+    # Fallback: match case-insensitive via scan acotado
+    all_rows = (
+        supabase.table("pk_ids")
+        .select("id,pk_id")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    label_l = label.lower()
+    for r in all_rows:
+        if str(r.get("pk_id") or "").strip().lower() == label_l:
+            return int(r["id"])
+    return None
+
+
+def _sicoe_links_from_meta(meta: Any) -> list[dict]:
+    if not isinstance(meta, dict):
+        return []
+    raw = meta.get("sicoe_reportes")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw:
+        if isinstance(item, dict) and item.get("reporte_id") is not None:
+            out.append(dict(item))
+    return out
+
+
+def _coords_wgs_planilla(p: dict) -> tuple[Optional[float], Optional[float]]:
+    meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    norte = p.get("norte_ref")
+    if norte is None:
+        norte = meta.get("norte_abs_inicial")
+    este = p.get("este_ref")
+    if este is None:
+        este = meta.get("este_abs_inicial")
+    if este is None or norte is None:
+        return None, None
+    try:
+        lon, lat = gk_bogota_to_wgs84(float(este), float(norte))
+        return float(lat), float(lon)
+    except Exception:
+        return None, None
+
+
+@router.get("/{contrato_id}/planillas-tuberia/por-reporte-sicoe/{reporte_id}")
+def planilla_por_reporte_sicoe(
+    contrato_id: int, reporte_id: int, current_user=Depends(get_current_user),
+):
+    """Resuelve la planilla de origen vinculada a un so_reportes (pestaña SICOE)."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver")
+    rows = (
+        supabase.table("topo_planillas_tuberia")
+        .select("id,nombre,tipo,estado,pk_id,costado,meta_cabecera,updated_at")
+        .eq("contrato_id", contrato_id)
+        .order("updated_at", desc=True)
+        .limit(200)
+        .execute()
+        .data
+        or []
+    )
+    rid = int(reporte_id)
+    for r in rows:
+        for link in _sicoe_links_from_meta(r.get("meta_cabecera")):
+            try:
+                if int(link.get("reporte_id")) == rid:
+                    return _detalle(contrato_id, r["id"])
+            except (TypeError, ValueError):
+                continue
+    raise HTTPException(404, "No hay planilla de tubería vinculada a este reporte.")
+
+
+@router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/crear-reporte-sicoe")
+def crear_reporte_sicoe_desde_planilla(
+    contrato_id: int,
+    planilla_id: str,
+    body: CrearReporteSicoeBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Crea so_reportes + so_registros (sin ítem) a partir de la planilla.
+    Reutiliza el mismo modelo/estructura que el wizard SICOE Obra.
+    """
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(404, "Planilla no encontrada")
+
+    capitulo = str(body.capitulo or "").strip()
+    if not capitulo:
+        raise HTTPException(422, "Capítulo requerido")
+    if not body.subcontratista_id or not body.inspector_id:
+        raise HTTPException(422, "Subcontratista e Inspector son requeridos")
+
+    nombre = str(p.get("nombre") or "").strip()
+    if not nombre:
+        raise HTTPException(422, "La planilla debe tener nombre antes de crear el reporte.")
+
+    filas = _filas(planilla_id)
+    if not filas:
+        raise HTTPException(422, "Guarde la cartera de campo con datos antes de crear el reporte.")
+
+    try:
+        calc = _calcular(p, filas, _descuentos(planilla_id))
+    except HTTPException as exc:
+        raise HTTPException(
+            422,
+            "Configure diámetro y ancho de excavación, y asegúrese de tener cartera calculable.",
+        ) from exc
+
+    lineas = lineas_planilla_a_registros_sicoe(calc)
+    if not lineas:
+        raise HTTPException(
+            422,
+            "No hay líneas de cantidad/descuento con valor ≠ 0 para generar registros.",
+        )
+
+    abs0, abs1 = abscisas_extremos_cartera(calc, filas)
+    if body.abs_inicio is not None:
+        abs0 = float(body.abs_inicio)
+    if body.abs_final is not None:
+        abs1 = float(body.abs_final)
+    if abs0 is not None and abs1 is not None and abs0 > abs1:
+        abs0, abs1 = abs1, abs0
+
+    nodo_ini = (body.nodo_ini if body.nodo_ini is not None else (str(abs0) if abs0 is not None else None))
+    nodo_fin = (body.nodo_fin if body.nodo_fin is not None else (str(abs1) if abs1 is not None else None))
+    if isinstance(nodo_ini, str):
+        nodo_ini = nodo_ini.strip() or None
+    if isinstance(nodo_fin, str):
+        nodo_fin = nodo_fin.strip() or None
+
+    pk_id_id = _resolver_pk_id_maestro(contrato_id, p.get("pk_id"))
+    lat, lng = _coords_wgs_planilla(p)
+    margen = str(p.get("costado") or "").strip() or None
+    uid = _uid(current_user)
+
+    # 1) Cabecera so_reportes (mismo flujo que POST /sicoe-obra/.../reportes)
+    try:
+        from main import (
+            _get_niveles_activos_contrato,
+            _invalidate_dashboard_financial_caches,
+            _so_registro_normalizar_graficos_historial,
+            _so_reportes_normalizar_payload_cabecera,
+            _sicoe_resolver_acta_semana_corte,
+            registrar_log,
+            supabase_execute,
+        )
+    except ImportError:
+        _so_reportes_normalizar_payload_cabecera = None  # type: ignore
+        _so_registro_normalizar_graficos_historial = lambda d: d  # type: ignore
+        _sicoe_resolver_acta_semana_corte = lambda *_a, **_k: (None, None, None)  # type: ignore
+        _get_niveles_activos_contrato = lambda *_a, **_k: [1, 2, 3]  # type: ignore
+        _invalidate_dashboard_financial_caches = lambda *_a, **_k: None  # type: ignore
+        registrar_log = None  # type: ignore
+
+        def supabase_execute(fn):  # type: ignore
+            return fn()
+
+    numero = supabase_execute(
+        lambda: supabase.rpc("siguiente_numero_reporte", {"p_contrato_id": contrato_id}).execute().data
+    )
+    acta_rpo_id, semana_id, corte_id = _sicoe_resolver_acta_semana_corte(
+        int(contrato_id), int(body.subcontratista_id),
+    )
+
+    reporte_payload: dict[str, Any] = {
+        "descripcion_actividad": nombre,
+        "subcontratista_id": int(body.subcontratista_id),
+        "inspector_id": int(body.inspector_id),
+        "capitulo": capitulo,
+        "pk_id_id": pk_id_id,
+        "margen": margen,
+        "abs_inicio": abs0,
+        "abs_final": abs1,
+        "nodo_ini": nodo_ini,
+        "nodo_fin": nodo_fin,
+        "coord_lat": lat,
+        "coord_lng": lng,
+        "tipo_localizacion": "unica",
+        "estado": "Sin Asignar Ítem",
+        "contrato_id": contrato_id,
+        "numero_reporte": numero,
+        "creado_por": uid,
+        "acta_rpo_id": acta_rpo_id,
+        "semana_id": semana_id,
+        "corte_id": corte_id,
+    }
+    if _so_reportes_normalizar_payload_cabecera:
+        _so_reportes_normalizar_payload_cabecera(reporte_payload)
+
+    rep_rows = supabase_execute(
+        lambda: supabase.table("so_reportes").insert(reporte_payload).execute().data
+    )
+    if not rep_rows:
+        raise HTTPException(500, "No se pudo crear el reporte en SICOE Obra")
+    reporte = rep_rows[0]
+    reporte_id = int(reporte["id"])
+
+    # 2) Números de registro + insert lote
+    nlines = len(lineas)
+    numeros: list[int] = []
+    try:
+        raw_nums = supabase_execute(
+            lambda: supabase.rpc(
+                "siguiente_n_numeros_registro",
+                {"p_contrato_id": contrato_id, "p_n": nlines},
+            ).execute().data
+        )
+        if isinstance(raw_nums, list) and len(raw_nums) == nlines:
+            numeros = [int(x) for x in raw_nums]
+    except Exception:
+        numeros = []
+    if len(numeros) != nlines:
+        numeros = []
+        for _ in range(nlines):
+            numeros.append(int(supabase_execute(
+                lambda: supabase.rpc(
+                    "siguiente_numero_registro", {"p_contrato_id": contrato_id}
+                ).execute().data
+            )))
+
+    niveles = _get_niveles_activos_contrato(int(contrato_id)) or [1, 2, 3]
+    rows_ins: list[dict[str, Any]] = []
+    mapa_codigos: dict[str, int] = {}
+    for line, num in zip(lineas, numeros):
+        data = {k: v for k, v in line.items() if not str(k).startswith("_")}
+        data.update({
+            "reporte_id": reporte_id,
+            "numero_registro": int(num),
+            "contrato_id": contrato_id,
+            "creado_por_reg": uid,
+            "modificado_por_reg": uid,
+            "bloqueado": False,
+            "capitulo": capitulo,
+            "pk_id_id": pk_id_id,
+            "margen": margen,
+            "abs_inicio": abs0,
+            "abs_final": abs1,
+            "nodo_ini": nodo_ini,
+            "nodo_fin": nodo_fin,
+            "coord_lat": lat,
+            "coord_lng": lng,
+            "subcontratista_id": int(body.subcontratista_id),
+            "inspector_id": int(body.inspector_id),
+            "acta_rpo_id": acta_rpo_id,
+            "semana_id": semana_id,
+            "corte_id": corte_id,
+        })
+        for n in niveles:
+            try:
+                ni = int(n)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= ni <= 6:
+                data[f"nivel{ni}_estado"] = "No Revisado"
+                data[f"nivel{ni}_usuario_id"] = None
+                data[f"nivel{ni}_fecha"] = None
+        _so_registro_normalizar_graficos_historial(data)
+        rows_ins.append(data)
+        origen_key = f"{line.get('_origen_tabla')}:{line.get('_origen_codigo')}"
+        mapa_codigos[origen_key] = int(num)
+
+    inserted = supabase_execute(
+        lambda: supabase.table("so_registros").insert(rows_ins).execute().data
+    ) or []
+
+    # 3) Vínculo cruzado en meta_cabecera de la planilla
+    prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    links = _sicoe_links_from_meta(prev_meta)
+    link = {
+        "reporte_id": reporte_id,
+        "numero_reporte": reporte.get("numero_reporte"),
+        "created_at": _now(),
+        "capitulo": capitulo,
+        "n_registros": len(rows_ins),
+        "registro_numeros_por_codigo": mapa_codigos,
+    }
+    links.append(link)
+    new_meta = {**prev_meta, "sicoe_reportes": links}
+    supabase.table("topo_planillas_tuberia").update({
+        "meta_cabecera": new_meta,
+        "updated_at": _now(),
+        "version": int(p.get("version") or 1) + 1,
+    }).eq("id", planilla_id).execute()
+
+    try:
+        if registrar_log:
+            from main import _audit_user_contrato
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log, "CREAR", "SICOE", "reporte", str(reporte_id),
+                {
+                    "origen": "planilla_tuberia",
+                    "planilla_id": planilla_id,
+                    "numero_reporte": reporte.get("numero_reporte"),
+                    "n_registros": len(rows_ins),
+                },
+            )
+    except Exception:
+        logger.exception("audit crear reporte desde planilla")
+    try:
+        _invalidate_dashboard_financial_caches(int(contrato_id))
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "reporte": reporte,
+        "reporte_id": reporte_id,
+        "numero_reporte": reporte.get("numero_reporte"),
+        "n_registros": len(inserted) or len(rows_ins),
+        "link": link,
+        "planilla": _detalle(contrato_id, planilla_id),
+    }
 
 
 @router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/cerrar")
