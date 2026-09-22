@@ -15,6 +15,7 @@ import {
   nombreEmpresaAsistencia,
   personalAgregadoDesdeAsistencia,
   resolverCatalogoCargos,
+  resumenCargosDesdeCatalogo,
   resumenEmpresasCargos,
 } from './personalAsistenciaHelpers'
 import { useSeguimientoCompact } from './seguimientoShared'
@@ -82,13 +83,16 @@ export default function PersonalAsistenciaPanel({
 
   const resumenEmpresas = useMemo(
     () => resumenEmpresasCargos({
-      catalogoCargos: cargosBase,
       rows,
       personalManual: permitirCargoCantidad ? personalManual : [],
-      trabajadores: rrhhCatalogo,
       liveEstadosByRrhhId: liveMap,
     }),
-    [cargosBase, rows, personalManual, permitirCargoCantidad, rrhhCatalogo, liveMap],
+    [rows, personalManual, permitirCargoCantidad, liveMap],
+  )
+
+  const resumenConsolidado = useMemo(
+    () => resumenCargosDesdeCatalogo(cargosBase, agregado),
+    [cargosBase, agregado],
   )
 
   const usedIds = useMemo(
@@ -99,6 +103,9 @@ export default function PersonalAsistenciaPanel({
   const entriesDetalle = useMemo(() => {
     if (!cargoDetalle?.cargo) return []
     if (cargoDetalle.esRegistroDirecto) return []
+    if (cargoDetalle.esConsolidado) {
+      return filasAsistenciaPorCargo(rows, cargoDetalle.cargo)
+    }
     return filasAsistenciaPorCargo(rows, cargoDetalle.cargo, {
       empresa: cargoDetalle.empresa,
     })
@@ -166,8 +173,78 @@ export default function PersonalAsistenciaPanel({
       empresa: grupo.empresa,
       empresa_key: grupo.empresa_key,
       esRegistroDirecto: Boolean(grupo.esRegistroDirecto),
+      esConsolidado: false,
     })
   }
+
+  const openCargoConsolidado = (cargoRow) => {
+    setCargoDetalle({
+      cargo: cargoRow.cargo,
+      empresa: '',
+      empresa_key: '',
+      esRegistroDirecto: false,
+      esConsolidado: true,
+    })
+  }
+
+  const renderCargoCards = (cargos, { onOpen, keyPrefix, ariaLabel }) => (
+    <div
+      role="list"
+      aria-label={ariaLabel}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: viewportCompact
+          ? 'repeat(auto-fill, minmax(132px, 1fr))'
+          : 'repeat(auto-fill, minmax(168px, 1fr))',
+        gap: viewportCompact ? 8 : 10,
+      }}
+    >
+      {cargos.map((row) => (
+        <button
+          key={`${keyPrefix}-${row.cargo}`}
+          type="button"
+          role="listitem"
+          onClick={() => onOpen(row)}
+          title={`Ver detalle de ${row.cargo}`}
+          style={{
+            minHeight: viewportCompact ? 84 : 96,
+            border: `1px solid ${t.border}`,
+            borderRadius: 10,
+            background: t.bg || t.bgCard || '#fff',
+            padding: '12px 10px',
+            cursor: 'pointer',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            textAlign: 'center',
+            boxShadow: 'none',
+            transition: 'border-color 120ms ease, background 120ms ease',
+          }}
+        >
+          <span style={{
+            fontWeight: 700,
+            fontSize: 'var(--cc-xs)',
+            color: t.text,
+            lineHeight: 1.25,
+            wordBreak: 'break-word',
+          }}>
+            {row.cargo}
+          </span>
+          <span style={{
+            fontWeight: 800,
+            fontSize: 'var(--cc-title)',
+            color: Number(row.cantidad) > 0 ? (t.primary || '#0077B6') : (t.textMuted || '#64748b'),
+            fontVariantNumeric: 'tabular-nums',
+            lineHeight: 1,
+          }}>
+            {row.cantidad}
+          </span>
+        </button>
+      ))}
+    </div>
+  )
 
   const btnGhost = {
     border: `1px dashed ${t.border}`,
@@ -260,8 +337,8 @@ export default function PersonalAsistenciaPanel({
           lineHeight: 1.35,
         }}>
           {gateRrhhAprobado
-            ? 'Haga clic en un cargo (dentro de su empresa) para ver o agregar colaboradores con documentación Aprobada en RRHH.'
-            : 'El resumen agrupa por empresa/contratista. Haga clic en un cargo para ver o agregar colaboradores de esa empresa.'}
+            ? 'Consolidado por cargo (catálogo RRHH) y desglose por empresa solo con cargos registrados ese día.'
+            : 'Arriba: consolidado general por cargo. Abajo: desglose por empresa solo con los cargos que tiene registrados.'}
         </div>
       )}
 
@@ -415,113 +492,90 @@ export default function PersonalAsistenciaPanel({
         flexDirection: 'column',
         gap: viewportCompact ? 14 : 18,
       }}>
-        {resumenEmpresas.length === 0 ? (
-          <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)', padding: 8 }}>
-            Sin empresas ni cargos en el catálogo de RRHH.
+        <section aria-label="Consolidado general por cargo" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{
+            fontWeight: 800,
+            fontSize: 'var(--cc-caption)',
+            color: t.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+          }}>
+            Consolidado general
           </div>
-        ) : resumenEmpresas.map((grupo) => (
-          <section
-            key={`emp-${grupo.empresa_key}`}
-            aria-label={grupo.empresa}
-            style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
-          >
-            <div style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'baseline',
-              justifyContent: 'space-between',
-              gap: 8,
-              paddingBottom: 4,
-              borderBottom: `1px solid ${t.border}`,
-            }}>
-              <div style={{
-                fontWeight: 800,
-                fontSize: 'var(--cc-sm)',
-                color: t.text,
-                letterSpacing: '0.01em',
-              }}>
-                {grupo.empresa}
-              </div>
-              <div style={{
-                fontSize: 'var(--cc-caption)',
-                fontWeight: 700,
-                color: t.textMuted,
-              }}>
-                {grupo.total} persona{grupo.total === 1 ? '' : 's'}
-                {grupo.esRegistroDirecto ? ' · sin identificación' : ''}
-              </div>
+          {resumenConsolidado.length === 0 ? (
+            <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+              Sin cargos en el catálogo de RRHH.
             </div>
-            {!grupo.cargos.length ? (
-              <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
-                Sin cargos para esta empresa.
+          ) : renderCargoCards(resumenConsolidado, {
+            keyPrefix: 'cons',
+            ariaLabel: 'Consolidado por cargo',
+            onOpen: openCargoConsolidado,
+          })}
+        </section>
+
+        <section aria-label="Desglose por empresa" style={{ display: 'flex', flexDirection: 'column', gap: viewportCompact ? 12 : 16 }}>
+          <div style={{
+            fontWeight: 800,
+            fontSize: 'var(--cc-caption)',
+            color: t.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+          }}>
+            Por empresa
+          </div>
+          {resumenEmpresas.length === 0 ? (
+            <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+              Sin colaboradores nominados por empresa este día.
+            </div>
+          ) : resumenEmpresas.map((grupo) => (
+            <div
+              key={`emp-${grupo.empresa_key}`}
+              aria-label={grupo.empresa}
+              style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+            >
+              <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'baseline',
+                justifyContent: 'space-between',
+                gap: 8,
+                paddingBottom: 4,
+                borderBottom: `1px solid ${t.border}`,
+              }}>
+                <div style={{
+                  fontWeight: 800,
+                  fontSize: 'var(--cc-sm)',
+                  color: t.text,
+                  letterSpacing: '0.01em',
+                }}>
+                  {grupo.empresa}
+                </div>
+                <div style={{
+                  fontSize: 'var(--cc-caption)',
+                  fontWeight: 700,
+                  color: t.textMuted,
+                }}>
+                  {grupo.total} persona{grupo.total === 1 ? '' : 's'}
+                  {grupo.esRegistroDirecto ? ' · sin identificación' : ''}
+                </div>
               </div>
-            ) : (
-              <div
-                role="list"
-                aria-label={`Cargos de ${grupo.empresa}`}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: viewportCompact
-                    ? 'repeat(auto-fill, minmax(132px, 1fr))'
-                    : 'repeat(auto-fill, minmax(168px, 1fr))',
-                  gap: viewportCompact ? 8 : 10,
-                }}
-              >
-                {grupo.cargos.map((row) => (
-                  <button
-                    key={`card-${grupo.empresa_key}-${row.cargo}`}
-                    type="button"
-                    role="listitem"
-                    onClick={() => openCargoDetalle(grupo, row)}
-                    title={`Ver detalle de ${row.cargo} · ${grupo.empresa}`}
-                    style={{
-                      minHeight: viewportCompact ? 84 : 96,
-                      border: `1px solid ${t.border}`,
-                      borderRadius: 10,
-                      background: t.bg || t.bgCard || '#fff',
-                      padding: '12px 10px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 8,
-                      textAlign: 'center',
-                      boxShadow: 'none',
-                      transition: 'border-color 120ms ease, background 120ms ease',
-                    }}
-                  >
-                    <span style={{
-                      fontWeight: 700,
-                      fontSize: 'var(--cc-xs)',
-                      color: t.text,
-                      lineHeight: 1.25,
-                      wordBreak: 'break-word',
-                    }}>
-                      {row.cargo}
-                    </span>
-                    <span style={{
-                      fontWeight: 800,
-                      fontSize: 'var(--cc-title)',
-                      color: Number(row.cantidad) > 0 ? (t.primary || '#0077B6') : (t.textMuted || '#64748b'),
-                      fontVariantNumeric: 'tabular-nums',
-                      lineHeight: 1,
-                    }}>
-                      {row.cantidad}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
-        ))}
+              {renderCargoCards(grupo.cargos, {
+                keyPrefix: `emp-${grupo.empresa_key}`,
+                ariaLabel: `Cargos de ${grupo.empresa}`,
+                onOpen: (row) => openCargoDetalle(grupo, row),
+              })}
+            </div>
+          ))}
+        </section>
       </div>
 
       {cargoDetalle?.cargo && (
         <PersonalCargoDetalleModal
           t={t}
           cargo={cargoDetalle.cargo}
-          empresa={cargoDetalle.esRegistroDirecto ? EMPRESA_REGISTRO_DIRECTO : cargoDetalle.empresa}
+          empresa={cargoDetalle.esConsolidado || cargoDetalle.esRegistroDirecto
+            ? (cargoDetalle.esRegistroDirecto ? EMPRESA_REGISTRO_DIRECTO : '')
+            : cargoDetalle.empresa}
           esRegistroDirecto={Boolean(cargoDetalle.esRegistroDirecto)}
           entries={entriesDetalle}
           rows={rows}

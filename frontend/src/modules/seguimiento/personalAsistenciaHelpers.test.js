@@ -290,32 +290,26 @@ describe('resumen por empresa → cargo', () => {
     assert.equal(nombreEmpresaAsistencia({}), EMPRESA_SIN_NOMBRE)
   })
 
-  it('resumenEmpresasCargos une catálogo de cargos por empresa y registro directo', () => {
+  it('resumenEmpresasCargos solo lista cargos con registros (sin vacíos ni empresas en cero)', () => {
     const groups = resumenEmpresasCargos({
-      catalogoCargos: ['Ayudante', 'Oficial', 'Topógrafo'],
       rows: [
         { nombre: 'A', cargo: 'Ayudante', estado: 'activo', subcontratista_nombre: 'Consorcio X' },
         { nombre: 'B', cargo: 'Oficial', estado: 'activo', subcontratista_nombre: 'Sub Y' },
       ],
       personalManual: [{ cargo: 'Maestro', cantidad: 2 }],
-      trabajadores: [
-        { empresa_nombre: 'Consorcio X', cargo_aspira: 'Ayudante' },
-        { empresa_nombre: 'Sub Y', cargo_aspira: 'Oficial' },
-        { empresa_nombre: 'Otra Z', cargo_aspira: 'Topógrafo' },
-      ],
     })
-    assert.equal(groups.length, 4) // 3 empresas RRHH + registro directo
+    assert.equal(groups.length, 3) // Consorcio X, Sub Y, registro directo
     const consorcio = groups.find((g) => g.empresa === 'Consorcio X')
     assert.ok(consorcio)
-    assert.equal(consorcio.cargos.find((c) => c.cargo === 'Ayudante').cantidad, 1)
-    assert.equal(consorcio.cargos.find((c) => c.cargo === 'Oficial').cantidad, 0)
+    assert.deepEqual(consorcio.cargos, [{ cargo: 'Ayudante', cantidad: 1 }])
     assert.equal(consorcio.total, 1)
-    const otra = groups.find((g) => g.empresa === 'Otra Z')
-    assert.equal(otra.total, 0)
-    assert.ok(otra.cargos.every((c) => c.cantidad === 0))
+    assert.equal(consorcio.cargos.some((c) => c.cantidad === 0), false)
+    const sub = groups.find((g) => g.empresa === 'Sub Y')
+    assert.deepEqual(sub.cargos, [{ cargo: 'Oficial', cantidad: 1 }])
+    assert.equal(groups.some((g) => g.empresa === 'Otra Z'), false)
     const manual = groups.find((g) => g.esRegistroDirecto)
     assert.equal(manual.empresa, EMPRESA_REGISTRO_DIRECTO)
-    assert.equal(manual.cargos.find((c) => c.cargo === 'Maestro').cantidad, 2)
+    assert.deepEqual(manual.cargos, [{ cargo: 'Maestro', cantidad: 2 }])
   })
 
   it('filas y catálogo respetan filtro empresa+cargo', () => {

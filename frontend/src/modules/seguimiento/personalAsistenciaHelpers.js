@@ -299,51 +299,41 @@ export function cantidadManualPorCargo(personalManual, cargo) {
 }
 
 /**
- * Resumen jerárquico: empresa → cargos (catálogo completo con ceros).
- * Cada colaborador solo cuenta en su empresa.
+ * Desglose por empresa → solo cargos con al menos 1 colaborador ese día.
+ * No incluye empresas vacías ni cargos en cero.
+ * El consolidado general (catálogo completo) se arma aparte con
+ * `resumenCargosDesdeCatalogo`.
  */
 export function resumenEmpresasCargos({
-  catalogoCargos = [],
   rows = [],
   personalManual = [],
-  trabajadores = [],
   liveEstadosByRrhhId = null,
 } = {}) {
   const porAsistencia = personalAgregadoPorEmpresaCargo(rows, { liveEstadosByRrhhId })
-  const byKey = new Map(porAsistencia.map((g) => [g.empresa_key, g]))
 
-  const empresas = new Map()
-  for (const e of empresasDesdeCatalogoRrhh(trabajadores)) {
-    empresas.set(e.empresa_key, e.empresa)
-  }
-  for (const g of porAsistencia) {
-    empresas.set(g.empresa_key, g.empresa)
-  }
-
-  const groups = [...empresas.entries()]
-    .sort((a, b) => a[1].localeCompare(b[1], 'es'))
-    .map(([empresa_key, empresa]) => {
-      const agg = byKey.get(empresa_key)?.agregado || []
-      const cargos = resumenCargosDesdeCatalogo(catalogoCargos, agg)
+  const groups = porAsistencia
+    .map((g) => {
+      const cargos = (g.agregado || []).filter((c) => Number(c.cantidad) > 0)
       const total = cargos.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
       return {
-        empresa,
-        empresa_key,
+        empresa: g.empresa,
+        empresa_key: g.empresa_key,
         esRegistroDirecto: false,
         cargos,
         total,
       }
     })
+    .filter((g) => g.total > 0 && g.cargos.length > 0)
 
   const manualNorm = normalizarPersonalCantidades(personalManual)
+    .filter((c) => Number(c.cantidad) > 0)
   if (manualNorm.length) {
-    const cargos = resumenCargosDesdeCatalogo(catalogoCargos, manualNorm)
-    const total = cargos.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
+    const total = manualNorm.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
     groups.push({
       empresa: EMPRESA_REGISTRO_DIRECTO,
       empresa_key: '__registro_directo__',
       esRegistroDirecto: true,
-      cargos,
+      cargos: manualNorm,
       total,
     })
   }
