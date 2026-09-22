@@ -44,6 +44,7 @@ import {
   lineasPlanillaParaReporteSicoe,
   linksSicoeDesdeMeta,
   puedeCrearReporteSicoe,
+  puedeVerBotonCrearReporteSicoe,
   normalizarEvidenciasFotograficas,
   validarEvidenciasFotograficas,
   lineasConCantidadCalculada,
@@ -671,6 +672,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     () => puedeCrearReporteSicoe({ esDesarrollador: esDev, linksSicoe }),
     [esDev, linksSicoe],
   )
+  /** Solo usuarios con crear y/o editar so_registros (SICOE Obra) ven el botón. */
+  const puedeVerCrearReporte = useMemo(
+    () => puedeVerBotonCrearReporteSicoe(usuario, contratoId),
+    [usuario, contratoId],
+  )
   const reporteSicoeYaEnviado = linksSicoe.length > 0
   const lineasFotoReq = useMemo(
     () => new Set(
@@ -881,8 +887,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
             </AccionIcono>
           )}
-          {planilla?.id && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {planilla?.id && puedeVerCrearReporte && (
+            <span
+              data-crear-reporte-sicoe-btn
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
               <AccionIcono
                 title={
                   !puedeCrearReporte
@@ -1852,7 +1861,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       )}
 
       <PlanillaTuberiaCrearReporteModal
-        open={crearReporteOpen}
+        open={crearReporteOpen && puedeVerCrearReporte}
         onClose={() => setCrearReporteOpen(false)}
         contratoId={contratoId}
         token={token}

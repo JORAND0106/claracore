@@ -2,6 +2,11 @@
  * Helpers de presentación — Planillas de Tubería (solo UI; sin recálculo).
  */
 
+import {
+  usuarioPuedeCrearRegistrosSicoe,
+  usuarioPuedeEditarRegistrosSicoe,
+} from '../../../utils/permisosContrato.js'
+
 /** Filas mínimas al crear planilla / plantilla vacía (alineado al backend). */
 export const FILAS_INICIALES_CARTERA = 2
 
@@ -632,6 +637,18 @@ export function linksSicoeDesdeMeta(meta) {
 export function puedeCrearReporteSicoe({ esDesarrollador = false, linksSicoe = [] } = {}) {
   if (esDesarrollador) return true
   return !(Array.isArray(linksSicoe) && linksSicoe.length > 0)
+}
+
+/**
+ * Visibilidad del botón «Crear reporte»: mismo criterio que crear/editar
+ * so_registros en SICOE Obra («Reporte de Cantidades»).
+ * Sin crear ni editar → no se muestra el botón (oculto, no solo deshabilitado).
+ */
+export function puedeVerBotonCrearReporteSicoe(usuario, contratoId) {
+  return (
+    usuarioPuedeCrearRegistrosSicoe(usuario, contratoId)
+    || usuarioPuedeEditarRegistrosSicoe(usuario, contratoId)
+  )
 }
 
 /** Normaliza cantidades_manuales: OTROS → OTROS_1; garantiza EXC_ROC + ≥1 Otros. */
