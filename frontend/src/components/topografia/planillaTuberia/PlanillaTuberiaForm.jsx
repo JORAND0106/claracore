@@ -1674,6 +1674,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         absInicioDefault={absExtremos.absInicio}
         absFinalDefault={absExtremos.absFinal}
         lineasPreview={lineasReporteSicoe}
+        logoUrl={usuario?.logo_contratista || null}
+        contratoMeta={{
+          numero: usuario?.contrato_numero || usuario?.numero_contrato || null,
+          nombre: usuario?.contrato_nombre || null,
+        }}
         ui={{
           text: ui.text,
           textMuted: ui.textMuted,
@@ -1681,6 +1686,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           inputBg: ui.t?.inputBg || '#fff',
           cardBg: ui.t?.bgCard || '#fff',
           accent: ui.accent,
+          accentSoft: ui.accentSoft,
         }}
         apiCrear={async (body) => {
           const res = await api(`/planillas-tuberia/${planilla.id}/crear-reporte-sicoe`, {

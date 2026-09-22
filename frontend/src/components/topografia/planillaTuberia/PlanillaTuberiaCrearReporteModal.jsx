@@ -1,9 +1,190 @@
 /**
  * Popup: Crear reporte SICOE Obra desde planilla de tubería.
  * Solo pide lo no derivado: Subcontratista, Inspector, Capítulo, Nodo ini/fin (editable).
+ * z-index > editor de planilla (100030) y selector PK (100050).
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { API_BASE } from '../../../apiBase'
+
+/** Por encima del editor de planilla (100030) y del mapa PK (100050). */
+export const CREAR_REPORTE_Z_INDEX = 100060
+
+/**
+ * Autocomplete de catálogo {id, nombre}: un solo input con sugerencias (sin dropdown aparte).
+ * Patrón alineado con UserSearchSelect / ReceptorObraSelector (lista predictiva al escribir).
+ */
+function CatalogAutocomplete({
+  label,
+  required,
+  items = [],
+  valueId,
+  onSelect,
+  placeholder = 'Buscar…',
+  disabled,
+  inputStyle,
+  labelStyle,
+  ui,
+}) {
+  const reactId = useId()
+  const listId = `cc-topo-cat-${String(reactId).replace(/:/g, '')}`
+  const selected = items.find((x) => String(x.id) === String(valueId || ''))
+  const [q, setQ] = useState(selected?.nombre || '')
+  const [open, setOpen] = useState(false)
+  const [highlight, setHighlight] = useState(-1)
+  const wrapRef = useRef(null)
+  const pickingRef = useRef(false)
+
+  useEffect(() => {
+    setQ(selected?.nombre || '')
+  }, [selected?.nombre, valueId])
+
+  const filtrados = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    const base = !s
+      ? items.slice(0, 40)
+      : items.filter((it) => String(it.nombre || '').toLowerCase().includes(s)).slice(0, 40)
+    return base
+  }, [items, q])
+
+  useEffect(() => {
+    setHighlight(-1)
+  }, [q, open])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDoc = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  const pick = (it) => {
+    pickingRef.current = true
+    setQ(it.nombre || '')
+    setOpen(false)
+    setHighlight(-1)
+    onSelect?.(it)
+    window.setTimeout(() => { pickingRef.current = false }, 0)
+  }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      if (open) { e.preventDefault(); setOpen(false); setHighlight(-1) }
+      return
+    }
+    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+      setOpen(true)
+      return
+    }
+    if (!open || !filtrados.length) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlight((h) => (h + 1) % filtrados.length)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlight((h) => (h <= 0 ? filtrados.length - 1 : h - 1))
+    } else if (e.key === 'Enter' && highlight >= 0) {
+      e.preventDefault()
+      pick(filtrados[highlight])
+    }
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <label style={labelStyle}>
+        {label}{required ? ' *' : ''}
+      </label>
+      <input
+        type="search"
+        autoComplete="off"
+        spellCheck={false}
+        disabled={disabled}
+        placeholder={placeholder}
+        value={q}
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={listId}
+        style={inputStyle}
+        onChange={(e) => {
+          setQ(e.target.value)
+          setOpen(true)
+          if (valueId) onSelect?.(null)
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          window.setTimeout(() => {
+            if (pickingRef.current) return
+            setOpen(false)
+            if (valueId && selected) setQ(selected.nombre || '')
+          }, 120)
+        }}
+        onKeyDown={onKeyDown}
+      />
+      {open && filtrados.length > 0 && (
+        <ul
+          id={listId}
+          role="listbox"
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: '100%',
+            margin: '4px 0 0',
+            padding: 4,
+            listStyle: 'none',
+            maxHeight: 200,
+            overflowY: 'auto',
+            background: ui?.cardBg || '#fff',
+            border: `1px solid ${ui?.border || '#cbd5e1'}`,
+            borderRadius: 8,
+            boxShadow: '0 8px 24px rgba(15,23,42,0.18)',
+            zIndex: 2,
+          }}
+        >
+          {filtrados.map((it, idx) => (
+            <li
+              key={it.id}
+              role="option"
+              aria-selected={String(it.id) === String(valueId || '')}
+              onMouseDown={(e) => { e.preventDefault(); pick(it) }}
+              style={{
+                padding: '8px 10px',
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: 'var(--cc-sm)',
+                background: idx === highlight ? (ui?.accentSoft || '#eff6ff') : 'transparent',
+                color: ui?.text || '#0f172a',
+                fontWeight: String(it.id) === String(valueId || '') ? 700 : 500,
+              }}
+            >
+              {it.nombre}
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && !filtrados.length && q.trim() && (
+        <div style={{
+          position: 'absolute', left: 0, right: 0, top: '100%', marginTop: 4,
+          padding: '8px 10px', fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b',
+          background: ui?.cardBg || '#fff', border: `1px solid ${ui?.border || '#e2e8f0'}`,
+          borderRadius: 8, zIndex: 2,
+        }}
+        >
+          Sin coincidencias
+        </div>
+      )}
+    </div>
+  )
+}
+
+function fmtAbs(v) {
+  if (v == null || v === '') return ''
+  const n = Number(v)
+  if (!Number.isFinite(n)) return String(v)
+  return String(n)
+}
 
 export default function PlanillaTuberiaCrearReporteModal({
   open,
@@ -17,6 +198,8 @@ export default function PlanillaTuberiaCrearReporteModal({
   lineasPreview = [],
   apiCrear,
   ui,
+  logoUrl,
+  contratoMeta,
 }) {
   const [subs, setSubs] = useState([])
   const [insps, setInsps] = useState([])
@@ -26,12 +209,8 @@ export default function PlanillaTuberiaCrearReporteModal({
   const [capitulo, setCapitulo] = useState('')
   const [nodoIni, setNodoIni] = useState('')
   const [nodoFin, setNodoFin] = useState('')
-  const [absIni, setAbsIni] = useState('')
-  const [absFin, setAbsFin] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [qSub, setQSub] = useState('')
-  const [qInsp, setQInsp] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -39,12 +218,8 @@ export default function PlanillaTuberiaCrearReporteModal({
     setSubId('')
     setInspId('')
     setCapitulo('')
-    setQSub('')
-    setQInsp('')
-    const a0 = absInicioDefault != null ? String(absInicioDefault) : ''
-    const a1 = absFinalDefault != null ? String(absFinalDefault) : ''
-    setAbsIni(a0)
-    setAbsFin(a1)
+    const a0 = fmtAbs(absInicioDefault)
+    const a1 = fmtAbs(absFinalDefault)
     setNodoIni(a0)
     setNodoFin(a1)
   }, [open, absInicioDefault, absFinalDefault, planilla?.id])
@@ -74,18 +249,6 @@ export default function PlanillaTuberiaCrearReporteModal({
     return () => { cancelled = true }
   }, [open, contratoId, token])
 
-  const subsF = useMemo(() => {
-    const q = qSub.trim().toLowerCase()
-    if (!q) return subs
-    return subs.filter((s) => String(s.nombre || '').toLowerCase().includes(q))
-  }, [subs, qSub])
-
-  const inspsF = useMemo(() => {
-    const q = qInsp.trim().toLowerCase()
-    if (!q) return insps
-    return insps.filter((s) => String(s.nombre || '').toLowerCase().includes(q))
-  }, [insps, qInsp])
-
   if (!open) return null
 
   const inputStyle = {
@@ -105,6 +268,9 @@ export default function PlanillaTuberiaCrearReporteModal({
     color: ui?.textMuted || '#64748b',
     marginBottom: 4,
   }
+  const cellBorder = `1px solid ${ui?.border || '#94a3b8'}`
+  const logoSrc = String(logoUrl || '').trim()
+  const meta = contratoMeta && typeof contratoMeta === 'object' ? contratoMeta : {}
 
   const crear = async () => {
     if (!subId) { setErr('Seleccione subcontratista'); return }
@@ -117,14 +283,17 @@ export default function PlanillaTuberiaCrearReporteModal({
         const n = Number(v)
         return Number.isFinite(n) ? n : null
       }
+      // Nodo inicio/fin = abscisas min/max (autodiligenciadas); también van a abs_inicio/abs_final.
+      const absIni = numOrNull(nodoIni)
+      const absFin = numOrNull(nodoFin)
       const res = await apiCrear({
         subcontratista_id: Number(subId),
         inspector_id: Number(inspId),
         capitulo: String(capitulo).trim(),
-        nodo_ini: nodoIni.trim() || null,
-        nodo_fin: nodoFin.trim() || null,
-        abs_inicio: numOrNull(absIni),
-        abs_final: numOrNull(absFin),
+        nodo_ini: String(nodoIni).trim() || null,
+        nodo_fin: String(nodoFin).trim() || null,
+        abs_inicio: absIni,
+        abs_final: absFin,
       })
       onCreated?.(res)
       onClose?.()
@@ -135,92 +304,193 @@ export default function PlanillaTuberiaCrearReporteModal({
     }
   }
 
-  return (
+  const overlay = (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Crear reporte SICOE Obra"
       style={{
-        position: 'fixed', inset: 0, zIndex: 12000,
-        background: 'rgba(15,23,42,0.45)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        position: 'fixed',
+        inset: 0,
+        zIndex: CREAR_REPORTE_Z_INDEX,
+        background: 'rgba(15,23,42,0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
         padding: 16,
       }}
       onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose?.() }}
     >
       <div
         style={{
-          width: 'min(560px, 100%)',
-          maxHeight: '90vh',
+          width: 'min(640px, 100%)',
+          maxHeight: '92vh',
           overflow: 'auto',
           background: ui?.cardBg || '#fff',
           borderRadius: 12,
           border: `1px solid ${ui?.border || '#e2e8f0'}`,
-          boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
-          padding: 16,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
           color: ui?.text || '#0f172a',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)' }}>Crear reporte SICOE Obra</div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', marginTop: 2 }}>
-              Nombre: <b>{planilla?.nombre || '—'}</b>
-              {planilla?.pk_id ? <> · PK {planilla.pk_id}</> : null}
-              {planilla?.costado ? <> · {planilla.costado}</> : null}
+        {/* Encabezado tipo documento / PDF planilla */}
+        <div style={{ padding: 14, borderBottom: `1px solid ${ui?.border || '#e2e8f0'}` }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              <tr>
+                <td style={{
+                  width: 72, border: cellBorder, padding: 6, textAlign: 'center', verticalAlign: 'middle',
+                  background: '#f8fafc',
+                }}
+                >
+                  {logoSrc ? (
+                    <img
+                      src={logoSrc}
+                      alt="Logo contratista"
+                      style={{ maxHeight: 44, maxWidth: 64, objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <div style={{
+                      fontSize: 9, fontWeight: 700, color: ui?.textMuted || '#64748b',
+                      lineHeight: 1.2, padding: '6px 2px',
+                    }}
+                    >
+                      LOGO
+                    </div>
+                  )}
+                </td>
+                <td style={{
+                  border: cellBorder, padding: '8px 10px', textAlign: 'center', verticalAlign: 'middle',
+                }}
+                >
+                  <div style={{ fontWeight: 800, fontSize: 'var(--cc-md)', letterSpacing: '0.01em' }}>
+                    Crear reporte SICOE Obra
+                  </div>
+                  <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', marginTop: 2 }}>
+                    Desde planilla de tubería · Topografía
+                  </div>
+                </td>
+                <td style={{
+                  width: '28%', border: cellBorder, padding: '6px 8px', verticalAlign: 'top',
+                  fontSize: 'var(--cc-xxs)', color: ui?.textMuted || '#475569',
+                }}
+                >
+                  <div style={{ fontWeight: 700, textAlign: 'right', color: ui?.text || '#0f172a' }}>
+                    INF-ING - TOP - SICOE
+                  </div>
+                  <div style={{ marginTop: 4, textAlign: 'right' }}>
+                    {new Date().toLocaleDateString('es-CO')}
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style={{
+            marginTop: 8,
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 6,
+            fontSize: 'var(--cc-xs)',
+            border: cellBorder,
+            borderRadius: 6,
+            padding: '8px 10px',
+            background: '#f8fafc',
+          }}
+          >
+            <div>
+              <span style={{ color: ui?.textMuted || '#64748b', fontWeight: 700 }}>Planilla: </span>
+              <b>{planilla?.nombre || '—'}</b>
+            </div>
+            <div>
+              <span style={{ color: ui?.textMuted || '#64748b', fontWeight: 700 }}>Tipo: </span>
+              {planilla?.tipo || '—'}
+            </div>
+            <div>
+              <span style={{ color: ui?.textMuted || '#64748b', fontWeight: 700 }}>PK / ID: </span>
+              {planilla?.pk_id || '—'}
+              {planilla?.costado ? ` · ${planilla.costado}` : ''}
+            </div>
+            <div>
+              <span style={{ color: ui?.textMuted || '#64748b', fontWeight: 700 }}>Contrato: </span>
+              {meta.numero || meta.nombre || '—'}
             </div>
           </div>
-          <button type="button" onClick={onClose} disabled={busy} style={{ border: 'none', background: 'transparent', fontSize: 20, cursor: 'pointer', color: ui?.textMuted }}>×</button>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div>
-            <label style={labelStyle}>Subcontratista *</label>
-            <input style={{ ...inputStyle, marginBottom: 6 }} placeholder="Buscar…" value={qSub} onChange={(e) => setQSub(e.target.value)} />
-            <select style={inputStyle} value={subId} onChange={(e) => setSubId(e.target.value)}>
-              <option value="">— Seleccionar —</option>
-              {subsF.map((s) => (
-                <option key={s.id} value={s.id}>{s.nombre}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label style={labelStyle}>Inspector *</label>
-            <input style={{ ...inputStyle, marginBottom: 6 }} placeholder="Buscar…" value={qInsp} onChange={(e) => setQInsp(e.target.value)} />
-            <select style={inputStyle} value={inspId} onChange={(e) => setInspId(e.target.value)}>
-              <option value="">— Seleccionar —</option>
-              {inspsF.map((s) => (
-                <option key={s.id} value={s.id}>{s.nombre}</option>
-              ))}
-            </select>
-          </div>
+        <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <CatalogAutocomplete
+            label="Subcontratista"
+            required
+            items={subs}
+            valueId={subId}
+            onSelect={(it) => setSubId(it?.id != null ? String(it.id) : '')}
+            placeholder="Escriba para buscar subcontratista…"
+            disabled={busy}
+            inputStyle={inputStyle}
+            labelStyle={labelStyle}
+            ui={ui}
+          />
+          <CatalogAutocomplete
+            label="Inspector"
+            required
+            items={insps}
+            valueId={inspId}
+            onSelect={(it) => setInspId(it?.id != null ? String(it.id) : '')}
+            placeholder="Escriba para buscar inspector…"
+            disabled={busy}
+            inputStyle={inputStyle}
+            labelStyle={labelStyle}
+            ui={ui}
+          />
           <div>
             <label style={labelStyle}>Capítulo *</label>
-            <select style={inputStyle} value={capitulo} onChange={(e) => setCapitulo(e.target.value)}>
+            <select
+              style={inputStyle}
+              value={capitulo}
+              disabled={busy}
+              onChange={(e) => setCapitulo(e.target.value)}
+            >
               <option value="">— Seleccionar —</option>
               {caps.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
           </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <div>
-              <label style={labelStyle}>Nodo inicio (abscisa)</label>
-              <input style={inputStyle} value={nodoIni} onChange={(e) => setNodoIni(e.target.value)} />
+              <label style={labelStyle}>Nodo / abscisa inicio</label>
+              <input
+                style={inputStyle}
+                type="number"
+                step="any"
+                inputMode="decimal"
+                disabled={busy}
+                value={nodoIni}
+                onChange={(e) => setNodoIni(e.target.value)}
+                title="Autodiligenciado con el mínimo de abscisa de la cartera"
+              />
             </div>
             <div>
-              <label style={labelStyle}>Nodo fin (abscisa)</label>
-              <input style={inputStyle} value={nodoFin} onChange={(e) => setNodoFin(e.target.value)} />
-            </div>
-            <div>
-              <label style={labelStyle}>Abs. inicio</label>
-              <input style={inputStyle} type="number" step="any" value={absIni} onChange={(e) => setAbsIni(e.target.value)} />
-            </div>
-            <div>
-              <label style={labelStyle}>Abs. final</label>
-              <input style={inputStyle} type="number" step="any" value={absFin} onChange={(e) => setAbsFin(e.target.value)} />
+              <label style={labelStyle}>Nodo / abscisa fin</label>
+              <input
+                style={inputStyle}
+                type="number"
+                step="any"
+                inputMode="decimal"
+                disabled={busy}
+                value={nodoFin}
+                onChange={(e) => setNodoFin(e.target.value)}
+                title="Autodiligenciado con el máximo de abscisa de la cartera"
+              />
             </div>
           </div>
+          {(absInicioDefault != null || absFinalDefault != null) && (
+            <div style={{ fontSize: 'var(--cc-xxs)', color: ui?.textMuted || '#64748b', marginTop: -4 }}>
+              Valores tomados de la cartera (mín. {fmtAbs(absInicioDefault) || '—'} · máx. {fmtAbs(absFinalDefault) || '—'}). Puede editarlos.
+            </div>
+          )}
 
           {lineasPreview.length > 0 && (
             <div style={{
@@ -231,7 +501,8 @@ export default function PlanillaTuberiaCrearReporteModal({
               maxHeight: 140,
               overflow: 'auto',
               background: ui?.inputBg || '#f8fafc',
-            }}>
+            }}
+            >
               <div style={{ fontWeight: 700, marginBottom: 4 }}>
                 Se generarán {lineasPreview.length} registro(s) en «Sin Asignar Ítem»:
               </div>
@@ -251,16 +522,26 @@ export default function PlanillaTuberiaCrearReporteModal({
           )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-            <button type="button" disabled={busy} onClick={onClose} style={{
-              padding: '8px 14px', borderRadius: 8, border: `1px solid ${ui?.border || '#cbd5e1'}`,
-              background: '#fff', cursor: 'pointer', fontWeight: 600,
-            }}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onClose}
+              style={{
+                padding: '8px 14px', borderRadius: 8, border: `1px solid ${ui?.border || '#cbd5e1'}`,
+                background: '#fff', cursor: 'pointer', fontWeight: 600,
+              }}
+            >
               Cancelar
             </button>
-            <button type="button" disabled={busy} onClick={crear} style={{
-              padding: '8px 14px', borderRadius: 8, border: 'none',
-              background: ui?.accent || '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 700,
-            }}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={crear}
+              style={{
+                padding: '8px 14px', borderRadius: 8, border: 'none',
+                background: ui?.accent || '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 700,
+              }}
+            >
               {busy ? 'Creando…' : 'Crear reporte'}
             </button>
           </div>
@@ -268,4 +549,6 @@ export default function PlanillaTuberiaCrearReporteModal({
       </div>
     </div>
   )
+
+  return createPortal(overlay, document.body)
 }
