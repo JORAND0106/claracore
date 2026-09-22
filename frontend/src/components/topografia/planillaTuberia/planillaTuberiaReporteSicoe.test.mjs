@@ -28,7 +28,7 @@ describe('Planilla tubería → reporte SICOE', () => {
     assert.match(modalSrc, /Subcontratista/)
     assert.match(modalSrc, /Inspector/)
     assert.match(modalSrc, /Capítulo/)
-    assert.match(modalSrc, /Nodo inicio/)
+    assert.match(modalSrc, /Nodo \/ abscisa inicio/)
   })
 
   it('backend expone endpoint crear-reporte-sicoe y por-reporte', () => {
@@ -60,6 +60,12 @@ describe('Planilla tubería → reporte SICOE', () => {
     )
     assert.equal(abs.absInicio, 1.5)
     assert.equal(abs.absFinal, 9.2)
+    const absFilas = abscisasExtremosPlanilla(
+      { cartera: { totales: { abscisa_inicial: 0, abscisa_final: 99 } } },
+      [{ abscisa: 10 }, { abscisa: 20 }],
+    )
+    assert.equal(absFilas.absInicio, 10)
+    assert.equal(absFilas.absFinal, 20)
     const links = linksSicoeDesdeMeta({
       sicoe_reportes: [{ reporte_id: 7, numero_reporte: 3 }],
     })

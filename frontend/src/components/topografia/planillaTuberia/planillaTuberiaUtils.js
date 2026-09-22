@@ -567,15 +567,24 @@ export function validarNombrePlanilla(nombre, lista = [], excludeId = null) {
 
 /** Extremos de abscisa desde cálculo local o filas. */
 export function abscisasExtremosPlanilla(calculo, filas = []) {
-  const tot = calculo?.cartera?.totales || {}
-  let a0 = tot.abscisa_inicial
-  let a1 = tot.abscisa_final
-  if (a0 != null && a1 != null) return { absInicio: Number(a0), absFinal: Number(a1) }
+  // Preferir filas de cartera (preview en vivo); totales del cálculo como respaldo.
   const vals = (filas || [])
-    .map((f) => Number(f?.abscisa))
+    .map((f) => {
+      const raw = f?.abscisa
+      if (raw == null || raw === '') return NaN
+      if (typeof raw === 'number') return raw
+      const s = String(raw).trim().replace(',', '.')
+      return Number(s)
+    })
     .filter((n) => Number.isFinite(n))
-  if (!vals.length) return { absInicio: null, absFinal: null }
-  return { absInicio: Math.min(...vals), absFinal: Math.max(...vals) }
+  if (vals.length) return { absInicio: Math.min(...vals), absFinal: Math.max(...vals) }
+  const tot = calculo?.cartera?.totales || {}
+  const a0 = tot.abscisa_inicial
+  const a1 = tot.abscisa_final
+  if (a0 != null && a1 != null && Number.isFinite(Number(a0)) && Number.isFinite(Number(a1))) {
+    return { absInicio: Number(a0), absFinal: Number(a1) }
+  }
+  return { absInicio: null, absFinal: null }
 }
 
 /**
