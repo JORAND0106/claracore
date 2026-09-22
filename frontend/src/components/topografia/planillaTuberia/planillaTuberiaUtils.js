@@ -346,6 +346,88 @@ export function payloadCoordsGeo(params) {
 export const CALC_CELL_BG = '#F2F2F2'
 
 /**
+ * Agrupa avisos de validación en tablas tipo Excel (Abscisa | Diferencia).
+ * Evita repetir el mismo párrafo una vez por fila.
+ * @param {Array<object>} avisos
+ * @returns {Array<{ key: string, msg: string, detalle?: string, prioridad: string, filas: Array<{abscisa: *, diferencia: *}> }>}
+ */
+export function agruparAlertasValidacion(avisos) {
+  const map = new Map()
+  for (const a of avisos || []) {
+    if (!a) continue
+    const key = `${a.prioridad || 'info'}|${a.msg || ''}|${a.campo || ''}`
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        msg: a.msg || 'Alerta',
+        detalle: a.detalle || '',
+        prioridad: a.prioridad || 'info',
+        campo: a.campo || '',
+        filas: [],
+      })
+    }
+    const g = map.get(key)
+    const abs = a.abscisa != null ? a.abscisa : null
+    const dif = a.diferencia != null ? a.diferencia : null
+    if (!g.filas.some((r) => r.abscisa === abs && r.diferencia === dif && r.orden === a.orden)) {
+      g.filas.push({ abscisa: abs, diferencia: dif, orden: a.orden })
+    }
+  }
+  return [...map.values()]
+}
+
+/** Validación local (espejo liviano del backend) para banner reactivo. */
+export function validarFilasCarteraLocal(filas, tipo = 'ALCANTARILLA') {
+  const tipoU = String(tipo || 'ALCANTARILLA').toUpperCase()
+  const avisos = []
+  const num = (v) => {
+    if (v === '' || v == null) return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const nivelRef = (f) => {
+    const keys = tipoU === 'FILTRO'
+      ? ['terminado_filtro', 'nivel_referencia', 'subrasante_via']
+      : ['subrasante_via', 'nivel_referencia', 'terminado_filtro']
+    for (const k of keys) {
+      const v = num(f?.[k])
+      if (v != null) return v
+    }
+    return null
+  }
+  ;(filas || []).forEach((f, i) => {
+    const abscisa = num(f?.abscisa)
+    const tn = num(f?.terreno_natural)
+    const cfe = num(f?.cota_fondo_excavacion)
+    const nivel = nivelRef(f)
+    if ([abscisa, tn, cfe, nivel].every((v) => v == null)) return
+    const orden = f?.orden ?? i + 1
+    if (tn != null && cfe != null && cfe > tn) {
+      avisos.push({
+        prioridad: 'error', msg: 'CFE > TN', campo: 'cota_fondo_excavacion',
+        detalle: 'La cota fondo no puede superar el terreno natural.',
+        abscisa, diferencia: Math.round((cfe - tn) * 10000) / 10000, orden,
+      })
+    }
+    if (tn != null && nivel != null && nivel > tn + 0.05) {
+      avisos.push({
+        prioridad: 'info', msg: 'Nivel sobre TN', campo: 'nivel_referencia',
+        detalle: 'El nivel de referencia está >5 cm sobre el terreno natural.',
+        abscisa, diferencia: Math.round((nivel - tn) * 10000) / 10000, orden,
+      })
+    }
+    if (nivel != null && cfe != null && nivel < cfe) {
+      avisos.push({
+        prioridad: 'error', msg: 'Nivel < CFE', campo: 'nivel_referencia',
+        detalle: 'El nivel de referencia debe quedar sobre el fondo de excavación.',
+        abscisa, diferencia: Math.round((cfe - nivel) * 10000) / 10000, orden,
+      })
+    }
+  })
+  return avisos
+}
+
+/**
  * Nombre de planilla: obligatorio y único en el contrato (case-insensitive).
  * @param {string} nombre
  * @param {Array<{id?: string, nombre?: string}>} lista

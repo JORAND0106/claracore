@@ -725,26 +725,33 @@ def validar_fila_campo(fila: dict, tipo: str) -> list[dict]:
     if all(v is None for v in (abscisa, tn, cfe, nivel)):
         return avisos
     if abscisa is None:
-        avisos.append({"severity": "error", "campo": "abscisa", "msg": "Abscisa requerida",
-                       "detalle": "Toda fila con datos de cota debe tener abscisa."})
+        avisos.append({"prioridad": "error", "campo": "abscisa", "msg": "Abscisa requerida",
+                       "detalle": "Toda fila con datos de cota debe tener abscisa.",
+                       "abscisa": None, "diferencia": None})
     if tn is None:
-        avisos.append({"severity": "error", "campo": "terreno_natural", "msg": "TN requerido",
-                       "detalle": "Indique cota de terreno natural."})
+        avisos.append({"prioridad": "error", "campo": "terreno_natural", "msg": "TN requerido",
+                       "detalle": "Indique cota de terreno natural.",
+                       "abscisa": abscisa, "diferencia": None})
     if cfe is None:
-        avisos.append({"severity": "error", "campo": "cota_fondo_excavacion", "msg": "CFE requerida",
-                       "detalle": "Indique cota fondo de excavación."})
+        avisos.append({"prioridad": "error", "campo": "cota_fondo_excavacion", "msg": "CFE requerida",
+                       "detalle": "Indique cota fondo de excavación.",
+                       "abscisa": abscisa, "diferencia": None})
     if nivel is None and tipo_u == "FILTRO":
-        avisos.append({"severity": "info", "campo": "nivel_referencia", "msg": "Terminado Filtro vacío",
-                       "detalle": "Sin Terminado Filtro no se calcula Altura Triturado (E−F)."})
+        avisos.append({"prioridad": "info", "campo": "nivel_referencia", "msg": "Terminado Filtro vacío",
+                       "detalle": "Sin Terminado Filtro no se calcula Altura Triturado (E−F).",
+                       "abscisa": abscisa, "diferencia": None})
     if tn is not None and cfe is not None and cfe > tn:
-        avisos.append({"severity": "error", "campo": "cota_fondo_excavacion", "msg": "CFE > TN",
-                       "detalle": "La cota fondo no puede superar el terreno natural."})
+        avisos.append({"prioridad": "error", "campo": "cota_fondo_excavacion", "msg": "CFE > TN",
+                       "detalle": "La cota fondo no puede superar el terreno natural.",
+                       "abscisa": abscisa, "diferencia": _r4(cfe - tn)})
     if tn is not None and nivel is not None and nivel > tn + 0.05:
-        avisos.append({"severity": "info", "campo": "nivel_referencia", "msg": "Nivel sobre TN",
-                       "detalle": "El nivel de referencia está >5 cm sobre el terreno natural."})
+        avisos.append({"prioridad": "info", "campo": "nivel_referencia", "msg": "Nivel sobre TN",
+                       "detalle": "El nivel de referencia está >5 cm sobre el terreno natural.",
+                       "abscisa": abscisa, "diferencia": _r4(nivel - tn)})
     if nivel is not None and cfe is not None and nivel < cfe:
-        avisos.append({"severity": "error", "campo": "nivel_referencia", "msg": "Nivel < CFE",
-                       "detalle": "El nivel de referencia debe quedar sobre el fondo de excavación."})
+        avisos.append({"prioridad": "error", "campo": "nivel_referencia", "msg": "Nivel < CFE",
+                       "detalle": "El nivel de referencia debe quedar sobre el fondo de excavación.",
+                       "abscisa": abscisa, "diferencia": _r4(cfe - nivel)})
     return avisos
 
 
@@ -754,7 +761,7 @@ def validar_cartera_campo(filas: list[dict], tipo: str) -> dict[str, Any]:
     for i, f in enumerate(filas or []):
         for a in validar_fila_campo(f, tipo):
             item = {**a, "orden": f.get("orden", i + 1), "fila_idx": i}
-            (errores if a["severity"] == "error" else infos).append(item)
+            (errores if a.get("prioridad") == "error" else infos).append(item)
     prev = None
     for i, f in enumerate(filas or []):
         ab = _f(f.get("abscisa"))
@@ -764,9 +771,10 @@ def validar_cartera_campo(filas: list[dict], tipo: str) -> dict[str, Any]:
             continue
         if ab is not None and prev is not None and ab < prev:
             errores.append({
-                "severity": "error", "campo": "abscisa", "msg": "Abscisa no creciente",
+                "prioridad": "error", "campo": "abscisa", "msg": "Abscisa no creciente",
                 "detalle": f"La abscisa {ab} es menor que la anterior {prev}.",
                 "orden": f.get("orden", i + 1), "fila_idx": i,
+                "abscisa": ab, "diferencia": _r4(prev - ab) if prev is not None else None,
             })
         if ab is not None:
             prev = ab

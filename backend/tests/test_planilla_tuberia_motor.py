@@ -197,6 +197,23 @@ class TestValidacionYConsolidado(unittest.TestCase):
         v = validar_cartera_campo(filas, "ALCANTARILLA")
         self.assertFalse(v["ok"])
         self.assertTrue(any(e["campo"] == "cota_fondo_excavacion" for e in v["errores"]))
+        err = next(e for e in v["errores"] if e["campo"] == "cota_fondo_excavacion")
+        self.assertEqual(err["prioridad"], "error")
+        self.assertEqual(err["abscisa"], 10)
+        self.assertAlmostEqual(err["diferencia"], 1.0)
+
+    def test_validacion_nivel_sobre_tn_con_diferencia(self):
+        filas = [{
+            "orden": 1, "abscisa": 12.5, "terreno_natural": 100,
+            "subrasante_via": 100.12, "cota_fondo_excavacion": 98,
+        }]
+        v = validar_cartera_campo(filas, "ALCANTARILLA")
+        self.assertTrue(v["ok"])
+        self.assertTrue(any(i["msg"] == "Nivel sobre TN" for i in v["infos"]))
+        info = next(i for i in v["infos"] if i["msg"] == "Nivel sobre TN")
+        self.assertEqual(info["prioridad"], "info")
+        self.assertEqual(info["abscisa"], 12.5)
+        self.assertAlmostEqual(info["diferencia"], 0.12)
 
     def test_consolidado_22_columnas(self):
         r = calcular_planilla_completa(

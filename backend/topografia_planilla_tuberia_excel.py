@@ -439,7 +439,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         ("I", "Item"),
         ("K", "Long"),
         ("L", "Ancho"),
-        ("M", "Espesor"),
+        ("M", "Área"),
         ("N", "Cantidad"),
     ):
         _set(ws, f"{col}44", label)
