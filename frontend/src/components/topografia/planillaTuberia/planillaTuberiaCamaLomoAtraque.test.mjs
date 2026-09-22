@@ -25,7 +25,9 @@ describe('ALCANTARILLA — cama, cota lomo y desglose atraque', () => {
     assert.match(formSrc, /Cota Lomo/)
     assert.match(formSrc, /colsCampoEdit/)
     assert.match(formSrc, /desgloseAtraqueAlcantarilla/)
-    assert.match(formSrc, /h<sub>atr<\/sub>/)
+    assert.match(formSrc, /pasosDesgloseAtraque/)
+    assert.match(formSrc, /data-atraque-paso/)
+    assert.match(formSrc, /overflowX:\s*'auto'/)
   })
 
   it('payloadFilas ALC mapea cota_lomo → terminado_filtro (persistencia)', () => {
