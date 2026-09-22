@@ -257,20 +257,18 @@ describe('filasAsistenciaPorCargo / cantidadManualPorCargo', () => {
 })
 
 describe('resumenCargosDesdeCatalogo / filtro por cargo', () => {
-  it('muestra todo el catálogo RRHH con ceros e incluye cargos con conteo fuera de catálogo', () => {
+  it('solo muestra cargos con personas (omite ceros del catálogo) e incluye fuera de catálogo', () => {
     const rows = resumenCargosDesdeCatalogo(
       ['Ayudante', 'Maestro', 'Topógrafo', 'Oficial'],
       [
         { cargo: 'Ayudante', cantidad: 3 },
         { cargo: 'Cadenero', cantidad: 1 },
+        { cargo: 'Oficial', cantidad: 0 },
       ],
     )
     assert.deepEqual(rows, [
       { cargo: 'Ayudante', cantidad: 3 },
       { cargo: 'Cadenero', cantidad: 1 },
-      { cargo: 'Maestro', cantidad: 0 },
-      { cargo: 'Oficial', cantidad: 0 },
-      { cargo: 'Topógrafo', cantidad: 0 },
     ])
   })
 
@@ -311,7 +309,6 @@ describe('resumenCargosDesdeCatalogo / filtro por cargo', () => {
     )
     assert.deepEqual(rows, [
       { cargo: 'Oficial', cantidad: 1 },
-      { cargo: 'Residente Administrativo', cantidad: 0 },
     ])
     const cat = [
       { id: 1, nombres: 'Ana', cargo_aspira: 'Oficial' },

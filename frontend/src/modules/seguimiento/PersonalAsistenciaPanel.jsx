@@ -362,8 +362,8 @@ export default function PersonalAsistenciaPanel({
           lineHeight: 1.35,
         }}>
           {gateRrhhAprobado
-            ? 'Consolidado por cargo (catálogo RRHH) y desglose por empresa solo con cargos registrados ese día.'
-            : 'Arriba: consolidado general por cargo. Abajo: desglose por empresa solo con los cargos que tiene registrados.'}
+            ? 'Consolidado y desglose por empresa: solo cargos con colaboradores nominados ese día.'
+            : 'Arriba: consolidado general (solo cargos con personas). Abajo: desglose por empresa con los cargos registrados.'}
         </div>
       )}
 
@@ -539,7 +539,7 @@ export default function PersonalAsistenciaPanel({
           </div>
           {resumenConsolidado.length === 0 ? (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
-              Sin cargos en el catálogo de RRHH.
+              Sin colaboradores nominados este día.
             </div>
           ) : renderCargoChips(resumenConsolidado, {
             keyPrefix: 'cons',

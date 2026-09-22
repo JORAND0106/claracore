@@ -358,8 +358,8 @@ export function cantidadManualPorCargo(personalManual, cargo) {
 /**
  * Desglose por empresa → solo cargos con al menos 1 colaborador ese día.
  * No incluye empresas vacías ni cargos en cero.
- * El consolidado general (catálogo completo) se arma aparte con
- * `resumenCargosDesdeCatalogo`.
+ * El consolidado general se arma aparte con `resumenCargosDesdeCatalogo`
+ * (también solo cargos con cantidad > 0).
  */
 export function resumenEmpresasCargos({
   rows = [],
@@ -565,8 +565,10 @@ export function filtrarCatalogoPorCargoYEmpresa(catalogo = [], cargo = '', empre
 }
 
 /**
- * Une catálogo de cargos RRHH con conteos del día (asistencia + manual).
- * Incluye cargos del catálogo con cantidad 0 y cargos con conteo fuera del catálogo.
+ * Une conteos del día (asistencia + manual) para el consolidado por cargo.
+ * Solo incluye cargos con al menos 1 persona (cantidad > 0): no basta con que
+ * el cargo exista en el catálogo RRHH si nadie está nominado ese día.
+ * Si hay catálogo, prioriza su etiqueta/orden para los cargos con conteo.
  */
 export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
   const byKey = new Map()
@@ -575,9 +577,11 @@ export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
     if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const key = cargo.toLowerCase()
     const n = Number(r?.cantidad)
+    const add = Number.isFinite(n) ? n : 0
+    if (add <= 0) continue
     byKey.set(key, {
       cargo: byKey.get(key)?.cargo || cargo,
-      cantidad: (byKey.get(key)?.cantidad || 0) + (Number.isFinite(n) ? n : 0),
+      cantidad: (byKey.get(key)?.cantidad || 0) + add,
     })
   }
 
@@ -588,15 +592,19 @@ export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
     if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const key = cargo.toLowerCase()
     if (seen.has(key)) continue
-    seen.add(key)
     const hit = byKey.get(key)
-    out.push({ cargo, cantidad: hit ? Number(hit.cantidad) || 0 : 0 })
+    const n = hit ? Number(hit.cantidad) || 0 : 0
+    if (n <= 0) continue
+    seen.add(key)
+    out.push({ cargo, cantidad: n })
   }
   for (const hit of byKey.values()) {
     const key = String(hit.cargo).toLowerCase()
     if (seen.has(key)) continue
+    const n = Number(hit.cantidad) || 0
+    if (n <= 0) continue
     seen.add(key)
-    out.push({ cargo: hit.cargo, cantidad: Number(hit.cantidad) || 0 })
+    out.push({ cargo: hit.cargo, cantidad: n })
   }
   return out.sort((a, b) => a.cargo.localeCompare(b.cargo, 'es'))
 }
