@@ -2472,6 +2472,39 @@ def list_rrhh_trabajadores_para_bitacora(
     return out
 
 
+def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
+    """
+    Catálogo completo de cargos RRHH (categoria ``cargo``) para el resumen
+    por cargo de Bitácora. No exige permiso del módulo RRHH.
+    """
+    try:
+        from rrhh_service import list_catalogo
+    except Exception as exc:  # pragma: no cover
+        _log.warning("list_rrhh_cargos_para_bitacora import: %s", exc)
+        return []
+    try:
+        rows = list_catalogo(sb, int(contrato_id), "cargo") or []
+    except Exception as exc:
+        _log.warning("list_rrhh_cargos_para_bitacora: %s", exc)
+        return []
+    out: List[str] = []
+    seen = set()
+    for r in rows:
+        if isinstance(r, dict):
+            val = str(r.get("valor") or "").strip()
+        else:
+            val = str(r or "").strip()
+        if not val:
+            continue
+        key = val.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(val)
+    out.sort(key=lambda s: s.casefold())
+    return out
+
+
 def sync_colaboradores_catalogo(
     sb,
     contrato_id: int,

@@ -12,14 +12,16 @@ import {
   mapaEstadosRrhh,
   mergePersonalCantidades,
   personalAgregadoDesdeAsistencia,
+  resolverCatalogoCargos,
+  resumenCargosDesdeCatalogo,
 } from './personalAsistenciaHelpers'
 import { useSeguimientoCompact } from './seguimientoShared'
 
 export { default as NombreRrhhAutocomplete } from './NombreRrhhAutocomplete'
 
 /**
- * Personal en obra: resumen compacto por cargo + detalle en popup.
- * El registro (campos/validaciones) se mantiene; solo cambia la visualización.
+ * Personal en obra: resumen por cargo en tarjetas (catálogo RRHH completo)
+ * + detalle en popup. El registro (campos/validaciones) se mantiene.
  */
 export default function PersonalAsistenciaPanel({
   t,
@@ -29,6 +31,8 @@ export default function PersonalAsistenciaPanel({
   sheetStyles = null,
   compact = false,
   rrhhCatalogo = [],
+  /** Catálogo de cargos desde RRHH (categoria cargo). */
+  cargosCatalogo = [],
   /** Catálogo de tramos (maestro PK) para dropdown por fila. */
   tramosCatalogo = [],
   /** Si true (reporte cerrado), el resumen usa el snapshot guardado, no el estado live de RRHH. */
@@ -63,6 +67,20 @@ export default function PersonalAsistenciaPanel({
   const agregado = useMemo(
     () => mergePersonalCantidades(agregadoRrhh, personalManual),
     [agregadoRrhh, personalManual],
+  )
+
+  const cargosBase = useMemo(
+    () => resolverCatalogoCargos({
+      catalogoRrhh: cargosCatalogo,
+      trabajadores: rrhhCatalogo,
+      fallback: cargosOpciones?.length ? cargosOpciones : CARGOS_PERSONAL,
+    }),
+    [cargosCatalogo, rrhhCatalogo, cargosOpciones],
+  )
+
+  const resumenRows = useMemo(
+    () => resumenCargosDesdeCatalogo(cargosBase, agregado),
+    [cargosBase, agregado],
   )
 
   const usedIds = useMemo(
@@ -141,8 +159,10 @@ export default function PersonalAsistenciaPanel({
     fontSize: 'var(--cc-xs)',
   }
 
-  const resumenRows = agregado.length ? agregado : [{ cargo: '—', cantidad: 0 }]
   const totalPersonas = agregado.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
+  const selectCargos = cargosBase.length
+    ? cargosBase
+    : (cargosOpciones?.length ? cargosOpciones : CARGOS_PERSONAL)
 
   return (
     <div>
@@ -212,8 +232,8 @@ export default function PersonalAsistenciaPanel({
           lineHeight: 1.35,
         }}>
           {gateRrhhAprobado
-            ? 'Agregue colaboradores con documentación Aprobada en RRHH. El resumen agrupa por cargo; haga clic en un cargo para ver el detalle.'
-            : 'Agregue colaboradores desde RRHH. El resumen agrupa por cargo; haga clic en un cargo para ver y editar el detalle.'}
+            ? 'Haga clic en un cargo para ver o agregar colaboradores con documentación Aprobada en RRHH.'
+            : 'Haga clic en un cargo para ver el detalle o agregar colaboradores de ese cargo desde RRHH.'}
         </div>
       )}
 
@@ -308,7 +328,7 @@ export default function PersonalAsistenciaPanel({
               onChange={(e) => setDraftCargo(e.target.value)}
               style={cellInp}
             >
-              {(cargosOpciones?.length ? cargosOpciones : CARGOS_PERSONAL).map((c) => (
+              {selectCargos.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
@@ -356,81 +376,76 @@ export default function PersonalAsistenciaPanel({
         marginTop: addOpen || cargoFormOpen ? 4 : 0,
       }}>
         <span>Resumen por cargo</span>
-        {totalPersonas > 0 && (
-          <span style={{ fontWeight: 700, textTransform: 'none', letterSpacing: 0, fontSize: 'var(--cc-caption)' }}>
-            {totalPersonas} persona{totalPersonas === 1 ? '' : 's'}
-          </span>
-        )}
+        <span style={{ fontWeight: 700, textTransform: 'none', letterSpacing: 0, fontSize: 'var(--cc-caption)' }}>
+          {totalPersonas} persona{totalPersonas === 1 ? '' : 's'}
+        </span>
       </div>
-      <div style={ui.sheetWrapFlush || ui.sheetWrap} className="cc-bitacora-sheet-scroll">
-        <table
-          className="cc-bitacora-responsive-table cc-bitacora-personal-table"
-          style={{ ...ui.sheetTable, tableLayout: 'auto', minWidth: 0 }}
-        >
-          <thead>
-            <tr>
-              <th style={{ ...ui.th, width: '70%' }}>Cargo</th>
-              <th style={{ ...ui.th, width: '30%', textAlign: 'center' }}>Cant.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {resumenRows.map((row) => {
-              const clickable = row.cargo && row.cargo !== '—'
-              return (
-                <tr key={`ag-${row.cargo}`}>
-                  <td style={ui.td} data-label="Cargo">
-                    {clickable ? (
-                      <button
-                        type="button"
-                        onClick={() => setCargoDetalle(row.cargo)}
-                        style={{
-                          border: 'none',
-                          background: 'transparent',
-                          padding: 0,
-                          margin: 0,
-                          cursor: 'pointer',
-                          color: t.primary,
-                          fontSize: 'var(--cc-xs)',
-                          fontWeight: 700,
-                          textAlign: 'left',
-                          textDecoration: 'underline',
-                          textUnderlineOffset: 2,
-                        }}
-                        title={`Ver detalle de ${row.cargo}`}
-                      >
-                        {row.cargo}
-                      </button>
-                    ) : (
-                      <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: t.textMuted }}>
-                        {row.cargo}
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ ...ui.td, textAlign: 'center', fontWeight: 800 }} data-label="Cant.">
-                    {clickable ? (
-                      <button
-                        type="button"
-                        onClick={() => setCargoDetalle(row.cargo)}
-                        style={{
-                          border: 'none',
-                          background: 'transparent',
-                          padding: 0,
-                          cursor: 'pointer',
-                          fontWeight: 800,
-                          color: t.text,
-                          fontSize: 'inherit',
-                        }}
-                        title={`Ver detalle de ${row.cargo}`}
-                      >
-                        {row.cantidad}
-                      </button>
-                    ) : row.cantidad}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+      <div style={{
+        ...(ui.sheetWrapFlush || ui.sheetWrap || {}),
+        padding: viewportCompact ? 10 : 12,
+      }}>
+        {resumenRows.length === 0 ? (
+          <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)', padding: 8 }}>
+            Sin cargos en el catálogo de RRHH.
+          </div>
+        ) : (
+          <div
+            role="list"
+            aria-label="Resumen por cargo"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: viewportCompact
+                ? 'repeat(auto-fill, minmax(132px, 1fr))'
+                : 'repeat(auto-fill, minmax(168px, 1fr))',
+              gap: viewportCompact ? 8 : 10,
+            }}
+          >
+            {resumenRows.map((row) => (
+              <button
+                key={`card-${row.cargo}`}
+                type="button"
+                role="listitem"
+                onClick={() => setCargoDetalle(row.cargo)}
+                title={`Ver detalle de ${row.cargo}`}
+                style={{
+                  minHeight: viewportCompact ? 84 : 96,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 10,
+                  background: t.bg || t.bgCard || '#fff',
+                  padding: '12px 10px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  textAlign: 'center',
+                  boxShadow: 'none',
+                  transition: 'border-color 120ms ease, background 120ms ease',
+                }}
+              >
+                <span style={{
+                  fontWeight: 700,
+                  fontSize: 'var(--cc-xs)',
+                  color: t.text,
+                  lineHeight: 1.25,
+                  wordBreak: 'break-word',
+                }}>
+                  {row.cargo}
+                </span>
+                <span style={{
+                  fontWeight: 800,
+                  fontSize: 'var(--cc-title)',
+                  color: Number(row.cantidad) > 0 ? (t.primary || '#0077B6') : (t.textMuted || '#64748b'),
+                  fontVariantNumeric: 'tabular-nums',
+                  lineHeight: 1,
+                }}>
+                  {row.cantidad}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {cargoDetalle && (

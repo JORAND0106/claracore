@@ -287,6 +287,8 @@ export function createSeguimientoApi(contratoId, token) {
       const qs = q ? `?q=${encodeURIComponent(q)}` : ''
       return get(`/seguimiento/${cid}/bitacora/rrhh-trabajadores${qs}`)
     },
+    /** Catálogo completo de cargos RRHH para el resumen por cargo. */
+    listBitacoraRrhhCargos: () => get(`/seguimiento/${cid}/bitacora/rrhh-cargos`),
     /** Política corte / contrato exento ID 3 / gate documentación Aprobada. */
     getBitacoraAsistenciaRrhhPolicy: () =>
       get(`/seguimiento/${cid}/bitacora/asistencia-rrhh-policy`),

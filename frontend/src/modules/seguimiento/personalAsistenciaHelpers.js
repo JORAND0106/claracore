@@ -262,6 +262,90 @@ export function filtrarTrabajadoresRrhh(catalogo = [], query = '', excludeIds = 
   })
 }
 
+/** True si el cargo RRHH del trabajador coincide con el cargo del resumen (case-insensitive). */
+export function cargoCoincideRrhh(trab, cargo) {
+  const want = String(cargo || '').trim().toLowerCase()
+  if (!want) return true
+  const got = String(trab?.cargo_aspira || trab?.cargo || '').trim().toLowerCase()
+  return got === want
+}
+
+/** Subconjunto del catálogo RRHH con el cargo indicado. */
+export function filtrarCatalogoPorCargo(catalogo = [], cargo = '') {
+  const want = String(cargo || '').trim()
+  if (!want) return Array.isArray(catalogo) ? [...catalogo] : []
+  return (Array.isArray(catalogo) ? catalogo : []).filter((t) => cargoCoincideRrhh(t, want))
+}
+
+/**
+ * Une catálogo de cargos RRHH con conteos del día (asistencia + manual).
+ * Incluye cargos del catálogo con cantidad 0 y cargos con conteo fuera del catálogo.
+ */
+export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
+  const byKey = new Map()
+  for (const r of agregado || []) {
+    const cargo = String(r?.cargo || '').trim()
+    if (!cargo) continue
+    const key = cargo.toLowerCase()
+    const n = Number(r?.cantidad)
+    byKey.set(key, {
+      cargo: byKey.get(key)?.cargo || cargo,
+      cantidad: (byKey.get(key)?.cantidad || 0) + (Number.isFinite(n) ? n : 0),
+    })
+  }
+
+  const seen = new Set()
+  const out = []
+  for (const raw of catalogoCargos || []) {
+    const cargo = String(raw || '').trim()
+    if (!cargo) continue
+    const key = cargo.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    const hit = byKey.get(key)
+    out.push({ cargo, cantidad: hit ? Number(hit.cantidad) || 0 : 0 })
+  }
+  for (const hit of byKey.values()) {
+    const key = String(hit.cargo).toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ cargo: hit.cargo, cantidad: Number(hit.cantidad) || 0 })
+  }
+  return out.sort((a, b) => a.cargo.localeCompare(b.cargo, 'es'))
+}
+
+/**
+ * Resuelve la lista base de cargos: API RRHH → cargos vistos en trabajadores → fallback.
+ */
+export function resolverCatalogoCargos({
+  catalogoRrhh = [],
+  trabajadores = [],
+  fallback = [],
+} = {}) {
+  const dedupe = (list) => {
+    const out = []
+    const seen = new Set()
+    for (const raw of list || []) {
+      const cargo = String(raw || '').trim()
+      if (!cargo) continue
+      const key = cargo.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(cargo)
+    }
+    return out
+  }
+  const fromApi = dedupe(catalogoRrhh)
+  if (fromApi.length) return fromApi
+  const fromTrab = []
+  for (const t of trabajadores || []) {
+    fromTrab.push(t?.cargo_aspira || t?.cargo || '')
+  }
+  const derived = dedupe(fromTrab)
+  if (derived.length) return derived
+  return dedupe(fallback)
+}
+
 /** Mapa id → estado desde catálogo RRHH. */
 export function mapaEstadosRrhh(catalogo = []) {
   const map = new Map()

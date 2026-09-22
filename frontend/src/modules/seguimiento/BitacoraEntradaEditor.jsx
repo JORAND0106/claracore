@@ -253,6 +253,7 @@ export default function BitacoraEntradaEditor({
     recoverPersonalManual(entrada?.personal, entrada?.asistencia_colaboradores)
   ))
   const [rrhhCatalogo, setRrhhCatalogo] = useState([])
+  const [cargosCatalogo, setCargosCatalogo] = useState([])
   const [contratoNumero, setContratoNumero] = useState('')
   const [asistenciaRrhhPolicy, setAsistenciaRrhhPolicy] = useState(() =>
     policySnapshotAsistenciaRrhh({ contratoId }),
@@ -345,6 +346,20 @@ export default function BitacoraEntradaEditor({
     })()
     return () => { cancelled = true }
   }, [api, tipo, asistenciaRrhhPolicy?.requiere_rrhh_aprobado])
+
+  // Catálogo completo de cargos RRHH (resumen por cargo — incluye ceros).
+  useEffect(() => {
+    if (tipo !== 'diario' || !api?.listBitacoraRrhhCargos) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await api.listBitacoraRrhhCargos()
+        const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
+        if (!cancelled) setCargosCatalogo(items.map((c) => String(c || '').trim()).filter(Boolean))
+      } catch { /* sin permiso / red */ }
+    })()
+    return () => { cancelled = true }
+  }, [api, tipo])
 
   // Política Bitácora ↔ RRHH (corte / contrato 3 / toggle).
   useEffect(() => {
@@ -1027,6 +1042,7 @@ export default function BitacoraEntradaEditor({
                 sheetStyles={ui}
                 compact={grillaCompacta}
                 rrhhCatalogo={rrhhCatalogo}
+                cargosCatalogo={cargosCatalogo}
                 tramosCatalogo={tramosCatalogo}
                 resumenCongelado={resumenCongelado}
                 personalManual={personalManual}
