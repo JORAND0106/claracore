@@ -43,6 +43,7 @@ import {
   abscisasExtremosPlanilla,
   lineasPlanillaParaReporteSicoe,
   linksSicoeDesdeMeta,
+  puedeCrearReporteSicoe,
   normalizarEvidenciasFotograficas,
   validarEvidenciasFotograficas,
   lineasConCantidadCalculada,
@@ -666,6 +667,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     () => linksSicoeDesdeMeta(planilla?.meta_cabecera),
     [planilla?.meta_cabecera],
   )
+  const puedeCrearReporte = useMemo(
+    () => puedeCrearReporteSicoe({ esDesarrollador: esDev, linksSicoe }),
+    [esDev, linksSicoe],
+  )
+  const reporteSicoeYaEnviado = linksSicoe.length > 0
   const lineasFotoReq = useMemo(
     () => new Set(
       lineasConCantidadCalculada(calculoVista, { displayNeto: displayNetoCant })
@@ -864,14 +870,64 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             </AccionIcono>
           )}
           {planilla?.id && (
-            <AccionIcono
-              title="Crear reporte SICOE Obra"
-              primary
-              disabled={busy || !lineasReporteSicoe.length || !String(params.nombre || planilla?.nombre || '').trim()}
-              onClick={() => { setErr(''); setMsg(''); setCrearReporteOpen(true) }}
-            >
-              <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M12 18v-6" /><path d="M9 15h6" /></svg>
-            </AccionIcono>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <AccionIcono
+                title={
+                  !puedeCrearReporte
+                    ? 'Reporte ya creado — no se puede reenviar'
+                    : (esDev && reporteSicoeYaEnviado
+                      ? 'Crear reporte SICOE Obra (Dev: reenvío permitido)'
+                      : 'Crear reporte SICOE Obra')
+                }
+                primary
+                disabled={
+                  busy
+                  || !puedeCrearReporte
+                  || !lineasReporteSicoe.length
+                  || !String(params.nombre || planilla?.nombre || '').trim()
+                }
+                onClick={() => {
+                  if (!puedeCrearReporte) return
+                  setErr('')
+                  setMsg('')
+                  setCrearReporteOpen(true)
+                }}
+              >
+                <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M12 18v-6" /><path d="M9 15h6" /></svg>
+              </AccionIcono>
+              {reporteSicoeYaEnviado && !esDev && (
+                <span
+                  data-reporte-sicoe-bloqueado
+                  style={{
+                    fontSize: 'var(--cc-xs)',
+                    fontWeight: 700,
+                    color: '#166534',
+                    background: '#dcfce7',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: 999,
+                    padding: '4px 8px',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title="Esta planilla ya generó un reporte SICOE"
+                >
+                  Reporte creado
+                </span>
+              )}
+              {reporteSicoeYaEnviado && esDev && (
+                <span
+                  data-reporte-sicoe-reenvio-dev
+                  style={{
+                    fontSize: 'var(--cc-xs)',
+                    fontWeight: 600,
+                    color: '#64748b',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title="Desarrollador puede reenviar para pruebas"
+                >
+                  Reporte creado · Dev
+                </span>
+              )}
+            </span>
           )}
           {esDev && sellada && (
             <AccionIcono title="Reabrir (Dev)" disabled={busy} onClick={reabrir}>
