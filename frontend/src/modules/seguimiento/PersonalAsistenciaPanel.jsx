@@ -503,10 +503,9 @@ export default function PersonalAsistenciaPanel({
         data-testid="bitacora-resumen-cargos-compacto"
         style={{
           ...(ui.sheetWrapFlush || ui.sheetWrap || {}),
-          /* Desktop: ~¼ del ancho del popup; móvil: ancho útil completo. */
-          maxWidth: viewportCompact ? '100%' : '25%',
-          minWidth: viewportCompact ? undefined : 200,
+          /* Chips densos a ancho completo del popup (sin columna vacía a la derecha). */
           width: '100%',
+          maxWidth: '100%',
           padding: viewportCompact ? 8 : 10,
           display: 'flex',
           flexDirection: 'column',
