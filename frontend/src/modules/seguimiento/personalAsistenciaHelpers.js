@@ -24,6 +24,20 @@ export const HINT_REGISTRAR_EN_RRHH =
 export const HINT_OPERADOR_DESDE_ASISTENCIA =
   'El colaborador debe estar registrado primero en Personal en obra (lista de asistencia del día) para poder seleccionarlo aquí como operador.'
 
+/**
+ * ROL de plataforma «Administrativo» — no entra en Bitácora.
+ * Coincidencia exacta (no «Residente Administrativo»).
+ */
+export function esEtiquetaAdministrativoExcluida(valor) {
+  const s = String(valor || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/ {2,}/g, ' ')
+  return s === 'administrativo'
+}
+
 export function capitalizarNombrePropio(raw) {
   return String(raw || '')
     .trim()
@@ -248,7 +262,7 @@ export function personalAgregadoPorEmpresaCargo(rows, opts = {}) {
     const estado = liveEst != null ? normalizeEstadoRrhh(liveEst) : normalizeEstadoRrhh(r?.estado)
     if (!estadoCuentaEnResumen(estado)) continue
     const cargo = String(r?.cargo || '').trim()
-    if (!cargo) continue
+    if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const empresa = nombreEmpresaAsistencia(r)
     const ek = keyEmpresa(empresa)
     let g = byEmp.get(ek)
@@ -326,7 +340,7 @@ export function resumenEmpresasCargos({
     .filter((g) => g.total > 0 && g.cargos.length > 0)
 
   const manualNorm = normalizarPersonalCantidades(personalManual)
-    .filter((c) => Number(c.cantidad) > 0)
+    .filter((c) => Number(c.cantidad) > 0 && !esEtiquetaAdministrativoExcluida(c.cargo))
   if (manualNorm.length) {
     const total = manualNorm.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
     groups.push({
@@ -471,6 +485,7 @@ export function filtrarTrabajadoresRrhh(catalogo = [], query = '', excludeIds = 
   return list.filter((t) => {
     const id = Number(t?.id)
     if (Number.isFinite(id) && excl.has(id)) return false
+    if (esEtiquetaAdministrativoExcluida(t?.cargo_aspira || t?.cargo)) return false
     if (!needle) return true
     const nombre = nombreCompletoRrhh(t).toLowerCase()
     const doc = String(t?.numero_documento || '').toLowerCase()
@@ -491,8 +506,11 @@ export function cargoCoincideRrhh(trab, cargo) {
 /** Subconjunto del catálogo RRHH con el cargo indicado. */
 export function filtrarCatalogoPorCargo(catalogo = [], cargo = '') {
   const want = String(cargo || '').trim()
-  if (!want) return Array.isArray(catalogo) ? [...catalogo] : []
-  return (Array.isArray(catalogo) ? catalogo : []).filter((t) => cargoCoincideRrhh(t, want))
+  const list = (Array.isArray(catalogo) ? catalogo : [])
+    .filter((t) => !esEtiquetaAdministrativoExcluida(t?.cargo_aspira || t?.cargo))
+  if (!want) return [...list]
+  if (esEtiquetaAdministrativoExcluida(want)) return []
+  return list.filter((t) => cargoCoincideRrhh(t, want))
 }
 
 /** Filtra por cargo y, si se indica, por empresa contratante. */
@@ -511,7 +529,7 @@ export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
   const byKey = new Map()
   for (const r of agregado || []) {
     const cargo = String(r?.cargo || '').trim()
-    if (!cargo) continue
+    if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const key = cargo.toLowerCase()
     const n = Number(r?.cantidad)
     byKey.set(key, {
@@ -524,7 +542,7 @@ export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
   const out = []
   for (const raw of catalogoCargos || []) {
     const cargo = String(raw || '').trim()
-    if (!cargo) continue
+    if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const key = cargo.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
@@ -553,7 +571,7 @@ export function resolverCatalogoCargos({
     const seen = new Set()
     for (const raw of list || []) {
       const cargo = String(raw || '').trim()
-      if (!cargo) continue
+      if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
       const key = cargo.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)

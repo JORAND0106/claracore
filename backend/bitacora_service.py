@@ -11,10 +11,11 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from contextlib import contextmanager
 import uuid
 from datetime import date, datetime, time as dt_time, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 BOGOTA = ZoneInfo("America/Bogota")
@@ -47,6 +48,101 @@ TRAMO_NO_ESPECIFICADO_LABEL = "Sin tramo asignado"
 SIN_TRAMO_ASIGNADO_LABEL = TRAMO_NO_ESPECIFICADO_LABEL
 
 _log = logging.getLogger("claracore.bitacora")
+
+# ROL de plataforma «Administrativo» (tabla roles) — no entra en Bitácora
+# (catálogo de cargos ni selección de colaboradores). Coincidencia exacta;
+# p. ej. «Residente Administrativo» no se excluye.
+_ETIQUETA_ADMINISTRATIVO = "administrativo"
+
+
+def _norm_etiqueta_bitacora(txt: Any) -> str:
+    s = unicodedata.normalize("NFD", str(txt or ""))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return s.lower().strip().replace("  ", " ")
+
+
+def es_etiqueta_administrativo_excluida(valor: Any) -> bool:
+    """True solo si la etiqueta es exactamente «Administrativo»."""
+    return _norm_etiqueta_bitacora(valor) == _ETIQUETA_ADMINISTRATIVO
+
+
+def _emails_usuarios_rol_administrativo(sb, contrato_id: int) -> Set[str]:
+    """
+    Emails (lower) de usuarios del contrato con ROL de plataforma Administrativo.
+    Cruce trabajador ↔ usuario por email para excluirlos del picker de Bitácora.
+    """
+    emails: Set[str] = set()
+    try:
+        roles = sb.table("roles").select("id, nombre").execute().data or []
+        admin_ids = {
+            int(r["id"])
+            for r in roles
+            if r.get("id") is not None and es_etiqueta_administrativo_excluida(r.get("nombre"))
+        }
+        if not admin_ids:
+            return emails
+
+        uids: Set[int] = set()
+        try:
+            ucs = (
+                sb.table("usuario_contratos")
+                .select("usuario_id")
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+                or []
+            )
+            for u in ucs:
+                if u.get("usuario_id") is not None:
+                    try:
+                        uids.add(int(u["usuario_id"]))
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as exc:
+            _log.warning("_emails_usuarios_rol_administrativo usuario_contratos: %s", exc)
+
+        try:
+            primary = (
+                sb.table("usuarios")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+                or []
+            )
+            for u in primary:
+                if u.get("id") is not None:
+                    try:
+                        uids.add(int(u["id"]))
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as exc:
+            _log.warning("_emails_usuarios_rol_administrativo usuarios.contrato_id: %s", exc)
+
+        if not uids:
+            return emails
+
+        users = (
+            sb.table("usuarios")
+            .select("id, email, rol_id")
+            .in_("id", list(uids))
+            .execute()
+            .data
+            or []
+        )
+        for u in users:
+            try:
+                rid = int(u["rol_id"]) if u.get("rol_id") is not None else None
+            except (TypeError, ValueError):
+                rid = None
+            if rid not in admin_ids:
+                continue
+            em = str(u.get("email") or "").strip().lower()
+            if em:
+                emails.add(em)
+    except Exception as exc:
+        _log.warning("_emails_usuarios_rol_administrativo: %s", exc)
+    return emails
 
 
 def _is_tramo_sentinel_invalido(value: Any) -> bool:
@@ -2423,7 +2519,11 @@ def enrich_asistencia_desde_rrhh(
 def list_rrhh_trabajadores_para_bitacora(
     sb, contrato_id: int, q: str = "", *, solo_aprobados: Optional[bool] = None,
 ) -> List[dict]:
-    """Catálogo RRHH reducido para autocompletado de Personal en obra."""
+    """Catálogo RRHH reducido para autocompletado de Personal en obra.
+
+    Excluye colaboradores con ROL de plataforma Administrativo (cruce por email)
+    y quienes tengan cargo_aspira exactamente «Administrativo».
+    """
     try:
         from rrhh_service import list_trabajadores
     except Exception as exc:  # pragma: no cover
@@ -2445,6 +2545,8 @@ def list_rrhh_trabajadores_para_bitacora(
 
     from bitacora_asistencia_rrhh_policy import doc_validacion_es_aprobado
 
+    admin_emails = _emails_usuarios_rol_administrativo(sb, contrato_id)
+
     out: List[dict] = []
     for t in rows:
         if not isinstance(t, dict):
@@ -2452,6 +2554,12 @@ def list_rrhh_trabajadores_para_bitacora(
         try:
             tid = int(t["id"])
         except (TypeError, ValueError, KeyError):
+            continue
+        cargo_asp = str(t.get("cargo_aspira") or "").strip()
+        if es_etiqueta_administrativo_excluida(cargo_asp):
+            continue
+        email = str(t.get("email") or "").strip().lower()
+        if email and email in admin_emails:
             continue
         doc_est = str(t.get("doc_validacion_estado") or "pendiente").lower()
         if solo_aprobados and not doc_validacion_es_aprobado(doc_est):
@@ -2463,7 +2571,7 @@ def list_rrhh_trabajadores_para_bitacora(
             "nombre": _nombre_completo_rrhh(t),
             "tipo_documento": t.get("tipo_documento") or "CC",
             "numero_documento": t.get("numero_documento") or "",
-            "cargo_aspira": t.get("cargo_aspira") or "",
+            "cargo_aspira": cargo_asp,
             "empresa_nombre": t.get("empresa_nombre") or "",
             "empresa_subcontratista_id": t.get("empresa_subcontratista_id"),
             "estado": str(t.get("estado") or "activo").lower(),
@@ -2476,6 +2584,9 @@ def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
     """
     Catálogo completo de cargos RRHH (categoria ``cargo``) para el resumen
     por cargo de Bitácora. No exige permiso del módulo RRHH.
+
+    Excluye la etiqueta exacta «Administrativo» (ROL de plataforma; no debe
+    figurar como cargo de obra en Bitácora).
     """
     try:
         from rrhh_service import list_catalogo
@@ -2494,7 +2605,7 @@ def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
             val = str(r.get("valor") or "").strip()
         else:
             val = str(r or "").strip()
-        if not val:
+        if not val or es_etiqueta_administrativo_excluida(val):
             continue
         key = val.casefold()
         if key in seen:
