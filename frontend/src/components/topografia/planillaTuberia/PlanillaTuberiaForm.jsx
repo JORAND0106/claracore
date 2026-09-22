@@ -12,6 +12,7 @@ import {
 import TopoConfirmModal from '../TopoConfirmModal'
 import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
+import PlanillaTuberiaCrearReporteModal from './PlanillaTuberiaCrearReporteModal'
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
 import { calcularPlanillaLocal } from './planillaTuberiaCalc'
 import {
@@ -38,6 +39,9 @@ import {
   validarNombrePlanilla,
   agruparAlertasValidacion,
   validarFilasCarteraLocal,
+  abscisasExtremosPlanilla,
+  lineasPlanillaParaReporteSicoe,
+  linksSicoeDesdeMeta,
   normalizarEvidenciasFotograficas,
   validarEvidenciasFotograficas,
   lineasConCantidadCalculada,
@@ -92,7 +96,7 @@ const ico = {
 }
 
 
-export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuario }) {
+export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuario, onAbrirReporteSicoe }) {
   const ui = useTopoTheme()
   const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { isCompact } = useTopoViewport()
@@ -126,6 +130,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [editorOpen, setEditorOpen] = useState(false)
   const [confirmEliminar, setConfirmEliminar] = useState(null) // null | 'vacia' | 'con_datos'
   const [pkMapOpen, setPkMapOpen] = useState(false)
+  const [crearReporteOpen, setCrearReporteOpen] = useState(false)
   /** Overrides Long/Ancho/Espesor (+nombre OTROS) del Resumen de Cantidades. */
   const [cantManuales, setCantManuales] = useState([])
   /** Fotos por línea de cantidad/descuento (meta_cabecera.evidencias_fotograficas). */
@@ -600,6 +605,18 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   /** Preferir preview local; si faltan Ø/B, caer al último cálculo del servidor. */
   const calculoVista = calculoLocal || calculo
 
+  const absExtremos = useMemo(
+    () => abscisasExtremosPlanilla(calculoVista, filas),
+    [calculoVista, filas],
+  )
+  const lineasReporteSicoe = useMemo(
+    () => lineasPlanillaParaReporteSicoe(calculoVista, { displayNeto: displayNetoCant }),
+    [calculoVista, cantManuales],
+  )
+  const linksSicoe = useMemo(
+    () => linksSicoeDesdeMeta(planilla?.meta_cabecera),
+    [planilla?.meta_cabecera],
+  )
   const lineasFotoReq = useMemo(
     () => new Set(
       lineasConCantidadCalculada(calculoVista, { displayNeto: displayNetoCant })
@@ -784,6 +801,16 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           {editable && (
             <AccionIcono title="Cerrar planilla" disabled={busy} onClick={cerrar}>
               <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+            </AccionIcono>
+          )}
+          {planilla?.id && (
+            <AccionIcono
+              title="Crear reporte SICOE Obra"
+              primary
+              disabled={busy || !lineasReporteSicoe.length || !String(params.nombre || planilla?.nombre || '').trim()}
+              onClick={() => { setErr(''); setMsg(''); setCrearReporteOpen(true) }}
+            >
+              <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M12 18v-6" /><path d="M9 15h6" /></svg>
             </AccionIcono>
           )}
           {esDev && sellada && (
@@ -1338,6 +1365,28 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
             {err && <div style={{ color: '#dc2626', padding: 8, background: '#fef2f2', borderRadius: 8 }}>{err}</div>}
             {msg && <div style={{ color: '#166534', padding: 8, background: '#f0fdf4', borderRadius: 8 }}>{msg}</div>}
+            {linksSicoe.length > 0 && (
+              <div style={{
+                padding: 8, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a',
+                fontSize: 'var(--cc-sm)', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+              }}>
+                <span style={{ fontWeight: 700 }}>Reportes SICOE:</span>
+                {linksSicoe.map((l) => (
+                  <button
+                    key={l.reporte_id}
+                    type="button"
+                    onClick={() => onAbrirReporteSicoe?.(l.reporte_id, l.numero_reporte)}
+                    style={{
+                      border: '1px solid #93c5fd', background: '#fff', borderRadius: 6,
+                      padding: '2px 8px', cursor: 'pointer', fontWeight: 700, color: '#1d4ed8',
+                    }}
+                    title="Abrir carpeta del reporte"
+                  >
+                    #{l.numero_reporte ?? l.reporte_id}
+                  </button>
+                ))}
+              </div>
+            )}
             {alertasTabla?.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {alertasTabla.map((g) => {
@@ -1439,6 +1488,42 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           }}
         />
       )}
+
+      <PlanillaTuberiaCrearReporteModal
+        open={crearReporteOpen}
+        onClose={() => setCrearReporteOpen(false)}
+        contratoId={contratoId}
+        token={token}
+        planilla={{ ...(planilla || {}), nombre: params.nombre || planilla?.nombre, pk_id: params.pk_id, costado: params.costado }}
+        absInicioDefault={absExtremos.absInicio}
+        absFinalDefault={absExtremos.absFinal}
+        lineasPreview={lineasReporteSicoe}
+        ui={{
+          text: ui.text,
+          textMuted: ui.textMuted,
+          border: ui.t?.border || '#e2e8f0',
+          inputBg: ui.t?.inputBg || '#fff',
+          cardBg: ui.t?.bgCard || '#fff',
+          accent: ui.accent,
+        }}
+        apiCrear={async (body) => {
+          const res = await api(`/planillas-tuberia/${planilla.id}/crear-reporte-sicoe`, {
+            method: 'POST',
+            body: JSON.stringify(body),
+          })
+          return res
+        }}
+        onCreated={(res) => {
+          if (res?.planilla) aplicarDetalle(res.planilla)
+          const num = res?.numero_reporte
+          setMsg(num != null
+            ? `Reporte SICOE #${num} creado con ${res?.n_registros || 0} registro(s) en Sin Asignar Ítem.`
+            : 'Reporte SICOE creado.')
+          if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
+            onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
+          }
+        }}
+      />
 
     </div>
   )
