@@ -690,6 +690,10 @@ class ReemplazarExternoBody(BaseModel):
         None,
         description="Clave de agrupación del listado (email:… o nombre:…)",
     )
+    match_keys: Optional[List[str]] = Field(
+        None,
+        description="Todas las claves del grupo deduplicado (email + nombre)",
+    )
     email: Optional[str] = None
     nombre: Optional[str] = None
 
@@ -719,7 +723,14 @@ def route_reemplazar_externo(
             status_code=400,
             detail="Debe seleccionar un usuario registrado de reemplazo",
         )
-    if not body.externo_id and not (body.match_key or "").strip() and not (body.email or "").strip() and not (body.nombre or "").strip():
+    has_identity = (
+        body.externo_id
+        or (body.match_key or "").strip()
+        or (body.match_keys or [])
+        or (body.email or "").strip()
+        or (body.nombre or "").strip()
+    )
+    if not has_identity:
         raise HTTPException(
             status_code=400,
             detail="Indique el asistente externo a reemplazar",
@@ -731,6 +742,7 @@ def route_reemplazar_externo(
             usuario_id=int(body.usuario_id),
             externo_id=int(body.externo_id) if body.externo_id is not None else None,
             match_key=(body.match_key or None),
+            match_keys=list(body.match_keys or []) or None,
             email=(body.email or None),
             nombre=(body.nombre or None),
         )

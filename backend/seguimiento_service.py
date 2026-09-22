@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
+import unicodedata
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 from zoneinfo import ZoneInfo
@@ -2288,8 +2289,70 @@ def update_acta(
 
 
 def _norm_email(raw: Optional[str]) -> Optional[str]:
+    """Normaliza correo: minúsculas, sin mailto:, sin <> ni basura alrededor."""
     s = (raw or "").strip().lower()
+    if not s:
+        return None
+    if s.startswith("mailto:"):
+        s = s[7:].strip()
+    s = s.strip("<> \t\"'")
+    # Si quedó basura tipo "correo otra_cosa", tomar el primer token con @
+    if " " in s or "\t" in s:
+        parts = re.split(r"\s+", s)
+        with_at = next((p for p in parts if "@" in p), None)
+        s = (with_at or parts[0] or "").strip("<> \t\"'")
     return s or None
+
+
+def _norm_nombre_key(nombre: Optional[str]) -> str:
+    """Nombre comparable: minúsculas, sin tildes, espacios colapsados."""
+    s = (nombre or "").strip().lower()
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _clave_externo(*, email: Optional[str] = None, nombre: Optional[str] = None) -> Optional[str]:
+    """Clave preferente (email > nombre) para identidad de externo."""
+    em = _norm_email(email)
+    if em:
+        return f"email:{em}"
+    nk = _norm_nombre_key(nombre)
+    return f"nombre:{nk}" if nk else None
+
+
+def _claves_identidad_externo(*, email: Optional[str] = None, nombre: Optional[str] = None) -> List[str]:
+    """Todas las claves aplicables (email y/o nombre) para unir duplicados."""
+    out: List[str] = []
+    em = _norm_email(email)
+    if em:
+        out.append(f"email:{em}")
+    nk = _norm_nombre_key(nombre)
+    if nk:
+        out.append(f"nombre:{nk}")
+    return out
+
+
+def _uf_find(parent: Dict[str, str], x: str) -> str:
+    parent.setdefault(x, x)
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+
+def _uf_union(parent: Dict[str, str], a: str, b: str) -> None:
+    ra, rb = _uf_find(parent, a), _uf_find(parent, b)
+    if ra != rb:
+        parent[rb] = ra
+
+
+def _batch_acta_ids(acta_ids: List[int], batch_size: int = 100):
+    for i in range(0, len(acta_ids), batch_size):
+        yield acta_ids[i : i + batch_size]
 
 
 def upsert_contacto_externo(
@@ -2422,24 +2485,6 @@ def inhabilitar_contactos_externos_por_email(
         return 0
 
 
-def _norm_nombre_key(nombre: Optional[str]) -> str:
-    return re.sub(r"\s+", " ", (nombre or "").strip().lower())
-
-
-def _clave_externo(*, email: Optional[str] = None, nombre: Optional[str] = None) -> Optional[str]:
-    """Clave estable para agrupar asistentes externos del histórico (email > nombre)."""
-    em = _norm_email(email)
-    if em:
-        return f"email:{em}"
-    nk = _norm_nombre_key(nombre)
-    return f"nombre:{nk}" if nk else None
-
-
-def _batch_acta_ids(acta_ids: List[int], batch_size: int = 100):
-    for i in range(0, len(acta_ids), batch_size):
-        yield acta_ids[i : i + batch_size]
-
-
 def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict], Dict[int, dict]]:
     """
     Asistentes sin usuario_id en actas del contrato + mapa de actas.
@@ -2519,77 +2564,108 @@ def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict
 
 def list_externos_depuracion(sb, contrato_id: int) -> List[dict]:
     """
-    Listado de asistentes marcados como externos en el histórico de actas del contrato,
-    agrupados por identidad (email normalizado o nombre) para depuración manual.
+    Listado de asistentes marcados como externos en el histórico de actas del contrato.
+
+    Deduplica por identidad: une filas con el mismo correo normalizado (sin mailto:)
+    o el mismo nombre normalizado (p. ej. una asistencia con email y otra solo nombre).
     """
     asistentes, actas_by_id = _fetch_asistentes_externos_contrato(sb, contrato_id)
     if not asistentes:
         return []
 
+    parent: Dict[str, str] = {}
     catalog_by_key: Dict[str, dict] = {}
+
     for ext in list_contactos_externos_activos(sb, int(contrato_id)):
-        k = _clave_externo(
+        ckeys = _claves_identidad_externo(
             email=ext.get("email_norm") or ext.get("email"),
             nombre=ext.get("nombre"),
         )
-        if k and k not in catalog_by_key:
-            catalog_by_key[k] = ext
-
-    groups: Dict[str, dict] = {}
-    for a in asistentes:
-        k = _clave_externo(email=a.get("email"), nombre=a.get("nombre"))
-        if not k:
+        if not ckeys:
             continue
-        g = groups.get(k)
+        for i in range(1, len(ckeys)):
+            _uf_union(parent, ckeys[0], ckeys[i])
+        for k in ckeys:
+            if k not in catalog_by_key:
+                catalog_by_key[k] = ext
+
+    items: List[tuple] = []
+    for a in asistentes:
+        keys = _claves_identidad_externo(email=a.get("email"), nombre=a.get("nombre"))
+        if not keys:
+            continue
+        for i in range(1, len(keys)):
+            _uf_union(parent, keys[0], keys[i])
+        items.append((a, keys))
+
+    clusters: Dict[str, dict] = {}
+    for a, keys in items:
+        root = _uf_find(parent, keys[0])
+        g = clusters.get(root)
         if g is None:
             g = {
-                "match_key": k,
-                "nombre": (a.get("nombre") or "").strip(),
-                "email": (a.get("email") or "").strip(),
-                "cargo": (a.get("cargo") or "").strip(),
-                "entidad": (a.get("entidad") or "").strip(),
+                "match_keys": set(),
+                "nombre": "",
+                "email": "",
+                "cargo": "",
+                "entidad": "",
                 "externo_id": None,
                 "asistente_ids": [],
                 "acta_ids": set(),
             }
-            groups[k] = g
+            clusters[root] = g
+        g["match_keys"].update(keys)
         g["asistente_ids"].append(int(a["id"]))
         g["acta_ids"].add(int(a["acta_id"]))
         nom = (a.get("nombre") or "").strip()
         if len(nom) > len(g["nombre"] or ""):
             g["nombre"] = nom
-        if (a.get("email") or "").strip() and not g["email"]:
-            g["email"] = (a.get("email") or "").strip()
-        if (a.get("cargo") or "").strip() and not g["cargo"]:
-            g["cargo"] = (a.get("cargo") or "").strip()
-        if (a.get("entidad") or "").strip() and not g["entidad"]:
-            g["entidad"] = (a.get("entidad") or "").strip()
+        em = _norm_email(a.get("email"))
+        if em and not g["email"]:
+            g["email"] = em
+        cargo = (a.get("cargo") or "").strip()
+        if cargo and not g["cargo"]:
+            g["cargo"] = cargo
+        entidad = (a.get("entidad") or "").strip()
+        if entidad and not g["entidad"]:
+            g["entidad"] = entidad
 
     out: List[dict] = []
-    for g in groups.values():
-        ext = catalog_by_key.get(g["match_key"])
+    for g in clusters.values():
+        keys_sorted = sorted(g["match_keys"])
+        email_keys = [k for k in keys_sorted if k.startswith("email:")]
+        primary = email_keys[0] if email_keys else keys_sorted[0]
+
+        ext = None
+        for k in keys_sorted:
+            hit = catalog_by_key.get(k)
+            if hit:
+                ext = hit
+                break
         if ext:
             g["externo_id"] = int(ext["id"])
             if ext.get("nombre"):
                 g["nombre"] = ext["nombre"]
-            if ext.get("email"):
-                g["email"] = ext["email"]
+            em = _norm_email(ext.get("email_norm") or ext.get("email"))
+            if em:
+                g["email"] = em
             if ext.get("cargo"):
                 g["cargo"] = ext["cargo"]
             if ext.get("entidad"):
                 g["entidad"] = ext["entidad"]
+
+        g["asistente_ids"] = list(dict.fromkeys(g["asistente_ids"]))
         acta_ids_sorted = sorted(g["acta_ids"], reverse=True)
-        actas_info = []
-        for aid in acta_ids_sorted[:80]:
-            meta = actas_by_id.get(aid) or {}
-            actas_info.append({
-                "id": aid,
-                "consecutivo": meta.get("consecutivo"),
-                "fecha_reunion": meta.get("fecha_reunion"),
-                "estado": meta.get("estado"),
-            })
+        actas_info = [{
+            "id": aid,
+            "consecutivo": (actas_by_id.get(aid) or {}).get("consecutivo"),
+            "fecha_reunion": (actas_by_id.get(aid) or {}).get("fecha_reunion"),
+            "estado": (actas_by_id.get(aid) or {}).get("estado"),
+        } for aid in acta_ids_sorted[:80]]
+
         out.append({
-            "match_key": g["match_key"],
+            "match_key": primary,
+            "match_keys": keys_sorted,
             "externo_id": g["externo_id"],
             "nombre": g["nombre"] or "",
             "email": g["email"] or None,
@@ -2627,6 +2703,7 @@ def _resolver_claves_y_catalogo_externo(
     *,
     externo_id: Optional[int] = None,
     match_key: Optional[str] = None,
+    match_keys: Optional[List[str]] = None,
     email: Optional[str] = None,
     nombre: Optional[str] = None,
 ) -> tuple[Set[str], List[int]]:
@@ -2651,32 +2728,35 @@ def _resolver_claves_y_catalogo_externo(
             raise ValueError("Contacto externo no encontrado en este contrato")
         ext = rows[0]
         externo_ids.append(int(ext["id"]))
-        k = _clave_externo(
+        for k in _claves_identidad_externo(
             email=ext.get("email_norm") or ext.get("email"),
             nombre=ext.get("nombre"),
-        )
-        if k:
+        ):
             keys.add(k)
 
     mk = (match_key or "").strip()
     if mk:
         keys.add(mk)
+    for raw in match_keys or []:
+        s = (raw or "").strip()
+        if s:
+            keys.add(s)
 
-    k2 = _clave_externo(email=email, nombre=nombre)
-    if k2:
-        keys.add(k2)
+    for k in _claves_identidad_externo(email=email, nombre=nombre):
+        keys.add(k)
 
     if not keys:
         raise ValueError("Indique el asistente externo a reemplazar")
 
-    # Ampliar catálogo: mismos email/nombre activos del contrato
+    # Ampliar: mismas claves de catálogo activo del contrato
     if _schema_has(sb, "contacto_externo"):
         for ext in list_contactos_externos_activos(sb, cid):
-            k = _clave_externo(
+            ckeys = _claves_identidad_externo(
                 email=ext.get("email_norm") or ext.get("email"),
                 nombre=ext.get("nombre"),
             )
-            if k and k in keys:
+            if any(k in keys for k in ckeys):
+                keys.update(ckeys)
                 eid = int(ext["id"])
                 if eid not in externo_ids:
                     externo_ids.append(eid)
@@ -2685,8 +2765,11 @@ def _resolver_claves_y_catalogo_externo(
 
 
 def _asistente_coincide_claves(row: dict, keys: Set[str]) -> bool:
-    k = _clave_externo(email=row.get("email"), nombre=row.get("nombre"))
-    return bool(k and k in keys)
+    """Coincide si el email o el nombre del asistente cae en el conjunto de claves."""
+    for k in _claves_identidad_externo(email=row.get("email"), nombre=row.get("nombre")):
+        if k in keys:
+            return True
+    return False
 
 
 def _migrar_firmas_asistente(sb, *, acta_id: int, from_asistente_id: int, to_asistente_id: int, usuario_id: int) -> int:
@@ -2734,6 +2817,7 @@ def reemplazar_externo_por_usuario(
     usuario_id: int,
     externo_id: Optional[int] = None,
     match_key: Optional[str] = None,
+    match_keys: Optional[List[str]] = None,
     email: Optional[str] = None,
     nombre: Optional[str] = None,
 ) -> dict:
@@ -2758,6 +2842,7 @@ def reemplazar_externo_por_usuario(
         cid,
         externo_id=externo_id,
         match_key=match_key,
+        match_keys=match_keys,
         email=email,
         nombre=nombre,
     )

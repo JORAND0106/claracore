@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Search, UserRoundCheck, Users, X } from 'lucide-react'
+import { ArrowLeft, Search, UserRoundCheck, Users, X } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { createSeguimientoApi } from './seguimientoApi'
-import { fmtFecha, numeroActaLabel } from './seguimientoTheme'
+import { fmtFecha, labelEstadoActa, numeroActaLabel } from './seguimientoTheme'
 import UserSearchSelect, { nombreUser } from './UserSearchSelect'
 
 /**
- * Popup de depuración: listado de asistentes externos del histórico de actas
- * y reemplazo obligatorio por un usuario registrado del contrato.
+ * Popup de depuración: listado de externos → pantalla de reemplazo a protagonismo.
+ * El contrato lo toma de la sesión del módulo; el usuario no elige contrato.
  */
 export default function ExternosDepuracionModal({
   t,
@@ -16,7 +16,6 @@ export default function ExternosDepuracionModal({
   onClose,
   zIndex = 12100,
 }) {
-  // Contrato del módulo activo (sesión). El usuario no elige ni fuerza contrato.
   const cid = contratoId != null && contratoId !== '' ? Number(contratoId) : null
   const api = useMemo(
     () => (cid && Number.isFinite(cid) ? createSeguimientoApi(cid, token) : null),
@@ -31,20 +30,6 @@ export default function ExternosDepuracionModal({
   const [q, setQ] = useState('')
   const [selected, setSelected] = useState(null)
   const [usuarioDestino, setUsuarioDestino] = useState(null)
-  const [narrow, setNarrow] = useState(false)
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return undefined
-    const mq = window.matchMedia('(max-width: 760px)')
-    const apply = () => setNarrow(Boolean(mq.matches))
-    apply()
-    if (mq.addEventListener) mq.addEventListener('change', apply)
-    else mq.addListener?.(apply)
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener('change', apply)
-      else mq.removeListener?.(apply)
-    }
-  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -62,7 +47,6 @@ export default function ExternosDepuracionModal({
         api.listUsuarios(),
       ])
       setRows(Array.isArray(ext) ? ext : [])
-      // Solo usuarios reales (nunca externos) como destino de reemplazo
       setUsuarios((Array.isArray(users) ? users : []).filter((u) => !u?.es_externo && Number(u?.id) > 0))
     } catch (e) {
       setError(e.message || 'No se pudo cargar el listado de externos')
@@ -93,10 +77,16 @@ export default function ExternosDepuracionModal({
     setError('')
   }
 
+  const volverListado = () => {
+    setSelected(null)
+    setUsuarioDestino(null)
+    setError('')
+  }
+
   const puedeConfirmar = Boolean(selected && usuarioDestino?.id && Number(usuarioDestino.id) > 0)
 
   const confirmar = async () => {
-    if (!selected) return
+    if (!selected || !api) return
     if (!usuarioDestino?.id || Number(usuarioDestino.id) <= 0) {
       setError('Debe seleccionar un usuario registrado de reemplazo')
       return
@@ -109,6 +99,7 @@ export default function ExternosDepuracionModal({
         usuario_id: Number(usuarioDestino.id),
         externo_id: selected.externo_id ?? undefined,
         match_key: selected.match_key,
+        match_keys: Array.isArray(selected.match_keys) ? selected.match_keys : undefined,
         email: selected.email || undefined,
         nombre: selected.nombre || undefined,
       })
@@ -127,6 +118,27 @@ export default function ExternosDepuracionModal({
     }
   }
 
+  const ghostBtn = {
+    padding: '10px 16px',
+    borderRadius: 10,
+    border: `1px solid ${t.border}`,
+    background: 'transparent',
+    color: t.text,
+    cursor: 'pointer',
+    fontWeight: 650,
+    fontSize: 'var(--cc-sm)',
+  }
+  const primaryBtn = (enabled) => ({
+    padding: '11px 18px',
+    borderRadius: 10,
+    border: `1px solid ${t.primary}`,
+    background: enabled ? t.primary : `${t.primary}55`,
+    color: '#fff',
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    fontWeight: 800,
+    fontSize: 'var(--cc-sm)',
+  })
+
   return (
     <div
       role="dialog"
@@ -135,14 +147,14 @@ export default function ExternosDepuracionModal({
       onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}
       style={{
         position: 'fixed', inset: 0, zIndex,
-        background: 'rgba(15,23,42,0.48)',
+        background: 'rgba(15,23,42,0.52)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,
       }}
     >
       <div
         style={{
-          width: 'min(920px, 100%)',
+          width: 'min(720px, 100%)',
           maxHeight: '92vh',
           overflow: 'hidden',
           display: 'flex',
@@ -153,33 +165,35 @@ export default function ExternosDepuracionModal({
           boxShadow: t.shadow || '0 16px 48px rgba(0,0,0,0.22)',
         }}
       >
-        <div style={{ padding: '16px 18px 0' }}>
+        <div style={{ padding: '16px 20px 0' }}>
           <CcModalBrandHeader theme={t} />
         </div>
 
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
-          gap: 12, padding: '10px 18px 14px',
+          gap: 12, padding: '10px 20px 14px',
           borderBottom: `1px solid ${t.border}`,
         }}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', minWidth: 0 }}>
             <div style={{
-              width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+              width: 42, height: 42, borderRadius: 11, flexShrink: 0,
               display: 'grid', placeItems: 'center',
               background: `linear-gradient(145deg, ${t.primary}22, ${t.primary}08)`,
               border: `1px solid color-mix(in srgb, ${t.primary} 35%, ${t.border})`,
               color: t.primary,
             }}>
-              <Users size={20} strokeWidth={2.2} aria-hidden />
+              {selected
+                ? <UserRoundCheck size={21} strokeWidth={2.2} aria-hidden />
+                : <Users size={21} strokeWidth={2.2} aria-hidden />}
             </div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 'var(--cc-title)', fontWeight: 800, color: t.text }}>
-                Depurar asistentes externos
+                {selected ? 'Reemplazar externo' : 'Depurar asistentes externos'}
               </div>
-              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 2, maxWidth: 620 }}>
-                Externos del contrato activo en esta sesión. Abra el popup y revise el listado;
-                no debe elegir ni forzar ningún contrato. El reemplazo por usuario registrado
-                es obligatorio y conserva la participación histórica.
+              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 3, lineHeight: 1.45 }}>
+                {selected
+                  ? 'Elija el usuario registrado que sustituirá a este externo en todas sus actas.'
+                  : 'Seleccione un externo del histórico. Al elegirlo pasará a la pantalla de reemplazo.'}
               </div>
             </div>
           </div>
@@ -189,30 +203,20 @@ export default function ExternosDepuracionModal({
             onClick={onClose}
             style={{
               border: `1px solid ${t.border}`, background: t.bg || 'transparent',
-              color: t.textMuted, borderRadius: 8, padding: 6, cursor: 'pointer',
+              color: t.textMuted, borderRadius: 8, padding: 6, cursor: 'pointer', flexShrink: 0,
             }}
           >
             <X size={18} />
           </button>
         </div>
 
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: selected && !narrow ? 'minmax(0, 1.05fr) minmax(0, 0.95fr)' : '1fr',
-          gap: 0,
-          minHeight: 0,
-          flex: 1,
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            display: 'flex', flexDirection: 'column', minHeight: 0,
-            borderRight: selected ? `1px solid ${t.border}` : undefined,
-          }}>
-            <div style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center' }}>
+        {!selected ? (
+          <>
+            <div style={{ padding: '14px 20px 8px', display: 'flex', gap: 10, alignItems: 'center' }}>
               <div style={{ position: 'relative', flex: 1 }}>
                 <Search
-                  size={15}
-                  style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.textMuted }}
+                  size={16}
+                  style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: t.textMuted }}
                   aria-hidden
                 />
                 <input
@@ -221,191 +225,234 @@ export default function ExternosDepuracionModal({
                   placeholder="Buscar por nombre, correo, cargo…"
                   style={{
                     width: '100%', boxSizing: 'border-box',
-                    padding: '9px 10px 9px 32px', borderRadius: 9,
+                    padding: '11px 12px 11px 36px', borderRadius: 10,
                     border: `1px solid ${t.border}`, background: t.bg || t.bgCard,
-                    color: t.text, fontSize: 'var(--cc-sm)',
+                    color: t.text, fontSize: 'var(--cc-body)',
                   }}
                 />
               </div>
-              <span style={{
-                fontSize: 'var(--cc-xs)', color: t.textMuted, whiteSpace: 'nowrap',
-                fontWeight: 600,
-              }}>
-                {filtrados.length} externo{filtrados.length === 1 ? '' : 's'}
+              <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, whiteSpace: 'nowrap', fontWeight: 700 }}>
+                {filtrados.length}
               </span>
             </div>
 
-            <div style={{ overflow: 'auto', padding: '0 12px 14px', minHeight: 280, maxHeight: '58vh' }}>
+            <div style={{ overflow: 'auto', padding: '6px 16px 18px', flex: 1, minHeight: 300, maxHeight: '58vh' }}>
               {loading ? (
-                <div style={{ color: t.textMuted, padding: 16 }}>Cargando histórico…</div>
+                <div style={{ color: t.textMuted, padding: 20 }}>Cargando histórico…</div>
               ) : filtrados.length === 0 ? (
                 <div style={{
-                  color: t.textMuted, padding: 20, textAlign: 'center',
-                  border: `1px dashed ${t.border}`, borderRadius: 10, margin: 4,
+                  color: t.textMuted, padding: 28, textAlign: 'center',
+                  border: `1px dashed ${t.border}`, borderRadius: 12, margin: 4,
                 }}>
                   No hay asistentes externos pendientes de depurar en este contrato.
                 </div>
               ) : (
-                <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {filtrados.map((r) => {
-                    const active = selected?.match_key === r.match_key
-                    return (
-                      <li key={r.match_key}>
-                        <button
-                          type="button"
-                          onClick={() => seleccionar(r)}
-                          style={{
-                            width: '100%', textAlign: 'left', cursor: 'pointer',
-                            padding: '12px 14px', borderRadius: 11,
-                            border: `1px solid ${active ? t.primary : t.border}`,
-                            background: active
-                              ? `color-mix(in srgb, ${t.primary} 12%, ${t.bgCard})`
-                              : (t.bg || t.bgCard),
-                            color: t.text,
-                            boxShadow: active ? `0 0 0 1px color-mix(in srgb, ${t.primary} 40%, transparent)` : 'none',
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontWeight: 750, fontSize: 'var(--cc-body)' }}>
-                                {r.nombre || 'Sin nombre'}
-                              </div>
-                              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 3 }}>
-                                {[r.cargo, r.entidad, r.email].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
-                              </div>
+                <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {filtrados.map((r) => (
+                    <li key={r.match_key}>
+                      <button
+                        type="button"
+                        onClick={() => seleccionar(r)}
+                        style={{
+                          width: '100%', textAlign: 'left', cursor: 'pointer',
+                          padding: '14px 16px', borderRadius: 12,
+                          border: `1px solid ${t.border}`,
+                          background: t.bg || t.bgCard,
+                          color: t.text,
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 780, fontSize: 'var(--cc-body)', lineHeight: 1.35 }}>
+                              {r.nombre || 'Sin nombre'}
                             </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
-                              <span style={{
-                                display: 'inline-block', padding: '2px 8px', borderRadius: 6,
-                                border: `1px solid ${t.border}`, fontWeight: 700, fontSize: 'var(--cc-xs)',
-                                color: t.textMuted, background: `${t.primary}08`,
-                              }}>
-                                Externo
-                              </span>
-                              <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.primary }}>
-                                {r.actas_count} acta{r.actas_count === 1 ? '' : 's'}
-                              </span>
+                            <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 5, lineHeight: 1.4 }}>
+                              {[r.cargo, r.entidad].filter(Boolean).join(' · ') || 'Sin cargo / entidad'}
                             </div>
+                            {r.email ? (
+                              <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 4 }}>
+                                {r.email}
+                              </div>
+                            ) : null}
                           </div>
-                        </button>
-                      </li>
-                    )
-                  })}
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+                            <span style={{
+                              display: 'inline-block', padding: '3px 9px', borderRadius: 7,
+                              border: `1px solid ${t.border}`, fontWeight: 700, fontSize: 'var(--cc-xs)',
+                              color: t.textMuted, background: `${t.primary}0a`,
+                            }}>
+                              Externo
+                            </span>
+                            <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.primary }}>
+                              {r.actas_count} acta{r.actas_count === 1 ? '' : 's'}
+                            </span>
+                          </div>
+                        </div>
+                      </button>
+                    </li>
+                  ))}
                 </ul>
               )}
             </div>
-          </div>
-
-          {selected && (
+          </>
+        ) : (
+          <>
             <div style={{
-              display: 'flex', flexDirection: 'column', minHeight: 0,
-              background: `linear-gradient(180deg, ${t.primary}06, transparent 120px)`,
+              padding: '16px 20px 8px',
+              overflow: 'auto',
+              flex: 1,
+              minHeight: 0,
+              maxHeight: '62vh',
             }}>
-              <div style={{ padding: '14px 16px', overflow: 'auto', flex: 1, maxHeight: '62vh' }}>
-                <div style={{
+              <button
+                type="button"
+                onClick={volverListado}
+                style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
-                  fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.primary,
-                  marginBottom: 8,
-                }}>
-                  <UserRoundCheck size={14} aria-hidden />
-                  Reemplazo
-                </div>
-                <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 800, color: t.text }}>
-                  {selected.nombre}
-                </div>
-                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 4 }}>
-                  Participó en <strong style={{ color: t.text }}>{selected.actas_count}</strong>
-                  {' '}reunión{selected.actas_count === 1 ? '' : 'es'}/acta{selected.actas_count === 1 ? '' : 's'}.
-                  Elija el usuario registrado que lo sustituirá.
-                </div>
-
-                <div style={{ marginTop: 14 }}>
-                  <label style={{ display: 'block', fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
-                    Usuario registrado de destino *
-                  </label>
-                  <UserSearchSelect
-                    t={t}
-                    usuarios={usuarios}
-                    valueId={usuarioDestino?.id || null}
-                    valueNombre={usuarioDestino ? nombreUser(usuarioDestino) : ''}
-                    mode="strict"
-                    placeholder="Buscar usuario del contrato…"
-                    onSelect={(u) => setUsuarioDestino(u)}
-                  />
-                </div>
-
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted, marginBottom: 8 }}>
-                    Actas afectadas
-                  </div>
-                  <div style={{
-                    border: `1px solid ${t.border}`, borderRadius: 10, overflow: 'hidden',
-                    maxHeight: 220, overflowY: 'auto',
-                  }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-xs)' }}>
-                      <thead>
-                        <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
-                          <th style={{ padding: '8px 10px' }}>Acta</th>
-                          <th style={{ padding: '8px 10px' }}>Fecha</th>
-                          <th style={{ padding: '8px 10px' }}>Estado</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(selected.actas || []).map((a) => (
-                          <tr key={a.id} style={{ borderTop: `1px solid ${t.border}` }}>
-                            <td style={{ padding: '8px 10px', fontWeight: 700, color: t.text }}>
-                              {numeroActaLabel(a.consecutivo)}
-                            </td>
-                            <td style={{ padding: '8px 10px', color: t.textMuted }}>{fmtFecha(a.fecha_reunion)}</td>
-                            <td style={{ padding: '8px 10px', color: t.textMuted }}>{a.estado || '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
+                  border: 'none', background: 'transparent', color: t.primary,
+                  fontWeight: 700, fontSize: 'var(--cc-sm)', cursor: 'pointer',
+                  padding: '2px 0 12px',
+                }}
+              >
+                <ArrowLeft size={16} aria-hidden />
+                Volver al listado
+              </button>
 
               <div style={{
-                padding: '12px 16px', borderTop: `1px solid ${t.border}`,
-                display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end',
+                padding: '16px 18px',
+                borderRadius: 12,
+                border: `1px solid color-mix(in srgb, ${t.primary} 28%, ${t.border})`,
+                background: `linear-gradient(160deg, ${t.primary}12, transparent 70%)`,
+                marginBottom: 18,
               }}>
-                <button
-                  type="button"
-                  onClick={() => { setSelected(null); setUsuarioDestino(null) }}
-                  style={{
-                    padding: '9px 14px', borderRadius: 9, border: `1px solid ${t.border}`,
-                    background: 'transparent', color: t.text, cursor: 'pointer', fontWeight: 600,
-                    fontSize: 'var(--cc-sm)',
-                  }}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  disabled={!puedeConfirmar || saving}
-                  onClick={confirmar}
-                  title={!puedeConfirmar ? 'Seleccione un usuario registrado' : 'Confirmar reemplazo'}
-                  style={{
-                    padding: '9px 16px', borderRadius: 9,
-                    border: `1px solid ${t.primary}`,
-                    background: puedeConfirmar && !saving ? t.primary : `${t.primary}55`,
-                    color: '#fff', cursor: puedeConfirmar && !saving ? 'pointer' : 'not-allowed',
-                    fontWeight: 800, fontSize: 'var(--cc-sm)',
-                  }}
-                >
-                  {saving ? 'Reemplazando…' : 'Confirmar reemplazo'}
-                </button>
+                <div style={{
+                  fontSize: 'var(--cc-xs)', fontWeight: 750, color: t.primary,
+                  letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 6,
+                }}>
+                  Externo seleccionado
+                </div>
+                <div style={{ fontSize: '1.35rem', fontWeight: 820, color: t.text, lineHeight: 1.25 }}>
+                  {selected.nombre}
+                </div>
+                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 8, lineHeight: 1.45 }}>
+                  {[selected.cargo, selected.entidad, selected.email].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
+                </div>
+                <div style={{
+                  marginTop: 12, display: 'inline-flex', alignItems: 'center', gap: 8,
+                  padding: '6px 12px', borderRadius: 8,
+                  background: `${t.primary}14`, color: t.text, fontWeight: 720,
+                  fontSize: 'var(--cc-sm)',
+                }}>
+                  Participó en {selected.actas_count} reunión{selected.actas_count === 1 ? '' : 'es'} / acta{selected.actas_count === 1 ? '' : 's'}
+                </div>
+              </div>
+
+              <label style={{
+                display: 'block', fontSize: 'var(--cc-sm)', fontWeight: 780,
+                color: t.text, marginBottom: 8,
+              }}>
+                Usuario registrado de destino *
+              </label>
+              <UserSearchSelect
+                t={t}
+                usuarios={usuarios}
+                valueId={usuarioDestino?.id || null}
+                valueNombre={usuarioDestino ? nombreUser(usuarioDestino) : ''}
+                mode="strict"
+                placeholder="Buscar usuario de la plataforma…"
+                onSelect={(u) => setUsuarioDestino(u)}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  padding: '14px 16px',
+                  borderRadius: 11,
+                  border: `1px solid ${t.border}`,
+                  background: t.bg || t.bgCard,
+                  color: t.text,
+                  fontSize: 'var(--cc-body)',
+                  fontWeight: 600,
+                }}
+              />
+              {usuarioDestino ? (
+                <div style={{
+                  marginTop: 10, padding: '12px 14px', borderRadius: 10,
+                  border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+                }}>
+                  <div style={{ fontWeight: 750, color: t.text, fontSize: 'var(--cc-body)' }}>
+                    {nombreUser(usuarioDestino)}
+                  </div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 4 }}>
+                    {[usuarioDestino.cargo_nombre, usuarioDestino.empresa, usuarioDestino.email]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+                  Escriba para buscar y seleccione un usuario real del contrato.
+                </div>
+              )}
+
+              <div style={{ marginTop: 22 }}>
+                <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 780, color: t.text, marginBottom: 10 }}>
+                  Actas afectadas
+                </div>
+                <div style={{
+                  border: `1px solid ${t.border}`, borderRadius: 12, overflow: 'hidden',
+                }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                    <thead>
+                      <tr style={{ background: t.bg || `${t.primary}10`, color: t.textMuted, textAlign: 'left' }}>
+                        <th style={{ padding: '12px 14px', fontWeight: 700 }}>Acta</th>
+                        <th style={{ padding: '12px 14px', fontWeight: 700 }}>Fecha</th>
+                        <th style={{ padding: '12px 14px', fontWeight: 700 }}>Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(selected.actas || []).map((a) => (
+                        <tr key={a.id} style={{ borderTop: `1px solid ${t.border}` }}>
+                          <td style={{ padding: '12px 14px', fontWeight: 750, color: t.text }}>
+                            {numeroActaLabel(a.consecutivo)}
+                          </td>
+                          <td style={{ padding: '12px 14px', color: t.textMuted }}>{fmtFecha(a.fecha_reunion)}</td>
+                          <td style={{ padding: '12px 14px', color: t.textMuted }}>
+                            {labelEstadoActa(a.estado) || a.estado || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          )}
-        </div>
+
+            <div style={{
+              padding: '14px 20px',
+              borderTop: `1px solid ${t.border}`,
+              display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end',
+              background: t.bgCard,
+            }}>
+              <button type="button" onClick={volverListado} style={ghostBtn}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={!puedeConfirmar || saving}
+                onClick={confirmar}
+                title={!puedeConfirmar ? 'Seleccione un usuario registrado' : 'Confirmar reemplazo'}
+                style={primaryBtn(puedeConfirmar && !saving)}
+              >
+                {saving ? 'Reemplazando…' : 'Confirmar reemplazo'}
+              </button>
+            </div>
+          </>
+        )}
 
         {(error || okMsg) && (
-          <div style={{ padding: '0 16px 14px' }}>
+          <div style={{ padding: '0 20px 16px' }}>
             {error && (
               <div role="alert" style={{
-                padding: '10px 12px', borderRadius: 8, fontSize: 'var(--cc-sm)',
+                padding: '11px 13px', borderRadius: 9, fontSize: 'var(--cc-sm)',
                 background: 'color-mix(in srgb, #b91c1c 10%, transparent)',
                 border: '1px solid color-mix(in srgb, #b91c1c 35%, transparent)',
                 color: '#b91c1c',
@@ -415,7 +462,7 @@ export default function ExternosDepuracionModal({
             )}
             {okMsg && (
               <div role="status" style={{
-                padding: '10px 12px', borderRadius: 8, fontSize: 'var(--cc-sm)',
+                padding: '11px 13px', borderRadius: 9, fontSize: 'var(--cc-sm)',
                 background: `color-mix(in srgb, ${t.primary} 12%, transparent)`,
                 border: `1px solid color-mix(in srgb, ${t.primary} 35%, ${t.border})`,
                 color: t.text, marginTop: error ? 8 : 0,
