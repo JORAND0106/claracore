@@ -1012,50 +1012,40 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               data-atraque-paso={paso.key}
               style={{
                 flex: '0 0 auto',
-                minWidth: 112,
-                maxWidth: 168,
+                minWidth: 250,
+                maxWidth: 380,
                 border: `1px solid ${sheet.border}`,
-                borderRadius: 6,
+                borderRadius: 8,
                 background: ui.t?.inputBg || '#f8fafc',
-                padding: '5px 8px',
+                padding: '10px 14px',
                 boxSizing: 'border-box',
               }}
             >
               <div style={{
-                fontSize: 'var(--cc-xxs)',
+                fontSize: 'var(--cc-sm)',
                 fontWeight: 800,
                 color: ui.text,
                 letterSpacing: '0.02em',
+                lineHeight: 1.2,
                 whiteSpace: 'nowrap',
               }}
               >
                 {paso.titulo}
               </div>
-              <div style={{
-                fontSize: 'var(--cc-xxs)',
-                color: ui.textMuted,
-                marginTop: 2,
-                lineHeight: 1.25,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-              title={paso.formula}
+              <div
+                style={{
+                  marginTop: 6,
+                  fontFamily: 'ui-monospace, Consolas, monospace',
+                  fontVariantNumeric: 'tabular-nums',
+                  fontWeight: 700,
+                  fontSize: 'var(--cc-xs)',
+                  color: ui.text,
+                  lineHeight: 1.35,
+                  whiteSpace: 'nowrap',
+                }}
+                title={paso.operacion}
               >
-                {paso.formula}
-              </div>
-              <div style={{
-                marginTop: 3,
-                fontFamily: 'ui-monospace, Consolas, monospace',
-                fontVariantNumeric: 'tabular-nums',
-                fontWeight: 700,
-                fontSize: 'var(--cc-xs)',
-                color: ui.text,
-                whiteSpace: 'nowrap',
-              }}
-              >
-                {paso.valor}
-                <span style={{ fontWeight: 600, color: ui.textMuted, marginLeft: 3 }}>{paso.unidad}</span>
+                {paso.operacion}
               </div>
             </div>
           ))}

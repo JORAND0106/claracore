@@ -693,7 +693,8 @@ export function desgloseAtraqueAlcantarilla(seccion) {
 
 /**
  * Pasos del desglose de atraque para UI en recuadros (sin cambiar el cálculo).
- * @returns {Array<{ key: string, titulo: string, formula: string, valor: string, unidad: string }>}
+ * Cada paso: título arriba + operación completa con resultado abajo.
+ * @returns {Array<{ key: string, titulo: string, operacion: string, formula: string, valor: string, unidad: string }>}
  */
 export function pasosDesgloseAtraque(desglose, fmt = fmtNDash) {
   if (!desglose) return []
@@ -711,17 +712,19 @@ export function pasosDesgloseAtraque(desglose, fmt = fmtNDash) {
   return [
     {
       key: 'hatr',
-      titulo: `h_atr (${desglose.relacion})`,
+      titulo: 'h_atr',
       formula: formulaHatr,
       valor: hAtr,
       unidad: 'm',
+      operacion: `${formulaHatr} = ${hAtr} m`,
     },
     {
       key: 'htrit',
       titulo: 'h_trit',
-      formula: `h_atr+cama = ${hAtr}+${cama}`,
+      formula: `h_atr+cama`,
       valor: hTrit,
       unidad: 'm',
+      operacion: `h_atr+cama = ${hAtr}+${cama} = ${hTrit} m`,
     },
     {
       key: 'seccion',
@@ -729,6 +732,7 @@ export function pasosDesgloseAtraque(desglose, fmt = fmtNDash) {
       formula: `${hTrit}×${b}−${a1}`,
       valor: sec,
       unidad: 'm²',
+      operacion: `${hTrit}×${b}−${a1} = ${sec} m²`,
     },
     {
       key: 'a1',
@@ -736,6 +740,7 @@ export function pasosDesgloseAtraque(desglose, fmt = fmtNDash) {
       formula: 'Área 1',
       valor: a1fine,
       unidad: 'm²',
+      operacion: `Área 1 = ${a1fine} m²`,
     },
     {
       key: 'a2',
@@ -743,6 +748,7 @@ export function pasosDesgloseAtraque(desglose, fmt = fmtNDash) {
       formula: 'Área 2',
       valor: a2,
       unidad: 'm²',
+      operacion: `Área 2 = ${a2} m²`,
     },
   ]
 }
