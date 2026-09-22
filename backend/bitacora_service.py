@@ -2266,7 +2266,15 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
             sub_id = int(item["subcontratista_id"]) if item.get("subcontratista_id") not in (None, "") else None
         except (TypeError, ValueError):
             sub_id = None
-        key = (rrhh_id, cid, _norm_nombre_visitante(nombre), doc_num)
+        tramo_fila = _normalize_tramo(item.get("tramo"))
+        key = (
+            rrhh_id,
+            cid,
+            _norm_nombre_visitante(nombre),
+            doc_num,
+            # Misma persona en distinto tramo = filas distintas (modelo tramo-por-fila).
+            tramo_fila or "",
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -2274,7 +2282,6 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
         hora_ingreso = _parse_hora_hhmm(item.get("hora_ingreso"))
         hora_salida = _parse_hora_hhmm(item.get("hora_salida"), default=HORA_SALIDA_DEFAULT)
         origen = str(item.get("origen") or ("rrhh" if rrhh_id is not None else "legado")).strip() or "legado"
-        tramo_fila = _normalize_tramo(item.get("tramo"))
         out.append({
             "rrhh_trabajador_id": rrhh_id,
             "colaborador_id": cid,

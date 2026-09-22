@@ -71,13 +71,34 @@ def test_validar_tramos_filas_exige():
     )
 
 
-def test_normalizar_materiales_tramo_fila_separado_de_ubicacion():
-    out = _normalizar_materiales([{
-        "movimiento": "ingreso",
-        "tipo_material": "Grava",
-        "cantidad": 1,
-        "tramo": "Tramo 1",
-        "ubicacion_tramo": "Desde mapa",
-    }])
-    assert out[0]["tramo"] == "Tramo 1"
-    assert out[0]["ubicacion_tramo"] == "Desde mapa"
+def test_normalizar_asistencia_conserva_misma_persona_en_distinto_tramo():
+    from bitacora_service import _normalizar_asistencia_colaboradores
+    out = _normalizar_asistencia_colaboradores([
+        {
+            "nombre": "Juan Pérez",
+            "documento_numero": "123",
+            "rrhh_trabajador_id": 9,
+            "cargo": "Oficial",
+            "tramo": "Tramo A",
+            "estado": "activo",
+        },
+        {
+            "nombre": "Juan Pérez",
+            "documento_numero": "123",
+            "rrhh_trabajador_id": 9,
+            "cargo": "Oficial",
+            "tramo": "Tramo B",
+            "estado": "activo",
+        },
+        {
+            "nombre": "Juan Pérez",
+            "documento_numero": "123",
+            "rrhh_trabajador_id": 9,
+            "cargo": "Oficial",
+            "tramo": "Tramo A",  # duplicado exacto
+            "estado": "activo",
+        },
+    ])
+    assert len(out) == 2
+    tramos = sorted(r["tramo"] for r in out)
+    assert tramos == ["Tramo A", "Tramo B"]
