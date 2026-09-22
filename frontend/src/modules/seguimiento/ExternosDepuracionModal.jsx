@@ -16,7 +16,12 @@ export default function ExternosDepuracionModal({
   onClose,
   zIndex = 12100,
 }) {
-  const api = useMemo(() => createSeguimientoApi(contratoId, token), [contratoId, token])
+  // Contrato del módulo activo (sesión). El usuario no elige ni fuerza contrato.
+  const cid = contratoId != null && contratoId !== '' ? Number(contratoId) : null
+  const api = useMemo(
+    () => (cid && Number.isFinite(cid) ? createSeguimientoApi(cid, token) : null),
+    [cid, token],
+  )
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -44,6 +49,13 @@ export default function ExternosDepuracionModal({
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
+    if (!api || !cid) {
+      setRows([])
+      setUsuarios([])
+      setError('No hay contrato activo en la sesión. Vuelva a seleccionar el contrato e intente de nuevo.')
+      setLoading(false)
+      return
+    }
     try {
       const [ext, users] = await Promise.all([
         api.listExternosDepuracion(),
@@ -58,7 +70,7 @@ export default function ExternosDepuracionModal({
     } finally {
       setLoading(false)
     }
-  }, [api])
+  }, [api, cid])
 
   useEffect(() => { load() }, [load])
 
@@ -165,8 +177,9 @@ export default function ExternosDepuracionModal({
                 Depurar asistentes externos
               </div>
               <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 2, maxWidth: 620 }}>
-                Revise coincidencias del histórico y reemplácelas por el usuario registrado.
-                El reemplazo es obligatorio; no se elimina la participación.
+                Externos del contrato activo en esta sesión. Abra el popup y revise el listado;
+                no debe elegir ni forzar ningún contrato. El reemplazo por usuario registrado
+                es obligatorio y conserva la participación histórica.
               </div>
             </div>
           </div>
