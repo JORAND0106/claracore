@@ -10,6 +10,7 @@ import {
   abscisasExtremosPlanilla,
   lineasPlanillaParaReporteSicoe,
   linksSicoeDesdeMeta,
+  puedeCrearReporteSicoe,
 } from './planillaTuberiaUtils.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
@@ -71,5 +72,18 @@ describe('Planilla tubería → reporte SICOE', () => {
     })
     assert.equal(links.length, 1)
     assert.equal(links[0].reporte_id, 7)
+  })
+
+  it('bloquea Crear reporte tras el primer envío (salvo Desarrollador)', () => {
+    const links = [{ reporte_id: 7, numero_reporte: 3 }]
+    assert.equal(puedeCrearReporteSicoe({ esDesarrollador: false, linksSicoe: links }), false)
+    assert.equal(puedeCrearReporteSicoe({ esDesarrollador: false, linksSicoe: [] }), true)
+    assert.equal(puedeCrearReporteSicoe({ esDesarrollador: true, linksSicoe: links }), true)
+    assert.equal(puedeCrearReporteSicoe({ esDesarrollador: true, linksSicoe: [] }), true)
+    assert.match(formSrc, /puedeCrearReporteSicoe/)
+    assert.match(formSrc, /data-reporte-sicoe-bloqueado/)
+    assert.match(formSrc, /Reporte creado/)
+    assert.match(formSrc, /!puedeCrearReporte/)
+    assert.match(formSrc, /data-reporte-sicoe-reenvio-dev/)
   })
 })

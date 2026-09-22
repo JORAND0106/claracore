@@ -625,6 +625,15 @@ export function linksSicoeDesdeMeta(meta) {
   return raw.filter((x) => x && x.reporte_id != null)
 }
 
+/**
+ * ¿Puede el usuario pulsar «Crear reporte»?
+ * Tras el primer envío exitoso queda bloqueado, excepto Desarrollador.
+ */
+export function puedeCrearReporteSicoe({ esDesarrollador = false, linksSicoe = [] } = {}) {
+  if (esDesarrollador) return true
+  return !(Array.isArray(linksSicoe) && linksSicoe.length > 0)
+}
+
 /** Normaliza cantidades_manuales: OTROS → OTROS_1; garantiza EXC_ROC + ≥1 Otros. */
 export function normalizarCantidadesManuales(raw) {
   const out = []
