@@ -23,7 +23,7 @@ import { useSeguimientoCompact } from './seguimientoShared'
 export { default as NombreRrhhAutocomplete } from './NombreRrhhAutocomplete'
 
 /**
- * Personal en obra: resumen por empresa → cargos en tarjetas
+ * Personal en obra: resumen compacto (chips) por consolidado / empresa
  * + detalle en popup. El registro (campos/validaciones) se mantiene.
  */
 export default function PersonalAsistenciaPanel({
@@ -187,62 +187,72 @@ export default function PersonalAsistenciaPanel({
     })
   }
 
-  const renderCargoCards = (cargos, { onOpen, keyPrefix, ariaLabel }) => (
+  /** Chips densos: cargo + contador; clic abre el mismo popup de detalle. */
+  const renderCargoChips = (cargos, { onOpen, keyPrefix, ariaLabel }) => (
     <div
       role="list"
       aria-label={ariaLabel}
       style={{
-        display: 'grid',
-        gridTemplateColumns: viewportCompact
-          ? 'repeat(auto-fill, minmax(132px, 1fr))'
-          : 'repeat(auto-fill, minmax(168px, 1fr))',
-        gap: viewportCompact ? 8 : 10,
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 5,
+        alignItems: 'flex-start',
       }}
     >
-      {cargos.map((row) => (
-        <button
-          key={`${keyPrefix}-${row.cargo}`}
-          type="button"
-          role="listitem"
-          onClick={() => onOpen(row)}
-          title={`Ver detalle de ${row.cargo}`}
-          style={{
-            minHeight: viewportCompact ? 84 : 96,
-            border: `1px solid ${t.border}`,
-            borderRadius: 10,
-            background: t.bg || t.bgCard || '#fff',
-            padding: '12px 10px',
-            cursor: 'pointer',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            textAlign: 'center',
-            boxShadow: 'none',
-            transition: 'border-color 120ms ease, background 120ms ease',
-          }}
-        >
-          <span style={{
-            fontWeight: 700,
-            fontSize: 'var(--cc-xs)',
-            color: t.text,
-            lineHeight: 1.25,
-            wordBreak: 'break-word',
-          }}>
-            {row.cargo}
-          </span>
-          <span style={{
-            fontWeight: 800,
-            fontSize: 'var(--cc-title)',
-            color: Number(row.cantidad) > 0 ? (t.primary || '#0077B6') : (t.textMuted || '#64748b'),
-            fontVariantNumeric: 'tabular-nums',
-            lineHeight: 1,
-          }}>
-            {row.cantidad}
-          </span>
-        </button>
-      ))}
+      {cargos.map((row) => {
+        const n = Number(row.cantidad) || 0
+        const activo = n > 0
+        return (
+          <button
+            key={`${keyPrefix}-${row.cargo}`}
+            type="button"
+            role="listitem"
+            onClick={() => onOpen(row)}
+            title={`Ver detalle de ${row.cargo}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              maxWidth: '100%',
+              margin: 0,
+              padding: '3px 8px 3px 9px',
+              border: `1px solid ${activo ? (t.primary || '#0077B6') : t.border}`,
+              borderRadius: 6,
+              background: activo
+                ? 'rgba(0, 119, 182, 0.06)'
+                : (t.bg || t.bgCard || '#fff'),
+              cursor: 'pointer',
+              textAlign: 'left',
+              boxShadow: 'none',
+              lineHeight: 1.2,
+              transition: 'border-color 120ms ease, background 120ms ease',
+            }}
+          >
+            <span style={{
+              fontWeight: 600,
+              fontSize: 'var(--cc-caption)',
+              color: t.text,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: 140,
+            }}>
+              {row.cargo}
+            </span>
+            <span style={{
+              flex: '0 0 auto',
+              fontWeight: 800,
+              fontSize: 'var(--cc-xs)',
+              fontVariantNumeric: 'tabular-nums',
+              color: activo ? (t.primary || '#0077B6') : (t.textMuted || '#64748b'),
+              minWidth: '1.1em',
+              textAlign: 'right',
+            }}>
+              {n}
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 
@@ -485,14 +495,22 @@ export default function PersonalAsistenciaPanel({
           {totalPersonas} persona{totalPersonas === 1 ? '' : 's'}
         </span>
       </div>
-      <div style={{
-        ...(ui.sheetWrapFlush || ui.sheetWrap || {}),
-        padding: viewportCompact ? 10 : 12,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: viewportCompact ? 14 : 18,
-      }}>
-        <section aria-label="Consolidado general por cargo" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div
+        data-testid="bitacora-resumen-cargos-compacto"
+        style={{
+          ...(ui.sheetWrapFlush || ui.sheetWrap || {}),
+          /* Desktop: ~¼ del ancho del popup; móvil: ancho útil completo. */
+          maxWidth: viewportCompact ? '100%' : '25%',
+          minWidth: viewportCompact ? undefined : 200,
+          width: '100%',
+          padding: viewportCompact ? 8 : 10,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: viewportCompact ? 10 : 12,
+          boxSizing: 'border-box',
+        }}
+      >
+        <section aria-label="Consolidado general por cargo" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{
             fontWeight: 800,
             fontSize: 'var(--cc-caption)',
@@ -506,14 +524,14 @@ export default function PersonalAsistenciaPanel({
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
               Sin cargos en el catálogo de RRHH.
             </div>
-          ) : renderCargoCards(resumenConsolidado, {
+          ) : renderCargoChips(resumenConsolidado, {
             keyPrefix: 'cons',
             ariaLabel: 'Consolidado por cargo',
             onOpen: openCargoConsolidado,
           })}
         </section>
 
-        <section aria-label="Desglose por empresa" style={{ display: 'flex', flexDirection: 'column', gap: viewportCompact ? 12 : 16 }}>
+        <section aria-label="Desglose por empresa" style={{ display: 'flex', flexDirection: 'column', gap: viewportCompact ? 8 : 10 }}>
           <div style={{
             fontWeight: 800,
             fontSize: 'var(--cc-caption)',
@@ -531,22 +549,26 @@ export default function PersonalAsistenciaPanel({
             <div
               key={`emp-${grupo.empresa_key}`}
               aria-label={grupo.empresa}
-              style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+              style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
             >
               <div style={{
                 display: 'flex',
                 flexWrap: 'wrap',
                 alignItems: 'baseline',
                 justifyContent: 'space-between',
-                gap: 8,
-                paddingBottom: 4,
+                gap: 4,
+                paddingBottom: 2,
                 borderBottom: `1px solid ${t.border}`,
               }}>
                 <div style={{
-                  fontWeight: 800,
-                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 700,
+                  fontSize: 'var(--cc-caption)',
                   color: t.text,
                   letterSpacing: '0.01em',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  maxWidth: '100%',
                 }}>
                   {grupo.empresa}
                 </div>
@@ -554,12 +576,13 @@ export default function PersonalAsistenciaPanel({
                   fontSize: 'var(--cc-caption)',
                   fontWeight: 700,
                   color: t.textMuted,
+                  flex: '0 0 auto',
                 }}>
-                  {grupo.total} persona{grupo.total === 1 ? '' : 's'}
-                  {grupo.esRegistroDirecto ? ' · sin identificación' : ''}
+                  {grupo.total}
+                  {grupo.esRegistroDirecto ? ' · directo' : ''}
                 </div>
               </div>
-              {renderCargoCards(grupo.cargos, {
+              {renderCargoChips(grupo.cargos, {
                 keyPrefix: `emp-${grupo.empresa_key}`,
                 ariaLabel: `Cargos de ${grupo.empresa}`,
                 onOpen: (row) => openCargoDetalle(grupo, row),
