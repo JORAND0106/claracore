@@ -397,8 +397,15 @@
             "y": "Tbl_Auxiliares!$E$5:$E$28"
           }
         ],
-        "x_axis_title": "longitud de tramo",
-        "y_axis_title": "cota"
+        "x_axis_title": "Abscisa (longitud de tramo)",
+        "y_axis_title": "Cota (m)",
+        "gridlines": {
+          "major": true,
+          "minor": false,
+          "color": "E2E8F0",
+          "width_emu": 3175,
+          "notes": "Grilla tenue/delgada (~0.25 pt) para no competir con series."
+        }
       },
       "anchor_rows": "52:63",
       "anchor_range": "B52:N63",

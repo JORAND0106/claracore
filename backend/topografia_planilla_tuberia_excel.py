@@ -14,7 +14,10 @@ from typing import Any, Optional
 from openpyxl import Workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.chart import Reference, ScatterChart, Series
+from openpyxl.chart.axis import ChartLines
+from openpyxl.chart.shapes import GraphicalProperties
 from openpyxl.drawing.image import Image
+from openpyxl.drawing.line import LineProperties
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -72,9 +75,28 @@ SECCION_IMG_TO = (14, 40)    # esquina inferior-derecha (N40)
 # Nota: B43 es el título de Resumen de Cantidades — el chart NO debe empezar ahí.
 PERFIL_CHART_FROM = (1, 51)  # B52
 PERFIL_CHART_TO = (14, 63)   # N63
+# Etiquetas de ejes del ScatterChart de perfil (inventario / layout_map).
+PERFIL_X_AXIS_TITLE = "Abscisa (longitud de tramo)"
+PERFIL_Y_AXIS_TITLE = "Cota (m)"
+# Grilla del chart: tenue y delgada (no compite con series).
+# w en EMUs; 12700 EMU ≈ 1 pt → ~0.5 pt.
+PERFIL_GRID_LINE_WIDTH_EMU = 3175  # ~0.25 pt
+PERFIL_GRID_LINE_COLOR = "E2E8F0"
 # Celdas de resultado del panel gráfico que conservan cuadrícula/borde.
 PANEL_RESULTADO_CELDAS = ("L18", "K23", "K30")
 NO_BORDER = Border()
+
+
+def _perfil_chart_gridlines() -> ChartLines:
+    """Líneas de grilla mayor: gris claro y trazo fino."""
+    return ChartLines(
+        spPr=GraphicalProperties(
+            ln=LineProperties(
+                w=PERFIL_GRID_LINE_WIDTH_EMU,
+                solidFill=PERFIL_GRID_LINE_COLOR,
+            )
+        )
+    )
 
 
 def _inventory_path() -> Path:
@@ -232,9 +254,18 @@ def _add_profile_chart(ws_planilla, wb, *, tipo: str = "ALCANTARILLA") -> None:
     ws_planilla._charts = []
     chart = ScatterChart()
     chart.title = "Perfil Longitudinal de Tubería"
-    chart.x_axis.title = "longitud de tramo"
-    chart.y_axis.title = "cota"
-    chart.style = 10
+    chart.x_axis.title = PERFIL_X_AXIS_TITLE
+    chart.y_axis.title = PERFIL_Y_AXIS_TITLE
+    # ScatterChart: X abajo, Y izquierda (openpyxl deja ambos en "l" por defecto).
+    chart.x_axis.axPos = "b"
+    chart.y_axis.axPos = "l"
+    # Grilla tenue/delgada en ambos ejes (sin minor gridlines).
+    chart.x_axis.majorGridlines = _perfil_chart_gridlines()
+    chart.y_axis.majorGridlines = _perfil_chart_gridlines()
+    chart.x_axis.minorGridlines = None
+    chart.y_axis.minorGridlines = None
+    # Evitar estilo de tema Excel que fuerza grillas gruesas/oscuras.
+    chart.style = None
     aux = wb[aux_name]
     xvalues = Reference(aux, min_col=2, min_row=5, max_row=28)
     titulo_nivel = "Terminado Filtro" if (tipo or "").upper() == "FILTRO" else "Cota Lomo"
