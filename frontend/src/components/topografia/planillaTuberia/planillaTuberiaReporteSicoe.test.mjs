@@ -86,4 +86,10 @@ describe('Planilla tubería → reporte SICOE', () => {
     assert.match(formSrc, /!puedeCrearReporte/)
     assert.match(formSrc, /data-reporte-sicoe-reenvio-dev/)
   })
+
+  it('visibilidad del botón exige permiso crear/editar SICOE (so_registros)', () => {
+    assert.match(formSrc, /puedeVerBotonCrearReporteSicoe/)
+    assert.match(formSrc, /puedeVerCrearReporte/)
+    assert.match(formSrc, /planilla\?\.id && puedeVerCrearReporte/)
+  })
 })
