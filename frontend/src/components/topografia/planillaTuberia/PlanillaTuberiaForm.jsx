@@ -10,6 +10,7 @@ import {
   useTopografiaApi,
 } from '../topografiaShared'
 import TopoConfirmModal from '../TopoConfirmModal'
+import PoligonalValidacionPanel from '../PoligonalValidacionPanel'
 import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
 import PlanillaTuberiaCrearReporteModal from './PlanillaTuberiaCrearReporteModal'
@@ -147,6 +148,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const calculo = detalle?.calculo
   const sellada = ['cerrado', 'validado'].includes(String(planilla?.estado || '').toLowerCase())
   const editable = editablePerm && !sellada
+  const comentarioInterventoria = String(planilla?.comentario_interventoria || '').trim()
   const conDatos = useMemo(() => tieneDatosExportables(filas, detalle), [filas, detalle])
   const puedeExportar = puede(permisos, 'exportar') || esDev
   const puedeEliminar = puede(permisos, 'eliminar')
@@ -1067,6 +1069,27 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
   <div style={{ ...cardPad, minWidth: 0 }}>
     <div style={sheet.sectionTitle}>Cartera de campo</div>
+    {comentarioInterventoria ? (
+      <div
+        data-comentario-interventoria
+        style={{
+          marginBottom: 10,
+          padding: '10px 12px',
+          borderRadius: 8,
+          border: '1px solid #fde68a',
+          background: '#fffbeb',
+          color: '#92400e',
+          fontSize: 'var(--cc-sm)',
+        }}
+        title="Observación de interventoría asociada a la validación"
+      >
+        <div style={{ fontWeight: 800, marginBottom: 4, letterSpacing: '0.02em', textTransform: 'uppercase', fontSize: 'var(--cc-xs)' }}>
+          Comentario interventoría
+          {planilla?.nivel2_estado ? ` · ${planilla.nivel2_estado}` : ''}
+        </div>
+        <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{comentarioInterventoria}</div>
+      </div>
+    ) : null}
     <div
       style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}
       className="cc-topo-table-scroll"
@@ -1578,12 +1601,40 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               {planilla && (
                 <span style={{ color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
                   Estado: <b>{planilla.estado}</b> · v{version}
+                  {planilla.nivel1_estado && planilla.nivel1_estado !== 'No Revisado'
+                    ? ` · C:${planilla.nivel1_estado}` : ''}
+                  {planilla.nivel2_estado && planilla.nivel2_estado !== 'No Revisado'
+                    ? ` · I:${planilla.nivel2_estado}` : ''}
                 </span>
               )}
             </div>
 
             {err && <div style={{ color: '#dc2626', padding: 8, background: '#fef2f2', borderRadius: 8 }}>{err}</div>}
             {msg && <div style={{ color: '#166534', padding: 8, background: '#f0fdf4', borderRadius: 8 }}>{msg}</div>}
+            {planilla && (
+              <PoligonalValidacionPanel
+                poligonal={planilla}
+                cierre={{ cerrado: sellada, admisible_lineal: true }}
+                permisos={permisos}
+                usuario={usuario}
+                contratoId={contratoId}
+                token={token}
+                api={api}
+                onActualizado={async () => {
+                  if (!planilla?.id) return
+                  try {
+                    aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}`))
+                    await cargarLista()
+                    setMsg('Validación actualizada.')
+                  } catch (e) {
+                    setErr(e.message || String(e))
+                  }
+                }}
+                onError={(e) => setErr(e?.message || String(e))}
+                validarPathPrefix={`/planillas-tuberia/${planilla.id}`}
+                variante="planilla-tuberia"
+              />
+            )}
             {linksSicoe.length > 0 && (
               <div style={{
                 padding: 8, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a',

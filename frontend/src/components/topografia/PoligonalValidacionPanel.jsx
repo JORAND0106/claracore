@@ -81,6 +81,8 @@ export default function PoligonalValidacionPanel({
   requisitosN1Ok = true,
   avisoRequisitosN1 = null,
   avisoPreValidacion = null,
+  /** 'poligonal' | 'nivelacion' | 'planilla-tuberia' — adapta prerequisitos de lista para validar. */
+  variante = null,
 }) {
   const ui = useTopoTheme()
   const { isCompact } = useTopoViewport()
@@ -89,17 +91,25 @@ export default function PoligonalValidacionPanel({
 
   const pol = poligonal || {}
   const nv = determinarNivelValidacionTopo(usuario, permisos)
-  const terminada = pol.estado === 'cerrado'
+  const basePath = validarPathPrefix || `/poligonales/${pol.id}`
+  const esNivelacion = (variante === 'nivelacion') || basePath.includes('nivelacion')
+  const esPlanilla = (variante === 'planilla-tuberia') || basePath.includes('planillas-tuberia')
+  const terminada = esPlanilla
+    ? ['cerrado', 'validado'].includes(String(pol.estado || '').toLowerCase())
+    : pol.estado === 'cerrado'
   const ajustada = Boolean(pol.ajustada_at)
   const cierreOk = cierre?.cerrado && cierre?.admisible_lineal
-  const listaValidar = terminada && ajustada && cierreOk
+  const listaValidar = esPlanilla
+    ? terminada
+    : terminada && ajustada && cierreOk
   const n1Aprobado = (pol.nivel1_estado || '') === 'Aprobado'
-  const basePath = validarPathPrefix || `/poligonales/${pol.id}`
-  const esNivelacion = basePath.includes('nivelacion')
   // Poligonal: sellado solo con BO interventoría. Nivelación: biblioteca_at sigue sellando.
-  const sellada = esNivelacion
-    ? ((pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at))
-    : poligonalSellada(pol)
+  // Planilla tubería: sellada cuando interventoría aprueba (nivel2) o estado validado.
+  const sellada = esPlanilla
+    ? ((pol.nivel2_estado || '') === 'Aprobado' || String(pol.estado || '').toLowerCase() === 'validado')
+    : esNivelacion
+      ? ((pol.nivel2_estado || '') === 'Aprobado' || Boolean(pol.biblioteca_at))
+      : poligonalSellada(pol)
 
   const habilitadoN1 = !soloLectura && listaValidar && !sellada && requisitosN1Ok && (nv.esDev || (nv.puedeValidar && nv.niveles.includes(1)))
   const habilitadoN2 = !soloLectura && listaValidar && !sellada && n1Aprobado && (nv.esDev || (nv.puedeValidar && nv.niveles.includes(2)))
@@ -128,13 +138,18 @@ export default function PoligonalValidacionPanel({
 
   const avisoGeneral = avisoPreValidacion
     || (!terminada && !soloLectura
-      ? (esNivelacion
-        ? 'Termine la nivelación (cierre admisible) antes de validar.'
-        : 'Termine la poligonal antes de validar.')
+      ? (esPlanilla
+        ? 'Cierre la planilla antes de validar.'
+        : esNivelacion
+          ? 'Termine la nivelación (cierre admisible) antes de validar.'
+          : 'Termine la poligonal antes de validar.')
       : null)
 
   return (
-    <div style={{ marginTop: 12 }}>
+    <div
+      style={{ marginTop: 12 }}
+      data-topo-validacion={esPlanilla ? 'planilla-tuberia' : esNivelacion ? 'nivelacion' : 'poligonal'}
+    >
       {avisoGeneral && !sellada && (
         <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#b45309' }}>{avisoGeneral}</p>
       )}
@@ -144,7 +159,7 @@ export default function PoligonalValidacionPanel({
         </p>
       )}
 
-      {!listaValidar && !soloLectura && terminada && (
+      {!listaValidar && !soloLectura && terminada && !esPlanilla && (
         <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-xs)', color: '#b45309' }} title="Verifique el cierre antes de validar">
           {!ajustada
             ? (esNivelacion ? 'Ejecute «Guardar y calcular» antes de validar.' : 'Ejecute «Corregir y ajustar» antes de validar.')
@@ -165,7 +180,9 @@ export default function PoligonalValidacionPanel({
       >
         <PanelNivel
           titulo="Contratista"
-          ayuda="Primera aprobación del circuito topográfico (contratista / topógrafo)."
+          ayuda={esPlanilla
+            ? 'Primera validación de la planilla de tubería (contratista / topógrafo).'
+            : 'Primera aprobación del circuito topográfico (contratista / topógrafo).'}
           estadoActual={pol.nivel1_estado}
           habilitado={habilitadoN1}
           busy={busy}
@@ -181,14 +198,16 @@ export default function PoligonalValidacionPanel({
 
         <PanelNivel
           titulo="Interventoría"
-          ayuda="Segunda aprobación. Al aprobar, las coordenadas ajustadas se publican en la biblioteca."
+          ayuda={esPlanilla
+            ? 'Segunda validación. Disponible solo tras aprobación del contratista. El comentario queda visible en la cartera.'
+            : 'Segunda aprobación. Al aprobar, las coordenadas ajustadas se publican en la biblioteca.'}
           estadoActual={pol.nivel2_estado}
           habilitado={habilitadoN2}
           busy={busy}
           bloqueado={sellada}
           compact={isCompact}
           aviso={
-            !habilitadoN2 && !sellada && n1Aprobado && !listaValidar
+            !habilitadoN2 && !sellada && n1Aprobado && !listaValidar && !esPlanilla
               ? 'Ejecute «Corregir y ajustar» antes de validar.'
               : !habilitadoN2 && !sellada && !n1Aprobado
                 ? 'Requiere aprobación de contratista.'

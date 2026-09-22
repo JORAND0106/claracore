@@ -7,7 +7,7 @@ import io
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from main import _es_desarrollador, _require_contract_access, get_current_user, supabase
-from topografia_permissions import require_permiso_topografia
+from topografia_permissions import require_permiso_topografia, require_topo_puede_validar_nivel
 from topografia_planilla_tuberia import (
     FILAS_INICIALES_CARTERA,
     ITEMS_CANTIDADES,
@@ -39,6 +39,13 @@ from topo_crs import gk_bogota_to_wgs84
 
 logger = logging.getLogger("claracore.topo.planilla_tuberia")
 router = APIRouter(tags=["topografia-planillas-tuberia"])
+
+ESTADOS_VALIDACION_PT = frozenset({"Aprobado", "Pendiente", "Rechazado"})
+
+
+class ValidarPlanillaTuberiaBody(BaseModel):
+    estado: Literal["Aprobado", "Pendiente", "Rechazado"]
+    comentario_data: Optional[dict] = None
 
 
 def _now() -> str:
@@ -565,7 +572,8 @@ def listar(contrato_id: int, current_user=Depends(get_current_user)):
         supabase.table("topo_planillas_tuberia")
         .select(
             "id,tipo,nombre,pk_id,costado,estado,version,diametro_m,relacion_atraque,"
-            "created_at,updated_at,cerrado_at,creado_por,cerrado_por,validado_por,validado_at"
+            "created_at,updated_at,cerrado_at,creado_por,cerrado_por,validado_por,validado_at,"
+            "nivel1_estado,nivel2_estado,comentario_interventoria"
         )
         .eq("contrato_id", contrato_id).order("created_at", desc=True).execute().data or []
     )
@@ -1404,6 +1412,132 @@ def cerrar(contrato_id: int, planilla_id: str, current_user=Depends(get_current_
     return _detalle(contrato_id, planilla_id)
 
 
+def _aplicar_validacion_planilla_tuberia(
+    contrato_id: int,
+    planilla_id: str,
+    row: dict,
+    nivel: int,
+    body: ValidarPlanillaTuberiaBody,
+    current_user,
+) -> dict:
+    """Validación dual contratista (N1) → interventoría (N2), patrón topo/SICOE."""
+    require_topo_puede_validar_nivel(current_user, nivel)
+    estado_planilla = (row.get("estado") or "").lower()
+    if estado_planilla not in ("cerrado", "validado"):
+        raise HTTPException(
+            422,
+            "La planilla debe estar cerrada antes de validar.",
+        )
+    if body.estado not in ESTADOS_VALIDACION_PT:
+        raise HTTPException(
+            422,
+            f"Estado inválido. Use: {sorted(ESTADOS_VALIDACION_PT)}",
+        )
+    if body.estado in ("Pendiente", "Rechazado") and not body.comentario_data:
+        raise HTTPException(
+            422,
+            "Se requiere comentario cuando el estado es Pendiente o Rechazado.",
+        )
+    if nivel == 2 and (row.get("nivel1_estado") or "No Revisado") != "Aprobado":
+        raise HTTPException(
+            422,
+            "La interventoría solo puede validar cuando la contratista haya aprobado (nivel 1).",
+        )
+    # Si ya está sellada por interventoría, no permitir re-validar salvo revocación Dev.
+    if (row.get("nivel2_estado") or "") == "Aprobado" and estado_planilla == "validado":
+        raise HTTPException(422, "Planilla ya validada por interventoría (sellada).")
+
+    uid = _uid(current_user)
+    now = _now()
+    update: dict[str, Any] = {
+        f"nivel{nivel}_estado": body.estado,
+        f"nivel{nivel}_usuario_id": uid,
+        f"nivel{nivel}_fecha": now,
+        "nivel_validacion": nivel,
+        "version": int(row.get("version") or 1) + 1,
+        "updated_at": now,
+    }
+
+    if nivel == 2:
+        msg = ""
+        if body.comentario_data and isinstance(body.comentario_data, dict):
+            msg = (body.comentario_data.get("mensaje") or "").strip()
+        if body.estado in ("Pendiente", "Rechazado") and not msg:
+            raise HTTPException(422, "El comentario debe incluir un mensaje.")
+        update["comentario_interventoria"] = msg or None
+        update["comentario_interventoria_at"] = now if msg else None
+        if body.estado == "Aprobado":
+            update["estado"] = "validado"
+            update["validado_at"] = now
+            update["validado_por"] = uid
+        else:
+            # Pendiente/Rechazado: permanece cerrada (editable solo vía reabrir Dev).
+            update["estado"] = "cerrado"
+            update["validado_at"] = None
+            update["validado_por"] = None
+
+    try:
+        supabase.table("topo_planillas_tuberia").update(update).eq("id", planilla_id).execute()
+    except Exception as exc:
+        # Columnas de validación pueden faltar si la migración SQL no se aplicó.
+        err = str(exc).lower()
+        if "nivel1_estado" in err or "comentario_interventoria" in err or "column" in err:
+            raise HTTPException(
+                503,
+                "Faltan columnas de validación en topo_planillas_tuberia. "
+                "Ejecute backend/sql/topo_alter_planillas_tuberia_validacion.sql",
+            ) from exc
+        raise
+
+    _audit(
+        contrato_id,
+        planilla_id,
+        f"VALIDAR_NIVEL{nivel}",
+        current_user,
+        {
+            "estado": body.estado,
+            "comentario": bool(body.comentario_data),
+            "mensaje": (update.get("comentario_interventoria") if nivel == 2 else None),
+        },
+    )
+    return {
+        "ok": True,
+        "nivel": nivel,
+        "estado": body.estado,
+        "planilla": _detalle(contrato_id, planilla_id),
+    }
+
+
+@router.put("/{contrato_id}/planillas-tuberia/{planilla_id}/validar-nivel1")
+def validar_nivel1(
+    contrato_id: int,
+    planilla_id: str,
+    body: ValidarPlanillaTuberiaBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "validar")
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(404, "Planilla no encontrada")
+    return _aplicar_validacion_planilla_tuberia(contrato_id, planilla_id, p, 1, body, current_user)
+
+
+@router.put("/{contrato_id}/planillas-tuberia/{planilla_id}/validar-nivel2")
+def validar_nivel2(
+    contrato_id: int,
+    planilla_id: str,
+    body: ValidarPlanillaTuberiaBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "validar")
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(404, "Planilla no encontrada")
+    return _aplicar_validacion_planilla_tuberia(contrato_id, planilla_id, p, 2, body, current_user)
+
+
 @router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/reabrir")
 def reabrir(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -1416,9 +1550,22 @@ def reabrir(contrato_id: int, planilla_id: str, current_user=Depends(get_current
         raise HTTPException(422, "La planilla no está cerrada.")
     now = _now()
     supabase.table("topo_planillas_tuberia").update({
-        "estado": "borrador", "nivel_validacion": 0, "validado_at": None, "validado_por": None,
-        "reabierto_at": now, "reabierto_por": _uid(current_user),
-        "version": int(p.get("version") or 1) + 1, "updated_at": now,
+        "estado": "borrador",
+        "nivel_validacion": 0,
+        "validado_at": None,
+        "validado_por": None,
+        "nivel1_estado": "No Revisado",
+        "nivel1_usuario_id": None,
+        "nivel1_fecha": None,
+        "nivel2_estado": "No Revisado",
+        "nivel2_usuario_id": None,
+        "nivel2_fecha": None,
+        "comentario_interventoria": None,
+        "comentario_interventoria_at": None,
+        "reabierto_at": now,
+        "reabierto_por": _uid(current_user),
+        "version": int(p.get("version") or 1) + 1,
+        "updated_at": now,
     }).eq("id", planilla_id).execute()
     supabase.table("topo_planilla_tuberia_consolidado").delete().eq("planilla_id", planilla_id).execute()
     _audit(contrato_id, planilla_id, "REABRIR", current_user, {"estado_previo": p.get("estado")})
@@ -1437,9 +1584,20 @@ def revocar(contrato_id: int, planilla_id: str, current_user=Depends(get_current
     supabase.table("topo_planillas_tuberia").update({
         "nivel_validacion": 0,
         "estado": "cerrado" if p.get("cerrado_at") else "borrador",
-        "validado_at": None, "validado_por": None,
-        "validacion_revocada_at": now, "validacion_revocada_por": _uid(current_user),
-        "version": int(p.get("version") or 1) + 1, "updated_at": now,
+        "validado_at": None,
+        "validado_por": None,
+        "nivel1_estado": "No Revisado",
+        "nivel1_usuario_id": None,
+        "nivel1_fecha": None,
+        "nivel2_estado": "No Revisado",
+        "nivel2_usuario_id": None,
+        "nivel2_fecha": None,
+        "comentario_interventoria": None,
+        "comentario_interventoria_at": None,
+        "validacion_revocada_at": now,
+        "validacion_revocada_por": _uid(current_user),
+        "version": int(p.get("version") or 1) + 1,
+        "updated_at": now,
     }).eq("id", planilla_id).execute()
     _audit(contrato_id, planilla_id, "REVOCAR_VALIDACION", current_user, {})
     return _detalle(contrato_id, planilla_id)
