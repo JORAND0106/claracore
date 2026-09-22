@@ -2441,18 +2441,36 @@ def _batch_acta_ids(acta_ids: List[int], batch_size: int = 100):
 
 
 def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict], Dict[int, dict]]:
-    """Asistentes sin usuario_id en actas del contrato + mapa de actas."""
+    """
+    Asistentes sin usuario_id en actas del contrato + mapa de actas.
+
+    El contrato_id lo fija el backend desde la ruta (sesión del módulo); el
+    usuario final no elige ni fuerza contrato.
+
+    Importante: NO seleccionar columnas opcionales como tipo_acta. En varios
+    entornos esa columna no existe (Postgres 42703) y el listado debe cargar
+    igual con id/consecutivo/fecha/estado.
+    """
+    cid = int(contrato_id)
+    # Columnas estables del módulo original — sin tipo_acta ni otras opcionales.
     actas = (
         sb.table("seguimiento_acta")
-        .select("id, consecutivo, fecha_reunion, tipo_acta, estado")
-        .eq("contrato_id", int(contrato_id))
+        .select("id, contrato_id, consecutivo, fecha_reunion, estado")
+        .eq("contrato_id", cid)
         .order("consecutivo", desc=True)
         .limit(500)
         .execute()
         .data
         or []
     )
-    actas_by_id = {int(a["id"]): a for a in actas if a.get("id") is not None}
+    actas_by_id: Dict[int, dict] = {}
+    for a in actas:
+        if a.get("id") is None:
+            continue
+        # Defensa: nunca mezclar actas de otro contrato.
+        if a.get("contrato_id") is not None and int(a["contrato_id"]) != cid:
+            continue
+        actas_by_id[int(a["id"])] = a
     if not actas_by_id:
         return [], actas_by_id
 
@@ -2461,6 +2479,7 @@ def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict
     if include_email:
         cols += ", email"
 
+    allowed_acta_ids = set(actas_by_id.keys())
     asistentes: List[dict] = []
     for chunk in _batch_acta_ids(list(actas_by_id.keys())):
         try:
@@ -2487,6 +2506,12 @@ def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict
                 raise
         for r in rows:
             if r.get("usuario_id"):
+                continue
+            try:
+                aid = int(r.get("acta_id"))
+            except (TypeError, ValueError):
+                continue
+            if aid not in allowed_acta_ids:
                 continue
             asistentes.append(r)
     return asistentes, actas_by_id
@@ -2561,7 +2586,6 @@ def list_externos_depuracion(sb, contrato_id: int) -> List[dict]:
                 "id": aid,
                 "consecutivo": meta.get("consecutivo"),
                 "fecha_reunion": meta.get("fecha_reunion"),
-                "tipo_acta": meta.get("tipo_acta"),
                 "estado": meta.get("estado"),
             })
         out.append({

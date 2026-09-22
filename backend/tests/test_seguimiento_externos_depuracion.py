@@ -7,9 +7,10 @@ import seguimiento_service as svc
 
 
 class StoreQ:
-    def __init__(self, store, name):
+    def __init__(self, store, name, *, forbidden_cols=None):
         self.store = store
         self.name = name
+        self.forbidden_cols = set(forbidden_cols or [])
         self._op = "select"
         self._filters = []
         self._in = None
@@ -17,9 +18,11 @@ class StoreQ:
         self._order = None
         self._limit = None
         self._eq = {}
+        self._select = ""
 
     def select(self, *_a, **_k):
         self._op = "select"
+        self._select = _a[0] if _a else ""
         return self
 
     def insert(self, payload):
@@ -65,6 +68,12 @@ class StoreQ:
     def execute(self):
         table = self.store.setdefault(self.name, [])
         if self._op == "select":
+            for col in self.forbidden_cols:
+                if col in (self._select or ""):
+                    raise RuntimeError(
+                        f"{{'message': 'column {self.name}.{col} does not exist', "
+                        f"'code': '42703', 'hint': None, 'details': None}}"
+                    )
             rows = [dict(r) for r in table if self._match(r)]
             if self._limit is not None:
                 rows = rows[: self._limit]
@@ -100,11 +109,12 @@ class StoreQ:
 
 
 class FakeSb:
-    def __init__(self, store):
+    def __init__(self, store, *, forbidden_cols=None):
         self.store = store
+        self.forbidden_cols = forbidden_cols or {}
 
     def table(self, name):
-        return StoreQ(self.store, name)
+        return StoreQ(self.store, name, forbidden_cols=self.forbidden_cols.get(name) or [])
 
 
 def _base_store():
@@ -289,3 +299,50 @@ def test_reemplazar_fusiona_si_usuario_ya_es_asistente(monkeypatch):
     assert not any(r["id"] == 12 for r in store["seguimiento_acta_asistente"])
     # El asistente registrado del usuario permanece
     assert any(r["id"] == 16 and r["usuario_id"] == 50 for r in store["seguimiento_acta_asistente"])
+
+
+def test_list_nunca_consulta_tipo_acta(monkeypatch):
+    """Regresión: el listado no debe pedir tipo_acta (columna inexistente → 42703)."""
+    store = _base_store()
+    for a in store["seguimiento_acta"]:
+        a.pop("tipo_acta", None)
+    monkeypatch.setattr(svc, "_schema_has", lambda *_a, **_k: True)
+    # Si el código pide tipo_acta, FakeSb lanza el mismo 42703 de producción.
+    sb = FakeSb(store, forbidden_cols={"seguimiento_acta": ["tipo_acta"]})
+    out = svc.list_externos_depuracion(sb, 7)
+    assert len(out) >= 1
+    pepito = next(x for x in out if x.get("match_key") == "email:pepito@ext.com")
+    assert pepito["actas_count"] == 3
+    assert "tipo_acta" not in pepito["actas"][0]
+
+
+def test_list_filtra_por_contrato_automatico(monkeypatch):
+    """El contrato viene del path/sesión: cada contrato ve solo sus externos."""
+    store = _base_store()
+    store["seguimiento_contacto_externo"].append({
+        "id": 200,
+        "contrato_id": 8,
+        "nombre": "Pepito Pérez",
+        "cargo": "Guest",
+        "entidad": "Otro",
+        "email": "pepito@ext.com",
+        "email_norm": "pepito@ext.com",
+        "activo": True,
+        "usuario_id": None,
+    })
+    store["contratos"].append({"id": 8, "contratista": "OTRO", "numero": "2"})
+    monkeypatch.setattr(svc, "_schema_has", lambda *_a, **_k: True)
+    sb = FakeSb(store, forbidden_cols={"seguimiento_acta": ["tipo_acta"]})
+
+    out7 = svc.list_externos_depuracion(sb, 7)
+    out8 = svc.list_externos_depuracion(sb, 8)
+
+    pepito7 = next(x for x in out7 if x.get("match_key") == "email:pepito@ext.com")
+    pepito8 = next(x for x in out8 if x.get("match_key") == "email:pepito@ext.com")
+    assert pepito7["externo_id"] == 100
+    assert pepito7["actas_count"] == 3
+    assert pepito8["externo_id"] == 200
+    assert pepito8["actas_count"] == 1
+    ids7 = {a["id"] for x in out7 for a in x["actas"]}
+    ids8 = {a["id"] for x in out8 for a in x["actas"]}
+    assert ids7.isdisjoint(ids8)
