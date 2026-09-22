@@ -1,10 +1,31 @@
 """Tests — catálogo de cargos RRHH expuesto a Bitácora."""
 from __future__ import annotations
 
-from bitacora_service import (
-    es_etiqueta_administrativo_excluida,
-    list_rrhh_cargos_para_bitacora,
-)
+from types import SimpleNamespace
+
+from bitacora_service import list_rrhh_cargos_para_bitacora
+
+
+class _FakeSb:
+    """SB mínimo: sin usuarios admin → no exclusiones por rol."""
+
+    def table(self, name: str):
+        store = {"roles": [], "usuarios": [], "usuario_contratos": []}
+
+        class Q:
+            def select(self, *_a, **_k):
+                return self
+
+            def eq(self, *_a, **_k):
+                return self
+
+            def in_(self, *_a, **_k):
+                return self
+
+            def execute(self):
+                return SimpleNamespace(data=list(store.get(name) or []))
+
+        return Q()
 
 
 def test_list_rrhh_cargos_para_bitacora_dedupe_y_orden(monkeypatch):
@@ -16,35 +37,28 @@ def test_list_rrhh_cargos_para_bitacora_dedupe_y_orden(monkeypatch):
         {"id": 5, "categoria": "cargo", "valor": "Oficial", "activo": True},
     ]
 
-    def _fake_list_catalogo(_sb, _cid, _cat):
-        return rows
-
     import rrhh_service as rrhh_mod
 
-    monkeypatch.setattr(rrhh_mod, "list_catalogo", _fake_list_catalogo)
+    monkeypatch.setattr(rrhh_mod, "list_catalogo", lambda *_a, **_k: rows)
+    monkeypatch.setattr(rrhh_mod, "list_trabajadores", lambda *_a, **_k: [])
 
-    out = list_rrhh_cargos_para_bitacora(object(), 10)
+    out = list_rrhh_cargos_para_bitacora(_FakeSb(), 10)
     assert out == ["Ayudante", "Oficial", "Topógrafo"]
 
 
-def test_list_rrhh_cargos_para_bitacora_excluye_administrativo(monkeypatch):
+def test_list_rrhh_cargos_para_bitacora_excluye_etiqueta_exacta_administrativo(monkeypatch):
     rows = [
         {"id": 1, "categoria": "cargo", "valor": "Administrativo", "activo": True},
-        {"id": 2, "categoria": "cargo", "valor": "administrativo", "activo": True},
-        {"id": 3, "categoria": "cargo", "valor": "Residente Administrativo", "activo": True},
-        {"id": 4, "categoria": "cargo", "valor": "Oficial", "activo": True},
+        {"id": 2, "categoria": "cargo", "valor": "Residente Administrativo", "activo": True},
+        {"id": 3, "categoria": "cargo", "valor": "Oficial", "activo": True},
     ]
-
-    def _fake_list_catalogo(_sb, _cid, _cat):
-        return rows
-
     import rrhh_service as rrhh_mod
 
-    monkeypatch.setattr(rrhh_mod, "list_catalogo", _fake_list_catalogo)
+    monkeypatch.setattr(rrhh_mod, "list_catalogo", lambda *_a, **_k: rows)
+    monkeypatch.setattr(rrhh_mod, "list_trabajadores", lambda *_a, **_k: [])
 
-    out = list_rrhh_cargos_para_bitacora(object(), 10)
+    out = list_rrhh_cargos_para_bitacora(_FakeSb(), 10)
     assert out == ["Oficial", "Residente Administrativo"]
-    assert not any(es_etiqueta_administrativo_excluida(c) for c in out)
 
 
 def test_list_rrhh_cargos_para_bitacora_sin_rrhh_devuelve_vacio(monkeypatch):
@@ -54,4 +68,4 @@ def test_list_rrhh_cargos_para_bitacora_sin_rrhh_devuelve_vacio(monkeypatch):
     import rrhh_service as rrhh_mod
 
     monkeypatch.setattr(rrhh_mod, "list_catalogo", _boom)
-    assert list_rrhh_cargos_para_bitacora(object(), 1) == []
+    assert list_rrhh_cargos_para_bitacora(_FakeSb(), 1) == []
