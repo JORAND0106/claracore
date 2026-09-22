@@ -16,6 +16,14 @@ on:
     branches:
       - main
 
+# Evita "Deployment Canceled" en Azure cuando dos merges a main
+# disparan upload concurrentes al mismo Static Web App (p. ej. #586 + #587).
+# Encolar (no cancelar): cada push a main despliega en serie y no deja
+# el check en rojo por carrera en Azure.
+concurrency:
+  group: azure-static-web-apps-happy-grass-0aea5f31e-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build_and_deploy_job:
     # Solo production hasta liberar cupo de staging en Azure.

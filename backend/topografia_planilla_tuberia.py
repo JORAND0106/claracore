@@ -781,6 +781,123 @@ def validar_cartera_campo(filas: list[dict], tipo: str) -> dict[str, Any]:
     return {"ok": len(errores) == 0, "errores": errores, "infos": infos}
 
 
+# --- Evidencias fotográficas por línea de cantidad / descuento ---------------
+
+SCOPES_EVIDENCIA = ("cantidades", "descuentos")
+MAX_FOTOS_POR_LINEA = 4
+_EPS_CANTIDAD_FOTO = 1e-9
+
+
+def _cantidad_no_cero(v: Any) -> bool:
+    try:
+        if v is None or v == "":
+            return False
+        return abs(float(v)) > _EPS_CANTIDAD_FOTO
+    except (TypeError, ValueError):
+        return False
+
+
+def normalizar_evidencias_fotograficas(raw: Any) -> dict[str, dict[str, list[dict]]]:
+    """Estructura estable: { cantidades: {codigo: [foto…]}, descuentos: {…} }."""
+    out: dict[str, dict[str, list[dict]]] = {s: {} for s in SCOPES_EVIDENCIA}
+    if not isinstance(raw, dict):
+        return out
+    for scope in SCOPES_EVIDENCIA:
+        bucket = raw.get(scope)
+        if not isinstance(bucket, dict):
+            continue
+        for codigo, fotos in bucket.items():
+            cod = str(codigo or "").strip()
+            if not cod or not isinstance(fotos, list):
+                continue
+            limpios: list[dict] = []
+            for f in fotos:
+                if not isinstance(f, dict):
+                    continue
+                if not (f.get("blob_path") or f.get("data_uri") or f.get("url")):
+                    continue
+                limpios.append(dict(f))
+            if limpios:
+                out[scope][cod] = limpios
+    return out
+
+
+def lineas_con_cantidad_calculada(calculo: Optional[dict]) -> list[dict[str, Any]]:
+    """Líneas de Resumen/Descuentos con cantidad ≠ 0 que exigen foto."""
+    if not isinstance(calculo, dict):
+        return []
+    lineas: list[dict[str, Any]] = []
+    for n in calculo.get("netos") or []:
+        if not isinstance(n, dict):
+            continue
+        codigo = str(n.get("codigo") or "").strip()
+        if not codigo:
+            continue
+        cant = n.get("neto")
+        if cant is None:
+            cant = n.get("cantidad")
+        if not _cantidad_no_cero(cant):
+            continue
+        lineas.append({
+            "scope": "cantidades",
+            "codigo": codigo,
+            "nombre": n.get("nombre") or codigo,
+            "cantidad": cant,
+        })
+    for d in calculo.get("descuentos") or []:
+        if not isinstance(d, dict):
+            continue
+        if not d.get("nombre"):
+            continue
+        codigo = str(d.get("codigo") or "").strip()
+        if not codigo:
+            continue
+        cant = d.get("cantidad")
+        if not _cantidad_no_cero(cant):
+            continue
+        lineas.append({
+            "scope": "descuentos",
+            "codigo": codigo,
+            "nombre": d.get("nombre") or codigo,
+            "cantidad": cant,
+        })
+    return lineas
+
+
+def validar_evidencias_fotograficas(
+    calculo: Optional[dict],
+    evidencias: Any,
+) -> dict[str, Any]:
+    """
+    Restrictivo: toda línea con cantidad calculada ≠ 0 debe tener ≥1 foto.
+    """
+    ev = normalizar_evidencias_fotograficas(evidencias)
+    faltantes: list[dict[str, Any]] = []
+    for linea in lineas_con_cantidad_calculada(calculo):
+        fotos = (ev.get(linea["scope"]) or {}).get(linea["codigo"]) or []
+        if not fotos:
+            faltantes.append(linea)
+    return {
+        "ok": len(faltantes) == 0,
+        "faltantes": faltantes,
+        "requeridas": lineas_con_cantidad_calculada(calculo),
+    }
+
+
+def mensaje_faltan_evidencias(faltantes: list[dict]) -> str:
+    if not faltantes:
+        return "Falta registro fotográfico en una o más líneas de cantidad."
+    partes = []
+    for f in faltantes:
+        scope_lbl = "Resumen de Cantidades" if f.get("scope") == "cantidades" else "Descuentos Específicos"
+        partes.append(f"{f.get('nombre') or f.get('codigo')} ({scope_lbl})")
+    return (
+        "No se puede guardar la cartera: falta registro fotográfico en: "
+        + "; ".join(partes)
+        + "."
+    )
+
+
 # --- Puente Planilla Tubería → SICOE Obra (so_reportes / so_registros) --------
 
 _EPS_CANTIDAD_SICOE = 1e-9
