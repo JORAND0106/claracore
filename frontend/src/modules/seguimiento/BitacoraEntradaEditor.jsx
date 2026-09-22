@@ -1062,6 +1062,11 @@ export default function BitacoraEntradaEditor({
                 onChangePersonalManual={setPersonalManual}
                 permitirCargoCantidad={permitirCargoCantidad && editable}
                 gateRrhhAprobado={gateRrhhAprobado}
+                fetchPlantillaAutocompletar={
+                  editable && esNuevo
+                    ? () => api.plantillaAutocompletarDiario()
+                    : null
+                }
               />
 
               {/* Maquinaria Excel */}

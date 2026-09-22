@@ -175,6 +175,122 @@ export function stripTramoFilasAutocompletar(rows) {
   }))
 }
 
+/** Clave estable de una fila de asistencia (evita duplicar al autocompletar). */
+export function claveAsistenciaPersona(row) {
+  let tid = null
+  try {
+    tid = row?.rrhh_trabajador_id != null && row.rrhh_trabajador_id !== ''
+      ? Number(row.rrhh_trabajador_id)
+      : null
+    if (!Number.isFinite(tid)) tid = null
+  } catch { tid = null }
+  if (tid != null) return `id:${tid}`
+  const doc = soloDigitosDocumento(row?.documento_numero)
+  if (doc) return `doc:${doc}`
+  const nombre = String(row?.nombre || '').trim().toLowerCase()
+  return nombre ? `n:${nombre}` : ''
+}
+
+/**
+ * Autocompleta asistencia de un cargo desde la plantilla del día anterior.
+ * - Sustituye las filas actuales de ese cargo (opcionalmente filtradas por empresa).
+ * - Tramo siempre vacío (el usuario lo asigna en el día actual; aplica también a maquinaria).
+ * - No reintroduce personas ya nominadas en otros cargos del día.
+ *
+ * @returns {{ rows: object[], added: number, empty: boolean, fuenteFecha: string }}
+ */
+export function aplicarAutocompletarAsistenciaPorCargo({
+  currentRows = [],
+  plantilla = null,
+  cargo = '',
+  empresa = '',
+  excluidosRrhhIds = [],
+} = {}) {
+  const cargoLabel = normalizarCargoNombrePropio(cargo)
+  const cargoKey = cargoLabel.toLowerCase()
+  if (!cargoKey) {
+    return { rows: Array.isArray(currentRows) ? [...currentRows] : [], added: 0, empty: true, fuenteFecha: '' }
+  }
+
+  const empRaw = String(empresa || '').trim()
+  const empFiltro = empRaw && empRaw !== EMPRESA_REGISTRO_DIRECTO
+    ? keyEmpresa(empRaw)
+    : null
+
+  const prevAll = filasAsistenciaSinExcluidosRrhh(
+    stripTramoFilasAutocompletar(asistenciaFromEntrada(plantilla)),
+    excluidosRrhhIds,
+  )
+  const prevForCargo = []
+  const seenPrev = new Set()
+  for (const r of prevAll) {
+    const ck = normalizarCargoNombrePropio(r?.cargo || '').toLowerCase()
+    if (ck !== cargoKey) continue
+    if (empFiltro != null && keyEmpresa(nombreEmpresaAsistencia(r)) !== empFiltro) continue
+    const k = claveAsistenciaPersona(r)
+    if (!k || seenPrev.has(k)) continue
+    seenPrev.add(k)
+    prevForCargo.push({
+      ...r,
+      cargo: cargoLabel || r.cargo,
+      tramo: '',
+    })
+  }
+
+  const fuenteFecha = String(plantilla?.fuente_fecha || '').trim()
+  if (!prevForCargo.length) {
+    return {
+      rows: Array.isArray(currentRows) ? [...currentRows] : [],
+      added: 0,
+      empty: true,
+      fuenteFecha,
+    }
+  }
+
+  const kept = (Array.isArray(currentRows) ? currentRows : []).filter((r) => {
+    const ck = normalizarCargoNombrePropio(r?.cargo || '').toLowerCase()
+    if (ck !== cargoKey) return true
+    if (empFiltro != null && keyEmpresa(nombreEmpresaAsistencia(r)) !== empFiltro) return true
+    return false
+  })
+
+  const occupied = new Set(kept.map(claveAsistenciaPersona).filter(Boolean))
+  const toAdd = []
+  for (const r of prevForCargo) {
+    const k = claveAsistenciaPersona(r)
+    if (!k || occupied.has(k)) continue
+    occupied.add(k)
+    toAdd.push(r)
+  }
+
+  return {
+    rows: [...kept, ...toAdd],
+    added: toAdd.length,
+    empty: toAdd.length === 0,
+    fuenteFecha,
+  }
+}
+
+/**
+ * Cantidad de registro directo del cargo en la plantilla del día anterior
+ * (personal_manual o diferencia personal − asistencia).
+ */
+export function cantidadManualDesdePlantillaPorCargo(plantilla, cargo) {
+  const cargoKey = normalizarCargoNombrePropio(cargo).toLowerCase()
+  if (!cargoKey) return 0
+  const prevAsist = stripTramoFilasAutocompletar(asistenciaFromEntrada(plantilla))
+  const manual = Array.isArray(plantilla?.personal_manual) && plantilla.personal_manual.length
+    ? normalizarPersonalCantidades(plantilla.personal_manual)
+    : recoverPersonalManual(plantilla?.personal, prevAsist)
+  for (const r of manual || []) {
+    if (normalizarCargoNombrePropio(r?.cargo || '').toLowerCase() === cargoKey) {
+      const n = Number(r?.cantidad)
+      return Number.isFinite(n) && n > 0 ? n : 0
+    }
+  }
+  return 0
+}
+
 export function asistenciaFromEntrada(entradaOrList) {
   const list = Array.isArray(entradaOrList)
     ? entradaOrList

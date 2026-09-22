@@ -53,6 +53,8 @@ export default function PersonalAsistenciaPanel({
   cargosOpciones = CARGOS_PERSONAL,
   /** IDs RRHH con rol plataforma Administrativo (no deben figurar en resumen). */
   excluidosRrhhIds = [],
+  /** () => Promise<plantilla> para autocompletar por cargo desde el día anterior. */
+  fetchPlantillaAutocompletar = null,
 }) {
   const ui = sheetStyles || {}
   const viewportCompact = useSeguimientoCompact() || compact
@@ -626,6 +628,8 @@ export default function PersonalAsistenciaPanel({
           cantidadManual={cantidadManualDetalle}
           onChangeCantidadManual={(n) => setCantidadManualCargo(cargoDetalle.cargo, n)}
           permitirCargoCantidad={permitirCargoCantidad && Boolean(cargoDetalle.esRegistroDirecto)}
+          fetchPlantillaAutocompletar={fetchPlantillaAutocompletar}
+          excluidosRrhhIds={excluidosRrhhIds}
           viewportCompact={viewportCompact}
           onClose={() => setCargoDetalle(null)}
         />
