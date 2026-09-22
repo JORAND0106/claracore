@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BookOpen } from 'lucide-react'
+import { BookOpen, Users } from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
 import BitacoraAsistenciaRrhhToggle from './BitacoraAsistenciaRrhhToggle'
 import { accesoBitacora } from './bitacoraPermisos'
+import ExternosDepuracionModal from './ExternosDepuracionModal'
 import LibroDigitalVista, { LibroDigitalSelector } from './LibroDigitalVista'
 import SeguimientoCalendarioPanel from './SeguimientoCalendarioPanel'
 import { accesoSeguimiento } from './seguimientoPermisos'
@@ -32,6 +33,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [libroSelectorOpen, setLibroSelectorOpen] = useState(false)
   const [libroModo, setLibroModo] = useState(null) // 'actas' | 'bitacora' | null
+  const [externosDepuracionOpen, setExternosDepuracionOpen] = useState(false)
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
@@ -92,6 +94,29 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
             contratoId={cid}
             esDesarrollador={Boolean(permisosBitacora?.esDesarrollador)}
           />
+          {permisos?.editar && (
+            <button
+              type="button"
+              onClick={() => setExternosDepuracionOpen(true)}
+              title="Depurar asistentes externos del histórico de actas"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '10px 14px',
+                borderRadius: 10,
+                border: `1px solid ${t.border}`,
+                background: t.bgCard || t.bg || 'transparent',
+                color: t.text,
+                fontWeight: 700,
+                fontSize: 'var(--cc-sm)',
+                cursor: 'pointer',
+              }}
+            >
+              <Users size={17} strokeWidth={2.3} aria-hidden />
+              <span>Externos</span>
+            </button>
+          )}
           <button
             type="button"
             className="cc-seguim-libro-btn"
@@ -156,6 +181,15 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           token={token}
           contratoId={contratoId}
           onClose={() => setLibroModo(null)}
+        />
+      )}
+
+      {externosDepuracionOpen && (
+        <ExternosDepuracionModal
+          t={t}
+          token={token}
+          contratoId={cid}
+          onClose={() => setExternosDepuracionOpen(false)}
         />
       )}
     </div>

@@ -57,12 +57,14 @@ from seguimiento_service import (
     get_item_detalle,
     list_actas,
     list_bandeja,
+    list_externos_depuracion,
     list_usuarios_contrato_enriquecidos,
     procesar_vencimientos_y_llamados,
     procesar_recordatorios_reunion_acta,
     proximo_consecutivo,
     redaccion_asistida_clara,
     registrar_firma_asistente,
+    reemplazar_externo_por_usuario,
     revertir_acta_a_borrador,
     revisar_justificacion,
     solicitar_justificacion,
@@ -678,6 +680,76 @@ def route_usuarios_contrato(contrato_id: int, current_user=Depends(get_current_u
     require_permiso_seguimiento(current_user, "ver")
     _check_contrato(current_user, contrato_id)
     return list_usuarios_contrato_enriquecidos(supabase, contrato_id)
+
+
+class ReemplazarExternoBody(BaseModel):
+    """Reemplazo obligatorio de un asistente externo por usuario registrado."""
+    usuario_id: int = Field(..., description="Usuario de plataforma que sustituye al externo")
+    externo_id: Optional[int] = Field(None, description="Id en catálogo seguimiento_contacto_externo")
+    match_key: Optional[str] = Field(
+        None,
+        description="Clave de agrupación del listado (email:… o nombre:…)",
+    )
+    email: Optional[str] = None
+    nombre: Optional[str] = None
+
+
+@router.get("/{contrato_id}/externos-depuracion")
+def route_list_externos_depuracion(contrato_id: int, current_user=Depends(get_current_user)):
+    """Listado de asistentes externos del histórico de actas (depuración)."""
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    return list_externos_depuracion(supabase, contrato_id)
+
+
+@router.post("/{contrato_id}/externos-depuracion/reemplazar")
+def route_reemplazar_externo(
+    contrato_id: int,
+    body: ReemplazarExternoBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Sustituye al externo por el usuario registrado en todas las actas donde participó.
+    El usuario_id de destino es obligatorio (nunca eliminación simple).
+    """
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    if body.usuario_id is None or int(body.usuario_id) <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Debe seleccionar un usuario registrado de reemplazo",
+        )
+    if not body.externo_id and not (body.match_key or "").strip() and not (body.email or "").strip() and not (body.nombre or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Indique el asistente externo a reemplazar",
+        )
+    try:
+        result = reemplazar_externo_por_usuario(
+            supabase,
+            contrato_id,
+            usuario_id=int(body.usuario_id),
+            externo_id=int(body.externo_id) if body.externo_id is not None else None,
+            match_key=(body.match_key or None),
+            email=(body.email or None),
+            nombre=(body.nombre or None),
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "SEGUIMIENTO",
+        "seguimiento_externo_reemplazar",
+        str(body.externo_id or body.match_key or ""),
+        {
+            "contrato_id": contrato_id,
+            "usuario_id": body.usuario_id,
+            "actas_count": result.get("actas_count"),
+            "asistentes_actualizados": result.get("asistentes_actualizados"),
+        },
+    )
+    return result
 
 
 @router.get("/{contrato_id}/actas")

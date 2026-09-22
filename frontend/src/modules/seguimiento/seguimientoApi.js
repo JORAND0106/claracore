@@ -84,6 +84,8 @@ export function createSeguimientoApi(contratoId, token) {
       return get(`/seguimiento/${cid}/actas${qs ? `?${qs}` : ''}`)
     },
     listUsuarios: () => get(`/seguimiento/${cid}/usuarios`),
+    listExternosDepuracion: () => get(`/seguimiento/${cid}/externos-depuracion`),
+    reemplazarExterno: (body) => send('POST', `/seguimiento/${cid}/externos-depuracion/reemplazar`, body),
     proximoConsecutivo: () => get(`/seguimiento/${cid}/actas/proximo-consecutivo`),
     compromisosAbiertos: (excluirActaId, tipoActa) => {
       const q = new URLSearchParams()
