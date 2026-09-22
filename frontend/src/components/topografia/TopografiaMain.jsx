@@ -140,7 +140,7 @@ function NavGroup({ titulo, mods, submodulo, intentarSubmodulo, alertas, ui, com
   )
 }
 
-function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuberiaSel, setTuberiaSel }) {
+function TopografiaLayout({ usuario, token, permisos, alertas, setAlertas, tuberiaSel, setTuberiaSel, onAbrirReporteSicoe }) {
   const ui = useTopoTheme()
   const { isCompact, isLandscapeMobile } = useTopoViewport()
   const contratoId = usuario?.contrato_id
@@ -438,6 +438,7 @@ export default function TopografiaMain({ t, usuario, token, permisos = defaultPe
           setAlertas={setAlertas}
           tuberiaSel={tuberiaSel}
           setTuberiaSel={setTuberiaSel}
+          onAbrirReporteSicoe={onAbrirReporteSicoe}
         />
       </TopoOfflineProvider>
     </TopoThemeProvider>
