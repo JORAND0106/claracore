@@ -338,6 +338,7 @@ export default function BitacoraEntradaEditor({
   }, [tipo, contratoId, token])
 
   // Catálogo RRHH (Personal en obra — autocompletado).
+  // Consolidado y cargos se derivan aquí (sin esperar /rrhh-cargos).
   useEffect(() => {
     if (tipo !== 'diario' || !api?.listBitacoraRrhhTrabajadores) return undefined
     let cancelled = false
@@ -349,25 +350,22 @@ export default function BitacoraEntradaEditor({
         if (!cancelled) {
           setRrhhCatalogo(items)
           setExcluidosRrhhIds(excluidos)
+          const fromTrab = []
+          const seen = new Set()
+          for (const t of items) {
+            const c = String(t?.cargo_aspira || t?.cargo || '').trim()
+            if (!c) continue
+            const key = c.toLowerCase()
+            if (seen.has(key)) continue
+            seen.add(key)
+            fromTrab.push(c)
+          }
+          setCargosCatalogo(fromTrab)
         }
       } catch { /* sin permiso / red */ }
     })()
     return () => { cancelled = true }
   }, [api, tipo, asistenciaRrhhPolicy?.requiere_rrhh_aprobado])
-
-  // Catálogo completo de cargos RRHH (resumen por cargo — incluye ceros).
-  useEffect(() => {
-    if (tipo !== 'diario' || !api?.listBitacoraRrhhCargos) return undefined
-    let cancelled = false
-    ;(async () => {
-      try {
-        const data = await api.listBitacoraRrhhCargos()
-        const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
-        if (!cancelled) setCargosCatalogo(items.map((c) => String(c || '').trim()).filter(Boolean))
-      } catch { /* sin permiso / red */ }
-    })()
-    return () => { cancelled = true }
-  }, [api, tipo])
 
   // Política Bitácora ↔ RRHH (corte / contrato 3 / toggle).
   useEffect(() => {

@@ -1609,16 +1609,11 @@ def route_list_bitacora_rrhh_trabajadores(
     current_user=Depends(get_current_user),
 ):
     """Catálogo RRHH para autocompletado de Personal en obra (permiso Bitácora)."""
-    from bitacora_service import (
-        ids_rrhh_excluidos_rol_administrativo,
-        list_rrhh_trabajadores_para_bitacora,
-    )
+    from bitacora_service import catalogo_rrhh_para_bitacora
 
     require_permiso_bitacora(current_user, "ver", contrato_id)
     _check_contrato(current_user, contrato_id)
-    items = list_rrhh_trabajadores_para_bitacora(supabase, contrato_id, q or "")
-    excluidos = ids_rrhh_excluidos_rol_administrativo(supabase, contrato_id)
-    return {"items": items, "excluidos_rrhh_ids": excluidos}
+    return catalogo_rrhh_para_bitacora(supabase, contrato_id, q or "")
 
 
 @router.get("/{contrato_id}/bitacora/rrhh-cargos")
