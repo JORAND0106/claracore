@@ -41,6 +41,7 @@ def _load_routes_with_stubs():
             delete=lambda *a, **k: (lambda f: f),
         )
         m.Depends = lambda x: x
+        m.Query = lambda *a, **k: None
         return m
 
     def _responses():

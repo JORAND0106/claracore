@@ -192,4 +192,32 @@ describe('planillaTuberiaUtils', () => {
     // No toca otras columnas
     assert.equal(cfe[0].abscisa, '')
   })
+
+  it('validarEvidenciasFotograficas exige foto por línea con cantidad ≠ 0', async () => {
+    const {
+      validarEvidenciasFotograficas,
+      lineasConCantidadCalculada,
+    } = await import('./planillaTuberiaUtils.js')
+    const calc = {
+      netos: [
+        { codigo: 'EXC', nombre: 'Excavación Varias', neto: 12.5 },
+        { codigo: 'OTROS', nombre: 'Otros: ____', neto: 0 },
+      ],
+      descuentos: [
+        { codigo: 'DESC_A1', nombre: 'Area 1', cantidad: 2.1 },
+      ],
+    }
+    const lineas = lineasConCantidadCalculada(calc)
+    assert.equal(lineas.length, 2)
+    const sin = validarEvidenciasFotograficas(calc, {})
+    assert.equal(sin.ok, false)
+    assert.match(sin.mensaje, /falta registro fotográfico/i)
+    assert.match(sin.mensaje, /Excavación Varias/)
+    assert.match(sin.mensaje, /Area 1/)
+    const con = validarEvidenciasFotograficas(calc, {
+      cantidades: { EXC: [{ id: '1', data_uri: 'data:image/jpeg;base64,x' }] },
+      descuentos: { DESC_A1: [{ id: '2', blob_path: 'topo/x.jpg' }] },
+    })
+    assert.equal(con.ok, true)
+  })
 })

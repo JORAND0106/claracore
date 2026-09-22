@@ -80,6 +80,7 @@ def classify_storage_tipo(
             "/presupuesto-graficos/",
             "/evidencia",
             "mapa-pantallazos",
+            "topo-planilla-tuberia",
         )
     ):
         return TIPO_FOTOS
@@ -139,6 +140,7 @@ def infer_contrato_id_from_path(blob_path: Optional[str]) -> Optional[int]:
         "contratos-ordenes-pago/",
         "seguimiento-actas/",
         "seguimiento-llamados/",
+        "topo-planilla-tuberia/",
     ):
         if path.startswith(prefix):
             rest = path[len(prefix) :]

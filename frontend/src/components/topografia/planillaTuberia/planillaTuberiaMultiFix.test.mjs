@@ -28,10 +28,17 @@ describe('Planilla tubería — multi-fix UI/persist', () => {
   })
 
   it('Descuentos Específicos usa etiqueta Área (no Espesor)', () => {
-    assert.match(formSrc, /\['Item', 'Long', 'Ancho', 'Área', 'Cantidad'\]/)
+    assert.match(formSrc, /\['Item', 'Long', 'Ancho', 'Área', 'Cantidad', 'Foto'\]/)
     assert.match(routesSrc, /desc num">Área</)
-    // Resumen de cantidades sigue con Espesor
-    assert.match(formSrc, /\['Item', 'Long', 'Ancho', 'Espesor', 'Desc\.', 'Cantidad'\]/)
+    // Resumen de cantidades sigue con Espesor + Foto
+    assert.match(formSrc, /\['Item', 'Long', 'Ancho', 'Espesor', 'Desc\.', 'Cantidad', 'Foto'\]/)
+  })
+
+  it('exige evidencia fotográfica por línea de cantidad', () => {
+    assert.match(formSrc, /validarEvidenciasFotograficas/)
+    assert.match(formSrc, /PlanillaTuberiaEvidenciaBtn/)
+    assert.match(routesSrc, /validar_evidencias_fotograficas/)
+    assert.match(routesSrc, /evidencias_fotograficas/)
   })
 
   it('replace usa estrategia upsert por orden', () => {
