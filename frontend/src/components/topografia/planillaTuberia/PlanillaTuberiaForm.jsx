@@ -137,7 +137,8 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [cantManuales, setCantManuales] = useState([])
   /** Fotos por línea de cantidad/descuento (meta_cabecera.evidencias_fotograficas). */
   const [evidencias, setEvidencias] = useState(() => normalizarEvidenciasFotograficas(null))
-  const tableRef = useRef(null)
+  /** Contenedor del editor: Enter avanza como Tab en cabecera/cartera/cantidades/descuentos. */
+  const editorRef = useRef(null)
 
   const planilla = detalle?.planilla
   const calculo = detalle?.calculo
@@ -795,7 +796,11 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   }
 
   const editorContent = planilla ? (
-<>
+  <div
+    ref={editorRef}
+    onKeyDown={(e) => handleEnterAsTab(e, editorRef.current)}
+    style={layoutMain}
+  >
   <div style={cardPad}>
     <TopoExcelSheet
       sheet={sheet}
@@ -989,11 +994,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     </div>
   </div>
 
-  <div
-    ref={tableRef}
-    onKeyDown={(e) => handleEnterAsTab(e, tableRef.current)}
-    style={{ ...cardPad, minWidth: 0 }}
-  >
+  <div style={{ ...cardPad, minWidth: 0 }}>
     <div style={sheet.sectionTitle}>Cartera de campo</div>
     <div
       style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}
@@ -1252,7 +1253,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       </div>
     ))}
   </div>
-</>
+  </div>
   ) : null
 
   return (
