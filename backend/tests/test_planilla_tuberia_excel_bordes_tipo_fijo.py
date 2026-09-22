@@ -80,7 +80,7 @@ class TestExcelTipoFijo(unittest.TestCase):
 class TestExcelBordes(unittest.TestCase):
     def test_bloques_con_borde(self):
         ws = _wb("ALCANTARILLA")["planilla"]
-        samples = ("B5", "B16", "B17", "J36", "B44", "H50", "I44", "N50", "K17")
+        samples = ("B5", "B16", "B17", "J36", "B44", "H50", "I44", "N50", "L18")
         for addr in samples:
             cell = ws[addr]
             self.assertIsNotNone(cell.border)
