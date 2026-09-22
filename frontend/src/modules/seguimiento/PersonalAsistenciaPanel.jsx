@@ -1,159 +1,25 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { CARGOS_PERSONAL, personalEnColumnas } from './bitacoraConstants'
+import { useMemo, useState } from 'react'
+import { CARGOS_PERSONAL } from './bitacoraConstants'
 import { HINT_DOCUMENTACION_NO_APROBADA } from './bitacoraAsistenciaRrhhPolicy'
+import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
+import PersonalCargoDetalleModal from './PersonalCargoDetalleModal'
 import {
-  HINT_REGISTRAR_EN_RRHH,
   HORA_SALIDA_DEFAULT,
   asistenciaRowFromRrhh,
+  cantidadManualPorCargo,
   emptyAsistenciaRow,
-  filtrarTrabajadoresRrhh,
-  formatHorarioAsistencia,
+  filasAsistenciaPorCargo,
   mapaEstadosRrhh,
   mergePersonalCantidades,
-  nombreCompletoRrhh,
   personalAgregadoDesdeAsistencia,
 } from './personalAsistenciaHelpers'
-import { useAnchoredDropdown } from './useAnchoredDropdown'
+import { useSeguimientoCompact } from './seguimientoShared'
+
+export { default as NombreRrhhAutocomplete } from './NombreRrhhAutocomplete'
 
 /**
- * Autocompletado de nombre contra catálogo RRHH del contrato.
- * Desplegable en portal (fixed): la grilla Personal usa sheetWrap con
- * overflow:auto y un absolute interno quedaba totalmente recortado.
- */
-export function NombreRrhhAutocomplete({
-  t,
-  value,
-  catalogo = [],
-  excludeIds = [],
-  disabled = false,
-  onPick,
-  style,
-}) {
-  const listId = useId()
-  const [query, setQuery] = useState(value || '')
-  const [open, setOpen] = useState(false)
-  const wrapRef = useRef(null)
-  const inputRef = useRef(null)
-  const listRef = useRef(null)
-
-  useEffect(() => {
-    setQuery(value || '')
-  }, [value])
-
-  useEffect(() => {
-    const onDoc = (e) => {
-      if (wrapRef.current?.contains(e.target) || listRef.current?.contains(e.target)) return
-      setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [])
-
-  const matches = useMemo(
-    () => filtrarTrabajadoresRrhh(catalogo, query, excludeIds).slice(0, 12),
-    [catalogo, query, excludeIds],
-  )
-
-  const showEmptyHint = open && !disabled
-    && String(query || '').trim().length >= 1
-    && matches.length === 0
-  const listVisible = !disabled && open && (matches.length > 0 || showEmptyHint)
-  const dropdownStyle = useAnchoredDropdown(listVisible, inputRef, { maxHeight: 220 })
-
-  const listbox = listVisible && dropdownStyle && typeof document !== 'undefined'
-    ? createPortal(
-      <div
-        ref={listRef}
-        id={listId}
-        role="listbox"
-        style={{
-          ...dropdownStyle,
-          overflowY: 'auto',
-          background: t.bgCard || '#fff',
-          border: `1px solid ${t.border}`,
-          borderRadius: 8,
-          boxShadow: '0 8px 24px rgba(15,23,42,0.12)',
-          WebkitOverflowScrolling: 'touch',
-        }}
-      >
-        {showEmptyHint ? (
-          <div style={{
-            padding: '10px 12px',
-            fontSize: 'var(--cc-caption)',
-            color: t.textMuted,
-            lineHeight: 1.35,
-          }}>
-            {HINT_REGISTRAR_EN_RRHH}
-          </div>
-        ) : matches.map((trab) => {
-          const label = nombreCompletoRrhh(trab)
-          const doc = [trab.tipo_documento || 'CC', trab.numero_documento].filter(Boolean).join(' ')
-          const meta = [trab.cargo_aspira, trab.empresa_nombre].filter(Boolean).join(' · ')
-          return (
-            <button
-              key={`rrhh-${trab.id}`}
-              type="button"
-              role="option"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                onPick?.(trab)
-                setQuery(label)
-                setOpen(false)
-              }}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                border: 'none',
-                background: 'transparent',
-                padding: '8px 12px',
-                cursor: 'pointer',
-                borderBottom: `1px solid ${t.border}`,
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)', color: t.text }}>{label}</div>
-              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                {[doc, meta].filter(Boolean).join(' · ')}
-              </div>
-            </button>
-          )
-        })}
-      </div>,
-      document.body,
-    )
-    : null
-
-  return (
-    <div ref={wrapRef} style={{ position: 'relative' }}>
-      <input
-        ref={inputRef}
-        type="text"
-        value={query}
-        disabled={disabled}
-        placeholder="Buscar en RRHH…"
-        autoComplete="off"
-        onChange={(e) => {
-          setQuery(e.target.value)
-          setOpen(true)
-        }}
-        onFocus={() => setOpen(true)}
-        style={style}
-        title="Seleccione un colaborador del catálogo de RRHH"
-        role="combobox"
-        aria-autocomplete="list"
-        aria-expanded={listVisible}
-        aria-controls={listId}
-      />
-      {listbox}
-    </div>
-  )
-}
-
-
-/**
- * Personal en obra: asistencia diaria desde catálogo RRHH (sin popup de alta).
- * Opcional: captura temporal cargo/cantidad (Dev+ICCU o contrato exento ID 3).
+ * Personal en obra: resumen compacto por cargo + detalle en popup.
+ * El registro (campos/validaciones) se mantiene; solo cambia la visualización.
  */
 export default function PersonalAsistenciaPanel({
   t,
@@ -177,10 +43,14 @@ export default function PersonalAsistenciaPanel({
   cargosOpciones = CARGOS_PERSONAL,
 }) {
   const ui = sheetStyles || {}
+  const viewportCompact = useSeguimientoCompact() || compact
   const [cargoFormOpen, setCargoFormOpen] = useState(false)
   const [draftCargo, setDraftCargo] = useState(CARGOS_PERSONAL[0] || 'Oficial')
   const [draftCargoOtro, setDraftCargoOtro] = useState('')
   const [draftCantidad, setDraftCantidad] = useState(1)
+  const [addOpen, setAddOpen] = useState(false)
+  const [draftAdd, setDraftAdd] = useState(() => emptyAsistenciaRow())
+  const [cargoDetalle, setCargoDetalle] = useState(null)
 
   const liveMap = useMemo(
     () => (resumenCongelado ? null : mapaEstadosRrhh(rrhhCatalogo)),
@@ -194,39 +64,21 @@ export default function PersonalAsistenciaPanel({
     () => mergePersonalCantidades(agregadoRrhh, personalManual),
     [agregadoRrhh, personalManual],
   )
-  const personalCols = useMemo(() => personalEnColumnas(
-    agregado.length
-      ? agregado
-      : [{ cargo: '—', cantidad: 0 }],
-  ), [agregado])
-  const maxRows = Math.max(...personalCols.map((c) => c.length), 0)
 
   const usedIds = useMemo(
     () => (rows || []).map((r) => r.rrhh_trabajador_id).filter((x) => x != null),
     [rows],
   )
 
-  const updateRow = (idx, patch) => {
-    onChange?.((rows || []).map((r, i) => (i === idx ? { ...r, ...patch } : r)))
-  }
+  const entriesDetalle = useMemo(
+    () => (cargoDetalle ? filasAsistenciaPorCargo(rows, cargoDetalle) : []),
+    [rows, cargoDetalle],
+  )
 
-  const pickTrabajador = (idx, trab) => {
-    const base = asistenciaRowFromRrhh(trab, {
-      hora_ingreso: rows[idx]?.hora_ingreso || '',
-      hora_salida: rows[idx]?.hora_salida || HORA_SALIDA_DEFAULT,
-      observacion: rows[idx]?.observacion || '',
-      tramo: rows[idx]?.tramo || '',
-    })
-    updateRow(idx, base)
-  }
-
-  const addRow = () => {
-    onChange?.([...(rows || []), emptyAsistenciaRow({ nombre: '', rrhh_trabajador_id: null })])
-  }
-
-  const removeRow = (idx) => {
-    onChange?.((rows || []).filter((_, i) => i !== idx))
-  }
+  const cantidadManualDetalle = useMemo(
+    () => (cargoDetalle ? cantidadManualPorCargo(personalManual, cargoDetalle) : 0),
+    [personalManual, cargoDetalle],
+  )
 
   const addCargoCantidad = () => {
     let cargo = String(draftCargo || '').trim()
@@ -242,8 +94,33 @@ export default function PersonalAsistenciaPanel({
     setCargoFormOpen(false)
   }
 
-  const removeManual = (idx) => {
-    onChangePersonalManual?.((personalManual || []).filter((_, i) => i !== idx))
+  const pickDraftAdd = (trab) => {
+    setDraftAdd(asistenciaRowFromRrhh(trab, {
+      hora_ingreso: draftAdd.hora_ingreso || '',
+      hora_salida: draftAdd.hora_salida || HORA_SALIDA_DEFAULT,
+      tramo: draftAdd.tramo || '',
+    }))
+  }
+
+  const confirmDraftAdd = () => {
+    if (!String(draftAdd.nombre || '').trim()) return
+    onChange?.([...(rows || []), { ...draftAdd }])
+    setDraftAdd(emptyAsistenciaRow())
+    setAddOpen(false)
+    const cargo = String(draftAdd.cargo || '').trim()
+    if (cargo) setCargoDetalle(cargo)
+  }
+
+  const setCantidadManualCargo = (cargo, cantidad) => {
+    const key = String(cargo || '').trim().toLowerCase()
+    const rest = (personalManual || []).filter(
+      (r) => String(r?.cargo || '').trim().toLowerCase() !== key,
+    )
+    const n = Number(cantidad)
+    const next = Number.isFinite(n) && n > 0
+      ? mergePersonalCantidades(rest, [{ cargo, cantidad: n }])
+      : mergePersonalCantidades(rest)
+    onChangePersonalManual?.(next)
   }
 
   const btnGhost = {
@@ -264,6 +141,9 @@ export default function PersonalAsistenciaPanel({
     fontSize: 'var(--cc-xs)',
   }
 
+  const resumenRows = agregado.length ? agregado : [{ cargo: '—', cantidad: 0 }]
+  const totalPersonas = agregado.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
+
   return (
     <div>
       <div style={ui.sectionBarSolo || {
@@ -278,7 +158,10 @@ export default function PersonalAsistenciaPanel({
             {permitirCargoCantidad && (
               <button
                 type="button"
-                onClick={() => setCargoFormOpen((v) => !v)}
+                onClick={() => {
+                  setAddOpen(false)
+                  setCargoFormOpen((v) => !v)
+                }}
                 style={ui.sectionBarSolo
                   ? { ...btnGhost, padding: '4px 8px', fontSize: 'var(--cc-caption)' }
                   : btnGhost}
@@ -291,7 +174,11 @@ export default function PersonalAsistenciaPanel({
             )}
             <button
               type="button"
-              onClick={addRow}
+              onClick={() => {
+                setCargoFormOpen(false)
+                setDraftAdd(emptyAsistenciaRow())
+                setAddOpen((v) => !v)
+              }}
               style={ui.sectionBarSolo
                 ? { ...btnGhost, padding: '4px 8px', fontSize: 'var(--cc-caption)' }
                 : btnGhost}
@@ -325,8 +212,82 @@ export default function PersonalAsistenciaPanel({
           lineHeight: 1.35,
         }}>
           {gateRrhhAprobado
-            ? 'Busque por nombre entre colaboradores con documentación Aprobada en RRHH. Cargo y empresa se completan solos.'
-            : 'Busque por nombre en el catálogo de RRHH. Cargo y empresa se completan solos. Los colaboradores nuevos se registran en Recursos Humanos.'}
+            ? 'Agregue colaboradores con documentación Aprobada en RRHH. El resumen agrupa por cargo; haga clic en un cargo para ver el detalle.'
+            : 'Agregue colaboradores desde RRHH. El resumen agrupa por cargo; haga clic en un cargo para ver y editar el detalle.'}
+        </div>
+      )}
+
+      {!disabled && addOpen && (
+        <div style={{
+          ...ui.sheetWrap,
+          marginBottom: 8,
+          padding: 10,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          alignItems: 'flex-end',
+        }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 200px', minWidth: 160 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Nombre</span>
+            <NombreRrhhAutocomplete
+              t={t}
+              value={draftAdd.nombre}
+              catalogo={rrhhCatalogo}
+              excludeIds={usedIds}
+              onPick={pickDraftAdd}
+              style={cellInp}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Tramo *</span>
+            <select
+              value={draftAdd.tramo || ''}
+              onChange={(e) => setDraftAdd((d) => ({ ...d, tramo: e.target.value }))}
+              style={{ ...cellInp, height: 28 }}
+            >
+              <option value="">Seleccione…</option>
+              {(tramosCatalogo || []).map((tr) => (
+                <option key={tr} value={tr}>{tr}</option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Ingreso</span>
+            <input
+              type="time"
+              value={(draftAdd.hora_ingreso || '').slice(0, 5)}
+              onChange={(e) => setDraftAdd((d) => ({ ...d, hora_ingreso: e.target.value }))}
+              style={{ ...cellInp, width: 96 }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Salida</span>
+            <input
+              type="time"
+              value={(draftAdd.hora_salida || HORA_SALIDA_DEFAULT).slice(0, 5)}
+              onChange={(e) => setDraftAdd((d) => ({
+                ...d,
+                hora_salida: e.target.value || HORA_SALIDA_DEFAULT,
+              }))}
+              style={{ ...cellInp, width: 96 }}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={confirmDraftAdd}
+            disabled={!String(draftAdd.nombre || '').trim()}
+            style={{
+              ...btnGhost,
+              borderStyle: 'solid',
+              background: t.primary,
+              color: '#fff',
+              borderColor: t.primary,
+              opacity: String(draftAdd.nombre || '').trim() ? 1 : 0.5,
+              cursor: String(draftAdd.nombre || '').trim() ? 'pointer' : 'default',
+            }}
+          >
+            Registrar
+          </button>
         </div>
       )}
 
@@ -390,200 +351,80 @@ export default function PersonalAsistenciaPanel({
         </div>
       )}
 
-      {permitirCargoCantidad && (personalManual || []).length > 0 && (
-        <div style={{ ...ui.sheetWrap, marginBottom: 8 }} className="cc-bitacora-sheet-scroll">
-          <table style={{ ...ui.sheetTable, minWidth: 0 }}>
-            <thead>
-              <tr>
-                <th style={{ ...ui.th, width: '55%' }}>Cargo (registro directo)</th>
-                <th style={{ ...ui.th, width: '25%', textAlign: 'center' }}>Cant.</th>
-                <th style={{ ...ui.th, width: '20%' }} />
-              </tr>
-            </thead>
-            <tbody>
-              {(personalManual || []).map((row, idx) => (
-                <tr key={`man-${row.cargo}-${idx}`}>
-                  <td style={ui.td} data-label="Cargo">{row.cargo}</td>
-                  <td style={{ ...ui.td, textAlign: 'center', fontWeight: 800 }} data-label="Cant.">
-                    {disabled ? row.cantidad : (
-                      <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={row.cantidad}
-                        onChange={(e) => {
-                          const n = Number(e.target.value)
-                          const next = (personalManual || []).map((r, i) => (
-                            i === idx ? { ...r, cantidad: Number.isFinite(n) && n >= 0 ? n : 0 } : r
-                          )).filter((r) => Number(r.cantidad) > 0)
-                          onChangePersonalManual?.(next)
-                        }}
-                        style={{ ...cellInp, width: 72, textAlign: 'center' }}
-                      />
-                    )}
-                  </td>
-                  <td style={{ ...ui.td, textAlign: 'center' }}>
-                    {!disabled && (
-                      <button
-                        type="button"
-                        onClick={() => removeManual(idx)}
-                        style={{ ...ui.clipBtn, color: '#B91C1C', fontWeight: 700 }}
-                        title="Quitar"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+      <div style={{
+        ...(ui.sectionBar || { ...ui.sectionTitle, marginBottom: 6 }),
+        marginTop: addOpen || cargoFormOpen ? 4 : 0,
+      }}>
+        <span>Resumen por cargo</span>
+        {totalPersonas > 0 && (
+          <span style={{ fontWeight: 700, textTransform: 'none', letterSpacing: 0, fontSize: 'var(--cc-caption)' }}>
+            {totalPersonas} persona{totalPersonas === 1 ? '' : 's'}
+          </span>
+        )}
+      </div>
+      <div style={ui.sheetWrapFlush || ui.sheetWrap} className="cc-bitacora-sheet-scroll">
         <table
-          className={compact ? 'cc-bitacora-responsive-table cc-bitacora-personal-table' : 'cc-bitacora-personal-table'}
-          style={{ ...ui.sheetTable, minWidth: compact ? 0 : 760 }}
+          className="cc-bitacora-responsive-table cc-bitacora-personal-table"
+          style={{ ...ui.sheetTable, tableLayout: 'auto', minWidth: 0 }}
         >
           <thead>
             <tr>
-              <th style={{ ...ui.th, width: '22%' }}>Nombre</th>
-              <th style={{ ...ui.th, width: '16%' }}>Tramo *</th>
-              <th style={{ ...ui.th, width: '16%' }}>Cargo</th>
-              <th style={{ ...ui.th, width: '16%' }}>Empresa</th>
-              <th style={{ ...ui.th, width: '20%' }}>Horario</th>
-              <th style={{ ...ui.th, width: '10%' }} />
+              <th style={{ ...ui.th, width: '70%' }}>Cargo</th>
+              <th style={{ ...ui.th, width: '30%', textAlign: 'center' }}>Cant.</th>
             </tr>
           </thead>
           <tbody>
-            {(rows || []).length === 0 ? (
-              <tr>
-                <td colSpan={6} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
-                  {disabled
-                    ? 'Sin colaboradores registrados este día.'
-                    : 'Sin colaboradores. Use «+ Agregar colaborador» y selecciónelo desde RRHH.'}
-                </td>
-              </tr>
-            ) : (rows || []).map((row, idx) => {
-              const locked = disabled || (row.rrhh_trabajador_id != null && !!row.nombre)
+            {resumenRows.map((row) => {
+              const clickable = row.cargo && row.cargo !== '—'
               return (
-                <tr key={`as-${row.rrhh_trabajador_id || row.colaborador_id || row.nombre}-${idx}`}>
-                  <td style={ui.td} data-label="Nombre">
-                    {disabled ? (
-                      <>
-                        <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)' }}>{row.nombre}</div>
-                        {row.documento_numero ? (
-                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                            {row.documento_tipo || 'CC'} {row.documento_numero}
-                          </div>
-                        ) : null}
-                      </>
-                    ) : locked ? (
-                      <>
-                        <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)' }}>{row.nombre}</div>
-                        {row.documento_numero ? (
-                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                            {row.documento_tipo || 'CC'} {row.documento_numero}
-                          </div>
-                        ) : null}
-                        <button
-                          type="button"
-                          onClick={() => updateRow(idx, {
-                            rrhh_trabajador_id: null,
-                            nombre: '',
-                            cargo: '',
-                            subcontratista_nombre: '',
-                            subcontratista_id: null,
-                            documento_numero: '',
-                            estado: 'activo',
-                          })}
-                          style={{
-                            ...ui.clipBtn,
-                            color: t.primary,
-                            fontWeight: 600,
-                            fontSize: 'var(--cc-caption)',
-                            padding: 0,
-                            marginTop: 2,
-                          }}
-                        >
-                          Cambiar
-                        </button>
-                      </>
-                    ) : (
-                      <NombreRrhhAutocomplete
-                        t={t}
-                        value={row.nombre}
-                        catalogo={rrhhCatalogo}
-                        excludeIds={usedIds.filter((id) => id !== row.rrhh_trabajador_id)}
-                        onPick={(trab) => pickTrabajador(idx, trab)}
-                        style={cellInp}
-                      />
-                    )}
-                  </td>
-                  <td style={ui.td} data-label="Tramo">
-                    {disabled ? (
-                      <span style={{ fontSize: 'var(--cc-xs)' }}>{row.tramo || '—'}</span>
-                    ) : (
-                      <select
-                        value={row.tramo || ''}
-                        onChange={(e) => updateRow(idx, { tramo: e.target.value })}
-                        style={{ ...cellInp, height: 28 }}
-                        required
-                        title="Tramo obligatorio por colaborador"
-                      >
-                        <option value="">Seleccione…</option>
-                        {(tramosCatalogo || []).map((tr) => (
-                          <option key={tr} value={tr}>{tr}</option>
-                        ))}
-                        {row.tramo && !(tramosCatalogo || []).includes(row.tramo) ? (
-                          <option value={row.tramo}>{row.tramo}</option>
-                        ) : null}
-                      </select>
-                    )}
-                  </td>
+                <tr key={`ag-${row.cargo}`}>
                   <td style={ui.td} data-label="Cargo">
-                    <span style={{ fontSize: 'var(--cc-xs)' }}>{row.cargo || '—'}</span>
-                  </td>
-                  <td style={ui.td} data-label="Empresa">
-                    <span style={{ fontSize: 'var(--cc-xs)' }}>{row.subcontratista_nombre || '—'}</span>
-                  </td>
-                  <td style={ui.td} data-label="Horario">
-                    {disabled ? (
-                      formatHorarioAsistencia(row)
-                    ) : (
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <input
-                          type="time"
-                          value={(row.hora_ingreso || '').slice(0, 5)}
-                          onChange={(e) => updateRow(idx, { hora_ingreso: e.target.value })}
-                          style={{ ...cellInp, width: 96 }}
-                          title="Hora de ingreso"
-                        />
-                        <span style={{ color: t.textMuted }}>–</span>
-                        <input
-                          type="time"
-                          value={(row.hora_salida || HORA_SALIDA_DEFAULT).slice(0, 5)}
-                          onChange={(e) => updateRow(idx, {
-                            hora_salida: e.target.value || HORA_SALIDA_DEFAULT,
-                          })}
-                          style={{ ...cellInp, width: 96 }}
-                          title="Hora de salida (defecto 16:30)"
-                        />
-                      </div>
-                    )}
-                  </td>
-                  <td style={{ ...ui.td, textAlign: 'center', whiteSpace: 'nowrap' }} data-label="">
-                    {!disabled && (
+                    {clickable ? (
                       <button
                         type="button"
-                        onClick={() => removeRow(idx)}
-                        style={{ ...ui.clipBtn, color: '#B91C1C', fontWeight: 700 }}
-                        title="Quitar"
+                        onClick={() => setCargoDetalle(row.cargo)}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          padding: 0,
+                          margin: 0,
+                          cursor: 'pointer',
+                          color: t.primary,
+                          fontSize: 'var(--cc-xs)',
+                          fontWeight: 700,
+                          textAlign: 'left',
+                          textDecoration: 'underline',
+                          textUnderlineOffset: 2,
+                        }}
+                        title={`Ver detalle de ${row.cargo}`}
                       >
-                        ×
+                        {row.cargo}
                       </button>
+                    ) : (
+                      <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: t.textMuted }}>
+                        {row.cargo}
+                      </span>
                     )}
+                  </td>
+                  <td style={{ ...ui.td, textAlign: 'center', fontWeight: 800 }} data-label="Cant.">
+                    {clickable ? (
+                      <button
+                        type="button"
+                        onClick={() => setCargoDetalle(row.cargo)}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          padding: 0,
+                          cursor: 'pointer',
+                          fontWeight: 800,
+                          color: t.text,
+                          fontSize: 'inherit',
+                        }}
+                        title={`Ver detalle de ${row.cargo}`}
+                      >
+                        {row.cantidad}
+                      </button>
+                    ) : row.cantidad}
                   </td>
                 </tr>
               )
@@ -592,83 +433,23 @@ export default function PersonalAsistenciaPanel({
         </table>
       </div>
 
-      <div style={{
-        ...(ui.sectionBar || { ...ui.sectionTitle, marginBottom: 6 }),
-        marginTop: 12,
-      }}>
-        Resumen por cargo (automático
-        {permitirCargoCantidad
-          ? ' · RRHH + registro directo'
-          : (gateRrhhAprobado ? ' · solo Aprobados en RRHH' : ' · solo Activos en RRHH')})
-      </div>
-      <div style={ui.sheetWrapFlush || ui.sheetWrap} className="cc-bitacora-sheet-scroll">
-        {compact ? (
-          <table
-            className="cc-bitacora-responsive-table cc-bitacora-personal-table"
-            style={{ ...ui.sheetTable, tableLayout: 'auto' }}
-          >
-            <thead>
-              <tr>
-                <th style={{ ...ui.th, width: '70%' }}>Cargo</th>
-                <th style={{ ...ui.th, width: '30%', textAlign: 'center' }}>Cant.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(agregado.length ? agregado : [{ cargo: '—', cantidad: 0 }]).map((row) => (
-                <tr key={`ag-${row.cargo}`}>
-                  <td style={ui.td} data-label="Cargo">
-                    <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 600 }}>{row.cargo}</span>
-                  </td>
-                  <td style={{ ...ui.td, textAlign: 'center', fontWeight: 800 }} data-label="Cant.">
-                    {row.cantidad}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <table style={ui.sheetTable} className="cc-bitacora-personal-table">
-            <thead>
-              <tr>
-                {[0, 1, 2].map((c) => (
-                  <th key={`h${c}`} colSpan={2} style={{ ...ui.th, textAlign: 'center' }}>
-                    Col. {c + 1}
-                  </th>
-                ))}
-              </tr>
-              <tr>
-                {[0, 1, 2].map((c) => (
-                  <Fragment key={`hh${c}`}>
-                    <th style={{ ...ui.th, width: '18%' }}>Cargo</th>
-                    <th style={{ ...ui.th, width: '7%', textAlign: 'center' }}>Cant.</th>
-                  </Fragment>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {Array.from({ length: maxRows }).map((_, ri) => (
-                <tr key={`pr${ri}`}>
-                  {[0, 1, 2].map((ci) => {
-                    const row = personalCols[ci][ri]
-                    return (
-                      <Fragment key={`c${ci}-${ri}`}>
-                        <td style={ui.td}>
-                          {row ? (
-                            <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 600 }}>{row.cargo}</span>
-                          ) : null}
-                        </td>
-                        <td style={{ ...ui.td, textAlign: 'center', fontWeight: 800 }}>
-                          {row && row.cargo !== '—' ? row.cantidad : (row ? 0 : '')}
-                        </td>
-                      </Fragment>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {cargoDetalle && (
+        <PersonalCargoDetalleModal
+          t={t}
+          cargo={cargoDetalle}
+          entries={entriesDetalle}
+          rows={rows}
+          onChange={onChange}
+          disabled={disabled}
+          rrhhCatalogo={rrhhCatalogo}
+          tramosCatalogo={tramosCatalogo}
+          cantidadManual={cantidadManualDetalle}
+          onChangeCantidadManual={(n) => setCantidadManualCargo(cargoDetalle, n)}
+          permitirCargoCantidad={permitirCargoCantidad}
+          viewportCompact={viewportCompact}
+          onClose={() => setCargoDetalle(null)}
+        />
+      )}
     </div>
   )
 }

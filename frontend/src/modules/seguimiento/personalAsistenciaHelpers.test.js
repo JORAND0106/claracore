@@ -10,9 +10,11 @@ import {
   asistenciaFromEntrada,
   asistenciaParaPayload,
   asistenciaRowFromRrhh,
+  cantidadManualPorCargo,
   capitalizarNombrePropio,
   emptyAsistenciaRow,
   estadoCuentaEnResumen,
+  filasAsistenciaPorCargo,
   filtrarTrabajadoresRrhh,
   formatHorarioAsistencia,
   mapaEstadosRrhh,
@@ -140,6 +142,58 @@ describe('personalAgregadoDesdeAsistencia', () => {
     // Aunque RRHH ahora diga inactivo, al no pasar live map se usa el snapshot.
     const agg = personalAgregadoDesdeAsistencia(rows, { liveEstadosByRrhhId: null })
     assert.deepEqual(agg, [{ cargo: 'Oficial', cantidad: 1 }])
+  })
+
+  it('con 100+ personas el resumen permanece compacto por cargo', () => {
+    const cargos = ['Ayudante', 'Maestro', 'Topógrafo', 'Oficial', 'Operador']
+    const rows = Array.from({ length: 120 }, (_, i) => ({
+      nombre: `Persona ${i + 1}`,
+      cargo: cargos[i % cargos.length],
+      estado: 'activo',
+      rrhh_trabajador_id: i + 1,
+    }))
+    const agg = personalAgregadoDesdeAsistencia(rows)
+    assert.equal(agg.length, cargos.length)
+    assert.equal(agg.reduce((s, r) => s + r.cantidad, 0), 120)
+    assert.ok(agg.every((r) => r.cantidad === 24))
+  })
+})
+
+describe('filasAsistenciaPorCargo / cantidadManualPorCargo', () => {
+  it('filtra por cargo case-insensitive y conserva índices originales', () => {
+    const rows = [
+      { nombre: 'A', cargo: 'Ayudante' },
+      { nombre: 'B', cargo: 'Oficial' },
+      { nombre: 'C', cargo: 'ayudante' },
+      { nombre: 'D', cargo: 'Maestro' },
+    ]
+    const hits = filasAsistenciaPorCargo(rows, 'Ayudantes'.replace(/s$/, '')) // Ayudante
+    assert.equal(hits.length, 2)
+    assert.equal(hits[0].index, 0)
+    assert.equal(hits[0].row.nombre, 'A')
+    assert.equal(hits[1].index, 2)
+    assert.equal(hits[1].row.nombre, 'C')
+    assert.deepEqual(filasAsistenciaPorCargo(rows, ''), [])
+    assert.deepEqual(filasAsistenciaPorCargo(null, 'Oficial'), [])
+  })
+
+  it('con 100+ filas el detalle de un cargo solo trae ese subconjunto', () => {
+    const rows = Array.from({ length: 110 }, (_, i) => ({
+      nombre: `P${i}`,
+      cargo: i < 40 ? 'Ayudante' : (i < 70 ? 'Maestro' : 'Topógrafo'),
+      estado: 'activo',
+    }))
+    const ayudantes = filasAsistenciaPorCargo(rows, 'Ayudante')
+    assert.equal(ayudantes.length, 40)
+    assert.equal(ayudantes[39].index, 39)
+    assert.equal(filasAsistenciaPorCargo(rows, 'Maestro').length, 30)
+    assert.equal(filasAsistenciaPorCargo(rows, 'Topógrafo').length, 40)
+  })
+
+  it('cantidadManualPorCargo lee el aporte directo del cargo', () => {
+    assert.equal(cantidadManualPorCargo([{ cargo: 'Ayudante', cantidad: 5 }], 'ayudante'), 5)
+    assert.equal(cantidadManualPorCargo([{ cargo: 'Oficial', cantidad: 2 }], 'Ayudante'), 0)
+    assert.equal(cantidadManualPorCargo([], 'Oficial'), 0)
   })
 })
 

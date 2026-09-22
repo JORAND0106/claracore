@@ -181,6 +181,35 @@ export function personalAgregadoDesdeAsistencia(rows, opts = {}) {
     .map(([cargo, cantidad]) => ({ cargo, cantidad }))
 }
 
+/**
+ * Filas de asistencia con el cargo indicado (comparación case-insensitive).
+ * Devuelve `{ row, index }` para poder actualizar/quitar en el arreglo original.
+ */
+export function filasAsistenciaPorCargo(rows, cargo) {
+  const key = String(cargo || '').trim().toLowerCase()
+  if (!key) return []
+  const out = []
+  ;(rows || []).forEach((row, index) => {
+    if (String(row?.cargo || '').trim().toLowerCase() === key) {
+      out.push({ row, index })
+    }
+  })
+  return out
+}
+
+/** Cantidad de registro directo (sin nombres) asociada a un cargo. */
+export function cantidadManualPorCargo(personalManual, cargo) {
+  const key = String(cargo || '').trim().toLowerCase()
+  if (!key) return 0
+  for (const r of personalManual || []) {
+    if (String(r?.cargo || '').trim().toLowerCase() === key) {
+      const n = Number(r?.cantidad)
+      return Number.isFinite(n) && n > 0 ? n : 0
+    }
+  }
+  return 0
+}
+
 export function asistenciaParaPayload(rows) {
   return asistenciaFromEntrada(rows).map((r) => ({
     rrhh_trabajador_id: r.rrhh_trabajador_id,
