@@ -677,9 +677,10 @@ def calcular_cantidades_y_descuentos(
 
 
 def perfil_longitudinal(cartera: dict, seccion: dict) -> dict[str, Any]:
-    """Series del ScatterChart: TN / Terminado Filtro|Cota Lomo / Cota Fondo."""
-    etiqueta = "Terminado Filtro" if seccion["tipo"] == "FILTRO" else "Cota Lomo"
-    series = {
+    """Series del ScatterChart: TN [/ Subrasante] / Terminado|Cota Lomo / Cota Fondo."""
+    tipo = seccion["tipo"]
+    etiqueta = "Terminado Filtro" if tipo == "FILTRO" else "Cota Lomo"
+    series: dict[str, Any] = {
         "abscisas": [],
         "terreno_natural": [],
         "nivel_referencia": [],
@@ -689,17 +690,24 @@ def perfil_longitudinal(cartera: dict, seccion: dict) -> dict[str, Any]:
         "eje_x": "longitud de tramo",
         "eje_y": "cota",
     }
+    if tipo == "ALCANTARILLA":
+        series["subrasante_via"] = []
+        series["cota_lomo"] = []
+        series["etiqueta_subrasante"] = "Subrasante de Vía"
     for f in cartera.get("filas") or []:
         if f.get("vacio"):
             continue
         series["abscisas"].append(f.get("abscisa"))
         series["terreno_natural"].append(f.get("terreno_natural"))
-        if seccion["tipo"] == "FILTRO":
+        if tipo == "FILTRO":
             series["nivel_referencia"].append(f.get("terminado_filtro") or f.get("nivel_referencia"))
         else:
-            series["nivel_referencia"].append(
-                f.get("cota_lomo") or f.get("subrasante_via") or f.get("nivel_referencia")
-            )
+            cota_lomo = f.get("cota_lomo")
+            sub = f.get("subrasante_via") or f.get("nivel_referencia")
+            series["subrasante_via"].append(sub)
+            series["cota_lomo"].append(cota_lomo)
+            # Compat: nivel_referencia = Cota Lomo (serie principal del XLSM)
+            series["nivel_referencia"].append(cota_lomo if cota_lomo is not None else sub)
         series["cota_fondo_excavacion"].append(f.get("cota_fondo_excavacion"))
     return series
 

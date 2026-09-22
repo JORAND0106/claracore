@@ -110,6 +110,7 @@ class FilaBody(BaseModel):
     terreno_natural: Optional[float] = None
     subrasante_via: Optional[float] = None
     terminado_filtro: Optional[float] = None
+    cota_lomo: Optional[float] = None
     cota_fondo_excavacion: Optional[float] = None
     norte: Optional[float] = None
     este: Optional[float] = None
@@ -171,18 +172,52 @@ def _descuentos(planilla_id: str) -> list[dict]:
     )
 
 
-def _as_campo(filas_db: list[dict]) -> list[dict]:
-    return [{
+def _as_campo(filas_db: list[dict], *, tipo: Optional[str] = None) -> list[dict]:
+    """Normaliza filas DB → campo. En ALC, cota_lomo usa columna propia o terminado_filtro."""
+    tipo_u = (tipo or "").upper()
+    out = []
+    for f in filas_db:
+        cota_lomo = f.get("cota_lomo")
+        terminado = f.get("terminado_filtro")
+        # Persistencia dual: si no hay columna cota_lomo, ALC guarda en terminado_filtro.
+        if cota_lomo is None and tipo_u == "ALCANTARILLA":
+            cota_lomo = terminado
+        out.append({
+            "orden": f.get("orden"),
+            "abscisa": f.get("abscisa"),
+            "terreno_natural": f.get("terreno_natural"),
+            "subrasante_via": f.get("subrasante_via"),
+            "terminado_filtro": terminado if tipo_u != "ALCANTARILLA" else None,
+            "cota_lomo": cota_lomo if tipo_u != "FILTRO" else None,
+            "cota_fondo_excavacion": f.get("cota_fondo_excavacion"),
+            "norte": f.get("norte"),
+            "este": f.get("este"),
+            "observacion": f.get("observacion"),
+        })
+    return out
+
+
+def _fila_campo_para_db(f: dict, *, tipo: str) -> dict:
+    """Prepara fila para upsert: ALC mapea cota_lomo → terminado_filtro (+ cota_lomo si existe)."""
+    tipo_u = (tipo or "ALCANTARILLA").upper()
+    cota_lomo = f.get("cota_lomo")
+    terminado = f.get("terminado_filtro")
+    if tipo_u == "ALCANTARILLA":
+        if cota_lomo is None and terminado is not None:
+            cota_lomo = terminado
+        terminado = cota_lomo  # fallback de persistencia sin columna dedicada
+    return {
         "orden": f.get("orden"),
         "abscisa": f.get("abscisa"),
         "terreno_natural": f.get("terreno_natural"),
-        "subrasante_via": f.get("subrasante_via"),
-        "terminado_filtro": f.get("terminado_filtro"),
+        "subrasante_via": f.get("subrasante_via") if tipo_u == "ALCANTARILLA" else None,
+        "terminado_filtro": terminado,
+        "cota_lomo": cota_lomo if tipo_u == "ALCANTARILLA" else None,
         "cota_fondo_excavacion": f.get("cota_fondo_excavacion"),
         "norte": f.get("norte"),
         "este": f.get("este"),
         "observacion": f.get("observacion"),
-    } for f in filas_db]
+    }
 
 
 def _cama_triturado_m(planilla: dict) -> float:
@@ -303,7 +338,7 @@ def _calcular(planilla: dict, filas_db: list[dict], desc_db: list[dict]) -> dict
         espesor_m=float(planilla.get("espesor_m") or 0),
         ancho_excavacion_m=ancho,
         relacion_atraque=planilla.get("relacion_atraque") or "1:3",
-        filas_campo=_as_campo(filas_db),
+        filas_campo=_as_campo(filas_db, tipo=planilla.get("tipo")),
         descuentos_manuales=[{"codigo": d["codigo"], "cantidad": d.get("cantidad")} for d in desc_db],
         cantidades_manuales=_cantidades_manuales_from_meta(planilla),
         cama_triturado_m=_cama_triturado_m(planilla),
@@ -365,7 +400,7 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
 
     return {
         "planilla": planilla,
-        "filas_campo": filas,
+        "filas_campo": _as_campo(filas, tipo=planilla.get("tipo")),
         "descuentos_manuales": descuentos,
         "calculo": calculo,
         "coords_wgs84": coords,
@@ -392,16 +427,27 @@ def _num_fp(v: Any) -> str:
 
 
 def fingerprint_filas_campo(filas: list[dict]) -> list[str]:
-    """Huella estable orden|abscisa|TN|CFE|subrasante|terminado (eco post-guardado)."""
+    """Huella estable orden|abscisa|TN|CFE|subrasante|terminado|cota_lomo (eco post-guardado).
+
+    Cota Lomo (ALC) puede vivir en `cota_lomo` o en `terminado_filtro` (fallback de
+    persistencia); la huella usa el valor efectivo.
+    """
+    def _extra_nivel(f: dict) -> str:
+        if f.get("cota_lomo") is not None and f.get("cota_lomo") != "":
+            return _num_fp(f.get("cota_lomo"))
+        return _num_fp(f.get("terminado_filtro"))
+
     return sorted(
         f"{int(f.get('orden') or 0)}|{_num_fp(f.get('abscisa'))}|"
         f"{_num_fp(f.get('terreno_natural'))}|{_num_fp(f.get('cota_fondo_excavacion'))}|"
-        f"{_num_fp(f.get('subrasante_via'))}|{_num_fp(f.get('terminado_filtro'))}"
+        f"{_num_fp(f.get('subrasante_via'))}|{_extra_nivel(f)}"
         for f in (filas or [])
     )
 
 
 def _fila_payload_db(planilla_id: str, f: dict, *, orden: int, row_id: Optional[str] = None) -> dict:
+    # Cota Lomo se persiste en terminado_filtro (columna siempre presente).
+    # Si el entorno ya tiene cota_lomo, también se escribe (ignorado si falla).
     return {
         "id": row_id or str(uuid4()),
         "planilla_id": planilla_id,
@@ -417,7 +463,7 @@ def _fila_payload_db(planilla_id: str, f: dict, *, orden: int, row_id: Optional[
     }
 
 
-def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
+def _replace_filas(planilla_id: str, filas: list[dict], *, tipo: str = "ALCANTARILLA") -> list[dict]:
     """Reemplaza la cartera de forma idempotente por (planilla_id, orden).
 
     Evita el patrón insert+delete que chocaba con UNIQUE(planilla_id, orden) y
@@ -437,19 +483,20 @@ def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
         except (TypeError, ValueError):
             continue
 
-    ordenes_finales = [int(f["orden"]) for f in filas]
+    normalizadas = [_fila_campo_para_db(f, tipo=tipo) for f in filas]
+    ordenes_finales = [int(f["orden"]) for f in normalizadas]
     wanted = set(ordenes_finales)
     expected_fp = fingerprint_filas_campo([
-        {**f, "orden": o} for f, o in zip(filas, ordenes_finales)
+        {**f, "orden": o} for f, o in zip(normalizadas, ordenes_finales)
     ])
 
     logger.info(
         "planilla_tuberia_filas_replace start id=%s previas=%s payload=%s strategy=upsert_orden",
-        planilla_id, len(prev), len(filas),
+        planilla_id, len(prev), len(normalizadas),
     )
 
     try:
-        for f, o in zip(filas, ordenes_finales):
+        for f, o in zip(normalizadas, ordenes_finales):
             fields = {
                 "abscisa": f.get("abscisa"),
                 "terreno_natural": f.get("terreno_natural"),
@@ -482,8 +529,8 @@ def _replace_filas(planilla_id: str, filas: list[dict]) -> list[dict]:
                 ).execute()
 
         rows = _filas(planilla_id)
-        if len(rows) != len(filas):
-            raise RuntimeError(f"Cartera inconsistente {len(rows)}/{len(filas)}")
+        if len(rows) != len(normalizadas):
+            raise RuntimeError(f"Cartera inconsistente {len(rows)}/{len(normalizadas)}")
         got_fp = fingerprint_filas_campo(rows)
         if got_fp != expected_fp:
             # Log detallado; reintento de lectura (eventual consistency) antes de fallar
@@ -695,7 +742,9 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
     tipo_prev = (p.get("tipo") or "ALCANTARILLA").upper()
     if "tipo" in patch and patch["tipo"] != tipo_prev:
         filas_db = _filas(planilla_id)
-        migradas = migrar_filas_campo_al_cambiar_tipo(_as_campo(filas_db), patch["tipo"])
+        migradas = migrar_filas_campo_al_cambiar_tipo(
+            _as_campo(filas_db, tipo=tipo_prev), patch["tipo"],
+        )
         if migradas:
             _replace_filas(planilla_id, [
                 {
@@ -704,13 +753,14 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
                     "terreno_natural": f.get("terreno_natural"),
                     "subrasante_via": f.get("subrasante_via"),
                     "terminado_filtro": f.get("terminado_filtro"),
+                    "cota_lomo": f.get("cota_lomo"),
                     "cota_fondo_excavacion": f.get("cota_fondo_excavacion"),
                     "norte": f.get("norte"),
                     "este": f.get("este"),
                     "observacion": f.get("observacion"),
                 }
                 for f in migradas
-            ])
+            ], tipo=patch["tipo"])
         desc_db = _descuentos(planilla_id)
         kept = filtrar_descuentos_manuales_por_tipo(
             patch["tipo"],
@@ -751,10 +801,12 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
         p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id) or {**p, "meta_cabecera": new_meta}
 
     filas_util = []
+    tipo_planilla = p.get("tipo") or "ALCANTARILLA"
     for f in body.filas:
         d = f.model_dump()
         if any(d.get(k) is not None for k in (
-            "abscisa", "terreno_natural", "subrasante_via", "terminado_filtro", "cota_fondo_excavacion"
+            "abscisa", "terreno_natural", "subrasante_via", "terminado_filtro",
+            "cota_lomo", "cota_fondo_excavacion",
         )):
             filas_util.append(d)
 
@@ -762,7 +814,7 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
     if not filas_util:
         raise HTTPException(422, "No hay filas con datos para guardar en la cartera.")
 
-    valid = validar_cartera_campo(filas_util, p.get("tipo") or "ALCANTARILLA")
+    valid = validar_cartera_campo(filas_util, tipo_planilla)
     if not valid.get("ok"):
         raise HTTPException(422, {
             "mensaje": "Validación restrictiva: corrija errores antes de guardar.",
@@ -787,7 +839,7 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
         })
 
     try:
-        rows = _replace_filas(planilla_id, filas_util)
+        rows = _replace_filas(planilla_id, filas_util, tipo=tipo_planilla)
     except Exception as exc:
         raise HTTPException(500, f"Error al guardar cartera: {exc}") from exc
 
@@ -1567,17 +1619,43 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         else "PLANILLA DE INSTALACIÓN DE TUBERÍA ALCANTARILLAS"
     )
 
-    rows = "".join(
-        f"<tr><td>{f.get('orden')}</td><td>{fmt(f.get('abscisa'),2)}</td>"
-        f"<td>{fmt(f.get('terreno_natural'))}</td>"
-        f"<td>{fmt(f.get('subrasante_via') if tipo=='ALCANTARILLA' else f.get('terminado_filtro'))}</td>"
-        f"<td>{fmt(f.get('cota_fondo_excavacion'))}</td>"
-        f"<td class='calc'>{fmt(f.get('altura_excavacion'))}</td>"
-        f"<td class='calc'>{fmt(f.get('altura_triturado'))}</td>"
-        f"<td class='calc'>{fmt(f.get('altura_relleno'))}</td>"
-        f"<td class='calc'>{fmt(f.get('ancho_geotextil'))}</td></tr>"
-        for f in filas
-    )
+    if tipo == "ALCANTARILLA":
+        rows = "".join(
+            f"<tr><td>{f.get('orden')}</td><td>{fmt(f.get('abscisa'),2)}</td>"
+            f"<td>{fmt(f.get('terreno_natural'))}</td>"
+            f"<td>{fmt(f.get('subrasante_via'))}</td>"
+            f"<td>{fmt(f.get('cota_lomo'))}</td>"
+            f"<td>{fmt(f.get('cota_fondo_excavacion'))}</td>"
+            f"<td class='calc'>{fmt(f.get('altura_excavacion'))}</td>"
+            f"<td class='calc'>{fmt(f.get('altura_triturado'))}</td>"
+            f"<td class='calc'>{fmt(f.get('altura_relleno'))}</td>"
+            f"<td class='calc'>{fmt(f.get('ancho_geotextil'))}</td></tr>"
+            for f in filas
+        )
+        cartera_hdr = (
+            "<th>#</th><th>Abscisa</th><th>Terreno Natural</th>"
+            "<th>Subrasante de Vía</th><th>Cota Lomo</th><th>Cota Fondo Excavación</th>"
+            "<th>Altura Excavacion</th><th>Altura Triturado</th>"
+            "<th>Altura Relleno</th><th>Ancho Geotextil</th>"
+        )
+    else:
+        rows = "".join(
+            f"<tr><td>{f.get('orden')}</td><td>{fmt(f.get('abscisa'),2)}</td>"
+            f"<td>{fmt(f.get('terreno_natural'))}</td>"
+            f"<td>{fmt(f.get('terminado_filtro'))}</td>"
+            f"<td>{fmt(f.get('cota_fondo_excavacion'))}</td>"
+            f"<td class='calc'>{fmt(f.get('altura_excavacion'))}</td>"
+            f"<td class='calc'>{fmt(f.get('altura_triturado'))}</td>"
+            f"<td class='calc'>{fmt(f.get('altura_relleno'))}</td>"
+            f"<td class='calc'>{fmt(f.get('ancho_geotextil'))}</td></tr>"
+            for f in filas
+        )
+        cartera_hdr = (
+            f"<th>#</th><th>Abscisa</th><th>Terreno Natural</th><th>{nivel_hdr}</th>"
+            "<th>Cota Fondo Excavación</th>"
+            "<th>Altura Excavacion</th><th>Altura Triturado</th>"
+            "<th>Altura Relleno</th><th>Ancho Geotextil</th>"
+        )
     netos = calc.get("netos") or [
         {**it, "long": None, "ancho": None, "espesor": None, "bruto": None, "descuentos": None, "neto": None}
         for it in ITEMS_CANTIDADES
@@ -1657,9 +1735,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     {franja}
     <h2>Cartera</h2>
     <table class="sheet cartera"><thead><tr>
-      <th>#</th><th>Abscisa</th><th>Terreno Natural</th><th>{nivel_hdr}</th>
-      <th>Cota Fondo Excavación</th><th>Altura Excavacion</th><th>Altura Triturado</th>
-      <th>Altura Relleno</th><th>Ancho Geotextil</th>
+      {cartera_hdr}
     </tr></thead><tbody>{rows}</tbody></table>
     <div style="clear:both;height:2px;"></div>{graficos}<div style="clear:both;height:6px;">&nbsp;</div>
     <table class="grid2"><tr>

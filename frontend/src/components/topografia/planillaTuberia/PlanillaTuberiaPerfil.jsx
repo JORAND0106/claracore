@@ -1,6 +1,7 @@
 /**
  * Perfil longitudinal — series del motor (nulls rompen la polilínea).
- * Incluye grilla de referencia (abscisas × cotas) para lectura intermedia.
+ * ALCANTARILLA: TN + Subrasante + Cota Lomo + CFE.
+ * FILTRO: TN + Terminado Filtro + CFE.
  */
 import { fmtNDash } from './planillaTuberiaUtils'
 
@@ -33,10 +34,15 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
   const p = perfil || {}
   const abs = p.abscisas || []
   const tn = p.terreno_natural || []
-  const nv = p.nivel_referencia || []
+  const sub = p.subrasante_via || []
+  const cotaLomo = p.cota_lomo || []
+  const nv = (cotaLomo.some((v) => v != null) ? cotaLomo : (p.nivel_referencia || []))
   const cfe = p.cota_fondo_excavacion || []
+  const tieneSub = Array.isArray(p.subrasante_via) && sub.some((v) => v != null)
 
-  const nums = [...tn, ...nv, ...cfe].filter((v) => v != null && !Number.isNaN(Number(v))).map(Number)
+  const nums = [...tn, ...nv, ...cfe, ...(tieneSub ? sub : [])]
+    .filter((v) => v != null && !Number.isNaN(Number(v)))
+    .map(Number)
   const absN = abs.filter((v) => v != null && !Number.isNaN(Number(v))).map(Number)
   if (absN.length < 2 || nums.length < 2) {
     return (
@@ -79,13 +85,20 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
     ))
   }
 
+  let legX = pad.l
+  const legends = [
+    { label: 'TN', color: '#166534', show: true },
+    { label: p.etiqueta_subrasante || 'Subrasante', color: '#7c3aed', show: tieneSub },
+    { label: p.etiqueta_nivel || 'Nivel', color: '#1d4ed8', show: true },
+    { label: 'CFE', color: '#b45309', show: true },
+  ]
+
   return (
     <div style={{ border: `1px solid ${ui?.border || '#cbd5e1'}`, borderRadius: 8, padding: 8, background: ui?.cardBg || '#fff' }}>
       <div style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, marginBottom: 4, color: ui?.textMuted || '#64748b' }}>
         Perfil longitudinal
       </div>
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Perfil longitudinal">
-        {/* Grilla de referencia */}
         {xTicks.map((a, i) => (
           <line
             key={`gx-${i}`}
@@ -111,18 +124,26 @@ export default function PlanillaTuberiaPerfil({ perfil, ui }) {
         <line x1={pad.l} y1={pad.t} x2={pad.l} y2={yBase} stroke="#94a3b8" />
         <line x1={pad.l} y1={yBase} x2={W - pad.r} y2={yBase} stroke="#94a3b8" />
         {poly(tn, '#166534')}
+        {tieneSub ? poly(sub, '#7c3aed') : null}
         {poly(nv, '#1d4ed8')}
         {poly(cfe, '#b45309')}
-        <text x={pad.l} y={14} fontSize="10" fill="#166534">TN</text>
-        <text x={pad.l + 40} y={14} fontSize="10" fill="#1d4ed8">{p.etiqueta_nivel || 'Nivel'}</text>
-        <text x={pad.l + 140} y={14} fontSize="10" fill="#b45309">CFE</text>
+        {legends.filter((l) => l.show).map((l) => {
+          const x = legX
+          legX += Math.max(36, String(l.label).length * 7 + 8)
+          return (
+            <text key={l.label} x={x} y={14} fontSize="10" fill={l.color}>{l.label}</text>
+          )
+        })}
         {yTicks.map((v, i) => (
           <text key={`yl-${i}`} x={pad.l - 4} y={yOf(v) + 3} fontSize="8" fill="#94a3b8" textAnchor="end">
             {fmtNDash(v, 2)}
           </text>
         ))}
-        <text x={pad.l} y={H - 8} fontSize="9" fill="#64748b">{fmtNDash(minA, 2)}</text>
-        <text x={W - pad.r} y={H - 8} fontSize="9" fill="#64748b" textAnchor="end">{fmtNDash(maxA, 2)}</text>
+        {xTicks.map((a, i) => (
+          <text key={`xl-${i}`} x={xOf(a)} y={H - 10} fontSize="8" fill="#94a3b8" textAnchor="middle">
+            {fmtNDash(a, 1)}
+          </text>
+        ))}
       </svg>
     </div>
   )

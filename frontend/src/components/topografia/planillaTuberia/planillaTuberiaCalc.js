@@ -449,22 +449,32 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
 }
 
 export function perfilLongitudinal(cartera, seccion) {
+  const tipo = seccion.tipo
   const serie = {
     abscisas: [],
     terreno_natural: [],
     nivel_referencia: [],
     cota_fondo_excavacion: [],
-    etiqueta_nivel: seccion.tipo === 'FILTRO' ? 'Terminado Filtro' : 'Cota Lomo',
+    etiqueta_nivel: tipo === 'FILTRO' ? 'Terminado Filtro' : 'Cota Lomo',
     titulo_grafico: 'Perfil Longitudinal de Tubería',
+  }
+  if (tipo === 'ALCANTARILLA') {
+    serie.subrasante_via = []
+    serie.cota_lomo = []
+    serie.etiqueta_subrasante = 'Subrasante de Vía'
   }
   for (const fila of cartera.filas || []) {
     if (fila.vacio) continue
     serie.abscisas.push(fila.abscisa)
     serie.terreno_natural.push(fila.terreno_natural)
-    if (seccion.tipo === 'FILTRO') {
+    if (tipo === 'FILTRO') {
       serie.nivel_referencia.push(fila.terminado_filtro || fila.nivel_referencia)
     } else {
-      serie.nivel_referencia.push(fila.cota_lomo || fila.subrasante_via || fila.nivel_referencia)
+      const sub = fila.subrasante_via || fila.nivel_referencia
+      const cl = fila.cota_lomo
+      serie.subrasante_via.push(sub)
+      serie.cota_lomo.push(cl)
+      serie.nivel_referencia.push(cl != null ? cl : sub)
     }
     serie.cota_fondo_excavacion.push(fila.cota_fondo_excavacion)
   }

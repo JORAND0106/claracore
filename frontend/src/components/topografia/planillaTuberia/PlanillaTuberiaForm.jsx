@@ -47,6 +47,7 @@ import {
   lineasConCantidadCalculada,
   normalizarCantidadesManuales,
   siguienteCodigoOtros,
+  desgloseAtraqueAlcantarilla,
 } from './planillaTuberiaUtils'
 
 
@@ -117,6 +118,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     espesor_m: '0',
     ancho_excavacion_m: '',
     relacion_atraque: '1:3',
+    cama_triturado_m: '',
     material: '',
     norte_abs_inicial: '',
     este_abs_inicial: '',
@@ -170,6 +172,10 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       espesor_m: p.espesor_m ?? '0',
       ancho_excavacion_m: p.ancho_excavacion_m ?? '',
       relacion_atraque: p.relacion_atraque || '1:3',
+      cama_triturado_m: (() => {
+        const meta0 = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
+        return meta0.cama_triturado_m ?? ''
+      })(),
       material: p.material || '',
       ...coordsGeoDesdePlanilla(p),
     })
@@ -210,6 +216,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       espesor_m: '0',
       ancho_excavacion_m: '',
       relacion_atraque: '1:3',
+      cama_triturado_m: '',
       material: '',
       norte_abs_inicial: '',
       este_abs_inicial: '',
@@ -260,7 +267,14 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     const prev = (planilla?.meta_cabecera && typeof planilla.meta_cabecera === 'object')
       ? planilla.meta_cabecera
       : {}
-    return { ...prev, cantidades_manuales: cantManuales }
+    const meta = { ...prev, cantidades_manuales: cantManuales }
+    if (String(params.tipo || '').toUpperCase() === 'ALCANTARILLA') {
+      const cama = params.cama_triturado_m === '' || params.cama_triturado_m == null
+        ? 0
+        : Number(params.cama_triturado_m)
+      meta.cama_triturado_m = Number.isFinite(cama) ? cama : 0
+    }
+    return meta
   }
 
   const overrideCantidad = (codigo) => (
@@ -616,7 +630,10 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     const meta = (planilla?.meta_cabecera && typeof planilla.meta_cabecera === 'object')
       ? planilla.meta_cabecera
       : {}
-    const cama = meta.cama_triturado_m
+    const camaParam = params.cama_triturado_m
+    const cama = (camaParam !== '' && camaParam != null)
+      ? Number(camaParam)
+      : (meta.cama_triturado_m ?? 0)
     return calcularPlanillaLocal({
       tipo: params.tipo,
       diametro_m: params.diametro_m,
@@ -626,7 +643,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       filas_campo: (filas || []).map((row, i) => ({ ...row, orden: i + 1 })),
       descuentos_manuales: detalle?.descuentos_manuales || [],
       cantidades_manuales: cantManuales,
-      cama_triturado_m: cama ?? 0,
+      cama_triturado_m: Number.isFinite(Number(cama)) ? Number(cama) : 0,
     })
   }, [filas, params, cantManuales, detalle?.descuentos_manuales, planilla?.meta_cabecera])
 
@@ -668,7 +685,14 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   }, [calculoVista, filas])
 
   const nivelLabel = params.tipo === 'FILTRO' ? 'Terminado Filtro' : 'Subrasante de Vía'
-  const nivelKey = params.tipo === 'FILTRO' ? 'terminado_filtro' : 'subrasante_via'
+  const esAlc = String(params.tipo || '').toUpperCase() === 'ALCANTARILLA'
+  const colsCampoEdit = esAlc
+    ? ['abscisa', 'terreno_natural', 'subrasante_via', 'cota_lomo', 'cota_fondo_excavacion']
+    : ['abscisa', 'terreno_natural', 'terminado_filtro', 'cota_fondo_excavacion']
+  const desgloseAtraque = useMemo(
+    () => desgloseAtraqueAlcantarilla(calculoVista?.seccion || calculoVista?.seccion_tipica),
+    [calculoVista],
+  )
 
   const thBase = { ...sheet.th, textAlign: 'center' }
   const thCalc = { ...thBase, background: CALC_CELL_BG }
@@ -881,14 +905,15 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         {
           key: 'tramo',
           columns: [
-            { key: 'nombre', label: 'Nombre', width: '16%' },
-            { key: 'pk_id', label: 'PK / ID', width: '12%' },
-            { key: 'costado', label: 'Costado', width: '10%' },
-            { key: 'diametro_m', label: 'Ø (m)', width: '8%' },
-            { key: 'espesor_m', label: 'Espesor', width: '8%' },
-            { key: 'ancho_excavacion_m', label: 'Ancho B', width: '10%' },
-            { key: 'relacion_atraque', label: 'Rel. atraque', width: '10%' },
-            { key: 'material', label: 'Material', width: '14%' },
+            { key: 'nombre', label: 'Nombre', width: '14%' },
+            { key: 'pk_id', label: 'PK / ID', width: '10%' },
+            { key: 'costado', label: 'Costado', width: '8%' },
+            { key: 'diametro_m', label: 'Ø (m)', width: '7%' },
+            { key: 'espesor_m', label: 'Espesor', width: '7%' },
+            { key: 'ancho_excavacion_m', label: 'Ancho B', width: '8%' },
+            { key: 'relacion_atraque', label: 'Rel. atraque', width: '9%' },
+            ...(esAlc ? [{ key: 'cama_triturado_m', label: 'Cama Triturado', width: '10%' }] : []),
+            { key: 'material', label: 'Material', width: esAlc ? '12%' : '14%' },
           ],
           cells: [
             <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
@@ -926,6 +951,19 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             <select key="rel" disabled={!editable} value={params.relacion_atraque} onChange={(e) => setParams((p) => ({ ...p, relacion_atraque: e.target.value }))} style={sheet.cellSelect}>
               {RELACIONES_ATRAQUE.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>,
+            ...(esAlc ? [
+              <input
+                key="cama"
+                type="number"
+                step="any"
+                min="0"
+                disabled={!editable}
+                value={params.cama_triturado_m}
+                onChange={(e) => setParams((p) => ({ ...p, cama_triturado_m: e.target.value }))}
+                title="Cama de Triturado / cimentación (m)"
+                style={sheet.cellInp}
+              />,
+            ] : []),
             <input key="mat" disabled={!editable} value={params.material} onChange={(e) => setParams((p) => ({ ...p, material: e.target.value }))} style={sheet.cellInp} />,
           ],
         },
@@ -947,9 +985,32 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       ]}
     />
     <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
-      H.Relleno={fmtNDash(planilla.altura_relleno_m, 4)} ·
-      A1={fmtNDash(planilla.area_1_m2, 4)} ·
-      A2={fmtNDash(planilla.area_2_m2, 4)}
+      {desgloseAtraque ? (
+        <>
+          h<sub>atr</sub>({desgloseAtraque.relacion})=
+          {desgloseAtraque.radio_externo_m != null
+            ? `2·r/${desgloseAtraque.denominador}=`
+            : ''}
+          {fmtNDash(desgloseAtraque.altura_atraque_m, 3)} m
+          {' · '}h<sub>trit</sub>=h<sub>atr</sub>+cama=
+          {fmtNDash(desgloseAtraque.altura_atraque_m, 3)}+
+          {fmtNDash(desgloseAtraque.cama_triturado_m, 3)}=
+          {fmtNDash(desgloseAtraque.altura_triturado_m, 3)} m
+          {' · '}(h<sub>trit</sub>×B)−A1=
+          {fmtNDash(desgloseAtraque.altura_triturado_m, 3)}×
+          {fmtNDash(desgloseAtraque.ancho_excavacion_m, 3)}−
+          {fmtNDash(desgloseAtraque.area_1_m2, 3)}=
+          {fmtNDash(desgloseAtraque.seccion_atraque_m2, 3)} m²
+          {' · '}A1={fmtNDash(desgloseAtraque.area_1_m2, 4)}
+          {' · '}A2={fmtNDash(desgloseAtraque.area_2_m2, 4)}
+        </>
+      ) : (
+        <>
+          H.Relleno={fmtNDash(planilla.altura_relleno_m, 4)} ·
+          A1={fmtNDash(planilla.area_1_m2, 4)} ·
+          A2={fmtNDash(planilla.area_2_m2, 4)}
+        </>
+      )}
       {detalle?.coords_wgs84 && (
         <> · WGS84 (inicio) {fmtNDash(detalle.coords_wgs84.lat, 6)}, {fmtNDash(detalle.coords_wgs84.lon, 6)}</>
       )}
@@ -972,7 +1033,14 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             <th style={{ ...thCartera, width: 36 }}>#</th>
             <th style={thCartera}>Abscisa</th>
             <th style={thCartera}>Terreno Natural</th>
-            <th style={thCartera}>{nivelLabel}</th>
+            {esAlc ? (
+              <>
+                <th style={thCartera}>Subrasante de Vía</th>
+                <th style={thCartera}>Cota Lomo</th>
+              </>
+            ) : (
+              <th style={thCartera}>{nivelLabel}</th>
+            )}
             <th style={thCartera}>Cota Fondo Excavación</th>
             <th style={thCarteraCalc}>Altura Excavacion</th>
             <th style={thCarteraCalc}>Altura Triturado</th>
@@ -986,7 +1054,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
             return (
               <tr key={idx}>
                 <td style={{ ...tdCartera, textAlign: 'center', fontWeight: 700 }}>{idx + 1}</td>
-                {['abscisa', 'terreno_natural', nivelKey, 'cota_fondo_excavacion'].map((k) => (
+                {colsCampoEdit.map((k) => (
                   <td key={k} style={tdCarteraEdit}>
                     <input
                       type="number"
