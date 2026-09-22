@@ -96,6 +96,50 @@ class TestExcelGraficosAnclas(unittest.TestCase):
         self.assertIn("L20:N40", src)
         self.assertIn("B52:N63", src)
 
+    def test_perfil_ejes_y_grilla_tenue(self):
+        """Etiquetas X/Y presentes; grilla major tenue/delgada; ancla B52:N63 intacta."""
+        import re
+        import zipfile
+
+        from topografia_planilla_tuberia_excel import (
+            PERFIL_GRID_LINE_COLOR,
+            PERFIL_GRID_LINE_WIDTH_EMU,
+            PERFIL_X_AXIS_TITLE,
+            PERFIL_Y_AXIS_TITLE,
+        )
+
+        ws = _ws()
+        ch = ws._charts[0]
+        self.assertEqual(str(ch.x_axis.title.tx.rich.p[0].r[0].t), PERFIL_X_AXIS_TITLE)
+        self.assertEqual(str(ch.y_axis.title.tx.rich.p[0].r[0].t), PERFIL_Y_AXIS_TITLE)
+        self.assertEqual(ch.x_axis.axPos, "b")
+        self.assertEqual(ch.y_axis.axPos, "l")
+        self.assertIsNotNone(ch.x_axis.majorGridlines)
+        self.assertIsNotNone(ch.y_axis.majorGridlines)
+        self.assertIsNone(ch.x_axis.minorGridlines)
+        self.assertIsNone(ch.y_axis.minorGridlines)
+        # Ancla sin cambios
+        self.assertEqual((ch.anchor._from.col, ch.anchor._from.row), PERFIL_CHART_FROM)
+        self.assertEqual((ch.anchor.to.col, ch.anchor.to.row), PERFIL_CHART_TO)
+
+        raw = build_planilla_tuberia_xlsx(
+            planilla={"tipo": "ALCANTARILLA", "meta_cabecera": {}},
+            calculo={"cartera": {"filas": []}},
+            vacia=True,
+        )
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            xml = z.read("xl/charts/chart1.xml").decode("utf-8")
+        self.assertIn(PERFIL_X_AXIS_TITLE, xml)
+        self.assertIn(PERFIL_Y_AXIS_TITLE, xml)
+        self.assertIn(PERFIL_GRID_LINE_COLOR, xml)
+        self.assertRegex(xml, rf'w="{PERFIL_GRID_LINE_WIDTH_EMU}"')
+        # Dos bloques majorGridlines con spPr/ln (X e Y); openpyxl omite prefijo c:
+        grids = re.findall(r"<majorGridlines>.*?</majorGridlines>", xml, re.S)
+        self.assertEqual(len(grids), 2)
+        for g in grids:
+            self.assertIn("a:ln", g)
+            self.assertIn(PERFIL_GRID_LINE_COLOR, g)
+
 
 if __name__ == "__main__":
     unittest.main()
