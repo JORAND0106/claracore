@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import BitacoraEntradaEditor from './BitacoraEntradaEditor'
 import BitacoraExportRangoBar from './BitacoraExportRangoBar'
 import { accesoBitacora } from './bitacoraPermisos'
+import { mergeDiariosParaEditor } from './bitacoraMergeDiarios'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import { createSeguimientoApi } from './seguimientoApi'
 
@@ -60,6 +61,34 @@ export default function BitacoraPanel({
   }, [api, cid, token, permisos.ver, filtros])
 
   useEffect(() => { void load() }, [load, refreshKey])
+
+  const openDiarioRow = useCallback(async (row) => {
+    const fecha = row?.fecha ? String(row.fecha).slice(0, 10) : null
+    if (fecha && api.getBitacoraDiariosFecha) {
+      try {
+        const data = await api.getBitacoraDiariosFecha(fecha)
+        const diarios = Array.isArray(data?.diarios) ? data.diarios : []
+        if (diarios.length > 1) {
+          const hydrated = []
+          for (const d of diarios) {
+            if (d?.id != null && api.getBitacoraEntrada) {
+              try {
+                hydrated.push(await api.getBitacoraEntrada(d.id))
+                continue
+              } catch { /* meta */ }
+            }
+            hydrated.push(d)
+          }
+          const merged = mergeDiariosParaEditor(hydrated)
+          if (merged) {
+            setEditor({ modo: 'ver', entrada: merged })
+            return
+          }
+        }
+      } catch { /* abrir fila sola */ }
+    }
+    setEditor({ modo: 'ver', entrada: row })
+  }, [api])
 
   const diarios = useMemo(() => rows.filter((r) => r.tipo !== 'evento'), [rows])
 
@@ -193,7 +222,7 @@ export default function BitacoraPanel({
                       return (
                         <tr
                           key={row.id}
-                          onClick={() => setEditor({ modo: 'ver', entrada: row })}
+                          onClick={() => void openDiarioRow(row)}
                           style={{ cursor: 'pointer' }}
                           onMouseEnter={(e) => { e.currentTarget.style.background = `${t.primary || '#2563eb'}12` }}
                           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
