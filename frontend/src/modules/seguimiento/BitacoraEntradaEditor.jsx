@@ -36,7 +36,7 @@ import { puedeEditarEntradaBitacora, esReporteAtrasadoLocal } from './bitacoraPe
 import {
   EVENTO_TIPOS,
   eventoTieneDestinatario,
-  horaActualBogota,
+  horaInicioLaboresInicial,
   hoyISOBogota,
   labelEventoTipo,
   personalPlantillaVacia,
@@ -225,9 +225,7 @@ export default function BitacoraEntradaEditor({
     () => normalizeTramoValue(entrada?.tramo ?? tramoInicial) || '',
   )
   const [tramosCatalogo, setTramosCatalogo] = useState([])
-  const [horaInicio, setHoraInicio] = useState(
-    String(entrada?.hora_inicio_labores || '').slice(0, 5) || horaActualBogota(),
-  )
+  const [horaInicio, setHoraInicio] = useState(() => horaInicioLaboresInicial(entrada))
   const [clima, setClima] = useState({
     clima_codigo: entrada?.clima_codigo ?? null,
     clima_temp_c: entrada?.clima_temp_c ?? null,
@@ -803,8 +801,9 @@ export default function BitacoraEntradaEditor({
           background: t.bgCard,
           border: viewportCompact ? 'none' : `1px solid ${t.border}`,
           boxShadow: t.shadow || '0 20px 50px rgba(0,0,0,0.2)',
-          width: viewportCompact ? '100%' : 'min(1180px, 100%)',
+          // Ancho dinámico: hereda min(1640px, 98vw) de wide; no fijar 1180.
           maxHeight: viewportCompact ? '96dvh' : '94vh',
+          padding: viewportCompact ? undefined : 12,
         }}
       >
         <CcModalBrandHeader theme={t} />
@@ -813,7 +812,7 @@ export default function BitacoraEntradaEditor({
           display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
           justifyContent: 'space-between',
           padding: '10px 12px',
-          borderBottom: `1px solid ${t.border}`,
+          borderBottom: `1px solid ${ui.border}`,
           background: t.bgCard,
         }}>
           <div>
@@ -840,6 +839,28 @@ export default function BitacoraEntradaEditor({
                 {autoBusy ? 'Cargando…' : 'Autocompletar desde día anterior'}
               </button>
             )}
+            {tipo === 'diario' && permisos?.exportar && (
+              <>
+                <button
+                  type="button"
+                  disabled={pdfBusy || busy || !fecha}
+                  onClick={() => void exportarPdfDia({ preview: true })}
+                  style={btnGhost}
+                  title="Vista previa PDF del reporte de este día/tramo (datos guardados en servidor)"
+                >
+                  {pdfBusy ? '…' : 'Vista previa'}
+                </button>
+                <button
+                  type="button"
+                  disabled={pdfBusy || busy || !fecha}
+                  onClick={() => void exportarPdfDia({ preview: false })}
+                  style={btnPrimary}
+                  title="Descargar PDF del reporte de este día/tramo (datos guardados en servidor)"
+                >
+                  {pdfBusy ? '…' : 'Descargar PDF'}
+                </button>
+              </>
+            )}
             <button type="button" onClick={onClose} style={btnGhost}>Cerrar</button>
           </div>
         </div>
@@ -858,117 +879,115 @@ export default function BitacoraEntradaEditor({
             }}>{okMsg}</div>
           )}
 
-          {/* Panel superior: fecha | tramo | hora | clima */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'stretch' }}>
-            <div style={{ ...ui.sheetWrap, width: 168, minWidth: 168, flexShrink: 0 }}>
-              <table style={ui.sheetTable}>
-                <thead>
-                  <tr><th style={ui.th}>Fecha</th></tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={ui.td}>
-                      {fechaRo ? (
-                        <div style={{ ...ui.cellRo, whiteSpace: 'nowrap', letterSpacing: '0.02em' }}>{fecha}</div>
+          {/* Encabezado Excel: Fecha | Tramo | Hora | Clima | Elaborado por */}
+          <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+            <table
+              className="cc-bitacora-responsive-table cc-bitacora-meta-table"
+              style={{
+                ...ui.sheetTable,
+                tableLayout: grillaCompacta ? 'auto' : 'fixed',
+                minWidth: grillaCompacta ? 0 : undefined,
+              }}
+            >
+              <thead>
+                <tr>
+                  <th style={{ ...ui.th, width: '14%' }}>Fecha</th>
+                  {tipo === 'diario' && (
+                    <th style={{ ...ui.th, width: '20%' }}>Tramo *</th>
+                  )}
+                  {tipo === 'diario' && (
+                    <th style={{ ...ui.th, width: '12%' }}>Hora inicio</th>
+                  )}
+                  {tipo === 'diario' && (
+                    <th style={{ ...ui.th, width: '30%' }}>Clima</th>
+                  )}
+                  <th style={{ ...ui.th, width: tipo === 'diario' ? '24%' : '86%' }}>Elaborado por</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={ui.td} data-label="Fecha">
+                    {fechaRo ? (
+                      <div style={{ ...ui.cellRo, whiteSpace: 'nowrap', letterSpacing: '0.02em' }}>{fecha}</div>
+                    ) : (
+                      <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={ui.cellInp} />
+                    )}
+                  </td>
+                  {tipo === 'diario' && (
+                    <td style={ui.td} data-label="Tramo *">
+                      {editable || esNuevo ? (
+                        <select
+                          value={tramo}
+                          onChange={(e) => setTramo(e.target.value)}
+                          style={{ ...ui.cellInp, height: 28 }}
+                          required
+                          title="Obligatorio: un Reporte Diario por tramo y fecha"
+                        >
+                          <option value="">Seleccione tramo…</option>
+                          {tramosCatalogo.map((tr) => (
+                            <option key={tr} value={tr}>{tr}</option>
+                          ))}
+                          {tramo && !tramosCatalogo.includes(tramo) ? (
+                            <option value={tramo}>{tramo}</option>
+                          ) : null}
+                        </select>
                       ) : (
-                        <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={ui.cellInp} />
+                        <div style={ui.cellRo}>{labelTramoBitacora(tramo || entrada?.tramo)}</div>
                       )}
                     </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            {tipo === 'diario' && (
-              <div style={{ ...ui.sheetWrap, flex: '1 1 200px', minWidth: 180 }}>
-                <table style={ui.sheetTable}>
-                  <thead>
-                    <tr><th style={ui.th}>Tramo *</th></tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td style={ui.td}>
-                        {editable || esNuevo ? (
-                          <select
-                            value={tramo}
-                            onChange={(e) => setTramo(e.target.value)}
-                            style={{ ...ui.cellInp, height: 28 }}
-                            required
-                            title="Obligatorio: un Reporte Diario por tramo y fecha"
-                          >
-                            <option value="">Seleccione tramo…</option>
-                            {tramosCatalogo.map((tr) => (
-                              <option key={tr} value={tr}>{tr}</option>
-                            ))}
-                            {tramo && !tramosCatalogo.includes(tramo) ? (
-                              <option value={tramo}>{tramo}</option>
-                            ) : null}
-                          </select>
-                        ) : (
-                          <div style={ui.cellRo}>{labelTramoBitacora(tramo || entrada?.tramo)}</div>
-                        )}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {tipo === 'diario' && (
-              <div style={{ ...ui.sheetWrap, width: 110, flexShrink: 0 }}>
-                <table style={ui.sheetTable}>
-                  <thead>
-                    <tr><th style={ui.th}>Hora inicio</th></tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td style={ui.td}>
-                        {editable ? (
-                          <input
-                            type="time"
-                            step={1}
-                            value={(horaInicio || '').slice(0, 8)}
-                            onChange={(e) => setHoraInicio(e.target.value)}
-                            style={ui.cellInp}
-                            title="Editable mientras la bitácora esté abierta"
-                          />
-                        ) : (
-                          <div style={ui.cellRo}>{horaInicio || '—'}</div>
-                        )}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {tipo === 'diario' && (
-              <BitacoraClimaField
-                t={t}
-                contratoId={contratoId}
-                token={token}
-                fecha={fecha}
-                horaPreferida={horaInicio}
-                value={clima}
-                onChange={setClima}
-                disabled={!editable}
-                compact
-              />
-            )}
-            {(entrada?.created_by_nombre || usuario) && (
-              <div style={{
-                ...ui.sheetWrap, flex: '1 1 180px', display: 'flex', flexDirection: 'column',
-                justifyContent: 'center', padding: '6px 10px', fontSize: 12, color: t.textMuted,
-                gap: 2,
-              }}>
-                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                  Elaborado por
-                </span>
-                <span style={{ color: t.text, fontWeight: 600 }}>
-                  {entrada?.created_by_nombre
-                    || [usuario?.nombre, usuario?.apellido].filter(Boolean).join(' ')
-                    || '—'}
-                  {entrada?.created_by_rol ? ` · ${entrada.created_by_rol}` : ''}
-                </span>
-              </div>
-            )}
+                  )}
+                  {tipo === 'diario' && (
+                    <td style={ui.td} data-label="Hora inicio">
+                      {editable ? (
+                        <input
+                          type="time"
+                          step={1}
+                          value={(horaInicio || '').slice(0, 8)}
+                          onChange={(e) => setHoraInicio(e.target.value)}
+                          style={ui.cellInp}
+                          title="Por defecto 07:30; editable mientras la bitácora esté abierta"
+                        />
+                      ) : (
+                        <div style={ui.cellRo}>{horaInicio || '—'}</div>
+                      )}
+                    </td>
+                  )}
+                  {tipo === 'diario' && (
+                    <td style={{ ...ui.td, padding: 0 }} data-label="Clima">
+                      <BitacoraClimaField
+                        t={t}
+                        contratoId={contratoId}
+                        token={token}
+                        fecha={fecha}
+                        horaPreferida={horaInicio}
+                        value={clima}
+                        onChange={setClima}
+                        disabled={!editable}
+                        compact
+                        embedded
+                      />
+                    </td>
+                  )}
+                  <td style={ui.td} data-label="Elaborado por">
+                    <div style={{
+                      ...ui.cellRo,
+                      fontFamily: 'inherit',
+                      fontWeight: 600,
+                      height: 'auto',
+                      minHeight: 28,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}>
+                      {entrada?.created_by_nombre
+                        || [usuario?.nombre, usuario?.apellido].filter(Boolean).join(' ')
+                        || '—'}
+                      {entrada?.created_by_rol ? ` · ${entrada.created_by_rol}` : ''}
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           {tipo === 'diario' && (
@@ -990,18 +1009,19 @@ export default function BitacoraEntradaEditor({
 
               {/* Maquinaria Excel */}
               <div>
-                <div style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  marginBottom: 6, gap: 8,
-                }}>
-                  <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>Maquinaria, equipos y volquetas</div>
+                <div style={ui.sectionBar}>
+                  <span>Maquinaria, equipos y volquetas</span>
                   {editable && (
-                    <button type="button" onClick={() => setUsos((u) => [...u, emptyUso()])} style={btnGhost}>
+                    <button
+                      type="button"
+                      onClick={() => setUsos((u) => [...u, emptyUso()])}
+                      style={{ ...btnGhost, padding: '4px 8px', fontSize: 'var(--cc-caption)' }}
+                    >
                       + Fila
                     </button>
                   )}
                 </div>
-                <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+                <div style={ui.sheetWrapFlush} className="cc-bitacora-sheet-scroll">
                   <table
                     className="cc-bitacora-responsive-table cc-bitacora-maquinaria-table"
                     style={{
@@ -1126,18 +1146,19 @@ export default function BitacoraEntradaEditor({
 
               {/* Materiales Excel — ingreso/salida */}
               <div>
-                <div style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  marginBottom: 6, gap: 8,
-                }}>
-                  <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>Materiales de obra (ingreso / salida)</div>
+                <div style={ui.sectionBar}>
+                  <span>Materiales de obra (ingreso / salida)</span>
                   {editable && (
-                    <button type="button" onClick={() => setMateriales((m) => [...m, emptyMaterial()])} style={btnGhost}>
+                    <button
+                      type="button"
+                      onClick={() => setMateriales((m) => [...m, emptyMaterial()])}
+                      style={{ ...btnGhost, padding: '4px 8px', fontSize: 'var(--cc-caption)' }}
+                    >
                       + Fila
                     </button>
                   )}
                 </div>
-                <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+                <div style={ui.sheetWrapFlush} className="cc-bitacora-sheet-scroll">
                   <table
                     className="cc-bitacora-responsive-table cc-bitacora-materiales-table"
                     style={{
@@ -1535,43 +1556,61 @@ export default function BitacoraEntradaEditor({
                     )}
                   </div>
                 </div>
-                <TemaRichEditor
-                  t={t}
-                  value={cuerpoHtml}
-                  onChange={setCuerpoHtml}
-                  editable={editable || esNuevo}
-                  minHeight={110}
-                  placeholder="Notas del día (opcional)…"
-                />
-                <div style={{ marginTop: 8 }}>
-                  <BitacoraAdjuntos
-                    t={t}
-                    api={api}
-                    imagenes={imagenes}
-                    onChange={setImagenes}
-                    disabled={!(editable || esNuevo)}
-                    entradaId={localId}
-                    singleLine
-                    contratoId={contratoId}
-                    mapLocation={(() => {
-                      const withPk = (materiales || []).find((m) => (
-                        m?.ubicacion_pk
-                        || (m?.ubicacion_lat != null && m?.ubicacion_lng != null)
-                      ))
-                      if (!withPk) return null
-                      const lat = Number(withPk.ubicacion_lat)
-                      const lng = Number(withPk.ubicacion_lng)
-                      return {
-                        pkId: String(withPk.ubicacion_pk || '').trim() || undefined,
-                        ...(Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : {}),
-                      }
-                    })()}
-                    onUploadPersisted={localId != null ? async (body) => {
-                      const row = await api.pegarImagenBitacora(localId, body)
-                      setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
-                      onSaved?.(row)
-                    } : undefined}
-                  />
+                <div style={{ ...ui.sheetWrap, padding: 0, overflow: 'visible' }}>
+                  <div style={{
+                    ...ui.th,
+                    position: 'static',
+                    borderBottom: `1px solid ${ui.border}`,
+                    borderLeft: 'none',
+                    borderRight: 'none',
+                    borderTop: 'none',
+                  }}>
+                    Notas del día
+                  </div>
+                  <div style={{ padding: 8 }}>
+                    <TemaRichEditor
+                      t={t}
+                      value={cuerpoHtml}
+                      onChange={setCuerpoHtml}
+                      editable={editable || esNuevo}
+                      minHeight={110}
+                      placeholder="Notas del día (opcional)…"
+                    />
+                  </div>
+                  <div style={{
+                    borderTop: `1px solid ${ui.border}`,
+                    padding: 8,
+                    background: t.inputBg || t.bg || 'transparent',
+                  }}>
+                    <BitacoraAdjuntos
+                      t={t}
+                      api={api}
+                      imagenes={imagenes}
+                      onChange={setImagenes}
+                      disabled={!(editable || esNuevo)}
+                      entradaId={localId}
+                      singleLine
+                      contratoId={contratoId}
+                      mapLocation={(() => {
+                        const withPk = (materiales || []).find((m) => (
+                          m?.ubicacion_pk
+                          || (m?.ubicacion_lat != null && m?.ubicacion_lng != null)
+                        ))
+                        if (!withPk) return null
+                        const lat = Number(withPk.ubicacion_lat)
+                        const lng = Number(withPk.ubicacion_lng)
+                        return {
+                          pkId: String(withPk.ubicacion_pk || '').trim() || undefined,
+                          ...(Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : {}),
+                        }
+                      })()}
+                      onUploadPersisted={localId != null ? async (body) => {
+                        const row = await api.pegarImagenBitacora(localId, body)
+                        setImagenes(Array.isArray(row.imagenes) ? row.imagenes : [])
+                        onSaved?.(row)
+                      } : undefined}
+                    />
+                  </div>
                 </div>
               </div>
             ) : null
@@ -1579,25 +1618,27 @@ export default function BitacoraEntradaEditor({
 
           <div style={{
             display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end',
-            borderTop: `1px solid ${t.border}`, paddingTop: 10,
+            borderTop: `1px solid ${ui.border}`, paddingTop: 10,
           }}>
             {tipo === 'diario' && permisos?.exportar && (
               <div style={{ display: 'flex', gap: 8, marginRight: 'auto', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  disabled={pdfBusy || busy}
+                  disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: true })}
                   style={btnGhost}
+                  title="Vista previa PDF del reporte de este día/tramo (datos guardados en servidor)"
                 >
                   {pdfBusy ? '…' : 'Vista previa'}
                 </button>
                 <button
                   type="button"
-                  disabled={pdfBusy || busy}
+                  disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: false })}
-                  style={btnGhost}
+                  style={btnPrimary}
+                  title="Descargar PDF del reporte de este día/tramo (datos guardados en servidor)"
                 >
-                  {pdfBusy ? '…' : 'Descargar'}
+                  {pdfBusy ? '…' : 'Descargar PDF'}
                 </button>
               </div>
             )}
@@ -1825,7 +1866,7 @@ export default function BitacoraEntradaEditor({
                   }}
                   style={btnPrimary}
                 >
-                  Descargar
+                  Descargar PDF
                 </button>
                 <button type="button" onClick={() => setPdfPreviewOpen(false)} style={btnGhost}>
                   Cerrar

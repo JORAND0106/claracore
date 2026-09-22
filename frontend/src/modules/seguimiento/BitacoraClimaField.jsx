@@ -53,6 +53,8 @@ export default function BitacoraClimaField({
   onChange,
   disabled = false,
   compact = true,
+  /** Sin borde exterior: para embeber en celda de grilla Excel. */
+  embedded = false,
 }) {
   const ui = bitacoraSheetStyles(t)
   const [loading, setLoading] = useState(false)
@@ -151,18 +153,19 @@ export default function BitacoraClimaField({
         display: 'flex',
         alignItems: 'stretch',
         gap: 0,
-        border: `1px solid ${ui.border}`,
-        borderRadius: 4,
+        border: embedded ? 'none' : `1px solid ${ui.border}`,
+        borderRadius: embedded ? 0 : 4,
         overflow: 'hidden',
-        minHeight: 36,
-        flex: '1 1 220px',
+        minHeight: embedded ? 28 : 36,
+        flex: embedded ? '1 1 auto' : '1 1 220px',
+        width: embedded ? '100%' : undefined,
         background: t.bgCard,
         position: 'relative',
       }}>
         <div style={{
           position: 'relative',
-          width: 72,
-          minHeight: 36,
+          width: embedded ? 56 : 72,
+          minHeight: embedded ? 28 : 36,
           flexShrink: 0,
           overflow: 'hidden',
         }}>
@@ -175,7 +178,7 @@ export default function BitacoraClimaField({
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          padding: '2px 6px',
+          padding: embedded ? '0 4px' : '2px 6px',
           flex: 1,
           minWidth: 0,
         }}>

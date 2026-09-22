@@ -91,6 +91,18 @@ export function horaActualBogota() {
   }
 }
 
+/**
+ * Hora de inicio de labores por defecto al crear un Reporte Diario (jornada típica).
+ * Editable en el popup; no aplica a reportes ya guardados.
+ */
+export const BITACORA_HORA_INICIO_DEFAULT = '07:30'
+
+/** Hora de inicio al crear: valor guardado, o 07:30 si es nuevo. */
+export function horaInicioLaboresInicial(entrada) {
+  const saved = String(entrada?.hora_inicio_labores || '').slice(0, 5)
+  return saved || BITACORA_HORA_INICIO_DEFAULT
+}
+
 export function personalPlantillaVacia() {
   return CARGOS_PERSONAL.map((cargo) => ({
     cargo,

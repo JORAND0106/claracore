@@ -46,4 +46,20 @@ describe('bitacoraSheetStyles', () => {
     assert.ok(vars['--cc-sheet-grid-border'])
     assert.ok(vars['--cc-bitacora-header-bg'])
   })
+
+  it('sectionBar y sheetWrapFlush refuerzan secciones tipo Excel', () => {
+    const ui = bitacoraSheetStyles({
+      text: '#0F2942',
+      bgCard: '#FFFFFF',
+      primary: '#0077B6',
+    })
+    assert.equal(ui.sectionBar.fontWeight, 800)
+    assert.equal(ui.sectionBar.textTransform, 'uppercase')
+    assert.equal(ui.sectionBar.borderBottom, 'none')
+    assert.match(String(ui.sectionBar.border), /1px solid/)
+    assert.equal(ui.sheetWrapFlush.borderTop, 'none')
+    assert.match(String(ui.sheetWrapFlush.border), /1px solid/)
+    assert.equal(ui.sectionBarSolo.borderBottom, undefined)
+    assert.match(String(ui.sectionBarSolo.border), /1px solid/)
+  })
 })
