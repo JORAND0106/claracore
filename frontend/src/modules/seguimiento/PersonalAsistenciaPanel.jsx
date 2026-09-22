@@ -21,7 +21,7 @@ import { useAnchoredDropdown } from './useAnchoredDropdown'
  * Desplegable en portal (fixed): la grilla Personal usa sheetWrap con
  * overflow:auto y un absolute interno quedaba totalmente recortado.
  */
-function NombreRrhhAutocomplete({
+export function NombreRrhhAutocomplete({
   t,
   value,
   catalogo = [],
@@ -163,6 +163,8 @@ export default function PersonalAsistenciaPanel({
   sheetStyles = null,
   compact = false,
   rrhhCatalogo = [],
+  /** Catálogo de tramos (maestro PK) para dropdown por fila. */
+  tramosCatalogo = [],
   /** Si true (reporte cerrado), el resumen usa el snapshot guardado, no el estado live de RRHH. */
   resumenCongelado = false,
   /** Filas {cargo, cantidad} del botón temporal. */
@@ -213,6 +215,7 @@ export default function PersonalAsistenciaPanel({
       hora_ingreso: rows[idx]?.hora_ingreso || '',
       hora_salida: rows[idx]?.hora_salida || HORA_SALIDA_DEFAULT,
       observacion: rows[idx]?.observacion || '',
+      tramo: rows[idx]?.tramo || '',
     })
     updateRow(idx, base)
   }
@@ -441,21 +444,22 @@ export default function PersonalAsistenciaPanel({
       <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
         <table
           className={compact ? 'cc-bitacora-responsive-table cc-bitacora-personal-table' : 'cc-bitacora-personal-table'}
-          style={{ ...ui.sheetTable, minWidth: compact ? 0 : 640 }}
+          style={{ ...ui.sheetTable, minWidth: compact ? 0 : 760 }}
         >
           <thead>
             <tr>
-              <th style={{ ...ui.th, width: '28%' }}>Nombre</th>
-              <th style={{ ...ui.th, width: '18%' }}>Cargo</th>
-              <th style={{ ...ui.th, width: '20%' }}>Empresa</th>
-              <th style={{ ...ui.th, width: '22%' }}>Horario</th>
-              <th style={{ ...ui.th, width: '12%' }} />
+              <th style={{ ...ui.th, width: '22%' }}>Nombre</th>
+              <th style={{ ...ui.th, width: '16%' }}>Tramo *</th>
+              <th style={{ ...ui.th, width: '16%' }}>Cargo</th>
+              <th style={{ ...ui.th, width: '16%' }}>Empresa</th>
+              <th style={{ ...ui.th, width: '20%' }}>Horario</th>
+              <th style={{ ...ui.th, width: '10%' }} />
             </tr>
           </thead>
           <tbody>
             {(rows || []).length === 0 ? (
               <tr>
-                <td colSpan={5} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+                <td colSpan={6} style={{ ...ui.td, color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
                   {disabled
                     ? 'Sin colaboradores registrados este día.'
                     : 'Sin colaboradores. Use «+ Agregar colaborador» y selecciónelo desde RRHH.'}
@@ -515,6 +519,27 @@ export default function PersonalAsistenciaPanel({
                         onPick={(trab) => pickTrabajador(idx, trab)}
                         style={cellInp}
                       />
+                    )}
+                  </td>
+                  <td style={ui.td} data-label="Tramo">
+                    {disabled ? (
+                      <span style={{ fontSize: 'var(--cc-xs)' }}>{row.tramo || '—'}</span>
+                    ) : (
+                      <select
+                        value={row.tramo || ''}
+                        onChange={(e) => updateRow(idx, { tramo: e.target.value })}
+                        style={{ ...cellInp, height: 28 }}
+                        required
+                        title="Tramo obligatorio por colaborador"
+                      >
+                        <option value="">Seleccione…</option>
+                        {(tramosCatalogo || []).map((tr) => (
+                          <option key={tr} value={tr}>{tr}</option>
+                        ))}
+                        {row.tramo && !(tramosCatalogo || []).includes(row.tramo) ? (
+                          <option value={row.tramo}>{row.tramo}</option>
+                        ) : null}
+                      </select>
                     )}
                   </td>
                   <td style={ui.td} data-label="Cargo">

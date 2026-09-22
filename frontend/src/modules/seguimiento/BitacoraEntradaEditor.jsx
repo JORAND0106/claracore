@@ -8,7 +8,7 @@ import ActividadesEventoGrid from './ActividadesEventoGrid'
 import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
-import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
+import PersonalAsistenciaPanel, { NombreRrhhAutocomplete } from './PersonalAsistenciaPanel'
 import EventoBloquesSection from './EventoBloquesSection'
 import { eventosFromEntrada, eventosParaPayload, debeMostrarObservacionesDia } from './eventoBloquesHelpers'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
@@ -23,9 +23,11 @@ import {
   asistenciaParaPayload,
   mapaEstadosRrhh,
   mergePersonalCantidades,
+  nombreCompletoRrhh,
   personalAgregadoDesdeAsistencia,
   puedeUsarCargoCantidadAsistencia,
   recoverPersonalManual,
+  stripTramoFilasAutocompletar,
 } from './personalAsistenciaHelpers'
 import {
   HINT_DOCUMENTACION_NO_APROBADA,
@@ -58,6 +60,8 @@ function emptyUso() {
     equipo_nombre: '',
     tipo: 'equipo',
     operador: '',
+    operador_rrhh_id: null,
+    tramo: '',
     cantidad: 1,
     hora_inicio: '',
     hora_fin: '',
@@ -76,6 +80,7 @@ function emptyMaterial() {
     placa: '',
     numeros_vale: '',
     adjuntos: [],
+    tramo: '',
     ubicacion_pk: '',
     ubicacion_pk_id: null,
     ubicacion_tramo: '',
@@ -98,9 +103,10 @@ function materialFromApi(m) {
     adjuntos: Array.isArray(m.adjuntos)
       ? m.adjuntos
       : (Array.isArray(m.vales) && m.vales[0] && typeof m.vales[0] === 'object' ? m.vales : []),
+    tramo: normalizeTramoValue(m.tramo) || '',
     ubicacion_pk: m.ubicacion_pk || m.pk_label || '',
     ubicacion_pk_id: m.ubicacion_pk_id != null ? m.ubicacion_pk_id : (m.pk_id_id != null ? m.pk_id_id : null),
-    ubicacion_tramo: m.ubicacion_tramo || m.tramo || '',
+    ubicacion_tramo: m.ubicacion_tramo || '',
     ubicacion_costado: m.ubicacion_costado || m.costado || m.calzada || '',
     ubicacion_infraestructura: m.ubicacion_infraestructura || m.infraestructura || '',
     ubicacion_lat: m.ubicacion_lat != null && m.ubicacion_lat !== '' ? Number(m.ubicacion_lat) : null,
@@ -170,9 +176,19 @@ function emptyEventoDetalle(tipo) {
 function usoFromApi(u) {
   const horas = Array.isArray(u.horas_intermedias) ? u.horas_intermedias : []
   const primera = horas[0]?.hora ? String(horas[0].hora).slice(0, 5) : ''
+  let opRrhh = null
+  try {
+    opRrhh = u?.operador_rrhh_id != null && u.operador_rrhh_id !== ''
+      ? Number(u.operador_rrhh_id)
+      : null
+    if (!Number.isFinite(opRrhh)) opRrhh = null
+  } catch { opRrhh = null }
   return {
     ...emptyUso(),
     ...u,
+    operador: u.operador || '',
+    operador_rrhh_id: opRrhh,
+    tramo: normalizeTramoValue(u.tramo) || '',
     hora_inicio: String(u.hora_inicio || '').slice(0, 5),
     hora_fin: String(u.hora_fin || '').slice(0, 5),
     hora_intermedia: primera,
@@ -195,8 +211,6 @@ export default function BitacoraEntradaEditor({
   entrada = null,
   /** Fecha YYYY-MM-DD al crear desde el calendario (día seleccionado). */
   fechaInicial = null,
-  /** Tramo al crear desde el selector del día. */
-  tramoInicial = null,
   onClose,
   onSaved,
   viewportCompact: viewportCompactProp,
@@ -220,9 +234,6 @@ export default function BitacoraEntradaEditor({
 
   const [fecha, setFecha] = useState(
     entrada?.fecha || (fechaInicial ? String(fechaInicial).slice(0, 10) : '') || hoyISOBogota(),
-  )
-  const [tramo, setTramo] = useState(
-    () => normalizeTramoValue(entrada?.tramo ?? tramoInicial) || '',
   )
   const [tramosCatalogo, setTramosCatalogo] = useState([])
   const [horaInicio, setHoraInicio] = useState(() => horaInicioLaboresInicial(entrada))
@@ -407,7 +418,6 @@ export default function BitacoraEntradaEditor({
     setError('')
     try {
       const blob = await api.exportBitacoraPdfBlob(fecha, {
-        tramo: normalizeTramoValue(tramo) || undefined,
         entradaId: localId || undefined,
       })
       if (pdfUrl) URL.revokeObjectURL(pdfUrl)
@@ -419,7 +429,7 @@ export default function BitacoraEntradaEditor({
       } else {
         const a = document.createElement('a')
         a.href = url
-        a.download = `bitacora_${fecha}${tramo ? `_${String(tramo).replace(/\s+/g, '_')}` : ''}.pdf`
+        a.download = `bitacora_${fecha}.pdf`
         a.rel = 'noopener'
         document.body.appendChild(a)
         a.click()
@@ -464,11 +474,20 @@ export default function BitacoraEntradaEditor({
       const horas = inter
         ? [{ hora: inter, ...(u.horas_intermedias?.[0]?.nota ? { nota: u.horas_intermedias[0].nota } : {}) }]
         : []
+      let opRrhh = null
+      try {
+        opRrhh = u.operador_rrhh_id != null && u.operador_rrhh_id !== ''
+          ? Number(u.operador_rrhh_id)
+          : null
+        if (!Number.isFinite(opRrhh)) opRrhh = null
+      } catch { opRrhh = null }
       return {
         equipo_id: u.equipo_id,
         equipo_nombre: u.equipo_nombre,
         tipo: u.tipo || 'equipo',
         operador: u.operador || '',
+        operador_rrhh_id: opRrhh,
+        tramo: normalizeTramoValue(u.tramo),
         cantidad: Number(u.cantidad) || 1,
         hora_inicio: u.hora_inicio || null,
         hora_fin: u.hora_fin || null,
@@ -477,6 +496,14 @@ export default function BitacoraEntradaEditor({
         orden: i,
       }
     })
+
+  const materialRowNoVacia = (m) => (
+    m.tipo_material || m.proveedor || m.placa || m.numeros_vale
+    || Number(m.cantidad) > 0 || (m.adjuntos || []).length
+    || m.ubicacion_pk || m.ubicacion_pk_id != null
+    || m.ubicacion_tramo || m.ubicacion_costado || m.ubicacion_infraestructura
+    || (m.ubicacion_lat != null && m.ubicacion_lng != null)
+  )
 
   const guardarDiario = async () => {
     setBusy(true)
@@ -508,6 +535,34 @@ export default function BitacoraEntradaEditor({
           return
         }
       }
+      const sinTramoPersonal = asistenciaPayload.filter((r) => r.nombre && !normalizeTramoValue(r.tramo))
+      if (sinTramoPersonal.length) {
+        setError('Cada colaborador en Personal debe tener Tramo asignado.')
+        setBusy(false)
+        return
+      }
+      const usosConEquipo = usos.filter((u) => String(u.equipo_nombre || '').trim())
+      const sinTramoUso = usosConEquipo.filter((u) => !normalizeTramoValue(u.tramo))
+      if (sinTramoUso.length) {
+        setError('Cada fila de Maquinaria con equipo debe tener Tramo asignado.')
+        setBusy(false)
+        return
+      }
+      const sinOperadorRrhh = usosConEquipo.filter(
+        (u) => String(u.operador || '').trim() && u.operador_rrhh_id == null,
+      )
+      if (sinOperadorRrhh.length) {
+        setError(HINT_REGISTRAR_EN_RRHH)
+        setBusy(false)
+        return
+      }
+      const matsFilled = materiales.filter(materialRowNoVacia)
+      const sinTramoMat = matsFilled.filter((m) => !normalizeTramoValue(m.tramo))
+      if (sinTramoMat.length) {
+        setError('Cada fila de Materiales debe tener Tramo asignado.')
+        setBusy(false)
+        return
+      }
       const liveMap = mapaEstadosRrhh(rrhhCatalogo)
       const personalRrhh = personalAgregadoDesdeAsistencia(
         asistenciaPayload,
@@ -517,14 +572,7 @@ export default function BitacoraEntradaEditor({
         ? mergePersonalCantidades(personalManual)
         : []
       const personalPayload = mergePersonalCantidades(personalRrhh, personalManualPayload)
-      const materialesPayload = materiales
-        .filter((m) => (
-          m.tipo_material || m.proveedor || m.placa || m.numeros_vale
-          || Number(m.cantidad) > 0 || (m.adjuntos || []).length
-          || m.ubicacion_pk || m.ubicacion_pk_id != null
-          || m.ubicacion_tramo || m.ubicacion_costado || m.ubicacion_infraestructura
-          || (m.ubicacion_lat != null && m.ubicacion_lng != null)
-        ))
+      const materialesPayload = matsFilled
         .map((m) => ({
           movimiento: m.movimiento === 'salida' ? 'salida' : 'ingreso',
           tipo_material: m.tipo_material || '',
@@ -533,6 +581,7 @@ export default function BitacoraEntradaEditor({
           placa: m.placa || '',
           numeros_vale: m.numeros_vale || '',
           adjuntos: (m.adjuntos || []).slice(0, 2),
+          tramo: normalizeTramoValue(m.tramo),
           ...(m.ubicacion_pk ? { ubicacion_pk: m.ubicacion_pk } : {}),
           ...(m.ubicacion_pk_id != null ? { ubicacion_pk_id: m.ubicacion_pk_id } : {}),
           ...(m.ubicacion_tramo ? { ubicacion_tramo: m.ubicacion_tramo } : {}),
@@ -544,7 +593,7 @@ export default function BitacoraEntradaEditor({
         }))
       const payload = {
         fecha,
-        tramo: normalizeTramoValue(tramo),
+        tramo: null,
         hora_inicio_labores: horaInicio || null,
         ...clima,
         personal: personalPayload,
@@ -554,9 +603,6 @@ export default function BitacoraEntradaEditor({
         materiales: materialesPayload,
         cuerpo_html: cuerpoHtml,
         eventos: eventosParaPayload(eventos),
-      }
-      if (!payload.tramo) {
-        throw new Error('Debe seleccionar un Tramo para guardar el Reporte Diario.')
       }
       let row
       const tNet0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
@@ -609,22 +655,18 @@ export default function BitacoraEntradaEditor({
 
   const autocompletarDesdeAnterior = async () => {
     if (!esNuevo || tipo !== 'diario' || !editable) return
-    if (!normalizeTramoValue(tramo)) {
-      setError('Seleccione el Tramo antes de autocompletar desde el día anterior.')
-      return
-    }
     setAutoBusy(true)
     setError('')
     setOkMsg('')
     try {
-      const data = await api.plantillaAutocompletarDiario(tramo)
-      const prevAsist = asistenciaFromEntrada(data)
+      const data = await api.plantillaAutocompletarDiario()
+      const prevAsist = stripTramoFilasAutocompletar(asistenciaFromEntrada(data))
       const hasManual = Array.isArray(data.personal_manual) && data.personal_manual.length
       if (!data || (!prevAsist.length && !data.personal?.length && !hasManual && !data.equipos_uso?.length)) {
-        setError('No hay una Bitácora anterior del mismo tramo para autocompletar.')
+        setError('No hay una Bitácora anterior para autocompletar.')
         return
       }
-      // No tocar fecha / hora / clima / tramo ni materiales
+      // No tocar fecha / hora / clima ni materiales; tramo por fila queda vacío.
       if (prevAsist.length) {
         setAsistencia(prevAsist)
       }
@@ -640,7 +682,7 @@ export default function BitacoraEntradaEditor({
         setPersonal((prev) => mergePersonalPlantilla(prev, data.personal))
       }
       if (Array.isArray(data.equipos_uso) && data.equipos_uso.length) {
-        setUsos(data.equipos_uso.map(usoFromApi))
+        setUsos(stripTramoFilasAutocompletar(data.equipos_uso.map(usoFromApi)))
       }
       // Materiales siempre vacíos al autocompletar (movimientos del día)
       setMateriales([emptyMaterial()])
@@ -650,7 +692,7 @@ export default function BitacoraEntradaEditor({
       ].filter(Boolean).join(' · ')
       setOkMsg(
         `Asistencia, cargos y maquinaria cargados desde el reporte anterior${fuente ? ` (${fuente})` : ''}. `
-        + 'Materiales quedan vacíos. Fecha, hora, clima y tramo no se modificaron.',
+        + 'Materiales quedan vacíos. Asigne Tramo en cada fila. Fecha, hora y clima no se modificaron.',
       )
     } catch (e) {
       setError(e.message || 'No se pudo autocompletar')
@@ -834,19 +876,19 @@ export default function BitacoraEntradaEditor({
                 disabled={autoBusy || busy}
                 onClick={() => void autocompletarDesdeAnterior()}
                 style={btnGhost}
-                title="Carga asistencia y maquinaria de la bitácora anterior. Materiales no se autocompletan. No modifica fecha, hora ni clima."
+                title="Carga asistencia y maquinaria de la bitácora anterior. Materiales no se autocompletan. No modifica fecha, hora ni clima. Debe asignar Tramo en cada fila."
               >
                 {autoBusy ? 'Cargando…' : 'Autocompletar desde día anterior'}
               </button>
             )}
-            {tipo === 'diario' && permisos?.exportar && (
+            {tipo === 'diario' && (permisos?.ver || permisos?.exportar) && (
               <>
                 <button
                   type="button"
                   disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: true })}
                   style={btnGhost}
-                  title="Vista previa PDF del reporte de este día/tramo (datos guardados en servidor)"
+                  title="Vista previa PDF del reporte de este día (datos guardados en servidor)"
                 >
                   {pdfBusy ? '…' : 'Vista previa'}
                 </button>
@@ -855,7 +897,7 @@ export default function BitacoraEntradaEditor({
                   disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: false })}
                   style={btnPrimary}
-                  title="Descargar PDF del reporte de este día/tramo (datos guardados en servidor)"
+                  title="Descargar PDF del reporte de este día (datos guardados en servidor)"
                 >
                   {pdfBusy ? '…' : 'Descargar PDF'}
                 </button>
@@ -879,7 +921,7 @@ export default function BitacoraEntradaEditor({
             }}>{okMsg}</div>
           )}
 
-          {/* Encabezado Excel: Fecha | Tramo | Hora | Clima | Elaborado por */}
+          {/* Encabezado Excel: Fecha | Hora | Clima | Elaborado por */}
           <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
             <table
               className="cc-bitacora-responsive-table cc-bitacora-meta-table"
@@ -891,17 +933,14 @@ export default function BitacoraEntradaEditor({
             >
               <thead>
                 <tr>
-                  <th style={{ ...ui.th, width: '14%' }}>Fecha</th>
+                  <th style={{ ...ui.th, width: '18%' }}>Fecha</th>
                   {tipo === 'diario' && (
-                    <th style={{ ...ui.th, width: '20%' }}>Tramo *</th>
+                    <th style={{ ...ui.th, width: '14%' }}>Hora inicio</th>
                   )}
                   {tipo === 'diario' && (
-                    <th style={{ ...ui.th, width: '12%' }}>Hora inicio</th>
+                    <th style={{ ...ui.th, width: '36%' }}>Clima</th>
                   )}
-                  {tipo === 'diario' && (
-                    <th style={{ ...ui.th, width: '30%' }}>Clima</th>
-                  )}
-                  <th style={{ ...ui.th, width: tipo === 'diario' ? '24%' : '86%' }}>Elaborado por</th>
+                  <th style={{ ...ui.th, width: tipo === 'diario' ? '32%' : '82%' }}>Elaborado por</th>
                 </tr>
               </thead>
               <tbody>
@@ -913,29 +952,6 @@ export default function BitacoraEntradaEditor({
                       <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={ui.cellInp} />
                     )}
                   </td>
-                  {tipo === 'diario' && (
-                    <td style={ui.td} data-label="Tramo *">
-                      {editable || esNuevo ? (
-                        <select
-                          value={tramo}
-                          onChange={(e) => setTramo(e.target.value)}
-                          style={{ ...ui.cellInp, height: 28 }}
-                          required
-                          title="Obligatorio: un Reporte Diario por tramo y fecha"
-                        >
-                          <option value="">Seleccione tramo…</option>
-                          {tramosCatalogo.map((tr) => (
-                            <option key={tr} value={tr}>{tr}</option>
-                          ))}
-                          {tramo && !tramosCatalogo.includes(tramo) ? (
-                            <option value={tramo}>{tramo}</option>
-                          ) : null}
-                        </select>
-                      ) : (
-                        <div style={ui.cellRo}>{labelTramoBitacora(tramo || entrada?.tramo)}</div>
-                      )}
-                    </td>
-                  )}
                   {tipo === 'diario' && (
                     <td style={ui.td} data-label="Hora inicio">
                       {editable ? (
@@ -1000,6 +1016,7 @@ export default function BitacoraEntradaEditor({
                 sheetStyles={ui}
                 compact={grillaCompacta}
                 rrhhCatalogo={rrhhCatalogo}
+                tramosCatalogo={tramosCatalogo}
                 resumenCongelado={resumenCongelado}
                 personalManual={personalManual}
                 onChangePersonalManual={setPersonalManual}
@@ -1032,18 +1049,21 @@ export default function BitacoraEntradaEditor({
                   >
                     <thead>
                       <tr>
-                        <th style={{ ...ui.th, width: '22%' }}>Equipo / máquina</th>
+                        <th style={{ ...ui.th, width: '18%' }}>Equipo / máquina</th>
+                        <th style={{ ...ui.th, width: '14%' }}>Tramo *</th>
                         <th style={{ ...ui.th, width: '16%' }}>Operador</th>
-                        <th style={{ ...ui.th, width: '8%' }}>Cant.</th>
+                        <th style={{ ...ui.th, width: '7%' }}>Cant.</th>
                         <th style={{ ...ui.th, width: '10%' }}>Hora inicio</th>
                         <th style={{ ...ui.th, width: '10%' }}>Hora fin</th>
                         <th style={{ ...ui.th, width: '10%' }}>Hora interm.</th>
                         <th style={{ ...ui.th, width: '8%', textAlign: 'center' }}>Preop.</th>
-                        {editable && <th style={{ ...ui.th, width: '6%' }} />}
+                        {editable && <th style={{ ...ui.th, width: '5%' }} />}
                       </tr>
                     </thead>
                     <tbody>
-                      {usos.map((u, idx) => (
+                      {usos.map((u, idx) => {
+                        const opLocked = editable && u.operador_rrhh_id != null && !!u.operador
+                        return (
                         <tr key={`uso-${idx}`}>
                           <td style={ui.td} data-label="Equipo / máquina">
                             <EquipoCatalogSelect
@@ -1057,15 +1077,67 @@ export default function BitacoraEntradaEditor({
                               )))}
                             />
                           </td>
+                          <td style={ui.td} data-label="Tramo">
+                            {editable ? (
+                              <select
+                                value={u.tramo || ''}
+                                onChange={(e) => setUsos((rows) => rows.map((r, i) => (
+                                  i === idx ? { ...r, tramo: e.target.value } : r
+                                )))}
+                                style={{ ...ui.cellInp, height: 28 }}
+                                required
+                                title="Tramo obligatorio por fila de maquinaria"
+                              >
+                                <option value="">Seleccione…</option>
+                                {tramosCatalogo.map((tr) => (
+                                  <option key={tr} value={tr}>{tr}</option>
+                                ))}
+                                {u.tramo && !tramosCatalogo.includes(u.tramo) ? (
+                                  <option value={u.tramo}>{u.tramo}</option>
+                                ) : null}
+                              </select>
+                            ) : (
+                              <div style={ui.cellRo}>{u.tramo || '—'}</div>
+                            )}
+                          </td>
                           <td style={ui.td} data-label="Operador">
-                            <input
-                              disabled={!editable}
-                              value={u.operador || ''}
-                              onChange={(e) => setUsos((rows) => rows.map((r, i) => (
-                                i === idx ? { ...r, operador: e.target.value } : r
-                              )))}
-                              style={ui.cellInp}
-                            />
+                            {!editable ? (
+                              <div style={ui.cellRo}>{u.operador || '—'}</div>
+                            ) : opLocked ? (
+                              <>
+                                <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)' }}>{u.operador}</div>
+                                <button
+                                  type="button"
+                                  onClick={() => setUsos((rows) => rows.map((r, i) => (
+                                    i === idx ? { ...r, operador: '', operador_rrhh_id: null } : r
+                                  )))}
+                                  style={{
+                                    ...ui.clipBtn,
+                                    color: t.primary,
+                                    fontWeight: 600,
+                                    fontSize: 'var(--cc-caption)',
+                                    padding: 0,
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  Cambiar
+                                </button>
+                              </>
+                            ) : (
+                              <NombreRrhhAutocomplete
+                                t={t}
+                                value={u.operador || ''}
+                                catalogo={rrhhCatalogo}
+                                onPick={(trab) => setUsos((rows) => rows.map((r, i) => (
+                                  i === idx ? {
+                                    ...r,
+                                    operador: nombreCompletoRrhh(trab),
+                                    operador_rrhh_id: trab?.id != null ? Number(trab.id) : null,
+                                  } : r
+                                )))}
+                                style={ui.cellInp}
+                              />
+                            )}
                           </td>
                           <td style={ui.td} data-label="Cant.">
                             <input
@@ -1138,7 +1210,8 @@ export default function BitacoraEntradaEditor({
                             </td>
                           )}
                         </tr>
-                      ))}
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1170,12 +1243,13 @@ export default function BitacoraEntradaEditor({
                     <thead>
                       <tr>
                         <th style={{ ...ui.th, width: '10%' }}>Movimiento</th>
-                        <th style={{ ...ui.th, width: '20%' }}>Tipo de material</th>
-                        <th style={{ ...ui.th, width: '14%' }}>Proveedor</th>
-                        <th style={{ ...ui.th, width: '8%' }}>Cant.</th>
-                        <th style={{ ...ui.th, width: '16%' }}>Nº vale(s)</th>
-                        <th style={{ ...ui.th, width: '10%', textAlign: 'center' }}>Remisión</th>
-                        <th style={{ ...ui.th, width: '10%', textAlign: 'center' }}>PK</th>
+                        <th style={{ ...ui.th, width: '12%' }}>Tramo *</th>
+                        <th style={{ ...ui.th, width: '18%' }}>Tipo de material</th>
+                        <th style={{ ...ui.th, width: '12%' }}>Proveedor</th>
+                        <th style={{ ...ui.th, width: '7%' }}>Cant.</th>
+                        <th style={{ ...ui.th, width: '14%' }}>Nº vale(s)</th>
+                        <th style={{ ...ui.th, width: '9%', textAlign: 'center' }}>Remisión</th>
+                        <th style={{ ...ui.th, width: '9%', textAlign: 'center' }}>PK</th>
                         {editable && <th style={{ ...ui.th, width: '5%' }} />}
                       </tr>
                     </thead>
@@ -1194,6 +1268,29 @@ export default function BitacoraEntradaEditor({
                               <option value="ingreso">Ingreso</option>
                               <option value="salida">Salida</option>
                             </select>
+                          </td>
+                          <td style={ui.td} data-label="Tramo">
+                            {editable ? (
+                              <select
+                                value={m.tramo || ''}
+                                onChange={(e) => setMateriales((rows) => rows.map((r, i) => (
+                                  i === idx ? { ...r, tramo: e.target.value } : r
+                                )))}
+                                style={{ ...ui.cellInp, height: 28 }}
+                                required
+                                title="Tramo obligatorio por fila de materiales"
+                              >
+                                <option value="">Seleccione…</option>
+                                {tramosCatalogo.map((tr) => (
+                                  <option key={tr} value={tr}>{tr}</option>
+                                ))}
+                                {m.tramo && !tramosCatalogo.includes(m.tramo) ? (
+                                  <option value={m.tramo}>{m.tramo}</option>
+                                ) : null}
+                              </select>
+                            ) : (
+                              <div style={ui.cellRo}>{m.tramo || '—'}</div>
+                            )}
                           </td>
                           <td style={ui.td} data-label="Tipo de material">
                             {/* Catálogo Bitácora propio — no Almacén/insumos */}
@@ -1620,14 +1717,14 @@ export default function BitacoraEntradaEditor({
             display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end',
             borderTop: `1px solid ${ui.border}`, paddingTop: 10,
           }}>
-            {tipo === 'diario' && permisos?.exportar && (
+            {tipo === 'diario' && (permisos?.ver || permisos?.exportar) && (
               <div style={{ display: 'flex', gap: 8, marginRight: 'auto', flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: true })}
                   style={btnGhost}
-                  title="Vista previa PDF del reporte de este día/tramo (datos guardados en servidor)"
+                  title="Vista previa PDF del reporte de este día (datos guardados en servidor)"
                 >
                   {pdfBusy ? '…' : 'Vista previa'}
                 </button>
@@ -1636,7 +1733,7 @@ export default function BitacoraEntradaEditor({
                   disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: false })}
                   style={btnPrimary}
-                  title="Descargar PDF del reporte de este día/tramo (datos guardados en servidor)"
+                  title="Descargar PDF del reporte de este día (datos guardados en servidor)"
                 >
                   {pdfBusy ? '…' : 'Descargar PDF'}
                 </button>

@@ -11,6 +11,7 @@ import {
   asistenciaParaPayload,
   asistenciaRowFromRrhh,
   capitalizarNombrePropio,
+  emptyAsistenciaRow,
   estadoCuentaEnResumen,
   filtrarTrabajadoresRrhh,
   formatHorarioAsistencia,
@@ -19,6 +20,7 @@ import {
   parseFechaISO,
   personalAgregadoDesdeAsistencia,
   soloDigitosDocumento,
+  stripTramoFilasAutocompletar,
 } from './personalAsistenciaHelpers.js'
 
 describe('capitalizarNombrePropio / documento', () => {
@@ -153,6 +155,7 @@ describe('asistenciaFromEntrada / payload', () => {
         hora_salida: '',
         fecha_ingreso: '2026-01-15',
         origen: 'rrhh',
+        tramo: 'Tramo 1',
       }],
     })
     assert.equal(rows.length, 1)
@@ -160,9 +163,11 @@ describe('asistenciaFromEntrada / payload', () => {
     assert.equal(rows[0].documento_numero, '123')
     assert.equal(rows[0].hora_salida, '16:30')
     assert.equal(rows[0].rrhh_trabajador_id, 9)
+    assert.equal(rows[0].tramo, 'Tramo 1')
     const payload = asistenciaParaPayload(rows)
     assert.equal(payload[0].cargo, 'Cadenero')
     assert.equal(payload[0].hora_salida, '16:30')
+    assert.equal(payload[0].tramo, 'Tramo 1')
   })
 
   it('conserva horario aunque el estado RRHH no sea activo', () => {
@@ -181,5 +186,26 @@ describe('asistenciaFromEntrada / payload', () => {
     assert.equal(rows[0].hora_salida, '16:30')
     assert.equal(formatHorarioAsistencia(rows[0]), '07:00 – 16:30')
     assert.equal(personalAgregadoDesdeAsistencia(rows).length, 0)
+  })
+
+  it('emptyAsistenciaRow incluye tramo vacío; pick RRHH conserva tramo', () => {
+    assert.equal(emptyAsistenciaRow().tramo, '')
+    const row = asistenciaRowFromRrhh(
+      { id: 1, nombres: 'Ana', apellidos: 'X', cargo_aspira: 'Oficial', estado: 'activo' },
+      { tramo: 'Tramo Norte' },
+    )
+    assert.equal(row.tramo, 'Tramo Norte')
+  })
+
+  it('stripTramoFilasAutocompletar limpia tramo en filas de plantilla', () => {
+    const stripped = stripTramoFilasAutocompletar([
+      { nombre: 'A', tramo: 'Tramo 1', cargo: 'Oficial' },
+      { equipo_nombre: 'Excavadora', tramo: 'Tramo 2' },
+    ])
+    assert.equal(stripped[0].tramo, '')
+    assert.equal(stripped[0].nombre, 'A')
+    assert.equal(stripped[1].tramo, '')
+    assert.equal(stripped[1].equipo_nombre, 'Excavadora')
+    assert.deepEqual(stripTramoFilasAutocompletar(null), [])
   })
 })

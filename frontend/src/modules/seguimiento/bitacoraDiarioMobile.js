@@ -13,7 +13,6 @@ export function debeUsarGrillaDiarioCompacta(viewportCompact) {
 /** Etiquetas de columna para el modo card (data-label) del encabezado meta. */
 export const META_DATA_LABELS = [
   'Fecha',
-  'Tramo *',
   'Hora inicio',
   'Clima',
   'Elaborado por',
@@ -22,6 +21,7 @@ export const META_DATA_LABELS = [
 /** Etiquetas de columna para el modo card (data-label) de Maquinaria. */
 export const MAQUINARIA_DATA_LABELS = [
   'Equipo / máquina',
+  'Tramo',
   'Operador',
   'Cant.',
   'Hora inicio',
@@ -34,6 +34,7 @@ export const MAQUINARIA_DATA_LABELS = [
 /** Etiquetas de columna para el modo card (data-label) de Materiales. */
 export const MATERIALES_DATA_LABELS = [
   'Movimiento',
+  'Tramo',
   'Tipo de material',
   'Proveedor',
   'Cant.',

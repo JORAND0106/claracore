@@ -132,9 +132,10 @@ COMMENT ON COLUMN public.seguimiento_bitacora_entrada.personal IS
 COMMENT ON COLUMN public.seguimiento_bitacora_entrada.imagenes IS
   'Máx. 4 fotos/gráficos [{nombre, blob_path, mime_type, content_hash, origen, created_at}].';
 
--- Un solo Reporte Diario por fecha por tramo por contrato.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_seg_bitacora_diario_contrato_fecha_tramo
-  ON public.seguimiento_bitacora_entrada (contrato_id, fecha, (COALESCE(tramo, '')))
+-- Un solo Reporte Diario por (contrato, fecha). El índice por tramo legacy se elimina.
+DROP INDEX IF EXISTS public.uq_seg_bitacora_diario_contrato_fecha_tramo;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_seg_bitacora_diario_contrato_fecha
+  ON public.seguimiento_bitacora_entrada (contrato_id, fecha)
   WHERE tipo = 'diario';
 
 CREATE INDEX IF NOT EXISTS idx_seg_bitacora_entrada_contrato_fecha
@@ -151,6 +152,8 @@ CREATE TABLE IF NOT EXISTS public.seguimiento_bitacora_equipo_uso (
   equipo_id          bigint REFERENCES public.seguimiento_bitacora_equipo(id) ON DELETE SET NULL,
   equipo_nombre      text NOT NULL,
   operador           text,
+  operador_rrhh_id   bigint,
+  tramo              text,
   cantidad           numeric(12, 2) NOT NULL DEFAULT 1,
   hora_inicio        time,
   hora_fin           time,
@@ -161,6 +164,12 @@ CREATE TABLE IF NOT EXISTS public.seguimiento_bitacora_equipo_uso (
 
 COMMENT ON COLUMN public.seguimiento_bitacora_equipo_uso.horas_intermedias IS
   'Paradas intermedias [{hora, nota?}].';
+
+COMMENT ON COLUMN public.seguimiento_bitacora_equipo_uso.tramo IS
+  'Tramo del contrato asignado a esta fila de maquinaria (obligatorio en UI).';
+
+COMMENT ON COLUMN public.seguimiento_bitacora_equipo_uso.operador_rrhh_id IS
+  'Trabajador RRHH del operador (autocompletado).';
 
 CREATE INDEX IF NOT EXISTS idx_seg_bitacora_equipo_uso_entrada
   ON public.seguimiento_bitacora_equipo_uso (entrada_id, orden);

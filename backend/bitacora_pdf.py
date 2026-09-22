@@ -44,8 +44,8 @@ _LOGO_MAX_PX_H = 80
 _LOGO_URI_CACHE: Dict[str, Tuple[float, str]] = {}
 _LOGO_URI_CACHE_LOCK = threading.Lock()
 _LOGO_URI_CACHE_TTL = 600.0
-_HTTP_IMG_TIMEOUT = 5.0
-_PDF_ASSET_WORKERS = 6
+_HTTP_IMG_TIMEOUT = 2.5
+_PDF_ASSET_WORKERS = 8
 _PDF_BYTES_CACHE: Dict[tuple, Tuple[float, bytes]] = {}
 _PDF_BYTES_CACHE_LOCK = threading.Lock()
 _PDF_BYTES_CACHE_TTL = 90.0
@@ -794,6 +794,7 @@ def generar_pdf_bitacora_dia(
     pal = _palette(contrato)
     dia = list_entradas_del_dia(
         sb, contrato_id, fecha, tramo=tramo, entrada_id=entrada_id,
+        skip_legacy_migracion=True,
     )
     diario = dia.get("diario")
     eventos = [e for e in (dia.get("eventos") or []) if isinstance(e, dict)]

@@ -327,30 +327,16 @@ export default function SeguimientoCalendario({
 
   const canCreateSeguimiento = Boolean(permisos?.crear)
   const canCreateBitacora = Boolean(permisosBitacora?.crear)
-  const canExportBitacora = Boolean(permisosBitacora?.exportar)
+  const canExportBitacora = Boolean(permisosBitacora?.exportar || permisosBitacora?.ver)
   const showDayCreate = canCreateSeguimiento || canCreateBitacora || canExportBitacora
 
   const exportPdfDia = async (dateStr, { preview = false } = {}) => {
     if (!api?.exportBitacoraPdfBlob || !dateStr) return
-    const dayBit = eventsForDate(events, dateStr).find(
-      (ev) => ev?.extendedProps?.kind === 'bitacora_diario',
-    )
-    const diarios = Array.isArray(dayBit?.extendedProps?.diarios)
-      ? dayBit.extendedProps.diarios
-      : []
-    if (diarios.length > 1) {
-      setDayMenu(null)
-      openBitacoraEntry(diarios[0]?.id, { fecha: dateStr, diarios, grouped: true })
-      setError('Hay varios tramos ese día: abra el reporte del tramo y use Vista previa / Descargar ahí.')
-      return
-    }
     setPdfBusy(true)
     setError('')
     try {
-      const opts = diarios.length === 1
-        ? { entradaId: diarios[0].id, tramo: diarios[0].tramo }
-        : {}
-      const blob = await api.exportBitacoraPdfBlob(dateStr, opts)
+      // Un diario por fecha: exportar solo por fecha (sin picker de tramo).
+      const blob = await api.exportBitacoraPdfBlob(dateStr)
       const url = URL.createObjectURL(blob)
       if (preview) {
         window.open(url, '_blank', 'noopener,noreferrer')
