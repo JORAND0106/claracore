@@ -2,8 +2,8 @@
  * Pestaña SICOE: vista de la planilla de tubería de origen (solo lectura).
  */
 import { useEffect, useState } from 'react'
-import { API_BASE } from '../../../apiBase'
-import { fmtNDash } from '../planillaTuberia/planillaTuberiaUtils'
+import { API_BASE } from '../../apiBase'
+import { fmtNDash } from '../../components/topografia/planillaTuberia/planillaTuberiaUtils'
 
 export default function SicoePlanillaTuberiaOrigenTab({
   contratoId,
