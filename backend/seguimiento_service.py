@@ -2422,6 +2422,472 @@ def inhabilitar_contactos_externos_por_email(
         return 0
 
 
+def _norm_nombre_key(nombre: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (nombre or "").strip().lower())
+
+
+def _clave_externo(*, email: Optional[str] = None, nombre: Optional[str] = None) -> Optional[str]:
+    """Clave estable para agrupar asistentes externos del histórico (email > nombre)."""
+    em = _norm_email(email)
+    if em:
+        return f"email:{em}"
+    nk = _norm_nombre_key(nombre)
+    return f"nombre:{nk}" if nk else None
+
+
+def _batch_acta_ids(acta_ids: List[int], batch_size: int = 100):
+    for i in range(0, len(acta_ids), batch_size):
+        yield acta_ids[i : i + batch_size]
+
+
+def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict], Dict[int, dict]]:
+    """Asistentes sin usuario_id en actas del contrato + mapa de actas."""
+    actas = (
+        sb.table("seguimiento_acta")
+        .select("id, consecutivo, fecha_reunion, tipo_acta, estado")
+        .eq("contrato_id", int(contrato_id))
+        .order("consecutivo", desc=True)
+        .limit(500)
+        .execute()
+        .data
+        or []
+    )
+    actas_by_id = {int(a["id"]): a for a in actas if a.get("id") is not None}
+    if not actas_by_id:
+        return [], actas_by_id
+
+    include_email = _schema_has(sb, "asistente_email")
+    cols = "id, acta_id, nombre, cargo, entidad, usuario_id, orden"
+    if include_email:
+        cols += ", email"
+
+    asistentes: List[dict] = []
+    for chunk in _batch_acta_ids(list(actas_by_id.keys())):
+        try:
+            rows = (
+                sb.table("seguimiento_acta_asistente")
+                .select(cols)
+                .in_("acta_id", chunk)
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            if include_email and _is_missing_column_error(exc, "email"):
+                _SCHEMA_CAPS["asistente_email"] = False
+                rows = (
+                    sb.table("seguimiento_acta_asistente")
+                    .select("id, acta_id, nombre, cargo, entidad, usuario_id, orden")
+                    .in_("acta_id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+            else:
+                raise
+        for r in rows:
+            if r.get("usuario_id"):
+                continue
+            asistentes.append(r)
+    return asistentes, actas_by_id
+
+
+def list_externos_depuracion(sb, contrato_id: int) -> List[dict]:
+    """
+    Listado de asistentes marcados como externos en el histórico de actas del contrato,
+    agrupados por identidad (email normalizado o nombre) para depuración manual.
+    """
+    asistentes, actas_by_id = _fetch_asistentes_externos_contrato(sb, contrato_id)
+    if not asistentes:
+        return []
+
+    catalog_by_key: Dict[str, dict] = {}
+    for ext in list_contactos_externos_activos(sb, int(contrato_id)):
+        k = _clave_externo(
+            email=ext.get("email_norm") or ext.get("email"),
+            nombre=ext.get("nombre"),
+        )
+        if k and k not in catalog_by_key:
+            catalog_by_key[k] = ext
+
+    groups: Dict[str, dict] = {}
+    for a in asistentes:
+        k = _clave_externo(email=a.get("email"), nombre=a.get("nombre"))
+        if not k:
+            continue
+        g = groups.get(k)
+        if g is None:
+            g = {
+                "match_key": k,
+                "nombre": (a.get("nombre") or "").strip(),
+                "email": (a.get("email") or "").strip(),
+                "cargo": (a.get("cargo") or "").strip(),
+                "entidad": (a.get("entidad") or "").strip(),
+                "externo_id": None,
+                "asistente_ids": [],
+                "acta_ids": set(),
+            }
+            groups[k] = g
+        g["asistente_ids"].append(int(a["id"]))
+        g["acta_ids"].add(int(a["acta_id"]))
+        nom = (a.get("nombre") or "").strip()
+        if len(nom) > len(g["nombre"] or ""):
+            g["nombre"] = nom
+        if (a.get("email") or "").strip() and not g["email"]:
+            g["email"] = (a.get("email") or "").strip()
+        if (a.get("cargo") or "").strip() and not g["cargo"]:
+            g["cargo"] = (a.get("cargo") or "").strip()
+        if (a.get("entidad") or "").strip() and not g["entidad"]:
+            g["entidad"] = (a.get("entidad") or "").strip()
+
+    out: List[dict] = []
+    for g in groups.values():
+        ext = catalog_by_key.get(g["match_key"])
+        if ext:
+            g["externo_id"] = int(ext["id"])
+            if ext.get("nombre"):
+                g["nombre"] = ext["nombre"]
+            if ext.get("email"):
+                g["email"] = ext["email"]
+            if ext.get("cargo"):
+                g["cargo"] = ext["cargo"]
+            if ext.get("entidad"):
+                g["entidad"] = ext["entidad"]
+        acta_ids_sorted = sorted(g["acta_ids"], reverse=True)
+        actas_info = []
+        for aid in acta_ids_sorted[:80]:
+            meta = actas_by_id.get(aid) or {}
+            actas_info.append({
+                "id": aid,
+                "consecutivo": meta.get("consecutivo"),
+                "fecha_reunion": meta.get("fecha_reunion"),
+                "tipo_acta": meta.get("tipo_acta"),
+                "estado": meta.get("estado"),
+            })
+        out.append({
+            "match_key": g["match_key"],
+            "externo_id": g["externo_id"],
+            "nombre": g["nombre"] or "",
+            "email": g["email"] or None,
+            "cargo": g["cargo"] or None,
+            "entidad": g["entidad"] or None,
+            "actas_count": len(g["acta_ids"]),
+            "asistentes_count": len(g["asistente_ids"]),
+            "actas": actas_info,
+        })
+
+    out.sort(key=lambda x: (-int(x["actas_count"]), (x.get("nombre") or "").lower()))
+    return out
+
+
+def _usuario_contrato_para_reemplazo(sb, contrato_id: int, usuario_id: int) -> dict:
+    """Usuario registrado activo del contrato (sin entradas de catálogo externo)."""
+    uid = int(usuario_id)
+    for u in list_usuarios_contrato_enriquecidos(sb, int(contrato_id)):
+        if u.get("es_externo"):
+            continue
+        try:
+            if int(u.get("id")) != uid:
+                continue
+        except (TypeError, ValueError):
+            continue
+        if u.get("activo") is False:
+            raise ValueError("El usuario de reemplazo no está activo")
+        return u
+    raise ValueError("El usuario de reemplazo no pertenece a este contrato")
+
+
+def _resolver_claves_y_catalogo_externo(
+    sb,
+    contrato_id: int,
+    *,
+    externo_id: Optional[int] = None,
+    match_key: Optional[str] = None,
+    email: Optional[str] = None,
+    nombre: Optional[str] = None,
+) -> tuple[Set[str], List[int]]:
+    keys: Set[str] = set()
+    externo_ids: List[int] = []
+    cid = int(contrato_id)
+
+    if externo_id is not None:
+        if not _schema_has(sb, "contacto_externo"):
+            raise ValueError("Catálogo de contactos externos no disponible")
+        rows = (
+            sb.table("seguimiento_contacto_externo")
+            .select("id, nombre, email, email_norm, activo, usuario_id")
+            .eq("id", int(externo_id))
+            .eq("contrato_id", cid)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            raise ValueError("Contacto externo no encontrado en este contrato")
+        ext = rows[0]
+        externo_ids.append(int(ext["id"]))
+        k = _clave_externo(
+            email=ext.get("email_norm") or ext.get("email"),
+            nombre=ext.get("nombre"),
+        )
+        if k:
+            keys.add(k)
+
+    mk = (match_key or "").strip()
+    if mk:
+        keys.add(mk)
+
+    k2 = _clave_externo(email=email, nombre=nombre)
+    if k2:
+        keys.add(k2)
+
+    if not keys:
+        raise ValueError("Indique el asistente externo a reemplazar")
+
+    # Ampliar catálogo: mismos email/nombre activos del contrato
+    if _schema_has(sb, "contacto_externo"):
+        for ext in list_contactos_externos_activos(sb, cid):
+            k = _clave_externo(
+                email=ext.get("email_norm") or ext.get("email"),
+                nombre=ext.get("nombre"),
+            )
+            if k and k in keys:
+                eid = int(ext["id"])
+                if eid not in externo_ids:
+                    externo_ids.append(eid)
+
+    return keys, externo_ids
+
+
+def _asistente_coincide_claves(row: dict, keys: Set[str]) -> bool:
+    k = _clave_externo(email=row.get("email"), nombre=row.get("nombre"))
+    return bool(k and k in keys)
+
+
+def _migrar_firmas_asistente(sb, *, acta_id: int, from_asistente_id: int, to_asistente_id: int, usuario_id: int) -> int:
+    """Reasigna firmas del asistente externo al registrado; evita violar UNIQUE (acta, asistente)."""
+    if int(from_asistente_id) == int(to_asistente_id):
+        return 0
+    firmas_from = (
+        sb.table("seguimiento_firma_registro")
+        .select("id")
+        .eq("acta_id", int(acta_id))
+        .eq("asistente_id", int(from_asistente_id))
+        .execute()
+        .data
+        or []
+    )
+    if not firmas_from:
+        return 0
+    firmas_to = (
+        sb.table("seguimiento_firma_registro")
+        .select("id")
+        .eq("acta_id", int(acta_id))
+        .eq("asistente_id", int(to_asistente_id))
+        .execute()
+        .data
+        or []
+    )
+    n = 0
+    for f in firmas_from:
+        if firmas_to:
+            sb.table("seguimiento_firma_registro").delete().eq("id", int(f["id"])).execute()
+        else:
+            sb.table("seguimiento_firma_registro").update({
+                "asistente_id": int(to_asistente_id),
+                "usuario_id": int(usuario_id),
+            }).eq("id", int(f["id"])).execute()
+            firmas_to = [{"id": f["id"]}]
+        n += 1
+    return n
+
+
+def reemplazar_externo_por_usuario(
+    sb,
+    contrato_id: int,
+    *,
+    usuario_id: int,
+    externo_id: Optional[int] = None,
+    match_key: Optional[str] = None,
+    email: Optional[str] = None,
+    nombre: Optional[str] = None,
+) -> dict:
+    """
+    Sustituye un asistente externo del histórico por un usuario registrado en todas
+    las actas donde participó. Conserva filas de asistencia (y firmas) cuando es posible;
+    no elimina la participación: el reemplazo de usuario es obligatorio.
+    """
+    if usuario_id is None:
+        raise ValueError("Debe seleccionar un usuario registrado de reemplazo")
+    try:
+        uid = int(usuario_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Debe seleccionar un usuario registrado de reemplazo") from exc
+    if uid <= 0:
+        raise ValueError("Debe seleccionar un usuario registrado de reemplazo")
+
+    cid = int(contrato_id)
+    user = _usuario_contrato_para_reemplazo(sb, cid, uid)
+    keys, externo_ids = _resolver_claves_y_catalogo_externo(
+        sb,
+        cid,
+        externo_id=externo_id,
+        match_key=match_key,
+        email=email,
+        nombre=nombre,
+    )
+
+    asistentes, actas_by_id = _fetch_asistentes_externos_contrato(sb, cid)
+    targets = [a for a in asistentes if _asistente_coincide_claves(a, keys)]
+    if not targets and not externo_ids:
+        raise ValueError("No se encontraron asistencias externas para reemplazar")
+
+    nombre_user = _nombre_usuario(user) or (user.get("email") or f"Usuario #{uid}")
+    cargo_user = (user.get("cargo_nombre") or "").strip() or None
+    email_user = (user.get("email") or "").strip() or None
+    include_email = _schema_has(sb, "asistente_email")
+    now = _now_utc().isoformat()
+
+    # Asistentes ya registrados del usuario, por acta (para fusionar duplicados)
+    user_asis_by_acta: Dict[int, dict] = {}
+    for chunk in _batch_acta_ids(list(actas_by_id.keys()) or [0]):
+        if not chunk or chunk == [0]:
+            break
+        rows = (
+            sb.table("seguimiento_acta_asistente")
+            .select("id, acta_id, usuario_id, nombre")
+            .in_("acta_id", chunk)
+            .eq("usuario_id", uid)
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            user_asis_by_acta[int(r["acta_id"])] = r
+
+    asistentes_actualizados = 0
+    asistentes_fusionados = 0
+    firmas_migradas = 0
+    actas_tocadas: Set[int] = set()
+
+    for a in targets:
+        aid = int(a["acta_id"])
+        asis_id = int(a["id"])
+        existing = user_asis_by_acta.get(aid)
+        if existing and int(existing["id"]) != asis_id:
+            firmas_migradas += _migrar_firmas_asistente(
+                sb,
+                acta_id=aid,
+                from_asistente_id=asis_id,
+                to_asistente_id=int(existing["id"]),
+                usuario_id=uid,
+            )
+            sb.table("seguimiento_acta_asistente").delete().eq("id", asis_id).execute()
+            asistentes_fusionados += 1
+        else:
+            patch = {
+                "usuario_id": uid,
+                "nombre": nombre_user[:300],
+            }
+            if cargo_user:
+                patch["cargo"] = cargo_user[:200]
+            if include_email and email_user:
+                patch["email"] = email_user[:320]
+            try:
+                sb.table("seguimiento_acta_asistente").update(patch).eq("id", asis_id).execute()
+            except Exception as exc:
+                if include_email and "email" in patch and _is_missing_column_error(exc, "email"):
+                    _SCHEMA_CAPS["asistente_email"] = False
+                    patch.pop("email", None)
+                    sb.table("seguimiento_acta_asistente").update(patch).eq("id", asis_id).execute()
+                else:
+                    raise
+            # Alinear firma (si existe) con el usuario real
+            sb.table("seguimiento_firma_registro").update({
+                "usuario_id": uid,
+            }).eq("acta_id", aid).eq("asistente_id", asis_id).execute()
+            user_asis_by_acta[aid] = {"id": asis_id, "acta_id": aid, "usuario_id": uid}
+            asistentes_actualizados += 1
+        actas_tocadas.add(aid)
+
+    compromisos_actualizados = 0
+    if externo_ids and _schema_has(sb, "asignado_externo_id"):
+        for eid in externo_ids:
+            items = (
+                sb.table("seguimiento_item")
+                .select("id")
+                .eq("asignado_externo_id", int(eid))
+                .execute()
+                .data
+                or []
+            )
+            for it in items:
+                sb.table("seguimiento_item").update({
+                    "asignado_a_id": uid,
+                    "asignado_externo_id": None,
+                    "asignado_a_nombre": nombre_user[:200],
+                    "updated_at": now,
+                }).eq("id", int(it["id"])).execute()
+                compromisos_actualizados += 1
+
+    catalog_inhabilitados = 0
+    if _schema_has(sb, "contacto_externo"):
+        patch_cat = {
+            "activo": False,
+            "usuario_id": uid,
+            "updated_at": now,
+        }
+        # Por id explícito
+        for eid in externo_ids:
+            sb.table("seguimiento_contacto_externo").update(patch_cat).eq("id", int(eid)).eq(
+                "contrato_id", cid
+            ).execute()
+            catalog_inhabilitados += 1
+        # Por email de las claves (cubre duplicados de catálogo)
+        for k in keys:
+            if not k.startswith("email:"):
+                continue
+            email_norm = k.split(":", 1)[1]
+            rows = (
+                sb.table("seguimiento_contacto_externo")
+                .select("id")
+                .eq("contrato_id", cid)
+                .eq("email_norm", email_norm)
+                .eq("activo", True)
+                .execute()
+                .data
+                or []
+            )
+            for r in rows:
+                if int(r["id"]) in externo_ids:
+                    continue
+                sb.table("seguimiento_contacto_externo").update(patch_cat).eq("id", int(r["id"])).execute()
+                catalog_inhabilitados += 1
+
+    if (
+        asistentes_actualizados == 0
+        and asistentes_fusionados == 0
+        and compromisos_actualizados == 0
+        and catalog_inhabilitados == 0
+    ):
+        raise ValueError("No se encontraron asistencias externas para reemplazar")
+
+    return {
+        "ok": True,
+        "usuario_id": uid,
+        "usuario_nombre": nombre_user,
+        "match_keys": sorted(keys),
+        "externo_ids": externo_ids,
+        "actas_count": len(actas_tocadas),
+        "asistentes_actualizados": asistentes_actualizados,
+        "asistentes_fusionados": asistentes_fusionados,
+        "firmas_migradas": firmas_migradas,
+        "compromisos_actualizados": compromisos_actualizados,
+        "catalogo_inhabilitados": catalog_inhabilitados,
+    }
+
+
 def _sync_asistentes(sb, acta_id: int, asistentes: list, *, contrato_id: Optional[int] = None) -> None:
     sb.table("seguimiento_acta_asistente").delete().eq("acta_id", int(acta_id)).execute()
     rows = []
