@@ -4,6 +4,7 @@ import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import {
   EMPRESA_REGISTRO_DIRECTO,
+  HORA_INGRESO_DEFAULT,
   HORA_SALIDA_DEFAULT,
   asistenciaRowFromRrhh,
   emptyAsistenciaRow,
@@ -90,7 +91,7 @@ export default function PersonalCargoDetalleModal({
   const pickDraft = (trab) => {
     setDraft(asistenciaRowFromRrhh(trab, {
       cargo: String(cargo || trab?.cargo_aspira || trab?.cargo || '').trim() || cargo,
-      hora_ingreso: draft.hora_ingreso || '',
+      hora_ingreso: draft.hora_ingreso || HORA_INGRESO_DEFAULT,
       hora_salida: draft.hora_salida || HORA_SALIDA_DEFAULT,
       tramo: draft.tramo || '',
     }))
@@ -247,8 +248,11 @@ export default function PersonalCargoDetalleModal({
                 <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Ingreso</span>
                 <input
                   type="time"
-                  value={(draft.hora_ingreso || '').slice(0, 5)}
-                  onChange={(e) => setDraft((d) => ({ ...d, hora_ingreso: e.target.value }))}
+                  value={(draft.hora_ingreso || HORA_INGRESO_DEFAULT).slice(0, 5)}
+                  onChange={(e) => setDraft((d) => ({
+                    ...d,
+                    hora_ingreso: e.target.value || HORA_INGRESO_DEFAULT,
+                  }))}
                   style={{ ...cellInp, width: 96 }}
                 />
               </label>
@@ -350,7 +354,7 @@ export default function PersonalCargoDetalleModal({
                             excludeIds={usedIds.filter((id) => id !== row.rrhh_trabajador_id)}
                             onPick={(trab) => {
                               updateByIndex(index, asistenciaRowFromRrhh(trab, {
-                                hora_ingreso: row.hora_ingreso || '',
+                                hora_ingreso: row.hora_ingreso || HORA_INGRESO_DEFAULT,
                                 hora_salida: row.hora_salida || HORA_SALIDA_DEFAULT,
                                 observacion: row.observacion || '',
                                 tramo: row.tramo || '',
@@ -392,10 +396,12 @@ export default function PersonalCargoDetalleModal({
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                             <input
                               type="time"
-                              value={(row.hora_ingreso || '').slice(0, 5)}
-                              onChange={(e) => updateByIndex(index, { hora_ingreso: e.target.value })}
+                              value={(row.hora_ingreso || HORA_INGRESO_DEFAULT).slice(0, 5)}
+                              onChange={(e) => updateByIndex(index, {
+                                hora_ingreso: e.target.value || HORA_INGRESO_DEFAULT,
+                              })}
                               style={{ ...cellInp, width: 96 }}
-                              title="Hora de ingreso"
+                              title="Hora de ingreso (defecto 07:30)"
                             />
                             <span style={{ color: t.textMuted }}>–</span>
                             <input

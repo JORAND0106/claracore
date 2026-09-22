@@ -9,6 +9,7 @@ import {
   EMPRESA_SIN_NOMBRE,
   HINT_OPERADOR_DESDE_ASISTENCIA,
   HINT_REGISTRAR_EN_RRHH,
+  HORA_INGRESO_DEFAULT,
   HORA_SALIDA_DEFAULT,
   asistenciaFromEntrada,
   asistenciaParaPayload,
@@ -79,8 +80,25 @@ describe('RRHH mapping / filtro', () => {
     assert.equal(row.nombre, 'Ana Lopez')
     assert.equal(row.cargo, 'Oficial')
     assert.equal(row.subcontratista_nombre, 'Consorcio X')
+    assert.equal(row.hora_ingreso, HORA_INGRESO_DEFAULT)
     assert.equal(row.hora_salida, HORA_SALIDA_DEFAULT)
     assert.equal(row.origen, 'rrhh')
+  })
+
+  it('conserva hora de ingreso editada al mapear desde RRHH (no vuelve a 07:30)', () => {
+    const row = asistenciaRowFromRrhh(
+      {
+        id: 8,
+        nombres: 'Luis',
+        apellidos: 'Diaz',
+        cargo_aspira: 'Ayudante',
+        estado: 'activo',
+      },
+      { hora_ingreso: '06:45', hora_salida: '15:00' },
+    )
+    assert.equal(row.hora_ingreso, '06:45')
+    assert.equal(row.hora_salida, '15:00')
+    assert.equal(emptyAsistenciaRow().hora_ingreso, HORA_INGRESO_DEFAULT)
   })
 
   it('filtra catálogo y excluye ya usados', () => {
