@@ -2,12 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { API_BASE, apiFetchSignal } from '../../apiBase'
 import ActaEditor from './ActaEditor'
 import BitacoraEntradaEditor from './BitacoraEntradaEditor'
-import BitacoraTramoDiaModal from './BitacoraTramoDiaModal'
 import SeguimientoCalendario from './SeguimientoCalendario'
 import { accesoBitacora } from './bitacoraPermisos'
 import { createSeguimientoApi } from './seguimientoApi'
 import { accesoSeguimiento } from './seguimientoPermisos'
 import { useSeguimientoCompact } from './seguimientoShared'
+
+/** Diario keeper = menor id (consolidación 1 diario / fecha). */
+function pickKeeperDiario(diarios) {
+  const list = Array.isArray(diarios) ? diarios.filter((d) => d?.id != null) : []
+  if (!list.length) return null
+  return [...list].sort((a, b) => Number(a.id) - Number(b.id))[0]
+}
 
 /**
  * Host reutilizable del calendario de Seguimiento + editores de Acta y Bitácora.
@@ -35,8 +41,6 @@ export default function SeguimientoCalendarioPanel({
   const [creating, setCreating] = useState(false)
   const [fechaActaInicial, setFechaActaInicial] = useState(null)
   const [bitacoraEditor, setBitacoraEditor] = useState(null)
-  /** @type {[null|{fecha:string, diarios?:object[]}, Function]} */
-  const [bitacoraDiaPicker, setBitacoraDiaPicker] = useState(null)
   const [localKey, setLocalKey] = useState(0)
 
   const loadUsuarios = useCallback(async () => {
@@ -66,37 +70,67 @@ export default function SeguimientoCalendarioPanel({
     setLocalKey((n) => n + 1)
   }, [])
 
-  const openBitacoraDia = useCallback((fecha, diarios = null) => {
-    const fechaStr = fecha ? String(fecha).slice(0, 10) : null
-    if (!fechaStr) return
-    setBitacoraDiaPicker({ fecha: fechaStr, diarios: Array.isArray(diarios) ? diarios : null })
-  }, [])
-
-  const openNuevaBitacora = useCallback(async (modo, fecha) => {
-    void modo
-    openBitacoraDia(fecha, null)
-  }, [openBitacoraDia])
-
-  const openBitacoraById = useCallback(async (entradaId, meta = null) => {
-    const fechaMeta = meta?.fecha ? String(meta.fecha).slice(0, 10) : null
-    const diariosMeta = Array.isArray(meta?.diarios) ? meta.diarios : null
-    if (fechaMeta && (meta?.grouped || (diariosMeta && diariosMeta.length >= 1))) {
-      openBitacoraDia(fechaMeta, diariosMeta)
+  const openEditorConEntrada = useCallback(async (entradaIdOrRow, { modo = 'ver', fechaInicial = null } = {}) => {
+    if (entradaIdOrRow && typeof entradaIdOrRow === 'object' && entradaIdOrRow.id != null) {
+      const id = entradaIdOrRow.id
+      try {
+        if (api.getBitacoraEntrada) {
+          const row = await api.getBitacoraEntrada(id)
+          setBitacoraEditor({ modo, entrada: row, fechaInicial })
+          return
+        }
+      } catch { /* usar meta */ }
+      setBitacoraEditor({ modo, entrada: entradaIdOrRow, fechaInicial })
       return
     }
+    const entradaId = entradaIdOrRow
     if (!entradaId || !api.getBitacoraEntrada) return
     try {
       const row = await api.getBitacoraEntrada(entradaId)
-      setBitacoraEditor({ modo: 'ver', entrada: row, fechaInicial: null, tramoInicial: row?.tramo || null })
+      setBitacoraEditor({ modo, entrada: row, fechaInicial })
     } catch {
-      setBitacoraEditor({
-        modo: 'ver',
-        entrada: { id: entradaId },
-        fechaInicial: null,
-        tramoInicial: null,
-      })
+      setBitacoraEditor({ modo, entrada: { id: entradaId }, fechaInicial })
     }
-  }, [api, openBitacoraDia])
+  }, [api])
+
+  const openNuevaBitacora = useCallback(async (modo, fecha) => {
+    void modo
+    const fechaStr = fecha ? String(fecha).slice(0, 10) : null
+    if (!fechaStr) return
+    try {
+      if (api?.getBitacoraDiariosFecha) {
+        const data = await api.getBitacoraDiariosFecha(fechaStr)
+        const diarios = Array.isArray(data?.diarios) ? data.diarios : []
+        const keeper = pickKeeperDiario(diarios)
+        if (keeper) {
+          await openEditorConEntrada(keeper, { modo: 'ver', fechaInicial: null })
+          return
+        }
+      }
+    } catch { /* crear nuevo */ }
+    setBitacoraEditor({
+      modo: 'diario',
+      entrada: null,
+      fechaInicial: fechaStr,
+    })
+  }, [api, openEditorConEntrada])
+
+  const openBitacoraById = useCallback(async (entradaId, meta = null) => {
+    const fechaMeta = meta?.fecha ? String(meta.fecha).slice(0, 10) : null
+    if (fechaMeta && api?.getBitacoraDiariosFecha) {
+      try {
+        const data = await api.getBitacoraDiariosFecha(fechaMeta)
+        const diarios = Array.isArray(data?.diarios) ? data.diarios : []
+        const keeper = pickKeeperDiario(diarios)
+        if (keeper) {
+          await openEditorConEntrada(keeper, { modo: 'ver', fechaInicial: null })
+          return
+        }
+      } catch { /* cargar por id */ }
+    }
+    if (!entradaId) return
+    await openEditorConEntrada(entradaId, { modo: 'ver', fechaInicial: null })
+  }, [api, openEditorConEntrada])
 
   if (permisos.bloqueado) {
     return (
@@ -195,41 +229,9 @@ export default function SeguimientoCalendarioPanel({
         />
       )}
 
-      {bitacoraDiaPicker && (
-        <BitacoraTramoDiaModal
-          t={t}
-          api={api}
-          token={token}
-          contratoId={cid}
-          fecha={bitacoraDiaPicker.fecha}
-          diariosIniciales={bitacoraDiaPicker.diarios}
-          permisosBitacora={permisosBitacora}
-          viewportCompact={viewportCompact}
-          onClose={() => setBitacoraDiaPicker(null)}
-          onAbrirDiario={(row) => {
-            setBitacoraDiaPicker(null)
-            setBitacoraEditor({
-              modo: 'ver',
-              entrada: row,
-              fechaInicial: null,
-              tramoInicial: row?.tramo || null,
-            })
-          }}
-          onNuevoDiario={({ fecha, tramo }) => {
-            setBitacoraDiaPicker(null)
-            setBitacoraEditor({
-              modo: 'diario',
-              entrada: null,
-              fechaInicial: fecha,
-              tramoInicial: tramo,
-            })
-          }}
-        />
-      )}
-
       {bitacoraEditor && (
         <BitacoraEntradaEditor
-          key={`bit-${bitacoraEditor.modo}-${bitacoraEditor.entrada?.id || 'new'}-${bitacoraEditor.fechaInicial || ''}-${bitacoraEditor.tramoInicial || ''}`}
+          key={`bit-${bitacoraEditor.modo}-${bitacoraEditor.entrada?.id || 'new'}-${bitacoraEditor.fechaInicial || ''}`}
           t={t}
           api={api}
           usuario={usuario}
@@ -239,7 +241,6 @@ export default function SeguimientoCalendarioPanel({
           modo={bitacoraEditor.modo}
           entrada={bitacoraEditor.entrada}
           fechaInicial={bitacoraEditor.fechaInicial}
-          tramoInicial={bitacoraEditor.tramoInicial}
           viewportCompact={viewportCompact}
           onClose={closeBitacoraEditor}
           onSaved={() => {

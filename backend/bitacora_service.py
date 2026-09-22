@@ -75,11 +75,25 @@ def _label_tramo(value: Any) -> str:
 
 
 def _require_tramo_nuevo(value: Any) -> str:
-    """Tramo obligatorio al crear un Reporte Diario nuevo (Tramo 1+ real)."""
+    """
+    Compat: validación de tramo no vacío.
+    Tras la reversión a 1 diario/fecha, el tramo obligatorio es por fila
+    (asistencia / maquinaria / materiales), no a nivel de documento.
+    """
     n = _normalize_tramo(value)
     if not n:
         raise ValueError(
-            "Debe seleccionar un Tramo para crear el Reporte Diario."
+            "Debe seleccionar un Tramo para cada fila de Personal, Maquinaria o Materiales."
+        )
+    return n
+
+
+def _require_tramo_fila(value: Any, *, contexto: str = "fila") -> str:
+    """Tramo obligatorio a nivel de fila (Personal / Maquinaria / Materiales)."""
+    n = _normalize_tramo(value)
+    if not n:
+        raise ValueError(
+            f"Debe seleccionar un Tramo en cada {contexto}."
         )
     return n
 
@@ -546,8 +560,10 @@ def _normalizar_materiales(raw) -> List[dict]:
             ubicacion_pk_id = None
 
         ubicacion_tramo = str(
-            item.get("ubicacion_tramo") or item.get("tramo") or ""
+            item.get("ubicacion_tramo") or ""
         ).strip() or None
+        # Tramo operativo por fila (maestro contrato) — distinto de ubicacion_tramo del mapa.
+        tramo_fila = _normalize_tramo(item.get("tramo"))
         ubicacion_costado = str(
             item.get("ubicacion_costado") or item.get("costado") or item.get("calzada") or ""
         ).strip() or None
@@ -582,7 +598,7 @@ def _normalizar_materiales(raw) -> List[dict]:
         if not any([
             tipo, proveedor, placa, numeros_vale, adjuntos, cantidad,
             ubicacion_pk, ubicacion_pk_id is not None, ubicacion_lat is not None,
-            ubicacion_tramo, ubicacion_costado, ubicacion_infraestructura,
+            ubicacion_tramo, ubicacion_costado, ubicacion_infraestructura, tramo_fila,
         ]):
             continue
         row = {
@@ -594,6 +610,8 @@ def _normalizar_materiales(raw) -> List[dict]:
             "numeros_vale": numeros_vale,
             "adjuntos": adjuntos,
         }
+        if tramo_fila:
+            row["tramo"] = tramo_fila
         if ubicacion_pk:
             row["ubicacion_pk"] = ubicacion_pk
         if ubicacion_pk_id is not None:
@@ -609,6 +627,31 @@ def _normalizar_materiales(raw) -> List[dict]:
             row["ubicacion_lng"] = round(ubicacion_lng, 7)
         out.append(row)
     return out
+
+
+def _validar_tramos_filas_diario(
+    *,
+    asistencia: Optional[List[dict]] = None,
+    materiales: Optional[List[dict]] = None,
+    equipos_uso: Optional[List[dict]] = None,
+) -> None:
+    """Exige Tramo en cada fila con contenido (Personal / Maquinaria / Materiales)."""
+    for row in asistencia or []:
+        if not isinstance(row, dict):
+            continue
+        if not str(row.get("nombre") or "").strip():
+            continue
+        _require_tramo_fila(row.get("tramo"), contexto="fila de Personal en obra")
+    for row in materiales or []:
+        if not isinstance(row, dict):
+            continue
+        _require_tramo_fila(row.get("tramo"), contexto="fila de Materiales")
+    for row in equipos_uso or []:
+        if not isinstance(row, dict):
+            continue
+        if not str(row.get("equipo_nombre") or row.get("nombre") or "").strip():
+            continue
+        _require_tramo_fila(row.get("tramo"), contexto="fila de Maquinaria")
 
 
 def _persist_materiales(mats: List[dict]) -> List[dict]:
@@ -2231,6 +2274,7 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
         hora_ingreso = _parse_hora_hhmm(item.get("hora_ingreso"))
         hora_salida = _parse_hora_hhmm(item.get("hora_salida"), default=HORA_SALIDA_DEFAULT)
         origen = str(item.get("origen") or ("rrhh" if rrhh_id is not None else "legado")).strip() or "legado"
+        tramo_fila = _normalize_tramo(item.get("tramo"))
         out.append({
             "rrhh_trabajador_id": rrhh_id,
             "colaborador_id": cid,
@@ -2247,6 +2291,7 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
             "fecha_retiro": _parse_fecha_iso(item.get("fecha_retiro")),
             "observacion": str(item.get("observacion") or item.get("observaciones") or "").strip(),
             "origen": origen,
+            **({"tramo": tramo_fila} if tramo_fila else {}),
         })
     return out
 
@@ -2508,20 +2553,31 @@ def _strip_para_autocompletar(entrada: dict) -> dict:
             "equipo_id": u.get("equipo_id"),
             "equipo_nombre": nombre,
             "operador": str(u.get("operador") or "").strip() or None,
+            "operador_rrhh_id": u.get("operador_rrhh_id"),
             "cantidad": u.get("cantidad") if u.get("cantidad") is not None else 1,
             "hora_inicio": u.get("hora_inicio"),
             "hora_fin": u.get("hora_fin"),
             "horas_intermedias": _normalizar_horas_intermedias(u.get("horas_intermedias")),
             "preoperacionales": [],  # no arrastrar escáneres
             "orden": u.get("orden"),
+            # Tramo NUNCA se autocompleta desde el día anterior.
+            "tramo": None,
         })
+    # Limpiar tramo en asistencia (obligatorio seleccionar el día)
+    asistencia_limpia = []
+    for a in asistencia:
+        if not isinstance(a, dict):
+            continue
+        row = {**a}
+        row.pop("tramo", None)
+        asistencia_limpia.append(row)
     return {
         "fuente_id": entrada.get("id"),
         "fuente_fecha": entrada.get("fecha"),
         "fuente_tramo": entrada.get("tramo"),
         "personal": personal,
         "personal_manual": personal_manual,
-        "asistencia_colaboradores": asistencia,
+        "asistencia_colaboradores": asistencia_limpia,
         "equipos_uso": usos,
         "materiales": [],  # siempre vacío: movimientos son del día
     }
@@ -2531,11 +2587,12 @@ def plantilla_autocompletar_diario(
     sb, contrato_id: int, *, tramo: Optional[str] = None,
 ) -> Optional[dict]:
     """
-    Último Reporte Diario del mismo Tramo (preferir cerrado; si no, el más reciente).
-    Si no hay del mismo tramo, no inventa otro tramo.
-    No incluye fecha/hora/clima.
+    Último Reporte Diario del contrato (preferir cerrado; si no, el más reciente).
+    El parámetro `tramo` se ignora (compat API): ya no hay un diario por tramo.
+    No incluye fecha/hora/clima; Tramo por fila queda vacío a propósito.
     """
-    tramo_n = _normalize_tramo(tramo)
+    void_tramo = tramo  # compat firma API
+    del void_tramo
 
     def _query(estado: Optional[str] = None):
         q = (
@@ -2548,17 +2605,11 @@ def plantilla_autocompletar_diario(
         )
         if estado:
             q = q.eq("estado", estado)
-        if tramo_n is None:
-            # Sin tramo pedido: comportamiento previo (cualquier diario).
-            pass
-        else:
-            q = q.eq("tramo", tramo_n)
         return q.execute().data or []
 
     rows = _query("cerrado")
     if not rows:
         rows = _query(None)
-    # Si se pidió tramo concreto y no hay, no caer a otro tramo.
     if not rows:
         return None
     enriched = _enrich_entrada(sb, rows[0])
@@ -2740,11 +2791,22 @@ def _sync_usos(
             "orden": int(item.get("orden") if item.get("orden") is not None else i),
             "created_at": _now_utc().isoformat(),
         }
+        tramo_fila = _normalize_tramo(item.get("tramo"))
+        if tramo_fila:
+            payload["tramo"] = tramo_fila
+        try:
+            op_rrhh = item.get("operador_rrhh_id")
+            if op_rrhh not in (None, ""):
+                payload["operador_rrhh_id"] = int(op_rrhh)
+        except (TypeError, ValueError):
+            pass
         try:
             inserted = sb.table("seguimiento_bitacora_equipo_uso").insert(payload).execute().data or []
         except Exception:
-            # Columna preoperacionales puede no existir aún
+            # Columnas nuevas pueden no existir aún
             payload.pop("preoperacionales", None)
+            payload.pop("tramo", None)
+            payload.pop("operador_rrhh_id", None)
             inserted = sb.table("seguimiento_bitacora_equipo_uso").insert(payload).execute().data or []
         if inserted:
             rows_out.append(inserted[0])
@@ -3078,12 +3140,10 @@ def crear_reporte_diario(
             raise ValueError("No se puede crear un Reporte Diario con fecha futura")
         # Fechas pasadas (incl. atrasadas fuera de D+1) se permiten crear; el sellado
         # del atrasado ocurre a las 23:59:59 del día de creación (ver momento_cierre_efectivo).
-        tramo = _require_tramo_nuevo(data.get("tramo"))
-        if _diario_existe_fecha_tramo(sb, contrato_id, fecha.isoformat(), tramo):
+        if _diario_existe_fecha(sb, contrato_id, fecha.isoformat()):
             raise ValueError(
-                f"Ya existe un Reporte Diario para el {fecha.isoformat()} "
-                f"en el tramo «{tramo}». Ábralo para complementar mientras "
-                "esté dentro de la ventana de gracia."
+                f"Ya existe un Reporte Diario para el {fecha.isoformat()}. "
+                "Ábralo para complementar mientras esté dentro de la ventana de gracia."
             )
 
     with _stage_timer(stages, "usuario_meta"):
@@ -3108,7 +3168,7 @@ def crear_reporte_diario(
             "contrato_id": int(contrato_id),
             "tipo": "diario",
             "fecha": fecha.isoformat(),
-            "tramo": tramo,
+            "tramo": None,  # tramo vive por fila; documento = 1 por fecha
             "estado": "abierto",
             "hora_inicio_labores": hora_inicio,
             "clima_codigo": clima_codigo,
@@ -3127,6 +3187,12 @@ def crear_reporte_diario(
         }
         personal, asistencia = _resolver_personal_y_asistencia(
             sb, contrato_id, data, user_id=user_id, current_user=current_user,
+        )
+        usos_raw = data.get("equipos_uso") if isinstance(data.get("equipos_uso"), list) else []
+        _validar_tramos_filas_diario(
+            asistencia=asistencia,
+            materiales=payload.get("materiales") or [],
+            equipos_uso=usos_raw,
         )
         payload["personal"] = personal
         if asistencia is not None:
@@ -3299,17 +3365,9 @@ def update_entrada(
         patch["cuerpo_html"] = str(data.get("cuerpo_html") or "")
 
     if tipo == "diario":
+        # Tramo a nivel de documento ya no se actualiza (vive por fila).
         if "tramo" in data:
-            nuevo_tramo = _require_tramo_nuevo(data.get("tramo"))
-            actual = _normalize_tramo(entrada.get("tramo"))
-            if nuevo_tramo != actual:
-                if _diario_existe_fecha_tramo(
-                    sb, contrato_id, str(entrada.get("fecha") or "")[:10], nuevo_tramo,
-                ):
-                    raise ValueError(
-                        f"Ya existe un Reporte Diario para esta fecha en el tramo «{nuevo_tramo}»."
-                    )
-                patch["tramo"] = nuevo_tramo
+            patch["tramo"] = None
         if "hora_inicio_labores" in data:
             patch["hora_inicio_labores"] = _parse_hora(data.get("hora_inicio_labores"))
         if "clima_codigo" in data:
@@ -3363,6 +3421,18 @@ def update_entrada(
                         usos_rows = []
                 else:
                     usos_rows = _sync_usos(sb, contrato_id, entrada_id, usos_list, user_id=user_id)
+        # Validar Tramo por fila sobre el payload efectivo a persistir.
+        _validar_tramos_filas_diario(
+            asistencia=patch.get("asistencia_colaboradores")
+            if "asistencia_colaboradores" in patch
+            else None,
+            materiales=patch.get("materiales") if "materiales" in patch else None,
+            equipos_uso=(
+                (data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria"))
+                if ("equipos_uso" in data or "maquinaria" in data)
+                else None
+            ),
+        )
         if "eventos" in data:
             patch["eventos"] = _normalizar_eventos_bloques(
                 sb, contrato_id, data.get("eventos"),
@@ -4008,6 +4078,64 @@ def clear_clima_slots_cache_for_tests() -> None:
         _CLIMA_SLOTS_CACHE.clear()
 
 
+def _stamp_tramo_en_filas(rows: Any, tramo: Optional[str]) -> List[dict]:
+    """Asegura tramo de origen en cada fila dict (para merge PDF / transición)."""
+    tramo_n = _normalize_tramo(tramo)
+    out: List[dict] = []
+    if not isinstance(rows, list):
+        return out
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if tramo_n and not _normalize_tramo(row.get("tramo")):
+            row["tramo"] = tramo_n
+        out.append(row)
+    return out
+
+
+def _merge_diarios_mismo_dia(rows: List[dict]) -> Optional[dict]:
+    """
+    Consolida en memoria varios diarios de la misma fecha (transición post-tramo).
+    Keeper = menor id; estampa tramo de origen en filas sin tramo.
+    """
+    if not rows:
+        return None
+    ordered = sorted(rows, key=lambda r: int(r.get("id") or 0))
+    if len(ordered) == 1:
+        return ordered[0]
+    base = dict(ordered[0])
+    asist: List[dict] = []
+    mats: List[dict] = []
+    personal: List[dict] = []
+    eventos: List[dict] = []
+    imagenes: List[dict] = []
+    usos: List[dict] = []
+    for src in ordered:
+        tramo_src = src.get("tramo")
+        asist.extend(_stamp_tramo_en_filas(src.get("asistencia_colaboradores"), tramo_src))
+        mats.extend(_stamp_tramo_en_filas(src.get("materiales"), tramo_src))
+        personal.extend(src.get("personal") or [] if isinstance(src.get("personal"), list) else [])
+        eventos.extend(src.get("eventos") or [] if isinstance(src.get("eventos"), list) else [])
+        imagenes.extend(src.get("imagenes") or [] if isinstance(src.get("imagenes"), list) else [])
+        for u in (src.get("equipos_uso") or []):
+            if not isinstance(u, dict):
+                continue
+            uu = dict(u)
+            if _normalize_tramo(tramo_src) and not _normalize_tramo(uu.get("tramo")):
+                uu["tramo"] = _normalize_tramo(tramo_src)
+            usos.append(uu)
+    base["asistencia_colaboradores"] = asist
+    base["materiales"] = mats
+    base["personal"] = personal
+    base["eventos"] = eventos
+    base["imagenes"] = imagenes
+    base["equipos_uso"] = usos
+    base["tramo"] = None
+    base["_merged_from_ids"] = [int(r.get("id") or 0) for r in ordered]
+    return base
+
+
 def list_entradas_del_dia(
     sb,
     contrato_id: int,
@@ -4015,13 +4143,15 @@ def list_entradas_del_dia(
     *,
     tramo: Optional[str] = None,
     entrada_id: Optional[int] = None,
+    skip_legacy_migracion: bool = False,
 ) -> Dict[str, Any]:
-    """Diario del día (con eventos embebidos) para exportación PDF — un tramo/entrada."""
+    """Diario del día (con eventos embebidos) para exportación PDF — un documento por fecha."""
     f = _parse_fecha(fecha).isoformat()
-    try:
-        migrar_eventos_legacy_contrato(sb, contrato_id)
-    except Exception:
-        pass
+    if not skip_legacy_migracion:
+        try:
+            migrar_eventos_legacy_contrato(sb, contrato_id)
+        except Exception:
+            pass
     rows = list_entradas(sb, contrato_id, fecha_desde=f, fecha_hasta=f, tipo="diario")
     diario = None
     if entrada_id is not None:
@@ -4035,17 +4165,16 @@ def list_entradas_del_dia(
             (r for r in rows if _normalize_tramo(r.get("tramo")) == tramo_n),
             None,
         )
-        if diario is None:
+        if diario is None and rows:
+            # Compat: si ya se consolidó, devolver el único diario del día.
+            diario = _merge_diarios_mismo_dia(rows)
+        elif diario is None:
             raise ValueError(
                 f"No hay Reporte Diario del tramo «{tramo_n}» para el {f}"
             )
     else:
-        if len(rows) > 1:
-            raise ValueError(
-                "Hay varios Reportes Diarios esa fecha (distintos tramos). "
-                "Indique el tramo o el id de la entrada para exportar el PDF."
-            )
-        diario = rows[0] if rows else None
+        # Un diario por fecha (o merge en memoria si aún hay multi-tramo pendientes).
+        diario = _merge_diarios_mismo_dia(rows)
     eventos = []
     if diario and isinstance(diario.get("eventos"), list):
         for b in diario["eventos"]:

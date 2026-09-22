@@ -65,7 +65,7 @@ export function nombreCompletoRrhh(trab) {
   )
 }
 
-/** Fila de asistencia a partir de un trabajador RRHH. */
+/** Fila de asistencia a partir de un trabajador RRHH. Conserva tramo vía partial. */
 export function asistenciaRowFromRrhh(trab, partial = {}) {
   const nombre = nombreCompletoRrhh(trab)
   const tid = trab?.id != null ? Number(trab.id) : null
@@ -101,8 +101,20 @@ export function emptyAsistenciaRow(partial = {}) {
     fecha_retiro: '',
     observacion: '',
     origen: 'rrhh',
+    tramo: '',
     ...partial,
   }
+}
+
+/**
+ * Tras autocompletar desde plantilla: limpia tramo en cada fila
+ * para forzar reasignación por fila en el nuevo diario.
+ */
+export function stripTramoFilasAutocompletar(rows) {
+  return (Array.isArray(rows) ? rows : []).map((r) => ({
+    ...r,
+    tramo: '',
+  }))
 }
 
 export function asistenciaFromEntrada(entradaOrList) {
@@ -136,6 +148,7 @@ export function asistenciaFromEntrada(entradaOrList) {
       fecha_retiro: parseFechaISO(r?.fecha_retiro),
       observacion: String(r?.observacion || r?.observaciones || '').trim(),
       origen: r?.origen || (tid != null ? 'rrhh' : 'legado'),
+      tramo: String(r?.tramo || '').trim(),
     })
   }).filter((r) => r.nombre)
 }
@@ -185,6 +198,7 @@ export function asistenciaParaPayload(rows) {
     fecha_retiro: r.fecha_retiro || null,
     observacion: r.observacion,
     origen: r.origen || 'rrhh',
+    tramo: String(r.tramo || '').trim() || null,
   }))
 }
 

@@ -41,3 +41,10 @@ def test_require_tramo_nuevo_rejects_cero():
     with pytest.raises(ValueError):
         _require_tramo_nuevo(None)
     assert _require_tramo_nuevo("Tramo 1") == "Tramo 1"
+
+
+def test_require_tramo_fila_mensaje():
+    from bitacora_service import _require_tramo_fila
+    with pytest.raises(ValueError, match="Personal"):
+        _require_tramo_fila(None, contexto="fila de Personal en obra")
+    assert _require_tramo_fila("Tramo Norte", contexto="x") == "Tramo Norte"
