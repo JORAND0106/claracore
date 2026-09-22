@@ -427,6 +427,7 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
 
     for col, label in (
         ("B", "Item"),
+        ("C", "Und."),
         ("D", "Long"),
         ("E", "Ancho"),
         ("F", "Espesor"),
@@ -456,6 +457,13 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     ):
         _set(ws, addr, name)
 
+    # Unidades (columna C)
+    for row, und in (
+        (45, "m³"), (46, "ml"), (47, "m³"), (48, "m³"),
+        (49, "m²"), (50, "m³"), (51, "m³"),
+    ):
+        _set(ws, f"C{row}", und)
+
     _set(ws, "D45", "=B41")
     _set(ws, "E45", "=G15")
     _set(ws, "F45", "=IFERROR(G41,0)")
@@ -484,6 +492,49 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     # Otros: dims libres (sin fórmulas enlazadas)
     _set(ws, "H51", "=ROUND(PRODUCT(D51:F51),2)")
 
+    # Overlay valores calculados (EXC_ROC / OTROS múltiples) desde el motor.
+    if calculo and not vacia:
+        netos = list(calculo.get("netos") or [])
+        # Filas fijas 45–49 por código
+        codigo_a_fila = {
+            "EXC": 45, "TUB": 46, "TRI": 47, "REL": 48, "GEO": 49, "EXC_ROC": 50,
+        }
+        for n in netos:
+            cod = str(n.get("codigo") or "")
+            if cod in codigo_a_fila:
+                r = codigo_a_fila[cod]
+                if n.get("unidad"):
+                    _set(ws, f"C{r}", n.get("unidad"))
+                if cod in ("EXC_ROC",) and not vacia:
+                    if n.get("long") is not None:
+                        _set(ws, f"D{r}", float(n["long"]))
+                    if n.get("ancho") is not None:
+                        _set(ws, f"E{r}", float(n["ancho"]))
+                    if n.get("espesor") is not None:
+                        _set(ws, f"F{r}", float(n["espesor"]))
+                    if n.get("neto") is not None:
+                        _set(ws, f"H{r}", float(n["neto"]))
+        # OTROS: primera en fila 51; adicionales debajo
+        otros = [n for n in netos if str(n.get("codigo") or "").upper().startswith("OTROS")]
+        for i, n in enumerate(otros):
+            r = 51 + i
+            _set(ws, f"B{r}", n.get("nombre") or "Otros: ____")
+            _set(ws, f"C{r}", n.get("unidad") or "m³")
+            if n.get("long") is not None:
+                _set(ws, f"D{r}", float(n["long"]))
+            if n.get("ancho") is not None:
+                _set(ws, f"E{r}", float(n["ancho"]))
+            if n.get("espesor") is not None:
+                _set(ws, f"F{r}", float(n["espesor"]))
+            if n.get("neto") is not None:
+                _set(ws, f"H{r}", float(n["neto"]))
+            else:
+                _set(ws, f"H{r}", "=ROUND(PRODUCT(D{0}:F{0}),2)".format(r))
+            for col in ("B", "C", "D", "E", "F", "G", "H"):
+                _style(ws, f"{col}{r}", border=THIN)
+            if i == 0:
+                continue
+            # Extra rows: estilo encabezado no aplica; solo borde
     if es_alc:
         _set(ws, "I45", "")
         _set(ws, "K45", "")

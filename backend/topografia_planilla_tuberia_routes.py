@@ -1584,6 +1584,7 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     ]
     cants = "".join(
         f"<tr><td class='item'>{n['nombre']}</td>"
+        f"<td class='calc num'>{n.get('unidad') or ''}</td>"
         f"<td class='calc num'>{fmt(n.get('long'))}</td>"
         f"<td class='calc num'>{fmt(n.get('ancho'))}</td>"
         f"<td class='calc num'>{fmt(n.get('espesor'))}</td>"
@@ -1665,7 +1666,8 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
       <td width="58%">
         <h2>Resumen de Cantidades</h2>
         <table class="sheet resumen"><thead><tr>
-          <th class="cant item" width="42%">Item</th><th class="cant num">Long</th><th class="cant num">Ancho</th>
+          <th class="cant item" width="36%">Item</th><th class="cant num">Und.</th>
+          <th class="cant num">Long</th><th class="cant num">Ancho</th>
           <th class="cant num">Espesor</th><th class="cant num">Desc.</th><th class="cant num">Cantidad</th>
         </tr></thead><tbody>{cants}</tbody></table>
       </td>
