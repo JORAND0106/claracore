@@ -16,6 +16,7 @@ import {
   emptyAsistenciaRow,
   estadoCuentaEnResumen,
   filasAsistenciaPorCargo,
+  filtrarCatalogoPorCargo,
   filtrarTrabajadoresRrhh,
   formatHorarioAsistencia,
   mapaEstadosRrhh,
@@ -26,6 +27,8 @@ import {
   parseFechaISO,
   parseOperadorSelectValue,
   personalAgregadoDesdeAsistencia,
+  resolverCatalogoCargos,
+  resumenCargosDesdeCatalogo,
   soloDigitosDocumento,
   stripTramoFilasAutocompletar,
 } from './personalAsistenciaHelpers.js'
@@ -199,6 +202,58 @@ describe('filasAsistenciaPorCargo / cantidadManualPorCargo', () => {
     assert.equal(cantidadManualPorCargo([{ cargo: 'Ayudante', cantidad: 5 }], 'ayudante'), 5)
     assert.equal(cantidadManualPorCargo([{ cargo: 'Oficial', cantidad: 2 }], 'Ayudante'), 0)
     assert.equal(cantidadManualPorCargo([], 'Oficial'), 0)
+  })
+})
+
+describe('resumenCargosDesdeCatalogo / filtro por cargo', () => {
+  it('muestra todo el catálogo RRHH con ceros e incluye cargos con conteo fuera de catálogo', () => {
+    const rows = resumenCargosDesdeCatalogo(
+      ['Ayudante', 'Maestro', 'Topógrafo', 'Oficial'],
+      [
+        { cargo: 'Ayudante', cantidad: 3 },
+        { cargo: 'Cadenero', cantidad: 1 },
+      ],
+    )
+    assert.deepEqual(rows, [
+      { cargo: 'Ayudante', cantidad: 3 },
+      { cargo: 'Cadenero', cantidad: 1 },
+      { cargo: 'Maestro', cantidad: 0 },
+      { cargo: 'Oficial', cantidad: 0 },
+      { cargo: 'Topógrafo', cantidad: 0 },
+    ])
+  })
+
+  it('resolverCatalogoCargos prioriza API RRHH y cae a trabajadores / fallback', () => {
+    assert.deepEqual(
+      resolverCatalogoCargos({ catalogoRrhh: ['Operador', 'Ayudante'] }),
+      ['Operador', 'Ayudante'],
+    )
+    assert.deepEqual(
+      resolverCatalogoCargos({
+        trabajadores: [
+          { cargo_aspira: 'Oficial' },
+          { cargo_aspira: 'oficial' },
+          { cargo_aspira: 'Topógrafo' },
+        ],
+      }),
+      ['Oficial', 'Topógrafo'],
+    )
+    assert.deepEqual(
+      resolverCatalogoCargos({ fallback: ['A', 'B'] }),
+      ['A', 'B'],
+    )
+  })
+
+  it('filtrarCatalogoPorCargo solo deja el cargo de la tarjeta', () => {
+    const cat = [
+      { id: 1, nombres: 'Ana', cargo_aspira: 'Ayudante' },
+      { id: 2, nombres: 'Beto', cargo_aspira: 'Oficial' },
+      { id: 3, nombres: 'Cata', cargo_aspira: 'ayudante' },
+    ]
+    const hits = filtrarCatalogoPorCargo(cat, 'Ayudante')
+    assert.equal(hits.length, 2)
+    assert.deepEqual(hits.map((t) => t.id), [1, 3])
+    assert.equal(filtrarCatalogoPorCargo(cat, 'Maestro').length, 0)
   })
 })
 

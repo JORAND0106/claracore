@@ -1616,6 +1616,19 @@ def route_list_bitacora_rrhh_trabajadores(
     return {"items": list_rrhh_trabajadores_para_bitacora(supabase, contrato_id, q or "")}
 
 
+@router.get("/{contrato_id}/bitacora/rrhh-cargos")
+def route_list_bitacora_rrhh_cargos(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Catálogo completo de cargos RRHH para el resumen por cargo (permiso Bitácora)."""
+    from bitacora_service import list_rrhh_cargos_para_bitacora
+
+    require_permiso_bitacora(current_user, "ver", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    return {"items": list_rrhh_cargos_para_bitacora(supabase, contrato_id)}
+
+
 @router.get("/{contrato_id}/bitacora/asistencia-rrhh-policy")
 def route_bitacora_asistencia_rrhh_policy(
     contrato_id: int,

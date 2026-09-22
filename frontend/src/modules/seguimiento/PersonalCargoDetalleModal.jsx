@@ -6,6 +6,7 @@ import {
   HORA_SALIDA_DEFAULT,
   asistenciaRowFromRrhh,
   emptyAsistenciaRow,
+  filtrarCatalogoPorCargo,
   formatHorarioAsistencia,
 } from './personalAsistenciaHelpers'
 import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
@@ -14,6 +15,7 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './segu
 /**
  * Detalle por cargo: popup con encabezado institucional y grilla tipo Excel
  * de las personas registradas bajo ese cargo.
+ * Al agregar, el catálogo RRHH se filtra al cargo de la tarjeta.
  */
 export default function PersonalCargoDetalleModal({
   t,
@@ -38,6 +40,11 @@ export default function PersonalCargoDetalleModal({
   const usedIds = useMemo(
     () => (rows || []).map((r) => r.rrhh_trabajador_id).filter((x) => x != null),
     [rows],
+  )
+
+  const catalogoDelCargo = useMemo(
+    () => filtrarCatalogoPorCargo(rrhhCatalogo, cargo),
+    [rrhhCatalogo, cargo],
   )
 
   const cellInp = {
@@ -76,7 +83,7 @@ export default function PersonalCargoDetalleModal({
 
   const pickDraft = (trab) => {
     setDraft(asistenciaRowFromRrhh(trab, {
-      cargo: String(trab?.cargo_aspira || trab?.cargo || cargo || '').trim() || cargo,
+      cargo: String(cargo || trab?.cargo_aspira || trab?.cargo || '').trim() || cargo,
       hora_ingreso: draft.hora_ingreso || '',
       hora_salida: draft.hora_salida || HORA_SALIDA_DEFAULT,
       tramo: draft.tramo || '',
@@ -208,7 +215,7 @@ export default function PersonalCargoDetalleModal({
                 <NombreRrhhAutocomplete
                   t={t}
                   value={draft.nombre}
-                  catalogo={rrhhCatalogo}
+                  catalogo={catalogoDelCargo}
                   excludeIds={usedIds}
                   onPick={pickDraft}
                   style={cellInp}
@@ -330,7 +337,7 @@ export default function PersonalCargoDetalleModal({
                           <NombreRrhhAutocomplete
                             t={t}
                             value={row.nombre}
-                            catalogo={rrhhCatalogo}
+                            catalogo={catalogoDelCargo}
                             excludeIds={usedIds.filter((id) => id !== row.rrhh_trabajador_id)}
                             onPick={(trab) => {
                               updateByIndex(index, asistenciaRowFromRrhh(trab, {
@@ -338,7 +345,7 @@ export default function PersonalCargoDetalleModal({
                                 hora_salida: row.hora_salida || HORA_SALIDA_DEFAULT,
                                 observacion: row.observacion || '',
                                 tramo: row.tramo || '',
-                                cargo: String(trab?.cargo_aspira || trab?.cargo || cargo || '').trim() || cargo,
+                                cargo: String(cargo || trab?.cargo_aspira || trab?.cargo || '').trim() || cargo,
                               }))
                             }}
                             style={cellInp}
