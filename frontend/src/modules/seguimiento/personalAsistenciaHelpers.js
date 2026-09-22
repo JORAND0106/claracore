@@ -49,6 +49,45 @@ export function capitalizarNombrePropio(raw) {
     .join(' ')
 }
 
+/** Siglas de cargos de obra que permanecen en mayúsculas. */
+const CARGO_ACRONIMOS = new Set([
+  'sst', 'arl', 'eps', 'siso', 'hseq', 'qa', 'qc', 'pk', 'id', 'nit',
+  'cc', 'ti', 'ce', 'pa', 'otp', 'bim',
+])
+/** Partículas en español: minúsculas salvo al inicio. */
+const CARGO_PARTICULAS = new Set([
+  'de', 'del', 'la', 'las', 'los', 'y', 'e', 'o', 'u', 'a', 'en', 'al',
+  'para', 'por', 'con', 'el',
+])
+
+function _stripAccentsLower(txt) {
+  return String(txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+}
+
+/**
+ * Formato «Nombre Propio» para cargos: title-case con siglas (SST, …)
+ * y partículas (de, del, …) en minúscula excepto al inicio.
+ * Idempotente sobre valores ya bien formateados.
+ */
+export function normalizarCargoNombrePropio(raw) {
+  const s = String(raw || '').trim().replace(/\s+/g, ' ')
+  if (!s) return ''
+  const parts = s.split(' ').filter(Boolean)
+  return parts.map((word, i) => {
+    const m = word.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)([.\-]?)$/)
+    const core = m ? m[1] : word
+    const suf = m ? (m[2] || '') : ''
+    const key = _stripAccentsLower(core)
+    if (CARGO_ACRONIMOS.has(key)) return core.toUpperCase() + suf
+    if (i > 0 && CARGO_PARTICULAS.has(key)) return key + suf
+    if (!core) return word
+    return core.charAt(0).toUpperCase() + core.slice(1).toLowerCase() + suf
+  }).join(' ')
+}
+
 export function soloDigitosDocumento(raw) {
   return String(raw || '').replace(/\D+/g, '')
 }
@@ -94,7 +133,7 @@ export function asistenciaRowFromRrhh(trab, partial = {}) {
     nombre,
     documento_tipo: String(trab?.tipo_documento || 'CC').toUpperCase(),
     documento_numero: soloDigitosDocumento(trab?.numero_documento),
-    cargo: String(trab?.cargo_aspira || trab?.cargo || '').trim(),
+    cargo: normalizarCargoNombrePropio(trab?.cargo_aspira || trab?.cargo || ''),
     subcontratista_id: trab?.empresa_subcontratista_id ?? null,
     subcontratista_nombre: String(trab?.empresa_nombre || '').trim(),
     estado: normalizeEstadoRrhh(trab?.estado),
@@ -157,7 +196,7 @@ export function asistenciaFromEntrada(entradaOrList) {
       nombre: capitalizarNombrePropio(r?.nombre || ''),
       documento_tipo: String(r?.documento_tipo || 'CC').toUpperCase(),
       documento_numero: soloDigitosDocumento(r?.documento_numero),
-      cargo: String(r?.cargo || '').trim(),
+      cargo: normalizarCargoNombrePropio(r?.cargo || ''),
       subcontratista_id: r?.subcontratista_id ?? null,
       subcontratista_nombre: String(r?.subcontratista_nombre || '').trim(),
       estado: normalizeEstadoRrhh(r?.estado),
@@ -187,17 +226,20 @@ export function personalAgregadoDesdeAsistencia(rows, opts = {}) {
     return live[id] ?? live[String(id)] ?? live[Number(id)] ?? null
   }
   const counts = new Map()
+  const labels = new Map()
   for (const r of rows || []) {
     const liveEst = getLive(r?.rrhh_trabajador_id)
     const estado = liveEst != null ? normalizeEstadoRrhh(liveEst) : normalizeEstadoRrhh(r?.estado)
     if (!estadoCuentaEnResumen(estado)) continue
-    const cargo = String(r?.cargo || '').trim()
+    const cargo = normalizarCargoNombrePropio(r?.cargo || '')
     if (!cargo) continue
-    counts.set(cargo, (counts.get(cargo) || 0) + 1)
+    const key = cargo.toLowerCase()
+    counts.set(key, (counts.get(key) || 0) + 1)
+    labels.set(key, cargo)
   }
   return [...counts.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0], 'es'))
-    .map(([cargo, cantidad]) => ({ cargo, cantidad }))
+    .sort((a, b) => labels.get(a[0]).localeCompare(labels.get(b[0]), 'es'))
+    .map(([key, cantidad]) => ({ cargo: labels.get(key), cantidad }))
 }
 
 /**
@@ -262,7 +304,7 @@ export function personalAgregadoPorEmpresaCargo(rows, opts = {}) {
     const liveEst = getLive(r?.rrhh_trabajador_id)
     const estado = liveEst != null ? normalizeEstadoRrhh(liveEst) : normalizeEstadoRrhh(r?.estado)
     if (!estadoCuentaEnResumen(estado)) continue
-    const cargo = String(r?.cargo || '').trim()
+    const cargo = normalizarCargoNombrePropio(r?.cargo || '')
     if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const empresa = nombreEmpresaAsistencia(r)
     const ek = keyEmpresa(empresa)
@@ -529,7 +571,7 @@ export function filtrarCatalogoPorCargoYEmpresa(catalogo = [], cargo = '', empre
 export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
   const byKey = new Map()
   for (const r of agregado || []) {
-    const cargo = String(r?.cargo || '').trim()
+    const cargo = normalizarCargoNombrePropio(r?.cargo || '')
     if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const key = cargo.toLowerCase()
     const n = Number(r?.cantidad)
@@ -542,7 +584,7 @@ export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
   const seen = new Set()
   const out = []
   for (const raw of catalogoCargos || []) {
-    const cargo = String(raw || '').trim()
+    const cargo = normalizarCargoNombrePropio(raw || '')
     if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const key = cargo.toLowerCase()
     if (seen.has(key)) continue
@@ -571,7 +613,7 @@ export function resolverCatalogoCargos({
     const out = []
     const seen = new Set()
     for (const raw of list || []) {
-      const cargo = String(raw || '').trim()
+      const cargo = normalizarCargoNombrePropio(raw || '')
       if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
       const key = cargo.toLowerCase()
       if (seen.has(key)) continue
@@ -607,16 +649,16 @@ export function normalizarPersonalCantidades(rows = []) {
   const counts = new Map()
   const otroByKey = new Map()
   for (const r of rows || []) {
-    let cargo = String(r?.cargo || '').trim()
+    let cargo = normalizarCargoNombrePropio(r?.cargo || '')
     if (!cargo) continue
-    const otro = String(r?.cargo_otro || '').trim()
+    const otro = normalizarCargoNombrePropio(r?.cargo_otro || '')
     if (cargo.toLowerCase().startsWith('otro') && otro) cargo = otro
     let n = Number(r?.cantidad)
     if (!Number.isFinite(n) || n < 0) n = 0
     if (n === 0) continue
     const key = cargo.toLowerCase()
     counts.set(key, (counts.get(key) || 0) + n)
-    if (!otroByKey.has(key)) otroByKey.set(key, cargo)
+    otroByKey.set(key, cargo)
   }
   return [...counts.entries()]
     .sort((a, b) => otroByKey.get(a[0]).localeCompare(otroByKey.get(b[0]), 'es'))

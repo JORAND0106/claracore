@@ -1,4 +1,4 @@
-import { capitalizarNombrePropio } from '../seguimiento/personalAsistenciaHelpers.js'
+import { capitalizarNombrePropio, normalizarCargoNombrePropio } from '../seguimiento/personalAsistenciaHelpers.js'
 
 export const EMPTY_TRABAJADOR_FORM = {
   nombres: '',
@@ -240,7 +240,7 @@ export function capitalizarOracion(raw) {
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
 }
 
-export { capitalizarNombrePropio }
+export { capitalizarNombrePropio, normalizarCargoNombrePropio }
 
 export function fmtSalario(val) {
   if (val == null || val === '') return '—'
@@ -375,7 +375,9 @@ export function payloadFromForm(form) {
     cesantias: form.cesantias || null,
     arl: form.arl || null,
     caja_compensacion: form.caja_compensacion || null,
-    cargo_aspira: form.cargo_aspira || null,
+    cargo_aspira: form.cargo_aspira
+      ? (normalizarCargoNombrePropio(form.cargo_aspira) || form.cargo_aspira)
+      : null,
     salario,
     salario_liquidable: form.salario_liquidable !== false,
     subsidio_transporte: Boolean(form.subsidio_transporte),

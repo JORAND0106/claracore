@@ -11,6 +11,7 @@ import {
   capitalizarNombrePropio,
   capitalizarOracion,
   formatSalarioInput,
+  normalizarCargoNombrePropio,
 } from './rrhhHelpers'
 import { rrhhSheetCssVars, rrhhSheetStyles, rrhhUi } from './rrhhSheetStyles'
 
@@ -176,8 +177,14 @@ export default function TrabajadorFormSheet({
       options={catalogo?.[categoria] || []}
       canEdit={canEdit}
       style={ui.cellSelect}
-      onChange={(v) => setField(field, v)}
-      onAddNew={async (v) => { await onAddCatalogValue?.(categoria, v) }}
+      onChange={(v) => {
+        const next = categoria === 'cargo' ? (normalizarCargoNombrePropio(v) || v) : v
+        setField(field, next)
+      }}
+      onAddNew={async (v) => {
+        const next = categoria === 'cargo' ? (normalizarCargoNombrePropio(v) || v) : v
+        await onAddCatalogValue?.(categoria, next)
+      }}
     />
   )
 
