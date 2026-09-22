@@ -20,6 +20,10 @@ export const ESTADOS_CUENTAN_RESUMEN = new Set(['activo'])
 export const HINT_REGISTRAR_EN_RRHH =
   'No hay coincidencias en RRHH. Registre el colaborador primero en el módulo de Recursos Humanos.'
 
+/** Tooltip / validación: operador de maquinaria solo desde asistencia del día. */
+export const HINT_OPERADOR_DESDE_ASISTENCIA =
+  'El colaborador debe estar registrado primero en Personal en obra (lista de asistencia del día) para poder seleccionarlo aquí como operador.'
+
 export function capitalizarNombrePropio(raw) {
   return String(raw || '')
     .trim()
@@ -208,6 +212,92 @@ export function cantidadManualPorCargo(personalManual, cargo) {
     }
   }
   return 0
+}
+
+/**
+ * Opciones de operador para Maquinaria: solo colaboradores ya nominados
+ * en la asistencia del día (sin catálogo histórico completo).
+ */
+export function opcionesOperadorDesdeAsistencia(rows = []) {
+  const seen = new Set()
+  const out = []
+  for (const r of rows || []) {
+    const nombre = String(r?.nombre || '').trim()
+    if (!nombre) continue
+    let tid = null
+    try {
+      tid = r?.rrhh_trabajador_id != null && r.rrhh_trabajador_id !== ''
+        ? Number(r.rrhh_trabajador_id)
+        : null
+      if (!Number.isFinite(tid)) tid = null
+    } catch { tid = null }
+    const key = tid != null ? `id:${tid}` : `n:${nombre.toLowerCase()}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const cargo = String(r?.cargo || '').trim()
+    out.push({
+      rrhh_trabajador_id: tid,
+      nombre,
+      cargo,
+      value: key,
+      label: cargo ? `${nombre} · ${cargo}` : nombre,
+    })
+  }
+  return out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+}
+
+/** Valor de <select> para una fila de uso de maquinaria. */
+export function operadorSelectValue(uso) {
+  let tid = null
+  try {
+    tid = uso?.operador_rrhh_id != null && uso.operador_rrhh_id !== ''
+      ? Number(uso.operador_rrhh_id)
+      : null
+    if (!Number.isFinite(tid)) tid = null
+  } catch { tid = null }
+  if (tid != null) return `id:${tid}`
+  const nombre = String(uso?.operador || '').trim()
+  return nombre ? `n:${nombre}` : ''
+}
+
+/** Interpreta el value del selector contra las opciones del día. */
+export function parseOperadorSelectValue(value, opciones = []) {
+  const v = String(value || '').trim()
+  if (!v) return { operador: '', operador_rrhh_id: null }
+  const list = Array.isArray(opciones) ? opciones : []
+  const byValue = list.find((o) => o.value === v)
+  if (byValue) {
+    return {
+      operador: byValue.nombre,
+      operador_rrhh_id: byValue.rrhh_trabajador_id,
+    }
+  }
+  if (v.startsWith('id:')) {
+    const tid = Number(v.slice(3))
+    if (Number.isFinite(tid)) {
+      const found = list.find((o) => o.rrhh_trabajador_id === tid)
+      if (found) return { operador: found.nombre, operador_rrhh_id: found.rrhh_trabajador_id }
+    }
+  }
+  if (v.startsWith('n:')) {
+    const nombre = v.slice(2).trim()
+    const found = list.find((o) => o.nombre.toLowerCase() === nombre.toLowerCase())
+    if (found) return { operador: found.nombre, operador_rrhh_id: found.rrhh_trabajador_id }
+  }
+  return { operador: '', operador_rrhh_id: null }
+}
+
+/**
+ * True si el uso no tiene operador, o si el operador elegido está en asistencia.
+ * Vacío se considera válido (operador opcional).
+ */
+export function operadorEstaEnAsistencia(uso, asistenciaRows) {
+  const tieneOp = String(uso?.operador || '').trim() || uso?.operador_rrhh_id != null
+  if (!tieneOp) return true
+  const opciones = opcionesOperadorDesdeAsistencia(asistenciaRows)
+  const current = operadorSelectValue(uso)
+  if (!current) return true
+  return opciones.some((o) => o.value === current)
 }
 
 export function asistenciaParaPayload(rows) {
