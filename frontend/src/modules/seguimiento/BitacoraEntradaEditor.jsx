@@ -9,7 +9,6 @@ import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
-import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import EventoBloquesSection from './EventoBloquesSection'
 import { eventosFromEntrada, eventosParaPayload, debeMostrarObservacionesDia } from './eventoBloquesHelpers'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
@@ -19,12 +18,16 @@ import {
   emptyActividadRow,
 } from './bitacoraEventoActividades'
 import {
+  HINT_OPERADOR_DESDE_ASISTENCIA,
   HINT_REGISTRAR_EN_RRHH,
   asistenciaFromEntrada,
   asistenciaParaPayload,
   mapaEstadosRrhh,
   mergePersonalCantidades,
-  nombreCompletoRrhh,
+  operadorEstaEnAsistencia,
+  operadorSelectValue,
+  opcionesOperadorDesdeAsistencia,
+  parseOperadorSelectValue,
   personalAgregadoDesdeAsistencia,
   puedeUsarCargoCantidadAsistencia,
   recoverPersonalManual,
@@ -391,6 +394,10 @@ export default function BitacoraEntradaEditor({
     contratoNumero,
     permiteCargoCuadrilla: Boolean(asistenciaRrhhPolicy?.permite_cargo_cuadrilla),
   })
+  const operadoresAsistencia = useMemo(
+    () => opcionesOperadorDesdeAsistencia(asistencia),
+    [asistencia],
+  )
   useEffect(() => {
     if (tipo !== 'diario') return
     const liveMap = resumenCongelado ? null : mapaEstadosRrhh(rrhhCatalogo)
@@ -564,11 +571,11 @@ export default function BitacoraEntradaEditor({
         setBusy(false)
         return
       }
-      const sinOperadorRrhh = usosConEquipo.filter(
-        (u) => String(u.operador || '').trim() && u.operador_rrhh_id == null,
+      const sinOperadorAsistencia = usosConEquipo.filter(
+        (u) => !operadorEstaEnAsistencia(u, asistencia),
       )
-      if (sinOperadorRrhh.length) {
-        setError(HINT_REGISTRAR_EN_RRHH)
+      if (sinOperadorAsistencia.length) {
+        setError(HINT_OPERADOR_DESDE_ASISTENCIA)
         setBusy(false)
         return
       }
@@ -1078,7 +1085,40 @@ export default function BitacoraEntradaEditor({
                       <tr>
                         <th style={{ ...ui.th, width: '18%' }}>Equipo / máquina</th>
                         <th style={{ ...ui.th, width: '14%' }}>Tramo *</th>
-                        <th style={{ ...ui.th, width: '16%' }}>Operador</th>
+                        <th style={{ ...ui.th, width: '16%' }}>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em',
+                          }}>
+                            Operador
+                            <span
+                              title={HINT_OPERADOR_DESDE_ASISTENCIA}
+                              aria-label={HINT_OPERADOR_DESDE_ASISTENCIA}
+                              style={{
+                                display: 'inline-flex',
+                                width: 14,
+                                height: 14,
+                                borderRadius: '50%',
+                                background: t.textMuted || '#94a3b8',
+                                color: '#fff',
+                                fontSize: 9,
+                                fontWeight: 800,
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: 'help',
+                                flexShrink: 0,
+                                textTransform: 'none',
+                                letterSpacing: 0,
+                                lineHeight: 1,
+                              }}
+                            >
+                              ?
+                            </span>
+                          </span>
+                        </th>
                         <th style={{ ...ui.th, width: '7%' }}>Cant.</th>
                         <th style={{ ...ui.th, width: '10%' }}>Hora inicio</th>
                         <th style={{ ...ui.th, width: '10%' }}>Hora fin</th>
@@ -1089,7 +1129,9 @@ export default function BitacoraEntradaEditor({
                     </thead>
                     <tbody>
                       {usos.map((u, idx) => {
-                        const opLocked = editable && u.operador_rrhh_id != null && !!u.operador
+                        const opValue = operadorSelectValue(u)
+                        const opEnLista = !opValue
+                          || operadoresAsistencia.some((o) => o.value === opValue)
                         return (
                         <tr key={`uso-${idx}`}>
                           <td style={ui.td} data-label="Equipo / máquina">
@@ -1130,40 +1172,35 @@ export default function BitacoraEntradaEditor({
                           <td style={ui.td} data-label="Operador">
                             {!editable ? (
                               <div style={ui.cellRo}>{u.operador || '—'}</div>
-                            ) : opLocked ? (
-                              <>
-                                <div style={{ fontWeight: 700, fontSize: 'var(--cc-xs)' }}>{u.operador}</div>
-                                <button
-                                  type="button"
-                                  onClick={() => setUsos((rows) => rows.map((r, i) => (
-                                    i === idx ? { ...r, operador: '', operador_rrhh_id: null } : r
-                                  )))}
-                                  style={{
-                                    ...ui.clipBtn,
-                                    color: t.primary,
-                                    fontWeight: 600,
-                                    fontSize: 'var(--cc-caption)',
-                                    padding: 0,
-                                    marginTop: 2,
-                                  }}
-                                >
-                                  Cambiar
-                                </button>
-                              </>
                             ) : (
-                              <NombreRrhhAutocomplete
-                                t={t}
-                                value={u.operador || ''}
-                                catalogo={rrhhCatalogo}
-                                onPick={(trab) => setUsos((rows) => rows.map((r, i) => (
-                                  i === idx ? {
-                                    ...r,
-                                    operador: nombreCompletoRrhh(trab),
-                                    operador_rrhh_id: trab?.id != null ? Number(trab.id) : null,
-                                  } : r
-                                )))}
-                                style={ui.cellInp}
-                              />
+                              <select
+                                value={opValue}
+                                onChange={(e) => {
+                                  const parsed = parseOperadorSelectValue(
+                                    e.target.value,
+                                    operadoresAsistencia,
+                                  )
+                                  setUsos((rows) => rows.map((r, i) => (
+                                    i === idx ? { ...r, ...parsed } : r
+                                  )))
+                                }}
+                                style={{ ...ui.cellInp, height: 28 }}
+                                title={HINT_OPERADOR_DESDE_ASISTENCIA}
+                              >
+                                <option value="">
+                                  {operadoresAsistencia.length
+                                    ? 'Seleccione…'
+                                    : 'Sin personal en asistencia'}
+                                </option>
+                                {operadoresAsistencia.map((op) => (
+                                  <option key={op.value} value={op.value}>{op.label}</option>
+                                ))}
+                                {!opEnLista && opValue ? (
+                                  <option value={opValue} disabled>
+                                    {u.operador || 'Operador'} (no está en asistencia)
+                                  </option>
+                                ) : null}
+                              </select>
                             )}
                           </td>
                           <td style={ui.td} data-label="Cant.">
