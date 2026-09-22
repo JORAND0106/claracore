@@ -198,16 +198,18 @@ export default function PersonalAsistenciaPanel({
     })
   }
 
-  /** Chips densos: cargo + contador; clic abre el mismo popup de detalle. */
+  /** Chips densos en cuadrícula uniforme; clic abre el mismo popup de detalle. */
   const renderCargoChips = (cargos, { onOpen, keyPrefix, ariaLabel }) => (
     <div
       role="list"
       aria-label={ariaLabel}
+      data-testid="bitacora-resumen-cargos-grid"
       style={{
-        display: 'flex',
-        flexWrap: 'wrap',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))',
         gap: 5,
-        alignItems: 'flex-start',
+        alignItems: 'stretch',
+        width: '100%',
       }}
     >
       {cargos.map((row) => {
@@ -224,7 +226,8 @@ export default function PersonalAsistenciaPanel({
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              maxWidth: '100%',
+              width: '100%',
+              minWidth: 0,
               margin: 0,
               padding: '3px 8px 3px 9px',
               border: `1px solid ${activo ? (t.primary || '#0077B6') : t.border}`,
@@ -240,13 +243,14 @@ export default function PersonalAsistenciaPanel({
             }}
           >
             <span style={{
+              flex: '1 1 auto',
+              minWidth: 0,
               fontWeight: 600,
               fontSize: 'var(--cc-caption)',
               color: t.text,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              maxWidth: 140,
             }}>
               {row.cargo}
             </span>
