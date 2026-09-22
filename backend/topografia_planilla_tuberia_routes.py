@@ -1710,8 +1710,8 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     table.sheet{{border-collapse:collapse;width:100%;margin-bottom:2px}}
     table.sheet th,table.sheet td{{border:0.4pt solid #64748b;padding:4px 5px;font-size:7.5pt;line-height:1.4}}
     table.sheet th{{background:#D9D9D9;font-size:6pt}}
-    table.sheet.cartera th,table.sheet.cartera td{{padding:3px 4px;font-size:7pt;line-height:1.15}}
-    table.sheet.cartera th{{font-size:5.5pt;background:#B0B0B0;color:#1e293b}}
+    table.sheet.cartera th,table.sheet.cartera td{{padding:1px 3px;font-size:5.5pt;line-height:1.0}}
+    table.sheet.cartera th{{font-size:5pt;background:#B0B0B0;color:#1e293b}}
     table.sheet.resumen th,table.sheet.resumen td{{padding:2px 3px;font-size:6.5pt;line-height:1.05}}
     table.sheet.resumen th{{font-size:5.5pt}}
     table.sheet.resumen th.item,table.sheet.resumen td.item{{width:42%;white-space:nowrap;text-align:left}}
