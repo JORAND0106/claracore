@@ -15,6 +15,59 @@ _log = logging.getLogger("claracore.rrhh")
 _TABLE_CATALOGO = "rrhh_catalogo_opciones"
 _TABLE_TRAB = "rrhh_trabajadores"
 
+# Siglas de cargos de obra que deben permanecer en mayúsculas.
+_CARGO_ACRONIMOS = frozenset({
+    "sst", "arl", "eps", "siso", "hseq", "qa", "qc", "pk", "id", "nit",
+    "cc", "ti", "ce", "pa", "otp", "bim",
+})
+# Partículas en español: minúsculas salvo al inicio.
+_CARGO_PARTICULAS = frozenset({
+    "de", "del", "la", "las", "los", "y", "e", "o", "u", "a", "en", "al",
+    "para", "por", "con", "el",
+})
+
+
+def _strip_accents_lower(txt: str) -> str:
+    s = unicodedata.normalize("NFD", str(txt or ""))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return s.lower()
+
+
+def normalizar_cargo_nombre_propio(raw: Any) -> str:
+    """
+    Formato «Nombre Propio» para cargos: primera letra de cada palabra en
+    mayúscula, resto en minúscula. Respeta siglas (SST, ARL, …) y deja
+    partículas (de, del, la, …) en minúscula excepto al inicio.
+    Idempotente sobre valores ya bien formateados.
+    """
+    s = re.sub(r"\s+", " ", str(raw or "").strip())
+    if not s:
+        return ""
+    out: List[str] = []
+    for i, word in enumerate(s.split(" ")):
+        if not word:
+            continue
+        # Separar puntuación final tipo «Insp.» / «Ing.»
+        m = re.match(r"^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)([.\-]?)$", word)
+        if m:
+            core, suf = m.group(1), m.group(2) or ""
+        else:
+            core, suf = word, ""
+        key = _strip_accents_lower(core)
+        if key in _CARGO_ACRONIMOS:
+            out.append(core.upper() + suf)
+            continue
+        if i > 0 and key in _CARGO_PARTICULAS:
+            out.append(key + suf)
+            continue
+        if not core:
+            out.append(word)
+            continue
+        # Title-case preservando acentos en el resto en minúsculas
+        titled = core[:1].upper() + core[1:].lower()
+        out.append(titled + suf)
+    return " ".join(out)
+
 CATALOG_CATEGORIAS = frozenset({
     "eps",
     "pension",
@@ -391,6 +444,8 @@ def _validate_categoria(categoria: str) -> str:
 def list_catalogo(sb, contrato_id: int, categoria: str) -> List[dict]:
     cat = _validate_categoria(categoria)
     ensure_catalogo_defaults(sb, contrato_id, cat)
+    if cat == "cargo":
+        ensure_cargos_nombre_propio(sb, contrato_id)
     return (
         sb.table(_TABLE_CATALOGO)
         .select("id, categoria, valor, activo")
@@ -408,6 +463,7 @@ def list_catalogo_todos(sb, contrato_id: int) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = {c: [] for c in sorted(CATALOG_CATEGORIAS)}
     for cat in CATALOG_CATEGORIAS:
         ensure_catalogo_defaults(sb, contrato_id, cat)
+    ensure_cargos_nombre_propio(sb, contrato_id)
     rows = (
         sb.table(_TABLE_CATALOGO)
         .select("categoria, valor")
@@ -464,6 +520,8 @@ def ensure_catalogo_defaults(sb, contrato_id: int, categoria: str, current_user=
 def add_catalogo_opcion(sb, contrato_id: int, categoria: str, valor: str, current_user=None) -> dict:
     cat = _validate_categoria(categoria)
     v = _require_str(valor, "Valor", min_len=1, max_len=200)
+    if cat == "cargo":
+        v = normalizar_cargo_nombre_propio(v) or v
     norm = _norm_valor(v)
     existing = (
         sb.table(_TABLE_CATALOGO)
@@ -478,16 +536,21 @@ def add_catalogo_opcion(sb, contrato_id: int, categoria: str, valor: str, curren
     )
     if existing:
         row = existing[0]
+        patch = {}
         if not row.get("activo"):
+            patch["activo"] = True
+        if cat == "cargo" and str(row.get("valor") or "") != v:
+            patch["valor"] = v
+        if patch:
             updated = (
                 sb.table(_TABLE_CATALOGO)
-                .update({"activo": True, "valor": v})
+                .update(patch)
                 .eq("id", row["id"])
                 .execute()
                 .data
                 or []
             )
-            return updated[0] if updated else {**row, "activo": True, "valor": v}
+            return updated[0] if updated else {**row, **patch}
         return row
     payload = {
         "contrato_id": int(contrato_id),
@@ -520,6 +583,83 @@ def add_catalogo_opcion(sb, contrato_id: int, categoria: str, valor: str, curren
     if not rows:
         raise ValueError("No se pudo agregar la opción al catálogo.")
     return rows[0]
+
+
+# Contratos ya normalizados en este proceso (evita reescribir en cada listado).
+_CARGOS_NP_ENSURED: set = set()
+
+
+def ensure_cargos_nombre_propio(sb, contrato_id: int, *, force: bool = False) -> Dict[str, int]:
+    """
+    Corrección retroactiva idempotente: normaliza ``valor`` del catálogo
+    (categoria cargo) y ``cargo_aspira`` de trabajadores al formato Nombre Propio.
+    """
+    cid = int(contrato_id)
+    if not force and cid in _CARGOS_NP_ENSURED:
+        return {"catalogo_actualizados": 0, "trabajadores_actualizados": 0}
+
+    updated_cat = 0
+    updated_trab = 0
+    try:
+        rows = (
+            sb.table(_TABLE_CATALOGO)
+            .select("id, valor, valor_norm, activo")
+            .eq("contrato_id", cid)
+            .eq("categoria", "cargo")
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            raw = str(r.get("valor") or "").strip()
+            if not raw:
+                continue
+            nuevo = normalizar_cargo_nombre_propio(raw)
+            if not nuevo or nuevo == raw:
+                continue
+            try:
+                sb.table(_TABLE_CATALOGO).update({
+                    "valor": nuevo,
+                    "valor_norm": _norm_valor(nuevo),
+                }).eq("id", int(r["id"])).execute()
+                updated_cat += 1
+            except Exception as exc:
+                # Colisión de valor_norm tras normalizar: desactivar duplicado
+                _log.debug("ensure_cargos_nombre_propio catalogo id=%s: %s", r.get("id"), exc)
+                try:
+                    sb.table(_TABLE_CATALOGO).update({"activo": False}).eq("id", int(r["id"])).execute()
+                except Exception:
+                    pass
+    except Exception as exc:
+        _log.warning("ensure_cargos_nombre_propio catalogo: %s", exc)
+
+    try:
+        trabs = (
+            sb.table(_TABLE_TRAB)
+            .select("id, cargo_aspira")
+            .eq("contrato_id", cid)
+            .is_("eliminado_en", "null")
+            .execute()
+            .data
+            or []
+        )
+        for t in trabs:
+            raw = str(t.get("cargo_aspira") or "").strip()
+            if not raw:
+                continue
+            nuevo = normalizar_cargo_nombre_propio(raw)
+            if not nuevo or nuevo == raw:
+                continue
+            try:
+                sb.table(_TABLE_TRAB).update({"cargo_aspira": nuevo}).eq("id", int(t["id"])).execute()
+                updated_trab += 1
+            except Exception as exc:
+                _log.debug("ensure_cargos_nombre_propio trab id=%s: %s", t.get("id"), exc)
+    except Exception as exc:
+        _log.warning("ensure_cargos_nombre_propio trabajadores: %s", exc)
+
+    _CARGOS_NP_ENSURED.add(cid)
+    return {"catalogo_actualizados": updated_cat, "trabajadores_actualizados": updated_trab}
 
 
 def soft_delete_catalogo_opcion(
@@ -749,6 +889,9 @@ def _payload_trabajador(sb, contrato_id: int, body: dict, *, partial: bool = Fal
     ):
         max_len = 4000 if k == "notas" else (1000 if k == "direccion" else 300)
         set_opt(k, max_len=max_len)
+
+    if "cargo_aspira" in out and out["cargo_aspira"]:
+        out["cargo_aspira"] = normalizar_cargo_nombre_propio(out["cargo_aspira"]) or out["cargo_aspira"]
 
     if "tipo_sangre" in body or not partial:
         ts = _trim(body.get("tipo_sangre"), max_len=8)

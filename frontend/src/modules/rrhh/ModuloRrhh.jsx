@@ -16,6 +16,7 @@ import {
   formFromTrabajador,
   fmtSalario,
   nombreCompleto,
+  normalizarCargoNombrePropio,
   payloadFromForm,
   dataUrlToBlob,
   validateTrabajadorForm,
@@ -142,10 +143,13 @@ export default function ModuloRrhh({ t, usuario, token, contratoId, themeMode })
 
   const addCatalogValue = useCallback(async (categoria, valor) => {
     if (!api) return
-    await api.addCatalogoOpcion(categoria, valor)
+    const v = categoria === 'cargo'
+      ? (normalizarCargoNombrePropio(valor) || String(valor || '').trim())
+      : valor
+    await api.addCatalogoOpcion(categoria, v)
     setCatalogo((prev) => {
       const list = [...(prev?.[categoria] || [])]
-      if (!list.includes(valor)) list.push(valor)
+      if (!list.includes(v)) list.push(v)
       list.sort((a, b) => a.localeCompare(b, 'es'))
       return { ...prev, [categoria]: list }
     })

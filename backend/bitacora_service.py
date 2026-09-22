@@ -615,6 +615,22 @@ def clima_label(codigo: Optional[int]) -> str:
     return f"Código {c}"
 
 
+def _normalizar_nombre_cargo_propio(raw) -> str:
+    """Delegado a RRHH: formato Nombre Propio (siglas SST, partículas de/del, …)."""
+    try:
+        from rrhh_service import normalizar_cargo_nombre_propio
+        return normalizar_cargo_nombre_propio(raw)
+    except Exception:
+        s = re.sub(r"\s+", " ", str(raw or "").strip())
+        if not s:
+            return ""
+        return " ".join(
+            (p[:1].upper() + p[1:].lower() if len(p) > 1 else p.upper())
+            for p in s.split(" ")
+            if p
+        )
+
+
 def _normalizar_personal(raw) -> List[dict]:
     if not isinstance(raw, list):
         return []
@@ -622,7 +638,7 @@ def _normalizar_personal(raw) -> List[dict]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        cargo = str(item.get("cargo") or "").strip()
+        cargo = _normalizar_nombre_cargo_propio(item.get("cargo") or "")
         if not cargo:
             continue
         try:
@@ -632,7 +648,7 @@ def _normalizar_personal(raw) -> List[dict]:
         if cantidad < 0:
             cantidad = 0
         row = {"cargo": cargo, "cantidad": cantidad}
-        otro = str(item.get("cargo_otro") or "").strip()
+        otro = _normalizar_nombre_cargo_propio(item.get("cargo_otro") or "")
         if cargo.lower().startswith("otro") and otro:
             row["cargo_otro"] = otro
         out.append(row)
@@ -645,8 +661,8 @@ def _expandir_personal_otro(personal: List[dict]) -> List[dict]:
     for item in personal or []:
         if not isinstance(item, dict):
             continue
-        cargo = str(item.get("cargo") or "").strip()
-        otro = str(item.get("cargo_otro") or "").strip()
+        cargo = _normalizar_nombre_cargo_propio(item.get("cargo") or "")
+        otro = _normalizar_nombre_cargo_propio(item.get("cargo_otro") or "")
         if cargo.lower().startswith("otro") and otro:
             out.append({"cargo": otro, "cantidad": item.get("cantidad") or 0})
         else:
@@ -663,7 +679,7 @@ def _merge_personal_por_cargo(*listas: List[dict]) -> List[dict]:
         for item in lista or []:
             if not isinstance(item, dict):
                 continue
-            cargo = str(item.get("cargo") or "").strip()
+            cargo = _normalizar_nombre_cargo_propio(item.get("cargo") or "")
             if not cargo:
                 continue
             key = cargo.lower()
@@ -674,8 +690,7 @@ def _merge_personal_por_cargo(*listas: List[dict]) -> List[dict]:
             if n <= 0:
                 continue
             counts[key] = counts.get(key, 0.0) + n
-            if key not in labels:
-                labels[key] = cargo
+            labels[key] = cargo
     return [
         {"cargo": labels[k], "cantidad": counts[k]}
         for k in sorted(counts.keys(), key=lambda x: labels[x].lower())
@@ -1732,7 +1747,7 @@ def upsert_cargo_custom(
     *,
     user_id: Optional[int] = None,
 ) -> Optional[dict]:
-    nombre_limpio = str(nombre or "").strip()
+    nombre_limpio = _normalizar_nombre_cargo_propio(nombre)
     if not nombre_limpio:
         return None
     # No duplicar plantilla fija
@@ -2440,7 +2455,7 @@ def upsert_colaborador(
     if doc_tipo not in DOCUMENTO_TIPOS_COLABORADOR:
         doc_tipo = "OTRO"
     doc_num = _norm_documento_numero(documento_numero)
-    cargo_limpio = str(cargo or "").strip()
+    cargo_limpio = _normalizar_nombre_cargo_propio(cargo)
     sub_nombre = str(subcontratista_nombre or "").strip()
     f_ingreso = _parse_fecha_iso(fecha_ingreso)
     f_retiro = _parse_fecha_iso(fecha_retiro)
@@ -2548,7 +2563,7 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
         nombre = _capitalizar_nombre_propio(item.get("nombre") or "")
         if not nombre:
             continue
-        cargo = str(item.get("cargo") or "").strip()
+        cargo = _normalizar_nombre_cargo_propio(item.get("cargo") or "")
         estado = str(item.get("estado") or "activo").strip().lower()
         if estado not in ESTADOS_COLABORADOR:
             estado = "activo"
@@ -2612,14 +2627,20 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
 def _personal_desde_asistencia(asistencia: List[dict]) -> List[dict]:
     """Agrega cantidades por cargo solo para colaboradores con estado Activo (RRHH)."""
     counts: Dict[str, float] = {}
+    labels: Dict[str, str] = {}
     for row in asistencia or []:
         if str(row.get("estado") or "").lower() not in ESTADOS_CUENTAN_RESUMEN:
             continue
-        cargo = str(row.get("cargo") or "").strip()
+        cargo = _normalizar_nombre_cargo_propio(row.get("cargo") or "")
         if not cargo:
             continue
-        counts[cargo] = counts.get(cargo, 0.0) + 1.0
-    return [{"cargo": c, "cantidad": n} for c, n in sorted(counts.items(), key=lambda x: x[0].lower())]
+        key = cargo.lower()
+        counts[key] = counts.get(key, 0.0) + 1.0
+        labels[key] = cargo
+    return [
+        {"cargo": labels[k], "cantidad": n}
+        for k, n in sorted(counts.items(), key=lambda x: labels[x[0]].lower())
+    ]
 
 
 def _nombre_completo_rrhh(trab: dict) -> str:
@@ -2721,7 +2742,9 @@ def enrich_asistencia_desde_rrhh(
             "documento_numero": _norm_documento_numero(
                 trab.get("numero_documento") or item.get("documento_numero")
             ),
-            "cargo": str(trab.get("cargo_aspira") or item.get("cargo") or "").strip(),
+            "cargo": _normalizar_nombre_cargo_propio(
+                trab.get("cargo_aspira") or item.get("cargo") or ""
+            ),
             "subcontratista_id": sub_id,
             "subcontratista_nombre": str(
                 trab.get("empresa_nombre") or item.get("subcontratista_nombre") or ""
@@ -2774,7 +2797,7 @@ def list_rrhh_trabajadores_para_bitacora(
             continue
         if trabajador_tiene_rol_administrativo(t, claves_admin):
             continue
-        cargo_asp = str(t.get("cargo_aspira") or "").strip()
+        cargo_asp = _normalizar_nombre_cargo_propio(t.get("cargo_aspira") or "")
         # Legado: cargo_aspira exactamente «Administrativo» (era el rol mal
         # modelado como cargo).
         if es_etiqueta_administrativo_excluida(cargo_asp):
@@ -2853,9 +2876,9 @@ def list_rrhh_cargos_para_bitacora(sb, contrato_id: int) -> List[str]:
 
     for r in rows:
         if isinstance(r, dict):
-            val = str(r.get("valor") or "").strip()
+            val = _normalizar_nombre_cargo_propio(r.get("valor") or "")
         else:
-            val = str(r or "").strip()
+            val = _normalizar_nombre_cargo_propio(r or "")
         if not val:
             continue
         key = val.casefold()

@@ -26,6 +26,7 @@ import {
   mapaEstadosRrhh,
   nombreCompletoRrhh,
   nombreEmpresaAsistencia,
+  normalizarCargoNombrePropio,
   operadorEstaEnAsistencia,
   operadorSelectValue,
   opcionesOperadorDesdeAsistencia,
@@ -47,6 +48,31 @@ describe('capitalizarNombrePropio / documento', () => {
   })
   it('solo dígitos en documento', () => {
     assert.equal(soloDigitosDocumento('1.234.567-8'), '12345678')
+  })
+})
+
+describe('normalizarCargoNombrePropio', () => {
+  it('unifica mayúsculas/minúsculas a Nombre Propio', () => {
+    assert.equal(normalizarCargoNombrePropio('OPERARIO VOLQUETA'), 'Operario Volqueta')
+    assert.equal(normalizarCargoNombrePropio('AUXILIAR DE TRÁFICO'), 'Auxiliar de Tráfico')
+    assert.equal(normalizarCargoNombrePropio('auxiliar de tráfico'), 'Auxiliar de Tráfico')
+  })
+
+  it('es idempotente y respeta siglas SST / partículas', () => {
+    assert.equal(normalizarCargoNombrePropio('Auxiliar de Tráfico'), 'Auxiliar de Tráfico')
+    assert.equal(normalizarCargoNombrePropio('Insp. SST'), 'Insp. SST')
+    assert.equal(normalizarCargoNombrePropio('INSP. SST'), 'Insp. SST')
+    assert.equal(normalizarCargoNombrePropio('inspector sst'), 'Inspector SST')
+    assert.equal(normalizarCargoNombrePropio('QA inspector'), 'QA Inspector')
+  })
+
+  it('fusiona variantes de casing en el resumen por cargo', () => {
+    const agg = personalAgregadoDesdeAsistencia([
+      { nombre: 'A', cargo: 'OPERARIO VOLQUETA', estado: 'activo' },
+      { nombre: 'B', cargo: 'Operario Volqueta', estado: 'activo' },
+      { nombre: 'C', cargo: 'operario volqueta', estado: 'activo' },
+    ])
+    assert.deepEqual(agg, [{ cargo: 'Operario Volqueta', cantidad: 3 }])
   })
 })
 
@@ -133,7 +159,7 @@ describe('RRHH mapping / filtro', () => {
     assert.equal(hits.length, 1)
     const row = asistenciaRowFromRrhh(hits[0])
     assert.equal(row.nombre, 'Gustavo Ramírez López')
-    assert.equal(row.cargo, 'Oficial de obra')
+    assert.equal(row.cargo, 'Oficial de Obra')
     assert.equal(row.subcontratista_nombre, 'Constructora Demo S.A.S.')
     assert.equal(filtrarTrabajadoresRrhh(cat, 'Zzzinexistente', []).length, 0)
   })

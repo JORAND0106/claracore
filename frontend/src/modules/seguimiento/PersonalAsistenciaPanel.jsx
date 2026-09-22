@@ -15,6 +15,7 @@ import {
   mapaEstadosRrhh,
   mergePersonalCantidades,
   nombreEmpresaAsistencia,
+  normalizarCargoNombrePropio,
   personalAgregadoDesdeAsistencia,
   resolverCatalogoCargos,
   resumenCargosDesdeCatalogo,
@@ -130,6 +131,7 @@ export default function PersonalAsistenciaPanel({
     if (cargo.toLowerCase() === 'otro') {
       cargo = String(draftCargoOtro || '').trim()
     }
+    cargo = normalizarCargoNombrePropio(cargo)
     const n = Number(draftCantidad)
     if (!cargo || !Number.isFinite(n) || n <= 0) return
     const next = mergePersonalCantidades(personalManual, [{ cargo, cantidad: n }])
