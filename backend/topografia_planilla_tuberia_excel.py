@@ -15,6 +15,7 @@ from openpyxl import Workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.chart import Reference, ScatterChart, Series
 from openpyxl.drawing.image import Image
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -62,6 +63,18 @@ _SECCION_PNG = {
     "ALCANTARILLA": _MEDIA_DIR / "seccion_alcantarilla.png",
     "FILTRO": _MEDIA_DIR / "seccion_filtro.png",
 }
+
+# Anclas canónicas (inventario XLSM / layout_map). openpyxl usa índices 0-based.
+# Imagen sección: L20:N40  → from (col=11,row=19) to (col=14,row=40)
+SECCION_IMG_FROM = (11, 19)  # L20
+SECCION_IMG_TO = (14, 40)    # esquina inferior-derecha (N40)
+# Perfil: B52:N63 (debajo de Resumen/Descuentos en 43–51; encima de firmas en 64+)
+# Nota: B43 es el título de Resumen de Cantidades — el chart NO debe empezar ahí.
+PERFIL_CHART_FROM = (1, 51)  # B52
+PERFIL_CHART_TO = (14, 63)   # N63
+# Celdas de resultado del panel gráfico que conservan cuadrícula/borde.
+PANEL_RESULTADO_CELDAS = ("L18", "K23", "K30")
+NO_BORDER = Border()
 
 
 def _inventory_path() -> Path:
@@ -212,6 +225,7 @@ def _write_aux_feed(ws_aux, n_rows: int = 24) -> None:
 
 
 def _add_profile_chart(ws_planilla, wb, *, tipo: str = "ALCANTARILLA") -> None:
+    """ScatterChart de perfil anclado exactamente en B52:N63 (no invade firmas)."""
     aux_name = next((n for n in wb.sheetnames if n.lower().startswith("tbl_aux")), None)
     if not aux_name:
         return
@@ -231,10 +245,15 @@ def _add_profile_chart(ws_planilla, wb, *, tipo: str = "ALCANTARILLA") -> None:
     ):
         yvalues = Reference(aux, min_col=col, min_row=5, max_row=28)
         chart.series.append(Series(yvalues, xvalues, title=title))
-    chart.width = 18
-    chart.height = 8
-    ws_planilla.add_chart(chart, "A52")
-
+    # TwoCellAnchor: tamaño = rango de celdas (evita height/width sueltos que cruzaban firmas).
+    c0, r0 = PERFIL_CHART_FROM
+    c1, r1 = PERFIL_CHART_TO
+    chart.anchor = TwoCellAnchor(
+        _from=AnchorMarker(col=c0, colOff=0, row=r0, rowOff=0),
+        to=AnchorMarker(col=c1, colOff=0, row=r1, rowOff=0),
+        editAs="twoCell",
+    )
+    ws_planilla.add_chart(chart)
 
 
 def _side(style: str, color: str = "64748B") -> Side:
@@ -263,6 +282,33 @@ def _border_box(
             )
 
 
+def _border_box_outer_only(
+    ws,
+    min_row: int,
+    max_row: int,
+    min_col: int,
+    max_col: int,
+    *,
+    edge: Border = MEDIUM,
+) -> None:
+    """Solo marco exterior (sin cuadrícula interna)."""
+    for r in range(min_row, max_row + 1):
+        for c in range(min_col, max_col + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.border = Border(
+                left=edge.left if c == min_col else None,
+                right=edge.right if c == max_col else None,
+                top=edge.top if r == min_row else None,
+                bottom=edge.bottom if r == max_row else None,
+            )
+
+
+def _clear_borders_range(ws, min_row: int, max_row: int, min_col: int, max_col: int) -> None:
+    for r in range(min_row, max_row + 1):
+        for c in range(min_col, max_col + 1):
+            ws.cell(row=r, column=c).border = NO_BORDER
+
+
 def _apply_sheet_borders(ws) -> None:
     """Bordes de bloques: cabecera, franja, cartera, cantidades, descuentos, firmas."""
     _border_box(ws, 1, 4, 6, 12)  # título F1:L4
@@ -274,7 +320,11 @@ def _apply_sheet_borders(ws) -> None:
     _border_box(ws, 12, 13, 9, 13)  # params tubo
     _border_box(ws, 14, 15, 2, 7)  # áreas / sección
     _border_box(ws, 16, 41, 2, 10)  # cartera + totales
-    _border_box(ws, 16, 40, 11, 14)  # panel gráfico
+    # Panel gráfico K16:N40: marco exterior sin cuadrícula interna.
+    _border_box_outer_only(ws, 16, 40, 11, 14)
+    # Zona de la imagen L20:N40 sin bordes (salvo celdas de resultado más abajo).
+    _clear_borders_range(ws, 20, 40, 12, 14)  # L20:N40
+    _clear_borders_range(ws, 17, 40, 11, 11)  # K17:K40 (columna GRAFICO cuerpo)
     _border_box(ws, 43, 51, 2, 8)  # resumen cantidades
     _border_box(ws, 43, 51, 9, 14)  # descuentos
     _border_box(ws, 64, 66, 1, 7)  # elaboró
@@ -285,18 +335,25 @@ def _apply_sheet_borders(ws) -> None:
             cell = ws.cell(row=r, column=c)
             if not cell.border or not cell.border.left:
                 cell.border = THIN
+    # Únicas celdas del panel gráfico que conservan cuadrícula (valores de resultado).
+    for addr in PANEL_RESULTADO_CELDAS:
+        _style(ws, addr, border=THIN)
 
 
 def _embed_seccion_png(ws, tipo: str) -> None:
-    """Inserta el PNG de sección típica según tipo (sin lógica condicional en el archivo)."""
+    """PNG de sección típica anclado exactamente en L20:N40."""
     path = _SECCION_PNG.get(tipo) or _SECCION_PNG["ALCANTARILLA"]
     if not path.is_file():
         return
     img = Image(str(path))
-    # Encaja en el panel K17:N39 aprox.
-    img.width = 220
-    img.height = 200
-    ws.add_image(img, "K17")
+    c0, r0 = SECCION_IMG_FROM
+    c1, r1 = SECCION_IMG_TO
+    img.anchor = TwoCellAnchor(
+        _from=AnchorMarker(col=c0, colOff=0, row=r0, rowOff=0),
+        to=AnchorMarker(col=c1, colOff=0, row=r1, rowOff=0),
+        editAs="twoCell",
+    )
+    ws.add_image(img)
 
 
 def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia: bool) -> None:
@@ -614,7 +671,6 @@ def build_planilla_tuberia_xlsx(
     _overlay_data(ws, planilla, calculo, tipo, vacia)
     _embed_seccion_png(ws, tipo)
     _apply_sheet_borders(ws)
-    _add_profile_chart(ws, wb, tipo=tipo)
     _add_profile_chart(ws, wb, tipo=tipo)
 
     base = sheets.get("Resumen_BASE")

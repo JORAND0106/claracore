@@ -254,8 +254,7 @@
         {
           "col": "K",
           "header": "GRAFICO",
-          "role": "panel_grafico_seccion",
-          "notes": "Gráfico dinámico XLSM: formas SeccionTub (image3.png=ALCANTARILLA) y SeccionFil (image2.png=FILTRO) con VBA ActualizarSeccion según F1 vs P1."
+          "role": "panel_grafico_seccion"
         }
       ],
       "totales_row": 41,
@@ -269,9 +268,11 @@
     },
     {
       "id": "panel_grafico_seccion",
-      "range": "K16:N42",
+      "range": "K16:N40",
       "title": "GRAFICO",
-      "notes": "Panel de sección típica por celdas/fórmulas/etiquetas (no es chart embebido). Gráfico dinámico XLSM: formas SeccionTub (image3.png=ALCANTARILLA) y SeccionFil (image2.png=FILTRO) con VBA ActualizarSeccion según F1 vs P1."
+      "image_anchor": "L20:N40",
+      "resultado_celdas_con_borde": ["L18", "K23", "K30"],
+      "notes": "PNG de sección tipica anclado en L20:N40. Sin cuadrícula interna salvo las 3 celdas de resultado."
     },
     {
       "id": "resumen_cantidades",
@@ -343,7 +344,7 @@
         "I44": "Item",
         "K44": "Long",
         "L44": "Ancho",
-        "M44": "Espesor",
+        "M44": "Área",
         "N44": "Cantidad"
       },
       "header_fill": "FFEA4296",
@@ -373,10 +374,11 @@
         "type": "ScatterChart",
         "title": "Perfil Longitudinal de Tubería",
         "anchor": {
-          "from_col": 0,
+          "from_col": 1,
           "from_row": 51,
           "to_col": 14,
-          "to_row": 63
+          "to_row": 63,
+          "range": "B52:N63"
         },
         "series": [
           {
@@ -399,6 +401,8 @@
         "y_axis_title": "cota"
       },
       "anchor_rows": "52:63",
+      "anchor_range": "B52:N63",
+      "notes": "Debajo de Resumen/Descuentos (43–51); no invade firmas (64+). B43 es título de Resumen, no ancla del chart.",
       "data_sheet": "Tbl_Auxiliares",
       "series": [
         {
