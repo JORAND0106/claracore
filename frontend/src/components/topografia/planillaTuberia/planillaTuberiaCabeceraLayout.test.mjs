@@ -36,6 +36,7 @@ describe('Planilla tubería — cabecera compacta 2 filas', () => {
     assert.match(formSrc, /este_abs_final/)
     assert.match(formSrc, /diametro_m/)
     assert.match(formSrc, /relacion_atraque/)
+    assert.match(formSrc, /cama_triturado_m/)
     assert.match(formSrc, /BitacoraMaterialUbicacionModal/)
   })
 })

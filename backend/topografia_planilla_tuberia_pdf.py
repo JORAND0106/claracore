@@ -397,14 +397,20 @@ def svg_seccion_tipica_pdf(seccion_tipica: Optional[dict], *, width: int = 320, 
     return "".join(parts)
 
 def svg_perfil_longitudinal_pdf(perfil: Optional[dict], *, width: int = 520, height: int = 200) -> str:
-    """SVG del ScatterChart: Terreno Natural / Terminado Filtro|Cota Lomo / Cota Fondo."""
+    """SVG del ScatterChart: TN [/ Subrasante] / Terminado|Cota Lomo / Cota Fondo."""
     p = perfil or {}
     abs_ = list(p.get("abscisas") or [])
     tn = list(p.get("terreno_natural") or [])
     nv = list(p.get("nivel_referencia") or [])
     cfe = list(p.get("cota_fondo_excavacion") or [])
+    sub = list(p.get("subrasante_via") or [])
+    cota_lomo = list(p.get("cota_lomo") or [])
     etiqueta = html.escape(str(p.get("etiqueta_nivel") or "Nivel"))
+    etiqueta_sub = html.escape(str(p.get("etiqueta_subrasante") or "Subrasante de Vía"))
     titulo = html.escape(str(p.get("titulo_grafico") or "Perfil Longitudinal de Tubería"))
+    tiene_sub = bool(sub) and any(v is not None for v in sub)
+    # Preferir serie cota_lomo explícita si viene; si no, nivel_referencia.
+    serie_lomo = cota_lomo if any(v is not None for v in cota_lomo) else nv
 
     def nums(vals):
         out = []
@@ -418,11 +424,28 @@ def svg_perfil_longitudinal_pdf(perfil: Optional[dict], *, width: int = 520, hei
         return out
 
     abs_n = nums(abs_)
-    all_y = nums(tn) + nums(nv) + nums(cfe)
+    all_y = nums(tn) + nums(serie_lomo) + nums(cfe) + (nums(sub) if tiene_sub else [])
 
     pad_l, pad_r, pad_t, pad_b = 40, 12, 28, 28
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
+
+    legend_bits = [
+        f'<text x="{pad_l}" y="24" font-size="8" fill="#166534">Terreno Natural</text>',
+    ]
+    x_leg = pad_l + 100
+    if tiene_sub:
+        legend_bits.append(
+            f'<text x="{x_leg}" y="24" font-size="8" fill="#7c3aed">{etiqueta_sub}</text>'
+        )
+        x_leg += 110
+    legend_bits.append(
+        f'<text x="{x_leg}" y="24" font-size="8" fill="#1d4ed8">{etiqueta}</text>'
+    )
+    x_leg += 90
+    legend_bits.append(
+        f'<text x="{x_leg}" y="24" font-size="8" fill="#b45309">Cota Fondo Excavación</text>'
+    )
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
@@ -430,9 +453,7 @@ def svg_perfil_longitudinal_pdf(perfil: Optional[dict], *, width: int = 520, hei
         f'<text x="{pad_l}" y="14" font-size="10" font-weight="700" fill="#334155">{titulo}</text>',
         f'<line x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{height - pad_b}" stroke="#94a3b8"/>',
         f'<line x1="{pad_l}" y1="{height - pad_b}" x2="{width - pad_r}" y2="{height - pad_b}" stroke="#94a3b8"/>',
-        f'<text x="{pad_l}" y="24" font-size="8" fill="#166534">Terreno Natural</text>',
-        f'<text x="{pad_l + 100}" y="24" font-size="8" fill="#1d4ed8">{etiqueta}</text>',
-        f'<text x="{pad_l + 220}" y="24" font-size="8" fill="#b45309">Cota Fondo Excavación</text>',
+        *legend_bits,
     ]
 
     if len(abs_n) < 2 or len(all_y) < 2:
@@ -476,7 +497,9 @@ def svg_perfil_longitudinal_pdf(perfil: Optional[dict], *, width: int = 520, hei
         )
 
     parts.append(poly(tn, "#166534"))
-    parts.append(poly(nv, "#1d4ed8"))
+    if tiene_sub:
+        parts.append(poly(sub, "#7c3aed"))
+    parts.append(poly(serie_lomo, "#1d4ed8"))
     parts.append(poly(cfe, "#b45309"))
     parts.append(
         f'<text x="{pad_l}" y="{height - 8}" font-size="8" fill="#64748b">{_fmt(min_a, 2)}</text>'

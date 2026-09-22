@@ -211,7 +211,7 @@ def _write_aux_feed(ws_aux, n_rows: int = 24) -> None:
         ws_aux[f"E{r}"] = f'=IF(OR(planilla!$B{src}="",planilla!F{src}=""),NA(),planilla!F{src})'
 
 
-def _add_profile_chart(ws_planilla, wb) -> None:
+def _add_profile_chart(ws_planilla, wb, *, tipo: str = "ALCANTARILLA") -> None:
     aux_name = next((n for n in wb.sheetnames if n.lower().startswith("tbl_aux")), None)
     if not aux_name:
         return
@@ -223,9 +223,10 @@ def _add_profile_chart(ws_planilla, wb) -> None:
     chart.style = 10
     aux = wb[aux_name]
     xvalues = Reference(aux, min_col=2, min_row=5, max_row=28)
+    titulo_nivel = "Terminado Filtro" if (tipo or "").upper() == "FILTRO" else "Cota Lomo"
     for col, title in (
         (3, "Terreno Natural"),
-        (4, "Terminado Filtro"),
+        (4, titulo_nivel),
         (5, "Cota Fondo Excavación"),
     ):
         yvalues = Reference(aux, min_col=col, min_row=5, max_row=28)
@@ -562,7 +563,8 @@ def build_planilla_tuberia_xlsx(
     _overlay_data(ws, planilla, calculo, tipo, vacia)
     _embed_seccion_png(ws, tipo)
     _apply_sheet_borders(ws)
-    _add_profile_chart(ws, wb)
+    _add_profile_chart(ws, wb, tipo=tipo)
+    _add_profile_chart(ws, wb, tipo=tipo)
 
     base = sheets.get("Resumen_BASE")
     if base:

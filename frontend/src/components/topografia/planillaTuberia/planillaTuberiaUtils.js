@@ -134,6 +134,7 @@ export function filaCampoVacia(orden) {
     terreno_natural: '',
     subrasante_via: '',
     terminado_filtro: '',
+    cota_lomo: '',
     cota_fondo_excavacion: '',
     norte: '',
     este: '',
@@ -142,17 +143,22 @@ export function filaCampoVacia(orden) {
 }
 
 export function filasDesdeApi(filasApi, tipo, minRows = FILAS_INICIALES_CARTERA) {
-  const mapped = (filasApi || []).map((f, i) => ({
-    orden: f.orden ?? i + 1,
-    abscisa: f.abscisa ?? '',
-    terreno_natural: f.terreno_natural ?? '',
-    subrasante_via: f.subrasante_via ?? '',
-    terminado_filtro: f.terminado_filtro ?? '',
-    cota_fondo_excavacion: f.cota_fondo_excavacion ?? '',
-    norte: f.norte ?? '',
-    este: f.este ?? '',
-    observacion: f.observacion ?? '',
-  }))
+  const tipoU = String(tipo || 'ALCANTARILLA').toUpperCase()
+  const mapped = (filasApi || []).map((f, i) => {
+    const cotaLomo = f.cota_lomo ?? (tipoU === 'ALCANTARILLA' ? f.terminado_filtro : null)
+    return {
+      orden: f.orden ?? i + 1,
+      abscisa: f.abscisa ?? '',
+      terreno_natural: f.terreno_natural ?? '',
+      subrasante_via: f.subrasante_via ?? '',
+      terminado_filtro: tipoU === 'FILTRO' ? (f.terminado_filtro ?? '') : '',
+      cota_lomo: tipoU === 'ALCANTARILLA' ? (cotaLomo ?? '') : '',
+      cota_fondo_excavacion: f.cota_fondo_excavacion ?? '',
+      norte: f.norte ?? '',
+      este: f.este ?? '',
+      observacion: f.observacion ?? '',
+    }
+  })
   while (mapped.length < minRows) mapped.push(filaCampoVacia(mapped.length + 1))
   return mapped
 }
@@ -191,16 +197,21 @@ export function payloadFilas(filas, tipo) {
       observacion: f.observacion || null,
       subrasante_via: null,
       terminado_filtro: null,
+      cota_lomo: null,
     }
     if (tipo === 'FILTRO') {
       base.terminado_filtro = numOrNull(f.terminado_filtro)
     } else {
       base.subrasante_via = numOrNull(f.subrasante_via)
+      // Cota Lomo: API + persistencia dual en terminado_filtro
+      const cl = numOrNull(f.cota_lomo)
+      base.cota_lomo = cl
+      base.terminado_filtro = cl
     }
     return base
   }).filter((f) => (
     f.abscisa != null || f.terreno_natural != null || f.cota_fondo_excavacion != null
-    || f.subrasante_via != null || f.terminado_filtro != null
+    || f.subrasante_via != null || f.terminado_filtro != null || f.cota_lomo != null
   ))
 }
 
@@ -216,7 +227,8 @@ export function fingerprintFilasCartera(filas) {
   return (filas || [])
     .map((f) => (
       `${Number(f?.orden) || 0}|${num(f?.abscisa)}|${num(f?.terreno_natural)}|`
-      + `${num(f?.cota_fondo_excavacion)}|${num(f?.subrasante_via)}|${num(f?.terminado_filtro)}`
+      + `${num(f?.cota_fondo_excavacion)}|${num(f?.subrasante_via)}|`
+      + `${num(f?.cota_lomo != null && f?.cota_lomo !== '' ? f.cota_lomo : f?.terminado_filtro)}`
     ))
     .sort()
 }
@@ -269,7 +281,7 @@ export function confirmarGuardadoCartera(res, expectedCount, payloadEnviado = nu
 /** True si hay al menos un dato de campo diligenciado (exportable). */
 export function tieneDatosExportables(filas, detalle) {
   for (const f of filas || []) {
-    if ([f.abscisa, f.terreno_natural, f.subrasante_via, f.terminado_filtro, f.cota_fondo_excavacion]
+    if ([f.abscisa, f.terreno_natural, f.subrasante_via, f.terminado_filtro, f.cota_lomo, f.cota_fondo_excavacion]
       .some((v) => v !== '' && v != null)) {
       return true
     }
@@ -279,7 +291,7 @@ export function tieneDatosExportables(filas, detalle) {
     if (!f?.vacio) return true
   }
   for (const f of detalle?.filas_campo || []) {
-    if ([f.abscisa, f.terreno_natural, f.subrasante_via, f.terminado_filtro, f.cota_fondo_excavacion]
+    if ([f.abscisa, f.terreno_natural, f.subrasante_via, f.terminado_filtro, f.cota_lomo, f.cota_fondo_excavacion]
       .some((v) => v != null)) {
       return true
     }
@@ -584,4 +596,37 @@ export function linksSicoeDesdeMeta(meta) {
   const raw = meta && typeof meta === 'object' ? meta.sicoe_reportes : null
   if (!Array.isArray(raw)) return []
   return raw.filter((x) => x && x.reporte_id != null)
+}
+
+/**
+ * Desglose visible del cálculo de atraque (solo ALCANTARILLA).
+ * h = 2·r / N; sección = (h + cama)·B − Area1.
+ */
+export function desgloseAtraqueAlcantarilla(seccion) {
+  if (!seccion || String(seccion.tipo || '').toUpperCase() !== 'ALCANTARILLA') return null
+  const rel = String(seccion.relacion_atraque || '1:3')
+  const den = Number(String(rel).split(':')[1]) || 3
+  const r = Number(seccion.radio_externo_m)
+  const h = Number(seccion.altura_relleno_m)
+  const cama = Number(seccion.cama_triturado_m || 0)
+  const b = Number(seccion.ancho_excavacion_m)
+  const a1 = Number(seccion.area_1_m2)
+  const a2 = Number(seccion.area_2_m2)
+  const aTub = Number(seccion.area_tuberia_m2)
+  if (![h, b, a1].every((v) => Number.isFinite(v))) return null
+  const hTrit = h + (Number.isFinite(cama) ? cama : 0)
+  const seccionAtraque = hTrit * b - a1
+  return {
+    relacion: rel,
+    denominador: den,
+    radio_externo_m: Number.isFinite(r) ? r : null,
+    altura_atraque_m: h,
+    cama_triturado_m: Number.isFinite(cama) ? cama : 0,
+    ancho_excavacion_m: b,
+    altura_triturado_m: hTrit,
+    area_1_m2: a1,
+    area_2_m2: Number.isFinite(a2) ? a2 : null,
+    area_tuberia_m2: Number.isFinite(aTub) ? aTub : null,
+    seccion_atraque_m2: Math.round(seccionAtraque * 1000) / 1000,
+  }
 }

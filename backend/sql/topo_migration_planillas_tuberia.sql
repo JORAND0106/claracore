@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS topo_planilla_tuberia_filas (
     terreno_natural         DOUBLE PRECISION,
     subrasante_via          DOUBLE PRECISION,
     terminado_filtro        DOUBLE PRECISION,
+    -- Cota Lomo (solo ALCANTARILLA). También se puede persistir en terminado_filtro
+    -- como fallback si esta columna aún no existe en el entorno.
+    cota_lomo               DOUBLE PRECISION,
     cota_fondo_excavacion   DOUBLE PRECISION,
     norte                   DOUBLE PRECISION,
     este                    DOUBLE PRECISION,
