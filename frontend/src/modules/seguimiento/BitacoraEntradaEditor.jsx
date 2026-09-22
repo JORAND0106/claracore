@@ -920,6 +920,16 @@ export default function BitacoraEntradaEditor({
               borderRadius: 6, padding: '6px 8px', fontSize: 12,
             }}>{okMsg}</div>
           )}
+          {entrada?._merged_pendiente_persistir && Array.isArray(entrada?._merged_from_ids) && (
+            <div style={{
+              background: '#FFFBEB', color: '#92400E', border: '1px solid #FDE68A',
+              borderRadius: 6, padding: '8px 10px', fontSize: 12, lineHeight: 1.4,
+            }}>
+              Se unieron temporalmente {entrada._merged_from_ids.length} reportes de tramo
+              de esta fecha para mostrar todo el Personal y Maquinaria.
+              Pulse <strong>Guardar</strong> para persistir la consolidación en este diario.
+            </div>
+          )}
 
           {/* Encabezado Excel: Fecha | Hora | Clima | Elaborado por */}
           <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
