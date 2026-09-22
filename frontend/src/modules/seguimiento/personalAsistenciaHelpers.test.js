@@ -250,6 +250,33 @@ describe('resumenCargosDesdeCatalogo / filtro por cargo', () => {
     )
   })
 
+  it('excluye Administrativo del catálogo y del picker (exacto; no Residente Administrativo)', () => {
+    assert.deepEqual(
+      resolverCatalogoCargos({
+        catalogoRrhh: ['Administrativo', 'Oficial', 'Residente Administrativo', 'administrativo'],
+      }),
+      ['Oficial', 'Residente Administrativo'],
+    )
+    const rows = resumenCargosDesdeCatalogo(
+      ['Administrativo', 'Oficial', 'Residente Administrativo'],
+      [
+        { cargo: 'Administrativo', cantidad: 2 },
+        { cargo: 'Oficial', cantidad: 1 },
+      ],
+    )
+    assert.deepEqual(rows, [
+      { cargo: 'Oficial', cantidad: 1 },
+      { cargo: 'Residente Administrativo', cantidad: 0 },
+    ])
+    const cat = [
+      { id: 1, nombres: 'Ana', cargo_aspira: 'Oficial' },
+      { id: 2, nombres: 'Beth', cargo_aspira: 'Administrativo' },
+      { id: 3, nombres: 'Carla', cargo_aspira: 'Residente Administrativo' },
+    ]
+    const hits = filtrarTrabajadoresRrhh(cat, '')
+    assert.deepEqual(hits.map((t) => t.id), [1, 3])
+  })
+
   it('filtrarCatalogoPorCargo solo deja el cargo de la tarjeta', () => {
     const cat = [
       { id: 1, nombres: 'Ana', cargo_aspira: 'Ayudante' },
