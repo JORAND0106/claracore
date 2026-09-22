@@ -475,7 +475,8 @@ export function cantidadManualPorCargo(personalManual, cargo) {
  * Desglose por empresa → solo cargos con al menos 1 colaborador ese día.
  * No incluye empresas vacías ni cargos en cero.
  * El consolidado general se arma aparte con `resumenCargosDesdeCatalogo`
- * (también solo cargos con cantidad > 0).
+ * sobre cargos RRHH con colaboradores (`cargosConColaboradoresRrhh`);
+ * el desglose por empresa solo lista cargos con cantidad > 0 ese día.
  */
 export function resumenEmpresasCargos({
   rows = [],
@@ -681,10 +682,29 @@ export function filtrarCatalogoPorCargoYEmpresa(catalogo = [], cargo = '', empre
 }
 
 /**
- * Une conteos del día (asistencia + manual) para el consolidado por cargo.
- * Solo incluye cargos con al menos 1 persona (cantidad > 0): no basta con que
- * el cargo exista en el catálogo RRHH si nadie está nominado ese día.
- * Si hay catálogo, prioriza su etiqueta/orden para los cargos con conteo.
+ * Cargos de RRHH con al menos un colaborador asignado (cargo_aspira / cargo).
+ * Fuente del Consolidado general: no depende de la asistencia del día.
+ */
+export function cargosConColaboradoresRrhh(trabajadores = []) {
+  const out = []
+  const seen = new Set()
+  for (const t of trabajadores || []) {
+    const cargo = normalizarCargoNombrePropio(t?.cargo_aspira || t?.cargo || '')
+    if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
+    const key = cargo.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(cargo)
+  }
+  return out.sort((a, b) => a.localeCompare(b, 'es'))
+}
+
+/**
+ * Une cargos base con conteos del día (asistencia + manual) para el consolidado.
+ * - Los cargos del catálogo se listan siempre (cantidad puede ser 0).
+ * - Cargos con conteo del día fuera del catálogo se agregan al final.
+ * El catálogo del consolidado debe venir de `cargosConColaboradoresRrhh`
+ * (cargos RRHH con ≥1 colaborador), no del catálogo vacío de opciones.
  */
 export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
   const byKey = new Map()
@@ -694,7 +714,6 @@ export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
     const key = cargo.toLowerCase()
     const n = Number(r?.cantidad)
     const add = Number.isFinite(n) ? n : 0
-    if (add <= 0) continue
     byKey.set(key, {
       cargo: byKey.get(key)?.cargo || cargo,
       cantidad: (byKey.get(key)?.cantidad || 0) + add,
@@ -708,11 +727,9 @@ export function resumenCargosDesdeCatalogo(catalogoCargos = [], agregado = []) {
     if (!cargo || esEtiquetaAdministrativoExcluida(cargo)) continue
     const key = cargo.toLowerCase()
     if (seen.has(key)) continue
-    const hit = byKey.get(key)
-    const n = hit ? Number(hit.cantidad) || 0 : 0
-    if (n <= 0) continue
     seen.add(key)
-    out.push({ cargo, cantidad: n })
+    const hit = byKey.get(key)
+    out.push({ cargo, cantidad: hit ? Number(hit.cantidad) || 0 : 0 })
   }
   for (const hit of byKey.values()) {
     const key = String(hit.cargo).toLowerCase()
