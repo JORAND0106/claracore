@@ -263,18 +263,22 @@ export default function PersonalAsistenciaPanel({
 
   return (
     <div>
-      <div style={{
+      <div style={ui.sectionBarSolo || {
         display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
         justifyContent: 'space-between', marginBottom: 6,
       }}>
-        <div style={{ ...ui.sectionTitle, marginBottom: 0 }}>Personal en obra</div>
+        <div style={ui.sectionBarSolo ? undefined : { ...ui.sectionTitle, marginBottom: 0 }}>
+          Personal en obra
+        </div>
         {!disabled && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {permitirCargoCantidad && (
               <button
                 type="button"
                 onClick={() => setCargoFormOpen((v) => !v)}
-                style={btnGhost}
+                style={ui.sectionBarSolo
+                  ? { ...btnGhost, padding: '4px 8px', fontSize: 'var(--cc-caption)' }
+                  : btnGhost}
                 title={gateRrhhAprobado
                   ? 'Registro directo cargo/cantidad'
                   : 'Registro por cargo y cantidad (sin identificación individual)'}
@@ -282,7 +286,13 @@ export default function PersonalAsistenciaPanel({
                 Registrar cargo y cantidad
               </button>
             )}
-            <button type="button" onClick={addRow} style={btnGhost}>
+            <button
+              type="button"
+              onClick={addRow}
+              style={ui.sectionBarSolo
+                ? { ...btnGhost, padding: '4px 8px', fontSize: 'var(--cc-caption)' }
+                : btnGhost}
+            >
               + Agregar colaborador
             </button>
           </div>
@@ -557,13 +567,16 @@ export default function PersonalAsistenciaPanel({
         </table>
       </div>
 
-      <div style={{ ...ui.sectionTitle, marginTop: 12, marginBottom: 6 }}>
+      <div style={{
+        ...(ui.sectionBar || { ...ui.sectionTitle, marginBottom: 6 }),
+        marginTop: 12,
+      }}>
         Resumen por cargo (automático
         {permitirCargoCantidad
           ? ' · RRHH + registro directo'
           : (gateRrhhAprobado ? ' · solo Aprobados en RRHH' : ' · solo Activos en RRHH')})
       </div>
-      <div style={ui.sheetWrap} className="cc-bitacora-sheet-scroll">
+      <div style={ui.sheetWrapFlush || ui.sheetWrap} className="cc-bitacora-sheet-scroll">
         {compact ? (
           <table
             className="cc-bitacora-responsive-table cc-bitacora-personal-table"

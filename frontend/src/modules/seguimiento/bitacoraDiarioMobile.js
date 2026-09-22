@@ -10,6 +10,15 @@ export function debeUsarGrillaDiarioCompacta(viewportCompact) {
   return !!viewportCompact
 }
 
+/** Etiquetas de columna para el modo card (data-label) del encabezado meta. */
+export const META_DATA_LABELS = [
+  'Fecha',
+  'Tramo *',
+  'Hora inicio',
+  'Clima',
+  'Elaborado por',
+]
+
 /** Etiquetas de columna para el modo card (data-label) de Maquinaria. */
 export const MAQUINARIA_DATA_LABELS = [
   'Equipo / máquina',

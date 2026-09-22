@@ -5,7 +5,9 @@ import {
   puedeEditarEntradaBitacora,
 } from './bitacoraPermisos.js'
 import {
+  BITACORA_HORA_INICIO_DEFAULT,
   eventoTieneDestinatario,
+  horaInicioLaboresInicial,
   labelEventoTipo,
   personalEnColumnas,
   personalPlantillaVacia,
@@ -79,5 +81,13 @@ describe('bitacoraConstants excel redesign', () => {
 
   it('visita_terceros se muestra como Recorrido de obra', () => {
     assert.equal(labelEventoTipo('visita_terceros'), 'Recorrido de obra')
+  })
+
+  it('hora de inicio por defecto al crear es 07:30', () => {
+    assert.equal(BITACORA_HORA_INICIO_DEFAULT, '07:30')
+    assert.equal(horaInicioLaboresInicial(null), '07:30')
+    assert.equal(horaInicioLaboresInicial({}), '07:30')
+    assert.equal(horaInicioLaboresInicial({ hora_inicio_labores: '08:15:00' }), '08:15')
+    assert.equal(horaInicioLaboresInicial({ hora_inicio_labores: '' }), '07:30')
   })
 })
