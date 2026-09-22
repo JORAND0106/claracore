@@ -3,23 +3,25 @@ import { createPortal } from 'react-dom'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { bitacoraSheetStyles } from './bitacoraSheetStyles'
 import {
+  EMPRESA_REGISTRO_DIRECTO,
   HORA_SALIDA_DEFAULT,
   asistenciaRowFromRrhh,
   emptyAsistenciaRow,
-  filtrarCatalogoPorCargo,
+  filtrarCatalogoPorCargoYEmpresa,
   formatHorarioAsistencia,
 } from './personalAsistenciaHelpers'
 import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle } from './seguimientoShared'
 
 /**
- * Detalle por cargo: popup con encabezado institucional y grilla tipo Excel
- * de las personas registradas bajo ese cargo.
- * Al agregar, el catálogo RRHH se filtra al cargo de la tarjeta.
+ * Detalle por cargo (y empresa): popup con encabezado institucional y grilla
+ * tipo Excel. Al agregar, el catálogo RRHH se filtra a cargo + empresa.
  */
 export default function PersonalCargoDetalleModal({
   t,
   cargo,
+  empresa = '',
+  esRegistroDirecto = false,
   entries = [],
   rows = [],
   onChange,
@@ -42,9 +44,13 @@ export default function PersonalCargoDetalleModal({
     [rows],
   )
 
-  const catalogoDelCargo = useMemo(
-    () => filtrarCatalogoPorCargo(rrhhCatalogo, cargo),
-    [rrhhCatalogo, cargo],
+  const catalogoFiltrado = useMemo(
+    () => filtrarCatalogoPorCargoYEmpresa(
+      rrhhCatalogo,
+      cargo,
+      esRegistroDirecto ? EMPRESA_REGISTRO_DIRECTO : empresa,
+    ),
+    [rrhhCatalogo, cargo, empresa, esRegistroDirecto],
   )
 
   const cellInp = {
@@ -108,7 +114,7 @@ export default function PersonalCargoDetalleModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`Detalle ${cargo}`}
+      aria-label={`Detalle ${cargo}${empresa ? ` · ${empresa}` : ''}`}
       className={viewportCompact ? 'cc-seguim-modal-overlay cc-seguim-modal-overlay--compact' : 'cc-seguim-modal-overlay'}
       style={{ ...seguimientoModalOverlayStyle(viewportCompact), zIndex }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose?.() }}
@@ -144,6 +150,9 @@ export default function PersonalCargoDetalleModal({
               {cargo || 'Sin cargo'}
             </div>
             <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
+              {empresa && empresa !== EMPRESA_REGISTRO_DIRECTO
+                ? `${empresa} · `
+                : (esRegistroDirecto ? 'Registro directo · ' : '')}
               {totalNombrados} colaborador{totalNombrados === 1 ? '' : 'es'} nominado{totalNombrados === 1 ? '' : 's'}
               {Number(cantidadManual) > 0
                 ? ` · ${cantidadManual} por registro directo · total ${totalResumen}`
@@ -215,7 +224,7 @@ export default function PersonalCargoDetalleModal({
                 <NombreRrhhAutocomplete
                   t={t}
                   value={draft.nombre}
-                  catalogo={catalogoDelCargo}
+                  catalogo={catalogoFiltrado}
                   excludeIds={usedIds}
                   onPick={pickDraft}
                   style={cellInp}
@@ -337,7 +346,7 @@ export default function PersonalCargoDetalleModal({
                           <NombreRrhhAutocomplete
                             t={t}
                             value={row.nombre}
-                            catalogo={catalogoDelCargo}
+                            catalogo={catalogoFiltrado}
                             excludeIds={usedIds.filter((id) => id !== row.rrhh_trabajador_id)}
                             onPick={(trab) => {
                               updateByIndex(index, asistenciaRowFromRrhh(trab, {
