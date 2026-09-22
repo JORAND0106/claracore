@@ -187,18 +187,102 @@ export function personalAgregadoDesdeAsistencia(rows, opts = {}) {
 
 /**
  * Filas de asistencia con el cargo indicado (comparación case-insensitive).
+ * Opcional: filtrar también por empresa (`opts.empresa`).
  * Devuelve `{ row, index }` para poder actualizar/quitar en el arreglo original.
  */
-export function filasAsistenciaPorCargo(rows, cargo) {
+export function filasAsistenciaPorCargo(rows, cargo, opts = {}) {
   const key = String(cargo || '').trim().toLowerCase()
   if (!key) return []
+  const empFiltro = opts.empresa != null && String(opts.empresa).trim() !== ''
+    ? keyEmpresa(opts.empresa)
+    : null
   const out = []
   ;(rows || []).forEach((row, index) => {
-    if (String(row?.cargo || '').trim().toLowerCase() === key) {
-      out.push({ row, index })
-    }
+    if (String(row?.cargo || '').trim().toLowerCase() !== key) return
+    if (empFiltro != null && keyEmpresa(nombreEmpresaAsistencia(row)) !== empFiltro) return
+    out.push({ row, index })
   })
   return out
+}
+
+/** Etiqueta de empresa en una fila de asistencia (snapshot). */
+export const EMPRESA_SIN_NOMBRE = 'Sin empresa'
+export const EMPRESA_REGISTRO_DIRECTO = 'Registro directo'
+
+export function nombreEmpresaAsistencia(row) {
+  const n = String(row?.subcontratista_nombre || '').trim()
+  return n || EMPRESA_SIN_NOMBRE
+}
+
+export function keyEmpresa(nombre) {
+  const n = String(nombre || '').trim().toLowerCase()
+  return n || 'sin-empresa'
+}
+
+export function empresaCoincideRrhh(trab, empresa) {
+  const want = String(empresa || '').trim().toLowerCase()
+  if (!want || want === keyEmpresa(EMPRESA_SIN_NOMBRE)) {
+    const got = String(trab?.empresa_nombre || '').trim()
+    return !got
+  }
+  if (want === keyEmpresa(EMPRESA_REGISTRO_DIRECTO)) return true
+  const got = String(trab?.empresa_nombre || '').trim().toLowerCase()
+  return got === want
+}
+
+/**
+ * Agregado {empresa, cargos[]} desde asistencia (sin catálogo).
+ * Cada persona cuenta solo en su empresa.
+ */
+export function personalAgregadoPorEmpresaCargo(rows, opts = {}) {
+  const live = opts.liveEstadosByRrhhId ?? null
+  const getLive = (id) => {
+    if (live == null || id == null) return null
+    if (live instanceof Map) return live.get(Number(id)) ?? live.get(id) ?? null
+    return live[id] ?? live[String(id)] ?? live[Number(id)] ?? null
+  }
+  /** @type {Map<string, { empresa: string, counts: Map<string, { cargo: string, cantidad: number }> }>} */
+  const byEmp = new Map()
+  for (const r of rows || []) {
+    const liveEst = getLive(r?.rrhh_trabajador_id)
+    const estado = liveEst != null ? normalizeEstadoRrhh(liveEst) : normalizeEstadoRrhh(r?.estado)
+    if (!estadoCuentaEnResumen(estado)) continue
+    const cargo = String(r?.cargo || '').trim()
+    if (!cargo) continue
+    const empresa = nombreEmpresaAsistencia(r)
+    const ek = keyEmpresa(empresa)
+    let g = byEmp.get(ek)
+    if (!g) {
+      g = { empresa, counts: new Map() }
+      byEmp.set(ek, g)
+    }
+    const ck = cargo.toLowerCase()
+    const prev = g.counts.get(ck)
+    if (prev) prev.cantidad += 1
+    else g.counts.set(ck, { cargo, cantidad: 1 })
+  }
+  return [...byEmp.entries()]
+    .sort((a, b) => a[1].empresa.localeCompare(b[1].empresa, 'es'))
+    .map(([empresa_key, g]) => {
+      const agregado = [...g.counts.values()]
+        .sort((a, b) => a.cargo.localeCompare(b.cargo, 'es'))
+      const total = agregado.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
+      return { empresa: g.empresa, empresa_key, agregado, total }
+    })
+}
+
+/** Empresas únicas desde catálogo RRHH (trabajadores). */
+export function empresasDesdeCatalogoRrhh(trabajadores = []) {
+  const out = []
+  const seen = new Set()
+  for (const t of trabajadores || []) {
+    const empresa = String(t?.empresa_nombre || '').trim() || EMPRESA_SIN_NOMBRE
+    const ek = keyEmpresa(empresa)
+    if (seen.has(ek)) continue
+    seen.add(ek)
+    out.push({ empresa, empresa_key: ek })
+  }
+  return out.sort((a, b) => a.empresa.localeCompare(b.empresa, 'es'))
 }
 
 /** Cantidad de registro directo (sin nombres) asociada a un cargo. */
@@ -213,6 +297,60 @@ export function cantidadManualPorCargo(personalManual, cargo) {
   }
   return 0
 }
+
+/**
+ * Resumen jerárquico: empresa → cargos (catálogo completo con ceros).
+ * Cada colaborador solo cuenta en su empresa.
+ */
+export function resumenEmpresasCargos({
+  catalogoCargos = [],
+  rows = [],
+  personalManual = [],
+  trabajadores = [],
+  liveEstadosByRrhhId = null,
+} = {}) {
+  const porAsistencia = personalAgregadoPorEmpresaCargo(rows, { liveEstadosByRrhhId })
+  const byKey = new Map(porAsistencia.map((g) => [g.empresa_key, g]))
+
+  const empresas = new Map()
+  for (const e of empresasDesdeCatalogoRrhh(trabajadores)) {
+    empresas.set(e.empresa_key, e.empresa)
+  }
+  for (const g of porAsistencia) {
+    empresas.set(g.empresa_key, g.empresa)
+  }
+
+  const groups = [...empresas.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], 'es'))
+    .map(([empresa_key, empresa]) => {
+      const agg = byKey.get(empresa_key)?.agregado || []
+      const cargos = resumenCargosDesdeCatalogo(catalogoCargos, agg)
+      const total = cargos.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
+      return {
+        empresa,
+        empresa_key,
+        esRegistroDirecto: false,
+        cargos,
+        total,
+      }
+    })
+
+  const manualNorm = normalizarPersonalCantidades(personalManual)
+  if (manualNorm.length) {
+    const cargos = resumenCargosDesdeCatalogo(catalogoCargos, manualNorm)
+    const total = cargos.reduce((s, r) => s + (Number(r.cantidad) || 0), 0)
+    groups.push({
+      empresa: EMPRESA_REGISTRO_DIRECTO,
+      empresa_key: '__registro_directo__',
+      esRegistroDirecto: true,
+      cargos,
+      total,
+    })
+  }
+
+  return groups
+}
+
 
 /**
  * Opciones de operador para Maquinaria: solo colaboradores ya nominados
@@ -365,6 +503,14 @@ export function filtrarCatalogoPorCargo(catalogo = [], cargo = '') {
   const want = String(cargo || '').trim()
   if (!want) return Array.isArray(catalogo) ? [...catalogo] : []
   return (Array.isArray(catalogo) ? catalogo : []).filter((t) => cargoCoincideRrhh(t, want))
+}
+
+/** Filtra por cargo y, si se indica, por empresa contratante. */
+export function filtrarCatalogoPorCargoYEmpresa(catalogo = [], cargo = '', empresa = '') {
+  const byCargo = filtrarCatalogoPorCargo(catalogo, cargo)
+  const emp = String(empresa || '').trim()
+  if (!emp || emp === EMPRESA_REGISTRO_DIRECTO) return byCargo
+  return byCargo.filter((t) => empresaCoincideRrhh(t, emp))
 }
 
 /**

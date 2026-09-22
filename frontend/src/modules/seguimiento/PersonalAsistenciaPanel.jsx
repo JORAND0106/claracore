@@ -4,6 +4,7 @@ import { HINT_DOCUMENTACION_NO_APROBADA } from './bitacoraAsistenciaRrhhPolicy'
 import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import PersonalCargoDetalleModal from './PersonalCargoDetalleModal'
 import {
+  EMPRESA_REGISTRO_DIRECTO,
   HORA_SALIDA_DEFAULT,
   asistenciaRowFromRrhh,
   cantidadManualPorCargo,
@@ -11,16 +12,17 @@ import {
   filasAsistenciaPorCargo,
   mapaEstadosRrhh,
   mergePersonalCantidades,
+  nombreEmpresaAsistencia,
   personalAgregadoDesdeAsistencia,
   resolverCatalogoCargos,
-  resumenCargosDesdeCatalogo,
+  resumenEmpresasCargos,
 } from './personalAsistenciaHelpers'
 import { useSeguimientoCompact } from './seguimientoShared'
 
 export { default as NombreRrhhAutocomplete } from './NombreRrhhAutocomplete'
 
 /**
- * Personal en obra: resumen por cargo en tarjetas (catálogo RRHH completo)
+ * Personal en obra: resumen por empresa → cargos en tarjetas
  * + detalle en popup. El registro (campos/validaciones) se mantiene.
  */
 export default function PersonalAsistenciaPanel({
@@ -78,9 +80,15 @@ export default function PersonalAsistenciaPanel({
     [cargosCatalogo, rrhhCatalogo, cargosOpciones],
   )
 
-  const resumenRows = useMemo(
-    () => resumenCargosDesdeCatalogo(cargosBase, agregado),
-    [cargosBase, agregado],
+  const resumenEmpresas = useMemo(
+    () => resumenEmpresasCargos({
+      catalogoCargos: cargosBase,
+      rows,
+      personalManual: permitirCargoCantidad ? personalManual : [],
+      trabajadores: rrhhCatalogo,
+      liveEstadosByRrhhId: liveMap,
+    }),
+    [cargosBase, rows, personalManual, permitirCargoCantidad, rrhhCatalogo, liveMap],
   )
 
   const usedIds = useMemo(
@@ -88,15 +96,18 @@ export default function PersonalAsistenciaPanel({
     [rows],
   )
 
-  const entriesDetalle = useMemo(
-    () => (cargoDetalle ? filasAsistenciaPorCargo(rows, cargoDetalle) : []),
-    [rows, cargoDetalle],
-  )
+  const entriesDetalle = useMemo(() => {
+    if (!cargoDetalle?.cargo) return []
+    if (cargoDetalle.esRegistroDirecto) return []
+    return filasAsistenciaPorCargo(rows, cargoDetalle.cargo, {
+      empresa: cargoDetalle.empresa,
+    })
+  }, [rows, cargoDetalle])
 
-  const cantidadManualDetalle = useMemo(
-    () => (cargoDetalle ? cantidadManualPorCargo(personalManual, cargoDetalle) : 0),
-    [personalManual, cargoDetalle],
-  )
+  const cantidadManualDetalle = useMemo(() => {
+    if (!cargoDetalle?.cargo || !cargoDetalle.esRegistroDirecto) return 0
+    return cantidadManualPorCargo(personalManual, cargoDetalle.cargo)
+  }, [personalManual, cargoDetalle])
 
   const addCargoCantidad = () => {
     let cargo = String(draftCargo || '').trim()
@@ -123,10 +134,18 @@ export default function PersonalAsistenciaPanel({
   const confirmDraftAdd = () => {
     if (!String(draftAdd.nombre || '').trim()) return
     onChange?.([...(rows || []), { ...draftAdd }])
+    const cargo = String(draftAdd.cargo || '').trim()
+    const empresa = nombreEmpresaAsistencia(draftAdd)
     setDraftAdd(emptyAsistenciaRow())
     setAddOpen(false)
-    const cargo = String(draftAdd.cargo || '').trim()
-    if (cargo) setCargoDetalle(cargo)
+    if (cargo) {
+      setCargoDetalle({
+        cargo,
+        empresa,
+        empresa_key: String(empresa).toLowerCase(),
+        esRegistroDirecto: false,
+      })
+    }
   }
 
   const setCantidadManualCargo = (cargo, cantidad) => {
@@ -139,6 +158,15 @@ export default function PersonalAsistenciaPanel({
       ? mergePersonalCantidades(rest, [{ cargo, cantidad: n }])
       : mergePersonalCantidades(rest)
     onChangePersonalManual?.(next)
+  }
+
+  const openCargoDetalle = (grupo, cargoRow) => {
+    setCargoDetalle({
+      cargo: cargoRow.cargo,
+      empresa: grupo.empresa,
+      empresa_key: grupo.empresa_key,
+      esRegistroDirecto: Boolean(grupo.esRegistroDirecto),
+    })
   }
 
   const btnGhost = {
@@ -232,8 +260,8 @@ export default function PersonalAsistenciaPanel({
           lineHeight: 1.35,
         }}>
           {gateRrhhAprobado
-            ? 'Haga clic en un cargo para ver o agregar colaboradores con documentación Aprobada en RRHH.'
-            : 'Haga clic en un cargo para ver el detalle o agregar colaboradores de ese cargo desde RRHH.'}
+            ? 'Haga clic en un cargo (dentro de su empresa) para ver o agregar colaboradores con documentación Aprobada en RRHH.'
+            : 'El resumen agrupa por empresa/contratista. Haga clic en un cargo para ver o agregar colaboradores de esa empresa.'}
         </div>
       )}
 
@@ -383,75 +411,118 @@ export default function PersonalAsistenciaPanel({
       <div style={{
         ...(ui.sheetWrapFlush || ui.sheetWrap || {}),
         padding: viewportCompact ? 10 : 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: viewportCompact ? 14 : 18,
       }}>
-        {resumenRows.length === 0 ? (
+        {resumenEmpresas.length === 0 ? (
           <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)', padding: 8 }}>
-            Sin cargos en el catálogo de RRHH.
+            Sin empresas ni cargos en el catálogo de RRHH.
           </div>
-        ) : (
-          <div
-            role="list"
-            aria-label="Resumen por cargo"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: viewportCompact
-                ? 'repeat(auto-fill, minmax(132px, 1fr))'
-                : 'repeat(auto-fill, minmax(168px, 1fr))',
-              gap: viewportCompact ? 8 : 10,
-            }}
+        ) : resumenEmpresas.map((grupo) => (
+          <section
+            key={`emp-${grupo.empresa_key}`}
+            aria-label={grupo.empresa}
+            style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
           >
-            {resumenRows.map((row) => (
-              <button
-                key={`card-${row.cargo}`}
-                type="button"
-                role="listitem"
-                onClick={() => setCargoDetalle(row.cargo)}
-                title={`Ver detalle de ${row.cargo}`}
+            <div style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 8,
+              paddingBottom: 4,
+              borderBottom: `1px solid ${t.border}`,
+            }}>
+              <div style={{
+                fontWeight: 800,
+                fontSize: 'var(--cc-sm)',
+                color: t.text,
+                letterSpacing: '0.01em',
+              }}>
+                {grupo.empresa}
+              </div>
+              <div style={{
+                fontSize: 'var(--cc-caption)',
+                fontWeight: 700,
+                color: t.textMuted,
+              }}>
+                {grupo.total} persona{grupo.total === 1 ? '' : 's'}
+                {grupo.esRegistroDirecto ? ' · sin identificación' : ''}
+              </div>
+            </div>
+            {!grupo.cargos.length ? (
+              <div style={{ color: t.textMuted, fontSize: 'var(--cc-xs)' }}>
+                Sin cargos para esta empresa.
+              </div>
+            ) : (
+              <div
+                role="list"
+                aria-label={`Cargos de ${grupo.empresa}`}
                 style={{
-                  minHeight: viewportCompact ? 84 : 96,
-                  border: `1px solid ${t.border}`,
-                  borderRadius: 10,
-                  background: t.bg || t.bgCard || '#fff',
-                  padding: '12px 10px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  textAlign: 'center',
-                  boxShadow: 'none',
-                  transition: 'border-color 120ms ease, background 120ms ease',
+                  display: 'grid',
+                  gridTemplateColumns: viewportCompact
+                    ? 'repeat(auto-fill, minmax(132px, 1fr))'
+                    : 'repeat(auto-fill, minmax(168px, 1fr))',
+                  gap: viewportCompact ? 8 : 10,
                 }}
               >
-                <span style={{
-                  fontWeight: 700,
-                  fontSize: 'var(--cc-xs)',
-                  color: t.text,
-                  lineHeight: 1.25,
-                  wordBreak: 'break-word',
-                }}>
-                  {row.cargo}
-                </span>
-                <span style={{
-                  fontWeight: 800,
-                  fontSize: 'var(--cc-title)',
-                  color: Number(row.cantidad) > 0 ? (t.primary || '#0077B6') : (t.textMuted || '#64748b'),
-                  fontVariantNumeric: 'tabular-nums',
-                  lineHeight: 1,
-                }}>
-                  {row.cantidad}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
+                {grupo.cargos.map((row) => (
+                  <button
+                    key={`card-${grupo.empresa_key}-${row.cargo}`}
+                    type="button"
+                    role="listitem"
+                    onClick={() => openCargoDetalle(grupo, row)}
+                    title={`Ver detalle de ${row.cargo} · ${grupo.empresa}`}
+                    style={{
+                      minHeight: viewportCompact ? 84 : 96,
+                      border: `1px solid ${t.border}`,
+                      borderRadius: 10,
+                      background: t.bg || t.bgCard || '#fff',
+                      padding: '12px 10px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      textAlign: 'center',
+                      boxShadow: 'none',
+                      transition: 'border-color 120ms ease, background 120ms ease',
+                    }}
+                  >
+                    <span style={{
+                      fontWeight: 700,
+                      fontSize: 'var(--cc-xs)',
+                      color: t.text,
+                      lineHeight: 1.25,
+                      wordBreak: 'break-word',
+                    }}>
+                      {row.cargo}
+                    </span>
+                    <span style={{
+                      fontWeight: 800,
+                      fontSize: 'var(--cc-title)',
+                      color: Number(row.cantidad) > 0 ? (t.primary || '#0077B6') : (t.textMuted || '#64748b'),
+                      fontVariantNumeric: 'tabular-nums',
+                      lineHeight: 1,
+                    }}>
+                      {row.cantidad}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        ))}
       </div>
 
-      {cargoDetalle && (
+      {cargoDetalle?.cargo && (
         <PersonalCargoDetalleModal
           t={t}
-          cargo={cargoDetalle}
+          cargo={cargoDetalle.cargo}
+          empresa={cargoDetalle.esRegistroDirecto ? EMPRESA_REGISTRO_DIRECTO : cargoDetalle.empresa}
+          esRegistroDirecto={Boolean(cargoDetalle.esRegistroDirecto)}
           entries={entriesDetalle}
           rows={rows}
           onChange={onChange}
@@ -459,8 +530,8 @@ export default function PersonalAsistenciaPanel({
           rrhhCatalogo={rrhhCatalogo}
           tramosCatalogo={tramosCatalogo}
           cantidadManual={cantidadManualDetalle}
-          onChangeCantidadManual={(n) => setCantidadManualCargo(cargoDetalle, n)}
-          permitirCargoCantidad={permitirCargoCantidad}
+          onChangeCantidadManual={(n) => setCantidadManualCargo(cargoDetalle.cargo, n)}
+          permitirCargoCantidad={permitirCargoCantidad && Boolean(cargoDetalle.esRegistroDirecto)}
           viewportCompact={viewportCompact}
           onClose={() => setCargoDetalle(null)}
         />

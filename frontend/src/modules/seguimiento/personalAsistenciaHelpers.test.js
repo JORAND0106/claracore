@@ -5,6 +5,8 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  EMPRESA_REGISTRO_DIRECTO,
+  EMPRESA_SIN_NOMBRE,
   HINT_OPERADOR_DESDE_ASISTENCIA,
   HINT_REGISTRAR_EN_RRHH,
   HORA_SALIDA_DEFAULT,
@@ -17,18 +19,22 @@ import {
   estadoCuentaEnResumen,
   filasAsistenciaPorCargo,
   filtrarCatalogoPorCargo,
+  filtrarCatalogoPorCargoYEmpresa,
   filtrarTrabajadoresRrhh,
   formatHorarioAsistencia,
   mapaEstadosRrhh,
   nombreCompletoRrhh,
+  nombreEmpresaAsistencia,
   operadorEstaEnAsistencia,
   operadorSelectValue,
   opcionesOperadorDesdeAsistencia,
   parseFechaISO,
   parseOperadorSelectValue,
   personalAgregadoDesdeAsistencia,
+  personalAgregadoPorEmpresaCargo,
   resolverCatalogoCargos,
   resumenCargosDesdeCatalogo,
+  resumenEmpresasCargos,
   soloDigitosDocumento,
   stripTramoFilasAutocompletar,
 } from './personalAsistenciaHelpers.js'
@@ -254,6 +260,83 @@ describe('resumenCargosDesdeCatalogo / filtro por cargo', () => {
     assert.equal(hits.length, 2)
     assert.deepEqual(hits.map((t) => t.id), [1, 3])
     assert.equal(filtrarCatalogoPorCargo(cat, 'Maestro').length, 0)
+  })
+})
+
+describe('resumen por empresa → cargo', () => {
+  it('agrupa por empresa sin duplicar personas entre empresas', () => {
+    const rows = [
+      { nombre: 'A', cargo: 'Ayudante', estado: 'activo', subcontratista_nombre: 'Empresa A' },
+      { nombre: 'B', cargo: 'Ayudante', estado: 'activo', subcontratista_nombre: 'Empresa A' },
+      { nombre: 'C', cargo: 'Oficial', estado: 'activo', subcontratista_nombre: 'Empresa A' },
+      { nombre: 'D', cargo: 'Ayudante', estado: 'activo', subcontratista_nombre: 'Empresa B' },
+      { nombre: 'E', cargo: 'Topógrafo', estado: 'activo', subcontratista_nombre: 'Empresa B' },
+      { nombre: 'F', cargo: 'Ayudante', estado: 'inactivo', subcontratista_nombre: 'Empresa B' },
+    ]
+    const agg = personalAgregadoPorEmpresaCargo(rows)
+    assert.equal(agg.length, 2)
+    assert.equal(agg[0].empresa, 'Empresa A')
+    assert.equal(agg[0].total, 3)
+    assert.deepEqual(agg[0].agregado, [
+      { cargo: 'Ayudante', cantidad: 2 },
+      { cargo: 'Oficial', cantidad: 1 },
+    ])
+    assert.equal(agg[1].empresa, 'Empresa B')
+    assert.equal(agg[1].total, 2)
+    assert.deepEqual(agg[1].agregado, [
+      { cargo: 'Ayudante', cantidad: 1 },
+      { cargo: 'Topógrafo', cantidad: 1 },
+    ])
+    assert.equal(nombreEmpresaAsistencia({}), EMPRESA_SIN_NOMBRE)
+  })
+
+  it('resumenEmpresasCargos une catálogo de cargos por empresa y registro directo', () => {
+    const groups = resumenEmpresasCargos({
+      catalogoCargos: ['Ayudante', 'Oficial', 'Topógrafo'],
+      rows: [
+        { nombre: 'A', cargo: 'Ayudante', estado: 'activo', subcontratista_nombre: 'Consorcio X' },
+        { nombre: 'B', cargo: 'Oficial', estado: 'activo', subcontratista_nombre: 'Sub Y' },
+      ],
+      personalManual: [{ cargo: 'Maestro', cantidad: 2 }],
+      trabajadores: [
+        { empresa_nombre: 'Consorcio X', cargo_aspira: 'Ayudante' },
+        { empresa_nombre: 'Sub Y', cargo_aspira: 'Oficial' },
+        { empresa_nombre: 'Otra Z', cargo_aspira: 'Topógrafo' },
+      ],
+    })
+    assert.equal(groups.length, 4) // 3 empresas RRHH + registro directo
+    const consorcio = groups.find((g) => g.empresa === 'Consorcio X')
+    assert.ok(consorcio)
+    assert.equal(consorcio.cargos.find((c) => c.cargo === 'Ayudante').cantidad, 1)
+    assert.equal(consorcio.cargos.find((c) => c.cargo === 'Oficial').cantidad, 0)
+    assert.equal(consorcio.total, 1)
+    const otra = groups.find((g) => g.empresa === 'Otra Z')
+    assert.equal(otra.total, 0)
+    assert.ok(otra.cargos.every((c) => c.cantidad === 0))
+    const manual = groups.find((g) => g.esRegistroDirecto)
+    assert.equal(manual.empresa, EMPRESA_REGISTRO_DIRECTO)
+    assert.equal(manual.cargos.find((c) => c.cargo === 'Maestro').cantidad, 2)
+  })
+
+  it('filas y catálogo respetan filtro empresa+cargo', () => {
+    const rows = [
+      { nombre: 'A', cargo: 'Ayudante', subcontratista_nombre: 'Empresa A' },
+      { nombre: 'B', cargo: 'Ayudante', subcontratista_nombre: 'Empresa B' },
+      { nombre: 'C', cargo: 'Oficial', subcontratista_nombre: 'Empresa A' },
+    ]
+    assert.equal(filasAsistenciaPorCargo(rows, 'Ayudante').length, 2)
+    assert.equal(filasAsistenciaPorCargo(rows, 'Ayudante', { empresa: 'Empresa A' }).length, 1)
+    assert.equal(filasAsistenciaPorCargo(rows, 'Ayudante', { empresa: 'Empresa A' })[0].row.nombre, 'A')
+
+    const cat = [
+      { id: 1, cargo_aspira: 'Ayudante', empresa_nombre: 'Empresa A' },
+      { id: 2, cargo_aspira: 'Ayudante', empresa_nombre: 'Empresa B' },
+      { id: 3, cargo_aspira: 'Oficial', empresa_nombre: 'Empresa A' },
+    ]
+    assert.deepEqual(
+      filtrarCatalogoPorCargoYEmpresa(cat, 'Ayudante', 'Empresa A').map((t) => t.id),
+      [1],
+    )
   })
 })
 
