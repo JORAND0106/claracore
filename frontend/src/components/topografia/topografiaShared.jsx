@@ -497,6 +497,9 @@ export function useTopografiaApi(contratoId, token) {
             detail = text.slice(0, 200)
           }
         }
+        if (detail && typeof detail === 'object') {
+          detail = detail.mensaje || detail.message || JSON.stringify(detail)
+        }
         throw new Error(typeof detail === 'string' ? detail : 'Error en solicitud')
       }
       if (res.status === 204) return null

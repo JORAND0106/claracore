@@ -12,6 +12,7 @@ import {
 import TopoConfirmModal from '../TopoConfirmModal'
 import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
+import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
 import { calcularPlanillaLocal } from './planillaTuberiaCalc'
 import {
   CALC_CELL_BG,
@@ -37,6 +38,9 @@ import {
   validarNombrePlanilla,
   agruparAlertasValidacion,
   validarFilasCarteraLocal,
+  normalizarEvidenciasFotograficas,
+  validarEvidenciasFotograficas,
+  lineasConCantidadCalculada,
 } from './planillaTuberiaUtils'
 
 
@@ -124,6 +128,8 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [pkMapOpen, setPkMapOpen] = useState(false)
   /** Overrides Long/Ancho/Espesor (+nombre OTROS) del Resumen de Cantidades. */
   const [cantManuales, setCantManuales] = useState([])
+  /** Fotos por línea de cantidad/descuento (meta_cabecera.evidencias_fotograficas). */
+  const [evidencias, setEvidencias] = useState(() => normalizarEvidenciasFotograficas(null))
   const tableRef = useRef(null)
 
   const planilla = detalle?.planilla
@@ -164,6 +170,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setInfos(det?.validacion?.infos || [])
     const meta = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
     setCantManuales(Array.isArray(meta.cantidades_manuales) ? meta.cantidades_manuales : [])
+    setEvidencias(normalizarEvidenciasFotograficas(meta.evidencias_fotograficas))
   }, [])
 
   const abrir = async (id) => {
@@ -185,6 +192,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setErr('')
     setInfos([])
     setCantManuales([])
+    setEvidencias(normalizarEvidenciasFotograficas(null))
     setFilas(Array.from({ length: FILAS_INICIALES_CARTERA }, (_, i) => filaCampoVacia(i + 1)))
     setParams((p) => ({
       ...p,
@@ -346,6 +354,13 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         setErr('No hay filas con datos para guardar en la cartera.')
         return
       }
+      const evCheck = validarEvidenciasFotograficas(calculoVista, evidencias, {
+        displayNeto: displayNetoCant,
+      })
+      if (!evCheck.ok) {
+        setErr(evCheck.mensaje)
+        return
+      }
       const res = await api(`/planillas-tuberia/${planilla.id}/cartera`, {
         method: 'PUT',
         body: JSON.stringify({ version, filas: filasPayload, descuentos_manuales: [], cantidades_manuales: cantManuales }),
@@ -362,6 +377,86 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
       setErr(typeof e.message === 'string' ? e.message : JSON.stringify(e.message))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const adjuntarEvidencia = async ({ scope, codigo, nombre, data_base64, mime_type }) => {
+    if (!planilla?.id) return
+    setErr(''); setMsg('')
+    try {
+      const res = await api(`/planillas-tuberia/${planilla.id}/evidencia`, {
+        method: 'POST',
+        body: JSON.stringify({
+          version,
+          scope,
+          codigo,
+          nombre,
+          data_base64,
+          mime_type: mime_type || 'image/jpeg',
+          origen: 'archivo',
+        }),
+      })
+      if (res?.version != null) setVersion(res.version)
+      if (res?.evidencias_fotograficas) {
+        setEvidencias(normalizarEvidenciasFotograficas(res.evidencias_fotograficas))
+      }
+      setDetalle((prev) => {
+        if (!prev?.planilla) return prev
+        const meta = {
+          ...(prev.planilla.meta_cabecera || {}),
+          ...(res?.meta_cabecera || {}),
+          evidencias_fotograficas: res?.evidencias_fotograficas
+            || prev.planilla.meta_cabecera?.evidencias_fotograficas,
+        }
+        return {
+          ...prev,
+          planilla: {
+            ...prev.planilla,
+            version: res?.version ?? prev.planilla.version,
+            meta_cabecera: meta,
+          },
+        }
+      })
+      setMsg(`Foto adjuntada a ${codigo}.`)
+    } catch (e) {
+      setErr(e.message || 'No se pudo adjuntar la foto')
+      throw e
+    }
+  }
+
+  const eliminarEvidencia = async ({ scope, codigo, foto_id }) => {
+    if (!planilla?.id) return
+    setErr(''); setMsg('')
+    try {
+      const res = await api(`/planillas-tuberia/${planilla.id}/evidencia/eliminar`, {
+        method: 'POST',
+        body: JSON.stringify({ version, scope, codigo, foto_id }),
+      })
+      if (res?.version != null) setVersion(res.version)
+      if (res?.evidencias_fotograficas) {
+        setEvidencias(normalizarEvidenciasFotograficas(res.evidencias_fotograficas))
+      }
+      setDetalle((prev) => {
+        if (!prev?.planilla) return prev
+        const meta = {
+          ...(prev.planilla.meta_cabecera || {}),
+          ...(res?.meta_cabecera || {}),
+          evidencias_fotograficas: res?.evidencias_fotograficas
+            || prev.planilla.meta_cabecera?.evidencias_fotograficas,
+        }
+        return {
+          ...prev,
+          planilla: {
+            ...prev.planilla,
+            version: res?.version ?? prev.planilla.version,
+            meta_cabecera: meta,
+          },
+        }
+      })
+      setMsg(`Foto eliminada de ${codigo}.`)
+    } catch (e) {
+      setErr(e.message || 'No se pudo eliminar la foto')
+      throw e
     }
   }
 
@@ -504,6 +599,14 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
 
   /** Preferir preview local; si faltan Ø/B, caer al último cálculo del servidor. */
   const calculoVista = calculoLocal || calculo
+
+  const lineasFotoReq = useMemo(
+    () => new Set(
+      lineasConCantidadCalculada(calculoVista, { displayNeto: displayNetoCant })
+        .map((l) => `${l.scope}:${l.codigo}`),
+    ),
+    [calculoVista, cantManuales],
+  )
 
   const avisosLocales = useMemo(
     () => validarFilasCarteraLocal(filas, params.tipo),
@@ -888,10 +991,10 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     <div style={cardPad}>
       <div style={sheet.sectionTitle}>Resumen de Cantidades</div>
       <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-        <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 580 }}>
+        <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 620 }}>
           <thead>
             <tr>
-              {['Item', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad'].map((h, i) => (
+              {['Item', 'Long', 'Ancho', 'Espesor', 'Desc.', 'Cantidad', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -899,6 +1002,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                     background: '#4472C4',
                     color: '#fff',
                     ...(i === 0 ? { textAlign: 'left' } : null),
+                    ...(h === 'Foto' ? { width: 56, textAlign: 'center' } : null),
                   }}
                 >
                   {h}
@@ -953,6 +1057,19 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                   ))}
                   <td style={tdResumenCalc}>{fmtNDash(n.descuentos)}</td>
                   <td style={tdResumenCalc}>{fmtNDash(displayNetoCant(n))}</td>
+                  <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
+                    <PlanillaTuberiaEvidenciaBtn
+                      scope="cantidades"
+                      codigo={n.codigo}
+                      label={displayNombreCant(n)}
+                      evidencias={evidencias}
+                      editable={editable}
+                      busy={busy}
+                      requiere={lineasFotoReq.has(`cantidades:${n.codigo}`)}
+                      onAdjuntar={adjuntarEvidencia}
+                      onEliminar={eliminarEvidencia}
+                    />
+                  </td>
                 </tr>
               )
             })}
@@ -963,10 +1080,10 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     <div style={cardPad}>
       <div style={sheet.sectionTitle}>Descuentos Específicos</div>
       <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
-        <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 480 }}>
+        <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 520 }}>
           <thead>
             <tr>
-              {['Item', 'Long', 'Ancho', 'Área', 'Cantidad'].map((h, i) => (
+              {['Item', 'Long', 'Ancho', 'Área', 'Cantidad', 'Foto'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -974,6 +1091,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                     background: '#EA4296',
                     color: '#fff',
                     ...(i === 0 ? { textAlign: 'left' } : null),
+                    ...(h === 'Foto' ? { width: 56, textAlign: 'center' } : null),
                   }}
                 >
                   {h}
@@ -989,6 +1107,19 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
                 <td style={tdResumenCalc}>{fmtNDash(d.ancho)}</td>
                 <td style={tdResumenCalc}>{fmtNDash(d.espesor)}</td>
                 <td style={tdResumenCalc}>{fmtNDash(d.cantidad)}</td>
+                <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
+                  <PlanillaTuberiaEvidenciaBtn
+                    scope="descuentos"
+                    codigo={d.codigo}
+                    label={d.nombre}
+                    evidencias={evidencias}
+                    editable={editable}
+                    busy={busy}
+                    requiere={lineasFotoReq.has(`descuentos:${d.codigo}`)}
+                    onAdjuntar={adjuntarEvidencia}
+                    onEliminar={eliminarEvidencia}
+                  />
+                </td>
               </tr>
             ))}
           </tbody>

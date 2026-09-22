@@ -1,13 +1,16 @@
 """Rutas HTTP — Planillas de Tubería (ALCANTARILLA / FILTRO)."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -18,13 +21,17 @@ from topografia_planilla_tuberia import (
     ITEMS_CANTIDADES,
     ITEMS_DESCUENTOS_ALCANTARILLA,
     ITEMS_DESCUENTOS_FILTRO,
+    MAX_FOTOS_POR_LINEA,
     RELACIONES_ATRAQUE,
     TIPOS_PLANILLA,
     calcular_planilla_completa,
     construir_fila_consolidado,
     filtrar_descuentos_manuales_por_tipo,
+    mensaje_faltan_evidencias,
     migrar_filas_campo_al_cambiar_tipo,
+    normalizar_evidencias_fotograficas,
     validar_cartera_campo,
+    validar_evidencias_fotograficas,
 )
 from topo_crs import gk_bogota_to_wgs84
 
@@ -120,6 +127,23 @@ class CarteraBody(BaseModel):
     cantidades_manuales: Optional[list[dict[str, Any]]] = None
 
 
+class EvidenciaBody(BaseModel):
+    version: int
+    scope: str  # cantidades | descuentos
+    codigo: str
+    nombre: Optional[str] = None
+    data_base64: str
+    mime_type: Optional[str] = "image/jpeg"
+    origen: Optional[str] = "archivo"
+
+
+class EvidenciaDeleteBody(BaseModel):
+    version: int
+    scope: str
+    codigo: str
+    foto_id: str
+
+
 def _filas(planilla_id: str) -> list[dict]:
     return (
         supabase.table("topo_planilla_tuberia_filas")
@@ -165,6 +189,93 @@ def _cantidades_manuales_from_meta(planilla: dict) -> list[dict]:
         return []
     raw = meta.get("cantidades_manuales") or []
     return raw if isinstance(raw, list) else []
+
+
+def _evidencias_from_meta(planilla: dict) -> dict[str, dict[str, list[dict]]]:
+    meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
+    return normalizar_evidencias_fotograficas(meta.get("evidencias_fotograficas"))
+
+
+def _set_evidencias_meta(planilla_id: str, prev_meta: dict, evidencias: dict) -> dict:
+    new_meta = {**(prev_meta or {}), "evidencias_fotograficas": evidencias}
+    supabase.table("topo_planillas_tuberia").update({
+        "meta_cabecera": new_meta,
+        "updated_at": _now(),
+    }).eq("id", planilla_id).execute()
+    return new_meta
+
+
+def _decode_imagen_b64(data_b64: str, mime: Optional[str]) -> tuple[bytes, str]:
+    raw = data_b64 or ""
+    mime_out = (mime or "image/jpeg").split(";")[0].strip() or "image/jpeg"
+    if "," in raw and raw.strip().startswith("data:"):
+        header, raw = raw.split(",", 1)
+        m = re.search(r"data:([^;]+)", header)
+        if m:
+            mime_out = m.group(1).strip() or mime_out
+    try:
+        content = base64.b64decode(raw)
+    except Exception as exc:
+        raise HTTPException(422, "Imagen inválida") from exc
+    if len(content) > 8_000_000:
+        raise HTTPException(422, "La imagen supera 8 MB")
+    if not mime_out.startswith("image/"):
+        raise HTTPException(422, "Solo se permiten archivos de imagen")
+    return content, mime_out
+
+
+def _store_evidencia_bytes(
+    contrato_id: int,
+    planilla_id: str,
+    scope: str,
+    codigo: str,
+    nombre: str,
+    content: bytes,
+    mime: str,
+) -> dict:
+    foto_id = str(uuid4())
+    safe = re.sub(r"[^\w.\-]+", "_", nombre or "foto.jpg")[:80]
+    blob_path = (
+        f"topo-planilla-tuberia/{int(contrato_id)}/{planilla_id}/fotos/"
+        f"{scope}/{codigo}/{foto_id}_{safe}"
+    )
+    stored_path = None
+    try:
+        from azure_blob_storage import upload_blob_private
+        upload_blob_private(
+            blob_path, content, content_type=mime or "image/jpeg",
+            overwrite=True, contrato_id=int(contrato_id), storage_tipo="fotos",
+        )
+        stored_path = blob_path
+    except Exception as exc:
+        logger.warning("planilla_tuberia evidencia upload falló, data_uri: %s", exc)
+    digest = hashlib.sha256(content).hexdigest()
+    b64 = base64.b64encode(content).decode("ascii")
+    data_uri = f"data:{mime or 'image/jpeg'};base64,{b64}"
+    persist: dict[str, Any] = {
+        "id": foto_id,
+        "nombre": nombre or "foto.jpg",
+        "mime_type": mime or "image/jpeg",
+        "created_at": _now(),
+        "content_hash": digest,
+        "kind": "foto",
+    }
+    if stored_path:
+        persist["blob_path"] = stored_path
+    else:
+        # Sin Azure: conservar data_uri en meta (entornos de prueba / local).
+        persist["data_uri"] = data_uri
+    return persist
+
+
+def _assert_scope_codigo(scope: str, codigo: str) -> tuple[str, str]:
+    scope_u = str(scope or "").strip().lower()
+    if scope_u not in ("cantidades", "descuentos"):
+        raise HTTPException(422, "scope debe ser 'cantidades' o 'descuentos'")
+    cod = str(codigo or "").strip()
+    if not cod:
+        raise HTTPException(422, "codigo requerido")
+    return scope_u, cod
 
 
 
@@ -646,6 +757,22 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
             "infos": valid.get("infos") or [],
         })
 
+    # Evidencias fotográficas: toda línea con cantidad ≠ 0 debe tener ≥1 foto.
+    try:
+        calc_previo = _calcular(p, filas_util, [
+            {"codigo": d.codigo, "cantidad": float(d.cantidad)}
+            for d in (body.descuentos_manuales or []) if d.codigo
+        ] or _descuentos(planilla_id))
+    except HTTPException:
+        calc_previo = None
+    evidencias = _evidencias_from_meta(p)
+    ev_check = validar_evidencias_fotograficas(calc_previo, evidencias)
+    if calc_previo is not None and not ev_check.get("ok"):
+        raise HTTPException(422, {
+            "mensaje": mensaje_faltan_evidencias(ev_check.get("faltantes") or []),
+            "faltantes": ev_check.get("faltantes") or [],
+        })
+
     try:
         rows = _replace_filas(planilla_id, filas_util)
     except Exception as exc:
@@ -676,6 +803,142 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
         "fingerprint_orden": fp,
         "validacion": {"infos": valid.get("infos") or []},
     }
+
+
+@router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/evidencia")
+def adjuntar_evidencia(
+    contrato_id: int, planilla_id: str, body: EvidenciaBody,
+    current_user=Depends(get_current_user),
+):
+    """Adjunta foto a una línea de Resumen de Cantidades o Descuentos Específicos."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(404, "Planilla no encontrada")
+    _assert_editable(p)
+    _assert_version(p, body.version)
+    scope, codigo = _assert_scope_codigo(body.scope, body.codigo)
+    content, mime = _decode_imagen_b64(body.data_base64, body.mime_type)
+    evidencias = _evidencias_from_meta(p)
+    actuales = list((evidencias.get(scope) or {}).get(codigo) or [])
+    if len(actuales) >= MAX_FOTOS_POR_LINEA:
+        raise HTTPException(
+            422, f"Máximo {MAX_FOTOS_POR_LINEA} fotografías por línea de cantidad.",
+        )
+    foto = _store_evidencia_bytes(
+        contrato_id, planilla_id, scope, codigo,
+        body.nombre or f"{codigo}.jpg", content, mime,
+    )
+    foto["origen"] = str(body.origen or "archivo")[:40]
+    actuales.append(foto)
+    evidencias[scope][codigo] = actuales
+    prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    new_meta = _set_evidencias_meta(planilla_id, prev_meta, evidencias)
+    nueva_v = int(p.get("version") or 1) + 1
+    supabase.table("topo_planillas_tuberia").update({
+        "version": nueva_v, "updated_at": _now(),
+    }).eq("id", planilla_id).execute()
+    return {
+        "ok": True,
+        "version": nueva_v,
+        "scope": scope,
+        "codigo": codigo,
+        "foto": {k: v for k, v in foto.items() if k != "data_uri" or not foto.get("blob_path")},
+        "fotos": [
+            {k: v for k, v in f.items() if k != "data_uri" or not f.get("blob_path")}
+            for f in actuales
+        ],
+        "evidencias_fotograficas": evidencias,
+        "meta_cabecera": new_meta,
+    }
+
+
+@router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/evidencia/eliminar")
+def eliminar_evidencia(
+    contrato_id: int, planilla_id: str, body: EvidenciaDeleteBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(404, "Planilla no encontrada")
+    _assert_editable(p)
+    _assert_version(p, body.version)
+    scope, codigo = _assert_scope_codigo(body.scope, body.codigo)
+    evidencias = _evidencias_from_meta(p)
+    actuales = list((evidencias.get(scope) or {}).get(codigo) or [])
+    foto_id = str(body.foto_id or "").strip()
+    kept = [f for f in actuales if str(f.get("id") or "") != foto_id]
+    if len(kept) == len(actuales):
+        raise HTTPException(404, "Fotografía no encontrada")
+    removed = next(f for f in actuales if str(f.get("id") or "") == foto_id)
+    if removed.get("blob_path"):
+        try:
+            from azure_blob_storage import delete_blob_private
+            delete_blob_private(removed["blob_path"])
+        except Exception as exc:
+            logger.warning("planilla_tuberia evidencia delete blob: %s", exc)
+    if kept:
+        evidencias[scope][codigo] = kept
+    else:
+        evidencias.get(scope, {}).pop(codigo, None)
+    prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    new_meta = _set_evidencias_meta(planilla_id, prev_meta, evidencias)
+    nueva_v = int(p.get("version") or 1) + 1
+    supabase.table("topo_planillas_tuberia").update({
+        "version": nueva_v, "updated_at": _now(),
+    }).eq("id", planilla_id).execute()
+    return {
+        "ok": True,
+        "version": nueva_v,
+        "scope": scope,
+        "codigo": codigo,
+        "fotos": kept,
+        "evidencias_fotograficas": evidencias,
+        "meta_cabecera": new_meta,
+    }
+
+
+@router.get("/{contrato_id}/planillas-tuberia/{planilla_id}/evidencia-media")
+def evidencia_media(
+    contrato_id: int,
+    planilla_id: str,
+    path: str = Query(..., min_length=8),
+    current_user=Depends(get_current_user),
+):
+    """Sirve una foto de evidencia (blob privado) bajo demanda."""
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver")
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(404, "Planilla no encontrada")
+    blob = str(path or "").strip().lstrip("/")
+    prefix = f"topo-planilla-tuberia/{int(contrato_id)}/{planilla_id}/"
+    if not blob.startswith(prefix):
+        raise HTTPException(403, "Ruta de evidencia no válida para esta planilla")
+    try:
+        from azure_blob_storage import download_blob_bytes_private
+        data = download_blob_bytes_private(blob)
+    except Exception as exc:
+        raise HTTPException(404, "Archivo no encontrado") from exc
+    if not data:
+        raise HTTPException(404, "Archivo no encontrado")
+    lower = blob.lower()
+    if lower.endswith((".jpg", ".jpeg")):
+        mime = "image/jpeg"
+    elif lower.endswith(".webp"):
+        mime = "image/webp"
+    elif lower.endswith(".gif"):
+        mime = "image/gif"
+    else:
+        mime = "image/png"
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/calcular")

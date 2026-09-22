@@ -428,6 +428,87 @@ export function validarFilasCarteraLocal(filas, tipo = 'ALCANTARILLA') {
 }
 
 /**
+ * Evidencias fotográficas por línea (Resumen / Descuentos).
+ * Estructura: { cantidades: { CODIGO: [foto…] }, descuentos: {…} }
+ */
+export function normalizarEvidenciasFotograficas(raw) {
+  const out = { cantidades: {}, descuentos: {} }
+  if (!raw || typeof raw !== 'object') return out
+  for (const scope of ['cantidades', 'descuentos']) {
+    const bucket = raw[scope]
+    if (!bucket || typeof bucket !== 'object') continue
+    for (const [codigo, fotos] of Object.entries(bucket)) {
+      if (!codigo || !Array.isArray(fotos)) continue
+      const limpios = fotos.filter((f) => f && (f.blob_path || f.data_uri || f.url))
+      if (limpios.length) out[scope][codigo] = limpios
+    }
+  }
+  return out
+}
+
+export function fotosLineaEvidencia(evidencias, scope, codigo) {
+  const ev = normalizarEvidenciasFotograficas(evidencias)
+  return (ev[scope] && ev[scope][codigo]) || []
+}
+
+function _cantNoCero(v) {
+  if (v == null || v === '') return false
+  const n = Number(v)
+  return Number.isFinite(n) && Math.abs(n) > 1e-9
+}
+
+/** Líneas de Resumen/Descuentos con cantidad ≠ 0 que exigen foto. */
+export function lineasConCantidadCalculada(calculo, opts = {}) {
+  const displayNeto = typeof opts.displayNeto === 'function' ? opts.displayNeto : null
+  const lineas = []
+  for (const n of calculo?.netos || []) {
+    if (!n?.codigo) continue
+    const cant = displayNeto ? displayNeto(n) : (n.neto ?? n.cantidad)
+    if (!_cantNoCero(cant)) continue
+    lineas.push({
+      scope: 'cantidades',
+      codigo: n.codigo,
+      nombre: n.nombre || n.codigo,
+      cantidad: cant,
+    })
+  }
+  for (const d of calculo?.descuentos || []) {
+    if (!d?.nombre || !d?.codigo) continue
+    if (!_cantNoCero(d.cantidad)) continue
+    lineas.push({
+      scope: 'descuentos',
+      codigo: d.codigo,
+      nombre: d.nombre || d.codigo,
+      cantidad: d.cantidad,
+    })
+  }
+  return lineas
+}
+
+/**
+ * Restrictivo: toda línea con cantidad ≠ 0 debe tener ≥1 foto.
+ * @returns {{ ok: boolean, faltantes: Array, mensaje: string }}
+ */
+export function validarEvidenciasFotograficas(calculo, evidencias, opts = {}) {
+  const ev = normalizarEvidenciasFotograficas(evidencias)
+  const faltantes = []
+  for (const linea of lineasConCantidadCalculada(calculo, opts)) {
+    const fotos = (ev[linea.scope] && ev[linea.scope][linea.codigo]) || []
+    if (!fotos.length) faltantes.push(linea)
+  }
+  if (!faltantes.length) return { ok: true, faltantes: [], mensaje: '' }
+  const partes = faltantes.map((f) => {
+    const scopeLbl = f.scope === 'cantidades' ? 'Resumen de Cantidades' : 'Descuentos Específicos'
+    return `${f.nombre} (${scopeLbl})`
+  })
+  return {
+    ok: false,
+    faltantes,
+    mensaje: `No se puede guardar la cartera: falta registro fotográfico en: ${partes.join('; ')}.`,
+  }
+}
+
+/**
  * Nombre de planilla: obligatorio y único en el contrato (case-insensitive).
  * @param {string} nombre
  * @param {Array<{id?: string, nombre?: string}>} lista
