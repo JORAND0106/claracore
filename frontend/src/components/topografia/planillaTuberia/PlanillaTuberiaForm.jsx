@@ -48,6 +48,7 @@ import {
   normalizarCantidadesManuales,
   siguienteCodigoOtros,
   desgloseAtraqueAlcantarilla,
+  pasosDesgloseAtraque,
 } from './planillaTuberiaUtils'
 
 
@@ -989,35 +990,87 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
         },
       ]}
     />
-    <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 4 }}>
+    <div style={{ marginTop: 6 }}>
       {desgloseAtraque ? (
-        <>
-          h<sub>atr</sub>({desgloseAtraque.relacion})=
-          {desgloseAtraque.radio_externo_m != null
-            ? `2·r/${desgloseAtraque.denominador}=`
-            : ''}
-          {fmtNDash(desgloseAtraque.altura_atraque_m, 3)} m
-          {' · '}h<sub>trit</sub>=h<sub>atr</sub>+cama=
-          {fmtNDash(desgloseAtraque.altura_atraque_m, 3)}+
-          {fmtNDash(desgloseAtraque.cama_triturado_m, 3)}=
-          {fmtNDash(desgloseAtraque.altura_triturado_m, 3)} m
-          {' · '}(h<sub>trit</sub>×B)−A1=
-          {fmtNDash(desgloseAtraque.altura_triturado_m, 3)}×
-          {fmtNDash(desgloseAtraque.ancho_excavacion_m, 3)}−
-          {fmtNDash(desgloseAtraque.area_1_m2, 3)}=
-          {fmtNDash(desgloseAtraque.seccion_atraque_m2, 3)} m²
-          {' · '}A1={fmtNDash(desgloseAtraque.area_1_m2, 4)}
-          {' · '}A2={fmtNDash(desgloseAtraque.area_2_m2, 4)}
-        </>
+        <div
+          role="group"
+          aria-label="Desglose del cálculo de atraque"
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            flexWrap: 'nowrap',
+            gap: 6,
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            paddingBottom: 2,
+            maxWidth: '100%',
+          }}
+        >
+          {pasosDesgloseAtraque(desgloseAtraque).map((paso) => (
+            <div
+              key={paso.key}
+              data-atraque-paso={paso.key}
+              style={{
+                flex: '0 0 auto',
+                minWidth: 112,
+                maxWidth: 168,
+                border: `1px solid ${sheet.border}`,
+                borderRadius: 6,
+                background: ui.t?.inputBg || '#f8fafc',
+                padding: '5px 8px',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{
+                fontSize: 'var(--cc-xxs)',
+                fontWeight: 800,
+                color: ui.text,
+                letterSpacing: '0.02em',
+                whiteSpace: 'nowrap',
+              }}
+              >
+                {paso.titulo}
+              </div>
+              <div style={{
+                fontSize: 'var(--cc-xxs)',
+                color: ui.textMuted,
+                marginTop: 2,
+                lineHeight: 1.25,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+              title={paso.formula}
+              >
+                {paso.formula}
+              </div>
+              <div style={{
+                marginTop: 3,
+                fontFamily: 'ui-monospace, Consolas, monospace',
+                fontVariantNumeric: 'tabular-nums',
+                fontWeight: 700,
+                fontSize: 'var(--cc-xs)',
+                color: ui.text,
+                whiteSpace: 'nowrap',
+              }}
+              >
+                {paso.valor}
+                <span style={{ fontWeight: 600, color: ui.textMuted, marginLeft: 3 }}>{paso.unidad}</span>
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
-        <>
+        <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
           H.Relleno={fmtNDash(planilla.altura_relleno_m, 4)} ·
           A1={fmtNDash(planilla.area_1_m2, 4)} ·
           A2={fmtNDash(planilla.area_2_m2, 4)}
-        </>
+        </div>
       )}
       {detalle?.coords_wgs84 && (
-        <> · WGS84 (inicio) {fmtNDash(detalle.coords_wgs84.lat, 6)}, {fmtNDash(detalle.coords_wgs84.lon, 6)}</>
+        <div style={{ fontSize: 'var(--cc-xxs)', color: ui.textMuted, marginTop: 4 }}>
+          WGS84 (inicio) {fmtNDash(detalle.coords_wgs84.lat, 6)}, {fmtNDash(detalle.coords_wgs84.lon, 6)}
+        </div>
       )}
     </div>
   </div>

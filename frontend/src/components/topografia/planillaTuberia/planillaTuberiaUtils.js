@@ -681,3 +681,59 @@ export function desgloseAtraqueAlcantarilla(seccion) {
     seccion_atraque_m2: Math.round(seccionAtraque * 1000) / 1000,
   }
 }
+
+/**
+ * Pasos del desglose de atraque para UI en recuadros (sin cambiar el cálculo).
+ * @returns {Array<{ key: string, titulo: string, formula: string, valor: string, unidad: string }>}
+ */
+export function pasosDesgloseAtraque(desglose, fmt = fmtNDash) {
+  if (!desglose) return []
+  const hAtr = fmt(desglose.altura_atraque_m, 3)
+  const cama = fmt(desglose.cama_triturado_m, 3)
+  const hTrit = fmt(desglose.altura_triturado_m, 3)
+  const b = fmt(desglose.ancho_excavacion_m, 3)
+  const a1 = fmt(desglose.area_1_m2, 3)
+  const a1fine = fmt(desglose.area_1_m2, 4)
+  const a2 = fmt(desglose.area_2_m2, 4)
+  const sec = fmt(desglose.seccion_atraque_m2, 3)
+  const formulaHatr = desglose.radio_externo_m != null
+    ? `2·r/${desglose.denominador}`
+    : `h_atr(${desglose.relacion})`
+  return [
+    {
+      key: 'hatr',
+      titulo: `h_atr (${desglose.relacion})`,
+      formula: formulaHatr,
+      valor: hAtr,
+      unidad: 'm',
+    },
+    {
+      key: 'htrit',
+      titulo: 'h_trit',
+      formula: `h_atr+cama = ${hAtr}+${cama}`,
+      valor: hTrit,
+      unidad: 'm',
+    },
+    {
+      key: 'seccion',
+      titulo: '(h_trit×B)−A1',
+      formula: `${hTrit}×${b}−${a1}`,
+      valor: sec,
+      unidad: 'm²',
+    },
+    {
+      key: 'a1',
+      titulo: 'A1',
+      formula: 'Área 1',
+      valor: a1fine,
+      unidad: 'm²',
+    },
+    {
+      key: 'a2',
+      titulo: 'A2',
+      formula: 'Área 2',
+      valor: a2,
+      unidad: 'm²',
+    },
+  ]
+}
