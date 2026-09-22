@@ -7,9 +7,10 @@ import seguimiento_service as svc
 
 
 class StoreQ:
-    def __init__(self, store, name):
+    def __init__(self, store, name, *, missing_cols=None):
         self.store = store
         self.name = name
+        self.missing_cols = set(missing_cols or [])
         self._op = "select"
         self._filters = []
         self._in = None
@@ -17,9 +18,11 @@ class StoreQ:
         self._order = None
         self._limit = None
         self._eq = {}
+        self._select = ""
 
     def select(self, *_a, **_k):
         self._op = "select"
+        self._select = _a[0] if _a else ""
         return self
 
     def insert(self, payload):
@@ -65,6 +68,13 @@ class StoreQ:
     def execute(self):
         table = self.store.setdefault(self.name, [])
         if self._op == "select":
+            for col in self.missing_cols:
+                # Simula PostgREST/Postgres 42703 si se pide una columna inexistente
+                if col in (self._select or ""):
+                    raise RuntimeError(
+                        f"{{'message': 'column {self.name}.{col} does not exist', "
+                        f"'code': '42703', 'hint': None, 'details': None}}"
+                    )
             rows = [dict(r) for r in table if self._match(r)]
             if self._limit is not None:
                 rows = rows[: self._limit]
@@ -100,11 +110,12 @@ class StoreQ:
 
 
 class FakeSb:
-    def __init__(self, store):
+    def __init__(self, store, *, missing_cols=None):
         self.store = store
+        self.missing_cols = missing_cols or {}
 
     def table(self, name):
-        return StoreQ(self.store, name)
+        return StoreQ(self.store, name, missing_cols=self.missing_cols.get(name) or [])
 
 
 def _base_store():
@@ -289,3 +300,75 @@ def test_reemplazar_fusiona_si_usuario_ya_es_asistente(monkeypatch):
     assert not any(r["id"] == 12 for r in store["seguimiento_acta_asistente"])
     # El asistente registrado del usuario permanece
     assert any(r["id"] == 16 and r["usuario_id"] == 50 for r in store["seguimiento_acta_asistente"])
+
+
+def test_list_sin_columna_tipo_acta(monkeypatch):
+    """Reproduce APIError 42703: no debe pedir tipo_acta si no existe."""
+    store = _base_store()
+    for a in store["seguimiento_acta"]:
+        a.pop("tipo_acta", None)
+
+    def schema_has(_sb, cap, force=False):
+        if cap == "tipo_acta":
+            return False
+        return True
+
+    monkeypatch.setattr(svc, "_schema_has", schema_has)
+    sb = FakeSb(store, missing_cols={"seguimiento_acta": ["tipo_acta"]})
+    out = svc.list_externos_depuracion(sb, 7)
+    assert len(out) >= 1
+    pepito = next(x for x in out if x.get("match_key") == "email:pepito@ext.com")
+    assert pepito["actas_count"] == 3
+    # Metadatos de actas sin tipo_acta
+    assert all(a.get("tipo_acta") is None for a in pepito["actas"])
+
+
+def test_list_reintenta_si_tipo_acta_falla_en_runtime(monkeypatch):
+    """Si el cache cree que tipo_acta existe pero Postgres responde 42703, reintenta."""
+    store = _base_store()
+    for a in store["seguimiento_acta"]:
+        a.pop("tipo_acta", None)
+    monkeypatch.setattr(svc, "_schema_has", lambda *_a, **_k: True)
+    monkeypatch.setattr(svc, "_SCHEMA_CAPS", dict(svc._SCHEMA_CAPS))
+    sb = FakeSb(store, missing_cols={"seguimiento_acta": ["tipo_acta"]})
+    out = svc.list_externos_depuracion(sb, 7)
+    assert any(x.get("match_key") == "email:pepito@ext.com" for x in out)
+    assert svc._SCHEMA_CAPS.get("tipo_acta") is False
+
+
+def test_list_filtra_por_contrato_sin_mezclar(monkeypatch):
+    """Dos contratos con el mismo nombre/email de externo: cada listado es exclusivo."""
+    store = _base_store()
+    store["seguimiento_contacto_externo"].append({
+        "id": 200,
+        "contrato_id": 8,
+        "nombre": "Pepito Pérez",
+        "cargo": "Guest",
+        "entidad": "Otro",
+        "email": "pepito@ext.com",
+        "email_norm": "pepito@ext.com",
+        "activo": True,
+        "usuario_id": None,
+    })
+    store["contratos"].append({"id": 8, "contratista": "OTRO", "numero": "2"})
+    monkeypatch.setattr(svc, "_schema_has", lambda *_a, **_k: True)
+
+    out7 = svc.list_externos_depuracion(FakeSb(store), 7)
+    out8 = svc.list_externos_depuracion(FakeSb(store), 8)
+
+    pepito7 = next(x for x in out7 if x.get("match_key") == "email:pepito@ext.com")
+    pepito8 = next(x for x in out8 if x.get("match_key") == "email:pepito@ext.com")
+
+    assert pepito7["externo_id"] == 100
+    assert pepito7["actas_count"] == 3
+    assert all(a["id"] in (1, 2, 3) for a in pepito7["actas"])
+
+    assert pepito8["externo_id"] == 200
+    assert pepito8["actas_count"] == 1
+    assert pepito8["actas"][0]["id"] == 99
+    assert pepito8["cargo"] == "Guest"
+
+    # Ningún id de acta del contrato 7 aparece en el 8 y viceversa
+    ids7 = {a["id"] for x in out7 for a in x["actas"]}
+    ids8 = {a["id"] for x in out8 for a in x["actas"]}
+    assert ids7.isdisjoint(ids8)

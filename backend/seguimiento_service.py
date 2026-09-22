@@ -2440,19 +2440,53 @@ def _batch_acta_ids(acta_ids: List[int], batch_size: int = 100):
         yield acta_ids[i : i + batch_size]
 
 
+def _fetch_actas_meta_contrato(sb, contrato_id: int) -> Dict[int, dict]:
+    """
+    Metadatos de actas del contrato para depuración de externos.
+    No selecciona tipo_acta si la columna no existe en el esquema (entornos
+    sin migración de ciclo de vida); reintenta ante 42703.
+    Siempre filtra por contrato_id: nunca mezcla actas de otro contrato.
+    """
+    cid = int(contrato_id)
+    base_cols = "id, contrato_id, consecutivo, fecha_reunion, estado"
+    include_tipo = _schema_has(sb, "tipo_acta")
+    select_cols = f"{base_cols}, tipo_acta" if include_tipo else base_cols
+
+    def _query(cols: str):
+        return (
+            sb.table("seguimiento_acta")
+            .select(cols)
+            .eq("contrato_id", cid)
+            .order("consecutivo", desc=True)
+            .limit(500)
+            .execute()
+            .data
+            or []
+        )
+
+    try:
+        actas = _query(select_cols)
+    except Exception as exc:
+        if include_tipo and _is_missing_column_error(exc, "tipo_acta"):
+            _SCHEMA_CAPS["tipo_acta"] = False
+            actas = _query(base_cols)
+        else:
+            raise
+
+    # Defensa: descartar filas que no correspondan al contrato (p. ej. vistas/RPC raras).
+    out: Dict[int, dict] = {}
+    for a in actas:
+        if a.get("id") is None:
+            continue
+        if a.get("contrato_id") is not None and int(a["contrato_id"]) != cid:
+            continue
+        out[int(a["id"])] = a
+    return out
+
+
 def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict], Dict[int, dict]]:
-    """Asistentes sin usuario_id en actas del contrato + mapa de actas."""
-    actas = (
-        sb.table("seguimiento_acta")
-        .select("id, consecutivo, fecha_reunion, tipo_acta, estado")
-        .eq("contrato_id", int(contrato_id))
-        .order("consecutivo", desc=True)
-        .limit(500)
-        .execute()
-        .data
-        or []
-    )
-    actas_by_id = {int(a["id"]): a for a in actas if a.get("id") is not None}
+    """Asistentes sin usuario_id en actas del contrato + mapa de actas (solo ese contrato)."""
+    actas_by_id = _fetch_actas_meta_contrato(sb, contrato_id)
     if not actas_by_id:
         return [], actas_by_id
 
@@ -2461,6 +2495,7 @@ def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict
     if include_email:
         cols += ", email"
 
+    allowed_acta_ids = set(actas_by_id.keys())
     asistentes: List[dict] = []
     for chunk in _batch_acta_ids(list(actas_by_id.keys())):
         try:
@@ -2487,6 +2522,13 @@ def _fetch_asistentes_externos_contrato(sb, contrato_id: int) -> tuple[List[dict
                 raise
         for r in rows:
             if r.get("usuario_id"):
+                continue
+            try:
+                aid = int(r.get("acta_id"))
+            except (TypeError, ValueError):
+                continue
+            # Solo asistencias de actas del contrato consultado.
+            if aid not in allowed_acta_ids:
                 continue
             asistentes.append(r)
     return asistentes, actas_by_id
