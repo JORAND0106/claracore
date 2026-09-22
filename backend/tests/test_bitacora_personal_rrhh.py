@@ -1,6 +1,7 @@
 """Personal en obra ↔ RRHH: normalización y resumen por cargo Activo."""
 from bitacora_service import (
     ESTADOS_CUENTAN_RESUMEN,
+    HORA_INGRESO_DEFAULT,
     HORA_SALIDA_DEFAULT,
     _normalizar_asistencia_colaboradores,
     _personal_desde_asistencia,
@@ -25,6 +26,34 @@ def test_normaliza_asistencia_conserva_horario_y_rrhh_id():
     assert rows[0]["hora_ingreso"] == "07:00"
     assert rows[0]["hora_salida"] == HORA_SALIDA_DEFAULT
     assert rows[0]["estado"] == "inactivo"
+
+
+def test_normaliza_asistencia_default_hora_ingreso_0730():
+    rows = _normalizar_asistencia_colaboradores([
+        {
+            "rrhh_trabajador_id": 9,
+            "nombre": "Pedro Ruiz",
+            "cargo": "Ayudante",
+            "estado": "activo",
+            "hora_ingreso": "",
+            "hora_salida": "",
+            "origen": "rrhh",
+        },
+    ])
+    assert rows[0]["hora_ingreso"] == HORA_INGRESO_DEFAULT
+    assert rows[0]["hora_ingreso"] == "07:30"
+    assert rows[0]["hora_salida"] == HORA_SALIDA_DEFAULT
+    # Valor editado manualmente se conserva.
+    editado = _normalizar_asistencia_colaboradores([
+        {
+            "nombre": "Pedro Ruiz",
+            "cargo": "Ayudante",
+            "hora_ingreso": "06:15",
+            "hora_salida": "15:45",
+        },
+    ])
+    assert editado[0]["hora_ingreso"] == "06:15"
+    assert editado[0]["hora_salida"] == "15:45"
 
 
 def test_personal_desde_asistencia_solo_activo():

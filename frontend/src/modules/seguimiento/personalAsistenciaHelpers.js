@@ -12,6 +12,7 @@ export const ESTADOS_COLABORADOR = [
   { value: 'retirado', label: 'Retirado' },
 ]
 
+export const HORA_INGRESO_DEFAULT = '07:30'
 export const HORA_SALIDA_DEFAULT = '16:30'
 
 /** Solo «activo» (RRHH) aporta al Resumen por cargo. */
@@ -113,7 +114,7 @@ export function emptyAsistenciaRow(partial = {}) {
     subcontratista_id: null,
     subcontratista_nombre: '',
     estado: 'activo',
-    hora_ingreso: '',
+    hora_ingreso: HORA_INGRESO_DEFAULT,
     hora_salida: HORA_SALIDA_DEFAULT,
     fecha_ingreso: '',
     fecha_retiro: '',

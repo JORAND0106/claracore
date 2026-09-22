@@ -2135,6 +2135,7 @@ def sync_visitantes_catalogo(
 
 ESTADOS_COLABORADOR = ("activo", "incapacitado", "inactivo", "retirado")
 DOCUMENTO_TIPOS_COLABORADOR = ("CC", "CE", "TI", "PA", "NIT", "OTRO")
+HORA_INGRESO_DEFAULT = "07:30"
 HORA_SALIDA_DEFAULT = "16:30"
 # Solo Activo (RRHH) cuenta en el Resumen por cargo.
 ESTADOS_CUENTAN_RESUMEN = frozenset({"activo"})
@@ -2375,7 +2376,7 @@ def _normalizar_asistencia_colaboradores(raw) -> List[dict]:
             continue
         seen.add(key)
         # Horario = dato operativo del día (siempre se conserva; no depende del estado RRHH).
-        hora_ingreso = _parse_hora_hhmm(item.get("hora_ingreso"))
+        hora_ingreso = _parse_hora_hhmm(item.get("hora_ingreso"), default=HORA_INGRESO_DEFAULT)
         hora_salida = _parse_hora_hhmm(item.get("hora_salida"), default=HORA_SALIDA_DEFAULT)
         origen = str(item.get("origen") or ("rrhh" if rrhh_id is not None else "legado")).strip() or "legado"
         out.append({

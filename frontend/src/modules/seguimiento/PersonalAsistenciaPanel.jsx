@@ -5,6 +5,7 @@ import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import PersonalCargoDetalleModal from './PersonalCargoDetalleModal'
 import {
   EMPRESA_REGISTRO_DIRECTO,
+  HORA_INGRESO_DEFAULT,
   HORA_SALIDA_DEFAULT,
   asistenciaRowFromRrhh,
   cantidadManualPorCargo,
@@ -132,7 +133,7 @@ export default function PersonalAsistenciaPanel({
 
   const pickDraftAdd = (trab) => {
     setDraftAdd(asistenciaRowFromRrhh(trab, {
-      hora_ingreso: draftAdd.hora_ingreso || '',
+      hora_ingreso: draftAdd.hora_ingreso || HORA_INGRESO_DEFAULT,
       hora_salida: draftAdd.hora_salida || HORA_SALIDA_DEFAULT,
       tramo: draftAdd.tramo || '',
     }))
@@ -390,8 +391,11 @@ export default function PersonalAsistenciaPanel({
             <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Ingreso</span>
             <input
               type="time"
-              value={(draftAdd.hora_ingreso || '').slice(0, 5)}
-              onChange={(e) => setDraftAdd((d) => ({ ...d, hora_ingreso: e.target.value }))}
+              value={(draftAdd.hora_ingreso || HORA_INGRESO_DEFAULT).slice(0, 5)}
+              onChange={(e) => setDraftAdd((d) => ({
+                ...d,
+                hora_ingreso: e.target.value || HORA_INGRESO_DEFAULT,
+              }))}
               style={{ ...cellInp, width: 96 }}
             />
           </label>
