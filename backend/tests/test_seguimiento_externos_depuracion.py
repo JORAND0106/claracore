@@ -200,8 +200,51 @@ def _base_store():
 
 def test_clave_externo_prioriza_email():
     assert svc._clave_externo(email=" A@B.COM ", nombre="X") == "email:a@b.com"
-    assert svc._clave_externo(email=None, nombre="  Pepito   Pérez ") == "nombre:pepito pérez"
+    assert svc._clave_externo(email="mailto:Ana@Mail.COM", nombre="X") == "email:ana@mail.com"
+    assert svc._clave_externo(email=None, nombre="  Pepito   Pérez ") == "nombre:pepito perez"
     assert svc._clave_externo(email="", nombre="") is None
+
+
+def test_list_une_mailto_y_mismo_nombre(monkeypatch):
+    """Duplicados tipo Viviana (mailto) y Lubin (con/sin email) deben unirse."""
+    store = _base_store()
+    store["seguimiento_acta_asistente"].extend([
+        {
+            "id": 30, "acta_id": 1, "nombre": "Viviana Paulina Garcia Mancipe",
+            "cargo": "Abogada", "entidad": "Umbrales", "email": "vgarciam@umbrales.com",
+            "usuario_id": None, "orden": 5,
+        },
+        {
+            "id": 31, "acta_id": 2, "nombre": "Viviana Paulina Garcia Mancipe",
+            "cargo": "Abogada", "entidad": "Umbrales", "email": "mailto:vgarciam@umbrales.com",
+            "usuario_id": None, "orden": 5,
+        },
+        {
+            "id": 32, "acta_id": 1, "nombre": "Lubin Andrés Hernández Sanabria",
+            "cargo": "Ingeniero Ambiental", "entidad": "CONSORCIO", "email": "mailto:lhernandez@x.com",
+            "usuario_id": None, "orden": 6,
+        },
+        {
+            "id": 33, "acta_id": 2, "nombre": "Lubin Andrés Hernández Sanabria",
+            "cargo": "Ingeniero Ambiental", "entidad": None, "email": None,
+            "usuario_id": None, "orden": 6,
+        },
+    ])
+    monkeypatch.setattr(svc, "_schema_has", lambda *_a, **_k: True)
+    out = svc.list_externos_depuracion(FakeSb(store), 7)
+
+    vivianas = [x for x in out if "viviana" in (x.get("nombre") or "").lower()]
+    assert len(vivianas) == 1
+    assert vivianas[0]["actas_count"] == 2
+    assert vivianas[0]["email"] == "vgarciam@umbrales.com"
+    assert "email:vgarciam@umbrales.com" in vivianas[0]["match_keys"]
+
+    lubines = [x for x in out if "lubin" in (x.get("nombre") or "").lower()]
+    assert len(lubines) == 1
+    assert lubines[0]["actas_count"] == 2
+    assert lubines[0]["email"] == "lhernandez@x.com"
+    assert any(k.startswith("nombre:") for k in lubines[0]["match_keys"])
+    assert any(k.startswith("email:") for k in lubines[0]["match_keys"])
 
 
 def test_list_externos_depuracion_agrupa_por_email(monkeypatch):
