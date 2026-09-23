@@ -1112,10 +1112,6 @@ def validar_fila_campo(fila: dict, tipo: str) -> list[dict]:
         avisos.append({"prioridad": "error", "campo": "cota_fondo_excavacion", "msg": "CFE > TN",
                        "detalle": "La cota fondo no puede superar el terreno natural.",
                        "abscisa": abscisa, "diferencia": _r4(cfe - tn)})
-    if tn is not None and nivel is not None and nivel > tn + 0.05:
-        avisos.append({"prioridad": "info", "campo": "nivel_referencia", "msg": "Nivel sobre TN",
-                       "detalle": "El nivel de referencia está >5 cm sobre el terreno natural.",
-                       "abscisa": abscisa, "diferencia": _r4(nivel - tn)})
     if nivel is not None and cfe is not None and nivel < cfe:
         avisos.append({"prioridad": "error", "campo": "nivel_referencia", "msg": "Nivel < CFE",
                        "detalle": "El nivel de referencia debe quedar sobre el fondo de excavación.",

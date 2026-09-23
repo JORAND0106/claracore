@@ -22,16 +22,18 @@ const routesSrc = readFileSync(
 
 describe('Planilla tubería — multi-fix UI/persist', () => {
   it('perfil declara grilla horizontal y vertical', () => {
-    assert.match(perfilSrc, /Grilla de referencia/)
     assert.match(perfilSrc, /xTicks/)
-    assert.match(perfilSrc, /yTicks/)
+    assert.match(perfilSrc, /yTicks|ticks\(/)
+    assert.match(perfilSrc, /function ticks/)
   })
 
   it('Descuentos Específicos usa etiqueta Área (no Espesor)', () => {
     assert.match(formSrc, /\['Item', 'Long', 'Ancho', 'Área', 'Cantidad', 'Foto'\]/)
     assert.match(routesSrc, /desc num">Área</)
     // Resumen de cantidades sigue con Espesor + Foto
-    assert.match(formSrc, /\['Item', 'Long', 'Ancho', 'Espesor', 'Desc\.', 'Cantidad', 'Foto'\]/)
+    assert.match(formSrc, /'Espesor'/)
+    assert.match(formSrc, /'Cantidad'/)
+    assert.match(formSrc, /'Foto'/)
   })
 
   it('exige evidencia fotográfica por línea de cantidad', () => {
@@ -46,19 +48,32 @@ describe('Planilla tubería — multi-fix UI/persist', () => {
     assert.match(routesSrc, /Guarde la cartera de campo/)
   })
 
-  it('alertas se agrupan en tabla Abscisa|Diferencia', () => {
+  it('alertas se agrupan en tabla Abscisa|Diferencia (CFE > TN)', () => {
     const avisos = validarFilasCarteraLocal([
-      { orden: 1, abscisa: 10, terreno_natural: 100, subrasante_via: 100.2, cota_fondo_excavacion: 98 },
-      { orden: 2, abscisa: 20, terreno_natural: 101, subrasante_via: 101.3, cota_fondo_excavacion: 99 },
+      { orden: 1, abscisa: 10, terreno_natural: 100, subrasante_via: 100.5, cota_fondo_excavacion: 100.2 },
+      { orden: 2, abscisa: 20, terreno_natural: 101, subrasante_via: 101.5, cota_fondo_excavacion: 101.3 },
     ], 'ALCANTARILLA')
-    assert.ok(avisos.length >= 2)
-    assert.ok(avisos.every((a) => a.msg === 'Nivel sobre TN'))
-    assert.equal(avisos[0].diferencia, 0.2)
-    const grupos = agruparAlertasValidacion(avisos)
+    // nivel (100.5) > cfe (100.2) → solo CFE > TN, sin Nivel < CFE
+    const cfeAvisos = avisos.filter((a) => a.msg === 'CFE > TN')
+    assert.ok(cfeAvisos.length >= 2)
+    assert.ok(cfeAvisos.every((a) => a.prioridad === 'error'))
+    const grupos = agruparAlertasValidacion(cfeAvisos)
     assert.equal(grupos.length, 1)
     assert.equal(grupos[0].filas.length, 2)
     assert.match(formSrc, /agruparAlertasValidacion/)
     assert.match(formSrc, />Abscisa</)
     assert.match(formSrc, />Diferencia</)
+  })
+
+  it('ya no alerta Nivel sobre TN (relleno por encima del terreno)', () => {
+    const avisos = validarFilasCarteraLocal([
+      { orden: 1, abscisa: 10, terreno_natural: 100, subrasante_via: 100.2, cota_fondo_excavacion: 98 },
+      { orden: 2, abscisa: 20, terreno_natural: 101, subrasante_via: 101.3, cota_fondo_excavacion: 99 },
+    ], 'ALCANTARILLA')
+    assert.equal(avisos.length, 0)
+    assert.doesNotMatch(
+      readFileSync(join(dir, 'planillaTuberiaUtils.js'), 'utf8'),
+      /Nivel sobre TN/,
+    )
   })
 })

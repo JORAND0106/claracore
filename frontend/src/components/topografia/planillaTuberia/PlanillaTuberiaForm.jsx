@@ -14,6 +14,7 @@ import PoligonalValidacionPanel from '../PoligonalValidacionPanel'
 import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
 import PlanillaTuberiaCrearReporteModal from './PlanillaTuberiaCrearReporteModal'
+import PlanillaTuberiaAsociarReporteModal from './PlanillaTuberiaAsociarReporteModal'
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
 import PlanillaTuberiaTramoMapaModal from './PlanillaTuberiaTramoMapaModal'
 import { calcularPlanillaLocal, CAMPOS_DESCUENTO_ALTURA, esCodigoOtros, esCodigoDescOtros } from './planillaTuberiaCalc'
@@ -156,6 +157,7 @@ export default function PlanillaTuberiaForm({
   const [pkMapOpen, setPkMapOpen] = useState(false)
   const [tramoMapOpen, setTramoMapOpen] = useState(false)
   const [crearReporteOpen, setCrearReporteOpen] = useState(false)
+  const [asociarReporteOpen, setAsociarReporteOpen] = useState(false)
   /** Overrides Long/Ancho/Espesor (+nombre OTROS) del Resumen de Cantidades. */
   const [cantManuales, setCantManuales] = useState([])
   /** Overrides multi-Otros de Descuentos Específicos (DESC_OTROS_n). */
@@ -1105,6 +1107,41 @@ export default function PlanillaTuberiaForm({
               >
                 <svg {...ico}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M12 18v-6" /><path d="M9 15h6" /></svg>
               </AccionIcono>
+              <span data-asociar-reporte-sicoe-btn style={{ display: 'inline-flex' }}>
+                <AccionIcono
+                  title="Asociar a reporte SICOE existente"
+                  disabled={
+                    busy
+                    || !lineasReporteSicoe.length
+                    || !String(params.nombre || planilla?.nombre || '').trim()
+                  }
+                  onClick={() => {
+                    const evCheck = validarEvidenciasFotograficas(calculoVista, evidencias, {
+                      displayNeto: displayNetoCant,
+                    })
+                    if (evCheck?.faltantes?.length) {
+                      const lista = evCheck.faltantes
+                        .slice(0, 8)
+                        .map((f) => f.nombre || f.codigo)
+                        .join(', ')
+                      const extra = evCheck.faltantes.length > 8
+                        ? ` y ${evCheck.faltantes.length - 8} más`
+                        : ''
+                      setErr(
+                        `No se puede asociar al reporte: faltan fotos en ${evCheck.faltantes.length} línea(s) `
+                        + `con cantidad (${lista}${extra}). Adjunte evidencias en Resumen de Cantidades / Descuentos.`,
+                      )
+                      setMsg('')
+                      return
+                    }
+                    setErr('')
+                    setMsg('')
+                    setAsociarReporteOpen(true)
+                  }}
+                >
+                  <svg {...ico}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                </AccionIcono>
+              </span>
               {reporteSicoeYaEnviado && !esDev && (
                 <span
                   data-reporte-sicoe-bloqueado
@@ -2277,6 +2314,61 @@ export default function PlanillaTuberiaForm({
           setMsg(num != null
             ? `Reporte SICOE #${num} creado con ${res?.n_registros || 0} registro(s) en Sin Asignar Ítem.`
             : 'Reporte SICOE creado.')
+          if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
+            onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
+          }
+        }}
+      />
+
+      <PlanillaTuberiaAsociarReporteModal
+        open={asociarReporteOpen && puedeVerCrearReporte}
+        onClose={() => setAsociarReporteOpen(false)}
+        contratoId={contratoId}
+        planilla={{
+          ...(planilla || {}),
+          nombre: params.nombre || planilla?.nombre,
+          pk_id: params.pk_id,
+          costado: params.costado,
+        }}
+        absInicioDefault={absExtremos.absInicio}
+        absFinalDefault={absExtremos.absFinal}
+        lineasPreview={lineasReporteSicoe}
+        logoUrl={usuario?.logo_contratista || null}
+        contratoMeta={{
+          numero: usuario?.contrato_numero || usuario?.numero_contrato || null,
+          nombre: usuario?.contrato_nombre || null,
+        }}
+        coordsWgs84Inicio={detalle?.coords_wgs84 || null}
+        coordsWgs84Fin={detalle?.coords_wgs84_fin || null}
+        seedTramoGk={{
+          norteIni: params.norte_abs_inicial,
+          esteIni: params.este_abs_inicial,
+          norteFin: params.norte_abs_final,
+          esteFin: params.este_abs_final,
+        }}
+        ui={{
+          text: ui.text,
+          textMuted: ui.textMuted,
+          border: ui.t?.border || '#e2e8f0',
+          inputBg: ui.t?.inputBg || '#fff',
+          cardBg: ui.t?.bgCard || '#fff',
+          accent: ui.accent,
+          accentSoft: ui.accentSoft,
+          t: ui.t,
+        }}
+        apiAsociar={async (body) => {
+          const res = await api(`/planillas-tuberia/${planilla.id}/asociar-reporte-sicoe`, {
+            method: 'POST',
+            body: JSON.stringify(body),
+          })
+          return res
+        }}
+        onAsociado={(res) => {
+          if (res?.planilla) aplicarDetalle(res.planilla)
+          const num = res?.numero_reporte
+          setMsg(num != null
+            ? `Planilla asociada al reporte SICOE #${num} (coords/fotos/gráfico actualizados; cantidades intactas).`
+            : 'Planilla asociada al reporte SICOE.')
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)
           }
