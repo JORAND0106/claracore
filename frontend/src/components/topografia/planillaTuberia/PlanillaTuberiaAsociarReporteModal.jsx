@@ -317,7 +317,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
                     Asociar a reporte existente
                   </div>
                   <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', marginTop: 2 }}>
-                    Planilla de tubería · sin actualizar cantidades
+                    Planilla de tubería · sin modificar cantidades al asociar
                   </div>
                 </td>
                 <td style={{
@@ -347,7 +347,9 @@ export default function PlanillaTuberiaAsociarReporteModal({
             Busque y seleccione un reporte existente de SICOE Obra. Al asociar
             se vinculará la planilla <strong>{planilla?.nombre || '—'}</strong>,
             se reemplazarán coordenadas y se actualizarán fotos/gráfico.
-            {' '}<strong>No se modifican cantidades ni se crean registros nuevos.</strong>
+            {' '}<strong>No se modifican cantidades al asociar ni se crean registros nuevos.</strong>
+            {' '}Mientras la planilla no esté validada por interventoría, al Guardar se sincronizan
+            las cantidades del resumen/descuentos al reporte (las casillas en SICOE siguen editables).
           </div>
 
           <div ref={wrapRef} style={{ position: 'relative' }}>
