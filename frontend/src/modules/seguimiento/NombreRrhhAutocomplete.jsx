@@ -19,13 +19,7 @@ export default function NombreRrhhAutocomplete({
   excludeIds = [],
   disabled = false,
   onPick,
-  /** Se llama al vaciar el input (p. ej. limpiar operador_rrhh_id). */
-  onClear,
-  /** Texto libre mientras escribe (antes de elegir una opción). */
-  onInputChange,
   style,
-  placeholder = 'Buscar en RRHH…',
-  title = 'Seleccione un colaborador del catálogo de RRHH',
 }) {
   const listId = useId()
   const [query, setQuery] = useState(value || '')
@@ -128,21 +122,15 @@ export default function NombreRrhhAutocomplete({
         type="text"
         value={query}
         disabled={disabled}
-        placeholder={placeholder}
+        placeholder="Buscar en RRHH…"
         autoComplete="off"
         onChange={(e) => {
-          const next = e.target.value
-          setQuery(next)
+          setQuery(e.target.value)
           setOpen(true)
-          if (!String(next || '').trim()) {
-            onClear?.()
-          } else {
-            onInputChange?.(next)
-          }
         }}
         onFocus={() => setOpen(true)}
         style={style}
-        title={title}
+        title="Seleccione un colaborador del catálogo de RRHH"
         role="combobox"
         aria-autocomplete="list"
         aria-expanded={listVisible}

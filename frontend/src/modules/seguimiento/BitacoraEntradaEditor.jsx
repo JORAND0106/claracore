@@ -1177,8 +1177,6 @@ export default function BitacoraEntradaEditor({
                                 t={t}
                                 value={u.operador || ''}
                                 catalogo={rrhhCatalogo}
-                                placeholder="Buscar operador en RRHH…"
-                                title={HINT_OPERADOR_DESDE_RRHH}
                                 style={{ ...ui.cellInp, height: 28 }}
                                 onPick={(trab) => {
                                   const tid = trab?.id != null ? Number(trab.id) : null
@@ -1187,20 +1185,6 @@ export default function BitacoraEntradaEditor({
                                       ...r,
                                       operador: nombreCompletoRrhh(trab),
                                       operador_rrhh_id: Number.isFinite(tid) ? tid : null,
-                                    } : r
-                                  )))
-                                }}
-                                onClear={() => {
-                                  setUsos((rows) => rows.map((r, i) => (
-                                    i === idx ? { ...r, operador: '', operador_rrhh_id: null } : r
-                                  )))
-                                }}
-                                onInputChange={(text) => {
-                                  setUsos((rows) => rows.map((r, i) => (
-                                    i === idx ? {
-                                      ...r,
-                                      operador: text,
-                                      operador_rrhh_id: null,
                                     } : r
                                   )))
                                 }}

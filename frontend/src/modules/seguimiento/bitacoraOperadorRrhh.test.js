@@ -16,14 +16,32 @@ const dir = dirname(fileURLToPath(import.meta.url))
 const editorSrc = readFileSync(join(dir, 'BitacoraEntradaEditor.jsx'), 'utf8')
 
 describe('Bitácora Maquinaria — Operador vs RRHH', () => {
+  it('Operador usa NombreRrhhAutocomplete (mismo que Personal), no dropdown', () => {
+    assert.match(editorSrc, /NombreRrhhAutocomplete/)
+    // Celda Operador editable: autocomplete, no <select>
+    assert.match(
+      editorSrc,
+      /data-label="Operador"[\s\S]{0,400}NombreRrhhAutocomplete/,
+    )
+    assert.doesNotMatch(
+      editorSrc,
+      /data-label="Operador"[\s\S]{0,500}<select/,
+    )
+    assert.doesNotMatch(editorSrc, /Sin personal en asistencia/)
+    assert.doesNotMatch(editorSrc, /no está en asistencia/)
+    // No se alteró el componente compartido: Personal sigue importando el mismo archivo
+    const autoSrc = readFileSync(join(dir, 'NombreRrhhAutocomplete.jsx'), 'utf8')
+    assert.match(autoSrc, /filtrarTrabajadoresRrhh/)
+    assert.match(autoSrc, /Buscar en RRHH/)
+    assert.doesNotMatch(autoSrc, /onInputChange/)
+    assert.doesNotMatch(autoSrc, /onClear/)
+  })
+
   it('editor valida con operadorEstaEnRrhh(rrhhCatalogo), no asistencia del día', () => {
     assert.match(editorSrc, /operadorEstaEnRrhh/)
     assert.match(editorSrc, /HINT_OPERADOR_DESDE_RRHH/)
-    assert.match(editorSrc, /NombreRrhhAutocomplete/)
     assert.doesNotMatch(editorSrc, /operadorEstaEnAsistencia/)
     assert.doesNotMatch(editorSrc, /opcionesOperadorDesdeAsistencia/)
-    assert.doesNotMatch(editorSrc, /Sin personal en asistencia/)
-    assert.doesNotMatch(editorSrc, /no está en asistencia/)
   })
 
   it('permite guardar: operador en RRHH aunque NO esté en Personal en obra', () => {
