@@ -29,9 +29,12 @@ from topografia_planilla_tuberia import (
     construir_fila_consolidado,
     filtrar_descuentos_manuales_por_tipo,
     lineas_planilla_a_registros_sicoe,
+    mapa_lineas_sicoe_por_origen,
     mensaje_faltan_evidencias,
     migrar_filas_campo_al_cambiar_tipo,
     normalizar_evidencias_fotograficas,
+    normalizar_margen_sicoe,
+    patch_so_registro_desde_linea_planilla,
     validar_cartera_campo,
     validar_evidencias_fotograficas,
 )
@@ -797,7 +800,18 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
                 for d in kept
             ]).execute()
 
-    return _detalle(contrato_id, planilla_id)
+    detalle = _detalle(contrato_id, planilla_id)
+    try:
+        calc_final = detalle.get("calculo")
+        if calc_final:
+            sync = _sincronizar_so_registros_desde_calc(
+                detalle.get("planilla") or p, calc_final, contrato_id,
+            )
+            if isinstance(detalle, dict):
+                detalle = {**detalle, "sicoe_sync": sync}
+    except Exception:
+        logger.exception("sync sicoe tras actualizar params planilla=%s", planilla_id)
+    return detalle
 
 
 @router.put("/{contrato_id}/planillas-tuberia/{planilla_id}/cartera")
@@ -879,6 +893,13 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
     fp = fingerprint_filas_campo(rows)
     if fingerprint_filas_campo(echo) != fp:
         raise HTTPException(500, "Verificación post-guardado falló (huella).")
+    sync_info = {"updated": 0}
+    try:
+        calc_final = detalle.get("calculo")
+        if calc_final:
+            sync_info = _sincronizar_so_registros_desde_calc(detalle.get("planilla") or p, calc_final, contrato_id)
+    except Exception:
+        logger.exception("sync sicoe tras guardar cartera planilla=%s", planilla_id)
     return {
         **detalle,
         "verified": True,
@@ -886,6 +907,7 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
         "version": nueva_v,
         "fingerprint_orden": fp,
         "validacion": {"infos": valid.get("infos") or []},
+        "sicoe_sync": sync_info,
     }
 
 
@@ -1077,6 +1099,52 @@ def _sicoe_links_from_meta(meta: Any) -> list[dict]:
     return out
 
 
+def _sincronizar_so_registros_desde_calc(
+    planilla: dict,
+    calculo: Optional[dict],
+    contrato_id: int,
+) -> dict[str, Any]:
+    """
+    Actualiza so_registros ya vinculados (dims/cantidad) tras editar la planilla.
+    No crea registros nuevos; solo parchea los mapeados en meta.sicoe_reportes.
+    """
+    links = _sicoe_links_from_meta(planilla.get("meta_cabecera"))
+    if not links:
+        return {"updated": 0, "skipped": True}
+    by_origen = mapa_lineas_sicoe_por_origen(calculo)
+    updated = 0
+    errors: list[str] = []
+    for link in links:
+        try:
+            reporte_id = int(link.get("reporte_id"))
+        except (TypeError, ValueError):
+            continue
+        mapa = link.get("registro_numeros_por_codigo") or {}
+        if not isinstance(mapa, dict):
+            continue
+        for origen_key, num_raw in mapa.items():
+            try:
+                num = int(num_raw)
+            except (TypeError, ValueError):
+                continue
+            linea = by_origen.get(str(origen_key))
+            if not linea:
+                continue
+            patch = patch_so_registro_desde_linea_planilla(linea)
+            try:
+                supabase.table("so_registros").update(patch).eq(
+                    "contrato_id", int(contrato_id),
+                ).eq("reporte_id", reporte_id).eq("numero_registro", num).execute()
+                updated += 1
+            except Exception as exc:
+                errors.append(f"{origen_key}#{num}: {exc}")
+                logger.exception(
+                    "sync so_registros planilla→sicoe reporte=%s num=%s",
+                    reporte_id, num,
+                )
+    return {"updated": updated, "errors": errors}
+
+
 def _coords_wgs_planilla(p: dict) -> tuple[Optional[float], Optional[float]]:
     meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
     norte = p.get("norte_ref")
@@ -1139,6 +1207,15 @@ def crear_reporte_sicoe_desde_planilla(
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
 
+    # Bloqueo de reenvío (salvo Desarrollador)
+    links_previos = _sicoe_links_from_meta(p.get("meta_cabecera"))
+    if links_previos and not _es_desarrollador(current_user):
+        raise HTTPException(
+            409,
+            "Esta planilla ya generó un reporte SICOE Obra. "
+            "Solo el rol Desarrollador puede reenviar.",
+        )
+
     capitulo = str(body.capitulo or "").strip()
     if not capitulo:
         raise HTTPException(422, "Capítulo requerido")
@@ -1185,7 +1262,8 @@ def crear_reporte_sicoe_desde_planilla(
 
     pk_id_id = _resolver_pk_id_maestro(contrato_id, p.get("pk_id"))
     lat, lng = _coords_wgs_planilla(p)
-    margen = str(p.get("costado") or "").strip() or None
+    # costado del maestro PK («Derecho») → catálogo so_reportes.margen («Derecha»)
+    margen = normalizar_margen_sicoe(p.get("costado"))
     uid = _uid(current_user)
 
     # 1) Cabecera so_reportes (mismo flujo que POST /sicoe-obra/.../reportes)

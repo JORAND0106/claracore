@@ -56,10 +56,11 @@ describe('Vista rápida tramo en mapa', () => {
     assert.ok(Math.abs(((ab - ba + 360) % 360) - 180) < 5)
   })
 
-  it('Form expone icono ojo y modal Mapbox', () => {
+  it('Form expone icono ojo junto a PK_ID y modal Mapbox', () => {
     assert.match(formSrc, /PlanillaTuberiaTramoMapaModal/)
     assert.match(formSrc, /setTramoMapOpen\(true\)/)
     assert.match(formSrc, /data-icon-ojo-tramo/)
+    assert.match(formSrc, /data-pk-id-con-ojo/)
     assert.match(formSrc, /puedeVerMapaTramo/)
     assert.match(modalSrc, /crearMapboxMapSeguro/)
     assert.match(modalSrc, /Inicio/)
