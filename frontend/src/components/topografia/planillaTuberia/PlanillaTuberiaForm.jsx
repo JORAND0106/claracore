@@ -537,20 +537,6 @@ export default function PlanillaTuberiaForm({
     }
   }
 
-  const cerrar = async () => {
-    if (!planilla?.id) return
-    setBusy(true); setErr(''); setMsg('')
-    try {
-      aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}/cerrar`, { method: 'POST' }))
-      setMsg('Planilla cerrada. Consolidado generado.')
-      await cargarLista()
-    } catch (e) {
-      setErr(e.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const reabrir = async () => {
     if (!planilla?.id) return
     setBusy(true); setErr(''); setMsg('')
@@ -924,11 +910,6 @@ export default function PlanillaTuberiaForm({
           {editable && (
             <AccionIcono title="Guardar cartera" primary disabled={busy} onClick={guardarCartera}>
               <svg {...ico}><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
-            </AccionIcono>
-          )}
-          {editable && (
-            <AccionIcono title="Cerrar planilla" disabled={busy} onClick={cerrar}>
-              <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
             </AccionIcono>
           )}
           {planilla?.id && puedeVerCrearReporte && !modoSoloLectura && (

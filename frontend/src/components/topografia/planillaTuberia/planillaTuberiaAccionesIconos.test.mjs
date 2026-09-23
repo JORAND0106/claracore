@@ -23,7 +23,8 @@ describe('Planilla tubería — acciones como iconos', () => {
     assert.match(formSrc, /role="toolbar"/)
     assert.match(formSrc, /title="Guardar parámetros"/)
     assert.match(formSrc, /title="Guardar cartera"/)
-    assert.match(formSrc, /title="Cerrar planilla"/)
+    // Cierre manual eliminado: se cierra al aprobar interventoría (N2).
+    assert.doesNotMatch(formSrc, /title="Cerrar planilla"/)
     assert.match(formSrc, /title="Eliminar planilla"/)
     assert.match(formSrc, /Exportar PDF/)
     assert.match(formSrc, /Exportar Excel/)
@@ -41,10 +42,11 @@ describe('Planilla tubería — acciones como iconos', () => {
     assert.doesNotMatch(formSrc, /marginTop: 10, alignItems: 'center'/)
   })
 
-  it('conserva handlers y restricciones (dev / permisos)', () => {
+  it('conserva handlers y restricciones (dev / permisos); sin cierre manual', () => {
     assert.match(formSrc, /onClick=\{guardarParams\}/)
     assert.match(formSrc, /onClick=\{guardarCartera\}/)
-    assert.match(formSrc, /onClick=\{cerrar\}/)
+    assert.doesNotMatch(formSrc, /onClick=\{cerrar\}/)
+    assert.doesNotMatch(formSrc, /const cerrar = async/)
     assert.match(formSrc, /onClick=\{solicitarEliminar\}/)
     assert.match(formSrc, /onClick=\{exportarPdf\}/)
     assert.match(formSrc, /onClick=\{exportarExcel\}/)

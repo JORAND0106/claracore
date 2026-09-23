@@ -95,16 +95,17 @@ export default function PoligonalValidacionPanel({
   const esNivelacion = (variante === 'nivelacion') || basePath.includes('nivelacion')
   const esPlanilla = (variante === 'planilla-tuberia') || basePath.includes('planillas-tuberia')
   const terminada = esPlanilla
-    ? ['cerrado', 'validado'].includes(String(pol.estado || '').toLowerCase())
+    ? Boolean(pol?.id)
     : pol.estado === 'cerrado'
   const ajustada = Boolean(pol.ajustada_at)
   const cierreOk = cierre?.cerrado && cierre?.admisible_lineal
   const listaValidar = esPlanilla
-    ? terminada
+    ? Boolean(pol?.id)
     : terminada && ajustada && cierreOk
   const n1Aprobado = (pol.nivel1_estado || '') === 'Aprobado'
   // Poligonal: sellado solo con BO interventoría. Nivelación: biblioteca_at sigue sellando.
-  // Planilla tubería: sellada cuando interventoría aprueba (nivel2) o estado validado.
+  // Planilla tubería: sellada cuando interventoría aprueba (nivel2) o estado validado
+  // (el cierre ocurre automáticamente al aprobar N2; no hay botón «Cerrar planilla»).
   const sellada = esPlanilla
     ? ((pol.nivel2_estado || '') === 'Aprobado' || String(pol.estado || '').toLowerCase() === 'validado')
     : esNivelacion
@@ -139,7 +140,7 @@ export default function PoligonalValidacionPanel({
   const avisoGeneral = avisoPreValidacion
     || (!terminada && !soloLectura
       ? (esPlanilla
-        ? 'Cierre la planilla antes de validar.'
+        ? null
         : esNivelacion
           ? 'Termine la nivelación (cierre admisible) antes de validar.'
           : 'Termine la poligonal antes de validar.')
