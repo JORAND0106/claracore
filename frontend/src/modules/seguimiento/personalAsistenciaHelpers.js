@@ -21,9 +21,16 @@ export const ESTADOS_CUENTAN_RESUMEN = new Set(['activo'])
 export const HINT_REGISTRAR_EN_RRHH =
   'No hay coincidencias en RRHH. Registre el colaborador primero en el módulo de Recursos Humanos.'
 
-/** Tooltip / validación: operador de maquinaria solo desde asistencia del día. */
-export const HINT_OPERADOR_DESDE_ASISTENCIA =
-  'El colaborador debe estar registrado primero en Personal en obra (lista de asistencia del día) para poder seleccionarlo aquí como operador.'
+/**
+ * Tooltip / validación: operador de maquinaria debe existir en el catálogo RRHH
+ * del contrato (igual que Nombre en Personal en obra). No exige estar nominado
+ * en la asistencia del día.
+ */
+export const HINT_OPERADOR_DESDE_RRHH =
+  'El operador debe existir en el catálogo de RRHH del contrato. Si no aparece, regístrelo primero en Recursos Humanos.'
+
+/** @deprecated Usar HINT_OPERADOR_DESDE_RRHH. Se mantiene por compatibilidad de imports. */
+export const HINT_OPERADOR_DESDE_ASISTENCIA = HINT_OPERADOR_DESDE_RRHH
 
 /**
  * ROL de plataforma «Administrativo» — no entra en Bitácora.
@@ -517,8 +524,41 @@ export function resumenEmpresasCargos({
 
 
 /**
- * Opciones de operador para Maquinaria: solo colaboradores ya nominados
- * en la asistencia del día (sin catálogo histórico completo).
+ * Opciones de operador para Maquinaria desde el catálogo maestro RRHH del contrato
+ * (mismo universo que el autocomplete de Nombre en Personal en obra).
+ * No exige que el colaborador esté en la asistencia del día.
+ */
+export function opcionesOperadorDesdeRrhh(catalogo = []) {
+  const seen = new Set()
+  const out = []
+  for (const t of Array.isArray(catalogo) ? catalogo : []) {
+    if (esEtiquetaAdministrativoExcluida(t?.cargo_aspira || t?.cargo)) continue
+    let tid = null
+    try {
+      tid = t?.id != null && t.id !== '' ? Number(t.id) : null
+      if (!Number.isFinite(tid)) tid = null
+    } catch { tid = null }
+    if (tid == null) continue
+    const nombre = nombreCompletoRrhh(t)
+    if (!nombre) continue
+    const key = `id:${tid}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const cargo = normalizarCargoNombrePropio(t?.cargo_aspira || t?.cargo || '')
+    out.push({
+      rrhh_trabajador_id: tid,
+      nombre,
+      cargo,
+      value: key,
+      label: cargo ? `${nombre} · ${cargo}` : nombre,
+    })
+  }
+  return out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+}
+
+/**
+ * @deprecated Usar opcionesOperadorDesdeRrhh(catalogo).
+ * Conservado: algunas pruebas/legado pasan filas de asistencia con rrhh_trabajador_id.
  */
 export function opcionesOperadorDesdeAsistencia(rows = []) {
   const seen = new Set()
@@ -548,7 +588,7 @@ export function opcionesOperadorDesdeAsistencia(rows = []) {
   return out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
 }
 
-/** Valor de <select> para una fila de uso de maquinaria. */
+/** Valor de <select> / clave estable para una fila de uso de maquinaria. */
 export function operadorSelectValue(uso) {
   let tid = null
   try {
@@ -562,7 +602,7 @@ export function operadorSelectValue(uso) {
   return nombre ? `n:${nombre}` : ''
 }
 
-/** Interpreta el value del selector contra las opciones del día. */
+/** Interpreta el value del selector contra las opciones (RRHH o legado). */
 export function parseOperadorSelectValue(value, opciones = []) {
   const v = String(value || '').trim()
   if (!v) return { operador: '', operador_rrhh_id: null }
@@ -590,13 +630,42 @@ export function parseOperadorSelectValue(value, opciones = []) {
 }
 
 /**
- * True si el uso no tiene operador, o si el operador elegido está en asistencia.
+ * True si el uso no tiene operador, o si el operador existe en el catálogo RRHH.
  * Vacío se considera válido (operador opcional).
+ * No exige que el colaborador esté en Personal en obra ese día.
  */
-export function operadorEstaEnAsistencia(uso, asistenciaRows) {
+export function operadorEstaEnRrhh(uso, catalogo = []) {
+  const nombre = String(uso?.operador || '').trim()
+  let tid = null
+  try {
+    tid = uso?.operador_rrhh_id != null && uso.operador_rrhh_id !== ''
+      ? Number(uso.operador_rrhh_id)
+      : null
+    if (!Number.isFinite(tid)) tid = null
+  } catch { tid = null }
+  if (!nombre && tid == null) return true
+  const opciones = opcionesOperadorDesdeRrhh(catalogo)
+  if (tid != null) {
+    return opciones.some((o) => o.rrhh_trabajador_id === tid)
+  }
+  const needle = nombre.toLowerCase()
+  return opciones.some((o) => o.nombre.toLowerCase() === needle)
+}
+
+/**
+ * @deprecated Usar operadorEstaEnRrhh(uso, catalogoRrhh).
+ * Si el 2.º arg parece catálogo RRHH (objetos con `id`), delega a RRHH;
+ * si parece filas de asistencia (`rrhh_trabajador_id`), usa el criterio legado.
+ */
+export function operadorEstaEnAsistencia(uso, rowsOrCatalogo) {
+  const list = Array.isArray(rowsOrCatalogo) ? rowsOrCatalogo : []
+  const sample = list[0]
+  if (sample && sample.id != null && sample.rrhh_trabajador_id == null && (sample.nombres != null || sample.nombre != null || sample.cargo_aspira != null)) {
+    return operadorEstaEnRrhh(uso, list)
+  }
   const tieneOp = String(uso?.operador || '').trim() || uso?.operador_rrhh_id != null
   if (!tieneOp) return true
-  const opciones = opcionesOperadorDesdeAsistencia(asistenciaRows)
+  const opciones = opcionesOperadorDesdeAsistencia(list)
   const current = operadorSelectValue(uso)
   if (!current) return true
   return opciones.some((o) => o.value === current)

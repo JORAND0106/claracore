@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import {
   EMPRESA_REGISTRO_DIRECTO,
   EMPRESA_SIN_NOMBRE,
-  HINT_OPERADOR_DESDE_ASISTENCIA,
+  HINT_OPERADOR_DESDE_RRHH,
   HINT_REGISTRAR_EN_RRHH,
   HORA_INGRESO_DEFAULT,
   HORA_SALIDA_DEFAULT,
@@ -29,9 +29,9 @@ import {
   nombreCompletoRrhh,
   nombreEmpresaAsistencia,
   normalizarCargoNombrePropio,
-  operadorEstaEnAsistencia,
+  operadorEstaEnRrhh,
   operadorSelectValue,
-  opcionesOperadorDesdeAsistencia,
+  opcionesOperadorDesdeRrhh,
   parseFechaISO,
   parseOperadorSelectValue,
   personalAgregadoDesdeAsistencia,
@@ -438,14 +438,16 @@ describe('resumen por empresa → cargo', () => {
   })
 })
 
-describe('opcionesOperadorDesdeAsistencia', () => {
-  it('lista solo nominados del día, sin duplicar por rrhh id', () => {
-    const ops = opcionesOperadorDesdeAsistencia([
-      { nombre: 'Ana Lopez', cargo: 'Operador', rrhh_trabajador_id: 1 },
-      { nombre: '', cargo: 'Oficial', rrhh_trabajador_id: 2 },
-      { nombre: 'Ana Lopez', cargo: 'Operador', rrhh_trabajador_id: 1 },
-      { nombre: 'Beto Ruiz', cargo: 'Ayudante', rrhh_trabajador_id: 3 },
-    ])
+describe('opcionesOperadorDesdeRrhh', () => {
+  it('lista catálogo RRHH completo (no solo asistencia del día)', () => {
+    const catalogo = [
+      { id: 1, nombres: 'Ana', apellidos: 'Lopez', cargo_aspira: 'Operador' },
+      { id: 2, nombres: '', apellidos: '', cargo_aspira: 'Oficial' },
+      { id: 1, nombres: 'Ana', apellidos: 'Lopez', cargo_aspira: 'Operador' },
+      { id: 3, nombres: 'Beto', apellidos: 'Ruiz', cargo_aspira: 'Ayudante' },
+      { id: 4, nombres: 'Admin', apellidos: 'X', cargo_aspira: 'Administrativo' },
+    ]
+    const ops = opcionesOperadorDesdeRrhh(catalogo)
     assert.equal(ops.length, 2)
     assert.equal(ops[0].nombre, 'Ana Lopez')
     assert.equal(ops[0].value, 'id:1')
@@ -453,11 +455,11 @@ describe('opcionesOperadorDesdeAsistencia', () => {
     assert.equal(ops[1].nombre, 'Beto Ruiz')
   })
 
-  it('parse/select value y validación contra asistencia del día', () => {
-    const asistencia = [
-      { nombre: 'Ana Lopez', cargo: 'Operador', rrhh_trabajador_id: 7, estado: 'activo' },
+  it('parse/select value y validación contra RRHH (sin exigir asistencia del día)', () => {
+    const catalogo = [
+      { id: 7, nombres: 'Ana', apellidos: 'Lopez', cargo_aspira: 'Operador', estado: 'activo' },
     ]
-    const ops = opcionesOperadorDesdeAsistencia(asistencia)
+    const ops = opcionesOperadorDesdeRrhh(catalogo)
     assert.deepEqual(parseOperadorSelectValue('id:7', ops), {
       operador: 'Ana Lopez',
       operador_rrhh_id: 7,
@@ -467,16 +469,22 @@ describe('opcionesOperadorDesdeAsistencia', () => {
       operador_rrhh_id: null,
     })
     assert.equal(operadorSelectValue({ operador: 'Ana Lopez', operador_rrhh_id: 7 }), 'id:7')
-    assert.equal(operadorEstaEnAsistencia({ operador: '', operador_rrhh_id: null }, asistencia), true)
+    assert.equal(operadorEstaEnRrhh({ operador: '', operador_rrhh_id: null }, catalogo), true)
     assert.equal(
-      operadorEstaEnAsistencia({ operador: 'Ana Lopez', operador_rrhh_id: 7 }, asistencia),
+      operadorEstaEnRrhh({ operador: 'Ana Lopez', operador_rrhh_id: 7 }, catalogo),
+      true,
+    )
+    // En RRHH pero NO en Personal en obra del día → válido
+    assert.equal(
+      operadorEstaEnRrhh({ operador: 'Ana Lopez', operador_rrhh_id: 7 }, catalogo),
       true,
     )
     assert.equal(
-      operadorEstaEnAsistencia({ operador: 'Ghost', operador_rrhh_id: 99 }, asistencia),
+      operadorEstaEnRrhh({ operador: 'Ghost', operador_rrhh_id: 99 }, catalogo),
       false,
     )
-    assert.ok(HINT_OPERADOR_DESDE_ASISTENCIA.includes('asistencia'))
+    assert.ok(HINT_OPERADOR_DESDE_RRHH.includes('RRHH'))
+    assert.ok(!HINT_OPERADOR_DESDE_RRHH.toLowerCase().includes('asistencia'))
   })
 
   it('seleccionar operador no duplica el conteo del resumen por cargo', () => {
@@ -484,14 +492,23 @@ describe('opcionesOperadorDesdeAsistencia', () => {
       { nombre: 'Ana Lopez', cargo: 'Operador', estado: 'activo', rrhh_trabajador_id: 7 },
       { nombre: 'Beto Ruiz', cargo: 'Ayudante', estado: 'activo', rrhh_trabajador_id: 8 },
     ]
+    const catalogo = [
+      { id: 7, nombres: 'Ana', apellidos: 'Lopez', cargo_aspira: 'Operador' },
+      { id: 8, nombres: 'Beto', apellidos: 'Ruiz', cargo_aspira: 'Ayudante' },
+      { id: 9, nombres: 'Carla', apellidos: 'Diaz', cargo_aspira: 'Operador' },
+    ]
     const resumen = personalAgregadoDesdeAsistencia(asistencia)
     assert.deepEqual(resumen, [
       { cargo: 'Ayudante', cantidad: 1 },
       { cargo: 'Operador', cantidad: 1 },
     ])
-    // Vincular Ana a maquinaria no agrega filas a asistencia ni altera el agregado.
-    const uso = parseOperadorSelectValue('id:7', opcionesOperadorDesdeAsistencia(asistencia))
-    assert.equal(uso.operador_rrhh_id, 7)
+    // Operador solo en RRHH (Carla), sin fila de asistencia → válido y no altera resumen
+    assert.equal(
+      operadorEstaEnRrhh({ operador: 'Carla Diaz', operador_rrhh_id: 9 }, catalogo),
+      true,
+    )
+    const uso = parseOperadorSelectValue('id:9', opcionesOperadorDesdeRrhh(catalogo))
+    assert.equal(uso.operador_rrhh_id, 9)
     assert.deepEqual(personalAgregadoDesdeAsistencia(asistencia), resumen)
   })
 })
