@@ -106,13 +106,23 @@ const ico = {
 }
 
 
-export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuario, onAbrirReporteSicoe }) {
+export default function PlanillaTuberiaForm({
+  contratoId,
+  token,
+  permisos,
+  usuario,
+  onAbrirReporteSicoe,
+  /** Vista embebida en SICOE (pestaña planilla de origen): solo lectura, sin listado. */
+  modoSoloLectura = false,
+  /** Detalle API ya cargado (GET planillas-tuberia/:id o por-reporte-sicoe). */
+  detalleInicial = null,
+}) {
   const ui = useTopoTheme()
   const sheet = useMemo(() => topoSheetStyles(ui.t), [ui.t])
   const { isCompact } = useTopoViewport()
   const { api, downloadPdf, downloadExcel } = useTopografiaApi(contratoId, token)
   const esDev = esDesarrolladorTopo(usuario)
-  const editablePerm = puede(permisos, 'editar')
+  const editablePerm = puede(permisos, 'editar') && !modoSoloLectura
 
   const [detalle, setDetalle] = useState(null)
   const [filas, setFilas] = useState(() => Array.from({ length: FILAS_INICIALES_CARTERA }, (_, i) => filaCampoVacia(i + 1)))
@@ -138,7 +148,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [infos, setInfos] = useState([])
   const [busy, setBusy] = useState(false)
   const [lista, setLista] = useState([])
-  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(() => Boolean(modoSoloLectura && detalleInicial))
   const [confirmEliminar, setConfirmEliminar] = useState(null) // null | 'vacia' | 'con_datos'
   const [pkMapOpen, setPkMapOpen] = useState(false)
   const [tramoMapOpen, setTramoMapOpen] = useState(false)
@@ -153,7 +163,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const planilla = detalle?.planilla
   const calculo = detalle?.calculo
   const sellada = ['cerrado', 'validado'].includes(String(planilla?.estado || '').toLowerCase())
-  const editable = editablePerm && !sellada
+  const editable = editablePerm && !sellada && !modoSoloLectura
   const comentarioInterventoria = String(planilla?.comentario_interventoria || '').trim()
   const conDatos = useMemo(() => tieneDatosExportables(filas, detalle), [filas, detalle])
   const puedeExportar = puede(permisos, 'exportar') || esDev
@@ -161,13 +171,16 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const exportPlantillaVacia = esDev && !conDatos
 
   const cargarLista = useCallback(async () => {
+    if (modoSoloLectura) return
     const data = await api('/planillas-tuberia')
     setLista(Array.isArray(data) ? data : [])
-  }, [api])
+  }, [api, modoSoloLectura])
 
   useEffect(() => {
+    if (modoSoloLectura) return undefined
     cargarLista().catch((e) => setErr(e.message))
-  }, [cargarLista])
+    return undefined
+  }, [cargarLista, modoSoloLectura])
 
   const aplicarDetalle = useCallback((det) => {
     setDetalle(det)
@@ -195,6 +208,13 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     setCantManuales(normalizarCantidadesManuales(meta.cantidades_manuales))
     setEvidencias(normalizarEvidenciasFotograficas(meta.evidencias_fotograficas))
   }, [])
+
+  // Embebido SICOE: aplicar detalle de la planilla de origen (misma UI, solo lectura).
+  useEffect(() => {
+    if (!modoSoloLectura || !detalleInicial) return
+    aplicarDetalle(detalleInicial)
+    setEditorOpen(true)
+  }, [modoSoloLectura, detalleInicial, aplicarDetalle])
 
   const abrir = async (id) => {
     setErr(''); setMsg(''); setBusy(true)
@@ -911,7 +931,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
             </AccionIcono>
           )}
-          {planilla?.id && puedeVerCrearReporte && (
+          {planilla?.id && puedeVerCrearReporte && !modoSoloLectura && (
             <span
               data-crear-reporte-sicoe-btn
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
@@ -1590,6 +1610,31 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   </div>
   </div>
   ) : null
+
+  if (modoSoloLectura) {
+    return (
+      <div
+        data-planilla-tuberia-vista-sicoe
+        style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0, padding: isCompact ? 8 : 4 }}
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <strong id="planilla-tuberia-origen-title" style={{ fontSize: isCompact ? 'var(--cc-base)' : undefined }}>
+            {planilla?.nombre || planilla?.tipo || 'Planilla de tubería de origen'}
+          </strong>
+          <span style={{ color: ui.textMuted, fontSize: 'var(--cc-xs)' }}>
+            {planilla?.tipo || '—'}
+            {planilla?.estado ? ` · ${planilla.estado}` : ''}
+            {version ? ` · v${version}` : ''}
+            {' · solo lectura'}
+          </span>
+        </div>
+        {err && <div style={{ color: '#dc2626', padding: 8, background: '#fef2f2', borderRadius: 8 }}>{err}</div>}
+        {editorContent || (
+          <div style={{ ...cardPad, color: ui.textMuted }}>Cargando planilla de origen…</div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>

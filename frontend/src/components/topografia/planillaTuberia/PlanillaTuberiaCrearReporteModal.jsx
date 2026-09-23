@@ -364,6 +364,7 @@ export default function PlanillaTuberiaCrearReporteModal({
         nodo_fin: String(nodoFin).trim() || null,
         abs_inicio: absIni,
         abs_final: absFin,
+        esquema_data_uri: esquemaDataUri || null,
       })
       onCreated?.(res)
       onClose?.()
