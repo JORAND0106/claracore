@@ -38,6 +38,7 @@ from topografia_planilla_tuberia import (
     patch_so_registro_desde_linea_planilla,
     puntos_topograficos_desde_planilla,
     nombre_triturado_por_tipo,
+    redondear_costo_directo_sicoe,
     validar_cartera_campo,
     validar_evidencias_fotograficas,
 )
@@ -1616,6 +1617,11 @@ def crear_reporte_sicoe_desde_planilla(
     n_fotos = 0
     for line, num in zip(lineas, numeros):
         data = {k: v for k, v in line.items() if not str(k).startswith("_")}
+        # Solo Longitud/Ancho/Espesor como dims; cantidad (factor) vacío.
+        # cantidad_total ya viene del Resumen (2 dec) — no recalcular PRODUCT.
+        data["cantidad"] = None
+        if data.get("costo_directo") is not None:
+            data["costo_directo"] = redondear_costo_directo_sicoe(data.get("costo_directo"))
         data.update({
             "reporte_id": reporte_id,
             "numero_registro": int(num),

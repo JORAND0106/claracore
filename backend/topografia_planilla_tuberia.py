@@ -1103,6 +1103,57 @@ def formatear_observacion_registro_sicoe(
     return f"{nombre} para {tipo} en tramo {tramo_txt}"
 
 
+def _dim_sicoe_3(v: Any) -> Optional[float]:
+    """Longitud / Ancho / Espesor → 3 decimales (None si vacío)."""
+    if v is None or v == "":
+        return None
+    try:
+        return _r3(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _cantidad_total_desde_resumen(v: Any) -> Optional[float]:
+    """Cantidad del Resumen de Cantidades → 2 decimales (sin recalcular L×A×E)."""
+    if v is None or v == "":
+        return None
+    try:
+        return _r2(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def redondear_costo_directo_sicoe(v: Any) -> Optional[float]:
+    """Costo directo → 0 decimales."""
+    if v is None or v == "":
+        return None
+    try:
+        return float(round(float(v), 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def dims_y_cantidad_registro_sicoe(
+    long: Any,
+    ancho: Any,
+    espesor: Any,
+    cantidad_resumen: Any,
+) -> dict[str, Any]:
+    """
+    Payload dimensional para so_registros desde planilla:
+      - solo Longitud / Ancho / Espesor (3 dec);
+      - cantidad_total = valor del resumen (2 dec), sin PRODUCT independiente;
+      - el factor `cantidad` queda vacío (no es una 4ª dimensión).
+    """
+    return {
+        "longitud": _dim_sicoe_3(long),
+        "ancho": _dim_sicoe_3(ancho),
+        "espesor": _dim_sicoe_3(espesor),
+        "cantidad": None,
+        "cantidad_total": _cantidad_total_desde_resumen(cantidad_resumen),
+    }
+
+
 def abscisas_extremos_cartera(
     calculo: Optional[dict], filas_campo: Optional[list[dict]] = None
 ) -> tuple[Optional[float], Optional[float]]:
@@ -1147,17 +1198,13 @@ def lineas_planilla_a_registros_sicoe(
             return
         txt = str(nombre or codigo or "").strip() or codigo
         obs = formatear_observacion_registro_sicoe(txt, tipo, tramo)
-        c = float(cant)
+        dims = dims_y_cantidad_registro_sicoe(long, ancho, espesor, cant)
         out.append({
             "nombre": txt,
             "descripcion": txt,
             "observacion": obs,
             "unidad": (str(unidad).strip() if unidad not in (None, "") else None),
-            "longitud": _r4(long) if long is not None else None,
-            "ancho": _r4(ancho) if ancho is not None else None,
-            "espesor": _r4(espesor) if espesor is not None else None,
-            "cantidad": _r2(c),
-            "cantidad_total": _r2(c),
+            **dims,
             "item_numero": None,
             "item_descripcion": None,
             "_origen_codigo": codigo,
@@ -1194,7 +1241,7 @@ def lineas_planilla_a_registros_sicoe(
 
 def patch_so_registro_desde_linea_planilla(linea: dict[str, Any]) -> dict[str, Any]:
     """Campos dimensionales a sincronizar en un so_registro existente."""
-    return {
+    patch = {
         "nombre": linea.get("nombre"),
         "descripcion": linea.get("descripcion"),
         "observacion": linea.get("observacion"),
@@ -1202,9 +1249,12 @@ def patch_so_registro_desde_linea_planilla(linea: dict[str, Any]) -> dict[str, A
         "longitud": linea.get("longitud"),
         "ancho": linea.get("ancho"),
         "espesor": linea.get("espesor"),
-        "cantidad": linea.get("cantidad"),
+        "cantidad": None,
         "cantidad_total": linea.get("cantidad_total"),
     }
+    if "costo_directo" in linea:
+        patch["costo_directo"] = redondear_costo_directo_sicoe(linea.get("costo_directo"))
+    return patch
 
 
 def mapa_lineas_sicoe_por_origen(
@@ -1226,22 +1276,18 @@ def mapa_lineas_sicoe_por_origen(
         cant = n.get("neto")
         if cant is None:
             cant = n.get("cantidad")
-        try:
-            c = float(cant) if cant is not None and cant != "" else 0.0
-        except (TypeError, ValueError):
-            c = 0.0
         nombre = n.get("nombre") or codigo
         key = f"cantidades:{codigo}"
+        dims = dims_y_cantidad_registro_sicoe(
+            n.get("long"), n.get("ancho"), n.get("espesor"),
+            cant if cant is not None else 0,
+        )
         out[key] = {
             "nombre": nombre,
             "descripcion": nombre,
             "observacion": formatear_observacion_registro_sicoe(nombre, tipo, tramo),
             "unidad": n.get("unidad"),
-            "longitud": n.get("long"),
-            "ancho": n.get("ancho"),
-            "espesor": n.get("espesor"),
-            "cantidad": round(c, 2),
-            "cantidad_total": round(c, 2),
+            **dims,
             "_origen_tabla": "cantidades",
             "_origen_codigo": codigo,
         }
@@ -1251,22 +1297,18 @@ def mapa_lineas_sicoe_por_origen(
         codigo = str(d.get("codigo") or "").strip()
         if not codigo:
             continue
-        try:
-            c = float(d.get("cantidad") or 0)
-        except (TypeError, ValueError):
-            c = 0.0
         nombre = d.get("nombre") or codigo
         key = f"descuentos:{codigo}"
+        dims = dims_y_cantidad_registro_sicoe(
+            d.get("long"), d.get("ancho"), d.get("espesor"),
+            d.get("cantidad") if d.get("cantidad") is not None else 0,
+        )
         out[key] = {
             "nombre": nombre,
             "descripcion": nombre,
             "observacion": formatear_observacion_registro_sicoe(nombre, tipo, tramo),
             "unidad": d.get("unidad") or "m³",
-            "longitud": d.get("long"),
-            "ancho": d.get("ancho"),
-            "espesor": d.get("espesor"),
-            "cantidad": round(c, 2),
-            "cantidad_total": round(c, 2),
+            **dims,
             "_origen_tabla": "descuentos",
             "_origen_codigo": codigo,
         }
