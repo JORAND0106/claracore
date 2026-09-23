@@ -144,9 +144,22 @@ class DescBody(BaseModel):
 
 class CarteraBody(BaseModel):
     version: int
-    filas: list[FilaBody]
+    filas: list[FilaBody] = Field(default_factory=list)
     descuentos_manuales: list[DescBody] = Field(default_factory=list)
     cantidades_manuales: Optional[list[dict[str, Any]]] = None
+    # Cabecera/tramo (guardado unificado cabecera + cartera en una sola operación).
+    meta_cabecera: Optional[dict[str, Any]] = None
+    tipo: Optional[str] = None
+    nombre: Optional[str] = None
+    pk_id: Optional[str] = None
+    costado: Optional[str] = None
+    diametro_m: Optional[float] = None
+    espesor_m: Optional[float] = None
+    ancho_excavacion_m: Optional[float] = None
+    relacion_atraque: Optional[str] = None
+    material: Optional[str] = None
+    norte_ref: Optional[float] = None
+    este_ref: Optional[float] = None
 
 
 class EvidenciaBody(BaseModel):
@@ -992,18 +1005,45 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
     _assert_editable(p)
     _assert_version(p, body.version)
 
+    # Cabecera/tramo + meta (incl. traslapo) en la misma operación que la cartera.
+    # Evita el falso rechazo de Traslapo cuando el valor solo está en el form y no aún en DB.
+    patch_cab: dict[str, Any] = {}
+    if body.tipo is not None:
+        tipo_up = str(body.tipo).upper()
+        if tipo_up not in TIPOS_PLANILLA:
+            raise HTTPException(422, f"Tipo inválido: {tipo_up}")
+        patch_cab["tipo"] = tipo_up
+    for field in (
+        "pk_id", "costado", "diametro_m", "espesor_m", "ancho_excavacion_m",
+        "material", "norte_ref", "este_ref",
+    ):
+        val = getattr(body, field, None)
+        if val is not None:
+            patch_cab[field] = val
+    if body.nombre is not None:
+        patch_cab["nombre"] = _assert_nombre_planilla_unico(
+            contrato_id, body.nombre, exclude_id=planilla_id,
+        )
+    if body.relacion_atraque is not None:
+        if body.relacion_atraque not in RELACIONES_ATRAQUE:
+            raise HTTPException(422, "Relación de atraque inválida")
+        patch_cab["relacion_atraque"] = body.relacion_atraque
+
+    prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    new_meta = dict(prev_meta)
+    meta_changed = False
+    if body.meta_cabecera is not None:
+        if not isinstance(body.meta_cabecera, dict):
+            raise HTTPException(422, "meta_cabecera inválida")
+        new_meta = {**new_meta, **body.meta_cabecera}
+        meta_changed = True
+
     if body.cantidades_manuales is not None:
-        prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
-        new_meta = {**prev_meta, "cantidades_manuales": body.cantidades_manuales}
-        supabase.table("topo_planillas_tuberia").update({
-            "meta_cabecera": new_meta,
-            "updated_at": _now(),
-        }).eq("id", planilla_id).execute()
-        p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id) or {**p, "meta_cabecera": new_meta}
+        new_meta = {**new_meta, "cantidades_manuales": body.cantidades_manuales}
+        meta_changed = True
 
     # Persistir overrides multi-Otros de Descuentos Específicos en meta (dims/nombre).
     if body.descuentos_manuales is not None:
-        prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
         desc_meta = []
         for d in body.descuentos_manuales or []:
             if not d.codigo:
@@ -1020,27 +1060,84 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
             elif d.nota is not None:
                 entry["nombre"] = d.nota
             desc_meta.append(entry)
-        new_meta = {**prev_meta, "descuentos_manuales": desc_meta}
-        supabase.table("topo_planillas_tuberia").update({
-            "meta_cabecera": new_meta,
-            "updated_at": _now(),
-        }).eq("id", planilla_id).execute()
-        p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id) or {**p, "meta_cabecera": new_meta}
+        new_meta = {**new_meta, "descuentos_manuales": desc_meta}
+        meta_changed = True
+
+    if meta_changed:
+        patch_cab["meta_cabecera"] = new_meta
+
+    cabecera_explicit = (
+        body.meta_cabecera is not None
+        or body.tipo is not None
+        or body.nombre is not None
+        or body.relacion_atraque is not None
+        or any(
+            getattr(body, f, None) is not None
+            for f in (
+                "pk_id", "costado", "diametro_m", "espesor_m", "ancho_excavacion_m",
+                "material", "norte_ref", "este_ref",
+            )
+        )
+    )
+
+    tipo_para_assert = patch_cab.get("tipo", p.get("tipo") or "ALCANTARILLA")
+    meta_para_assert = patch_cab.get("meta_cabecera", p.get("meta_cabecera"))
+    # Validar Traslapo sobre meta fusionada (form + DB) antes de persistir.
+    _assert_traslapo_filtro(tipo_para_assert, meta_para_assert)
+
+    # Recalc sección tipológica si cambian parámetros geométricos (mismo criterio que /params).
+    if patch_cab:
+        diam = patch_cab.get("diametro_m", p.get("diametro_m"))
+        esp = patch_cab.get("espesor_m", p.get("espesor_m") or 0)
+        ancho = patch_cab.get("ancho_excavacion_m", p.get("ancho_excavacion_m"))
+        rel = patch_cab.get("relacion_atraque", p.get("relacion_atraque") or "1:3")
+        tipo_calc = patch_cab.get("tipo", p.get("tipo") or "ALCANTARILLA")
+        meta_for_calc = patch_cab.get("meta_cabecera", p.get("meta_cabecera"))
+        if diam and ancho:
+            calc = calcular_planilla_completa(
+                tipo=tipo_calc, diametro_m=float(diam), espesor_m=float(esp or 0),
+                ancho_excavacion_m=float(ancho), relacion_atraque=rel, filas_campo=[],
+                cama_triturado_m=_cama_triturado_m({"meta_cabecera": meta_for_calc}),
+                traslapo_m=_traslapo_m({"meta_cabecera": meta_for_calc}),
+            )
+            sec = calc["seccion"]
+            patch_cab.update({
+                "altura_relleno_m": sec["altura_relleno_m"],
+                "area_1_m2": sec["area_1_m2"],
+                "area_2_m2": sec["area_2_m2"],
+            })
+        patch_cab["updated_at"] = _now()
+        supabase.table("topo_planillas_tuberia").update(patch_cab).eq("id", planilla_id).execute()
+        p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id) or {**p, **patch_cab}
 
     filas_util = []
     tipo_planilla = p.get("tipo") or "ALCANTARILLA"
-    _assert_traslapo_filtro(tipo_planilla, p.get("meta_cabecera"))
-    for f in body.filas:
-        d = f.model_dump()
+    for f in (body.filas or []):
+        d = f.model_dump() if hasattr(f, "model_dump") else dict(f)
         if any(d.get(k) is not None for k in (
             "abscisa", "terreno_natural", "subrasante_via", "terminado_filtro",
             "cota_lomo", "cota_fondo_excavacion",
         )):
             filas_util.append(d)
 
-    # Evita el wipe silencioso (mismo estándar que nivelación: cartera no vacía).
+    # Cabecera sola (sin filas): solo si el body trae campos de cabecera/meta explícitos.
     if not filas_util:
-        raise HTTPException(422, "No hay filas con datos para guardar en la cartera.")
+        if not cabecera_explicit:
+            raise HTTPException(422, "No hay filas con datos para guardar en la cartera.")
+        nueva_v = int(p.get("version") or 1) + 1
+        supabase.table("topo_planillas_tuberia").update({
+            "version": nueva_v, "updated_at": _now(),
+        }).eq("id", planilla_id).execute()
+        detalle = _detalle(contrato_id, planilla_id)
+        return {
+            **detalle,
+            "verified": True,
+            "count": 0,
+            "version": nueva_v,
+            "cabecera_only": True,
+            "validacion": {"infos": []},
+            "sicoe_sync": {"updated": 0},
+        }
 
     valid = validar_cartera_campo(filas_util, tipo_planilla)
     if not valid.get("ok"):

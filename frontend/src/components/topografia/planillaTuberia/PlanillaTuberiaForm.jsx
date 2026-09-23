@@ -516,7 +516,31 @@ export default function PlanillaTuberiaForm({
     return d?.nombre || 'Otros: ____'
   }
 
-  const guardarParams = async () => {
+  /** Payload unificado cabecera + meta (traslapo, geo, manuales). */
+  const payloadCabeceraUnificado = (nombreFinal) => {
+    const coords = payloadCoordsGeo(params)
+    const meta = {
+      ...metaCabeceraActual(),
+      ...(coords.meta_cabecera || {}),
+    }
+    return {
+      tipo: params.tipo,
+      nombre: nombreFinal,
+      pk_id: params.pk_id || null,
+      costado: params.costado || null,
+      diametro_m: params.diametro_m === '' ? null : Number(params.diametro_m),
+      espesor_m: params.espesor_m === '' ? 0 : Number(params.espesor_m),
+      ancho_excavacion_m: params.ancho_excavacion_m === '' ? null : Number(params.ancho_excavacion_m),
+      relacion_atraque: params.relacion_atraque,
+      material: params.material || null,
+      norte_ref: coords.norte_ref,
+      este_ref: coords.este_ref,
+      meta_cabecera: meta,
+    }
+  }
+
+  /** Un solo Guardar: cabecera/tramo + cartera en una operación atómica. */
+  const guardar = async () => {
     if (!planilla?.id) return
     const vNom = validarNombrePlanilla(params.nombre, lista, planilla.id)
     if (!vNom.ok) {
@@ -530,44 +554,16 @@ export default function PlanillaTuberiaForm({
     }
     setBusy(true); setErr(''); setMsg('')
     try {
-      const body = {
-        version,
-        tipo: params.tipo,
-        nombre: vNom.nombre,
-        pk_id: params.pk_id || null,
-        costado: params.costado || null,
-        diametro_m: params.diametro_m === '' ? null : Number(params.diametro_m),
-        espesor_m: params.espesor_m === '' ? 0 : Number(params.espesor_m),
-        ancho_excavacion_m: params.ancho_excavacion_m === '' ? null : Number(params.ancho_excavacion_m),
-        relacion_atraque: params.relacion_atraque,
-        material: params.material || null,
-        meta_cabecera: metaCabeceraActual(),
-        ...payloadCoordsGeo(params),
-      }
-      aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}/params`, {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      }))
-      setMsg('Parámetros guardados.')
-    } catch (e) {
-      setErr(e.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const guardarCartera = async () => {
-    if (!planilla?.id) return
-    const vTr = validarTraslapoFiltro()
-    if (!vTr.ok) {
-      setErr(vTr.error)
-      return
-    }
-    setBusy(true); setErr(''); setMsg('')
-    try {
+      const cabecera = payloadCabeceraUnificado(vNom.nombre)
       const filasPayload = payloadFilas(filas, params.tipo)
       if (!filasPayload.length) {
-        setErr('No hay filas con datos para guardar en la cartera.')
+        // Solo cabecera/tramo (sin filas de campo).
+        aplicarDetalle(await api(`/planillas-tuberia/${planilla.id}/params`, {
+          method: 'PUT',
+          body: JSON.stringify({ version, ...cabecera }),
+        }))
+        setMsg('Planilla guardada (cabecera / tramo).')
+        await cargarLista()
         return
       }
       const evCheck = validarEvidenciasFotograficas(calculoVista, evidencias, {
@@ -581,6 +577,7 @@ export default function PlanillaTuberiaForm({
         method: 'PUT',
         body: JSON.stringify({
           version,
+          ...cabecera,
           filas: filasPayload,
           descuentos_manuales: payloadDescuentosManuales(),
           cantidades_manuales: cantManuales,
@@ -592,7 +589,7 @@ export default function PlanillaTuberiaForm({
         return
       }
       aplicarDetalle(res)
-      setMsg(`Cartera guardada y verificada (${conf.count} filas, v${conf.version}).`)
+      setMsg(`Planilla guardada y verificada (${conf.count} filas, v${conf.version}).`)
       await cargarLista()
     } catch (e) {
       setErr(typeof e.message === 'string' ? e.message : JSON.stringify(e.message))
@@ -1057,13 +1054,8 @@ export default function PlanillaTuberiaForm({
           }}
         >
           {editable && (
-            <AccionIcono title="Guardar parámetros" disabled={busy} onClick={guardarParams}>
+            <AccionIcono title="Guardar" primary disabled={busy} onClick={guardar}>
               <svg {...ico}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
-            </AccionIcono>
-          )}
-          {editable && (
-            <AccionIcono title="Guardar cartera" primary disabled={busy} onClick={guardarCartera}>
-              <svg {...ico}><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
             </AccionIcono>
           )}
           {planilla?.id && puedeVerCrearReporte && !modoSoloLectura && (
