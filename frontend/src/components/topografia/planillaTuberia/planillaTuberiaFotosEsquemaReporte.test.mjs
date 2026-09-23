@@ -32,6 +32,16 @@ describe('Crear reporte — fotos + esquema tramo', () => {
     assert.match(formSrc, /theme=\{ui\.t\}/)
   })
 
+  it('galería envía URL al backend (sin fetch CORS en el browser)', () => {
+    assert.doesNotMatch(evidSrc, /async function fileFromUrl/)
+    assert.doesNotMatch(evidSrc, /fetch\(url\)/)
+    assert.match(evidSrc, /origen: 'galeria'/)
+    assert.match(evidSrc, /url: String\(url\)/)
+    assert.match(evidSrc, /EVIDENCIA_GALERIA_Z_INDEX/)
+    assert.match(formSrc, /if \(url\) payload\.url = url/)
+    assert.match(formSrc, /origen: origen \|\| \(url \? 'galeria' : 'archivo'\)/)
+  })
+
   it('Crear reporte valida fotos faltantes antes de abrir el modal', () => {
     assert.match(formSrc, /validarEvidenciasFotograficas\(calculoVista, evidencias/)
     assert.match(formSrc, /No se puede crear el reporte: faltan fotos/)
