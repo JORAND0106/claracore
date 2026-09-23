@@ -126,6 +126,8 @@ function esVisibleParaFoco(el) {
 /**
  * Enter avanza al siguiente campo (como Tab); Shift+Enter al anterior.
  * Flechas navegan en la dirección correspondiente (hoja de cálculo).
+ * Si el caret está editando texto (no en el borde / selección parcial),
+ * ←/→ mueven caracteres y no saltan de celda.
  * No intercepta botones ni atajos con modificadores.
  * Misma semántica que `nivelacionUiShared.handleEnterAsTab` (+ flechas).
  */
@@ -148,6 +150,16 @@ export function handleEnterAsTab(e, rootEl) {
   if (isArrow && tag === 'SELECT') return
   // En textarea, flechas/Enter son edición de texto.
   if (tag === 'TEXTAREA') return
+
+  // ←/→ dentro del texto: no saltar de celda mientras se edita.
+  if (
+    (key === 'ArrowLeft' || key === 'ArrowRight')
+    && tag === 'INPUT'
+    && typ !== 'number'
+    && caretPermiteEdicionTexto(target, key)
+  ) {
+    return
+  }
 
   e.preventDefault()
   const nodes = [...rootEl.querySelectorAll(ENTER_AS_TAB_SELECTOR)].filter(esVisibleParaFoco)
@@ -190,6 +202,33 @@ export function handleEnterAsTab(e, rootEl) {
   if (typeof next.select === 'function' && String(next.tagName).toUpperCase() === 'INPUT') {
     try { next.select() } catch { /* ignore */ }
   }
+}
+
+/**
+ * true → dejar que el navegador mueva el caret / ajuste la selección.
+ * false → el caller puede navegar entre celdas (p. ej. texto todo seleccionado
+ * tras foco, o caret en el borde en la dirección de la flecha).
+ */
+export function caretPermiteEdicionTexto(el, key) {
+  if (!el || (key !== 'ArrowLeft' && key !== 'ArrowRight')) return false
+  let start
+  let end
+  try {
+    start = el.selectionStart
+    end = el.selectionEnd
+  } catch {
+    return false
+  }
+  if (typeof start !== 'number' || typeof end !== 'number') return false
+  const len = String(el.value ?? '').length
+  // Selección parcial (no todo el valor): el usuario está editando.
+  if (start !== end) {
+    const todoSeleccionado = start === 0 && end === len
+    return !todoSeleccionado
+  }
+  // Caret colapsado: ← solo navega celda si está al inicio; → al final.
+  if (key === 'ArrowLeft') return start > 0
+  return start < len
 }
 
 /**
@@ -655,8 +694,8 @@ export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
     const n = Number(cantidad)
     if (!Number.isFinite(n) || Math.abs(n) <= 1e-9) return
     out.push({
-      scope,
-      codigo,
+      scope: String(scope || 'cantidades').trim().toLowerCase() || 'cantidades',
+      codigo: String(codigo || '').trim().toUpperCase(),
       nombre: nombre || codigo,
       unidad: unidad || '',
       cantidad: Math.round(n * 100) / 100,
@@ -664,20 +703,31 @@ export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
   }
   for (const n of calculo?.netos || []) {
     if (!n?.codigo) continue
-    const cant = displayNeto ? displayNeto(n) : (n.neto ?? n.cantidad)
+    // Misma base que el backend (bruto); displayNeto solo si no hay bruto.
+    let cant = n.bruto
+    if (cant == null && displayNeto) cant = displayNeto(n)
+    if (cant == null) cant = n.neto ?? n.cantidad
     push('cantidades', n.codigo, n.nombre, n.unidad, cant)
   }
   for (const d of calculo?.descuentos || []) {
     if (!d?.nombre || !d?.codigo) continue
-    push('descuentos', d.codigo, d.nombre, d.unidad || 'm³', d.cantidad)
+    const cant = displayNeto && d.editable_dims
+      ? (typeof opts.displayCantDesc === 'function' ? opts.displayCantDesc(d) : d.cantidad)
+      : d.cantidad
+    push('descuentos', d.codigo, d.nombre, d.unidad || 'm³', cant)
+  }
+  // Descuentos de altura (mismo origen que backend → descuentos:CODIGO).
+  for (const d of calculo?.descuentos_altura_detalle || []) {
+    if (!d?.codigo) continue
+    push('descuentos', d.codigo, d.nombre || d.codigo, d.unidad || 'm³', d.cantidad)
   }
   return out
 }
 
 /** Clave estable scope:codigo para checks de asociar → so_registros. */
 export function origenKeyLineaAsociarSicoe(linea) {
-  const scope = String(linea?.scope || linea?._origen_tabla || 'cantidades').trim() || 'cantidades'
-  const codigo = String(linea?.codigo || linea?._origen_codigo || '').trim()
+  const scope = String(linea?.scope || linea?._origen_tabla || 'cantidades').trim().toLowerCase() || 'cantidades'
+  const codigo = String(linea?.codigo || linea?._origen_codigo || '').trim().toUpperCase()
   return `${scope}:${codigo}`
 }
 

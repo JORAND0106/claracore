@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  caretPermiteEdicionTexto,
   filtrarLinksSicoeVigentes,
   handleEnterAsTab,
 } from './planillaTuberiaUtils.js'
@@ -45,9 +46,12 @@ describe('Navegación flechas + pegado Abscisa + reportes vigentes', () => {
       querySelectorAll() { return this._nodes },
       _nodes: [],
     }
-    const make = (row, col) => ({
+    const make = (row, col, value = '') => ({
       tagName: 'INPUT',
       type: 'text',
+      value,
+      selectionStart: 0,
+      selectionEnd: String(value).length,
       disabled: false,
       offsetParent: {},
       getClientRects: () => [{}],
@@ -65,7 +69,7 @@ describe('Navegación flechas + pegado Abscisa + reportes vigentes', () => {
       row,
       col,
     })
-    const a00 = make(0, 0)
+    const a00 = make(0, 0, '10.5')
     const a01 = make(0, 1)
     const a10 = make(1, 0)
     root._nodes = [a00, a01, a10]
@@ -78,6 +82,71 @@ describe('Navegación flechas + pegado Abscisa + reportes vigentes', () => {
     handleEnterAsTab(e, root)
     assert.equal(e.defaultPrevented, true)
     assert.equal(a10.focused, true)
+  })
+
+  it('←/→ no saltan de celda si el caret está editando texto', () => {
+    assert.equal(
+      caretPermiteEdicionTexto({ value: 'abc', selectionStart: 1, selectionEnd: 1 }, 'ArrowLeft'),
+      true,
+    )
+    assert.equal(
+      caretPermiteEdicionTexto({ value: 'abc', selectionStart: 0, selectionEnd: 0 }, 'ArrowLeft'),
+      false,
+    )
+    assert.equal(
+      caretPermiteEdicionTexto({ value: 'abc', selectionStart: 0, selectionEnd: 3 }, 'ArrowRight'),
+      false,
+    )
+    assert.equal(
+      caretPermiteEdicionTexto({ value: 'abc', selectionStart: 1, selectionEnd: 2 }, 'ArrowRight'),
+      true,
+    )
+
+    const root = {
+      contains(el) { return el && el._root === this },
+      querySelectorAll() { return this._nodes },
+      _nodes: [],
+    }
+    const editing = {
+      tagName: 'INPUT',
+      type: 'text',
+      value: '12.50',
+      selectionStart: 2,
+      selectionEnd: 2,
+      disabled: false,
+      offsetParent: {},
+      getClientRects: () => [{}],
+      getAttribute() { return null },
+      hasAttribute() { return false },
+      focus() { this.focused = true },
+      select() { this.selected = true },
+      _root: root,
+    }
+    const other = {
+      tagName: 'INPUT',
+      type: 'text',
+      value: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+      disabled: false,
+      offsetParent: {},
+      getClientRects: () => [{}],
+      getAttribute() { return null },
+      hasAttribute() { return false },
+      focus() { this.focused = true },
+      select() { this.selected = true },
+      _root: root,
+    }
+    root._nodes = [editing, other]
+    const e = {
+      key: 'ArrowLeft',
+      defaultPrevented: false,
+      preventDefault() { this.defaultPrevented = true },
+      target: editing,
+    }
+    handleEnterAsTab(e, root)
+    assert.equal(e.defaultPrevented, false)
+    assert.equal(other.focused, undefined)
   })
 
   it('filtra links SICOE eliminados', () => {
