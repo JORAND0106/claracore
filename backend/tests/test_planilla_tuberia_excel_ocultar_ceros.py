@@ -60,7 +60,7 @@ class TestExcelOcultarCeros(unittest.TestCase):
             "netos": [
                 {"codigo": "EXC", "nombre": "Excavación Varias", "neto": 5.0, "unidad": "m³"},
                 {"codigo": "TUB", "nombre": "Long Tubería", "neto": 0, "unidad": "ml"},
-                {"codigo": "TRI", "nombre": "Triturado / Atraque", "neto": 2.0, "unidad": "m³"},
+                {"codigo": "TRI", "nombre": "Atraque mat. filtrante", "neto": 2.0, "unidad": "m³"},
                 {"codigo": "REL", "nombre": "Relleno Gran.", "neto": 0, "unidad": "m³"},
                 {"codigo": "GEO", "nombre": "Geotextil", "neto": 0, "unidad": "m²"},
                 {"codigo": "EXC_ROC", "nombre": "Excavación Roca", "neto": 0, "unidad": "m³"},
@@ -74,7 +74,7 @@ class TestExcelOcultarCeros(unittest.TestCase):
         ws = _ws_con_calculo(calc)
         # Compactado: EXC, TRI en resumen; Area 1 en descuentos
         self.assertEqual(ws["B45"].value, "Excavación Varias")
-        self.assertEqual(ws["B46"].value, "Triturado / Atraque")
+        self.assertEqual(ws["B46"].value, "Atraque mat. filtrante")
         self.assertIn(ws["B47"].value, (None, ""))
         self.assertNotEqual(ws["B50"].value, "Excavación Roca")
         self.assertNotEqual(ws["B51"].value, "Otros: ____")
@@ -93,8 +93,17 @@ class TestExcelOcultarCeros(unittest.TestCase):
         )
         ws = load_workbook(io.BytesIO(raw))["planilla"]
         self.assertEqual(ws["B50"].value, "Excavación Roca")
+        self.assertEqual(ws["B47"].value, "Atraque mat. filtrante")
         self.assertEqual(ws["I46"].value, "Area 1")
         self.assertEqual(ws["G47"].value, "=N46")
+
+        raw_fil = build_planilla_tuberia_xlsx(
+            planilla={"tipo": "FILTRO", "meta_cabecera": {}},
+            calculo={"cartera": {"filas": []}},
+            vacia=True,
+        )
+        ws_fil = load_workbook(io.BytesIO(raw_fil))["planilla"]
+        self.assertEqual(ws_fil["B47"].value, "Mat. Granular Filtrante")
 
 
 if __name__ == "__main__":

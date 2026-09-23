@@ -484,10 +484,12 @@ def _write_resumen_fila_formulas(
 
 def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
     """Layout fijo (plantilla vacía / sin lista netos): filas 45–51 + descuentos por tipo."""
+    from topografia_planilla_tuberia import nombre_triturado_por_tipo
+    tri_nombre = nombre_triturado_por_tipo("ALCANTARILLA" if es_alc else "FILTRO")
     for row, name, und in (
         (45, "Excavación Varias", "m³"),
         (46, "Long Tubería", "ml"),
-        (47, "Triturado / Atraque", "m³"),
+        (47, tri_nombre, "m³"),
         (48, "Relleno Gran.", "m³"),
         (49, "Geotextil", "m²"),
         (50, "Excavación Roca", "m³"),
