@@ -1059,13 +1059,15 @@ def calcular(contrato_id: int, planilla_id: str, current_user=Depends(get_curren
     return _detalle(contrato_id, planilla_id)
 
 
-def _resolver_pk_id_maestro(contrato_id: int, pk_label: Optional[str]) -> Optional[int]:
+def _fetch_pk_maestro(contrato_id: int, pk_label: Optional[str]) -> Optional[dict[str, Any]]:
+    """Fila del maestro pk_ids (id, pk_id, tramo, civ, …) o None."""
     label = str(pk_label or "").strip()
     if not label:
         return None
+    cols = "id,pk_id,tramo,civ,infraestructura,calzada,ubicacion"
     rows = (
         supabase.table("pk_ids")
-        .select("id,pk_id")
+        .select(cols)
         .eq("contrato_id", contrato_id)
         .eq("pk_id", label)
         .limit(1)
@@ -1074,11 +1076,11 @@ def _resolver_pk_id_maestro(contrato_id: int, pk_label: Optional[str]) -> Option
         or []
     )
     if rows:
-        return int(rows[0]["id"])
+        return rows[0]
     # Fallback: match case-insensitive via scan acotado
     all_rows = (
         supabase.table("pk_ids")
-        .select("id,pk_id")
+        .select(cols)
         .eq("contrato_id", contrato_id)
         .execute()
         .data
@@ -1087,8 +1089,18 @@ def _resolver_pk_id_maestro(contrato_id: int, pk_label: Optional[str]) -> Option
     label_l = label.lower()
     for r in all_rows:
         if str(r.get("pk_id") or "").strip().lower() == label_l:
-            return int(r["id"])
+            return r
     return None
+
+
+def _resolver_pk_id_maestro(contrato_id: int, pk_label: Optional[str]) -> Optional[int]:
+    row = _fetch_pk_maestro(contrato_id, pk_label)
+    if not row:
+        return None
+    try:
+        return int(row["id"])
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 def _sicoe_links_from_meta(meta: Any) -> list[dict]:
@@ -1116,7 +1128,17 @@ def _sincronizar_so_registros_desde_calc(
     links = _sicoe_links_from_meta(planilla.get("meta_cabecera"))
     if not links:
         return {"updated": 0, "skipped": True}
-    by_origen = mapa_lineas_sicoe_por_origen(calculo)
+    pk_row = _fetch_pk_maestro(contrato_id, planilla.get("pk_id"))
+    tramo_lbl = None
+    if isinstance(pk_row, dict):
+        tramo_lbl = str(pk_row.get("tramo") or "").strip() or None
+    if not tramo_lbl:
+        tramo_lbl = str(planilla.get("pk_id") or "").strip() or None
+    by_origen = mapa_lineas_sicoe_por_origen(
+        calculo,
+        tipo=planilla.get("tipo"),
+        tramo=tramo_lbl,
+    )
     updated = 0
     errors: list[str] = []
     for link in links:
@@ -1424,13 +1446,6 @@ def crear_reporte_sicoe_desde_planilla(
             "Configure diámetro y ancho de excavación, y asegúrese de tener cartera calculable.",
         ) from exc
 
-    lineas = lineas_planilla_a_registros_sicoe(calc)
-    if not lineas:
-        raise HTTPException(
-            422,
-            "No hay líneas de cantidad/descuento con valor ≠ 0 para generar registros.",
-        )
-
     abs0, abs1 = abscisas_extremos_cartera(calc, filas)
     if body.abs_inicio is not None:
         abs0 = float(body.abs_inicio)
@@ -1448,7 +1463,29 @@ def crear_reporte_sicoe_desde_planilla(
     if not nodo_ini or not nodo_fin:
         raise HTTPException(422, "Nodo inicio y nodo fin son obligatorios.")
 
-    pk_id_id = _resolver_pk_id_maestro(contrato_id, p.get("pk_id"))
+    pk_row = _fetch_pk_maestro(contrato_id, p.get("pk_id"))
+    pk_id_id = None
+    if isinstance(pk_row, dict) and pk_row.get("id") is not None:
+        try:
+            pk_id_id = int(pk_row["id"])
+        except (TypeError, ValueError):
+            pk_id_id = None
+    tramo_lbl = None
+    if isinstance(pk_row, dict):
+        tramo_lbl = str(pk_row.get("tramo") or "").strip() or None
+    if not tramo_lbl:
+        # Fallback: etiqueta PK de la planilla si el maestro no trae tramo
+        tramo_lbl = str(p.get("pk_id") or "").strip() or None
+
+    lineas = lineas_planilla_a_registros_sicoe(
+        calc, tipo=p.get("tipo"), tramo=tramo_lbl,
+    )
+    if not lineas:
+        raise HTTPException(
+            422,
+            "No hay líneas de cantidad/descuento con valor ≠ 0 para generar registros.",
+        )
+
     lat, lng = _coords_wgs_planilla(p)
     # costado del maestro PK («Derecho») → catálogo so_reportes.margen («Derecha»)
     margen = normalizar_margen_sicoe(p.get("costado"))
@@ -1483,6 +1520,15 @@ def crear_reporte_sicoe_desde_planilla(
         int(contrato_id), int(body.subcontratista_id),
     )
 
+    ubicacion_pk: dict[str, Any] = {}
+    if isinstance(pk_row, dict):
+        for k in ("tramo", "civ", "infraestructura", "calzada", "ubicacion"):
+            val = pk_row.get(k)
+            if val is not None and str(val).strip() != "":
+                ubicacion_pk[k] = val
+    if "tramo" not in ubicacion_pk and tramo_lbl:
+        ubicacion_pk["tramo"] = tramo_lbl
+
     reporte_payload: dict[str, Any] = {
         "descripcion_actividad": nombre,
         "subcontratista_id": int(body.subcontratista_id),
@@ -1490,6 +1536,7 @@ def crear_reporte_sicoe_desde_planilla(
         "capitulo": capitulo,
         "pk_id_id": pk_id_id,
         "margen": margen,
+        **ubicacion_pk,
         "abs_inicio": abs0,
         "abs_final": abs1,
         "nodo_ini": nodo_ini,
@@ -1579,6 +1626,7 @@ def crear_reporte_sicoe_desde_planilla(
             "capitulo": capitulo,
             "pk_id_id": pk_id_id,
             "margen": margen,
+            **ubicacion_pk,
             "abs_inicio": abs0,
             "abs_final": abs1,
             "nodo_ini": nodo_ini,
