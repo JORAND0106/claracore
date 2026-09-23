@@ -2394,8 +2394,12 @@ export default function PlanillaTuberiaForm({
         onAsociado={(res) => {
           if (res?.planilla) aplicarDetalle(res.planilla)
           const num = res?.numero_reporte
+          const nCre = Number(res?.n_registros_creados || 0)
+          const extra = nCre > 0
+            ? `; ${nCre} registro(s) creados en Sin Asignar Ítem`
+            : ''
           setMsg(num != null
-            ? `Planilla asociada al reporte SICOE #${num} (coords/fotos/gráfico actualizados; cantidades se sincronizan al Guardar si no está sellada).`
+            ? `Planilla asociada al reporte SICOE #${num} (coords/fotos/gráfico actualizados${extra}).`
             : 'Planilla asociada al reporte SICOE.')
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)

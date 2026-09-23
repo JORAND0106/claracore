@@ -674,6 +674,13 @@ export function lineasPlanillaParaReporteSicoe(calculo, opts = {}) {
   return out
 }
 
+/** Clave estable scope:codigo para checks de asociar → so_registros. */
+export function origenKeyLineaAsociarSicoe(linea) {
+  const scope = String(linea?.scope || linea?._origen_tabla || 'cantidades').trim() || 'cantidades'
+  const codigo = String(linea?.codigo || linea?._origen_codigo || '').trim()
+  return `${scope}:${codigo}`
+}
+
   /** Links SICOE guardados en meta_cabecera.sicoe_reportes */
 export function linksSicoeDesdeMeta(meta) {
   const raw = meta && typeof meta === 'object' ? meta.sicoe_reportes : null
