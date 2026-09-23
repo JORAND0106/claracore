@@ -14,6 +14,7 @@ export default function PptoSicoeGaleriaPicker({
   API,
   tipo = 'foto',
   onSelect,
+  zIndex = 2200,
 }) {
   const [fotos, setFotos] = useState([])
   const [loading, setLoading] = useState(false)
@@ -61,7 +62,7 @@ export default function PptoSicoeGaleriaPicker({
         position: 'fixed',
         inset: 0,
         background: 'rgba(0,0,0,0.55)',
-        zIndex: 2200,
+        zIndex,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

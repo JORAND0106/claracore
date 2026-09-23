@@ -211,6 +211,7 @@ export function calcularSeccion({
   ancho_excavacion_m: anchoExcavacionM,
   relacion_atraque: relacionAtraque,
   cama_triturado_m: camaTrituradoM = 0,
+  traslapo_m: traslapoM = 0,
 }) {
   const tipoU = String(tipo || 'ALCANTARILLA').toUpperCase()
   if (!TIPOS_PLANILLA.includes(tipoU)) throw new Error(`Tipo inválido: ${tipo}`)
@@ -218,9 +219,11 @@ export function calcularSeccion({
   const esp = Number(espesorM)
   const b = Number(anchoExcavacionM)
   const cama = Number(camaTrituradoM || 0)
+  const traslapo = Number(traslapoM || 0)
   if (!(theta > 0) || esp < 0 || !(b > 0)) {
     throw new Error('Diámetro > 0, espesor ≥ 0 y ancho excavación > 0.')
   }
+  if (traslapo < 0) throw new Error('Traslapo ≥ 0.')
   const h = alturaRellenoAtraqueM(theta, esp, relacionAtraque)
   const aTub = areaTuberiaM2(theta, esp)
   const a1 = area1M2(theta, esp, b, relacionAtraque, h)
@@ -236,6 +239,7 @@ export function calcularSeccion({
     denominador_atraque: parseDenominadorRelacion(relacionAtraque),
     altura_relleno_m: h,
     cama_triturado_m: tipoU === 'ALCANTARILLA' ? r4(cama) : 0,
+    traslapo_m: tipoU === 'FILTRO' ? r4(traslapo) : 0,
     area_tuberia_m2: aTub,
     area_1_m2: a1,
     area_2_m2: a2,
@@ -453,7 +457,9 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   let hExc = Number(tot.prom_altura_excavacion || 0)
   let hTrit = Number(tot.prom_altura_triturado || 0)
   let hRel = Number(tot.prom_altura_relleno || 0)
-  const anchoGeo = Number(tot.prom_ancho_geotextil || 0)
+  const anchoGeoProm = Number(tot.prom_ancho_geotextil || 0)
+  const traslapo = tipo === 'FILTRO' ? Number(seccion.traslapo_m || 0) : 0
+  const anchoGeo = tipo === 'FILTRO' ? anchoGeoProm + traslapo : anchoGeoProm
 
   const overridesList = normalizeCantidadesManuales(cantidadesManuales)
   const restas = {
@@ -679,6 +685,7 @@ export function seccionTipicaParams(seccion, cartera) {
     ancho_excavacion_m: seccion.ancho_excavacion_m,
     altura_relleno_m: seccion.altura_relleno_m,
     cama_triturado_m: seccion.cama_triturado_m,
+    traslapo_m: seccion.traslapo_m,
     area_tuberia_m2: seccion.area_tuberia_m2,
     area_1_m2: seccion.area_1_m2,
     area_2_m2: seccion.area_2_m2,
@@ -704,6 +711,7 @@ export function calcularPlanillaLocal({
   descuentos_manuales: descuentosManuales = [],
   cantidades_manuales: cantidadesManuales = [],
   cama_triturado_m: camaTrituradoM = 0,
+  traslapo_m: traslapoM = 0,
 }) {
   const diam = f(diametroM)
   const ancho = f(anchoExcavacionM)
@@ -716,6 +724,7 @@ export function calcularPlanillaLocal({
       ancho_excavacion_m: ancho,
       relacion_atraque: relacionAtraque || '1:3',
       cama_triturado_m: f(camaTrituradoM) ?? 0,
+      traslapo_m: f(traslapoM) ?? 0,
     })
     const cartera = calcularCartera(filasCampo, seccion)
     const cant = calcularCantidadesYDescuentos(seccion, cartera, {

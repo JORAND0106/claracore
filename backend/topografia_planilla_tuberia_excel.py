@@ -560,7 +560,8 @@ def _write_resumen_fila_formulas(
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
     elif cod == "GEO":
         _set(ws, f"D{r}", d_from_exc)
-        _set(ws, f"E{r}", "=J41")
+        # FILTRO: ancho = prom geotextil (J41) + traslapo (F15). ALC: solo J41.
+        _set(ws, f"E{r}", "=IFERROR(J41,0)+IFERROR($F$15,0)" if not es_alc else "=J41")
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
     elif cod == "OTROS" or cod.startswith("OTROS_"):
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
@@ -598,7 +599,7 @@ def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
     _set(ws, "G48", "=N47" if es_alc else 0)
     _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)")
     _set(ws, "D49", "=D45")
-    _set(ws, "E49", "=J41")
+    _set(ws, "E49", "=IFERROR(J41,0)+IFERROR($F$15,0)" if not es_alc else "=J41")
     _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
     _set(ws, "D50", "=D45")
     _set(ws, "E50", "=E45")
@@ -877,12 +878,22 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     ws.add_data_validation(dv_atr)
     dv_atr.add("D15")
 
-    # Cama triturado solo aplica a ALCANTARILLA.
-    _set(ws, "F14", "Cama Triturado" if es_alc else "")
-    cama = meta.get("cama_triturado_m")
-    if cama is None:
-        cama = 0.0
-    _set(ws, "F15", float(cama) if es_alc else None)
+    # Cama triturado (ALC) / Traslapo geotextil (FIL) en F14:F15.
+    if es_alc:
+        _set(ws, "F14", "Cama Triturado")
+        cama = meta.get("cama_triturado_m")
+        if cama is None:
+            cama = 0.0
+        _set(ws, "F15", float(cama))
+    else:
+        _set(ws, "F14", "Traslapo")
+        traslapo = meta.get("traslapo_m")
+        if traslapo is None:
+            traslapo = 0.0
+        try:
+            _set(ws, "F15", float(traslapo))
+        except (TypeError, ValueError):
+            _set(ws, "F15", 0.0)
     if planilla.get("ancho_excavacion_m") is not None:
         _set(ws, "G15", float(planilla["ancho_excavacion_m"]))
 

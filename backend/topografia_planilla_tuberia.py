@@ -335,6 +335,7 @@ def calcular_seccion(
     ancho_excavacion_m: float,
     relacion_atraque: str,
     cama_triturado_m: float = 0.0,
+    traslapo_m: float = 0.0,
 ) -> dict[str, Any]:
     tipo_u = (tipo or "ALCANTARILLA").upper()
     if tipo_u not in TIPOS_PLANILLA:
@@ -343,10 +344,13 @@ def calcular_seccion(
     esp = float(espesor_m)
     b = float(ancho_excavacion_m)
     cama = float(cama_triturado_m or 0.0)
+    traslapo = float(traslapo_m or 0.0)
     if theta <= 0 or esp < 0 or b <= 0:
         raise ValueError("Diámetro > 0, espesor ≥ 0 y ancho excavación > 0.")
     if cama < 0:
         raise ValueError("Cama triturado ≥ 0.")
+    if traslapo < 0:
+        raise ValueError("Traslapo ≥ 0.")
     h = altura_relleno_atraque_m(theta, esp, relacion_atraque)
     a_tub = area_tuberia_m2(theta, esp)
     a1 = area_1_m2(theta, esp, b, relacion_atraque, altura_relleno_m=h)
@@ -366,6 +370,9 @@ def calcular_seccion(
         "altura_relleno_m": h,
         "cama_triturado_m": round(cama, 6) if tipo_u == "ALCANTARILLA" else 0.0,
         "etiqueta_cama": "Cama Triturado" if tipo_u == "ALCANTARILLA" else "",
+        # Traslapo solo aplica a FILTRO (suma al ancho promedio de geotextil → GEO).
+        "traslapo_m": round(traslapo, 6) if tipo_u == "FILTRO" else 0.0,
+        "etiqueta_traslapo": "Traslapo" if tipo_u == "FILTRO" else "",
         "area_tuberia_m2": a_tub,
         "area_1_m2": a1,
         "area_2_m2": a2,
@@ -731,7 +738,10 @@ def calcular_cantidades_y_descuentos(
     h_exc = float(tot.get("prom_altura_excavacion") or 0.0)
     h_trit = float(tot.get("prom_altura_triturado") or 0.0)
     h_rel = float(tot.get("prom_altura_relleno") or 0.0)
-    ancho_geo = float(tot.get("prom_ancho_geotextil") or 0.0)
+    # FILTRO: Geotextil usa (ancho promedio cartera + traslapo). ALC: sin cambio.
+    ancho_geo_prom = float(tot.get("prom_ancho_geotextil") or 0.0)
+    traslapo = float(seccion.get("traslapo_m") or 0.0) if tipo == "FILTRO" else 0.0
+    ancho_geo = ancho_geo_prom + traslapo if tipo == "FILTRO" else ancho_geo_prom
 
     overrides_list = _normalize_cantidades_manuales(cantidades_manuales)
     # Descuentos de altura cruzados (suma de espesores por campo destino)
@@ -983,6 +993,7 @@ def seccion_tipica_params(seccion: dict, cartera: dict) -> dict[str, Any]:
         "ancho_excavacion_m": seccion["ancho_excavacion_m"],
         "altura_relleno_m": seccion["altura_relleno_m"],
         "cama_triturado_m": seccion.get("cama_triturado_m"),
+        "traslapo_m": seccion.get("traslapo_m"),
         "area_tuberia_m2": seccion.get("area_tuberia_m2"),
         "area_1_m2": seccion["area_1_m2"],
         "area_2_m2": seccion["area_2_m2"],
@@ -1006,6 +1017,7 @@ def calcular_planilla_completa(
     descuentos_manuales: Optional[list[dict]] = None,
     cantidades_manuales: Optional[list[dict]] = None,
     cama_triturado_m: float = 0.0,
+    traslapo_m: float = 0.0,
 ) -> dict[str, Any]:
     seccion = calcular_seccion(
         tipo=tipo,
@@ -1014,6 +1026,7 @@ def calcular_planilla_completa(
         ancho_excavacion_m=ancho_excavacion_m,
         relacion_atraque=relacion_atraque,
         cama_triturado_m=cama_triturado_m,
+        traslapo_m=traslapo_m,
     )
     cartera = calcular_cartera(filas_campo, seccion)
     cant = calcular_cantidades_y_descuentos(
