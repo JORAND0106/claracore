@@ -12,6 +12,13 @@ on:
       - '.github/workflows/deploy-backend-on-push.yml'
   workflow_dispatch:
 
+# Evita Conflict 409 en ZIP Deploy cuando varios merges a main
+# publican a la vez al mismo App Service (p. ej. #634 + #635 + #636).
+# Encolar (no cancelar): cada push despliega en serie.
+concurrency:
+  group: claracore-backend-app-service-production
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
