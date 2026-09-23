@@ -1,6 +1,6 @@
 /**
  * Popup: Crear reporte SICOE Obra desde planilla de tubería.
- * Solo pide lo no derivado: Subcontratista, Inspector, Capítulo, Nodo ini/fin (editable).
+ * Solo pide lo no derivado: Subcontratista, Inspector, Capítulo, Abscisas y Nodos (editables).
  * Exige esquema del tramo (EsquemaEditorModal) antes de confirmar.
  * z-index > editor de planilla (100030) y selector PK (100050).
  */
@@ -200,6 +200,10 @@ export default function PlanillaTuberiaCrearReporteModal({
   planilla,
   absInicioDefault,
   absFinalDefault,
+  /** Nodo inicio opcional (cabecera/cartera); vacío si no hay dato. */
+  nodoInicioDefault = '',
+  /** Nodo fin opcional (cabecera/cartera); vacío si no hay dato. */
+  nodoFinalDefault = '',
   lineasPreview = [],
   apiCrear,
   ui,
@@ -218,6 +222,8 @@ export default function PlanillaTuberiaCrearReporteModal({
   const [subId, setSubId] = useState('')
   const [inspId, setInspId] = useState('')
   const [capitulo, setCapitulo] = useState('')
+  const [absIni, setAbsIni] = useState('')
+  const [absFin, setAbsFin] = useState('')
   const [nodoIni, setNodoIni] = useState('')
   const [nodoFin, setNodoFin] = useState('')
   const [busy, setBusy] = useState(false)
@@ -233,11 +239,11 @@ export default function PlanillaTuberiaCrearReporteModal({
     setCapitulo('')
     setEsquemaOpen(false)
     setEsquemaDataUri(null)
-    const a0 = fmtAbs(absInicioDefault)
-    const a1 = fmtAbs(absFinalDefault)
-    setNodoIni(a0)
-    setNodoFin(a1)
-  }, [open, absInicioDefault, absFinalDefault, planilla?.id])
+    setAbsIni(fmtAbs(absInicioDefault))
+    setAbsFin(fmtAbs(absFinalDefault))
+    setNodoIni(String(nodoInicioDefault || '').trim())
+    setNodoFin(String(nodoFinalDefault || '').trim())
+  }, [open, absInicioDefault, absFinalDefault, nodoInicioDefault, nodoFinalDefault, planilla?.id])
 
   const mapLocation = useMemo(() => {
     const ini = coordsWgs84Inicio && typeof coordsWgs84Inicio === 'object' ? coordsWgs84Inicio : null
@@ -353,17 +359,14 @@ export default function PlanillaTuberiaCrearReporteModal({
         const n = Number(v)
         return Number.isFinite(n) ? n : null
       }
-      // Nodo inicio/fin = abscisas min/max (autodiligenciadas); también van a abs_inicio/abs_final.
-      const absIni = numOrNull(nodoIni)
-      const absFin = numOrNull(nodoFin)
       const res = await apiCrear({
         subcontratista_id: Number(subId),
         inspector_id: Number(inspId),
         capitulo: String(capitulo).trim(),
         nodo_ini: String(nodoIni).trim() || null,
         nodo_fin: String(nodoFin).trim() || null,
-        abs_inicio: absIni,
-        abs_final: absFin,
+        abs_inicio: numOrNull(absIni),
+        abs_final: numOrNull(absFin),
         esquema_data_uri: esquemaDataUri || null,
       })
       onCreated?.(res)
@@ -495,7 +498,7 @@ export default function PlanillaTuberiaCrearReporteModal({
             data-crear-reporte-grid
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
               gap: 12,
               alignItems: 'start',
             }}
@@ -538,44 +541,71 @@ export default function PlanillaTuberiaCrearReporteModal({
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
-              {planilla?.tipo && (
-                <div style={{ fontSize: 'var(--cc-xxs)', color: ui?.textMuted || '#64748b', marginTop: 4 }}>
-                  Filtrado por tipo de planilla: {planilla.tipo}
-                </div>
-              )}
             </div>
             <div>
-              <label style={labelStyle}>Nodo / abscisa inicio</label>
+              <label style={labelStyle}>Abscisa inicio</label>
               <input
                 style={inputStyle}
                 type="number"
                 step="any"
                 inputMode="decimal"
                 disabled={busy}
-                value={nodoIni}
-                onChange={(e) => setNodoIni(e.target.value)}
+                value={absIni}
+                onChange={(e) => setAbsIni(e.target.value)}
                 title="Autodiligenciado con el mínimo de abscisa de la cartera"
+                data-campo-abs-inicio
               />
             </div>
             <div>
-              <label style={labelStyle}>Nodo / abscisa fin</label>
+              <label style={labelStyle}>Abscisa fin</label>
               <input
                 style={inputStyle}
                 type="number"
                 step="any"
                 inputMode="decimal"
                 disabled={busy}
-                value={nodoFin}
-                onChange={(e) => setNodoFin(e.target.value)}
+                value={absFin}
+                onChange={(e) => setAbsFin(e.target.value)}
                 title="Autodiligenciado con el máximo de abscisa de la cartera"
+                data-campo-abs-fin
               />
             </div>
           </div>
-          {(absInicioDefault != null || absFinalDefault != null) && (
-            <div style={{ fontSize: 'var(--cc-xxs)', color: ui?.textMuted || '#64748b', marginTop: -4 }}>
-              Valores tomados de la cartera (mín. {fmtAbs(absInicioDefault) || '—'} · máx. {fmtAbs(absFinalDefault) || '—'}). Puede editarlos.
+
+          <div
+            data-crear-reporte-nodos-grid
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gap: 12,
+              alignItems: 'start',
+            }}
+          >
+            <div>
+              <label style={labelStyle}>Nodo inicio</label>
+              <input
+                style={inputStyle}
+                type="text"
+                disabled={busy}
+                value={nodoIni}
+                onChange={(e) => setNodoIni(e.target.value)}
+                placeholder="Opcional"
+                data-campo-nodo-inicio
+              />
             </div>
-          )}
+            <div>
+              <label style={labelStyle}>Nodo fin</label>
+              <input
+                style={inputStyle}
+                type="text"
+                disabled={busy}
+                value={nodoFin}
+                onChange={(e) => setNodoFin(e.target.value)}
+                placeholder="Opcional"
+                data-campo-nodo-fin
+              />
+            </div>
+          </div>
 
           <div
             style={{
@@ -594,11 +624,8 @@ export default function PlanillaTuberiaCrearReporteModal({
                 background: esquemaListo ? '#f0fdf4' : (ui?.inputBg || '#f8fafc'),
               }}
             >
-              <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', marginBottom: 4 }}>
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', marginBottom: 8 }}>
                 Esquema del tramo *
-              </div>
-              <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', marginBottom: 8 }}>
-                Obligatorio. Se abre el editor de Esquemas con el mapa y los puntos Inicio / Fin (WGS84) unidos por una flecha.
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                 <button

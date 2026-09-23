@@ -1977,6 +1977,11 @@ export default function PlanillaTuberiaForm({
         norteFin={params.norte_abs_final}
         esteFin={params.este_abs_final}
         titulo={`Tramo${params.nombre ? `: ${params.nombre}` : ''}`}
+        contratoId={contratoId}
+        token={token}
+        pkId={params.pk_id || ''}
+        absInicio={absExtremos.absInicio}
+        absFinal={absExtremos.absFinal}
       />
 
       <PlanillaTuberiaCrearReporteModal

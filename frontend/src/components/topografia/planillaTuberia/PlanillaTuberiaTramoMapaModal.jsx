@@ -1,14 +1,23 @@
 /**
  * Vista rápida del tramo de planilla de tubería sobre Mapbox.
  * Inicio/Fin en WGS84 (o conversión GK Bogotá) con etiquetas y flechas bidireccionales.
+ * Reutiliza polígonos PK + abscisado del plano SICOE Obra (mismas capas que el mapa geoespacial).
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import mapboxgl from 'mapbox-gl'
 import CcModalBrandHeader from '../../CcModalBrandHeader'
 import { crearMapboxMapSeguro, MapaNoDisponible } from '../../../mapboxSafe'
+import { API_BASE } from '../../../apiBase'
+import { getContratoPlanoGeojson } from '../../../contratoPlanoGeojsonCache'
 import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
 import { SICOE_MAPA_STYLE_SATELLITE } from '../../../modules/sicoe-obra/sicoeMapaBasemap'
+import { sicoeDatosMapaPortadaPk } from '../../../modules/sicoe-obra/sicoeMapaPortadaPk'
+import {
+  applyEsquemaPkSelectionStyle,
+  buildEsquemaPlanoFc,
+  ensureEsquemaPkLayers,
+} from '../../esquema/esquemaMapaPkLayers'
 import {
   bearingDegTramo,
   resolverCoordsTramoWgs84,
@@ -18,6 +27,7 @@ const SRC = 'pt-tramo-src'
 const LYR_LINE = 'pt-tramo-line'
 const LYR_PTS = 'pt-tramo-pts'
 const LYR_LABELS = 'pt-tramo-labels'
+const LYR_COORDS = 'pt-tramo-coords'
 const SAT_OPACITY = 0.45
 
 function applySatelliteOpacity(map, opacity = SAT_OPACITY) {
@@ -32,15 +42,28 @@ function applySatelliteOpacity(map, opacity = SAT_OPACITY) {
   }
 }
 
-function makeEndpointMarker({ label, bearing, color }) {
+function fmtCoord(n, digits = 6) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '—'
+  return v.toFixed(digits)
+}
+
+function makeEndpointMarker({ label, bearing, color, lng, lat }) {
   const el = document.createElement('div')
   el.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px;pointer-events:none;'
+  const coordTxt = `${fmtCoord(lng)}, ${fmtCoord(lat)}`
   el.innerHTML = `
     <div style="
       background:#fff;color:#0f172a;font:700 12px/1.2 system-ui,sans-serif;
       padding:3px 8px;border-radius:6px;border:1px solid #cbd5e1;
       box-shadow:0 1px 3px rgba(15,23,42,.18);white-space:nowrap;
-    ">${label}</div>
+      text-align:center;
+    ">
+      <div>${label}</div>
+      <div style="font:600 10px/1.2 ui-monospace,Consolas,monospace;color:#475569;margin-top:2px;">
+        ${coordTxt}
+      </div>
+    </div>
     <div style="
       width:0;height:0;
       border-left:7px solid transparent;border-right:7px solid transparent;
@@ -62,7 +85,8 @@ function makeEndpointMarker({ label, bearing, color }) {
  * @param {{ open: boolean, onClose: function, theme?: object,
  *   coordsWgs84Inicio?: object|null, coordsWgs84Fin?: object|null,
  *   norteIni?: any, esteIni?: any, norteFin?: any, esteFin?: any,
- *   titulo?: string }} props
+ *   titulo?: string, contratoId?: string|number|null, token?: string|null,
+ *   pkId?: string, absInicio?: any, absFinal?: any }} props
  */
 export default function PlanillaTuberiaTramoMapaModal({
   open,
@@ -75,13 +99,20 @@ export default function PlanillaTuberiaTramoMapaModal({
   norteFin,
   esteFin,
   titulo = 'Vista del tramo',
+  contratoId = null,
+  token = null,
+  pkId = '',
+  absInicio = null,
+  absFinal = null,
 }) {
   const t = theme || {}
   const mapNodeRef = useRef(null)
   const mapRef = useRef(null)
   const markersRef = useRef([])
+  const planoFcRef = useRef(null)
   const [mapError, setMapError] = useState(null)
   const [mapReady, setMapReady] = useState(false)
+  const [planoReady, setPlanoReady] = useState(false)
 
   const tramo = useMemo(
     () => resolverCoordsTramoWgs84({
@@ -95,6 +126,8 @@ export default function PlanillaTuberiaTramoMapaModal({
     }),
     [coordsWgs84Inicio, coordsWgs84Fin, norteIni, esteIni, norteFin, esteFin],
   )
+
+  const pkStr = String(pkId || '').trim()
 
   useEffect(() => {
     if (!open) return undefined
@@ -116,6 +149,8 @@ export default function PlanillaTuberiaTramoMapaModal({
     }
     mapRef.current = map
     setMapError(null)
+    setPlanoReady(false)
+    planoFcRef.current = null
 
     const onLoad = () => {
       applySatelliteOpacity(map)
@@ -131,7 +166,14 @@ export default function PlanillaTuberiaTramoMapaModal({
       }
     }
     map.on('load', onLoad)
-    map.on('style.load', () => applySatelliteOpacity(map))
+    map.on('style.load', () => {
+      applySatelliteOpacity(map)
+      const fc = planoFcRef.current
+      if (fc) {
+        ensureEsquemaPkLayers(map, fc, pkStr)
+        applyEsquemaPkSelectionStyle(map, pkStr)
+      }
+    })
 
     return () => {
       markersRef.current.forEach((m) => {
@@ -140,9 +182,48 @@ export default function PlanillaTuberiaTramoMapaModal({
       markersRef.current = []
       try { map.remove() } catch { /* ignore */ }
       mapRef.current = null
+      planoFcRef.current = null
       setMapReady(false)
+      setPlanoReady(false)
     }
-  }, [open, tramo])
+  }, [open, tramo, pkStr])
+
+  // Plano SICOE: polígonos PK + abscisado (misma fuente que mapa geoespacial / portada).
+  useEffect(() => {
+    if (!open || !mapReady || !contratoId) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        const row = await getContratoPlanoGeojson(API_BASE, contratoId, token)
+        if (cancelled || !mapRef.current) return
+        const planoFull = buildEsquemaPlanoFc(row?.plano_geojson)
+        const portada = pkStr
+          ? sicoeDatosMapaPortadaPk(row?.plano_geojson, pkStr, absInicio, absFinal)
+          : null
+        const planoFc = (portada?.planoFc?.features?.length)
+          ? portada.planoFc
+          : planoFull
+        planoFcRef.current = planoFc
+        ensureEsquemaPkLayers(mapRef.current, planoFc, pkStr)
+        applyEsquemaPkSelectionStyle(mapRef.current, pkStr)
+        if (portada?.bounds) {
+          try {
+            const b = portada.bounds
+            mapRef.current.fitBounds(
+              [[b.minLng, b.minLat], [b.maxLng, b.maxLat]],
+              { padding: 64, maxZoom: 17, duration: 0 },
+            )
+          } catch {
+            /* ignore */
+          }
+        }
+        setPlanoReady(true)
+      } catch {
+        if (!cancelled) setPlanoReady(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, mapReady, contratoId, token, pkStr, absInicio, absFinal])
 
   useEffect(() => {
     const map = mapRef.current
@@ -166,12 +247,20 @@ export default function PlanillaTuberiaTramoMapaModal({
         },
         {
           type: 'Feature',
-          properties: { label: 'Inicio', role: 'inicio' },
+          properties: {
+            label: 'Inicio',
+            role: 'inicio',
+            coords: `${fmtCoord(ini.lng)}, ${fmtCoord(ini.lat)}`,
+          },
           geometry: { type: 'Point', coordinates: [ini.lng, ini.lat] },
         },
         {
           type: 'Feature',
-          properties: { label: 'Fin', role: 'fin' },
+          properties: {
+            label: 'Fin',
+            role: 'fin',
+            coords: `${fmtCoord(fin.lng)}, ${fmtCoord(fin.lat)}`,
+          },
           geometry: { type: 'Point', coordinates: [fin.lng, fin.lat] },
         },
       ],
@@ -223,6 +312,24 @@ export default function PlanillaTuberiaTramoMapaModal({
             'text-halo-width': 1.5,
           },
         })
+        map.addLayer({
+          id: LYR_COORDS,
+          type: 'symbol',
+          source: SRC,
+          filter: ['in', ['get', 'role'], ['literal', ['inicio', 'fin']]],
+          layout: {
+            'text-field': ['get', 'coords'],
+            'text-size': 10,
+            'text-offset': [0, 2.7],
+            'text-anchor': 'top',
+            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+          },
+          paint: {
+            'text-color': '#334155',
+            'text-halo-color': '#fff',
+            'text-halo-width': 1.5,
+          },
+        })
       }
     } catch {
       /* ignore */
@@ -234,18 +341,22 @@ export default function PlanillaTuberiaTramoMapaModal({
     markersRef.current = []
     try {
       const mIni = new mapboxgl.Marker({
-        element: makeEndpointMarker({ label: 'Inicio', bearing: bearIni, color: '#16a34a' }),
+        element: makeEndpointMarker({
+          label: 'Inicio', bearing: bearIni, color: '#16a34a', lng: ini.lng, lat: ini.lat,
+        }),
         anchor: 'bottom',
       }).setLngLat([ini.lng, ini.lat]).addTo(map)
       const mFin = new mapboxgl.Marker({
-        element: makeEndpointMarker({ label: 'Fin', bearing: bearFin, color: '#dc2626' }),
+        element: makeEndpointMarker({
+          label: 'Fin', bearing: bearFin, color: '#dc2626', lng: fin.lng, lat: fin.lat,
+        }),
         anchor: 'bottom',
       }).setLngLat([fin.lng, fin.lat]).addTo(map)
       markersRef.current = [mIni, mFin]
     } catch {
       /* ignore */
     }
-  }, [open, mapReady, tramo])
+  }, [open, mapReady, tramo, planoReady])
 
   if (!open) return null
 
@@ -297,7 +408,7 @@ export default function PlanillaTuberiaTramoMapaModal({
               {titulo}
             </div>
             <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted || '#64748b', marginTop: 2 }}>
-              Inicio → Fin con flechas en ambos sentidos (WGS84)
+              Inicio → Fin con flechas, polígonos PK y abscisado SICOE (coordenadas visibles)
             </div>
           </div>
           <button
@@ -339,7 +450,7 @@ export default function PlanillaTuberiaTramoMapaModal({
               <MapaNoDisponible mensaje={mapError} />
             </div>
           ) : (
-            <div ref={mapNodeRef} style={{ position: 'absolute', inset: 0 }} />
+            <div ref={mapNodeRef} data-tramo-mapa-con-plano style={{ position: 'absolute', inset: 0 }} />
           )}
         </div>
       </div>

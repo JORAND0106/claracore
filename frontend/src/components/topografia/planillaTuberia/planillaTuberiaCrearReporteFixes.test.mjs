@@ -32,11 +32,15 @@ describe('Crear reporte — fixes múltiples', () => {
     ))
   })
 
-  it('popup más ancho y grid horizontal', () => {
+  it('popup más ancho, fila superior de 5 y sin leyendas superfluas', () => {
     assert.match(modalSrc, /min\(980px/)
     assert.match(modalSrc, /data-crear-reporte-grid/)
     assert.match(modalSrc, /filtrarCapitulosPorTipoPlanilla/)
     assert.match(modalSrc, /data-capitulo-filtrado-tipo/)
+    assert.match(modalSrc, /repeat\(5,\s*minmax\(0,\s*1fr\)\)/)
+    assert.match(modalSrc, /data-crear-reporte-nodos-grid/)
+    assert.doesNotMatch(modalSrc, /Filtrado por tipo de planilla/)
+    assert.doesNotMatch(modalSrc, /Obligatorio\. Se abre el editor de Esquemas/)
   })
 
   it('ojo integrado en celda PK_ID (no toolbar suelta)', () => {
