@@ -8,6 +8,7 @@ import ActividadesEventoGrid from './ActividadesEventoGrid'
 import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
+import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
 import EventoBloquesSection from './EventoBloquesSection'
 import { eventosFromEntrada, eventosParaPayload, debeMostrarObservacionesDia } from './eventoBloquesHelpers'
@@ -18,16 +19,14 @@ import {
   emptyActividadRow,
 } from './bitacoraEventoActividades'
 import {
-  HINT_OPERADOR_DESDE_ASISTENCIA,
+  HINT_OPERADOR_DESDE_RRHH,
   HINT_REGISTRAR_EN_RRHH,
   asistenciaFromEntrada,
   asistenciaParaPayload,
   mapaEstadosRrhh,
   mergePersonalCantidades,
-  operadorEstaEnAsistencia,
-  operadorSelectValue,
-  opcionesOperadorDesdeAsistencia,
-  parseOperadorSelectValue,
+  nombreCompletoRrhh,
+  operadorEstaEnRrhh,
   personalAgregadoDesdeAsistencia,
   puedeUsarCargoCantidadAsistencia,
   recoverPersonalManual,
@@ -397,10 +396,6 @@ export default function BitacoraEntradaEditor({
     contratoNumero,
     permiteCargoCuadrilla: Boolean(asistenciaRrhhPolicy?.permite_cargo_cuadrilla),
   })
-  const operadoresAsistencia = useMemo(
-    () => opcionesOperadorDesdeAsistencia(asistencia),
-    [asistencia],
-  )
   useEffect(() => {
     if (tipo !== 'diario') return
     const liveMap = resumenCongelado ? null : mapaEstadosRrhh(rrhhCatalogo)
@@ -574,11 +569,11 @@ export default function BitacoraEntradaEditor({
         setBusy(false)
         return
       }
-      const sinOperadorAsistencia = usosConEquipo.filter(
-        (u) => !operadorEstaEnAsistencia(u, asistencia),
+      const sinOperadorRrhh = usosConEquipo.filter(
+        (u) => !operadorEstaEnRrhh(u, rrhhCatalogo),
       )
-      if (sinOperadorAsistencia.length) {
-        setError(HINT_OPERADOR_DESDE_ASISTENCIA)
+      if (sinOperadorRrhh.length) {
+        setError(HINT_OPERADOR_DESDE_RRHH)
         setBusy(false)
         return
       }
@@ -1104,8 +1099,8 @@ export default function BitacoraEntradaEditor({
                           }}>
                             Operador
                             <span
-                              title={HINT_OPERADOR_DESDE_ASISTENCIA}
-                              aria-label={HINT_OPERADOR_DESDE_ASISTENCIA}
+                              title={HINT_OPERADOR_DESDE_RRHH}
+                              aria-label={HINT_OPERADOR_DESDE_RRHH}
                               style={{
                                 display: 'inline-flex',
                                 width: 14,
@@ -1137,11 +1132,7 @@ export default function BitacoraEntradaEditor({
                       </tr>
                     </thead>
                     <tbody>
-                      {usos.map((u, idx) => {
-                        const opValue = operadorSelectValue(u)
-                        const opEnLista = !opValue
-                          || operadoresAsistencia.some((o) => o.value === opValue)
-                        return (
+                      {usos.map((u, idx) => (
                         <tr key={`uso-${idx}`}>
                           <td style={ui.td} data-label="Equipo / máquina">
                             <EquipoCatalogSelect
@@ -1182,34 +1173,22 @@ export default function BitacoraEntradaEditor({
                             {!editable ? (
                               <div style={ui.cellRo}>{u.operador || '—'}</div>
                             ) : (
-                              <select
-                                value={opValue}
-                                onChange={(e) => {
-                                  const parsed = parseOperadorSelectValue(
-                                    e.target.value,
-                                    operadoresAsistencia,
-                                  )
+                              <NombreRrhhAutocomplete
+                                t={t}
+                                value={u.operador || ''}
+                                catalogo={rrhhCatalogo}
+                                style={{ ...ui.cellInp, height: 28 }}
+                                onPick={(trab) => {
+                                  const tid = trab?.id != null ? Number(trab.id) : null
                                   setUsos((rows) => rows.map((r, i) => (
-                                    i === idx ? { ...r, ...parsed } : r
+                                    i === idx ? {
+                                      ...r,
+                                      operador: nombreCompletoRrhh(trab),
+                                      operador_rrhh_id: Number.isFinite(tid) ? tid : null,
+                                    } : r
                                   )))
                                 }}
-                                style={{ ...ui.cellInp, height: 28 }}
-                                title={HINT_OPERADOR_DESDE_ASISTENCIA}
-                              >
-                                <option value="">
-                                  {operadoresAsistencia.length
-                                    ? 'Seleccione…'
-                                    : 'Sin personal en asistencia'}
-                                </option>
-                                {operadoresAsistencia.map((op) => (
-                                  <option key={op.value} value={op.value}>{op.label}</option>
-                                ))}
-                                {!opEnLista && opValue ? (
-                                  <option value={opValue} disabled>
-                                    {u.operador || 'Operador'} (no está en asistencia)
-                                  </option>
-                                ) : null}
-                              </select>
+                              />
                             )}
                           </td>
                           <td style={ui.td} data-label="Cant.">
@@ -1283,8 +1262,7 @@ export default function BitacoraEntradaEditor({
                             </td>
                           )}
                         </tr>
-                        )
-                      })}
+                      ))}
                     </tbody>
                   </table>
                 </div>
