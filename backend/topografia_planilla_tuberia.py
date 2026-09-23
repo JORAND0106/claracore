@@ -1780,10 +1780,59 @@ def puntos_topograficos_desde_planilla(planilla: Optional[dict]) -> list[dict[st
 
 
 def origen_key_linea_sicoe(linea: dict) -> str:
-    """Clave estable cantidades:CODIGO / descuentos:CODIGO."""
-    tabla = str(linea.get("_origen_tabla") or "").strip() or "cantidades"
-    codigo = str(linea.get("_origen_codigo") or "").strip()
+    """Clave estable cantidades:CODIGO / descuentos:CODIGO (código en mayúsculas)."""
+    tabla = str(linea.get("_origen_tabla") or "").strip().lower() or "cantidades"
+    codigo = str(linea.get("_origen_codigo") or "").strip().upper()
     return f"{tabla}:{codigo}"
+
+
+def normalizar_origen_key_sicoe(raw: Any) -> str:
+    """Normaliza «scope:codigo» (case-insensitive) a forma canónica."""
+    txt = str(raw or "").strip()
+    if not txt:
+        return ""
+    if ":" in txt:
+        tabla, _, codigo = txt.partition(":")
+        tabla = tabla.strip().lower() or "cantidades"
+        codigo = codigo.strip().upper()
+        return f"{tabla}:{codigo}" if codigo else ""
+    # Solo código → cantidades:CODIGO
+    return f"cantidades:{txt.upper()}"
+
+
+def resolver_lineas_por_origenes_seleccionados(
+    lineas: list[dict[str, Any]],
+    origenes_seleccionados: Optional[list[Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Filtra líneas de planilla según orígenes marcados en el UI.
+    Retorna (lineas_a_crear, origenes_no_encontrados).
+    Matching case-insensitive; preserva orden de selección.
+    """
+    sel_raw = [normalizar_origen_key_sicoe(x) for x in (origenes_seleccionados or [])]
+    sel_ordered = [k for k in sel_raw if k]
+    if not sel_ordered:
+        return [], []
+    by_key: dict[str, dict[str, Any]] = {}
+    for ln in lineas or []:
+        if not isinstance(ln, dict):
+            continue
+        key = normalizar_origen_key_sicoe(origen_key_linea_sicoe(ln))
+        if key and key not in by_key:
+            by_key[key] = ln
+    found: list[dict[str, Any]] = []
+    missing: list[str] = []
+    seen: set[str] = set()
+    for key in sel_ordered:
+        if key in seen:
+            continue
+        seen.add(key)
+        ln = by_key.get(key)
+        if ln:
+            found.append(ln)
+        else:
+            missing.append(key)
+    return found, missing
 
 
 # Aliases estables para rutas / tests

@@ -6,6 +6,7 @@ import unittest
 from topografia_planilla_tuberia import (
     origen_key_linea_sicoe,
     puntos_topograficos_desde_planilla,
+    resolver_lineas_por_origenes_seleccionados,
 )
 
 
@@ -51,6 +52,25 @@ class TestOrigenKeyYContratoCrearReporte(unittest.TestCase):
             origen_key_linea_sicoe({"_origen_tabla": "cantidades", "_origen_codigo": "EXC"}),
             "cantidades:EXC",
         )
+        self.assertEqual(
+            origen_key_linea_sicoe({"_origen_tabla": "Cantidades", "_origen_codigo": "exc"}),
+            "cantidades:EXC",
+        )
+
+    def test_resolver_lineas_por_origenes_seleccionados(self):
+        lineas = [
+            {"nombre": "Exc", "_origen_tabla": "cantidades", "_origen_codigo": "EXC"},
+            {"nombre": "Area 1", "_origen_tabla": "descuentos", "_origen_codigo": "DESC_A1"},
+        ]
+        found, missing = resolver_lineas_por_origenes_seleccionados(
+            lineas, ["cantidades:exc", "descuentos:FALTANTE"],
+        )
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["_origen_codigo"], "EXC")
+        self.assertEqual(missing, ["descuentos:FALTANTE"])
+        empty, miss = resolver_lineas_por_origenes_seleccionados(lineas, [])
+        self.assertEqual(empty, [])
+        self.assertEqual(miss, [])
 
     def test_body_y_ruta_aceptan_esquema_y_sync(self):
         from pathlib import Path
@@ -63,6 +83,7 @@ class TestOrigenKeyYContratoCrearReporte(unittest.TestCase):
         self.assertIn("puntos_topograficos_desde_planilla", text)
         self.assertIn("n_fotos_sincronizadas", text)
         self.assertIn("esquema_adjunto", text)
+        self.assertIn("resolver_lineas_por_origenes_seleccionados", text)
 
 
 class TestFrontendEnviaEsquemaYVistaOrigen(unittest.TestCase):

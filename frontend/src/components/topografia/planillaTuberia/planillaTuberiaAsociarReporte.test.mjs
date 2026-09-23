@@ -97,6 +97,8 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.match(routesSrc, /solo_adjunto/)
     assert.match(routesSrc, /origenes_seleccionados/)
     assert.match(routesSrc, /n_registros_creados/)
+    assert.match(routesSrc, /resolver_lineas_por_origenes_seleccionados/)
+    assert.match(routesSrc, /No se encontraron en la planilla las líneas seleccionadas/)
     assert.match(routesSrc, /_reemplazar_puntos_topograficos_planilla/)
     assert.match(routesSrc, /El esquema del tramo es obligatorio/)
     const asociarBlock = routesSrc.slice(
@@ -108,6 +110,14 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.match(asociarBlock, /\.insert\(rows_ins\)/)
     assert.match(asociarBlock, /Reemplazar gráfico en TODOS/)
     assert.match(asociarBlock, /\.eq\("reporte_id", int\(reporte_id\)\)/)
+  })
+
+  it('origenKey normaliza scope:CODIGO en mayúsculas', async () => {
+    const { origenKeyLineaAsociarSicoe } = await import('./planillaTuberiaUtils.js')
+    assert.equal(
+      origenKeyLineaAsociarSicoe({ scope: 'Cantidades', codigo: 'exc' }),
+      'cantidades:EXC',
+    )
   })
 
   it('sync de cantidades incluye solo_adjunto mientras la planilla no esté sellada', () => {

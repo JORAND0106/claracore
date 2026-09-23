@@ -40,6 +40,7 @@ from topografia_planilla_tuberia import (
     puntos_topograficos_desde_planilla,
     nombre_triturado_por_tipo,
     redondear_costo_directo_sicoe,
+    resolver_lineas_por_origenes_seleccionados,
     validar_cartera_campo,
     validar_evidencias_fotograficas,
 )
@@ -2546,15 +2547,16 @@ def asociar_reporte_sicoe_existente(
             )
 
     # 2c) Insertar líneas marcadas como registros nuevos en Sin Asignar Ítem.
-    origenes_sel: set[str] = set()
-    for raw in (body.origenes_seleccionados or []):
-        key = str(raw or "").strip()
-        if key:
-            origenes_sel.add(key)
-    lineas_crear = [
-        ln for ln in lineas
-        if origen_key_linea_sicoe(ln) in origenes_sel
-    ]
+    lineas_crear, origenes_faltantes = resolver_lineas_por_origenes_seleccionados(
+        lineas, body.origenes_seleccionados,
+    )
+    if origenes_faltantes:
+        raise HTTPException(
+            422,
+            "No se encontraron en la planilla las líneas seleccionadas para crear "
+            f"registros: {', '.join(origenes_faltantes)}. "
+            "Guarde la cartera y vuelva a intentar.",
+        )
     n_creados = 0
     if lineas_crear:
         nlines = len(lineas_crear)
