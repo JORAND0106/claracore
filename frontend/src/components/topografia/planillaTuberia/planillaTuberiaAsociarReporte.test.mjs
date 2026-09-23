@@ -95,6 +95,12 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.match(formSrc, /sicoe_sync\?\.updated/)
     assert.match(formSrc, /Cantidades sincronizadas al reporte SICOE/)
   })
+
+  it('asociar y crear se bloquean si ya hay vínculo SICOE', () => {
+    assert.match(formSrc, /puedeAsociarReporteSicoe/)
+    assert.match(formSrc, /!puedeAsociarReporte/)
+    assert.match(routesSrc, /Solo el rol Desarrollador puede re-asociar/)
+  })
 })
 
 describe('Validación cartera — sin alerta Nivel sobre TN', () => {

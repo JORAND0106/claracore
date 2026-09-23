@@ -45,6 +45,7 @@ import {
   abscisasExtremosPlanilla,
   lineasPlanillaParaReporteSicoe,
   linksSicoeDesdeMeta,
+  puedeAsociarReporteSicoe,
   puedeCrearReporteSicoe,
   puedeVerBotonCrearReporteSicoe,
   etiquetaReportesAsociadosLista,
@@ -840,6 +841,10 @@ export default function PlanillaTuberiaForm({
     () => puedeCrearReporteSicoe({ esDesarrollador: esDev, linksSicoe }),
     [esDev, linksSicoe],
   )
+  const puedeAsociarReporte = useMemo(
+    () => puedeAsociarReporteSicoe({ esDesarrollador: esDev, linksSicoe }),
+    [esDev, linksSicoe],
+  )
   /** Solo usuarios con crear y/o editar so_registros (SICOE Obra) ven el botón. */
   const puedeVerCrearReporte = useMemo(
     () => puedeVerBotonCrearReporteSicoe(usuario, contratoId),
@@ -1074,7 +1079,7 @@ export default function PlanillaTuberiaForm({
               <AccionIcono
                 title={
                   !puedeCrearReporte
-                    ? 'Reporte ya creado — no se puede reenviar'
+                    ? 'Ya hay un reporte SICOE vinculado — no se puede crear otro'
                     : (esDev && reporteSicoeYaEnviado
                       ? 'Crear reporte SICOE Obra (Dev: reenvío permitido)'
                       : 'Crear reporte SICOE Obra')
@@ -1115,13 +1120,21 @@ export default function PlanillaTuberiaForm({
               </AccionIcono>
               <span data-asociar-reporte-sicoe-btn style={{ display: 'inline-flex' }}>
                 <AccionIcono
-                  title="Asociar a reporte SICOE existente"
+                  title={
+                    !puedeAsociarReporte
+                      ? 'Ya hay un reporte SICOE vinculado — no se puede asociar otro'
+                      : (esDev && reporteSicoeYaEnviado
+                        ? 'Asociar a reporte SICOE existente (Dev: re-asociación permitida)'
+                        : 'Asociar a reporte SICOE existente')
+                  }
                   disabled={
                     busy
+                    || !puedeAsociarReporte
                     || !lineasReporteSicoe.length
                     || !String(params.nombre || planilla?.nombre || '').trim()
                   }
                   onClick={() => {
+                    if (!puedeAsociarReporte) return
                     const evCheck = validarEvidenciasFotograficas(calculoVista, evidencias, {
                       displayNeto: displayNetoCant,
                     })
@@ -1161,9 +1174,9 @@ export default function PlanillaTuberiaForm({
                     padding: '4px 8px',
                     whiteSpace: 'nowrap',
                   }}
-                  title="Esta planilla ya generó un reporte SICOE"
+                  title="Esta planilla ya está vinculada a un reporte SICOE (crear y asociar bloqueados)"
                 >
-                  Reporte creado
+                  Reporte vinculado
                 </span>
               )}
               {reporteSicoeYaEnviado && esDev && (
@@ -1175,9 +1188,9 @@ export default function PlanillaTuberiaForm({
                     color: '#64748b',
                     whiteSpace: 'nowrap',
                   }}
-                  title="Desarrollador puede reenviar para pruebas"
+                  title="Desarrollador puede reenviar o re-asociar para pruebas"
                 >
-                  Reporte creado · Dev
+                  Reporte vinculado · Dev
                 </span>
               )}
             </span>

@@ -10,6 +10,7 @@ import {
   abscisasExtremosPlanilla,
   lineasPlanillaParaReporteSicoe,
   linksSicoeDesdeMeta,
+  puedeAsociarReporteSicoe,
   puedeCrearReporteSicoe,
 } from './planillaTuberiaUtils.js'
 
@@ -75,17 +76,24 @@ describe('Planilla tubería → reporte SICOE', () => {
     assert.equal(links[0].reporte_id, 7)
   })
 
-  it('bloquea Crear reporte tras el primer envío (salvo Desarrollador)', () => {
+  it('bloquea Crear y Asociar tras el primer vínculo (salvo Desarrollador)', () => {
     const links = [{ reporte_id: 7, numero_reporte: 3 }]
     assert.equal(puedeCrearReporteSicoe({ esDesarrollador: false, linksSicoe: links }), false)
     assert.equal(puedeCrearReporteSicoe({ esDesarrollador: false, linksSicoe: [] }), true)
     assert.equal(puedeCrearReporteSicoe({ esDesarrollador: true, linksSicoe: links }), true)
     assert.equal(puedeCrearReporteSicoe({ esDesarrollador: true, linksSicoe: [] }), true)
+    assert.equal(puedeAsociarReporteSicoe({ esDesarrollador: false, linksSicoe: links }), false)
+    assert.equal(puedeAsociarReporteSicoe({ esDesarrollador: false, linksSicoe: [] }), true)
+    assert.equal(puedeAsociarReporteSicoe({ esDesarrollador: true, linksSicoe: links }), true)
     assert.match(formSrc, /puedeCrearReporteSicoe/)
+    assert.match(formSrc, /puedeAsociarReporteSicoe/)
+    assert.match(formSrc, /!puedeAsociarReporte/)
     assert.match(formSrc, /data-reporte-sicoe-bloqueado/)
-    assert.match(formSrc, /Reporte creado/)
+    assert.match(formSrc, /Reporte vinculado/)
     assert.match(formSrc, /!puedeCrearReporte/)
     assert.match(formSrc, /data-reporte-sicoe-reenvio-dev/)
+    assert.match(routesSrc, /Solo el rol Desarrollador puede re-asociar/)
+    assert.match(routesSrc, /ya está vinculada a un reporte SICOE Obra/)
   })
 
   it('visibilidad del botón exige permiso crear/editar SICOE (so_registros)', () => {
