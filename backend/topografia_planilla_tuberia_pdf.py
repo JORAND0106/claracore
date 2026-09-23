@@ -210,12 +210,22 @@ def html_franja_tramo_tuberia(
         cama = sec.get("cama_triturado_m")
         if cama is None:
             cama = st.get("cama_triturado_m")
+    traslapo = meta.get("traslapo_m")
+    if traslapo is None:
+        traslapo = sec.get("traslapo_m")
+        if traslapo is None:
+            traslapo = st.get("traslapo_m")
     ancho_exc = planilla.get("ancho_excavacion_m")
     if ancho_exc is None:
         ancho_exc = sec.get("ancho_excavacion_m")
 
-    cama_hdr = "Cama Triturado" if tipo != "FILTRO" else ""
-    cama_val = _fmt(cama) if tipo != "FILTRO" else ""
+    # ALC: Cama Triturado; FILTRO: Traslapo geotextil (misma celda de cabecera).
+    if tipo == "FILTRO":
+        cama_hdr = "Traslapo"
+        cama_val = _fmt(traslapo)
+    else:
+        cama_hdr = "Cama Triturado"
+        cama_val = _fmt(cama)
 
     # Fila Abs / PK / Costado (I10:M11 del inventario).
     abs_strip = f"""

@@ -136,6 +136,7 @@ export default function PlanillaTuberiaForm({
     ancho_excavacion_m: '',
     relacion_atraque: '1:3',
     cama_triturado_m: '',
+    traslapo_m: '',
     material: '',
     norte_abs_inicial: '',
     este_abs_inicial: '',
@@ -199,6 +200,10 @@ export default function PlanillaTuberiaForm({
         const meta0 = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
         return meta0.cama_triturado_m ?? ''
       })(),
+      traslapo_m: (() => {
+        const meta0 = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
+        return meta0.traslapo_m ?? ''
+      })(),
       material: p.material || '',
       ...coordsGeoDesdePlanilla(p),
     })
@@ -247,6 +252,7 @@ export default function PlanillaTuberiaForm({
       ancho_excavacion_m: '',
       relacion_atraque: '1:3',
       cama_triturado_m: '',
+      traslapo_m: '',
       material: '',
       norte_abs_inicial: '',
       este_abs_inicial: '',
@@ -298,13 +304,35 @@ export default function PlanillaTuberiaForm({
       ? planilla.meta_cabecera
       : {}
     const meta = { ...prev, cantidades_manuales: cantManuales }
-    if (String(params.tipo || '').toUpperCase() === 'ALCANTARILLA') {
+    const tipoU = String(params.tipo || '').toUpperCase()
+    if (tipoU === 'ALCANTARILLA') {
       const cama = params.cama_triturado_m === '' || params.cama_triturado_m == null
         ? 0
         : Number(params.cama_triturado_m)
       meta.cama_triturado_m = Number.isFinite(cama) ? cama : 0
     }
+    if (tipoU === 'FILTRO') {
+      if (params.traslapo_m !== '' && params.traslapo_m != null) {
+        const tr = Number(params.traslapo_m)
+        meta.traslapo_m = Number.isFinite(tr) ? tr : params.traslapo_m
+      } else {
+        meta.traslapo_m = null
+      }
+    }
     return meta
+  }
+
+  /** FILTRO: Traslapo obligatorio (≥ 0). */
+  const validarTraslapoFiltro = () => {
+    if (String(params.tipo || '').toUpperCase() !== 'FILTRO') return { ok: true }
+    if (params.traslapo_m === '' || params.traslapo_m == null) {
+      return { ok: false, error: 'Traslapo es obligatorio en planillas tipo FILTRO (cabecera / tramo).' }
+    }
+    const tr = Number(params.traslapo_m)
+    if (!Number.isFinite(tr) || tr < 0) {
+      return { ok: false, error: 'Traslapo debe ser un número ≥ 0.' }
+    }
+    return { ok: true }
   }
 
   const overrideCantidad = (codigo) => (
@@ -394,6 +422,11 @@ export default function PlanillaTuberiaForm({
       setErr(vNom.error)
       return
     }
+    const vTr = validarTraslapoFiltro()
+    if (!vTr.ok) {
+      setErr(vTr.error)
+      return
+    }
     setBusy(true); setErr(''); setMsg('')
     try {
       const body = {
@@ -424,6 +457,11 @@ export default function PlanillaTuberiaForm({
 
   const guardarCartera = async () => {
     if (!planilla?.id) return
+    const vTr = validarTraslapoFiltro()
+    if (!vTr.ok) {
+      setErr(vTr.error)
+      return
+    }
     setBusy(true); setErr(''); setMsg('')
     try {
       const filasPayload = payloadFilas(filas, params.tipo)
@@ -654,6 +692,10 @@ export default function PlanillaTuberiaForm({
     const cama = (camaParam !== '' && camaParam != null)
       ? Number(camaParam)
       : (meta.cama_triturado_m ?? 0)
+    const trParam = params.traslapo_m
+    const traslapo = (trParam !== '' && trParam != null)
+      ? Number(trParam)
+      : (meta.traslapo_m ?? 0)
     return calcularPlanillaLocal({
       tipo: params.tipo,
       diametro_m: params.diametro_m,
@@ -664,6 +706,7 @@ export default function PlanillaTuberiaForm({
       descuentos_manuales: detalle?.descuentos_manuales || [],
       cantidades_manuales: cantManuales,
       cama_triturado_m: Number.isFinite(Number(cama)) ? Number(cama) : 0,
+      traslapo_m: Number.isFinite(Number(traslapo)) ? Number(traslapo) : 0,
     })
   }, [filas, params, cantManuales, detalle?.descuentos_manuales, planilla?.meta_cabecera])
 
@@ -1044,8 +1087,10 @@ export default function PlanillaTuberiaForm({
             { key: 'espesor_m', label: 'Espesor', width: '7%' },
             { key: 'ancho_excavacion_m', label: 'Ancho B', width: '8%' },
             { key: 'relacion_atraque', label: 'Rel. atraque', width: '9%' },
-            ...(esAlc ? [{ key: 'cama_triturado_m', label: 'Cama Triturado', width: '10%' }] : []),
-            { key: 'material', label: 'Material', width: esAlc ? '12%' : '14%' },
+            ...(esAlc
+              ? [{ key: 'cama_triturado_m', label: 'Cama Triturado', width: '10%' }]
+              : [{ key: 'traslapo_m', label: 'Traslapo *', width: '10%' }]),
+            { key: 'material', label: 'Material', width: '12%' },
           ],
           cells: [
             <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
@@ -1132,7 +1177,21 @@ export default function PlanillaTuberiaForm({
                 title="Cama de Triturado / cimentación (m)"
                 style={sheet.cellInp}
               />,
-            ] : []),
+            ] : [
+              <input
+                key="traslapo"
+                type="number"
+                step="any"
+                min="0"
+                required
+                disabled={!editable}
+                value={params.traslapo_m}
+                onChange={(e) => setParams((p) => ({ ...p, traslapo_m: e.target.value }))}
+                title="Traslapo geotextil (m) — obligatorio en FILTRO; se suma al ancho promedio"
+                placeholder="Obligatorio"
+                style={sheet.cellInp}
+              />,
+            ]),
             <input key="mat" disabled={!editable} value={params.material} onChange={(e) => setParams((p) => ({ ...p, material: e.target.value }))} style={sheet.cellInp} />,
           ],
         },
