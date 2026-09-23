@@ -200,9 +200,9 @@ export default function PlanillaTuberiaCrearReporteModal({
   planilla,
   absInicioDefault,
   absFinalDefault,
-  /** Nodo inicio opcional (cabecera/cartera); vacío si no hay dato. */
+  /** Nodo inicio (obligatorio en Crear reporte). */
   nodoInicioDefault = '',
-  /** Nodo fin opcional (cabecera/cartera); vacío si no hay dato. */
+  /** Nodo fin (obligatorio en Crear reporte). */
   nodoFinalDefault = '',
   lineasPreview = [],
   apiCrear,
@@ -280,6 +280,8 @@ export default function PlanillaTuberiaCrearReporteModal({
   }, [seedTramoGk])
 
   const esquemaListo = Boolean(esquemaDataUri)
+  const nodosListos = Boolean(String(nodoIni || '').trim() && String(nodoFin || '').trim())
+  const puedeCrear = esquemaListo && nodosListos
 
   useEffect(() => {
     if (!open || !contratoId || !token) return
@@ -348,6 +350,8 @@ export default function PlanillaTuberiaCrearReporteModal({
     if (!subId) { setErr('Seleccione subcontratista'); return }
     if (!inspId) { setErr('Seleccione inspector'); return }
     if (!String(capitulo || '').trim()) { setErr('Seleccione capítulo'); return }
+    if (!String(nodoIni || '').trim()) { setErr('Indique el nodo de inicio'); return }
+    if (!String(nodoFin || '').trim()) { setErr('Indique el nodo de fin'); return }
     if (!esquemaListo) {
       setErr('Genere y guarde el esquema del tramo (Inicio → Fin) antes de crear el reporte.')
       return
@@ -363,8 +367,8 @@ export default function PlanillaTuberiaCrearReporteModal({
         subcontratista_id: Number(subId),
         inspector_id: Number(inspId),
         capitulo: String(capitulo).trim(),
-        nodo_ini: String(nodoIni).trim() || null,
-        nodo_fin: String(nodoFin).trim() || null,
+        nodo_ini: String(nodoIni).trim(),
+        nodo_fin: String(nodoFin).trim(),
         abs_inicio: numOrNull(absIni),
         abs_final: numOrNull(absFin),
         esquema_data_uri: esquemaDataUri || null,
@@ -582,26 +586,30 @@ export default function PlanillaTuberiaCrearReporteModal({
             }}
           >
             <div>
-              <label style={labelStyle}>Nodo inicio</label>
+              <label style={labelStyle}>Nodo inicio *</label>
               <input
                 style={inputStyle}
                 type="text"
+                required
                 disabled={busy}
                 value={nodoIni}
                 onChange={(e) => setNodoIni(e.target.value)}
-                placeholder="Opcional"
+                placeholder="Requerido"
+                aria-required="true"
                 data-campo-nodo-inicio
               />
             </div>
             <div>
-              <label style={labelStyle}>Nodo fin</label>
+              <label style={labelStyle}>Nodo fin *</label>
               <input
                 style={inputStyle}
                 type="text"
+                required
                 disabled={busy}
                 value={nodoFin}
                 onChange={(e) => setNodoFin(e.target.value)}
-                placeholder="Opcional"
+                placeholder="Requerido"
+                aria-required="true"
                 data-campo-nodo-fin
               />
             </div>
@@ -727,15 +735,20 @@ export default function PlanillaTuberiaCrearReporteModal({
             </button>
             <button
               type="button"
-              disabled={busy || !esquemaListo}
+              disabled={busy || !puedeCrear}
               onClick={crear}
-              title={!esquemaListo ? 'Genere y guarde el esquema del tramo primero' : undefined}
+              title={
+                !nodosListos
+                  ? 'Indique nodo de inicio y nodo de fin'
+                  : (!esquemaListo ? 'Genere y guarde el esquema del tramo primero' : undefined)
+              }
+              data-crear-reporte-submit
               style={{
                 padding: '8px 14px', borderRadius: 8, border: 'none',
                 background: ui?.accent || '#2563eb', color: '#fff',
-                cursor: (busy || !esquemaListo) ? 'not-allowed' : 'pointer',
+                cursor: (busy || !puedeCrear) ? 'not-allowed' : 'pointer',
                 fontWeight: 700,
-                opacity: !esquemaListo ? 0.55 : 1,
+                opacity: !puedeCrear ? 0.55 : 1,
               }}
             >
               {busy ? 'Creando…' : 'Crear reporte'}

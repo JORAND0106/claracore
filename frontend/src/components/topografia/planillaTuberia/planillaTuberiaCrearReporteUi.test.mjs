@@ -64,6 +64,18 @@ describe('Crear reporte SICOE — UI popup', () => {
     assert.match(modalSrc, /gridTemplateColumns:\s*'repeat\(5,\s*minmax\(0,\s*1fr\)\)'/)
   })
 
+  it('nodos inicio/fin obligatorios (label, validación y botón)', () => {
+    assert.match(modalSrc, /Nodo inicio \*/)
+    assert.match(modalSrc, /Nodo fin \*/)
+    assert.match(modalSrc, /Indique el nodo de inicio/)
+    assert.match(modalSrc, /Indique el nodo de fin/)
+    assert.match(modalSrc, /nodosListos/)
+    assert.match(modalSrc, /puedeCrear/)
+    assert.match(modalSrc, /disabled=\{busy \|\| !puedeCrear\}/)
+    assert.match(modalSrc, /data-crear-reporte-submit/)
+    assert.doesNotMatch(modalSrc, /placeholder="Opcional"/)
+  })
+
   it('encabezado con logo institucional y meta de planilla', () => {
     assert.match(modalSrc, /logoUrl/)
     assert.match(modalSrc, /Logo contratista|LOGO/)
