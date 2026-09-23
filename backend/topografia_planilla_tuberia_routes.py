@@ -37,6 +37,7 @@ from topografia_planilla_tuberia import (
     origen_key_linea_sicoe,
     patch_so_registro_desde_linea_planilla,
     puntos_topograficos_desde_planilla,
+    nombre_triturado_por_tipo,
     validar_cartera_campo,
     validar_evidencias_fotograficas,
 )
@@ -2216,7 +2217,14 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
             "<th>Altura Relleno</th><th>Ancho Geotextil</th>"
         )
     netos = calc.get("netos") or [
-        {**it, "long": None, "ancho": None, "espesor": None, "bruto": None, "descuentos": None, "neto": None}
+        {
+            **it,
+            "nombre": (
+                nombre_triturado_por_tipo(tipo) if it["codigo"] == "TRI" else it["nombre"]
+            ),
+            "long": None, "ancho": None, "espesor": None,
+            "bruto": None, "descuentos": None, "neto": None,
+        }
         for it in ITEMS_CANTIDADES
     ]
     cants = "".join(

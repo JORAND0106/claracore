@@ -406,5 +406,52 @@ class TestCambioTipoDescuentos(unittest.TestCase):
         self.assertIn("DESC_TUB_FILT", cods)
 
 
+class TestNombreTrituradoPorTipo(unittest.TestCase):
+    def _filas_min(self):
+        return [
+            {"orden": 1, "abscisa": 100, "terreno_natural": 105, "subrasante_via": 104, "cota_fondo_excavacion": 103},
+            {"orden": 2, "abscisa": 120, "terreno_natural": 104.5, "subrasante_via": 103.5, "cota_fondo_excavacion": 102.5},
+        ]
+
+    def test_etiqueta_alc_y_filtro_mismo_codigo_tri(self):
+        from topografia_planilla_tuberia import (
+            NOMBRE_TRI_ALCANTARILLA,
+            NOMBRE_TRI_FILTRO,
+            nombre_triturado_por_tipo,
+        )
+        self.assertEqual(nombre_triturado_por_tipo("ALCANTARILLA"), NOMBRE_TRI_ALCANTARILLA)
+        self.assertEqual(nombre_triturado_por_tipo("FILTRO"), NOMBRE_TRI_FILTRO)
+        self.assertEqual(NOMBRE_TRI_ALCANTARILLA, "Atraque mat. filtrante")
+        self.assertEqual(NOMBRE_TRI_FILTRO, "Mat. Granular Filtrante")
+
+        r_alc = calcular_planilla_completa(
+            tipo="ALCANTARILLA", diametro_m=0.9, espesor_m=0.05,
+            ancho_excavacion_m=1.5, relacion_atraque="1:3",
+            filas_campo=self._filas_min(), cama_triturado_m=0.1,
+        )
+        r_fil = calcular_planilla_completa(
+            tipo="FILTRO", diametro_m=0.9, espesor_m=0.05,
+            ancho_excavacion_m=1.5, relacion_atraque="1:3",
+            filas_campo=[
+                {"orden": 1, "abscisa": 100, "terreno_natural": 105, "terminado_filtro": 104, "cota_fondo_excavacion": 103},
+                {"orden": 2, "abscisa": 120, "terreno_natural": 104.5, "terminado_filtro": 103.5, "cota_fondo_excavacion": 102.5},
+            ],
+        )
+        tri_alc = next(n for n in r_alc["netos"] if n["codigo"] == "TRI")
+        tri_fil = next(n for n in r_fil["netos"] if n["codigo"] == "TRI")
+        self.assertEqual(tri_alc["codigo"], "TRI")
+        self.assertEqual(tri_fil["codigo"], "TRI")
+        self.assertEqual(tri_alc["nombre"], "Atraque mat. filtrante")
+        self.assertEqual(tri_fil["nombre"], "Mat. Granular Filtrante")
+        self.assertEqual(
+            next(d for d in r_alc["descuentos"] if d["codigo"] == "DESC_A1")["item_cant_codigo"],
+            "TRI",
+        )
+        self.assertEqual(
+            next(d for d in r_fil["descuentos"] if d["codigo"] == "DESC_TUB_FILT")["item_cant_codigo"],
+            "TRI",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,9 @@ import {
   areaTuberiaM2,
   calcularPlanillaLocal,
   calcularSeccion,
+  nombreTrituradoPorTipo,
+  NOMBRE_TRI_ALCANTARILLA,
+  NOMBRE_TRI_FILTRO,
 } from './planillaTuberiaCalc.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
@@ -68,5 +71,39 @@ describe('planillaTuberiaCalc — preview reactivo', () => {
     assert.match(formSrc, /calculoVista/)
     assert.match(formSrc, /calculoVista\?\.perfil/)
     assert.match(formSrc, /calculoVista\?\.netos/)
+  })
+
+  it('TRI: etiqueta dinámica por tipo; codigo TRI estable', () => {
+    assert.equal(nombreTrituradoPorTipo('ALCANTARILLA'), 'Atraque mat. filtrante')
+    assert.equal(nombreTrituradoPorTipo('FILTRO'), 'Mat. Granular Filtrante')
+    assert.equal(NOMBRE_TRI_ALCANTARILLA, 'Atraque mat. filtrante')
+    assert.equal(NOMBRE_TRI_FILTRO, 'Mat. Granular Filtrante')
+
+    const base = {
+      diametro_m: 0.9,
+      espesor_m: 0.05,
+      ancho_excavacion_m: 1.2,
+      relacion_atraque: '1:3',
+      filas_campo: [
+        { orden: 1, abscisa: 1, terreno_natural: 100, subrasante_via: 99.5, cota_fondo_excavacion: 98 },
+        { orden: 2, abscisa: 10, terreno_natural: 100.2, subrasante_via: 99.6, cota_fondo_excavacion: 98.1 },
+      ],
+      cama_triturado_m: 0.1,
+    }
+    const alc = calcularPlanillaLocal({ ...base, tipo: 'ALCANTARILLA' })
+    const fil = calcularPlanillaLocal({
+      ...base,
+      tipo: 'FILTRO',
+      filas_campo: [
+        { orden: 1, abscisa: 1, terreno_natural: 100, terminado_filtro: 99.5, cota_fondo_excavacion: 98 },
+        { orden: 2, abscisa: 10, terreno_natural: 100.2, terminado_filtro: 99.6, cota_fondo_excavacion: 98.1 },
+      ],
+    })
+    const triAlc = alc.netos.find((n) => n.codigo === 'TRI')
+    const triFil = fil.netos.find((n) => n.codigo === 'TRI')
+    assert.equal(triAlc.codigo, 'TRI')
+    assert.equal(triFil.codigo, 'TRI')
+    assert.equal(triAlc.nombre, 'Atraque mat. filtrante')
+    assert.equal(triFil.nombre, 'Mat. Granular Filtrante')
   })
 })

@@ -8,10 +8,19 @@ export const TIPOS_PLANILLA = ['ALCANTARILLA', 'FILTRO']
 export const RELACIONES_ATRAQUE = ['1:1', '1:2', '1:3', '1:4', '1:6']
 export const ESPESOR_ROCA_M = 0.05
 
+/** TRI: codigo estable (vínculo descuentos); etiqueta visible según tipo. */
+export const NOMBRE_TRI_ALCANTARILLA = 'Atraque mat. filtrante'
+export const NOMBRE_TRI_FILTRO = 'Mat. Granular Filtrante'
+
+export function nombreTrituradoPorTipo(tipo) {
+  const tipoU = String(tipo || 'ALCANTARILLA').trim().toUpperCase()
+  return tipoU === 'FILTRO' ? NOMBRE_TRI_FILTRO : NOMBRE_TRI_ALCANTARILLA
+}
+
 export const ITEMS_CANTIDADES = [
   { codigo: 'EXC', nombre: 'Excavación Varias', unidad: 'm³' },
   { codigo: 'TUB', nombre: 'Long Tubería', unidad: 'ml' },
-  { codigo: 'TRI', nombre: 'Triturado / Atraque', unidad: 'm³' },
+  { codigo: 'TRI', nombre: NOMBRE_TRI_ALCANTARILLA, unidad: 'm³' },
   { codigo: 'REL', nombre: 'Relleno Gran.', unidad: 'm³' },
   { codigo: 'GEO', nombre: 'Geotextil', unidad: 'm²' },
   { codigo: 'EXC_ROC', nombre: 'Excavación Roca', unidad: 'm³', editable_dims: true },
@@ -276,13 +285,15 @@ function normalizeCantidadesManuales(cantidadesManuales) {
   return out
 }
 
-function metaItemCantidad(codigo) {
-  if (codigo === 'EXC_ROC') return ITEMS_CANTIDADES.find((it) => it.codigo === 'EXC_ROC')
+function metaItemCantidad(codigo, tipo = null) {
+  if (codigo === 'EXC_ROC') return { ...ITEMS_CANTIDADES.find((it) => it.codigo === 'EXC_ROC') }
   if (esCodigoOtros(codigo)) {
     const base = ITEMS_CANTIDADES.find((it) => it.codigo === 'OTROS')
     return { ...base, codigo }
   }
-  return ITEMS_CANTIDADES.find((it) => it.codigo === codigo)
+  const meta = { ...ITEMS_CANTIDADES.find((it) => it.codigo === codigo) }
+  if (codigo === 'TRI') meta.nombre = nombreTrituradoPorTipo(tipo)
+  return meta
 }
 
 export function calcularCantidadesYDescuentos(seccion, cartera, {
@@ -335,7 +346,7 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   const descOtros = Number(manual.DESC_OTROS || 0)
 
   function row(codigo, long, ancho, espesor, desc = 0, restarDesc = false, nombre = null, descontarDe = null) {
-    const meta = metaItemCantidad(codigo)
+    const meta = metaItemCantidad(codigo, tipo)
     const prod = product([long, ancho, espesor])
     const bruto = prod != null ? (r2(prod) ?? 0) : 0
     const cant = restarDesc ? Math.round((bruto - desc) * 100) / 100 : bruto

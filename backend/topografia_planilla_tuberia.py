@@ -21,10 +21,14 @@ TITULO_FILTRO = "PLANILLA DE INSTALACIÓN DE FILTROS"
 CODIGO_DOCUMENTO = "INF-ING - TOP - 001 - V0"
 
 # Orden UI: fijos primero; Excavación Roca y Otros al final (editables).
+# TRI: el `codigo` es estable (vínculo descuentos); el nombre visible depende del tipo.
+NOMBRE_TRI_ALCANTARILLA = "Atraque mat. filtrante"
+NOMBRE_TRI_FILTRO = "Mat. Granular Filtrante"
+
 ITEMS_CANTIDADES = (
     {"codigo": "EXC", "nombre": "Excavación Varias", "unidad": "m³"},
     {"codigo": "TUB", "nombre": "Long Tubería", "unidad": "ml"},
-    {"codigo": "TRI", "nombre": "Triturado / Atraque", "unidad": "m³"},
+    {"codigo": "TRI", "nombre": NOMBRE_TRI_ALCANTARILLA, "unidad": "m³"},
     {"codigo": "REL", "nombre": "Relleno Gran.", "unidad": "m³"},
     {"codigo": "GEO", "nombre": "Geotextil", "unidad": "m²"},
     {"codigo": "EXC_ROC", "nombre": "Excavación Roca", "unidad": "m³", "editable_dims": True},
@@ -36,6 +40,12 @@ ITEMS_CANTIDADES = (
         "editable_nombre": True,
     },
 )
+
+
+def nombre_triturado_por_tipo(tipo: Optional[str]) -> str:
+    """Etiqueta visible del ítem TRI según tipo de planilla (codigo TRI sin cambio)."""
+    tipo_u = str(tipo or "ALCANTARILLA").strip().upper()
+    return NOMBRE_TRI_FILTRO if tipo_u == "FILTRO" else NOMBRE_TRI_ALCANTARILLA
 
 # Códigos de Resumen de Cantidades con Long/Ancho/Espesor editables por el usuario.
 # OTROS admite múltiples líneas: OTROS, OTROS_1, OTROS_2, …
@@ -473,13 +483,16 @@ def _normalize_cantidades_manuales(
     return out
 
 
-def _meta_item_cantidad(codigo: str) -> dict[str, Any]:
+def _meta_item_cantidad(codigo: str, tipo: Optional[str] = None) -> dict[str, Any]:
     if codigo == "EXC_ROC":
-        return next(it for it in ITEMS_CANTIDADES if it["codigo"] == "EXC_ROC")
+        return dict(next(it for it in ITEMS_CANTIDADES if it["codigo"] == "EXC_ROC"))
     if es_codigo_otros(codigo):
         base = next(it for it in ITEMS_CANTIDADES if it["codigo"] == "OTROS")
         return {**base, "codigo": codigo}
-    return next(it for it in ITEMS_CANTIDADES if it["codigo"] == codigo)
+    meta = dict(next(it for it in ITEMS_CANTIDADES if it["codigo"] == codigo))
+    if codigo == "TRI":
+        meta["nombre"] = nombre_triturado_por_tipo(tipo)
+    return meta
 
 
 def calcular_cantidades_y_descuentos(
@@ -547,7 +560,7 @@ def calcular_cantidades_y_descuentos(
         nombre: Optional[str] = None,
         descontar_de: Optional[str] = None,
     ) -> dict:
-        meta = _meta_item_cantidad(codigo)
+        meta = _meta_item_cantidad(codigo, tipo)
         prod = _product([long, ancho, espesor])
         bruto = _r2(prod) if prod is not None else 0.0
         if bruto is None:

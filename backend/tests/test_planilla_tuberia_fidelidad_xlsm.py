@@ -76,7 +76,7 @@ class TestFormulasVsInventario(unittest.TestCase):
             [
                 "Excavación Varias",
                 "Long Tubería",
-                "Triturado / Atraque",
+                "Atraque mat. filtrante",
                 "Relleno Gran.",
                 "Geotextil",
                 "Excavación Roca",
@@ -329,6 +329,7 @@ class TestExcelDescuentosFijosPorTipo(unittest.TestCase):
     def test_descuentos_fijos_por_tipo(self):
         ws_alc = self._ws("ALCANTARILLA")
         # Triturado en fila 47 y Relleno en 48 tras reordenar Excavación Roca al final.
+        self.assertEqual(ws_alc["B47"].value, "Atraque mat. filtrante")
         self.assertEqual(ws_alc["G47"].value, "=N46")
         self.assertEqual(ws_alc["G48"].value, "=N47")
         self.assertEqual(ws_alc["I46"].value, "Area 1")
@@ -339,6 +340,7 @@ class TestExcelDescuentosFijosPorTipo(unittest.TestCase):
         self.assertEqual(ws_alc["B51"].value, "Otros: ____")
 
         ws_fil = self._ws("FILTRO")
+        self.assertEqual(ws_fil["B47"].value, "Mat. Granular Filtrante")
         self.assertEqual(ws_fil["G47"].value, "=N45")
         self.assertEqual(ws_fil["G48"].value, 0)
         self.assertEqual(ws_fil["I45"].value, "Tubería Filtro")
