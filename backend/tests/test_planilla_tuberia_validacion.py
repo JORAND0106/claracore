@@ -111,19 +111,25 @@ class TestValidacionPlanillaTuberiaLogic(unittest.TestCase):
     def _body(self, estado="Aprobado", comentario_data=None):
         return SimpleNamespace(estado=estado, comentario_data=comentario_data)
 
-    def test_requiere_cerrada(self):
-        with self.assertRaises(self.HTTPException) as ctx:
-            self.mod._aplicar_validacion_planilla_tuberia(
-                1, "p1", {"estado": "borrador", "nivel1_estado": "No Revisado"}, 1,
-                self._body(), {"sub": 3},
+    def test_permite_validar_en_borrador(self):
+        """Ya no se exige cierre manual previo: N1 puede validar en borrador."""
+        fake_sb = MagicMock()
+        row = {"estado": "borrador", "nivel1_estado": "No Revisado", "version": 1}
+        with patch.object(self.mod, "supabase", fake_sb), \
+             patch.object(self.mod, "_audit"), \
+             patch.object(self.mod, "_detalle", return_value={"planilla": {"id": "p1"}}):
+            out = self.mod._aplicar_validacion_planilla_tuberia(
+                1, "p1", row, 1, self._body("Aprobado"), {"sub": 3},
             )
-        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertTrue(out["ok"])
+        update = fake_sb.table.return_value.update.call_args[0][0]
+        self.assertEqual(update["nivel1_estado"], "Aprobado")
 
     def test_n2_requiere_n1_aprobado(self):
         with self.assertRaises(self.HTTPException) as ctx:
             self.mod._aplicar_validacion_planilla_tuberia(
                 1, "p1",
-                {"estado": "cerrado", "nivel1_estado": "Pendiente", "version": 1},
+                {"estado": "borrador", "nivel1_estado": "Pendiente", "version": 1},
                 2, self._body(), {"sub": 3},
             )
         self.assertIn("contratista", str(ctx.exception.detail).lower())
@@ -132,14 +138,14 @@ class TestValidacionPlanillaTuberiaLogic(unittest.TestCase):
         with self.assertRaises(self.HTTPException) as ctx:
             self.mod._aplicar_validacion_planilla_tuberia(
                 1, "p1",
-                {"estado": "cerrado", "nivel1_estado": "Aprobado", "version": 1},
+                {"estado": "borrador", "nivel1_estado": "Aprobado", "version": 1},
                 2, self._body("Pendiente"), {"sub": 3},
             )
         self.assertEqual(ctx.exception.status_code, 422)
 
-    def test_n2_guarda_comentario_y_valida(self):
+    def test_n2_pendiente_deja_editable_borrador(self):
         row = {
-            "estado": "cerrado",
+            "estado": "borrador",
             "nivel1_estado": "Aprobado",
             "nivel2_estado": "No Revisado",
             "version": 2,
@@ -161,11 +167,11 @@ class TestValidacionPlanillaTuberiaLogic(unittest.TestCase):
         update = fake_sb.table.return_value.update.call_args[0][0]
         self.assertEqual(update["nivel2_estado"], "Pendiente")
         self.assertEqual(update["comentario_interventoria"], "Revisar abscisa final")
-        self.assertEqual(update["estado"], "cerrado")
+        self.assertEqual(update["estado"], "borrador")
 
-    def test_n2_aprobado_sella_validado(self):
+    def test_n2_aprobado_auto_cierra_y_sella(self):
         row = {
-            "estado": "cerrado",
+            "estado": "borrador",
             "nivel1_estado": "Aprobado",
             "nivel2_estado": "No Revisado",
             "version": 1,
@@ -173,14 +179,18 @@ class TestValidacionPlanillaTuberiaLogic(unittest.TestCase):
         fake_sb = MagicMock()
         with patch.object(self.mod, "supabase", fake_sb), \
              patch.object(self.mod, "_audit"), \
-             patch.object(self.mod, "_detalle", return_value={"planilla": {"id": "p1"}}):
+             patch.object(self.mod, "_ejecutar_cierre_planilla_tuberia") as mock_cierre, \
+             patch.object(self.mod, "_row", return_value={**row, "estado": "validado", "version": 2}), \
+             patch.object(self.mod, "_detalle", return_value={"planilla": {"id": "p1", "estado": "validado"}}):
             out = self.mod._aplicar_validacion_planilla_tuberia(
                 7, "p1", row, 2, self._body("Aprobado"), {"sub": 9},
             )
+        mock_cierre.assert_called_once()
+        kwargs = mock_cierre.call_args.kwargs
+        self.assertEqual(kwargs.get("estado_final"), "validado")
         update = fake_sb.table.return_value.update.call_args[0][0]
-        self.assertEqual(update["estado"], "validado")
         self.assertEqual(update["nivel2_estado"], "Aprobado")
-        self.assertIsNone(update["comentario_interventoria"])
+        self.assertNotIn("estado", update)  # estado lo fijó el auto-cierre
         self.assertEqual(out["nivel"], 2)
 
     def test_endpoints_y_sql_en_fuente(self):
@@ -188,9 +198,18 @@ class TestValidacionPlanillaTuberiaLogic(unittest.TestCase):
         self.assertIn("/validar-nivel1", src)
         self.assertIn("/validar-nivel2", src)
         self.assertIn("comentario_interventoria", src)
+        self.assertIn("_ejecutar_cierre_planilla_tuberia", src)
+        self.assertIn("CERRAR_AL_APROBAR_N2", src)
         sql = Path(__file__).resolve().parents[1] / "sql" / "topo_alter_planillas_tuberia_validacion.sql"
         self.assertTrue(sql.is_file())
         self.assertIn("nivel1_estado", sql.read_text(encoding="utf-8"))
+
+    def test_ui_sin_boton_cerrar_y_panel_sin_prerequisito(self):
+        root = Path(__file__).resolve().parents[2]
+        form = (root / "frontend/src/components/topografia/planillaTuberia/PlanillaTuberiaForm.jsx").read_text(encoding="utf-8")
+        panel = (root / "frontend/src/components/topografia/PoligonalValidacionPanel.jsx").read_text(encoding="utf-8")
+        self.assertNotIn('title="Cerrar planilla"', form)
+        self.assertNotIn("Cierre la planilla antes de validar.", panel)
 
 
 if __name__ == "__main__":

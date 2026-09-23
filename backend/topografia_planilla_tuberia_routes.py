@@ -1689,28 +1689,80 @@ def crear_reporte_sicoe_desde_planilla(
 
 @router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/cerrar")
 def cerrar(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
+    """
+    Cierre manual (API / compatibilidad).
+    En UI el cierre ocurre al aprobar interventoría (nivel 2); este endpoint
+    permanece por si se invoca desde herramientas o flujos legacy.
+    """
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar")
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
-    if (p.get("estado") or "").lower() != "borrador":
-        raise HTTPException(422, "Solo se cierran planillas en borrador.")
-    filas = _filas(planilla_id)
-    if not filas:
-        raise HTTPException(
-            422,
-            "No hay cartera para cerrar. Guarde la cartera de campo (con datos) antes de cerrar la planilla.",
-        )
-    calc = _calcular(p, filas, _descuentos(planilla_id))
-    now = _now()
-    consol = construir_fila_consolidado(
-        {**p, "estado": "cerrado", "cerrado_at": now, "contrato_id": contrato_id}, calc
+    _ejecutar_cierre_planilla_tuberia(
+        contrato_id, planilla_id, p, current_user, estado_final="cerrado",
     )
-    supabase.table("topo_planillas_tuberia").update({
-        "estado": "cerrado", "cerrado_at": now, "cerrado_por": _uid(current_user),
-        "calculo_snapshot": calc, "version": int(p.get("version") or 1) + 1, "updated_at": now,
-    }).eq("id", planilla_id).execute()
+    return _detalle(contrato_id, planilla_id)
+
+
+def _ejecutar_cierre_planilla_tuberia(
+    contrato_id: int,
+    planilla_id: str,
+    p: dict,
+    current_user,
+    *,
+    estado_final: str = "cerrado",
+    validado_por: Optional[int] = None,
+) -> dict:
+    """
+    Congela cartera, genera snapshot y consolidado.
+    estado_final: 'cerrado' (legacy) o 'validado' (auto-cierre al aprobar N2).
+    """
+    estado_act = (p.get("estado") or "").lower()
+    if estado_act not in ("borrador", "cerrado"):
+        # Ya validada u otro estado: no re-cerrar.
+        if estado_act == "validado" and estado_final == "validado":
+            return p
+        raise HTTPException(422, "Solo se cierran planillas en borrador (o cerrado previo a sello).")
+    if estado_act == "borrador":
+        filas = _filas(planilla_id)
+        if not filas:
+            raise HTTPException(
+                422,
+                "No hay cartera para cerrar. Guarde la cartera de campo (con datos) "
+                "antes de que interventoría apruebe la planilla.",
+            )
+        calc = _calcular(p, filas, _descuentos(planilla_id))
+    else:
+        # Ya cerrada: reutilizar snapshot si existe; si no, recalcular.
+        calc = p.get("calculo_snapshot")
+        if not isinstance(calc, dict) or not calc:
+            filas = _filas(planilla_id)
+            if not filas:
+                raise HTTPException(422, "No hay cartera para cerrar.")
+            calc = _calcular(p, filas, _descuentos(planilla_id))
+
+    now = _now()
+    uid = _uid(current_user)
+    estado_out = "validado" if estado_final == "validado" else "cerrado"
+    consol = construir_fila_consolidado(
+        {**p, "estado": estado_out, "cerrado_at": p.get("cerrado_at") or now, "contrato_id": contrato_id},
+        calc,
+    )
+    update: dict[str, Any] = {
+        "estado": estado_out,
+        "calculo_snapshot": calc,
+        "version": int(p.get("version") or 1) + 1,
+        "updated_at": now,
+    }
+    if not p.get("cerrado_at"):
+        update["cerrado_at"] = now
+        update["cerrado_por"] = uid
+    if estado_out == "validado":
+        update["validado_at"] = now
+        update["validado_por"] = validado_por if validado_por is not None else uid
+
+    supabase.table("topo_planillas_tuberia").update(update).eq("id", planilla_id).execute()
     supabase.table("topo_planilla_tuberia_consolidado").delete().eq("planilla_id", planilla_id).execute()
     supabase.table("topo_planilla_tuberia_consolidado").insert({
         "contrato_id": contrato_id,
@@ -1734,12 +1786,17 @@ def cerrar(contrato_id: int, planilla_id: str, current_user=Depends(get_current_
         "c17_long_tuberia_m": consol.get("c17_long_tuberia_m"),
         "c18_norte_ref": consol.get("c18_norte_ref"),
         "c19_este_ref": consol.get("c19_este_ref"),
-        "c20_estado": "cerrado",
-        "c21_cerrado_at": now,
+        "c20_estado": estado_out,
+        "c21_cerrado_at": update.get("cerrado_at") or p.get("cerrado_at") or now,
         "c22_contrato_id": contrato_id,
     }).execute()
-    _audit(contrato_id, planilla_id, "CERRAR", current_user, {"consolidado": consol})
-    return _detalle(contrato_id, planilla_id)
+    _audit(
+        contrato_id, planilla_id,
+        "CERRAR" if estado_out == "cerrado" else "CERRAR_AL_APROBAR_N2",
+        current_user,
+        {"consolidado": consol, "estado": estado_out},
+    )
+    return {**p, **update}
 
 
 def _aplicar_validacion_planilla_tuberia(
@@ -1750,14 +1807,16 @@ def _aplicar_validacion_planilla_tuberia(
     body: ValidarPlanillaTuberiaBody,
     current_user,
 ) -> dict:
-    """Validación dual contratista (N1) → interventoría (N2), patrón topo/SICOE."""
+    """Validación dual contratista (N1) → interventoría (N2), patrón topo/SICOE.
+
+    El cierre de la planilla (congelar cartera + consolidado) ocurre automáticamente
+    cuando interventoría (N2) marca Aprobado. Pendiente/Rechazado dejan la planilla
+    editable (borrador).
+    """
     require_topo_puede_validar_nivel(current_user, nivel)
-    estado_planilla = (row.get("estado") or "").lower()
-    if estado_planilla not in ("cerrado", "validado"):
-        raise HTTPException(
-            422,
-            "La planilla debe estar cerrada antes de validar.",
-        )
+    estado_planilla = (row.get("estado") or "").lower() or "borrador"
+    if estado_planilla not in ("borrador", "cerrado", "validado"):
+        raise HTTPException(422, f"Estado de planilla no válido para validar: {estado_planilla}")
     if body.estado not in ESTADOS_VALIDACION_PT:
         raise HTTPException(
             422,
@@ -1797,12 +1856,21 @@ def _aplicar_validacion_planilla_tuberia(
         update["comentario_interventoria"] = msg or None
         update["comentario_interventoria_at"] = now if msg else None
         if body.estado == "Aprobado":
-            update["estado"] = "validado"
-            update["validado_at"] = now
-            update["validado_por"] = uid
+            # Auto-cierre: mismo efecto que el antiguo botón «Cerrar planilla».
+            _ejecutar_cierre_planilla_tuberia(
+                contrato_id, planilla_id, row, current_user,
+                estado_final="validado", validado_por=uid,
+            )
+            # El cierre ya escribió estado/validado_*/cerrado_*/version/snapshot;
+            # solo aplicamos campos de nivel + comentario encima.
+            # Recargar versión tras cierre para no pisar version bump.
+            p_post = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id) or row
+            update["version"] = int(p_post.get("version") or 1) + 1
+            # No reescribir estado/validado_at (ya puestos por el cierre).
+            update.pop("estado", None)
         else:
-            # Pendiente/Rechazado: permanece cerrada (editable solo vía reabrir Dev).
-            update["estado"] = "cerrado"
+            # Pendiente/Rechazado: permanece editable (borrador).
+            update["estado"] = "borrador"
             update["validado_at"] = None
             update["validado_por"] = None
 
@@ -1828,6 +1896,7 @@ def _aplicar_validacion_planilla_tuberia(
             "estado": body.estado,
             "comentario": bool(body.comentario_data),
             "mensaje": (update.get("comentario_interventoria") if nivel == 2 else None),
+            "auto_cierre": bool(nivel == 2 and body.estado == "Aprobado"),
         },
     )
     return {
