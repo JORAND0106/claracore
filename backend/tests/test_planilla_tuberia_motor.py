@@ -114,6 +114,34 @@ class TestCarteraXlsm(unittest.TestCase):
             )
             self.assertEqual(activas[i]["altura_relleno"], 0.0)
 
+    def test_filtro_traslapo_suma_a_geotextil(self):
+        base = calcular_planilla_completa(
+            tipo="FILTRO", diametro_m=0.6, espesor_m=0.03,
+            ancho_excavacion_m=1.2, relacion_atraque="1:2",
+            filas_campo=_filas_sinteticas("FILTRO"),
+            traslapo_m=0.0,
+        )
+        prom = base["cartera"]["totales"]["prom_ancho_geotextil"]
+        L = base["cartera"]["totales"]["longitud_m"]
+        self.assertIsNotNone(prom)
+        geo0 = next(n for n in base["netos"] if n["codigo"] == "GEO")
+        self.assertAlmostEqual(geo0["neto"], round(L * prom, 2), places=2)
+
+        r = calcular_planilla_completa(
+            tipo="FILTRO", diametro_m=0.6, espesor_m=0.03,
+            ancho_excavacion_m=1.2, relacion_atraque="1:2",
+            filas_campo=_filas_sinteticas("FILTRO"),
+            traslapo_m=0.25,
+        )
+        self.assertAlmostEqual(r["seccion"]["traslapo_m"], 0.25, places=4)
+        # Promedio de cartera no incluye traslapo.
+        self.assertAlmostEqual(
+            r["cartera"]["totales"]["prom_ancho_geotextil"], prom, places=4,
+        )
+        geo = next(n for n in r["netos"] if n["codigo"] == "GEO")
+        self.assertAlmostEqual(geo["ancho"], prom + 0.25, places=4)
+        self.assertAlmostEqual(geo["neto"], round(L * (prom + 0.25), 2), places=2)
+
     def test_promedios_ignoran_filas_vacias(self):
         filas = _filas_sinteticas()
         r = calcular_planilla_completa(

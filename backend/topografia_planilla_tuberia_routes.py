@@ -248,6 +248,35 @@ def _cama_triturado_m(planilla: dict) -> float:
         return 0.0
 
 
+def _traslapo_m(planilla: dict) -> float:
+    """Traslapo geotextil (m) desde meta_cabecera; solo relevante en FILTRO."""
+    meta = planilla.get("meta_cabecera") or {}
+    if not isinstance(meta, dict):
+        return 0.0
+    try:
+        return float(meta.get("traslapo_m") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _assert_traslapo_filtro(tipo: str, meta: Any) -> None:
+    """FILTRO: traslapo_m obligatorio en meta (≥ 0, no vacío)."""
+    if str(tipo or "").upper() != "FILTRO":
+        return
+    meta_d = meta if isinstance(meta, dict) else {}
+    raw = meta_d.get("traslapo_m")
+    if raw is None or raw == "":
+        raise HTTPException(
+            422,
+            "Traslapo es obligatorio en planillas tipo FILTRO (cabecera / tramo).",
+        )
+    try:
+        val = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, "Traslapo debe ser un número ≥ 0.") from exc
+    if val < 0:
+        raise HTTPException(422, "Traslapo debe ser ≥ 0.")
+
 
 def _cantidades_manuales_from_meta(planilla: dict) -> list[dict]:
     meta = planilla.get("meta_cabecera") or {}
@@ -420,6 +449,7 @@ def _calcular(planilla: dict, filas_db: list[dict], desc_db: list[dict]) -> dict
         descuentos_manuales=[{"codigo": d["codigo"], "cantidad": d.get("cantidad")} for d in desc_db],
         cantidades_manuales=_cantidades_manuales_from_meta(planilla),
         cama_triturado_m=_cama_triturado_m(planilla),
+        traslapo_m=_traslapo_m(planilla),
     )
 
 
@@ -815,11 +845,13 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
     rel = patch.get("relacion_atraque", p.get("relacion_atraque") or "1:3")
     tipo_calc = patch.get("tipo", p.get("tipo") or "ALCANTARILLA")
     meta_for_calc = patch.get("meta_cabecera", p.get("meta_cabecera"))
+    _assert_traslapo_filtro(tipo_calc, meta_for_calc)
     if diam and ancho:
         calc = calcular_planilla_completa(
             tipo=tipo_calc, diametro_m=float(diam), espesor_m=float(esp or 0),
             ancho_excavacion_m=float(ancho), relacion_atraque=rel, filas_campo=[],
             cama_triturado_m=_cama_triturado_m({"meta_cabecera": meta_for_calc}),
+            traslapo_m=_traslapo_m({"meta_cabecera": meta_for_calc}),
         )
         sec = calc["seccion"]
         patch.update({
@@ -904,6 +936,7 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
 
     filas_util = []
     tipo_planilla = p.get("tipo") or "ALCANTARILLA"
+    _assert_traslapo_filtro(tipo_planilla, p.get("meta_cabecera"))
     for f in body.filas:
         d = f.model_dump()
         if any(d.get(k) is not None for k in (
