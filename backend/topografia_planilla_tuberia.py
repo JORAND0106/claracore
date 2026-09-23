@@ -1080,12 +1080,27 @@ def filtrar_capitulos_por_tipo_planilla(
 
 
 def _cantidad_sicoe_no_cero(v: Any) -> bool:
+    """Misma semántica que Excel (`_excel_cantidad_no_cero`): |cant| > eps."""
     try:
         if v is None or v == "":
             return False
         return abs(float(v)) > _EPS_CANTIDAD_SICOE
     except (TypeError, ValueError):
         return False
+
+
+def formatear_observacion_registro_sicoe(
+    nombre_item: Any,
+    tipo_red: Any,
+    tramo: Any,
+) -> str:
+    """
+    Observación SICOE: «{Ítem} para {ALCANTARILLA|FILTRO} en tramo {Tramo}».
+    """
+    nombre = str(nombre_item or "").strip() or "Ítem"
+    tipo = str(tipo_red or "").strip().upper() or "—"
+    tramo_txt = str(tramo or "").strip() or "—"
+    return f"{nombre} para {tipo} en tramo {tramo_txt}"
 
 
 def abscisas_extremos_cartera(
@@ -1109,10 +1124,16 @@ def abscisas_extremos_cartera(
     return min(vals), max(vals)
 
 
-def lineas_planilla_a_registros_sicoe(calculo: Optional[dict]) -> list[dict[str, Any]]:
+def lineas_planilla_a_registros_sicoe(
+    calculo: Optional[dict],
+    *,
+    tipo: Optional[str] = None,
+    tramo: Optional[str] = None,
+) -> list[dict[str, Any]]:
     """
     Cada línea de Resumen de Cantidades y Descuentos Específicos con cantidad ≠ 0
-    → payload de so_registros (sin ítem; texto Item → observacion/descripcion).
+    → payload de so_registros (sin ítem; observación enriquecida con tipo/tramo).
+    Criterio de cero: mismo eps que la exportación Excel.
     """
     if not isinstance(calculo, dict):
         return []
@@ -1125,11 +1146,12 @@ def lineas_planilla_a_registros_sicoe(calculo: Optional[dict]) -> list[dict[str,
         if not _cantidad_sicoe_no_cero(cant):
             return
         txt = str(nombre or codigo or "").strip() or codigo
+        obs = formatear_observacion_registro_sicoe(txt, tipo, tramo)
         c = float(cant)
         out.append({
             "nombre": txt,
             "descripcion": txt,
-            "observacion": txt,
+            "observacion": obs,
             "unidad": (str(unidad).strip() if unidad not in (None, "") else None),
             "longitud": _r4(long) if long is not None else None,
             "ancho": _r4(ancho) if ancho is not None else None,
@@ -1185,7 +1207,12 @@ def patch_so_registro_desde_linea_planilla(linea: dict[str, Any]) -> dict[str, A
     }
 
 
-def mapa_lineas_sicoe_por_origen(calculo: Optional[dict]) -> dict[str, dict[str, Any]]:
+def mapa_lineas_sicoe_por_origen(
+    calculo: Optional[dict],
+    *,
+    tipo: Optional[str] = None,
+    tramo: Optional[str] = None,
+) -> dict[str, dict[str, Any]]:
     """clave «scope:codigo» → línea (incluye las que quedaron en 0 para poder bajar cantidad)."""
     out: dict[str, dict[str, Any]] = {}
     if not isinstance(calculo, dict):
@@ -1203,11 +1230,12 @@ def mapa_lineas_sicoe_por_origen(calculo: Optional[dict]) -> dict[str, dict[str,
             c = float(cant) if cant is not None and cant != "" else 0.0
         except (TypeError, ValueError):
             c = 0.0
+        nombre = n.get("nombre") or codigo
         key = f"cantidades:{codigo}"
         out[key] = {
-            "nombre": n.get("nombre") or codigo,
-            "descripcion": n.get("nombre") or codigo,
-            "observacion": n.get("nombre") or codigo,
+            "nombre": nombre,
+            "descripcion": nombre,
+            "observacion": formatear_observacion_registro_sicoe(nombre, tipo, tramo),
             "unidad": n.get("unidad"),
             "longitud": n.get("long"),
             "ancho": n.get("ancho"),
@@ -1227,11 +1255,12 @@ def mapa_lineas_sicoe_por_origen(calculo: Optional[dict]) -> dict[str, dict[str,
             c = float(d.get("cantidad") or 0)
         except (TypeError, ValueError):
             c = 0.0
+        nombre = d.get("nombre") or codigo
         key = f"descuentos:{codigo}"
         out[key] = {
-            "nombre": d.get("nombre") or codigo,
-            "descripcion": d.get("nombre") or codigo,
-            "observacion": d.get("nombre") or codigo,
+            "nombre": nombre,
+            "descripcion": nombre,
+            "observacion": formatear_observacion_registro_sicoe(nombre, tipo, tramo),
             "unidad": d.get("unidad") or "m³",
             "longitud": d.get("long"),
             "ancho": d.get("ancho"),
