@@ -1552,6 +1552,56 @@ def _filtrar_sicoe_reportes_vigentes(
     return {**planilla, "meta_cabecera": new_meta}
 
 
+def _planilla_tuberia_sellada(planilla: Optional[dict]) -> bool:
+    """Sellada = cerrada/validada o interventoría (N2) Aprobado."""
+    if not isinstance(planilla, dict):
+        return False
+    est = str(planilla.get("estado") or "").lower()
+    if est in ("cerrado", "validado"):
+        return True
+    return str(planilla.get("nivel2_estado") or "") == "Aprobado"
+
+
+def _mapa_codigos_por_nombre_registros(
+    contrato_id: int,
+    reporte_id: int,
+    by_origen: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    """Resuelve «scope:codigo» → numero_registro emparejando nombres de ítem."""
+    try:
+        regs = (
+            supabase.table("so_registros")
+            .select("id,numero_registro,nombre")
+            .eq("contrato_id", int(contrato_id))
+            .eq("reporte_id", int(reporte_id))
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        logger.exception(
+            "mapa codigos por nombre reporte=%s contrato=%s", reporte_id, contrato_id,
+        )
+        return {}
+    by_nombre: dict[str, dict] = {}
+    for r in regs:
+        key = _norm_nombre_match(r.get("nombre"))
+        if key and key not in by_nombre:
+            by_nombre[key] = r
+    out: dict[str, int] = {}
+    for origen_key, linea in (by_origen or {}).items():
+        if not isinstance(linea, dict):
+            continue
+        nombre = _norm_nombre_match(linea.get("nombre"))
+        reg = by_nombre.get(nombre) if nombre else None
+        if not reg:
+            continue
+        try:
+            out[str(origen_key)] = int(reg.get("numero_registro"))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _sincronizar_so_registros_desde_calc(
     planilla: dict,
     calculo: Optional[dict],
@@ -1560,10 +1610,15 @@ def _sincronizar_so_registros_desde_calc(
     """
     Actualiza so_registros ya vinculados (dims/cantidad) tras editar la planilla.
     No crea registros nuevos; solo parchea los mapeados en meta.sicoe_reportes.
+    Mientras la planilla no esté sellada (interventoría), sincroniza también los
+    vínculos «asociar» (solo_adjunto): la edición de cantidades va primero por
+    topografía; las casillas en SICOE siguen editables.
     """
+    if _planilla_tuberia_sellada(planilla):
+        return {"updated": 0, "skipped": True, "reason": "sellada"}
     links = _sicoe_links_from_meta(planilla.get("meta_cabecera"))
     if not links:
-        return {"updated": 0, "skipped": True}
+        return {"updated": 0, "skipped": True, "reason": "sin_vinculos"}
     pk_row = _fetch_pk_maestro(contrato_id, planilla.get("pk_id"))
     tramo_lbl = None
     if isinstance(pk_row, dict):
@@ -1577,16 +1632,21 @@ def _sincronizar_so_registros_desde_calc(
     )
     updated = 0
     errors: list[str] = []
+    mapa_persistir: dict[str, dict[str, int]] = {}
     for link in links:
-        if link.get("solo_adjunto"):
-            # Vínculo por «Asociar a reporte»: no parchea cantidades/dims.
-            continue
         try:
             reporte_id = int(link.get("reporte_id"))
         except (TypeError, ValueError):
             continue
         mapa = link.get("registro_numeros_por_codigo") or {}
         if not isinstance(mapa, dict):
+            mapa = {}
+        # Si el vínculo no trae mapa (p. ej. asociar con pocos matches), armar por nombre.
+        if not mapa and by_origen:
+            mapa = _mapa_codigos_por_nombre_registros(contrato_id, reporte_id, by_origen)
+            if mapa:
+                mapa_persistir[str(reporte_id)] = mapa
+        if not mapa:
             continue
         for origen_key, num_raw in mapa.items():
             try:
@@ -1608,6 +1668,30 @@ def _sincronizar_so_registros_desde_calc(
                     "sync so_registros planilla→sicoe reporte=%s num=%s",
                     reporte_id, num,
                 )
+
+    # Persistir mapas reconstruidos para próximos guardados.
+    if mapa_persistir and planilla.get("id"):
+        try:
+            prev_meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
+            links_new = []
+            for lk in links:
+                entry = dict(lk) if isinstance(lk, dict) else {}
+                try:
+                    rid_k = str(int(entry.get("reporte_id")))
+                except (TypeError, ValueError):
+                    links_new.append(entry)
+                    continue
+                if rid_k in mapa_persistir:
+                    entry["registro_numeros_por_codigo"] = mapa_persistir[rid_k]
+                links_new.append(entry)
+            new_meta = {**prev_meta, "sicoe_reportes": links_new}
+            supabase.table("topo_planillas_tuberia").update({
+                "meta_cabecera": new_meta,
+                "updated_at": _now(),
+            }).eq("id", planilla["id"]).eq("contrato_id", int(contrato_id)).execute()
+        except Exception:
+            logger.exception("persist mapa codigos tras sync planilla=%s", planilla.get("id"))
+
     return {"updated": updated, "errors": errors}
 
 
@@ -2222,7 +2306,9 @@ def asociar_reporte_sicoe_existente(
 ):
     """
     Vincula la planilla a un so_reportes ya existente.
-    No crea registros ni actualiza cantidades: solo adjunto + fotos + coordenadas + gráfico.
+    No crea registros nuevos. Reemplaza coordenadas/fotos/gráfico.
+    Las cantidades se sincronizan en guardados posteriores mientras la planilla
+    no esté sellada por interventoría (las casillas en SICOE siguen editables).
     """
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar")
@@ -2431,7 +2517,8 @@ def asociar_reporte_sicoe_existente(
                 reg.get("id"), reporte_id, exc,
             )
 
-    # 3) Vínculo en meta (solo_adjunto: no sincroniza cantidades en guardados posteriores)
+    # 3) Vínculo en meta. solo_adjunto marca origen «asociar» (sin crear registros);
+    #    el sync de cantidades aplica igual mientras la planilla no esté sellada.
     prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
     links = _sicoe_links_from_meta(prev_meta)
     link = {

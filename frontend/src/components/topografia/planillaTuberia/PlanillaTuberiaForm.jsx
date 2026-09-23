@@ -593,7 +593,11 @@ export default function PlanillaTuberiaForm({
         return
       }
       aplicarDetalle(res)
-      setMsg(`Planilla guardada y verificada (${conf.count} filas, v${conf.version}).`)
+      const syncN = Number(res?.sicoe_sync?.updated || 0)
+      const syncTxt = syncN > 0
+        ? ` Cantidades sincronizadas al reporte SICOE (${syncN} registro(s)).`
+        : ''
+      setMsg(`Planilla guardada y verificada (${conf.count} filas, v${conf.version}).${syncTxt}`)
       await cargarLista()
     } catch (e) {
       setErr(typeof e.message === 'string' ? e.message : JSON.stringify(e.message))
@@ -2378,7 +2382,7 @@ export default function PlanillaTuberiaForm({
           if (res?.planilla) aplicarDetalle(res.planilla)
           const num = res?.numero_reporte
           setMsg(num != null
-            ? `Planilla asociada al reporte SICOE #${num} (coords/fotos/gráfico actualizados; cantidades intactas).`
+            ? `Planilla asociada al reporte SICOE #${num} (coords/fotos/gráfico actualizados; cantidades se sincronizan al Guardar si no está sellada).`
             : 'Planilla asociada al reporte SICOE.')
           if (res?.reporte_id != null && typeof onAbrirReporteSicoe === 'function') {
             onAbrirReporteSicoe(res.reporte_id, res.numero_reporte)

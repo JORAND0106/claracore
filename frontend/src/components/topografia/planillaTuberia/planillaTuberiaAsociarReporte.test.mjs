@@ -36,7 +36,8 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.match(modalSrc, /Asociar a reporte existente/)
     assert.match(modalSrc, /data-asociar-numero-reporte/)
     assert.match(modalSrc, /data-asociar-esquema-btn/)
-    assert.match(modalSrc, /sin actualizar cantidades/i)
+    assert.match(modalSrc, /sin modificar cantidades al asociar/i)
+    assert.match(modalSrc, /al Guardar se sincronizan/i)
   })
 
   it('busca reportes existentes con autocomplete y preview Nº & Descripción & Abs', () => {
@@ -86,8 +87,13 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.match(asociarBlock, /\.eq\("reporte_id", int\(reporte_id\)\)/)
   })
 
-  it('sync de cantidades omite vínculos solo_adjunto', () => {
-    assert.match(routesSrc, /if link\.get\("solo_adjunto"\)/)
+  it('sync de cantidades incluye solo_adjunto mientras la planilla no esté sellada', () => {
+    assert.match(routesSrc, /def _planilla_tuberia_sellada/)
+    assert.match(routesSrc, /reason": "sellada"/)
+    assert.match(routesSrc, /_mapa_codigos_por_nombre_registros/)
+    assert.doesNotMatch(routesSrc, /if link\.get\("solo_adjunto"\)/)
+    assert.match(formSrc, /sicoe_sync\?\.updated/)
+    assert.match(formSrc, /Cantidades sincronizadas al reporte SICOE/)
   })
 })
 
