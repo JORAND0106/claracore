@@ -58,6 +58,76 @@ export function esCodigoCantidadEditable(codigo) {
   return cod === 'EXC_ROC' || esCodigoOtros(cod)
 }
 
+const CAMPOS_DESC_LABEL = Object.fromEntries(CAMPOS_DESCUENTO_ALTURA.map((c) => [c.key, c.label]))
+
+function nombreActividadDescuentoAltura(codigo, nombre) {
+  const cod = String(codigo || '').trim().toUpperCase()
+  let raw = String(nombre || '').trim()
+  if (esCodigoOtros(cod)) {
+    if (raw.toLowerCase().startsWith('otros:')) raw = raw.slice(6).trim()
+    else if (raw.toLowerCase().startsWith('otros')) raw = raw.slice(5).replace(/^:/, '').trim()
+    return raw || 'Otros'
+  }
+  if (cod === 'EXC_ROC') return raw || 'Excavación Roca'
+  return raw || cod || '—'
+}
+
+/** Nota breve de descuento de altura para FE / Excel. */
+export function formatearNotaDescuentoAltura({
+  actividad, campoLabel, alturaOriginal, valorDescontado, alturaFinal,
+}) {
+  const act = String(actividad || '').trim() || '—'
+  const lbl = String(campoLabel || '').trim() || 'Altura'
+  const fmt = (v) => {
+    const n = Number(v)
+    if (!Number.isFinite(n)) return '—'
+    return (Math.round(n * 1000) / 1000).toString()
+  }
+  return `${act}: ${lbl} ${fmt(alturaOriginal)} − ${fmt(valorDescontado)} = ${fmt(alturaFinal)} m`
+}
+
+function construirDescuentosAlturaDetalle(overridesList, L, B, alturasOrig, alturasFinal) {
+  const out = []
+  for (const ov of overridesList || []) {
+    const campo = ov.descontar_de
+    if (!CAMPOS_DESC_SET.has(campo) || ov.espesor == null) continue
+    const esp = Number(ov.espesor)
+    if (!Number.isFinite(esp) || Math.abs(esp) < 1e-12) continue
+    const codigo = String(ov.codigo || '').trim().toUpperCase()
+    if (!codigo) continue
+    const actividad = nombreActividadDescuentoAltura(codigo, ov.nombre)
+    const label = CAMPOS_DESC_LABEL[campo] || campo
+    const hOrig = Number(alturasOrig[campo] || 0)
+    const hFin = Number(alturasFinal[campo] || 0)
+    const vol = r2(product([L, B, esp])) || 0
+    const nota = formatearNotaDescuentoAltura({
+      actividad,
+      campoLabel: label,
+      alturaOriginal: hOrig,
+      valorDescontado: esp,
+      alturaFinal: hFin,
+    })
+    out.push({
+      codigo: `DESC_ALT_${codigo}`,
+      origen_codigo: codigo,
+      nombre: `Desc. altura (${actividad})`,
+      actividad,
+      campo,
+      campo_label: label,
+      altura_original: r4(hOrig),
+      valor_descontado: r4(esp),
+      altura_final: r4(hFin),
+      long: r4(L),
+      ancho: r4(B),
+      espesor: r4(esp),
+      cantidad: Math.round(vol * 100) / 100,
+      unidad: 'm³',
+      nota,
+    })
+  }
+  return out
+}
+
 function f(v) {
   if (v == null || v === '') return null
   const x = Number(v)
@@ -318,6 +388,9 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
     prom_altura_triturado: 0,
     prom_altura_relleno: 0,
   }
+  const hExcOrig = hExc
+  const hTritOrig = hTrit
+  const hRelOrig = hRel
   for (const ov of overridesList) {
     if (ov.descontar_de && ov.espesor != null && restas[ov.descontar_de] != null) {
       restas[ov.descontar_de] += Number(ov.espesor) || 0
@@ -326,6 +399,20 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   hExc = Math.max(0, hExc - restas.prom_altura_excavacion)
   hTrit = Math.max(0, hTrit - restas.prom_altura_triturado)
   hRel = Math.max(0, hRel - restas.prom_altura_relleno)
+  const alturasOrig = {
+    prom_altura_excavacion: hExcOrig,
+    prom_altura_triturado: hTritOrig,
+    prom_altura_relleno: hRelOrig,
+  }
+  const alturasFinal = {
+    prom_altura_excavacion: hExc,
+    prom_altura_triturado: hTrit,
+    prom_altura_relleno: hRel,
+  }
+  const descuentosAlturaDetalle = construirDescuentosAlturaDetalle(
+    overridesList, L, B, alturasOrig, alturasFinal,
+  )
+  const notasDescuentoAltura = descuentosAlturaDetalle.map((d) => d.nota).filter(Boolean)
 
   let descA1 = 0
   let descA2 = 0
@@ -456,6 +543,8 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
     descuentos_altura: Object.fromEntries(
       Object.entries(restas).filter(([, v]) => v).map(([k, v]) => [k, Math.round(v * 10000) / 10000]),
     ),
+    descuentos_altura_detalle: descuentosAlturaDetalle,
+    notas_descuento_altura: notasDescuentoAltura,
   }
 }
 
@@ -550,6 +639,8 @@ export function calcularPlanillaLocal({
       descuentos: cant.descuentos,
       netos: cant.netos,
       descuentos_altura: cant.descuentos_altura || {},
+      descuentos_altura_detalle: cant.descuentos_altura_detalle || [],
+      notas_descuento_altura: cant.notas_descuento_altura || [],
       perfil: perfilLongitudinal(cartera, seccion),
       seccion_tipica: seccionTipicaParams(seccion, cartera),
     }

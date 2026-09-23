@@ -378,6 +378,7 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
     planilla = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not planilla:
         raise HTTPException(404, "Planilla no encontrada")
+    planilla = _filtrar_sicoe_reportes_vigentes(contrato_id, planilla, persist=True)
     filas = _filas(planilla_id)
     descuentos = _descuentos(planilla_id)
     calculo = None
@@ -1115,6 +1116,95 @@ def _sicoe_links_from_meta(meta: Any) -> list[dict]:
         if isinstance(item, dict) and item.get("reporte_id") is not None:
             out.append(dict(item))
     return out
+
+
+def _filtrar_sicoe_reportes_vigentes(
+    contrato_id: int,
+    planilla: dict,
+    *,
+    persist: bool = True,
+) -> dict:
+    """
+    Quita de meta_cabecera.sicoe_reportes los reporte_id que ya no existen en so_reportes.
+    Así «Reportes SICOE» en la planilla refleja solo números vigentes.
+    """
+    if not isinstance(planilla, dict):
+        return planilla
+    meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
+    links = _sicoe_links_from_meta(meta)
+    if not links:
+        return planilla
+    ids: list[int] = []
+    for l in links:
+        try:
+            ids.append(int(l["reporte_id"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    if not ids:
+        new_meta = {**meta, "sicoe_reportes": []}
+        if persist and planilla.get("id"):
+            try:
+                supabase.table("topo_planillas_tuberia").update({
+                    "meta_cabecera": new_meta,
+                    "updated_at": _now(),
+                }).eq("id", planilla["id"]).eq("contrato_id", int(contrato_id)).execute()
+            except Exception:
+                logger.exception("prune sicoe_reportes vacío")
+        return {**planilla, "meta_cabecera": new_meta}
+
+    try:
+        rows = (
+            supabase.table("so_reportes")
+            .select("id, numero_reporte")
+            .eq("contrato_id", int(contrato_id))
+            .in_("id", ids)
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        logger.exception("filtrar sicoe_reportes vigentes")
+        return planilla
+
+    by_id = {}
+    for r in rows:
+        try:
+            by_id[int(r["id"])] = r
+        except (TypeError, ValueError, KeyError):
+            continue
+
+    kept: list[dict] = []
+    for l in links:
+        try:
+            rid = int(l["reporte_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if rid not in by_id:
+            continue
+        row = dict(l)
+        nr = by_id[rid].get("numero_reporte")
+        if nr is not None:
+            row["numero_reporte"] = nr
+        kept.append(row)
+
+    if len(kept) == len(links):
+        # Actualizar números si cambiaron, sin persistir si idéntico
+        changed_nums = any(
+            kept[i].get("numero_reporte") != links[i].get("numero_reporte")
+            for i in range(len(kept))
+        )
+        if not changed_nums:
+            return planilla
+
+    new_meta = {**meta, "sicoe_reportes": kept}
+    if persist and planilla.get("id"):
+        try:
+            supabase.table("topo_planillas_tuberia").update({
+                "meta_cabecera": new_meta,
+                "updated_at": _now(),
+            }).eq("id", planilla["id"]).eq("contrato_id", int(contrato_id)).execute()
+        except Exception:
+            logger.exception("prune sicoe_reportes persist")
+    return {**planilla, "meta_cabecera": new_meta}
 
 
 def _sincronizar_so_registros_desde_calc(

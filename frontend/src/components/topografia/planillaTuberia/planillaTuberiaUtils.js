@@ -125,11 +125,12 @@ function esVisibleParaFoco(el) {
 
 /**
  * Enter avanza al siguiente campo (como Tab); Shift+Enter al anterior.
+ * Flechas navegan en la dirección correspondiente (hoja de cálculo).
  * No intercepta botones ni atajos con modificadores.
- * Misma semántica que `nivelacionUiShared.handleEnterAsTab`.
+ * Misma semántica que `nivelacionUiShared.handleEnterAsTab` (+ flechas).
  */
 export function handleEnterAsTab(e, rootEl) {
-  if (e.key !== 'Enter' || e.defaultPrevented) return
+  if (e.defaultPrevented) return
   if (e.ctrlKey || e.metaKey || e.altKey) return
   const target = e.target
   if (!target || !rootEl || typeof rootEl.contains !== 'function' || !rootEl.contains(target)) return
@@ -138,16 +139,73 @@ export function handleEnterAsTab(e, rootEl) {
   const typ = String(target.type || '').toLowerCase()
   if (typ === 'button' || typ === 'submit' || typ === 'reset' || typ === 'checkbox' || typ === 'radio') return
 
+  const key = e.key
+  const isEnter = key === 'Enter'
+  const isArrow = key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' || key === 'ArrowRight'
+  if (!isEnter && !isArrow) return
+
+  // En selects, flechas cambian la opción nativa — no interceptar.
+  if (isArrow && tag === 'SELECT') return
+  // En textarea, flechas/Enter son edición de texto.
+  if (tag === 'TEXTAREA') return
+
   e.preventDefault()
   const nodes = [...rootEl.querySelectorAll(ENTER_AS_TAB_SELECTOR)].filter(esVisibleParaFoco)
   const idx = nodes.indexOf(target)
   if (idx < 0) return
-  const next = e.shiftKey ? nodes[idx - 1] : nodes[idx + 1]
+
+  let nextIdx = idx
+  if (isEnter) {
+    nextIdx = e.shiftKey ? idx - 1 : idx + 1
+  } else {
+    const row = Number(target.getAttribute?.('data-cartera-row'))
+    const col = Number(target.getAttribute?.('data-cartera-col'))
+    if (Number.isFinite(row) && Number.isFinite(col) && target.hasAttribute?.('data-cartera-row')) {
+      let nr = row
+      let nc = col
+      if (key === 'ArrowUp') nr -= 1
+      else if (key === 'ArrowDown') nr += 1
+      else if (key === 'ArrowLeft') nc -= 1
+      else if (key === 'ArrowRight') nc += 1
+      const found = nodes.find(
+        (el) => Number(el.getAttribute?.('data-cartera-row')) === nr
+          && Number(el.getAttribute?.('data-cartera-col')) === nc,
+      )
+      if (found) {
+        found.focus()
+        if (typeof found.select === 'function' && String(found.tagName).toUpperCase() === 'INPUT') {
+          try { found.select() } catch { /* ignore */ }
+        }
+        return
+      }
+      // Fuera de la grilla cartera: caer al avance lineal.
+    }
+    if (key === 'ArrowLeft' || key === 'ArrowUp') nextIdx = idx - 1
+    else nextIdx = idx + 1
+  }
+
+  const next = nodes[nextIdx]
   if (!next) return
   next.focus()
   if (typeof next.select === 'function' && String(next.tagName).toUpperCase() === 'INPUT') {
     try { next.select() } catch { /* ignore */ }
   }
+}
+
+/**
+ * Filtra links SICOE dejando solo reportes que siguen existiendo.
+ * @param {Array<{reporte_id:*, numero_reporte?:*}>} links
+ * @param {Set<number|string>|number[]} vigentesIds
+ */
+export function filtrarLinksSicoeVigentes(links, vigentesIds) {
+  const set = vigentesIds instanceof Set
+    ? vigentesIds
+    : new Set((vigentesIds || []).map((x) => Number(x)).filter((n) => Number.isFinite(n)))
+  return (links || []).filter((l) => {
+    if (!l || l.reporte_id == null) return false
+    const id = Number(l.reporte_id)
+    return Number.isFinite(id) && set.has(id)
+  })
 }
 
 export function filaCampoVacia(orden) {
