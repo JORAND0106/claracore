@@ -2324,6 +2324,7 @@ export default function PlanillaTuberiaForm({
         open={asociarReporteOpen && puedeVerCrearReporte}
         onClose={() => setAsociarReporteOpen(false)}
         contratoId={contratoId}
+        token={token}
         planilla={{
           ...(planilla || {}),
           nombre: params.nombre || planilla?.nombre,
