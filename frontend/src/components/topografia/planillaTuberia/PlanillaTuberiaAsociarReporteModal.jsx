@@ -1,21 +1,57 @@
 /**
  * Popup: Asociar planilla de tubería a un reporte SICOE Obra ya existente.
+ * Buscador/autocomplete de reportes existentes (preview Nº & Descripción & Abs).
  * Solo adjunta planilla + actualiza fotos, coordenadas y gráfico.
- * No crea registros ni modifica cantidades.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { API_BASE } from '../../../apiBase'
 import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
 import {
   CREAR_REPORTE_ESQUEMA_Z_INDEX,
   CREAR_REPORTE_Z_INDEX,
 } from './PlanillaTuberiaCrearReporteModal'
+import {
+  filtrarReportesSicoeAutocomplete,
+  formatoPreviewReporteSicoe,
+} from './planillaTuberiaUtils'
+
+async function fetchReportesBuscar(contratoId, token, params = {}) {
+  const q = new URLSearchParams()
+  q.set('limit', String(params.limit ?? 100))
+  q.set('offset', String(params.offset ?? 0))
+  if (params.numero_reporte != null && params.numero_reporte !== '') {
+    q.set('numero_reporte', String(params.numero_reporte))
+  }
+  const res = await fetch(
+    `${API_BASE}/sicoe-obra/${contratoId}/reportes/buscar?${q}`,
+    { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+  )
+  if (!res.ok) {
+    const t = await res.text().catch(() => '')
+    throw new Error(t || `No se pudieron cargar reportes (${res.status})`)
+  }
+  const data = await res.json()
+  return Array.isArray(data?.reportes) ? data.reportes : (Array.isArray(data) ? data : [])
+}
+
+function mergeReportes(prev, extra) {
+  const map = new Map()
+  for (const r of [...(prev || []), ...(extra || [])]) {
+    if (!r || r.id == null) continue
+    map.set(String(r.id), r)
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => Number(b.numero_reporte || 0) - Number(a.numero_reporte || 0),
+  )
+}
 
 export default function PlanillaTuberiaAsociarReporteModal({
   open,
   onClose,
   onAsociado,
   contratoId,
+  token,
   planilla,
   absInicioDefault,
   absFinalDefault,
@@ -28,19 +64,102 @@ export default function PlanillaTuberiaAsociarReporteModal({
   coordsWgs84Fin = null,
   seedTramoGk = null,
 }) {
-  const [numeroReporte, setNumeroReporte] = useState('')
+  const [reportes, setReportes] = useState([])
+  const [cargandoLista, setCargandoLista] = useState(false)
+  const [query, setQuery] = useState('')
+  const [listOpen, setListOpen] = useState(false)
+  const [highlight, setHighlight] = useState(-1)
+  const [selected, setSelected] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaDataUri, setEsquemaDataUri] = useState(null)
+  const wrapRef = useRef(null)
+  const pickingRef = useRef(false)
+  const reactId = useId()
+  const listId = `cc-topo-asociar-rep-${String(reactId).replace(/:/g, '')}`
 
   useEffect(() => {
     if (!open) return
     setErr('')
-    setNumeroReporte('')
+    setQuery('')
+    setSelected(null)
+    setListOpen(false)
+    setHighlight(-1)
     setEsquemaOpen(false)
     setEsquemaDataUri(null)
+    setReportes([])
   }, [open, planilla?.id])
+
+  // Carga inicial de reportes existentes (SICOE Obra).
+  useEffect(() => {
+    if (!open || !contratoId || !token) return undefined
+    let cancelled = false
+    setCargandoLista(true)
+    ;(async () => {
+      try {
+        const lista = await fetchReportesBuscar(contratoId, token, { limit: 100, offset: 0 })
+        if (!cancelled) setReportes(lista)
+      } catch (e) {
+        if (!cancelled) {
+          setErr(e?.message || 'No se pudieron cargar los reportes SICOE')
+          setReportes([])
+        }
+      } finally {
+        if (!cancelled) setCargandoLista(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, contratoId, token])
+
+  // Si digita un número exacto que no está en la página cargada, consultar por Nº.
+  useEffect(() => {
+    if (!open || !contratoId || !token) return undefined
+    const raw = String(query || '').trim()
+    if (!/^\d+$/.test(raw)) return undefined
+    const num = Number(raw)
+    if (!Number.isFinite(num) || num <= 0) return undefined
+    let cancelled = false
+    const t = window.setTimeout(() => {
+      ;(async () => {
+        try {
+          const extra = await fetchReportesBuscar(contratoId, token, {
+            limit: 10,
+            numero_reporte: num,
+          })
+          if (cancelled || !extra.length) return
+          setReportes((prev) => {
+            if (prev.some((r) => Number(r.numero_reporte) === num)) return prev
+            return mergeReportes(prev, extra)
+          })
+        } catch {
+          /* ignore — el listado base sigue disponible */
+        }
+      })()
+    }, 280)
+    return () => {
+      cancelled = true
+      window.clearTimeout(t)
+    }
+  }, [open, contratoId, token, query])
+
+  const filtrados = useMemo(
+    () => filtrarReportesSicoeAutocomplete(reportes, query, 40),
+    [reportes, query],
+  )
+
+  useEffect(() => {
+    setHighlight(-1)
+  }, [query, listOpen])
+
+  useEffect(() => {
+    if (!listOpen) return undefined
+    const onDoc = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setListOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [listOpen])
 
   const mapLocation = useMemo(() => {
     const ini = coordsWgs84Inicio && typeof coordsWgs84Inicio === 'object' ? coordsWgs84Inicio : null
@@ -76,9 +195,42 @@ export default function PlanillaTuberiaAsociarReporteModal({
     return { norteIni: nIni, esteIni: eIni, norteFin: nFin, esteFin: eFin }
   }, [seedTramoGk])
 
+  const pick = (rep) => {
+    if (!rep) return
+    pickingRef.current = true
+    setSelected(rep)
+    setQuery(formatoPreviewReporteSicoe(rep))
+    setListOpen(false)
+    setHighlight(-1)
+    setErr('')
+    window.setTimeout(() => { pickingRef.current = false }, 0)
+  }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      if (listOpen) { e.preventDefault(); setListOpen(false); setHighlight(-1) }
+      return
+    }
+    if (!listOpen && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+      setListOpen(true)
+      return
+    }
+    if (!listOpen || !filtrados.length) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlight((h) => (h + 1) % filtrados.length)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlight((h) => (h <= 0 ? filtrados.length - 1 : h - 1))
+    } else if (e.key === 'Enter' && highlight >= 0) {
+      e.preventDefault()
+      pick(filtrados[highlight])
+    }
+  }
+
   const esquemaListo = Boolean(esquemaDataUri)
-  const numOk = Number.isFinite(Number(numeroReporte)) && Number(numeroReporte) > 0
-  const puedeAsociar = esquemaListo && numOk
+  const reporteOk = selected?.id != null && selected?.numero_reporte != null
+  const puedeAsociar = esquemaListo && reporteOk
 
   const asociar = async () => {
     if (!puedeAsociar || busy) return
@@ -86,7 +238,8 @@ export default function PlanillaTuberiaAsociarReporteModal({
     setErr('')
     try {
       const res = await apiAsociar?.({
-        numero_reporte: Number(numeroReporte),
+        reporte_id: Number(selected.id),
+        numero_reporte: Number(selected.numero_reporte),
         esquema_data_uri: esquemaDataUri,
       })
       onAsociado?.(res)
@@ -134,7 +287,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
       <div
         data-asociar-reporte-popup
         style={{
-          width: 'min(640px, 100%)',
+          width: 'min(720px, 100%)',
           maxHeight: '90vh',
           overflow: 'auto',
           background: ui?.cardBg || '#fff',
@@ -191,24 +344,132 @@ export default function PlanillaTuberiaAsociarReporteModal({
             lineHeight: 1.45,
           }}
           >
-            Se vinculará la planilla <strong>{planilla?.nombre || '—'}</strong> al reporte indicado.
-            Se reemplazarán las coordenadas topográficas y se actualizarán fotos y gráfico
-            de los registros existentes. <strong>No se modifican cantidades ni se crean registros nuevos.</strong>
+            Busque y seleccione un reporte existente de SICOE Obra. Al asociar
+            se vinculará la planilla <strong>{planilla?.nombre || '—'}</strong>,
+            se reemplazarán coordenadas y se actualizarán fotos/gráfico.
+            {' '}<strong>No se modifican cantidades ni se crean registros nuevos.</strong>
           </div>
 
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>Nº reporte SICOE *</span>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={numeroReporte}
-              onChange={(e) => setNumeroReporte(e.target.value)}
-              placeholder="Ej. 128"
-              data-asociar-numero-reporte
-              style={inputStyle}
-            />
-          </label>
+          <div ref={wrapRef} style={{ position: 'relative' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontWeight: 700, fontSize: 'var(--cc-sm)' }}>
+                Reporte SICOE Obra *
+              </span>
+              <input
+                type="search"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={busy || cargandoLista}
+                placeholder={
+                  cargandoLista
+                    ? 'Cargando reportes…'
+                    : 'Buscar por Nº, descripción o abscisa…'
+                }
+                value={query}
+                data-asociar-numero-reporte
+                data-asociar-reporte-buscar
+                aria-autocomplete="list"
+                aria-expanded={listOpen}
+                aria-controls={listId}
+                style={inputStyle}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setListOpen(true)
+                  if (selected) setSelected(null)
+                }}
+                onFocus={() => setListOpen(true)}
+                onBlur={() => {
+                  if (pickingRef.current) return
+                  // Mantener lista un instante para permitir click
+                }}
+                onKeyDown={onKeyDown}
+              />
+            </label>
+            {listOpen && (
+              <ul
+                id={listId}
+                role="listbox"
+                data-asociar-reporte-sugerencias
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  top: '100%',
+                  marginTop: 4,
+                  maxHeight: 240,
+                  overflow: 'auto',
+                  listStyle: 'none',
+                  padding: 4,
+                  margin: 0,
+                  zIndex: 5,
+                  background: ui?.cardBg || '#fff',
+                  border: `1px solid ${ui?.border || '#e2e8f0'}`,
+                  borderRadius: 8,
+                  boxShadow: '0 8px 24px rgba(15,23,42,0.14)',
+                }}
+              >
+                {filtrados.length === 0 ? (
+                  <li style={{
+                    padding: '8px 10px',
+                    fontSize: 'var(--cc-xs)',
+                    color: ui?.textMuted || '#64748b',
+                  }}
+                  >
+                    {cargandoLista
+                      ? 'Cargando…'
+                      : (query.trim()
+                        ? 'Sin coincidencias — verifique que el reporte exista en SICOE Obra'
+                        : 'Escriba para filtrar reportes existentes')}
+                  </li>
+                ) : filtrados.map((rep, idx) => {
+                  const label = formatoPreviewReporteSicoe(rep)
+                  const active = idx === highlight
+                    || (selected && String(selected.id) === String(rep.id))
+                  return (
+                    <li
+                      key={rep.id}
+                      role="option"
+                      aria-selected={active}
+                      data-asociar-reporte-opcion
+                      data-numero-reporte={rep.numero_reporte}
+                      onMouseDown={(e) => { e.preventDefault(); pick(rep) }}
+                      onMouseEnter={() => setHighlight(idx)}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        fontSize: 'var(--cc-xs)',
+                        lineHeight: 1.35,
+                        background: active ? (ui?.accentSoft || '#eff6ff') : 'transparent',
+                        color: ui?.text || '#0f172a',
+                        fontWeight: selected && String(selected.id) === String(rep.id) ? 700 : 500,
+                      }}
+                    >
+                      {label}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+
+          {selected && (
+            <div
+              data-asociar-reporte-seleccionado
+              style={{
+                background: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: 8,
+                padding: '8px 10px',
+                fontSize: 'var(--cc-xs)',
+                color: '#166534',
+                lineHeight: 1.4,
+              }}
+            >
+              <strong>Seleccionado:</strong>{' '}
+              {formatoPreviewReporteSicoe(selected)}
+            </div>
+          )}
 
           <div>
             <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', marginBottom: 6 }}>
@@ -278,8 +539,8 @@ export default function PlanillaTuberiaAsociarReporteModal({
               onClick={asociar}
               data-asociar-reporte-submit
               title={
-                !numOk
-                  ? 'Indique el número de reporte'
+                !reporteOk
+                  ? 'Seleccione un reporte existente de la lista'
                   : (!esquemaListo ? 'Genere y guarde el esquema del tramo primero' : undefined)
               }
               style={{

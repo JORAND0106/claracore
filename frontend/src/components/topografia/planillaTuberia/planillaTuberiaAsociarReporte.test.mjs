@@ -8,10 +8,15 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validarFilasCarteraLocal } from './planillaTuberiaUtils.js'
+import {
+  filtrarReportesSicoeAutocomplete,
+  formatoPreviewReporteSicoe,
+} from './planillaTuberiaUtils.js'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 const formSrc = readFileSync(join(dir, 'PlanillaTuberiaForm.jsx'), 'utf8')
 const modalSrc = readFileSync(join(dir, 'PlanillaTuberiaAsociarReporteModal.jsx'), 'utf8')
+const utilsSrc = readFileSync(join(dir, 'planillaTuberiaUtils.js'), 'utf8')
 const routesSrc = readFileSync(
   join(dir, '../../../../../backend/topografia_planilla_tuberia_routes.py'),
   'utf8',
@@ -27,10 +32,40 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.match(formSrc, /data-asociar-reporte-sicoe-btn/)
     assert.match(formSrc, /Asociar a reporte SICOE existente/)
     assert.match(formSrc, /asociar-reporte-sicoe/)
+    assert.match(formSrc, /token=\{token\}/)
     assert.match(modalSrc, /Asociar a reporte existente/)
     assert.match(modalSrc, /data-asociar-numero-reporte/)
     assert.match(modalSrc, /data-asociar-esquema-btn/)
     assert.match(modalSrc, /sin actualizar cantidades/i)
+  })
+
+  it('busca reportes existentes con autocomplete y preview Nº & Descripción & Abs', () => {
+    assert.match(modalSrc, /reportes\/buscar/)
+    assert.match(modalSrc, /formatoPreviewReporteSicoe/)
+    assert.match(modalSrc, /filtrarReportesSicoeAutocomplete/)
+    assert.match(modalSrc, /data-asociar-reporte-sugerencias/)
+    assert.match(modalSrc, /data-asociar-reporte-seleccionado/)
+    assert.match(utilsSrc, /\$\{num\} & \$\{desc\} & \$\{absTxt\}/)
+
+    const preview = formatoPreviewReporteSicoe({
+      numero_reporte: 128,
+      descripcion_actividad: 'Tubería PK-12',
+      abs_inicio: 100.5,
+      abs_final: 250,
+    })
+    assert.equal(preview, '128 & Tubería PK-12 & 100.5 - 250')
+
+    const lista = [
+      { id: 1, numero_reporte: 10, descripcion_actividad: 'Filtro norte', abs_inicio: 1, abs_final: 2 },
+      { id: 2, numero_reporte: 128, descripcion_actividad: 'Tubería PK-12', abs_inicio: 100, abs_final: 200 },
+      { id: 3, numero_reporte: 50, descripcion_actividad: 'Otro', abs_inicio: 5, abs_final: 6 },
+    ]
+    const byNum = filtrarReportesSicoeAutocomplete(lista, '128')
+    assert.equal(byNum.length, 1)
+    assert.equal(byNum[0].id, 2)
+    const byDesc = filtrarReportesSicoeAutocomplete(lista, 'filtro')
+    assert.equal(byDesc.length, 1)
+    assert.equal(byDesc[0].id, 1)
   })
 
   it('backend asocia sin crear registros ni sync de cantidades', () => {

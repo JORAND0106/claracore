@@ -681,6 +681,48 @@ export function linksSicoeDesdeMeta(meta) {
   return raw.filter((x) => x && x.reporte_id != null)
 }
 
+/** Formato preview autocomplete: «Nº & Descripción & AbsIni - AbsFin». */
+export function formatoPreviewReporteSicoe(reporte) {
+  if (!reporte || typeof reporte !== 'object') return ''
+  const num = reporte.numero_reporte != null ? String(reporte.numero_reporte) : '—'
+  const desc = String(reporte.descripcion_actividad || '').trim() || '(sin descripción)'
+  const a0 = reporte.abs_inicio
+  const a1 = reporte.abs_final
+  const absTxt = (a0 != null && a0 !== '') || (a1 != null && a1 !== '')
+    ? `${a0 != null && a0 !== '' ? a0 : '—'} - ${a1 != null && a1 !== '' ? a1 : '—'}`
+    : '— - —'
+  return `${num} & ${desc} & ${absTxt}`
+}
+
+/**
+ * Filtra reportes SICOE para autocomplete (número, descripción, abscisas).
+ * @param {Array<object>} reportes
+ * @param {string} query
+ * @param {number} [limit=40]
+ */
+export function filtrarReportesSicoeAutocomplete(reportes, query, limit = 40) {
+  const list = Array.isArray(reportes) ? reportes : []
+  const s = String(query || '').trim().toLowerCase()
+  const max = Math.max(1, Number(limit) || 40)
+  if (!s) return list.slice(0, max)
+  const out = []
+  for (const r of list) {
+    if (!r) continue
+    const hay = [
+      r.numero_reporte,
+      r.descripcion_actividad,
+      r.abs_inicio,
+      r.abs_final,
+      formatoPreviewReporteSicoe(r),
+    ].map((x) => String(x ?? '').toLowerCase()).join(' ')
+    if (hay.includes(s)) {
+      out.push(r)
+      if (out.length >= max) break
+    }
+  }
+  return out
+}
+
 /**
  * ¿Puede el usuario pulsar «Crear reporte»?
  * Tras el primer envío exitoso queda bloqueado, excepto Desarrollador.
