@@ -742,6 +742,40 @@ export function siguienteCodigoOtros(cantManuales) {
   return `OTROS_${max + 1}`
 }
 
+/** Normaliza descuentos_manuales Otros: DESC_OTROS → DESC_OTROS_1; ≥1 línea. */
+export function normalizarDescuentosManuales(raw) {
+  const out = []
+  const seen = new Set()
+  for (const d of raw || []) {
+    if (!d || typeof d !== 'object') continue
+    let cod = String(d.codigo || '').trim().toUpperCase()
+    if (!cod) continue
+    if (cod === 'DESC_OTROS') cod = 'DESC_OTROS_1'
+    if (!(cod === 'DESC_OTROS' || cod.startsWith('DESC_OTROS_'))) continue
+    if (seen.has(cod)) continue
+    seen.add(cod)
+    const entry = { ...d, codigo: cod }
+    if (entry.nombre == null && entry.nota != null) entry.nombre = entry.nota
+    out.push(entry)
+  }
+  if (![...seen].some((c) => c === 'DESC_OTROS' || c.startsWith('DESC_OTROS_'))) {
+    out.push({ codigo: 'DESC_OTROS_1' })
+  }
+  return out
+}
+
+/** Siguiente código DESC_OTROS_n libre. */
+export function siguienteCodigoDescOtros(descManuales) {
+  let max = 0
+  for (const c of descManuales || []) {
+    const cod = String(c?.codigo || '').toUpperCase()
+    const m = /^DESC_OTROS_(\d+)$/.exec(cod)
+    if (m) max = Math.max(max, Number(m[1]))
+    else if (cod === 'DESC_OTROS') max = Math.max(max, 1)
+  }
+  return `DESC_OTROS_${max + 1}`
+}
+
 /**
  * Desglose visible del cálculo de atraque (solo ALCANTARILLA).
  * h = 2·r / N; sección = (h + cama)·B − Area1.

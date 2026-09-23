@@ -172,6 +172,37 @@ class TestPlanillaARegistrosSicoe(unittest.TestCase):
         self.assertEqual(regs[0]["cantidad_total"], 2.99)
         self.assertIsNone(regs[0]["cantidad"])
 
+    def test_multi_desc_otros_negativos_excluye_cero(self):
+        r = calcular_planilla_completa(
+            tipo="ALCANTARILLA", diametro_m=0.9, espesor_m=0.05,
+            ancho_excavacion_m=1.5, relacion_atraque="1:3",
+            filas_campo=_filas(),
+            descuentos_manuales=[
+                {"codigo": "DESC_OTROS_1", "nombre": "Pozo", "long": 2, "ancho": 1, "espesor": 0.5},
+                {"codigo": "DESC_OTROS_2", "nombre": "Vacío", "long": 0, "ancho": 0, "espesor": 0},
+                {"codigo": "DESC_OTROS_3", "nombre": "Caja", "long": 1, "ancho": 1, "espesor": 0.8},
+            ],
+        )
+        regs = lineas_planilla_a_registros_sicoe(r, tipo="ALCANTARILLA", tramo="T2")
+        neg_otros = [
+            x for x in regs
+            if str(x.get("_origen_codigo") or "").startswith("DESC_OTROS")
+            and (x.get("cantidad_total") or 0) < 0
+        ]
+        cods = {x["_origen_codigo"] for x in neg_otros}
+        self.assertIn("DESC_OTROS_1", cods)
+        self.assertIn("DESC_OTROS_3", cods)
+        self.assertNotIn("DESC_OTROS_2", cods)
+        by = {x["_origen_codigo"]: x for x in neg_otros}
+        self.assertAlmostEqual(float(by["DESC_OTROS_1"]["cantidad_total"]), -1.0, places=2)
+        self.assertAlmostEqual(float(by["DESC_OTROS_3"]["cantidad_total"]), -0.8, places=2)
+        self.assertIn("Otros", by["DESC_OTROS_1"]["nombre"])
+        obs = formatear_observacion_descuento_sicoe(
+            "DESC_OTROS_1", "Otros: Pozo", "ALCANTARILLA", "T2",
+        )
+        self.assertTrue(obs.lower().startswith("descuento otros"))
+        self.assertIn("Pozo", obs)
+
 
 class TestRutaUsaTramoYFiltroCero(unittest.TestCase):
     def test_crear_reporte_pasa_tipo_tramo_y_ubicacion(self):

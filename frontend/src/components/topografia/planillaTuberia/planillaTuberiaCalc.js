@@ -30,12 +30,26 @@ export const ITEMS_CANTIDADES = [
 export const ITEMS_DESCUENTOS_ALCANTARILLA = [
   { codigo: 'DESC_A1', nombre: 'Area 1', unidad: 'm³', item_cant_codigo: 'TRI' },
   { codigo: 'DESC_A2', nombre: 'Area 2', unidad: 'm³', item_cant_codigo: 'REL' },
-  { codigo: 'DESC_OTROS', nombre: 'Otros', unidad: 'm³', item_cant_codigo: 'EXC' },
+  {
+    codigo: 'DESC_OTROS',
+    nombre: 'Otros: ____',
+    unidad: 'm³',
+    item_cant_codigo: 'EXC',
+    editable_dims: true,
+    editable_nombre: true,
+  },
 ]
 
 export const ITEMS_DESCUENTOS_FILTRO = [
   { codigo: 'DESC_TUB_FILT', nombre: 'Tubería Filtro', unidad: 'm³', item_cant_codigo: 'TRI' },
-  { codigo: 'DESC_OTROS', nombre: 'Otros', unidad: 'm³', item_cant_codigo: 'EXC' },
+  {
+    codigo: 'DESC_OTROS',
+    nombre: 'Otros: ____',
+    unidad: 'm³',
+    item_cant_codigo: 'EXC',
+    editable_dims: true,
+    editable_nombre: true,
+  },
 ]
 
 export const CAMPOS_DESCUENTO_ALTURA = [
@@ -51,6 +65,11 @@ const CAMPOS_DESC_SET = new Set(CAMPOS_DESCUENTO_ALTURA.map((c) => c.key))
 export function esCodigoOtros(codigo) {
   const cod = String(codigo || '').trim().toUpperCase()
   return cod === 'OTROS' || cod.startsWith('OTROS_')
+}
+
+export function esCodigoDescOtros(codigo) {
+  const cod = String(codigo || '').trim().toUpperCase()
+  return cod === 'DESC_OTROS' || cod.startsWith('DESC_OTROS_')
 }
 
 export function esCodigoCantidadEditable(codigo) {
@@ -323,16 +342,70 @@ export function calcularCartera(filasCampo, seccion) {
   }
 }
 
+function cantidadDesdeDims(long, ancho, espesor, cantidadFallback = null) {
+  const dims = [long, ancho, espesor].map((v) => f(v)).filter((v) => v != null)
+  if (dims.length) {
+    const prod = dims.reduce((a, b) => a * b, 1)
+    return r2(prod) ?? 0
+  }
+  const fb = f(cantidadFallback)
+  return fb != null ? fb : 0
+}
+
+function labelDescOtros(nombre) {
+  const raw = String(nombre || '').trim()
+  if (!raw) return 'Otros: ____'
+  if (raw.toLowerCase().startsWith('otros')) return raw
+  return `Otros: ${raw}`
+}
+
+function normalizeDescuentosOtrosManuales(descuentosManuales) {
+  const out = []
+  const seen = new Set()
+  for (const d of descuentosManuales || []) {
+    if (!d || typeof d !== 'object') continue
+    let cod = String(d.codigo || '').trim().toUpperCase()
+    if (!esCodigoDescOtros(cod)) continue
+    if (cod === 'DESC_OTROS') cod = 'DESC_OTROS_1'
+    if (seen.has(cod)) continue
+    seen.add(cod)
+    const entry = { codigo: cod }
+    for (const key of ['long', 'ancho', 'espesor']) {
+      if (d[key] != null && d[key] !== '') entry[key] = f(d[key])
+    }
+    if ('nombre' in d) entry.nombre = String(d.nombre || '').trim()
+    else if (d.nota != null && d.nota !== '') entry.nombre = String(d.nota || '').trim()
+    entry.cantidad = cantidadDesdeDims(entry.long, entry.ancho, entry.espesor, d.cantidad)
+    out.push(entry)
+  }
+  if (!out.some((x) => esCodigoDescOtros(x.codigo))) {
+    out.push({ codigo: 'DESC_OTROS_1', cantidad: 0 })
+  }
+  out.sort((a, b) => String(a.codigo).localeCompare(String(b.codigo)))
+  return out
+}
+
 function normalizeManualDescuentos(tipo, descuentosManuales) {
   const alias = tipo === 'FILTRO' ? ALIAS_FIL : ALIAS_ALC
   const out = {}
   for (const d of descuentosManuales || []) {
     let cod = String(d?.codigo || '')
     cod = alias[cod] || cod
+    if (esCodigoDescOtros(cod)) continue
     const cant = f(d?.cantidad)
     if (cod && cant != null) out[cod] = cant
   }
   return out
+}
+
+function metaItemDescuento(codigo, tipo) {
+  const catalogo = tipo === 'FILTRO' ? ITEMS_DESCUENTOS_FILTRO : ITEMS_DESCUENTOS_ALCANTARILLA
+  if (esCodigoDescOtros(codigo)) {
+    const base = catalogo.find((it) => it.codigo === 'DESC_OTROS')
+    return { ...base, codigo }
+  }
+  const found = catalogo.find((it) => it.codigo === codigo)
+  return found ? { ...found } : { codigo, nombre: codigo, unidad: 'm³', item_cant_codigo: 'EXC' }
 }
 
 function normalizeCantidadesManuales(cantidadesManuales) {
@@ -436,7 +509,10 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   }
 
   const manual = normalizeManualDescuentos(tipo, descuentosManuales)
-  const descOtros = Number(manual.DESC_OTROS || 0)
+  const otrosDesc = normalizeDescuentosOtrosManuales(descuentosManuales)
+  const descOtros = Math.round(
+    otrosDesc.reduce((s, o) => s + Number(o.cantidad || 0), 0) * 100,
+  ) / 100
 
   function row(codigo, long, ancho, espesor, desc = 0, restarDesc = false, nombre = null, descontarDe = null) {
     const meta = metaItemCantidad(codigo, tipo)
@@ -493,7 +569,9 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   }
 
   const catalogo = tipo === 'FILTRO' ? ITEMS_DESCUENTOS_FILTRO : ITEMS_DESCUENTOS_ALCANTARILLA
-  const descuentos = catalogo.map((it) => {
+  const descuentos = []
+  for (const it of catalogo) {
+    if (esCodigoDescOtros(it.codigo)) continue
     let cant = 0
     let long = null
     let ancho = null
@@ -501,16 +579,28 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
     if (it.codigo === 'DESC_A1') { cant = descA1; long = L; esp = a1 }
     else if (it.codigo === 'DESC_A2') { cant = descA2; long = L; esp = a2 }
     else if (it.codigo === 'DESC_TUB_FILT') { cant = descTubFilt; long = L; esp = aTub }
-    else if (it.codigo === 'DESC_OTROS') { cant = descOtros }
     else { cant = Number(manual[it.codigo] || 0) }
-    return {
+    descuentos.push({
       ...it,
       long: r4(long),
       ancho: r4(ancho),
       espesor: r4(esp),
       cantidad: Math.round(Number(cant) * 100) / 100,
-    }
-  })
+    })
+  }
+  for (const ov of otrosDesc) {
+    const meta = metaItemDescuento(ov.codigo, tipo)
+    descuentos.push({
+      ...meta,
+      nombre: labelDescOtros(ov.nombre),
+      long: r4(ov.long ?? null),
+      ancho: r4(ov.ancho ?? null),
+      espesor: r4(ov.espesor ?? null),
+      cantidad: Math.round(Number(ov.cantidad || 0) * 100) / 100,
+      editable_dims: true,
+      editable_nombre: true,
+    })
+  }
 
   const netos = cantidades.map((c) => {
     let descuento = 0

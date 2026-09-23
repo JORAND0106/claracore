@@ -498,7 +498,7 @@ def _style_fila_descuento(ws, r: int) -> None:
 
 
 def _write_descuento_fila_formula(ws, r: int, codigo: str, es_alc: bool) -> None:
-    """Fórmulas vivas de descuentos conocidos (Area1/Area2 / Tubería Filtro)."""
+    """Fórmulas vivas de descuentos conocidos (Area1/Area2 / Tubería Filtro / Otros)."""
     cod = str(codigo or "").upper()
     if es_alc and cod == "DESC_A1":
         _set(ws, f"K{r}", "=$B$41")
@@ -512,6 +512,8 @@ def _write_descuento_fila_formula(ws, r: int, codigo: str, es_alc: bool) -> None
         _set(ws, f"K{r}", "=$B$41")
         _set(ws, f"M{r}", "=$K$13")
         _set(ws, f"N{r}", f"=PRODUCT(K{r}:M{r})")
+    elif cod == "DESC_OTROS" or cod.startswith("DESC_OTROS_"):
+        _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
 
 
 def _write_resumen_fila_formulas(
@@ -709,11 +711,28 @@ def _write_tablas_cantidades_descuentos(
     for i, d in enumerate(desc_vis):
         r = 45 + i
         cod = str(d.get("codigo") or "").strip()
+        cod_u = cod.upper()
         if cod:
             desc_row_by_cod[cod] = r
         _set_nombre_item_descuento(ws, r, d.get("nombre"))
         _write_descuento_fila_formula(ws, r, cod, es_alc)
-        if ws[f"N{r}"].value is None:
+        es_otros_desc = cod_u == "DESC_OTROS" or cod_u.startswith("DESC_OTROS_")
+        if es_otros_desc:
+            if d.get("long") is not None:
+                _set(ws, f"K{r}", float(d["long"]))
+            if d.get("ancho") is not None:
+                _set(ws, f"L{r}", float(d["ancho"]))
+            if d.get("espesor") is not None:
+                _set(ws, f"M{r}", float(d["espesor"]))
+            # Si no hay dims, dejar cantidad numérica (compat legacy).
+            if (
+                d.get("long") is None
+                and d.get("ancho") is None
+                and d.get("espesor") is None
+                and d.get("cantidad") is not None
+            ):
+                _set(ws, f"N{r}", float(d["cantidad"]))
+        elif ws[f"N{r}"].value is None:
             if d.get("long") is not None:
                 _set(ws, f"K{r}", float(d["long"]))
             if d.get("ancho") is not None:

@@ -166,7 +166,7 @@ class TestCantidadesDescuentosXlsm(unittest.TestCase):
         by_cod = {d["codigo"]: d for d in r["descuentos"]}
         self.assertEqual(by_cod["DESC_A1"]["item_cant_codigo"], "TRI")
         self.assertEqual(by_cod["DESC_A2"]["item_cant_codigo"], "REL")
-        self.assertAlmostEqual(by_cod["DESC_OTROS"]["cantidad"], 2.5)
+        self.assertAlmostEqual(by_cod["DESC_OTROS_1"]["cantidad"], 2.5)
         netos = {n["codigo"]: n for n in r["netos"]}
         self.assertAlmostEqual(
             netos["TRI"]["neto"], netos["TRI"]["bruto"] - by_cod["DESC_A1"]["cantidad"], places=2
@@ -183,8 +183,30 @@ class TestCantidadesDescuentosXlsm(unittest.TestCase):
         )
         cods = {d["codigo"] for d in r["descuentos"]}
         self.assertIn("DESC_TUB_FILT", cods)
-        self.assertIn("DESC_OTROS", cods)
+        self.assertIn("DESC_OTROS_1", cods)
         self.assertNotIn("DESC_A1", cods)
+
+    def test_multi_desc_otros_dims_independientes(self):
+        r = calcular_planilla_completa(
+            tipo="ALCANTARILLA", diametro_m=0.9, espesor_m=0.05,
+            ancho_excavacion_m=1.5, relacion_atraque="1:3",
+            filas_campo=_filas_sinteticas(),
+            cama_triturado_m=0.1,
+            descuentos_manuales=[
+                {"codigo": "DESC_OTROS_1", "nombre": "Pozo", "long": 2, "ancho": 1, "espesor": 0.5},
+                {"codigo": "DESC_OTROS_2", "nombre": "Caja", "long": 3, "ancho": 1, "espesor": 0.2},
+            ],
+        )
+        otros = [d for d in r["descuentos"] if d["codigo"].startswith("DESC_OTROS")]
+        self.assertEqual(len(otros), 2)
+        by = {d["codigo"]: d for d in otros}
+        self.assertAlmostEqual(by["DESC_OTROS_1"]["cantidad"], 1.0, places=2)
+        self.assertAlmostEqual(by["DESC_OTROS_2"]["cantidad"], 0.6, places=2)
+        self.assertEqual(by["DESC_OTROS_1"]["nombre"], "Otros: Pozo")
+        self.assertTrue(by["DESC_OTROS_1"]["editable_dims"] and by["DESC_OTROS_1"]["editable_nombre"])
+        netos = {n["codigo"]: n for n in r["netos"]}
+        self.assertAlmostEqual(netos["EXC"]["descuentos"], 1.6, places=2)
+        self.assertAlmostEqual(netos["EXC"]["neto"], netos["EXC"]["bruto"] - 1.6, places=2)
 
     def test_exc_roc_al_final_y_dims_editables(self):
         r = calcular_planilla_completa(
@@ -307,7 +329,7 @@ class TestFlujoE2ESintetico(unittest.TestCase):
             self.assertIn(cod, netos)
         desc_codes = {d["codigo"] for d in r["descuentos"]}
         if tipo == "ALCANTARILLA":
-            self.assertTrue({"DESC_A1", "DESC_A2", "DESC_OTROS"} <= desc_codes)
+            self.assertTrue({"DESC_A1", "DESC_A2", "DESC_OTROS_1"} <= desc_codes)
         else:
             self.assertIn("DESC_TUB_FILT", desc_codes)
         consol = construir_fila_consolidado(
