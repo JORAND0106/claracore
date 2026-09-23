@@ -18,11 +18,12 @@ describe('Planilla tubería — acciones como iconos', () => {
     assert.doesNotMatch(formSrc, /verificar formato \(sin valores de ejemplo\)/)
   })
 
-  it('usa panel de iconos con tooltip (title/aria-label)', () => {
+  it('usa panel de iconos con tooltip (title/aria-label) y un solo Guardar', () => {
     assert.match(formSrc, /function AccionIcono/)
     assert.match(formSrc, /role="toolbar"/)
-    assert.match(formSrc, /title="Guardar parámetros"/)
-    assert.match(formSrc, /title="Guardar cartera"/)
+    assert.match(formSrc, /title="Guardar"/)
+    assert.doesNotMatch(formSrc, /title="Guardar parámetros"/)
+    assert.doesNotMatch(formSrc, /title="Guardar cartera"/)
     // Cierre manual eliminado: se cierra al aprobar interventoría (N2).
     assert.doesNotMatch(formSrc, /title="Cerrar planilla"/)
     assert.match(formSrc, /title="Eliminar planilla"/)
@@ -42,9 +43,11 @@ describe('Planilla tubería — acciones como iconos', () => {
     assert.doesNotMatch(formSrc, /marginTop: 10, alignItems: 'center'/)
   })
 
-  it('conserva handlers y restricciones (dev / permisos); sin cierre manual', () => {
-    assert.match(formSrc, /onClick=\{guardarParams\}/)
-    assert.match(formSrc, /onClick=\{guardarCartera\}/)
+  it('conserva handlers y restricciones (dev / permisos); sin cierre manual; Guardar unificado', () => {
+    assert.match(formSrc, /onClick=\{guardar\}/)
+    assert.match(formSrc, /const guardar = async/)
+    assert.doesNotMatch(formSrc, /onClick=\{guardarParams\}/)
+    assert.doesNotMatch(formSrc, /onClick=\{guardarCartera\}/)
     assert.doesNotMatch(formSrc, /onClick=\{cerrar\}/)
     assert.doesNotMatch(formSrc, /const cerrar = async/)
     assert.match(formSrc, /onClick=\{solicitarEliminar\}/)

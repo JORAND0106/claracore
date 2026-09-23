@@ -222,6 +222,40 @@ class TestPlanillaTuberiaGuardarCartera(unittest.TestCase):
         self.assertEqual(len(inserts), 1)
         self.assertEqual(inserts[0]["orden"], 2)
 
+    def test_assert_traslapo_filtro_acepta_cero_y_rechaza_vacio(self):
+        mod = self.mod
+        # Vacío → error
+        with self.assertRaises(mod.HTTPException) as ctx:
+            mod._assert_traslapo_filtro("FILTRO", {})
+        self.assertIn("Traslapo", str(ctx.exception.detail))
+        with self.assertRaises(mod.HTTPException):
+            mod._assert_traslapo_filtro("FILTRO", {"traslapo_m": None})
+        with self.assertRaises(mod.HTTPException):
+            mod._assert_traslapo_filtro("FILTRO", {"traslapo_m": ""})
+        # 0 y valores positivos OK
+        mod._assert_traslapo_filtro("FILTRO", {"traslapo_m": 0})
+        mod._assert_traslapo_filtro("FILTRO", {"traslapo_m": 0.0})
+        mod._assert_traslapo_filtro("FILTRO", {"traslapo_m": "0.25"})
+        mod._assert_traslapo_filtro("FILTRO", {"traslapo_m": 0.3})
+        # ALC no exige
+        mod._assert_traslapo_filtro("ALCANTARILLA", {})
+
+    def test_cartera_body_acepta_meta_cabecera_y_params(self):
+        """Guardado unificado: CarteraBody incluye meta/cabecera para no perder Traslapo."""
+        fields = getattr(self.mod.CarteraBody, "model_fields", None) or getattr(
+            self.mod.CarteraBody, "__annotations__", {},
+        )
+        # Con stub pydantic no hay model_fields; verificar atributos en la clase / annotations
+        src_ok = "meta_cabecera" in str(fields) or hasattr(self.mod.CarteraBody, "meta_cabecera")
+        # Fallback: leer anotaciones del módulo cargado
+        ann = getattr(self.mod.CarteraBody, "__annotations__", {})
+        self.assertTrue(
+            "meta_cabecera" in ann or src_ok,
+            "CarteraBody debe declarar meta_cabecera",
+        )
+        self.assertIn("tipo", ann)
+        self.assertIn("nombre", ann)
+
 
 if __name__ == "__main__":
     unittest.main()

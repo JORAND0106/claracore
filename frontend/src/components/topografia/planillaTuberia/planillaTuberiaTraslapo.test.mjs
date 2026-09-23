@@ -115,6 +115,17 @@ describe('Traslapo geotextil — FILTRO', () => {
     assert.match(formSrc, /Traslapo es obligatorio en planillas tipo FILTRO/)
   })
 
+  it('guardado unificado envía meta_cabecera (traslapo) en /cartera para no rechazar valor diligenciado', () => {
+    assert.match(formSrc, /payloadCabeceraUnificado/)
+    assert.match(formSrc, /const guardar = async/)
+    assert.match(formSrc, /\/planillas-tuberia\/\$\{planilla\.id\}\/cartera/)
+    // El body de cartera incluye cabecera/meta (no solo filas).
+    assert.match(formSrc, /\.\.\.cabecera/)
+    assert.match(formSrc, /meta_cabecera:\s*meta/)
+    assert.match(routesSrc, /body\.meta_cabecera/)
+    assert.match(routesSrc, /meta_para_assert/)
+  })
+
   it('BE/Excel/PDF: traslapo en cabecera y fórmula GEO', () => {
     assert.match(routesSrc, /_assert_traslapo_filtro/)
     assert.match(routesSrc, /traslapo_m=_traslapo_m/)
