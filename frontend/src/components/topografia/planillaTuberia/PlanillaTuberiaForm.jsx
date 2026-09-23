@@ -1278,14 +1278,15 @@ export default function PlanillaTuberiaForm({
             return (
               <tr key={idx}>
                 <td style={{ ...tdCartera, textAlign: 'center', fontWeight: 700 }}>{idx + 1}</td>
-                {colsCampoEdit.map((k) => (
+                {colsCampoEdit.map((k, colIdx) => (
                   <td key={k} style={tdCarteraEdit}>
                     <input
-                      type="number"
-                      step="any"
+                      type="text"
                       inputMode="decimal"
                       disabled={!editable}
                       value={f[k]}
+                      data-cartera-row={idx}
+                      data-cartera-col={colIdx}
                       onChange={(e) => setFila(idx, k, e.target.value)}
                       onPaste={(e) => onPasteCartera(idx, k, e)}
                       style={{
@@ -1496,13 +1497,29 @@ export default function PlanillaTuberiaForm({
           </tbody>
         </table>
       </div>
-      {calculoVista?.descuentos_altura && Object.keys(calculoVista.descuentos_altura).length > 0 && (
-        <div style={{ marginTop: 6, fontSize: 'var(--cc-xxs)', color: ui.textMuted }}>
-          Descuentos de altura aplicados:{' '}
-          {Object.entries(calculoVista.descuentos_altura).map(([k, v]) => {
-            const lbl = CAMPOS_DESCUENTO_ALTURA.find((c) => c.key === k)?.label || k
-            return `${lbl} −${fmtNDash(v)}`
-          }).join(' · ')}
+      {((calculoVista?.notas_descuento_altura || []).length > 0
+        || (calculoVista?.descuentos_altura && Object.keys(calculoVista.descuentos_altura).length > 0)) && (
+        <div style={{
+          marginTop: 8, padding: '8px 10px', borderRadius: 8,
+          background: '#fff7ed', border: '1px solid #fed7aa',
+          fontSize: 'var(--cc-xs)', color: '#9a3412',
+        }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Notas de descuento de altura</div>
+          {(calculoVista?.notas_descuento_altura || []).length > 0 ? (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {calculoVista.notas_descuento_altura.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          ) : (
+            <div>
+              Descuentos de altura aplicados:{' '}
+              {Object.entries(calculoVista.descuentos_altura || {}).map(([k, v]) => {
+                const lbl = CAMPOS_DESCUENTO_ALTURA.find((c) => c.key === k)?.label || k
+                return `${lbl} −${fmtNDash(v)}`
+              }).join(' · ')}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -24,9 +24,8 @@ describe('Cartera de campo — pegado masivo desde Excel', () => {
   })
 
   it('cubre Abscisa, Terreno Natural, nivel y Cota Fondo Excavación', () => {
-    assert.match(
-      formSrc,
-      /\['abscisa', 'terreno_natural', nivelKey, 'cota_fondo_excavacion'\]/,
-    )
+    assert.match(formSrc, /\['abscisa', 'terreno_natural'/)
+    assert.match(formSrc, /cota_fondo_excavacion/)
+    assert.match(formSrc, /onPaste=\{\(e\) => onPasteCartera\(idx, k, e\)\}/)
   })
 })

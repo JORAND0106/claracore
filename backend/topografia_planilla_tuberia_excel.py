@@ -381,6 +381,88 @@ def _descuentos_visibles_excel(calculo: Optional[dict]) -> list[dict]:
     return out
 
 
+def _notas_planilla_para_excel(calculo: Optional[dict], planilla: Optional[dict]) -> list[str]:
+    """Notas dinámicas (descuento altura) + notas manuales de meta_cabecera."""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for n in (calculo or {}).get("notas_descuento_altura") or []:
+        txt = str(n or "").strip()
+        if txt and txt not in seen:
+            seen.add(txt)
+            lines.append(txt)
+    for d in (calculo or {}).get("descuentos_altura_detalle") or []:
+        if not isinstance(d, dict):
+            continue
+        txt = str(d.get("nota") or "").strip()
+        if txt and txt not in seen:
+            seen.add(txt)
+            lines.append(txt)
+    meta = (planilla or {}).get("meta_cabecera") if isinstance(planilla, dict) else {}
+    if isinstance(meta, dict):
+        manual = meta.get("notas") or meta.get("notas_planilla")
+        if isinstance(manual, list):
+            for n in manual:
+                txt = str(n or "").strip()
+                if txt and txt not in seen:
+                    seen.add(txt)
+                    lines.append(txt)
+        elif isinstance(manual, str) and manual.strip():
+            for part in manual.replace("\r\n", "\n").split("\n"):
+                txt = part.strip()
+                if txt and txt not in seen:
+                    seen.add(txt)
+                    lines.append(txt)
+    return lines
+
+
+def _write_bloque_notas(
+    ws,
+    *,
+    calculo: Optional[dict],
+    planilla: Optional[dict],
+    after_row: int,
+) -> int:
+    """
+    Bloque «Notas» entre tablas de cantidades y firmas (fila 64).
+    Reserva varias filas para notas dinámicas y futuras anotaciones manuales.
+    """
+    start = max(int(after_row or 51) + 2, 53)
+    max_start = 56
+    start = min(start, max_start)
+    end = 63
+    if end < start:
+        end = start
+
+    notas = _notas_planilla_para_excel(calculo, planilla)
+    _set(ws, f"A{start}", "Notas")
+    _style(ws, f"A{start}", font=FONT_LABEL, fill=FILL_HDR, border=THIN)
+    try:
+        ws.merge_cells(start_row=start, start_column=1, end_row=start, end_column=14)
+    except Exception:
+        pass
+
+    cuerpo = "\n".join(f"• {n}" for n in notas) if notas else ""
+    body_row = start + 1
+    body_end = end
+    _set(ws, f"A{body_row}", cuerpo)
+    try:
+        ws.merge_cells(
+            start_row=body_row, start_column=1, end_row=body_end, end_column=14,
+        )
+    except Exception:
+        pass
+    cell = ws.cell(row=body_row, column=1)
+    cell.alignment = Alignment(wrap_text=True, vertical="top", horizontal="left")
+    cell.font = Font(name="Arial", size=9)
+    for r in range(body_row, body_end + 1):
+        for c in range(1, 15):
+            coord = ws.cell(row=r, column=c).coordinate
+            _style(ws, coord, border=THIN)
+        ws.row_dimensions[r].height = 18
+    _border_box(ws, start, body_end, 1, 14)
+    return body_end
+
+
 def _clear_tabla_cantidades_descuentos(ws, first_row: int = 45, last_row: int = 70) -> None:
     for r in range(first_row, last_row + 1):
         for col in ("B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"):
@@ -891,6 +973,9 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     if vacia:
         _set(ws, "A9", "PLANTILLA VACÍA — solo Desarrollador (verificación de formato)")
 
+    # Guardar refs para Notas (se escriben tras bordes de cantidades).
+    ws._cc_notas_calculo = calculo
+    ws._cc_notas_planilla = planilla
     return cant_last
 
 
@@ -927,6 +1012,12 @@ def build_planilla_tuberia_xlsx(
     cant_last = _overlay_data(ws, planilla, calculo, tipo, vacia)
     _embed_seccion_png(ws, tipo)
     _apply_sheet_borders(ws, cant_last_row=cant_last or 51)
+    _write_bloque_notas(
+        ws,
+        calculo=getattr(ws, "_cc_notas_calculo", calculo),
+        planilla=getattr(ws, "_cc_notas_planilla", planilla),
+        after_row=cant_last or 51,
+    )
     _add_profile_chart(ws, wb, tipo=tipo)
 
     base = sheets.get("Resumen_BASE")
