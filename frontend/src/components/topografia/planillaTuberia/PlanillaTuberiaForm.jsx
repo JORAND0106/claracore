@@ -47,6 +47,8 @@ import {
   linksSicoeDesdeMeta,
   puedeCrearReporteSicoe,
   puedeVerBotonCrearReporteSicoe,
+  etiquetaReportesAsociadosLista,
+  etiquetaValidacionLista,
   normalizarEvidenciasFotograficas,
   validarEvidenciasFotograficas,
   lineasConCantidadCalculada,
@@ -1973,13 +1975,15 @@ export default function PlanillaTuberiaForm({
           style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}
           className="cc-topo-table-scroll"
         >
-          <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 560, width: '100%' }}>
+          <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 720, width: '100%' }}>
             <thead>
               <tr>
                 <th style={{ ...thLista, width: 48, textAlign: 'center' }}>No.</th>
                 <th style={thLista}>Nombre Planilla</th>
-                <th style={thLista}>Fecha de generada</th>
-                <th style={thLista}>Quien Validó por última vez</th>
+                <th style={thLista}>Fecha Creación</th>
+                <th style={thLista}>Validación Contratista</th>
+                <th style={thLista}>Validación Interventoría</th>
+                <th style={thLista}>Reporte asociado</th>
               </tr>
             </thead>
             <tbody>
@@ -2006,12 +2010,18 @@ export default function PlanillaTuberiaForm({
                     </span>
                   </td>
                   <td style={tdLista}>{fmtFechaLista(p.created_at)}</td>
-                  <td style={tdLista}>{p.validado_por_nombre || '—'}</td>
+                  <td style={tdLista} title={p.nivel1_usuario_nombre || undefined}>
+                    {etiquetaValidacionLista(p.nivel1_estado, p.nivel1_fecha)}
+                  </td>
+                  <td style={tdLista} title={p.nivel2_usuario_nombre || undefined}>
+                    {etiquetaValidacionLista(p.nivel2_estado, p.nivel2_fecha)}
+                  </td>
+                  <td style={tdLista}>{etiquetaReportesAsociadosLista(p)}</td>
                 </tr>
               ))}
               {!lista.length && (
                 <tr>
-                  <td colSpan={4} style={{ ...tdLista, color: ui.textMuted, textAlign: 'center' }}>
+                  <td colSpan={6} style={{ ...tdLista, color: ui.textMuted, textAlign: 'center' }}>
                     Sin planillas aún. Use «Nueva planilla» para crear la primera.
                   </td>
                 </tr>

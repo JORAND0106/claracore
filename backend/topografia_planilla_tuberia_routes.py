@@ -774,14 +774,19 @@ def listar(contrato_id: int, current_user=Depends(get_current_user)):
         .select(
             "id,tipo,nombre,pk_id,costado,estado,version,diametro_m,relacion_atraque,"
             "created_at,updated_at,cerrado_at,creado_por,cerrado_por,validado_por,validado_at,"
-            "nivel1_estado,nivel2_estado,comentario_interventoria"
+            "nivel1_estado,nivel1_usuario_id,nivel1_fecha,"
+            "nivel2_estado,nivel2_usuario_id,nivel2_fecha,"
+            "comentario_interventoria,meta_cabecera"
         )
         .eq("contrato_id", contrato_id).order("created_at", desc=True).execute().data or []
     )
     uids = {
         int(u)
         for r in rows
-        for u in (r.get("validado_por"), r.get("cerrado_por"), r.get("creado_por"))
+        for u in (
+            r.get("validado_por"), r.get("cerrado_por"), r.get("creado_por"),
+            r.get("nivel1_usuario_id"), r.get("nivel2_usuario_id"),
+        )
         if u is not None and str(u).strip() != ""
     }
     nombres: dict[int, str] = {}
@@ -813,6 +818,28 @@ def listar(contrato_id: int, current_user=Depends(get_current_user)):
         except (TypeError, ValueError):
             vid_i = None
         item["validado_por_nombre"] = nombres.get(vid_i) if vid_i is not None else None
+
+        def _uid_nombre(raw):
+            try:
+                ui = int(raw) if raw is not None and str(raw).strip() != "" else None
+            except (TypeError, ValueError):
+                ui = None
+            return nombres.get(ui) if ui is not None else None
+
+        item["nivel1_usuario_nombre"] = _uid_nombre(r.get("nivel1_usuario_id"))
+        item["nivel2_usuario_nombre"] = _uid_nombre(r.get("nivel2_usuario_id"))
+
+        # Proyección ligera de reportes asociados (sin enviar meta completa al cliente).
+        links = _sicoe_links_from_meta(r.get("meta_cabecera"))
+        item["reportes_sicoe"] = [
+            {
+                "reporte_id": lk.get("reporte_id"),
+                "numero_reporte": lk.get("numero_reporte"),
+            }
+            for lk in links
+            if lk.get("reporte_id") is not None or lk.get("numero_reporte") is not None
+        ]
+        item.pop("meta_cabecera", None)
         out.append(item)
     return out
 
@@ -2318,7 +2345,36 @@ def asociar_reporte_sicoe_existente(
         )
     ) or []
 
-    # Índice por nombre normalizado (primer match gana).
+    # 2a) Reemplazar gráfico en TODOS los registros del reporte (no depende de match por nombre).
+    patch_graf: dict[str, Any] = {
+        "grafico_url": grafico_url,
+        "grafico_numero": grafico_numero,
+        "grafico_descripcion": "Esquema del tramo — planilla de tubería",
+        "graficos_historial": list(graficos_historial),
+        "modificado_por_reg": uid,
+    }
+    _so_registro_normalizar_graficos_historial(patch_graf)
+    n_graf = 0
+    if regs:
+        try:
+            supabase_execute(
+                lambda: (
+                    supabase.table("so_registros")
+                    .update(patch_graf)
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("reporte_id", int(reporte_id))
+                    .execute()
+                )
+            )
+            n_graf = len(regs)
+        except Exception as exc:
+            logger.exception("asociar grafico masivo reporte=%s: %s", reporte_id, exc)
+            raise HTTPException(
+                500,
+                "No se pudo reemplazar el gráfico en los registros del reporte.",
+            ) from exc
+
+    # 2b) Fotos por línea: match por nombre de ítem (sin tocar cantidades).
     by_nombre: dict[str, dict] = {}
     for r in regs:
         key = _norm_nombre_match(r.get("nombre"))
@@ -2327,7 +2383,6 @@ def asociar_reporte_sicoe_existente(
 
     mapa_codigos: dict[str, int] = {}
     n_fotos = 0
-    n_graf = 0
     for line in lineas:
         origen_key = origen_key_linea_sicoe(line)
         nombre_line = _norm_nombre_match(line.get("nombre"))
@@ -2339,34 +2394,29 @@ def asociar_reporte_sicoe_existente(
         except (TypeError, ValueError):
             pass
 
-        patch: dict[str, Any] = {
-            "grafico_url": grafico_url,
-            "grafico_numero": grafico_numero,
-            "grafico_descripcion": "Esquema del tramo — planilla de tubería",
-            "graficos_historial": list(graficos_historial),
-            "modificado_por_reg": uid,
-        }
-        _so_registro_normalizar_graficos_historial(patch)
-
         scope = str(line.get("_origen_tabla") or "").strip()
         codigo = str(line.get("_origen_codigo") or "").strip()
         fotos_linea = list((evidencias.get(scope) or {}).get(codigo) or [])
-        if fotos_linea:
-            content, mime = _bytes_desde_evidencia_foto(fotos_linea[0])
-            if content:
-                foto_url, foto_numero = _subir_bytes_sicoe_foto(contrato_id, content, mime)
-                if foto_url:
-                    patch["foto_url"] = foto_url
-                    patch["foto_numero"] = foto_numero
-                    patch["foto_descripcion"] = (
-                        str(fotos_linea[0].get("nombre") or "").strip()
-                        or f"Evidencia {codigo}"
-                    )
-                    n_fotos += 1
-
+        if not fotos_linea:
+            continue
+        content, mime = _bytes_desde_evidencia_foto(fotos_linea[0])
+        if not content:
+            continue
+        foto_url, foto_numero = _subir_bytes_sicoe_foto(contrato_id, content, mime)
+        if not foto_url:
+            continue
+        patch_foto: dict[str, Any] = {
+            "foto_url": foto_url,
+            "foto_numero": foto_numero,
+            "foto_descripcion": (
+                str(fotos_linea[0].get("nombre") or "").strip()
+                or f"Evidencia {codigo}"
+            ),
+            "modificado_por_reg": uid,
+        }
         try:
             supabase_execute(
-                lambda rid=reg["id"], payload=dict(patch): (
+                lambda rid=reg["id"], payload=dict(patch_foto): (
                     supabase.table("so_registros")
                     .update(payload)
                     .eq("id", int(rid))
@@ -2374,36 +2424,12 @@ def asociar_reporte_sicoe_existente(
                     .execute()
                 )
             )
-            n_graf += 1
+            n_fotos += 1
         except Exception as exc:
             logger.exception(
-                "asociar foto/grafico so_registro id=%s reporte=%s: %s",
+                "asociar foto so_registro id=%s reporte=%s: %s",
                 reg.get("id"), reporte_id, exc,
             )
-
-    # Si no hubo match por nombre, al menos actualizar gráfico en todos los registros.
-    if n_graf == 0 and regs:
-        patch_all: dict[str, Any] = {
-            "grafico_url": grafico_url,
-            "grafico_numero": grafico_numero,
-            "grafico_descripcion": "Esquema del tramo — planilla de tubería",
-            "graficos_historial": list(graficos_historial),
-            "modificado_por_reg": uid,
-        }
-        _so_registro_normalizar_graficos_historial(patch_all)
-        try:
-            supabase_execute(
-                lambda: (
-                    supabase.table("so_registros")
-                    .update(patch_all)
-                    .eq("contrato_id", int(contrato_id))
-                    .eq("reporte_id", reporte_id)
-                    .execute()
-                )
-            )
-            n_graf = len(regs)
-        except Exception as exc:
-            logger.exception("asociar grafico masivo reporte=%s: %s", reporte_id, exc)
 
     # 3) Vínculo en meta (solo_adjunto: no sincroniza cantidades en guardados posteriores)
     prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}

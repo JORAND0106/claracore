@@ -681,6 +681,45 @@ export function linksSicoeDesdeMeta(meta) {
   return raw.filter((x) => x && x.reporte_id != null)
 }
 
+/**
+ * Etiqueta compacta de reportes asociados en el listado.
+ * Acepta `reportes_sicoe` del API de listado o links de meta.
+ */
+export function etiquetaReportesAsociadosLista(planillaOLinks) {
+  const links = Array.isArray(planillaOLinks)
+    ? planillaOLinks
+    : (
+      Array.isArray(planillaOLinks?.reportes_sicoe)
+        ? planillaOLinks.reportes_sicoe
+        : linksSicoeDesdeMeta(planillaOLinks?.meta_cabecera)
+    )
+  const nums = []
+  const seen = new Set()
+  for (const lk of links || []) {
+    const n = lk?.numero_reporte
+    if (n == null || n === '') continue
+    const key = String(n)
+    if (seen.has(key)) continue
+    seen.add(key)
+    nums.push(`#${n}`)
+  }
+  return nums.length ? nums.join(', ') : '—'
+}
+
+/** Celda de validación N1/N2 en listado: estado (+ fecha corta si hay). */
+export function etiquetaValidacionLista(estado, fechaIso) {
+  const est = String(estado || '').trim() || 'No Revisado'
+  if (!fechaIso || est === 'No Revisado') return est
+  try {
+    const d = new Date(fechaIso)
+    if (Number.isNaN(d.getTime())) return est
+    const f = d.toLocaleDateString('es-CO', { dateStyle: 'short' })
+    return `${est} · ${f}`
+  } catch {
+    return est
+  }
+}
+
 /** Formato preview autocomplete: «Nº & Descripción & AbsIni - AbsFin». */
 export function formatoPreviewReporteSicoe(reporte) {
   if (!reporte || typeof reporte !== 'object') return ''
