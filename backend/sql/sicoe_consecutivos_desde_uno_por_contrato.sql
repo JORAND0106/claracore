@@ -74,6 +74,10 @@ BEGIN
 END;
 $$;
 
+-- Nota: GREATEST(MAX+1, reservado_hasta+1) protege reservas concurrentes (RPC antes del INSERT).
+-- Tras eliminar reportes, el backend debe sincronizar reservado_hasta = MAX (ver
+-- patch_sicoe_sync_reservado_hasta_tras_eliminar.sql y _sincronizar_contador_numero_reporte).
+-- No clampear aquí a MAX: rompería dos creaciones concurrentes.
 CREATE OR REPLACE FUNCTION public.siguiente_numero_reporte(p_contrato_id integer)
 RETURNS integer
 LANGUAGE plpgsql

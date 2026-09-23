@@ -5910,6 +5910,78 @@ def _sicoe_rsv_efectivo(desde_uno: bool, rsv: int, m_tab: int, piso: int) -> int
     return int(rsv or 0)
 
 
+def _sincronizar_contador_numero_reporte(contrato_id: int) -> int:
+    """Fija ``sico_ultimo_numero_reporte.reservado_hasta`` = MAX(numero_reporte) del contrato.
+
+    La RPC ``siguiente_numero_reporte`` usa ``GREATEST(MAX+1, reservado_hasta+1)`` para
+    proteger reservas concurrentes antes del INSERT. Si se eliminan reportes, el
+    contador queda por encima del máximo real y el próximo número no reutiliza huecos.
+    Llamar esto tras borrar reportes alinea el contador con la tabla.
+    """
+    cid = int(contrato_id)
+
+    def _max_rep():
+        return (
+            supabase.table("so_reportes")
+            .select("numero_reporte")
+            .eq("contrato_id", cid)
+            .order("numero_reporte", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    mrep_rows = supabase_execute(_max_rep)
+    max_rep = (
+        int(mrep_rows[0]["numero_reporte"])
+        if mrep_rows and mrep_rows[0].get("numero_reporte") is not None
+        else 0
+    )
+
+    def _upsert():
+        return (
+            supabase.table("sico_ultimo_numero_reporte")
+            .upsert({"contrato_id": cid, "reservado_hasta": max_rep}, on_conflict="contrato_id")
+            .execute()
+        )
+
+    supabase_execute(_upsert)
+    return max_rep
+
+
+def _sincronizar_contador_numero_registro(contrato_id: int) -> int:
+    """Fija ``sico_ultimo_numero_registro.reservado_hasta`` = MAX(numero_registro) del contrato."""
+    cid = int(contrato_id)
+
+    def _max_reg():
+        return (
+            supabase.table("so_registros")
+            .select("numero_registro")
+            .eq("contrato_id", cid)
+            .order("numero_registro", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    mreg_rows = supabase_execute(_max_reg)
+    max_reg = (
+        int(mreg_rows[0]["numero_registro"])
+        if mreg_rows and mreg_rows[0].get("numero_registro") is not None
+        else 0
+    )
+
+    def _upsert():
+        return (
+            supabase.table("sico_ultimo_numero_registro")
+            .upsert({"contrato_id": cid, "reservado_hasta": max_reg}, on_conflict="contrato_id")
+            .execute()
+        )
+
+    supabase_execute(_upsert)
+    return max_reg
+
+
 def _sicoe_renumerar_reportes_contrato(contrato_id: int) -> int:
     """Renumera so_reportes del contrato 1..N (dos fases para evitar colisiones)."""
     def _listar():
@@ -23339,6 +23411,10 @@ def eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get
             .eq("id", reporte_id).eq("contrato_id", contrato_id)\
             .eq("estado", "Borrador").execute().data
     supabase_execute(_del)
+    try:
+        _sincronizar_contador_numero_reporte(contrato_id)
+    except Exception:
+        pass
     return {"ok": True}
 
 @app.post("/sicoe-obra/{contrato_id}/reportes")
@@ -25965,6 +26041,10 @@ def eliminar_registros_reporte(contrato_id: int, reporte_id: int, current_user=D
 
     supabase_execute(_del)
     try:
+        _sincronizar_contador_numero_registro(contrato_id)
+    except Exception:
+        pass
+    try:
         u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
@@ -26171,6 +26251,11 @@ def dev_eliminar_registro(contrato_id: int, registro_id: int, current_user=Depen
     supabase_execute(_del_reg)
 
     try:
+        _sincronizar_contador_numero_registro(contrato_id)
+    except Exception:
+        pass
+
+    try:
         u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
@@ -26226,6 +26311,12 @@ def dev_eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends
     def _del_rep():
         return supabase.table("so_reportes").delete().eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
     supabase_execute(_del_rep)
+
+    try:
+        _sincronizar_contador_numero_reporte(contrato_id)
+        _sincronizar_contador_numero_registro(contrato_id)
+    except Exception:
+        pass
 
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
