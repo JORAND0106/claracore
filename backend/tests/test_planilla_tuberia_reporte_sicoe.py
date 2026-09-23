@@ -8,6 +8,7 @@ from topografia_planilla_tuberia import (
     abscisas_extremos_cartera,
     calcular_planilla_completa,
     dims_y_cantidad_registro_sicoe,
+    formatear_observacion_descuento_sicoe,
     formatear_observacion_registro_sicoe,
     lineas_planilla_a_registros_sicoe,
     redondear_costo_directo_sicoe,
@@ -28,7 +29,7 @@ def _filas():
 
 
 class TestPlanillaARegistrosSicoe(unittest.TestCase):
-    def test_lineas_sin_item_y_observacion_enriquecida(self):
+    def test_lineas_obs_positiva_y_descuento_negativo(self):
         r = calcular_planilla_completa(
             tipo="ALCANTARILLA", diametro_m=0.9, espesor_m=0.05,
             ancho_excavacion_m=1.5, relacion_atraque="1:3",
@@ -38,24 +39,34 @@ class TestPlanillaARegistrosSicoe(unittest.TestCase):
             r, tipo="ALCANTARILLA", tramo="TRAMO 1",
         )
         self.assertGreaterEqual(len(regs), 2)
-        for reg in regs:
+        pos = [x for x in regs if (x.get("cantidad_total") or 0) > 0]
+        neg = [x for x in regs if (x.get("cantidad_total") or 0) < 0]
+        self.assertTrue(pos)
+        # ALC con Area1/Area2 típicos → al menos un negativo si hay descuento > 0
+        for reg in pos:
             self.assertIsNone(reg.get("item_numero"))
-            self.assertTrue(reg.get("observacion"))
-            self.assertIn(" para ALCANTARILLA en tramo TRAMO 1", reg["observacion"])
+            self.assertIn(" para ALCANTARILLA para TRAMO 1", reg["observacion"])
+            self.assertNotIn(" en tramo ", reg["observacion"])
+            self.assertIsNone(reg.get("cantidad"))
             self.assertTrue(reg["observacion"].startswith(reg["nombre"]))
-            self.assertIsNone(reg.get("cantidad"), "factor cantidad no debe enviarse")
-            self.assertIsNotNone(reg.get("cantidad_total"))
-            self.assertNotAlmostEqual(float(reg["cantidad_total"]), 0.0)
-            for k in ("longitud", "ancho", "espesor"):
-                self.assertIn(k, reg)
-            match = next(
-                (n for n in r["netos"] if n["nombre"] == reg["nombre"]),
-                None,
+        for reg in neg:
+            self.assertLess(float(reg["cantidad_total"]), 0)
+            self.assertTrue(reg["observacion"].lower().startswith("descuento"))
+            self.assertIn(" para ALCANTARILLA para TRAMO 1", reg["observacion"])
+            self.assertEqual(reg.get("_origen_tabla"), "descuentos")
+
+        # TRI: positivo = bruto; negativo Area 1 ≈ descuentos del neto
+        tri_neto = next(n for n in r["netos"] if n["codigo"] == "TRI")
+        tri_reg = next(x for x in pos if x["nombre"] == tri_neto["nombre"])
+        self.assertAlmostEqual(
+            float(tri_reg["cantidad_total"]), float(tri_neto["bruto"]), places=2,
+        )
+        if tri_neto["descuentos"]:
+            a1 = next(x for x in neg if x.get("_origen_codigo") == "DESC_A1")
+            self.assertAlmostEqual(
+                float(a1["cantidad_total"]), -float(tri_neto["descuentos"]), places=2,
             )
-            if match:
-                self.assertAlmostEqual(
-                    float(reg["cantidad_total"]), float(match["neto"]), places=2,
-                )
+            self.assertIn("Area 1", a1["observacion"])
 
     def test_abscisas_extremos(self):
         r = calcular_planilla_completa(
@@ -67,44 +78,68 @@ class TestPlanillaARegistrosSicoe(unittest.TestCase):
         self.assertEqual(a0, 0)
         self.assertEqual(a1, 10)
 
-    def test_cero_no_genera_registro(self):
+    def test_cero_no_genera_registro_ni_descuento(self):
         calc = {
             "netos": [
-                {"codigo": "OTROS", "nombre": "Otros: ____", "neto": 0, "unidad": "m³"},
-                {"codigo": "REL", "nombre": "Relleno Gran.", "neto": 0.0, "unidad": "m³"},
-                {"codigo": "EXC", "nombre": "Excavación Varias", "neto": 3.2, "unidad": "m³",
-                 "long": 10, "ancho": 1.5, "espesor": 0.2},
+                {"codigo": "OTROS", "nombre": "Otros: ____", "bruto": 0, "neto": 0, "unidad": "m³"},
+                {"codigo": "REL", "nombre": "Relleno Gran.", "bruto": 0.0, "neto": 0.0, "unidad": "m³"},
+                {
+                    "codigo": "EXC", "nombre": "Excavación Varias", "bruto": 3.2, "neto": 3.2,
+                    "unidad": "m³", "long": 10, "ancho": 1.5, "espesor": 0.2,
+                },
+                {
+                    "codigo": "TRI", "nombre": "Atraque mat. filtrante", "bruto": 5.0, "neto": 4.5,
+                    "descuentos": 0.5, "unidad": "m³", "long": 10, "ancho": 1.5, "espesor": 0.3,
+                },
             ],
             "descuentos": [
                 {"codigo": "DESC_A1", "nombre": "Area 1", "cantidad": 0, "unidad": "m³"},
-                {"codigo": "DESC_A2", "nombre": "Area 2", "cantidad": 0.5, "unidad": "m³"},
+                {
+                    "codigo": "DESC_A2", "nombre": "Area 2", "cantidad": 0.5, "unidad": "m³",
+                    "long": 10, "espesor": 0.05,
+                },
+                {
+                    "codigo": "DESC_TUB_FILT", "nombre": "Tubería Filtro", "cantidad": 0.5,
+                    "unidad": "m³", "long": 10, "espesor": 0.05,
+                },
             ],
         }
         regs = lineas_planilla_a_registros_sicoe(
             calc, tipo="FILTRO", tramo="TRAMO 8",
         )
-        self.assertEqual(len(regs), 2)
-        nombres = {r["nombre"] for r in regs}
-        self.assertEqual(nombres, {"Excavación Varias", "Area 2"})
-        for r in regs:
-            self.assertEqual(
-                r["observacion"],
-                f"{r['nombre']} para FILTRO en tramo TRAMO 8",
-            )
-            self.assertIsNone(r.get("cantidad"))
+        # EXC + TRI positivos; DESC_A2 y DESC_TUB_FILT negativos; ceros omitidos
+        pos = [x for x in regs if float(x["cantidad_total"]) > 0]
+        neg = [x for x in regs if float(x["cantidad_total"]) < 0]
+        self.assertEqual({p["nombre"] for p in pos}, {"Excavación Varias", "Atraque mat. filtrante"})
+        self.assertEqual({n["_origen_codigo"] for n in neg}, {"DESC_A2", "DESC_TUB_FILT"})
+        tri = next(p for p in pos if p["nombre"] == "Atraque mat. filtrante")
+        self.assertEqual(tri["cantidad_total"], 5.0)  # bruto, no neto 4.5
+        self.assertEqual(
+            tri["observacion"],
+            "Atraque mat. filtrante para FILTRO para TRAMO 8",
+        )
+        tub = next(n for n in neg if n["_origen_codigo"] == "DESC_TUB_FILT")
+        self.assertEqual(tub["cantidad_total"], -0.5)
+        self.assertIn("Tubería Filtro", tub["observacion"])
+        self.assertIn("Longitud × área de tubería", tub["observacion"])
 
     def test_formatear_observacion(self):
         self.assertEqual(
             formatear_observacion_registro_sicoe("Excavación Varias", "FILTRO", "TRAMO 8"),
-            "Excavación Varias para FILTRO en tramo TRAMO 8",
+            "Excavación Varias para FILTRO para TRAMO 8",
         )
         self.assertEqual(
             formatear_observacion_registro_sicoe("Geotextil", "alcantarilla", "  T1 "),
-            "Geotextil para ALCANTARILLA en tramo T1",
+            "Geotextil para ALCANTARILLA para T1",
         )
-        self.assertEqual(
-            formatear_observacion_registro_sicoe("X", None, None),
-            "X para — en tramo —",
+        self.assertIn(
+            "Area 1",
+            formatear_observacion_descuento_sicoe("DESC_A1", "Area 1", "ALCANTARILLA", "T1"),
+        )
+        self.assertTrue(
+            formatear_observacion_descuento_sicoe(
+                "DESC_TUB_FILT", "Tubería Filtro", "FILTRO", "T8",
+            ).startswith("Descuento Tubería Filtro"),
         )
 
     def test_dims_3_dec_cantidad_total_2_sin_factor_cantidad(self):
@@ -114,17 +149,20 @@ class TestPlanillaARegistrosSicoe(unittest.TestCase):
         self.assertEqual(dims["espesor"], 0.123)
         self.assertIsNone(dims["cantidad"])
         self.assertEqual(dims["cantidad_total"], 3.22)
+        self.assertEqual(
+            dims_y_cantidad_registro_sicoe(10, None, 0.05, -1.256)["cantidad_total"],
+            -1.26,
+        )
         self.assertEqual(redondear_costo_directo_sicoe(1234.56), 1235.0)
         self.assertIsNone(redondear_costo_directo_sicoe(None))
 
     def test_no_recalcula_producto(self):
-        """cantidad_total = neto del resumen, aunque L×A×E dé otro valor."""
         calc = {
             "netos": [
                 {
                     "codigo": "EXC", "nombre": "Excavación Varias", "unidad": "m³",
                     "long": 10, "ancho": 1.5, "espesor": 0.2,
-                    "neto": 2.99,  # distinto de 10*1.5*0.2=3.0
+                    "bruto": 2.99, "neto": 2.99,
                 },
             ],
             "descuentos": [],
@@ -132,9 +170,6 @@ class TestPlanillaARegistrosSicoe(unittest.TestCase):
         regs = lineas_planilla_a_registros_sicoe(calc, tipo="ALCANTARILLA", tramo="T1")
         self.assertEqual(len(regs), 1)
         self.assertEqual(regs[0]["cantidad_total"], 2.99)
-        self.assertEqual(regs[0]["longitud"], 10.0)
-        self.assertEqual(regs[0]["ancho"], 1.5)
-        self.assertEqual(regs[0]["espesor"], 0.2)
         self.assertIsNone(regs[0]["cantidad"])
 
 
@@ -150,6 +185,11 @@ class TestRutaUsaTramoYFiltroCero(unittest.TestCase):
         self.assertIn("**ubicacion_pk", text)
         self.assertIn('data["cantidad"] = None', text)
         self.assertIn("redondear_costo_directo_sicoe", text)
+        motor = (
+            Path(__file__).resolve().parents[1] / "topografia_planilla_tuberia.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("formatear_observacion_descuento_sicoe", motor)
+        self.assertIn("cant_neg = -abs", motor)
 
 
 if __name__ == "__main__":

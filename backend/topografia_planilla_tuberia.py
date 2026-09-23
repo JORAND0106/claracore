@@ -1095,12 +1095,45 @@ def formatear_observacion_registro_sicoe(
     tramo: Any,
 ) -> str:
     """
-    Observación SICOE: «{Ítem} para {ALCANTARILLA|FILTRO} en tramo {Tramo}».
+    Observación SICOE (Resumen): «{Ítem} para {ALCANTARILLA|FILTRO} para {Tramo}».
     """
     nombre = str(nombre_item or "").strip() or "Ítem"
     tipo = str(tipo_red or "").strip().upper() or "—"
     tramo_txt = str(tramo or "").strip() or "—"
-    return f"{nombre} para {tipo} en tramo {tramo_txt}"
+    return f"{nombre} para {tipo} para {tramo_txt}"
+
+
+def formatear_observacion_descuento_sicoe(
+    codigo: Any,
+    nombre: Any,
+    tipo_red: Any,
+    tramo: Any,
+) -> str:
+    """
+    Observación de registro negativo de Descuentos Específicos:
+    indica que es descuento y cómo se obtuvo el área (Area 1 / Area 2 / Tubería Filtro).
+    """
+    cod = str(codigo or "").strip().upper()
+    nombre_txt = str(nombre or cod or "Descuento").strip()
+    explicaciones = {
+        "DESC_A1": (
+            "Descuento Area 1 (área descontada = Longitud × Area 1 m²; "
+            "resta volumen de Triturado/Atraque)"
+        ),
+        "DESC_A2": (
+            "Descuento Area 2 (área descontada = Longitud × Area 2 m²; "
+            "resta volumen de Relleno)"
+        ),
+        "DESC_TUB_FILT": (
+            "Descuento Tubería Filtro (área descontada = Longitud × área de tubería m²; "
+            "resta volumen de material filtrante)"
+        ),
+        "DESC_OTROS": "Descuento Otros (resta volumen de Excavación)",
+    }
+    base = explicaciones.get(cod) or f"Descuento {nombre_txt}"
+    tipo = str(tipo_red or "").strip().upper() or "—"
+    tramo_txt = str(tramo or "").strip() or "—"
+    return f"{base} para {tipo} para {tramo_txt}"
 
 
 def _dim_sicoe_3(v: Any) -> Optional[float]:
@@ -1182,8 +1215,8 @@ def lineas_planilla_a_registros_sicoe(
     tramo: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """
-    Cada línea de Resumen de Cantidades y Descuentos Específicos con cantidad ≠ 0
-    → payload de so_registros (sin ítem; observación enriquecida con tipo/tramo).
+    Resumen de Cantidades (positivo, cantidad mayor = bruto) + Descuentos Específicos
+    (registro independiente en negativo) con cantidad ≠ 0 → so_registros.
     Criterio de cero: mismo eps que la exportación Excel.
     """
     if not isinstance(calculo, dict):
@@ -1192,17 +1225,16 @@ def lineas_planilla_a_registros_sicoe(
 
     def _push(
         nombre: Any, unidad: Any, long: Any, ancho: Any, espesor: Any, cant: Any,
-        *, origen: str, codigo: str,
+        *, origen: str, codigo: str, observacion: str,
     ) -> None:
         if not _cantidad_sicoe_no_cero(cant):
             return
         txt = str(nombre or codigo or "").strip() or codigo
-        obs = formatear_observacion_registro_sicoe(txt, tipo, tramo)
         dims = dims_y_cantidad_registro_sicoe(long, ancho, espesor, cant)
         out.append({
             "nombre": txt,
             "descripcion": txt,
-            "observacion": obs,
+            "observacion": observacion,
             "unidad": (str(unidad).strip() if unidad not in (None, "") else None),
             **dims,
             "item_numero": None,
@@ -1211,30 +1243,47 @@ def lineas_planilla_a_registros_sicoe(
             "_origen_tabla": origen,
         })
 
+    # Positivos: cantidad mayor (bruto del resumen). El neto se obtiene en SICOE
+    # al sumar el registro negativo del descuento vinculado.
     for n in calculo.get("netos") or []:
         if not isinstance(n, dict):
             continue
         codigo = str(n.get("codigo") or "").strip()
         if not codigo:
             continue
-        cant = n.get("neto")
+        cant = n.get("bruto")
+        if cant is None:
+            cant = n.get("neto")
         if cant is None:
             cant = n.get("cantidad")
+        nombre = n.get("nombre") or codigo
         _push(
-            n.get("nombre") or codigo, n.get("unidad"),
+            nombre, n.get("unidad"),
             n.get("long"), n.get("ancho"), n.get("espesor"), cant,
             origen="cantidades", codigo=codigo,
+            observacion=formatear_observacion_registro_sicoe(nombre, tipo, tramo),
         )
+
+    # Negativos: una línea por descuento específico ≠ 0
     for d in calculo.get("descuentos") or []:
         if not isinstance(d, dict) or not d.get("nombre"):
             continue
         codigo = str(d.get("codigo") or "").strip()
         if not codigo:
             continue
+        try:
+            cant_abs = float(d.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not _cantidad_sicoe_no_cero(cant_abs):
+            continue
+        cant_neg = -abs(cant_abs)
+        nombre = d.get("nombre") or codigo
         _push(
-            d.get("nombre") or codigo, d.get("unidad") or "m³",
-            d.get("long"), d.get("ancho"), d.get("espesor"), d.get("cantidad"),
+            nombre, d.get("unidad") or "m³",
+            d.get("long"), d.get("ancho"), d.get("espesor"), cant_neg,
             origen="descuentos", codigo=codigo,
+            observacion=formatear_observacion_descuento_sicoe(codigo, nombre, tipo, tramo),
         )
     return out
 
@@ -1273,7 +1322,9 @@ def mapa_lineas_sicoe_por_origen(
         codigo = str(n.get("codigo") or "").strip()
         if not codigo:
             continue
-        cant = n.get("neto")
+        cant = n.get("bruto")
+        if cant is None:
+            cant = n.get("neto")
         if cant is None:
             cant = n.get("cantidad")
         nombre = n.get("nombre") or codigo
@@ -1297,16 +1348,20 @@ def mapa_lineas_sicoe_por_origen(
         codigo = str(d.get("codigo") or "").strip()
         if not codigo:
             continue
+        try:
+            cant_abs = float(d.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            cant_abs = 0.0
+        cant_signed = -abs(cant_abs) if cant_abs else 0.0
         nombre = d.get("nombre") or codigo
         key = f"descuentos:{codigo}"
         dims = dims_y_cantidad_registro_sicoe(
-            d.get("long"), d.get("ancho"), d.get("espesor"),
-            d.get("cantidad") if d.get("cantidad") is not None else 0,
+            d.get("long"), d.get("ancho"), d.get("espesor"), cant_signed,
         )
         out[key] = {
             "nombre": nombre,
             "descripcion": nombre,
-            "observacion": formatear_observacion_registro_sicoe(nombre, tipo, tramo),
+            "observacion": formatear_observacion_descuento_sicoe(codigo, nombre, tipo, tramo),
             "unidad": d.get("unidad") or "m³",
             **dims,
             "_origen_tabla": "descuentos",
