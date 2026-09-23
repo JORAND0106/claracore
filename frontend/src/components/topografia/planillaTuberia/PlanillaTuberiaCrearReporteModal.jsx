@@ -8,6 +8,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { API_BASE } from '../../../apiBase'
 import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
+import { filtrarCapitulosPorTipoPlanilla } from './planillaTuberiaCrearReporteUi'
 
 /** Por encima del editor de planilla (100030) y del mapa PK (100050). */
 export const CREAR_REPORTE_Z_INDEX = 100060
@@ -296,7 +297,7 @@ export default function PlanillaTuberiaCrearReporteModal({
         const capList = Array.isArray(c)
           ? c.map((x) => (typeof x === 'string' ? x : (x?.capitulo || x?.nombre || ''))).filter(Boolean)
           : []
-        setCaps(capList)
+        setCaps(filtrarCapitulosPorTipoPlanilla(capList, planilla?.tipo))
       } catch (e) {
         if (!cancelled) {
           setSubs([])
@@ -307,7 +308,12 @@ export default function PlanillaTuberiaCrearReporteModal({
       }
     })()
     return () => { cancelled = true }
-  }, [open, contratoId, token])
+  }, [open, contratoId, token, planilla?.tipo])
+
+  useEffect(() => {
+    if (!capitulo) return
+    if (caps.length && !caps.includes(capitulo)) setCapitulo('')
+  }, [caps, capitulo])
 
   if (!open) return null
 
@@ -386,9 +392,10 @@ export default function PlanillaTuberiaCrearReporteModal({
       onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose?.() }}
     >
       <div
+        data-crear-reporte-popup
         style={{
-          width: 'min(640px, 100%)',
-          maxHeight: '92vh',
+          width: 'min(980px, 100%)',
+          maxHeight: '90vh',
           overflow: 'auto',
           background: ui?.cardBg || '#fff',
           borderRadius: 12,
@@ -483,46 +490,59 @@ export default function PlanillaTuberiaCrearReporteModal({
         </div>
 
         <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <CatalogAutocomplete
-            label="Subcontratista"
-            required
-            items={subs}
-            valueId={subId}
-            onSelect={(it) => setSubId(it?.id != null ? String(it.id) : '')}
-            placeholder="Escriba para buscar subcontratista…"
-            disabled={busy}
-            inputStyle={inputStyle}
-            labelStyle={labelStyle}
-            ui={ui}
-          />
-          <CatalogAutocomplete
-            label="Inspector"
-            required
-            items={insps}
-            valueId={inspId}
-            onSelect={(it) => setInspId(it?.id != null ? String(it.id) : '')}
-            placeholder="Escriba para buscar inspector…"
-            disabled={busy}
-            inputStyle={inputStyle}
-            labelStyle={labelStyle}
-            ui={ui}
-          />
-          <div>
-            <label style={labelStyle}>Capítulo *</label>
-            <select
-              style={inputStyle}
-              value={capitulo}
+          <div
+            data-crear-reporte-grid
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: 12,
+              alignItems: 'start',
+            }}
+          >
+            <CatalogAutocomplete
+              label="Subcontratista"
+              required
+              items={subs}
+              valueId={subId}
+              onSelect={(it) => setSubId(it?.id != null ? String(it.id) : '')}
+              placeholder="Escriba para buscar subcontratista…"
               disabled={busy}
-              onChange={(e) => setCapitulo(e.target.value)}
-            >
-              <option value="">— Seleccionar —</option>
-              {caps.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              inputStyle={inputStyle}
+              labelStyle={labelStyle}
+              ui={ui}
+            />
+            <CatalogAutocomplete
+              label="Inspector"
+              required
+              items={insps}
+              valueId={inspId}
+              onSelect={(it) => setInspId(it?.id != null ? String(it.id) : '')}
+              placeholder="Escriba para buscar inspector…"
+              disabled={busy}
+              inputStyle={inputStyle}
+              labelStyle={labelStyle}
+              ui={ui}
+            />
+            <div>
+              <label style={labelStyle}>Capítulo *</label>
+              <select
+                style={inputStyle}
+                value={capitulo}
+                disabled={busy}
+                onChange={(e) => setCapitulo(e.target.value)}
+                data-capitulo-filtrado-tipo={String(planilla?.tipo || '').toUpperCase() || undefined}
+              >
+                <option value="">— Seleccionar —</option>
+                {caps.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              {planilla?.tipo && (
+                <div style={{ fontSize: 'var(--cc-xxs)', color: ui?.textMuted || '#64748b', marginTop: 4 }}>
+                  Filtrado por tipo de planilla: {planilla.tipo}
+                </div>
+              )}
+            </div>
             <div>
               <label style={labelStyle}>Nodo / abscisa inicio</label>
               <input
@@ -557,87 +577,107 @@ export default function PlanillaTuberiaCrearReporteModal({
           )}
 
           <div
-            data-esquema-tramo-obligatorio
             style={{
-              border: `1px solid ${esquemaListo ? '#86efac' : (ui?.border || '#e2e8f0')}`,
-              borderRadius: 8,
-              padding: 10,
-              background: esquemaListo ? '#f0fdf4' : (ui?.inputBg || '#f8fafc'),
+              display: 'grid',
+              gridTemplateColumns: 'minmax(260px, 1fr) minmax(280px, 1.2fr)',
+              gap: 12,
+              alignItems: 'stretch',
             }}
           >
-            <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', marginBottom: 4 }}>
-              Esquema del tramo *
-            </div>
-            <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', marginBottom: 8 }}>
-              Obligatorio. Se abre el editor de Esquemas con el mapa y los puntos Inicio / Fin (WGS84) unidos por una flecha.
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => { setErr(''); setEsquemaOpen(true) }}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  border: 'none',
-                  background: ui?.accent || '#2563eb',
-                  color: '#fff',
+            <div
+              data-esquema-tramo-obligatorio
+              style={{
+                border: `1px solid ${esquemaListo ? '#86efac' : (ui?.border || '#e2e8f0')}`,
+                borderRadius: 8,
+                padding: 10,
+                background: esquemaListo ? '#f0fdf4' : (ui?.inputBg || '#f8fafc'),
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', marginBottom: 4 }}>
+                Esquema del tramo *
+              </div>
+              <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', marginBottom: 8 }}>
+                Obligatorio. Se abre el editor de Esquemas con el mapa y los puntos Inicio / Fin (WGS84) unidos por una flecha.
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => { setErr(''); setEsquemaOpen(true) }}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: ui?.accent || '#2563eb',
+                    color: '#fff',
+                    fontWeight: 700,
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                    fontSize: 'var(--cc-sm)',
+                  }}
+                >
+                  {esquemaListo ? '✎ Revisar / regenerar esquema' : '✎ Generar esquema del tramo'}
+                </button>
+                <span style={{
+                  fontSize: 'var(--cc-xs)',
                   fontWeight: 700,
-                  cursor: busy ? 'not-allowed' : 'pointer',
-                  fontSize: 'var(--cc-sm)',
+                  color: esquemaListo ? '#166534' : '#b45309',
                 }}
-              >
-                {esquemaListo ? '✎ Revisar / regenerar esquema' : '✎ Generar esquema del tramo'}
-              </button>
-              <span style={{
+                >
+                  {esquemaListo ? 'Esquema guardado' : 'Pendiente de generar'}
+                </span>
+              </div>
+              {esquemaListo && esquemaDataUri && (
+                <img
+                  src={esquemaDataUri}
+                  alt="Vista previa esquema del tramo"
+                  style={{
+                    display: 'block',
+                    marginTop: 8,
+                    maxWidth: '100%',
+                    maxHeight: 120,
+                    objectFit: 'contain',
+                    borderRadius: 6,
+                    border: `1px solid ${ui?.border || '#e2e8f0'}`,
+                    background: '#fff',
+                  }}
+                />
+              )}
+            </div>
+
+            {lineasPreview.length > 0 ? (
+              <div style={{
+                border: `1px solid ${ui?.border || '#e2e8f0'}`,
+                borderRadius: 8,
+                padding: 8,
                 fontSize: 'var(--cc-xs)',
-                fontWeight: 700,
-                color: esquemaListo ? '#166534' : '#b45309',
+                maxHeight: 200,
+                overflow: 'auto',
+                background: ui?.inputBg || '#f8fafc',
               }}
               >
-                {esquemaListo ? 'Esquema guardado' : 'Pendiente de generar'}
-              </span>
-            </div>
-            {esquemaListo && esquemaDataUri && (
-              <img
-                src={esquemaDataUri}
-                alt="Vista previa esquema del tramo"
-                style={{
-                  display: 'block',
-                  marginTop: 8,
-                  maxWidth: '100%',
-                  maxHeight: 120,
-                  objectFit: 'contain',
-                  borderRadius: 6,
-                  border: `1px solid ${ui?.border || '#e2e8f0'}`,
-                  background: '#fff',
-                }}
-              />
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                  Se generarán {lineasPreview.length} registro(s) en «Sin Asignar Ítem»:
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {lineasPreview.slice(0, 12).map((l, i) => (
+                    <li key={`${l.codigo}-${i}`}>{l.nombre} — {l.cantidad} {l.unidad || ''}</li>
+                  ))}
+                  {lineasPreview.length > 12 && <li>… y {lineasPreview.length - 12} más</li>}
+                </ul>
+              </div>
+            ) : (
+              <div style={{
+                border: `1px dashed ${ui?.border || '#e2e8f0'}`,
+                borderRadius: 8,
+                padding: 12,
+                fontSize: 'var(--cc-xs)',
+                color: ui?.textMuted || '#64748b',
+              }}
+              >
+                Sin líneas con cantidad ≠ 0 para generar registros.
+              </div>
             )}
           </div>
-
-          {lineasPreview.length > 0 && (
-            <div style={{
-              border: `1px solid ${ui?.border || '#e2e8f0'}`,
-              borderRadius: 8,
-              padding: 8,
-              fontSize: 'var(--cc-xs)',
-              maxHeight: 140,
-              overflow: 'auto',
-              background: ui?.inputBg || '#f8fafc',
-            }}
-            >
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                Se generarán {lineasPreview.length} registro(s) en «Sin Asignar Ítem»:
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {lineasPreview.slice(0, 12).map((l, i) => (
-                  <li key={`${l.codigo}-${i}`}>{l.nombre} — {l.cantidad} {l.unidad || ''}</li>
-                ))}
-                {lineasPreview.length > 12 && <li>… y {lineasPreview.length - 12} más</li>}
-              </ul>
-            </div>
-          )}
 
           {err && (
             <div style={{ color: '#b91c1c', background: '#fef2f2', borderRadius: 8, padding: 8, fontSize: 'var(--cc-sm)' }}>

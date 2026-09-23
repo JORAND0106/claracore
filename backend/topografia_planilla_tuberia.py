@@ -992,6 +992,79 @@ def mensaje_faltan_evidencias(faltantes: list[dict]) -> str:
 
 _EPS_CANTIDAD_SICOE = 1e-9
 
+# Catálogo de so_reportes.margen (constraint so_reportes_margen_check).
+SO_MARGEN_CANONICOS = ("Izquierda", "Central", "Derecha", "Única")
+_SO_MARGEN_ALIAS = {
+    "derecho": "Derecha",
+    "derecha": "Derecha",
+    "der": "Derecha",
+    "izquierdo": "Izquierda",
+    "izquierda": "Izquierda",
+    "izq": "Izquierda",
+    "central": "Central",
+    "centro": "Central",
+    "unico": "Única",
+    "unica": "Única",
+    "única": "Única",
+}
+
+
+def _norm_margen_key(txt: Any) -> str:
+    return (
+        str(txt or "")
+        .strip()
+        .lower()
+        .replace("ú", "u")
+        .replace("á", "a")
+        .replace("é", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+    )
+
+
+def normalizar_margen_sicoe(valor: Any) -> Optional[str]:
+    """
+    Normaliza costado/calzada de planilla → margen de so_reportes.
+    Evita 23514 so_reportes_margen_check (p. ej. 'Derecho' → 'Derecha').
+    Valores desconocidos se envuelven como «Otro: …».
+    """
+    s = str(valor or "").strip()
+    if not s:
+        return None
+    if s.lower().startswith("otro:"):
+        resto = s.split(":", 1)[1].strip()
+        return f"Otro: {resto}" if resto else None
+    key = _norm_margen_key(s)
+    if key in _SO_MARGEN_ALIAS:
+        return _SO_MARGEN_ALIAS[key]
+    for c in SO_MARGEN_CANONICOS:
+        if _norm_margen_key(c) == key:
+            return c
+    return f"Otro: {s}"
+
+
+def filtrar_capitulos_por_tipo_planilla(
+    capitulos: list[Any], tipo_planilla: Any
+) -> list[str]:
+    """
+    Filtra capítulos SICOE según tipo de planilla (ALCANTARILLA / FILTRO).
+    Si no hay coincidencias, devuelve la lista original (no deja el dropdown vacío).
+    """
+    caps = [
+        (x if isinstance(x, str) else str(x.get("capitulo") or x.get("nombre") or "")).strip()
+        for x in (capitulos or [])
+    ]
+    caps = [c for c in caps if c]
+    tipo = str(tipo_planilla or "").strip().upper()
+    if tipo == "FILTRO":
+        keys = ("filtro", "filtros")
+    elif tipo == "ALCANTARILLA":
+        keys = ("alcantarilla", "alcantarillado", "obras de arte")
+    else:
+        return caps
+    matched = [c for c in caps if any(k in c.lower() for k in keys)]
+    return matched if matched else caps
+
 
 def _cantidad_sicoe_no_cero(v: Any) -> bool:
     try:
@@ -1081,6 +1154,80 @@ def lineas_planilla_a_registros_sicoe(calculo: Optional[dict]) -> list[dict[str,
             d.get("long"), d.get("ancho"), d.get("espesor"), d.get("cantidad"),
             origen="descuentos", codigo=codigo,
         )
+    return out
+
+
+def patch_so_registro_desde_linea_planilla(linea: dict[str, Any]) -> dict[str, Any]:
+    """Campos dimensionales a sincronizar en un so_registro existente."""
+    return {
+        "nombre": linea.get("nombre"),
+        "descripcion": linea.get("descripcion"),
+        "observacion": linea.get("observacion"),
+        "unidad": linea.get("unidad"),
+        "longitud": linea.get("longitud"),
+        "ancho": linea.get("ancho"),
+        "espesor": linea.get("espesor"),
+        "cantidad": linea.get("cantidad"),
+        "cantidad_total": linea.get("cantidad_total"),
+    }
+
+
+def mapa_lineas_sicoe_por_origen(calculo: Optional[dict]) -> dict[str, dict[str, Any]]:
+    """clave «scope:codigo» → línea (incluye las que quedaron en 0 para poder bajar cantidad)."""
+    out: dict[str, dict[str, Any]] = {}
+    if not isinstance(calculo, dict):
+        return out
+    for n in calculo.get("netos") or []:
+        if not isinstance(n, dict):
+            continue
+        codigo = str(n.get("codigo") or "").strip()
+        if not codigo:
+            continue
+        cant = n.get("neto")
+        if cant is None:
+            cant = n.get("cantidad")
+        try:
+            c = float(cant) if cant is not None and cant != "" else 0.0
+        except (TypeError, ValueError):
+            c = 0.0
+        key = f"cantidades:{codigo}"
+        out[key] = {
+            "nombre": n.get("nombre") or codigo,
+            "descripcion": n.get("nombre") or codigo,
+            "observacion": n.get("nombre") or codigo,
+            "unidad": n.get("unidad"),
+            "longitud": n.get("long"),
+            "ancho": n.get("ancho"),
+            "espesor": n.get("espesor"),
+            "cantidad": round(c, 2),
+            "cantidad_total": round(c, 2),
+            "_origen_tabla": "cantidades",
+            "_origen_codigo": codigo,
+        }
+    for d in calculo.get("descuentos") or []:
+        if not isinstance(d, dict) or not d.get("nombre"):
+            continue
+        codigo = str(d.get("codigo") or "").strip()
+        if not codigo:
+            continue
+        try:
+            c = float(d.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            c = 0.0
+        key = f"descuentos:{codigo}"
+        out[key] = {
+            "nombre": d.get("nombre") or codigo,
+            "descripcion": d.get("nombre") or codigo,
+            "observacion": d.get("nombre") or codigo,
+            "unidad": d.get("unidad") or "m³",
+            "longitud": d.get("long"),
+            "ancho": d.get("ancho"),
+            "espesor": d.get("espesor"),
+            "cantidad": round(c, 2),
+            "cantidad_total": round(c, 2),
+            "_origen_tabla": "descuentos",
+            "_origen_codigo": codigo,
+        }
     return out
 
 

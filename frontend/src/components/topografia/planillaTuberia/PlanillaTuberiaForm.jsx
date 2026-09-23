@@ -911,23 +911,6 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
               <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
             </AccionIcono>
           )}
-          {planilla?.id && (
-            <AccionIcono
-              title={puedeMapaTramo
-                ? 'Ver tramo en mapa (Inicio / Fin)'
-                : 'Registre Norte/Este de inicio y fin para ver el tramo'}
-              disabled={!puedeMapaTramo || busy}
-              onClick={() => {
-                if (!puedeMapaTramo) return
-                setTramoMapOpen(true)
-              }}
-            >
-              <svg {...ico} data-icon-ojo-tramo>
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            </AccionIcono>
-          )}
           {planilla?.id && puedeVerCrearReporte && (
             <span
               data-crear-reporte-sicoe-btn
@@ -1061,25 +1044,62 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           ],
           cells: [
             <input key="nombre" disabled={!editable} value={params.nombre} onChange={(e) => setParams((p) => ({ ...p, nombre: e.target.value }))} style={sheet.cellInp} />,
-            <button
+            <div
               key="pk"
-              type="button"
-              disabled={!editable}
-              onClick={() => setPkMapOpen(true)}
-              title={params.pk_id ? `PK ${params.pk_id}` : 'Seleccionar PK en el mapa'}
-              style={{
-                ...sheet.cellInp,
-                display: 'block',
-                width: '100%',
-                boxSizing: 'border-box',
-                textAlign: 'left',
-                cursor: editable ? 'pointer' : 'default',
-                color: params.pk_id ? (ui.t?.text || '#0f172a') : (ui.textMuted || '#64748b'),
-                fontWeight: params.pk_id ? 700 : 600,
-              }}
+              data-pk-id-con-ojo
+              style={{ display: 'flex', alignItems: 'stretch', gap: 4, width: '100%', boxSizing: 'border-box' }}
             >
-              {params.pk_id || '📍 Elegir PK'}
-            </button>,
+              <button
+                type="button"
+                disabled={!editable}
+                onClick={() => setPkMapOpen(true)}
+                title={params.pk_id ? `PK ${params.pk_id}` : 'Seleccionar PK en el mapa'}
+                style={{
+                  ...sheet.cellInp,
+                  display: 'block',
+                  flex: 1,
+                  minWidth: 0,
+                  boxSizing: 'border-box',
+                  textAlign: 'left',
+                  cursor: editable ? 'pointer' : 'default',
+                  color: params.pk_id ? (ui.t?.text || '#0f172a') : (ui.textMuted || '#64748b'),
+                  fontWeight: params.pk_id ? 700 : 600,
+                }}
+              >
+                {params.pk_id || '📍 Elegir PK'}
+              </button>
+              <button
+                type="button"
+                data-icon-ojo-tramo
+                title={puedeMapaTramo
+                  ? 'Ver tramo en mapa (Inicio / Fin)'
+                  : 'Registre Norte/Este de inicio y fin para ver el tramo'}
+                disabled={!puedeMapaTramo || busy}
+                onClick={() => {
+                  if (!puedeMapaTramo) return
+                  setTramoMapOpen(true)
+                }}
+                style={{
+                  width: 36,
+                  minWidth: 36,
+                  padding: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 8,
+                  border: `1px solid ${ui.t?.border || '#cbd5e1'}`,
+                  background: '#fff',
+                  color: puedeMapaTramo ? '#0f172a' : '#94a3b8',
+                  cursor: (!puedeMapaTramo || busy) ? 'not-allowed' : 'pointer',
+                  opacity: (!puedeMapaTramo || busy) ? 0.5 : 1,
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              </button>
+            </div>,
             <input
               key="cost"
               disabled={!editable}
