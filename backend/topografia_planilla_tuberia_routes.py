@@ -1438,12 +1438,14 @@ def crear_reporte_sicoe_desde_planilla(
     if abs0 is not None and abs1 is not None and abs0 > abs1:
         abs0, abs1 = abs1, abs0
 
-    nodo_ini = (body.nodo_ini if body.nodo_ini is not None else (str(abs0) if abs0 is not None else None))
-    nodo_fin = (body.nodo_fin if body.nodo_fin is not None else (str(abs1) if abs1 is not None else None))
+    nodo_ini = (body.nodo_ini if body.nodo_ini is not None else None)
+    nodo_fin = (body.nodo_fin if body.nodo_fin is not None else None)
     if isinstance(nodo_ini, str):
         nodo_ini = nodo_ini.strip() or None
     if isinstance(nodo_fin, str):
         nodo_fin = nodo_fin.strip() or None
+    if not nodo_ini or not nodo_fin:
+        raise HTTPException(422, "Nodo inicio y nodo fin son obligatorios.")
 
     pk_id_id = _resolver_pk_id_maestro(contrato_id, p.get("pk_id"))
     lat, lng = _coords_wgs_planilla(p)
