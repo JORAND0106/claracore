@@ -7,8 +7,10 @@ import unittest
 from topografia_planilla_tuberia import (
     abscisas_extremos_cartera,
     calcular_planilla_completa,
+    dims_y_cantidad_registro_sicoe,
     formatear_observacion_registro_sicoe,
     lineas_planilla_a_registros_sicoe,
+    redondear_costo_directo_sicoe,
 )
 
 
@@ -41,9 +43,19 @@ class TestPlanillaARegistrosSicoe(unittest.TestCase):
             self.assertTrue(reg.get("observacion"))
             self.assertIn(" para ALCANTARILLA en tramo TRAMO 1", reg["observacion"])
             self.assertTrue(reg["observacion"].startswith(reg["nombre"]))
-            self.assertNotEqual(reg["observacion"], reg["nombre"])
-            self.assertTrue(reg.get("cantidad"))
-            self.assertNotAlmostEqual(float(reg["cantidad"]), 0.0)
+            self.assertIsNone(reg.get("cantidad"), "factor cantidad no debe enviarse")
+            self.assertIsNotNone(reg.get("cantidad_total"))
+            self.assertNotAlmostEqual(float(reg["cantidad_total"]), 0.0)
+            for k in ("longitud", "ancho", "espesor"):
+                self.assertIn(k, reg)
+            match = next(
+                (n for n in r["netos"] if n["nombre"] == reg["nombre"]),
+                None,
+            )
+            if match:
+                self.assertAlmostEqual(
+                    float(reg["cantidad_total"]), float(match["neto"]), places=2,
+                )
 
     def test_abscisas_extremos(self):
         r = calcular_planilla_completa(
@@ -79,6 +91,7 @@ class TestPlanillaARegistrosSicoe(unittest.TestCase):
                 r["observacion"],
                 f"{r['nombre']} para FILTRO en tramo TRAMO 8",
             )
+            self.assertIsNone(r.get("cantidad"))
 
     def test_formatear_observacion(self):
         self.assertEqual(
@@ -94,6 +107,36 @@ class TestPlanillaARegistrosSicoe(unittest.TestCase):
             "X para — en tramo —",
         )
 
+    def test_dims_3_dec_cantidad_total_2_sin_factor_cantidad(self):
+        dims = dims_y_cantidad_registro_sicoe(10.12345, 1.56789, 0.12345, 3.2167)
+        self.assertEqual(dims["longitud"], 10.123)
+        self.assertEqual(dims["ancho"], 1.568)
+        self.assertEqual(dims["espesor"], 0.123)
+        self.assertIsNone(dims["cantidad"])
+        self.assertEqual(dims["cantidad_total"], 3.22)
+        self.assertEqual(redondear_costo_directo_sicoe(1234.56), 1235.0)
+        self.assertIsNone(redondear_costo_directo_sicoe(None))
+
+    def test_no_recalcula_producto(self):
+        """cantidad_total = neto del resumen, aunque L×A×E dé otro valor."""
+        calc = {
+            "netos": [
+                {
+                    "codigo": "EXC", "nombre": "Excavación Varias", "unidad": "m³",
+                    "long": 10, "ancho": 1.5, "espesor": 0.2,
+                    "neto": 2.99,  # distinto de 10*1.5*0.2=3.0
+                },
+            ],
+            "descuentos": [],
+        }
+        regs = lineas_planilla_a_registros_sicoe(calc, tipo="ALCANTARILLA", tramo="T1")
+        self.assertEqual(len(regs), 1)
+        self.assertEqual(regs[0]["cantidad_total"], 2.99)
+        self.assertEqual(regs[0]["longitud"], 10.0)
+        self.assertEqual(regs[0]["ancho"], 1.5)
+        self.assertEqual(regs[0]["espesor"], 0.2)
+        self.assertIsNone(regs[0]["cantidad"])
+
 
 class TestRutaUsaTramoYFiltroCero(unittest.TestCase):
     def test_crear_reporte_pasa_tipo_tramo_y_ubicacion(self):
@@ -105,7 +148,8 @@ class TestRutaUsaTramoYFiltroCero(unittest.TestCase):
         self.assertIn("tipo=p.get(\"tipo\")", text)
         self.assertIn("tramo=tramo_lbl", text)
         self.assertIn("**ubicacion_pk", text)
-        self.assertIn("mapa_lineas_sicoe_por_origen(", text)
+        self.assertIn('data["cantidad"] = None', text)
+        self.assertIn("redondear_costo_directo_sicoe", text)
 
 
 if __name__ == "__main__":
