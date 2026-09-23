@@ -48,6 +48,11 @@ describe('Bitácora Maquinaria — Operador vs RRHH', () => {
     )
     assert.equal(operadorEstaEnRrhh(uso, catalogo), true)
     assert.ok(HINT_OPERADOR_DESDE_RRHH.includes('RRHH'))
+
+    // Réplica del gate de guardarDiario: filas con equipo + operadorEstaEnRrhh
+    const usosConEquipo = [uso].filter((u) => String(u.equipo_nombre || '').trim())
+    const bloqueados = usosConEquipo.filter((u) => !operadorEstaEnRrhh(u, catalogo))
+    assert.equal(bloqueados.length, 0, 'guardarDiario no debe bloquear este operador')
   })
 
   it('bloquea solo si el operador no existe en RRHH', () => {
