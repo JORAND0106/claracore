@@ -1231,6 +1231,79 @@ def mapa_lineas_sicoe_por_origen(calculo: Optional[dict]) -> dict[str, dict[str,
     return out
 
 
+def _float_or_none(v: Any) -> Optional[float]:
+    if v is None or v == "":
+        return None
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    if n != n:  # NaN
+        return None
+    return n
+
+
+def puntos_topograficos_desde_planilla(planilla: Optional[dict]) -> list[dict[str, Any]]:
+    """
+    Pares Norte/Este Inicio y Fin → filas para so_puntos_topograficos.
+    Fuente: columnas norte_ref/este_ref + meta_cabecera Abs Inicial/Final.
+    """
+    if not isinstance(planilla, dict):
+        return []
+    meta = planilla.get("meta_cabecera") if isinstance(planilla.get("meta_cabecera"), dict) else {}
+
+    def _lookup(keys: tuple) -> Optional[float]:
+        for k in keys:
+            if k in planilla and planilla.get(k) is not None and planilla.get(k) != "":
+                v = _float_or_none(planilla.get(k))
+                if v is not None:
+                    return v
+            if k in meta and meta.get(k) is not None and meta.get(k) != "":
+                v = _float_or_none(meta.get(k))
+                if v is not None:
+                    return v
+        return None
+
+    def _par(norte_keys: tuple, este_keys: tuple, punto: str, desc: str) -> Optional[dict]:
+        norte = _lookup(norte_keys)
+        este = _lookup(este_keys)
+        if norte is None and este is None:
+            return None
+        return {
+            "punto": punto,
+            "norte": norte,
+            "este": este,
+            "cota": None,
+            "descripcion": desc,
+        }
+
+    out: list[dict[str, Any]] = []
+    ini = _par(
+        ("norte_ref", "norte_abs_inicial"),
+        ("este_ref", "este_abs_inicial"),
+        "Inicio",
+        "Inicio tramo — planilla de tubería",
+    )
+    if ini:
+        out.append(ini)
+    fin = _par(
+        ("norte_abs_final",),
+        ("este_abs_final",),
+        "Fin",
+        "Fin tramo — planilla de tubería",
+    )
+    if fin:
+        out.append(fin)
+    return out
+
+
+def origen_key_linea_sicoe(linea: dict) -> str:
+    """Clave estable cantidades:CODIGO / descuentos:CODIGO."""
+    tabla = str(linea.get("_origen_tabla") or "").strip() or "cantidades"
+    codigo = str(linea.get("_origen_codigo") or "").strip()
+    return f"{tabla}:{codigo}"
+
+
 # Aliases estables para rutas / tests
 calcular_seccion_planilla = calcular_seccion
 altura_relleno_m = altura_relleno_atraque_m

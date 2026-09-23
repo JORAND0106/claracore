@@ -34,7 +34,9 @@ from topografia_planilla_tuberia import (
     migrar_filas_campo_al_cambiar_tipo,
     normalizar_evidencias_fotograficas,
     normalizar_margen_sicoe,
+    origen_key_linea_sicoe,
     patch_so_registro_desde_linea_planilla,
+    puntos_topograficos_desde_planilla,
     validar_cartera_campo,
     validar_evidencias_fotograficas,
 )
@@ -158,7 +160,7 @@ class EvidenciaDeleteBody(BaseModel):
 
 
 class CrearReporteSicoeBody(BaseModel):
-    """Datos que no se derivan de la planilla: actores + capítulo + nodos editables."""
+    """Datos que no se derivan de la planilla: actores + capítulo + nodos + esquema."""
     subcontratista_id: int
     inspector_id: int
     capitulo: str
@@ -166,6 +168,8 @@ class CrearReporteSicoeBody(BaseModel):
     nodo_fin: Optional[str] = None
     abs_inicio: Optional[float] = None
     abs_final: Optional[float] = None
+    # Data URI PNG/JPEG del esquema del tramo (popup Crear reporte).
+    esquema_data_uri: Optional[str] = None
 
 
 def _filas(planilla_id: str) -> list[dict]:
@@ -1162,6 +1166,187 @@ def _coords_wgs_planilla(p: dict) -> tuple[Optional[float], Optional[float]]:
         return None, None
 
 
+def _sicoe_rpc_numero(rpc_name: str, contrato_id: int) -> int:
+    """Siguiente número foto/gráfico vía RPC (misma semántica que /next-foto)."""
+    try:
+        from main import supabase_execute, _sicoe_normalizar_numero_rpc
+    except ImportError:
+        def supabase_execute(fn):  # type: ignore
+            return fn()
+
+        def _sicoe_normalizar_numero_rpc(raw, etiqueta="consecutivo"):  # type: ignore
+            if isinstance(raw, (int, float)):
+                return int(raw)
+            if isinstance(raw, list) and raw:
+                return int(raw[0])
+            if isinstance(raw, dict):
+                for v in raw.values():
+                    if isinstance(v, (int, float)):
+                        return int(v)
+            raise ValueError("RPC número inválido")
+
+    raw = supabase_execute(
+        lambda: supabase.rpc(rpc_name, {"p_contrato_id": contrato_id}).execute().data
+    )
+    return int(_sicoe_normalizar_numero_rpc(raw, rpc_name))
+
+
+def _bytes_desde_evidencia_foto(foto: dict) -> tuple[Optional[bytes], str]:
+    """Lee bytes de una evidencia (blob privado, data_uri o url pública)."""
+    if not isinstance(foto, dict):
+        return None, "image/jpeg"
+    mime = str(foto.get("mime_type") or "image/jpeg").split(";")[0].strip() or "image/jpeg"
+    data_uri = foto.get("data_uri")
+    if data_uri:
+        try:
+            return _decode_imagen_b64(str(data_uri), mime)[0], mime
+        except HTTPException:
+            pass
+    blob_path = str(foto.get("blob_path") or "").strip().lstrip("/")
+    if blob_path:
+        try:
+            from azure_blob_storage import download_blob_bytes_private
+            data = download_blob_bytes_private(blob_path)
+            if data:
+                return data, mime
+        except Exception as exc:
+            logger.warning("evidencia blob_path download: %s", exc)
+    url = str(foto.get("url") or "").strip()
+    if url.startswith("data:"):
+        try:
+            return _decode_imagen_b64(url, mime)[0], mime
+        except HTTPException:
+            return None, mime
+    if url.startswith("http"):
+        try:
+            from azure_blob_storage import blob_path_from_url, download_blob_bytes
+            bp = blob_path_from_url(url)
+            if bp:
+                return download_blob_bytes(bp), mime
+            import httpx
+            r = httpx.get(url, timeout=60.0, follow_redirects=True)
+            r.raise_for_status()
+            ct = (r.headers.get("content-type") or mime).split(";")[0].strip()
+            return r.content, ct or mime
+        except Exception as exc:
+            logger.warning("evidencia url download: %s", exc)
+    return None, mime
+
+
+def _ext_mime(mime: str) -> str:
+    m = (mime or "").lower()
+    if "png" in m:
+        return ".png"
+    if "webp" in m:
+        return ".webp"
+    if "gif" in m:
+        return ".gif"
+    return ".jpg"
+
+
+def _subir_bytes_sicoe_foto(contrato_id: int, content: bytes, mime: str) -> tuple[Optional[str], Optional[int]]:
+    """Copia bytes al path público SICOE fotos; retorna (url, numero)."""
+    try:
+        from azure_blob_storage import path_sicoe_foto, upload_blob
+        from main import _so_foto_hash_lookup, _so_foto_hash_upsert, _sha256_hex
+    except ImportError as exc:
+        logger.warning("imports sicoe foto: %s", exc)
+        return None, None
+    digest = _sha256_hex(content)
+    existing = _so_foto_hash_lookup(contrato_id, digest)
+    if existing and existing.get("foto_url"):
+        return existing.get("foto_url"), existing.get("foto_numero")
+    try:
+        numero = _sicoe_rpc_numero("siguiente_numero_foto", contrato_id)
+    except Exception as exc:
+        logger.warning("siguiente_numero_foto: %s", exc)
+        return None, None
+    ext = _ext_mime(mime)
+    blob_path = path_sicoe_foto(contrato_id, numero, ext)
+    try:
+        url = upload_blob(
+            blob_path, content, mime or "image/jpeg",
+            overwrite=True, contrato_id=contrato_id, storage_tipo="fotos",
+        )
+    except Exception as exc:
+        logger.warning("upload foto sicoe desde planilla: %s", exc)
+        return None, None
+    _so_foto_hash_upsert(contrato_id, digest, url, numero)
+    return url, numero
+
+
+def _subir_bytes_sicoe_grafico(contrato_id: int, content: bytes, mime: str) -> tuple[Optional[str], Optional[int]]:
+    try:
+        from azure_blob_storage import path_sicoe_grafico, upload_blob
+    except ImportError as exc:
+        logger.warning("imports sicoe grafico: %s", exc)
+        return None, None
+    try:
+        numero = _sicoe_rpc_numero("siguiente_numero_grafico", contrato_id)
+    except Exception as exc:
+        logger.warning("siguiente_numero_grafico: %s", exc)
+        return None, None
+    ext = _ext_mime(mime)
+    blob_path = path_sicoe_grafico(contrato_id, numero, ext)
+    try:
+        url = upload_blob(
+            blob_path, content, mime or "image/png",
+            overwrite=True, contrato_id=contrato_id, storage_tipo="fotos",
+        )
+    except Exception as exc:
+        logger.warning("upload grafico sicoe desde planilla: %s", exc)
+        return None, None
+    return url, numero
+
+
+def _insertar_puntos_topograficos_planilla(
+    contrato_id: int, reporte_id: int, planilla: dict, uid: int,
+) -> int:
+    """Escribe Inicio/Fin en so_puntos_topograficos. Retorna cantidad insertada."""
+    puntos = puntos_topograficos_desde_planilla(planilla)
+    if not puntos:
+        return 0
+    rows = []
+    for pt in puntos:
+        rows.append({
+            "contrato_id": contrato_id,
+            "reporte_id": reporte_id,
+            "punto": pt.get("punto"),
+            "norte": pt.get("norte"),
+            "este": pt.get("este"),
+            "cota": pt.get("cota"),
+            "descripcion": pt.get("descripcion"),
+            "creado_por": uid,
+        })
+    try:
+        from main import supabase_execute
+    except ImportError:
+        def supabase_execute(fn):  # type: ignore
+            return fn()
+    try:
+        supabase_execute(
+            lambda: supabase.table("so_puntos_topograficos").insert(rows).execute().data
+        )
+        return len(rows)
+    except Exception as exc:
+        logger.exception(
+            "insert so_puntos_topograficos planilla→sicoe reporte=%s: %s",
+            reporte_id, exc,
+        )
+        return 0
+
+
+def _esquema_desde_data_uri(data_uri: Optional[str]) -> tuple[Optional[bytes], str]:
+    raw = str(data_uri or "").strip()
+    if not raw:
+        return None, "image/png"
+    try:
+        content, mime = _decode_imagen_b64(raw, "image/png")
+        return content, mime
+    except HTTPException:
+        return None, "image/png"
+
+
 @router.get("/{contrato_id}/planillas-tuberia/por-reporte-sicoe/{reporte_id}")
 def planilla_por_reporte_sicoe(
     contrato_id: int, reporte_id: int, current_user=Depends(get_current_user),
@@ -1328,6 +1513,30 @@ def crear_reporte_sicoe_desde_planilla(
     reporte = rep_rows[0]
     reporte_id = int(reporte["id"])
 
+    # 1b) Coordenadas topográficas (tabla so_puntos_topograficos — Inicio/Fin GK)
+    n_puntos = _insertar_puntos_topograficos_planilla(contrato_id, reporte_id, p, uid)
+
+    # 1c) Esquema del tramo → gráfico SICOE (compartido por todos los registros)
+    grafico_url = None
+    grafico_numero = None
+    graficos_historial: list[dict[str, Any]] = []
+    esquema_bytes, esquema_mime = _esquema_desde_data_uri(getattr(body, "esquema_data_uri", None))
+    if esquema_bytes:
+        grafico_url, grafico_numero = _subir_bytes_sicoe_grafico(
+            contrato_id, esquema_bytes, esquema_mime,
+        )
+        if grafico_url:
+            graficos_historial = [{
+                "url": grafico_url,
+                "numero": grafico_numero,
+                "descripcion": "Esquema del tramo — planilla de tubería",
+                "nombre": "esquema_tramo.png",
+                "origen": "planilla_tuberia",
+            }]
+
+    # Evidencias fotográficas por línea (meta_cabecera)
+    evidencias = _evidencias_from_meta(p)
+
     # 2) Números de registro + insert lote
     nlines = len(lineas)
     numeros: list[int] = []
@@ -1354,6 +1563,7 @@ def crear_reporte_sicoe_desde_planilla(
     niveles = _get_niveles_activos_contrato(int(contrato_id)) or [1, 2, 3]
     rows_ins: list[dict[str, Any]] = []
     mapa_codigos: dict[str, int] = {}
+    n_fotos = 0
     for line, num in zip(lineas, numeros):
         data = {k: v for k, v in line.items() if not str(k).startswith("_")}
         data.update({
@@ -1378,6 +1588,28 @@ def crear_reporte_sicoe_desde_planilla(
             "semana_id": semana_id,
             "corte_id": corte_id,
         })
+        # Foto de la línea → so_registros.foto_url
+        scope = str(line.get("_origen_tabla") or "").strip()
+        codigo = str(line.get("_origen_codigo") or "").strip()
+        fotos_linea = list((evidencias.get(scope) or {}).get(codigo) or [])
+        if fotos_linea:
+            content, mime = _bytes_desde_evidencia_foto(fotos_linea[0])
+            if content:
+                foto_url, foto_numero = _subir_bytes_sicoe_foto(contrato_id, content, mime)
+                if foto_url:
+                    data["foto_url"] = foto_url
+                    data["foto_numero"] = foto_numero
+                    data["foto_descripcion"] = (
+                        str(fotos_linea[0].get("nombre") or "").strip()
+                        or f"Evidencia {codigo}"
+                    )
+                    n_fotos += 1
+        # Esquema del tramo → grafico_url / graficos_historial
+        if grafico_url:
+            data["grafico_url"] = grafico_url
+            data["grafico_numero"] = grafico_numero
+            data["grafico_descripcion"] = "Esquema del tramo — planilla de tubería"
+            data["graficos_historial"] = list(graficos_historial)
         for n in niveles:
             try:
                 ni = int(n)
@@ -1389,7 +1621,7 @@ def crear_reporte_sicoe_desde_planilla(
                 data[f"nivel{ni}_fecha"] = None
         _so_registro_normalizar_graficos_historial(data)
         rows_ins.append(data)
-        origen_key = f"{line.get('_origen_tabla')}:{line.get('_origen_codigo')}"
+        origen_key = origen_key_linea_sicoe(line)
         mapa_codigos[origen_key] = int(num)
 
     inserted = supabase_execute(
@@ -1406,6 +1638,9 @@ def crear_reporte_sicoe_desde_planilla(
         "capitulo": capitulo,
         "n_registros": len(rows_ins),
         "registro_numeros_por_codigo": mapa_codigos,
+        "n_puntos_topograficos": n_puntos,
+        "n_fotos_sincronizadas": n_fotos,
+        "esquema_adjunto": bool(grafico_url),
     }
     links.append(link)
     new_meta = {**prev_meta, "sicoe_reportes": links}
@@ -1426,6 +1661,9 @@ def crear_reporte_sicoe_desde_planilla(
                     "planilla_id": planilla_id,
                     "numero_reporte": reporte.get("numero_reporte"),
                     "n_registros": len(rows_ins),
+                    "n_puntos_topograficos": n_puntos,
+                    "n_fotos_sincronizadas": n_fotos,
+                    "esquema_adjunto": bool(grafico_url),
                 },
             )
     except Exception:
@@ -1441,6 +1679,9 @@ def crear_reporte_sicoe_desde_planilla(
         "reporte_id": reporte_id,
         "numero_reporte": reporte.get("numero_reporte"),
         "n_registros": len(inserted) or len(rows_ins),
+        "n_puntos_topograficos": n_puntos,
+        "n_fotos_sincronizadas": n_fotos,
+        "esquema_adjunto": bool(grafico_url),
         "link": link,
         "planilla": _detalle(contrato_id, planilla_id),
     }
