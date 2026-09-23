@@ -149,7 +149,9 @@ class EvidenciaBody(BaseModel):
     scope: str  # cantidades | descuentos
     codigo: str
     nombre: Optional[str] = None
-    data_base64: str
+    # Cámara/archivo: data URI o base64. Galería: URL pública SICOE (el backend descarga).
+    data_base64: Optional[str] = None
+    url: Optional[str] = None
     mime_type: Optional[str] = "image/jpeg"
     origen: Optional[str] = "archivo"
 
@@ -286,6 +288,66 @@ def _decode_imagen_b64(data_b64: str, mime: Optional[str]) -> tuple[bytes, str]:
     if not mime_out.startswith("image/"):
         raise HTTPException(422, "Solo se permiten archivos de imagen")
     return content, mime_out
+
+
+def _descargar_imagen_desde_url(url: str, mime_hint: Optional[str] = None) -> tuple[bytes, str]:
+    """
+    Descarga imagen de galería SICOE en el servidor (evita CORS del navegador).
+    Preferir blob path Azure; si no, HTTP GET.
+    """
+    u = str(url or "").strip()
+    if not u.startswith("http"):
+        raise HTTPException(422, "URL de galería inválida")
+    mime_out = (mime_hint or "image/jpeg").split(";")[0].strip() or "image/jpeg"
+    try:
+        from azure_blob_storage import blob_path_from_url, download_blob_bytes
+        bp = blob_path_from_url(u)
+        if bp:
+            content = download_blob_bytes(bp)
+            if content:
+                if len(content) > 8_000_000:
+                    raise HTTPException(422, "La imagen supera 8 MB")
+                return content, mime_out
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("evidencia galeria blob_path: %s", exc)
+    try:
+        import httpx
+        r = httpx.get(u, timeout=60.0, follow_redirects=True)
+        r.raise_for_status()
+        content = r.content
+        ct = (r.headers.get("content-type") or mime_out).split(";")[0].strip() or mime_out
+        if not ct.startswith("image/"):
+            # Algunas CDNs no mandan content-type de imagen; aceptar si hay bytes.
+            if not content:
+                raise HTTPException(422, "La URL no devolvió una imagen")
+            ct = mime_out if mime_out.startswith("image/") else "image/jpeg"
+        if len(content) > 8_000_000:
+            raise HTTPException(422, "La imagen supera 8 MB")
+        return content, ct
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("evidencia galeria http")
+        raise HTTPException(
+            422,
+            f"No se pudo descargar la imagen de la galería: {exc}",
+        ) from exc
+
+
+def _contenido_evidencia_desde_body(body: EvidenciaBody) -> tuple[bytes, str]:
+    """Resuelve bytes desde data_base64 (cámara/archivo) o url (galería)."""
+    raw_b64 = (body.data_base64 or "").strip()
+    raw_url = (body.url or "").strip()
+    if raw_url.startswith("http"):
+        return _descargar_imagen_desde_url(raw_url, body.mime_type)
+    if raw_b64:
+        return _decode_imagen_b64(raw_b64, body.mime_type)
+    raise HTTPException(
+        422,
+        "Se requiere data_base64 (cámara/archivo) o url (galería) para adjuntar la foto.",
+    )
 
 
 def _store_evidencia_bytes(
@@ -932,7 +994,7 @@ def adjuntar_evidencia(
     _assert_editable(p)
     _assert_version(p, body.version)
     scope, codigo = _assert_scope_codigo(body.scope, body.codigo)
-    content, mime = _decode_imagen_b64(body.data_base64, body.mime_type)
+    content, mime = _contenido_evidencia_desde_body(body)
     evidencias = _evidencias_from_meta(p)
     actuales = list((evidencias.get(scope) or {}).get(codigo) or [])
     if len(actuales) >= MAX_FOTOS_POR_LINEA:
@@ -943,7 +1005,11 @@ def adjuntar_evidencia(
         contrato_id, planilla_id, scope, codigo,
         body.nombre or f"{codigo}.jpg", content, mime,
     )
-    foto["origen"] = str(body.origen or "archivo")[:40]
+    origen = str(body.origen or "").strip() or ("galeria" if (body.url or "").strip() else "archivo")
+    foto["origen"] = origen[:40]
+    # Conservar URL de origen para trazabilidad (galería SICOE).
+    if (body.url or "").strip().startswith("http"):
+        foto["url"] = str(body.url).strip()
     actuales.append(foto)
     evidencias[scope][codigo] = actuales
     prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}

@@ -457,21 +457,25 @@ export default function PlanillaTuberiaForm({
     }
   }
 
-  const adjuntarEvidencia = async ({ scope, codigo, nombre, data_base64, mime_type }) => {
+  const adjuntarEvidencia = async ({
+    scope, codigo, nombre, data_base64, url, mime_type, origen,
+  }) => {
     if (!planilla?.id) return
     setErr(''); setMsg('')
+    const payload = {
+      version,
+      scope,
+      codigo,
+      nombre,
+      mime_type: mime_type || 'image/jpeg',
+      origen: origen || (url ? 'galeria' : 'archivo'),
+    }
+    if (url) payload.url = url
+    if (data_base64) payload.data_base64 = data_base64
     try {
       const res = await api(`/planillas-tuberia/${planilla.id}/evidencia`, {
         method: 'POST',
-        body: JSON.stringify({
-          version,
-          scope,
-          codigo,
-          nombre,
-          data_base64,
-          mime_type: mime_type || 'image/jpeg',
-          origen: 'archivo',
-        }),
+        body: JSON.stringify(payload),
       })
       if (res?.version != null) setVersion(res.version)
       if (res?.evidencias_fotograficas) {
@@ -1486,6 +1490,7 @@ export default function PlanillaTuberiaForm({
                       requiere={lineasFotoReq.has(`cantidades:${n.codigo}`)}
                       onAdjuntar={adjuntarEvidencia}
                       onEliminar={eliminarEvidencia}
+                      onError={(msg) => setErr(msg)}
                       contratoId={contratoId}
                       token={token}
                       theme={ui.t}
@@ -1564,6 +1569,7 @@ export default function PlanillaTuberiaForm({
                     requiere={lineasFotoReq.has(`descuentos:${d.codigo}`)}
                     onAdjuntar={adjuntarEvidencia}
                     onEliminar={eliminarEvidencia}
+                    onError={(msg) => setErr(msg)}
                     contratoId={contratoId}
                     token={token}
                     theme={ui.t}

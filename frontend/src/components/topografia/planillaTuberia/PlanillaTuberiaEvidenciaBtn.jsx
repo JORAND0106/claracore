@@ -1,6 +1,10 @@
 /**
  * Icono de adjuntar foto por línea de cantidad / descuento.
  * Fuentes (mismo patrón SICOE Obra): cámara, archivo o galería del contrato.
+ *
+ * Galería: se envía la URL al backend (descarga server-side). No se redescarga
+ * la imagen en el navegador — las URLs de Azure/CDN fallan por CORS y el
+ * ícono quedaba en rojo tras cerrar el popup.
  */
 import { useRef, useState } from 'react'
 import { API_BASE } from '../../../apiBase'
@@ -9,15 +13,8 @@ import PptoSicoeGaleriaPicker from '../../../modules/presupuesto/PptoSicoeGaleri
 import { fotosLineaEvidencia } from './planillaTuberiaUtils'
 
 const MAX_FOTOS = 4
-
-async function fileFromUrl(url, nombreHint = 'galeria.jpg') {
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`No se pudo descargar la imagen (${res.status})`)
-  const blob = await res.blob()
-  const mime = blob.type || 'image/jpeg'
-  const name = String(nombreHint || 'galeria.jpg').replace(/[^\w.\-]+/g, '_') || 'galeria.jpg'
-  return new File([blob], name, { type: mime })
-}
+/** Por encima del editor de planilla (100030). */
+export const EVIDENCIA_GALERIA_Z_INDEX = 100080
 
 export default function PlanillaTuberiaEvidenciaBtn({
   scope,
@@ -32,6 +29,7 @@ export default function PlanillaTuberiaEvidenciaBtn({
   contratoId,
   token,
   theme,
+  onError,
 }) {
   const camRef = useRef(null)
   const fileRef = useRef(null)
@@ -44,6 +42,12 @@ export default function PlanillaTuberiaEvidenciaBtn({
   const need = !!requiere && !ok
   const disabled = !editable || busy || localBusy
 
+  const reportError = (err) => {
+    const msg = err?.message || String(err || 'No se pudo adjuntar la foto')
+    console.warn('evidencia', err)
+    onError?.(msg)
+  }
+
   const procesarArchivo = async (file, nombreFallback) => {
     if (!file || !esArchivoImagen(file)) return
     setLocalBusy(true)
@@ -55,9 +59,10 @@ export default function PlanillaTuberiaEvidenciaBtn({
         nombre: file.name || nombreFallback || `${codigo}.jpg`,
         data_base64: dataUri,
         mime_type: 'image/jpeg',
+        origen: 'archivo',
       })
     } catch (err) {
-      console.warn('evidencia upload', err)
+      reportError(err)
       throw err
     } finally {
       setLocalBusy(false)
@@ -71,19 +76,32 @@ export default function PlanillaTuberiaEvidenciaBtn({
     try {
       await procesarArchivo(file)
     } catch {
-      /* padre muestra error vía onAdjuntar */
+      /* error ya reportado */
     }
   }
 
   const onGaleriaSelect = async ({ url, numero }) => {
     setGaleriaOpen(false)
     setMenuOpen(false)
-    if (!url) return
+    if (!url) {
+      reportError(new Error('La foto de galería no tiene URL'))
+      return
+    }
+    setLocalBusy(true)
     try {
-      const file = await fileFromUrl(url, `sicoe_${numero || 'foto'}.jpg`)
-      await procesarArchivo(file, `sicoe_${numero || 'foto'}.jpg`)
+      // El backend descarga la URL (sin CORS en el browser).
+      await onAdjuntar?.({
+        scope,
+        codigo,
+        nombre: `sicoe_${numero || 'foto'}.jpg`,
+        url: String(url),
+        mime_type: 'image/jpeg',
+        origen: 'galeria',
+      })
     } catch (err) {
-      console.warn('evidencia galeria', err)
+      reportError(err)
+    } finally {
+      setLocalBusy(false)
     }
   }
 
@@ -145,6 +163,7 @@ export default function PlanillaTuberiaEvidenciaBtn({
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         data-evidencia-fuente-menu
+        data-evidencia-ok={ok ? '1' : '0'}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
@@ -260,6 +279,7 @@ export default function PlanillaTuberiaEvidenciaBtn({
         token={token}
         API={API_BASE}
         tipo="foto"
+        zIndex={EVIDENCIA_GALERIA_Z_INDEX}
         onSelect={onGaleriaSelect}
       />
     </span>
