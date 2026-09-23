@@ -340,8 +340,342 @@ def _clear_borders_range(ws, min_row: int, max_row: int, min_col: int, max_col: 
             ws.cell(row=r, column=c).border = NO_BORDER
 
 
-def _apply_sheet_borders(ws) -> None:
+_EPS_CANTIDAD_EXCEL = 1e-9
+
+
+def _excel_cantidad_no_cero(v: Any) -> bool:
+    """True si la cantidad calculada es distinta de cero (misma semántica que SICOE)."""
+    try:
+        if v is None or v == "":
+            return False
+        return abs(float(v)) > _EPS_CANTIDAD_EXCEL
+    except (TypeError, ValueError):
+        return False
+
+
+def _netos_visibles_excel(calculo: Optional[dict]) -> list[dict]:
+    out: list[dict] = []
+    for n in (calculo or {}).get("netos") or []:
+        if not isinstance(n, dict):
+            continue
+        cod = str(n.get("codigo") or "").strip()
+        if not cod:
+            continue
+        cant = n.get("neto")
+        if cant is None:
+            cant = n.get("cantidad")
+        if not _excel_cantidad_no_cero(cant):
+            continue
+        out.append(n)
+    return out
+
+
+def _descuentos_visibles_excel(calculo: Optional[dict]) -> list[dict]:
+    out: list[dict] = []
+    for d in (calculo or {}).get("descuentos") or []:
+        if not isinstance(d, dict) or not d.get("nombre"):
+            continue
+        if not _excel_cantidad_no_cero(d.get("cantidad")):
+            continue
+        out.append(d)
+    return out
+
+
+def _clear_tabla_cantidades_descuentos(ws, first_row: int = 45, last_row: int = 70) -> None:
+    for r in range(first_row, last_row + 1):
+        for col in ("B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"):
+            cell = ws[f"{col}{r}"]
+            if isinstance(cell, MergedCell):
+                continue
+            cell.value = None
+
+
+def _set_nombre_item_cantidad(ws, row: int, nombre: Any, unidad: Any = None) -> None:
+    """Escribe el ítem en B{row}. B:C suele estar mergeado: no pisar el nombre con la unidad."""
+    _set(ws, f"B{row}", nombre)
+    cell_c = ws[f"C{row}"]
+    if isinstance(cell_c, MergedCell):
+        return
+    if unidad is not None:
+        _set(ws, f"C{row}", unidad)
+
+
+def _set_nombre_item_descuento(ws, row: int, nombre: Any) -> None:
+    """Escribe el ítem de descuento en I{row} (I:J mergeado en plantilla)."""
+    _set(ws, f"I{row}", nombre)
+
+
+def _style_fila_cantidad(ws, r: int) -> None:
+    for col in ("B", "C", "D", "E", "F", "G", "H"):
+        _style(ws, f"{col}{r}", border=THIN)
+
+
+def _style_fila_descuento(ws, r: int) -> None:
+    for col in ("I", "J", "K", "L", "M", "N"):
+        _style(ws, f"{col}{r}", border=THIN)
+
+
+def _write_descuento_fila_formula(ws, r: int, codigo: str, es_alc: bool) -> None:
+    """Fórmulas vivas de descuentos conocidos (Area1/Area2 / Tubería Filtro)."""
+    cod = str(codigo or "").upper()
+    if es_alc and cod == "DESC_A1":
+        _set(ws, f"K{r}", "=$B$41")
+        _set(ws, f"M{r}", "=$B$15")
+        _set(ws, f"N{r}", f"=PRODUCT(K{r}:M{r})")
+    elif es_alc and cod == "DESC_A2":
+        _set(ws, f"K{r}", "=$B$41")
+        _set(ws, f"M{r}", "=$C$15")
+        _set(ws, f"N{r}", f"=PRODUCT(K{r}:M{r})")
+    elif (not es_alc) and cod == "DESC_TUB_FILT":
+        _set(ws, f"K{r}", "=$B$41")
+        _set(ws, f"M{r}", "=$K$13")
+        _set(ws, f"N{r}", f"=PRODUCT(K{r}:M{r})")
+
+
+def _write_resumen_fila_formulas(
+    ws,
+    r: int,
+    codigo: str,
+    *,
+    es_alc: bool,
+    desc_row_by_cod: dict[str, int],
+    exc_row: Optional[int],
+) -> None:
+    """Fórmulas vivas de Resumen según código; G enlaza N del descuento visible."""
+    cod = str(codigo or "").upper()
+
+    def _g_ref(*codigos: str) -> Any:
+        for c in codigos:
+            rr = desc_row_by_cod.get(c)
+            if rr:
+                return f"=N{rr}"
+        return 0
+
+    d_from_exc = f"=D{exc_row}" if exc_row else "=B41"
+    e_from_exc = f"=E{exc_row}" if exc_row else "=G15"
+
+    if cod == "EXC":
+        _set(ws, f"D{r}", "=B41")
+        _set(ws, f"E{r}", "=G15")
+        _set(ws, f"F{r}", "=IFERROR(G41,0)")
+        _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
+    elif cod == "TUB":
+        _set(ws, f"D{r}", d_from_exc)
+        _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
+    elif cod == "TRI":
+        _set(ws, f"D{r}", d_from_exc)
+        _set(ws, f"E{r}", e_from_exc)
+        _set(ws, f"F{r}", "=IFERROR(H41,0)")
+        _set(ws, f"G{r}", _g_ref("DESC_A1", "DESC_TUB_FILT"))
+        _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)-G{r}")
+    elif cod == "REL":
+        _set(ws, f"D{r}", d_from_exc)
+        _set(ws, f"E{r}", e_from_exc)
+        _set(ws, f"F{r}", "=IFERROR(I41,0)")
+        _set(ws, f"G{r}", _g_ref("DESC_A2") if es_alc else 0)
+        _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
+    elif cod == "GEO":
+        _set(ws, f"D{r}", d_from_exc)
+        _set(ws, f"E{r}", "=J41")
+        _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
+    elif cod == "OTROS" or cod.startswith("OTROS_"):
+        _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
+
+
+def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
+    """Layout fijo (plantilla vacía / sin lista netos): filas 45–51 + descuentos por tipo."""
+    for row, name, und in (
+        (45, "Excavación Varias", "m³"),
+        (46, "Long Tubería", "ml"),
+        (47, "Triturado / Atraque", "m³"),
+        (48, "Relleno Gran.", "m³"),
+        (49, "Geotextil", "m²"),
+        (50, "Excavación Roca", "m³"),
+        (51, "Otros: ____", "m³"),
+    ):
+        _set_nombre_item_cantidad(ws, row, name, und)
+
+    _set(ws, "D45", "=B41")
+    _set(ws, "E45", "=G15")
+    _set(ws, "F45", "=IFERROR(G41,0)")
+    _set(ws, "H45", "=ROUND(PRODUCT(D45:F45),2)")
+    _set(ws, "D46", "=D45")
+    _set(ws, "H46", "=ROUND(PRODUCT(D46:F46),2)")
+    _set(ws, "D47", "=D45")
+    _set(ws, "E47", "=E45")
+    _set(ws, "F47", "=IFERROR(H41,0)")
+    _set(ws, "G47", "=N46" if es_alc else "=N45")
+    _set(ws, "H47", "=ROUND(PRODUCT(D47:F47),2)-G47")
+    _set(ws, "D48", "=D45")
+    _set(ws, "E48", "=E45")
+    _set(ws, "F48", "=IFERROR(I41,0)")
+    _set(ws, "G48", "=N47" if es_alc else 0)
+    _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)")
+    _set(ws, "D49", "=D45")
+    _set(ws, "E49", "=J41")
+    _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
+    _set(ws, "D50", "=D45")
+    _set(ws, "E50", "=E45")
+    _set(ws, "F50", 0.05)
+    _set(ws, "H50", "=ROUND(PRODUCT(D50:F50),2)")
+    _set(ws, "H51", "=ROUND(PRODUCT(D51:F51),2)")
+
+    if es_alc:
+        _set(ws, "I45", "")
+        _set(ws, "K45", "")
+        _set(ws, "M45", "")
+        _set(ws, "N45", "")
+        _set_nombre_item_descuento(ws, 46, "Area 1")
+        _set(ws, "K46", "=$B$41")
+        _set(ws, "M46", "=$B$15")
+        _set(ws, "N46", "=PRODUCT(K46:M46)")
+        _set_nombre_item_descuento(ws, 47, "Area 2")
+        _set(ws, "K47", "=$B$41")
+        _set(ws, "M47", "=$C$15")
+        _set(ws, "N47", "=PRODUCT(K47:M47)")
+    else:
+        _set_nombre_item_descuento(ws, 45, "Tubería Filtro")
+        _set(ws, "K45", "=$B$41")
+        _set(ws, "M45", "=$K$13")
+        _set(ws, "N45", "=PRODUCT(K45:M45)")
+        _set(ws, "I46", "")
+        _set(ws, "K46", "")
+        _set(ws, "M46", "")
+        _set(ws, "N46", "")
+        _set(ws, "I47", "")
+        _set(ws, "K47", "")
+        _set(ws, "M47", "")
+        _set(ws, "N47", "")
+    _set_nombre_item_descuento(ws, 48, "Otros")
+
+
+def _overlay_valores_editables_resumen(ws, calculo: dict) -> None:
+    """Overlay EXC_ROC / OTROS sobre filas fijas de plantilla (sin filtro de ceros)."""
+    netos = list(calculo.get("netos") or [])
+    codigo_a_fila = {
+        "EXC": 45, "TUB": 46, "TRI": 47, "REL": 48, "GEO": 49, "EXC_ROC": 50,
+    }
+    for n in netos:
+        cod = str(n.get("codigo") or "")
+        if cod in codigo_a_fila:
+            r = codigo_a_fila[cod]
+            if n.get("unidad"):
+                _set_nombre_item_cantidad(ws, r, ws[f"B{r}"].value, n.get("unidad"))
+            if cod == "EXC_ROC":
+                if n.get("long") is not None:
+                    _set(ws, f"D{r}", float(n["long"]))
+                if n.get("ancho") is not None:
+                    _set(ws, f"E{r}", float(n["ancho"]))
+                if n.get("espesor") is not None:
+                    _set(ws, f"F{r}", float(n["espesor"]))
+                if n.get("neto") is not None:
+                    _set(ws, f"H{r}", float(n["neto"]))
+    otros = [n for n in netos if str(n.get("codigo") or "").upper().startswith("OTROS")]
+    for i, n in enumerate(otros):
+        r = 51 + i
+        _set_nombre_item_cantidad(ws, r, n.get("nombre") or "Otros: ____", n.get("unidad") or "m³")
+        if n.get("long") is not None:
+            _set(ws, f"D{r}", float(n["long"]))
+        if n.get("ancho") is not None:
+            _set(ws, f"E{r}", float(n["ancho"]))
+        if n.get("espesor") is not None:
+            _set(ws, f"F{r}", float(n["espesor"]))
+        if n.get("neto") is not None:
+            _set(ws, f"H{r}", float(n["neto"]))
+        else:
+            _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
+        _style_fila_cantidad(ws, r)
+
+
+def _write_tablas_cantidades_descuentos(
+    ws,
+    *,
+    tipo: str,
+    calculo: Optional[dict],
+    vacia: bool,
+) -> int:
+    """
+    Escribe Resumen de Cantidades + Descuentos Específicos.
+    Con cálculo real (listas netos/descuentos): excluye líneas con cantidad 0,
+    compacta filas y mantiene fórmulas vivas en las restantes (refs N ajustadas).
+    Plantilla vacía / sin listas: layout fijo histórico.
+    """
+    es_alc = tipo == "ALCANTARILLA"
+    usar_filtro = (
+        bool(calculo)
+        and not vacia
+        and (
+            isinstance(calculo.get("netos"), list)
+            or isinstance(calculo.get("descuentos"), list)
+        )
+    )
+
+    if not usar_filtro:
+        _write_tablas_cantidades_descuentos_plantilla(ws, es_alc=es_alc)
+        if calculo and not vacia:
+            _overlay_valores_editables_resumen(ws, calculo)
+        return 51
+
+    netos_vis = _netos_visibles_excel(calculo)
+    desc_vis = _descuentos_visibles_excel(calculo)
+    _clear_tabla_cantidades_descuentos(ws)
+
+    desc_row_by_cod: dict[str, int] = {}
+    for i, d in enumerate(desc_vis):
+        r = 45 + i
+        cod = str(d.get("codigo") or "").strip()
+        if cod:
+            desc_row_by_cod[cod] = r
+        _set_nombre_item_descuento(ws, r, d.get("nombre"))
+        _write_descuento_fila_formula(ws, r, cod, es_alc)
+        if ws[f"N{r}"].value is None:
+            if d.get("long") is not None:
+                _set(ws, f"K{r}", float(d["long"]))
+            if d.get("ancho") is not None:
+                _set(ws, f"L{r}", float(d["ancho"]))
+            if d.get("espesor") is not None:
+                _set(ws, f"M{r}", float(d["espesor"]))
+            if d.get("cantidad") is not None:
+                _set(ws, f"N{r}", float(d["cantidad"]))
+        _style_fila_descuento(ws, r)
+
+    exc_row = None
+    for i, n in enumerate(netos_vis):
+        if str(n.get("codigo") or "").upper() == "EXC":
+            exc_row = 45 + i
+            break
+    for i, n in enumerate(netos_vis):
+        r = 45 + i
+        cod = str(n.get("codigo") or "").strip()
+        _set_nombre_item_cantidad(ws, r, n.get("nombre") or cod, n.get("unidad") or "m³")
+        _write_resumen_fila_formulas(
+            ws,
+            r,
+            cod,
+            es_alc=es_alc,
+            desc_row_by_cod=desc_row_by_cod,
+            exc_row=exc_row,
+        )
+        cod_u = cod.upper()
+        if cod_u == "EXC_ROC" or cod_u == "OTROS" or cod_u.startswith("OTROS_"):
+            if n.get("long") is not None:
+                _set(ws, f"D{r}", float(n["long"]))
+            if n.get("ancho") is not None:
+                _set(ws, f"E{r}", float(n["ancho"]))
+            if n.get("espesor") is not None:
+                _set(ws, f"F{r}", float(n["espesor"]))
+            if n.get("neto") is not None:
+                _set(ws, f"H{r}", float(n["neto"]))
+            elif ws[f"H{r}"].value is None:
+                _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
+        _style_fila_cantidad(ws, r)
+
+    return max(44 + len(netos_vis), 44 + len(desc_vis), 45)
+
+
+def _apply_sheet_borders(ws, cant_last_row: int = 51) -> None:
     """Bordes de bloques: cabecera, franja, cartera, cantidades, descuentos, firmas."""
+    last = max(int(cant_last_row or 51), 45)
     _border_box(ws, 1, 4, 6, 12)  # título F1:L4
     _border_box(ws, 1, 2, 13, 14)  # código doc
     _border_box(ws, 5, 8, 2, 6)  # partes contratista
@@ -356,8 +690,8 @@ def _apply_sheet_borders(ws) -> None:
     # Zona de la imagen L20:N40 sin bordes (salvo celdas de resultado más abajo).
     _clear_borders_range(ws, 20, 40, 12, 14)  # L20:N40
     _clear_borders_range(ws, 17, 40, 11, 11)  # K17:K40 (columna GRAFICO cuerpo)
-    _border_box(ws, 43, 51, 2, 8)  # resumen cantidades
-    _border_box(ws, 43, 51, 9, 14)  # descuentos
+    _border_box(ws, 43, last, 2, 8)  # resumen cantidades
+    _border_box(ws, 43, last, 9, 14)  # descuentos
     _border_box(ws, 64, 66, 1, 7)  # elaboró
     _border_box(ws, 64, 66, 8, 14)  # aprobó
     # Celdas de captura de cartera: borde fino explícito
@@ -387,7 +721,7 @@ def _embed_seccion_png(ws, tipo: str) -> None:
     ws.add_image(img)
 
 
-def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia: bool) -> None:
+def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia: bool) -> int:
     """Datos + fórmulas fijas al tipo de planilla (sin dropdown ni IF de tipo)."""
     meta = _meta(planilla)
     firmas = _firmas(planilla)
@@ -535,122 +869,9 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         _set(ws, f"{col}44", label)
         _style(ws, f"{col}44", fill=FILL_DESC, font=FONT_HDR, border=THIN)
 
-    for addr, name in (
-        ("B45", "Excavación Varias"),
-        ("B46", "Long Tubería"),
-        ("B47", "Triturado / Atraque"),
-        ("B48", "Relleno Gran."),
-        ("B49", "Geotextil"),
-        ("B50", "Excavación Roca"),
-        ("B51", "Otros: ____"),
-    ):
-        _set(ws, addr, name)
-
-    # Unidades (columna C)
-    for row, und in (
-        (45, "m³"), (46, "ml"), (47, "m³"), (48, "m³"),
-        (49, "m²"), (50, "m³"), (51, "m³"),
-    ):
-        _set(ws, f"C{row}", und)
-
-    _set(ws, "D45", "=B41")
-    _set(ws, "E45", "=G15")
-    _set(ws, "F45", "=IFERROR(G41,0)")
-    _set(ws, "H45", "=ROUND(PRODUCT(D45:F45),2)")
-    _set(ws, "D46", "=D45")
-    _set(ws, "H46", "=ROUND(PRODUCT(D46:F46),2)")
-    _set(ws, "D47", "=D45")
-    _set(ws, "E47", "=E45")
-    _set(ws, "F47", "=IFERROR(H41,0)")
-    # Descuento triturado: ALC → Area1 (N46); FIL → Tubería Filtro (N45)
-    _set(ws, "G47", "=N46" if es_alc else "=N45")
-    _set(ws, "H47", "=ROUND(PRODUCT(D47:F47),2)-G47")
-    _set(ws, "D48", "=D45")
-    _set(ws, "E48", "=E45")
-    _set(ws, "F48", "=IFERROR(I41,0)")
-    _set(ws, "G48", "=N47" if es_alc else 0)
-    _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)")
-    _set(ws, "D49", "=D45")
-    _set(ws, "E49", "=J41")
-    _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
-    # Excavación Roca (editable en UI; defaults de plantilla)
-    _set(ws, "D50", "=D45")
-    _set(ws, "E50", "=E45")
-    _set(ws, "F50", 0.05)
-    _set(ws, "H50", "=ROUND(PRODUCT(D50:F50),2)")
-    # Otros: dims libres (sin fórmulas enlazadas)
-    _set(ws, "H51", "=ROUND(PRODUCT(D51:F51),2)")
-
-    # Overlay valores calculados (EXC_ROC / OTROS múltiples) desde el motor.
-    if calculo and not vacia:
-        netos = list(calculo.get("netos") or [])
-        # Filas fijas 45–49 por código
-        codigo_a_fila = {
-            "EXC": 45, "TUB": 46, "TRI": 47, "REL": 48, "GEO": 49, "EXC_ROC": 50,
-        }
-        for n in netos:
-            cod = str(n.get("codigo") or "")
-            if cod in codigo_a_fila:
-                r = codigo_a_fila[cod]
-                if n.get("unidad"):
-                    _set(ws, f"C{r}", n.get("unidad"))
-                if cod in ("EXC_ROC",) and not vacia:
-                    if n.get("long") is not None:
-                        _set(ws, f"D{r}", float(n["long"]))
-                    if n.get("ancho") is not None:
-                        _set(ws, f"E{r}", float(n["ancho"]))
-                    if n.get("espesor") is not None:
-                        _set(ws, f"F{r}", float(n["espesor"]))
-                    if n.get("neto") is not None:
-                        _set(ws, f"H{r}", float(n["neto"]))
-        # OTROS: primera en fila 51; adicionales debajo
-        otros = [n for n in netos if str(n.get("codigo") or "").upper().startswith("OTROS")]
-        for i, n in enumerate(otros):
-            r = 51 + i
-            _set(ws, f"B{r}", n.get("nombre") or "Otros: ____")
-            _set(ws, f"C{r}", n.get("unidad") or "m³")
-            if n.get("long") is not None:
-                _set(ws, f"D{r}", float(n["long"]))
-            if n.get("ancho") is not None:
-                _set(ws, f"E{r}", float(n["ancho"]))
-            if n.get("espesor") is not None:
-                _set(ws, f"F{r}", float(n["espesor"]))
-            if n.get("neto") is not None:
-                _set(ws, f"H{r}", float(n["neto"]))
-            else:
-                _set(ws, f"H{r}", "=ROUND(PRODUCT(D{0}:F{0}),2)".format(r))
-            for col in ("B", "C", "D", "E", "F", "G", "H"):
-                _style(ws, f"{col}{r}", border=THIN)
-            if i == 0:
-                continue
-            # Extra rows: estilo encabezado no aplica; solo borde
-    if es_alc:
-        _set(ws, "I45", "")
-        _set(ws, "K45", "")
-        _set(ws, "M45", "")
-        _set(ws, "N45", "")
-        _set(ws, "I46", "Area 1")
-        _set(ws, "K46", '=$B$41')
-        _set(ws, "M46", '=$B$15')
-        _set(ws, "N46", "=PRODUCT(K46:M46)")
-        _set(ws, "I47", "Area 2")
-        _set(ws, "K47", '=$B$41')
-        _set(ws, "M47", '=$C$15')
-        _set(ws, "N47", "=PRODUCT(K47:M47)")
-    else:
-        _set(ws, "I45", "Tubería Filtro")
-        _set(ws, "K45", '=$B$41')
-        _set(ws, "M45", '=$K$13')
-        _set(ws, "N45", "=PRODUCT(K45:M45)")
-        _set(ws, "I46", "")
-        _set(ws, "K46", "")
-        _set(ws, "M46", "")
-        _set(ws, "N46", "")
-        _set(ws, "I47", "")
-        _set(ws, "K47", "")
-        _set(ws, "M47", "")
-        _set(ws, "N47", "")
-    _set(ws, "I48", "Otros")
+    cant_last = _write_tablas_cantidades_descuentos(
+        ws, tipo=tipo, calculo=calculo, vacia=vacia,
+    )
 
     _set(ws, "L18", '="Ancho "&G15')
     _style(ws, "L18", fill=FILL_CALC, border=THIN)
@@ -667,6 +888,8 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
 
     if vacia:
         _set(ws, "A9", "PLANTILLA VACÍA — solo Desarrollador (verificación de formato)")
+
+    return cant_last
 
 
 def build_planilla_tuberia_xlsx(
@@ -699,9 +922,9 @@ def build_planilla_tuberia_xlsx(
     tipo = (planilla.get("tipo") or "ALCANTARILLA").upper()
     if tipo not in ("ALCANTARILLA", "FILTRO"):
         tipo = "ALCANTARILLA"
-    _overlay_data(ws, planilla, calculo, tipo, vacia)
+    cant_last = _overlay_data(ws, planilla, calculo, tipo, vacia)
     _embed_seccion_png(ws, tipo)
-    _apply_sheet_borders(ws)
+    _apply_sheet_borders(ws, cant_last_row=cant_last or 51)
     _add_profile_chart(ws, wb, tipo=tipo)
 
     base = sheets.get("Resumen_BASE")

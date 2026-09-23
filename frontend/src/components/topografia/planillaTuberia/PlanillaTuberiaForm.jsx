@@ -15,6 +15,7 @@ import PlanillaTuberiaPerfil from './PlanillaTuberiaPerfil'
 import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
 import PlanillaTuberiaCrearReporteModal from './PlanillaTuberiaCrearReporteModal'
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
+import PlanillaTuberiaTramoMapaModal from './PlanillaTuberiaTramoMapaModal'
 import { calcularPlanillaLocal, CAMPOS_DESCUENTO_ALTURA, esCodigoOtros } from './planillaTuberiaCalc'
 import {
   CALC_CELL_BG,
@@ -53,6 +54,8 @@ import {
   desgloseAtraqueAlcantarilla,
   pasosDesgloseAtraque,
 } from './planillaTuberiaUtils'
+import { gkBogotaToWgs84 } from '../../../utils/epsg3116'
+import { puedeVerMapaTramo } from './planillaTuberiaTramoMapa'
 
 
 const CARTERA_MIN_WIDTH = 720
@@ -138,6 +141,7 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
   const [editorOpen, setEditorOpen] = useState(false)
   const [confirmEliminar, setConfirmEliminar] = useState(null) // null | 'vacia' | 'con_datos'
   const [pkMapOpen, setPkMapOpen] = useState(false)
+  const [tramoMapOpen, setTramoMapOpen] = useState(false)
   const [crearReporteOpen, setCrearReporteOpen] = useState(false)
   /** Overrides Long/Ancho/Espesor (+nombre OTROS) del Resumen de Cantidades. */
   const [cantManuales, setCantManuales] = useState([])
@@ -698,6 +702,26 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
     params.este_abs_final,
   ])
 
+  const puedeMapaTramo = useMemo(
+    () => puedeVerMapaTramo({
+      coordsWgs84Inicio: detalle?.coords_wgs84,
+      coordsWgs84Fin: detalle?.coords_wgs84_fin,
+      norteIni: params.norte_abs_inicial,
+      esteIni: params.este_abs_inicial,
+      norteFin: params.norte_abs_final,
+      esteFin: params.este_abs_final,
+      convertGk: gkBogotaToWgs84,
+    }),
+    [
+      detalle?.coords_wgs84,
+      detalle?.coords_wgs84_fin,
+      params.norte_abs_inicial,
+      params.este_abs_inicial,
+      params.norte_abs_final,
+      params.este_abs_final,
+    ],
+  )
+
   const avisosLocales = useMemo(
     () => validarFilasCarteraLocal(filas, params.tipo),
     [filas, params.tipo],
@@ -885,6 +909,23 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           {editable && (
             <AccionIcono title="Cerrar planilla" disabled={busy} onClick={cerrar}>
               <svg {...ico}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+            </AccionIcono>
+          )}
+          {planilla?.id && (
+            <AccionIcono
+              title={puedeMapaTramo
+                ? 'Ver tramo en mapa (Inicio / Fin)'
+                : 'Registre Norte/Este de inicio y fin para ver el tramo'}
+              disabled={!puedeMapaTramo || busy}
+              onClick={() => {
+                if (!puedeMapaTramo) return
+                setTramoMapOpen(true)
+              }}
+            >
+              <svg {...ico} data-icon-ojo-tramo>
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
             </AccionIcono>
           )}
           {planilla?.id && puedeVerCrearReporte && (
@@ -1859,6 +1900,19 @@ export default function PlanillaTuberiaForm({ contratoId, token, permisos, usuar
           }}
         />
       )}
+
+      <PlanillaTuberiaTramoMapaModal
+        open={tramoMapOpen}
+        onClose={() => setTramoMapOpen(false)}
+        theme={ui.t}
+        coordsWgs84Inicio={detalle?.coords_wgs84 || null}
+        coordsWgs84Fin={detalle?.coords_wgs84_fin || null}
+        norteIni={params.norte_abs_inicial}
+        esteIni={params.este_abs_inicial}
+        norteFin={params.norte_abs_final}
+        esteFin={params.este_abs_final}
+        titulo={`Tramo${params.nombre ? `: ${params.nombre}` : ''}`}
+      />
 
       <PlanillaTuberiaCrearReporteModal
         open={crearReporteOpen && puedeVerCrearReporte}
