@@ -36,8 +36,30 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.match(modalSrc, /Asociar a reporte existente/)
     assert.match(modalSrc, /data-asociar-numero-reporte/)
     assert.match(modalSrc, /data-asociar-esquema-btn/)
-    assert.match(modalSrc, /sin modificar cantidades al asociar/i)
     assert.match(modalSrc, /al Guardar se sincronizan/i)
+  })
+
+  it('mini tabla de cantidades con checks desmarcados por defecto', () => {
+    assert.match(modalSrc, /data-asociar-cantidades-tabla/)
+    assert.match(modalSrc, /data-asociar-linea-check/)
+    assert.match(modalSrc, /origenKeyLineaAsociarSicoe/)
+    assert.match(modalSrc, /origenes_seleccionados/)
+    assert.match(modalSrc, /Desmarcadas por defecto/)
+    assert.match(modalSrc, /Sin Asignar Ítem/)
+    assert.match(utilsSrc, /export function origenKeyLineaAsociarSicoe/)
+    assert.match(modalSrc, /useState\(\(\) => new Set\(\)\)/)
+  })
+
+  it('origenKeyLineaAsociarSicoe arma scope:codigo', async () => {
+    const { origenKeyLineaAsociarSicoe } = await import('./planillaTuberiaUtils.js')
+    assert.equal(
+      origenKeyLineaAsociarSicoe({ scope: 'cantidades', codigo: 'EXC' }),
+      'cantidades:EXC',
+    )
+    assert.equal(
+      origenKeyLineaAsociarSicoe({ scope: 'descuentos', codigo: 'DESC_A1' }),
+      'descuentos:DESC_A1',
+    )
   })
 
   it('busca reportes existentes con autocomplete y preview Nº & Descripción & Abs', () => {
@@ -69,20 +91,21 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.equal(byDesc[0].id, 1)
   })
 
-  it('backend asocia sin crear registros ni sync de cantidades', () => {
+  it('backend asocia coords/fotos/gráfico y puede crear registros seleccionados', () => {
     assert.match(routesSrc, /asociar-reporte-sicoe/)
     assert.match(routesSrc, /def asociar_reporte_sicoe_existente/)
     assert.match(routesSrc, /solo_adjunto/)
+    assert.match(routesSrc, /origenes_seleccionados/)
+    assert.match(routesSrc, /n_registros_creados/)
     assert.match(routesSrc, /_reemplazar_puntos_topograficos_planilla/)
     assert.match(routesSrc, /El esquema del tramo es obligatorio/)
-    // No inserta so_registros en el flujo asociar (solo update)
     const asociarBlock = routesSrc.slice(
       routesSrc.indexOf('def asociar_reporte_sicoe_existente'),
       routesSrc.indexOf('def cerrar('),
     )
-    assert.doesNotMatch(asociarBlock, /\.insert\(rows_ins\)/)
+    // Updates existentes + insert opcional de seleccionados
     assert.match(asociarBlock, /so_registros[\s\S]*\.update\(/)
-    // Gráfico se reemplaza en TODOS los registros del reporte (no solo match por nombre).
+    assert.match(asociarBlock, /\.insert\(rows_ins\)/)
     assert.match(asociarBlock, /Reemplazar gráfico en TODOS/)
     assert.match(asociarBlock, /\.eq\("reporte_id", int\(reporte_id\)\)/)
   })

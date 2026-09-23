@@ -195,11 +195,17 @@ class CrearReporteSicoeBody(BaseModel):
 
 
 class AsociarReporteSicoeBody(BaseModel):
-    """Asocia la planilla a un so_reportes existente (sin crear registros ni tocar cantidades)."""
+    """Asocia la planilla a un so_reportes existente.
+
+    Siempre actualiza coords/fotos/gráfico. Opcionalmente crea so_registros
+    en «Sin Asignar Ítem» para los orígenes marcados (cantidades:CODIGO / descuentos:CODIGO).
+    """
     reporte_id: Optional[int] = None
     numero_reporte: Optional[int] = None
     # Esquema del tramo obligatorio: actualiza grafico_url en los registros del reporte.
     esquema_data_uri: str
+    # Orígenes a insertar como registros nuevos (vacío = solo adjuntos).
+    origenes_seleccionados: Optional[list[str]] = None
 
 
 def _filas(planilla_id: str) -> list[dict]:
@@ -2306,9 +2312,10 @@ def asociar_reporte_sicoe_existente(
 ):
     """
     Vincula la planilla a un so_reportes ya existente.
-    No crea registros nuevos. Reemplaza coordenadas/fotos/gráfico.
-    Las cantidades se sincronizan en guardados posteriores mientras la planilla
-    no esté sellada por interventoría (las casillas en SICOE siguen editables).
+    Siempre reemplaza coordenadas/fotos/gráfico.
+    Opcionalmente inserta en «Sin Asignar Ítem» las líneas marcadas
+    (origenes_seleccionados); permite duplicados si ya existían por nombre.
+    Las cantidades del resto se sincronizan en Guardar mientras no esté sellada.
     Si la planilla ya tiene un vínculo SICOE (crear o asociar), se rechaza salvo Dev.
     """
     _require_contract_access(current_user, contrato_id)
@@ -2336,23 +2343,34 @@ def asociar_reporte_sicoe_existente(
 
     try:
         from main import (
+            _get_niveles_activos_contrato,
+            _invalidate_dashboard_financial_caches,
             _so_registro_normalizar_graficos_historial,
             registrar_log,
             supabase_execute,
         )
     except ImportError:
         _so_registro_normalizar_graficos_historial = lambda d: d  # type: ignore
+        _get_niveles_activos_contrato = lambda *_a, **_k: [1, 2, 3]  # type: ignore
+        _invalidate_dashboard_financial_caches = lambda *_a, **_k: None  # type: ignore
         registrar_log = None  # type: ignore
 
         def supabase_execute(fn):  # type: ignore
             return fn()
 
+    _REP_SELECT = (
+        "id,numero_reporte,descripcion_actividad,estado,contrato_id,"
+        "capitulo,subcontratista_id,inspector_id,pk_id_id,margen,"
+        "tramo,civ,infraestructura,calzada,ubicacion,"
+        "abs_inicio,abs_final,nodo_ini,nodo_fin,coord_lat,coord_lng,"
+        "acta_rpo_id,semana_id,corte_id"
+    )
     reporte = None
     if body.reporte_id is not None:
         rows = supabase_execute(
             lambda: (
                 supabase.table("so_reportes")
-                .select("id,numero_reporte,descripcion_actividad,estado,contrato_id")
+                .select(_REP_SELECT)
                 .eq("contrato_id", int(contrato_id))
                 .eq("id", int(body.reporte_id))
                 .limit(1)
@@ -2365,7 +2383,7 @@ def asociar_reporte_sicoe_existente(
         rows = supabase_execute(
             lambda: (
                 supabase.table("so_reportes")
-                .select("id,numero_reporte,descripcion_actividad,estado,contrato_id")
+                .select(_REP_SELECT)
                 .eq("contrato_id", int(contrato_id))
                 .eq("numero_reporte", int(body.numero_reporte))
                 .limit(1)
@@ -2527,8 +2545,118 @@ def asociar_reporte_sicoe_existente(
                 reg.get("id"), reporte_id, exc,
             )
 
-    # 3) Vínculo en meta. solo_adjunto marca origen «asociar» (sin crear registros);
-    #    el sync de cantidades aplica igual mientras la planilla no esté sellada.
+    # 2c) Insertar líneas marcadas como registros nuevos en Sin Asignar Ítem.
+    origenes_sel: set[str] = set()
+    for raw in (body.origenes_seleccionados or []):
+        key = str(raw or "").strip()
+        if key:
+            origenes_sel.add(key)
+    lineas_crear = [
+        ln for ln in lineas
+        if origen_key_linea_sicoe(ln) in origenes_sel
+    ]
+    n_creados = 0
+    if lineas_crear:
+        nlines = len(lineas_crear)
+        numeros: list[int] = []
+        try:
+            raw_nums = supabase_execute(
+                lambda: supabase.rpc(
+                    "siguiente_n_numeros_registro",
+                    {"p_contrato_id": contrato_id, "p_n": nlines},
+                ).execute().data
+            )
+            if isinstance(raw_nums, list) and len(raw_nums) == nlines:
+                numeros = [int(x) for x in raw_nums]
+        except Exception:
+            numeros = []
+        if len(numeros) != nlines:
+            numeros = []
+            for _ in range(nlines):
+                numeros.append(int(supabase_execute(
+                    lambda: supabase.rpc(
+                        "siguiente_numero_registro", {"p_contrato_id": contrato_id}
+                    ).execute().data
+                )))
+
+        niveles = _get_niveles_activos_contrato(int(contrato_id)) or [1, 2, 3]
+        cab_keys = (
+            "capitulo", "subcontratista_id", "inspector_id", "pk_id_id", "margen",
+            "tramo", "civ", "infraestructura", "calzada", "ubicacion",
+            "abs_inicio", "abs_final", "nodo_ini", "nodo_fin",
+            "coord_lat", "coord_lng", "acta_rpo_id", "semana_id", "corte_id",
+        )
+        cab_from_rep: dict[str, Any] = {}
+        for k in cab_keys:
+            if reporte.get(k) is not None:
+                cab_from_rep[k] = reporte.get(k)
+
+        rows_ins: list[dict[str, Any]] = []
+        for line, num in zip(lineas_crear, numeros):
+            data = {k: v for k, v in line.items() if not str(k).startswith("_")}
+            data["cantidad"] = None
+            if data.get("costo_directo") is not None:
+                data["costo_directo"] = redondear_costo_directo_sicoe(data.get("costo_directo"))
+            data.update({
+                "reporte_id": reporte_id,
+                "numero_registro": int(num),
+                "contrato_id": contrato_id,
+                "creado_por_reg": uid,
+                "modificado_por_reg": uid,
+                "bloqueado": False,
+                **cab_from_rep,
+            })
+            scope = str(line.get("_origen_tabla") or "").strip()
+            codigo = str(line.get("_origen_codigo") or "").strip()
+            fotos_linea = list((evidencias.get(scope) or {}).get(codigo) or [])
+            if fotos_linea:
+                content, mime = _bytes_desde_evidencia_foto(fotos_linea[0])
+                if content:
+                    foto_url, foto_numero = _subir_bytes_sicoe_foto(contrato_id, content, mime)
+                    if foto_url:
+                        data["foto_url"] = foto_url
+                        data["foto_numero"] = foto_numero
+                        data["foto_descripcion"] = (
+                            str(fotos_linea[0].get("nombre") or "").strip()
+                            or f"Evidencia {codigo}"
+                        )
+                        n_fotos += 1
+            data["grafico_url"] = grafico_url
+            data["grafico_numero"] = grafico_numero
+            data["grafico_descripcion"] = "Esquema del tramo — planilla de tubería"
+            data["graficos_historial"] = list(graficos_historial)
+            for n in niveles:
+                try:
+                    ni = int(n)
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= ni <= 6:
+                    data[f"nivel{ni}_estado"] = "No Revisado"
+                    data[f"nivel{ni}_usuario_id"] = None
+                    data[f"nivel{ni}_fecha"] = None
+            _so_registro_normalizar_graficos_historial(data)
+            rows_ins.append(data)
+            origen_key = origen_key_linea_sicoe(line)
+            mapa_codigos[origen_key] = int(num)
+
+        try:
+            supabase_execute(
+                lambda: supabase.table("so_registros").insert(rows_ins).execute().data
+            )
+            n_creados = len(rows_ins)
+            n_graf += n_creados
+        except Exception as exc:
+            logger.exception("asociar insert so_registros reporte=%s: %s", reporte_id, exc)
+            raise HTTPException(
+                500,
+                "No se pudieron crear los registros seleccionados en el reporte SICOE.",
+            ) from exc
+        try:
+            _invalidate_dashboard_financial_caches(int(contrato_id))
+        except Exception:
+            pass
+
+    # 3) Vínculo en meta. solo_adjunto = True si no se crearon registros nuevos.
     prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
     links = _sicoe_links_from_meta(prev_meta)
     link = {
@@ -2536,8 +2664,9 @@ def asociar_reporte_sicoe_existente(
         "numero_reporte": reporte.get("numero_reporte"),
         "created_at": _now(),
         "asociado_at": _now(),
-        "solo_adjunto": True,
-        "n_registros": len(regs),
+        "solo_adjunto": n_creados == 0,
+        "n_registros": len(regs) + n_creados,
+        "n_registros_creados": n_creados,
         "registro_numeros_por_codigo": mapa_codigos,
         "n_puntos_topograficos": n_puntos,
         "n_fotos_sincronizadas": n_fotos,
@@ -2574,7 +2703,8 @@ def asociar_reporte_sicoe_existente(
                     "n_puntos_topograficos": n_puntos,
                     "n_fotos_sincronizadas": n_fotos,
                     "n_graficos_actualizados": n_graf,
-                    "solo_adjunto": True,
+                    "n_registros_creados": n_creados,
+                    "solo_adjunto": n_creados == 0,
                 },
             )
     except Exception:
@@ -2588,8 +2718,9 @@ def asociar_reporte_sicoe_existente(
         "n_puntos_topograficos": n_puntos,
         "n_fotos_sincronizadas": n_fotos,
         "n_graficos_actualizados": n_graf,
+        "n_registros_creados": n_creados,
         "esquema_adjunto": True,
-        "solo_adjunto": True,
+        "solo_adjunto": n_creados == 0,
         "link": link,
         "planilla": _detalle(contrato_id, planilla_id),
     }

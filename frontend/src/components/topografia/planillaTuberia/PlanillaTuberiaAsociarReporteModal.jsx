@@ -1,7 +1,8 @@
 /**
  * Popup: Asociar planilla de tubería a un reporte SICOE Obra ya existente.
  * Buscador/autocomplete de reportes existentes (preview Nº & Descripción & Abs).
- * Solo adjunta planilla + actualiza fotos, coordenadas y gráfico.
+ * Actualiza fotos, coordenadas y gráfico; opcionalmente crea registros
+ * seleccionados (checks) en «Sin Asignar Ítem».
  */
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -14,6 +15,7 @@ import {
 import {
   filtrarReportesSicoeAutocomplete,
   formatoPreviewReporteSicoe,
+  origenKeyLineaAsociarSicoe,
 } from './planillaTuberiaUtils'
 
 async function fetchReportesBuscar(contratoId, token, params = {}) {
@@ -74,6 +76,8 @@ export default function PlanillaTuberiaAsociarReporteModal({
   const [err, setErr] = useState('')
   const [esquemaOpen, setEsquemaOpen] = useState(false)
   const [esquemaDataUri, setEsquemaDataUri] = useState(null)
+  /** Orígenes marcados para crear en Sin Asignar Ítem (desmarcados por defecto). */
+  const [origenesSel, setOrigenesSel] = useState(() => new Set())
   const wrapRef = useRef(null)
   const pickingRef = useRef(false)
   const reactId = useId()
@@ -89,6 +93,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
     setEsquemaOpen(false)
     setEsquemaDataUri(null)
     setReportes([])
+    setOrigenesSel(new Set())
   }, [open, planilla?.id])
 
   // Carga inicial de reportes existentes (SICOE Obra).
@@ -231,6 +236,17 @@ export default function PlanillaTuberiaAsociarReporteModal({
   const esquemaListo = Boolean(esquemaDataUri)
   const reporteOk = selected?.id != null && selected?.numero_reporte != null
   const puedeAsociar = esquemaListo && reporteOk
+  const nSeleccionados = origenesSel.size
+
+  const toggleOrigen = (key) => {
+    if (!key) return
+    setOrigenesSel((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   const asociar = async () => {
     if (!puedeAsociar || busy) return
@@ -241,6 +257,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
         reporte_id: Number(selected.id),
         numero_reporte: Number(selected.numero_reporte),
         esquema_data_uri: esquemaDataUri,
+        origenes_seleccionados: Array.from(origenesSel),
       })
       onAsociado?.(res)
       onClose?.()
@@ -317,7 +334,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
                     Asociar a reporte existente
                   </div>
                   <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', marginTop: 2 }}>
-                    Planilla de tubería · sin modificar cantidades al asociar
+                    Planilla de tubería · coords/fotos/gráfico + ítems opcionales
                   </div>
                 </td>
                 <td style={{
@@ -347,7 +364,9 @@ export default function PlanillaTuberiaAsociarReporteModal({
             Busque y seleccione un reporte existente de SICOE Obra. Al asociar
             se vinculará la planilla <strong>{planilla?.nombre || '—'}</strong>,
             se reemplazarán coordenadas y se actualizarán fotos/gráfico.
-            {' '}<strong>No se modifican cantidades al asociar ni se crean registros nuevos.</strong>
+            {' '}Opcionalmente marque líneas abajo para crearlas en
+            {' '}<strong>Sin Asignar Ítem</strong> (permite duplicar si ya existían).
+            {' '}Sin checks solo se adjuntan coords/fotos/gráfico.
             {' '}Mientras la planilla no esté validada por interventoría, al Guardar se sincronizan
             las cantidades del resumen/descuentos al reporte (las casillas en SICOE siguen editables).
           </div>
@@ -501,14 +520,131 @@ export default function PlanillaTuberiaAsociarReporteModal({
           </div>
 
           {lineasPreview.length > 0 && (
-            <div style={{ fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b' }}>
-              Fotos a sincronizar ({lineasPreview.length} línea(s) con cantidad ≠ 0):
-              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                {lineasPreview.slice(0, 8).map((l) => (
-                  <li key={`${l.codigo || l.nombre}`}>{l.nombre || l.codigo}</li>
-                ))}
-                {lineasPreview.length > 8 && <li>… y {lineasPreview.length - 8} más</li>}
-              </ul>
+            <div data-asociar-cantidades-tabla>
+              <div style={{
+                fontSize: 'var(--cc-sm)',
+                fontWeight: 700,
+                color: ui?.text || '#0f172a',
+                marginBottom: 6,
+              }}
+              >
+                Cantidades a enviar (opcional)
+                <span style={{
+                  fontWeight: 500,
+                  color: ui?.textMuted || '#64748b',
+                  marginLeft: 8,
+                }}
+                >
+                  {nSeleccionados} de {lineasPreview.length} seleccionada(s) → Sin Asignar Ítem
+                </span>
+              </div>
+              <div style={{
+                maxHeight: 220,
+                overflow: 'auto',
+                border: `1px solid ${ui?.border || '#e2e8f0'}`,
+                borderRadius: 8,
+              }}
+              >
+                <table style={{
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  fontSize: 'var(--cc-xs)',
+                }}
+                >
+                  <thead>
+                    <tr style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
+                      <th style={{
+                        width: 36, padding: '6px 8px', textAlign: 'center',
+                        borderBottom: `1px solid ${ui?.border || '#e2e8f0'}`,
+                      }}
+                      >
+                        <span className="sr-only">Enviar</span>
+                      </th>
+                      <th style={{
+                        padding: '6px 8px', textAlign: 'left',
+                        borderBottom: `1px solid ${ui?.border || '#e2e8f0'}`,
+                      }}
+                      >
+                        Ítem
+                      </th>
+                      <th style={{
+                        padding: '6px 8px', textAlign: 'left', width: 56,
+                        borderBottom: `1px solid ${ui?.border || '#e2e8f0'}`,
+                      }}
+                      >
+                        Und
+                      </th>
+                      <th style={{
+                        padding: '6px 8px', textAlign: 'right', width: 72,
+                        borderBottom: `1px solid ${ui?.border || '#e2e8f0'}`,
+                      }}
+                      >
+                        Cant.
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lineasPreview.map((l) => {
+                      const key = origenKeyLineaAsociarSicoe(l)
+                      const checked = origenesSel.has(key)
+                      return (
+                        <tr
+                          key={key}
+                          data-asociar-linea-origen={key}
+                          style={{ background: checked ? '#eff6ff' : 'transparent' }}
+                        >
+                          <td style={{
+                            padding: '5px 8px', textAlign: 'center',
+                            borderBottom: `1px solid ${ui?.border || '#f1f5f9'}`,
+                          }}
+                          >
+                            <input
+                              type="checkbox"
+                              data-asociar-linea-check
+                              checked={checked}
+                              disabled={busy}
+                              onChange={() => toggleOrigen(key)}
+                              aria-label={`Enviar ${l.nombre || l.codigo} a Sin Asignar Ítem`}
+                            />
+                          </td>
+                          <td style={{
+                            padding: '5px 8px',
+                            borderBottom: `1px solid ${ui?.border || '#f1f5f9'}`,
+                            color: ui?.text || '#0f172a',
+                          }}
+                          >
+                            {l.nombre || l.codigo}
+                          </td>
+                          <td style={{
+                            padding: '5px 8px',
+                            borderBottom: `1px solid ${ui?.border || '#f1f5f9'}`,
+                            color: ui?.textMuted || '#64748b',
+                          }}
+                          >
+                            {l.unidad || '—'}
+                          </td>
+                          <td style={{
+                            padding: '5px 8px', textAlign: 'right',
+                            borderBottom: `1px solid ${ui?.border || '#f1f5f9'}`,
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                          >
+                            {l.cantidad != null ? l.cantidad : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{
+                marginTop: 6,
+                fontSize: 'var(--cc-xxs)',
+                color: ui?.textMuted || '#64748b',
+              }}
+              >
+                Desmarcadas por defecto. Coords, fotos y gráfico se envían siempre.
+              </div>
             </div>
           )}
 
@@ -553,7 +689,11 @@ export default function PlanillaTuberiaAsociarReporteModal({
                 opacity: !puedeAsociar ? 0.55 : 1,
               }}
             >
-              {busy ? 'Asociando…' : 'Asociar planilla'}
+              {busy
+                ? 'Asociando…'
+                : (nSeleccionados > 0
+                  ? `Asociar planilla (+${nSeleccionados} ítem(s))`
+                  : 'Asociar planilla')}
             </button>
           </div>
         </div>
