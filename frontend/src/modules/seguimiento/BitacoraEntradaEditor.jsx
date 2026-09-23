@@ -9,6 +9,7 @@ import BitacoraMaterialUbicacionModal from './BitacoraMaterialUbicacionModal'
 import EquipoCatalogSelect from './EquipoCatalogSelect'
 import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
+import BitacoraReportePersonalModal from './BitacoraReportePersonalModal'
 import EventoBloquesSection from './EventoBloquesSection'
 import { eventosFromEntrada, eventosParaPayload, debeMostrarObservacionesDia } from './eventoBloquesHelpers'
 import VisitantesEventoGrid, { emptyVisitanteRow, visitantesFromDetalle } from './VisitantesEventoGrid'
@@ -300,6 +301,8 @@ export default function BitacoraEntradaEditor({
   const [pdfBusy, setPdfBusy] = useState(false)
   const [pdfUrl, setPdfUrl] = useState(null)
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
+  const [reportePersonalOpen, setReportePersonalOpen] = useState(false)
+  const [contratoMeta, setContratoMeta] = useState({})
 
   // Plantilla de cargos: se mantiene para sync de catálogo; el resumen se deriva de asistencia.
   useEffect(() => {
@@ -424,7 +427,15 @@ export default function BitacoraEntradaEditor({
         })
         if (!res.ok || cancelled) return
         const data = await res.json()
-        if (!cancelled && data?.numero) setContratoNumero(String(data.numero))
+        if (!cancelled) {
+          if (data?.numero) setContratoNumero(String(data.numero))
+          setContratoMeta({
+            numero: data?.numero != null ? String(data.numero) : '',
+            objeto: data?.objeto != null ? String(data.objeto) : '',
+            contratista: data?.contratista != null ? String(data.contratista) : '',
+            logo_contratista: data?.logo_contratista || '',
+          })
+        }
         let lat = data?.centro_lat != null ? Number(data.centro_lat) : null
         let lng = data?.centro_lng != null ? Number(data.centro_lng) : null
         if ((lat == null || lng == null) && data?.plano_geojson) {
@@ -909,6 +920,15 @@ export default function BitacoraEntradaEditor({
             )}
             {tipo === 'diario' && (permisos?.ver || permisos?.exportar) && (
               <>
+                <button
+                  type="button"
+                  disabled={busy || !fecha}
+                  onClick={() => setReportePersonalOpen(true)}
+                  style={btnGhost}
+                  title="Resumen del día por empresa: personal y maquinaria (captura / imprimir)"
+                >
+                  Reporte de personal
+                </button>
                 <button
                   type="button"
                   disabled={pdfBusy || busy || !fecha}
@@ -1794,6 +1814,15 @@ export default function BitacoraEntradaEditor({
               <div style={{ display: 'flex', gap: 8, marginRight: 'auto', flexWrap: 'wrap' }}>
                 <button
                   type="button"
+                  disabled={busy || !fecha}
+                  onClick={() => setReportePersonalOpen(true)}
+                  style={btnGhost}
+                  title="Resumen del día por empresa: personal y maquinaria (captura / imprimir)"
+                >
+                  Reporte de personal
+                </button>
+                <button
+                  type="button"
                   disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: true })}
                   style={btnGhost}
@@ -2000,6 +2029,19 @@ export default function BitacoraEntradaEditor({
           }}
         />
       )}
+
+      <BitacoraReportePersonalModal
+        open={reportePersonalOpen}
+        onClose={() => setReportePersonalOpen(false)}
+        t={t}
+        fecha={fecha}
+        asistencia={asistencia}
+        usos={usos}
+        rrhhCatalogo={rrhhCatalogo}
+        contratoId={contratoId}
+        token={token}
+        contratoMeta={contratoMeta}
+      />
 
       {pdfPreviewOpen && pdfUrl && (
         <div
