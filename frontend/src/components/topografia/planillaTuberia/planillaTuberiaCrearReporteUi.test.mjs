@@ -41,17 +41,27 @@ describe('Crear reporte SICOE — UI popup', () => {
     assert.doesNotMatch(modalSrc, /placeholder="Buscar…"[\s\S]{0,80}<select/)
   })
 
-  it('abscisas autodiligenciadas desde cartera (min/max) y preferencia por filas', () => {
+  it('abscisas autodiligenciadas desde cartera (min/max) y nodos separados', () => {
     const abs = abscisasExtremosPlanilla(
       { cartera: { totales: { abscisa_inicial: 99, abscisa_final: 100 } } },
       [{ abscisa: '1,5' }, { abscisa: '9.2' }, { abscisa: '' }],
     )
     assert.equal(abs.absInicio, 1.5)
     assert.equal(abs.absFinal, 9.2)
-    assert.match(modalSrc, /setNodoIni\(a0\)/)
-    assert.match(modalSrc, /setNodoFin\(a1\)/)
-    assert.match(modalSrc, /abs_inicio:\s*absIni/)
-    assert.match(modalSrc, /abs_final:\s*absFin/)
+    assert.match(modalSrc, /setAbsIni\(fmtAbs\(absInicioDefault\)\)/)
+    assert.match(modalSrc, /setAbsFin\(fmtAbs\(absFinalDefault\)\)/)
+    assert.match(modalSrc, /data-campo-abs-inicio/)
+    assert.match(modalSrc, /data-campo-abs-fin/)
+    assert.match(modalSrc, /data-campo-nodo-inicio/)
+    assert.match(modalSrc, /data-campo-nodo-fin/)
+    assert.match(modalSrc, /abs_inicio:\s*numOrNull\(absIni\)/)
+    assert.match(modalSrc, /abs_final:\s*numOrNull\(absFin\)/)
+    assert.match(modalSrc, /nodo_ini:\s*String\(nodoIni\)/)
+    assert.match(modalSrc, /nodo_fin:\s*String\(nodoFin\)/)
+    assert.doesNotMatch(modalSrc, /Nodo \/ abscisa/)
+    assert.doesNotMatch(modalSrc, /Filtrado por tipo de planilla/)
+    assert.doesNotMatch(modalSrc, /Obligatorio\. Se abre el editor de Esquemas/)
+    assert.match(modalSrc, /gridTemplateColumns:\s*'repeat\(5,\s*minmax\(0,\s*1fr\)\)'/)
   })
 
   it('encabezado con logo institucional y meta de planilla', () => {
