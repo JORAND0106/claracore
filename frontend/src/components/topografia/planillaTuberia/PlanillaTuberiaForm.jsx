@@ -16,7 +16,7 @@ import PlanillaTuberiaSeccionSvg from './PlanillaTuberiaSeccionSvg'
 import PlanillaTuberiaCrearReporteModal from './PlanillaTuberiaCrearReporteModal'
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
 import PlanillaTuberiaTramoMapaModal from './PlanillaTuberiaTramoMapaModal'
-import { calcularPlanillaLocal, CAMPOS_DESCUENTO_ALTURA, esCodigoOtros } from './planillaTuberiaCalc'
+import { calcularPlanillaLocal, CAMPOS_DESCUENTO_ALTURA, esCodigoOtros, esCodigoDescOtros } from './planillaTuberiaCalc'
 import {
   CALC_CELL_BG,
   RELACIONES_ATRAQUE,
@@ -51,6 +51,8 @@ import {
   lineasConCantidadCalculada,
   normalizarCantidadesManuales,
   siguienteCodigoOtros,
+  normalizarDescuentosManuales,
+  siguienteCodigoDescOtros,
   desgloseAtraqueAlcantarilla,
   pasosDesgloseAtraque,
 } from './planillaTuberiaUtils'
@@ -155,6 +157,8 @@ export default function PlanillaTuberiaForm({
   const [crearReporteOpen, setCrearReporteOpen] = useState(false)
   /** Overrides Long/Ancho/Espesor (+nombre OTROS) del Resumen de Cantidades. */
   const [cantManuales, setCantManuales] = useState([])
+  /** Overrides multi-Otros de Descuentos Específicos (DESC_OTROS_n). */
+  const [descManuales, setDescManuales] = useState([])
   /** Fotos por línea de cantidad/descuento (meta_cabecera.evidencias_fotograficas). */
   const [evidencias, setEvidencias] = useState(() => normalizarEvidenciasFotograficas(null))
   /** Contenedor del editor: Enter avanza como Tab en cabecera/cartera/cantidades/descuentos. */
@@ -206,6 +210,12 @@ export default function PlanillaTuberiaForm({
     setInfos(det?.validacion?.infos || [])
     const meta = (p.meta_cabecera && typeof p.meta_cabecera === 'object') ? p.meta_cabecera : {}
     setCantManuales(normalizarCantidadesManuales(meta.cantidades_manuales))
+    const descSrc = (Array.isArray(meta.descuentos_manuales) && meta.descuentos_manuales.length)
+      ? meta.descuentos_manuales
+      : (det?.descuentos_manuales || [])
+    setDescManuales(normalizarDescuentosManuales(
+      (descSrc || []).filter((d) => esCodigoDescOtros(d?.codigo)),
+    ))
     setEvidencias(normalizarEvidenciasFotograficas(meta.evidencias_fotograficas))
   }, [])
 
@@ -297,7 +307,11 @@ export default function PlanillaTuberiaForm({
     const prev = (planilla?.meta_cabecera && typeof planilla.meta_cabecera === 'object')
       ? planilla.meta_cabecera
       : {}
-    const meta = { ...prev, cantidades_manuales: cantManuales }
+    const meta = {
+      ...prev,
+      cantidades_manuales: cantManuales,
+      descuentos_manuales: descManuales,
+    }
     if (String(params.tipo || '').toUpperCase() === 'ALCANTARILLA') {
       const cama = params.cama_triturado_m === '' || params.cama_triturado_m == null
         ? 0
@@ -331,6 +345,26 @@ export default function PlanillaTuberiaForm({
     })
   }
 
+  const overrideDescuento = (codigo) => (
+    (descManuales || []).find((c) => String(c.codigo || '').toUpperCase() === String(codigo || '').toUpperCase()) || null
+  )
+
+  const setOverrideDescuento = (codigo, patch) => {
+    const cod = String(codigo || '').toUpperCase()
+    setDescManuales((prev) => {
+      const list = normalizarDescuentosManuales(prev)
+      const idx = list.findIndex((c) => String(c.codigo || '').toUpperCase() === cod)
+      const base = idx >= 0 ? { ...list[idx] } : { codigo: cod }
+      const next = { ...base, ...patch, codigo: cod }
+      ;['long', 'ancho', 'espesor'].forEach((k) => {
+        if (next[k] === '' || next[k] == null) delete next[k]
+      })
+      if (idx >= 0) list[idx] = next
+      else list.push(next)
+      return list
+    })
+  }
+
   const agregarLineaOtros = () => {
     setCantManuales((prev) => {
       const list = normalizarCantidadesManuales(prev)
@@ -348,6 +382,23 @@ export default function PlanillaTuberiaForm({
     })
   }
 
+  const agregarLineaDescOtros = () => {
+    setDescManuales((prev) => {
+      const list = normalizarDescuentosManuales(prev)
+      return [...list, { codigo: siguienteCodigoDescOtros(list) }]
+    })
+  }
+
+  const eliminarLineaDescOtros = (codigo) => {
+    setDescManuales((prev) => {
+      const list = normalizarDescuentosManuales(prev).filter(
+        (c) => String(c.codigo || '').toUpperCase() !== String(codigo || '').toUpperCase(),
+      )
+      if (!list.some((c) => esCodigoDescOtros(c.codigo))) list.push({ codigo: 'DESC_OTROS_1' })
+      return list
+    })
+  }
+
   const cantidadDesdeDims = (long, ancho, espesor) => {
     const xs = [long, ancho, espesor]
       .map((v) => (v === '' || v == null ? null : Number(v)))
@@ -355,6 +406,23 @@ export default function PlanillaTuberiaForm({
     if (!xs.length) return 0
     return Math.round(xs.reduce((a, b) => a * b, 1) * 100) / 100
   }
+
+  const payloadDescuentosManuales = () => (
+    normalizarDescuentosManuales(descManuales).map((d) => {
+      const long = d.long
+      const ancho = d.ancho
+      const espesor = d.espesor
+      const cant = cantidadDesdeDims(long, ancho, espesor)
+      return {
+        codigo: d.codigo,
+        cantidad: cant || Number(d.cantidad) || 0,
+        nombre: d.nombre ?? null,
+        long: long === '' || long == null ? null : Number(long),
+        ancho: ancho === '' || ancho == null ? null : Number(ancho),
+        espesor: espesor === '' || espesor == null ? null : Number(espesor),
+      }
+    })
+  )
 
   const cellValCant = (n, key) => {
     const ov = overrideCantidad(n.codigo)
@@ -386,6 +454,39 @@ export default function PlanillaTuberiaForm({
     () => (cantManuales || []).filter((c) => esCodigoOtros(c.codigo)).length,
     [cantManuales],
   )
+
+  const nDescOtrosLineas = useMemo(
+    () => (descManuales || []).filter((c) => esCodigoDescOtros(c.codigo)).length,
+    [descManuales],
+  )
+
+  const cellValDesc = (d, key) => {
+    const ov = overrideDescuento(d.codigo)
+    if (ov && Object.prototype.hasOwnProperty.call(ov, key) && ov[key] != null && ov[key] !== '') {
+      return ov[key]
+    }
+    return d[key] ?? ''
+  }
+
+  const displayCantDesc = (d) => {
+    if (!d?.editable_dims) return d?.cantidad
+    const long = cellValDesc(d, 'long')
+    const ancho = cellValDesc(d, 'ancho')
+    const espesor = cellValDesc(d, 'espesor')
+    const fromDims = cantidadDesdeDims(long, ancho, espesor)
+    if (fromDims) return fromDims
+    return d?.cantidad ?? 0
+  }
+
+  const displayNombreDesc = (d) => {
+    if (!d?.editable_nombre) return d?.nombre
+    const ov = overrideDescuento(d.codigo)
+    if (ov && ov.nombre != null && String(ov.nombre).trim() !== '') {
+      const nom = String(ov.nombre).trim()
+      return nom.toLowerCase().startsWith('otros') ? nom : `Otros: ${nom}`
+    }
+    return d?.nombre || 'Otros: ____'
+  }
 
   const guardarParams = async () => {
     if (!planilla?.id) return
@@ -440,7 +541,12 @@ export default function PlanillaTuberiaForm({
       }
       const res = await api(`/planillas-tuberia/${planilla.id}/cartera`, {
         method: 'PUT',
-        body: JSON.stringify({ version, filas: filasPayload, descuentos_manuales: [], cantidades_manuales: cantManuales }),
+        body: JSON.stringify({
+          version,
+          filas: filasPayload,
+          descuentos_manuales: payloadDescuentosManuales(),
+          cantidades_manuales: cantManuales,
+        }),
       })
       const conf = confirmarGuardadoCartera(res, filasPayload.length, filasPayload)
       if (!conf.ok) {
@@ -657,11 +763,11 @@ export default function PlanillaTuberiaForm({
       ancho_excavacion_m: params.ancho_excavacion_m,
       relacion_atraque: params.relacion_atraque || '1:3',
       filas_campo: (filas || []).map((row, i) => ({ ...row, orden: i + 1 })),
-      descuentos_manuales: detalle?.descuentos_manuales || [],
+      descuentos_manuales: descManuales,
       cantidades_manuales: cantManuales,
       cama_triturado_m: Number.isFinite(Number(cama)) ? Number(cama) : 0,
     })
-  }, [filas, params, cantManuales, detalle?.descuentos_manuales, planilla?.meta_cabecera])
+  }, [filas, params, cantManuales, descManuales, planilla?.meta_cabecera])
 
   /** Preferir preview local; si faltan Ø/B, caer al último cálculo del servidor. */
   const calculoVista = calculoLocal || calculo
@@ -672,7 +778,7 @@ export default function PlanillaTuberiaForm({
   )
   const lineasReporteSicoe = useMemo(
     () => lineasPlanillaParaReporteSicoe(calculoVista, { displayNeto: displayNetoCant }),
-    [calculoVista, cantManuales],
+    [calculoVista, cantManuales, descManuales],
   )
   const linksSicoe = useMemo(
     () => linksSicoeDesdeMeta(planilla?.meta_cabecera),
@@ -693,7 +799,7 @@ export default function PlanillaTuberiaForm({
       lineasConCantidadCalculada(calculoVista, { displayNeto: displayNetoCant })
         .map((l) => `${l.scope}:${l.codigo}`),
     ),
-    [calculoVista, cantManuales],
+    [calculoVista, cantManuales, descManuales],
   )
 
   const seedTramoGk = useMemo(() => ({
@@ -843,7 +949,8 @@ export default function PlanillaTuberiaForm({
             body: JSON.stringify({
               version: det?.planilla?.version ?? det?.version ?? body.version,
               filas: filasPayload,
-              descuentos_manuales: [],
+              descuentos_manuales: payloadDescuentosManuales(),
+              cantidades_manuales: cantManuales,
             }),
           })
           const conf = confirmarGuardadoCartera(res, filasPayload.length, filasPayload)
@@ -1524,7 +1631,20 @@ export default function PlanillaTuberiaForm({
       )}
     </div>
     <div style={cardPad}>
-      <div style={sheet.sectionTitle}>Descuentos Específicos</div>
+      <div style={{ ...sheet.sectionTitle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span>Descuentos Específicos</span>
+        {editable && (
+          <button
+            type="button"
+            className="cc-topo-touch-btn"
+            style={{ ...ui.btnSecondary, height: 28, padding: '0 10px', fontSize: 'var(--cc-xs)' }}
+            onClick={agregarLineaDescOtros}
+            title="Agregar otra línea Otros"
+          >
+            + Otros
+          </button>
+        )}
+      </div>
       <div style={{ ...sheet.sheetWrap, WebkitOverflowScrolling: 'touch' }} className="cc-topo-table-scroll">
         <table style={{ ...sheet.sheetTable, tableLayout: 'auto', minWidth: 520 }}>
           <thead>
@@ -1546,31 +1666,99 @@ export default function PlanillaTuberiaForm({
             </tr>
           </thead>
           <tbody>
-            {(calculoVista?.descuentos || []).filter((d) => d.nombre).map((d) => (
-              <tr key={d.codigo}>
-                <td style={tdResumenItem}>{d.nombre}</td>
-                <td style={tdResumenCalc}>{fmtNDash(d.long)}</td>
-                <td style={tdResumenCalc}>{fmtNDash(d.ancho)}</td>
-                <td style={tdResumenCalc}>{fmtNDash(d.espesor)}</td>
-                <td style={tdResumenCalc}>{fmtNDash(d.cantidad)}</td>
-                <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
-                  <PlanillaTuberiaEvidenciaBtn
-                    scope="descuentos"
-                    codigo={d.codigo}
-                    label={d.nombre}
-                    evidencias={evidencias}
-                    editable={editable}
-                    busy={busy}
-                    requiere={lineasFotoReq.has(`descuentos:${d.codigo}`)}
-                    onAdjuntar={adjuntarEvidencia}
-                    onEliminar={eliminarEvidencia}
-                    contratoId={contratoId}
-                    token={token}
-                    theme={ui.t}
-                  />
-                </td>
-              </tr>
-            ))}
+            {(calculoVista?.descuentos || []).filter((d) => d.nombre).map((d) => {
+              const editDims = !!d.editable_dims && editable
+              const editNom = !!d.editable_nombre && editable
+              const esOtrosDesc = esCodigoDescOtros(d.codigo)
+              const ov = overrideDescuento(d.codigo)
+              const inpStyle = {
+                ...sheet.cellInp,
+                height: RESUMEN_ROW_HEIGHT,
+                padding: '1px 3px',
+                textAlign: 'right',
+                fontFamily: 'ui-monospace, Consolas, monospace',
+                fontVariantNumeric: 'tabular-nums',
+                fontWeight: 700,
+                fontSize: 'var(--cc-xs)',
+                lineHeight: 1.05,
+                background: 'transparent',
+                boxSizing: 'border-box',
+                width: '100%',
+              }
+              return (
+                <tr key={d.codigo}>
+                  <td style={tdResumenItem}>
+                    {editNom ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: '100%' }}>
+                        <span>Otros:</span>
+                        <input
+                          disabled={!editable}
+                          value={ov?.nombre ?? ''}
+                          placeholder="____"
+                          onChange={(e) => setOverrideDescuento(d.codigo, { nombre: e.target.value })}
+                          style={{
+                            ...sheet.cellInp,
+                            height: RESUMEN_ROW_HEIGHT,
+                            padding: '1px 3px',
+                            textAlign: 'left',
+                            flex: 1,
+                            fontSize: 'var(--cc-xs)',
+                            lineHeight: 1.05,
+                            fontWeight: 700,
+                            background: 'transparent',
+                          }}
+                        />
+                        {editable && nDescOtrosLineas > 1 && (
+                          <button
+                            type="button"
+                            title="Quitar esta línea Otros"
+                            onClick={() => eliminarLineaDescOtros(d.codigo)}
+                            style={{
+                              border: 'none', background: 'transparent', color: '#b91c1c',
+                              cursor: 'pointer', fontWeight: 700, padding: '0 4px', fontSize: 12,
+                            }}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
+                    ) : displayNombreDesc(d)}
+                  </td>
+                  {['long', 'ancho', 'espesor'].map((k) => (
+                    <td key={k} style={editDims ? { ...tdResumenCalc, padding: 0 } : tdResumenCalc}>
+                      {editDims ? (
+                        <input
+                          type="number"
+                          step="0.0001"
+                          inputMode="decimal"
+                          disabled={!editable}
+                          value={cellValDesc(d, k)}
+                          onChange={(e) => setOverrideDescuento(d.codigo, { [k]: e.target.value })}
+                          style={inpStyle}
+                        />
+                      ) : fmtNDash(d[k])}
+                    </td>
+                  ))}
+                  <td style={tdResumenCalc}>{fmtNDash(esOtrosDesc ? displayCantDesc(d) : d.cantidad)}</td>
+                  <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
+                    <PlanillaTuberiaEvidenciaBtn
+                      scope="descuentos"
+                      codigo={d.codigo}
+                      label={displayNombreDesc(d)}
+                      evidencias={evidencias}
+                      editable={editable}
+                      busy={busy}
+                      requiere={lineasFotoReq.has(`descuentos:${d.codigo}`)}
+                      onAdjuntar={adjuntarEvidencia}
+                      onEliminar={eliminarEvidencia}
+                      contratoId={contratoId}
+                      token={token}
+                      theme={ui.t}
+                    />
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

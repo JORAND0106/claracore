@@ -28,6 +28,7 @@ from topografia_planilla_tuberia import (
     calcular_planilla_completa,
     construir_fila_consolidado,
     filtrar_descuentos_manuales_por_tipo,
+    es_codigo_desc_otros,
     lineas_planilla_a_registros_sicoe,
     mapa_lineas_sicoe_por_origen,
     mensaje_faltan_evidencias,
@@ -135,6 +136,10 @@ class DescBody(BaseModel):
     codigo: str
     cantidad: float = 0
     nota: Optional[str] = None
+    long: Optional[float] = None
+    ancho: Optional[float] = None
+    espesor: Optional[float] = None
+    nombre: Optional[str] = None
 
 
 class CarteraBody(BaseModel):
@@ -186,6 +191,22 @@ def _descuentos(planilla_id: str) -> list[dict]:
         supabase.table("topo_planilla_tuberia_descuentos")
         .select("*").eq("planilla_id", planilla_id).execute().data or []
     )
+
+
+def _desc_body_to_dict(d: "DescBody") -> dict[str, Any]:
+    entry: dict[str, Any] = {"codigo": d.codigo, "cantidad": float(d.cantidad or 0)}
+    if d.long is not None:
+        entry["long"] = d.long
+    if d.ancho is not None:
+        entry["ancho"] = d.ancho
+    if d.espesor is not None:
+        entry["espesor"] = d.espesor
+    if d.nombre is not None:
+        entry["nombre"] = d.nombre
+    elif d.nota is not None:
+        entry["nombre"] = d.nota
+        entry["nota"] = d.nota
+    return entry
 
 
 def _as_campo(filas_db: list[dict], *, tipo: Optional[str] = None) -> list[dict]:
@@ -253,6 +274,52 @@ def _cantidades_manuales_from_meta(planilla: dict) -> list[dict]:
         return []
     raw = meta.get("cantidades_manuales") or []
     return raw if isinstance(raw, list) else []
+
+
+def _descuentos_manuales_from_meta(planilla: dict) -> list[dict]:
+    """Overrides DESC_OTROS[_n] con dims/nombre (espejo de cantidades_manuales)."""
+    meta = planilla.get("meta_cabecera") or {}
+    if not isinstance(meta, dict):
+        return []
+    raw = meta.get("descuentos_manuales") or []
+    return raw if isinstance(raw, list) else []
+
+
+def _merge_descuentos_para_calculo(planilla: dict, desc_db: list[dict]) -> list[dict]:
+    """
+    Prefiere meta_cabecera.descuentos_manuales (dims/nombre multi-Otros);
+    completa con filas DB que no estén en meta (p.ej. legacy solo cantidad).
+    """
+    meta_list = _descuentos_manuales_from_meta(planilla)
+    if meta_list:
+        seen = {
+            str(d.get("codigo") or "").strip().upper()
+            for d in meta_list
+            if isinstance(d, dict)
+        }
+        out = [dict(d) for d in meta_list if isinstance(d, dict)]
+        for d in desc_db or []:
+            cod = str(d.get("codigo") or "").strip().upper()
+            if not cod or cod in seen:
+                continue
+            # Si meta ya trae algún DESC_OTROS_*, no mezclar legacy DESC_OTROS de DB.
+            if es_codigo_desc_otros(cod) and any(es_codigo_desc_otros(c) for c in seen):
+                continue
+            entry = {"codigo": cod, "cantidad": d.get("cantidad")}
+            if d.get("nota"):
+                entry["nombre"] = d.get("nota")
+            out.append(entry)
+            seen.add(cod)
+        return out
+    return [
+        {
+            "codigo": d.get("codigo"),
+            "cantidad": d.get("cantidad"),
+            **({"nombre": d.get("nota")} if d.get("nota") else {}),
+        }
+        for d in (desc_db or [])
+        if d.get("codigo")
+    ]
 
 
 def _evidencias_from_meta(planilla: dict) -> dict[str, dict[str, list[dict]]]:
@@ -355,7 +422,7 @@ def _calcular(planilla: dict, filas_db: list[dict], desc_db: list[dict]) -> dict
         ancho_excavacion_m=ancho,
         relacion_atraque=planilla.get("relacion_atraque") or "1:3",
         filas_campo=_as_campo(filas_db, tipo=planilla.get("tipo")),
-        descuentos_manuales=[{"codigo": d["codigo"], "cantidad": d.get("cantidad")} for d in desc_db],
+        descuentos_manuales=_merge_descuentos_para_calculo(planilla, desc_db),
         cantidades_manuales=_cantidades_manuales_from_meta(planilla),
         cama_triturado_m=_cama_triturado_m(planilla),
     )
@@ -428,7 +495,7 @@ def _detalle(contrato_id: int, planilla_id: str) -> dict:
     return {
         "planilla": planilla,
         "filas_campo": _as_campo(filas, tipo=planilla.get("tipo")),
-        "descuentos_manuales": descuentos,
+        "descuentos_manuales": _merge_descuentos_para_calculo(planilla, descuentos),
         "calculo": calculo,
         "coords_wgs84": coords,
         "coords_wgs84_fin": coords_fin,
@@ -840,6 +907,32 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
         }).eq("id", planilla_id).execute()
         p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id) or {**p, "meta_cabecera": new_meta}
 
+    # Persistir overrides multi-Otros de Descuentos Específicos en meta (dims/nombre).
+    if body.descuentos_manuales is not None:
+        prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+        desc_meta = []
+        for d in body.descuentos_manuales or []:
+            if not d.codigo:
+                continue
+            entry: dict[str, Any] = {"codigo": d.codigo, "cantidad": float(d.cantidad or 0)}
+            if d.long is not None:
+                entry["long"] = d.long
+            if d.ancho is not None:
+                entry["ancho"] = d.ancho
+            if d.espesor is not None:
+                entry["espesor"] = d.espesor
+            if d.nombre is not None:
+                entry["nombre"] = d.nombre
+            elif d.nota is not None:
+                entry["nombre"] = d.nota
+            desc_meta.append(entry)
+        new_meta = {**prev_meta, "descuentos_manuales": desc_meta}
+        supabase.table("topo_planillas_tuberia").update({
+            "meta_cabecera": new_meta,
+            "updated_at": _now(),
+        }).eq("id", planilla_id).execute()
+        p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id) or {**p, "meta_cabecera": new_meta}
+
     filas_util = []
     tipo_planilla = p.get("tipo") or "ALCANTARILLA"
     for f in body.filas:
@@ -864,10 +957,22 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
 
     # Evidencias fotográficas: toda línea con cantidad ≠ 0 debe tener ≥1 foto.
     try:
-        calc_previo = _calcular(p, filas_util, [
-            {"codigo": d.codigo, "cantidad": float(d.cantidad)}
+        desc_for_calc = [
+            _desc_body_to_dict(d)
             for d in (body.descuentos_manuales or []) if d.codigo
-        ] or _descuentos(planilla_id))
+        ] or _descuentos(planilla_id)
+        # Si el body trae overrides, inyectarlos en meta temporal para el merge.
+        p_calc = p
+        if body.descuentos_manuales is not None:
+            prev_m = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+            p_calc = {
+                **p,
+                "meta_cabecera": {
+                    **prev_m,
+                    "descuentos_manuales": desc_for_calc,
+                },
+            }
+        calc_previo = _calcular(p_calc, filas_util, desc_for_calc)
     except HTTPException:
         calc_previo = None
     evidencias = _evidencias_from_meta(p)
@@ -884,10 +989,19 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
         raise HTTPException(500, f"Error al guardar cartera: {exc}") from exc
 
     supabase.table("topo_planilla_tuberia_descuentos").delete().eq("planilla_id", planilla_id).execute()
-    desc_rows = [
-        {"planilla_id": planilla_id, "codigo": d.codigo, "cantidad": float(d.cantidad), "nota": d.nota}
-        for d in (body.descuentos_manuales or []) if d.codigo
-    ]
+    desc_rows = []
+    for d in (body.descuentos_manuales or []):
+        if not d.codigo:
+            continue
+        nota = d.nota
+        if nota is None and d.nombre is not None:
+            nota = d.nombre
+        desc_rows.append({
+            "planilla_id": planilla_id,
+            "codigo": d.codigo,
+            "cantidad": float(d.cantidad or 0),
+            "nota": nota,
+        })
     if desc_rows:
         supabase.table("topo_planilla_tuberia_descuentos").insert(desc_rows).execute()
 

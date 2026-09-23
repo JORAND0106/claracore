@@ -72,6 +72,12 @@ def es_codigo_otros(codigo: Any) -> bool:
     return cod == "OTROS" or cod.startswith("OTROS_")
 
 
+def es_codigo_desc_otros(codigo: Any) -> bool:
+    """Descuentos Específicos: DESC_OTROS / DESC_OTROS_n (multi-línea)."""
+    cod = str(codigo or "").strip().upper()
+    return cod == "DESC_OTROS" or cod.startswith("DESC_OTROS_")
+
+
 def es_codigo_cantidad_editable(codigo: Any) -> bool:
     cod = str(codigo or "").strip().upper()
     return cod == "EXC_ROC" or es_codigo_otros(cod)
@@ -172,15 +178,30 @@ def _construir_descuentos_altura_detalle(
 
 
 # Descuentos específicos (I43:N50). Vinculados por codigo de ítem de cantidad.
+# DESC_OTROS admite múltiples líneas: DESC_OTROS, DESC_OTROS_1, DESC_OTROS_2, …
 ITEMS_DESCUENTOS_ALCANTARILLA = (
     {"codigo": "DESC_A1", "nombre": "Area 1", "unidad": "m³", "item_cant_codigo": "TRI"},
     {"codigo": "DESC_A2", "nombre": "Area 2", "unidad": "m³", "item_cant_codigo": "REL"},
-    {"codigo": "DESC_OTROS", "nombre": "Otros", "unidad": "m³", "item_cant_codigo": "EXC"},
+    {
+        "codigo": "DESC_OTROS",
+        "nombre": "Otros: ____",
+        "unidad": "m³",
+        "item_cant_codigo": "EXC",
+        "editable_dims": True,
+        "editable_nombre": True,
+    },
 )
 
 ITEMS_DESCUENTOS_FILTRO = (
     {"codigo": "DESC_TUB_FILT", "nombre": "Tubería Filtro", "unidad": "m³", "item_cant_codigo": "TRI"},
-    {"codigo": "DESC_OTROS", "nombre": "Otros", "unidad": "m³", "item_cant_codigo": "EXC"},
+    {
+        "codigo": "DESC_OTROS",
+        "nombre": "Otros: ____",
+        "unidad": "m³",
+        "item_cant_codigo": "EXC",
+        "editable_dims": True,
+        "editable_nombre": True,
+    },
 )
 
 # Compat: tests / rutas antiguas esperaban DESC_TUB / DESC_POZO / DESC_FILT
@@ -399,11 +420,20 @@ def codigos_descuento_validos(tipo: str) -> set[str]:
     return {it["codigo"] for it in cat}
 
 
+def _codigo_descuento_aceptado(tipo: str, codigo: str) -> bool:
+    """Códigos fijos del catálogo + DESC_OTROS[_n] (multi-línea)."""
+    cod = str(codigo or "").strip().upper()
+    if not cod:
+        return False
+    if es_codigo_desc_otros(cod):
+        return True
+    return cod in codigos_descuento_validos(tipo)
+
+
 def filtrar_descuentos_manuales_por_tipo(
     tipo: str, descuentos_manuales: Optional[list[dict]]
 ) -> list[dict]:
-    """Conserva solo códigos válidos para el tipo (p.ej. DESC_OTROS); descarta residuos."""
-    valid = codigos_descuento_validos(tipo)
+    """Conserva solo códigos válidos para el tipo (p.ej. DESC_OTROS[_n]); descarta residuos."""
     alias = (
         ITEMS_DESCUENTOS_FILTRO_LEGACY_ALIAS
         if (tipo or "").upper() == "FILTRO"
@@ -413,7 +443,7 @@ def filtrar_descuentos_manuales_por_tipo(
     for d in descuentos_manuales or []:
         cod = str(d.get("codigo") or "")
         cod = alias.get(cod, cod)
-        if cod in valid:
+        if _codigo_descuento_aceptado(tipo, cod):
             out.append({**d, "codigo": cod})
     return out
 
@@ -527,9 +557,77 @@ def calcular_cartera(filas_campo: list[dict], seccion: dict) -> dict[str, Any]:
     }
 
 
+def _cantidad_desde_dims(
+    long: Any, ancho: Any, espesor: Any, cantidad_fallback: Any = None
+) -> float:
+    """PRODUCT(L,A,E) redondeado a 2; si no hay dims, usa cantidad_fallback."""
+    dims = []
+    for v in (long, ancho, espesor):
+        fv = _f(v)
+        if fv is not None:
+            dims.append(fv)
+    if dims:
+        prod = 1.0
+        for x in dims:
+            prod *= x
+        return float(_r2(prod) or 0.0)
+    fb = _f(cantidad_fallback)
+    return float(fb) if fb is not None else 0.0
+
+
+def _label_desc_otros(nombre: Any) -> str:
+    raw = str(nombre or "").strip()
+    if not raw:
+        return "Otros: ____"
+    if raw.lower().startswith("otros"):
+        return raw
+    return f"Otros: {raw}"
+
+
+def _normalize_descuentos_otros_manuales(
+    descuentos_manuales: Optional[list[dict]],
+) -> list[dict[str, Any]]:
+    """
+    Overrides DESC_OTROS[_n]: long/ancho/espesor/nombre/cantidad.
+    Compat: DESC_OTROS → DESC_OTROS_1. Siempre ≥1 línea DESC_OTROS_1.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for d in descuentos_manuales or []:
+        if not isinstance(d, dict):
+            continue
+        cod = str(d.get("codigo") or "").strip().upper()
+        if not es_codigo_desc_otros(cod):
+            continue
+        if cod == "DESC_OTROS":
+            cod = "DESC_OTROS_1"
+        if cod in seen:
+            continue
+        seen.add(cod)
+        entry: dict[str, Any] = {"codigo": cod}
+        for key in ("long", "ancho", "espesor"):
+            if key in d and d.get(key) is not None and d.get(key) != "":
+                entry[key] = _f(d.get(key))
+        if "nombre" in d:
+            entry["nombre"] = str(d.get("nombre") or "").strip()
+        elif d.get("nota") not in (None, ""):
+            # Persistencia legacy: nota de la tabla descuentos = observación/nombre.
+            entry["nombre"] = str(d.get("nota") or "").strip()
+        cant = _cantidad_desde_dims(
+            entry.get("long"), entry.get("ancho"), entry.get("espesor"), d.get("cantidad")
+        )
+        entry["cantidad"] = cant
+        out.append(entry)
+    if not any(es_codigo_desc_otros(x["codigo"]) for x in out):
+        out.append({"codigo": "DESC_OTROS_1", "cantidad": 0.0})
+    out.sort(key=lambda x: x["codigo"])
+    return out
+
+
 def _normalize_manual_descuentos(
     tipo: str, descuentos_manuales: Optional[list[dict]]
 ) -> dict[str, float]:
+    """Mapa codigo→cantidad para descuentos fijos (no multi-Otros)."""
     alias = (
         ITEMS_DESCUENTOS_FILTRO_LEGACY_ALIAS
         if tipo == "FILTRO"
@@ -539,10 +637,23 @@ def _normalize_manual_descuentos(
     for d in descuentos_manuales or []:
         cod = str(d.get("codigo") or "")
         cod = alias.get(cod, cod)
+        if es_codigo_desc_otros(cod):
+            continue  # se manejan en _normalize_descuentos_otros_manuales
         cant = _f(d.get("cantidad"))
         if cod and cant is not None:
             out[cod] = float(cant)
     return out
+
+
+def _meta_item_descuento(codigo: str, tipo: str) -> dict[str, Any]:
+    catalogo = ITEMS_DESCUENTOS_FILTRO if tipo == "FILTRO" else ITEMS_DESCUENTOS_ALCANTARILLA
+    if es_codigo_desc_otros(codigo):
+        base = next(it for it in catalogo if it["codigo"] == "DESC_OTROS")
+        return {**base, "codigo": codigo}
+    for it in catalogo:
+        if it["codigo"] == codigo:
+            return dict(it)
+    return {"codigo": codigo, "nombre": codigo, "unidad": "m³", "item_cant_codigo": "EXC"}
 
 
 def _normalize_cantidades_manuales(
@@ -670,7 +781,8 @@ def calcular_cantidades_y_descuentos(
         desc_rel = 0.0
 
     manual = _normalize_manual_descuentos(tipo, descuentos_manuales)
-    desc_otros = float(manual.get("DESC_OTROS") or 0.0)
+    otros_desc = _normalize_descuentos_otros_manuales(descuentos_manuales)
+    desc_otros = round(sum(float(o.get("cantidad") or 0.0) for o in otros_desc), 2)
 
     def _row(
         codigo: str,
@@ -751,14 +863,14 @@ def calcular_cantidades_y_descuentos(
     descuentos: list[dict] = []
     for it in catalogo:
         cod = it["codigo"]
+        if es_codigo_desc_otros(cod):
+            continue  # se agregan abajo como multi-línea
         if cod == "DESC_A1":
             cant, long, ancho, esp = desc_a1, L, None, a1
         elif cod == "DESC_A2":
             cant, long, ancho, esp = desc_a2, L, None, a2
         elif cod == "DESC_TUB_FILT":
             cant, long, ancho, esp = desc_tub_filt, L, None, a_tub
-        elif cod == "DESC_OTROS":
-            cant, long, ancho, esp = desc_otros, None, None, None
         else:
             cant, long, ancho, esp = float(manual.get(cod) or 0.0), None, None, None
         descuentos.append({
@@ -767,6 +879,19 @@ def calcular_cantidades_y_descuentos(
             "ancho": _r4(ancho),
             "espesor": _r4(esp),
             "cantidad": round(float(cant), 2),
+        })
+
+    for ov in otros_desc:
+        meta = _meta_item_descuento(ov["codigo"], tipo)
+        descuentos.append({
+            **meta,
+            "nombre": _label_desc_otros(ov.get("nombre")),
+            "long": _r4(ov.get("long")),
+            "ancho": _r4(ov.get("ancho")),
+            "espesor": _r4(ov.get("espesor")),
+            "cantidad": round(float(ov.get("cantidad") or 0.0), 2),
+            "editable_dims": True,
+            "editable_nombre": True,
         })
 
     netos = []
@@ -1259,6 +1384,10 @@ def formatear_observacion_descuento_sicoe(
     }
     if cod.startswith("DESC_ALT_"):
         base = f"Descuento altura ({nombre_txt})"
+    elif es_codigo_desc_otros(cod):
+        base = explicaciones["DESC_OTROS"]
+        if nombre_txt and nombre_txt.lower() not in ("otros", "otros: ____", "descuento otros"):
+            base = f"{base} — {nombre_txt}"
     else:
         base = explicaciones.get(cod) or f"Descuento {nombre_txt}"
     tipo = str(tipo_red or "").strip().upper() or "—"
