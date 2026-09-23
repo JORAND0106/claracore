@@ -255,18 +255,29 @@ class TestValidacionYConsolidado(unittest.TestCase):
         self.assertEqual(err["abscisa"], 10)
         self.assertAlmostEqual(err["diferencia"], 1.0)
 
-    def test_validacion_nivel_sobre_tn_con_diferencia(self):
+    def test_validacion_nivel_sobre_tn_ya_no_alerta(self):
+        """Nivel de referencia > TN es frecuente y ya no genera aviso amarillo."""
         filas = [{
             "orden": 1, "abscisa": 12.5, "terreno_natural": 100,
             "subrasante_via": 100.12, "cota_fondo_excavacion": 98,
         }]
         v = validar_cartera_campo(filas, "ALCANTARILLA")
         self.assertTrue(v["ok"])
-        self.assertTrue(any(i["msg"] == "Nivel sobre TN" for i in v["infos"]))
-        info = next(i for i in v["infos"] if i["msg"] == "Nivel sobre TN")
-        self.assertEqual(info["prioridad"], "info")
-        self.assertEqual(info["abscisa"], 12.5)
-        self.assertAlmostEqual(info["diferencia"], 0.12)
+        self.assertFalse(any(i["msg"] == "Nivel sobre TN" for i in v["infos"]))
+        self.assertFalse(any(
+            (i.get("detalle") or "").lower().find("terreno natural") >= 0
+            and i.get("prioridad") == "info"
+            for i in v["infos"]
+        ))
+
+    def test_validacion_cfe_sobre_nivel_sigue_siendo_error(self):
+        filas = [{
+            "orden": 1, "abscisa": 10, "terreno_natural": 100,
+            "subrasante_via": 97.5, "cota_fondo_excavacion": 98,
+        }]
+        v = validar_cartera_campo(filas, "ALCANTARILLA")
+        self.assertFalse(v["ok"])
+        self.assertTrue(any(e["msg"] == "Nivel < CFE" for e in v["errores"]))
 
     def test_consolidado_22_columnas(self):
         r = calcular_planilla_completa(

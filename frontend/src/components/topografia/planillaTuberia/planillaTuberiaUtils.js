@@ -502,13 +502,6 @@ export function validarFilasCarteraLocal(filas, tipo = 'ALCANTARILLA') {
         abscisa, diferencia: Math.round((cfe - tn) * 10000) / 10000, orden,
       })
     }
-    if (tn != null && nivel != null && nivel > tn + 0.05) {
-      avisos.push({
-        prioridad: 'info', msg: 'Nivel sobre TN', campo: 'nivel_referencia',
-        detalle: 'El nivel de referencia está >5 cm sobre el terreno natural.',
-        abscisa, diferencia: Math.round((nivel - tn) * 10000) / 10000, orden,
-      })
-    }
     if (nivel != null && cfe != null && nivel < cfe) {
       avisos.push({
         prioridad: 'error', msg: 'Nivel < CFE', campo: 'nivel_referencia',

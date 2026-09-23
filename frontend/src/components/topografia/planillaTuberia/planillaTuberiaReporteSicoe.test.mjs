@@ -29,7 +29,8 @@ describe('Planilla tubería → reporte SICOE', () => {
     assert.match(modalSrc, /Subcontratista/)
     assert.match(modalSrc, /Inspector/)
     assert.match(modalSrc, /Capítulo/)
-    assert.match(modalSrc, /Nodo \/ abscisa inicio/)
+    assert.match(modalSrc, /Nodo inicio/)
+    assert.match(modalSrc, /Nodo fin/)
   })
 
   it('backend expone endpoint crear-reporte-sicoe y por-reporte', () => {

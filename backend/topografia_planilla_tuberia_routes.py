@@ -194,6 +194,14 @@ class CrearReporteSicoeBody(BaseModel):
     esquema_data_uri: Optional[str] = None
 
 
+class AsociarReporteSicoeBody(BaseModel):
+    """Asocia la planilla a un so_reportes existente (sin crear registros ni tocar cantidades)."""
+    reporte_id: Optional[int] = None
+    numero_reporte: Optional[int] = None
+    # Esquema del tramo obligatorio: actualiza grafico_url en los registros del reporte.
+    esquema_data_uri: str
+
+
 def _filas(planilla_id: str) -> list[dict]:
     return (
         supabase.table("topo_planilla_tuberia_filas")
@@ -1543,6 +1551,9 @@ def _sincronizar_so_registros_desde_calc(
     updated = 0
     errors: list[str] = []
     for link in links:
+        if link.get("solo_adjunto"):
+            # Vínculo por «Asociar a reporte»: no parchea cantidades/dims.
+            continue
         try:
             reporte_id = int(link.get("reporte_id"))
         except (TypeError, ValueError):
@@ -1758,6 +1769,37 @@ def _insertar_puntos_topograficos_planilla(
             reporte_id, exc,
         )
         return 0
+
+
+def _reemplazar_puntos_topograficos_planilla(
+    contrato_id: int, reporte_id: int, planilla: dict, uid: int,
+) -> int:
+    """Borra puntos previos del reporte e inserta Inicio/Fin desde la planilla."""
+    try:
+        from main import supabase_execute
+    except ImportError:
+        def supabase_execute(fn):  # type: ignore
+            return fn()
+    try:
+        supabase_execute(
+            lambda: (
+                supabase.table("so_puntos_topograficos")
+                .delete()
+                .eq("contrato_id", int(contrato_id))
+                .eq("reporte_id", int(reporte_id))
+                .execute()
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "delete so_puntos_topograficos reporte=%s: %s", reporte_id, exc,
+        )
+        raise HTTPException(500, "No se pudieron reemplazar las coordenadas topográficas.") from exc
+    return _insertar_puntos_topograficos_planilla(contrato_id, reporte_id, planilla, uid)
+
+
+def _norm_nombre_match(v: Any) -> str:
+    return " ".join(str(v or "").strip().lower().split())
 
 
 def _esquema_desde_data_uri(data_uri: Optional[str]) -> tuple[Optional[bytes], str]:
@@ -2139,6 +2181,292 @@ def crear_reporte_sicoe_desde_planilla(
         "n_puntos_topograficos": n_puntos,
         "n_fotos_sincronizadas": n_fotos,
         "esquema_adjunto": bool(grafico_url),
+        "link": link,
+        "planilla": _detalle(contrato_id, planilla_id),
+    }
+
+
+@router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/asociar-reporte-sicoe")
+def asociar_reporte_sicoe_existente(
+    contrato_id: int,
+    planilla_id: str,
+    body: AsociarReporteSicoeBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Vincula la planilla a un so_reportes ya existente.
+    No crea registros ni actualiza cantidades: solo adjunto + fotos + coordenadas + gráfico.
+    """
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "editar")
+    p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
+    if not p:
+        raise HTTPException(404, "Planilla no encontrada")
+
+    nombre = str(p.get("nombre") or "").strip()
+    if not nombre:
+        raise HTTPException(422, "La planilla debe tener nombre antes de asociar el reporte.")
+
+    esquema_bytes, esquema_mime = _esquema_desde_data_uri(body.esquema_data_uri)
+    if not esquema_bytes:
+        raise HTTPException(422, "El esquema del tramo es obligatorio para actualizar el gráfico.")
+
+    try:
+        from main import (
+            _so_registro_normalizar_graficos_historial,
+            registrar_log,
+            supabase_execute,
+        )
+    except ImportError:
+        _so_registro_normalizar_graficos_historial = lambda d: d  # type: ignore
+        registrar_log = None  # type: ignore
+
+        def supabase_execute(fn):  # type: ignore
+            return fn()
+
+    reporte = None
+    if body.reporte_id is not None:
+        rows = supabase_execute(
+            lambda: (
+                supabase.table("so_reportes")
+                .select("id,numero_reporte,descripcion_actividad,estado,contrato_id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("id", int(body.reporte_id))
+                .limit(1)
+                .execute()
+                .data
+            )
+        ) or []
+        reporte = rows[0] if rows else None
+    elif body.numero_reporte is not None:
+        rows = supabase_execute(
+            lambda: (
+                supabase.table("so_reportes")
+                .select("id,numero_reporte,descripcion_actividad,estado,contrato_id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("numero_reporte", int(body.numero_reporte))
+                .limit(1)
+                .execute()
+                .data
+            )
+        ) or []
+        reporte = rows[0] if rows else None
+    else:
+        raise HTTPException(422, "Indique reporte_id o numero_reporte.")
+
+    if not reporte:
+        raise HTTPException(404, "Reporte SICOE no encontrado en este contrato.")
+    reporte_id = int(reporte["id"])
+    uid = _uid(current_user)
+
+    filas = _filas(planilla_id)
+    if not filas:
+        raise HTTPException(422, "Guarde la cartera de campo con datos antes de asociar el reporte.")
+
+    try:
+        calc = _calcular(p, filas, _descuentos(planilla_id))
+    except HTTPException as exc:
+        raise HTTPException(
+            422,
+            "Configure diámetro y ancho de excavación, y asegúrese de tener cartera calculable.",
+        ) from exc
+
+    evidencias = _evidencias_from_meta(p)
+    ev_check = validar_evidencias_fotograficas(calc, evidencias)
+    if not ev_check.get("ok"):
+        raise HTTPException(422, {
+            "mensaje": mensaje_faltan_evidencias(ev_check.get("faltantes") or []),
+            "faltantes": ev_check.get("faltantes") or [],
+        })
+
+    pk_row = _fetch_pk_maestro(contrato_id, p.get("pk_id"))
+    tramo_lbl = None
+    if isinstance(pk_row, dict):
+        tramo_lbl = str(pk_row.get("tramo") or "").strip() or None
+    if not tramo_lbl:
+        tramo_lbl = str(p.get("pk_id") or "").strip() or None
+
+    lineas = lineas_planilla_a_registros_sicoe(
+        calc, tipo=p.get("tipo"), tramo=tramo_lbl,
+    )
+
+    # 1) Coordenadas: reemplazar tabla so_puntos_topograficos
+    n_puntos = _reemplazar_puntos_topograficos_planilla(contrato_id, reporte_id, p, uid)
+
+    # 2) Esquema → gráfico compartido
+    grafico_url, grafico_numero = _subir_bytes_sicoe_grafico(
+        contrato_id, esquema_bytes, esquema_mime,
+    )
+    if not grafico_url:
+        raise HTTPException(500, "No se pudo subir el esquema del tramo como gráfico SICOE.")
+    graficos_historial = [{
+        "url": grafico_url,
+        "numero": grafico_numero,
+        "descripcion": "Esquema del tramo — planilla de tubería (asociada)",
+        "nombre": "esquema_tramo.png",
+        "origen": "planilla_tuberia_asociar",
+    }]
+
+    regs = supabase_execute(
+        lambda: (
+            supabase.table("so_registros")
+            .select("id,numero_registro,nombre,foto_url")
+            .eq("contrato_id", int(contrato_id))
+            .eq("reporte_id", reporte_id)
+            .execute()
+            .data
+        )
+    ) or []
+
+    # Índice por nombre normalizado (primer match gana).
+    by_nombre: dict[str, dict] = {}
+    for r in regs:
+        key = _norm_nombre_match(r.get("nombre"))
+        if key and key not in by_nombre:
+            by_nombre[key] = r
+
+    mapa_codigos: dict[str, int] = {}
+    n_fotos = 0
+    n_graf = 0
+    for line in lineas:
+        origen_key = origen_key_linea_sicoe(line)
+        nombre_line = _norm_nombre_match(line.get("nombre"))
+        reg = by_nombre.get(nombre_line) if nombre_line else None
+        if not reg:
+            continue
+        try:
+            mapa_codigos[origen_key] = int(reg.get("numero_registro"))
+        except (TypeError, ValueError):
+            pass
+
+        patch: dict[str, Any] = {
+            "grafico_url": grafico_url,
+            "grafico_numero": grafico_numero,
+            "grafico_descripcion": "Esquema del tramo — planilla de tubería",
+            "graficos_historial": list(graficos_historial),
+            "modificado_por_reg": uid,
+        }
+        _so_registro_normalizar_graficos_historial(patch)
+
+        scope = str(line.get("_origen_tabla") or "").strip()
+        codigo = str(line.get("_origen_codigo") or "").strip()
+        fotos_linea = list((evidencias.get(scope) or {}).get(codigo) or [])
+        if fotos_linea:
+            content, mime = _bytes_desde_evidencia_foto(fotos_linea[0])
+            if content:
+                foto_url, foto_numero = _subir_bytes_sicoe_foto(contrato_id, content, mime)
+                if foto_url:
+                    patch["foto_url"] = foto_url
+                    patch["foto_numero"] = foto_numero
+                    patch["foto_descripcion"] = (
+                        str(fotos_linea[0].get("nombre") or "").strip()
+                        or f"Evidencia {codigo}"
+                    )
+                    n_fotos += 1
+
+        try:
+            supabase_execute(
+                lambda rid=reg["id"], payload=dict(patch): (
+                    supabase.table("so_registros")
+                    .update(payload)
+                    .eq("id", int(rid))
+                    .eq("contrato_id", int(contrato_id))
+                    .execute()
+                )
+            )
+            n_graf += 1
+        except Exception as exc:
+            logger.exception(
+                "asociar foto/grafico so_registro id=%s reporte=%s: %s",
+                reg.get("id"), reporte_id, exc,
+            )
+
+    # Si no hubo match por nombre, al menos actualizar gráfico en todos los registros.
+    if n_graf == 0 and regs:
+        patch_all: dict[str, Any] = {
+            "grafico_url": grafico_url,
+            "grafico_numero": grafico_numero,
+            "grafico_descripcion": "Esquema del tramo — planilla de tubería",
+            "graficos_historial": list(graficos_historial),
+            "modificado_por_reg": uid,
+        }
+        _so_registro_normalizar_graficos_historial(patch_all)
+        try:
+            supabase_execute(
+                lambda: (
+                    supabase.table("so_registros")
+                    .update(patch_all)
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("reporte_id", reporte_id)
+                    .execute()
+                )
+            )
+            n_graf = len(regs)
+        except Exception as exc:
+            logger.exception("asociar grafico masivo reporte=%s: %s", reporte_id, exc)
+
+    # 3) Vínculo en meta (solo_adjunto: no sincroniza cantidades en guardados posteriores)
+    prev_meta = p.get("meta_cabecera") if isinstance(p.get("meta_cabecera"), dict) else {}
+    links = _sicoe_links_from_meta(prev_meta)
+    link = {
+        "reporte_id": reporte_id,
+        "numero_reporte": reporte.get("numero_reporte"),
+        "created_at": _now(),
+        "asociado_at": _now(),
+        "solo_adjunto": True,
+        "n_registros": len(regs),
+        "registro_numeros_por_codigo": mapa_codigos,
+        "n_puntos_topograficos": n_puntos,
+        "n_fotos_sincronizadas": n_fotos,
+        "n_graficos_actualizados": n_graf,
+        "esquema_adjunto": True,
+        "origen": "asociar",
+    }
+    # Reemplazar vínculo previo al mismo reporte_id si existía
+    links = [
+        x for x in links
+        if not (
+            isinstance(x, dict)
+            and str(x.get("reporte_id")) == str(reporte_id)
+        )
+    ]
+    links.append(link)
+    new_meta = {**prev_meta, "sicoe_reportes": links}
+    supabase.table("topo_planillas_tuberia").update({
+        "meta_cabecera": new_meta,
+        "updated_at": _now(),
+        "version": int(p.get("version") or 1) + 1,
+    }).eq("id", planilla_id).execute()
+
+    try:
+        if registrar_log:
+            from main import _audit_user_contrato
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log, "ACTUALIZAR", "SICOE", "reporte", str(reporte_id),
+                {
+                    "origen": "planilla_tuberia_asociar",
+                    "planilla_id": planilla_id,
+                    "numero_reporte": reporte.get("numero_reporte"),
+                    "n_puntos_topograficos": n_puntos,
+                    "n_fotos_sincronizadas": n_fotos,
+                    "n_graficos_actualizados": n_graf,
+                    "solo_adjunto": True,
+                },
+            )
+    except Exception:
+        logger.exception("audit asociar reporte desde planilla")
+
+    return {
+        "ok": True,
+        "reporte": reporte,
+        "reporte_id": reporte_id,
+        "numero_reporte": reporte.get("numero_reporte"),
+        "n_puntos_topograficos": n_puntos,
+        "n_fotos_sincronizadas": n_fotos,
+        "n_graficos_actualizados": n_graf,
+        "esquema_adjunto": True,
+        "solo_adjunto": True,
         "link": link,
         "planilla": _detalle(contrato_id, planilla_id),
     }
