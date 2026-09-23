@@ -81,6 +81,9 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     )
     assert.doesNotMatch(asociarBlock, /\.insert\(rows_ins\)/)
     assert.match(asociarBlock, /so_registros[\s\S]*\.update\(/)
+    // Gráfico se reemplaza en TODOS los registros del reporte (no solo match por nombre).
+    assert.match(asociarBlock, /Reemplazar gráfico en TODOS/)
+    assert.match(asociarBlock, /\.eq\("reporte_id", int\(reporte_id\)\)/)
   })
 
   it('sync de cantidades omite vínculos solo_adjunto', () => {
@@ -116,5 +119,27 @@ describe('Validación cartera — sin alerta Nivel sobre TN', () => {
       },
     ], 'ALCANTARILLA')
     assert.ok(nivelCfe.some((a) => a.msg === 'Nivel < CFE' && a.prioridad === 'error'))
+  })
+})
+
+describe('Listado planillas — etiquetas', () => {
+  it('formatea validación y reportes asociados', async () => {
+    const {
+      etiquetaReportesAsociadosLista,
+      etiquetaValidacionLista,
+    } = await import('./planillaTuberiaUtils.js')
+    assert.equal(etiquetaValidacionLista('No Revisado'), 'No Revisado')
+    assert.equal(etiquetaValidacionLista(null), 'No Revisado')
+    assert.match(etiquetaValidacionLista('Aprobado', '2026-09-23T15:00:00Z'), /^Aprobado · /)
+    assert.equal(etiquetaReportesAsociadosLista({ reportes_sicoe: [] }), '—')
+    assert.equal(
+      etiquetaReportesAsociadosLista({
+        reportes_sicoe: [
+          { reporte_id: 1, numero_reporte: 12 },
+          { reporte_id: 2, numero_reporte: 15 },
+        ],
+      }),
+      '#12, #15',
+    )
   })
 })

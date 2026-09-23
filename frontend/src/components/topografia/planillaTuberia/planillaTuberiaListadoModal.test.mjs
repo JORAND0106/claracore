@@ -25,12 +25,17 @@ describe('Planillas de Tubería — listado + modal', () => {
   it('muestra listado tipo Excel como vista principal', () => {
     assert.match(formSrc, /Planillas del contrato/)
     assert.match(formSrc, /Nombre Planilla/)
-    assert.match(formSrc, /Fecha de generada/)
-    assert.match(formSrc, /Quien Validó por última vez/)
-    assert.match(formSrc, /validado_por_nombre/)
+    assert.match(formSrc, /Fecha Creación/)
+    assert.match(formSrc, /Validación Contratista/)
+    assert.match(formSrc, /Validación Interventoría/)
+    assert.match(formSrc, /Reporte asociado/)
+    assert.match(formSrc, /etiquetaValidacionLista/)
+    assert.match(formSrc, /etiquetaReportesAsociadosLista/)
     assert.match(formSrc, /fmtFechaLista/)
     assert.match(formSrc, /Nueva planilla/)
     assert.match(formSrc, /api\('\/planillas-tuberia'\)/)
+    assert.doesNotMatch(formSrc, /Fecha de generada/)
+    assert.doesNotMatch(formSrc, /Quien Validó por última vez/)
   })
 
   it('abre edición en popup no descartable por clic fuera', () => {
@@ -64,9 +69,13 @@ describe('Planillas de Tubería — listado + modal', () => {
     assert.doesNotMatch(formSrc, /planillaIdFocus/)
   })
 
-  it('enriquece el listado API con quien validó', () => {
+  it('enriquece el listado API con validaciones y reportes asociados', () => {
     assert.match(routesSrc, /validado_por_nombre/)
-    assert.match(routesSrc, /validado_por/)
-    assert.match(routesSrc, /cerrado_por/)
+    assert.match(routesSrc, /nivel1_usuario_nombre/)
+    assert.match(routesSrc, /nivel2_usuario_nombre/)
+    assert.match(routesSrc, /reportes_sicoe/)
+    assert.match(routesSrc, /meta_cabecera/)
+    assert.match(routesSrc, /nivel1_fecha/)
+    assert.match(routesSrc, /nivel2_fecha/)
   })
 })
