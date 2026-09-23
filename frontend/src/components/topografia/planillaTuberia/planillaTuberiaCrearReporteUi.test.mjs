@@ -14,6 +14,16 @@ const modalSrc = readFileSync(join(dir, 'PlanillaTuberiaCrearReporteModal.jsx'),
 const formSrc = readFileSync(join(dir, 'PlanillaTuberiaForm.jsx'), 'utf8')
 
 describe('Crear reporte SICOE — UI popup', () => {
+  it('importa API_BASE desde src/apiBase (evita ReferenceError en catálogos)', () => {
+    assert.match(modalSrc, /import\s*\{\s*API_BASE\s*\}\s*from\s*['"]\.\.\/\.\.\/\.\.\/apiBase['"]/)
+    assert.match(modalSrc, /\$\{API_BASE\}\/sicoe-obra\/\$\{contratoId\}\/subcontratistas-activos/)
+    assert.match(modalSrc, /\$\{API_BASE\}\/sicoe-obra\/\$\{contratoId\}\/inspectores/)
+    // Catálogos: exigir ok HTTP y vaciar listas si falla (buscador no queda “mudo” sin error)
+    assert.match(modalSrc, /if\s*\(\s*!rs\.ok\s*\|\|\s*!ri\.ok\s*\|\|\s*!rc\.ok\s*\)/)
+    assert.match(modalSrc, /setSubs\(\[\]\)/)
+    assert.match(modalSrc, /setInsps\(\[\]\)/)
+  })
+
   it('z-index por encima del editor de planilla y del PK', () => {
     assert.match(modalSrc, /CREAR_REPORTE_Z_INDEX\s*=\s*100060/)
     assert.match(modalSrc, /zIndex:\s*CREAR_REPORTE_Z_INDEX/)

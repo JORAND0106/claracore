@@ -6,6 +6,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { API_BASE } from '../../../apiBase'
 import EsquemaEditorModal from '../../esquema/EsquemaEditorModal'
 
 /** Por encima del editor de planilla (100030) y del mapa PK (100050). */
@@ -279,11 +280,16 @@ export default function PlanillaTuberiaCrearReporteModal({
     let cancelled = false
     ;(async () => {
       try {
-        const [s, i, c] = await Promise.all([
-          fetch(`${API_BASE}/sicoe-obra/${contratoId}/subcontratistas-activos`, { headers: hdrs }).then((r) => r.json()),
-          fetch(`${API_BASE}/sicoe-obra/${contratoId}/inspectores`, { headers: hdrs }).then((r) => r.json()),
-          fetch(`${API_BASE}/sicoe-obra/${contratoId}/filtros/capitulos`, { headers: hdrs }).then((r) => r.json()),
+        const [rs, ri, rc] = await Promise.all([
+          fetch(`${API_BASE}/sicoe-obra/${contratoId}/subcontratistas-activos`, { headers: hdrs }),
+          fetch(`${API_BASE}/sicoe-obra/${contratoId}/inspectores`, { headers: hdrs }),
+          fetch(`${API_BASE}/sicoe-obra/${contratoId}/filtros/capitulos`, { headers: hdrs }),
         ])
+        if (cancelled) return
+        if (!rs.ok || !ri.ok || !rc.ok) {
+          throw new Error('No se pudieron cargar catálogos SICOE')
+        }
+        const [s, i, c] = await Promise.all([rs.json(), ri.json(), rc.json()])
         if (cancelled) return
         setSubs(Array.isArray(s) ? s : [])
         setInsps(Array.isArray(i) ? i : [])
@@ -292,7 +298,12 @@ export default function PlanillaTuberiaCrearReporteModal({
           : []
         setCaps(capList)
       } catch (e) {
-        if (!cancelled) setErr(e.message || 'No se pudieron cargar catálogos SICOE')
+        if (!cancelled) {
+          setSubs([])
+          setInsps([])
+          setCaps([])
+          setErr(e.message || 'No se pudieron cargar catálogos SICOE')
+        }
       }
     })()
     return () => { cancelled = true }
