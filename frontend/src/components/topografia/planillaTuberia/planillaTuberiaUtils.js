@@ -763,12 +763,18 @@ export function filtrarReportesSicoeAutocomplete(reportes, query, limit = 40) {
 }
 
 /**
- * ¿Puede el usuario pulsar «Crear reporte»?
- * Tras el primer envío exitoso queda bloqueado, excepto Desarrollador.
+ * ¿Puede el usuario pulsar «Crear reporte» o «Asociar a reporte»?
+ * Tras el primer vínculo (crear o asociar) ambos quedan bloqueados,
+ * excepto Desarrollador (reenvío / re-asociación de prueba).
  */
 export function puedeCrearReporteSicoe({ esDesarrollador = false, linksSicoe = [] } = {}) {
   if (esDesarrollador) return true
   return !(Array.isArray(linksSicoe) && linksSicoe.length > 0)
+}
+
+/** Misma regla que crear: un solo vínculo SICOE por planilla (salvo Dev). */
+export function puedeAsociarReporteSicoe(opts = {}) {
+  return puedeCrearReporteSicoe(opts)
 }
 
 /**

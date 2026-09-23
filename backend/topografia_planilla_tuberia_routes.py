@@ -1969,12 +1969,12 @@ def crear_reporte_sicoe_desde_planilla(
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
 
-    # Bloqueo de reenvío (salvo Desarrollador)
+    # Bloqueo de reenvío / segundo vínculo (salvo Desarrollador)
     links_previos = _sicoe_links_from_meta(p.get("meta_cabecera"))
     if links_previos and not _es_desarrollador(current_user):
         raise HTTPException(
             409,
-            "Esta planilla ya generó un reporte SICOE Obra. "
+            "Esta planilla ya está vinculada a un reporte SICOE Obra. "
             "Solo el rol Desarrollador puede reenviar.",
         )
 
@@ -2309,12 +2309,22 @@ def asociar_reporte_sicoe_existente(
     No crea registros nuevos. Reemplaza coordenadas/fotos/gráfico.
     Las cantidades se sincronizan en guardados posteriores mientras la planilla
     no esté sellada por interventoría (las casillas en SICOE siguen editables).
+    Si la planilla ya tiene un vínculo SICOE (crear o asociar), se rechaza salvo Dev.
     """
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "editar")
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
+
+    # Un solo vínculo por planilla (crear o asociar). Salvo Desarrollador.
+    links_previos = _sicoe_links_from_meta(p.get("meta_cabecera"))
+    if links_previos and not _es_desarrollador(current_user):
+        raise HTTPException(
+            409,
+            "Esta planilla ya está vinculada a un reporte SICOE Obra. "
+            "Solo el rol Desarrollador puede re-asociar.",
+        )
 
     nombre = str(p.get("nombre") or "").strip()
     if not nombre:
