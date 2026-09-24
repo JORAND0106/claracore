@@ -674,6 +674,21 @@ export default function BitacoraEntradaEditor({
           rowClean.asistencia_colaboradores,
         ))
       }
+      // Rehidratar Maquinaria desde la respuesta (incluye tramo persistido en BD).
+      if (Array.isArray(rowClean.equipos_uso)) {
+        setUsos(
+          rowClean.equipos_uso.length
+            ? rowClean.equipos_uso.map(usoFromApi)
+            : [emptyUso()],
+        )
+      }
+      if (Array.isArray(rowClean.materiales)) {
+        setMateriales(
+          rowClean.materiales.length
+            ? rowClean.materiales.map(materialFromApi)
+            : [emptyMaterial()],
+        )
+      }
       if (Array.isArray(rowClean.eventos)) {
         setEventos(eventosFromEntrada(rowClean))
       }

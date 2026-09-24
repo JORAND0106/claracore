@@ -3260,14 +3260,56 @@ def _sync_usos(
                 payload["operador_rrhh_id"] = int(op_rrhh)
         except (TypeError, ValueError):
             pass
+        inserted: List[dict] = []
         try:
             inserted = sb.table("seguimiento_bitacora_equipo_uso").insert(payload).execute().data or []
-        except Exception:
-            # Columnas nuevas pueden no existir aún
-            payload.pop("preoperacionales", None)
-            payload.pop("tramo", None)
-            payload.pop("operador_rrhh_id", None)
-            inserted = sb.table("seguimiento_bitacora_equipo_uso").insert(payload).execute().data or []
+        except Exception as exc:
+            # Reintentos progresivos: NUNCA descartar `tramo` junto con otras columnas
+            # nuevas. El patrón anterior hacía pop(tramo) en el primer fallo (p. ej.
+            # preoperacionales ausente) y el insert “exitoso” perdía el tramo en BD
+            # mientras la UI seguía mostrando éxito.
+            _log.warning(
+                "bitacora._sync_usos insert falló entrada=%s equipo=%s: %s",
+                entrada_id, nombre, exc,
+            )
+            for drop_key in ("preoperacionales", "operador_rrhh_id"):
+                if drop_key not in payload:
+                    continue
+                payload.pop(drop_key, None)
+                try:
+                    inserted = (
+                        sb.table("seguimiento_bitacora_equipo_uso")
+                        .insert(payload)
+                        .execute()
+                        .data
+                        or []
+                    )
+                except Exception as exc2:
+                    _log.warning(
+                        "bitacora._sync_usos retry sin %s: %s", drop_key, exc2,
+                    )
+                    inserted = []
+                if inserted:
+                    break
+            if not inserted and "tramo" in payload:
+                # Último recurso: esquema remoto sin columna tramo (migración pendiente).
+                payload.pop("tramo", None)
+                _log.error(
+                    "bitacora._sync_usos: insertando SIN tramo (columna ausente?) "
+                    "entrada=%s equipo=%s",
+                    entrada_id, nombre,
+                )
+                try:
+                    inserted = (
+                        sb.table("seguimiento_bitacora_equipo_uso")
+                        .insert(payload)
+                        .execute()
+                        .data
+                        or []
+                    )
+                except Exception as exc3:
+                    _log.error("bitacora._sync_usos insert final falló: %s", exc3)
+                    inserted = []
         if inserted:
             rows_out.append(inserted[0])
     return rows_out
