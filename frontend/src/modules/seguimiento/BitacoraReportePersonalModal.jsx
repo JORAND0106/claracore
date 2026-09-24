@@ -1,19 +1,30 @@
 /**
- * Vista tipo captura: Reporte de personal del día, agrupado por empresa.
- * Impresión / guardar PDF vía ventana de impresión del navegador (no altera el PDF completo).
+ * Resumen cruzado Tramo × Empresa: misma vista en pantalla y en PNG exportado.
+ * No altera el PDF completo de Bitácora.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { API_BASE } from '../../apiBase'
 import {
-  buildReportePersonalPorEmpresa,
+  downloadInformePeriodicoBlob,
+} from '../../utils/informePeriodicoCapture'
+import {
+  buildResumenTramoEmpresa,
   formatearFechaReportePersonal,
+  formatoCeldaResumen,
+  nombreArchivoResumenPng,
   resolveLogosPorEmpresa,
   tituloReportePersonal,
 } from './bitacoraReportePersonal'
 
-function EmpresaLogo({ url, nombre, t }) {
+const CAPTURE_OPTS = {
+  pixelRatio: Math.min(3, typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2),
+  backgroundColor: '#ffffff',
+  cacheBust: true,
+}
+
+function EmpresaLogo({ url, nombre, t, size = 28 }) {
   const [broken, setBroken] = useState(false)
   if (!url || broken) {
     return (
@@ -21,40 +32,61 @@ function EmpresaLogo({ url, nombre, t }) {
         aria-hidden
         title={nombre}
         style={{
-          width: 56,
-          height: 40,
-          borderRadius: 6,
+          width: size,
+          height: size * 0.7,
+          borderRadius: 4,
           border: `1px dashed ${t?.border || '#cbd5e1'}`,
           background: t?.inputBg || '#f8fafc',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: 9,
+          fontSize: 8,
           fontWeight: 700,
           color: t?.textMuted || '#64748b',
-          letterSpacing: '0.04em',
           flexShrink: 0,
         }}
       >
-        LOGO
+        —
       </div>
     )
   }
   return (
     <img
       src={url}
-      alt={`Logo ${nombre}`}
+      alt=""
       onError={() => setBroken(true)}
       style={{
-        width: 56,
-        height: 40,
+        width: size,
+        height: size * 0.7,
         objectFit: 'contain',
-        borderRadius: 6,
+        borderRadius: 4,
         background: '#fff',
         border: `1px solid ${t?.border || '#e2e8f0'}`,
         flexShrink: 0,
       }}
     />
+  )
+}
+
+function CeldaResumen({ cell, t, strong = false }) {
+  const txt = formatoCeldaResumen(cell)
+  const empty = txt === '—'
+  return (
+    <td
+      style={{
+        padding: '8px 10px',
+        textAlign: 'center',
+        borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
+        borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+        color: empty ? (t?.textMuted || '#94a3b8') : (t?.text || '#0f2942'),
+        fontWeight: strong ? 800 : (empty ? 500 : 700),
+        fontSize: 13,
+        whiteSpace: 'nowrap',
+        background: strong ? (t?.inputBg || '#f8fafc') : undefined,
+      }}
+    >
+      {txt}
+    </td>
   )
 }
 
@@ -71,7 +103,9 @@ export default function BitacoraReportePersonalModal({
   contratoMeta = {},
 }) {
   const [empresasOpts, setEmpresasOpts] = useState([])
-  const printRef = useRef(null)
+  const [pngBusy, setPngBusy] = useState(false)
+  const [pngError, setPngError] = useState('')
+  const captureRef = useRef(null)
 
   useEffect(() => {
     if (!open) return undefined
@@ -99,8 +133,8 @@ export default function BitacoraReportePersonalModal({
     [empresasOpts, contratoMeta],
   )
 
-  const bloques = useMemo(
-    () => buildReportePersonalPorEmpresa({
+  const resumen = useMemo(
+    () => buildResumenTramoEmpresa({
       asistencia,
       usos,
       rrhhCatalogo,
@@ -114,50 +148,37 @@ export default function BitacoraReportePersonalModal({
   const numero = String(contratoMeta?.numero || '').trim()
   const objeto = String(contratoMeta?.objeto || '').trim()
   const proyecto = String(contratoMeta?.contratista || '').trim()
+  const vacio = resumen.tramos.length === 0 || resumen.empresas.length === 0
 
-  const imprimir = () => {
-    const node = printRef.current
+  const descargarPng = useCallback(async () => {
+    const node = captureRef.current
     if (!node || typeof window === 'undefined') return
-    const w = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700')
-    if (!w) return
-    const styles = `
-      * { box-sizing: border-box; }
-      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        color: #0f2942; background: #fff; padding: 24px; }
-      h1 { font-size: 18px; margin: 0 0 4px; }
-      .meta { font-size: 12px; color: #4a7fa5; margin-bottom: 16px; line-height: 1.4; }
-      .block { border: 1px solid #bae6fd; border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
-      .block-h { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-        background: #ddeff8; border-bottom: 1px solid #bae6fd; }
-      .block-h img, .block-h .ph { width: 56px; height: 40px; object-fit: contain;
-        border-radius: 6px; background: #fff; border: 1px solid #e2e8f0; }
-      .block-h .ph { display: flex; align-items: center; justify-content: center;
-        font-size: 9px; font-weight: 700; color: #64748b; border-style: dashed; }
-      .block-h strong { font-size: 14px; }
-      .sec { padding: 8px 12px 10px; }
-      .sec h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase;
-        letter-spacing: 0.04em; color: #4a7fa5; }
-      table { width: 100%; border-collapse: collapse; font-size: 12px; }
-      th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #e2e8f0; }
-      th { color: #4a7fa5; font-weight: 700; font-size: 10px; text-transform: uppercase; }
-      .empty { font-size: 12px; color: #94a3b8; padding: 4px 0; }
-      @media print { body { padding: 12px; } .block { break-inside: avoid; } }
-    `
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${titulo}</title>
-      <style>${styles}</style></head><body>${node.innerHTML}</body></html>`)
-    w.document.close()
-    // Esperar imágenes antes de imprimir
-    const imgs = [...w.document.images]
-    Promise.all(imgs.map((img) => (
-      img.complete ? Promise.resolve() : new Promise((res) => {
-        img.onload = img.onerror = () => res()
-      })
-    ))).then(() => {
-      try { w.focus(); w.print() } catch { /* ignore */ }
-    })
-  }
+    setPngBusy(true)
+    setPngError('')
+    try {
+      // Esperar logos antes de capturar (misma imagen que se ve en pantalla).
+      const imgs = [...node.querySelectorAll('img')]
+      await Promise.all(imgs.map((img) => (
+        img.complete ? Promise.resolve() : new Promise((res) => {
+          img.onload = img.onerror = () => res()
+        })
+      )))
+      const { toBlob } = await import('html-to-image')
+      const blob = await toBlob(node, CAPTURE_OPTS)
+      if (!blob) throw new Error('No se pudo generar la imagen')
+      downloadInformePeriodicoBlob(blob, nombreArchivoResumenPng(fecha))
+    } catch (err) {
+      setPngError(err?.message || 'No se pudo descargar el PNG')
+    } finally {
+      setPngBusy(false)
+    }
+  }, [fecha])
 
   if (!open) return null
+
+  const border = t?.border || '#bae6fd'
+  const text = t?.text || '#0f2942'
+  const muted = t?.textMuted || '#4a7fa5'
 
   const overlay = (
     <div
@@ -178,12 +199,12 @@ export default function BitacoraReportePersonalModal({
     >
       <div
         style={{
-          width: 'min(720px, 100%)',
+          width: 'min(960px, 100%)',
           maxHeight: '92vh',
           overflow: 'auto',
           background: t?.bgCard || '#fff',
           borderRadius: 16,
-          border: `1px solid ${t?.border || '#bae6fd'}`,
+          border: `1px solid ${border}`,
           boxShadow: '0 24px 80px rgba(0,0,0,0.28)',
         }}
         onClick={(e) => e.stopPropagation()}
@@ -198,13 +219,17 @@ export default function BitacoraReportePersonalModal({
           padding: '10px 14px',
           borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
         }}>
-          <div style={{ fontWeight: 800, color: t?.text || '#0f2942', fontSize: 'var(--cc-title, 15px)' }}>
+          <div style={{ fontWeight: 800, color: text, fontSize: 'var(--cc-title, 15px)' }}>
             {titulo}
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {pngError ? (
+              <span style={{ fontSize: 11, color: '#b91c1c', maxWidth: 220 }}>{pngError}</span>
+            ) : null}
             <button
               type="button"
-              onClick={imprimir}
+              onClick={() => void descargarPng()}
+              disabled={pngBusy || vacio}
               style={{
                 padding: '6px 12px',
                 borderRadius: 8,
@@ -213,11 +238,12 @@ export default function BitacoraReportePersonalModal({
                 color: '#fff',
                 fontWeight: 700,
                 fontSize: 12,
-                cursor: 'pointer',
+                cursor: pngBusy || vacio ? 'not-allowed' : 'pointer',
+                opacity: pngBusy || vacio ? 0.65 : 1,
               }}
-              title="Abre la impresión del navegador (puede guardar como PDF)"
+              title="Descarga exactamente lo mostrado como imagen PNG"
             >
-              Imprimir / PDF
+              {pngBusy ? 'Generando…' : 'Descargar PNG'}
             </button>
             <button
               type="button"
@@ -225,9 +251,9 @@ export default function BitacoraReportePersonalModal({
               style={{
                 padding: '6px 12px',
                 borderRadius: 8,
-                border: `1px solid ${t?.border || '#bae6fd'}`,
+                border: `1px solid ${border}`,
                 background: t?.inputBg || '#f8fafc',
-                color: t?.text || '#0f2942',
+                color: text,
                 fontWeight: 700,
                 fontSize: 12,
                 cursor: 'pointer',
@@ -238,20 +264,30 @@ export default function BitacoraReportePersonalModal({
           </div>
         </div>
 
-        <div ref={printRef} style={{ padding: 14 }}>
+        {/* Este nodo es la vista previa Y la fuente del PNG (misma composición). */}
+        <div
+          ref={captureRef}
+          style={{
+            padding: 16,
+            background: '#fff',
+            color: text,
+          }}
+        >
           <h1 style={{
             margin: '0 0 4px',
             fontSize: 17,
-            color: t?.text || '#0f2942',
+            color: text,
+            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
           }}>
-            Reporte de personal · {fechaFmt || fecha || '—'}
+            Resumen por tramo y empresa · {fechaFmt || fecha || '—'}
           </h1>
           <div style={{
             fontSize: 12,
-            color: t?.textMuted || '#4a7fa5',
-            marginBottom: 14,
+            color: muted,
+            marginBottom: 12,
             lineHeight: 1.4,
-          }} className="meta">
+            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+          }}>
             {numero ? <>Contrato {numero}</> : null}
             {numero && (proyecto || objeto) ? ' · ' : null}
             {proyecto || null}
@@ -260,123 +296,161 @@ export default function BitacoraReportePersonalModal({
             {!numero && !proyecto && !objeto ? 'Bitácora de obra' : null}
           </div>
 
-          {bloques.length === 0 ? (
+          <div style={{
+            fontSize: 11,
+            color: muted,
+            marginBottom: 10,
+            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+          }}>
+            Celdas: personal (p) · maquinaria (m). Filas = tramos · columnas = empresas.
+          </div>
+
+          {vacio ? (
             <div style={{
               padding: 16,
               borderRadius: 10,
               border: `1px dashed ${t?.border || '#cbd5e1'}`,
-              color: t?.textMuted || '#64748b',
+              color: muted,
               fontSize: 13,
             }}>
               No hay personal ni maquinaria registrados para este día.
             </div>
-          ) : bloques.map((bloque) => (
-            <div
-              key={bloque.empresa_key}
-              className="block"
-              style={{
-                border: `1px solid ${t?.border || '#bae6fd'}`,
-                borderRadius: 10,
-                marginBottom: 12,
-                overflow: 'hidden',
-                background: t?.bgCard || '#fff',
-              }}
-            >
-              <div
-                className="block-h"
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '10px 12px',
-                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
-                  borderBottom: `1px solid ${t?.border || '#bae6fd'}`,
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+                  fontSize: 12,
+                  minWidth: 320 + resumen.empresas.length * 88,
                 }}
               >
-                <EmpresaLogo url={bloque.logo_url} nombre={bloque.empresa} t={t} />
-                <strong style={{ color: t?.text || '#0f2942', fontSize: 14 }}>
-                  {bloque.empresa}
-                </strong>
-              </div>
-              <div className="sec" style={{ padding: '8px 12px 10px' }}>
-                <h3 style={{
-                  margin: '0 0 6px',
-                  fontSize: 11,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
-                  color: t?.textMuted || '#4a7fa5',
-                }}>
-                  Personal en obra
-                </h3>
-                {bloque.personal.length === 0 ? (
-                  <div className="empty" style={{ fontSize: 12, color: t?.textMuted || '#94a3b8' }}>
-                    Sin personal de esta empresa
-                  </div>
-                ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '4px 6px', color: t?.textMuted || '#4a7fa5' }}>Nombre</th>
-                        <th style={{ textAlign: 'left', padding: '4px 6px', color: t?.textMuted || '#4a7fa5' }}>Cargo</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bloque.personal.map((p, i) => (
-                        <tr key={`p-${bloque.empresa_key}-${i}`}>
-                          <td style={{ padding: '4px 6px', borderBottom: `1px solid ${t?.border || '#e2e8f0'}`, color: t?.text }}>
-                            {p.nombre}
-                          </td>
-                          <td style={{ padding: '4px 6px', borderBottom: `1px solid ${t?.border || '#e2e8f0'}`, color: t?.text }}>
-                            {p.cargo || '—'}
-                          </td>
-                        </tr>
+                <thead>
+                  <tr>
+                    <th
+                      style={{
+                        textAlign: 'left',
+                        padding: '8px 10px',
+                        background: t?.primary ? `${t.primary}14` : '#ddeff8',
+                        borderBottom: `1px solid ${border}`,
+                        borderRight: `1px solid ${border}`,
+                        color: muted,
+                        fontWeight: 800,
+                        fontSize: 11,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.03em',
+                        position: 'sticky',
+                        left: 0,
+                        zIndex: 1,
+                      }}
+                    >
+                      Tramo
+                    </th>
+                    {resumen.empresas.map((emp) => (
+                      <th
+                        key={emp.key}
+                        style={{
+                          padding: '8px 8px 6px',
+                          background: t?.primary ? `${t.primary}14` : '#ddeff8',
+                          borderBottom: `1px solid ${border}`,
+                          borderRight: `1px solid ${border}`,
+                          color: text,
+                          fontWeight: 700,
+                          fontSize: 11,
+                          verticalAlign: 'bottom',
+                          minWidth: 88,
+                        }}
+                      >
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}>
+                          <EmpresaLogo url={emp.logo_url} nombre={emp.nombre} t={t} />
+                          <span style={{ textAlign: 'center', lineHeight: 1.2 }}>{emp.nombre}</span>
+                        </div>
+                      </th>
+                    ))}
+                    <th
+                      style={{
+                        padding: '8px 10px',
+                        background: t?.primary ? `${t.primary}22` : '#cfe7f5',
+                        borderBottom: `1px solid ${border}`,
+                        color: text,
+                        fontWeight: 800,
+                        fontSize: 11,
+                        textAlign: 'center',
+                      }}
+                    >
+                      Total
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {resumen.tramos.map((tr) => (
+                    <tr key={tr.key}>
+                      <td
+                        style={{
+                          padding: '8px 10px',
+                          borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
+                          borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+                          color: text,
+                          fontWeight: 700,
+                          whiteSpace: 'nowrap',
+                          background: '#fff',
+                          position: 'sticky',
+                          left: 0,
+                          zIndex: 1,
+                        }}
+                      >
+                        {tr.nombre}
+                      </td>
+                      {resumen.empresas.map((emp) => (
+                        <CeldaResumen
+                          key={`${tr.key}-${emp.key}`}
+                          cell={resumen.cells[tr.key]?.[emp.key]}
+                          t={t}
+                        />
                       ))}
-                    </tbody>
-                  </table>
-                )}
-
-                <h3 style={{
-                  margin: '12px 0 6px',
-                  fontSize: 11,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
-                  color: t?.textMuted || '#4a7fa5',
-                }}>
-                  Maquinaria / equipos
-                </h3>
-                {bloque.maquinaria.length === 0 ? (
-                  <div className="empty" style={{ fontSize: 12, color: t?.textMuted || '#94a3b8' }}>
-                    Sin maquinaria con operador de esta empresa
-                  </div>
-                ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '4px 6px', color: t?.textMuted || '#4a7fa5' }}>Equipo</th>
-                        <th style={{ textAlign: 'left', padding: '4px 6px', color: t?.textMuted || '#4a7fa5' }}>Operador</th>
-                        <th style={{ textAlign: 'left', padding: '4px 6px', color: t?.textMuted || '#4a7fa5' }}>Cant.</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bloque.maquinaria.map((m, i) => (
-                        <tr key={`m-${bloque.empresa_key}-${i}`}>
-                          <td style={{ padding: '4px 6px', borderBottom: `1px solid ${t?.border || '#e2e8f0'}`, color: t?.text }}>
-                            {m.equipo}
-                          </td>
-                          <td style={{ padding: '4px 6px', borderBottom: `1px solid ${t?.border || '#e2e8f0'}`, color: t?.text }}>
-                            {m.operador}
-                          </td>
-                          <td style={{ padding: '4px 6px', borderBottom: `1px solid ${t?.border || '#e2e8f0'}`, color: t?.text }}>
-                            {m.cantidad === '' ? '—' : m.cantidad}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
+                      <CeldaResumen
+                        cell={resumen.rowTotals[tr.key]}
+                        t={t}
+                        strong
+                      />
+                    </tr>
+                  ))}
+                  <tr>
+                    <td
+                      style={{
+                        padding: '8px 10px',
+                        borderTop: `2px solid ${border}`,
+                        borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+                        color: text,
+                        fontWeight: 800,
+                        background: t?.inputBg || '#f8fafc',
+                        position: 'sticky',
+                        left: 0,
+                        zIndex: 1,
+                      }}
+                    >
+                      Total
+                    </td>
+                    {resumen.empresas.map((emp) => (
+                      <CeldaResumen
+                        key={`tot-${emp.key}`}
+                        cell={resumen.colTotals[emp.key]}
+                        t={t}
+                        strong
+                      />
+                    ))}
+                    <CeldaResumen cell={resumen.grandTotal} t={t} strong />
+                  </tr>
+                </tbody>
+              </table>
             </div>
-          ))}
+          )}
         </div>
       </div>
     </div>
