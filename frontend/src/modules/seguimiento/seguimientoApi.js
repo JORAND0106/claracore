@@ -18,9 +18,13 @@ async function parseOrThrow(res) {
   try {
     const j = await res.json()
     detail = j.detail || j.message || detail
-    if (Array.isArray(detail)) detail = detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
+    if (Array.isArray(detail)) {
+      detail = detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
+    } else if (detail && typeof detail === 'object') {
+      detail = detail.msg || detail.message || JSON.stringify(detail)
+    }
   } catch { /* ignore */ }
-  const err = new Error(detail)
+  const err = new Error(typeof detail === 'string' ? detail : String(detail))
   err.status = res.status
   throw err
 }

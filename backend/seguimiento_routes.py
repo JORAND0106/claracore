@@ -1856,6 +1856,12 @@ def route_update_bitacora(
         )
         return row
     except ValueError as exc:
+        # El detalle viaja en el 400: imprescindible para diagnosticar en Network.
+        import logging
+        logging.getLogger("claracore.bitacora").warning(
+            "PUT bitacora 400 contrato=%s entrada=%s: %s",
+            contrato_id, entrada_id, exc,
+        )
         raise _http_value_error(exc) from exc
 
 
