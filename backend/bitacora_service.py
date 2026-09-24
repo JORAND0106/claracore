@@ -3194,6 +3194,57 @@ def _list_usos_batch(sb, entrada_ids: List[int]) -> Dict[int, List[dict]]:
     return out
 
 
+def _missing_column_from_exc(exc: BaseException) -> Optional[str]:
+    """Detecta columna ausente en error PostgREST/Postgres (PGRST204 / 42703)."""
+    msg = str(exc or "")
+    m = re.search(
+        r"Could not find the '([^']+)' column|column \"([^\"]+)\" does not exist|"
+        r"column ([a-zA-Z0-9_]+) does not exist",
+        msg,
+        re.I,
+    )
+    if not m:
+        return None
+    return next((g for g in m.groups() if g), None)
+
+
+def _insert_uso_con_reintentos_columna(sb, payload: dict) -> List[dict]:
+    """
+    Inserta una fila de equipo_uso. Si falla por columna inexistente, quita
+    SOLO esa columna y reintenta. Nunca descarta `tramo` salvo que el error
+    diga explícitamente que la columna `tramo` no existe.
+    """
+    attempt = dict(payload)
+    last_exc: Optional[BaseException] = None
+    for _ in range(6):
+        try:
+            return sb.table("seguimiento_bitacora_equipo_uso").insert(attempt).execute().data or []
+        except Exception as exc:
+            last_exc = exc
+            col = _missing_column_from_exc(exc)
+            if not col or col not in attempt:
+                # Error no relacionado con columna opcional → no enmascarar.
+                raise
+            if col == "tramo":
+                _log.error(
+                    "bitacora._sync_usos: columna tramo ausente en esquema; "
+                    "no se puede persistir el Tramo de Maquinaria. %s",
+                    exc,
+                )
+                raise ValueError(
+                    "No se pudo guardar el Tramo de Maquinaria: la columna "
+                    "`tramo` no existe aún en la base. Aplique la migración."
+                ) from exc
+            _log.warning(
+                "bitacora._sync_usos: omitiendo columna ausente %s (%s)",
+                col, exc,
+            )
+            attempt.pop(col, None)
+    if last_exc:
+        raise last_exc
+    return []
+
+
 def _sync_usos(
     sb,
     contrato_id: int,
@@ -3202,11 +3253,25 @@ def _sync_usos(
     *,
     user_id: Optional[int] = None,
 ) -> List[dict]:
-    # Replace-all strategy for simplicity and consistency with open diario edits.
-    sb.table("seguimiento_bitacora_equipo_uso").delete().eq("entrada_id", int(entrada_id)).execute()
+    """
+    Reemplaza los usos de la entrada.
+
+    CRÍTICO: insertar primero y borrar lo viejo después. El patrón anterior
+    (DELETE + insert con except silencioso) borraba la maquinaria y, si el
+    insert fallaba, devolvía éxito con lista vacía — la UI rehidrataba en
+    blanco y el usuario veía que «no guarda nada».
+    """
+    existentes = _list_usos(sb, int(entrada_id))
     if not isinstance(usos, list) or not usos:
+        if existentes:
+            sb.table("seguimiento_bitacora_equipo_uso").delete().eq(
+                "entrada_id", int(entrada_id),
+            ).execute()
         return []
-    rows_out = []
+
+    rows_out: List[dict] = []
+    errores: List[str] = []
+
     for i, item in enumerate(usos):
         if not isinstance(item, dict):
             continue
@@ -3225,9 +3290,11 @@ def _sync_usos(
             equipo_id = cat.get("id")
             nombre = cat.get("nombre") or nombre
         else:
-            # Ensure catalog entry stays reusable
             try:
-                upsert_equipo(sb, contrato_id, nombre, tipo=str(item.get("tipo") or "equipo"), user_id=user_id)
+                upsert_equipo(
+                    sb, contrato_id, nombre,
+                    tipo=str(item.get("tipo") or "equipo"), user_id=user_id,
+                )
             except Exception:
                 pass
         try:
@@ -3236,7 +3303,7 @@ def _sync_usos(
             cantidad = 1.0
         if cantidad <= 0:
             cantidad = 1.0
-        payload = {
+        payload: Dict[str, Any] = {
             "entrada_id": int(entrada_id),
             "equipo_id": int(equipo_id) if equipo_id is not None else None,
             "equipo_nombre": nombre,
@@ -3260,58 +3327,52 @@ def _sync_usos(
                 payload["operador_rrhh_id"] = int(op_rrhh)
         except (TypeError, ValueError):
             pass
-        inserted: List[dict] = []
+
         try:
-            inserted = sb.table("seguimiento_bitacora_equipo_uso").insert(payload).execute().data or []
+            inserted = _insert_uso_con_reintentos_columna(sb, payload)
         except Exception as exc:
-            # Reintentos progresivos: NUNCA descartar `tramo` junto con otras columnas
-            # nuevas. El patrón anterior hacía pop(tramo) en el primer fallo (p. ej.
-            # preoperacionales ausente) y el insert “exitoso” perdía el tramo en BD
-            # mientras la UI seguía mostrando éxito.
-            _log.warning(
+            _log.error(
                 "bitacora._sync_usos insert falló entrada=%s equipo=%s: %s",
                 entrada_id, nombre, exc,
             )
-            for drop_key in ("preoperacionales", "operador_rrhh_id"):
-                if drop_key not in payload:
-                    continue
-                payload.pop(drop_key, None)
-                try:
-                    inserted = (
-                        sb.table("seguimiento_bitacora_equipo_uso")
-                        .insert(payload)
-                        .execute()
-                        .data
-                        or []
-                    )
-                except Exception as exc2:
-                    _log.warning(
-                        "bitacora._sync_usos retry sin %s: %s", drop_key, exc2,
-                    )
-                    inserted = []
-                if inserted:
-                    break
-            if not inserted and "tramo" in payload:
-                # Último recurso: esquema remoto sin columna tramo (migración pendiente).
-                payload.pop("tramo", None)
-                _log.error(
-                    "bitacora._sync_usos: insertando SIN tramo (columna ausente?) "
-                    "entrada=%s equipo=%s",
-                    entrada_id, nombre,
-                )
-                try:
-                    inserted = (
-                        sb.table("seguimiento_bitacora_equipo_uso")
-                        .insert(payload)
-                        .execute()
-                        .data
-                        or []
-                    )
-                except Exception as exc3:
-                    _log.error("bitacora._sync_usos insert final falló: %s", exc3)
-                    inserted = []
+            errores.append(f"{nombre}: {exc}")
+            continue
         if inserted:
             rows_out.append(inserted[0])
+        else:
+            errores.append(f"{nombre}: insert sin filas devueltas")
+
+    if errores and not rows_out:
+        # Nada insertó: conservar existentes (no borrar). Fallar visible al usuario.
+        raise ValueError(
+            "No se pudo guardar Maquinaria. " + "; ".join(errores[:3])
+        )
+
+    # Borrar solo lo anterior cuando al menos un insert nuevo tuvo éxito.
+    old_ids = [int(r["id"]) for r in existentes if r.get("id") is not None]
+    if old_ids:
+        try:
+            sb.table("seguimiento_bitacora_equipo_uso").delete().in_(
+                "id", old_ids,
+            ).execute()
+        except Exception as exc:
+            _log.warning(
+                "bitacora._sync_usos cleanup batch falló: %s — borrando uno a uno",
+                exc,
+            )
+            for rid in old_ids:
+                try:
+                    sb.table("seguimiento_bitacora_equipo_uso").delete().eq(
+                        "id", rid,
+                    ).execute()
+                except Exception:
+                    pass
+
+    if errores:
+        _log.warning(
+            "bitacora._sync_usos parcial entrada=%s ok=%s err=%s",
+            entrada_id, len(rows_out), errores,
+        )
     return rows_out
 
 
@@ -3910,6 +3971,20 @@ def update_entrada(
                 sync_tipos_material_desde_materiales(
                     sb, contrato_id, mats, user_id=user_id,
                 )
+        # Validar ANTES de sync_usos: el sync muta BD; si validamos después y
+        # fallamos, Personal/Materiales no se actualizan pero Maquinaria sí
+        # (o queda inconsistente).
+        _validar_tramos_filas_diario(
+            asistencia=patch.get("asistencia_colaboradores")
+            if "asistencia_colaboradores" in patch
+            else None,
+            materiales=patch.get("materiales") if "materiales" in patch else None,
+            equipos_uso=(
+                (data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria"))
+                if ("equipos_uso" in data or "maquinaria" in data)
+                else None
+            ),
+        )
         if "equipos_uso" in data or "maquinaria" in data:
             with _stage_timer(stages, "sync_usos"):
                 usos = data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria")
@@ -3923,18 +3998,6 @@ def update_entrada(
                         usos_rows = []
                 else:
                     usos_rows = _sync_usos(sb, contrato_id, entrada_id, usos_list, user_id=user_id)
-        # Validar Tramo por fila sobre el payload efectivo a persistir.
-        _validar_tramos_filas_diario(
-            asistencia=patch.get("asistencia_colaboradores")
-            if "asistencia_colaboradores" in patch
-            else None,
-            materiales=patch.get("materiales") if "materiales" in patch else None,
-            equipos_uso=(
-                (data.get("equipos_uso") if "equipos_uso" in data else data.get("maquinaria"))
-                if ("equipos_uso" in data or "maquinaria" in data)
-                else None
-            ),
-        )
         if "eventos" in data:
             patch["eventos"] = _normalizar_eventos_bloques(
                 sb, contrato_id, data.get("eventos"),

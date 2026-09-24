@@ -340,7 +340,7 @@ export function createSeguimientoApi(contratoId, token) {
       if (opts?.entradaId != null && Number(opts.entradaId) > 0) {
         q.set('entrada_id', String(Number(opts.entradaId)))
       }
-      const sig = apiFetchSignal(120000)
+      const sig = apiFetchSignal(45000)
       try {
         const res = await fetch(
           `${API_BASE}/seguimiento/${cid}/bitacora/export/pdf?${q.toString()}`,

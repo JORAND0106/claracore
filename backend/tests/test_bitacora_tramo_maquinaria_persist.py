@@ -1,11 +1,15 @@
 """
-Regresión: Tramo de Maquinaria debe persistir aunque fallen columnas opcionales
-(preoperacionales / operador_rrhh_id). El retry anterior hacía pop(tramo) y el
-insert “exitoso” dejaba tramo NULL en BD mientras la UI mostraba éxito.
+Regresión guardado Maquinaria:
+1. Tramo se conserva si falla columna opcional (preoperacionales).
+2. Si TODOS los inserts fallan, NO se borran los usos existentes
+   (el DELETE-first del PR #657 dejaba la bitácora vacía con «éxito»).
+3. Error de columna desconocida no relacionada → se propaga (no silenciar).
 """
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
+import pytest
 
 import bitacora_service as svc
 
@@ -19,14 +23,38 @@ class _FakeTable:
     def __init__(self, behavior):
         self.behavior = behavior
         self.inserts = []
+        self.deleted_ids = []
+        self._existing = list(getattr(behavior, "existing", []) or [])
 
     def delete(self):
+        self._mode = "delete"
         return self
 
-    def eq(self, *_a, **_k):
+    def select(self, *_a, **_k):
+        self._mode = "select"
+        return self
+
+    def eq(self, key, val):
+        self._eq = (key, val)
+        return self
+
+    def in_(self, key, vals):
+        self._in = (key, list(vals))
+        if getattr(self, "_mode", None) == "delete":
+            self.deleted_ids.extend(list(vals))
+            # quitar de existentes simulados
+            ids = set(int(v) for v in vals)
+            self._existing = [r for r in self._existing if int(r.get("id") or 0) not in ids]
+        return self
+
+    def order(self, *_a, **_k):
         return self
 
     def execute(self):
+        if getattr(self, "_mode", None) == "select":
+            return _FakeInsertResult(list(self._existing))
+        if getattr(self, "_mode", None) == "delete":
+            return _FakeInsertResult([])
         return _FakeInsertResult([])
 
     def insert(self, payload):
@@ -36,15 +64,14 @@ class _FakeTable:
 
 
 class _Behavior:
-    def __init__(self):
+    def __init__(self, existing=None):
         self.calls = 0
+        self.existing = existing or []
 
     def on_insert(self, payload):
         self.calls += 1
-        # Primer intento: falla si trae preoperacionales (columna “ausente”).
         if "preoperacionales" in payload:
             raise RuntimeError('column "preoperacionales" does not exist')
-        # Éxito en reintentos sin preoperacionales
 
 
 def _make_sb(behavior: _Behavior):
@@ -53,7 +80,6 @@ def _make_sb(behavior: _Behavior):
     def table_fn(name):
         if name == "seguimiento_bitacora_equipo_uso":
             return table
-        # upsert_equipo path — no usado si viene equipo_id
         raise AssertionError(f"tabla inesperada: {name}")
 
     sb = MagicMock()
@@ -64,17 +90,22 @@ def _make_sb(behavior: _Behavior):
 def test_sync_usos_conserva_tramo_si_falla_preoperacionales():
     behavior = _Behavior()
     sb, table = _make_sb(behavior)
-    # Parchear insert.execute para devolver fila con tramo en el éxito
-    real_insert = table.insert
 
     def insert_and_return(payload):
-        real_insert(payload)
-        # Fake chain: insert().execute() — redefinir execute en la tabla tras insert
+        table.inserts.append(dict(payload))
+        try:
+            behavior.on_insert(payload)
+        except Exception:
+            # Simular fallo de insert: la cadena no llega a execute con data
+            class FailChain:
+                def execute(self_inner):
+                    raise RuntimeError('column "preoperacionales" does not exist')
+            return FailChain()
 
         class Chain:
             def execute(self_inner):
                 return _FakeInsertResult([{
-                    "id": 1,
+                    "id": 100,
                     "entrada_id": 10,
                     "equipo_nombre": payload.get("equipo_nombre"),
                     "tramo": payload.get("tramo"),
@@ -102,9 +133,48 @@ def test_sync_usos_conserva_tramo_si_falla_preoperacionales():
     )
     assert len(out) == 1
     assert out[0]["tramo"] == "Tramo Norte"
-    # Primer insert falló; el exitoso aún trae tramo
     assert any("tramo" in p and p.get("tramo") == "Tramo Norte" for p in table.inserts)
     assert any("preoperacionales" not in p for p in table.inserts)
+
+
+def test_sync_usos_no_borra_existentes_si_insert_falla_total():
+    """DELETE-first era el bug de producción: éxito vacío + UI en blanco."""
+    existing = [{
+        "id": 7,
+        "entrada_id": 10,
+        "equipo_nombre": "Retro",
+        "tramo": "Tramo 1",
+    }]
+    behavior = _Behavior(existing=existing)
+    sb, table = _make_sb(behavior)
+
+    def insert_always_fail(payload):
+        table.inserts.append(dict(payload))
+
+        class Chain:
+            def execute(self_inner):
+                raise RuntimeError("permission denied for table")
+
+        return Chain()
+
+    table.insert = insert_always_fail
+
+    with pytest.raises(ValueError, match="No se pudo guardar Maquinaria"):
+        svc._sync_usos(
+            sb,
+            3,
+            10,
+            [{
+                "equipo_id": 5,
+                "equipo_nombre": "Volqueta",
+                "tramo": "Tramo 2",
+                "cantidad": 1,
+                "preoperacionales": [],
+            }],
+        )
+    # No se borraron los existentes
+    assert table.deleted_ids == []
+    assert any(r.get("id") == 7 for r in table._existing)
 
 
 def test_sync_usos_tramo_vacio_omitido_del_payload():
@@ -121,7 +191,6 @@ def test_sync_usos_tramo_vacio_omitido_del_payload():
         return Chain()
 
     table.insert = insert_ok
-    # Forzar éxito inmediato (sin preoperacionales en payload → behavior no falla)
     out = svc._sync_usos(
         sb,
         3,
@@ -135,5 +204,14 @@ def test_sync_usos_tramo_vacio_omitido_del_payload():
         }],
     )
     assert len(out) == 1
-    # tramo vacío no se escribe (None / ausente)
     assert "tramo" not in table.inserts[0] or table.inserts[0].get("tramo") in (None, "")
+
+
+def test_missing_column_parser():
+    assert svc._missing_column_from_exc(
+        RuntimeError('column "preoperacionales" does not exist')
+    ) == "preoperacionales"
+    assert svc._missing_column_from_exc(
+        RuntimeError("Could not find the 'operador_rrhh_id' column of 'seguimiento_bitacora_equipo_uso'")
+    ) == "operador_rrhh_id"
+    assert svc._missing_column_from_exc(RuntimeError("permission denied")) is None

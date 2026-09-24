@@ -623,6 +623,7 @@ export default function BitacoraEntradaEditor({
             ? { ubicacion_lat: Number(m.ubicacion_lat), ubicacion_lng: Number(m.ubicacion_lng) }
             : {}),
         }))
+      const usosPayload = buildUsosPayload()
       const payload = {
         fecha,
         tramo: null,
@@ -631,7 +632,7 @@ export default function BitacoraEntradaEditor({
         personal: personalPayload,
         personal_manual: personalManualPayload,
         asistencia_colaboradores: asistenciaPayload,
-        equipos_uso: buildUsosPayload(),
+        equipos_uso: usosPayload,
         materiales: materialesPayload,
         cuerpo_html: cuerpoHtml,
         eventos: eventosParaPayload(eventos),
@@ -674,20 +675,34 @@ export default function BitacoraEntradaEditor({
           rowClean.asistencia_colaboradores,
         ))
       }
-      // Rehidratar Maquinaria desde la respuesta (incluye tramo persistido en BD).
+      // Rehidratar Maquinaria solo si el servidor devolvió filas coherentes.
+      // Si enviamos usos y la respuesta viene vacía, NO borrar el estado local
+      // (síntoma del bug DELETE+insert silencioso).
       if (Array.isArray(rowClean.equipos_uso)) {
-        setUsos(
-          rowClean.equipos_uso.length
-            ? rowClean.equipos_uso.map(usoFromApi)
-            : [emptyUso()],
-        )
+        if (usosPayload.length > 0 && rowClean.equipos_uso.length === 0) {
+          setError(
+            'La maquinaria no se persistió en el servidor. Revise la conexión e intente guardar de nuevo.',
+          )
+        } else {
+          setUsos(
+            rowClean.equipos_uso.length
+              ? rowClean.equipos_uso.map(usoFromApi)
+              : [emptyUso()],
+          )
+        }
       }
       if (Array.isArray(rowClean.materiales)) {
-        setMateriales(
-          rowClean.materiales.length
-            ? rowClean.materiales.map(materialFromApi)
-            : [emptyMaterial()],
-        )
+        if (materialesPayload.length > 0 && rowClean.materiales.length === 0) {
+          setError(
+            'Los materiales no se persistieron en el servidor. Intente guardar de nuevo.',
+          )
+        } else {
+          setMateriales(
+            rowClean.materiales.length
+              ? rowClean.materiales.map(materialFromApi)
+              : [emptyMaterial()],
+          )
+        }
       }
       if (Array.isArray(rowClean.eventos)) {
         setEventos(eventosFromEntrada(rowClean))
