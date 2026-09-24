@@ -738,10 +738,11 @@ def calcular_cantidades_y_descuentos(
     h_exc = float(tot.get("prom_altura_excavacion") or 0.0)
     h_trit = float(tot.get("prom_altura_triturado") or 0.0)
     h_rel = float(tot.get("prom_altura_relleno") or 0.0)
-    # FILTRO: Geotextil usa (ancho promedio cartera + traslapo). ALC: sin cambio.
+    # FILTRO: Geotextil = L × (prom ancho geotextil + traslapo).
+    # ALCANTARILLA: no se calcula → cantidad 0 (PRODUCT vacíos dejaría solo L).
     ancho_geo_prom = float(tot.get("prom_ancho_geotextil") or 0.0)
     traslapo = float(seccion.get("traslapo_m") or 0.0) if tipo == "FILTRO" else 0.0
-    ancho_geo = ancho_geo_prom + traslapo if tipo == "FILTRO" else ancho_geo_prom
+    ancho_geo = (ancho_geo_prom + traslapo) if tipo == "FILTRO" else None
 
     overrides_list = _normalize_cantidades_manuales(cantidades_manuales)
     # Descuentos de altura cruzados (suma de espesores por campo destino)
@@ -834,12 +835,18 @@ def calcular_cantidades_y_descuentos(
     roc_ancho = ov_roc["ancho"] if "ancho" in ov_roc else B
     roc_esp = ov_roc["espesor"] if "espesor" in ov_roc else ESPESOR_ROCA_M
 
+    # GEO solo en FILTRO; en ALC dims vacías → cantidad 0 (no PRODUCT(L, vacío)).
+    if tipo == "FILTRO":
+        geo_row = _row("GEO", L, ancho_geo if ancho_geo else None, None)
+    else:
+        geo_row = _row("GEO", None, None, None)
+
     cantidades = [
         _row("EXC", L, B, h_exc),
         _row("TUB", L, None, None),
         _row("TRI", L, B, h_trit, desc=desc_tri, restar_desc=True),
         _row("REL", L, B, h_rel, desc=desc_rel, restar_desc=False),
-        _row("GEO", L, ancho_geo if ancho_geo else None, None),
+        geo_row,
         _row(
             "EXC_ROC", roc_long, roc_ancho, roc_esp,
             descontar_de=ov_roc.get("descontar_de"),
