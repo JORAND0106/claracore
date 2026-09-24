@@ -186,6 +186,28 @@ describe('bitacoraReportePersonal — resumen Tramo × Empresa', () => {
     assert.doesNotMatch(modalSrc, /window\.print/)
   })
 
+  it('editor: acciones resumen/PDF solo en header como íconos (sin duplicar en pie)', () => {
+    assert.match(editorSrc, /from 'lucide-react'/)
+    assert.match(editorSrc, /<Table2\b/)
+    assert.match(editorSrc, /<Eye\b/)
+    assert.match(editorSrc, /<Download\b/)
+    assert.match(editorSrc, /aria-label="Resumen por tramo y empresa"/)
+    assert.match(editorSrc, /aria-label=\{pdfBusy \? 'Generando vista previa…' : 'Vista previa PDF'\}/)
+    assert.match(editorSrc, /aria-label=\{pdfBusy \? 'Generando PDF…' : 'Descargar PDF'\}/)
+    assert.match(editorSrc, /aria-label="Cerrar"/)
+    // Label de texto del resumen no aparece como hijo del botón (solo title/aria).
+    assert.doesNotMatch(editorSrc, />\s*Resumen por tramo y empresa\s*</)
+    // Un solo disparador del resumen (header); pie ya no duplica las tres acciones.
+    const opens = editorSrc.match(/setReportePersonalOpen\(true\)/g) || []
+    assert.equal(opens.length, 1)
+    const previewCalls = editorSrc.match(/exportarPdfDia\(\{\s*preview:\s*true\s*\}\)/g) || []
+    const downloadCalls = editorSrc.match(/exportarPdfDia\(\{\s*preview:\s*false\s*\}\)/g) || []
+    assert.equal(previewCalls.length, 1)
+    assert.equal(downloadCalls.length, 1)
+    // Guardar sigue como botón de texto en el pie.
+    assert.match(editorSrc, />\s*Guardar\s*</)
+  })
+
   it('adjuntos: drag-drop + Ctrl+V en BitacoraAdjuntos y BitacoraClipAdjuntos', () => {
     assert.match(adjuntosSrc, /onDrop/)
     assert.match(adjuntosSrc, /onDragOver/)
