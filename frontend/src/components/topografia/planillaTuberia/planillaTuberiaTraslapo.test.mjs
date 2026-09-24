@@ -131,6 +131,40 @@ describe('Traslapo geotextil — FILTRO', () => {
     assert.match(routesSrc, /traslapo_m=_traslapo_m/)
     assert.match(excelSrc, /Traslapo/)
     assert.match(excelSrc, /J41.*\$F\$15/)
+    assert.match(excelSrc, /ALCANTARILLA: Geotextil no aplica/)
     assert.match(pdfSrc, /Traslapo/)
+  })
+})
+
+describe('Geotextil — solo FILTRO', () => {
+  it('ALCANTARILLA: GEO cantidad 0 (no PRODUCT solo con L)', () => {
+    const r = calcularPlanillaLocal({
+      tipo: 'ALCANTARILLA',
+      diametro_m: 0.9,
+      espesor_m: 0.05,
+      ancho_excavacion_m: 1.5,
+      relacion_atraque: '1:3',
+      cama_triturado_m: 0.1,
+      filas_campo: [
+        {
+          orden: 1, abscisa: 100, terreno_natural: 105,
+          subrasante_via: 104.5, cota_fondo_excavacion: 103,
+        },
+        {
+          orden: 2, abscisa: 130, terreno_natural: 104.9,
+          subrasante_via: 104.4, cota_fondo_excavacion: 102.9,
+        },
+      ],
+    })
+    const geo = r.netos.find((n) => n.codigo === 'GEO')
+    assert.ok(geo)
+    assert.equal(geo.neto, 0)
+    assert.equal(geo.bruto, 0)
+    assert.equal(geo.long, null)
+    assert.equal(geo.ancho, null)
+    assert.match(
+      readFileSync(join(dir, 'planillaTuberiaCalc.js'), 'utf8'),
+      /GEO solo en FILTRO/,
+    )
   })
 })

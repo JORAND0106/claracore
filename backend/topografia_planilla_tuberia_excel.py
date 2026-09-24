@@ -559,10 +559,17 @@ def _write_resumen_fila_formulas(
         _set(ws, f"G{r}", _g_ref("DESC_A2") if es_alc else 0)
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
     elif cod == "GEO":
-        _set(ws, f"D{r}", d_from_exc)
-        # FILTRO: ancho = prom geotextil (J41) + traslapo (F15). ALC: solo J41.
-        _set(ws, f"E{r}", "=IFERROR(J41,0)+IFERROR($F$15,0)" if not es_alc else "=J41")
-        _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
+        if es_alc:
+            # ALCANTARILLA: Geotextil no aplica → cantidad 0 (evitar PRODUCT solo con L).
+            _set(ws, f"D{r}", None)
+            _set(ws, f"E{r}", None)
+            _set(ws, f"F{r}", None)
+            _set(ws, f"H{r}", 0)
+        else:
+            _set(ws, f"D{r}", d_from_exc)
+            # FILTRO: ancho = prom geotextil (J41) + traslapo (F15).
+            _set(ws, f"E{r}", "=IFERROR(J41,0)+IFERROR($F$15,0)")
+            _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
     elif cod == "OTROS" or cod.startswith("OTROS_"):
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
 
@@ -598,9 +605,13 @@ def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
     _set(ws, "F48", "=IFERROR(I41,0)")
     _set(ws, "G48", "=N47" if es_alc else 0)
     _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)")
-    _set(ws, "D49", "=D45")
-    _set(ws, "E49", "=IFERROR(J41,0)+IFERROR($F$15,0)" if not es_alc else "=J41")
-    _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
+    _set(ws, "D49", "=D45" if not es_alc else None)
+    if es_alc:
+        _set(ws, "E49", None)
+        _set(ws, "H49", 0)
+    else:
+        _set(ws, "E49", "=IFERROR(J41,0)+IFERROR($F$15,0)")
+        _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
     _set(ws, "D50", "=D45")
     _set(ws, "E50", "=E45")
     _set(ws, "F50", 0.05)

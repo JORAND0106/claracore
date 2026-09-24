@@ -92,6 +92,11 @@ class TestCarteraXlsm(unittest.TestCase):
                 round(f["altura_excavacion"] - h_esperada, 4),
                 places=4,
             )
+        geo = next(n for n in r["netos"] if n["codigo"] == "GEO")
+        self.assertEqual(geo["neto"], 0)
+        self.assertEqual(geo["bruto"], 0)
+        self.assertIsNone(geo.get("long"))
+        self.assertIsNone(geo.get("ancho"))
 
     def test_filtro_h_trit_y_geotextil_movil(self):
         r = calcular_planilla_completa(

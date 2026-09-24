@@ -458,8 +458,9 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   let hTrit = Number(tot.prom_altura_triturado || 0)
   let hRel = Number(tot.prom_altura_relleno || 0)
   const anchoGeoProm = Number(tot.prom_ancho_geotextil || 0)
+  // GEO solo en FILTRO; en ALC dims vacías → cantidad 0 (product ignora nulls y dejaría L).
   const traslapo = tipo === 'FILTRO' ? Number(seccion.traslapo_m || 0) : 0
-  const anchoGeo = tipo === 'FILTRO' ? anchoGeoProm + traslapo : anchoGeoProm
+  const anchoGeo = tipo === 'FILTRO' ? anchoGeoProm + traslapo : null
 
   const overridesList = normalizeCantidadesManuales(cantidadesManuales)
   const restas = {
@@ -539,12 +540,16 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   const rocAncho = 'ancho' in ovRoc ? ovRoc.ancho : B
   const rocEsp = 'espesor' in ovRoc ? ovRoc.espesor : ESPESOR_ROCA_M
 
+  const geoRow = tipo === 'FILTRO'
+    ? row('GEO', L, anchoGeo || null, null)
+    : row('GEO', null, null, null)
+
   const cantidades = [
     row('EXC', L, B, hExc),
     row('TUB', L, null, null),
     row('TRI', L, B, hTrit, descTri, true),
     row('REL', L, B, hRel, descRel, false),
-    row('GEO', L, anchoGeo || null, null),
+    geoRow,
     row('EXC_ROC', rocLong, rocAncho, rocEsp, 0, false, null, ovRoc.descontar_de || null),
   ]
 
