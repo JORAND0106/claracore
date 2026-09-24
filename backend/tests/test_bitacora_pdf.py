@@ -235,7 +235,8 @@ def test_generar_pdf_con_eventos_y_fotos(monkeypatch):
     out = pdf.generar_pdf_bitacora_dia(MagicMock(), 1, "2026-08-20")
     assert out.startswith(b"%PDF")
     doc = captured["doc"]
-    assert "Reportes de Evento" in doc
+    assert "Eventos del día" in doc
+    assert "Reportes de Evento" not in doc
     assert "Registro Fotográfico" in doc
     assert "Fotografías del día" not in doc
     assert "K12" in doc

@@ -4612,14 +4612,30 @@ def list_entradas_del_dia(
             migrar_eventos_legacy_contrato(sb, contrato_id)
         except Exception:
             pass
+
+    # Fast-path PDF/vista previa: una sola entrada por id (evita list+merge del día).
+    if entrada_id is not None:
+        diario = get_entrada(sb, contrato_id, int(entrada_id))
+        if str(diario.get("tipo") or "") != "diario":
+            raise ValueError("La entrada indicada no es un Reporte Diario")
+        if str(diario.get("fecha") or "")[:10] != f:
+            raise ValueError("El Reporte Diario no corresponde a la fecha solicitada")
+        eventos = []
+        if isinstance(diario.get("eventos"), list):
+            for b in diario["eventos"]:
+                if not isinstance(b, dict):
+                    continue
+                eventos.append({
+                    **b,
+                    "fecha": f,
+                    "tipo": "evento",
+                    "created_by_nombre": b.get("created_by_nombre") or diario.get("created_by_nombre"),
+                })
+        return {"fecha": f, "diario": diario, "eventos": eventos, "todas": [diario]}
+
     rows = list_entradas(sb, contrato_id, fecha_desde=f, fecha_hasta=f, tipo="diario")
     diario = None
-    if entrada_id is not None:
-        eid = int(entrada_id)
-        diario = next((r for r in rows if int(r.get("id") or 0) == eid), None)
-        if diario is None:
-            raise ValueError("No se encontró el Reporte Diario indicado para esa fecha")
-    elif tramo is not None and str(tramo).strip() != "":
+    if tramo is not None and str(tramo).strip() != "":
         tramo_n = _normalize_tramo(tramo)
         diario = next(
             (r for r in rows if _normalize_tramo(r.get("tramo")) == tramo_n),
