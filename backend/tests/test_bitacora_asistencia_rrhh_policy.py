@@ -16,28 +16,28 @@ from bitacora_asistencia_rrhh_policy import (
 
 
 def test_antes_del_corte_ningun_contrato_exige_gate():
-    before = datetime(2026, 9, 24, 23, 59, 59, tzinfo=TZ_BOGOTA)
+    before = datetime(2026, 9, 27, 23, 59, 59, tzinfo=TZ_BOGOTA)
     assert cutover_asistencia_rrhh_activo(before) is False
     assert requiere_asistencia_rrhh_aprobado(1, activa_en_exento=False, now=before) is False
     assert requiere_asistencia_rrhh_aprobado(3, activa_en_exento=True, now=before) is False
 
 
 def test_desde_corte_resto_de_contratos_exigen_gate():
-    after = datetime(2026, 9, 25, 0, 0, 0, tzinfo=TZ_BOGOTA)
+    after = datetime(2026, 9, 28, 0, 0, 0, tzinfo=TZ_BOGOTA)
     assert cutover_asistencia_rrhh_activo(after) is True
     assert requiere_asistencia_rrhh_aprobado(1, now=after) is True
     assert requiere_asistencia_rrhh_aprobado(99, now=after) is True
 
 
 def test_contrato_3_exento_hasta_activar():
-    after = datetime(2026, 9, 26, 12, 0, 0, tzinfo=TZ_BOGOTA)
+    after = datetime(2026, 9, 29, 12, 0, 0, tzinfo=TZ_BOGOTA)
     assert es_contrato_exento_asistencia_rrhh(BITACORA_ASISTENCIA_RRHH_EXENTO_CONTRATO_ID)
     assert requiere_asistencia_rrhh_aprobado(3, activa_en_exento=False, now=after) is False
     assert requiere_asistencia_rrhh_aprobado(3, activa_en_exento=True, now=after) is True
 
 
 def test_policy_snapshot_permite_cargo_cuadrilla_en_exento():
-    after = datetime(2026, 9, 25, 8, 0, 0, tzinfo=TZ_BOGOTA)
+    after = datetime(2026, 9, 28, 8, 0, 0, tzinfo=TZ_BOGOTA)
     snap = policy_snapshot(3, activa_en_exento=False, now=after)
     assert snap["corte_activo"] is True
     assert snap["contrato_exento"] is True

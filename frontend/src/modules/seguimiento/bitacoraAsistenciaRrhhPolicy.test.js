@@ -16,15 +16,15 @@ import {
 import { puedeUsarCargoCantidadAsistencia } from './personalAsistenciaHelpers.js'
 
 describe('bitacoraAsistenciaRrhhPolicy', () => {
-  it('antes del 25-sep-2026 no exige gate', () => {
-    const now = new Date('2026-09-24T23:30:00-05:00')
+  it('antes del 28-sep-2026 no exige gate', () => {
+    const now = new Date('2026-09-27T23:30:00-05:00')
     assert.equal(cutoverAsistenciaRrhhActivo(now), false)
     assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 1, now }), false)
     assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 3, activaEnExento: true, now }), false)
   })
 
-  it('desde el 25-sep-2026 exige gate salvo contrato 3', () => {
-    const now = new Date('2026-09-25T00:00:00-05:00')
+  it('desde el 28-sep-2026 exige gate salvo contrato 3', () => {
+    const now = new Date('2026-09-28T00:00:00-05:00')
     assert.equal(cutoverAsistenciaRrhhActivo(now), true)
     assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 1, now }), true)
     assert.equal(requiereAsistenciaRrhhAprobado({ contratoId: 3, activaEnExento: false, now }), false)
@@ -32,7 +32,7 @@ describe('bitacoraAsistenciaRrhhPolicy', () => {
   })
 
   it('snapshot y filtro de aprobados', () => {
-    const now = new Date('2026-09-26T10:00:00-05:00')
+    const now = new Date('2026-09-29T10:00:00-05:00')
     const snap = policySnapshotAsistenciaRrhh({ contratoId: 3, activaEnExento: false, now })
     assert.equal(snap.corte_iso, BITACORA_ASISTENCIA_RRHH_CORTE_ISO)
     assert.equal(snap.permite_cargo_cuadrilla, true)
