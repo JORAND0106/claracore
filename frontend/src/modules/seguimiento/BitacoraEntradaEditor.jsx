@@ -2054,6 +2054,7 @@ export default function BitacoraEntradaEditor({
         fecha={fecha}
         asistencia={asistencia}
         usos={usos}
+        materiales={materiales}
         rrhhCatalogo={rrhhCatalogo}
         contratoId={contratoId}
         token={token}

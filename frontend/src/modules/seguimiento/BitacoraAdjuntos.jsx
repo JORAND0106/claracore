@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
@@ -37,6 +37,7 @@ export default function BitacoraAdjuntos({
   const [preview, setPreview] = useState(null) // { dataUri, nombre, mime, origen, pie }
   const fileRef = useRef(null)
   const pasteZoneRef = useRef(null)
+  const [dragOver, setDragOver] = useState(false)
 
   const list = Array.isArray(imagenes) ? imagenes : []
   const full = list.length >= MAX_FOTOS_BITACORA
@@ -131,26 +132,55 @@ export default function BitacoraAdjuntos({
     }
   }
 
-  useEffect(() => {
-    if (disabled || esquemaOpen || galeriaOpen || preview) return undefined
-    const onPaste = (e) => {
-      const items = e.clipboardData?.items
-      if (!items?.length) return
-      for (const item of items) {
-        if (item.type?.startsWith('image/')) {
-          const file = item.getAsFile()
-          if (file) {
-            e.preventDefault()
-            void openPreviewFromFile(file, 'pegar')
-          }
-          break
+  const acceptDroppedFiles = (fileList, origen = 'archivo') => {
+    if (disabled || full) return
+    const files = Array.from(fileList || []).filter((f) => String(f.type || '').startsWith('image/'))
+    files.forEach((f) => { void openPreviewFromFile(f, origen) })
+  }
+
+  const onDragEnter = (e) => {
+    if (disabled || full) return
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(true)
+  }
+  const onDragOver = (e) => {
+    if (disabled || full) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    setDragOver(true)
+  }
+  const onDragLeave = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.currentTarget.contains(e.relatedTarget)) return
+    setDragOver(false)
+  }
+  const onDrop = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(false)
+    if (disabled || full) return
+    acceptDroppedFiles(e.dataTransfer?.files, 'archivo')
+  }
+
+  const onZonePaste = (e) => {
+    if (disabled || full || esquemaOpen || galeriaOpen || preview) return
+    const items = e.clipboardData?.items
+    if (!items?.length) return
+    for (const item of items) {
+      if (item.type?.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) {
+          e.preventDefault()
+          e.stopPropagation()
+          void openPreviewFromFile(file, 'pegar')
         }
+        break
       }
     }
-    window.addEventListener('paste', onPaste)
-    return () => window.removeEventListener('paste', onPaste)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [disabled, esquemaOpen, galeriaOpen, preview, list.length, entradaId])
+  }
 
   const openGaleria = async () => {
     setGaleriaOpen(true)
@@ -185,7 +215,26 @@ export default function BitacoraAdjuntos({
   )
 
   return (
-    <div>
+    <div
+      ref={pasteZoneRef}
+      tabIndex={disabled ? undefined : 0}
+      onPaste={onZonePaste}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      title={disabled ? undefined : 'Arrastre una imagen aquí o use Ctrl+V con el foco en esta zona'}
+      style={{
+        outline: 'none',
+        borderRadius: 8,
+        border: dragOver
+          ? `2px dashed ${t.primary || '#0077B6'}`
+          : '2px dashed transparent',
+        background: dragOver ? `${t.primary || '#0077B6'}12` : 'transparent',
+        padding: dragOver ? 4 : 0,
+        transition: 'background 0.12s ease, border-color 0.12s ease',
+      }}
+    >
       <div style={{
         display: 'flex',
         flexWrap: singleLine ? 'nowrap' : 'wrap',
@@ -239,7 +288,6 @@ export default function BitacoraAdjuntos({
             e.target.value = ''
           }}
         />
-        <div ref={pasteZoneRef} tabIndex={0} style={{ width: 1, height: 1, outline: 'none' }} aria-hidden />
       </div>
       {list.length > 0 && (
         <div style={{ marginTop: 8 }}>
@@ -455,7 +503,23 @@ export default function BitacoraAdjuntos({
   )
 }
 
-/** Clip genérico para adjuntar uno o varios archivos (vales / preoperacionales). */
+function fileMatchesAccept(file, accept) {
+  const a = String(accept || '*/*').trim()
+  if (!a || a === '*/*') return true
+  const type = String(file?.type || '')
+  const name = String(file?.name || '').toLowerCase()
+  return a.split(',').map((s) => s.trim()).some((token) => {
+    if (!token) return false
+    if (token.endsWith('/*')) {
+      const prefix = token.slice(0, -1)
+      return type.startsWith(prefix)
+    }
+    if (token.startsWith('.')) return name.endsWith(token.toLowerCase())
+    return type === token
+  })
+}
+
+/** Clip genérico para adjuntar uno o varios archivos (vales / preoperacionales / remisión). */
 export function BitacoraClipAdjuntos({
   t,
   files = [],
@@ -466,16 +530,21 @@ export function BitacoraClipAdjuntos({
 }) {
   const ui = bitacoraSheetStyles(t)
   const ref = useRef(null)
+  const zoneRef = useRef(null)
+  const [dragOver, setDragOver] = useState(false)
   const list = Array.isArray(files) ? files : []
 
-  const addFiles = (fileList) => {
-    const readers = Array.from(fileList || []).map((file) => new Promise((resolve) => {
+  const addFiles = (fileList, origen = 'archivo') => {
+    if (disabled) return
+    const filtered = Array.from(fileList || []).filter((f) => fileMatchesAccept(f, accept))
+    if (!filtered.length) return
+    const readers = filtered.map((file) => new Promise((resolve) => {
       const reader = new FileReader()
       reader.onload = () => resolve({
         nombre: file.name || `adjunto-${Date.now()}`,
         data_uri: reader.result,
         mime_type: file.type || 'application/octet-stream',
-        origen: 'archivo',
+        origen,
         pending: true,
         created_at: new Date().toISOString(),
         kind: 'adjunto',
@@ -489,8 +558,72 @@ export function BitacoraClipAdjuntos({
     })
   }
 
+  const onDragEnter = (e) => {
+    if (disabled) return
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(true)
+  }
+  const onDragOver = (e) => {
+    if (disabled) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    setDragOver(true)
+  }
+  const onDragLeave = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.currentTarget.contains(e.relatedTarget)) return
+    setDragOver(false)
+  }
+  const onDrop = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(false)
+    if (disabled) return
+    addFiles(e.dataTransfer?.files, 'archivo')
+  }
+
+  const onPaste = (e) => {
+    if (disabled) return
+    const items = e.clipboardData?.items
+    if (!items?.length) return
+    const files = []
+    for (const item of items) {
+      const file = item.getAsFile?.()
+      if (file && fileMatchesAccept(file, accept)) files.push(file)
+    }
+    if (!files.length) return
+    e.preventDefault()
+    e.stopPropagation()
+    addFiles(files, 'pegar')
+  }
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
+    <div
+      ref={zoneRef}
+      tabIndex={disabled ? undefined : 0}
+      onPaste={onPaste}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      title={disabled ? title : `${title} · arrastre o Ctrl+V`}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        justifyContent: 'center',
+        outline: 'none',
+        borderRadius: 6,
+        border: dragOver
+          ? `2px dashed ${t.primary || '#0077B6'}`
+          : '2px dashed transparent',
+        background: dragOver ? `${t.primary || '#0077B6'}14` : 'transparent',
+        padding: 2,
+      }}
+    >
       <button
         type="button"
         title={title}
@@ -527,7 +660,7 @@ export function BitacoraClipAdjuntos({
         multiple
         hidden
         onChange={(e) => {
-          addFiles(e.target.files)
+          addFiles(e.target.files, 'archivo')
           e.target.value = ''
         }}
       />
