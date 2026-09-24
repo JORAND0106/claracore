@@ -502,7 +502,13 @@ export default function BitacoraEntradaEditor({
   const buildUsosPayload = () => usos
     .filter((u) => String(u.equipo_nombre || '').trim())
     .map((u, i) => {
-      const inter = String(u.hora_intermedia || '').trim()
+      // <input type="time"> vacío muestra "--:-- -----"; nunca enviar placeholders.
+      const limpiaHora = (v) => {
+        const s = String(v || '').trim()
+        if (!s || /^[\-–—_:.\s]+$/.test(s)) return null
+        return s.slice(0, 5)
+      }
+      const inter = limpiaHora(u.hora_intermedia)
       const horas = inter
         ? [{ hora: inter, ...(u.horas_intermedias?.[0]?.nota ? { nota: u.horas_intermedias[0].nota } : {}) }]
         : []
@@ -521,8 +527,8 @@ export default function BitacoraEntradaEditor({
         operador_rrhh_id: opRrhh,
         tramo: normalizeTramoValue(u.tramo),
         cantidad: Number(u.cantidad) || 1,
-        hora_inicio: u.hora_inicio || null,
-        hora_fin: u.hora_fin || null,
+        hora_inicio: limpiaHora(u.hora_inicio),
+        hora_fin: limpiaHora(u.hora_fin),
         horas_intermedias: horas,
         preoperacionales: u.preoperacionales || [],
         orden: i,
@@ -591,7 +597,10 @@ export default function BitacoraEntradaEditor({
       const matsFilled = materiales.filter(materialRowNoVacia)
       const sinTramoMat = matsFilled.filter((m) => !normalizeTramoValue(m.tramo))
       if (sinTramoMat.length) {
-        setError('Cada fila de Materiales debe tener Tramo asignado.')
+        setError(
+          'Debe seleccionar un Tramo en cada fila de Materiales. '
+          + 'Hay filas con datos que aún muestran «Seleccione…» en Tramo.',
+        )
         setBusy(false)
         return
       }

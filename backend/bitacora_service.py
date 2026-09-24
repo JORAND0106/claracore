@@ -584,14 +584,29 @@ def _parse_hora(val) -> Optional[str]:
     s = str(val).strip()
     if not s:
         return None
+    # Placeholders de <input type="time"> / UI ("--:--", "——", etc.): opcionales → vacío.
+    if re.match(r"^[\-–—_:.\s]+$", s) or s.lower() in {"seleccione", "seleccione…", "seleccione..."}:
+        return None
+    # Postgres / drivers a veces devuelven "HH:MM:SS.mmm" o con tz.
+    s = re.sub(r"([+-]\d{2}:?\d{2}|Z)$", "", s, flags=re.I).strip()
+    if "." in s:
+        s = s.split(".", 1)[0]
     # HH:MM or HH:MM:SS
     m = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$", s)
     if not m:
-        raise ValueError(f"Hora inválida: {s}")
+        raise ValueError(f"Hora inválida: {val}")
     hh, mm, ss = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
     if hh > 23 or mm > 59 or ss > 59:
-        raise ValueError(f"Hora inválida: {s}")
+        raise ValueError(f"Hora inválida: {val}")
     return f"{hh:02d}:{mm:02d}:{ss:02d}"
+
+
+def _parse_hora_opcional(val) -> Optional[str]:
+    """Como ``_parse_hora`` pero nunca revienta: basura → None (campos opcionales)."""
+    try:
+        return _parse_hora(val)
+    except ValueError:
+        return None
 
 
 def _norm_nombre_equipo(nombre: str) -> str:
@@ -965,6 +980,24 @@ def _validar_tramos_filas_diario(
     for row in materiales or []:
         if not isinstance(row, dict):
             continue
+        # Misma regla que Personal/Maquinaria: solo filas con contenido.
+        # Antes se exigía tramo también en filas vacías → 400 engañoso.
+        tiene = any([
+            str(row.get("tipo_material") or "").strip(),
+            str(row.get("proveedor") or "").strip(),
+            str(row.get("placa") or "").strip(),
+            str(row.get("numeros_vale") or row.get("numero_vale") or "").strip(),
+            (isinstance(row.get("adjuntos"), list) and len(row.get("adjuntos") or []) > 0),
+            float(row.get("cantidad") or 0) > 0,
+            str(row.get("ubicacion_pk") or "").strip(),
+            row.get("ubicacion_pk_id") not in (None, ""),
+            row.get("ubicacion_lat") not in (None, ""),
+            str(row.get("ubicacion_tramo") or "").strip(),
+            str(row.get("ubicacion_costado") or "").strip(),
+            str(row.get("ubicacion_infraestructura") or "").strip(),
+        ])
+        if not tiene:
+            continue
         _require_tramo_fila(row.get("tramo"), contexto="fila de Materiales")
     for row in equipos_uso or []:
         if not isinstance(row, dict):
@@ -1014,7 +1047,8 @@ def _normalizar_horas_intermedias(raw) -> List[dict]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        hora = _parse_hora(item.get("hora"))
+        # Opcional: placeholder "--:--" u hora basura no debe tumbar el PUT (400).
+        hora = _parse_hora_opcional(item.get("hora"))
         if not hora:
             continue
         nota = str(item.get("nota") or "").strip()
@@ -3256,10 +3290,8 @@ def _sync_usos(
     """
     Reemplaza los usos de la entrada.
 
-    CRÍTICO: insertar primero y borrar lo viejo después. El patrón anterior
-    (DELETE + insert con except silencioso) borraba la maquinaria y, si el
-    insert fallaba, devolvía éxito con lista vacía — la UI rehidrataba en
-    blanco y el usuario veía que «no guarda nada».
+    Inserta primero y borra lo viejo después: si el insert falla, se conservan
+    los usos existentes y se responde 400 con el motivo (no wipe silencioso).
     """
     existentes = _list_usos(sb, int(entrada_id))
     if not isinstance(usos, list) or not usos:
@@ -3271,6 +3303,7 @@ def _sync_usos(
 
     rows_out: List[dict] = []
     errores: List[str] = []
+    n_con_equipo = 0
 
     for i, item in enumerate(usos):
         if not isinstance(item, dict):
@@ -3278,6 +3311,7 @@ def _sync_usos(
         nombre = str(item.get("equipo_nombre") or item.get("nombre") or "").strip()
         if not nombre:
             continue
+        n_con_equipo += 1
         equipo_id = item.get("equipo_id")
         if equipo_id is None:
             cat = upsert_equipo(
@@ -3309,8 +3343,9 @@ def _sync_usos(
             "equipo_nombre": nombre,
             "operador": str(item.get("operador") or "").strip() or None,
             "cantidad": cantidad,
-            "hora_inicio": _parse_hora(item.get("hora_inicio")),
-            "hora_fin": _parse_hora(item.get("hora_fin")),
+            # Horas opcionales: placeholder "--:--" no debe tumbar el guardado (400).
+            "hora_inicio": _parse_hora_opcional(item.get("hora_inicio")),
+            "hora_fin": _parse_hora_opcional(item.get("hora_fin")),
             "horas_intermedias": _normalizar_horas_intermedias(item.get("horas_intermedias")),
             "preoperacionales": _persist_adjuntos_sin_data_uri(
                 _normalizar_adjuntos_flex(item.get("preoperacionales") or [])
@@ -3340,24 +3375,24 @@ def _sync_usos(
         if inserted:
             rows_out.append(inserted[0])
         else:
-            errores.append(f"{nombre}: insert sin filas devueltas")
+            errores.append(
+                f"{nombre}: el servidor no confirmó el insert (RETURNING vacío)"
+            )
 
-    if errores and not rows_out:
-        # Nada insertó: conservar existentes (no borrar). Fallar visible al usuario.
+    if n_con_equipo > 0 and not rows_out:
         raise ValueError(
             "No se pudo guardar Maquinaria. " + "; ".join(errores[:3])
         )
 
-    # Borrar solo lo anterior cuando al menos un insert nuevo tuvo éxito.
     old_ids = [int(r["id"]) for r in existentes if r.get("id") is not None]
-    if old_ids:
+    if old_ids and rows_out:
         try:
             sb.table("seguimiento_bitacora_equipo_uso").delete().in_(
                 "id", old_ids,
             ).execute()
         except Exception as exc:
             _log.warning(
-                "bitacora._sync_usos cleanup batch falló: %s — borrando uno a uno",
+                "bitacora._sync_usos cleanup batch falló: %s — uno a uno",
                 exc,
             )
             for rid in old_ids:
