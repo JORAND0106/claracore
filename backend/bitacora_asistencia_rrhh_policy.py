@@ -1,8 +1,8 @@
 """
 Política Bitácora ↔ RRHH: identificación individual + documentación Aprobada.
 
-- Hasta 2026-09-24 23:59:59 America/Bogota: sin gate (comportamiento actual).
-- Desde 2026-09-25 00:00:00 America/Bogota: gate activo para todos los contratos
+- Hasta 2026-09-27 23:59:59 America/Bogota: sin gate (comportamiento actual).
+- Desde 2026-09-28 00:00:00 America/Bogota: gate activo para todos los contratos
   excepto el ID 3, que permanece exento hasta activación manual (Desarrollador).
 """
 from __future__ import annotations
@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 
 TZ_BOGOTA = ZoneInfo("America/Bogota")
 
-# Medianoche Colombia del 25-sep-2026: primer instante con gate activo.
-BITACORA_ASISTENCIA_RRHH_CORTE = datetime(2026, 9, 25, 0, 0, 0, tzinfo=TZ_BOGOTA)
+# Medianoche Colombia del 28-sep-2026: primer instante con gate activo.
+BITACORA_ASISTENCIA_RRHH_CORTE = datetime(2026, 9, 28, 0, 0, 0, tzinfo=TZ_BOGOTA)
 
 # Contrato exento indefinidamente hasta toggle manual.
 BITACORA_ASISTENCIA_RRHH_EXENTO_CONTRATO_ID = 3
@@ -31,7 +31,7 @@ def ahora_bogota(now: Optional[datetime] = None) -> datetime:
 
 
 def cutover_asistencia_rrhh_activo(now: Optional[datetime] = None) -> bool:
-    """True a partir del 25-sep-2026 00:00:00 America/Bogota."""
+    """True a partir del 28-sep-2026 00:00:00 America/Bogota."""
     return ahora_bogota(now) >= BITACORA_ASISTENCIA_RRHH_CORTE
 
 

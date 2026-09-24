@@ -1,11 +1,11 @@
 /**
  * Política Bitácora ↔ RRHH (espejo de backend/bitacora_asistencia_rrhh_policy.py).
  *
- * Corte: 2026-09-25 00:00:00 America/Bogota.
+ * Corte: 2026-09-28 00:00:00 America/Bogota.
  * Contrato exento: ID 3 hasta activación manual (Desarrollador).
  */
 
-export const BITACORA_ASISTENCIA_RRHH_CORTE_ISO = '2026-09-25'
+export const BITACORA_ASISTENCIA_RRHH_CORTE_ISO = '2026-09-28'
 export const BITACORA_ASISTENCIA_RRHH_EXENTO_CONTRATO_ID = 3
 
 export const HINT_DOCUMENTACION_NO_APROBADA =
@@ -30,7 +30,7 @@ export function hoyISOBogotaFrom(now = new Date()) {
   }
 }
 
-/** True a partir del 25-sep-2026 (día inclusive en Bogotá). */
+/** True a partir del 28-sep-2026 (día inclusive en Bogotá). */
 export function cutoverAsistenciaRrhhActivo(now = new Date()) {
   return hoyISOBogotaFrom(now) >= BITACORA_ASISTENCIA_RRHH_CORTE_ISO
 }

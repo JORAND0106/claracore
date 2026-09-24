@@ -103,7 +103,7 @@ export default function BitacoraAsistenciaRrhhToggle({
           ? 'Asistencia individual + documentación Aprobada (como el resto de contratos).'
           : (corte
             ? 'Exento: sigue en cargo/cuadrilla hasta que active este botón.'
-            : 'El gate global inicia el 25-sep-2026; este contrato permanece exento hasta activarlo.')}
+            : `El gate global inicia el ${BITACORA_ASISTENCIA_RRHH_CORTE_ISO.slice(8, 10)}-sep-${BITACORA_ASISTENCIA_RRHH_CORTE_ISO.slice(0, 4)}; este contrato permanece exento hasta activarlo.`)}
       </div>
       {err ? (
         <div style={{ fontSize: 11, color: '#B91C1C', textAlign: 'right' }}>{err}</div>
