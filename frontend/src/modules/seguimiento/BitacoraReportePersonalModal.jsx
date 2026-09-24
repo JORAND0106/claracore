@@ -243,7 +243,17 @@ function TablaEmpresaTramo({ tituloSeccion, matrix, t, border, text, muted }) {
 
 function TablaMateriales({ matrix, t, border, text, muted }) {
   if (!matrix?.hasData) return null
-  const { tramos, cells, rowTotals, colTotals, grandTotal } = matrix
+  const { rows = [], colTotals = {}, grandTotal = {} } = matrix
+  const thBase = {
+    padding: '8px 10px',
+    background: t?.primary ? `${t.primary}14` : '#ddeff8',
+    borderBottom: `1px solid ${border}`,
+    borderRight: `1px solid ${border}`,
+    fontWeight: 800,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: '0.03em',
+  }
   return (
     <div style={{ marginBottom: 8 }}>
       <h2 style={{
@@ -262,64 +272,30 @@ function TablaMateriales({ matrix, t, border, text, muted }) {
             borderCollapse: 'collapse',
             fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
             fontSize: 12,
-            minWidth: 320,
+            minWidth: 360,
           }}
         >
           <thead>
             <tr>
-              <th
-                style={{
-                  textAlign: 'left',
-                  padding: '8px 10px',
-                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
-                  borderBottom: `1px solid ${border}`,
-                  borderRight: `1px solid ${border}`,
-                  color: muted,
-                  fontWeight: 800,
-                  fontSize: 11,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.03em',
-                }}
-              >
+              <th style={{ ...thBase, textAlign: 'left', color: muted }}>
+                Tipo de material
+              </th>
+              <th style={{ ...thBase, textAlign: 'left', color: muted }}>
                 Tramo
               </th>
-              <th
-                style={{
-                  padding: '8px 10px',
-                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
-                  borderBottom: `1px solid ${border}`,
-                  borderRight: `1px solid ${border}`,
-                  color: text,
-                  fontWeight: 800,
-                  fontSize: 11,
-                  textAlign: 'center',
-                }}
-              >
+              <th style={{ ...thBase, textAlign: 'center', color: text }}>
                 Ingreso
               </th>
-              <th
-                style={{
-                  padding: '8px 10px',
-                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
-                  borderBottom: `1px solid ${border}`,
-                  borderRight: `1px solid ${border}`,
-                  color: text,
-                  fontWeight: 800,
-                  fontSize: 11,
-                  textAlign: 'center',
-                }}
-              >
+              <th style={{ ...thBase, textAlign: 'center', color: text }}>
                 Salida
               </th>
               <th
                 style={{
-                  padding: '8px 10px',
+                  ...thBase,
+                  borderRight: 'none',
                   background: t?.primary ? `${t.primary}22` : '#cfe7f5',
-                  borderBottom: `1px solid ${border}`,
-                  color: text,
-                  fontWeight: 800,
-                  fontSize: 11,
                   textAlign: 'center',
+                  color: text,
                 }}
               >
                 Total
@@ -327,31 +303,39 @@ function TablaMateriales({ matrix, t, border, text, muted }) {
             </tr>
           </thead>
           <tbody>
-            {tramos.map((tr) => {
-              const c = cells[tr.key] || { ingreso: 0, salida: 0 }
-              const rt = rowTotals[tr.key] || { ingreso: 0, salida: 0 }
-              return (
-                <tr key={tr.key}>
-                  <td
-                    style={{
-                      padding: '8px 10px',
-                      borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
-                      borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
-                      color: text,
-                      fontWeight: 700,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {tr.nombre}
-                  </td>
-                  <CeldaCantidad value={c.ingreso} t={t} />
-                  <CeldaCantidad value={c.salida} t={t} />
-                  <CeldaCantidad value={(rt.ingreso || 0) + (rt.salida || 0)} t={t} strong />
-                </tr>
-              )
-            })}
+            {rows.map((r) => (
+              <tr key={r.key}>
+                <td
+                  style={{
+                    padding: '8px 10px',
+                    borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
+                    borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+                    color: text,
+                    fontWeight: 700,
+                  }}
+                >
+                  {r.tipo}
+                </td>
+                <td
+                  style={{
+                    padding: '8px 10px',
+                    borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
+                    borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+                    color: text,
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {r.tramo}
+                </td>
+                <CeldaCantidad value={r.ingreso} t={t} />
+                <CeldaCantidad value={r.salida} t={t} />
+                <CeldaCantidad value={(r.ingreso || 0) + (r.salida || 0)} t={t} strong />
+              </tr>
+            ))}
             <tr>
               <td
+                colSpan={2}
                 style={{
                   padding: '8px 10px',
                   borderTop: `2px solid ${border}`,

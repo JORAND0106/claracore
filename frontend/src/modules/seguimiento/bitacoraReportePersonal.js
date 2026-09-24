@@ -85,6 +85,8 @@ function cantidadMaterial(m) {
   return n
 }
 
+export const SIN_TIPO_MATERIAL_LABEL = 'Sin tipo'
+
 function materialRowActiva(m) {
   if (!m || typeof m !== 'object') return false
   const tipo = String(m.tipo_material || '').trim()
@@ -93,6 +95,16 @@ function materialRowActiva(m) {
   const cant = m.cantidad
   const hasCant = cant !== '' && cant != null && Number.isFinite(Number(cant)) && Number(cant) > 0
   return Boolean(tipo || prov || placa || hasCant)
+}
+
+function labelTipoMaterial(raw) {
+  const n = String(raw || '').trim()
+  return n || SIN_TIPO_MATERIAL_LABEL
+}
+
+function keyTipoMaterial(raw) {
+  const n = String(raw || '').trim().toLowerCase()
+  return n || '__sin_tipo__'
 }
 
 function sortEmpresas(a, b) {
@@ -187,53 +199,56 @@ function buildEmpresaTramoMatrix(rows, {
 }
 
 function buildMaterialesMatrix(materiales = []) {
-  /** @type {Map<string, { key: string, nombre: string }>} */
-  const tramoMap = new Map()
-  /** @type {Map<string, { ingreso: number, salida: number }>} */
-  const cells = new Map()
-
-  const ensureTramo = (raw) => {
-    const nombre = labelTramoBitacora(raw)
-    const key = normalizeTramoValue(raw) ? String(normalizeTramoValue(raw)) : '__sin_tramo__'
-    if (!tramoMap.has(key)) tramoMap.set(key, { key, nombre })
-    return key
-  }
+  /** @type {Map<string, { key: string, tipo: string, tipoKey: string, tramo: string, tramoKey: string, ingreso: number, salida: number }>} */
+  const rowMap = new Map()
 
   for (const m of Array.isArray(materiales) ? materiales : []) {
     if (!materialRowActiva(m)) continue
-    const tk = ensureTramo(m?.tramo)
-    if (!cells.has(tk)) cells.set(tk, { ingreso: 0, salida: 0 })
-    const cell = cells.get(tk)
+    const tipoKey = keyTipoMaterial(m?.tipo_material)
+    const tipo = labelTipoMaterial(m?.tipo_material)
+    const tramoNorm = normalizeTramoValue(m?.tramo)
+    const tramoKey = tramoNorm ? String(tramoNorm) : '__sin_tramo__'
+    const tramo = labelTramoBitacora(m?.tramo)
+    const key = `${tipoKey}||${tramoKey}`
+    if (!rowMap.has(key)) {
+      rowMap.set(key, {
+        key,
+        tipo,
+        tipoKey,
+        tramo,
+        tramoKey,
+        ingreso: 0,
+        salida: 0,
+      })
+    }
+    const row = rowMap.get(key)
     const delta = cantidadMaterial(m)
-    if (String(m?.movimiento || '').toLowerCase() === 'salida') cell.salida += delta
-    else cell.ingreso += delta
+    if (String(m?.movimiento || '').toLowerCase() === 'salida') row.salida += delta
+    else row.ingreso += delta
   }
 
-  const tramos = [...tramoMap.values()].sort(sortTramos)
-  /** @type {Record<string, { ingreso: number, salida: number }>} */
-  const cellObj = {}
-  /** @type {Record<string, { ingreso: number, salida: number }>} */
-  const rowTotals = {}
+  const rows = [...rowMap.values()].sort((a, b) => {
+    if (a.tipoKey === '__sin_tipo__' && b.tipoKey !== '__sin_tipo__') return 1
+    if (b.tipoKey === '__sin_tipo__' && a.tipoKey !== '__sin_tipo__') return -1
+    const byTipo = a.tipo.localeCompare(b.tipo, 'es')
+    if (byTipo !== 0) return byTipo
+    if (a.tramoKey === '__sin_tramo__') return 1
+    if (b.tramoKey === '__sin_tramo__') return -1
+    return a.tramo.localeCompare(b.tramo, 'es', { numeric: true })
+  })
+
   const colTotals = { ingreso: 0, salida: 0 }
-  const grandTotal = { ingreso: 0, salida: 0 }
-
-  for (const tr of tramos) {
-    const c = cells.get(tr.key) || { ingreso: 0, salida: 0 }
-    cellObj[tr.key] = { ingreso: c.ingreso, salida: c.salida }
-    rowTotals[tr.key] = { ingreso: c.ingreso, salida: c.salida }
-    colTotals.ingreso += c.ingreso
-    colTotals.salida += c.salida
-    grandTotal.ingreso += c.ingreso
-    grandTotal.salida += c.salida
+  for (const r of rows) {
+    colTotals.ingreso += r.ingreso
+    colTotals.salida += r.salida
   }
+  const grandTotal = { ingreso: colTotals.ingreso, salida: colTotals.salida }
 
   return {
-    tramos,
-    cells: cellObj,
-    rowTotals,
+    rows,
     colTotals,
     grandTotal,
-    hasData: grandTotal.ingreso > 0 || grandTotal.salida > 0,
+    hasData: rows.length > 0,
   }
 }
 
