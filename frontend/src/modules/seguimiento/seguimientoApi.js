@@ -266,6 +266,8 @@ export function createSeguimientoApi(contratoId, token) {
       return get(`/seguimiento/${cid}/bitacora/equipos${qs}`)
     },
     upsertBitacoraEquipo: (body) => send('POST', `/seguimiento/${cid}/bitacora/equipos`, body),
+    deleteBitacoraEquipo: (equipoId) =>
+      send('DELETE', `/seguimiento/${cid}/bitacora/equipos/${equipoId}`),
     listBitacoraCargos: () => get(`/seguimiento/${cid}/bitacora/cargos`),
     upsertBitacoraCargo: (body) => send('POST', `/seguimiento/${cid}/bitacora/cargos`, body),
     listBitacoraTiposMaterial: (q = '') => {

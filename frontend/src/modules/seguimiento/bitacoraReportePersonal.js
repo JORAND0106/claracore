@@ -1,6 +1,6 @@
 /**
  * Resumen cruzado Tramo × Empresa (Bitácora Diario):
- * cantidades de personal y maquinaria, sin listado nominal.
+ * tablas separadas de Personal, Maquinaria y (si aplica) Materiales.
  * Empresa de maquinaria = empresa del operador vía catálogo RRHH.
  */
 
@@ -77,6 +77,24 @@ function cantidadMaquinaria(uso) {
   return n
 }
 
+function cantidadMaterial(m) {
+  const c = m?.cantidad
+  if (c === '' || c == null) return 1
+  const n = Number(c)
+  if (!Number.isFinite(n) || n <= 0) return 1
+  return n
+}
+
+function materialRowActiva(m) {
+  if (!m || typeof m !== 'object') return false
+  const tipo = String(m.tipo_material || '').trim()
+  const prov = String(m.proveedor || '').trim()
+  const placa = String(m.placa || '').trim()
+  const cant = m.cantidad
+  const hasCant = cant !== '' && cant != null && Number.isFinite(Number(cant)) && Number(cant) > 0
+  return Boolean(tipo || prov || placa || hasCant)
+}
+
 function sortEmpresas(a, b) {
   if (a.key === keyEmpresa(EMPRESA_SIN_NOMBRE)) return 1
   if (b.key === keyEmpresa(EMPRESA_SIN_NOMBRE)) return -1
@@ -89,29 +107,15 @@ function sortTramos(a, b) {
   return a.nombre.localeCompare(b.nombre, 'es', { numeric: true })
 }
 
-/**
- * Matriz cruzada Tramo × Empresa con cantidades consolidadas.
- *
- * @returns {{
- *   tramos: { key: string, nombre: string }[],
- *   empresas: { key: string, nombre: string, logo_url: string|null }[],
- *   cells: Record<string, Record<string, { personal: number, maquinaria: number }>>,
- *   rowTotals: Record<string, { personal: number, maquinaria: number }>,
- *   colTotals: Record<string, { personal: number, maquinaria: number }>,
- *   grandTotal: { personal: number, maquinaria: number },
- * }}
- */
-export function buildResumenTramoEmpresa({
-  asistencia = [],
-  usos = [],
-  rrhhCatalogo = [],
+function buildEmpresaTramoMatrix(rows, {
   logosByEmpresaKey = {},
+  field,
 } = {}) {
   /** @type {Map<string, { key: string, nombre: string }>} */
   const tramoMap = new Map()
   /** @type {Map<string, { key: string, nombre: string, logo_url: string|null }>} */
   const empresaMap = new Map()
-  /** @type {Map<string, Map<string, { personal: number, maquinaria: number }>>} */
+  /** @type {Map<string, Map<string, number>>} */
   const cells = new Map()
 
   const ensureTramo = (raw) => {
@@ -135,13 +139,117 @@ export function buildResumenTramoEmpresa({
     return key
   }
 
-  const bump = (tramoKey, empresaKey, field, delta) => {
+  const bump = (tramoKey, empresaKey, delta) => {
     if (!cells.has(tramoKey)) cells.set(tramoKey, new Map())
     const row = cells.get(tramoKey)
-    if (!row.has(empresaKey)) row.set(empresaKey, emptyCell())
-    row.get(empresaKey)[field] += delta
+    row.set(empresaKey, (row.get(empresaKey) || 0) + delta)
   }
 
+  for (const r of rows) {
+    bump(ensureTramo(r.tramo), ensureEmpresa(r.empresa), r.delta)
+  }
+
+  const tramos = [...tramoMap.values()].sort(sortTramos)
+  const empresas = [...empresaMap.values()].sort(sortEmpresas)
+
+  /** @type {Record<string, Record<string, number>>} */
+  const cellObj = {}
+  /** @type {Record<string, number>} */
+  const rowTotals = {}
+  /** @type {Record<string, number>} */
+  const colTotals = {}
+  let grandTotal = 0
+
+  for (const emp of empresas) colTotals[emp.key] = 0
+
+  for (const tr of tramos) {
+    cellObj[tr.key] = {}
+    rowTotals[tr.key] = 0
+    for (const emp of empresas) {
+      const n = cells.get(tr.key)?.get(emp.key) || 0
+      cellObj[tr.key][emp.key] = n
+      rowTotals[tr.key] += n
+      colTotals[emp.key] += n
+      grandTotal += n
+    }
+  }
+
+  return {
+    field: field || null,
+    tramos,
+    empresas,
+    cells: cellObj,
+    rowTotals,
+    colTotals,
+    grandTotal,
+    hasData: grandTotal > 0,
+  }
+}
+
+function buildMaterialesMatrix(materiales = []) {
+  /** @type {Map<string, { key: string, nombre: string }>} */
+  const tramoMap = new Map()
+  /** @type {Map<string, { ingreso: number, salida: number }>} */
+  const cells = new Map()
+
+  const ensureTramo = (raw) => {
+    const nombre = labelTramoBitacora(raw)
+    const key = normalizeTramoValue(raw) ? String(normalizeTramoValue(raw)) : '__sin_tramo__'
+    if (!tramoMap.has(key)) tramoMap.set(key, { key, nombre })
+    return key
+  }
+
+  for (const m of Array.isArray(materiales) ? materiales : []) {
+    if (!materialRowActiva(m)) continue
+    const tk = ensureTramo(m?.tramo)
+    if (!cells.has(tk)) cells.set(tk, { ingreso: 0, salida: 0 })
+    const cell = cells.get(tk)
+    const delta = cantidadMaterial(m)
+    if (String(m?.movimiento || '').toLowerCase() === 'salida') cell.salida += delta
+    else cell.ingreso += delta
+  }
+
+  const tramos = [...tramoMap.values()].sort(sortTramos)
+  /** @type {Record<string, { ingreso: number, salida: number }>} */
+  const cellObj = {}
+  /** @type {Record<string, { ingreso: number, salida: number }>} */
+  const rowTotals = {}
+  const colTotals = { ingreso: 0, salida: 0 }
+  const grandTotal = { ingreso: 0, salida: 0 }
+
+  for (const tr of tramos) {
+    const c = cells.get(tr.key) || { ingreso: 0, salida: 0 }
+    cellObj[tr.key] = { ingreso: c.ingreso, salida: c.salida }
+    rowTotals[tr.key] = { ingreso: c.ingreso, salida: c.salida }
+    colTotals.ingreso += c.ingreso
+    colTotals.salida += c.salida
+    grandTotal.ingreso += c.ingreso
+    grandTotal.salida += c.salida
+  }
+
+  return {
+    tramos,
+    cells: cellObj,
+    rowTotals,
+    colTotals,
+    grandTotal,
+    hasData: grandTotal.ingreso > 0 || grandTotal.salida > 0,
+  }
+}
+
+/**
+ * Tablas separadas Tramo × Empresa (Personal / Maquinaria) + Materiales (Ingreso/Salida).
+ *
+ * Conserva `cells` / totales combinados `{personal,maquinaria}` por compatibilidad.
+ */
+export function buildResumenTramoEmpresa({
+  asistencia = [],
+  usos = [],
+  materiales = [],
+  rrhhCatalogo = [],
+  logosByEmpresaKey = {},
+} = {}) {
+  const personalRows = []
   for (const r of Array.isArray(asistencia) ? asistencia : []) {
     const nombre = String(r?.nombre || '').trim()
     if (!nombre) continue
@@ -149,19 +257,45 @@ export function buildResumenTramoEmpresa({
     if (!estadoCuentaEnResumen(estado)) continue
     const cargo = normalizarCargoNombrePropio(r?.cargo || '')
     if (cargo && esEtiquetaAdministrativoExcluida(cargo)) continue
-    const tk = ensureTramo(r?.tramo)
-    const ek = ensureEmpresa(nombreEmpresaAsistencia(r))
-    bump(tk, ek, 'personal', 1)
+    personalRows.push({
+      tramo: r?.tramo,
+      empresa: nombreEmpresaAsistencia(r),
+      delta: 1,
+    })
   }
 
+  const maquinariaRows = []
   for (const u of Array.isArray(usos) ? usos : []) {
     const equipo = String(u?.equipo_nombre || '').trim()
     if (!equipo) continue
-    const tk = ensureTramo(u?.tramo)
-    const ek = ensureEmpresa(empresaDeOperadorUso(u, rrhhCatalogo))
-    bump(tk, ek, 'maquinaria', cantidadMaquinaria(u))
+    maquinariaRows.push({
+      tramo: u?.tramo,
+      empresa: empresaDeOperadorUso(u, rrhhCatalogo),
+      delta: cantidadMaquinaria(u),
+    })
   }
 
+  const personal = buildEmpresaTramoMatrix(personalRows, {
+    logosByEmpresaKey,
+    field: 'personal',
+  })
+  const maquinaria = buildEmpresaTramoMatrix(maquinariaRows, {
+    logosByEmpresaKey,
+    field: 'maquinaria',
+  })
+  const materialesTabla = buildMaterialesMatrix(materiales)
+
+  // Matriz combinada (compat tests / callers legacy).
+  /** @type {Map<string, { key: string, nombre: string }>} */
+  const tramoMap = new Map()
+  /** @type {Map<string, { key: string, nombre: string, logo_url: string|null }>} */
+  const empresaMap = new Map()
+  for (const tr of [...personal.tramos, ...maquinaria.tramos]) {
+    if (!tramoMap.has(tr.key)) tramoMap.set(tr.key, tr)
+  }
+  for (const emp of [...personal.empresas, ...maquinaria.empresas]) {
+    if (!empresaMap.has(emp.key)) empresaMap.set(emp.key, emp)
+  }
   const tramos = [...tramoMap.values()].sort(sortTramos)
   const empresas = [...empresaMap.values()].sort(sortEmpresas)
 
@@ -179,19 +313,23 @@ export function buildResumenTramoEmpresa({
     cellObj[tr.key] = {}
     rowTotals[tr.key] = emptyCell()
     for (const emp of empresas) {
-      const c = cells.get(tr.key)?.get(emp.key) || emptyCell()
-      const cell = { personal: c.personal, maquinaria: c.maquinaria }
+      const p = personal.cells[tr.key]?.[emp.key] || 0
+      const m = maquinaria.cells[tr.key]?.[emp.key] || 0
+      const cell = { personal: p, maquinaria: m }
       cellObj[tr.key][emp.key] = cell
-      rowTotals[tr.key].personal += cell.personal
-      rowTotals[tr.key].maquinaria += cell.maquinaria
-      colTotals[emp.key].personal += cell.personal
-      colTotals[emp.key].maquinaria += cell.maquinaria
-      grandTotal.personal += cell.personal
-      grandTotal.maquinaria += cell.maquinaria
+      rowTotals[tr.key].personal += p
+      rowTotals[tr.key].maquinaria += m
+      colTotals[emp.key].personal += p
+      colTotals[emp.key].maquinaria += m
+      grandTotal.personal += p
+      grandTotal.maquinaria += m
     }
   }
 
   return {
+    personal,
+    maquinaria,
+    materiales: materialesTabla,
     tramos,
     empresas,
     cells: cellObj,
@@ -237,7 +375,7 @@ export function nombreArchivoResumenPng(fecha) {
   return `resumen-tramo-empresa-${f}.png`
 }
 
-/** Formato compacto de celda: «3p · 1m» o «—» si vacío. */
+/** Formato compacto de celda combinada: «3p · 1m» o «—» si vacío. */
 export function formatoCeldaResumen({ personal = 0, maquinaria = 0 } = {}) {
   const p = Number(personal) || 0
   const m = Number(maquinaria) || 0
@@ -246,4 +384,18 @@ export function formatoCeldaResumen({ personal = 0, maquinaria = 0 } = {}) {
   if (p > 0) parts.push(`${p}p`)
   if (m > 0) parts.push(`${m}m`)
   return parts.join(' · ')
+}
+
+/** Cantidad simple para tablas separadas. */
+export function formatoCeldaCantidad(n) {
+  const v = Number(n) || 0
+  return v > 0 ? String(v) : '—'
+}
+
+/** Celda de materiales: ingreso / salida. */
+export function formatoCeldaMateriales({ ingreso = 0, salida = 0 } = {}) {
+  const i = Number(ingreso) || 0
+  const s = Number(salida) || 0
+  if (i <= 0 && s <= 0) return '—'
+  return `${i} / ${s}`
 }

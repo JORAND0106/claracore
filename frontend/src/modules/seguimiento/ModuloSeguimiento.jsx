@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BookOpen, Users } from 'lucide-react'
+import { BookOpen, Truck, Users } from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
 import BitacoraAsistenciaRrhhToggle from './BitacoraAsistenciaRrhhToggle'
 import { accesoBitacora } from './bitacoraPermisos'
 import ExternosDepuracionModal from './ExternosDepuracionModal'
+import MaquinariaCatalogoModal from './MaquinariaCatalogoModal'
 import LibroDigitalVista, { LibroDigitalSelector } from './LibroDigitalVista'
 import SeguimientoCalendarioPanel from './SeguimientoCalendarioPanel'
 import { accesoSeguimiento } from './seguimientoPermisos'
@@ -34,6 +35,7 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const [libroSelectorOpen, setLibroSelectorOpen] = useState(false)
   const [libroModo, setLibroModo] = useState(null) // 'actas' | 'bitacora' | null
   const [externosDepuracionOpen, setExternosDepuracionOpen] = useState(false)
+  const [maquinariaCatalogoOpen, setMaquinariaCatalogoOpen] = useState(false)
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
@@ -117,6 +119,29 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
               <span>Externos</span>
             </button>
           )}
+          {permisosBitacora?.esDesarrollador && (
+            <button
+              type="button"
+              onClick={() => setMaquinariaCatalogoOpen(true)}
+              title="Gestionar catálogo de Maquinaria / equipos de Bitácora"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '10px 14px',
+                borderRadius: 10,
+                border: `1px solid ${t.border}`,
+                background: t.bgCard || t.bg || 'transparent',
+                color: t.text,
+                fontWeight: 700,
+                fontSize: 'var(--cc-sm)',
+                cursor: 'pointer',
+              }}
+            >
+              <Truck size={17} strokeWidth={2.3} aria-hidden />
+              <span>Maquinaria</span>
+            </button>
+          )}
           <button
             type="button"
             className="cc-seguim-libro-btn"
@@ -190,6 +215,15 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           token={token}
           contratoId={cid}
           onClose={() => setExternosDepuracionOpen(false)}
+        />
+      )}
+
+      {maquinariaCatalogoOpen && (
+        <MaquinariaCatalogoModal
+          t={t}
+          token={token}
+          contratoId={cid}
+          onClose={() => setMaquinariaCatalogoOpen(false)}
         />
       )}
     </div>
