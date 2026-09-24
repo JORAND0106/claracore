@@ -25,9 +25,8 @@ def _data_uri_png(w: int, h: int) -> str:
     return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
 
 
-def test_prepare_img_prioriza_blob_sobre_data_uri_gigante(monkeypatch):
-    """Con blob_path + data_uri enorme, no debe decodificar el data_uri."""
-    # Simula data_uri multi-MB (como foto de campo embebida en JSON).
+def test_prepare_img_omite_data_uri_gigante_y_usa_blob(monkeypatch):
+    """data_uri multi-MB se ignora; se usa blob (con tope de bytes)."""
     huge_b64 = "A" * (pdf._FOTO_DATA_URI_MAX_RAW + 50_000)
     huge = "data:image/jpeg;base64," + huge_b64
     assert len(huge) > pdf._FOTO_DATA_URI_MAX_RAW
@@ -129,9 +128,34 @@ def test_pdf_con_fotos_grandes_termina_en_segundos(monkeypatch):
     assert stages["html_kb"] < 2500, f"HTML demasiado grande: {stages['html_kb']:.0f} KB"
 
 
-def test_export_pdf_frontend_timeout_respaldo():
+def test_export_pdf_frontend_timeout_no_enmascara_lentitud():
+    """El timeout FE debe quedar en 45s — subir a 120s ocultaba el síntoma."""
     from pathlib import Path
     src = Path(__file__).resolve().parents[2] / "frontend/src/modules/seguimiento/seguimientoApi.js"
     text = src.read_text(encoding="utf-8")
-    assert "apiFetchSignal(120000)" in text
-    assert "bitacora/export/pdf" in text
+    # Solo el export de un día (no el de rango).
+    idx = text.find("exportBitacoraPdfBlob")
+    assert idx >= 0
+    chunk = text[idx: idx + 900]
+    assert "apiFetchSignal(45000)" in chunk
+    assert "apiFetchSignal(120000)" not in chunk
+    assert "bitacora/export/pdf" in chunk
+
+
+def test_prepare_img_blob_respeta_timeout(monkeypatch):
+    """Si Azure cuelga, la foto se omite en < timeout+margen — no minutos."""
+    import bitacora_pdf as pdf
+
+    def hang(*_a, **_k):
+        time.sleep(30)
+        return b"x", "image/jpeg"
+
+    monkeypatch.setattr(pdf, "leer_media_bitacora", hang)
+    t0 = time.perf_counter()
+    out = pdf._prepare_img_asset(
+        {"blob_path": "seguimiento-bitacora/1/x.jpg"},
+        1,
+    )
+    elapsed = time.perf_counter() - t0
+    assert out is None
+    assert elapsed < pdf._FOTO_BLOB_DOWNLOAD_TIMEOUT_S + 2.5

@@ -35,20 +35,23 @@ _LOGO_W = 72.0
 _FOTO_BOX_W = 170.0
 _FOTO_BOX_H = 112.0
 _FOTO_MAX_DIARIO = 4
-# Resolución baja para PDF: xhtml2pdf escala mal con JPEG grandes embebidos
-# (cada foto multi-MB vía data_uri/Azure sumaba decenas de segundos).
+# Resolución baja para PDF: xhtml2pdf escala mal con JPEG grandes embebidos.
 _FOTO_MAX_PX_W = 360
 _FOTO_MAX_PX_H = 240
 _LOGO_MAX_PX_W = 220
 _LOGO_MAX_PX_H = 80
-# No procesar data_uri embebidos enormes si ya hay blob_path (o como tope duro).
-_FOTO_DATA_URI_MAX_RAW = 1_500_000
+# Tope duro de bytes descargados/decodificados por foto (PDF no necesita multi-MB).
+_FOTO_BLOB_MAX_BYTES = 2_000_000
+_FOTO_DATA_URI_MAX_RAW = 800_000
+# Azure sin timeout propio: acotar descarga o la generación cuelga minutos.
+_FOTO_BLOB_DOWNLOAD_TIMEOUT_S = 4.0
+_HTTP_IMG_TIMEOUT = 2.5
+# Pocos workers: demasiadas descargas Azure en paralelo empeoran el wall-clock.
+_PDF_ASSET_WORKERS = 3
 
 _LOGO_URI_CACHE: Dict[str, Tuple[float, str]] = {}
 _LOGO_URI_CACHE_LOCK = threading.Lock()
 _LOGO_URI_CACHE_TTL = 600.0
-_HTTP_IMG_TIMEOUT = 2.5
-_PDF_ASSET_WORKERS = 8
 _PDF_BYTES_CACHE: Dict[tuple, Tuple[float, bytes]] = {}
 _PDF_BYTES_CACHE_LOCK = threading.Lock()
 _PDF_BYTES_CACHE_TTL = 90.0
@@ -186,41 +189,71 @@ def _fit_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
         return round(max_w * 0.55, 2), round(max_h, 2)
 
 
+def _leer_blob_con_timeout(contrato_id: int, path: str) -> Tuple[bytes, str]:
+    """Descarga Azure con tope de tiempo; sin esto PDF puede colgar minutos.
+
+    Importante: ``shutdown(wait=False)`` — si usamos el context manager con
+    wait=True, un download colgado sigue bloqueando al salir del ``with``.
+    """
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = pool.submit(leer_media_bitacora, contrato_id, path)
+        return fut.result(timeout=_FOTO_BLOB_DOWNLOAD_TIMEOUT_S)
+    finally:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            pool.shutdown(wait=False)
+
+
 def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float, float]]:
     """Resuelve imagen a data-URI redimensionada + tamaño en pt (una pasada).
 
-    Prioriza ``blob_path`` (Azure) sobre ``data_uri`` embebido en el JSON de la
-    entrada: los data_uri de alta resolución (varios MB) eran el cuello de botella
-    dominante en vista previa / descarga (~minutos en xhtml2pdf).
+    Estrategia (producción real):
+    1. Si hay ``data_uri`` compacto (p. ej. preview), usarlo — evita Azure.
+    2. Si hay ``blob_path``, descargar con timeout corto y tope de bytes.
+    3. Si Azure falla/timeout/excede tope, NO reintentar data_uri multi-MB
+       (eso era el camino de minutos en xhtml2pdf).
     """
     if not isinstance(im, dict):
         return None
     uri = ""
-
     path = str(im.get("blob_path") or "").strip()
-    if path:
+    raw_data_uri = str(im.get("data_uri") or "").strip()
+
+    # 1) data_uri ya compacto (preview / pending) — sin red.
+    if raw_data_uri.startswith("data:image"):
+        m = re.match(r"data:image/[^;]+;base64,(.+)$", raw_data_uri, re.I | re.S)
+        b64_len = len(m.group(1)) if m else len(raw_data_uri)
+        if b64_len <= _FOTO_DATA_URI_MAX_RAW:
+            try:
+                uri = _http_or_data_to_uri(raw_data_uri, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+            except Exception:
+                uri = ""
+
+    # 2) blob Azure con timeout — fotos persistidas típicas solo traen path.
+    if not uri and path:
         try:
-            data, _mime = leer_media_bitacora(contrato_id, path)
-            # Hasta ~12 MB: PIL reduce a 360×240 JPEG; antes el tope 6 MB
-            # descartaba fotos de celular y caía al data_uri multi-MB.
-            if data and len(data) <= 12_000_000:
+            data, _mime = _leer_blob_con_timeout(int(contrato_id), path)
+            if data and len(data) <= _FOTO_BLOB_MAX_BYTES:
                 uri = _bytes_to_pdf_data_uri(data, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
-        except Exception:
+            elif data:
+                _log.warning(
+                    "bitacora pdf: blob demasiado grande (%s bytes) path=%s — omitida",
+                    len(data), path,
+                )
+        except Exception as exc:
+            _log.warning(
+                "bitacora pdf: blob timeout/error path=%s: %s — foto omitida",
+                path, exc,
+            )
             uri = ""
 
+    # 3) URL HTTP (no data:)
     if not uri:
         url = str(im.get("url") or "").strip()
         if url and not url.startswith("data:"):
             uri = _http_or_data_to_uri(url, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
-
-    if not uri:
-        raw_data_uri = str(im.get("data_uri") or "").strip()
-        if raw_data_uri.startswith("data:image"):
-            # Evitar decodificar data_uri gigantes cuando el blob falló / no existe.
-            m = re.match(r"data:image/[^;]+;base64,(.+)$", raw_data_uri, re.I | re.S)
-            b64_len = len(m.group(1)) if m else len(raw_data_uri)
-            if b64_len <= _FOTO_DATA_URI_MAX_RAW or not path:
-                uri = _http_or_data_to_uri(raw_data_uri, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
 
     if not uri:
         return None
@@ -866,9 +899,8 @@ def generar_pdf_bitacora_dia(
     prepared_diario: Dict[int, Tuple[str, float, float]] = {}
     prepared_by_evento: Dict[int, Dict[int, Tuple[str, float, float]]] = {}
 
-    # Clima + logos + TODAS las fotos en un solo pool (antes: clima||logos, luego
-    # fotos del diario, luego fotos por evento en serie → minutos con muchas fotos).
-    n_workers = min(_PDF_ASSET_WORKERS + 2, max(4, 2 + len(foto_jobs)))
+    # Clima + logos + fotos en paralelo acotado (workers bajos: Azure se satura).
+    n_workers = min(_PDF_ASSET_WORKERS + 2, max(3, 2 + min(len(foto_jobs), _PDF_ASSET_WORKERS)))
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         fut_clima = pool.submit(
             consultar_clima_slots_3h,

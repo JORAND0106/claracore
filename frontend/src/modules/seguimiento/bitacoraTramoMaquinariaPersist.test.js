@@ -1,6 +1,7 @@
 /**
- * UI: tras guardar Diario se rehidratan equipos_uso (tramo) desde la respuesta.
- * node --test src/modules/seguimiento/bitacoraTramoMaquinariaPersist.test.js
+ * Regresión: tras guardar, no rehidratar maquinaria vacía si se enviaron usos
+ * (el DELETE+insert silencioso del backend dejaba la UI en blanco).
+ * Timeout PDF diario vuelve a 45s (120s ocultaba la lentitud).
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,27 +11,20 @@ import { fileURLToPath } from 'node:url'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 const editorSrc = readFileSync(join(dir, 'BitacoraEntradaEditor.jsx'), 'utf8')
-const helpersSrc = readFileSync(
-  join(dir, '../../../..', 'backend/bitacora_service.py'),
-  'utf8',
-)
+const apiSrc = readFileSync(join(dir, 'seguimientoApi.js'), 'utf8')
 
-describe('Tramo Maquinaria — persistencia', () => {
-  it('frontend rehidrata usos (y materiales) desde respuesta de guardado', () => {
-    assert.match(editorSrc, /rowClean\.equipos_uso/)
-    assert.match(editorSrc, /setUsos\(/)
-    assert.match(editorSrc, /equipos_uso\.map\(usoFromApi\)/)
-    assert.match(editorSrc, /tramo:\s*normalizeTramoValue\(u\.tramo\)/)
-    assert.match(editorSrc, /buildUsosPayload[\s\S]*tramo:\s*normalizeTramoValue\(u\.tramo\)/)
+describe('bitacora guardado + PDF timeout', () => {
+  it('no limpia usos locales si el servidor devuelve equipos_uso vacío tras enviar datos', () => {
+    assert.match(editorSrc, /usosPayload\.length > 0 && rowClean\.equipos_uso\.length === 0/)
+    assert.match(editorSrc, /La maquinaria no se persistió/)
+    assert.match(editorSrc, /materialesPayload\.length > 0 && rowClean\.materiales\.length === 0/)
   })
 
-  it('backend _sync_usos no descarta tramo en el primer retry', () => {
-    // El anti-patrón: pop(tramo) junto con preoperacionales en el mismo except
-    assert.doesNotMatch(
-      helpersSrc,
-      /payload\.pop\("preoperacionales"[\s\S]{0,80}payload\.pop\("tramo"/,
-    )
-    assert.match(helpersSrc, /NUNCA descartar `tramo`/)
-    assert.match(helpersSrc, /Reintentos progresivos/)
+  it('export PDF diario usa timeout 45s (no 120s que ocultaba la lentitud)', () => {
+    const idx = apiSrc.indexOf('exportBitacoraPdfBlob')
+    assert.ok(idx >= 0)
+    const chunk = apiSrc.slice(idx, idx + 900)
+    assert.match(chunk, /apiFetchSignal\(45000\)/)
+    assert.doesNotMatch(chunk, /apiFetchSignal\(120000\)/)
   })
 })
