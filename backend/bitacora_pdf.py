@@ -35,11 +35,14 @@ _LOGO_W = 72.0
 _FOTO_BOX_W = 170.0
 _FOTO_BOX_H = 112.0
 _FOTO_MAX_DIARIO = 4
-# ~3× resolución de caja landscape para nitidez sin embutir MB en xhtml2pdf.
-_FOTO_MAX_PX_W = 510
-_FOTO_MAX_PX_H = 336
+# Resolución baja para PDF: xhtml2pdf escala mal con JPEG grandes embebidos
+# (cada foto multi-MB vía data_uri/Azure sumaba decenas de segundos).
+_FOTO_MAX_PX_W = 360
+_FOTO_MAX_PX_H = 240
 _LOGO_MAX_PX_W = 220
 _LOGO_MAX_PX_H = 80
+# No procesar data_uri embebidos enormes si ya hay blob_path (o como tope duro).
+_FOTO_DATA_URI_MAX_RAW = 1_500_000
 
 _LOGO_URI_CACHE: Dict[str, Tuple[float, str]] = {}
 _LOGO_URI_CACHE_LOCK = threading.Lock()
@@ -142,24 +145,21 @@ def _http_or_data_to_uri(src: str, max_px_w: int, max_px_h: int) -> str:
 
 
 def _bytes_to_pdf_data_uri(raw: bytes, max_px_w: int, max_px_h: int) -> str:
-    """Aplana alpha y reduce a tamaño de render PDF (una sola pasada PIL)."""
+    """Aplana alpha, fuerza JPEG compacto y reduce a tamaño de render PDF."""
     try:
         from PIL import Image
         import io
         from almacen_firma_pdf import _flatten_image_bytes_on_white
 
-        flat, mime = _flatten_image_bytes_on_white(raw)
+        flat, _mime = _flatten_image_bytes_on_white(raw)
         im = Image.open(io.BytesIO(flat))
         im.load()
         if im.mode != "RGB":
             im = im.convert("RGB")
-        px_w, px_h = im.size
-        if px_w > max_px_w or px_h > max_px_h:
-            im.thumbnail((max_px_w, max_px_h), getattr(Image, "Resampling", Image).LANCZOS)
-            out = io.BytesIO()
-            im.save(out, format="JPEG", quality=82, optimize=True)
-            return f"data:image/jpeg;base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
-        return f"data:{mime or 'image/png'};base64,{base64.b64encode(flat).decode('ascii')}"
+        im.thumbnail((max_px_w, max_px_h), getattr(Image, "Resampling", Image).LANCZOS)
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=70, optimize=True)
+        return f"data:image/jpeg;base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
     except Exception:
         from almacen_firma_pdf import _data_uri_from_bytes
         return _data_uri_from_bytes(raw)
@@ -186,6 +186,53 @@ def _fit_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
         return round(max_w * 0.55, 2), round(max_h, 2)
 
 
+def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float, float]]:
+    """Resuelve imagen a data-URI redimensionada + tamaño en pt (una pasada).
+
+    Prioriza ``blob_path`` (Azure) sobre ``data_uri`` embebido en el JSON de la
+    entrada: los data_uri de alta resolución (varios MB) eran el cuello de botella
+    dominante en vista previa / descarga (~minutos en xhtml2pdf).
+    """
+    if not isinstance(im, dict):
+        return None
+    uri = ""
+
+    path = str(im.get("blob_path") or "").strip()
+    if path:
+        try:
+            data, _mime = leer_media_bitacora(contrato_id, path)
+            # Hasta ~12 MB: PIL reduce a 360×240 JPEG; antes el tope 6 MB
+            # descartaba fotos de celular y caía al data_uri multi-MB.
+            if data and len(data) <= 12_000_000:
+                uri = _bytes_to_pdf_data_uri(data, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+        except Exception:
+            uri = ""
+
+    if not uri:
+        url = str(im.get("url") or "").strip()
+        if url and not url.startswith("data:"):
+            uri = _http_or_data_to_uri(url, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+
+    if not uri:
+        raw_data_uri = str(im.get("data_uri") or "").strip()
+        if raw_data_uri.startswith("data:image"):
+            # Evitar decodificar data_uri gigantes cuando el blob falló / no existe.
+            m = re.match(r"data:image/[^;]+;base64,(.+)$", raw_data_uri, re.I | re.S)
+            b64_len = len(m.group(1)) if m else len(raw_data_uri)
+            if b64_len <= _FOTO_DATA_URI_MAX_RAW or not path:
+                uri = _http_or_data_to_uri(raw_data_uri, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
+
+    if not uri:
+        return None
+    w, h = _fit_pt(uri, _FOTO_BOX_W, _FOTO_BOX_H)
+    return uri, w, h
+
+
+def _resolve_img_uri(im: dict, contrato_id: int) -> str:
+    prepared = _prepare_img_asset(im, contrato_id)
+    return prepared[0] if prepared else ""
+
+
 def _logo_cell(url: Optional[str], placeholder: str, pal: dict, *, uri: Optional[str] = None) -> str:
     resolved = uri if uri is not None else _logo_uri(url)
     muted = pal["titulo_2"]["text"]
@@ -200,38 +247,6 @@ def _logo_cell(url: Optional[str], placeholder: str, pal: dict, *, uri: Optional
         f'<div style="border:0.3pt dashed {muted};min-height:{_LOGO_H}pt;'
         f'text-align:center;padding:1pt;font-size:4.5pt;color:{muted};">{_esc(placeholder)}</div>'
     )
-
-
-def _resolve_img_uri(im: dict, contrato_id: int) -> str:
-    prepared = _prepare_img_asset(im, contrato_id)
-    return prepared[0] if prepared else ""
-
-
-def _prepare_img_asset(im: dict, contrato_id: int) -> Optional[Tuple[str, float, float]]:
-    """Resuelve imagen a data-URI redimensionada + tamaño en pt (una pasada)."""
-    if not isinstance(im, dict):
-        return None
-    uri = ""
-    raw_data_uri = str(im.get("data_uri") or "").strip()
-    if raw_data_uri.startswith("data:image"):
-        uri = _http_or_data_to_uri(raw_data_uri, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
-    if not uri:
-        url = str(im.get("url") or "").strip()
-        if url:
-            uri = _http_or_data_to_uri(url, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
-    if not uri:
-        path = str(im.get("blob_path") or "").strip()
-        if path:
-            try:
-                data, _mime = leer_media_bitacora(contrato_id, path)
-                if data and len(data) <= 6_000_000:
-                    uri = _bytes_to_pdf_data_uri(data, _FOTO_MAX_PX_W, _FOTO_MAX_PX_H)
-            except Exception:
-                uri = ""
-    if not uri:
-        return None
-    w, h = _fit_pt(uri, _FOTO_BOX_W, _FOTO_BOX_H)
-    return uri, w, h
 
 
 def _prefetch_logos(contrato: dict) -> Dict[str, str]:
@@ -668,13 +683,21 @@ def _html_asistencia_colaboradores(diario: Optional[dict], pal: dict) -> str:
     )
 
 
-def _html_cuerpo_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> str:
+def _html_cuerpo_diario(
+    diario: Optional[dict],
+    contrato_id: int,
+    pal: dict,
+    *,
+    prepared_fotos: Optional[Dict[int, Tuple[str, float, float]]] = None,
+) -> str:
     """Materiales a ancho completo; debajo, Observaciones | Registro Fotográfico."""
     mats = _html_materiales(diario, pal)
     asist = _html_asistencia_colaboradores(diario, pal)
     left = _html_observaciones(diario, pal)
     fotos = _fotos_diario(diario)
-    prepared = _prefetch_fotos(fotos[:_FOTO_MAX_DIARIO], contrato_id)
+    prepared = prepared_fotos
+    if prepared is None:
+        prepared = _prefetch_fotos(fotos[:_FOTO_MAX_DIARIO], contrato_id)
     right = _html_registro_fotografico(
         fotos, contrato_id, pal, prepared_map=prepared,
     )
@@ -690,11 +713,17 @@ def _html_cuerpo_diario(diario: Optional[dict], contrato_id: int, pal: dict) -> 
 """
 
 
-def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) -> str:
+def _html_eventos_con_fotos(
+    eventos: List[dict],
+    contrato_id: int,
+    pal: dict,
+    *,
+    prepared_by_evento: Optional[Dict[int, Dict[int, Tuple[str, float, float]]]] = None,
+) -> str:
     parts = [_section_title("Eventos del día", pal)]
     t2 = pal["titulo_2"]
     lp = pal["linea_principal"]
-    for ev in eventos or []:
+    for ei, ev in enumerate(eventos or []):
         if not isinstance(ev, dict):
             continue
         tipo = _label_evento(ev.get("evento_tipo"))
@@ -714,11 +743,15 @@ def _html_eventos_con_fotos(eventos: List[dict], contrato_id: int, pal: dict) ->
         )
         imgs = [im for im in (ev.get("imagenes") or []) if isinstance(im, dict)]
         if imgs:
-            prepared = _prefetch_fotos(imgs[:4], contrato_id)
+            prepared = None
+            if prepared_by_evento is not None:
+                prepared = prepared_by_evento.get(ei)
+            if prepared is None:
+                prepared = _prefetch_fotos(imgs[:4], contrato_id)
             cells = [
                 _foto_cell(
                     im, contrato_id, "Evento", pal,
-                    prepared=prepared.get(i),
+                    prepared=prepared.get(i) if prepared else None,
                 )
                 for i, im in enumerate(imgs[:4])
             ]
@@ -820,8 +853,23 @@ def generar_pdf_bitacora_dia(
             "hora_inicio_labores": diario.get("hora_inicio_labores"),
         }
 
-    # Clima + logos en paralelo (cuellos de red independientes).
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    fotos_diario = _fotos_diario(diario)[:_FOTO_MAX_DIARIO]
+    # Jobs: ('d', idx) | ('e', evento_idx, img_idx)
+    foto_jobs: List[Tuple[tuple, dict]] = [
+        (("d", i), im) for i, im in enumerate(fotos_diario) if isinstance(im, dict)
+    ]
+    for ei, ev in enumerate(eventos):
+        imgs = [im for im in (ev.get("imagenes") or []) if isinstance(im, dict)][:4]
+        for ii, im in enumerate(imgs):
+            foto_jobs.append((("e", ei, ii), im))
+
+    prepared_diario: Dict[int, Tuple[str, float, float]] = {}
+    prepared_by_evento: Dict[int, Dict[int, Tuple[str, float, float]]] = {}
+
+    # Clima + logos + TODAS las fotos en un solo pool (antes: clima||logos, luego
+    # fotos del diario, luego fotos por evento en serie → minutos con muchas fotos).
+    n_workers = min(_PDF_ASSET_WORKERS + 2, max(4, 2 + len(foto_jobs)))
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
         fut_clima = pool.submit(
             consultar_clima_slots_3h,
             float(contrato["geo_lat"]),
@@ -830,19 +878,36 @@ def generar_pdf_bitacora_dia(
             manual=manual,
         )
         fut_logos = pool.submit(_prefetch_logos, contrato)
+        fut_fotos = {
+            pool.submit(_prepare_img_asset, im, int(contrato_id)): key
+            for key, im in foto_jobs
+        }
         slots = fut_clima.result()
         logo_uris = fut_logos.result()
+        for fut in as_completed(fut_fotos):
+            key = fut_fotos[fut]
+            prepared = fut.result()
+            if not prepared:
+                continue
+            if key[0] == "d":
+                prepared_diario[int(key[1])] = prepared
+            else:
+                ei, ii = int(key[1]), int(key[2])
+                prepared_by_evento.setdefault(ei, {})[ii] = prepared
     t_assets = time.perf_counter()
 
     hdr = _encabezado(contrato, fecha_iso, pal, mostrar_fecha=True, logo_uris=logo_uris)
     hoja1 = (
         hdr
         + _html_panel_superior(diario, slots, pal)
-        + _html_cuerpo_diario(diario, int(contrato_id), pal)
+        + _html_cuerpo_diario(
+            diario, int(contrato_id), pal, prepared_fotos=prepared_diario,
+        )
     )
-    # Eventos embebidos en el mismo documento (sin hoja separada).
     if eventos:
-        hoja1 += _html_eventos_con_fotos(eventos, int(contrato_id), pal)
+        hoja1 += _html_eventos_con_fotos(
+            eventos, int(contrato_id), pal, prepared_by_evento=prepared_by_evento,
+        )
 
     body_parts = [hoja1]
     t_html = time.perf_counter()
@@ -862,10 +927,12 @@ def generar_pdf_bitacora_dia(
     t_end = time.perf_counter()
     _pdf_cache_set(cache_key, pdf)
     _log.info(
-        "bitacora pdf contrato=%s fecha=%s bytes=%s data_ms=%.0f assets_ms=%.0f html_ms=%.0f pisa_ms=%.0f total_ms=%.0f",
+        "bitacora pdf contrato=%s fecha=%s bytes=%s fotos=%s data_ms=%.0f "
+        "assets_ms=%.0f html_ms=%.0f pisa_ms=%.0f total_ms=%.0f",
         contrato_id,
         fecha_iso,
         len(pdf or b""),
+        len(foto_jobs),
         (t_data - t0) * 1000,
         (t_assets - t_data) * 1000,
         (t_html - t_assets) * 1000,
