@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Download, Eye, Table2, X } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import IdeaClaraModal from './IdeaClaraModal'
 import TemaRichEditor from './TemaRichEditor'
@@ -498,6 +499,23 @@ export default function BitacoraEntradaEditor({
     background: t.bg, color: t.text, border: `1px solid ${t.border}`, borderRadius: 6,
     padding: '7px 12px', fontWeight: 600, cursor: 'pointer', fontSize: 'var(--cc-sm)',
   }
+  /** Acciones secundarias del encabezado: ícono compacto + tooltip (mismo criterio que Actas). */
+  const btnIcon = (opts = {}) => ({
+    width: viewportCompact ? 36 : 34,
+    height: viewportCompact ? 36 : 34,
+    padding: 0,
+    flex: '0 0 auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    cursor: opts.disabled ? 'not-allowed' : 'pointer',
+    border: `1px solid ${opts.primary ? (t.primary || t.border) : t.border}`,
+    background: opts.primary ? (t.primary || '#0077B6') : (t.bg || 'transparent'),
+    color: opts.primary ? '#fff' : t.text,
+    opacity: opts.disabled ? 0.45 : 1,
+  })
+  const iconSz = viewportCompact ? 18 : 17
 
   const buildUsosPayload = () => usos
     .filter((u) => String(u.equipo_nombre || '').trim())
@@ -940,7 +958,10 @@ export default function BitacoraEntradaEditor({
                 : 'Inmutable desde su creación'}
             </div>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <div style={{
+            display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center',
+            overflowX: 'auto', WebkitOverflowScrolling: 'touch', maxWidth: '100%',
+          }}>
             {tipo === 'diario' && esNuevo && editable && (
               <button
                 type="button"
@@ -958,32 +979,43 @@ export default function BitacoraEntradaEditor({
                   type="button"
                   disabled={busy || !fecha}
                   onClick={() => setReportePersonalOpen(true)}
-                  style={btnGhost}
-                  title="Resumen cruzado Tramo × Empresa (personal y maquinaria). Vista = PNG."
+                  style={btnIcon({ disabled: busy || !fecha })}
+                  title="Resumen por tramo y empresa"
+                  aria-label="Resumen por tramo y empresa"
                 >
-                  Resumen por tramo y empresa
+                  <Table2 size={iconSz} strokeWidth={2.2} aria-hidden />
                 </button>
                 <button
                   type="button"
                   disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: true })}
-                  style={btnGhost}
-                  title="Vista previa PDF del reporte de este día (datos guardados en servidor)"
+                  style={btnIcon({ disabled: pdfBusy || busy || !fecha })}
+                  title={pdfBusy ? 'Generando vista previa…' : 'Vista previa PDF'}
+                  aria-label={pdfBusy ? 'Generando vista previa…' : 'Vista previa PDF'}
                 >
-                  {pdfBusy ? '…' : 'Vista previa'}
+                  <Eye size={iconSz} strokeWidth={2.2} aria-hidden />
                 </button>
                 <button
                   type="button"
                   disabled={pdfBusy || busy || !fecha}
                   onClick={() => void exportarPdfDia({ preview: false })}
-                  style={btnPrimary}
-                  title="Descargar PDF del reporte de este día (datos guardados en servidor)"
+                  style={btnIcon({ disabled: pdfBusy || busy || !fecha, primary: true })}
+                  title={pdfBusy ? 'Generando PDF…' : 'Descargar PDF'}
+                  aria-label={pdfBusy ? 'Generando PDF…' : 'Descargar PDF'}
                 >
-                  {pdfBusy ? '…' : 'Descargar PDF'}
+                  <Download size={iconSz} strokeWidth={2.2} aria-hidden />
                 </button>
               </>
             )}
-            <button type="button" onClick={onClose} style={btnGhost}>Cerrar</button>
+            <button
+              type="button"
+              onClick={onClose}
+              style={btnIcon()}
+              title="Cerrar"
+              aria-label="Cerrar"
+            >
+              <X size={iconSz} strokeWidth={2.2} aria-hidden />
+            </button>
           </div>
         </div>
 
@@ -1827,37 +1859,6 @@ export default function BitacoraEntradaEditor({
             display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end',
             borderTop: `1px solid ${ui.border}`, paddingTop: 10,
           }}>
-            {tipo === 'diario' && (permisos?.ver || permisos?.exportar) && (
-              <div style={{ display: 'flex', gap: 8, marginRight: 'auto', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  disabled={busy || !fecha}
-                  onClick={() => setReportePersonalOpen(true)}
-                  style={btnGhost}
-                  title="Resumen cruzado Tramo × Empresa (personal y maquinaria). Vista = PNG."
-                >
-                  Resumen por tramo y empresa
-                </button>
-                <button
-                  type="button"
-                  disabled={pdfBusy || busy || !fecha}
-                  onClick={() => void exportarPdfDia({ preview: true })}
-                  style={btnGhost}
-                  title="Vista previa PDF del reporte de este día (datos guardados en servidor)"
-                >
-                  {pdfBusy ? '…' : 'Vista previa'}
-                </button>
-                <button
-                  type="button"
-                  disabled={pdfBusy || busy || !fecha}
-                  onClick={() => void exportarPdfDia({ preview: false })}
-                  style={btnPrimary}
-                  title="Descargar PDF del reporte de este día (datos guardados en servidor)"
-                >
-                  {pdfBusy ? '…' : 'Descargar PDF'}
-                </button>
-              </div>
-            )}
             {tipo === 'diario' && editable && (
               <button type="button" disabled={busy} onClick={() => void guardarDiario()} style={btnPrimary}>
                 Guardar
