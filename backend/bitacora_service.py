@@ -3188,6 +3188,49 @@ def upsert_equipo(
     return inserted[0]
 
 
+def desactivar_equipo(
+    sb,
+    contrato_id: int,
+    equipo_id: int,
+) -> dict:
+    """Soft-delete del catálogo: deja de sugerirse en autocompletado.
+
+    No modifica filas históricas de ``seguimiento_bitacora_equipo_uso``
+    (``equipo_id`` queda en SET NULL solo si se borrara en duro; aquí solo
+    marcamos ``activo=False``).
+    """
+    eid = int(equipo_id)
+    cid = int(contrato_id)
+    rows = (
+        sb.table("seguimiento_bitacora_equipo")
+        .select("*")
+        .eq("id", eid)
+        .eq("contrato_id", cid)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise ValueError("Equipo no encontrado en el catálogo de este contrato")
+    row = rows[0]
+    if row.get("activo") is False:
+        return row
+    updated = (
+        sb.table("seguimiento_bitacora_equipo")
+        .update({
+            "activo": False,
+            "updated_at": _now_utc().isoformat(),
+        })
+        .eq("id", eid)
+        .eq("contrato_id", cid)
+        .execute()
+        .data
+        or []
+    )
+    return updated[0] if updated else {**row, "activo": False}
+
+
 # ── Usos de equipo ────────────────────────────────────────────────────────────
 
 def _list_usos(sb, entrada_id: int) -> List[dict]:

@@ -1206,6 +1206,7 @@ from bitacora_service import (  # noqa: E402
     cerrar_reporte_diario,
     crear_reporte_diario,
     crear_reporte_evento,
+    desactivar_equipo,
     eliminar_entrada,
     get_diario_por_fecha,
     get_diario_por_fecha_tramo,
@@ -1731,6 +1732,27 @@ def route_upsert_bitacora_equipo(
             tipo=body.tipo or "equipo",
             user_id=_uid(current_user),
         )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.delete("/{contrato_id}/bitacora/equipos/{equipo_id}")
+def route_delete_bitacora_equipo(
+    contrato_id: int,
+    equipo_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Soft-delete del catálogo de Maquinaria (solo Desarrollador)."""
+    from bitacora_service import es_desarrollador_bitacora
+    if not es_desarrollador_bitacora(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el cargo Desarrollador puede eliminar del catálogo de Maquinaria",
+        )
+    require_permiso_bitacora(current_user, "editar", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    try:
+        return desactivar_equipo(supabase, contrato_id, equipo_id)
     except ValueError as exc:
         raise _http_value_error(exc) from exc
 

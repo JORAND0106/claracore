@@ -1,18 +1,21 @@
 /**
- * Resumen cruzado Tramo × Empresa: misma vista en pantalla y en PNG exportado.
- * No altera el PDF completo de Bitácora.
+ * Resumen Cruzado Tramo × Empresa: tablas separadas Personal / Maquinaria / Materiales.
+ * PNG → copiar al portapapeles (mismo mecanismo del informe Dashboard 9 a.m.).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Check, Copy } from 'lucide-react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { API_BASE } from '../../apiBase'
 import {
+  copyInformePeriodicoBlob,
   downloadInformePeriodicoBlob,
+  isClipboardImageAvailable,
 } from '../../utils/informePeriodicoCapture'
 import {
   buildResumenTramoEmpresa,
   formatearFechaReportePersonal,
-  formatoCeldaResumen,
+  formatoCeldaCantidad,
   nombreArchivoResumenPng,
   resolveLogosPorEmpresa,
   tituloReportePersonal,
@@ -68,8 +71,8 @@ function EmpresaLogo({ url, nombre, t, size = 28 }) {
   )
 }
 
-function CeldaResumen({ cell, t, strong = false }) {
-  const txt = formatoCeldaResumen(cell)
+function CeldaCantidad({ value, t, strong = false }) {
+  const txt = formatoCeldaCantidad(value)
   const empty = txt === '—'
   return (
     <td
@@ -90,6 +93,291 @@ function CeldaResumen({ cell, t, strong = false }) {
   )
 }
 
+function TablaEmpresaTramo({ tituloSeccion, matrix, t, border, text, muted }) {
+  if (!matrix?.hasData) return null
+  const { tramos, empresas, cells, rowTotals, colTotals, grandTotal } = matrix
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <h2 style={{
+        margin: '0 0 8px',
+        fontSize: 14,
+        fontWeight: 800,
+        color: text,
+        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+      }}>
+        {tituloSeccion}
+      </h2>
+      <div style={{ overflowX: 'auto' }}>
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+            fontSize: 12,
+            minWidth: 280 + empresas.length * 80,
+          }}
+        >
+          <thead>
+            <tr>
+              <th
+                style={{
+                  textAlign: 'left',
+                  padding: '8px 10px',
+                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
+                  borderBottom: `1px solid ${border}`,
+                  borderRight: `1px solid ${border}`,
+                  color: muted,
+                  fontWeight: 800,
+                  fontSize: 11,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.03em',
+                  position: 'sticky',
+                  left: 0,
+                  zIndex: 1,
+                }}
+              >
+                Tramo
+              </th>
+              {empresas.map((emp) => (
+                <th
+                  key={emp.key}
+                  style={{
+                    padding: '8px 8px 6px',
+                    background: t?.primary ? `${t.primary}14` : '#ddeff8',
+                    borderBottom: `1px solid ${border}`,
+                    borderRight: `1px solid ${border}`,
+                    color: text,
+                    fontWeight: 700,
+                    fontSize: 11,
+                    verticalAlign: 'bottom',
+                    minWidth: 80,
+                  }}
+                >
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}>
+                    <EmpresaLogo url={emp.logo_url} nombre={emp.nombre} t={t} />
+                    <span style={{ textAlign: 'center', lineHeight: 1.2 }}>{emp.nombre}</span>
+                  </div>
+                </th>
+              ))}
+              <th
+                style={{
+                  padding: '8px 10px',
+                  background: t?.primary ? `${t.primary}22` : '#cfe7f5',
+                  borderBottom: `1px solid ${border}`,
+                  color: text,
+                  fontWeight: 800,
+                  fontSize: 11,
+                  textAlign: 'center',
+                }}
+              >
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {tramos.map((tr) => (
+              <tr key={tr.key}>
+                <td
+                  style={{
+                    padding: '8px 10px',
+                    borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
+                    borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+                    color: text,
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    background: '#fff',
+                    position: 'sticky',
+                    left: 0,
+                    zIndex: 1,
+                  }}
+                >
+                  {tr.nombre}
+                </td>
+                {empresas.map((emp) => (
+                  <CeldaCantidad
+                    key={`${tr.key}-${emp.key}`}
+                    value={cells[tr.key]?.[emp.key]}
+                    t={t}
+                  />
+                ))}
+                <CeldaCantidad value={rowTotals[tr.key]} t={t} strong />
+              </tr>
+            ))}
+            <tr>
+              <td
+                style={{
+                  padding: '8px 10px',
+                  borderTop: `2px solid ${border}`,
+                  borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+                  color: text,
+                  fontWeight: 800,
+                  background: t?.inputBg || '#f8fafc',
+                  position: 'sticky',
+                  left: 0,
+                  zIndex: 1,
+                }}
+              >
+                Total
+              </td>
+              {empresas.map((emp) => (
+                <CeldaCantidad
+                  key={`tot-${emp.key}`}
+                  value={colTotals[emp.key]}
+                  t={t}
+                  strong
+                />
+              ))}
+              <CeldaCantidad value={grandTotal} t={t} strong />
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function TablaMateriales({ matrix, t, border, text, muted }) {
+  if (!matrix?.hasData) return null
+  const { tramos, cells, rowTotals, colTotals, grandTotal } = matrix
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <h2 style={{
+        margin: '0 0 8px',
+        fontSize: 14,
+        fontWeight: 800,
+        color: text,
+        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+      }}>
+        Materiales
+      </h2>
+      <div style={{ overflowX: 'auto' }}>
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+            fontSize: 12,
+            minWidth: 320,
+          }}
+        >
+          <thead>
+            <tr>
+              <th
+                style={{
+                  textAlign: 'left',
+                  padding: '8px 10px',
+                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
+                  borderBottom: `1px solid ${border}`,
+                  borderRight: `1px solid ${border}`,
+                  color: muted,
+                  fontWeight: 800,
+                  fontSize: 11,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.03em',
+                }}
+              >
+                Tramo
+              </th>
+              <th
+                style={{
+                  padding: '8px 10px',
+                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
+                  borderBottom: `1px solid ${border}`,
+                  borderRight: `1px solid ${border}`,
+                  color: text,
+                  fontWeight: 800,
+                  fontSize: 11,
+                  textAlign: 'center',
+                }}
+              >
+                Ingreso
+              </th>
+              <th
+                style={{
+                  padding: '8px 10px',
+                  background: t?.primary ? `${t.primary}14` : '#ddeff8',
+                  borderBottom: `1px solid ${border}`,
+                  borderRight: `1px solid ${border}`,
+                  color: text,
+                  fontWeight: 800,
+                  fontSize: 11,
+                  textAlign: 'center',
+                }}
+              >
+                Salida
+              </th>
+              <th
+                style={{
+                  padding: '8px 10px',
+                  background: t?.primary ? `${t.primary}22` : '#cfe7f5',
+                  borderBottom: `1px solid ${border}`,
+                  color: text,
+                  fontWeight: 800,
+                  fontSize: 11,
+                  textAlign: 'center',
+                }}
+              >
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {tramos.map((tr) => {
+              const c = cells[tr.key] || { ingreso: 0, salida: 0 }
+              const rt = rowTotals[tr.key] || { ingreso: 0, salida: 0 }
+              return (
+                <tr key={tr.key}>
+                  <td
+                    style={{
+                      padding: '8px 10px',
+                      borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
+                      borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+                      color: text,
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {tr.nombre}
+                  </td>
+                  <CeldaCantidad value={c.ingreso} t={t} />
+                  <CeldaCantidad value={c.salida} t={t} />
+                  <CeldaCantidad value={(rt.ingreso || 0) + (rt.salida || 0)} t={t} strong />
+                </tr>
+              )
+            })}
+            <tr>
+              <td
+                style={{
+                  padding: '8px 10px',
+                  borderTop: `2px solid ${border}`,
+                  borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
+                  color: text,
+                  fontWeight: 800,
+                  background: t?.inputBg || '#f8fafc',
+                }}
+              >
+                Total
+              </td>
+              <CeldaCantidad value={colTotals.ingreso} t={t} strong />
+              <CeldaCantidad value={colTotals.salida} t={t} strong />
+              <CeldaCantidad
+                value={(grandTotal.ingreso || 0) + (grandTotal.salida || 0)}
+                t={t}
+                strong
+              />
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export default function BitacoraReportePersonalModal({
   open,
   onClose,
@@ -97,6 +385,7 @@ export default function BitacoraReportePersonalModal({
   fecha,
   asistencia = [],
   usos = [],
+  materiales = [],
   rrhhCatalogo = [],
   contratoId,
   token,
@@ -105,7 +394,9 @@ export default function BitacoraReportePersonalModal({
   const [empresasOpts, setEmpresasOpts] = useState([])
   const [pngBusy, setPngBusy] = useState(false)
   const [pngError, setPngError] = useState('')
+  const [pngCopied, setPngCopied] = useState(false)
   const captureRef = useRef(null)
+  const copiedTimer = useRef(null)
 
   useEffect(() => {
     if (!open) return undefined
@@ -125,6 +416,10 @@ export default function BitacoraReportePersonalModal({
     return () => { cancelled = true }
   }, [open, contratoId, token])
 
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current)
+  }, [])
+
   const logosByEmpresaKey = useMemo(
     () => resolveLogosPorEmpresa({
       empresasOpciones: empresasOpts,
@@ -137,10 +432,11 @@ export default function BitacoraReportePersonalModal({
     () => buildResumenTramoEmpresa({
       asistencia,
       usos,
+      materiales,
       rrhhCatalogo,
       logosByEmpresaKey,
     }),
-    [asistencia, usos, rrhhCatalogo, logosByEmpresaKey],
+    [asistencia, usos, materiales, rrhhCatalogo, logosByEmpresaKey],
   )
 
   const titulo = tituloReportePersonal(fecha)
@@ -148,15 +444,18 @@ export default function BitacoraReportePersonalModal({
   const numero = String(contratoMeta?.numero || '').trim()
   const objeto = String(contratoMeta?.objeto || '').trim()
   const proyecto = String(contratoMeta?.contratista || '').trim()
-  const vacio = resumen.tramos.length === 0 || resumen.empresas.length === 0
+  const vacio = !resumen.personal.hasData
+    && !resumen.maquinaria.hasData
+    && !resumen.materiales.hasData
+  const clipboardOk = isClipboardImageAvailable()
 
-  const descargarPng = useCallback(async () => {
+  const copiarPng = useCallback(async () => {
     const node = captureRef.current
     if (!node || typeof window === 'undefined') return
     setPngBusy(true)
     setPngError('')
+    setPngCopied(false)
     try {
-      // Esperar logos antes de capturar (misma imagen que se ve en pantalla).
       const imgs = [...node.querySelectorAll('img')]
       await Promise.all(imgs.map((img) => (
         img.complete ? Promise.resolve() : new Promise((res) => {
@@ -166,13 +465,21 @@ export default function BitacoraReportePersonalModal({
       const { toBlob } = await import('html-to-image')
       const blob = await toBlob(node, CAPTURE_OPTS)
       if (!blob) throw new Error('No se pudo generar la imagen')
-      downloadInformePeriodicoBlob(blob, nombreArchivoResumenPng(fecha))
+      if (clipboardOk) {
+        await copyInformePeriodicoBlob(blob)
+        setPngCopied(true)
+        if (copiedTimer.current) clearTimeout(copiedTimer.current)
+        copiedTimer.current = setTimeout(() => setPngCopied(false), 2500)
+      } else {
+        downloadInformePeriodicoBlob(blob, nombreArchivoResumenPng(fecha))
+        setPngError('Portapapeles no disponible: se descargó el PNG')
+      }
     } catch (err) {
-      setPngError(err?.message || 'No se pudo descargar el PNG')
+      setPngError(err?.message || 'No se pudo copiar la imagen')
     } finally {
       setPngBusy(false)
     }
-  }, [fecha])
+  }, [fecha, clipboardOk])
 
   if (!open) return null
 
@@ -215,56 +522,75 @@ export default function BitacoraReportePersonalModal({
           flexWrap: 'wrap',
           gap: 8,
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           padding: '10px 14px',
           borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
         }}>
-          <div style={{ fontWeight: 800, color: text, fontSize: 'var(--cc-title, 15px)' }}>
-            {titulo}
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {pngError ? (
-              <span style={{ fontSize: 11, color: '#b91c1c', maxWidth: 220 }}>{pngError}</span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginRight: 'auto' }}>
+            {pngCopied ? (
+              <span
+                role="status"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: t?.primary || '#0077B6',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                <Check size={14} aria-hidden />
+                Imagen copiada
+              </span>
             ) : null}
-            <button
-              type="button"
-              onClick={() => void descargarPng()}
-              disabled={pngBusy || vacio}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 8,
-                border: 'none',
-                background: t?.primary || '#0077B6',
-                color: '#fff',
-                fontWeight: 700,
-                fontSize: 12,
-                cursor: pngBusy || vacio ? 'not-allowed' : 'pointer',
-                opacity: pngBusy || vacio ? 0.65 : 1,
-              }}
-              title="Descarga exactamente lo mostrado como imagen PNG"
-            >
-              {pngBusy ? 'Generando…' : 'Descargar PNG'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 8,
-                border: `1px solid ${border}`,
-                background: t?.inputBg || '#f8fafc',
-                color: text,
-                fontWeight: 700,
-                fontSize: 12,
-                cursor: 'pointer',
-              }}
-            >
-              Cerrar
-            </button>
+            {pngError ? (
+              <span style={{ fontSize: 11, color: '#b91c1c', maxWidth: 260 }}>{pngError}</span>
+            ) : null}
           </div>
+          <button
+            type="button"
+            onClick={() => void copiarPng()}
+            disabled={pngBusy || vacio}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 8,
+              border: 'none',
+              background: t?.primary || '#0077B6',
+              color: '#fff',
+              fontWeight: 700,
+              fontSize: 12,
+              cursor: pngBusy || vacio ? 'not-allowed' : 'pointer',
+              opacity: pngBusy || vacio ? 0.65 : 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+            title={clipboardOk
+              ? 'Copia el resumen al portapapeles como imagen PNG'
+              : 'Portapapeles no disponible: descargará el PNG'}
+          >
+            <Copy size={14} aria-hidden />
+            {pngBusy ? 'Generando…' : (pngCopied ? 'Copiado' : 'Copiar imagen')}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 8,
+              border: `1px solid ${border}`,
+              background: t?.inputBg || '#f8fafc',
+              color: text,
+              fontWeight: 700,
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            Cerrar
+          </button>
         </div>
 
-        {/* Este nodo es la vista previa Y la fuente del PNG (misma composición). */}
+        {/* Vista previa = fuente del PNG (título principal una sola vez aquí). */}
         <div
           ref={captureRef}
           style={{
@@ -284,7 +610,7 @@ export default function BitacoraReportePersonalModal({
           <div style={{
             fontSize: 12,
             color: muted,
-            marginBottom: 12,
+            marginBottom: 14,
             lineHeight: 1.4,
             fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
           }}>
@@ -296,15 +622,6 @@ export default function BitacoraReportePersonalModal({
             {!numero && !proyecto && !objeto ? 'Bitácora de obra' : null}
           </div>
 
-          <div style={{
-            fontSize: 11,
-            color: muted,
-            marginBottom: 10,
-            fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
-          }}>
-            Celdas: personal (p) · maquinaria (m). Filas = tramos · columnas = empresas.
-          </div>
-
           {vacio ? (
             <div style={{
               padding: 16,
@@ -313,143 +630,34 @@ export default function BitacoraReportePersonalModal({
               color: muted,
               fontSize: 13,
             }}>
-              No hay personal ni maquinaria registrados para este día.
+              No hay personal, maquinaria ni materiales registrados para este día.
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table
-                style={{
-                  width: '100%',
-                  borderCollapse: 'collapse',
-                  fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
-                  fontSize: 12,
-                  minWidth: 320 + resumen.empresas.length * 88,
-                }}
-              >
-                <thead>
-                  <tr>
-                    <th
-                      style={{
-                        textAlign: 'left',
-                        padding: '8px 10px',
-                        background: t?.primary ? `${t.primary}14` : '#ddeff8',
-                        borderBottom: `1px solid ${border}`,
-                        borderRight: `1px solid ${border}`,
-                        color: muted,
-                        fontWeight: 800,
-                        fontSize: 11,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.03em',
-                        position: 'sticky',
-                        left: 0,
-                        zIndex: 1,
-                      }}
-                    >
-                      Tramo
-                    </th>
-                    {resumen.empresas.map((emp) => (
-                      <th
-                        key={emp.key}
-                        style={{
-                          padding: '8px 8px 6px',
-                          background: t?.primary ? `${t.primary}14` : '#ddeff8',
-                          borderBottom: `1px solid ${border}`,
-                          borderRight: `1px solid ${border}`,
-                          color: text,
-                          fontWeight: 700,
-                          fontSize: 11,
-                          verticalAlign: 'bottom',
-                          minWidth: 88,
-                        }}
-                      >
-                        <div style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          gap: 4,
-                        }}>
-                          <EmpresaLogo url={emp.logo_url} nombre={emp.nombre} t={t} />
-                          <span style={{ textAlign: 'center', lineHeight: 1.2 }}>{emp.nombre}</span>
-                        </div>
-                      </th>
-                    ))}
-                    <th
-                      style={{
-                        padding: '8px 10px',
-                        background: t?.primary ? `${t.primary}22` : '#cfe7f5',
-                        borderBottom: `1px solid ${border}`,
-                        color: text,
-                        fontWeight: 800,
-                        fontSize: 11,
-                        textAlign: 'center',
-                      }}
-                    >
-                      Total
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {resumen.tramos.map((tr) => (
-                    <tr key={tr.key}>
-                      <td
-                        style={{
-                          padding: '8px 10px',
-                          borderBottom: `1px solid ${t?.border || '#e2e8f0'}`,
-                          borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
-                          color: text,
-                          fontWeight: 700,
-                          whiteSpace: 'nowrap',
-                          background: '#fff',
-                          position: 'sticky',
-                          left: 0,
-                          zIndex: 1,
-                        }}
-                      >
-                        {tr.nombre}
-                      </td>
-                      {resumen.empresas.map((emp) => (
-                        <CeldaResumen
-                          key={`${tr.key}-${emp.key}`}
-                          cell={resumen.cells[tr.key]?.[emp.key]}
-                          t={t}
-                        />
-                      ))}
-                      <CeldaResumen
-                        cell={resumen.rowTotals[tr.key]}
-                        t={t}
-                        strong
-                      />
-                    </tr>
-                  ))}
-                  <tr>
-                    <td
-                      style={{
-                        padding: '8px 10px',
-                        borderTop: `2px solid ${border}`,
-                        borderRight: `1px solid ${t?.border || '#e2e8f0'}`,
-                        color: text,
-                        fontWeight: 800,
-                        background: t?.inputBg || '#f8fafc',
-                        position: 'sticky',
-                        left: 0,
-                        zIndex: 1,
-                      }}
-                    >
-                      Total
-                    </td>
-                    {resumen.empresas.map((emp) => (
-                      <CeldaResumen
-                        key={`tot-${emp.key}`}
-                        cell={resumen.colTotals[emp.key]}
-                        t={t}
-                        strong
-                      />
-                    ))}
-                    <CeldaResumen cell={resumen.grandTotal} t={t} strong />
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <>
+              <TablaEmpresaTramo
+                tituloSeccion="Personal"
+                matrix={resumen.personal}
+                t={t}
+                border={border}
+                text={text}
+                muted={muted}
+              />
+              <TablaEmpresaTramo
+                tituloSeccion="Maquinaria"
+                matrix={resumen.maquinaria}
+                t={t}
+                border={border}
+                text={text}
+                muted={muted}
+              />
+              <TablaMateriales
+                matrix={resumen.materiales}
+                t={t}
+                border={border}
+                text={text}
+                muted={muted}
+              />
+            </>
           )}
         </div>
       </div>
