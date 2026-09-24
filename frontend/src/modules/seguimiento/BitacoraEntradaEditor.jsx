@@ -935,9 +935,9 @@ export default function BitacoraEntradaEditor({
                   disabled={busy || !fecha}
                   onClick={() => setReportePersonalOpen(true)}
                   style={btnGhost}
-                  title="Resumen del día por empresa: personal y maquinaria (captura / imprimir)"
+                  title="Resumen cruzado Tramo × Empresa (personal y maquinaria). Vista = PNG."
                 >
-                  Reporte de personal
+                  Resumen por tramo y empresa
                 </button>
                 <button
                   type="button"
@@ -1810,9 +1810,9 @@ export default function BitacoraEntradaEditor({
                   disabled={busy || !fecha}
                   onClick={() => setReportePersonalOpen(true)}
                   style={btnGhost}
-                  title="Resumen del día por empresa: personal y maquinaria (captura / imprimir)"
+                  title="Resumen cruzado Tramo × Empresa (personal y maquinaria). Vista = PNG."
                 >
-                  Reporte de personal
+                  Resumen por tramo y empresa
                 </button>
                 <button
                   type="button"
