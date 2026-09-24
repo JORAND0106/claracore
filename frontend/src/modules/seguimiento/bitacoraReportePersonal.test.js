@@ -17,6 +17,7 @@ import {
   formatearFechaReportePersonal,
   nombreArchivoResumenPng,
   resolveLogosPorEmpresa,
+  SIN_TIPO_MATERIAL_LABEL,
   tituloReportePersonal,
 } from './bitacoraReportePersonal.js'
 
@@ -99,9 +100,10 @@ describe('bitacoraReportePersonal — resumen Tramo × Empresa', () => {
     assert.equal(resumen.maquinaria.grandTotal, 4)
   })
 
-  it('materiales: tabla solo con ingreso/salida y solo si hay datos', () => {
+  it('materiales: filas por tipo + tramo con ingreso/salida (solo si hay datos)', () => {
     const vacio = buildResumenTramoEmpresa({ asistencia: [], usos: [], materiales: [] })
     assert.equal(vacio.materiales.hasData, false)
+    assert.equal(vacio.materiales.rows.length, 0)
 
     const conMats = buildResumenTramoEmpresa({
       asistencia: [],
@@ -110,17 +112,41 @@ describe('bitacoraReportePersonal — resumen Tramo × Empresa', () => {
         { movimiento: 'ingreso', tipo_material: 'Arena', cantidad: 10, tramo: 'Tramo 1' },
         { movimiento: 'salida', tipo_material: 'Arena', cantidad: 3, tramo: 'Tramo 1' },
         { movimiento: 'ingreso', tipo_material: 'Grava', cantidad: 5, tramo: 'Tramo 2' },
+        { movimiento: 'ingreso', tipo_material: 'Arena', cantidad: 2, tramo: 'Tramo 2' },
+        { movimiento: 'salida', tipo_material: '', proveedor: 'Acme', cantidad: 1, tramo: 'Tramo 1' },
         { movimiento: 'ingreso', tipo_material: '', cantidad: '', tramo: 'Tramo 1' }, // vacía
       ],
     })
     assert.equal(conMats.materiales.hasData, true)
-    const t1 = conMats.materiales.tramos.find((tr) => tr.nombre === 'Tramo 1')
-    const t2 = conMats.materiales.tramos.find((tr) => tr.nombre === 'Tramo 2')
-    assert.ok(t1)
-    assert.ok(t2)
-    assert.deepEqual(conMats.materiales.cells[t1.key], { ingreso: 10, salida: 3 })
-    assert.deepEqual(conMats.materiales.cells[t2.key], { ingreso: 5, salida: 0 })
-    assert.deepEqual(conMats.materiales.grandTotal, { ingreso: 15, salida: 3 })
+    assert.equal(conMats.materiales.rows.length, 4)
+
+    const arenaT1 = conMats.materiales.rows.find((r) => r.tipo === 'Arena' && r.tramo === 'Tramo 1')
+    const arenaT2 = conMats.materiales.rows.find((r) => r.tipo === 'Arena' && r.tramo === 'Tramo 2')
+    const grava = conMats.materiales.rows.find((r) => r.tipo === 'Grava')
+    const sinTipo = conMats.materiales.rows.find((r) => r.tipo === SIN_TIPO_MATERIAL_LABEL)
+    assert.ok(arenaT1)
+    assert.ok(arenaT2)
+    assert.ok(grava)
+    assert.ok(sinTipo)
+    assert.deepEqual(
+      { ingreso: arenaT1.ingreso, salida: arenaT1.salida },
+      { ingreso: 10, salida: 3 },
+    )
+    assert.deepEqual(
+      { ingreso: arenaT2.ingreso, salida: arenaT2.salida },
+      { ingreso: 2, salida: 0 },
+    )
+    assert.deepEqual(
+      { ingreso: grava.ingreso, salida: grava.salida },
+      { ingreso: 5, salida: 0 },
+    )
+    assert.deepEqual(
+      { ingreso: sinTipo.ingreso, salida: sinTipo.salida },
+      { ingreso: 0, salida: 1 },
+    )
+    assert.deepEqual(conMats.materiales.grandTotal, { ingreso: 17, salida: 4 })
+    // Sin tipo al final
+    assert.equal(conMats.materiales.rows[conMats.materiales.rows.length - 1].tipo, SIN_TIPO_MATERIAL_LABEL)
   })
 
   it('filas sin tramo van a «Sin tramo asignado»', () => {
@@ -178,6 +204,7 @@ describe('bitacoraReportePersonal — resumen Tramo × Empresa', () => {
     assert.match(modalSrc, /tituloSeccion="Personal"/)
     assert.match(modalSrc, /tituloSeccion="Maquinaria"/)
     assert.match(modalSrc, /TablaMateriales/)
+    assert.match(modalSrc, /Tipo de material/)
     assert.match(modalSrc, /html-to-image/)
     assert.match(modalSrc, /captureRef/)
     assert.doesNotMatch(modalSrc, /Descargar PNG/)
