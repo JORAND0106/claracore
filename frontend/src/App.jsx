@@ -3948,7 +3948,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
       const j = await res.json().catch(() => ({}))
       if (j.ejecutada) {
-        setToastMsg('Reversión completada: N3 «No revisado», registro desbloqueado.')
+        setToastMsg(
+          j.recuperacion
+            ? 'Reversión recuperada: el registro quedó desbloqueado (ambas autorizaciones ya estaban registradas).'
+            : 'Reversión completada: N3 «No revisado», registro desbloqueado.',
+        )
       } else {
         setToastMsg('Tu autorización quedó registrada. Falta la de la contraparte (N2 o Interventoría).')
       }
@@ -4072,7 +4076,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     : slotLlave === 3
       ? (arm3Llave != null && arm3Llave !== uidLlave)
       : false
-  const puedeTurnarLlaveMisil = muestraPanelDobleLlave && miSlotLibre && !llaveContrariaOcupadaPorOtro
+  /** Ambas llaves grabadas pero el registro sigue sellado (carrera o fallo previo) → se puede completar el desbloqueo. */
+  const ambasLlavesSinDesbloquear =
+    arm2Llave != null && arm3Llave != null && arm2Llave !== arm3Llave && !!registro.bloqueado && regSelladoMax
+  const puedeTurnarLlaveMisil =
+    muestraPanelDobleLlave
+    && ((miSlotLibre && !llaveContrariaOcupadaPorOtro) || ambasLlavesSinDesbloquear)
 
   const CampoRO = ({ label, labelShort, valor, color, truncate, truncateWords, onTruncateClick }) => {
     const texto = valor != null ? String(valor) : ''
@@ -4359,11 +4368,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   Reversión sellado · doble autorización
                 </span>
                 <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'600', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                  {puedeTurnarLlaveMisil
-                    ? 'Tu turno: expande y registra tu autorización'
-                    : arm2Llave != null && arm3Llave != null
-                      ? 'N2 y N3 registradas'
-                      : 'Pulsa para instrucciones y estado de autorizaciones'}
+                  {ambasLlavesSinDesbloquear
+                    ? 'Ambas autorizaciones listas — completa el desbloqueo'
+                    : puedeTurnarLlaveMisil
+                      ? 'Tu turno: expande y registra tu autorización'
+                      : arm2Llave != null && arm3Llave != null
+                        ? 'N2 y N3 registradas'
+                        : 'Pulsa para instrucciones y estado de autorizaciones'}
                 </span>
               </span>
             </span>
@@ -4422,12 +4433,17 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   🔑 {encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'N máx.'} {arm3Llave ? `✓ ${registro.reversion_arm_n3_nombre || `#${arm3Llave}`}` : '··· sin autorizar'}
                 </span>
               </div>
-              {llaveContrariaOcupadaPorOtro && (
+              {llaveContrariaOcupadaPorOtro && !ambasLlavesSinDesbloquear && (
                 <div style={{ fontSize:'var(--cc-label)', color:'#b45309', marginBottom:'10px', fontWeight:'600' }}>
                   Otro usuario de tu nivel ya registró su autorización en este registro.
                 </div>
               )}
-              {!miSlotLibre && !llaveContrariaOcupadaPorOtro && (
+              {ambasLlavesSinDesbloquear && (
+                <div style={{ fontSize:'var(--cc-label)', color:'#b45309', marginBottom:'10px', fontWeight:'600' }}>
+                  N2 e interventoría ya autorizaron, pero el registro sigue sellado. Registra un comentario para completar el desbloqueo.
+                </div>
+              )}
+              {!miSlotLibre && !llaveContrariaOcupadaPorOtro && !ambasLlavesSinDesbloquear && (
                 <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'10px' }}>
                   Ya registraste tu parte. Espera a que la contraparte complete la suya.
                 </div>
@@ -4436,7 +4452,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 type="button"
                 disabled={!puedeTurnarLlaveMisil}
                 onClick={() => { setMostrarPopupValidacion(false); setMostrarPopupReversionN3(true) }}
-                title={!puedeTurnarLlaveMisil ? (llaveContrariaOcupadaPorOtro ? 'Tu nivel ya tiene autorización de otro usuario' : !miSlotLibre ? 'Ya registraste tu autorización' : '') : 'Formulario de comentarios (doble autorización)'}
+                title={!puedeTurnarLlaveMisil ? (llaveContrariaOcupadaPorOtro ? 'Tu nivel ya tiene autorización de otro usuario' : !miSlotLibre ? 'Ya registraste tu autorización' : '') : (ambasLlavesSinDesbloquear ? 'Completar desbloqueo con comentario' : 'Formulario de comentarios (doble autorización)')}
                 style={{
                   padding:'10px 18px', borderRadius:'10px', fontSize:'var(--cc-sm)', fontWeight:'800',
                   cursor: puedeTurnarLlaveMisil ? 'pointer' : 'not-allowed',
@@ -4450,7 +4466,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   letterSpacing:'0.03em',
                 }}
               >
-                {puedeTurnarLlaveMisil ? '🔐 REGISTRAR MI AUTORIZACIÓN (comentario obligatorio)' : '⏸️ Autorización no disponible'}
+                {puedeTurnarLlaveMisil
+                  ? (ambasLlavesSinDesbloquear
+                    ? '🔓 COMPLETAR DESBLOQUEO (comentario obligatorio)'
+                    : '🔐 REGISTRAR MI AUTORIZACIÓN (comentario obligatorio)')
+                  : '⏸️ Autorización no disponible'}
               </button>
             </div>
           )}

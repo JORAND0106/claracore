@@ -3873,7 +3873,9 @@ def _sicoe_slot_llave_reversion(nivel: Optional[int]) -> Optional[int]:
     return None
 
 
-def _require_llave_reversion_sicoe_nivel(current_user, user_id: int, nivel_arm: int) -> None:
+def _require_llave_reversion_sicoe_nivel(
+    current_user, user_id: int, nivel_arm: int, contrato_id: Optional[int] = None
+) -> None:
     """
     Doble llave reversión N3: debe coincidir el slot (N2 o N3) del usuario con la llave solicitada.
     Interventoría N4/N5/N6 usa el mismo slot que N3.
@@ -3883,7 +3885,7 @@ def _require_llave_reversion_sicoe_nivel(current_user, user_id: int, nivel_arm: 
     slot = _sicoe_slot_llave_reversion(nivel_arm)
     if slot not in (2, 3):
         raise HTTPException(status_code=403, detail="Llave de reversión no reconocida.")
-    got = _sicoe_db_nivel_validacion_usuario(user_id)
+    got = _sicoe_db_nivel_validacion_usuario(user_id, contrato_id)
     if got == 0:
         return
     got_slot = _sicoe_slot_llave_reversion(got)
@@ -20513,14 +20515,68 @@ def _sicoe_nid_reversion_arm(v):
         return None
 
 
+def _sicoe_reversion_ambas_llaves_listas(arm2: Optional[int], arm3: Optional[int]) -> bool:
+    """True si N2 y N3 (interventoría) están por usuarios distintos — listo para desellar."""
+    return arm2 is not None and arm3 is not None and arm2 != arm3
+
+
+def _sicoe_reversion_update_desellar(contrato_id: int) -> dict:
+    """Payload único de desbloqueo tras doble llave (o recuperación de estado atascado)."""
+    campo_mx = _get_nivel_maximo_contrato(contrato_id)
+    u_k, f_k = _sicoe_campo_usuario_fecha_desde_estado(campo_mx)
+    return {
+        "bloqueado": False,
+        "solicitud_reversion": False,
+        campo_mx: "No Revisado",
+        u_k: None,
+        f_k: None,
+        "reversion_arm_n2_usuario_id": None,
+        "reversion_arm_n3_usuario_id": None,
+    }
+
+
+def _sicoe_reversion_fetch_arms_row(contrato_id: int, registro_id: int) -> dict:
+    def _get():
+        return (
+            supabase.table("so_registros")
+            .select(
+                f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,"
+                "reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id"
+            )
+            .eq("id", registro_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    try:
+        rows = supabase_execute(_get)
+    except Exception as ex:
+        raise _http_reversion_doble_llave_db_error(ex) from ex
+    if not rows:
+        raise HTTPException(status_code=404, detail="Registro no encontrado.")
+    return rows[0]
+
+
 def _sicoe_reversion_doble_llave_nivel_usuario(
-    current_user, autor_id: int, arm2: Optional[int], arm3: Optional[int]
+    current_user,
+    autor_id: int,
+    arm2: Optional[int],
+    arm3: Optional[int],
+    contrato_id: Optional[int] = None,
+    *,
+    permitir_recuperacion: bool = False,
 ) -> int:
-    nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id)
+    nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id, contrato_id)
     if _es_desarrollador(current_user) or nivel_db == 0:
         if arm2 is None:
             return 2
         if arm3 is None:
+            return 3
+        if permitir_recuperacion and _sicoe_reversion_ambas_llaves_listas(arm2, arm3):
+            # Desarrollador cierra el desbloqueo cuando ambas llaves ya quedaron grabadas
+            # (p. ej. carrera concurrente) sin haber ejecutado el sellado→editable.
             return 3
         raise HTTPException(
             status_code=422,
@@ -20545,6 +20601,12 @@ def _sicoe_reversion_doble_llave_procesar_registro(
 ) -> Dict[str, Any]:
     """
     Primera llave o ejecución completa de reversión doble. Retorna dict con ok, ejecutada, nivel, omitido?, motivo?.
+
+    Si ambas llaves ya están grabadas por usuarios distintos y el registro sigue sellado
+    (p. ej. condición de carrera al registrar las dos en paralelo), ejecuta el desbloqueo
+    (recuperación) en lugar de rechazar con «llave ya registrada».
+    Tras registrar una sola llave, relee la fila: si la contraparte llegó en paralelo,
+    completa el desbloqueo en el mismo request.
     """
     mensaje_limpio = (cd.get("mensaje") or "").strip()
     if not mensaje_limpio:
@@ -20558,27 +20620,7 @@ def _sicoe_reversion_doble_llave_procesar_registro(
         )
 
     if row is None:
-        def _get():
-            return (
-                supabase.table("so_registros")
-                .select(
-                    f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,"
-                    "reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id"
-                )
-                .eq("id", registro_id)
-                .eq("contrato_id", contrato_id)
-                .limit(1)
-                .execute()
-                .data
-            )
-
-        try:
-            rows = supabase_execute(_get)
-        except Exception as ex:
-            raise _http_reversion_doble_llave_db_error(ex) from ex
-        if not rows:
-            raise HTTPException(status_code=404, detail="Registro no encontrado.")
-        row = rows[0]
+        row = _sicoe_reversion_fetch_arms_row(contrato_id, registro_id)
 
     if not _registro_nivel_max_aprobado(row, contrato_id) or not row.get("bloqueado"):
         return {"ok": False, "omitido": True, "motivo": "no_aprobado_o_no_bloqueado"}
@@ -20589,36 +20631,52 @@ def _sicoe_reversion_doble_llave_procesar_registro(
     prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
     arm2 = _sicoe_nid_reversion_arm(row.get("reversion_arm_n2_usuario_id"))
     arm3 = _sicoe_nid_reversion_arm(row.get("reversion_arm_n3_usuario_id"))
+    recuperacion = _sicoe_reversion_ambas_llaves_listas(arm2, arm3)
 
     try:
-        nivel = _sicoe_reversion_doble_llave_nivel_usuario(current_user, autor_id, arm2, arm3)
+        nivel = _sicoe_reversion_doble_llave_nivel_usuario(
+            current_user,
+            autor_id,
+            arm2,
+            arm3,
+            contrato_id,
+            permitir_recuperacion=recuperacion,
+        )
     except HTTPException as ex:
         if ex.status_code in (403, 422):
             return {"ok": False, "omitido": True, "motivo": str(ex.detail)}
         raise
 
-    _require_llave_reversion_sicoe_nivel(current_user, autor_id, nivel)
+    _require_llave_reversion_sicoe_nivel(current_user, autor_id, nivel, contrato_id)
 
-    if nivel == 2:
-        if arm2 is not None and arm2 != autor_id:
-            return {"ok": False, "omitido": True, "motivo": "llave_n2_otro_usuario"}
-        if arm2 is not None and arm2 == autor_id:
-            return {"ok": False, "omitido": True, "motivo": "llave_n2_ya_registrada"}
+    if recuperacion:
+        # Ambas llaves ya en BD y aún sellado → desbloquear (no re-registrar llave).
+        ejecutar = True
+        new2, new3 = arm2, arm3
     else:
-        if arm3 is not None and arm3 != autor_id:
-            return {"ok": False, "omitido": True, "motivo": "llave_n3_otro_usuario"}
-        if arm3 is not None and arm3 == autor_id:
-            return {"ok": False, "omitido": True, "motivo": "llave_n3_ya_registrada"}
+        if nivel == 2:
+            if arm2 is not None and arm2 != autor_id:
+                return {"ok": False, "omitido": True, "motivo": "llave_n2_otro_usuario"}
+            if arm2 is not None and arm2 == autor_id:
+                return {"ok": False, "omitido": True, "motivo": "llave_n2_ya_registrada"}
+        else:
+            if arm3 is not None and arm3 != autor_id:
+                return {"ok": False, "omitido": True, "motivo": "llave_n3_otro_usuario"}
+            if arm3 is not None and arm3 == autor_id:
+                return {"ok": False, "omitido": True, "motivo": "llave_n3_ya_registrada"}
 
-    new2 = autor_id if nivel == 2 else arm2
-    new3 = autor_id if nivel in (3, 4, 5, 6) else arm3
-    ejecutar = new2 is not None and new3 is not None
-    if ejecutar and new2 == new3:
-        return {"ok": False, "omitido": True, "motivo": "misma_persona_dos_llaves"}
+        new2 = autor_id if nivel == 2 else arm2
+        new3 = autor_id if nivel in (3, 4, 5, 6) else arm3
+        ejecutar = new2 is not None and new3 is not None
+        if ejecutar and new2 == new3:
+            return {"ok": False, "omitido": True, "motivo": "misma_persona_dos_llaves"}
 
     cd_send = {**cd, "mensaje": mensaje_limpio}
     slot_llave = _sicoe_slot_llave_reversion(nivel)
-    tipo_c = "reversion_doble_llave_n2" if slot_llave == 2 else "reversion_doble_llave_n3"
+    if recuperacion:
+        tipo_c = "reversion_doble_llave"
+    else:
+        tipo_c = "reversion_doble_llave_n2" if slot_llave == 2 else "reversion_doble_llave_n3"
     _insertar_comentario(
         contrato_id,
         registro_id,
@@ -20634,7 +20692,11 @@ def _sicoe_reversion_doble_llave_procesar_registro(
             autor_id,
             contrato_id,
             registro_id,
-            f"Doble llave reversión N3 — Nivel {nivel}",
+            (
+                "Reversión doble llave — desbloqueo (recuperación)"
+                if recuperacion
+                else f"Doble llave reversión N3 — Nivel {nivel}"
+            ),
             mensaje_limpio,
             cd_send,
         )
@@ -20642,17 +20704,7 @@ def _sicoe_reversion_doble_llave_procesar_registro(
         pass
 
     if ejecutar:
-        campo_mx = _get_nivel_maximo_contrato(contrato_id)
-        u_k, f_k = _sicoe_campo_usuario_fecha_desde_estado(campo_mx)
-        update = {
-            "bloqueado": False,
-            "solicitud_reversion": False,
-            campo_mx: "No Revisado",
-            u_k: None,
-            f_k: None,
-            "reversion_arm_n2_usuario_id": None,
-            "reversion_arm_n3_usuario_id": None,
-        }
+        update = _sicoe_reversion_update_desellar(contrato_id)
     else:
         update = (
             {"reversion_arm_n2_usuario_id": autor_id}
@@ -20661,19 +20713,56 @@ def _sicoe_reversion_doble_llave_procesar_registro(
         )
 
     def _upd():
-        return (
+        q = (
             supabase.table("so_registros")
             .update(update)
             .eq("id", registro_id)
             .eq("contrato_id", contrato_id)
-            .execute()
-            .data
         )
+        # Evita pisar una llave concurrente: solo escribe si el slot sigue libre.
+        if not ejecutar:
+            if nivel == 2:
+                q = q.is_("reversion_arm_n2_usuario_id", "null")
+            else:
+                q = q.is_("reversion_arm_n3_usuario_id", "null")
+        return q.execute().data
 
     try:
         supabase_execute(_upd)
     except Exception as ex:
         raise _http_reversion_doble_llave_db_error(ex) from ex
+
+    # Carrera: la contraparte pudo grabar su llave en paralelo. Releer y desellar si aplica.
+    if not ejecutar:
+        try:
+            row_after = _sicoe_reversion_fetch_arms_row(contrato_id, registro_id)
+        except Exception:
+            row_after = None
+        if row_after is not None:
+            a2 = _sicoe_nid_reversion_arm(row_after.get("reversion_arm_n2_usuario_id"))
+            a3 = _sicoe_nid_reversion_arm(row_after.get("reversion_arm_n3_usuario_id"))
+            if (
+                _sicoe_reversion_ambas_llaves_listas(a2, a3)
+                and row_after.get("bloqueado")
+                and _registro_nivel_max_aprobado(row_after, contrato_id)
+            ):
+                def _upd_desellar():
+                    return (
+                        supabase.table("so_registros")
+                        .update(_sicoe_reversion_update_desellar(contrato_id))
+                        .eq("id", registro_id)
+                        .eq("contrato_id", contrato_id)
+                        .eq("bloqueado", True)
+                        .execute()
+                        .data
+                    )
+
+                try:
+                    supabase_execute(_upd_desellar)
+                    ejecutar = True
+                    recuperacion = True
+                except Exception as ex:
+                    raise _http_reversion_doble_llave_db_error(ex) from ex
 
     if ejecutar:
         try:
@@ -20682,9 +20771,13 @@ def _sicoe_reversion_doble_llave_procesar_registro(
             pass
 
     accion_log = (
-        "REVERSION_DOBLE_EJECUTADA"
-        if ejecutar
-        else ("REVERSION_LLAVE_N2" if nivel == 2 else "REVERSION_LLAVE_N3")
+        "REVERSION_DOBLE_RECUPERADA"
+        if ejecutar and recuperacion
+        else (
+            "REVERSION_DOBLE_EJECUTADA"
+            if ejecutar
+            else ("REVERSION_LLAVE_N2" if nivel == 2 else "REVERSION_LLAVE_N3")
+        )
     )
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
@@ -20695,7 +20788,7 @@ def _sicoe_reversion_doble_llave_procesar_registro(
             "SICOE",
             "registro",
             str(registro_id),
-            {"nivel_llave": nivel, "ejecutada": ejecutar},
+            {"nivel_llave": nivel, "ejecutada": ejecutar, "recuperacion": bool(recuperacion)},
             valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
             valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
             severidad="AUDIT",
@@ -20703,7 +20796,12 @@ def _sicoe_reversion_doble_llave_procesar_registro(
     except Exception:
         pass
 
-    return {"ok": True, "ejecutada": ejecutar, "nivel": nivel}
+    return {
+        "ok": True,
+        "ejecutada": ejecutar,
+        "nivel": nivel,
+        "recuperacion": bool(recuperacion and ejecutar),
+    }
 
 
 def _sicoe_enriquecer_registros_reversion_meta(contrato_id: int, candidatos: List[dict]) -> List[dict]:
@@ -20785,7 +20883,12 @@ def _sicoe_filtrar_filas_elegibles_reversion(
             continue
         arm2 = _sicoe_nid_reversion_arm(r.get("reversion_arm_n2_usuario_id"))
         arm3 = _sicoe_nid_reversion_arm(r.get("reversion_arm_n3_usuario_id"))
+        # Ambas llaves grabadas pero aún sellado → elegible para recuperación/desbloqueo.
+        if _sicoe_reversion_ambas_llaves_listas(arm2, arm3):
+            elegibles.append(r)
+            continue
         if arm2 is not None and arm3 is not None:
+            # Misma persona en ambas (estado inválido): no elegible.
             omitidos += 1
             continue
         if _es_desarrollador(current_user) or nivel_db == 0:
@@ -35757,7 +35860,7 @@ def reversion_n3_doble_llave(
                     "(aprobación para pago del funcionario)."
                 )
             raise HTTPException(status_code=422, detail=motivo)
-        return {"ok": True, "ejecutada": bool(res.get("ejecutada"))}
+        return {"ok": True, "ejecutada": bool(res.get("ejecutada")), "recuperacion": bool(res.get("recuperacion"))}
     except HTTPException:
         raise
     except Exception as e:
