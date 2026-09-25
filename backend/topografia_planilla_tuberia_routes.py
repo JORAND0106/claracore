@@ -78,8 +78,8 @@ def _row(table: str, **eq) -> Optional[dict]:
     return data[0] if data else None
 
 
-def _perm(user, accion: str) -> None:
-    require_permiso_topografia(user, accion)  # type: ignore[arg-type]
+def _perm(user, accion: str, contrato_id=None) -> None:
+    require_permiso_topografia(user, accion, contrato_id=contrato_id)  # type: ignore[arg-type]
 
 
 def _assert_editable(p: dict) -> None:
@@ -775,7 +775,7 @@ def _replace_filas(planilla_id: str, filas: list[dict], *, tipo: str = "ALCANTAR
 @router.get("/{contrato_id}/planillas-tuberia")
 def listar(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     rows = (
         supabase.table("topo_planillas_tuberia")
         .select(
@@ -889,7 +889,7 @@ def _assert_nombre_planilla_unico(
 @router.post("/{contrato_id}/planillas-tuberia")
 def crear(contrato_id: int, body: CrearBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "crear", contrato_id)
     tipo = (body.tipo or "ALCANTARILLA").upper()
     if tipo not in TIPOS_PLANILLA:
         raise HTTPException(422, f"Tipo inválido: {tipo}")
@@ -920,14 +920,14 @@ def crear(contrato_id: int, body: CrearBody, current_user=Depends(get_current_us
 @router.get("/{contrato_id}/planillas-tuberia/{planilla_id}")
 def obtener(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return _detalle(contrato_id, planilla_id)
 
 
 @router.put("/{contrato_id}/planillas-tuberia/{planilla_id}/params")
 def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -1040,7 +1040,7 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
 @router.put("/{contrato_id}/planillas-tuberia/{planilla_id}/cartera")
 def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -1273,7 +1273,7 @@ def adjuntar_evidencia(
 ):
     """Adjunta foto a una línea de Resumen de Cantidades o Descuentos Específicos."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -1325,7 +1325,7 @@ def eliminar_evidencia(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -1375,7 +1375,7 @@ def evidencia_media(
 ):
     """Sirve una foto de evidencia (blob privado) bajo demanda."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -1409,7 +1409,7 @@ def evidencia_media(
 @router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/calcular")
 def calcular(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return _detalle(contrato_id, planilla_id)
 
 
@@ -1937,7 +1937,7 @@ def planilla_por_reporte_sicoe(
 ):
     """Resuelve la planilla de origen vinculada a un so_reportes (pestaña SICOE)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     rows = (
         supabase.table("topo_planillas_tuberia")
         .select("id,nombre,tipo,estado,pk_id,costado,meta_cabecera,updated_at")
@@ -1971,7 +1971,7 @@ def crear_reporte_sicoe_desde_planilla(
     Reutiliza el mismo modelo/estructura que el wizard SICOE Obra.
     """
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -2320,7 +2320,7 @@ def asociar_reporte_sicoe_existente(
     Si la planilla ya tiene un vínculo SICOE (crear o asociar), se rechaza salvo Dev.
     """
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -2736,7 +2736,7 @@ def cerrar(contrato_id: int, planilla_id: str, current_user=Depends(get_current_
     permanece por si se invoca desde herramientas o flujos legacy.
     """
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -2854,7 +2854,7 @@ def _aplicar_validacion_planilla_tuberia(
     cuando interventoría (N2) marca Aprobado. Pendiente/Rechazado dejan la planilla
     editable (borrador).
     """
-    require_topo_puede_validar_nivel(current_user, nivel)
+    require_topo_puede_validar_nivel(current_user, nivel, contrato_id)
     estado_planilla = (row.get("estado") or "").lower() or "borrador"
     if estado_planilla not in ("borrador", "cerrado", "validado"):
         raise HTTPException(422, f"Estado de planilla no válido para validar: {estado_planilla}")
@@ -2956,7 +2956,7 @@ def validar_nivel1(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -2971,7 +2971,7 @@ def validar_nivel2(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(404, "Planilla no encontrada")
@@ -3052,7 +3052,7 @@ def eliminar(contrato_id: int, planilla_id: str, current_user=Depends(get_curren
     explícita si ya hay datos diligenciados. El backend reporta `tenia_datos`.
     """
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "eliminar")
+    _perm(current_user, "eliminar", contrato_id)
     p = _row("topo_planillas_tuberia", id=planilla_id, contrato_id=contrato_id)
     if not p:
         raise HTTPException(status_code=404, detail="Planilla no encontrada")
@@ -3084,7 +3084,7 @@ def eliminar(contrato_id: int, planilla_id: str, current_user=Depends(get_curren
 @router.get("/{contrato_id}/planillas-tuberia-consolidado")
 def consolidado(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return (
         supabase.table("topo_planilla_tuberia_consolidado").select("*")
         .eq("contrato_id", contrato_id).order("created_at", desc=True).execute().data or []
@@ -3119,7 +3119,7 @@ def _assert_export_permitido(current_user, det: dict) -> bool:
                 "Sin datos para exportar. Solo Desarrollador puede descargar la plantilla vacía.",
             )
         return True
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     return False
 
 

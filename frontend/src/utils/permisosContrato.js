@@ -126,3 +126,34 @@ export function usuarioDebeSuscribirsePush(usuario, contratoId) {
   const p = permisoReporteCantidades(usuario, contratoId)
   return !!(p?.editar || p?.validar)
 }
+
+/**
+ * Matriz «Topografía» (código TOPOGR): misma resolución por contrato que SICOE Obra.
+ * Acepta nombre con o sin tilde.
+ */
+export function permisoTopografia(usuario, contratoId) {
+  const cid = Number(contratoId ?? usuario?.contrato_id)
+  return (
+    permisoFuncionContrato(usuario, 'topografía', cid)
+    || permisoFuncionContrato(usuario, 'topografia', cid)
+  )
+}
+
+export function tienePermisoTopografiaFlag(usuario, flag, contratoId) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  const p = permisoTopografia(usuario, contratoId)
+  return !!(p && p[flag])
+}
+
+/** Paquete de flags para App.jsx → TopografiaMain (crear/editar vs validar). */
+export function permisosTopografia(usuario, contratoId) {
+  const cid = contratoId ?? usuario?.contrato_id
+  return {
+    ver: tienePermisoTopografiaFlag(usuario, 'ver', cid),
+    crear: tienePermisoTopografiaFlag(usuario, 'crear', cid),
+    editar: tienePermisoTopografiaFlag(usuario, 'editar', cid),
+    eliminar: tienePermisoTopografiaFlag(usuario, 'eliminar', cid),
+    validar: tienePermisoTopografiaFlag(usuario, 'validar', cid),
+    exportar: tienePermisoTopografiaFlag(usuario, 'exportar', cid),
+  }
+}

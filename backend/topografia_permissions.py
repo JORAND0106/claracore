@@ -1,5 +1,8 @@
 """
 Permisos módulo Topografía — fila en `funciones` (nombre «Topografía», código TOPOGR).
+
+Misma semántica de matriz que SICOE Obra (ver/crear/editar/eliminar/validar/exportar),
+con alcance por contrato vía `_permisos_rows_para_cargo` (login /usuarios/me).
 """
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ from fastapi import HTTPException
 
 TopoAccion = Literal["ver", "crear", "editar", "eliminar", "validar", "exportar"]
 
-_FUNC_NOMBRE = "topografía"
+_FUNC_NOMBRES = frozenset({"topografía", "topografia"})
 
 
 def _norm(txt: str) -> str:
@@ -19,27 +22,41 @@ def _norm(txt: str) -> str:
     return s.lower().strip().replace("  ", " ")
 
 
-def _cargo_permiso_topografia(current_user, accion: TopoAccion) -> bool:
+def _cargo_permiso_topografia(
+    current_user,
+    accion: TopoAccion,
+    contrato_id: Optional[int] = None,
+) -> bool:
+    """Matriz Topografía; si contrato_id, misma resolución scoped que SICOE Obra."""
     try:
         uid = int(current_user.get("sub"))
     except (TypeError, ValueError):
         return False
     try:
-        from main import supabase, supabase_execute, _es_desarrollador
+        from main import (
+            _es_desarrollador,
+            _permisos_rows_para_cargo,
+            supabase,
+            supabase_execute,
+        )
 
         if _es_desarrollador(current_user):
             return True
-        urows = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
+        urows = (
+            supabase.table("usuarios")
+            .select("cargo_id")
+            .eq("id", uid)
+            .limit(1)
+            .execute()
+            .data
+        )
         u = urows[0] if urows else None
         if not u or u.get("cargo_id") is None:
             return False
         cid = int(u["cargo_id"])
-        perms = supabase_execute(
-            lambda: supabase.table("permisos")
-            .select("funcion_id, " + accion)
-            .eq("cargo_id", cid)
-            .execute()
-            .data
+        perms = _permisos_rows_para_cargo(
+            cid,
+            int(contrato_id) if contrato_id is not None else None,
         ) or []
         fids = [p["funcion_id"] for p in perms if p.get(accion)]
         if not fids:
@@ -53,19 +70,27 @@ def _cargo_permiso_topografia(current_user, accion: TopoAccion) -> bool:
         ) or []
         for f in funcs:
             nombre = (f.get("nombre") or "").strip().lower()
-            if nombre == _FUNC_NOMBRE or nombre == "topografia":
+            if nombre in _FUNC_NOMBRES:
                 return True
     except Exception:
         return False
     return False
 
 
-def tiene_permiso_topografia(current_user, accion: TopoAccion) -> bool:
-    return _cargo_permiso_topografia(current_user, accion)
+def tiene_permiso_topografia(
+    current_user,
+    accion: TopoAccion,
+    contrato_id: Optional[int] = None,
+) -> bool:
+    return _cargo_permiso_topografia(current_user, accion, contrato_id)
 
 
-def require_permiso_topografia(current_user, accion: TopoAccion) -> None:
-    if not _cargo_permiso_topografia(current_user, accion):
+def require_permiso_topografia(
+    current_user,
+    accion: TopoAccion,
+    contrato_id: Optional[int] = None,
+) -> None:
+    if not _cargo_permiso_topografia(current_user, accion, contrato_id):
         raise HTTPException(
             status_code=403,
             detail=f"No tiene permiso (Topografía · {accion}). Configúrelo en Control de accesos.",
@@ -99,10 +124,14 @@ def _usuario_topo_validacion(uid: int) -> dict:
     }
 
 
-def lado_validacion_topo_usuario(current_user) -> Optional[int]:
+def lado_validacion_topo_usuario(
+    current_user,
+    contrato_id: Optional[int] = None,
+) -> Optional[int]:
     """
-    Nivel de validación topográfica del usuario: 1 = contratista, 2 = interventoría.
+    Nivel de validación topográfica: 1 = contratista, 2 = interventoría.
     Requiere permiso validar en matriz Topografía (excepto desarrollador).
+    Sin lado claro → None (no inventar N1).
     """
     try:
         uid = int(current_user.get("sub"))
@@ -115,7 +144,7 @@ def lado_validacion_topo_usuario(current_user) -> Optional[int]:
             return 0  # acceso a ambos niveles
     except Exception:
         pass
-    if not _cargo_permiso_topografia(current_user, "validar"):
+    if not _cargo_permiso_topografia(current_user, "validar", contrato_id):
         return None
     info = _usuario_topo_validacion(uid)
     rol = info.get("rol") or ""
@@ -128,10 +157,17 @@ def lado_validacion_topo_usuario(current_user) -> Optional[int]:
         if "intervent" in cargo:
             return 2
         return 1
+    # Personal de campo contratista (operadores topo).
+    if "cadenero" in cargo:
+        return 1
     return None
 
 
-def require_topo_puede_validar_nivel(current_user, nivel: int) -> None:
+def require_topo_puede_validar_nivel(
+    current_user,
+    nivel: int,
+    contrato_id: Optional[int] = None,
+) -> None:
     """Desarrollador: niveles 1 y 2. Resto: matriz validar + lado contratista/interventoría."""
     if nivel not in (1, 2):
         raise HTTPException(status_code=500, detail="Nivel de validación topográfica inválido.")
@@ -142,12 +178,12 @@ def require_topo_puede_validar_nivel(current_user, nivel: int) -> None:
             return
     except Exception:
         pass
-    if not _cargo_permiso_topografia(current_user, "validar"):
+    if not _cargo_permiso_topografia(current_user, "validar", contrato_id):
         raise HTTPException(
             status_code=403,
             detail="No tiene permiso (Topografía · validar). Configúrelo en Control de accesos.",
         )
-    lado = lado_validacion_topo_usuario(current_user)
+    lado = lado_validacion_topo_usuario(current_user, contrato_id)
     if lado == 0:
         return
     if lado != nivel:
