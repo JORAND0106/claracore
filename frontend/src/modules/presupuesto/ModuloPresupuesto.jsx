@@ -75,6 +75,12 @@ import { useModulo } from '../../context/ModuloContext'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFilaCoincideFObra, pptoFilaCoincidePreInterv, pptoFilaCoincideRevisado, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroUbicacionCacheKey, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraParaConsulta, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoRequiereConsultaServidor, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
 import { fetchPptoPanelValidacion, pptoBuildPanelValidacionParams } from './pptoPanelValidacionApi'
 import { cargarFiltroSesion, guardarFiltroSesion, limpiarFiltroSesion } from './pptoFiltroSesion'
+import {
+  filtroPlanoEstaActivo,
+  grillaConFiltroPlano,
+  interpretarFiltroActivo,
+  mensajeFiltroPlano,
+} from './pptoFiltroPlano'
 import CcAvisoModal from '../../components/CcAvisoModal'
 
 /** Tipografía alineada con Pequeña / Mediana / Grande (`applyClaraTypography` en `typographyScale.js`) */
@@ -643,6 +649,11 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
   const dwgEnlazadoRef = useRef(false)
   const navPlanoTimerRef = useRef(null)
+  /** Filtro temporal plano → grilla. Solo memoria de esta visita; no se guarda en la sesión de filtros. */
+  const [filtroPlano, setFiltroPlano] = useState(null)
+  const filtroPlanoOpVistoRef = useRef(new Set())
+  const filtroPlanoPollRef = useRef(false)
+  const filtroPlanoContratoRef = useRef(contratoId)
 
   const refrescarDwgEnlazado = useCallback(async () => {
     if (!contratoId) return false
@@ -663,13 +674,68 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
     }
   }, [contratoId])
 
+  const consumirFiltroPlano = useCallback(async () => {
+    if (!contratoId || filtroPlanoPollRef.current) return
+    const tok = getToken()
+    if (!tok) return
+    const cid = contratoId
+    filtroPlanoPollRef.current = true
+    try {
+      const r = await fetch(`${API}/cad-queue/${contratoId}/filtro-activo`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      if (!r.ok) return
+      if (filtroPlanoContratoRef.current !== cid) return
+      const data = await r.json()
+      const filtro = interpretarFiltroActivo(data, filtroPlanoOpVistoRef.current)
+      if (filtro) {
+        filtroPlanoOpVistoRef.current.add(filtro.opId)
+        setFiltroPlano(filtro)
+        if (!filtro.sinCoincidencias) {
+          setSeleccionados(new Set())
+          setVisibleRegistrosCount((n) => Math.max(n, filtro.registros.length))
+        }
+      }
+      const opPendiente = Number(data?.op_id)
+      const opId = filtro?.opId || (Number.isFinite(opPendiente) ? opPendiente : 0)
+      if (!(opId > 0) || !filtroPlanoOpVistoRef.current.has(opId)) return
+      await fetch(`${API}/cad-queue/${opId}/procesado`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${tok}`,
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+      })
+    } catch {
+      /* el siguiente tick del polling reintenta */
+    } finally {
+      filtroPlanoPollRef.current = false
+    }
+  }, [API, contratoId])
+
+  useEffect(() => {
+    filtroPlanoContratoRef.current = contratoId
+    setFiltroPlano(null)
+    filtroPlanoOpVistoRef.current = new Set()
+  }, [contratoId])
+
   useEffect(() => {
     if (!contratoId || oculto) return
     void refrescarDwgEnlazado()
+    void consumirFiltroPlano()
     const iv = setInterval(() => {
-      if (document.visibilityState === 'visible') void refrescarDwgEnlazado()
+      if (document.visibilityState === 'visible') {
+        void refrescarDwgEnlazado()
+        void consumirFiltroPlano()
+      }
     }, 5000)
-    const onActivo = () => { if (document.visibilityState === 'visible') void refrescarDwgEnlazado() }
+    const onActivo = () => {
+      if (document.visibilityState === 'visible') {
+        void refrescarDwgEnlazado()
+        void consumirFiltroPlano()
+      }
+    }
     document.addEventListener('visibilitychange', onActivo)
     window.addEventListener('focus', onActivo)
     return () => {
@@ -677,7 +743,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
       document.removeEventListener('visibilitychange', onActivo)
       window.removeEventListener('focus', onActivo)
     }
-  }, [contratoId, oculto, refrescarDwgEnlazado])
+  }, [contratoId, oculto, refrescarDwgEnlazado, consumirFiltroPlano])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -2477,6 +2543,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const cid = String(contratoId)
     const filt = `contrato_id=eq.${cid}`
     const debouncer = createRealtimeDebouncer(() => {
+      void consumirFiltroPlano()
       void recargarCapActualRef.current?.(false)
     })
     const channel = supabase
@@ -2491,7 +2558,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       debouncer.dispose()
       void supabase.removeChannel(channel)
     }
-  }, [contratoId, oculto, dwgEnlazado])
+  }, [contratoId, oculto, dwgEnlazado, consumirFiltroPlano])
 
   // Multisesión: refresco solo en vista por capítulo/ítem (panel). No interrumpe búsqueda con chips.
   useEffect(() => {
@@ -3339,7 +3406,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     return ''
   }, [fObra])
 
+  const filtroPlanoActivo = filtroPlanoEstaActivo(filtroPlano)
+
   const registrosFiltrados = useMemo(() => {
+    // El filtro del plano es temporal y no se combina con los demás criterios de la grilla.
+    const desdePlano = grillaConFiltroPlano(null, filtroPlano)
+    if (filtroPlanoEstaActivo(filtroPlano)) return desdePlano
     // Papelera: el servidor ya pagina/filtra dado_de_baja; no reaplicar drill/filtros
     // de la vista activa (dejarían la primera página vacía en pantalla).
     if (verPapelera) return registros
@@ -3392,7 +3464,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       return true
     })
-  }, [registros, verPapelera, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, fObra.infraestructura, fObra.infraestructuras, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
+  }, [registros, verPapelera, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, fObra.infraestructura, fObra.infraestructuras, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada, filtroPlano])
 
   /**
    * Misma fuente de datos que el botón «Tramos» / `cargarCapituloData`:
@@ -7586,7 +7658,7 @@ async function darDeBaja(id) {
         <div style={s.emptyState}>⏳ Cargando capítulo...</div>
       ) : verPapelera && registros.length === 0 ? (
         <div style={s.emptyState}>🗑️ La Papelera está vacía</div>
-      ) : (!verPapelera && capitulosResumen.length === 0 && registros.length === 0 && !loadingCapitulos) ? (
+      ) : (!verPapelera && capitulosResumen.length === 0 && registros.length === 0 && !loadingCapitulos && !filtroPlanoActivo) ? (
         <div style={s.emptyState}>{loadingCapitulos ? '⏳ Cargando lista de capítulos…' : '📂 Importa un CSV para comenzar'}</div>
       ) : null}
 
@@ -7646,9 +7718,47 @@ async function darDeBaja(id) {
             🔗 DWG Enlazado
           </div>
         )}
+        {filtroPlano && (
+          <div
+            role="status"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: '6px 14px',
+              background: filtroPlanoActivo ? '#D9770618' : '#2563EB18',
+              border: `1px solid ${filtroPlanoActivo ? '#D9770644' : '#2563EB44'}`,
+              borderRadius: '8px',
+              fontSize: 'var(--cc-sm)',
+              color: filtroPlanoActivo ? '#B45309' : '#1D4ED8',
+              fontWeight: '600',
+              flexWrap: 'wrap',
+            }}
+          >
+            <span>{filtroPlanoActivo ? '⌖' : 'ℹ'}</span>
+            <span>{mensajeFiltroPlano(filtroPlano)}</span>
+            <button
+              type="button"
+              onClick={() => setFiltroPlano(null)}
+              style={{
+                marginLeft: '4px',
+                background: 'transparent',
+                border: `1px solid ${filtroPlanoActivo ? '#D97706' : '#2563EB'}`,
+                borderRadius: '6px',
+                padding: '4px 10px',
+                color: filtroPlanoActivo ? '#B45309' : '#1D4ED8',
+                fontSize: 'var(--cc-sm)',
+                fontWeight: '700',
+                cursor: 'pointer',
+              }}
+            >
+              {filtroPlanoActivo ? 'Quitar filtro' : 'Cerrar'}
+            </button>
+          </div>
+        )}
       </div>
       {/* ── Tabla ── */}
-      {(verPapelera || busquedaServidorActiva || drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra)) && registrosFiltrados.length > 0 && (
+      {(filtroPlanoActivo || verPapelera || busquedaServidorActiva || drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra)) && registrosFiltrados.length > 0 && (
         <>
         {pptoCompact && (
           <div className="cc-ppto-reg-cards" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>

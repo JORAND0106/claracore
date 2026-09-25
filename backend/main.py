@@ -1282,6 +1282,11 @@ class CadQueueProcesado(BaseModel):
     rev_block_handle: Optional[str] = None   # solo para insertar_bloque
     presupuesto_id:   Optional[int] = None
 
+class CadFiltroHandlesBody(BaseModel):
+    """Handles de la selección en el plano (entidad y texto). usuario_id: claracore_prefs."""
+    handles: list = Field(default_factory=list)
+    usuario_id: Optional[int] = None
+
 class CadSesionColaborativaBody(BaseModel):
     usuario_ids: list[int] = Field(default_factory=list)
 
@@ -14671,6 +14676,220 @@ def cad_procesado(op_id: int, body: CadQueueProcesado, current_user=Depends(get_
             "rev_block_handle": body.rev_block_handle
         }).eq("id", body.presupuesto_id).execute()
     return {"ok": True}
+
+
+def _cad_filtro_uid_fila(row: dict) -> int:
+    from cad_filtro_handles import usuario_de_fila_cad
+    return usuario_de_fila_cad(row or {})
+
+
+def _cad_cerrar_filtros_previos(contrato_id: int, usuario_id: int) -> None:
+    """Deja una sola operación filtro_activo pendiente por usuario."""
+    from cad_filtro_handles import ids_a_cerrar
+    try:
+        rows = (
+            supabase.table("cad_queue")
+            .select("id, tipo, estado, payload")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo", "filtro_activo")
+            .eq("estado", "pendiente")
+            .order("id", desc=True)
+            .limit(30)
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        rows = []
+    cerrar = ids_a_cerrar(rows, usuario_id)
+    if not cerrar:
+        return
+    try:
+        supabase.table("cad_queue").update({
+            "estado": "procesado",
+            "processed_at": datetime.utcnow().isoformat(),
+        }).in_("id", cerrar).execute()
+    except Exception:
+        _log_api.warning("filtro-handles: no se pudieron cerrar filtros previos", exc_info=True)
+
+
+def _cad_insert_filtro_activo(contrato_id: int, usuario_id: int, payload: dict) -> dict:
+    """Inserta filtro_activo. Si la columna usuario_id no existe en cad_queue, reintenta sin ella."""
+    base = {
+        "contrato_id": contrato_id,
+        "tipo": "filtro_activo",
+        "estado": "pendiente",
+        "payload": payload,
+    }
+    with_uid = {**base, "usuario_id": usuario_id}
+    try:
+        data = supabase.table("cad_queue").insert(with_uid).execute().data or []
+    except Exception as e:
+        if not _is_pgrst_missing_column(e, "usuario_id"):
+            raise
+        data = supabase.table("cad_queue").insert(base).execute().data or []
+    return data[0] if data else {}
+
+
+def _cad_ids_presupuesto_por_handles(contrato_id: int, handles: list) -> list:
+    from cad_filtro_handles import buscar_ids_por_handles, consulta_or_handles, trozos_handles
+    if not handles:
+        return []
+    rows = []
+    for chunk in trozos_handles(handles):
+        expr = consulta_or_handles(chunk)
+        try:
+            batch = (
+                supabase.table("presupuesto")
+                .select("id, contrato_id, ent_handle, txt_handle, dado_de_baja")
+                .eq("contrato_id", contrato_id)
+                .or_(expr)
+                .limit(2000)
+                .execute()
+                .data
+            ) or []
+        except Exception:
+            _log_api.warning("filtro-handles: fallo consultando handles", exc_info=True)
+            raise HTTPException(status_code=503, detail="No se pudo consultar el presupuesto por handles")
+        rows.extend(batch)
+    return buscar_ids_por_handles(rows, handles, contrato_id=contrato_id)
+
+
+def _cad_registros_filtro_para_usuario(contrato_id: int, ids: list, current_user) -> list:
+    if not ids:
+        return []
+    rows = []
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        q = (
+            supabase.table("presupuesto")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .in_("id", chunk)
+        )
+        q = _presupuesto_q_visibilidad_usuario(q, current_user)
+        try:
+            batch = q.execute().data or []
+        except Exception:
+            _log_api.warning("filtro-activo: fallo leyendo registros", exc_info=True)
+            raise HTTPException(status_code=503, detail="No se pudieron leer los registros del filtro")
+        rows.extend(batch)
+    by_id = {}
+    for r in rows:
+        try:
+            by_id[int(r.get("id"))] = r
+        except (TypeError, ValueError):
+            continue
+    ordered = [by_id[i] for i in ids if i in by_id]
+    try:
+        ordered = _enrich_presupuesto_ubicacion_desde_pk_ids(contrato_id, ordered)
+        ordered = _overlay_presupuesto_meta_vivo(contrato_id, ordered)
+    except Exception:
+        _log_api.warning("filtro-activo: enrich de registros omitido", exc_info=True)
+    return _redactar_presupuesto_si_subcontratista(ordered, current_user)
+
+
+@app.post("/cad-queue/{contrato_id}/filtro-handles")
+def cad_filtro_handles(
+    contrato_id: int,
+    body: CadFiltroHandlesBody,
+    usuario_id: int = 0,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+):
+    """Agent ClaraCAD: handles seleccionados en el plano → filtro_activo en la cola.
+
+    El Loader manda la operación IPC ``filtrar_registros`` con ``{"handles": [...]}``.
+    ``usuario_id`` sale de claracore_prefs.json (cuerpo o query, igual que el heartbeat)
+    o del JWT si el Agent ya inició sesión en ClaraCore.
+    """
+    from cad_filtro_handles import (
+        mensaje_filtro,
+        normalizar_handles,
+        payload_filtro_activo,
+        resolver_usuario_filtro,
+    )
+
+    uid = resolver_usuario_filtro(current_user, body.usuario_id, usuario_id)
+    if uid <= 0:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
+    handles = normalizar_handles(body.handles)
+    ids = _cad_ids_presupuesto_por_handles(contrato_id, handles)
+    payload = payload_filtro_activo(ids, uid, len(handles))
+    _cad_cerrar_filtros_previos(contrato_id, uid)
+    try:
+        row = _cad_insert_filtro_activo(contrato_id, uid, payload)
+    except HTTPException:
+        raise
+    except Exception:
+        _log_api.warning("filtro-handles: falló insert cad_queue", exc_info=True)
+        raise HTTPException(status_code=503, detail="No se pudo encolar el filtro del plano")
+    return {
+        "ok": True,
+        "op_id": row.get("id"),
+        "ids": ids,
+        "coincidencias": len(ids),
+        "sin_coincidencias": len(ids) == 0,
+        "mensaje": mensaje_filtro(ids, len(handles)),
+    }
+
+
+@app.get("/cad-queue/{contrato_id}/filtro-activo")
+def cad_filtro_activo(contrato_id: int, current_user=Depends(get_current_user)):
+    """Operación filtro_activo pendiente del usuario. El polling de presupuesto la consume."""
+    from cad_filtro_handles import (
+        MSG_SIN_COINCIDENCIAS,
+        elegir_filtro_pendiente,
+        ids_desde_payload,
+        mensaje_filtro,
+    )
+
+    uid = _cad_usuario_id_desde_jwt(current_user)
+    if uid <= 0:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
+    try:
+        rows = (
+            supabase.table("cad_queue")
+            .select("id, tipo, estado, payload")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo", "filtro_activo")
+            .eq("estado", "pendiente")
+            .order("id", desc=True)
+            .limit(20)
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        _log_api.warning("filtro-activo: fallo leyendo cad_queue", exc_info=True)
+        return {"pendiente": False}
+    op = elegir_filtro_pendiente(rows, uid)
+    if not op:
+        return {"pendiente": False}
+    payload = op.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = {}
+    ids = ids_desde_payload(payload)
+    n_handles = 0
+    try:
+        n_handles = int((payload or {}).get("handles_consultados") or 0)
+    except (TypeError, ValueError):
+        n_handles = 0
+    registros = _cad_registros_filtro_para_usuario(contrato_id, ids, current_user) if ids else []
+    sin_visibles = bool(ids) and not registros
+    if not registros:
+        mensaje = mensaje_filtro([], n_handles, sin_visibles=sin_visibles) or MSG_SIN_COINCIDENCIAS
+    else:
+        mensaje = None
+    return {
+        "pendiente": True,
+        "op_id": op.get("id"),
+        "ids": [r.get("id") for r in registros],
+        "sin_coincidencias": len(registros) == 0,
+        "mensaje": mensaje,
+        "registros": registros,
+    }
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CAD EJES (SicoeCAD — abscisado por contrato)
