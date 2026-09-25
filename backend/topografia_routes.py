@@ -119,8 +119,8 @@ class ValidarPoligonalBody(BaseModel):
     comentario_data: Optional[dict] = None
 
 
-def _perm(current_user, accion: str) -> None:
-    require_permiso_topografia(current_user, accion)
+def _perm(user, accion: str, contrato_id=None) -> None:
+    require_permiso_topografia(user, accion, contrato_id=contrato_id)  # type: ignore[arg-type]
 
 
 def _uid(current_user) -> int:
@@ -762,7 +762,7 @@ def _aplicar_validacion_newpoint(
     body: ValidarPoligonalBody,
     current_user,
 ) -> dict:
-    require_topo_puede_validar_nivel(current_user, nivel)
+    require_topo_puede_validar_nivel(current_user, nivel, contrato_id)
     _exigir_newpoint_lista_validar(row)
     if nivel == 1:
         _exigir_newpoint_datos_campo(row)
@@ -794,7 +794,7 @@ def _aplicar_validacion_newpoint(
             nivel,
             body.estado,
             body.comentario_data,
-            _rol_origen_topo(current_user),
+            _rol_origen_topo(current_user, contrato_id),
         )
     if nivel == 2 and body.estado == "Aprobado":
         row_upd = _row("topo_newpoints", id=newpoint_id, contrato_id=contrato_id) or row
@@ -807,8 +807,8 @@ def _aplicar_validacion_newpoint(
     }
 
 
-def _rol_origen_topo(current_user) -> str:
-    lado = lado_validacion_topo_usuario(current_user)
+def _rol_origen_topo(current_user, contrato_id=None) -> str:
+    lado = lado_validacion_topo_usuario(current_user, contrato_id)
     if lado == 2:
         return "interventoria"
     try:
@@ -889,7 +889,7 @@ def _aplicar_validacion_poligonal(
     body: ValidarPoligonalBody,
     current_user,
 ) -> dict:
-    require_topo_puede_validar_nivel(current_user, nivel)
+    require_topo_puede_validar_nivel(current_user, nivel, contrato_id)
     _exigir_poligonal_lista_validar(pol, poligonal_id)
     if body.estado not in ESTADOS_VALIDACION:
         raise HTTPException(status_code=422, detail=f"Estado inválido. Use: {sorted(ESTADOS_VALIDACION)}")
@@ -935,7 +935,7 @@ def _aplicar_validacion_poligonal(
             nivel,
             body.estado,
             body.comentario_data,
-            _rol_origen_topo(current_user),
+            _rol_origen_topo(current_user, contrato_id),
         )
 
     if nivel == 2 and body.estado == "Aprobado":
@@ -1691,7 +1691,7 @@ def _enriquecer_puntos_biblioteca(puntos: list[dict], contrato_id: int) -> list[
 @router.get("/{contrato_id}/puntos")
 def listar_puntos(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     puntos = (
         supabase.table("topo_puntos")
         .select("*")
@@ -1711,7 +1711,7 @@ def listar_puntos_verificados(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     q = (
         supabase.table("topo_puntos")
         .select("*")
@@ -1732,7 +1732,7 @@ def listar_operadores(contrato_id: int, current_user=Depends(get_current_user)):
     cadenero, desarrollador.
     """
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     cargos = {
         c["id"]: (c.get("nombre") or "")
         for c in (supabase.table("cargos").select("id, nombre").execute().data or [])
@@ -1793,7 +1793,7 @@ def listar_operadores(contrato_id: int, current_user=Depends(get_current_user)):
 def listar_puntos_nivelacion_mapa(contrato_id: int, current_user=Depends(get_current_user)):
     """Puntos de cartera de nivelación vinculados a un PK real (para capa opcional en planos)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     nivs = (
         supabase.table("topo_nivelaciones")
         .select("id, nombre")
@@ -1855,7 +1855,7 @@ def listar_puntos_nivelacion_mapa(contrato_id: int, current_user=Depends(get_cur
 @router.post("/{contrato_id}/puntos")
 def crear_punto(contrato_id: int, body: PuntoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     if body.verificado and not body.norte and body.tipo != "BM":
         raise HTTPException(status_code=422, detail="Solo BM iniciales pueden crearse verificados manualmente")
     row = (
@@ -1883,7 +1883,7 @@ def crear_punto(contrato_id: int, body: PuntoBody, current_user=Depends(get_curr
 @router.put("/{contrato_id}/puntos/{punto_id}")
 def actualizar_punto(contrato_id: int, punto_id: str, body: PuntoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     existing = _row("topo_puntos", id=punto_id, contrato_id=contrato_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Punto no encontrado")
@@ -1913,7 +1913,7 @@ def actualizar_punto(contrato_id: int, punto_id: str, body: PuntoBody, current_u
 @router.delete("/{contrato_id}/puntos/{punto_id}")
 def eliminar_punto(contrato_id: int, punto_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "eliminar")
+    _perm(current_user, "eliminar", contrato_id)
     existing = _row("topo_puntos", id=punto_id, contrato_id=contrato_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Punto no encontrado")
@@ -1928,7 +1928,7 @@ def eliminar_punto(contrato_id: int, punto_id: str, current_user=Depends(get_cur
 @router.get("/{contrato_id}/poligonales")
 def listar_poligonales(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return [
         _enriquecer_poligonal_vista(p)
         for p in (
@@ -1947,7 +1947,7 @@ def listar_poligonales(contrato_id: int, current_user=Depends(get_current_user))
 def listar_poligonales_selladas(contrato_id: int, current_user=Depends(get_current_user)):
     """Poligonales selladas (interventoría aprobada) — referencia para NewPoint."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     rows = (
         supabase.table("topo_poligonales")
         .select("id, nombre, tipo, biblioteca_at, nivel2_estado, created_at")
@@ -1964,7 +1964,7 @@ def listar_poligonales_selladas(contrato_id: int, current_user=Depends(get_curre
 def listar_puntos_biblioteca_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Puntos verificados de biblioteca que pertenecen a la poligonal sellada indicada."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -1986,7 +1986,7 @@ def listar_puntos_biblioteca_poligonal(contrato_id: int, poligonal_id: str, curr
 @router.post("/{contrato_id}/poligonales")
 def crear_poligonal(contrato_id: int, body: PoligonalBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     payload = body.model_dump(mode="json", exclude={"amarre_inicial", "amarre_final", "amarre_visado"})
     for field in ("punto_inicial_id", "punto_final_id", "punto_visado_id"):
         payload[field] = _sanitize_uuid_optional(payload.get(field))
@@ -2026,7 +2026,7 @@ def crear_poligonal(contrato_id: int, body: PoligonalBody, current_user=Depends(
 @router.get("/{contrato_id}/poligonales/{poligonal_id}")
 def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2174,7 +2174,7 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
 @router.put("/{contrato_id}/poligonales/{poligonal_id}")
 def actualizar_poligonal(contrato_id: int, poligonal_id: str, body: PoligonalBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2202,7 +2202,7 @@ def actualizar_amarres_poligonal(
 ):
     """Actualiza coordenadas de estación/visado de amarre y recalcula la vista en libreta."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2232,7 +2232,7 @@ def actualizar_amarres_poligonal(
 @router.delete("/{contrato_id}/poligonales/{poligonal_id}")
 def eliminar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "eliminar")
+    _perm(current_user, "eliminar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2247,7 +2247,7 @@ def eliminar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/estaciones")
 def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2300,7 +2300,7 @@ def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, cu
 @router.put("/{contrato_id}/poligonales/{poligonal_id}/estaciones/{estacion_id}")
 def editar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, body: EstacionEditBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2362,14 +2362,14 @@ def editar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, body:
 @router.get("/{contrato_id}/poligonales/{poligonal_id}/armadas")
 def listar_armadas(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return _armadas_activas(poligonal_id)
 
 
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/armadas")
 def crear_armada(contrato_id: int, poligonal_id: str, body: ArmadaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2397,7 +2397,7 @@ def crear_armada(contrato_id: int, poligonal_id: str, body: ArmadaBody, current_
 @router.put("/{contrato_id}/poligonales/{poligonal_id}/armadas/{armada_id}")
 def actualizar_armada(contrato_id: int, poligonal_id: str, armada_id: str, body: ArmadaUpdateBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2435,7 +2435,7 @@ def actualizar_armada(contrato_id: int, poligonal_id: str, armada_id: str, body:
 def eliminar_armada(contrato_id: int, poligonal_id: str, armada_id: str, current_user=Depends(get_current_user)):
     """Soft-delete de armada y de sus puntos activos (papelera, recuperable ~30 días)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2466,7 +2466,7 @@ def eliminar_armada(contrato_id: int, poligonal_id: str, armada_id: str, current
 def restaurar_armada(contrato_id: int, poligonal_id: str, armada_id: str, current_user=Depends(get_current_user)):
     """Restaura armada y sus puntos que estaban en papelera."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2501,7 +2501,7 @@ def restaurar_armada(contrato_id: int, poligonal_id: str, armada_id: str, curren
 def purgar_armada(contrato_id: int, poligonal_id: str, armada_id: str, current_user=Depends(get_current_user)):
     """Eliminación definitiva de armada en papelera (CASCADE a sus puntos)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2528,7 +2528,7 @@ class SentidoBody(BaseModel):
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/sentido")
 def set_sentido_poligonal(contrato_id: int, poligonal_id: str, body: SentidoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2547,7 +2547,7 @@ def set_sentido_poligonal(contrato_id: int, poligonal_id: str, body: SentidoBody
 def eliminar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, current_user=Depends(get_current_user)):
     """Soft-delete: mueve el punto a papelera (recuperable ~30 días)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2568,7 +2568,7 @@ def eliminar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, cur
 def restaurar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, current_user=Depends(get_current_user)):
     """Restaura un punto desde la papelera (al final del orden)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2605,7 +2605,7 @@ def restaurar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, cu
 def purgar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, current_user=Depends(get_current_user)):
     """Eliminación definitiva (solo desde papelera)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2628,7 +2628,7 @@ def purgar_estacion(contrato_id: int, poligonal_id: str, estacion_id: str, curre
 def listar_papelera_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Lista armadas y puntos en papelera (retención ~30 días)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2655,7 +2655,7 @@ def recalcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depen
     No cambia ``estado`` (use ``/reabrir`` para devolver una poligonal cerrada a editable).
     """
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     try:
         from main import _es_desarrollador
 
@@ -2684,7 +2684,7 @@ def reabrir_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
     No modifica ángulos medidos ni distancias de campo. Queda registrado en logs.
     """
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     try:
         from main import _es_desarrollador, registrar_log
 
@@ -2756,7 +2756,7 @@ def reabrir_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
 def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Corregir y ajustar: distribuye error angular y aplica Bowditch (azimuts por armadas)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2816,7 +2816,7 @@ def calcular_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
 def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Termina la poligonal: compensación angular + Bowditch y libreta cerrada."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2926,7 +2926,7 @@ def validar_poligonal_nivel1(
 ):
     """Validación contratista (topógrafo / operativo contratista)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2942,7 +2942,7 @@ def validar_poligonal_nivel2(
 ):
     """Validación interventoría. El sellado ocurre al aprobar; la biblioteca ya se publicó al terminar."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
@@ -2952,7 +2952,7 @@ def validar_poligonal_nivel2(
 @router.get("/{contrato_id}/poligonales/{poligonal_id}/comentarios")
 def listar_comentarios_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     if not _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
     return (
@@ -2970,12 +2970,19 @@ def listar_comentarios_poligonal(contrato_id: int, poligonal_id: str, current_us
 def validar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Compatibilidad: incrementa nivel según el lado del usuario (preferir validar-nivel1/2)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     pol = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id)
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
-    lado = lado_validacion_topo_usuario(current_user)
+    lado = lado_validacion_topo_usuario(current_user, contrato_id)
+    if lado is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Su rol no autoriza validar esta poligonal (sin lado contratista/interventoría).",
+        )
     nivel = 2 if lado == 2 else 1
+    if lado == 0:
+        nivel = 1
     body = ValidarPoligonalBody(estado="Aprobado")
     return _aplicar_validacion_poligonal(contrato_id, poligonal_id, pol, nivel, body, current_user)
 
@@ -2983,7 +2990,7 @@ def validar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
 @router.post("/{contrato_id}/poligonales/{poligonal_id}/firma")
 def firma_poligonal(contrato_id: int, poligonal_id: str, body: FirmaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
     return _guardar_firma("poligonal", poligonal_id, body, _uid(current_user))
@@ -2993,7 +3000,7 @@ def firma_poligonal(contrato_id: int, poligonal_id: str, body: FirmaBody, curren
 def firma_poligonal_desde_perfil(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Registra la firma digital del usuario (imagen en perfil) en la poligonal."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
     uid = _uid(current_user)
@@ -3020,7 +3027,7 @@ def firma_poligonal_desde_perfil(contrato_id: int, poligonal_id: str, current_us
 @router.get("/{contrato_id}/poligonales/{poligonal_id}/pdf")
 def pdf_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     try:
         data = obtener_poligonal(contrato_id, poligonal_id, current_user)
         contrato = _require_contrato_row(contrato_id)
@@ -3051,7 +3058,7 @@ def pdf_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_
 def excel_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_current_user)):
     """Exporta cartera con fórmulas Excel vivas (cierre + Bowditch + esquema)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     try:
         data = obtener_poligonal(contrato_id, poligonal_id, current_user)
         contrato = _require_contrato_row(contrato_id)
@@ -3473,7 +3480,7 @@ def _aplicar_validacion_nivelacion(
     body: ValidarPoligonalBody,
     current_user,
 ) -> dict:
-    require_topo_puede_validar_nivel(current_user, nivel)
+    require_topo_puede_validar_nivel(current_user, nivel, contrato_id)
     _exigir_nivelacion_lista_validar(row)
     if nivel == 1:
         _exigir_nivelacion_datos_campo(row)
@@ -3509,7 +3516,7 @@ def _aplicar_validacion_nivelacion(
             nivel,
             body.estado,
             body.comentario_data,
-            _rol_origen_topo(current_user),
+            _rol_origen_topo(current_user, contrato_id),
         )
     return {"ok": True, f"nivel{nivel}_estado": body.estado}
 
@@ -3575,14 +3582,14 @@ def _publicar_nivelacion_biblioteca(contrato_id: int, nivelacion_id: str) -> Non
 @router.get("/{contrato_id}/nivelaciones")
 def listar_nivelaciones(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return supabase.table("topo_nivelaciones").select("*").eq("contrato_id", contrato_id).order("created_at", desc=True).execute().data or []
 
 
 @router.post("/{contrato_id}/nivelaciones")
 def crear_nivelacion(contrato_id: int, body: NivelacionBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     if body.bm_inicial_id:
         _punto_verificado(body.bm_inicial_id, contrato_id)
     if body.bm_final_id:
@@ -3594,7 +3601,7 @@ def crear_nivelacion(contrato_id: int, body: NivelacionBody, current_user=Depend
 @router.get("/{contrato_id}/nivelaciones/{nivelacion_id}")
 def obtener_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3605,7 +3612,7 @@ def obtener_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depend
 @router.delete("/{contrato_id}/nivelaciones/{nivelacion_id}")
 def eliminar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "eliminar")
+    _perm(current_user, "eliminar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3622,7 +3629,7 @@ def eliminar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depen
 @router.put("/{contrato_id}/nivelaciones/{nivelacion_id}")
 def actualizar_nivelacion(contrato_id: int, nivelacion_id: str, body: NivelacionUpdateBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3642,7 +3649,7 @@ def sincronizar_lecturas_nivelacion(
     contrato_id: int, nivelacion_id: str, body: LecturasNivelSyncBody, current_user=Depends(get_current_user)
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3715,7 +3722,7 @@ def sincronizar_lecturas_nivelacion(
 @router.post("/{contrato_id}/nivelaciones/{nivelacion_id}/lecturas")
 def agregar_lectura_nivelacion(contrato_id: int, nivelacion_id: str, body: LecturaNivelBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3732,7 +3739,7 @@ def eliminar_lectura_nivelacion(
     contrato_id: int, nivelacion_id: str, lectura_id: str, current_user=Depends(get_current_user)
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3744,7 +3751,7 @@ def eliminar_lectura_nivelacion(
 @router.post("/{contrato_id}/nivelaciones/{nivelacion_id}/calcular")
 def calcular_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3762,7 +3769,7 @@ def abrir_circuito_nivelacion(contrato_id: int, nivelacion_id: str, current_user
     from datetime import datetime, timezone
 
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3801,7 +3808,7 @@ def abrir_circuito_nivelacion(contrato_id: int, nivelacion_id: str, current_user
 @router.post("/{contrato_id}/nivelaciones/{nivelacion_id}/cerrar")
 def cerrar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3836,7 +3843,7 @@ def cerrar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends
 def finalizar_circuito_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
     """Calcula cierre, cierra si es admisible y devuelve siempre resultado estructurado (sin 422 silencioso)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3902,7 +3909,7 @@ def validar_nivelacion_nivel1(
     contrato_id: int, nivelacion_id: str, body: ValidarPoligonalBody, current_user=Depends(get_current_user)
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3914,7 +3921,7 @@ def validar_nivelacion_nivel2(
     contrato_id: int, nivelacion_id: str, body: ValidarPoligonalBody, current_user=Depends(get_current_user)
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3924,7 +3931,7 @@ def validar_nivelacion_nivel2(
 @router.post("/{contrato_id}/nivelaciones/{nivelacion_id}/validar")
 def validar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     niv = _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id)
     if not niv:
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
@@ -3936,7 +3943,7 @@ def validar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depend
 @router.post("/{contrato_id}/nivelaciones/{nivelacion_id}/firma")
 def firma_nivelacion(contrato_id: int, nivelacion_id: str, body: FirmaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_nivelaciones", id=nivelacion_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Nivelacion no encontrada")
     return _guardar_firma("nivelacion", nivelacion_id, body, _uid(current_user))
@@ -3963,7 +3970,7 @@ def _enriquecer_nivelacion_pdf(contrato_id: int, niv: dict, lecturas: list[dict]
 @router.get("/{contrato_id}/nivelaciones/{nivelacion_id}/pdf")
 def pdf_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     try:
         data = obtener_nivelacion(contrato_id, nivelacion_id, current_user)
         contrato = _require_contrato_row(contrato_id)
@@ -3988,14 +3995,14 @@ def pdf_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(ge
 @router.get("/{contrato_id}/areas")
 def listar_areas(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return supabase.table("topo_areas").select("*").eq("contrato_id", contrato_id).order("created_at", desc=True).execute().data or []
 
 
 @router.post("/{contrato_id}/areas")
 def crear_area(contrato_id: int, body: AreaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     if len(body.puntos) < 3:
         raise HTTPException(status_code=422, detail="Se requieren al menos 3 vertices")
     area_m2 = area_por_coordenadas(body.puntos)
@@ -4019,7 +4026,7 @@ def crear_area(contrato_id: int, body: AreaBody, current_user=Depends(get_curren
 @router.get("/{contrato_id}/areas/{area_id}")
 def obtener_area(contrato_id: int, area_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     area = _row("topo_areas", id=area_id, contrato_id=contrato_id)
     if not area:
         raise HTTPException(status_code=404, detail="Area no encontrada")
@@ -4030,7 +4037,7 @@ def obtener_area(contrato_id: int, area_id: str, current_user=Depends(get_curren
 @router.put("/{contrato_id}/areas/{area_id}")
 def actualizar_area(contrato_id: int, area_id: str, body: AreaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_areas", id=area_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Area no encontrada")
     area_m2 = area_por_coordenadas(body.puntos)
@@ -4053,7 +4060,7 @@ def actualizar_area(contrato_id: int, area_id: str, body: AreaBody, current_user
 @router.delete("/{contrato_id}/areas/{area_id}")
 def eliminar_area(contrato_id: int, area_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "eliminar")
+    _perm(current_user, "eliminar", contrato_id)
     supabase.table("topo_areas").delete().eq("id", area_id).eq("contrato_id", contrato_id).execute()
     return {"ok": True}
 
@@ -4061,7 +4068,7 @@ def eliminar_area(contrato_id: int, area_id: str, current_user=Depends(get_curre
 @router.get("/{contrato_id}/areas/{area_id}/pdf")
 def pdf_area(contrato_id: int, area_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     area = obtener_area(contrato_id, area_id, current_user)
     contrato = _require_contrato_row(contrato_id)
     puntos = area.get("puntos") or []
@@ -4083,7 +4090,7 @@ def pdf_area(contrato_id: int, area_id: str, current_user=Depends(get_current_us
 @router.get("/{contrato_id}/newpoints")
 def listar_newpoints(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     rows = (
         supabase.table("topo_newpoints")
         .select("*")
@@ -4106,7 +4113,7 @@ def listar_newpoints(contrato_id: int, current_user=Depends(get_current_user)):
 @router.post("/{contrato_id}/newpoints")
 def crear_newpoint(contrato_id: int, body: NewPointBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     pol, p1, p2, calc = _calcular_payload_newpoint(body, contrato_id)
     opc_bd = _opciones_bd_desde_calc(calc)
     row = supabase.table("topo_newpoints").insert({
@@ -4147,7 +4154,7 @@ def crear_newpoint(contrato_id: int, body: NewPointBody, current_user=Depends(ge
 @router.get("/{contrato_id}/newpoints/{newpoint_id}")
 def obtener_newpoint(contrato_id: int, newpoint_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     np = _row("topo_newpoints", id=newpoint_id, contrato_id=contrato_id)
     if not np:
         raise HTTPException(status_code=404, detail="NewPoint no encontrado")
@@ -4164,7 +4171,7 @@ def obtener_newpoint(contrato_id: int, newpoint_id: str, current_user=Depends(ge
 @router.put("/{contrato_id}/newpoints/{newpoint_id}")
 def actualizar_newpoint(contrato_id: int, newpoint_id: str, body: NewPointBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     np = _row("topo_newpoints", id=newpoint_id, contrato_id=contrato_id)
     if not np:
         raise HTTPException(status_code=404, detail="NewPoint no encontrado")
@@ -4226,7 +4233,7 @@ def elegir_opcion_newpoint(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     np = _row("topo_newpoints", id=newpoint_id, contrato_id=contrato_id)
     if not np:
         raise HTTPException(status_code=404, detail="NewPoint no encontrado")
@@ -4257,7 +4264,7 @@ def validar_newpoint_nivel1(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     np = _row("topo_newpoints", id=newpoint_id, contrato_id=contrato_id)
     if not np:
         raise HTTPException(status_code=404, detail="NewPoint no encontrado")
@@ -4272,7 +4279,7 @@ def validar_newpoint_nivel2(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     np = _row("topo_newpoints", id=newpoint_id, contrato_id=contrato_id)
     if not np:
         raise HTTPException(status_code=404, detail="NewPoint no encontrado")
@@ -4282,7 +4289,7 @@ def validar_newpoint_nivel2(
 @router.get("/{contrato_id}/newpoints/{newpoint_id}/pdf")
 def pdf_newpoint(contrato_id: int, newpoint_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     try:
         np = obtener_newpoint(contrato_id, newpoint_id, current_user)
         contrato = _require_contrato_row(contrato_id)
@@ -4305,14 +4312,14 @@ def pdf_newpoint(contrato_id: int, newpoint_id: str, current_user=Depends(get_cu
 @router.get("/{contrato_id}/equipos")
 def listar_equipos(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return supabase.table("topo_equipos").select("*").eq("contrato_id", contrato_id).order("nombre").execute().data or []
 
 
 @router.post("/{contrato_id}/equipos")
 def crear_equipo(contrato_id: int, body: EquipoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     row = supabase.table("topo_equipos").insert({**body.model_dump(), "contrato_id": contrato_id}).execute().data
     return row[0] if row else {}
 
@@ -4320,7 +4327,7 @@ def crear_equipo(contrato_id: int, body: EquipoBody, current_user=Depends(get_cu
 @router.get("/{contrato_id}/equipos/alertas")
 def alertas_equipos(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     equipos = listar_equipos(contrato_id, current_user)
     hoy = date.today()
     alertas = {"vencidas": [], "proximas": [], "al_dia": []}
@@ -4364,7 +4371,7 @@ def alertas_equipos(contrato_id: int, current_user=Depends(get_current_user)):
 @router.put("/{contrato_id}/equipos/{equipo_id}")
 def actualizar_equipo(contrato_id: int, equipo_id: str, body: EquipoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_equipos", id=equipo_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Equipo no encontrado")
     row = supabase.table("topo_equipos").update(body.model_dump()).eq("id", equipo_id).execute().data
@@ -4374,7 +4381,7 @@ def actualizar_equipo(contrato_id: int, equipo_id: str, body: EquipoBody, curren
 @router.get("/{contrato_id}/equipos/{equipo_id}/verificaciones")
 def listar_verificaciones_equipo(contrato_id: int, equipo_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     if not _row("topo_equipos", id=equipo_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Equipo no encontrado")
     return supabase.table("topo_equipos_verificaciones").select("*").eq("equipo_id", equipo_id).order("fecha", desc=True).execute().data or []
@@ -4383,7 +4390,7 @@ def listar_verificaciones_equipo(contrato_id: int, equipo_id: str, current_user=
 @router.post("/{contrato_id}/equipos/{equipo_id}/verificaciones")
 def crear_verificacion_equipo(contrato_id: int, equipo_id: str, body: VerificacionEquipoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     eq = _row("topo_equipos", id=equipo_id, contrato_id=contrato_id)
     if not eq:
         raise HTTPException(status_code=404, detail="Equipo no encontrado")
@@ -4414,7 +4421,7 @@ def crear_verificacion_equipo(contrato_id: int, equipo_id: str, body: Verificaci
 @router.post("/{contrato_id}/equipos/{equipo_id}/verificaciones/{verificacion_id}/validar")
 def validar_verificacion_equipo(contrato_id: int, equipo_id: str, verificacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     ver = _row("topo_equipos_verificaciones", id=verificacion_id, equipo_id=equipo_id, contrato_id=contrato_id)
     if not ver:
         raise HTTPException(status_code=404, detail="Verificacion no encontrada")
@@ -4426,7 +4433,7 @@ def validar_verificacion_equipo(contrato_id: int, equipo_id: str, verificacion_i
 @router.get("/{contrato_id}/equipos/{equipo_id}/verificaciones/{verificacion_id}/pdf")
 def pdf_verificacion_equipo(contrato_id: int, equipo_id: str, verificacion_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     eq = _row("topo_equipos", id=equipo_id, contrato_id=contrato_id)
     ver = _row("topo_equipos_verificaciones", id=verificacion_id, equipo_id=equipo_id)
     if not eq or not ver:
@@ -4455,14 +4462,14 @@ def pdf_verificacion_equipo(contrato_id: int, equipo_id: str, verificacion_id: s
 @router.get("/{contrato_id}/vias/proyectos")
 def listar_vias_proyectos(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return supabase.table("topo_vias_proyectos").select("*").eq("contrato_id", contrato_id).order("created_at", desc=True).execute().data or []
 
 
 @router.post("/{contrato_id}/vias/proyectos")
 def crear_via_proyecto(contrato_id: int, body: ViaProyectoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     row = supabase.table("topo_vias_proyectos").insert({**body.model_dump(), "contrato_id": contrato_id}).execute().data
     return row[0] if row else {}
 
@@ -4470,7 +4477,7 @@ def crear_via_proyecto(contrato_id: int, body: ViaProyectoBody, current_user=Dep
 @router.get("/{contrato_id}/vias/proyectos/{proyecto_id}")
 def obtener_via_proyecto(contrato_id: int, proyecto_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     proj = _row("topo_vias_proyectos", id=proyecto_id, contrato_id=contrato_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
@@ -4480,7 +4487,7 @@ def obtener_via_proyecto(contrato_id: int, proyecto_id: str, current_user=Depend
 @router.post("/{contrato_id}/vias/registros")
 def crear_via_registro(contrato_id: int, body: ViaRegistroBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     if body.bm_referencia_id:
         _punto_verificado(body.bm_referencia_id, contrato_id)
     row = supabase.table("topo_vias_registros").insert({**body.model_dump(), "contrato_id": contrato_id}).execute().data
@@ -4490,7 +4497,7 @@ def crear_via_registro(contrato_id: int, body: ViaRegistroBody, current_user=Dep
 @router.get("/{contrato_id}/vias/registros/{registro_id}")
 def obtener_via_registro(contrato_id: int, registro_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     reg = _row("topo_vias_registros", id=registro_id, contrato_id=contrato_id)
     if not reg:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -4501,7 +4508,7 @@ def obtener_via_registro(contrato_id: int, registro_id: str, current_user=Depend
 @router.post("/{contrato_id}/vias/registros/{registro_id}/lecturas")
 def agregar_via_lectura(contrato_id: int, registro_id: str, body: ViaLecturaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     reg = _row("topo_vias_registros", id=registro_id, contrato_id=contrato_id)
     if not reg:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -4532,7 +4539,7 @@ def agregar_via_lectura(contrato_id: int, registro_id: str, body: ViaLecturaBody
 @router.post("/{contrato_id}/vias/registros/{registro_id}/calcular")
 def calcular_via_registro(contrato_id: int, registro_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     lecturas = supabase.table("topo_vias_lecturas").select("*").eq("registro_id", registro_id).execute().data or []
     total = len(lecturas)
     ok = sum(1 for l in lecturas if l.get("dentro_tolerancia"))
@@ -4542,7 +4549,7 @@ def calcular_via_registro(contrato_id: int, registro_id: str, current_user=Depen
 @router.post("/{contrato_id}/vias/registros/{registro_id}/validar")
 def validar_via_registro(contrato_id: int, registro_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     reg = _row("topo_vias_registros", id=registro_id, contrato_id=contrato_id)
     if not reg:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -4554,7 +4561,7 @@ def validar_via_registro(contrato_id: int, registro_id: str, current_user=Depend
 @router.post("/{contrato_id}/vias/registros/{registro_id}/firma")
 def firma_via_registro(contrato_id: int, registro_id: str, body: FirmaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_vias_registros", id=registro_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Registro no encontrado")
     return _guardar_firma("vias", registro_id, body, _uid(current_user))
@@ -4563,7 +4570,7 @@ def firma_via_registro(contrato_id: int, registro_id: str, body: FirmaBody, curr
 @router.get("/{contrato_id}/vias/registros/{registro_id}/pdf")
 def pdf_via_registro(contrato_id: int, registro_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     data = obtener_via_registro(contrato_id, registro_id, current_user)
     contrato = _require_contrato_row(contrato_id)
     reg = data["registro"]
@@ -4584,14 +4591,14 @@ def pdf_via_registro(contrato_id: int, registro_id: str, current_user=Depends(ge
 @router.get("/{contrato_id}/tuberias")
 def listar_tuberias(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return supabase.table("topo_tuberias").select("*").eq("contrato_id", contrato_id).order("created_at", desc=True).execute().data or []
 
 
 @router.post("/{contrato_id}/tuberias")
 def crear_tuberia(contrato_id: int, body: TuberiaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     row = supabase.table("topo_tuberias").insert({**body.model_dump(), "contrato_id": contrato_id}).execute().data
     return row[0] if row else {}
 
@@ -4599,7 +4606,7 @@ def crear_tuberia(contrato_id: int, body: TuberiaBody, current_user=Depends(get_
 @router.get("/{contrato_id}/tuberias/{tuberia_id}")
 def obtener_tuberia(contrato_id: int, tuberia_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     tub = _row("topo_tuberias", id=tuberia_id, contrato_id=contrato_id)
     if not tub:
         raise HTTPException(status_code=404, detail="Tuberia no encontrada")
@@ -4610,7 +4617,7 @@ def obtener_tuberia(contrato_id: int, tuberia_id: str, current_user=Depends(get_
 @router.post("/{contrato_id}/tuberias/{tuberia_id}/registros")
 def crear_tuberia_registro(contrato_id: int, tuberia_id: str, body: TuberiaRegistroBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     if not _row("topo_tuberias", id=tuberia_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Tuberia no encontrada")
     if body.bm_referencia_id:
@@ -4622,7 +4629,7 @@ def crear_tuberia_registro(contrato_id: int, tuberia_id: str, body: TuberiaRegis
 @router.post("/{contrato_id}/tuberias/{tuberia_id}/registros/{registro_id}/tubos")
 def agregar_tubo(contrato_id: int, tuberia_id: str, registro_id: str, body: TuberiaTuboBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     tub = _row("topo_tuberias", id=tuberia_id, contrato_id=contrato_id)
     if not tub:
         raise HTTPException(status_code=404, detail="Tuberia no encontrada")
@@ -4656,7 +4663,7 @@ def agregar_tubo(contrato_id: int, tuberia_id: str, registro_id: str, body: Tube
 @router.post("/{contrato_id}/tuberias/{tuberia_id}/cerrar")
 def cerrar_tuberia(contrato_id: int, tuberia_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_tuberias", id=tuberia_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Tuberia no encontrada")
     supabase.table("topo_tuberias").update({"estado": "cerrado", "fecha_cierre": str(date.today())}).eq("id", tuberia_id).execute()
@@ -4666,7 +4673,7 @@ def cerrar_tuberia(contrato_id: int, tuberia_id: str, current_user=Depends(get_c
 @router.post("/{contrato_id}/tuberias/{tuberia_id}/validar")
 def validar_tuberia(contrato_id: int, tuberia_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "validar")
+    _perm(current_user, "validar", contrato_id)
     tub = _row("topo_tuberias", id=tuberia_id, contrato_id=contrato_id)
     if not tub:
         raise HTTPException(status_code=404, detail="Tuberia no encontrada")
@@ -4678,7 +4685,7 @@ def validar_tuberia(contrato_id: int, tuberia_id: str, current_user=Depends(get_
 @router.post("/{contrato_id}/tuberias/{tuberia_id}/firma")
 def firma_tuberia(contrato_id: int, tuberia_id: str, body: FirmaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_tuberias", id=tuberia_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Tuberia no encontrada")
     return _guardar_firma("tuberia", tuberia_id, body, _uid(current_user))
@@ -4687,7 +4694,7 @@ def firma_tuberia(contrato_id: int, tuberia_id: str, body: FirmaBody, current_us
 @router.get("/{contrato_id}/tuberias/{tuberia_id}/pdf")
 def pdf_tuberia(contrato_id: int, tuberia_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "exportar")
+    _perm(current_user, "exportar", contrato_id)
     data = obtener_tuberia(contrato_id, tuberia_id, current_user)
     contrato = _require_contrato_row(contrato_id)
     tub = data["tuberia"]
@@ -4976,14 +4983,14 @@ def _guardar_estructura_capas(
 @router.get("/{contrato_id}/diseno-geometrico/tipos-seccion")
 def listar_tipos_seccion_diseno(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return SECCION_TIPOS
 
 
 @router.get("/{contrato_id}/diseno-geometrico/plantilla.csv")
 def descargar_plantilla_diseno(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return Response(
         content=PLANTILLA_CSV_DISENO.encode("utf-8-sig"),
         media_type="text/csv; charset=utf-8",
@@ -4994,7 +5001,7 @@ def descargar_plantilla_diseno(contrato_id: int, current_user=Depends(get_curren
 @router.get("/{contrato_id}/diseno-geometrico/ejes")
 def listar_diseno_ejes(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     rows = (
         supabase.table("topo_diseno_ejes")
         .select("*")
@@ -5010,7 +5017,7 @@ def listar_diseno_ejes(contrato_id: int, current_user=Depends(get_current_user))
 @router.post("/{contrato_id}/diseno-geometrico/ejes")
 def crear_diseno_eje(contrato_id: int, body: DisenoEjeBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     nombre = body.nombre.strip()
     row = (
         supabase.table("topo_diseno_ejes")
@@ -5024,14 +5031,14 @@ def crear_diseno_eje(contrato_id: int, body: DisenoEjeBody, current_user=Depends
 @router.get("/{contrato_id}/diseno-geometrico/ejes/{eje_id}")
 def obtener_diseno_eje(contrato_id: int, eje_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return _cargar_diseno_eje_detalle(contrato_id, eje_id)
 
 
 @router.delete("/{contrato_id}/diseno-geometrico/ejes/{eje_id}")
 def eliminar_diseno_eje(contrato_id: int, eje_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "eliminar")
+    _perm(current_user, "eliminar", contrato_id)
     if not _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Eje no encontrado")
     supabase.table("topo_diseno_ejes").delete().eq("id", eje_id).execute()
@@ -5042,7 +5049,7 @@ def eliminar_diseno_eje(contrato_id: int, eje_id: str, current_user=Depends(get_
 def eliminar_diseno_rasante(contrato_id: int, eje_id: str, current_user=Depends(get_current_user)):
     """Elimina rasante importada y puntos de perfil; conserva el eje y la estructura de vía."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Eje no encontrado")
     _eliminar_rasante_eje(eje_id)
@@ -5057,7 +5064,7 @@ def importar_diseno_csv(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Eje no encontrado")
     try:
@@ -5076,7 +5083,7 @@ def importar_diseno_filas(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Eje no encontrado")
     try:
@@ -5095,7 +5102,7 @@ def guardar_diseno_estructura(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Eje no encontrado")
     return _guardar_estructura_capas(eje_id, body.capas, body.nombre, nueva_version=False)
@@ -5110,7 +5117,7 @@ def crear_diseno_estructura(
 ):
     """Nueva versión de estructura; queda vigente (las anteriores pasan a histórico)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     if not _row("topo_diseno_ejes", id=eje_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Eje no encontrado")
     if not (body.nombre or "").strip():
@@ -5127,7 +5134,7 @@ def preview_cota_capa_diseno(
 ):
     """Vista previa: cotas de diseño por abscisa para la capa (0 = terminada/rasante)."""
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     data = _cargar_diseno_eje_detalle(contrato_id, eje_id)
     capas = data.get("capas") or []
     if not capas:
@@ -5432,7 +5439,7 @@ def preview_entrega_dg_rango(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     ctx = _contexto_entrega_eje(contrato_id, eje_id)
     capas = ctx["capas"]
     idx = int(indice_capa)
@@ -5463,7 +5470,7 @@ def preview_entrega_dg_rango(
 @router.get("/{contrato_id}/entrega-dg")
 def listar_entregas_dg(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     rows = (
         supabase.table("topo_entrega_dg")
         .select("*")
@@ -5484,7 +5491,7 @@ def reordenar_entregas_dg(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     existing = (
         supabase.table("topo_entrega_dg")
         .select("id")
@@ -5514,7 +5521,7 @@ def reordenar_entregas_dg(
 @router.post("/{contrato_id}/entrega-dg")
 def crear_entrega_dg(contrato_id: int, body: EntregaDgBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "crear")
+    _perm(current_user, "crear", contrato_id)
     ctx = _contexto_entrega_eje(contrato_id, body.eje_id)
     capas = ctx["capas"]
     n_capas = len(capas)
@@ -5565,14 +5572,14 @@ def crear_entrega_dg(contrato_id: int, body: EntregaDgBody, current_user=Depends
 @router.get("/{contrato_id}/entrega-dg/{entrega_id}")
 def obtener_entrega_dg(contrato_id: int, entrega_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver")
+    _perm(current_user, "ver", contrato_id)
     return _cargar_entrega_detalle(contrato_id, entrega_id)
 
 
 @router.delete("/{contrato_id}/entrega-dg/{entrega_id}")
 def eliminar_entrega_dg(contrato_id: int, entrega_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "eliminar")
+    _perm(current_user, "eliminar", contrato_id)
     if not _row("topo_entrega_dg", id=entrega_id, contrato_id=contrato_id):
         raise HTTPException(status_code=404, detail="Entrega no encontrada")
     supabase.table("topo_entrega_dg").delete().eq("id", entrega_id).execute()
@@ -5587,7 +5594,7 @@ def agregar_entrega_dg_lectura(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     entrega = _row("topo_entrega_dg", id=entrega_id, contrato_id=contrato_id)
     if not entrega:
         raise HTTPException(status_code=404, detail="Entrega no encontrada")
@@ -5638,7 +5645,7 @@ def eliminar_entrega_dg_lectura(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     entrega = _row("topo_entrega_dg", id=entrega_id, contrato_id=contrato_id)
     if not entrega:
         raise HTTPException(status_code=404, detail="Entrega no encontrada")
@@ -5655,7 +5662,7 @@ def agregar_entrega_dg_bloque(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     entrega = _row("topo_entrega_dg", id=entrega_id, contrato_id=contrato_id)
     if not entrega:
         raise HTTPException(status_code=404, detail="Entrega no encontrada")
@@ -5707,7 +5714,7 @@ def actualizar_entrega_dg_bloque(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     entrega = _row("topo_entrega_dg", id=entrega_id, contrato_id=contrato_id)
     if not entrega:
         raise HTTPException(status_code=404, detail="Entrega no encontrada")
@@ -5755,7 +5762,7 @@ def guardar_entrega_dg_fila_abscisa(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     _persistir_fila_abscisa_entrega(contrato_id, entrega_id, body)
     return _cargar_entrega_detalle(contrato_id, entrega_id)
 
@@ -5768,7 +5775,7 @@ def guardar_entrega_dg_cartera(
     current_user=Depends(get_current_user),
 ):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     entrega = _row("topo_entrega_dg", id=entrega_id, contrato_id=contrato_id)
     if not entrega:
         raise HTTPException(status_code=404, detail="Entrega no encontrada")
@@ -5979,7 +5986,7 @@ def _persistir_fila_abscisa_entrega(contrato_id: int, entrega_id: str, body: Ent
 @router.post("/{contrato_id}/entrega-dg/{entrega_id}/recalcular")
 def recalcular_entrega_dg(contrato_id: int, entrega_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "editar")
+    _perm(current_user, "editar", contrato_id)
     entrega = _row("topo_entrega_dg", id=entrega_id, contrato_id=contrato_id)
     if not entrega:
         raise HTTPException(status_code=404, detail="Entrega no encontrada")

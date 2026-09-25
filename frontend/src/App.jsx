@@ -205,6 +205,7 @@ import {
   sicoeSubcontratistaIdDeRegistro,
 } from './modules/sicoe-obra/sicoeRegistroSubcontratista'
 import { permisosProgramacionObra } from './progObraPermisos'
+import { permisosTopografia } from './utils/permisosContrato'
 import { accesoAlmacen } from './almacen/almacenPermisos'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
 import ProgObraHeaderRibbon from './ProgObraHeaderRibbon'
@@ -19729,20 +19730,13 @@ const [navReporteId, setNavReporteId] = useState(null)
   const puedeCrearProgramacionObra = progPermisos.crear
   const puedeValidarProgramacionObra = progPermisos.validar
   const puedeExportarProgramacionObra = progPermisos.exportar
-  const tienePermisoTopografia = _permisoVerFuncion('topografía')
-  const _topoPermiso = (flag) =>
-    esDeveloper ||
-    (usuario?.permisos || []).some(
-      (p) => {
-        const n = (p.funcion_nombre || '').toLowerCase()
-        return (n === 'topografía' || n === 'topografia') && p[flag]
-      },
-    )
-  const puedeCrearTopografia = _topoPermiso('crear')
-  const puedeEditarTopografia = _topoPermiso('editar')
-  const puedeValidarTopografia = _topoPermiso('validar')
-  const puedeEliminarTopografia = _topoPermiso('eliminar')
-  const puedeExportarTopografia = _topoPermiso('exportar')
+  const topoPermisos = permisosTopografia(usuario, usuario?.contrato_id)
+  const tienePermisoTopografia = topoPermisos.ver
+  const puedeCrearTopografia = topoPermisos.crear
+  const puedeEditarTopografia = topoPermisos.editar
+  const puedeValidarTopografia = topoPermisos.validar
+  const puedeEliminarTopografia = topoPermisos.eliminar
+  const puedeExportarTopografia = topoPermisos.exportar
   const almacenAcceso = accesoAlmacen(usuario, usuario?.contrato_id)
   const almacenPerm = almacenAcceso.permisos
   const almacenRolBloqueado = almacenAcceso.bloqueado

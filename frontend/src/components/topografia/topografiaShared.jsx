@@ -9,6 +9,13 @@ import {
   readTopoOffline,
 } from './offline/topoOfflineRouter.js'
 import { useTopoOffline } from './offline/TopoOfflineContext.jsx'
+import {
+  esDesarrolladorTopo,
+  puede,
+  determinarNivelValidacionTopo,
+} from './topografiaPermisosNivel'
+
+export { esDesarrolladorTopo, puede, determinarNivelValidacionTopo }
 
 function useTopoOfflineOptional() {
   return useTopoOffline()
@@ -638,10 +645,6 @@ export const defaultPermisos = {
   exportar: false,
 }
 
-export function puede(permisos, accion) {
-  return Boolean(permisos?.[accion])
-}
-
 export function PermisoAviso({ permisos, accion, children }) {
   if (puede(permisos, accion)) return children
   return null
@@ -764,56 +767,9 @@ export function chipEstadoValidacion(estado) {
   return { label: e, ...c }
 }
 
-/** Alineado con backend `_es_desarrollador` (cargo Desarrollador). */
-export function esDesarrolladorTopo(usuario) {
-  const norm = (txt) =>
-    String(txt || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .trim()
-  const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
-  const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
-  return cargo === 'desarrollador' || rol === 'desarrollador'
-}
-
 /** Sellado definitivo: solo tras BO interventoría aprobada (nivel2).
  *  ``biblioteca_at`` indica puntos publicados (puede ser al terminar) y no sella. */
 export function poligonalSellada(pol) {
   const p = pol || {}
   return (p.nivel2_estado || '') === 'Aprobado'
-}
-
-/** Nivel de validación topográfica: 0=dev (ambos), 1=contratista, 2=interventoría, null=sin validar. */
-export function determinarNivelValidacionTopo(usuario, permisos) {
-  const norm = (txt) =>
-    String(txt || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .trim()
-  const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
-  const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
-  const esDev = esDesarrolladorTopo(usuario)
-  const puedeValidar = esDev || puede(permisos, 'validar')
-
-  if (!puedeValidar) {
-    return { puedeValidar: false, lado: null, esDev, niveles: [] }
-  }
-  if (esDev) {
-    return { puedeValidar: true, lado: 0, esDev: true, niveles: [1, 2] }
-  }
-  if (rol === 'interventoria' || rol === 'operativo interventoria' || (cargo.includes('topograf') && cargo.includes('intervent'))) {
-    return { puedeValidar: true, lado: 2, esDev: false, niveles: [2] }
-  }
-  if (
-    rol === 'contratista' ||
-    rol === 'operativo contratista' ||
-    rol === 'subcontratista' ||
-    cargo.includes('topograf') ||
-    cargo.includes('cadenero')
-  ) {
-    return { puedeValidar: true, lado: 1, esDev: false, niveles: [1] }
-  }
-  return { puedeValidar: true, lado: 1, esDev: false, niveles: [1] }
 }
