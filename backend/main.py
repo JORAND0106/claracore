@@ -14581,15 +14581,203 @@ def cad_sesion_colaborativa_terminar(contrato_id: int, current_user=Depends(get_
     return {"ok": True, "activa": False, "usuario_ids": []}
 
 
+def _cad_handle_variantes(raw: str) -> set:
+    """Variantes de handle AutoCAD para cruce con ent_handle / txt_handle en presupuesto."""
+    s = (raw or "").strip()
+    out: set = set()
+    if not s:
+        return out
+    out.add(s)
+    out.add(s.upper())
+    if s.lower().startswith("0x"):
+        hx = s[2:].strip()
+        if hx:
+            out.add(hx.upper())
+    else:
+        try:
+            if all(c in "0123456789abcdefABCDEF" for c in s) and not s.isdigit():
+                dec = int(s, 16)
+                out.add(format(dec, "X"))
+                out.add(str(dec))
+            elif s.isdigit():
+                dec = int(s, 10)
+                out.add(format(dec, "X"))
+        except (ValueError, TypeError):
+            pass
+    return {x for x in out if x}
+
+
+def _cad_presupuesto_ids_por_handles(contrato_id: int, handles: list) -> tuple:
+    """Devuelve (ids, sin_coincidencias) buscando ent_handle y txt_handle."""
+    variants: set = set()
+    for h in handles or []:
+        variants.update(_cad_handle_variantes(str(h)))
+    variants = {v.upper() for v in variants if v}
+    if not variants:
+        return [], True
+
+    ids: set = set()
+    var_list = list(variants)
+    chunk = 80
+    for i in range(0, len(var_list), chunk):
+        part = var_list[i : i + chunk]
+        try:
+            ent_rows = (
+                supabase.table("presupuesto")
+                .select("id, ent_handle, txt_handle")
+                .eq("contrato_id", contrato_id)
+                .eq("dado_de_baja", False)
+                .in_("ent_handle", part)
+                .execute()
+                .data
+                or []
+            )
+            txt_rows = (
+                supabase.table("presupuesto")
+                .select("id, ent_handle, txt_handle")
+                .eq("contrato_id", contrato_id)
+                .eq("dado_de_baja", False)
+                .in_("txt_handle", part)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            ent_rows, txt_rows = [], []
+
+        for row in ent_rows + txt_rows:
+            rid = row.get("id")
+            if rid is None:
+                continue
+            eh = (row.get("ent_handle") or "").strip().upper()
+            th = (row.get("txt_handle") or "").strip().upper()
+            if eh in variants or th in variants:
+                ids.add(int(rid))
+
+    return sorted(ids), len(ids) == 0
+
+
 @app.get("/cad-queue/{contrato_id}/pendientes")
 def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):
-    """SicoeCAD descarga las operaciones pendientes."""
+    """SicoeCAD descarga las operaciones pendientes (solo ops de AutoCAD, no filtro web)."""
     try:
         rows = supabase.table("cad_queue").select("*") \
             .eq("contrato_id", contrato_id).eq("estado", "pendiente") \
+            .neq("tipo", "filtro_activo") \
             .order("id").limit(50).execute().data
     except Exception:
         return []
+    return rows
+
+
+@app.post("/cad-queue/{contrato_id}/filtro-handles")
+def cad_filtro_handles(contrato_id: int, body: dict, current_user=Depends(get_current_user)):
+    """Resuelve handles de selección en plano → encola filtro_activo para la grilla web."""
+    handles = body.get("handles") or body.get("Handles") or []
+    if not isinstance(handles, list):
+        raise HTTPException(status_code=400, detail="handles debe ser un arreglo")
+    handles = [str(h).strip() for h in handles if str(h).strip()]
+    if not handles:
+        raise HTTPException(status_code=400, detail="Se requiere al menos un handle")
+
+    usuario_id = _cad_usuario_id_desde_jwt(current_user)
+    if usuario_id <= 0:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
+
+    ids, sin_coincidencias = _cad_presupuesto_ids_por_handles(contrato_id, handles)
+    payload = {
+        "usuario_id": usuario_id,
+        "ids": ids,
+        "handles_enviados": len(handles),
+        "sin_coincidencias": sin_coincidencias,
+    }
+    try:
+        ins = supabase.table("cad_queue").insert({
+            "contrato_id": contrato_id,
+            "tipo": "filtro_activo",
+            "estado": "pendiente",
+            "payload": payload,
+        }).execute().data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error encolando filtro: {e}")
+
+    msg = (
+        "Ningún registro del presupuesto coincide con la selección del plano."
+        if sin_coincidencias
+        else f"Filtro enviado a ClaraCore ({len(ids)} registro(s))."
+    )
+    return {
+        "ok": True,
+        "message": msg,
+        "matching_count": len(ids),
+        "sin_coincidencias": sin_coincidencias,
+        "queue_id": ins[0].get("id") if ins else None,
+    }
+
+
+@app.get("/cad-queue/{contrato_id}/filtro-plano-pendiente")
+def cad_filtro_plano_pendiente(contrato_id: int, current_user=Depends(get_current_user)):
+    """Próxima operación filtro_activo pendiente para el usuario web actual."""
+    usuario_id = _cad_usuario_id_desde_jwt(current_user)
+    if usuario_id <= 0:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
+    try:
+        rows = (
+            supabase.table("cad_queue")
+            .select("id, payload, created_at")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo", "filtro_activo")
+            .eq("estado", "pendiente")
+            .order("id")
+            .limit(30)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return {"op_id": None, "payload": None}
+    for row in rows:
+        pl = row.get("payload") or {}
+        uid = pl.get("usuario_id")
+        try:
+            uid_int = int(uid) if uid is not None else 0
+        except (TypeError, ValueError):
+            uid_int = 0
+        if uid_int == usuario_id:
+            return {"op_id": row.get("id"), "payload": pl}
+    return {"op_id": None, "payload": None}
+
+
+@app.get("/presupuesto/{contrato_id}/registros-por-ids")
+def presupuesto_registros_por_ids(
+    contrato_id: int,
+    ids: List[int] = Query(...),
+    current_user=Depends(get_current_user),
+):
+    """Filas de presupuesto por lista de IDs (filtro desde plano AutoCAD)."""
+    clean = []
+    for x in ids[:500]:
+        try:
+            clean.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    if not clean:
+        return []
+    try:
+        rows = (
+            supabase.table("presupuesto")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .in_("id", clean)
+            .eq("dado_de_baja", False)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return []
+    order = {i: n for n, i in enumerate(clean)}
+    rows.sort(key=lambda r: order.get(int(r.get("id") or 0), 999999))
     return rows
 
 @app.post("/cad-queue/{contrato_id}/highlight-registro")

@@ -643,6 +643,9 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
   const dwgEnlazadoRef = useRef(false)
   const navPlanoTimerRef = useRef(null)
+  /** Filtro temporal desde selección en plano (CLARAFILTRO → cad_queue filtro_activo). */
+  const [filtroPlano, setFiltroPlano] = useState(null) // { ids: Set<number>, total: number } | null
+  const filtroPlanoConsumidoRef = useRef(new Set())
 
   const refrescarDwgEnlazado = useCallback(async () => {
     if (!contratoId) return false
@@ -678,6 +681,87 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
       window.removeEventListener('focus', onActivo)
     }
   }, [contratoId, oculto, refrescarDwgEnlazado])
+
+  const marcarCadOpProcesada = useCallback(async (opId) => {
+    const tok = getToken()
+    if (!tok || !opId) return
+    try {
+      await fetch(`${API}/cad-queue/${opId}/procesado`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: '{}',
+      })
+    } catch { /* ignore */ }
+  }, [API])
+
+  const consumirFiltroPlanoPendiente = useCallback(async () => {
+    if (!contratoId || oculto) return
+    const tok = getToken()
+    if (!tok) return
+    try {
+      const r = await fetch(`${API}/cad-queue/${contratoId}/filtro-plano-pendiente`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      if (!r.ok) return
+      const d = await r.json()
+      const opId = d?.op_id
+      if (!opId || filtroPlanoConsumidoRef.current.has(opId)) return
+
+      const payload = d.payload || {}
+      filtroPlanoConsumidoRef.current.add(opId)
+
+      if (payload.sin_coincidencias) {
+        window.alert(
+          'Ningún registro del presupuesto coincide con la selección del plano AutoCAD.\n\n' +
+          'Verifique que las entidades seleccionadas correspondan a cantidades ya cargadas en ClaraCore.',
+        )
+        await marcarCadOpProcesada(opId)
+        return
+      }
+
+      const ids = Array.isArray(payload.ids)
+        ? payload.ids.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)
+        : []
+      if (!ids.length) {
+        await marcarCadOpProcesada(opId)
+        return
+      }
+
+      const u = new URLSearchParams()
+      ids.forEach((id) => u.append('ids', String(id)))
+      const rr = await fetch(`${API}/presupuesto/${contratoId}/registros-por-ids?${u}`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      const rows = rr.ok ? await rr.json() : []
+      const lista = Array.isArray(rows) ? rows : []
+
+      setFiltroPlano({ ids: new Set(ids), total: ids.length })
+      setRegistros(lista)
+      setDrill([])
+      setCapExpandido(null)
+      setItemsResumen([])
+      busquedaServidorActivaRef.current = false
+      setBusquedaServidorActiva(false)
+      setSeleccionados(new Set())
+      setConteoFiltro(ids.length)
+
+      await marcarCadOpProcesada(opId)
+    } catch { /* ignore */ }
+  }, [API, contratoId, oculto, marcarCadOpProcesada])
+
+  const limpiarFiltroPlano = useCallback(() => {
+    setFiltroPlano(null)
+    void recargarCapActualRef.current?.(true)
+  }, [])
+
+  useEffect(() => {
+    if (!contratoId || oculto) return
+    void consumirFiltroPlanoPendiente()
+    const iv = setInterval(() => {
+      if (document.visibilityState === 'visible') void consumirFiltroPlanoPendiente()
+    }, 3500)
+    return () => clearInterval(iv)
+  }, [contratoId, oculto, consumirFiltroPlanoPendiente])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -2477,6 +2561,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const cid = String(contratoId)
     const filt = `contrato_id=eq.${cid}`
     const debouncer = createRealtimeDebouncer(() => {
+      void consumirFiltroPlanoPendiente()
       void recargarCapActualRef.current?.(false)
     })
     const channel = supabase
@@ -2491,7 +2576,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       debouncer.dispose()
       void supabase.removeChannel(channel)
     }
-  }, [contratoId, oculto, dwgEnlazado])
+  }, [contratoId, oculto, dwgEnlazado, consumirFiltroPlanoPendiente])
 
   // Multisesión: refresco solo en vista por capítulo/ítem (panel). No interrumpe búsqueda con chips.
   useEffect(() => {
@@ -3353,6 +3438,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const calzadaFiltro = pptoFiltroValoresLista(pptoFiltroDef('calzada'), fObra)
     const infraFiltro = pptoFiltroValoresLista(pptoFiltroDef('infraestructura'), fObra)
     return registros.filter(r => {
+      if (filtroPlano?.ids?.size > 0 && !filtroPlano.ids.has(Number(r.id))) return false
+      if (filtroPlano?.ids?.size > 0) return true
       if (!drillMatch(r)) return false
       if (pkidsSeleccionados.length > 0) {
         if (!pkidsSeleccionados.includes(r.pk_id)) return false
@@ -3392,7 +3479,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       return true
     })
-  }, [registros, verPapelera, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, fObra.infraestructura, fObra.infraestructuras, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada])
+  }, [registros, verPapelera, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, fObra.revisado, fObra.preInterv, fObra.tramo, fObra.tramos, fObra.calzada, fObra.calzadas, fObra.infraestructura, fObra.infraestructuras, pkidsSeleccionados, detalleConItem, ubicacionTramo, ubicacionCalzada, filtroPlano])
 
   /**
    * Misma fuente de datos que el botón «Tramos» / `cargarCapituloData`:
@@ -7646,9 +7733,44 @@ async function darDeBaja(id) {
             🔗 DWG Enlazado
           </div>
         )}
+        {filtroPlano && (
+          <div
+            title="Solo registros vinculados a la selección en AutoCAD (comando CLARAFILTRO)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: '6px 14px',
+              background: '#2563EB18',
+              border: '1px solid #2563EB55',
+              borderRadius: '8px',
+              fontSize: 'var(--cc-sm)',
+              color: '#1D4ED8',
+              fontWeight: '600',
+            }}
+          >
+            <span>📐 Filtro plano: {filtroPlano.total} registro(s)</span>
+            <button
+              type="button"
+              onClick={() => limpiarFiltroPlano()}
+              style={{
+                background: '#fff',
+                border: '1px solid #2563EB66',
+                borderRadius: '6px',
+                padding: '2px 10px',
+                fontSize: 'var(--cc-xs)',
+                fontWeight: '700',
+                color: '#1D4ED8',
+                cursor: 'pointer',
+              }}
+            >
+              Quitar filtro
+            </button>
+          </div>
+        )}
       </div>
       {/* ── Tabla ── */}
-      {(verPapelera || busquedaServidorActiva || drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra)) && registrosFiltrados.length > 0 && (
+      {(verPapelera || busquedaServidorActiva || drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra) || filtroPlano) && registrosFiltrados.length > 0 && (
         <>
         {pptoCompact && (
           <div className="cc-ppto-reg-cards" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
