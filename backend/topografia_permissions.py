@@ -1,8 +1,14 @@
 """
 Permisos módulo Topografía — fila en `funciones` (nombre «Topografía», código TOPOGR).
 
-Misma semántica de matriz que SICOE Obra (ver/crear/editar/eliminar/validar/exportar),
-con alcance por contrato vía `_permisos_rows_para_cargo` (login /usuarios/me).
+Misma semántica de matriz que SICOE Obra (ver/crear/editar/eliminar/validar/exportar).
+
+Resolución por función (no por lote de contrato):
+  1) fila Topografía con contrato_id exacto
+  2) fila Topografía legacy (contrato_id null)
+Nunca reutilizar la matriz de otro contrato. No dejar que permisos scoped de
+*otras* funciones oculten una fila legacy de Topografía (regresión «Not Found»/
+403 al listar planillas tras el ajuste de alcance por contrato).
 """
 from __future__ import annotations
 
@@ -13,7 +19,8 @@ from fastapi import HTTPException
 
 TopoAccion = Literal["ver", "crear", "editar", "eliminar", "validar", "exportar"]
 
-_FUNC_NOMBRES = frozenset({"topografía", "topografia"})
+_FUNC_NOMBRES = frozenset({"topografia"})  # tras _norm (sin tilde)
+_FUNC_CODIGO = "TOPOGR"
 
 
 def _norm(txt: str) -> str:
@@ -22,23 +29,109 @@ def _norm(txt: str) -> str:
     return s.lower().strip().replace("  ", " ")
 
 
+def _es_funcion_topografia(row: dict) -> bool:
+    nombre = _norm(row.get("nombre") or row.get("funcion_nombre") or "")
+    codigo = str(row.get("codigo") or row.get("funcion_codigo") or "").strip().upper()
+    return nombre in _FUNC_NOMBRES or codigo == _FUNC_CODIGO
+
+
+def _ids_funcion_topografia() -> list[int]:
+    """Ids de `funciones` que corresponden a Topografía / TOPOGR."""
+    from main import supabase, supabase_execute
+
+    rows = (
+        supabase_execute(
+            lambda: supabase.table("funciones")
+            .select("id, nombre, codigo")
+            .execute()
+            .data
+        )
+        or []
+    )
+    out: list[int] = []
+    for f in rows:
+        if not _es_funcion_topografia(f):
+            continue
+        try:
+            out.append(int(f["id"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+def _permisos_topografia_para_cargo(cargo_id: int, contrato_id: Optional[int]) -> list[dict]:
+    """
+    Filas de permisos solo de la función Topografía, con prioridad de contrato.
+
+    Alineado con frontend `permisoFuncionContrato`: exacto → legacy → vacío
+    (sin caer a otro contrato).
+    """
+    from main import supabase, supabase_execute
+
+    fids = _ids_funcion_topografia()
+    if not fids:
+        return []
+
+    cid_cargo = int(cargo_id)
+    all_topo = (
+        supabase_execute(
+            lambda: supabase.table("permisos")
+            .select("*")
+            .eq("cargo_id", cid_cargo)
+            .in_("funcion_id", fids)
+            .execute()
+            .data
+        )
+        or []
+    )
+    if not all_topo:
+        return []
+
+    if contrato_id is not None:
+        try:
+            cid = int(contrato_id)
+        except (TypeError, ValueError):
+            cid = None
+        if cid is not None:
+            exact = [
+                p
+                for p in all_topo
+                if p.get("contrato_id") is not None
+                and str(p.get("contrato_id")).strip() != ""
+                and int(p["contrato_id"]) == cid
+            ]
+            if exact:
+                return exact
+            legacy = [
+                p
+                for p in all_topo
+                if p.get("contrato_id") is None or p.get("contrato_id") == ""
+            ]
+            if legacy:
+                return legacy
+            return []
+
+    # Sin contrato pedido: preferir legacy, si no cualquiera (mismo cargo).
+    legacy = [
+        p
+        for p in all_topo
+        if p.get("contrato_id") is None or p.get("contrato_id") == ""
+    ]
+    return legacy or all_topo
+
+
 def _cargo_permiso_topografia(
     current_user,
     accion: TopoAccion,
     contrato_id: Optional[int] = None,
 ) -> bool:
-    """Matriz Topografía; si contrato_id, misma resolución scoped que SICOE Obra."""
+    """Matriz Topografía; alcance por contrato a nivel de *esta* función."""
     try:
         uid = int(current_user.get("sub"))
     except (TypeError, ValueError):
         return False
     try:
-        from main import (
-            _es_desarrollador,
-            _permisos_rows_para_cargo,
-            supabase,
-            supabase_execute,
-        )
+        from main import _es_desarrollador, supabase
 
         if _es_desarrollador(current_user):
             return True
@@ -53,28 +146,13 @@ def _cargo_permiso_topografia(
         u = urows[0] if urows else None
         if not u or u.get("cargo_id") is None:
             return False
-        cid = int(u["cargo_id"])
-        perms = _permisos_rows_para_cargo(
-            cid,
+        perms = _permisos_topografia_para_cargo(
+            int(u["cargo_id"]),
             int(contrato_id) if contrato_id is not None else None,
-        ) or []
-        fids = [p["funcion_id"] for p in perms if p.get(accion)]
-        if not fids:
-            return False
-        funcs = supabase_execute(
-            lambda: supabase.table("funciones")
-            .select("id, nombre")
-            .in_("id", fids)
-            .execute()
-            .data
-        ) or []
-        for f in funcs:
-            nombre = (f.get("nombre") or "").strip().lower()
-            if nombre in _FUNC_NOMBRES:
-                return True
+        )
+        return any(bool(p.get(accion)) for p in perms)
     except Exception:
         return False
-    return False
 
 
 def tiene_permiso_topografia(
@@ -157,7 +235,6 @@ def lado_validacion_topo_usuario(
         if "intervent" in cargo:
             return 2
         return 1
-    # Personal de campo contratista (operadores topo).
     if "cadenero" in cargo:
         return 1
     return None

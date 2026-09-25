@@ -917,6 +917,38 @@ def crear(contrato_id: int, body: CrearBody, current_user=Depends(get_current_us
     return _detalle(contrato_id, row[0]["id"])
 
 
+@router.get("/{contrato_id}/planillas-tuberia/por-reporte-sicoe/{reporte_id}")
+def planilla_por_reporte_sicoe(
+    contrato_id: int, reporte_id: int, current_user=Depends(get_current_user),
+):
+    """Resuelve la planilla de origen vinculada a un so_reportes (pestaña SICOE).
+
+    Debe declararse ANTES de `/{planilla_id}` para que el segmento estático
+    no sea capturado como UUID de planilla (404 Not Found).
+    """
+    _require_contract_access(current_user, contrato_id)
+    _perm(current_user, "ver", contrato_id)
+    rows = (
+        supabase.table("topo_planillas_tuberia")
+        .select("id,nombre,tipo,estado,pk_id,costado,meta_cabecera,updated_at")
+        .eq("contrato_id", contrato_id)
+        .order("updated_at", desc=True)
+        .limit(200)
+        .execute()
+        .data
+        or []
+    )
+    rid = int(reporte_id)
+    for r in rows:
+        for link in _sicoe_links_from_meta(r.get("meta_cabecera")):
+            try:
+                if int(link.get("reporte_id")) == rid:
+                    return _detalle(contrato_id, r["id"])
+            except (TypeError, ValueError):
+                continue
+    raise HTTPException(404, "No hay planilla de tubería vinculada a este reporte.")
+
+
 @router.get("/{contrato_id}/planillas-tuberia/{planilla_id}")
 def obtener(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -1929,34 +1961,6 @@ def _esquema_desde_data_uri(data_uri: Optional[str]) -> tuple[Optional[bytes], s
         return content, mime
     except HTTPException:
         return None, "image/png"
-
-
-@router.get("/{contrato_id}/planillas-tuberia/por-reporte-sicoe/{reporte_id}")
-def planilla_por_reporte_sicoe(
-    contrato_id: int, reporte_id: int, current_user=Depends(get_current_user),
-):
-    """Resuelve la planilla de origen vinculada a un so_reportes (pestaña SICOE)."""
-    _require_contract_access(current_user, contrato_id)
-    _perm(current_user, "ver", contrato_id)
-    rows = (
-        supabase.table("topo_planillas_tuberia")
-        .select("id,nombre,tipo,estado,pk_id,costado,meta_cabecera,updated_at")
-        .eq("contrato_id", contrato_id)
-        .order("updated_at", desc=True)
-        .limit(200)
-        .execute()
-        .data
-        or []
-    )
-    rid = int(reporte_id)
-    for r in rows:
-        for link in _sicoe_links_from_meta(r.get("meta_cabecera")):
-            try:
-                if int(link.get("reporte_id")) == rid:
-                    return _detalle(contrato_id, r["id"])
-            except (TypeError, ValueError):
-                continue
-    raise HTTPException(404, "No hay planilla de tubería vinculada a este reporte.")
 
 
 @router.post("/{contrato_id}/planillas-tuberia/{planilla_id}/crear-reporte-sicoe")

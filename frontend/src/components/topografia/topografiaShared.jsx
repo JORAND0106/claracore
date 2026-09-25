@@ -507,7 +507,18 @@ export function useTopografiaApi(contratoId, token) {
         if (detail && typeof detail === 'object') {
           detail = detail.mensaje || detail.message || JSON.stringify(detail)
         }
-        throw new Error(typeof detail === 'string' ? detail : 'Error en solicitud')
+        const msg = typeof detail === 'string' ? detail : 'Error en solicitud'
+        // Evitar el genérico "Not Found" sin contexto (p. ej. 404 de gateway/ruta).
+        if (res.status === 404 && (!msg || msg === 'Not Found')) {
+          throw new Error(
+            `Recurso no encontrado (HTTP 404) en ${pathOnly || path}. `
+            + 'Si tiene permiso Ver en Topografía y el listado falla, reintente o contacte soporte.',
+          )
+        }
+        if (res.status === 403) {
+          throw new Error(msg || 'No tiene permiso para esta acción de Topografía.')
+        }
+        throw new Error(msg)
       }
       if (res.status === 204) return null
       if (isPdf || (isXlsx && accept.includes('spreadsheetml'))) return res.blob()
