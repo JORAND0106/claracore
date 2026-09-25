@@ -77,6 +77,65 @@ describe('permisosTopografia aislamiento por contrato', () => {
     assert.equal(tienePermisoTopografiaFlag(u, 'crear', 5), false)
   })
 
+  it('acepta código TOPOGR aunque el nombre difiera', () => {
+    const u = {
+      cargo_nombre: 'Residente',
+      permisos: [
+        {
+          funcion_nombre: 'Topo Obra',
+          funcion_codigo: 'TOPOGR',
+          contrato_id: 5,
+          ver: true,
+          crear: true,
+          editar: true,
+          eliminar: false,
+          validar: false,
+          exportar: true,
+        },
+      ],
+    }
+    const p = permisosTopografia(u, 5)
+    assert.equal(p.ver, true)
+    assert.equal(p.crear, true)
+    assert.equal(p.editar, true)
+    assert.equal(p.exportar, true)
+    assert.equal(p.validar, false)
+  })
+
+  it('legacy Topografía funciona aunque haya otras funciones scoped', () => {
+    const u = {
+      cargo_nombre: 'Topógrafo',
+      contrato_id: 10,
+      permisos: [
+        {
+          funcion_nombre: 'Reporte de Cantidades',
+          contrato_id: 10,
+          ver: true,
+          crear: true,
+          editar: true,
+          validar: false,
+          exportar: true,
+          eliminar: false,
+        },
+        {
+          funcion_nombre: 'Topografía',
+          contrato_id: null,
+          ver: true,
+          crear: true,
+          editar: true,
+          validar: false,
+          exportar: true,
+          eliminar: false,
+        },
+      ],
+    }
+    const p = permisosTopografia(u, 10)
+    assert.equal(p.ver, true)
+    assert.equal(p.crear, true)
+    assert.equal(p.editar, true)
+    assert.equal(p.exportar, true)
+  })
+
   it('desarrollador tiene todos los flags', () => {
     const dev = { cargo_nombre: 'Desarrollador', permisos: [] }
     const p = permisosTopografia(dev, 1)

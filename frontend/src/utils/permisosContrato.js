@@ -127,16 +127,31 @@ export function usuarioDebeSuscribirsePush(usuario, contratoId) {
   return !!(p?.editar || p?.validar)
 }
 
+function _esFilaTopografia(p) {
+  const n = (p?.funcion_nombre || '').toLowerCase().trim()
+  const codigo = String(p?.funcion_codigo || p?.codigo || '').trim().toUpperCase()
+  return n === 'topografía' || n === 'topografia' || codigo === 'TOPOGR'
+}
+
 /**
- * Matriz «Topografía» (código TOPOGR): misma resolución por contrato que SICOE Obra.
- * Acepta nombre con o sin tilde.
+ * Matriz «Topografía» (código TOPOGR): exacto por contrato → legacy → null.
+ * No reutiliza filas de otro contrato. Acepta nombre con/sin tilde y código TOPOGR.
+ *
+ * Importante: no depende de que el lote `_permisos_rows_para_cargo` traiga Topografía
+ * mezclada con otras funciones; filtra solo filas Topografía del bag de sesión.
  */
 export function permisoTopografia(usuario, contratoId) {
+  const rows = (usuario?.permisos || []).filter(_esFilaTopografia)
+  if (!rows.length) return null
   const cid = Number(contratoId ?? usuario?.contrato_id)
-  return (
-    permisoFuncionContrato(usuario, 'topografía', cid)
-    || permisoFuncionContrato(usuario, 'topografia', cid)
-  )
+  if (Number.isFinite(cid)) {
+    const exact = rows.find((p) => Number(p.contrato_id) === cid)
+    if (exact) return exact
+    const legacy = rows.find((p) => p.contrato_id == null || p.contrato_id === '')
+    if (legacy) return legacy
+    return null
+  }
+  return rows[0]
 }
 
 export function tienePermisoTopografiaFlag(usuario, flag, contratoId) {
