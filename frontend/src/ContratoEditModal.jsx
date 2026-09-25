@@ -159,7 +159,7 @@ export default function ContratoEditModal({
           lineHeight: 1.35,
         }}
       >
-        <CcModalBrandHeader theme={t} />
+        <CcModalBrandHeader theme={tProp} />
         <div
           style={{
             padding: compact ? "12px 14px 10px" : "16px 20px 12px",
