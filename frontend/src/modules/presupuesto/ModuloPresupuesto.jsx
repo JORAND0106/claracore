@@ -64,7 +64,13 @@ import { resolverMetaLogosPresupuesto } from './presupuestoExportLogos'
 import { idsRangoSeleccion } from './pptoSeleccionRango'
 import { pptoFormatoNodos } from './pptoFormatoNodos'
 import { pptoConstruirTramosUnicos, pptoFilasDeTramo } from './pptoTramoBusqueda'
-import { pptoSheetStyles, pptoSheetCssVars } from './pptoSheetStyles'
+import {
+  pptoSheetStyles,
+  pptoSheetCssVars,
+  PPTO_Z_REVISOR_TRAMOS,
+  PPTO_Z_AGREGAR_CANTIDAD,
+  PPTO_Z_DETALLE_REGISTRO,
+} from './pptoSheetStyles'
 import {
   pptoLabelSubcontratista,
   pptoNormalizarSubcontratistasOpciones,
@@ -5173,12 +5179,71 @@ async function darDeBaja(id) {
         const tramoDimInput = {
           ...sheet.cellInp,
           width: '100%',
-          minWidth: '72px',
-          maxWidth: '120px',
+          minWidth: 0,
+          maxWidth: '100%',
           background: t.inputBg,
           border: `1px solid ${sheet.border}`,
           borderRadius: 0,
           padding: '4px 6px',
+        }
+
+        const iniciarEdicionDimsFila = (r, e) => {
+          if (!puedeIniciarEdicionDimsInline(r) || editDims[r.id] !== undefined) return
+          e?.stopPropagation?.()
+          setEditDims(p => ({
+            ...p,
+            [r.id]: {
+              area_long_nod: r.area_long_nod ?? '',
+              ancho: r.ancho ?? '',
+              espesor: r.espesor ?? '',
+            },
+          }))
+        }
+
+        const renderCeldaDim = (r, campo, placeholder, puedeEditarCampo) => {
+          const editando = puedeEditarDimensiones && !esSellado(r) && editDims[r.id] !== undefined
+          const valorVista = r[campo]
+          const textoVista = valorVista != null && valorVista !== '' ? String(valorVista) : '—'
+          if (editando) {
+            if (campo === 'area_long_nod' && !puedeEditarCampo) {
+              if (aplicaReglasCadPresupuesto) {
+                return renderDimBloqueadaCad(textoVista, MSG_AREA_LONG_DESDE_PLANO)
+              }
+              return (
+                <span
+                  style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}
+                  title="Área/long solo Desarrollador o editor en contrato autorizado"
+                >
+                  {textoVista}
+                </span>
+              )
+            }
+            if ((campo === 'ancho' || campo === 'espesor') && !puedeEditarCampo) {
+              return <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>{textoVista}</span>
+            }
+            return (
+              <input
+                type="number"
+                placeholder={placeholder}
+                value={editDims[r.id][campo] ?? ''}
+                onClick={e => e.stopPropagation()}
+                onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], [campo]: e.target.value } }))}
+                style={tramoDimInput}
+              />
+            )
+          }
+          return (
+            <span
+              title={puedeIniciarEdicionDimsInline(r) ? `Clic para editar ${placeholder}` : undefined}
+              style={{
+                cursor: puedeIniciarEdicionDimsInline(r) ? 'pointer' : 'default',
+                textDecoration: puedeIniciarEdicionDimsInline(r) ? 'underline dotted' : 'none',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {textoVista}
+            </span>
+          )
         }
 
         const tramosFiltradosLista = tramosUnicos.filter(tr => {
@@ -5208,7 +5273,7 @@ async function darDeBaja(id) {
             style={{
               position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
               background: t.overlay || 'rgba(0,0,0,0.65)',
-              zIndex: 3500, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              zIndex: PPTO_Z_REVISOR_TRAMOS, display: 'flex', alignItems: 'center', justifyContent: 'center',
               padding: '12px', fontSize: 'var(--cc-body)', lineHeight: 1.45, fontFamily: 'inherit',
             }}
             onClick={(e) => {
@@ -5223,8 +5288,8 @@ async function darDeBaja(id) {
                 background: t.bgCard,
                 border: `1px solid ${t.border}`,
                 borderRadius: 16,
-                width: 'min(1104px, 96vw)',
-                maxWidth: '96vw',
+                width: 'min(1400px, 98vw)',
+                maxWidth: '98vw',
                 maxHeight: '92vh',
                 overflow: 'hidden',
                 display: 'flex',
@@ -5806,27 +5871,32 @@ async function darDeBaja(id) {
                         <div style={{ ...sheet.sheetWrap, maxHeight: 'min(420px, 48vh)' }}>
                           <table
                             className="cc-ppto-revisor-items-table"
-                            style={{ ...sheet.sheetTable, minWidth: nivelInfo.verValoresEconomicos ? 980 : 760 }}
+                            style={{
+                              ...sheet.sheetTable,
+                              minWidth: nivelInfo.verValoresEconomicos ? 1180 : 980,
+                            }}
                           >
                             <thead>
                               <tr>
                                 <th style={{ ...sheet.th, width: 36, textAlign: 'center' }} />
-                                <th style={{ ...sheet.th, width: 120 }}>ID-POL</th>
-                                <th style={{ ...sheet.th, width: 72 }}>Ítem</th>
-                                <th style={sheet.th}>Descripción</th>
-                                <th style={{ ...sheet.th, width: 150, textAlign: 'right' }}>Dims</th>
-                                <th style={{ ...sheet.th, width: 80, textAlign: 'right' }}>Cant.</th>
+                                <th style={{ ...sheet.th, width: 110 }}>ID-POL</th>
+                                <th style={{ ...sheet.th, width: 64 }}>Ítem</th>
+                                <th style={{ ...sheet.th, width: '22%' }}>Descripción</th>
+                                <th style={{ ...sheet.th, width: 72, textAlign: 'right' }}>Long</th>
+                                <th style={{ ...sheet.th, width: 72, textAlign: 'right' }}>Ancho</th>
+                                <th style={{ ...sheet.th, width: 72, textAlign: 'right' }}>Espesor</th>
+                                <th style={{ ...sheet.th, width: 72, textAlign: 'right' }}>Cant.</th>
                                 {nivelInfo.verValoresEconomicos && (
-                                  <th style={{ ...sheet.th, width: 90, textAlign: 'right' }}>V. unit.</th>
+                                  <th style={{ ...sheet.th, width: 88, textAlign: 'right' }}>V. unit.</th>
                                 )}
                                 {nivelInfo.verValoresEconomicos && (
-                                  <th style={{ ...sheet.th, width: 100, textAlign: 'right' }}>C. directo</th>
+                                  <th style={{ ...sheet.th, width: 96, textAlign: 'right' }}>C. directo</th>
                                 )}
                                 {mostrarColumnaDepuracion && (
-                                  <th style={{ ...sheet.th, width: 56, textAlign: 'center' }} title="Depuración (contratista / obra)">Dep.</th>
+                                  <th style={{ ...sheet.th, width: 52, textAlign: 'center' }} title="Depuración (contratista / obra)">Dep.</th>
                                 )}
                                 <th style={{ ...sheet.th, width: 56, textAlign: 'center' }} title="Interventoría">Rev.</th>
-                                <th style={{ ...sheet.th, width: 52 }} />
+                                <th style={{ ...sheet.th, width: 48 }} />
                               </tr>
                             </thead>
                             <tbody>
@@ -5837,6 +5907,9 @@ async function darDeBaja(id) {
                                   : rowSelected
                                     ? t.primary + '18'
                                     : 'transparent'
+                                const descTxt = r.descripcion != null && String(r.descripcion).trim()
+                                  ? String(r.descripcion)
+                                  : '—'
                                 return (
                                   <tr
                                     key={r.id}
@@ -5887,72 +5960,24 @@ async function darDeBaja(id) {
                                       {r.id_pol || r.pk_id || '—'}
                                     </td>
                                     <td style={{ ...sheet.td, fontWeight: 600 }}>{r.item}</td>
-                                    <td style={{ ...sheet.tdMuted, lineHeight: 1.35 }}>{r.descripcion}</td>
-                                    <td style={{ ...sheet.tdMuted, textAlign: 'right' }} onClick={e => {
-                                      if (puedeIniciarEdicionDimsInline(r) && editDims[r.id] === undefined) {
-                                        e.stopPropagation()
-                                        setEditDims(p => ({
-                                          ...p,
-                                          [r.id]: {
-                                            area_long_nod: r.area_long_nod ?? '',
-                                            ancho: r.ancho ?? '',
-                                            espesor: r.espesor ?? '',
-                                          },
-                                        }))
-                                      }
-                                    }}>
-                                      {puedeEditarDimensiones && !esSellado(r) && editDims[r.id] !== undefined ? (
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }} onClick={e => e.stopPropagation()}>
-                                          {puedeEditarAreaLongNodInline() ? (
-                                            <input
-                                              type="number"
-                                              placeholder="a/l/n"
-                                              value={editDims[r.id].area_long_nod ?? ''}
-                                              onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], area_long_nod: e.target.value } }))}
-                                              style={tramoDimInput}
-                                            />
-                                          ) : aplicaReglasCadPresupuesto ? (
-                                            renderDimBloqueadaCad(`a/l/n: ${r.area_long_nod ?? '—'}`, MSG_AREA_LONG_DESDE_PLANO)
-                                          ) : (
-                                            <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }} title="Área/long solo Desarrollador o editor en contrato autorizado">
-                                              a/l/n: {r.area_long_nod ?? '—'}
-                                            </span>
-                                          )}
-                                          {puedeEditarAnchoEspesorInline() ? (
-                                            <>
-                                              <input
-                                                type="number"
-                                                placeholder="ancho"
-                                                value={editDims[r.id].ancho ?? ''}
-                                                onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], ancho: e.target.value } }))}
-                                                style={tramoDimInput}
-                                              />
-                                              <input
-                                                type="number"
-                                                placeholder="esp"
-                                                value={editDims[r.id].espesor ?? ''}
-                                                onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], espesor: e.target.value } }))}
-                                                style={tramoDimInput}
-                                              />
-                                            </>
-                                          ) : (
-                                            <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                                              {[r.ancho, r.espesor].filter(v => v != null && v !== '').join(' × ') || '—'}
-                                            </span>
-                                          )}
-                                        </div>
-                                      ) : (
-                                        <span
-                                          title={puedeIniciarEdicionDimsInline(r) ? 'Clic para editar dims' : undefined}
-                                          style={{
-                                            cursor: puedeIniciarEdicionDimsInline(r) ? 'pointer' : 'default',
-                                            textDecoration: puedeIniciarEdicionDimsInline(r) ? 'underline dotted' : 'none',
-                                            whiteSpace: 'nowrap',
-                                          }}
-                                        >
-                                          {[r.area_long_nod, r.ancho, r.espesor].filter(v => v != null && v !== '').join(' × ') || '—'}
-                                        </span>
-                                      )}
+                                    <td style={sheet.tdEllipsis} title={descTxt}>{descTxt}</td>
+                                    <td
+                                      style={{ ...sheet.tdMuted, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                                      onClick={e => iniciarEdicionDimsFila(r, e)}
+                                    >
+                                      {renderCeldaDim(r, 'area_long_nod', 'long', puedeEditarAreaLongNodInline())}
+                                    </td>
+                                    <td
+                                      style={{ ...sheet.tdMuted, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                                      onClick={e => iniciarEdicionDimsFila(r, e)}
+                                    >
+                                      {renderCeldaDim(r, 'ancho', 'ancho', puedeEditarAnchoEspesorInline())}
+                                    </td>
+                                    <td
+                                      style={{ ...sheet.tdMuted, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                                      onClick={e => iniciarEdicionDimsFila(r, e)}
+                                    >
+                                      {renderCeldaDim(r, 'espesor', 'esp', puedeEditarAnchoEspesorInline())}
                                     </td>
                                     <td style={{ ...sheet.tdMuted, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                                       {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', { maximumFractionDigits: 2 }) : '—'}
@@ -6149,7 +6174,7 @@ async function darDeBaja(id) {
         const dimsOk = Number.isFinite(_area) && Number.isFinite(_ancho) && Number.isFinite(_esp)
         const puedeGuardar = nuevaCant.itemSel && dimsOk && _area > 0
         return (
-          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.75)', zIndex:4000, display:'flex', alignItems:'center', justifyContent:'center' }}
+          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.75)', zIndex: PPTO_Z_AGREGAR_CANTIDAD, display:'flex', alignItems:'center', justifyContent:'center' }}
             onClick={() => { setModalAgregarCant(false) }}>
             <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'14px', padding:'22px', width:'480px', maxWidth:'96vw', maxHeight:'88vh', overflowY:'auto', boxShadow:'0 24px 64px rgba(0,0,0,0.55)' }}
               onClick={e => e.stopPropagation()}>
@@ -6304,20 +6329,60 @@ async function darDeBaja(id) {
         )
       })()}
 
-      {/* Modal detalle registro presupuesto */}
-      {modalDetallePpto && (
+      {/* Modal detalle registro presupuesto — grilla Excel, por encima del Revisor de Tramos */}
+      {modalDetallePpto && (() => {
+        const sheetDet = pptoSheetStyles(t)
+        const sheetDetCss = pptoSheetCssVars(t)
+        const sheetInp = {
+          width: '100%',
+          boxSizing: 'border-box',
+          background: t.inputBg,
+          border: `1px solid ${sheetDet.border}`,
+          borderRadius: 0,
+          padding: '6px 8px',
+          color: t.text,
+          fontSize: 'var(--cc-input)',
+          minHeight: 36,
+        }
+        return (
         <div
           className="cc-ppto-modal-overlay"
-          style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center',padding:'12px' }}
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: t.overlay || 'rgba(0,0,0,0.65)',
+            zIndex: PPTO_Z_DETALLE_REGISTRO,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '12px', fontSize: 'var(--cc-body)', lineHeight: 1.45,
+          }}
           onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }}>
           <div
-            className="cc-ppto-modal-sheet cc-ppto-detalle-sheet"
-            style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'min(1040px, 100%)',maxWidth:'100%',maxHeight:'min(80vh, 700px)',overflowY:'auto',WebkitOverflowScrolling:'touch',boxShadow:'0 20px 60px rgba(0,0,0,0.4)',display:'flex',flexDirection:'column',boxSizing:'border-box' }}
+            className="cc-ppto-modal-sheet cc-ppto-detalle-sheet cc-ppto-detalle-excel"
+            style={{
+              ...sheetDetCss,
+              background: t.bgCard,
+              border: `1px solid ${t.border}`,
+              borderRadius: 14,
+              padding: 0,
+              width: 'min(1280px, 98vw)',
+              maxWidth: '98vw',
+              maxHeight: 'min(90vh, 860px)',
+              overflow: 'hidden',
+              WebkitOverflowScrolling: 'touch',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+              display: 'flex',
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+              fontSize: 'inherit',
+            }}
             onClick={e => e.stopPropagation()}>
             <CcModalBrandHeader theme={t} />
-            <div className="cc-ppto-detalle-header" style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px', gap:'10px', flexWrap:'wrap', flexShrink:0 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize:'var(--cc-md)',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
+            <div className="cc-ppto-detalle-header" style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '12px 18px', borderBottom: `1px solid ${t.border}`,
+              gap: 10, flexWrap: 'wrap', flexShrink: 0,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.primary }}>📋 Detalle del Registro</div>
                 {(() => {
                   const r0 = modalDetallePpto
                   if (!r0) return null
@@ -6331,13 +6396,13 @@ async function darDeBaja(id) {
                         background: t.primary,
                         color: '#fff',
                         border: 'none',
-                        borderRadius: '8px',
+                        borderRadius: 4,
                         padding: '6px 14px',
                         fontSize: 'var(--cc-sm)',
-                        fontWeight: '700',
+                        fontWeight: 700,
                         cursor: 'pointer',
                         whiteSpace: 'nowrap',
-                        minHeight: 44,
+                        minHeight: 40,
                       }}
                     >✏️ Editar</button>
                   )
@@ -6347,26 +6412,33 @@ async function darDeBaja(id) {
                 type="button"
                 aria-label="Cerrar detalle"
                 onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }}
-                style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, width: 44, height: 44, fontSize:'var(--cc-lg)',cursor:'pointer',color:t.text, display:'inline-flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}
+                style={{
+                  background: t.bg, border: `1px solid ${sheetDet.border}`, borderRadius: 4,
+                  width: 40, height: 40, fontSize: 'var(--cc-lg)', cursor: 'pointer', color: t.text,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}
               >✕</button>
             </div>
-            <div className="cc-ppto-modal-body" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
+            <div className="cc-ppto-modal-body" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0, padding: '14px 18px 18px' }}>
             {(() => {
               const r = modalDetallePpto
-              const F = ({label, val, flex=1}) => (
-                <div style={{ flex, minWidth:0 }}>
-                  <div style={{ fontSize:'var(--cc-caption)',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px' }}>{label}</div>
-                  <div style={{ fontSize:'var(--cc-sm)',color:t.text,fontWeight:'500',marginTop:'1px',wordBreak:'break-word',overflowWrap:'anywhere' }}>{val ?? '—'}</div>
-                </div>
-              )
-              const Row = ({children}) => (
-                <div className="cc-ppto-detalle-row" style={{ display:'flex',gap:'12px',background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px',flexWrap:'wrap' }}>{children}</div>
-              )
-              const BigF = ({label, val}) => (
-                <div style={{ background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px' }}>
-                  <div style={{ fontSize:'var(--cc-caption)',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px',marginBottom:'3px' }}>{label}</div>
-                  <div style={{ fontSize:'var(--cc-sm)',color:t.text,lineHeight:1.5 }}>{val ?? '—'}</div>
-                </div>
+              const kvRows = (pairs) => (
+                <table style={{ ...sheetDet.sheetTable, minWidth: 0, tableLayout: 'fixed' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...sheetDet.th, width: '34%' }}>Campo</th>
+                      <th style={sheetDet.th}>Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pairs.map(([label, val]) => (
+                      <tr key={label}>
+                        <td style={sheetDet.tdLabel}>{label}</td>
+                        <td style={{ ...sheetDet.td, fontWeight: 600, wordBreak: 'break-word' }}>{val ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )
               const fmtFechaHoraRecalculo = (iso) => {
                 if (!iso) return '—'
@@ -6374,83 +6446,94 @@ async function darDeBaja(id) {
                 if (Number.isNaN(d.getTime())) return String(iso)
                 return d.toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
               }
+              const panelClasificacion = [
+                ['ID_POL', r.id_pol || r.pk_id || '—'],
+                ['Reg. ID', r.id ?? '—'],
+                ['Capítulo', r.capitulo],
+                ['Ítem', r.item],
+                ['Descripción', r.descripcion],
+                ['Observación', textoObservacionRegistro(r)],
+                ['Unidad', r.und],
+                ['Revisado', r.revisado || 'No Revisado'],
+                ['Tipo ejecución', r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT],
+              ]
+              if (mostrarColumnaDepuracion) {
+                panelClasificacion.push([
+                  'Depuración (costos / obra)',
+                  r.pre_interv_estado == null || r.pre_interv_estado === '' ? '— (legado)' : r.pre_interv_estado,
+                ])
+                if (r.pre_interv_por) panelClasificacion.push(['Depuración por', r.pre_interv_por])
+              }
+              const panelUbicacion = [
+                ['Nodo inicio', r.no_inicio],
+                ['Nodo final', r.no_final],
+                ['Abs. inicio', r.abs_inicio],
+                ['Abs. final', r.abs_final],
+                ['Long (área/long/nod)', fmtN(r.area_long_nod)],
+                ['Ancho', fmtN(r.ancho)],
+                ['Espesor', fmtN(r.espesor)],
+                ['Cant. total', fmtN(r.cant_total)],
+                ['Tramo', r.tramo],
+                ['Infraestructura', r.infraestructura],
+                ['Calzada', r.calzada],
+                ['PK', r.pk_id],
+                ['Observación (campo)', r.observacion != null && String(r.observacion).trim() ? String(r.observacion).trim() : '—'],
+              ]
+              const panelEconomia = [
+                ...(nivelInfo.verValoresEconomicos ? [
+                  ['Vlr. unitario', fmt(r.vlr_unitario)],
+                  ['Costo directo', fmt(r.costo_directo)],
+                ] : []),
+                ['Cálculo (usuario)', r.calculo_por ?? '—'],
+                ['Cálculo (fecha y hora)', fmtFechaHoraRecalculo(r.calculo_en)],
+              ]
               return (
                 <>
                   {esSellado(r) && !puedeReabrirTrasAprob && (
-                    <div style={{ background:'rgba(22,101,52,0.12)', border:`1px solid rgba(22,101,52,0.35)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'12px', fontSize:'var(--cc-sm)', color:'#166534', fontWeight:'600' }}>
+                    <div style={{
+                      background: 'rgba(22,101,52,0.12)', border: `1px solid ${sheetDet.border}`,
+                      borderRadius: 4, padding: '10px 12px', marginBottom: 12,
+                      fontSize: 'var(--cc-sm)', color: 'var(--cc-color-success, #166534)', fontWeight: 600,
+                    }}>
                       🔒 Registro sellado — aprobado por Interventoría. No admite cambios de cantidades ni de estado.
                     </div>
                   )}
                   {esSellado(r) && puedeReabrirTrasAprob && (
-                    <div style={{ background:'rgba(14,165,233,0.12)', border:`1px solid rgba(14,165,233,0.4)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'12px', fontSize:'var(--cc-sm)', color:'#0369A1', fontWeight:'600' }}>
+                    <div style={{
+                      background: 'rgba(14,165,233,0.12)', border: `1px solid ${sheetDet.border}`,
+                      borderRadius: 4, padding: '10px 12px', marginBottom: 12,
+                      fontSize: 'var(--cc-sm)', color: '#0369A1', fontWeight: 600,
+                    }}>
                       🔓 Puede editar este registro sellado: al guardar se pedirá destinatario y motivo (mín. 15 caracteres), se anulará el sellado y el estado de Interventoría volverá a «No Revisado».
                     </div>
                   )}
-                  <div className="cc-ppto-detalle-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
-                    <div style={{ display:'flex', flexDirection:'column', gap:'5px', minWidth:0 }}>
-                      <Row>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize:'var(--cc-caption)',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px' }}>ID_POL</div>
-                          <div style={{ fontSize:'var(--cc-sm)',color:t.text,fontWeight:'500',marginTop:'1px',wordBreak:'break-word',overflowWrap:'anywhere' }}>
-                            {r.id_pol || r.pk_id || '—'}
-                          </div>
-                          <div style={{ fontSize:'var(--cc-caption)',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px',marginTop:'4px' }}>REG. ID</div>
-                          <div style={{ fontSize:'var(--cc-sm)',color:t.text,fontWeight:'500',marginTop:'1px' }}>{r.id ?? '—'}</div>
-                        </div>
-                        <F label="CAPÍTULO" val={r.capitulo}/>
-                        <F label="ÍTEM" val={r.item} flex={0.5}/>
-                      </Row>
-                      <BigF label="DESCRIPCIÓN" val={r.descripcion}/>
-                      <BigF label="OBSERVACIÓN" val={textoObservacionRegistro(r)}/>
-                      <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO EJECUCIÓN" val={r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT}/></Row>
-                      {mostrarColumnaDepuracion && (
-                        <Row>
-                          <F label="DEPURACIÓN (COSTOS / OBRA)" val={r.pre_interv_estado == null || r.pre_interv_estado === '' ? '— (legado)' : r.pre_interv_estado} flex={1}/>
-                          {r.pre_interv_por && <F label="POR" val={r.pre_interv_por} flex={1}/>}
-                        </Row>
-                      )}
-                      <Row><F label="NODO INICIO" val={r.no_inicio}/><F label="NODO FINAL" val={r.no_final}/></Row>
+
+                  <div className="cc-ppto-detalle-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignItems: 'start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={sheetDet.sectionBar}>Identificación y clasificación</div>
+                      <div style={sheetDet.sheetWrapFlush}>{kvRows(panelClasificacion)}</div>
                     </div>
-                    <div style={{ display:'flex', flexDirection:'column', gap:'5px', minWidth:0 }}>
-                      <Row><F label="ABS. INICIO" val={r.abs_inicio}/><F label="ABS. FINAL" val={r.abs_final}/></Row>
-                      <Row>
-                        <F label="ÁREA/LONG" val={fmtN(r.area_long_nod)} flex={0.6}/>
-                        <F label="ANCHO" val={fmtN(r.ancho)} flex={0.6}/>
-                        <F label="ESPESOR" val={fmtN(r.espesor)} flex={0.6}/>
-                        <F label="CANT. TOTAL" val={fmtN(r.cant_total)} flex={0.6}/>
-                      </Row>
-                      {nivelInfo.verValoresEconomicos && (
-                        <Row>
-                          <F label="VLR. UNITARIO" val={fmt(r.vlr_unitario)}/>
-                          <F label="COSTO DIRECTO" val={fmt(r.costo_directo)}/>
-                        </Row>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={sheetDet.sectionBar}>Ubicación y dimensiones</div>
+                      <div style={sheetDet.sheetWrapFlush}>{kvRows(panelUbicacion)}</div>
+                      {(nivelInfo.verValoresEconomicos || r.calculo_por || r.calculo_en) && (
+                        <div style={{ marginTop: 12 }}>
+                          <div style={sheetDet.sectionBar}>Economía y cálculo</div>
+                          <div style={sheetDet.sheetWrapFlush}>{kvRows(panelEconomia)}</div>
+                        </div>
                       )}
-                      <div style={{ display:'flex', gap:'12px', marginBottom:'5px', flexWrap:'wrap' }}>
-                        <div style={{ flex:'1 1 140px', minWidth:0, background:t.bg, borderRadius:'6px', padding:'7px 10px' }} title={r.calculo_por || ''}>
-                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.6px' }}>CÁLCULO (usuario)</div>
-                          <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'500', marginTop:'1px', lineHeight:1.35, whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{r.calculo_por ?? '—'}</div>
-                        </div>
-                        <div style={{ flex:'1 1 140px', minWidth:0, background:t.bg, borderRadius:'6px', padding:'7px 10px' }}>
-                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.6px' }}>CÁLCULO (fecha y hora)</div>
-                          <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'500', marginTop:'1px' }}>{fmtFechaHoraRecalculo(r.calculo_en)}</div>
-                        </div>
-                      </div>
-                      <Row><F label="TRAMO" val={r.tramo}/><F label="INFRAESTRUCTURA" val={r.infraestructura}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
-                      <BigF
-                        label="OBSERVACIÓN"
-                        val={r.observacion != null && String(r.observacion).trim() ? String(r.observacion).trim() : null}
-                      />
                     </div>
                   </div>
                   {/* Acciones desde buzón */}
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && (!esSellado(r) || puedeReabrirTrasAprob) && (
-                    <div className="cc-ppto-detalle-acciones" style={{ borderTop:`1px solid ${t.border}`, marginTop:'14px', paddingTop:'14px' }}>
-                      <div className="cc-ppto-detalle-acciones-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'stretch' }}>
-                      {/* ── Editar dimensiones — ancho/espesor siempre con permiso; área/long solo sin CAD o contrato autorizado ── */}
+                    <div className="cc-ppto-detalle-acciones" style={{ borderTop: `1px solid ${sheetDet.border}`, marginTop: 14, paddingTop: 14 }}>
+                      <div className="cc-ppto-detalle-acciones-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignItems: 'stretch' }}>
+                      {/* ── Editar dimensiones ── */}
                       {puedeEditarDimensiones && !esSellado(r) && (
-                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', minWidth:0 }}>
-                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#F59E0B', letterSpacing:'0.5px', marginBottom:'8px' }}>📐 EDITAR DIMENSIONES</div>
-                          <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'10px', lineHeight:1.45 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={sheetDet.sectionBar}>📐 Editar dimensiones</div>
+                          <div style={{ ...sheetDet.sheetWrapFlush, padding: 10 }}>
+                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 10, lineHeight: 1.45 }}>
                             Ajuste <strong>ancho</strong> y <strong>espesor</strong>; al guardar se <strong>recalculan cantidad total y costo directo</strong> con el valor unitario del registro (sin requerir plano CAD).
                             {' '}Al pulsar guardar se abrirá una ventana para la <strong>justificación del cambio</strong> (obligatoria).
                             {puedeEditarAreaLongNodInline() && (
@@ -6463,39 +6546,39 @@ async function darDeBaja(id) {
                               <span> El campo <strong>área/long/nod</strong> debe modificarse desde ClaraLink/DWG en este contrato.</span>
                             )}
                           </div>
-                          <div className="cc-ppto-detalle-fields" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom: puedeEditarAreaLongNodInline() ? '10px' : '8px' }}>
-                            <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
-                              <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ANCHO</span>
+                          <div className="cc-ppto-detalle-fields" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: puedeEditarAreaLongNodInline() ? 10 : 8 }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>ANCHO</span>
                               <input type="number" step="any" value={popupDims.ancho}
                                 onChange={e => setPopupDims(d => ({...d, ancho: e.target.value}))}
-                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
+                                style={sheetInp} />
                             </label>
-                            <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
-                              <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ESPESOR</span>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>ESPESOR</span>
                               <input type="number" step="any" value={popupDims.espesor}
                                 onChange={e => setPopupDims(d => ({...d, espesor: e.target.value}))}
-                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
+                                style={sheetInp} />
                             </label>
                           </div>
                           {puedeEditarAreaLongNodInline() && (
-                            <div className="cc-ppto-detalle-fields" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'8px' }}>
-                              <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
-                                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ÁREA / LONG / NOD</span>
+                            <div className="cc-ppto-detalle-fields" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 8 }}>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>ÁREA / LONG / NOD</span>
                                 <input type="number" step="any" value={popupDims.area_long_nod}
                                   onChange={e => setPopupDims(d => ({...d, area_long_nod: e.target.value}))}
-                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
+                                  style={sheetInp} />
                               </label>
-                              <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
-                                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>NODO INICIO</span>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>NODO INICIO</span>
                                 <input type="text" value={popupDims.no_inicio}
                                   onChange={e => setPopupDims(d => ({...d, no_inicio: e.target.value}))}
-                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
+                                  style={sheetInp} />
                               </label>
-                              <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
-                                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>NODO FINAL</span>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>NODO FINAL</span>
                                 <input type="text" value={popupDims.no_final}
                                   onChange={e => setPopupDims(d => ({...d, no_final: e.target.value}))}
-                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', minHeight: 44 }} />
+                                  style={sheetInp} />
                               </label>
                             </div>
                           )}
@@ -6562,22 +6645,24 @@ async function darDeBaja(id) {
                             }
                             setPopupGuardando(false)
                           }}
-                            style={{ background:'#F59E0B', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
+                            style={{ background: '#F59E0B', color: '#fff', border: 'none', borderRadius: 4, padding: '7px 18px', fontSize: 'var(--cc-sm)', fontWeight: 700, cursor: 'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
                             {popupGuardando ? '⏳ Guardando...' : '💾 Recalcular y guardar'}
                           </button>
+                          </div>
                         </div>
                       )}
 
-                      {/* ── Corregir tipo de ejecución (Presupuesto de Obra / Obra Ejecutada) ── */}
+                      {/* ── Corregir tipo de ejecución ── */}
                       {puedeEditar && !esSellado(r) && (
-                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', minWidth:0 }}>
-                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#7C3AED', letterSpacing:'0.5px', marginBottom:'8px' }}>↔ TIPO DE EJECUCIÓN</div>
-                          <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'8px', lineHeight:1.45 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={sheetDet.sectionBar}>↔ Tipo de ejecución</div>
+                          <div style={{ ...sheetDet.sheetWrapFlush, padding: 10 }}>
+                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 8, lineHeight: 1.45 }}>
                             Corrija si el registro quedó mal clasificado entre presupuesto de obra y obra ejecutada.
                           </div>
                           <select value={popupTipoEjecucion}
                             onChange={e => setPopupTipoEjecucion(e.target.value)}
-                            style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', marginBottom:'8px' }}>
+                            style={{ ...sheetInp, marginBottom: 8, cursor: 'pointer' }}>
                             <option value={PPTO_TIPO_EJECUCION_DEFAULT}>{PPTO_TIPO_EJECUCION_DEFAULT}</option>
                             <option value={PPTO_TIPO_EJECUCION_OBRA}>{PPTO_TIPO_EJECUCION_OBRA}</option>
                           </select>
@@ -6624,41 +6709,43 @@ async function darDeBaja(id) {
                             }
                             setPopupGuardando(false)
                           }}
-                            style={{ background:'#7C3AED', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
+                            style={{ background: '#7C3AED', color: '#fff', border: 'none', borderRadius: 4, padding: '7px 18px', fontSize: 'var(--cc-sm)', fontWeight: 700, cursor: 'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
                             {popupGuardando ? '⏳ Guardando...' : '💾 Guardar tipo'}
                           </button>
+                          </div>
                         </div>
                       )}
 
                       {/* ── Cambiar capítulo / ítem ── */}
                       {puedeEditar && (
-                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', minWidth:0 }}>
-                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#0077B6', letterSpacing:'0.5px', marginBottom:'8px' }}>🔄 CAMBIAR CAPÍTULO / ÍTEM</div>
-                          <div style={{ marginBottom:'8px' }}>
-                            <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>CAPÍTULO</div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={sheetDet.sectionBar}>🔄 Cambiar capítulo / ítem</div>
+                          <div style={{ ...sheetDet.sheetWrapFlush, padding: 10 }}>
+                          <div style={{ marginBottom: 8 }}>
+                            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700, marginBottom: 3 }}>CAPÍTULO</div>
                             <select value={popupCap}
                               onChange={e => { setPopupCap(e.target.value); setPopupItem(''); setPopupItemBusq('') }}
-                              style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }}>
+                              style={{ ...sheetInp, cursor: 'pointer' }}>
                               <option value="">— Selecciona capítulo —</option>
                               {capitulosListado.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                           </div>
-                          <div style={{ marginBottom:'8px', position:'relative' }}>
-                            <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ÍTEM</div>
+                          <div style={{ marginBottom: 8, position: 'relative' }}>
+                            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700, marginBottom: 3 }}>ÍTEM</div>
                             <input value={popupItemBusq} disabled={!popupCap}
                               onChange={e => { setPopupItemBusq(e.target.value); setPopupItemOpen(true); setPopupItem('') }}
                               placeholder={popupCap ? 'Buscar ítem...' : 'Primero selecciona capítulo'}
-                              style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${popupItem ? t.primary : t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                              style={{ ...sheetInp, border: `1px solid ${popupItem ? t.primary : sheetDet.border}` }} />
                             {popupItemOpen && popupCap && (
-                              <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', maxHeight:'160px', overflowY:'auto', zIndex:100, boxShadow:'0 4px 16px rgba(0,0,0,0.2)' }}>
+                              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: t.bgCard, border: `1px solid ${sheetDet.border}`, borderRadius: 4, maxHeight: 160, overflowY: 'auto', zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
                                 {listadoPrecios
                                   .filter(p => p.capitulo === popupCap && (!popupItemBusq || `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(popupItemBusq.toLowerCase())))
                                   .slice(0, 20)
                                   .map(p => (
                                     <div key={p.item_numero} onClick={() => { setPopupItem(p.item_numero); setPopupItemBusq(`${p.item_numero} · ${p.descripcion}`); setPopupItemOpen(false) }}
-                                      style={{ padding:'6px 10px', fontSize:'var(--cc-sm)', cursor:'pointer', borderBottom:`1px solid ${t.border}44` }}
-                                      onMouseEnter={e => e.currentTarget.style.background=t.bg}
-                                      onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                                      style={{ padding: '6px 10px', fontSize: 'var(--cc-sm)', cursor: 'pointer', borderBottom: `1px solid ${sheetDet.border}` }}
+                                      onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                                       <strong>{p.item_numero}</strong> — {p.descripcion}
                                     </div>
                                   ))}
@@ -6730,14 +6817,15 @@ async function darDeBaja(id) {
                             }
                             setPopupGuardando(false)
                           }}
-                            style={{ background:'#0077B6', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: (popupGuardando || (!popupCap && !popupItem)) ? 0.5 : 1 }}>
+                            style={{ background: t.primary, color: '#fff', border: 'none', borderRadius: 4, padding: '7px 18px', fontSize: 'var(--cc-sm)', fontWeight: 700, cursor: 'pointer', opacity: (popupGuardando || (!popupCap && !popupItem)) ? 0.5 : 1 }}>
                             {popupGuardando ? '⏳ Guardando...' : '💾 Actualizar y recalcular'}
                           </button>
+                          </div>
                         </div>
                       )}
                       </div>
 
-                      {/* ── Dar de baja — no disponible en registros sellados (reabrir antes con el flujo contratista) ── */}
+                      {/* ── Dar de baja ── */}
                       {puedeEliminar && !esSellado(r) && (
                         <button
                           type="button"
@@ -6757,30 +6845,34 @@ async function darDeBaja(id) {
                             await darDeBaja(r.id)
                           }}
                           style={{
-                            background:'#EF444418', border:'1px solid #EF444444', borderRadius:'8px', padding:'8px 16px',
-                            fontSize:'var(--cc-sm)', fontWeight:'700', color:'#EF4444', cursor: dandoDeBaja ? 'not-allowed' : 'pointer',
+                            marginTop: 10,
+                            background: 'color-mix(in srgb, var(--cc-color-danger, #EF4444) 12%, transparent)',
+                            border: '1px solid color-mix(in srgb, var(--cc-color-danger, #EF4444) 45%, transparent)',
+                            borderRadius: 4, padding: '8px 16px',
+                            fontSize: 'var(--cc-sm)', fontWeight: 700,
+                            color: 'var(--cc-color-danger, #EF4444)',
+                            cursor: dandoDeBaja ? 'not-allowed' : 'pointer',
                             opacity: dandoDeBaja ? 0.55 : 1,
                           }}>
                           {dandoDeBaja ? '⏳ Baja en curso…' : '🗑️ Dar de baja'}
                         </button>
                       )}
 
-                      {/* Mensaje de resultado */}
                       {popupMsg && (
-                        <div style={{ marginTop:'8px', fontSize:'var(--cc-sm)', color: popupMsg.startsWith('✅') ? '#16A34A' : '#EF4444', fontWeight:'600' }}>
+                        <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: popupMsg.startsWith('✅') ? 'var(--cc-color-success, #16A34A)' : 'var(--cc-color-danger, #EF4444)', fontWeight: 600 }}>
                           {popupMsg}
                         </div>
                       )}
                     </div>
                   )}
                     {r.revisado === 'Verificado' && r.validado_por && (
-                    <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'8px', paddingTop:'8px', display:'flex', alignItems:'center', gap:'8px' }}>
-                      <div style={{ width:'28px', height:'28px', borderRadius:'50%', background:'#16A34A22', border:'1px solid #16A34A44', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'var(--cc-label)', flexShrink:0 }}>✅</div>
+                    <div style={{ borderTop: `1px solid ${sheetDet.border}`, marginTop: 8, paddingTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#16A34A22', border: '1px solid #16A34A44', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--cc-label)', flexShrink: 0 }}>✅</div>
                       <div>
-                        <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#16A34A', letterSpacing:'0.5px' }}>VERIFICADO POR</div>
-                        <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'600' }}>{r.validado_por}</div>
-                        {r.validado_en && <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>
-                          {new Date(r.validado_en).toLocaleString('es-CO', { dateStyle:'medium', timeStyle:'short' })}
+                        <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: 'var(--cc-color-success, #16A34A)', letterSpacing: '0.5px' }}>VERIFICADO POR</div>
+                        <div style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}>{r.validado_por}</div>
+                        {r.validado_en && <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                          {new Date(r.validado_en).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' })}
                         </div>}
                       </div>
                     </div>
@@ -6791,7 +6883,8 @@ async function darDeBaja(id) {
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {trazabilidadPresupuesto && (
         <TrazabilidadRegistroModal
