@@ -1,6 +1,12 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { pptoSheetStyles, pptoSheetCssVars } from './pptoSheetStyles.js'
+import {
+  pptoSheetStyles,
+  pptoSheetCssVars,
+  PPTO_Z_REVISOR_TRAMOS,
+  PPTO_Z_DETALLE_REGISTRO,
+  PPTO_Z_AGREGAR_CANTIDAD,
+} from './pptoSheetStyles.js'
 
 const light = {
   bg: '#F0F9FF', bgCard: '#FFFFFF', border: '#BAE6FD', text: '#0F2942',
@@ -65,5 +71,17 @@ describe('pptoSheetStyles', () => {
     assert.equal(vars['--cc-bg-card'], light.bgCard)
     assert.ok(vars['--cc-sheet-grid-border'])
     assert.ok(vars['--cc-ppto-sheet-header-bg'])
+  })
+
+  it('define tdEllipsis con truncado de una línea (sin wrap)', () => {
+    const s = pptoSheetStyles(light)
+    assert.equal(s.tdEllipsis.whiteSpace, 'nowrap')
+    assert.equal(s.tdEllipsis.overflow, 'hidden')
+    assert.equal(s.tdEllipsis.textOverflow, 'ellipsis')
+  })
+
+  it('apila detalle de registro por encima del Revisor de Tramos', () => {
+    assert.ok(PPTO_Z_DETALLE_REGISTRO > PPTO_Z_REVISOR_TRAMOS)
+    assert.ok(PPTO_Z_DETALLE_REGISTRO > PPTO_Z_AGREGAR_CANTIDAD)
   })
 })
