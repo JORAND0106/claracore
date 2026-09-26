@@ -1858,7 +1858,15 @@ select.cc-dashboard-acta-select--light option {
 
   .cc-ppto-revisor-excel .cc-ppto-revisor-tramos-table,
   .cc-ppto-revisor-excel .cc-ppto-revisor-items-table {
-    min-width: 560px;
+    min-width: 720px;
+  }
+
+  .cc-ppto-detalle-excel .cc-ppto-detalle-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .cc-ppto-detalle-excel .cc-ppto-detalle-acciones-grid {
+    grid-template-columns: 1fr !important;
   }
 }
 

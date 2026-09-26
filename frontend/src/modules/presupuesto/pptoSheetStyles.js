@@ -199,5 +199,24 @@ export function pptoSheetStyles(t) {
       fontFamily: 'inherit',
       lineHeight: 1.3,
     },
+    /** Celda de una sola línea: trunca con ellipsis (usar con title/tooltip). */
+    tdEllipsis: {
+      padding: '4px 6px',
+      fontSize: 'var(--cc-sm)',
+      color: textMuted,
+      border: `1px solid ${border}`,
+      verticalAlign: 'middle',
+      lineHeight: 1.3,
+      background: 'transparent',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      maxWidth: 0,
+    },
   }
 }
+
+/** Capas de apilamiento: detalle/edición siempre por encima del Revisor de Tramos. */
+export const PPTO_Z_REVISOR_TRAMOS = 3500
+export const PPTO_Z_AGREGAR_CANTIDAD = 4000
+export const PPTO_Z_DETALLE_REGISTRO = 4200
