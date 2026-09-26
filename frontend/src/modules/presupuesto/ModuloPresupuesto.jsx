@@ -6394,14 +6394,15 @@ async function darDeBaja(id) {
             >?</span>
           </span>
         )
-        const thCell = (label, tip) => (
-          <th style={sheetDet.th}>{tip ? labelWithTip(label, tip) : label}</th>
+        const thCell = (label, tip, width) => (
+          <th style={{ ...sheetDet.th, ...(width ? { width } : {}) }}>{tip ? labelWithTip(label, tip) : label}</th>
         )
         const tdVal = (val, opts = {}) => (
           <td
             style={{
               ...sheetDet.td,
               fontWeight: 600,
+              ...(opts.width ? { width: opts.width } : {}),
               ...(opts.ellipsis ? {
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 0,
               } : {}),
@@ -6415,11 +6416,16 @@ async function darDeBaja(id) {
         const filaCampos = (cols) => (
           <table style={{ ...sheetDet.sheetTable, minWidth: 0, tableLayout: 'fixed', width: '100%' }}>
             <thead>
-              <tr>{cols.map((c) => thCell(c.label, c.tip))}</tr>
+              <tr>{cols.map((c) => thCell(c.label, c.tip, c.width))}</tr>
             </thead>
             <tbody>
               <tr>
-                {cols.map((c) => tdVal(c.val, { ellipsis: c.ellipsis, right: c.right, title: c.title ?? c.val }))}
+                {cols.map((c) => tdVal(c.val, {
+                  ellipsis: c.ellipsis,
+                  right: c.right,
+                  title: c.title ?? c.val,
+                  width: c.width,
+                }))}
               </tr>
             </tbody>
           </table>
@@ -6720,12 +6726,19 @@ async function darDeBaja(id) {
                         { label: 'Reg. ID', val: r.id ?? '—' },
                       ])}
                       {filaCampos([
-                        { label: 'Capítulo', val: r.capitulo, ellipsis: true },
-                        { label: 'Ítem', val: r.item },
-                        { label: 'Und', val: r.und },
-                        { label: 'Descripción', val: descTxt, ellipsis: true, title: descTxt },
+                        // Proporciones: Ítem/Und −70% y Vlr −50% vs partes iguales; el remanente va a Descripción.
+                        { label: 'Capítulo', val: r.capitulo, ellipsis: true, width: nivelInfo.verValoresEconomicos ? '20%' : '25%' },
+                        { label: 'Ítem', val: r.item, width: nivelInfo.verValoresEconomicos ? '6%' : '7.5%' },
+                        { label: 'Und', val: r.und, width: nivelInfo.verValoresEconomicos ? '6%' : '7.5%' },
+                        {
+                          label: 'Descripción',
+                          val: descTxt,
+                          ellipsis: true,
+                          title: descTxt,
+                          width: nivelInfo.verValoresEconomicos ? '58%' : '60%',
+                        },
                         ...(nivelInfo.verValoresEconomicos
-                          ? [{ label: 'Vlr. unitario', val: fmt(r.vlr_unitario), right: true }]
+                          ? [{ label: 'Vlr. unitario', val: fmt(r.vlr_unitario), right: true, width: '10%' }]
                           : []),
                       ])}
                       {filaCampos([
