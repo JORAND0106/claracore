@@ -76,6 +76,7 @@ import {
   pptoNormalizarSubcontratistasOpciones,
 } from './pptoSubcontratistaMasiva'
 import { pptoPopVistaAnterior, pptoTotalesSeleccion } from './pptoNavegacionVista'
+import { pptoGrillaDatosIguales } from './pptoGrillaFingerprint'
 import { invalidateVistaModulo, VISTA_CACHE_TTL } from '../../cache/vistaCache'
 import { CC_LISTADO_META_CHANGED } from '../../cache/listadoMetaEvents'
 import { useModulo } from '../../context/ModuloContext'
@@ -469,6 +470,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const pptoCargaRef = useRef({ key: '', nextOffset: 0, hasMore: false, total: 0 })
   const cargaPptoInFlightRef = useRef(false)
   const cargaPptoIdRef = useRef(0)
+  /** Multisesión / realtime CAD: refresco silencioso de la grilla actual. */
+  const refrescarGrillaSilenciosoRef = useRef(null)
   /** true tras Buscar con chips: no auto-refrescar cada 22 s ni al volver a la pestaña. */
   const busquedaServidorActivaRef = useRef(false)
   const [busquedaServidorActiva, setBusquedaServidorActiva] = useState(false)
@@ -1526,6 +1529,39 @@ useEffect(() => {
     }
   }
 
+  /**
+   * Aplica filas al estado solo si difieren de lo visible.
+   * En modo silencioso: sin loading, sin reset de ventana, conserva scroll/filtros/selección.
+   * @returns {boolean} true si se aplicó setRegistros
+   */
+  function pptoCommitRegistrosSiCambiaron(rows, total, { silent = false } = {}) {
+    const nextRows = Array.isArray(rows) ? rows : []
+    const nextTotal = typeof total === 'number' ? total : nextRows.length
+    const curRows = Array.isArray(registrosRef.current) ? registrosRef.current : []
+    const curTotal = typeof conteoFiltroRef.current === 'number'
+      ? conteoFiltroRef.current
+      : curRows.length
+    if (pptoGrillaDatosIguales(curRows, curTotal, nextRows, nextTotal)) {
+      return false
+    }
+    if (silent) {
+      const el = pptoTablaScrollRef.current
+      const prevT = el?.scrollTop ?? 0
+      setRegistros(nextRows)
+      setConteoFiltro(nextTotal)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const wrap = pptoTablaScrollRef.current
+          if (wrap) wrap.scrollTop = prevT
+        })
+      })
+      return true
+    }
+    setRegistros(nextRows)
+    setConteoFiltro(nextTotal)
+    return true
+  }
+
   /** Actualización optimista: invalida cargas en vuelo y sincroniza caché local. */
   function pptoParchearRegistrosOptimista(patchRowFn) {
     cargaPptoIdRef.current += 1
@@ -2177,17 +2213,21 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setVisibleRegistrosCount(50)
     }
     try {
-      const { rows, total } = await fetchPresupuestoPaginasCompletas(p, (partial) => {
+      const { rows, total } = await fetchPresupuestoPaginasCompletas(p, silent ? null : (partial) => {
         if (cargaId !== cargaPptoIdRef.current) return
         setRegistros(partial)
       }, { avisarCargaGrande: !silent, onTotalConocido: silent ? undefined : (n) => {
         if (cargaId === cargaPptoIdRef.current) setConteoFiltro(n)
       } })
       if (cargaId !== cargaPptoIdRef.current) return
-      setConteoFiltro(total)
-      setRegistros(rows)
+      pptoGuardarEnCacheGrid(cacheKey, rows, total)
       pptoCargaRef.current = { key: cacheKey, nextOffset: rows.length, hasMore: false, total }
-      _pptoCachePorCap.current[cacheKey] = { data: rows, ts: Date.now(), total }
+      if (silent) {
+        pptoCommitRegistrosSiCambiaron(rows, total, { silent: true })
+      } else {
+        setConteoFiltro(total)
+        setRegistros(rows)
+      }
     } catch { /* silencio */ } finally {
       if (silent) {
         cargaPptoInFlightRef.current = false
@@ -2227,7 +2267,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     try {
       const p0 = armarQueryPresupuestoServer()
-      const { rows, total } = await fetchPresupuestoPaginasCompletas(p0, (partial) => {
+      const { rows, total } = await fetchPresupuestoPaginasCompletas(p0, silent ? null : (partial) => {
         if (cargaId !== cargaPptoIdRef.current) return
         setRegistros(partial)
       }, {
@@ -2237,10 +2277,14 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         },
       })
       if (cargaId !== cargaPptoIdRef.current) return
-      setConteoFiltro(total)
-      setRegistros(rows)
+      pptoGuardarEnCacheGrid(cacheKeyPpto, rows, total)
       pptoCargaRef.current = { key: cacheKeyPpto, nextOffset: rows.length, hasMore: false, total }
-      _pptoCachePorCap.current[cacheKeyPpto] = { data: rows, ts: Date.now(), total }
+      if (silent) {
+        pptoCommitRegistrosSiCambiaron(rows, total, { silent: true })
+      } else {
+        setConteoFiltro(total)
+        setRegistros(rows)
+      }
     } catch { /* silencio */ } finally {
       if (silent) {
         cargaPptoInFlightRef.current = false
@@ -2569,7 +2613,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const filt = `contrato_id=eq.${cid}`
     const debouncer = createRealtimeDebouncer(() => {
       void consumirFiltroPlanoPendiente()
-      void recargarCapActualRef.current?.(false)
+      // Refresco silencioso: no loading ni pre-clear (evita “regreso de pantalla”).
+      void refrescarGrillaSilenciosoRef.current?.()
     })
     const channel = supabase
       .channel(`cad-queue-${cid}`)
@@ -2585,32 +2630,35 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }, [contratoId, oculto, dwgEnlazado, consumirFiltroPlanoPendiente])
 
-  // Multisesión: refresco solo en vista por capítulo/ítem (panel). No interrumpe búsqueda con chips.
+  // Multisesión: poll cada 22 s + focus/visibility. Solo aplica setState si hay cambio real.
+  function refrescarGrillaSilencioso() {
+    if (document.visibilityState !== 'visible') return
+    if (busquedaServidorActivaRef.current) return
+    if (cargaPptoInFlightRef.current || loading) return
+    if (buscandoFiltroObra) return
+    if (pptoValidacionPendienteRef.current > 0) return
+    // No sobreescribir estado local durante 8 s después de escritura o recarga manual
+    if (Date.now() - _lastWriteAtRef.current < 8000) return
+    // Papelera: cargarRegistros es destructivo (loading + clear); no auto-refrescar.
+    if (verPapelera) return
+    if (detalleConItem) {
+      skipDebounceFiltrosRef.current = true
+      void refreshRegistrosDetalle({ forzar: true, syncPreserveSize: true })
+      return
+    }
+    const capD = drill.find((d) => d.campo === 'capitulo')?.valor
+    const itemD = drill.find((d) => d.campo === 'item')?.valor
+    const itemsDr = drill.find((d) => d.campo === 'items')?.valor
+    if (capD && !itemD && !(Array.isArray(itemsDr) && itemsDr.length)) {
+      void cargarCapituloData(capD, null, { forzar: true, syncPreserveSize: true })
+    }
+  }
+  refrescarGrillaSilenciosoRef.current = refrescarGrillaSilencioso
+
   useEffect(() => {
     const PPTO_MULTI_POLL_MS = 22000
     if (!contratoId || oculto) return
-    const tick = () => {
-      if (document.visibilityState !== 'visible') return
-      if (busquedaServidorActivaRef.current) return
-      if (cargaPptoInFlightRef.current || loading) return
-      if (buscandoFiltroObra) return
-      if (pptoValidacionPendienteRef.current > 0) return
-      // No sobreescribir estado local durante 8 s después de escritura o recarga manual del usuario
-      if (Date.now() - _lastWriteAtRef.current < 8000) return
-      if (detalleConItem) {
-        skipDebounceFiltrosRef.current = true
-        refreshRegistrosDetalle({ forzar: true, syncPreserveSize: true })
-        return
-      }
-      const capD = drill.find((d) => d.campo === 'capitulo')?.valor
-      const itemD = drill.find((d) => d.campo === 'item')?.valor
-      const itemsDr = drill.find((d) => d.campo === 'items')?.valor
-      if (capD && !itemD && !(Array.isArray(itemsDr) && itemsDr.length)) {
-        void cargarCapituloData(capD, null, { forzar: true, syncPreserveSize: true })
-        return
-      }
-      if (verPapelera) void cargarRegistros(undefined, true)
-    }
+    const tick = () => { refrescarGrillaSilenciosoRef.current?.() }
     const onVis = () => {
       if (document.visibilityState !== 'visible') return
       if (busquedaServidorActivaRef.current) return
