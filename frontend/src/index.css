@@ -1830,6 +1830,38 @@ select.cc-dashboard-acta-select--light option {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Revisor de Tramos — grilla Excel (temas + tipografía --cc-*) */
+.cc-ppto-revisor-excel {
+  font-size: var(--cc-body, 15px);
+  line-height: 1.45;
+}
+
+.cc-ppto-revisor-excel .cc-ppto-revisor-tramos-table,
+.cc-ppto-revisor-excel .cc-ppto-revisor-items-table {
+  border-collapse: collapse;
+}
+
+.cc-ppto-revisor-excel .cc-ppto-revisor-tramos-table th,
+.cc-ppto-revisor-excel .cc-ppto-revisor-items-table th {
+  font-size: var(--cc-caption, 11px);
+}
+
+.cc-ppto-revisor-excel .cc-ppto-revisor-tramos-table td,
+.cc-ppto-revisor-excel .cc-ppto-revisor-items-table td {
+  font-size: var(--cc-sm, 13px);
+}
+
+@media (max-width: 767px), (orientation: landscape) and (max-width: 932px) {
+  .cc-ppto-revisor-excel .cc-ppto-modal-body {
+    padding: 12px 12px 16px !important;
+  }
+
+  .cc-ppto-revisor-excel .cc-ppto-revisor-tramos-table,
+  .cc-ppto-revisor-excel .cc-ppto-revisor-items-table {
+    min-width: 560px;
+  }
+}
+
 .cc-ppto-table-scroll:focus-visible {
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
 }
