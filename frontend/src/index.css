@@ -1868,6 +1868,16 @@ select.cc-dashboard-acta-select--light option {
   .cc-ppto-detalle-excel .cc-ppto-detalle-acciones-grid {
     grid-template-columns: 1fr !important;
   }
+
+  .cc-ppto-detalle-excel .cc-ppto-detalle-edit-row {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .cc-ppto-detalle-excel .cc-ppto-detalle-edit-row > button {
+    grid-column: 1 / -1;
+    width: 100%;
+    height: 40px;
+  }
 }
 
 .cc-ppto-table-scroll:focus-visible {

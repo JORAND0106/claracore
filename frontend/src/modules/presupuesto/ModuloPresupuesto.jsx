@@ -5708,41 +5708,51 @@ async function darDeBaja(id) {
                   ))}
                 </div>
 
-                {/* TAB 0: INFO TRAMO — hoja clave/valor tipo Excel */}
+                {/* TAB 0: INFO TRAMO — filas horizontales fijas */}
                 {tabTramo === 0 && (() => {
                   const r = regsTramo[0] || regsNodoIni[0] || regsNodoFin[0] || {}
-                  const filasInfo = [
-                    ['Capítulo', modalModoCapitulo],
-                    ['Competencia', r.competencia],
-                    ['Tramo', r.tramo],
-                    ['Calzada', r.calzada],
-                    ['PK_ID', r.pk_id],
-                    ['Abs. inicio', r.abs_inicio],
-                    ['Abs. final', r.abs_final],
-                    ['Nodo inicio', tramoSelec.no_inicio],
-                    ['Nodo fin', tramoSelec.no_final],
-                  ]
+                  const cellTh = sheet.th
+                  const cellTd = { ...sheet.td, fontWeight: 600 }
+                  const filaTabla = (cols) => (
+                    <div style={{ ...sheet.sheetWrap, marginBottom: 8 }}>
+                      <table style={{ ...sheet.sheetTable, minWidth: 0, tableLayout: 'fixed' }}>
+                        <thead>
+                          <tr>
+                            {cols.map(([label]) => (
+                              <th key={label} style={cellTh}>{label}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            {cols.map(([label, val]) => (
+                              <td key={label} style={cellTd} title={val != null && val !== '' ? String(val) : undefined}>
+                                {val != null && val !== '' ? val : '—'}
+                              </td>
+                            ))}
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )
                   return (
                     <div>
-                      <div style={sheet.sectionBar}>{tramoSelec.label}</div>
-                      <div style={sheet.sheetWrapFlush}>
-                        <table style={{ ...sheet.sheetTable, minWidth: 0, tableLayout: 'fixed' }}>
-                          <thead>
-                            <tr>
-                              <th style={{ ...sheet.th, width: '36%' }}>Campo</th>
-                              <th style={sheet.th}>Valor</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {filasInfo.map(([label, val]) => (
-                              <tr key={label}>
-                                <td style={sheet.tdLabel}>{label}</td>
-                                <td style={{ ...sheet.td, fontWeight: 600 }}>{val || '—'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                      <div style={{ ...sheet.sectionBar, marginBottom: 8 }}>{tramoSelec.label}</div>
+                      {filaTabla([
+                        ['Capítulo', modalModoCapitulo],
+                        ['Competencia', r.competencia],
+                      ])}
+                      {filaTabla([
+                        ['Tramo', r.tramo],
+                        ['Calzada', r.calzada],
+                        ['PK-ID', r.pk_id],
+                      ])}
+                      {filaTabla([
+                        ['Abs Inicio', r.abs_inicio],
+                        ['Abs Fin', r.abs_final],
+                        ['Nodo Inicio', tramoSelec.no_inicio],
+                        ['Nodo Fin', tramoSelec.no_final],
+                      ])}
                     </div>
                   )
                 })()}
@@ -6329,7 +6339,7 @@ async function darDeBaja(id) {
         )
       })()}
 
-      {/* Modal detalle registro presupuesto — grilla Excel, por encima del Revisor de Tramos */}
+      {/* Modal detalle registro presupuesto — grupos por filas horizontales */}
       {modalDetallePpto && (() => {
         const sheetDet = pptoSheetStyles(t)
         const sheetDetCss = pptoSheetCssVars(t)
@@ -6339,11 +6349,87 @@ async function darDeBaja(id) {
           background: t.inputBg,
           border: `1px solid ${sheetDet.border}`,
           borderRadius: 0,
-          padding: '6px 8px',
+          padding: '5px 6px',
           color: t.text,
           fontSize: 'var(--cc-input)',
-          minHeight: 36,
+          minHeight: 32,
         }
+        const sheetInpRo = {
+          ...sheetInp,
+          background: t.bg,
+          color: t.textMuted,
+          cursor: 'not-allowed',
+        }
+        const iconBtn = (bg, disabled) => ({
+          background: bg,
+          color: '#fff',
+          border: 'none',
+          borderRadius: 4,
+          width: 34,
+          height: 34,
+          padding: 0,
+          fontSize: 'var(--cc-md)',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.55 : 1,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          alignSelf: 'end',
+          marginBottom: 1,
+        })
+        const AR_L_ND_TIP = 'Ár/L/Nd = Área / Longitud / Nodo (dimensión lineal o de área del registro)'
+        const labelWithTip = (label, tip) => (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {label}
+            <span
+              title={tip}
+              aria-label={tip}
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: 14, height: 14, borderRadius: '50%',
+                border: `1px solid ${sheetDet.border}`,
+                fontSize: 10, fontWeight: 800, color: t.textMuted, cursor: 'help', lineHeight: 1,
+              }}
+            >?</span>
+          </span>
+        )
+        const thCell = (label, tip) => (
+          <th style={sheetDet.th}>{tip ? labelWithTip(label, tip) : label}</th>
+        )
+        const tdVal = (val, opts = {}) => (
+          <td
+            style={{
+              ...sheetDet.td,
+              fontWeight: 600,
+              ...(opts.ellipsis ? {
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 0,
+              } : {}),
+              ...(opts.right ? { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } : {}),
+            }}
+            title={opts.title != null ? String(opts.title) : (val != null && val !== '' ? String(val) : undefined)}
+          >
+            {val != null && val !== '' ? val : '—'}
+          </td>
+        )
+        const filaCampos = (cols) => (
+          <table style={{ ...sheetDet.sheetTable, minWidth: 0, tableLayout: 'fixed', width: '100%' }}>
+            <thead>
+              <tr>{cols.map((c) => thCell(c.label, c.tip))}</tr>
+            </thead>
+            <tbody>
+              <tr>
+                {cols.map((c) => tdVal(c.val, { ellipsis: c.ellipsis, right: c.right, title: c.title ?? c.val }))}
+              </tr>
+            </tbody>
+          </table>
+        )
+        const grupo = (titulo, body) => (
+          <div style={{ marginBottom: 12 }}>
+            <div style={sheetDet.sectionBar}>{titulo}</div>
+            <div style={sheetDet.sheetWrapFlush}>{body}</div>
+          </div>
+        )
         return (
         <div
           className="cc-ppto-modal-overlay"
@@ -6363,9 +6449,9 @@ async function darDeBaja(id) {
               border: `1px solid ${t.border}`,
               borderRadius: 14,
               padding: 0,
-              width: 'min(1280px, 98vw)',
+              width: 'min(1400px, 98vw)',
               maxWidth: '98vw',
-              maxHeight: 'min(90vh, 860px)',
+              maxHeight: 'min(92vh, 900px)',
               overflow: 'hidden',
               WebkitOverflowScrolling: 'touch',
               boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
@@ -6393,16 +6479,9 @@ async function darDeBaja(id) {
                       type="button"
                       onClick={() => setModalDetallePptoEditable(true)}
                       style={{
-                        background: t.primary,
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: 4,
-                        padding: '6px 14px',
-                        fontSize: 'var(--cc-sm)',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                        minHeight: 40,
+                        background: t.primary, color: '#fff', border: 'none', borderRadius: 4,
+                        padding: '6px 14px', fontSize: 'var(--cc-sm)', fontWeight: 700,
+                        cursor: 'pointer', whiteSpace: 'nowrap', minHeight: 36,
                       }}
                     >✏️ Editar</button>
                   )
@@ -6414,7 +6493,7 @@ async function darDeBaja(id) {
                 onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }}
                 style={{
                   background: t.bg, border: `1px solid ${sheetDet.border}`, borderRadius: 4,
-                  width: 40, height: 40, fontSize: 'var(--cc-lg)', cursor: 'pointer', color: t.text,
+                  width: 36, height: 36, fontSize: 'var(--cc-lg)', cursor: 'pointer', color: t.text,
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                 }}
               >✕</button>
@@ -6422,77 +6501,202 @@ async function darDeBaja(id) {
             <div className="cc-ppto-modal-body" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', minHeight: 0, padding: '14px 18px 18px' }}>
             {(() => {
               const r = modalDetallePpto
-              const kvRows = (pairs) => (
-                <table style={{ ...sheetDet.sheetTable, minWidth: 0, tableLayout: 'fixed' }}>
-                  <thead>
-                    <tr>
-                      <th style={{ ...sheetDet.th, width: '34%' }}>Campo</th>
-                      <th style={sheetDet.th}>Valor</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pairs.map(([label, val]) => (
-                      <tr key={label}>
-                        <td style={sheetDet.tdLabel}>{label}</td>
-                        <td style={{ ...sheetDet.td, fontWeight: 600, wordBreak: 'break-word' }}>{val ?? '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )
-              const fmtFechaHoraRecalculo = (iso) => {
-                if (!iso) return '—'
-                const d = new Date(iso)
-                if (Number.isNaN(d.getTime())) return String(iso)
-                return d.toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+              const parseDim = (x) => {
+                const n = parseFloat(String(x ?? '').replace(',', '.'))
+                return Number.isFinite(n) ? n : NaN
               }
-              const panelClasificacion = [
-                ['ID_POL', r.id_pol || r.pk_id || '—'],
-                ['Reg. ID', r.id ?? '—'],
-                ['Capítulo', r.capitulo],
-                ['Ítem', r.item],
-                ['Descripción', r.descripcion],
-                ['Observación', textoObservacionRegistro(r)],
-                ['Unidad', r.und],
-                ['Revisado', r.revisado || 'No Revisado'],
-                ['Tipo ejecución', r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT],
-              ]
-              if (mostrarColumnaDepuracion) {
-                panelClasificacion.push([
-                  'Depuración (costos / obra)',
-                  r.pre_interv_estado == null || r.pre_interv_estado === '' ? '— (legado)' : r.pre_interv_estado,
-                ])
-                if (r.pre_interv_por) panelClasificacion.push(['Depuración por', r.pre_interv_por])
+              const areaFija = parseDim(r.area_long_nod)
+              const anchoLive = parseDim(popupDims.ancho)
+              const espLive = parseDim(popupDims.espesor)
+              const cantLive = [areaFija, anchoLive, espLive].every(Number.isFinite)
+                ? ((anchoLive > 0 || espLive > 0)
+                  ? Math.round(areaFija * anchoLive * espLive * 100) / 100
+                  : Math.round(areaFija * 100) / 100)
+                : NaN
+              const costoLive = Number.isFinite(cantLive)
+                ? Math.round(cantLive * (r.vlr_unitario || 0))
+                : NaN
+              const depVal = r.pre_interv_estado == null || r.pre_interv_estado === ''
+                ? '— (legado)'
+                : r.pre_interv_estado
+              const descTxt = r.descripcion != null && String(r.descripcion).trim() ? String(r.descripcion) : '—'
+              const obsTxt = textoObservacionRegistro(r) || '—'
+
+              const guardarDims = async () => {
+                setPopupMsg('')
+                const pAncho = parseDim(popupDims.ancho)
+                const pEsp = parseDim(popupDims.espesor)
+                const pArea = parseDim(r.area_long_nod)
+                if (![pArea, pAncho, pEsp].every(Number.isFinite)) {
+                  window.alert('Indique valores numéricos válidos en área/longitud, ancho y espesor.')
+                  return
+                }
+                const area = pArea
+                const ancho = pAncho
+                const esp = pEsp
+                const cant = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 100) / 100 : Math.round(area * 100) / 100
+                const costo = Math.round(cant * (r.vlr_unitario || 0))
+                const body = {
+                  ancho,
+                  espesor: esp,
+                  cant_total: cant,
+                  costo_directo: costo,
+                }
+                if (puedeEditarAreaLongNodInline()) {
+                  body.no_inicio = String(popupDims.no_inicio ?? '').trim() || null
+                  body.no_final = String(popupDims.no_final ?? '').trim() || null
+                }
+                const justDims = await pedirJustificacionEdicionDetalle(r, body, 'dims')
+                if (!justDims.ok) return
+                setPopupGuardando(true)
+                const res = await fetch(`${pptoEp().item(r.id)}`, {
+                  method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify(body),
+                })
+                if (res.ok) {
+                  const d = await res.json()
+                  if (justDims.comentarioTrazabilidad) {
+                    const c = justDims.comentarioTrazabilidad
+                    await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
+                  }
+                  if (d && d.id) {
+                    setModalDetallePpto(d)
+                    setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
+                    setRegistros(prev => prev.map(x => x.id === d.id ? d : x))
+                    setPopupDims({
+                      ancho: d.ancho ?? '',
+                      espesor: d.espesor ?? '',
+                      area_long_nod: d.area_long_nod ?? '',
+                      no_inicio: d.no_inicio ?? '',
+                      no_final: d.no_final ?? '',
+                    })
+                  }
+                  _lastWriteAtRef.current = Date.now()
+                  setPopupMsg('✅ Dimensiones actualizadas')
+                  { const c = drill.find(d => d.campo === 'capitulo')?.valor; if (c) delete _pptoCachePorCap.current[c] }
+                } else {
+                  const msg = await leerDetalleErrorRes(res)
+                  setPopupMsg(`❌ ${msg}`)
+                }
+                setPopupGuardando(false)
               }
-              const panelUbicacion = [
-                ['Nodo inicio', r.no_inicio],
-                ['Nodo final', r.no_final],
-                ['Abs. inicio', r.abs_inicio],
-                ['Abs. final', r.abs_final],
-                ['Long (área/long/nod)', fmtN(r.area_long_nod)],
-                ['Ancho', fmtN(r.ancho)],
-                ['Espesor', fmtN(r.espesor)],
-                ['Cant. total', fmtN(r.cant_total)],
-                ['Tramo', r.tramo],
-                ['Infraestructura', r.infraestructura],
-                ['Calzada', r.calzada],
-                ['PK', r.pk_id],
-                ['Observación (campo)', r.observacion != null && String(r.observacion).trim() ? String(r.observacion).trim() : '—'],
-              ]
-              const panelEconomia = [
-                ...(nivelInfo.verValoresEconomicos ? [
-                  ['Vlr. unitario', fmt(r.vlr_unitario)],
-                  ['Costo directo', fmt(r.costo_directo)],
-                ] : []),
-                ['Cálculo (usuario)', r.calculo_por ?? '—'],
-                ['Cálculo (fecha y hora)', fmtFechaHoraRecalculo(r.calculo_en)],
-              ]
+
+              const guardarTipo = async () => {
+                setPopupMsg('')
+                const body = { tipo_ejecucion: popupTipoEjecucion }
+                const justTipo = await pedirJustificacionEdicionDetalle(r, body, 'item_capitulo')
+                if (!justTipo.ok) return
+                setPopupGuardando(true)
+                const res = await fetch(`${pptoEp().item(r.id)}`, {
+                  method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify(body),
+                })
+                if (res.ok) {
+                  if (justTipo.comentarioTrazabilidad) {
+                    const c = justTipo.comentarioTrazabilidad
+                    await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
+                  }
+                  const d = await res.json()
+                  const nuevoTipo = d?.tipo_ejecucion || popupTipoEjecucion
+                  const vistaTipo = fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
+                  if (nuevoTipo !== vistaTipo) {
+                    setRegistros((prev) => prev.filter((x) => x.id !== r.id))
+                    setModalDetallePpto(null)
+                    setAvisoSistema({
+                      titulo: 'Tipo de ejecución',
+                      mensaje: `Tipo de ejecución actualizado a «${nuevoTipo}». El registro deja de mostrarse en la vista «${vistaTipo}»; use el toggle Presupuesto de Obra / Obra Ejecutada para verlo.`,
+                      tipo: 'info',
+                    })
+                  } else if (d?.id) {
+                    setModalDetallePpto(d)
+                    setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
+                    setRegistros((prev) => prev.map((x) => (x.id === d.id ? d : x)))
+                    setPopupTipoEjecucion(d.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)
+                    setPopupMsg('✅ Tipo de ejecución actualizado')
+                  }
+                  { const c = drill.find(d => d.campo === 'capitulo')?.valor; if (c) delete _pptoCachePorCap.current[c] }
+                } else {
+                  setModalDetallePpto(r)
+                  setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
+                  setPopupTipoEjecucion(r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)
+                  const msg = await leerDetalleErrorRes(res, 'Error al guardar tipo de ejecución')
+                  setPopupMsg(`❌ ${msg}`)
+                }
+                setPopupGuardando(false)
+              }
+
+              const guardarCapItem = async () => {
+                setPopupMsg('')
+                let motivoReap = null
+                let destinatarioReap = null
+                if (esSellado(r) && puedeReabrirTrasAprob) {
+                  const com = await pedirComentario('reapertura', true, [r.id])
+                  if (com == null) { return }
+                  motivoReap = String(com.mensaje || '').trim()
+                  destinatarioReap = com.destinatarioId ? parseInt(com.destinatarioId, 10) : null
+                  if (motivoReap.length < MIN_JUSTIFICACION_INTERV) {
+                    window.alert(mensajeJustificacionCorta(motivoReap.length, MIN_JUSTIFICACION_INTERV, true))
+                    return
+                  }
+                  if (!destinatarioReap) {
+                    window.alert('Seleccione un destinatario para notificar la reapertura.')
+                    return
+                  }
+                }
+                const precio = listadoPrecios.find(p => p.item_numero === popupItem)
+                const vlr =
+                  precioVlrDesdeListado(precio) ??
+                  (Number(r.vlr_unitario) || 0)
+                const cant = r.cant_total || 0
+                const body = {
+                  ...(popupCap && { capitulo: popupCap }),
+                  ...(popupItem && { item: popupItem, descripcion: precio?.descripcion || r.descripcion, und: precio?.und || r.und }),
+                  vlr_unitario: vlr,
+                  costo_directo: Math.round(cant * vlr),
+                  ...(motivoReap ? { motivo_edicion_tras_sellado: motivoReap } : {}),
+                  ...(destinatarioReap ? { destinatario_id: destinatarioReap } : {}),
+                }
+                if (popupCap && popupCap !== (r.capitulo || '') && !popupItem) {
+                  window.alert('Cambió el capítulo: seleccione un ítem del listado de precios para ese capítulo.')
+                  return
+                }
+                const justCap = await pedirJustificacionEdicionDetalle(r, body, 'item_capitulo')
+                if (!justCap.ok) return
+                setPopupGuardando(true)
+                const res = await fetch(`${pptoEp().item(r.id)}`, {
+                  method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify(body),
+                })
+                if (res.ok) {
+                  if (justCap.comentarioTrazabilidad) {
+                    const c = justCap.comentarioTrazabilidad
+                    await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
+                  }
+                  const d = await res.json()
+                  if (d && d.id) {
+                    setModalDetallePpto(d)
+                    setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
+                    setRegistros(prev => prev.map(x => x.id === d.id ? d : x))
+                    setPopupCap(d.capitulo || '')
+                    setPopupItem(d.item || '')
+                    setPopupItemBusq(d.item ? `${d.item} · ${d.descripcion || ''}` : '')
+                  }
+                  _lastWriteAtRef.current = Date.now()
+                  setPopupMsg('✅ Capítulo/ítem actualizado')
+                  { const c = drill.find(d => d.campo === 'capitulo')?.valor; if (c) delete _pptoCachePorCap.current[c] }
+                } else {
+                  const msg = await leerDetalleErrorRes(res)
+                  setPopupMsg(`❌ ${msg}`)
+                }
+                setPopupGuardando(false)
+              }
+
               return (
                 <>
                   {esSellado(r) && !puedeReabrirTrasAprob && (
                     <div style={{
                       background: 'rgba(22,101,52,0.12)', border: `1px solid ${sheetDet.border}`,
-                      borderRadius: 4, padding: '10px 12px', marginBottom: 12,
+                      borderRadius: 4, padding: '8px 10px', marginBottom: 10,
                       fontSize: 'var(--cc-sm)', color: 'var(--cc-color-success, #166534)', fontWeight: 600,
                     }}>
                       🔒 Registro sellado — aprobado por Interventoría. No admite cambios de cantidades ni de estado.
@@ -6501,331 +6705,287 @@ async function darDeBaja(id) {
                   {esSellado(r) && puedeReabrirTrasAprob && (
                     <div style={{
                       background: 'rgba(14,165,233,0.12)', border: `1px solid ${sheetDet.border}`,
-                      borderRadius: 4, padding: '10px 12px', marginBottom: 12,
+                      borderRadius: 4, padding: '8px 10px', marginBottom: 10,
                       fontSize: 'var(--cc-sm)', color: '#0369A1', fontWeight: 600,
                     }}>
-                      🔓 Puede editar este registro sellado: al guardar se pedirá destinatario y motivo (mín. 15 caracteres), se anulará el sellado y el estado de Interventoría volverá a «No Revisado».
+                      🔓 Puede editar este registro sellado: al guardar se pedirá destinatario y motivo; se anulará el sellado y el estado de Interventoría volverá a «No Revisado».
                     </div>
                   )}
 
-                  <div className="cc-ppto-detalle-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignItems: 'start' }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={sheetDet.sectionBar}>Identificación y clasificación</div>
-                      <div style={sheetDet.sheetWrapFlush}>{kvRows(panelClasificacion)}</div>
+                  {/* —— Identificación y clasificación —— */}
+                  {grupo('Identificación y clasificación', (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                      {filaCampos([
+                        { label: 'ID_POL', val: r.id_pol || r.pk_id || '—' },
+                        { label: 'Reg. ID', val: r.id ?? '—' },
+                      ])}
+                      {filaCampos([
+                        { label: 'Capítulo', val: r.capitulo, ellipsis: true },
+                        { label: 'Ítem', val: r.item },
+                        { label: 'Und', val: r.und },
+                        { label: 'Descripción', val: descTxt, ellipsis: true, title: descTxt },
+                        ...(nivelInfo.verValoresEconomicos
+                          ? [{ label: 'Vlr. unitario', val: fmt(r.vlr_unitario), right: true }]
+                          : []),
+                      ])}
+                      {filaCampos([
+                        { label: 'Observación', val: obsTxt, ellipsis: true, title: obsTxt },
+                      ])}
+                      {filaCampos([
+                        { label: 'Tipo de ejecución', val: r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT },
+                        ...(mostrarColumnaDepuracion
+                          ? [{ label: 'Depuración', val: depVal }]
+                          : []),
+                        { label: 'Revisado Interventoría', val: r.revisado || 'No Revisado' },
+                      ])}
                     </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={sheetDet.sectionBar}>Ubicación y dimensiones</div>
-                      <div style={sheetDet.sheetWrapFlush}>{kvRows(panelUbicacion)}</div>
-                      {(nivelInfo.verValoresEconomicos || r.calculo_por || r.calculo_en) && (
-                        <div style={{ marginTop: 12 }}>
-                          <div style={sheetDet.sectionBar}>Economía y cálculo</div>
-                          <div style={sheetDet.sheetWrapFlush}>{kvRows(panelEconomia)}</div>
-                        </div>
-                      )}
+                  ))}
+
+                  {/* —— Ubicación y Dimensiones —— */}
+                  {grupo('Ubicación y Dimensiones', (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                      {filaCampos([
+                        { label: 'Tramo', val: r.tramo },
+                        { label: 'Infraestructura', val: r.infraestructura },
+                        { label: 'Calzada', val: r.calzada },
+                        { label: 'PK-ID', val: r.pk_id },
+                      ])}
+                      {filaCampos([
+                        { label: 'Nodo Inicio', val: r.no_inicio },
+                        { label: 'Nodo Final', val: r.no_final },
+                        { label: 'Abs Inicio', val: r.abs_inicio },
+                        { label: 'Abs Fin', val: r.abs_final },
+                      ])}
+                      {filaCampos([
+                        { label: 'Ár/L/Nd', tip: AR_L_ND_TIP, val: fmtN(r.area_long_nod), right: true },
+                        { label: 'Anc', val: fmtN(r.ancho), right: true },
+                        { label: 'Esp', val: fmtN(r.espesor), right: true },
+                        { label: 'Cant. Total', val: fmtN(r.cant_total), right: true },
+                        ...(nivelInfo.verValoresEconomicos
+                          ? [{ label: 'Costo Directo', val: fmt(r.costo_directo), right: true }]
+                          : []),
+                      ])}
                     </div>
-                  </div>
-                  {/* Acciones desde buzón */}
+                  ))}
+
+                  {/* —— Paneles de edición (solo en modo editable) —— */}
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && (!esSellado(r) || puedeReabrirTrasAprob) && (
-                    <div className="cc-ppto-detalle-acciones" style={{ borderTop: `1px solid ${sheetDet.border}`, marginTop: 14, paddingTop: 14 }}>
-                      <div className="cc-ppto-detalle-acciones-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignItems: 'stretch' }}>
-                      {/* ── Editar dimensiones ── */}
+                    <div className="cc-ppto-detalle-acciones" style={{ marginTop: 4 }}>
                       {puedeEditarDimensiones && !esSellado(r) && (
-                        <div style={{ minWidth: 0 }}>
-                          <div style={sheetDet.sectionBar}>📐 Editar dimensiones</div>
-                          <div style={{ ...sheetDet.sheetWrapFlush, padding: 10 }}>
-                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 10, lineHeight: 1.45 }}>
-                            Ajuste <strong>ancho</strong> y <strong>espesor</strong>; al guardar se <strong>recalculan cantidad total y costo directo</strong> con el valor unitario del registro (sin requerir plano CAD).
-                            {' '}Al pulsar guardar se abrirá una ventana para la <strong>justificación del cambio</strong> (obligatoria).
-                            {puedeEditarAreaLongNodInline() && (
-                              <span>
-                                {' '}
-                                También puede editar <strong>área/long/nod</strong> y los <strong>nodos inicio / final</strong> (Desarrollador o editor en contrato autorizado).
-                              </span>
-                            )}
-                            {aplicaReglasCadPresupuesto && !puedeEditarAreaLongNodInline() && (
-                              <span> El campo <strong>área/long/nod</strong> debe modificarse desde ClaraLink/DWG en este contrato.</span>
-                            )}
-                          </div>
-                          <div className="cc-ppto-detalle-fields" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: puedeEditarAreaLongNodInline() ? 10 : 8 }}>
-                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>ANCHO</span>
-                              <input type="number" step="any" value={popupDims.ancho}
-                                onChange={e => setPopupDims(d => ({...d, ancho: e.target.value}))}
-                                style={sheetInp} />
-                            </label>
-                            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>ESPESOR</span>
-                              <input type="number" step="any" value={popupDims.espesor}
-                                onChange={e => setPopupDims(d => ({...d, espesor: e.target.value}))}
-                                style={sheetInp} />
-                            </label>
-                          </div>
-                          {puedeEditarAreaLongNodInline() && (
-                            <div className="cc-ppto-detalle-fields" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 8 }}>
-                              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>ÁREA / LONG / NOD</span>
-                                <input type="number" step="any" value={popupDims.area_long_nod}
-                                  onChange={e => setPopupDims(d => ({...d, area_long_nod: e.target.value}))}
-                                  style={sheetInp} />
-                              </label>
-                              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>NODO INICIO</span>
-                                <input type="text" value={popupDims.no_inicio}
-                                  onChange={e => setPopupDims(d => ({...d, no_inicio: e.target.value}))}
-                                  style={sheetInp} />
-                              </label>
-                              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>NODO FINAL</span>
-                                <input type="text" value={popupDims.no_final}
-                                  onChange={e => setPopupDims(d => ({...d, no_final: e.target.value}))}
-                                  style={sheetInp} />
-                              </label>
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={sheetDet.sectionBar}>Editar dimensiones</div>
+                          <div style={{ ...sheetDet.sheetWrapFlush, padding: '8px 10px' }}>
+                            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
+                              Edite <strong>Ancho</strong> y <strong>Espesor</strong>; Cant. y Costo se recalculan al guardar (justificación obligatoria).
+                              {aplicaReglasCadPresupuesto && !puedeEditarAreaLongNodInline() && (
+                                <span> Ár/L/Nd y nodos se gestionan desde el plano CAD.</span>
+                              )}
                             </div>
-                          )}
-                          <button disabled={popupGuardando} onClick={async () => {
-                            setPopupMsg('')
-                            const parseDim = (x) => {
-                              const n = parseFloat(String(x ?? '').replace(',', '.'))
-                              return Number.isFinite(n) ? n : NaN
-                            }
-                            const pAncho = parseDim(popupDims.ancho)
-                            const pEsp = parseDim(popupDims.espesor)
-                            const pArea = puedeEditarAreaLongNodInline() ? parseDim(popupDims.area_long_nod) : parseDim(r.area_long_nod)
-                            if (![pArea, pAncho, pEsp].every(Number.isFinite)) {
-                              window.alert('Indique valores numéricos válidos en área/longitud, ancho y espesor.')
-                              return
-                            }
-                            const area = pArea
-                            const ancho = pAncho
-                            const esp = pEsp
-                            const cant = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 100) / 100 : Math.round(area * 100) / 100
-                            const costo = Math.round(cant * (r.vlr_unitario || 0))
-                            const body = {
-                              ancho,
-                              espesor: esp,
-                              cant_total: cant,
-                              costo_directo: costo,
-                            }
-                            if (puedeEditarAreaLongNodInline()) {
-                              body.area_long_nod = area
-                              body.no_inicio = String(popupDims.no_inicio ?? '').trim() || null
-                              body.no_final = String(popupDims.no_final ?? '').trim() || null
-                            }
-                            const justDims = await pedirJustificacionEdicionDetalle(r, body, 'dims')
-                            if (!justDims.ok) return
-                            setPopupGuardando(true)
-                            const res = await fetch(`${pptoEp().item(r.id)}`, {
-                              method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
-                              body: JSON.stringify(body)
-                            })
-                            if (res.ok) {
-                              const d = await res.json()
-                              if (justDims.comentarioTrazabilidad) {
-                                const c = justDims.comentarioTrazabilidad
-                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
-                              }
-                              if (d && d.id) {
-                                setModalDetallePpto(d)
-                                setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
-                                setRegistros(prev => prev.map(x => x.id === d.id ? d : x))
-                                setPopupDims({
-                                  ancho: d.ancho ?? '',
-                                  espesor: d.espesor ?? '',
-                                  area_long_nod: d.area_long_nod ?? '',
-                                  no_inicio: d.no_inicio ?? '',
-                                  no_final: d.no_final ?? '',
-                                })
-                              }
-                              _lastWriteAtRef.current = Date.now()
-                              setPopupMsg('✅ Dimensiones actualizadas')
-                              { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
-                            } else {
-                              const msg = await leerDetalleErrorRes(res)
-                              setPopupMsg(`❌ ${msg}`)
-                            }
-                            setPopupGuardando(false)
-                          }}
-                            style={{ background: '#F59E0B', color: '#fff', border: 'none', borderRadius: 4, padding: '7px 18px', fontSize: 'var(--cc-sm)', fontWeight: 700, cursor: 'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
-                            {popupGuardando ? '⏳ Guardando...' : '💾 Recalcular y guardar'}
-                          </button>
+                            <div
+                              className="cc-ppto-detalle-edit-row"
+                              style={{
+                              display: 'grid',
+                              gridTemplateColumns: nivelInfo.verValoresEconomicos
+                                ? '1.1fr 1.1fr 0.9fr 0.85fr 0.85fr 0.85fr 1fr auto'
+                                : '1.1fr 1.1fr 0.9fr 0.85fr 0.85fr 0.85fr auto',
+                              gap: 8,
+                              alignItems: 'end',
+                            }}>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Nodo Inicio</span>
+                                <input
+                                  type="text"
+                                  value={popupDims.no_inicio}
+                                  disabled={!puedeEditarAreaLongNodInline()}
+                                  onChange={e => setPopupDims(d => ({ ...d, no_inicio: e.target.value }))}
+                                  style={puedeEditarAreaLongNodInline() ? sheetInp : sheetInpRo}
+                                />
+                              </label>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Nodo Fin</span>
+                                <input
+                                  type="text"
+                                  value={popupDims.no_final}
+                                  disabled={!puedeEditarAreaLongNodInline()}
+                                  onChange={e => setPopupDims(d => ({ ...d, no_final: e.target.value }))}
+                                  style={puedeEditarAreaLongNodInline() ? sheetInp : sheetInpRo}
+                                />
+                              </label>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>
+                                  {labelWithTip('Ár/L/Nd', AR_L_ND_TIP)}
+                                </span>
+                                <input
+                                  type="text"
+                                  readOnly
+                                  disabled
+                                  value={fmtN(r.area_long_nod)}
+                                  title={AR_L_ND_TIP}
+                                  style={sheetInpRo}
+                                />
+                              </label>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Ancho</span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={popupDims.ancho}
+                                  onChange={e => setPopupDims(d => ({ ...d, ancho: e.target.value }))}
+                                  style={sheetInp}
+                                />
+                              </label>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Espesor</span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={popupDims.espesor}
+                                  onChange={e => setPopupDims(d => ({ ...d, espesor: e.target.value }))}
+                                  style={sheetInp}
+                                />
+                              </label>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Cant.</span>
+                                <input
+                                  type="text"
+                                  readOnly
+                                  disabled
+                                  value={Number.isFinite(cantLive) ? fmtN(cantLive) : '—'}
+                                  title="Recalculada con Ár/L/Nd × Ancho × Espesor"
+                                  style={sheetInpRo}
+                                />
+                              </label>
+                              {nivelInfo.verValoresEconomicos && (
+                                <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                  <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Costo Directo</span>
+                                  <input
+                                    type="text"
+                                    readOnly
+                                    disabled
+                                    value={Number.isFinite(costoLive) ? fmt(costoLive) : '—'}
+                                    title="Cant. × Vlr. unitario"
+                                    style={sheetInpRo}
+                                  />
+                                </label>
+                              )}
+                              <button
+                                type="button"
+                                disabled={popupGuardando}
+                                onClick={() => { void guardarDims() }}
+                                title="Recalcular y guardar dimensiones"
+                                aria-label="Recalcular y guardar dimensiones"
+                                style={iconBtn('#F59E0B', popupGuardando)}
+                              >
+                                {popupGuardando ? '…' : '💾'}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )}
 
-                      {/* ── Corregir tipo de ejecución ── */}
-                      {puedeEditar && !esSellado(r) && (
-                        <div style={{ minWidth: 0 }}>
-                          <div style={sheetDet.sectionBar}>↔ Tipo de ejecución</div>
-                          <div style={{ ...sheetDet.sheetWrapFlush, padding: 10 }}>
-                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 8, lineHeight: 1.45 }}>
-                            Corrija si el registro quedó mal clasificado entre presupuesto de obra y obra ejecutada.
-                          </div>
-                          <select value={popupTipoEjecucion}
-                            onChange={e => setPopupTipoEjecucion(e.target.value)}
-                            style={{ ...sheetInp, marginBottom: 8, cursor: 'pointer' }}>
-                            <option value={PPTO_TIPO_EJECUCION_DEFAULT}>{PPTO_TIPO_EJECUCION_DEFAULT}</option>
-                            <option value={PPTO_TIPO_EJECUCION_OBRA}>{PPTO_TIPO_EJECUCION_OBRA}</option>
-                          </select>
-                          <button disabled={popupGuardando || popupTipoEjecucion === (r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)} onClick={async () => {
-                            setPopupMsg('')
-                            const body = { tipo_ejecucion: popupTipoEjecucion }
-                            const justTipo = await pedirJustificacionEdicionDetalle(r, body, 'item_capitulo')
-                            if (!justTipo.ok) return
-                            setPopupGuardando(true)
-                            const res = await fetch(`${pptoEp().item(r.id)}`, {
-                              method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
-                              body: JSON.stringify(body),
-                            })
-                            if (res.ok) {
-                              if (justTipo.comentarioTrazabilidad) {
-                                const c = justTipo.comentarioTrazabilidad
-                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
-                              }
-                              const d = await res.json()
-                              const nuevoTipo = d?.tipo_ejecucion || popupTipoEjecucion
-                              const vistaTipo = fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
-                              if (nuevoTipo !== vistaTipo) {
-                                setRegistros((prev) => prev.filter((x) => x.id !== r.id))
-                                setModalDetallePpto(null)
-                                setAvisoSistema({
-                                  titulo: 'Tipo de ejecución',
-                                  mensaje: `Tipo de ejecución actualizado a «${nuevoTipo}». El registro deja de mostrarse en la vista «${vistaTipo}»; use el toggle Presupuesto de Obra / Obra Ejecutada para verlo.`,
-                                  tipo: 'info',
-                                })
-                              } else if (d?.id) {
-                                setModalDetallePpto(d)
-                                setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
-                                setRegistros((prev) => prev.map((x) => (x.id === d.id ? d : x)))
-                                setPopupTipoEjecucion(d.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)
-                                setPopupMsg('✅ Tipo de ejecución actualizado')
-                              }
-                              { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
-                            } else {
-                              setModalDetallePpto(r)
-                              setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
-                              setPopupTipoEjecucion(r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)
-                              const msg = await leerDetalleErrorRes(res, 'Error al guardar tipo de ejecución')
-                              setPopupMsg(`❌ ${msg}`)
-                            }
-                            setPopupGuardando(false)
-                          }}
-                            style={{ background: '#7C3AED', color: '#fff', border: 'none', borderRadius: 4, padding: '7px 18px', fontSize: 'var(--cc-sm)', fontWeight: 700, cursor: 'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
-                            {popupGuardando ? '⏳ Guardando...' : '💾 Guardar tipo'}
-                          </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* ── Cambiar capítulo / ítem ── */}
                       {puedeEditar && (
-                        <div style={{ minWidth: 0 }}>
-                          <div style={sheetDet.sectionBar}>🔄 Cambiar capítulo / ítem</div>
-                          <div style={{ ...sheetDet.sheetWrapFlush, padding: 10 }}>
-                          <div style={{ marginBottom: 8 }}>
-                            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700, marginBottom: 3 }}>CAPÍTULO</div>
-                            <select value={popupCap}
-                              onChange={e => { setPopupCap(e.target.value); setPopupItem(''); setPopupItemBusq('') }}
-                              style={{ ...sheetInp, cursor: 'pointer' }}>
-                              <option value="">— Selecciona capítulo —</option>
-                              {capitulosListado.map(c => <option key={c} value={c}>{c}</option>)}
-                            </select>
-                          </div>
-                          <div style={{ marginBottom: 8, position: 'relative' }}>
-                            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700, marginBottom: 3 }}>ÍTEM</div>
-                            <input value={popupItemBusq} disabled={!popupCap}
-                              onChange={e => { setPopupItemBusq(e.target.value); setPopupItemOpen(true); setPopupItem('') }}
-                              placeholder={popupCap ? 'Buscar ítem...' : 'Primero selecciona capítulo'}
-                              style={{ ...sheetInp, border: `1px solid ${popupItem ? t.primary : sheetDet.border}` }} />
-                            {popupItemOpen && popupCap && (
-                              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: t.bgCard, border: `1px solid ${sheetDet.border}`, borderRadius: 4, maxHeight: 160, overflowY: 'auto', zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
-                                {listadoPrecios
-                                  .filter(p => p.capitulo === popupCap && (!popupItemBusq || `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(popupItemBusq.toLowerCase())))
-                                  .slice(0, 20)
-                                  .map(p => (
-                                    <div key={p.item_numero} onClick={() => { setPopupItem(p.item_numero); setPopupItemBusq(`${p.item_numero} · ${p.descripcion}`); setPopupItemOpen(false) }}
-                                      style={{ padding: '6px 10px', fontSize: 'var(--cc-sm)', cursor: 'pointer', borderBottom: `1px solid ${sheetDet.border}` }}
-                                      onMouseEnter={e => e.currentTarget.style.background = t.bg}
-                                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                                      <strong>{p.item_numero}</strong> — {p.descripcion}
-                                    </div>
-                                  ))}
-                              </div>
-                            )}
-                          </div>
-                          <button disabled={popupGuardando || (!popupCap && !popupItem)} onClick={async () => {
-                            setPopupMsg('')
-                            let motivoReap = null
-                            let destinatarioReap = null
-                            if (esSellado(r) && puedeReabrirTrasAprob) {
-                              const com = await pedirComentario('reapertura', true, [r.id])
-                              if (com == null) { return }
-                              motivoReap = String(com.mensaje || '').trim()
-                              destinatarioReap = com.destinatarioId ? parseInt(com.destinatarioId, 10) : null
-                              if (motivoReap.length < MIN_JUSTIFICACION_INTERV) {
-                                window.alert(mensajeJustificacionCorta(motivoReap.length, MIN_JUSTIFICACION_INTERV, true))
-                                return
-                              }
-                              if (!destinatarioReap) {
-                                window.alert('Seleccione un destinatario para notificar la reapertura.')
-                                return
-                              }
-                            }
-                            const precio = listadoPrecios.find(p => p.item_numero === popupItem)
-                            const vlr =
-                              precioVlrDesdeListado(precio) ??
-                              (Number(r.vlr_unitario) || 0)
-                            const cant   = r.cant_total || 0
-                            const body   = {
-                              ...(popupCap  && { capitulo: popupCap }),
-                              ...(popupItem && { item: popupItem, descripcion: precio?.descripcion || r.descripcion, und: precio?.und || r.und }),
-                              vlr_unitario:  vlr,
-                              costo_directo: Math.round(cant * vlr),
-                              ...(motivoReap ? { motivo_edicion_tras_sellado: motivoReap } : {}),
-                              ...(destinatarioReap ? { destinatario_id: destinatarioReap } : {}),
-                            }
-                            if (popupCap && popupCap !== (r.capitulo || '') && !popupItem) {
-                              window.alert('Cambió el capítulo: seleccione un ítem del listado de precios para ese capítulo.')
-                              return
-                            }
-                            const justCap = await pedirJustificacionEdicionDetalle(r, body, 'item_capitulo')
-                            if (!justCap.ok) return
-                            setPopupGuardando(true)
-                            const res = await fetch(`${pptoEp().item(r.id)}`, {
-                              method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
-                              body: JSON.stringify(body)
-                            })
-                            if (res.ok) {
-                              if (justCap.comentarioTrazabilidad) {
-                                const c = justCap.comentarioTrazabilidad
-                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId, c.modo || null)
-                              }
-                              const d = await res.json()
-                              if (d && d.id) {
-                                setModalDetallePpto(d)
-                                setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
-                                setRegistros(prev => prev.map(x => x.id === d.id ? d : x))
-                                setPopupCap(d.capitulo || '')
-                                setPopupItem(d.item || '')
-                                setPopupItemBusq(d.item ? `${d.item} · ${d.descripcion || ''}` : '')
-                              }
-                              _lastWriteAtRef.current = Date.now()
-                              setPopupMsg('✅ Capítulo/ítem actualizado')
-                              { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
-                            } else {
-                              const msg = await leerDetalleErrorRes(res)
-                              setPopupMsg(`❌ ${msg}`)
-                            }
-                            setPopupGuardando(false)
-                          }}
-                            style={{ background: t.primary, color: '#fff', border: 'none', borderRadius: 4, padding: '7px 18px', fontSize: 'var(--cc-sm)', fontWeight: 700, cursor: 'pointer', opacity: (popupGuardando || (!popupCap && !popupItem)) ? 0.5 : 1 }}>
-                            {popupGuardando ? '⏳ Guardando...' : '💾 Actualizar y recalcular'}
-                          </button>
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={sheetDet.sectionBar}>Capítulo / Competencia</div>
+                          <div style={{ ...sheetDet.sheetWrapFlush, padding: '8px 10px' }}>
+                            <div
+                              className="cc-ppto-detalle-edit-row"
+                              style={{
+                              display: 'grid',
+                              gridTemplateColumns: '1.2fr 1.6fr auto',
+                              gap: 8,
+                              alignItems: 'end',
+                            }}>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Capítulo</span>
+                                <select
+                                  value={popupCap}
+                                  onChange={e => { setPopupCap(e.target.value); setPopupItem(''); setPopupItemBusq('') }}
+                                  style={{ ...sheetInp, cursor: 'pointer' }}
+                                >
+                                  <option value="">— Selecciona capítulo —</option>
+                                  {capitulosListado.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              </label>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, position: 'relative' }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Ítem</span>
+                                <input
+                                  value={popupItemBusq}
+                                  disabled={!popupCap}
+                                  onChange={e => { setPopupItemBusq(e.target.value); setPopupItemOpen(true); setPopupItem('') }}
+                                  placeholder={popupCap ? 'Buscar ítem...' : 'Primero selecciona capítulo'}
+                                  style={{ ...sheetInp, border: `1px solid ${popupItem ? t.primary : sheetDet.border}` }}
+                                />
+                                {popupItemOpen && popupCap && (
+                                  <div style={{
+                                    position: 'absolute', top: '100%', left: 0, right: 0, background: t.bgCard,
+                                    border: `1px solid ${sheetDet.border}`, borderRadius: 4, maxHeight: 160,
+                                    overflowY: 'auto', zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+                                  }}>
+                                    {listadoPrecios
+                                      .filter(p => p.capitulo === popupCap && (!popupItemBusq || `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(popupItemBusq.toLowerCase())))
+                                      .slice(0, 20)
+                                      .map(p => (
+                                        <div
+                                          key={p.item_numero}
+                                          onClick={() => { setPopupItem(p.item_numero); setPopupItemBusq(`${p.item_numero} · ${p.descripcion}`); setPopupItemOpen(false) }}
+                                          style={{ padding: '6px 10px', fontSize: 'var(--cc-sm)', cursor: 'pointer', borderBottom: `1px solid ${sheetDet.border}` }}
+                                          onMouseEnter={e => { e.currentTarget.style.background = t.bg }}
+                                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                                        >
+                                          <strong>{p.item_numero}</strong> — {p.descripcion}
+                                        </div>
+                                      ))}
+                                  </div>
+                                )}
+                              </label>
+                              <button
+                                type="button"
+                                disabled={popupGuardando || (!popupCap && !popupItem)}
+                                onClick={() => { void guardarCapItem() }}
+                                title="Actualizar y recalcular capítulo / ítem"
+                                aria-label="Actualizar y recalcular capítulo / ítem"
+                                style={iconBtn(t.primary, popupGuardando || (!popupCap && !popupItem))}
+                              >
+                                {popupGuardando ? '…' : '🔄'}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )}
-                      </div>
 
-                      {/* ── Dar de baja ── */}
+                      {puedeEditar && !esSellado(r) && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={sheetDet.sectionBar}>Tipo de ejecución</div>
+                          <div style={{ ...sheetDet.sheetWrapFlush, padding: '8px 10px' }}>
+                            <div
+                              className="cc-ppto-detalle-edit-row"
+                              style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'end' }}>
+                              <label style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                                <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Tipo</span>
+                                <select
+                                  value={popupTipoEjecucion}
+                                  onChange={e => setPopupTipoEjecucion(e.target.value)}
+                                  style={{ ...sheetInp, cursor: 'pointer' }}
+                                >
+                                  <option value={PPTO_TIPO_EJECUCION_DEFAULT}>{PPTO_TIPO_EJECUCION_DEFAULT}</option>
+                                  <option value={PPTO_TIPO_EJECUCION_OBRA}>{PPTO_TIPO_EJECUCION_OBRA}</option>
+                                </select>
+                              </label>
+                              <button
+                                type="button"
+                                disabled={popupGuardando || popupTipoEjecucion === (r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)}
+                                onClick={() => { void guardarTipo() }}
+                                title="Guardar tipo de ejecución"
+                                aria-label="Guardar tipo de ejecución"
+                                style={iconBtn('#7C3AED', popupGuardando || popupTipoEjecucion === (r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT))}
+                              >
+                                {popupGuardando ? '…' : '✓'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {puedeEliminar && !esSellado(r) && (
                         <button
                           type="button"
@@ -6845,7 +7005,6 @@ async function darDeBaja(id) {
                             await darDeBaja(r.id)
                           }}
                           style={{
-                            marginTop: 10,
                             background: 'color-mix(in srgb, var(--cc-color-danger, #EF4444) 12%, transparent)',
                             border: '1px solid color-mix(in srgb, var(--cc-color-danger, #EF4444) 45%, transparent)',
                             borderRadius: 4, padding: '8px 16px',
@@ -6853,27 +7012,38 @@ async function darDeBaja(id) {
                             color: 'var(--cc-color-danger, #EF4444)',
                             cursor: dandoDeBaja ? 'not-allowed' : 'pointer',
                             opacity: dandoDeBaja ? 0.55 : 1,
-                          }}>
+                          }}
+                        >
                           {dandoDeBaja ? '⏳ Baja en curso…' : '🗑️ Dar de baja'}
                         </button>
                       )}
 
                       {popupMsg && (
-                        <div style={{ marginTop: 8, fontSize: 'var(--cc-sm)', color: popupMsg.startsWith('✅') ? 'var(--cc-color-success, #16A34A)' : 'var(--cc-color-danger, #EF4444)', fontWeight: 600 }}>
+                        <div style={{
+                          marginTop: 8, fontSize: 'var(--cc-sm)', fontWeight: 600,
+                          color: popupMsg.startsWith('✅') ? 'var(--cc-color-success, #16A34A)' : 'var(--cc-color-danger, #EF4444)',
+                        }}>
                           {popupMsg}
                         </div>
                       )}
                     </div>
                   )}
-                    {r.revisado === 'Verificado' && r.validado_por && (
+
+                  {r.revisado === 'Verificado' && r.validado_por && (
                     <div style={{ borderTop: `1px solid ${sheetDet.border}`, marginTop: 8, paddingTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#16A34A22', border: '1px solid #16A34A44', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--cc-label)', flexShrink: 0 }}>✅</div>
+                      <div style={{
+                        width: 28, height: 28, borderRadius: '50%', background: '#16A34A22',
+                        border: '1px solid #16A34A44', display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', fontSize: 'var(--cc-label)', flexShrink: 0,
+                      }}>✅</div>
                       <div>
                         <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: 'var(--cc-color-success, #16A34A)', letterSpacing: '0.5px' }}>VERIFICADO POR</div>
                         <div style={{ fontSize: 'var(--cc-sm)', color: t.text, fontWeight: 600 }}>{r.validado_por}</div>
-                        {r.validado_en && <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                          {new Date(r.validado_en).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' })}
-                        </div>}
+                        {r.validado_en && (
+                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                            {new Date(r.validado_en).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' })}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
