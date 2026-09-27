@@ -10902,8 +10902,9 @@ body.mem002-doc .mem002-foto-grid {
   margin-top: 2px;
 }
 body.mem002-doc .mem002-foto-grid td.mem002-foto-slot {
+  /* max-width:0 + table-layout:fixed: evita que imgs anchos expandan la celda */
   width: 33.33%;
-  max-width: 33.33%;
+  max-width: 0;
   vertical-align: top;
   padding: 3px 5px;
   overflow: hidden;
@@ -10912,6 +10913,7 @@ body.mem002-doc .mem002-foto-grid td.mem002-foto-slot {
    ignora a menudo overflow/object-fit: forzar width=100% + max-height en img. */
 body.mem002-doc .mem002-foto-box {
   width: 100%;
+  max-width: 100%;
   table-layout: fixed;
   height: 6.85cm;
   max-height: 6.85cm;
@@ -10923,6 +10925,7 @@ body.mem002-doc .mem002-foto-box {
 }
 body.mem002-doc .mem002-foto-box td {
   width: 100%;
+  max-width: 0;
   height: 6.85cm;
   max-height: 6.85cm;
   overflow: hidden;
@@ -10932,10 +10935,10 @@ body.mem002-doc .mem002-foto-box td {
 }
 body.mem002-doc .mem002-foto-box img,
 body.mem002-doc .mem002-foto-box img.mem002-media-img {
-  width: 100%;
-  max-width: 100%;
-  height: auto;
-  max-height: 6.55cm;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  max-height: 6.55cm !important;
   display: block;
   margin: 0 auto;
   object-fit: contain;
@@ -13731,18 +13734,19 @@ def _html_memoria_item_body(
         caption_top: str,
         caption_obs: str,
     ) -> str:
-        # Contenedor de tamaño fijo; img con width=100% + max-height (xhtml2pdf
-        # suele ignorar object-fit/overflow — misma regla foto y gráfico).
+        # Contenedor de tamaño fijo; img con width=100% + max-height.
+        # max-width:0 en celdas (vía CSS) + table-layout:fixed evita desborde
+        # de gráficos anchos (xhtml2pdf y navegador).
         box_td = (
-            f'style="width:100%;height:{FOTO_BOX_H};max-height:{FOTO_BOX_H};'
+            f'style="width:100%;max-width:0;height:{FOTO_BOX_H};max-height:{FOTO_BOX_H};'
             'overflow:hidden;text-align:center;vertical-align:middle;padding:2px;'
             'line-height:0;font-size:0;"'
         )
         if not url:
             return (
-                '<td class="mem002-foto-slot">'
+                '<td class="mem002-foto-slot" style="width:33.33%;max-width:0;overflow:hidden;">'
                 '<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" '
-                'style="table-layout:fixed;width:100%;">'
+                'style="table-layout:fixed;width:100%;max-width:100%;">'
                 f"<tr><td {box_td}>&nbsp;</td></tr>"
                 "</table>"
                 '<div class="mem002-foto-caption">&nbsp;</div>'
@@ -13750,13 +13754,13 @@ def _html_memoria_item_body(
             )
         img_html = (
             f'<img class="mem002-media-img" src="{_h(url)}" alt="media" width="100%" '
-            f'style="width:100%;max-width:100%;height:auto;max-height:6.55cm;'
-            f'display:block;margin:0 auto;object-fit:contain;" />'
+            f'style="width:100%!important;max-width:100%!important;height:auto!important;'
+            f'max-height:6.55cm!important;display:block;margin:0 auto;object-fit:contain;" />'
         )
         # Pie de alto fijo: truncar de forma legible la relación de registros / obs.
         obs_f = _descripcion_memoria_compacta((caption_obs or "")[:120])
-        return f"""<td class="mem002-foto-slot">
-<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" style="table-layout:fixed;width:100%;">
+        return f"""<td class="mem002-foto-slot" style="width:33.33%;max-width:0;overflow:hidden;">
+<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" style="table-layout:fixed;width:100%;max-width:100%;">
 <tr><td {box_td}>{img_html}</td></tr>
 </table>
 <div class="mem002-foto-caption">
