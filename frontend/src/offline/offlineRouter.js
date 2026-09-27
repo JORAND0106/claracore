@@ -512,12 +512,38 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
   const total = todos.length
   const pagina = todos.slice(offset, offset + limit)
 
-  const reportes = pagina.map(r => ({
-    ...r,
-    semana_numero: semanaById[r.semana_id]?.numero_semana ?? null,
-    acta_rpo: actaById[r.acta_rpo_id]?.numero_rpo ?? null,
-    acta_consecutivo: actaById[r.acta_rpo_id]?.consecutivo ?? null,
-  }))
+  const reportes = pagina.map(r => {
+    const regsDelRep = todosRegistros.filter(reg => String(reg.reporte_id) === String(r.id))
+    const tieneCabecera = (() => {
+      const raw = r.enlace_soporte
+      if (raw == null || raw === '') return false
+      try {
+        const p = JSON.parse(raw)
+        if (Array.isArray(p)) return p.map(String).filter(Boolean).length > 0
+        return !!String(p).trim()
+      } catch {
+        return !!String(raw).trim()
+      }
+    })()
+    const tieneReg = regsDelRep.some((reg) => {
+      const raw = reg.enlace_soporte
+      if (raw == null || raw === '') return false
+      try {
+        const p = JSON.parse(raw)
+        if (Array.isArray(p)) return p.map(String).filter(Boolean).length > 0
+        return !!String(p).trim()
+      } catch {
+        return !!String(raw).trim()
+      }
+    })
+    return {
+      ...r,
+      semana_numero: semanaById[r.semana_id]?.numero_semana ?? null,
+      acta_rpo: actaById[r.acta_rpo_id]?.numero_rpo ?? null,
+      acta_consecutivo: actaById[r.acta_rpo_id]?.consecutivo ?? null,
+      tiene_enlace_soporte: tieneCabecera || tieneReg,
+    }
+  })
 
   return { reportes, hay_mas: offset + limit < total }
 }
