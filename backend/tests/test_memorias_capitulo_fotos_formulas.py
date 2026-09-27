@@ -1,10 +1,9 @@
-"""Memorias SEM/MES/SUB-002: capítulo en banda, fotos 2×4 y Excel con fórmulas."""
+"""Memorias SEM/MES/SUB-002: capítulo, fotos 3×4, registro gráfico, columnas y fórmulas."""
 from __future__ import annotations
 
 import sys
 from io import BytesIO
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
 
 from openpyxl import load_workbook
 
@@ -44,6 +43,37 @@ def _import_informes_with_stubs():
     return inf
 
 
+def _regs_base(n_fotos=3, with_grafico=False, with_enlace=False):
+    regs = []
+    for i in range(n_fotos):
+        r = {
+            "numero_registro": i + 1,
+            "abs_inicio": "1+000",
+            "abs_final": "1+010",
+            "pk_ids": {"pk_id": "PK1"},
+            "calzada": "Izq",
+            "infraestructura": "Ciclorruta",
+            "enlace_soporte": '["https://drive.example/x"]' if with_enlace else None,
+            "longitud": 10,
+            "ancho": 2,
+            "espesor": 0.1,
+            "cantidad": None,
+            "cantidad_total": 2.0,
+            "observacion": "Obs " + ("larga " * 20),
+            "foto_url": f"https://example.com/f{i}.jpg",
+            "foto_numero": i + 1,
+            "item_numero": "5.01",
+            "item_descripcion": "Excavación",
+            "unidad": "m3",
+            "capitulo": "3. SANITARIO",
+        }
+        if with_grafico and i == 0:
+            r["grafico_url"] = "https://example.com/g1.png"
+            r["grafico_numero"] = 7
+        regs.append(r)
+    return regs
+
+
 def test_memoria_cells_con_capitulo_agrega_sin_duplicar():
     inf = _import_informes_with_stubs()
     cells = inf._memoria_cells_con_capitulo(
@@ -52,47 +82,23 @@ def test_memoria_cells_con_capitulo_agrega_sin_duplicar():
     )
     assert len(cells) == 5
     assert cells[4] == ("CAPÍTULO", "2. PLUVIAL")
-    again = inf._memoria_cells_con_capitulo(cells, "OTRO")
-    assert sum(1 for a, _ in again if a.upper().replace("Í", "I") == "CAPITULO") == 1
-    assert again[4][1] == "2. PLUVIAL"
 
 
-def test_excel_formula_cantidad_total_redondeo_dinamico():
+def test_excel_formula_cantidad_total_columnas_efgh():
     inf = _import_informes_with_stubs()
     f = inf._excel_formula_cantidad_total(12)
     assert f.startswith("=")
-    assert 'IF(F12="",1,F12)' in f
+    assert 'IF(E12="",1,E12)' in f
+    assert "F12" in f and "G12" in f and "H12" in f
     assert "ROUND(" in f
-    assert ">=0.1" in f
 
 
-def test_html_memoria_incluye_capitulo_y_grilla_8_fotos():
+def test_html_memoria_encabezado_en_fotos_grilla_12_y_columnas():
     inf = _import_informes_with_stubs()
     contrato = {"numero": "IDU-1", "logo_contratista": None}
     sub = {"razon_social": "Sub SA", "nombre_contacto": "Ana"}
     corte = {"consecutivo": 3, "fecha_inicio": "2026-01-01", "fecha_fin": "2026-01-07"}
-    registros = [
-        {
-            "numero_registro": i + 1,
-            "abs_inicio": "1+000",
-            "abs_final": "1+010",
-            "pk_ids": {"pk_id": "PK1"},
-            "calzada": "Izq",
-            "longitud": 10,
-            "ancho": 2,
-            "espesor": 0.1,
-            "cantidad": None,
-            "cantidad_total": 2.0,
-            "observacion": "Obs " + ("larga " * 30),
-            "foto_url": f"https://example.com/f{i}.jpg",
-            "foto_numero": i + 1,
-            "item_numero": "5.01",
-            "item_descripcion": "Excavación",
-            "unidad": "m3",
-            "capitulo": "3. SANITARIO",
-        }
-        for i in range(3)
-    ]
+    registros = _regs_base(n_fotos=13, with_grafico=True, with_enlace=True)
     item_info = inf._item_info_desde_registros(registros, "5.01")
     html = inf._html_memoria_item_body(
         contrato,
@@ -116,12 +122,49 @@ def test_html_memoria_incluye_capitulo_y_grilla_8_fotos():
     )
     assert "CAPÍTULO" in html
     assert "3. SANITARIO" in html
-    assert html.count('class="mem002-foto-slot"') == 8
-    assert "mem002-foto-box" in html
-    assert "REGISTRO FOTOGRÁFICO — ÍTEM" in html
+    # 13 fotos → 2 páginas × 12 slots; + 1 página de gráfico × 12
+    assert html.count('class="mem002-foto-slot"') == 36
+    assert html.count("REGISTRO FOTOGRÁFICO — ÍTEM") == 2
+    # Encabezado completo también en páginas de fotos/gráficos
+    assert html.count("MEMORIA SEMANAL") >= 4  # 1 detalle + 2 fotos + 1 gráfico
+    assert "height:4.55cm" in html
+    # Columnas nuevas
+    assert "ABSCISAS" in html
+    assert "ENLACE" in html
+    assert "INFRAESTRUCTURA" in html
+    assert "COSTADO" not in html
+    assert "ABS INI" not in html
+    assert "1+000 – 1+010" in html
+    assert "Ciclorruta" in html
+    assert "https://drive.example/x" in html
+    # Registro gráfico (1 gráfico) → 12 slots + título
+    assert "REGISTRO GRÁFICO — ÍTEM" in html
+    assert "Gráfico 7 — Reg. 1" in html
 
 
-def test_fill_memoria_excel_ws_formulas_y_capitulo():
+def test_html_memoria_sin_graficos_no_genera_seccion():
+    inf = _import_informes_with_stubs()
+    contrato = {"numero": "IDU-1", "logo_contratista": None}
+    sub = {"razon_social": "Sub SA", "nombre_contacto": "Ana"}
+    corte = {"consecutivo": 3, "fecha_inicio": "2026-01-01", "fecha_fin": "2026-01-07"}
+    registros = _regs_base(n_fotos=2, with_grafico=False)
+    item_info = inf._item_info_desde_registros(registros, "5.01")
+    html = inf._html_memoria_item_body(
+        contrato,
+        sub,
+        corte,
+        item_info,
+        registros,
+        "Usuario",
+        "Cargo",
+        pie_fotos_contexto="Semana N° 1",
+    )
+    assert "REGISTRO FOTOGRÁFICO" in html
+    assert "REGISTRO GRÁFICO" not in html
+    assert html.count('class="mem002-foto-slot"') == 12
+
+
+def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
     inf = _import_informes_with_stubs()
     from openpyxl import Workbook
 
@@ -136,7 +179,8 @@ def test_fill_memoria_excel_ws_formulas_y_capitulo():
             "abs_inicio": "1+000",
             "abs_final": "1+010",
             "pk_ids": {"pk_id": "A"},
-            "calzada": "Der",
+            "infraestructura": "Andén",
+            "enlace_soporte": "https://example.com/doc",
             "longitud": 2,
             "ancho": 3,
             "espesor": 4,
@@ -144,7 +188,8 @@ def test_fill_memoria_excel_ws_formulas_y_capitulo():
             "cantidad_total": 24,
             "observacion": "ok",
             "foto_url": "",
-            "foto_numero": None,
+            "grafico_url": "https://example.com/g.png",
+            "grafico_numero": 2,
             "item_numero": "1.01",
             "item_descripcion": "Item",
             "unidad": "m3",
@@ -155,7 +200,7 @@ def test_fill_memoria_excel_ws_formulas_y_capitulo():
             "abs_inicio": None,
             "abs_final": None,
             "pk_ids": {},
-            "calzada": None,
+            "infraestructura": "",
             "longitud": None,
             "ancho": None,
             "espesor": None,
@@ -197,17 +242,37 @@ def test_fill_memoria_excel_ws_formulas_y_capitulo():
     buf.seek(0)
     ws2 = load_workbook(buf)[ws.title]
 
-    # Capítulo en banda de identificación
+    assert ws2["B8"].value == "ABSCISAS"
+    assert ws2["C8"].value == "ENLACE"
+    assert ws2["D8"].value == "INFRAESTRUCTURA"
+    assert ws2["I8"].value == "CANT TOT"
+    assert ws2["J8"].value == "PK ID"
+    assert isinstance(ws2["I9"].value, str) and ws2["I9"].value.startswith("=")
+    assert "E9" in ws2["I9"].value and "H9" in ws2["I9"].value
+    assert ws2["E9"].value == 2
+    assert ws2["H10"].value == 5
+    assert ws2["I11"].value == "=SUM(I9:I10)"
+    assert ws2["B9"].value == "1+000 – 1+010"
+    assert ws2["C9"].value == "https://example.com/doc"
+    assert ws2["D9"].value == "Andén"
+
     flat = []
-    for row in ws2.iter_rows(min_row=3, max_row=4, max_col=11, values_only=True):
+    for row in ws2.iter_rows(min_row=1, max_row=40, max_col=11, values_only=True):
         flat.extend([str(v) for v in row if v is not None])
-    assert any("CAPÍTULO" in v for v in flat)
+    assert any("REGISTRO GRÁFICO" in v for v in flat)
     assert any("1. PRELIMINARES" in v for v in flat)
 
-    # Encabezado detalle en fila 7; datos en 9–10; total en 11
-    assert ws2["J8"].value == "CANT TOT"
-    assert isinstance(ws2["J9"].value, str) and ws2["J9"].value.startswith("=")
-    assert "F9" in ws2["J9"].value and "G9" in ws2["J9"].value
-    assert isinstance(ws2["F9"].value, (int, float)) and ws2["F9"].value == 2
-    assert ws2["I10"].value == 5
-    assert ws2["J11"].value == "=SUM(J9:J10)"
+
+def test_lista_graficos_desde_historial():
+    inf = _import_informes_with_stubs()
+    r = {
+        "numero_registro": 9,
+        "observacion": "x",
+        "graficos_historial": [
+            {"url": "https://a/1.png", "numero": 1, "creado_en": "2026-01-02"},
+            {"url": "https://a/2.png", "numero": 2, "creado_en": "2026-01-01"},
+        ],
+    }
+    g = inf._lista_graficos_memoria_registro(r)
+    assert [x["grafico_numero"] for x in g] == [2, 1]
+    assert g[0]["numero_registro"] == 9

@@ -349,8 +349,10 @@ def fetch_registros_memoria_conciliacion(
     n3v = _n3_in_aprob_interventoria()
     campo_mx, _niveles_mx = matriz_params_contrato(sb, int(contrato_id))
     sel = (
-        "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, "
-        "cantidad, cantidad_total, observacion, foto_url, foto_numero, capitulo, item_numero, item_descripcion, unidad, "
+        "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
+        "infraestructura, enlace_soporte, longitud, ancho, espesor, "
+        "cantidad, cantidad_total, observacion, foto_url, foto_numero, grafico_url, grafico_numero, "
+        "graficos_historial, capitulo, item_numero, item_descripcion, unidad, "
         "bloqueado, acta_rpo_id, semana_id"
     )
 
@@ -550,8 +552,10 @@ def registro_tiene_pendiente_matriz(r: Dict[str, Any]) -> bool:
 
 
 _SEL_MEMORIA_CC_MES = (
-    "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, "
-    "cantidad, cantidad_total, observacion, foto_url, foto_numero, item_numero, item_descripcion, unidad, "
+    "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
+    "infraestructura, enlace_soporte, longitud, ancho, espesor, "
+    "cantidad, cantidad_total, observacion, foto_url, foto_numero, grafico_url, grafico_numero, "
+    "graficos_historial, item_numero, item_descripcion, unidad, "
     "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
     "bloqueado, acta_rpo_id, semana_id, costo_directo, vlr_unitario, capitulo"
 )
