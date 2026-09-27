@@ -10863,6 +10863,18 @@ body.mem002-doc .mem002-detail td.mem002-obs {
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
+body.mem002-doc .mem002-detail td.mem002-enlace {
+  vertical-align: top;
+  text-align: left;
+  font-size: 5.5pt;
+  line-height: 1.15;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+body.mem002-doc .mem002-detail td.mem002-enlace a {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
 body.mem002-doc .mem002-detail .total-td {
   font-size: 6pt;
   padding: 2px 3px;
@@ -10891,26 +10903,43 @@ body.mem002-doc .mem002-foto-grid {
 }
 body.mem002-doc .mem002-foto-grid td.mem002-foto-slot {
   width: 33.33%;
+  max-width: 33.33%;
   vertical-align: top;
   padding: 3px 5px;
+  overflow: hidden;
 }
+/* Caja de media: tamaño fijo; la imagen se adapta (nunca al revés). xhtml2pdf
+   ignora a menudo overflow/object-fit: forzar width=100% + max-height en img. */
 body.mem002-doc .mem002-foto-box {
   width: 100%;
+  table-layout: fixed;
   height: 6.85cm;
+  max-height: 6.85cm;
   border: 1px solid #dee2e6;
   background: #f8fafc;
   text-align: center;
   vertical-align: middle;
   overflow: hidden;
 }
-body.mem002-doc .mem002-foto-box img {
-  max-width: 98%;
-  max-height: 6.6cm;
-  width: auto;
-  height: auto;
-  display: inline-block;
-  object-fit: contain;
+body.mem002-doc .mem002-foto-box td {
+  width: 100%;
+  height: 6.85cm;
+  max-height: 6.85cm;
+  overflow: hidden;
+  text-align: center;
   vertical-align: middle;
+  padding: 2px;
+}
+body.mem002-doc .mem002-foto-box img,
+body.mem002-doc .mem002-foto-box img.mem002-media-img {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: 6.55cm;
+  display: block;
+  margin: 0 auto;
+  object-fit: contain;
+  object-position: center center;
 }
 body.mem002-doc .mem002-foto-caption {
   height: 1.15cm;
@@ -11192,30 +11221,141 @@ def _memoria_abscisas_txt(r: dict) -> str:
     return a or b or "—"
 
 
-def _memoria_enlace_txt(r: dict) -> str:
-    """Primer enlace de soporte del registro (JSON array o string); vacío si no hay."""
-    raw = r.get("enlace_soporte")
+def _memoria_parse_enlaces_soporte(raw: object) -> List[str]:
+    """Biblioteca de soportes del registro: lista de URLs (JSON array, lista o string suelto)."""
     if raw is None or raw == "":
-        return ""
+        return []
     if isinstance(raw, list):
+        out: List[str] = []
         for u in raw:
-            s = str(u or "").strip()
-            if s:
-                return s
-        return ""
+            if isinstance(u, dict):
+                s = str(u.get("url") or u.get("href") or u.get("enlace") or "").strip()
+            else:
+                s = str(u or "").strip()
+            if s and s not in out:
+                out.append(s)
+        return out
     s = str(raw).strip()
-    if s.startswith("["):
+    if not s:
+        return []
+    if s.startswith("[") or s.startswith("{"):
         try:
             j = json.loads(s)
-            if isinstance(j, list):
-                for u in j:
-                    t = str(u or "").strip()
-                    if t:
-                        return t
-                return ""
+        except Exception:
+            return [s]
+        if isinstance(j, list):
+            return _memoria_parse_enlaces_soporte(j)
+        if isinstance(j, dict):
+            one = str(j.get("url") or j.get("href") or j.get("enlace") or "").strip()
+            return [one] if one else []
+        return [str(j)]
+    return [s]
+
+
+def _memoria_enlace_label(url: str, idx: int) -> str:
+    """Texto corto identificable del soporte (no la URL completa)."""
+    u = (url or "").strip()
+    if not u:
+        return f"Soporte {idx}"
+    host = ""
+    path = ""
+    try:
+        # Parse manual liviano (sin fallar ante URLs raras).
+        rest = u.split("://", 1)[-1] if "://" in u else u
+        host_part, _, path_part = rest.partition("/")
+        host = host_part.split("@")[-1].split(":")[0].lower()
+        path = path_part.split("?")[0].split("#")[0]
+    except Exception:
+        host, path = "", ""
+
+    # Nombre de archivo en la ruta (si parece archivo real).
+    if path:
+        seg = path.rstrip("/").split("/")[-1]
+        try:
+            from urllib.parse import unquote
+
+            seg = unquote(seg)
         except Exception:
             pass
-    return s
+        if seg and "." in seg and not seg.startswith("."):
+            base = seg[:40] + ("…" if len(seg) > 40 else "")
+            return base
+
+    if "drive.google" in host or "docs.google" in host:
+        return f"Drive {idx}"
+    if "sharepoint" in host or "onedrive" in host or "1drv.ms" in host:
+        return f"SharePoint {idx}"
+    if "dropbox" in host:
+        return f"Dropbox {idx}"
+    if "blob.core.windows" in host or "azure" in host:
+        return f"Azure {idx}"
+    if host:
+        short_host = host[4:] if host.startswith("www.") else host
+        short_host = short_host[:22] + ("…" if len(short_host) > 22 else "")
+        return f"{short_host} ({idx})" if idx > 1 else short_host
+    return f"Soporte {idx}"
+
+
+def _memoria_enlaces_soporte(r: dict) -> List[Dict[str, str]]:
+    """Enlaces de la biblioteca de soportes: [{url, label}, ...] en orden."""
+    urls = _memoria_parse_enlaces_soporte(r.get("enlace_soporte"))
+    out: List[Dict[str, str]] = []
+    for i, url in enumerate(urls, start=1):
+        out.append({"url": url, "label": _memoria_enlace_label(url, i)})
+    return out
+
+
+def _memoria_enlace_txt(r: dict) -> str:
+    """Primer URL de soporte (compat); preferir _memoria_enlaces_soporte."""
+    links = _memoria_enlaces_soporte(r)
+    return links[0]["url"] if links else ""
+
+
+def _memoria_enlaces_html_cell(r: dict) -> str:
+    """Celda Enlace HTML/PDF/preview: hipervínculos cortos; vacío → igual que el formato (blanco)."""
+    links = _memoria_enlaces_soporte(r)
+    if not links:
+        return ""
+    parts: List[str] = []
+    for L in links:
+        href = html.escape(L["url"], quote=True)
+        lab = _h(L["label"])
+        parts.append(
+            f'<a href="{href}" style="color:#1d4ed8;text-decoration:underline;font-size:5.5pt;">'
+            f"{lab}</a>"
+        )
+    return "<br/>".join(parts)
+
+
+def _excel_write_enlaces_soporte(cell, links: List[Dict[str, str]]) -> None:
+    """Etiquetas cortas en la celda Enlace; hipervínculo(s) usables en Excel.
+
+    Excel admite un hyperlink activo por celda: se asigna el primero y, si hay
+    más, todas las URLs quedan en el comentario de la celda (abribles / copiables).
+    Las etiquetas de todos los soportes se listan en la celda.
+    """
+    if not links:
+        cell.value = ""
+        return
+    cell.value = "\n".join(L["label"] for L in links)
+    cell.alignment = Alignment(wrap_text=True, vertical="top")
+    cell.font = Font(size=8, color="0563C1", underline="single")
+    first = (links[0].get("url") or "").strip()
+    if first.startswith(("http://", "https://")):
+        cell.hyperlink = first
+    if len(links) > 1:
+        try:
+            from openpyxl.comments import Comment
+
+            tip = "\n".join(f'{L["label"]}: {L["url"]}' for L in links)
+            cell.comment = Comment(
+                tip,
+                "ClaraCore",
+                width=320,
+                height=min(40 + 18 * len(links), 140),
+            )
+        except Exception:
+            pass
 
 
 def _memoria_infraestructura_txt(r: dict) -> str:
@@ -11505,7 +11645,7 @@ def _fill_memoria_excel_ws(
         if fn:
             obs = f"{obs} [Foto {fn}]".strip()
         obs = _descripcion_memoria_compacta(obs)
-        enlace = _memoria_enlace_txt(r)
+        links = _memoria_enlaces_soporte(r)
         infra = _memoria_infraestructura_txt(r)
         row = data_row + i
         # Orden: N°, Abscisas, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot (fórmula), Enlace, Obs.
@@ -11518,10 +11658,15 @@ def _fill_memoria_excel_ws(
             _excel_num_or_blank(r.get("espesor")),
             _excel_num_or_blank(r.get("cantidad")),
             _excel_formula_cantidad_total(row),
-            enlace or "",
+            None,  # Enlace: se escribe abajo con hipervínculos
             (obs or "")[:500],
         ]
         for col, v in enumerate(vals, start=1):
+            if col == 9:
+                cell = ws.cell(row=row, column=col)
+                cell.border = bd
+                _excel_write_enlaces_soporte(cell, links)
+                continue
             cell = ws.cell(row=row, column=col, value=v)
             cell.border = bd
             cell.font = Font(size=8)
@@ -11529,11 +11674,8 @@ def _fill_memoria_excel_ws(
                 cell.alignment = Alignment(horizontal="right", vertical="center")
                 if col == 8:
                     cell.number_format = "0.000"
-            elif col in (9, 10):
+            elif col == 10:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
-                if col == 9 and enlace.startswith(("http://", "https://")):
-                    cell.font = Font(size=8, color="0563C1", underline="single")
-                    cell.hyperlink = enlace
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         if i % 2 == 0:
@@ -13539,9 +13681,8 @@ def _html_memoria_item_body(
             if fn:
                 obs = f"{obs} [Foto {fn}]".strip()
             obs = _descripcion_memoria_compacta(obs)
-            enlace = _memoria_enlace_txt(r)
             infra = _memoria_infraestructura_txt(r) or "—"
-            enlace_cell = _h(enlace) if enlace else ""
+            enlace_cell = _memoria_enlaces_html_cell(r)
             body += f"""<tr class="{cls}">
                 <td class="data-td" style="text-align:center">{_h(r.get('numero_registro',''))}</td>
                 <td class="data-td" style="text-align:center">{_h(_memoria_abscisas_txt(r))}</td>
@@ -13551,7 +13692,7 @@ def _html_memoria_item_body(
                 <td class="data-td" style="text-align:right">{_fn(r.get('espesor'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('cantidad'))}</td>
                 <td class="data-td" style="text-align:right;font-weight:bold">{_fn_cant(r.get('cantidad_total'))}</td>
-                <td class="data-td mem002-obs" style="text-align:left;font-size:5.5pt">{enlace_cell}</td>
+                <td class="data-td mem002-enlace">{enlace_cell}</td>
                 <td class="data-td mem002-obs">{_h((obs or '')[:500])}</td>
             </tr>"""
 
@@ -13590,21 +13731,33 @@ def _html_memoria_item_body(
         caption_top: str,
         caption_obs: str,
     ) -> str:
+        # Contenedor de tamaño fijo; img con width=100% + max-height (xhtml2pdf
+        # suele ignorar object-fit/overflow — misma regla foto y gráfico).
+        box_td = (
+            f'style="width:100%;height:{FOTO_BOX_H};max-height:{FOTO_BOX_H};'
+            'overflow:hidden;text-align:center;vertical-align:middle;padding:2px;'
+            'line-height:0;font-size:0;"'
+        )
         if not url:
             return (
                 '<td class="mem002-foto-slot">'
-                '<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%">'
-                f'<tr><td style="height:{FOTO_BOX_H};text-align:center;vertical-align:middle;color:#cbd5e1;font-size:6pt;">&nbsp;</td></tr>'
+                '<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" '
+                'style="table-layout:fixed;width:100%;">'
+                f"<tr><td {box_td}>&nbsp;</td></tr>"
                 "</table>"
                 '<div class="mem002-foto-caption">&nbsp;</div>'
                 "</td>"
             )
-        img_html = f'<img src="{_h(url)}" alt="media"/>'
+        img_html = (
+            f'<img class="mem002-media-img" src="{_h(url)}" alt="media" width="100%" '
+            f'style="width:100%;max-width:100%;height:auto;max-height:6.55cm;'
+            f'display:block;margin:0 auto;object-fit:contain;" />'
+        )
         # Pie de alto fijo: truncar de forma legible la relación de registros / obs.
         obs_f = _descripcion_memoria_compacta((caption_obs or "")[:120])
         return f"""<td class="mem002-foto-slot">
-<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%">
-<tr><td style="height:{FOTO_BOX_H};text-align:center;vertical-align:middle;">{img_html}</td></tr>
+<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" style="table-layout:fixed;width:100%;">
+<tr><td {box_td}>{img_html}</td></tr>
 </table>
 <div class="mem002-foto-caption">
 <div class="foto-caption">{_h(caption_top)}</div>

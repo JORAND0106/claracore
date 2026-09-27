@@ -1,4 +1,4 @@
-"""Memorias SEM/MES/SUB-002: capítulo, grilla 3×2, dedupe foto/gráfico, columnas y fórmulas."""
+"""Memorias SEM/MES/SUB-002: capítulo, grilla 3×2, dedupe, enlaces soporte, fórmulas."""
 from __future__ import annotations
 
 import sys
@@ -54,7 +54,7 @@ def _regs_base(n_fotos=3, with_grafico=False, with_enlace=False, shared_foto_url
             "pk_ids": {"pk_id": "PK1"},
             "calzada": "Izq",
             "infraestructura": "Ciclorruta",
-            "enlace_soporte": '["https://drive.example/x"]' if with_enlace else None,
+            "enlace_soporte": '["https://drive.google.com/file/d/abc/view"]' if with_enlace else None,
             "longitud": 10,
             "ancho": 2,
             "espesor": 0.1,
@@ -93,6 +93,29 @@ def test_excel_formula_cantidad_total_columnas_defg():
     assert 'IF(D12="",1,D12)' in f
     assert "E12" in f and "F12" in f and "G12" in f
     assert "ROUND(" in f
+
+
+def test_enlaces_soporte_parse_labels_y_html():
+    inf = _import_informes_with_stubs()
+    r = {
+        "enlace_soporte": (
+            '["https://drive.google.com/file/d/aaa/view",'
+            '"https://contoso.sharepoint.com/sites/obra/doc.pdf",'
+            '"https://example.com/folder/plano.dwg"]'
+        )
+    }
+    links = inf._memoria_enlaces_soporte(r)
+    assert len(links) == 3
+    assert links[0]["label"] == "Drive 1"
+    assert links[1]["label"] == "doc.pdf"
+    assert links[2]["label"] == "plano.dwg"
+    html = inf._memoria_enlaces_html_cell(r)
+    assert 'href="https://drive.google.com/file/d/aaa/view"' in html
+    assert "Drive 1" in html
+    assert "plano.dwg" in html
+    assert html.count("<a href=") == 3
+    assert inf._memoria_enlaces_html_cell({"enlace_soporte": None}) == ""
+    assert inf._memoria_enlace_label("https://drive.google.com/open?id=1", 2) == "Drive 2"
 
 
 def test_dedupe_fotos_y_graficos_compartidos():
@@ -143,9 +166,7 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
     contrato = {"numero": "IDU-1", "logo_contratista": None}
     sub = {"razon_social": "Sub SA", "nombre_contacto": "Ana"}
     corte = {"consecutivo": 3, "fecha_inicio": "2026-01-01", "fecha_fin": "2026-01-07"}
-    # 7 URLs únicas → 2 páginas × 6 slots; + 1 gráfico compartido × 6
     registros = _regs_base(n_fotos=7, with_grafico=True, with_enlace=True)
-    # Tres registros adicionales con la misma foto 132 → no deben sumar páginas
     registros.extend(
         [
             {
@@ -155,6 +176,10 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
                 "foto_numero": 132,
                 "grafico_url": "https://example.com/g1.png",
                 "grafico_numero": 7,
+                "enlace_soporte": (
+                    '["https://drive.google.com/file/d/aaa/view",'
+                    '"https://contoso.sharepoint.com/sites/x"]'
+                ),
             },
             {
                 **registros[0],
@@ -195,13 +220,14 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
     )
     assert "CAPÍTULO" in html
     assert "3. SANITARIO" in html
-    # 7 únicas + 1 shared = 8 fotos → 2 páginas × 6; gráfico dedupeado (misma URL) → 1 página × 6
     assert html.count('class="mem002-foto-slot"') == 18
     assert html.count("REGISTRO FOTOGRÁFICO — ÍTEM") == 2
-    assert html.count("MEMORIA SEMANAL") >= 4  # 1 detalle + 2 fotos + 1 gráfico
+    assert html.count("MEMORIA SEMANAL") >= 4
     assert "height:6.85cm" in html
     assert "height:4.55cm" not in html
-    # Columnas: sin PK ID; Enlace entre Cant Tot y Observación
+    assert 'class="mem002-media-img"' in html
+    assert 'width="100%"' in html
+    assert "max-height:6.55cm" in html
     assert "ABSCISAS" in html
     assert "ENLACE" in html
     assert "INFRAESTRUCTURA" in html
@@ -210,14 +236,14 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
     assert "ABS INI" not in html
     assert "1+000 – 1+010" in html
     assert "Ciclorruta" in html
-    assert "https://drive.example/x" in html
-    # Orden thead: CANT TOT antes de ENLACE
+    assert 'href="https://drive.google.com/file/d/abc/view"' in html
+    assert "Drive 1" in html
+    assert "SharePoint 2" in html
     assert html.index("CANT TOT") < html.index(">ENLACE<")
     assert html.index(">ENLACE<") < html.index("OBSERVACIÓN")
     assert "REGISTRO GRÁFICO — ÍTEM" in html
     assert "Gráfico 7 — Reg. 1, 181, 295" in html
     assert "Foto 132 — Reg. 181, 295, 297" in html
-    # Una sola aparición de la URL compartida en slots de imagen (src)
     assert html.count("https://example.com/shared132.jpg") == 1
 
 
@@ -259,7 +285,10 @@ def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
             "abs_final": "1+010",
             "pk_ids": {"pk_id": "A"},
             "infraestructura": "Andén",
-            "enlace_soporte": "https://example.com/doc",
+            "enlace_soporte": (
+                '["https://drive.google.com/file/d/aaa/view",'
+                '"https://contoso.sharepoint.com/sites/obra/doc.pdf"]'
+            ),
             "longitud": 2,
             "ancho": 3,
             "espesor": 4,
@@ -337,15 +366,18 @@ def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
     assert ws2["G10"].value == 5
     assert ws2["H11"].value == "=SUM(H9:H10)"
     assert ws2["B9"].value == "1+000 – 1+010"
-    assert ws2["I9"].value == "https://example.com/doc"
+    # Enlace: etiquetas cortas (no URL completa) + hipervínculo al primero
+    assert ws2["I9"].value == "Drive 1\ndoc.pdf"
+    assert ws2["I9"].hyperlink is not None
+    assert "drive.google.com" in (ws2["I9"].hyperlink.target or "")
     assert ws2["C9"].value == "Andén"
+    assert ws2["I10"].value in ("", None)
 
     flat = []
     for row in ws2.iter_rows(min_row=1, max_row=40, max_col=11, values_only=True):
         flat.extend([str(v) for v in row if v is not None])
     assert any("REGISTRO GRÁFICO" in v for v in flat)
     assert any("1. PRELIMINARES" in v for v in flat)
-    # Dedupe Excel: una sola fila de foto compartida con ambos regs
     foto_rows = [v for v in flat if "shared.jpg" in v]
     assert len(foto_rows) == 1
     assert any("1, 2" in v or "1,2" in v for v in flat)
