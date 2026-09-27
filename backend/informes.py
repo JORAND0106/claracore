@@ -10819,8 +10819,8 @@ BASE_CSS = PAGE_CSS_LETTER_PORTRAIT + BASE_CSS_SHARED
 MEMORIA002_CSS = """
 @page {
   size: letter landscape;
-  /* Márgenes ajustados para caber encabezado completo + plantilla 3×4 (contenedores 4.55cm sin reducir). */
-  margin: 0.5cm 0.7cm 0.5cm 0.7cm;
+  /* Márgenes para caber encabezado completo + plantilla 3×2 (contenedores más grandes). */
+  margin: 0.5cm 0.65cm 0.5cm 0.65cm;
 }
 body.mem002-doc {
   font-family: Arial, sans-serif;
@@ -10882,7 +10882,7 @@ body.mem002-doc .doc-footer {
   padding-top: 2px;
   font-size: 6pt;
 }
-/* Registro fotográfico / gráfico: plantilla fija 3×4 (12 contenedores iguales por página). */
+/* Registro fotográfico / gráfico: plantilla fija 3×2 (6 contenedores grandes por página). */
 body.mem002-doc .mem002-foto-grid {
   width: 100%;
   border-collapse: collapse;
@@ -10890,13 +10890,13 @@ body.mem002-doc .mem002-foto-grid {
   margin-top: 2px;
 }
 body.mem002-doc .mem002-foto-grid td.mem002-foto-slot {
-  width: 25%;
+  width: 33.33%;
   vertical-align: top;
-  padding: 3px 4px;
+  padding: 3px 5px;
 }
 body.mem002-doc .mem002-foto-box {
   width: 100%;
-  height: 4.55cm;
+  height: 6.85cm;
   border: 1px solid #dee2e6;
   background: #f8fafc;
   text-align: center;
@@ -10905,7 +10905,7 @@ body.mem002-doc .mem002-foto-box {
 }
 body.mem002-doc .mem002-foto-box img {
   max-width: 98%;
-  max-height: 4.35cm;
+  max-height: 6.6cm;
   width: auto;
   height: auto;
   display: inline-block;
@@ -11175,11 +11175,11 @@ def _excel_num_or_blank(v: Any) -> Optional[float]:
 
 
 def _excel_formula_cantidad_total(row: int) -> str:
-    """CANT TOT = L×A×E[×C] (cols E–H) con vacíos=1 y redondeo dinámico (2 dp si ≥0.10, si no 3)."""
-    e, f, g, h = f"E{row}", f"F{row}", f"G{row}", f"H{row}"
-    prod = f'IF({e}="",1,{e})*IF({f}="",1,{f})*IF({g}="",1,{g})*IF({h}="",1,{h})'
+    """CANT TOT = L×A×E[×C] (cols D–G) con vacíos=1 y redondeo dinámico (2 dp si ≥0.10, si no 3)."""
+    d, e, f, g = f"D{row}", f"E{row}", f"F{row}", f"G{row}"
+    prod = f'IF({d}="",1,{d})*IF({e}="",1,{e})*IF({f}="",1,{f})*IF({g}="",1,{g})'
     return (
-        f'=IF(AND({e}="",{f}="",{g}="",{h}=""),0,'
+        f'=IF(AND({d}="",{e}="",{f}="",{g}=""),0,'
         f'IF(ROUND({prod},2)>=0.1,ROUND({prod},2),ROUND({prod},3)))'
     )
 
@@ -11263,6 +11263,102 @@ def _lista_graficos_memoria_registro(r: dict) -> List[Dict[str, Any]]:
     return out
 
 
+def _memoria_norm_media_url(url: object) -> str:
+    """Clave de identidad de foto/gráfico: misma URL = mismo archivo (como FO-EO-04)."""
+    return str(url or "").strip()
+
+
+def _memoria_regs_txt(nums: List[Any]) -> str:
+    parts: List[str] = []
+    for n in nums:
+        if n is None or n == "":
+            continue
+        s = str(n).strip()
+        if s and s not in parts:
+            parts.append(s)
+    return ", ".join(parts)
+
+
+def _dedupe_fotos_memoria(registros: List[dict]) -> List[Dict[str, Any]]:
+    """Una foto por URL única; orden = primer registro; pie con todos los regs asociados."""
+    order: List[str] = []
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for r in registros:
+        url = _memoria_norm_media_url(r.get("foto_url"))
+        if not url:
+            continue
+        if url not in by_key:
+            by_key[url] = {
+                "foto_url": url,
+                "foto_numero": r.get("foto_numero"),
+                "numeros_registro": [],
+                "observacion": (r.get("observacion") or "").strip(),
+            }
+            order.append(url)
+        entry = by_key[url]
+        nr = r.get("numero_registro")
+        if nr is not None and str(nr).strip() != "":
+            s = str(nr).strip()
+            if s not in [str(x) for x in entry["numeros_registro"]]:
+                entry["numeros_registro"].append(nr)
+        if entry.get("foto_numero") in (None, "") and r.get("foto_numero") not in (None, ""):
+            entry["foto_numero"] = r.get("foto_numero")
+        if not entry.get("observacion"):
+            entry["observacion"] = (r.get("observacion") or "").strip()
+    return [by_key[k] for k in order]
+
+
+def _dedupe_graficos_memoria(registros: List[dict]) -> List[Dict[str, Any]]:
+    """Un gráfico por URL única; orden = primera aparición; pie con todos los regs."""
+    order: List[str] = []
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for r in registros:
+        for g in _lista_graficos_memoria_registro(r):
+            url = _memoria_norm_media_url(g.get("grafico_url"))
+            if not url:
+                continue
+            if url not in by_key:
+                by_key[url] = {
+                    "grafico_url": url,
+                    "grafico_numero": g.get("grafico_numero"),
+                    "numeros_registro": [],
+                    "observacion": (g.get("observacion") or "").strip(),
+                }
+                order.append(url)
+            entry = by_key[url]
+            nr = g.get("numero_registro")
+            if nr is not None and str(nr).strip() != "":
+                s = str(nr).strip()
+                if s not in [str(x) for x in entry["numeros_registro"]]:
+                    entry["numeros_registro"].append(nr)
+            if entry.get("grafico_numero") in (None, "") and g.get("grafico_numero") not in (None, ""):
+                entry["grafico_numero"] = g.get("grafico_numero")
+            if not entry.get("observacion"):
+                entry["observacion"] = (g.get("observacion") or "").strip()
+    return [by_key[k] for k in order]
+
+
+def _memoria_media_caption_top(kind: str, numero: object, nums: List[Any]) -> str:
+    label = "Foto" if kind == "foto" else "Gráfico"
+    regs = _memoria_regs_txt(nums)
+    num_s = "" if numero in (None, "") else str(numero)
+    if regs:
+        return f"{label} {num_s} — Reg. {regs}".strip()
+    return f"{label} {num_s}".strip()
+
+
+def _memoria_media_caption_obs(entry: dict) -> str:
+    """Descripción del pie: relaciona registros; si hay obs del primer reg, la usa truncada."""
+    regs = _memoria_regs_txt(entry.get("numeros_registro") or [])
+    obs = (entry.get("observacion") or "").strip()
+    if regs and len((entry.get("numeros_registro") or [])) > 1:
+        base = f"Regs. {regs}"
+        if obs:
+            return f"{base} · {obs}"
+        return base
+    return obs
+
+
 def _fill_memoria_excel_ws(
     ws,
     contrato: dict,
@@ -11299,7 +11395,8 @@ def _fill_memoria_excel_ws(
     fill_tot = PatternFill("solid", fgColor="E5E7EB")
     lbl_font = Font(size=8, color="64748B")
 
-    for i, w in enumerate([5, 14, 18, 12, 8, 8, 8, 8, 10, 10, 28], start=1):
+    # 10 columnas: N°, Abscisas, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot, Enlace, Observación
+    for i, w in enumerate([5, 14, 12, 8, 8, 8, 8, 10, 18, 28], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     corte_lbl = _corte_consecutivo_fmt(corte)
@@ -11312,13 +11409,13 @@ def _fill_memoria_excel_ws(
         titulo_h = str(conc_meta.get("titulo") or titulo_h)
         codigo_h = str(conc_meta.get("codigo") or codigo_h)
 
-    ws.merge_cells("A1:K1")
+    ws.merge_cells("A1:J1")
     c = ws["A1"]
     c.value = titulo_h
     c.font = Font(bold=True, size=12)
     c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    ws.merge_cells("A2:K2")
+    ws.merge_cells("A2:J2")
     ws["A2"] = f"{codigo_h} · CCD · Memoria por ítem"
     ws["A2"].font = Font(bold=True, size=10, color="1E40AF")
     ws["A2"].alignment = Alignment(horizontal="center")
@@ -11337,7 +11434,6 @@ def _fill_memoria_excel_ws(
         )
     while len(cells) < 5:
         cells.append(("", ""))
-    # Fila 3: campos 0–2 · Fila 4: campos 3–4 (banda de identificación + capítulo)
     ws["A3"] = str(cells[0][0] or "")
     ws["A3"].font = lbl_font
     ws.merge_cells("B3:C3")
@@ -11348,7 +11444,7 @@ def _fill_memoria_excel_ws(
     ws["E3"] = str(cells[1][1] or "—")
     ws["G3"] = str(cells[2][0] or "")
     ws["G3"].font = lbl_font
-    ws.merge_cells("H3:K3")
+    ws.merge_cells("H3:J3")
     ws["H3"] = str(cells[2][1] or "—")
     ws["A4"] = str(cells[3][0] or "")
     ws["A4"].font = lbl_font
@@ -11356,7 +11452,7 @@ def _fill_memoria_excel_ws(
     ws["B4"] = str(cells[3][1] or "—")
     ws["F4"] = str(cells[4][0] or "")
     ws["F4"].font = lbl_font
-    ws.merge_cells("G4:K4")
+    ws.merge_cells("G4:J4")
     ws["G4"] = str(cells[4][1] or "—")
     for rr, cols in ((3, (1, 2, 4, 5, 7, 8)), (4, (1, 2, 6, 7))):
         for cc in cols:
@@ -11366,16 +11462,16 @@ def _fill_memoria_excel_ws(
     ws.merge_cells("B5:C5")
     ws["D5"] = "DESCRIPCIÓN"
     ws["D5"].font = lbl_font
-    ws.merge_cells("E5:I5")
+    ws.merge_cells("E5:H5")
     ws["E5"] = _descripcion_memoria_compacta(item_info.get("item_descripcion"))
     ws["E5"].alignment = Alignment(wrap_text=True, vertical="top")
-    ws["J5"] = "UNIDAD"
-    ws["J5"].font = lbl_font
-    ws["K5"] = str(item_info.get("unidad") or "—")
-    for cc in (1, 2, 4, 5, 10, 11):
+    ws["I5"] = "UNIDAD"
+    ws["I5"].font = lbl_font
+    ws["J5"] = str(item_info.get("unidad") or "—")
+    for cc in (1, 2, 4, 5, 9, 10):
         ws.cell(row=5, column=cc).border = bd
     r0 = 7
-    ws.merge_cells(start_row=r0, start_column=1, end_row=r0, end_column=11)
+    ws.merge_cells(start_row=r0, start_column=1, end_row=r0, end_column=10)
     bar = ws.cell(row=r0, column=1, value="DETALLE DE CANTIDADES APROBADAS")
     bar.fill = fill_bar
     bar.font = Font(bold=True, size=9)
@@ -11385,14 +11481,13 @@ def _fill_memoria_excel_ws(
     hdr = [
         "N°",
         "ABSCISAS",
-        "ENLACE",
         "INFRAESTRUCTURA",
         "LONG",
         "ANCHO",
         "ESP",
         "CANT",
         "CANT TOT",
-        "PK ID",
+        "ENLACE",
         "OBSERVACIÓN",
     ]
     hr = r0 + 1
@@ -11410,54 +11505,52 @@ def _fill_memoria_excel_ws(
         if fn:
             obs = f"{obs} [Foto {fn}]".strip()
         obs = _descripcion_memoria_compacta(obs)
-        pkv = (r.get("pk_ids") or {}).get("pk_id")
         enlace = _memoria_enlace_txt(r)
         infra = _memoria_infraestructura_txt(r)
         row = data_row + i
-        # Orden: N°, Abscisas, Enlace, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot (fórmula), PK ID, Obs.
+        # Orden: N°, Abscisas, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot (fórmula), Enlace, Obs.
         vals = [
             r.get("numero_registro"),
             _memoria_abscisas_txt(r),
-            enlace or "",
             infra or "—",
             _excel_num_or_blank(r.get("longitud")),
             _excel_num_or_blank(r.get("ancho")),
             _excel_num_or_blank(r.get("espesor")),
             _excel_num_or_blank(r.get("cantidad")),
             _excel_formula_cantidad_total(row),
-            pkv if pkv is not None else "—",
+            enlace or "",
             (obs or "")[:500],
         ]
         for col, v in enumerate(vals, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.border = bd
             cell.font = Font(size=8)
-            if col in (5, 6, 7, 8, 9):
+            if col in (4, 5, 6, 7, 8):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
-                if col == 9:
+                if col == 8:
                     cell.number_format = "0.000"
-            elif col in (3, 11):
+            elif col in (9, 10):
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
-                if col == 3 and enlace.startswith(("http://", "https://")):
+                if col == 9 and enlace.startswith(("http://", "https://")):
                     cell.font = Font(size=8, color="0563C1", underline="single")
                     cell.hyperlink = enlace
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         if i % 2 == 0:
-            for col in range(1, 12):
+            for col in range(1, 11):
                 ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F8FAFC")
 
     tot_r = data_row + len(registros)
-    ws.merge_cells(start_row=tot_r, start_column=1, end_row=tot_r, end_column=8)
+    ws.merge_cells(start_row=tot_r, start_column=1, end_row=tot_r, end_column=7)
     ws.cell(row=tot_r, column=1, value="CANTIDAD TOTAL DEL ÍTEM").alignment = Alignment(
         horizontal="right", vertical="center"
     )
     ws.cell(row=tot_r, column=1).font = Font(bold=True, size=9)
     if registros:
-        tot_formula = f"=SUM(I{data_row}:I{data_row + len(registros) - 1})"
+        tot_formula = f"=SUM(H{data_row}:H{data_row + len(registros) - 1})"
     else:
         tot_formula = 0
-    c_tot = ws.cell(row=tot_r, column=9, value=tot_formula)
+    c_tot = ws.cell(row=tot_r, column=8, value=tot_formula)
     c_tot.font = Font(bold=True, size=9)
     c_tot.alignment = Alignment(horizontal="right")
     c_tot.number_format = "0.000"
@@ -11466,17 +11559,15 @@ def _fill_memoria_excel_ws(
     c_lab = ws.cell(row=tot_r, column=1)
     c_lab.border = bd
     c_lab.fill = fill_tot
-    for cc in (10, 11):
+    for cc in (9, 10):
         c_e = ws.cell(row=tot_r, column=cc)
         c_e.border = bd
         c_e.fill = fill_tot
 
-    fotos = [r for r in registros if (r.get("foto_url") or "").strip()]
-    graficos: List[Dict[str, Any]] = []
-    for r in registros:
-        graficos.extend(_lista_graficos_memoria_registro(r))
+    fotos = _dedupe_fotos_memoria(registros)
+    graficos = _dedupe_graficos_memoria(registros)
     fr = tot_r + 2
-    ws.merge_cells(start_row=fr, start_column=1, end_row=fr, end_column=11)
+    ws.merge_cells(start_row=fr, start_column=1, end_row=fr, end_column=10)
     cap_foto = f"REGISTRO FOTOGRÁFICO — ÍTEM {item_info.get('item_numero', '')} | Corte N° {corte.get('consecutivo', '')}"
     if conc_meta and (pie_fotos_contexto or "").strip():
         cap_foto = f"REGISTRO FOTOGRÁFICO — ÍTEM {item_info.get('item_numero', '')} | {pie_fotos_contexto}"
@@ -11487,20 +11578,20 @@ def _fill_memoria_excel_ws(
     fb.border = bd
 
     fhdr = fr + 1
-    ws.cell(row=fhdr, column=1, value="Reg.").fill = fill_th
+    ws.cell(row=fhdr, column=1, value="Regs.").fill = fill_th
     ws.cell(row=fhdr, column=1).font = Font(bold=True, size=8)
     ws.cell(row=fhdr, column=1).border = bd
     ws.cell(row=fhdr, column=2, value="Foto N°").fill = fill_th
     ws.cell(row=fhdr, column=2).font = Font(bold=True, size=8)
     ws.cell(row=fhdr, column=2).border = bd
-    ws.merge_cells(start_row=fhdr, start_column=3, end_row=fhdr, end_column=8)
+    ws.merge_cells(start_row=fhdr, start_column=3, end_row=fhdr, end_column=7)
     c3 = ws.cell(row=fhdr, column=3, value="Enlace / URL")
     c3.fill = fill_th
     c3.font = Font(bold=True, size=8)
     c3.alignment = Alignment(horizontal="center", vertical="center")
     c3.border = bd
-    ws.merge_cells(start_row=fhdr, start_column=9, end_row=fhdr, end_column=11)
-    c9 = ws.cell(row=fhdr, column=9, value="Observación")
+    ws.merge_cells(start_row=fhdr, start_column=8, end_row=fhdr, end_column=10)
+    c9 = ws.cell(row=fhdr, column=8, value="Observación")
     c9.fill = fill_th
     c9.font = Font(bold=True, size=8)
     c9.alignment = Alignment(horizontal="center", vertical="center")
@@ -11508,7 +11599,7 @@ def _fill_memoria_excel_ws(
 
     pr = fhdr + 1
     if not fotos:
-        ws.merge_cells(start_row=pr, start_column=1, end_row=pr, end_column=11)
+        ws.merge_cells(start_row=pr, start_column=1, end_row=pr, end_column=10)
         sf = ws.cell(row=pr, column=1, value="Sin fotos en este ítem.")
         sf.font = Font(size=8, italic=True, color="64748B")
         sf.alignment = Alignment(horizontal="left")
@@ -11517,10 +11608,11 @@ def _fill_memoria_excel_ws(
     else:
         for r in fotos:
             fu = (r.get("foto_url") or "").strip()
-            obs_f = _descripcion_memoria_compacta((r.get("observacion") or "")[:300])
-            ws.cell(row=pr, column=1, value=r.get("numero_registro")).border = bd
+            regs_txt = _memoria_regs_txt(r.get("numeros_registro") or [])
+            obs_f = _descripcion_memoria_compacta((_memoria_media_caption_obs(r) or "")[:300])
+            ws.cell(row=pr, column=1, value=regs_txt).border = bd
             ws.cell(row=pr, column=2, value=r.get("foto_numero")).border = bd
-            ws.merge_cells(start_row=pr, start_column=3, end_row=pr, end_column=8)
+            ws.merge_cells(start_row=pr, start_column=3, end_row=pr, end_column=7)
             fu_cell = fu if len(fu) < 8000 else fu[:7990] + "…"
             lc = ws.cell(row=pr, column=3, value=fu_cell)
             lc.font = Font(size=8, color="0563C1", underline="single")
@@ -11528,17 +11620,17 @@ def _fill_memoria_excel_ws(
                 lc.hyperlink = fu
             lc.alignment = Alignment(wrap_text=True, vertical="top")
             lc.border = bd
-            ws.merge_cells(start_row=pr, start_column=9, end_row=pr, end_column=11)
-            oc = ws.cell(row=pr, column=9, value=obs_f)
+            ws.merge_cells(start_row=pr, start_column=8, end_row=pr, end_column=10)
+            oc = ws.cell(row=pr, column=8, value=obs_f)
             oc.font = Font(size=8)
             oc.alignment = Alignment(wrap_text=True, vertical="top")
             oc.border = bd
             pr += 1
 
-    # Registro gráfico (solo si hay gráficos asociados a los registros del ítem).
+    # Registro gráfico (solo si hay gráficos asociados; una fila por URL única).
     if graficos:
         gr = pr + 1
-        ws.merge_cells(start_row=gr, start_column=1, end_row=gr, end_column=11)
+        ws.merge_cells(start_row=gr, start_column=1, end_row=gr, end_column=10)
         cap_gr = f"REGISTRO GRÁFICO — ÍTEM {item_info.get('item_numero', '')} | Corte N° {corte.get('consecutivo', '')}"
         if conc_meta and (pie_fotos_contexto or "").strip():
             cap_gr = f"REGISTRO GRÁFICO — ÍTEM {item_info.get('item_numero', '')} | {pie_fotos_contexto}"
@@ -11548,20 +11640,20 @@ def _fill_memoria_excel_ws(
         gb.alignment = Alignment(horizontal="center", vertical="center")
         gb.border = bd
         ghdr = gr + 1
-        ws.cell(row=ghdr, column=1, value="Reg.").fill = fill_th
+        ws.cell(row=ghdr, column=1, value="Regs.").fill = fill_th
         ws.cell(row=ghdr, column=1).font = Font(bold=True, size=8)
         ws.cell(row=ghdr, column=1).border = bd
         ws.cell(row=ghdr, column=2, value="Gráfico N°").fill = fill_th
         ws.cell(row=ghdr, column=2).font = Font(bold=True, size=8)
         ws.cell(row=ghdr, column=2).border = bd
-        ws.merge_cells(start_row=ghdr, start_column=3, end_row=ghdr, end_column=8)
+        ws.merge_cells(start_row=ghdr, start_column=3, end_row=ghdr, end_column=7)
         gc3 = ws.cell(row=ghdr, column=3, value="Enlace / URL")
         gc3.fill = fill_th
         gc3.font = Font(bold=True, size=8)
         gc3.alignment = Alignment(horizontal="center", vertical="center")
         gc3.border = bd
-        ws.merge_cells(start_row=ghdr, start_column=9, end_row=ghdr, end_column=11)
-        gc9 = ws.cell(row=ghdr, column=9, value="Observación")
+        ws.merge_cells(start_row=ghdr, start_column=8, end_row=ghdr, end_column=10)
+        gc9 = ws.cell(row=ghdr, column=8, value="Observación")
         gc9.fill = fill_th
         gc9.font = Font(bold=True, size=8)
         gc9.alignment = Alignment(horizontal="center", vertical="center")
@@ -11569,10 +11661,11 @@ def _fill_memoria_excel_ws(
         pr = ghdr + 1
         for g in graficos:
             gu = (g.get("grafico_url") or "").strip()
-            obs_g = _descripcion_memoria_compacta((g.get("observacion") or "")[:300])
-            ws.cell(row=pr, column=1, value=g.get("numero_registro")).border = bd
+            regs_txt = _memoria_regs_txt(g.get("numeros_registro") or [])
+            obs_g = _descripcion_memoria_compacta((_memoria_media_caption_obs(g) or "")[:300])
+            ws.cell(row=pr, column=1, value=regs_txt).border = bd
             ws.cell(row=pr, column=2, value=g.get("grafico_numero")).border = bd
-            ws.merge_cells(start_row=pr, start_column=3, end_row=pr, end_column=8)
+            ws.merge_cells(start_row=pr, start_column=3, end_row=pr, end_column=7)
             gu_cell = gu if len(gu) < 8000 else gu[:7990] + "…"
             lc = ws.cell(row=pr, column=3, value=gu_cell)
             lc.font = Font(size=8, color="0563C1", underline="single")
@@ -11580,15 +11673,15 @@ def _fill_memoria_excel_ws(
                 lc.hyperlink = gu
             lc.alignment = Alignment(wrap_text=True, vertical="top")
             lc.border = bd
-            ws.merge_cells(start_row=pr, start_column=9, end_row=pr, end_column=11)
-            oc = ws.cell(row=pr, column=9, value=obs_g)
+            ws.merge_cells(start_row=pr, start_column=8, end_row=pr, end_column=10)
+            oc = ws.cell(row=pr, column=8, value=obs_g)
             oc.font = Font(size=8)
             oc.alignment = Alignment(wrap_text=True, vertical="top")
             oc.border = bd
             pr += 1
 
     sr = pr + 1
-    ws.merge_cells(start_row=sr, start_column=1, end_row=sr, end_column=11)
+    ws.merge_cells(start_row=sr, start_column=1, end_row=sr, end_column=10)
     ws.cell(row=sr, column=1, value="FIRMAS").fill = fill_bar
     ws.cell(row=sr, column=1).font = Font(bold=True, size=9)
     ws.cell(row=sr, column=1).alignment = Alignment(horizontal="center")
@@ -11605,8 +11698,8 @@ def _fill_memoria_excel_ws(
     ws.cell(row=fr0, column=6).font = Font(size=8)
     lbl_apro = "Aprobó (interventoría):" if aprobo_interventoria_desde_config else "Aprobó (subcontratista):"
     txt_apro = f"{aprobo_emp}\n{aprobo_rep}" if aprobo_interventoria_desde_config else f"{aprobo_emp}\nRepresentante: {aprobo_rep}"
+    # 10 cols: Elaboró A|B–D · Revisó E|F–H · Aprobó I|J (valor en J; etiqueta en I).
     ws.cell(row=fr0, column=9, value=lbl_apro).font = Font(size=8, bold=True)
-    ws.merge_cells(start_row=fr0, start_column=10, end_row=fr0, end_column=11)
     ws.cell(row=fr0, column=10, value=txt_apro).alignment = Alignment(wrap_text=True)
     ws.cell(row=fr0, column=10).font = Font(size=8)
     for cc in (1, 2, 5, 6, 9, 10):
@@ -13318,15 +13411,14 @@ def _html_memoria_item_body(
     # 1ª hoja: encabezado + barras consumen altura — objetivo ~26 filas para evitar 1 sola fila en página siguiente.
     ROWS_MEMORIA_PRIMERA_HOJA = 26
     ROWS_MEMORIA_SIGUIENTES = 30
-    # Plantilla fija: 12 contenedores/página (3 filas × 4). Tamaño de caja/pie = invariable;
+    # Plantilla fija: 6 contenedores/página (3 columnas × 2 filas). Caja/pie = invariable;
     # el encabezado completo cabe gracias a márgenes @page más justos (ver MEMORIA002_CSS).
-    FOTOS_PER_PAGE = 12
-    FOTOS_COLS = 4
+    FOTOS_PER_PAGE = 6
+    FOTOS_COLS = 3
+    FOTO_BOX_H = "6.85cm"
 
-    fotos = [r for r in registros if r.get("foto_url")]
-    graficos: List[Dict[str, Any]] = []
-    for r in registros:
-        graficos.extend(_lista_graficos_memoria_registro(r))
+    fotos = _dedupe_fotos_memoria(registros)
+    graficos = _dedupe_graficos_memoria(registros)
     cap_val = _capitulo_memoria(item_info, registros) or "—"
 
     def encabezado():
@@ -13415,18 +13507,18 @@ def _html_memoria_item_body(
     chunks_graf = [graficos[i : i + FOTOS_PER_PAGE] for i in range(0, len(graficos), FOTOS_PER_PAGE)]
     chunks_reg = _chunks_memoria_detalle(registros, ROWS_MEMORIA_PRIMERA_HOJA, ROWS_MEMORIA_SIGUIENTES)
 
+    # Orden: N°, Abscisas, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot, Enlace, Observación (sin PK ID).
     thead_detalle = """<tr>
             <th class="data-th" style="width:4%">N°</th>
-            <th class="data-th" style="width:11%">ABSCISAS</th>
-            <th class="data-th" style="width:10%">ENLACE</th>
-            <th class="data-th" style="width:10%">INFRAESTRUCTURA</th>
+            <th class="data-th" style="width:12%">ABSCISAS</th>
+            <th class="data-th" style="width:11%">INFRAESTRUCTURA</th>
             <th class="data-th" style="width:6%">LONG</th>
             <th class="data-th" style="width:6%">ANCHO</th>
             <th class="data-th" style="width:6%">ESP</th>
             <th class="data-th" style="width:7%">CANT</th>
             <th class="data-th" style="width:8%">CANT TOT</th>
-            <th class="data-th" style="width:7%">PK ID</th>
-            <th class="data-th" style="width:25%">OBSERVACIÓN</th>
+            <th class="data-th" style="width:12%">ENLACE</th>
+            <th class="data-th" style="width:28%">OBSERVACIÓN</th>
         </tr>"""
 
     body = ""
@@ -13447,21 +13539,19 @@ def _html_memoria_item_body(
             if fn:
                 obs = f"{obs} [Foto {fn}]".strip()
             obs = _descripcion_memoria_compacta(obs)
-            pkv = (r.get("pk_ids") or {}).get("pk_id")
             enlace = _memoria_enlace_txt(r)
             infra = _memoria_infraestructura_txt(r) or "—"
             enlace_cell = _h(enlace) if enlace else ""
             body += f"""<tr class="{cls}">
                 <td class="data-td" style="text-align:center">{_h(r.get('numero_registro',''))}</td>
                 <td class="data-td" style="text-align:center">{_h(_memoria_abscisas_txt(r))}</td>
-                <td class="data-td mem002-obs" style="text-align:left;font-size:5.5pt">{enlace_cell}</td>
                 <td class="data-td" style="text-align:center">{_h(infra)}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('longitud'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('ancho'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('espesor'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('cantidad'))}</td>
                 <td class="data-td" style="text-align:right;font-weight:bold">{_fn_cant(r.get('cantidad_total'))}</td>
-                <td class="data-td" style="text-align:center">{_h(pkv if pkv is not None else '—')}</td>
+                <td class="data-td mem002-obs" style="text-align:left;font-size:5.5pt">{enlace_cell}</td>
                 <td class="data-td mem002-obs">{_h((obs or '')[:500])}</td>
             </tr>"""
 
@@ -13489,7 +13579,7 @@ def _html_memoria_item_body(
         aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
     )
 
-    # Páginas de fotos / gráficos: mismo encabezado institucional + banda + ítem; plantilla 3×4.
+    # Páginas de fotos / gráficos: mismo encabezado institucional + banda + ítem; plantilla 3×2.
     if pie_fotos_contexto:
         pie_foto = _h(pie_fotos_contexto)
     else:
@@ -13504,16 +13594,17 @@ def _html_memoria_item_body(
             return (
                 '<td class="mem002-foto-slot">'
                 '<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%">'
-                '<tr><td style="height:4.55cm;text-align:center;vertical-align:middle;color:#cbd5e1;font-size:6pt;">&nbsp;</td></tr>'
+                f'<tr><td style="height:{FOTO_BOX_H};text-align:center;vertical-align:middle;color:#cbd5e1;font-size:6pt;">&nbsp;</td></tr>'
                 "</table>"
                 '<div class="mem002-foto-caption">&nbsp;</div>'
                 "</td>"
             )
         img_html = f'<img src="{_h(url)}" alt="media"/>'
-        obs_f = _descripcion_memoria_compacta((caption_obs or "")[:90])
+        # Pie de alto fijo: truncar de forma legible la relación de registros / obs.
+        obs_f = _descripcion_memoria_compacta((caption_obs or "")[:120])
         return f"""<td class="mem002-foto-slot">
 <table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%">
-<tr><td style="height:4.55cm;text-align:center;vertical-align:middle;">{img_html}</td></tr>
+<tr><td style="height:{FOTO_BOX_H};text-align:center;vertical-align:middle;">{img_html}</td></tr>
 </table>
 <div class="mem002-foto-caption">
 <div class="foto-caption">{_h(caption_top)}</div>
@@ -13527,6 +13618,7 @@ def _html_memoria_item_body(
         section_title: str,
         caption_builder,
         url_key: str,
+        obs_builder,
     ) -> str:
         parts = ""
         for chunk in chunks:
@@ -13547,7 +13639,7 @@ def _html_memoria_item_body(
                         parts += _celda_media_slot(
                             (item.get(url_key) or "").strip() or None,
                             caption_builder(item),
-                            item.get("observacion") or "",
+                            obs_builder(item),
                         )
                 parts += "</tr>"
             parts += "</table>"
@@ -13560,17 +13652,21 @@ def _html_memoria_item_body(
     body += _paginas_media_grid(
         chunks_foto,
         section_title="REGISTRO FOTOGRÁFICO",
-        caption_builder=lambda r: f"Foto {r.get('foto_numero', '')} — Reg. {r.get('numero_registro', '')}",
+        caption_builder=lambda r: _memoria_media_caption_top(
+            "foto", r.get("foto_numero"), r.get("numeros_registro") or []
+        ),
         url_key="foto_url",
+        obs_builder=_memoria_media_caption_obs,
     )
     if chunks_graf:
         body += _paginas_media_grid(
             chunks_graf,
             section_title="REGISTRO GRÁFICO",
-            caption_builder=lambda g: (
-                f"Gráfico {g.get('grafico_numero', '')} — Reg. {g.get('numero_registro', '')}"
+            caption_builder=lambda g: _memoria_media_caption_top(
+                "grafico", g.get("grafico_numero"), g.get("numeros_registro") or []
             ),
             url_key="grafico_url",
+            obs_builder=_memoria_media_caption_obs,
         )
 
     return body
