@@ -327,6 +327,45 @@ function parseEnlacesSoporteReporte(raw) {
   }
 }
 
+/** True si la biblioteca de soportes (cabecera o raw) tiene al menos un enlace. */
+function sicoeTieneEnlaceSoporte(raw) {
+  return parseEnlacesSoporteReporte(raw).length > 0
+}
+
+/**
+ * Ícono discreto de soporte adjunto para la grilla de reportes.
+ * Solo renderiza contenido cuando `tiene` es true (reserva el hueco visual con minWidth).
+ */
+function SicoeIconoSoporteAdjunto({ tiene, t, size = 'var(--cc-sm)' }) {
+  if (!tiene) {
+    return <span aria-hidden style={{ display: 'inline-block', width: '1.1em', flexShrink: 0 }} />
+  }
+  const color = t?.textMuted || 'currentColor'
+  return (
+    <span
+      role="img"
+      aria-label="Soporte adjunto"
+      title="Soporte adjunto"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '1.1em',
+        flexShrink: 0,
+        fontSize: size,
+        lineHeight: 1,
+        color,
+        opacity: 0.92,
+        cursor: 'default',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+      }}
+    >
+      📎
+    </span>
+  )
+}
+
 /** Texto para etiqueta en mapa: abscisas (`etiqueta`) o PK en polígonos. */
 function _mapLabelPlanoFeature(f, pkidResolved) {
   const p = f?.properties
@@ -6280,13 +6319,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setGuardandoEnlace(true)
     try {
       const nuevos = [...enlaces, enlaceInput]
+      const enlaceRaw = JSON.stringify(nuevos)
       await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
         method: 'PUT', headers: hdrs,
-        body: JSON.stringify({ ...reporte, enlace_soporte: JSON.stringify(nuevos) })
+        body: JSON.stringify({ ...reporte, enlace_soporte: enlaceRaw })
       })
       setEnlaces(nuevos)
       setEnlaceInput('')
-      setReporte(r => ({ ...r, enlace_soporte: JSON.stringify(nuevos) }))
+      setReporte(r => ({ ...r, enlace_soporte: enlaceRaw, tiene_enlace_soporte: true }))
+      propagarReporteGuardado({
+        id: reporte.id,
+        enlace_soporte: enlaceRaw,
+        tiene_enlace_soporte: true,
+      })
     } catch(e) {}
     setGuardandoEnlace(false)
   }
@@ -6294,12 +6339,20 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const eliminarEnlace = async (idx) => {
     const nuevos = enlaces.filter((_, i) => i !== idx)
     try {
+      const enlaceRaw = nuevos.length ? JSON.stringify(nuevos) : null
       await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
         method: 'PUT', headers: hdrs,
-        body: JSON.stringify({ ...reporte, enlace_soporte: JSON.stringify(nuevos) })
+        body: JSON.stringify({ ...reporte, enlace_soporte: enlaceRaw })
       })
       setEnlaces(nuevos)
-      setReporte(r => ({ ...r, enlace_soporte: JSON.stringify(nuevos) }))
+      const tieneRegs = registros.some((r) => sicoeTieneEnlaceSoporte(r?.enlace_soporte))
+      const tiene = nuevos.length > 0 || tieneRegs
+      setReporte(r => ({ ...r, enlace_soporte: enlaceRaw, tiene_enlace_soporte: tiene }))
+      propagarReporteGuardado({
+        id: reporte.id,
+        enlace_soporte: enlaceRaw,
+        tiene_enlace_soporte: tiene,
+      })
     } catch(e) {}
   }
 
@@ -10507,8 +10560,8 @@ function ModuloSicoeObra({
     }
   }
   const sicoeGrillaCols = nivelInfo.verValoresEconomicos
-    ? '68px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
-    : '68px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px'
+    ? '78px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
+    : '78px 96px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px'
   // Varias capas: AND u OR según `validacion_capas_op` en backend; no refinar de nuevo con agregados por reporte
   const reportesMostrados = reportes
 
@@ -12341,7 +12394,13 @@ function ModuloSicoeObra({
             }}
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-            <div style={{ fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
+            <div style={{ fontWeight:'700', color:t.primary, display:'flex', alignItems:'center', gap:4, minWidth:0 }}>
+              <span>#{rep.numero_reporte}</span>
+              <SicoeIconoSoporteAdjunto
+                tiene={!!rep.tiene_enlace_soporte || sicoeTieneEnlaceSoporte(rep.enlace_soporte)}
+                t={t}
+              />
+            </div>
             <div
               style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3, whiteSpace:'nowrap' }}
               title={rep.created_at ? `Creado: ${fmtSicoeFechaCreacion(rep.created_at)}` : 'Sin fecha de creación'}
@@ -12471,7 +12530,14 @@ function ModuloSicoeObra({
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)' }}>#{rep.numero_reporte}</div>
+                    <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>#{rep.numero_reporte}</span>
+                      <SicoeIconoSoporteAdjunto
+                        tiene={!!rep.tiene_enlace_soporte || sicoeTieneEnlaceSoporte(rep.enlace_soporte)}
+                        t={t}
+                        size="var(--cc-body)"
+                      />
+                    </div>
                     <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
                       {fmtSicoeFechaCreacion(rep.created_at)}
                     </div>
@@ -12741,6 +12807,13 @@ function ModuloSicoeObra({
             setReporteSeleccionado((prev) =>
               prev && String(prev.id) === String(patch.id) ? { ...prev, ...patch } : prev,
             )
+            if (patch?.id != null) {
+              setReportes((prev) =>
+                (prev || []).map((r) =>
+                  String(r.id) === String(patch.id) ? { ...r, ...patch } : r,
+                ),
+              )
+            }
           }}
         />
       )}

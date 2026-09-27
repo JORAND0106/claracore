@@ -3099,6 +3099,71 @@ _VM_COBRADO_NIVEL_COL = {i: f"cobrado_nivel{i}" for i in range(1, 7)}
 _VM_NR_NIVEL_COL = {i: f"no_revisado_nivel{i}" for i in range(3, 7)}
 
 
+def _sicoe_enlace_soporte_tiene_urls(raw) -> bool:
+    """True si `enlace_soporte` (JSON array, string suelto o lista) tiene al menos una URL no vacía."""
+    if raw is None:
+        return False
+    if isinstance(raw, (list, tuple)):
+        return any(str(x).strip() for x in raw)
+    s = str(raw).strip()
+    if not s or s in ("[]", "null", "None"):
+        return False
+    try:
+        parsed = json.loads(s)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return True
+    if isinstance(parsed, list):
+        return any(str(x).strip() for x in parsed)
+    if parsed is None:
+        return False
+    return bool(str(parsed).strip())
+
+
+def _sicoe_enriquecer_tiene_enlace_soporte(rows: List[dict]) -> None:
+    """
+    Marca `tiene_enlace_soporte` en cada fila de grilla (in-place).
+    Usa la cabecera ya cargada y un batch liviano a so_registros solo para la página
+    (típicamente ≤50–100 IDs), sin ampliar filtros ni el universo de búsqueda.
+    """
+    if not rows:
+        return
+    for r in rows:
+        r["tiene_enlace_soporte"] = _sicoe_enlace_soporte_tiene_urls(r.get("enlace_soporte"))
+    faltan = [int(r["id"]) for r in rows if r.get("id") is not None and not r.get("tiene_enlace_soporte")]
+    if not faltan:
+        return
+    con_enlace_reg: set = set()
+    for chunk in _sicoe_chunks_int(faltan, 200):
+        ch = list(chunk)
+
+        def _q(ids=ch):
+            return (
+                supabase.table("so_registros")
+                .select("reporte_id, enlace_soporte")
+                .in_("reporte_id", ids)
+                .not_.is_("enlace_soporte", "null")
+                .execute()
+                .data
+            )
+
+        try:
+            batch = supabase_execute(_q) or []
+        except Exception:
+            batch = []
+        for reg in batch:
+            rid = reg.get("reporte_id")
+            if rid is None:
+                continue
+            if _sicoe_enlace_soporte_tiene_urls(reg.get("enlace_soporte")):
+                con_enlace_reg.add(int(rid))
+    if not con_enlace_reg:
+        return
+    for r in rows:
+        rid = r.get("id")
+        if rid is not None and int(rid) in con_enlace_reg:
+            r["tiene_enlace_soporte"] = True
+
+
 def _vm_cobrado_col(campo_max: str) -> str:
     n = _sicoe_nivel_num_desde_campo(campo_max) or 3
     return _VM_COBRADO_NIVEL_COL.get(n, "cobrado_nivel3")
@@ -20275,6 +20340,8 @@ def buscar_reportes_obra(
     # sin registros coincidentes para evitar descuadres panel/grilla.
     if _nivel_l and _ev_l:
         rows = [r for r in rows if (r.get("num_registros") or 0) > 0]
+
+    _sicoe_enriquecer_tiene_enlace_soporte(rows)
 
     return {"reportes": rows, "total": len(rows), "offset": offset, "limit": limit, "hay_mas": hay_mas}
 
