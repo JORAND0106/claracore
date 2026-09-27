@@ -10902,18 +10902,16 @@ body.mem002-doc .mem002-foto-grid {
   margin-top: 2px;
 }
 body.mem002-doc .mem002-foto-grid td.mem002-foto-slot {
-  /* max-width:0 + table-layout:fixed: evita que imgs anchos expandan la celda */
+  /* NO usar max-width:0 aquí: en xhtml2pdf colapsa la celda y las imgs desaparecen
+     (mismo hallazgo documentado en el thead de gerencia matriz). */
   width: 33.33%;
-  max-width: 0;
   vertical-align: top;
   padding: 3px 5px;
   overflow: hidden;
 }
-/* Caja de media: tamaño fijo; la imagen se adapta (nunca al revés). xhtml2pdf
-   ignora a menudo overflow/object-fit: forzar width=100% + max-height en img. */
+/* Caja de media: tamaño fijo; la imagen se adapta (nunca al revés). */
 body.mem002-doc .mem002-foto-box {
   width: 100%;
-  max-width: 100%;
   table-layout: fixed;
   height: 6.85cm;
   max-height: 6.85cm;
@@ -10925,7 +10923,6 @@ body.mem002-doc .mem002-foto-box {
 }
 body.mem002-doc .mem002-foto-box td {
   width: 100%;
-  max-width: 0;
   height: 6.85cm;
   max-height: 6.85cm;
   overflow: hidden;
@@ -10933,16 +10930,18 @@ body.mem002-doc .mem002-foto-box td {
   vertical-align: middle;
   padding: 2px;
 }
+/* Contención sin colapsar: max-width/max-height en la img (no max-width:0 en el td). */
 body.mem002-doc .mem002-foto-box img,
 body.mem002-doc .mem002-foto-box img.mem002-media-img {
-  width: 100% !important;
-  max-width: 100% !important;
-  height: auto !important;
-  max-height: 6.55cm !important;
-  display: block;
+  max-width: 100%;
+  max-height: 6.55cm;
+  width: auto;
+  height: auto;
+  display: inline-block;
   margin: 0 auto;
   object-fit: contain;
   object-position: center center;
+  vertical-align: middle;
 }
 body.mem002-doc .mem002-foto-caption {
   height: 1.15cm;
@@ -13734,33 +13733,33 @@ def _html_memoria_item_body(
         caption_top: str,
         caption_obs: str,
     ) -> str:
-        # Contenedor de tamaño fijo; img con width=100% + max-height.
-        # max-width:0 en celdas (vía CSS) + table-layout:fixed evita desborde
-        # de gráficos anchos (xhtml2pdf y navegador).
+        # Contenedor de tamaño fijo. Contención en la IMG (max-width/max-height),
+        # no con max-width:0 en el td (colapsa en xhtml2pdf → imgs invisibles).
         box_td = (
-            f'style="width:100%;max-width:0;height:{FOTO_BOX_H};max-height:{FOTO_BOX_H};'
-            'overflow:hidden;text-align:center;vertical-align:middle;padding:2px;'
-            'line-height:0;font-size:0;"'
+            f'style="width:100%;height:{FOTO_BOX_H};max-height:{FOTO_BOX_H};'
+            'overflow:hidden;text-align:center;vertical-align:middle;padding:2px;"'
         )
         if not url:
             return (
-                '<td class="mem002-foto-slot" style="width:33.33%;max-width:0;overflow:hidden;">'
+                '<td class="mem002-foto-slot">'
                 '<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" '
-                'style="table-layout:fixed;width:100%;max-width:100%;">'
+                'style="table-layout:fixed;width:100%;">'
                 f"<tr><td {box_td}>&nbsp;</td></tr>"
                 "</table>"
                 '<div class="mem002-foto-caption">&nbsp;</div>'
                 "</td>"
             )
+        # width/height auto + max-* : escala sin deformar; overflow:hidden en la caja
+        # recorta cualquier exceso residual del motor PDF.
         img_html = (
-            f'<img class="mem002-media-img" src="{_h(url)}" alt="media" width="100%" '
-            f'style="width:100%!important;max-width:100%!important;height:auto!important;'
-            f'max-height:6.55cm!important;display:block;margin:0 auto;object-fit:contain;" />'
+            f'<img class="mem002-media-img" src="{_h(url)}" alt="media" '
+            f'style="max-width:100%;max-height:6.55cm;width:auto;height:auto;'
+            f'display:inline-block;margin:0 auto;object-fit:contain;vertical-align:middle;" />'
         )
         # Pie de alto fijo: truncar de forma legible la relación de registros / obs.
         obs_f = _descripcion_memoria_compacta((caption_obs or "")[:120])
-        return f"""<td class="mem002-foto-slot" style="width:33.33%;max-width:0;overflow:hidden;">
-<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" style="table-layout:fixed;width:100%;max-width:100%;">
+        return f"""<td class="mem002-foto-slot">
+<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" style="table-layout:fixed;width:100%;">
 <tr><td {box_td}>{img_html}</td></tr>
 </table>
 <div class="mem002-foto-caption">
