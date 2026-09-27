@@ -1685,31 +1685,53 @@ def _contexto_memoria_item(
         id=mem_sub_id,
     ) or {}
 
-    q = (
-        _sb.table("so_registros")
-        .select(
-            "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, cantidad, cantidad_total, observacion, foto_url, foto_numero, item_numero, item_descripcion, unidad"
-        )
-        .eq("contrato_id", contrato_id)
-        .eq("corte_id", corte_id)
+    sel_mem = (
+        "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
+        "longitud, ancho, espesor, cantidad, cantidad_total, observacion, foto_url, "
+        "foto_numero, item_numero, item_descripcion, unidad, capitulo"
     )
-    q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
-    if item_exacto:
-        q = q.eq("item_numero", (item_numero or "").strip())
-    else:
-        q = q.ilike("item_numero", f"%{item_numero}%")
-    registros = q.order("numero_registro").execute().data or []
+    try:
+        q = (
+            _sb.table("so_registros")
+            .select(sel_mem)
+            .eq("contrato_id", contrato_id)
+            .eq("corte_id", corte_id)
+        )
+        q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+        if item_exacto:
+            q = q.eq("item_numero", (item_numero or "").strip())
+        else:
+            q = q.ilike("item_numero", f"%{item_numero}%")
+        registros = q.order("numero_registro").execute().data or []
+    except Exception as e0:
+        err = str(e0).lower()
+        if "capitulo" in err or "column" in err or "schema cache" in err:
+            _log.warning("so_registros sin columna capitulo (memoria ítem); reintento sin ella: %s", e0)
+            q = (
+                _sb.table("so_registros")
+                .select(
+                    "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
+                    "longitud, ancho, espesor, cantidad, cantidad_total, observacion, foto_url, "
+                    "foto_numero, item_numero, item_descripcion, unidad"
+                )
+                .eq("contrato_id", contrato_id)
+                .eq("corte_id", corte_id)
+            )
+            q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+            if item_exacto:
+                q = q.eq("item_numero", (item_numero or "").strip())
+            else:
+                q = q.ilike("item_numero", f"%{item_numero}%")
+            registros = q.order("numero_registro").execute().data or []
+        else:
+            raise
 
     if not registros:
         if solo_aprobados:
             raise HTTPException(404, "No hay registros aprobados para este ítem en el corte")
         raise HTTPException(404, "No hay registros para este ítem en el corte")
 
-    item_info = {
-        "item_numero":      registros[0].get("item_numero", item_numero),
-        "item_descripcion": registros[0].get("item_descripcion", ""),
-        "unidad":           registros[0].get("unidad", ""),
-    }
+    item_info = _item_info_desde_registros(registros, item_numero)
 
     usuario_nombre = f"{current_user.get('nombre','')} {current_user.get('apellidos','')}".strip() or "—"
     usuario_cargo = current_user.get("cargo_nombre", "—") or "—"
@@ -5729,11 +5751,7 @@ def pdf_cc_sem_002_semana(
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
-    item_info = {
-        "item_numero": registros[0].get("item_numero", item_numero),
-        "item_descripcion": registros[0].get("item_descripcion", ""),
-        "unidad": registros[0].get("unidad", ""),
-    }
+    item_info = _item_info_desde_registros(registros, item_numero)
     sm = _row("so_semanas", "numero_semana, fecha_inicio, fecha_fin", id=semana_id) or {}
     nsem = sm.get("numero_semana")
     fi = str(sm.get("fecha_inicio") or "—")
@@ -5872,11 +5890,7 @@ def pdf_cc_sem_002_semana_completo(
             )
             if not registros:
                 continue
-            item_info = {
-                "item_numero": registros[0].get("item_numero", item_numero),
-                "item_descripcion": registros[0].get("item_descripcion", ""),
-                "unidad": registros[0].get("unidad", ""),
-            }
+            item_info = _item_info_desde_registros(registros, item_numero)
             inner = _html_memoria_item_body(
                 contrato,
                 sub,
@@ -5955,11 +5969,7 @@ def pdf_cc_mes_002_acta(
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
-    item_info = {
-        "item_numero": registros[0].get("item_numero", item_numero),
-        "item_descripcion": registros[0].get("item_descripcion", ""),
-        "unidad": registros[0].get("unidad", ""),
-    }
+    item_info = _item_info_desde_registros(registros, item_numero)
     ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
@@ -6319,11 +6329,7 @@ def pdf_cc_sem_002_semana_con_sello_firma(
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
-    item_info = {
-        "item_numero": registros[0].get("item_numero", item_numero),
-        "item_descripcion": registros[0].get("item_descripcion", ""),
-        "unidad": registros[0].get("unidad", ""),
-    }
+    item_info = _item_info_desde_registros(registros, item_numero)
     sm = _row("so_semanas", "numero_semana, fecha_inicio, fecha_fin", id=semana_id) or {}
     nsem = sm.get("numero_semana")
     fi = str(sm.get("fecha_inicio") or "—")
@@ -6465,11 +6471,7 @@ def pdf_cc_sem_002_semana_completo_con_sello_firma(
             )
             if not registros:
                 continue
-            item_info = {
-                "item_numero": registros[0].get("item_numero", item_numero),
-                "item_descripcion": registros[0].get("item_descripcion", ""),
-                "unidad": registros[0].get("unidad", ""),
-            }
+            item_info = _item_info_desde_registros(registros, item_numero)
             inner = _html_memoria_item_body(
                 contrato,
                 sub,
@@ -6552,11 +6554,7 @@ def pdf_cc_mes_002_acta_con_sello_firma(
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
-    item_info = {
-        "item_numero": registros[0].get("item_numero", item_numero),
-        "item_descripcion": registros[0].get("item_descripcion", ""),
-        "unidad": registros[0].get("unidad", ""),
-    }
+    item_info = _item_info_desde_registros(registros, item_numero)
     ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
@@ -6715,11 +6713,7 @@ def _cc_mes_002_acta_completo_ctx(
         if not registros:
             continue
         n_regs += len(registros)
-        item_info = {
-            "item_numero": registros[0].get("item_numero", item_numero),
-            "item_descripcion": registros[0].get("item_descripcion", ""),
-            "unidad": registros[0].get("unidad", ""),
-        }
+        item_info = _item_info_desde_registros(registros, item_numero)
         inner = _html_memoria_item_body(
             contrato,
             sub,
@@ -10862,7 +10856,58 @@ body.mem002-doc .doc-footer {
   padding-top: 2px;
   font-size: 6pt;
 }
-body.mem002-doc .mem002-foto-grid td { vertical-align: top; }
+/* Registro fotográfico: plantilla fija 2×4 (8 contenedores iguales por página). */
+body.mem002-doc .mem002-foto-grid {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin-top: 2px;
+}
+body.mem002-doc .mem002-foto-grid td.mem002-foto-slot {
+  width: 25%;
+  vertical-align: top;
+  padding: 3px 4px;
+}
+body.mem002-doc .mem002-foto-box {
+  width: 100%;
+  height: 4.55cm;
+  border: 1px solid #dee2e6;
+  background: #f8fafc;
+  text-align: center;
+  vertical-align: middle;
+  overflow: hidden;
+}
+body.mem002-doc .mem002-foto-box img {
+  max-width: 98%;
+  max-height: 4.35cm;
+  width: auto;
+  height: auto;
+  display: inline-block;
+  object-fit: contain;
+  vertical-align: middle;
+}
+body.mem002-doc .mem002-foto-caption {
+  height: 1.15cm;
+  max-height: 1.15cm;
+  overflow: hidden;
+  margin-top: 2px;
+  text-align: center;
+}
+body.mem002-doc .mem002-foto-caption .foto-caption {
+  font-size: 6pt;
+  line-height: 1.1;
+  margin: 0;
+  padding: 0;
+}
+body.mem002-doc .mem002-foto-caption .mem002-foto-obs {
+  font-size: 5.5pt;
+  color: #666;
+  line-height: 1.05;
+  margin: 1px 0 0 0;
+  padding: 0;
+  max-height: 0.7cm;
+  overflow: hidden;
+}
 /* Bloque firmas (misma lógica que CC-SUB-001: Elaboró / Revisó / Aprobó subcontratista) */
 body.mem002-doc .mem002-firmas-wrap {
   margin-top: 2mm;
@@ -11045,6 +11090,74 @@ def _excel_unique_sheet_name(wb: Workbook, base: str) -> str:
     return f"H{len(wb.sheetnames)}"[:31]
 
 
+def _item_info_desde_registros(registros: List[dict], item_numero: str = "") -> Dict[str, Any]:
+    """Ítem + capítulo para encabezado de memorias (CC-SUB/SEM/MES-002)."""
+    r0 = registros[0] if registros else {}
+    return {
+        "item_numero": r0.get("item_numero", item_numero) or item_numero,
+        "item_descripcion": r0.get("item_descripcion", "") or "",
+        "unidad": r0.get("unidad", "") or "",
+        "capitulo": str(r0.get("capitulo") or "").strip(),
+    }
+
+
+def _capitulo_memoria(item_info: Optional[dict], registros: Optional[List[dict]] = None) -> str:
+    """Capítulo del ítem: item_info o primer registro (misma ambigüedad ítem/capítulo)."""
+    cap = str((item_info or {}).get("capitulo") or "").strip()
+    if cap:
+        return cap
+    for r in registros or []:
+        cap = str(r.get("capitulo") or "").strip()
+        if cap:
+            return cap
+    return ""
+
+
+def _memoria_cells_con_capitulo(
+    cells: Optional[List[Any]],
+    capitulo: str,
+) -> List[Tuple[str, str]]:
+    """Banda de identificación con CAPÍTULO (5 campos). No duplica si ya viene en cells."""
+    out: List[Tuple[str, str]] = []
+    for c in cells or []:
+        if not c or len(c) < 2:
+            continue
+        out.append((str(c[0] or ""), str(c[1] if c[1] is not None else "")))
+    labels = {a.strip().upper().replace("Í", "I") for a, _ in out}
+    if "CAPITULO" not in labels:
+        out.append(("CAPÍTULO", (capitulo or "").strip() or "—"))
+    return out
+
+
+def _excel_num_or_blank(v: Any) -> Optional[float]:
+    """Dato de entrada numérico para Excel (vacío → None, no string formateado)."""
+    if v is None or v == "" or v == "—":
+        return None
+    try:
+        x = float(v)
+        if math.isnan(x) or math.isinf(x):
+            return None
+        return x
+    except (TypeError, ValueError):
+        try:
+            x = float(str(v).replace(",", "").replace(" ", "").strip())
+            if math.isnan(x) or math.isinf(x):
+                return None
+            return x
+        except (TypeError, ValueError):
+            return None
+
+
+def _excel_formula_cantidad_total(row: int) -> str:
+    """CANT TOT = L×A×E[×C] con vacíos=1 y redondeo dinámico (2 dp si ≥0.10, si no 3)."""
+    f, g, h, i = f"F{row}", f"G{row}", f"H{row}", f"I{row}"
+    prod = f'IF({f}="",1,{f})*IF({g}="",1,{g})*IF({h}="",1,{h})*IF({i}="",1,{i})'
+    return (
+        f'=IF(AND({f}="",{g}="",{h}="",{i}=""),0,'
+        f'IF(ROUND({prod},2)>=0.1,ROUND({prod},2),ROUND({prod},3)))'
+    )
+
+
 def _fill_memoria_excel_ws(
     ws,
     contrato: dict,
@@ -11058,7 +11171,10 @@ def _fill_memoria_excel_ws(
     pie_fotos_contexto: Optional[str] = None,
     aprobo_interventoria_desde_config: bool = False,
 ) -> None:
-    """Hoja CC-SUB-002 / CC-SEM-002 / CC-MES-002: encabezado, detalle, total, fotos, firmas."""
+    """Hoja CC-SUB-002 / CC-SEM-002 / CC-MES-002: encabezado, detalle, total, fotos, firmas.
+
+    Entradas (longitud/ancho/espesor/cantidad) como valores; CANT TOT y total del ítem como fórmulas.
+    """
     fc = firma_cfg or {}
     elaboro_n = str(fc.get("elaboro_nombre") or "").strip() or "—"
     elaboro_c = str(fc.get("elaboro_cargo") or "").strip() or "—"
@@ -11076,13 +11192,14 @@ def _fill_memoria_excel_ws(
     fill_bar = PatternFill("solid", fgColor="E5E7EB")
     fill_th = PatternFill("solid", fgColor="F3F4F6")
     fill_tot = PatternFill("solid", fgColor="E5E7EB")
+    lbl_font = Font(size=8, color="64748B")
 
     for i, w in enumerate([5, 9, 9, 8, 10, 8, 8, 8, 9, 10, 36], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    total_cant = sum(_sf(r.get("cantidad_total"), 0.0) for r in registros)
     corte_lbl = _corte_consecutivo_fmt(corte)
     periodo = f"{_fd(corte.get('fecha_inicio'))} — {_fd(corte.get('fecha_fin'))}"
+    cap_val = _capitulo_memoria(item_info, registros) or "—"
 
     titulo_h = "RESUMEN ACTIVIDADES CONCILIACIÓN CORTE SUBCONTRATISTA"
     codigo_h = "CC-SUB-002"
@@ -11102,73 +11219,57 @@ def _fill_memoria_excel_ws(
     ws["A2"].alignment = Alignment(horizontal="center")
 
     if conc_meta:
-        cells = list(conc_meta.get("cells") or [])
-        while len(cells) < 4:
-            cells.append(("", ""))
-        ws["A3"] = str(cells[0][0] or "")
-        ws["A3"].font = Font(size=8, color="64748B")
-        ws.merge_cells("B3:E3")
-        ws["B3"] = str(cells[0][1] or "—")
-        ws["F3"] = str(cells[1][0] or "")
-        ws["F3"].font = Font(size=8, color="64748B")
-        ws.merge_cells("G3:K3")
-        ws["G3"] = str(cells[1][1] or "—")
-        ws["A4"] = str(cells[2][0] or "")
-        ws["A4"].font = Font(size=8, color="64748B")
-        ws.merge_cells("B4:E4")
-        ws["B4"] = str(cells[2][1] or "—")
-        ws["F4"] = str(cells[3][0] or "")
-        ws["F4"].font = Font(size=8, color="64748B")
-        ws.merge_cells("G4:K4")
-        ws["G4"] = str(cells[3][1] or "—")
-        for rr in (3, 4):
-            for cc in (1, 2, 6, 7):
-                ws.cell(row=rr, column=cc).border = bd
-        ws["A5"], ws["B5"] = "ÍTEM", str(item_info.get("item_numero") or "—")
-        ws.merge_cells("B5:C5")
-        ws["D5"] = "DESCRIPCIÓN"
-        ws["D5"].font = Font(size=8, color="64748B")
-        ws.merge_cells("E5:I5")
-        ws["E5"] = _descripcion_memoria_compacta(item_info.get("item_descripcion"))
-        ws["E5"].alignment = Alignment(wrap_text=True, vertical="top")
-        ws["J5"] = "UNIDAD"
-        ws["J5"].font = Font(size=8, color="64748B")
-        ws["K5"] = str(item_info.get("unidad") or "—")
-        for cc in (1, 2, 4, 5, 10, 11):
-            ws.cell(row=5, column=cc).border = bd
-        r0 = 7
+        cells = _memoria_cells_con_capitulo(list(conc_meta.get("cells") or []), cap_val)
     else:
-        ws["A3"], ws["B3"] = "CONTRATO", str(contrato.get("numero") or "—")
-        ws.merge_cells("B3:E3")
-        ws["F3"], ws["G3"] = "SUB CONTRATISTA", str(sub.get("razon_social") or "—")
-        ws.merge_cells("G3:K3")
-        for x in ("A3", "F3"):
-            ws[x].font = Font(size=8, color="64748B")
-            ws[x].alignment = Alignment(vertical="top")
+        cells = _memoria_cells_con_capitulo(
+            [
+                ("CONTRATO", str(contrato.get("numero") or "—")),
+                ("SUB CONTRATISTA", str(sub.get("razon_social") or "—")),
+                ("CORTE N°", corte_lbl),
+                ("PERÍODO", periodo),
+            ],
+            cap_val,
+        )
+    while len(cells) < 5:
+        cells.append(("", ""))
+    # Fila 3: campos 0–2 · Fila 4: campos 3–4 (banda de identificación + capítulo)
+    ws["A3"] = str(cells[0][0] or "")
+    ws["A3"].font = lbl_font
+    ws.merge_cells("B3:C3")
+    ws["B3"] = str(cells[0][1] or "—")
+    ws["D3"] = str(cells[1][0] or "")
+    ws["D3"].font = lbl_font
+    ws.merge_cells("E3:F3")
+    ws["E3"] = str(cells[1][1] or "—")
+    ws["G3"] = str(cells[2][0] or "")
+    ws["G3"].font = lbl_font
+    ws.merge_cells("H3:K3")
+    ws["H3"] = str(cells[2][1] or "—")
+    ws["A4"] = str(cells[3][0] or "")
+    ws["A4"].font = lbl_font
+    ws.merge_cells("B4:E4")
+    ws["B4"] = str(cells[3][1] or "—")
+    ws["F4"] = str(cells[4][0] or "")
+    ws["F4"].font = lbl_font
+    ws.merge_cells("G4:K4")
+    ws["G4"] = str(cells[4][1] or "—")
+    for rr, cols in ((3, (1, 2, 4, 5, 7, 8)), (4, (1, 2, 6, 7))):
+        for cc in cols:
+            ws.cell(row=rr, column=cc).border = bd
 
-        ws["A4"], ws["B4"] = "CORTE N°", corte_lbl
-        ws.merge_cells("B4:E4")
-        ws["F4"], ws["G4"] = "PERÍODO", periodo
-        ws.merge_cells("G4:K4")
-        for x in ("A4", "F4"):
-            ws[x].font = Font(size=8, color="64748B")
-
-        ws["A5"], ws["B5"] = "ÍTEM", str(item_info.get("item_numero") or "—")
-        ws.merge_cells("B5:C5")
-        ws["D5"] = "DESCRIPCIÓN"
-        ws["D5"].font = Font(size=8, color="64748B")
-        ws.merge_cells("E5:I5")
-        ws["E5"] = _descripcion_memoria_compacta(item_info.get("item_descripcion"))
-        ws["E5"].alignment = Alignment(wrap_text=True, vertical="top")
-        ws["J5"] = "UNIDAD"
-        ws["J5"].font = Font(size=8, color="64748B")
-        ws["K5"] = str(item_info.get("unidad") or "—")
-        for rr in (3, 4):
-            for cc in (1, 2, 6, 7):
-                ws.cell(row=rr, column=cc).border = bd
-        for cc in (1, 2, 4, 5, 10, 11):
-            ws.cell(row=5, column=cc).border = bd
-        r0 = 7
+    ws["A5"], ws["B5"] = "ÍTEM", str(item_info.get("item_numero") or "—")
+    ws.merge_cells("B5:C5")
+    ws["D5"] = "DESCRIPCIÓN"
+    ws["D5"].font = lbl_font
+    ws.merge_cells("E5:I5")
+    ws["E5"] = _descripcion_memoria_compacta(item_info.get("item_descripcion"))
+    ws["E5"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws["J5"] = "UNIDAD"
+    ws["J5"].font = lbl_font
+    ws["K5"] = str(item_info.get("unidad") or "—")
+    for cc in (1, 2, 4, 5, 10, 11):
+        ws.cell(row=5, column=cc).border = bd
+    r0 = 7
     ws.merge_cells(start_row=r0, start_column=1, end_row=r0, end_column=11)
     bar = ws.cell(row=r0, column=1, value="DETALLE DE CANTIDADES APROBADAS")
     bar.fill = fill_bar
@@ -11206,17 +11307,18 @@ def _fill_memoria_excel_ws(
         obs = _descripcion_memoria_compacta(obs)
         pkv = (r.get("pk_ids") or {}).get("pk_id")
         row = data_row + i
+        # Entradas como valores; CANT TOT (col J) como fórmula real.
         vals = [
             r.get("numero_registro"),
-            r.get("abs_inicio") or "—",
-            r.get("abs_final") or "—",
+            r.get("abs_inicio") if r.get("abs_inicio") not in (None, "") else "—",
+            r.get("abs_final") if r.get("abs_final") not in (None, "") else "—",
             pkv if pkv is not None else "—",
-            r.get("calzada") or "—",
-            _fn(r.get("longitud")),
-            _fn(r.get("ancho")),
-            _fn(r.get("espesor")),
-            _fn(r.get("cantidad")),
-            _fn_cant(r.get("cantidad_total")),
+            r.get("calzada") if r.get("calzada") not in (None, "") else "—",
+            _excel_num_or_blank(r.get("longitud")),
+            _excel_num_or_blank(r.get("ancho")),
+            _excel_num_or_blank(r.get("espesor")),
+            _excel_num_or_blank(r.get("cantidad")),
+            _excel_formula_cantidad_total(row),
             (obs or "")[:500],
         ]
         for col, v in enumerate(vals, start=1):
@@ -11225,6 +11327,8 @@ def _fill_memoria_excel_ws(
             cell.font = Font(size=8)
             if col in (6, 7, 8, 9, 10):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
+                if col == 10:
+                    cell.number_format = "0.000"
             elif col == 11:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
             else:
@@ -11239,9 +11343,14 @@ def _fill_memoria_excel_ws(
         horizontal="right", vertical="center"
     )
     ws.cell(row=tot_r, column=1).font = Font(bold=True, size=9)
-    c_tot = ws.cell(row=tot_r, column=10, value=_fn_cant(total_cant))
+    if registros:
+        tot_formula = f"=SUM(J{data_row}:J{data_row + len(registros) - 1})"
+    else:
+        tot_formula = 0
+    c_tot = ws.cell(row=tot_r, column=10, value=tot_formula)
     c_tot.font = Font(bold=True, size=9)
     c_tot.alignment = Alignment(horizontal="right")
+    c_tot.number_format = "0.000"
     c_tot.border = bd
     c_tot.fill = fill_tot
     c_lab = ws.cell(row=tot_r, column=1)
@@ -11420,11 +11529,7 @@ def _cc_sem_002_item_excel_bytes(
     )
     if not contrato:
         raise HTTPException(404, "Contrato no encontrado")
-    item_info = {
-        "item_numero": registros[0].get("item_numero", item_numero),
-        "item_descripcion": registros[0].get("item_descripcion", ""),
-        "unidad": registros[0].get("unidad", ""),
-    }
+    item_info = _item_info_desde_registros(registros, item_numero)
     sm = _row("so_semanas", "numero_semana, fecha_inicio, fecha_fin", id=semana_id) or {}
     nsem = sm.get("numero_semana")
     fi = str(sm.get("fecha_inicio") or "—")
@@ -11512,11 +11617,7 @@ def _cc_sem_002_semana_completo_excel_bytes(contrato_id: int, semana_id: int, cu
         )
         if not registros:
             continue
-        item_info = {
-            "item_numero": registros[0].get("item_numero", inum),
-            "item_descripcion": registros[0].get("item_descripcion", ""),
-            "unidad": registros[0].get("unidad", ""),
-        }
+        item_info = _item_info_desde_registros(registros, inum)
         if first:
             ws = wb.active
             assert ws is not None
@@ -11583,11 +11684,7 @@ def _cc_mes_002_item_excel_bytes(
     )
     if not contrato:
         raise HTTPException(404, "Contrato no encontrado")
-    item_info = {
-        "item_numero": registros[0].get("item_numero", item_numero),
-        "item_descripcion": registros[0].get("item_descripcion", ""),
-        "unidad": registros[0].get("unidad", ""),
-    }
+    item_info = _item_info_desde_registros(registros, item_numero)
     ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
     cons = str(ac.get("consecutivo") or "—")
@@ -11683,11 +11780,7 @@ def _cc_mes_002_acta_completo_excel_bytes(
         registros = by_item.get(inum) or []
         if not registros:
             continue
-        item_info = {
-            "item_numero": registros[0].get("item_numero", inum),
-            "item_descripcion": registros[0].get("item_descripcion", ""),
-            "unidad": registros[0].get("unidad", ""),
-        }
+        item_info = _item_info_desde_registros(registros, inum)
         if first:
             ws = wb.active
             assert ws is not None
@@ -13059,28 +13152,41 @@ def _html_memoria_item_body(
     # 1ª hoja: encabezado + barra consumen altura — objetivo ~26 filas para evitar 1 sola fila en página siguiente.
     ROWS_MEMORIA_PRIMERA_HOJA = 26
     ROWS_MEMORIA_SIGUIENTES = 30
-    FOTOS_PER_PAGE = 6
+    # Plantilla fija: 8 contenedores/página (2 filas × 4), mismo tamaño; fotos se adaptan al contenedor.
+    FOTOS_PER_PAGE = 8
+    FOTOS_COLS = 4
 
     fotos = [r for r in registros if r.get("foto_url")]
+    cap_val = _capitulo_memoria(item_info, registros) or "—"
 
     def encabezado():
-        # CC-SUB-002: encabezado compacto en 3 filas (logo | título | código → contrato | sub | corte | período → ítem | descripción | und).
+        # CC-SUB-002: logo | título | código → banda id (5 campos, incl. capítulo) → ítem | descripción | und.
         # conc_meta: CC-SEM-002 / CC-MES-002 (sin sub/corte en metadatos).
         bd = "border:1px solid #9ca3af"
         titulo = "RESUMEN ACTIVIDADES CONCILIACIÓN CORTE SUBCONTRATISTA"
         codigo_h = _h("CC-SUB-002")
-        num_contrato = _h(str(contrato.get("numero") or ""))
-        sub_nom = _h(str(sub.get("razon_social") or ""))
-        corte_lbl = _h(_corte_consecutivo_fmt(corte))
-        periodo = f"{_h(_fd(corte.get('fecha_inicio')))} — {_h(_fd(corte.get('fecha_fin')))}"
         if conc_meta:
             titulo = str(conc_meta.get("titulo") or titulo)
             codigo_h = _h(str(conc_meta.get("codigo") or ""))
+            cells = _memoria_cells_con_capitulo(list(conc_meta.get("cells") or []), cap_val)
+        else:
+            cells = _memoria_cells_con_capitulo(
+                [
+                    ("CONTRATO", str(contrato.get("numero") or "")),
+                    ("SUB CONTRATISTA", str(sub.get("razon_social") or "")),
+                    ("CORTE N°", _corte_consecutivo_fmt(corte)),
+                    ("PERÍODO", f"{_fd(corte.get('fecha_inicio'))} — {_fd(corte.get('fecha_fin'))}"),
+                ],
+                cap_val,
+            )
+        while len(cells) < 5:
+            cells.append(("", ""))
+        c5 = cells[:5]
         it_num = _h(str(item_info.get("item_numero") or ""))
         it_desc = _h(_descripcion_memoria_compacta(item_info.get("item_descripcion")))
         it_und = _h(str(item_info.get("unidad") or ""))
-        lbl = "font-size:6pt;color:#555;font-weight:normal;"
-        val = "font-size:7pt;font-weight:bold;color:#1a1a2e;line-height:1.15;"
+        lbl = "font-size:5.5pt;color:#555;font-weight:normal;"
+        val = "font-size:6.5pt;font-weight:bold;color:#1a1a2e;line-height:1.12;"
         # Descripción: +1 pt respecto a 5.5 pt anterior → 6.5 pt; interlineado ajustado para fila más baja.
         val_desc = (
             "font-size:6.5pt;font-weight:normal;color:#1a1a2e;line-height:1.04;"
@@ -13091,56 +13197,11 @@ def _html_memoria_item_body(
         logo_box_h = "1.08cm"
         logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
         lbl_blk = "font-size:6pt;color:#555;font-weight:normal;display:block;margin:0;padding:0;line-height:1.05;"
-        if conc_meta:
-            cells = list(conc_meta.get("cells") or [])
-            while len(cells) < 4:
-                cells.append(("", ""))
-            c4 = cells[:4]
-            row2 = ""
-            for lab, celval in c4:
-                row2 += f"""<td style="width:25%;{bd};padding:3px 5px;vertical-align:top;">
-<span style="{lbl}">{_h(str(lab))}</span><br/><span style="{val}">{_h(str(celval))}</span>
+        row2 = ""
+        for lab, celval in c5:
+            row2 += f"""<td style="width:20%;{bd};padding:2px 4px;vertical-align:top;">
+<span style="{lbl}">{_h(str(lab))}</span><br/><span style="{val}">{_h(str(celval) if celval not in (None, '') else '—')}</span>
 </td>"""
-            return f"""<div class="mem002-head-wrap"><table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;margin-bottom:3px;border:1px solid #9ca3af;">
-<tr>
-<td style="width:17%;{bd};padding:1px 2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
-{logo_html}
-</td>
-<td style="width:65%;{bd};padding:2px 6px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
-<div style="font-size:6.8pt;font-weight:bold;color:#111827;text-transform:uppercase;line-height:1.08;">{_h(titulo)}</div>
-</td>
-<td style="width:18%;{bd};padding:2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
-<div style="font-size:10pt;font-weight:bold;color:#1e40af;line-height:1;">{codigo_h}</div>
-<div style="font-size:6pt;color:#64748b;margin-top:1px;">CCD</div>
-</td>
-</tr>
-<tr>
-<td colspan="3" style="padding:0;">
-<table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;">
-<tr>
-{row2}
-</tr>
-</table>
-</td>
-</tr>
-<tr>
-<td colspan="3" style="padding:0;">
-<table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;">
-<tr>
-<td style="width:13%;{bd};padding:1px 4px;vertical-align:top;">
-<span style="{lbl_blk}">ÍTEM</span><span style="{val};display:block;margin:1px 0 0 0;padding:0;">{it_num}</span>
-</td>
-<td style="width:74%;{bd};padding:1px 4px;vertical-align:top;">
-<span style="{lbl_blk}">DESCRIPCIÓN</span><span style="{val_desc}">{it_desc}</span>
-</td>
-<td style="width:13%;{bd};padding:1px 4px;vertical-align:top;">
-<span style="{lbl_blk}">UNIDAD</span><span style="{val};display:block;margin:1px 0 0 0;padding:0;">{it_und}</span>
-</td>
-</tr>
-</table>
-</td>
-</tr>
-</table></div>"""
         return f"""<div class="mem002-head-wrap"><table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;margin-bottom:3px;border:1px solid #9ca3af;">
 <tr>
 <td style="width:17%;{bd};padding:1px 2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
@@ -13158,18 +13219,7 @@ def _html_memoria_item_body(
 <td colspan="3" style="padding:0;">
 <table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;">
 <tr>
-<td style="width:25%;{bd};padding:3px 5px;vertical-align:top;">
-<span style="{lbl}">CONTRATO</span><br/><span style="{val}">{num_contrato}</span>
-</td>
-<td style="width:25%;{bd};padding:3px 5px;vertical-align:top;">
-<span style="{lbl}">SUB CONTRATISTA</span><br/><span style="{val}">{sub_nom}</span>
-</td>
-<td style="width:25%;{bd};padding:3px 5px;vertical-align:top;">
-<span style="{lbl}">CORTE N°</span><br/><span style="{val}">{corte_lbl}</span>
-</td>
-<td style="width:25%;{bd};padding:3px 5px;vertical-align:top;">
-<span style="{lbl}">PERÍODO</span><br/><span style="{val}">{periodo}</span>
-</td>
+{row2}
 </tr>
 </table>
 </td>
@@ -13268,31 +13318,52 @@ def _html_memoria_item_body(
     )
 
     # Páginas de fotos después del bloque de firmas (sin encabezado repetido).
+    # Plantilla fija 2×4: siempre 8 contenedores del mismo tamaño; vacíos conservan la cuadrícula.
     if pie_fotos_contexto:
         pie_foto = _h(pie_fotos_contexto)
     else:
         pie_foto = f'Corte N° {_h(corte.get("consecutivo",""))}'
+
+    def _celda_foto_slot(r: Optional[dict]) -> str:
+        if not r:
+            return (
+                '<td class="mem002-foto-slot">'
+                '<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%">'
+                '<tr><td style="height:4.55cm;text-align:center;vertical-align:middle;color:#cbd5e1;font-size:6pt;">&nbsp;</td></tr>'
+                "</table>"
+                '<div class="mem002-foto-caption">&nbsp;</div>'
+                "</td>"
+            )
+        obs_f = _descripcion_memoria_compacta((r.get("observacion") or "")[:90])
+        fu = (r.get("foto_url") or "").strip()
+        img_html = (
+            f'<img src="{_h(fu)}" alt="foto"/>'
+            if fu
+            else '<span style="color:#94a3b8;font-size:6pt;">Sin foto</span>'
+        )
+        return f"""<td class="mem002-foto-slot">
+<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%">
+<tr><td style="height:4.55cm;text-align:center;vertical-align:middle;">{img_html}</td></tr>
+</table>
+<div class="mem002-foto-caption">
+<div class="foto-caption">Foto {_h(r.get('foto_numero',''))} — Reg. {_h(r.get('numero_registro',''))}</div>
+<div class="mem002-foto-obs">{_h(obs_f)}</div>
+</div>
+</td>"""
+
     for foto_chunk in chunks_foto:
+        # Completar a 8 slots (nunca agrandar fotos para llenar).
+        slots: List[Optional[dict]] = list(foto_chunk) + [None] * (FOTOS_PER_PAGE - len(foto_chunk))
         body += '<pdf:nextpage />'
-        body += f'<div class="section-bar mem002-section">REGISTRO FOTOGRÁFICO — ÍTEM {_h(item_info.get("item_numero",""))} | {pie_foto}</div>'
-        body += '<table class="w100 mem002-foto-grid">'
-        for row_start in range(0, len(foto_chunk), 3):
+        body += (
+            f'<div class="section-bar mem002-section">REGISTRO FOTOGRÁFICO — ÍTEM '
+            f'{_h(item_info.get("item_numero",""))} | {pie_foto}</div>'
+        )
+        body += '<table class="w100 mem002-foto-grid" cellspacing="0" cellpadding="0">'
+        for row_start in range(0, FOTOS_PER_PAGE, FOTOS_COLS):
             body += "<tr>"
-            fila = foto_chunk[row_start:row_start+3]
-            for r in fila:
-                obs_f = _descripcion_memoria_compacta((r.get("observacion") or "")[:120])
-                fu = (r.get("foto_url") or "").strip()
-                if fu:
-                    body += f"""<td style="width:33%;text-align:center;padding:8px;vertical-align:top">
-                    <img src="{_h(fu)}" style="max-width:155px;max-height:115px;border:1px solid #dee2e6"/>
-                    <div class="foto-caption">Foto {_h(r.get('foto_numero',''))} — Reg. {_h(r.get('numero_registro',''))}</div>
-                    <div style="font-size:6pt;color:#666;margin-top:2px">{_h(obs_f)}</div>
-                </td>"""
-                else:
-                    body += """<td style="width:33%;text-align:center;padding:8px;vertical-align:top;color:#888">Sin foto</td>"""
-            # Completar fila si tiene menos de 3
-            for _ in range(3 - len(fila)):
-                body += '<td style="width:33%"></td>'
+            for r in slots[row_start : row_start + FOTOS_COLS]:
+                body += _celda_foto_slot(r)
             body += "</tr>"
         body += "</table>"
         body += '<div class="doc-footer">Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>'
