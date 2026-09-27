@@ -1687,8 +1687,9 @@ def _contexto_memoria_item(
 
     sel_mem = (
         "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
-        "longitud, ancho, espesor, cantidad, cantidad_total, observacion, foto_url, "
-        "foto_numero, item_numero, item_descripcion, unidad, capitulo"
+        "infraestructura, enlace_soporte, longitud, ancho, espesor, cantidad, cantidad_total, "
+        "observacion, foto_url, foto_numero, grafico_url, grafico_numero, graficos_historial, "
+        "item_numero, item_descripcion, unidad, capitulo"
     )
     try:
         q = (
@@ -1705,14 +1706,14 @@ def _contexto_memoria_item(
         registros = q.order("numero_registro").execute().data or []
     except Exception as e0:
         err = str(e0).lower()
-        if "capitulo" in err or "column" in err or "schema cache" in err:
-            _log.warning("so_registros sin columna capitulo (memoria ítem); reintento sin ella: %s", e0)
+        if "column" in err or "schema cache" in err or "enlace" in err or "infraestructura" in err or "grafico" in err or "capitulo" in err:
+            _log.warning("so_registros select memoria ampliado falló; reintento base: %s", e0)
             q = (
                 _sb.table("so_registros")
                 .select(
                     "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
                     "longitud, ancho, espesor, cantidad, cantidad_total, observacion, foto_url, "
-                    "foto_numero, item_numero, item_descripcion, unidad"
+                    "foto_numero, grafico_url, grafico_numero, item_numero, item_descripcion, unidad, capitulo"
                 )
                 .eq("contrato_id", contrato_id)
                 .eq("corte_id", corte_id)
@@ -1722,7 +1723,30 @@ def _contexto_memoria_item(
                 q = q.eq("item_numero", (item_numero or "").strip())
             else:
                 q = q.ilike("item_numero", f"%{item_numero}%")
-            registros = q.order("numero_registro").execute().data or []
+            try:
+                registros = q.order("numero_registro").execute().data or []
+            except Exception as e1:
+                err1 = str(e1).lower()
+                if "capitulo" in err1 or "grafico" in err1 or "column" in err1 or "schema cache" in err1:
+                    _log.warning("so_registros select memoria mínimo: %s", e1)
+                    q = (
+                        _sb.table("so_registros")
+                        .select(
+                            "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
+                            "longitud, ancho, espesor, cantidad, cantidad_total, observacion, foto_url, "
+                            "foto_numero, item_numero, item_descripcion, unidad"
+                        )
+                        .eq("contrato_id", contrato_id)
+                        .eq("corte_id", corte_id)
+                    )
+                    q = _apply_filtro_sub_estado(q, solo_aprobados=solo_aprobados)
+                    if item_exacto:
+                        q = q.eq("item_numero", (item_numero or "").strip())
+                    else:
+                        q = q.ilike("item_numero", f"%{item_numero}%")
+                    registros = q.order("numero_registro").execute().data or []
+                else:
+                    raise
         else:
             raise
 
@@ -10795,7 +10819,8 @@ BASE_CSS = PAGE_CSS_LETTER_PORTRAIT + BASE_CSS_SHARED
 MEMORIA002_CSS = """
 @page {
   size: letter landscape;
-  margin: 0.85cm 0.8cm 0.95cm 0.8cm;
+  /* Márgenes ajustados para caber encabezado completo + plantilla 3×4 (contenedores 4.55cm sin reducir). */
+  margin: 0.5cm 0.7cm 0.5cm 0.7cm;
 }
 body.mem002-doc {
   font-family: Arial, sans-serif;
@@ -10806,6 +10831,7 @@ body.mem002-doc .mem002-head-wrap {
   width: 100%;
   page-break-inside: avoid;
   page-break-after: avoid;
+  margin-bottom: 1px;
 }
 body.mem002-doc .mem002-section {
   page-break-after: avoid;
@@ -10856,7 +10882,7 @@ body.mem002-doc .doc-footer {
   padding-top: 2px;
   font-size: 6pt;
 }
-/* Registro fotográfico: plantilla fija 2×4 (8 contenedores iguales por página). */
+/* Registro fotográfico / gráfico: plantilla fija 3×4 (12 contenedores iguales por página). */
 body.mem002-doc .mem002-foto-grid {
   width: 100%;
   border-collapse: collapse;
@@ -11149,13 +11175,92 @@ def _excel_num_or_blank(v: Any) -> Optional[float]:
 
 
 def _excel_formula_cantidad_total(row: int) -> str:
-    """CANT TOT = L×A×E[×C] con vacíos=1 y redondeo dinámico (2 dp si ≥0.10, si no 3)."""
-    f, g, h, i = f"F{row}", f"G{row}", f"H{row}", f"I{row}"
-    prod = f'IF({f}="",1,{f})*IF({g}="",1,{g})*IF({h}="",1,{h})*IF({i}="",1,{i})'
+    """CANT TOT = L×A×E[×C] (cols E–H) con vacíos=1 y redondeo dinámico (2 dp si ≥0.10, si no 3)."""
+    e, f, g, h = f"E{row}", f"F{row}", f"G{row}", f"H{row}"
+    prod = f'IF({e}="",1,{e})*IF({f}="",1,{f})*IF({g}="",1,{g})*IF({h}="",1,{h})'
     return (
-        f'=IF(AND({f}="",{g}="",{h}="",{i}=""),0,'
+        f'=IF(AND({e}="",{f}="",{g}="",{h}=""),0,'
         f'IF(ROUND({prod},2)>=0.1,ROUND({prod},2),ROUND({prod},3)))'
     )
+
+
+def _memoria_abscisas_txt(r: dict) -> str:
+    a = str(r.get("abs_inicio") or "").strip()
+    b = str(r.get("abs_final") or "").strip()
+    if a and b:
+        return f"{a} – {b}"
+    return a or b or "—"
+
+
+def _memoria_enlace_txt(r: dict) -> str:
+    """Primer enlace de soporte del registro (JSON array o string); vacío si no hay."""
+    raw = r.get("enlace_soporte")
+    if raw is None or raw == "":
+        return ""
+    if isinstance(raw, list):
+        for u in raw:
+            s = str(u or "").strip()
+            if s:
+                return s
+        return ""
+    s = str(raw).strip()
+    if s.startswith("["):
+        try:
+            j = json.loads(s)
+            if isinstance(j, list):
+                for u in j:
+                    t = str(u or "").strip()
+                    if t:
+                        return t
+                return ""
+        except Exception:
+            pass
+    return s
+
+
+def _memoria_infraestructura_txt(r: dict) -> str:
+    v = str(r.get("infraestructura") or "").strip()
+    if v:
+        return v
+    pk = r.get("pk_ids")
+    if isinstance(pk, dict):
+        return str(pk.get("infraestructura") or "").strip()
+    return ""
+
+
+def _lista_graficos_memoria_registro(r: dict) -> List[Dict[str, Any]]:
+    """Gráficos del registro: historial o grafico_url legacy (misma lógica que SICOE Obra)."""
+    out: List[Dict[str, Any]] = []
+    hist = r.get("graficos_historial")
+    if isinstance(hist, str) and hist.strip():
+        try:
+            hist = json.loads(hist)
+        except Exception:
+            hist = []
+    if isinstance(hist, list) and hist:
+        items = [x for x in hist if isinstance(x, dict) and str(x.get("url") or "").strip()]
+        items.sort(key=lambda x: (str(x.get("creado_en") or ""), str(x.get("url") or "")))
+        for g in items:
+            out.append(
+                {
+                    "grafico_url": str(g.get("url") or "").strip(),
+                    "grafico_numero": g.get("numero"),
+                    "numero_registro": r.get("numero_registro"),
+                    "observacion": r.get("observacion") or "",
+                }
+            )
+        return out
+    gu = str(r.get("grafico_url") or "").strip()
+    if gu:
+        out.append(
+            {
+                "grafico_url": gu,
+                "grafico_numero": r.get("grafico_numero"),
+                "numero_registro": r.get("numero_registro"),
+                "observacion": r.get("observacion") or "",
+            }
+        )
+    return out
 
 
 def _fill_memoria_excel_ws(
@@ -11194,7 +11299,7 @@ def _fill_memoria_excel_ws(
     fill_tot = PatternFill("solid", fgColor="E5E7EB")
     lbl_font = Font(size=8, color="64748B")
 
-    for i, w in enumerate([5, 9, 9, 8, 10, 8, 8, 8, 9, 10, 36], start=1):
+    for i, w in enumerate([5, 14, 18, 12, 8, 8, 8, 8, 10, 10, 28], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     corte_lbl = _corte_consecutivo_fmt(corte)
@@ -11279,15 +11384,15 @@ def _fill_memoria_excel_ws(
 
     hdr = [
         "N°",
-        "ABS INI",
-        "ABS FIN",
-        "PK ID",
-        "COSTADO",
+        "ABSCISAS",
+        "ENLACE",
+        "INFRAESTRUCTURA",
         "LONG",
         "ANCHO",
         "ESP",
         "CANT",
         "CANT TOT",
+        "PK ID",
         "OBSERVACIÓN",
     ]
     hr = r0 + 1
@@ -11306,31 +11411,36 @@ def _fill_memoria_excel_ws(
             obs = f"{obs} [Foto {fn}]".strip()
         obs = _descripcion_memoria_compacta(obs)
         pkv = (r.get("pk_ids") or {}).get("pk_id")
+        enlace = _memoria_enlace_txt(r)
+        infra = _memoria_infraestructura_txt(r)
         row = data_row + i
-        # Entradas como valores; CANT TOT (col J) como fórmula real.
+        # Orden: N°, Abscisas, Enlace, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot (fórmula), PK ID, Obs.
         vals = [
             r.get("numero_registro"),
-            r.get("abs_inicio") if r.get("abs_inicio") not in (None, "") else "—",
-            r.get("abs_final") if r.get("abs_final") not in (None, "") else "—",
-            pkv if pkv is not None else "—",
-            r.get("calzada") if r.get("calzada") not in (None, "") else "—",
+            _memoria_abscisas_txt(r),
+            enlace or "",
+            infra or "—",
             _excel_num_or_blank(r.get("longitud")),
             _excel_num_or_blank(r.get("ancho")),
             _excel_num_or_blank(r.get("espesor")),
             _excel_num_or_blank(r.get("cantidad")),
             _excel_formula_cantidad_total(row),
+            pkv if pkv is not None else "—",
             (obs or "")[:500],
         ]
         for col, v in enumerate(vals, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.border = bd
             cell.font = Font(size=8)
-            if col in (6, 7, 8, 9, 10):
+            if col in (5, 6, 7, 8, 9):
                 cell.alignment = Alignment(horizontal="right", vertical="center")
-                if col == 10:
+                if col == 9:
                     cell.number_format = "0.000"
-            elif col == 11:
+            elif col in (3, 11):
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
+                if col == 3 and enlace.startswith(("http://", "https://")):
+                    cell.font = Font(size=8, color="0563C1", underline="single")
+                    cell.hyperlink = enlace
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         if i % 2 == 0:
@@ -11338,16 +11448,16 @@ def _fill_memoria_excel_ws(
                 ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F8FAFC")
 
     tot_r = data_row + len(registros)
-    ws.merge_cells(start_row=tot_r, start_column=1, end_row=tot_r, end_column=9)
+    ws.merge_cells(start_row=tot_r, start_column=1, end_row=tot_r, end_column=8)
     ws.cell(row=tot_r, column=1, value="CANTIDAD TOTAL DEL ÍTEM").alignment = Alignment(
         horizontal="right", vertical="center"
     )
     ws.cell(row=tot_r, column=1).font = Font(bold=True, size=9)
     if registros:
-        tot_formula = f"=SUM(J{data_row}:J{data_row + len(registros) - 1})"
+        tot_formula = f"=SUM(I{data_row}:I{data_row + len(registros) - 1})"
     else:
         tot_formula = 0
-    c_tot = ws.cell(row=tot_r, column=10, value=tot_formula)
+    c_tot = ws.cell(row=tot_r, column=9, value=tot_formula)
     c_tot.font = Font(bold=True, size=9)
     c_tot.alignment = Alignment(horizontal="right")
     c_tot.number_format = "0.000"
@@ -11356,11 +11466,15 @@ def _fill_memoria_excel_ws(
     c_lab = ws.cell(row=tot_r, column=1)
     c_lab.border = bd
     c_lab.fill = fill_tot
-    c_e = ws.cell(row=tot_r, column=11)
-    c_e.border = bd
-    c_e.fill = fill_tot
+    for cc in (10, 11):
+        c_e = ws.cell(row=tot_r, column=cc)
+        c_e.border = bd
+        c_e.fill = fill_tot
 
     fotos = [r for r in registros if (r.get("foto_url") or "").strip()]
+    graficos: List[Dict[str, Any]] = []
+    for r in registros:
+        graficos.extend(_lista_graficos_memoria_registro(r))
     fr = tot_r + 2
     ws.merge_cells(start_row=fr, start_column=1, end_row=fr, end_column=11)
     cap_foto = f"REGISTRO FOTOGRÁFICO — ÍTEM {item_info.get('item_numero', '')} | Corte N° {corte.get('consecutivo', '')}"
@@ -11416,6 +11530,58 @@ def _fill_memoria_excel_ws(
             lc.border = bd
             ws.merge_cells(start_row=pr, start_column=9, end_row=pr, end_column=11)
             oc = ws.cell(row=pr, column=9, value=obs_f)
+            oc.font = Font(size=8)
+            oc.alignment = Alignment(wrap_text=True, vertical="top")
+            oc.border = bd
+            pr += 1
+
+    # Registro gráfico (solo si hay gráficos asociados a los registros del ítem).
+    if graficos:
+        gr = pr + 1
+        ws.merge_cells(start_row=gr, start_column=1, end_row=gr, end_column=11)
+        cap_gr = f"REGISTRO GRÁFICO — ÍTEM {item_info.get('item_numero', '')} | Corte N° {corte.get('consecutivo', '')}"
+        if conc_meta and (pie_fotos_contexto or "").strip():
+            cap_gr = f"REGISTRO GRÁFICO — ÍTEM {item_info.get('item_numero', '')} | {pie_fotos_contexto}"
+        gb = ws.cell(row=gr, column=1, value=cap_gr)
+        gb.fill = fill_bar
+        gb.font = Font(bold=True, size=9)
+        gb.alignment = Alignment(horizontal="center", vertical="center")
+        gb.border = bd
+        ghdr = gr + 1
+        ws.cell(row=ghdr, column=1, value="Reg.").fill = fill_th
+        ws.cell(row=ghdr, column=1).font = Font(bold=True, size=8)
+        ws.cell(row=ghdr, column=1).border = bd
+        ws.cell(row=ghdr, column=2, value="Gráfico N°").fill = fill_th
+        ws.cell(row=ghdr, column=2).font = Font(bold=True, size=8)
+        ws.cell(row=ghdr, column=2).border = bd
+        ws.merge_cells(start_row=ghdr, start_column=3, end_row=ghdr, end_column=8)
+        gc3 = ws.cell(row=ghdr, column=3, value="Enlace / URL")
+        gc3.fill = fill_th
+        gc3.font = Font(bold=True, size=8)
+        gc3.alignment = Alignment(horizontal="center", vertical="center")
+        gc3.border = bd
+        ws.merge_cells(start_row=ghdr, start_column=9, end_row=ghdr, end_column=11)
+        gc9 = ws.cell(row=ghdr, column=9, value="Observación")
+        gc9.fill = fill_th
+        gc9.font = Font(bold=True, size=8)
+        gc9.alignment = Alignment(horizontal="center", vertical="center")
+        gc9.border = bd
+        pr = ghdr + 1
+        for g in graficos:
+            gu = (g.get("grafico_url") or "").strip()
+            obs_g = _descripcion_memoria_compacta((g.get("observacion") or "")[:300])
+            ws.cell(row=pr, column=1, value=g.get("numero_registro")).border = bd
+            ws.cell(row=pr, column=2, value=g.get("grafico_numero")).border = bd
+            ws.merge_cells(start_row=pr, start_column=3, end_row=pr, end_column=8)
+            gu_cell = gu if len(gu) < 8000 else gu[:7990] + "…"
+            lc = ws.cell(row=pr, column=3, value=gu_cell)
+            lc.font = Font(size=8, color="0563C1", underline="single")
+            if gu.startswith(("http://", "https://")):
+                lc.hyperlink = gu
+            lc.alignment = Alignment(wrap_text=True, vertical="top")
+            lc.border = bd
+            ws.merge_cells(start_row=pr, start_column=9, end_row=pr, end_column=11)
+            oc = ws.cell(row=pr, column=9, value=obs_g)
             oc.font = Font(size=8)
             oc.alignment = Alignment(wrap_text=True, vertical="top")
             oc.border = bd
@@ -13149,14 +13315,18 @@ def _html_memoria_item_body(
 ):
     total_cant = sum(_sf(r.get("cantidad_total"), 0.0) for r in registros)
 
-    # 1ª hoja: encabezado + barra consumen altura — objetivo ~26 filas para evitar 1 sola fila en página siguiente.
+    # 1ª hoja: encabezado + barras consumen altura — objetivo ~26 filas para evitar 1 sola fila en página siguiente.
     ROWS_MEMORIA_PRIMERA_HOJA = 26
     ROWS_MEMORIA_SIGUIENTES = 30
-    # Plantilla fija: 8 contenedores/página (2 filas × 4), mismo tamaño; fotos se adaptan al contenedor.
-    FOTOS_PER_PAGE = 8
+    # Plantilla fija: 12 contenedores/página (3 filas × 4). Tamaño de caja/pie = invariable;
+    # el encabezado completo cabe gracias a márgenes @page más justos (ver MEMORIA002_CSS).
+    FOTOS_PER_PAGE = 12
     FOTOS_COLS = 4
 
     fotos = [r for r in registros if r.get("foto_url")]
+    graficos: List[Dict[str, Any]] = []
+    for r in registros:
+        graficos.extend(_lista_graficos_memoria_registro(r))
     cap_val = _capitulo_memoria(item_info, registros) or "—"
 
     def encabezado():
@@ -13187,13 +13357,11 @@ def _html_memoria_item_body(
         it_und = _h(str(item_info.get("unidad") or ""))
         lbl = "font-size:5.5pt;color:#555;font-weight:normal;"
         val = "font-size:6.5pt;font-weight:bold;color:#1a1a2e;line-height:1.12;"
-        # Descripción: +1 pt respecto a 5.5 pt anterior → 6.5 pt; interlineado ajustado para fila más baja.
         val_desc = (
             "font-size:6.5pt;font-weight:normal;color:#1a1a2e;line-height:1.04;"
             "text-transform:none;word-wrap:break-word;margin:1px 0 0 0;padding:0;display:block;"
         )
         fila1_h = "1.14cm"
-        # Área útil del logo = altura de fila menos padding mínimo de celda.
         logo_box_h = "1.08cm"
         logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height=logo_box_h)
         lbl_blk = "font-size:6pt;color:#555;font-weight:normal;display:block;margin:0;padding:0;line-height:1.05;"
@@ -13202,7 +13370,7 @@ def _html_memoria_item_body(
             row2 += f"""<td style="width:20%;{bd};padding:2px 4px;vertical-align:top;">
 <span style="{lbl}">{_h(str(lab))}</span><br/><span style="{val}">{_h(str(celval) if celval not in (None, '') else '—')}</span>
 </td>"""
-        return f"""<div class="mem002-head-wrap"><table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;margin-bottom:3px;border:1px solid #9ca3af;">
+        return f"""<div class="mem002-head-wrap"><table class="w100" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;width:100%;margin-bottom:1px;border:1px solid #9ca3af;">
 <tr>
 <td style="width:17%;{bd};padding:1px 2px;vertical-align:middle;text-align:center;height:{fila1_h};min-height:{fila1_h};">
 {logo_html}
@@ -13244,20 +13412,21 @@ def _html_memoria_item_body(
 </table></div>"""
 
     chunks_foto = [fotos[i : i + FOTOS_PER_PAGE] for i in range(0, len(fotos), FOTOS_PER_PAGE)]
+    chunks_graf = [graficos[i : i + FOTOS_PER_PAGE] for i in range(0, len(graficos), FOTOS_PER_PAGE)]
     chunks_reg = _chunks_memoria_detalle(registros, ROWS_MEMORIA_PRIMERA_HOJA, ROWS_MEMORIA_SIGUIENTES)
 
     thead_detalle = """<tr>
             <th class="data-th" style="width:4%">N°</th>
-            <th class="data-th" style="width:5.5%">ABS INI</th>
-            <th class="data-th" style="width:5.5%">ABS FIN</th>
+            <th class="data-th" style="width:11%">ABSCISAS</th>
+            <th class="data-th" style="width:10%">ENLACE</th>
+            <th class="data-th" style="width:10%">INFRAESTRUCTURA</th>
+            <th class="data-th" style="width:6%">LONG</th>
+            <th class="data-th" style="width:6%">ANCHO</th>
+            <th class="data-th" style="width:6%">ESP</th>
+            <th class="data-th" style="width:7%">CANT</th>
+            <th class="data-th" style="width:8%">CANT TOT</th>
             <th class="data-th" style="width:7%">PK ID</th>
-            <th class="data-th" style="width:8%">COSTADO</th>
-            <th class="data-th" style="width:7%">LONG</th>
-            <th class="data-th" style="width:7%">ANCHO</th>
-            <th class="data-th" style="width:7%">ESP</th>
-            <th class="data-th" style="width:9%">CANT</th>
-            <th class="data-th" style="width:9%">CANT TOT</th>
-            <th class="data-th" style="width:38%">OBSERVACIÓN</th>
+            <th class="data-th" style="width:25%">OBSERVACIÓN</th>
         </tr>"""
 
     body = ""
@@ -13279,17 +13448,20 @@ def _html_memoria_item_body(
                 obs = f"{obs} [Foto {fn}]".strip()
             obs = _descripcion_memoria_compacta(obs)
             pkv = (r.get("pk_ids") or {}).get("pk_id")
+            enlace = _memoria_enlace_txt(r)
+            infra = _memoria_infraestructura_txt(r) or "—"
+            enlace_cell = _h(enlace) if enlace else ""
             body += f"""<tr class="{cls}">
                 <td class="data-td" style="text-align:center">{_h(r.get('numero_registro',''))}</td>
-                <td class="data-td" style="text-align:center">{_h(r.get('abs_inicio') or '—')}</td>
-                <td class="data-td" style="text-align:center">{_h(r.get('abs_final') or '—')}</td>
-                <td class="data-td" style="text-align:center">{_h(pkv if pkv is not None else '—')}</td>
-                <td class="data-td" style="text-align:center">{_h(r.get('calzada') or '—')}</td>
+                <td class="data-td" style="text-align:center">{_h(_memoria_abscisas_txt(r))}</td>
+                <td class="data-td mem002-obs" style="text-align:left;font-size:5.5pt">{enlace_cell}</td>
+                <td class="data-td" style="text-align:center">{_h(infra)}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('longitud'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('ancho'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('espesor'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('cantidad'))}</td>
                 <td class="data-td" style="text-align:right;font-weight:bold">{_fn_cant(r.get('cantidad_total'))}</td>
+                <td class="data-td" style="text-align:center">{_h(pkv if pkv is not None else '—')}</td>
                 <td class="data-td mem002-obs">{_h((obs or '')[:500])}</td>
             </tr>"""
 
@@ -13300,8 +13472,8 @@ def _html_memoria_item_body(
     body += f"""<table class="w100 mem002-total-wrap" cellspacing="0" cellpadding="0">
         <tr>
             <td class="total-td" style="width:60%;text-align:right;padding-right:8px">CANTIDAD TOTAL DEL ÍTEM</td>
-            <td class="total-td" style="width:9%;text-align:right">{_fn_cant(total_cant)}</td>
-            <td class="total-td" style="width:31%">&nbsp;</td>
+            <td class="total-td" style="width:8%;text-align:right">{_fn_cant(total_cant)}</td>
+            <td class="total-td" style="width:32%">&nbsp;</td>
         </tr>
     </table>"""
 
@@ -13317,15 +13489,18 @@ def _html_memoria_item_body(
         aprobo_interventoria_desde_config=aprobo_interventoria_desde_config,
     )
 
-    # Páginas de fotos después del bloque de firmas (sin encabezado repetido).
-    # Plantilla fija 2×4: siempre 8 contenedores del mismo tamaño; vacíos conservan la cuadrícula.
+    # Páginas de fotos / gráficos: mismo encabezado institucional + banda + ítem; plantilla 3×4.
     if pie_fotos_contexto:
         pie_foto = _h(pie_fotos_contexto)
     else:
         pie_foto = f'Corte N° {_h(corte.get("consecutivo",""))}'
 
-    def _celda_foto_slot(r: Optional[dict]) -> str:
-        if not r:
+    def _celda_media_slot(
+        url: Optional[str],
+        caption_top: str,
+        caption_obs: str,
+    ) -> str:
+        if not url:
             return (
                 '<td class="mem002-foto-slot">'
                 '<table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%">'
@@ -13334,42 +13509,71 @@ def _html_memoria_item_body(
                 '<div class="mem002-foto-caption">&nbsp;</div>'
                 "</td>"
             )
-        obs_f = _descripcion_memoria_compacta((r.get("observacion") or "")[:90])
-        fu = (r.get("foto_url") or "").strip()
-        img_html = (
-            f'<img src="{_h(fu)}" alt="foto"/>'
-            if fu
-            else '<span style="color:#94a3b8;font-size:6pt;">Sin foto</span>'
-        )
+        img_html = f'<img src="{_h(url)}" alt="media"/>'
+        obs_f = _descripcion_memoria_compacta((caption_obs or "")[:90])
         return f"""<td class="mem002-foto-slot">
 <table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%">
 <tr><td style="height:4.55cm;text-align:center;vertical-align:middle;">{img_html}</td></tr>
 </table>
 <div class="mem002-foto-caption">
-<div class="foto-caption">Foto {_h(r.get('foto_numero',''))} — Reg. {_h(r.get('numero_registro',''))}</div>
+<div class="foto-caption">{_h(caption_top)}</div>
 <div class="mem002-foto-obs">{_h(obs_f)}</div>
 </div>
 </td>"""
 
-    for foto_chunk in chunks_foto:
-        # Completar a 8 slots (nunca agrandar fotos para llenar).
-        slots: List[Optional[dict]] = list(foto_chunk) + [None] * (FOTOS_PER_PAGE - len(foto_chunk))
-        body += '<pdf:nextpage />'
-        body += (
-            f'<div class="section-bar mem002-section">REGISTRO FOTOGRÁFICO — ÍTEM '
-            f'{_h(item_info.get("item_numero",""))} | {pie_foto}</div>'
+    def _paginas_media_grid(
+        chunks: List[List[dict]],
+        *,
+        section_title: str,
+        caption_builder,
+        url_key: str,
+    ) -> str:
+        parts = ""
+        for chunk in chunks:
+            slots: List[Optional[dict]] = list(chunk) + [None] * (FOTOS_PER_PAGE - len(chunk))
+            parts += "<pdf:nextpage />"
+            parts += encabezado()
+            parts += (
+                f'<div class="section-bar mem002-section">{section_title} — ÍTEM '
+                f'{_h(item_info.get("item_numero",""))} | {pie_foto}</div>'
+            )
+            parts += '<table class="w100 mem002-foto-grid" cellspacing="0" cellpadding="0">'
+            for row_start in range(0, FOTOS_PER_PAGE, FOTOS_COLS):
+                parts += "<tr>"
+                for item in slots[row_start : row_start + FOTOS_COLS]:
+                    if not item:
+                        parts += _celda_media_slot(None, "", "")
+                    else:
+                        parts += _celda_media_slot(
+                            (item.get(url_key) or "").strip() or None,
+                            caption_builder(item),
+                            item.get("observacion") or "",
+                        )
+                parts += "</tr>"
+            parts += "</table>"
+            parts += (
+                '<div class="doc-footer">Documento institucional de control interno. '
+                "Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>"
+            )
+        return parts
+
+    body += _paginas_media_grid(
+        chunks_foto,
+        section_title="REGISTRO FOTOGRÁFICO",
+        caption_builder=lambda r: f"Foto {r.get('foto_numero', '')} — Reg. {r.get('numero_registro', '')}",
+        url_key="foto_url",
+    )
+    if chunks_graf:
+        body += _paginas_media_grid(
+            chunks_graf,
+            section_title="REGISTRO GRÁFICO",
+            caption_builder=lambda g: (
+                f"Gráfico {g.get('grafico_numero', '')} — Reg. {g.get('numero_registro', '')}"
+            ),
+            url_key="grafico_url",
         )
-        body += '<table class="w100 mem002-foto-grid" cellspacing="0" cellpadding="0">'
-        for row_start in range(0, FOTOS_PER_PAGE, FOTOS_COLS):
-            body += "<tr>"
-            for r in slots[row_start : row_start + FOTOS_COLS]:
-                body += _celda_foto_slot(r)
-            body += "</tr>"
-        body += "</table>"
-        body += '<div class="doc-footer">Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>'
 
     return body
-
 
 def _html_memoria_item(
     contrato,
