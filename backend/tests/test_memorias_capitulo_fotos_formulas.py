@@ -226,8 +226,11 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
     assert "height:6.85cm" in html
     assert "height:4.55cm" not in html
     assert 'class="mem002-media-img"' in html
-    assert 'width="100%"' in html
     assert "max-height:6.55cm" in html
+    assert "max-width:100%" in html
+    # Regresión: max-width:0 en celdas de media colapsa imgs en xhtml2pdf
+    assert "max-width:0" not in html
+    assert "font-size:0" not in html
     assert "ABSCISAS" in html
     assert "ENLACE" in html
     assert "INFRAESTRUCTURA" in html
