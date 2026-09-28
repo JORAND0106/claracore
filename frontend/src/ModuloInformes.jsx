@@ -11,7 +11,8 @@ import {
 import { decidirPollEstadoJobPdf } from './informesPdfJobPoll'
 import { pathConFiltroSubAprobacion } from './informesSubAprobacionFiltro'
 import {
-  INFORMES_GRUPOS,
+  INFORMES_INTRO,
+  getInformesGrupos,
   informesSheetStyles,
   informesSheetCssVars,
   InformesBreadcrumb,
@@ -155,17 +156,6 @@ function IconoFirmaRegistrar({ size = 18 }) {
       <path d="M15.2 5.4L18.6 8.8" stroke="#fed7aa" strokeWidth="2.2" strokeLinecap="round" />
       <path d="M4.2 19.5L2.8 21" stroke="#64748b" strokeWidth="1.4" strokeLinecap="round" />
       <ellipse cx="5.5" cy="20.5" rx="1.8" ry="0.9" fill="#334155" opacity="0.35" transform="rotate(-25 5.5 20.5)" />
-    </svg>
-  )
-}
-
-/** Estantería / libros — presentación «biblioteca CCD». */
-function IconoBiblioteca({ size = 28 }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path fill="currentColor" fillOpacity="0.92" d="M4 4h5v16H4V4zm6 2h5v14h-5V6zm6-1h5v15h-5V5z" />
-      <path fill="currentColor" fillOpacity="0.55" d="M5 5h3v14H5V5zm6 2h3v12h-3V7zm6-1h3v13h-3V6z" />
-      <path stroke="currentColor" strokeWidth="1" strokeOpacity="0.35" d="M4 4h16v16H4z" fill="none" />
     </svg>
   )
 }
@@ -2812,19 +2802,30 @@ export default function ModuloInformes({
     border: `1px solid ${t.primary}40`,
     boxShadow: `0 12px 28px ${t.primary}18`,
   }
-  const sheetSub = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.sub.accent), [t])
-  const sheetSem = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.sem.accent), [t])
-  const sheetGer = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.ger.accent), [t])
-  const sheetMes = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.mes.accent), [t])
-  const sheetEnt = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.ent.accent), [t])
+  const gruposInformes = useMemo(() => getInformesGrupos(t), [t])
+  const sheetSub = useMemo(() => informesSheetStyles(t, gruposInformes.sub.accent), [t, gruposInformes])
+  const sheetSem = useMemo(() => informesSheetStyles(t, gruposInformes.sem.accent), [t, gruposInformes])
+  const sheetGer = useMemo(() => informesSheetStyles(t, gruposInformes.ger.accent), [t, gruposInformes])
+  const sheetMes = useMemo(() => informesSheetStyles(t, gruposInformes.mes.accent), [t, gruposInformes])
+  const sheetEnt = useMemo(() => informesSheetStyles(t, gruposInformes.ent.accent), [t, gruposInformes])
+  const sheetBiblio = useMemo(() => informesSheetStyles(t, gruposInformes.biblio.accent), [t, gruposInformes])
   const sheetRoot = useMemo(() => informesSheetStyles(t, t?.primary), [t])
-  const cssVarsSub = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.sub.accent), [t])
-  const cssVarsSem = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.sem.accent), [t])
-  const cssVarsGer = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.ger.accent), [t])
-  const cssVarsMes = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.mes.accent), [t])
-  const cssVarsEnt = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.ent.accent), [t])
+  const cssVarsSub = useMemo(() => informesSheetCssVars(t, gruposInformes.sub.accent), [t, gruposInformes])
+  const cssVarsSem = useMemo(() => informesSheetCssVars(t, gruposInformes.sem.accent), [t, gruposInformes])
+  const cssVarsGer = useMemo(() => informesSheetCssVars(t, gruposInformes.ger.accent), [t, gruposInformes])
+  const cssVarsMes = useMemo(() => informesSheetCssVars(t, gruposInformes.mes.accent), [t, gruposInformes])
+  const cssVarsEnt = useMemo(() => informesSheetCssVars(t, gruposInformes.ent.accent), [t, gruposInformes])
+  const cssVarsBiblio = useMemo(() => informesSheetCssVars(t, gruposInformes.biblio.accent), [t, gruposInformes])
 
   const ubicacionInformes = useMemo(() => {
+    if (biblioPanelAbierto) {
+      const codAbierto = Object.keys(ccdExpanded || {}).find((k) => ccdExpanded[k])
+      return {
+        grupo: 'biblio',
+        formato: codAbierto || null,
+        nombre: codAbierto || null,
+      }
+    }
     if (formatoCorte001Abierto) return { grupo: 'sub', formato: 'CC-SUB-001', nombre: 'Informe corte de subcontratista' }
     if (formatoMemorias002Abierto) return { grupo: 'sub', formato: 'CC-SUB-002', nombre: 'Memoria por ítem (corte)' }
     if (formatoSem001Abierto) return { grupo: 'sem', formato: 'CC-SEM-001', nombre: 'Informe ejecución semanal' }
@@ -2839,6 +2840,7 @@ export default function ModuloInformes({
     if (formatosMesAbierto) return { grupo: 'mes', formato: null, nombre: null }
     return null
   }, [
+    biblioPanelAbierto, ccdExpanded,
     formatoCorte001Abierto, formatoMemorias002Abierto,
     formatoSem001Abierto, formatoSem002Abierto,
     formatoGer001Abierto, formatoMes001Abierto, formatoMes002Abierto,
@@ -2858,6 +2860,7 @@ export default function ModuloInformes({
 
   function irAGrupoInformes(grupoId) {
     cerrarFormatoActivo()
+    setBiblioPanelAbierto(grupoId === 'biblio')
     setFormatosSubAbierto(grupoId === 'sub')
     setFormatosSemAbierto(grupoId === 'sem')
     setFormatosInformeGerAbierto(grupoId === 'ger')
@@ -2867,6 +2870,7 @@ export default function ModuloInformes({
 
   function irARaizInformes() {
     cerrarFormatoActivo()
+    setBiblioPanelAbierto(false)
     setFormatosSubAbierto(false)
     setFormatosSemAbierto(false)
     setFormatosInformeGerAbierto(false)
@@ -2875,6 +2879,7 @@ export default function ModuloInformes({
   }
 
   function abrirFormatoEnGrupo(grupoId, codigo) {
+    setBiblioPanelAbierto(false)
     setFormatosSubAbierto(grupoId === 'sub')
     setFormatosSemAbierto(grupoId === 'sem')
     setFormatosInformeGerAbierto(grupoId === 'ger')
@@ -3593,112 +3598,103 @@ export default function ModuloInformes({
                 fontSize: 'var(--cc-body)',
                 color: sheetRoot.infoColor,
                 marginTop: '6px',
-                lineHeight: 1.55,
+                lineHeight: 1.6,
                 fontWeight: 400,
-                maxWidth: 640,
+                maxWidth: 720,
+                letterSpacing: '0.01em',
               }}
             >
-              Generación de formatos CCD por grupo: parámetros, vista previa PDF y descargas (PDF / Excel) según permiso.
-              Cada área de grupo tiene identidad propia; use la ruta de ubicación para orientarse.
+              {INFORMES_INTRO}
             </div>
           </div>
-          {biblioCcd.length > 0 && (
-            <div
-              style={{
-                flex: biblioPanelAbierto ? '1 1 360px' : '0 0 auto',
-                width: biblioPanelAbierto ? 'min(100%, 420px)' : 'auto',
-                maxWidth: '100%',
-                marginLeft: 'auto',
-              }}
-            >
-              <div
-                style={{
-                  borderRadius: '12px',
-                  border: '2px solid #0284c7',
-                  background: 'linear-gradient(165deg, #f0f9ff 0%, #e0f2fe 38%, #7dd3fc 72%, #38bdf8 100%)',
-                  boxShadow: '0 8px 28px rgba(2,132,199,0.22)',
-                  overflow: 'hidden',
-                  textAlign: 'left',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setBiblioPanelAbierto((v) => !v)}
-                  aria-expanded={biblioPanelAbierto}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'flex-start',
-                    gap: '10px',
-                    padding: ui.pHead,
-                    border: 'none',
-                    background: biblioPanelAbierto ? 'rgba(255,255,255,0.35)' : 'transparent',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    font: 'inherit',
-                  }}
-                >
-                  <span style={{ color: '#0369a1', flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-                    <IconoBiblioteca size={Math.round(ui.iconSvg + 6)} />
-                  </span>
-                  <span style={{ minWidth: 0, flex: 1 }}>
-                    <span
-                      style={{
-                        display: 'block',
-                        fontWeight: '800',
-                        fontSize: ui.cardTitle + 'px',
-                        color: '#0c4a6e',
-                        letterSpacing: '0.02em',
-                      }}
-                    >
-                      Biblioteca CCD
-                    </span>
-                    <span
-                      style={{
-                        display: 'block',
-                        fontSize: ui.hint + 'px',
-                        color: '#075985',
-                        marginTop: '2px',
-                        fontWeight: '500',
-                      }}
-                    >
-                      Plantillas, firmas y estilos PDF
-                    </span>
-                  </span>
-                  <span style={{ color: '#0369a1', fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
-                    {biblioPanelAbierto ? '▼' : '▶'}
-                  </span>
-                </button>
-                {biblioPanelAbierto && (
-                <div
-                  style={{
-                    borderTop: '1px solid rgba(3,105,161,0.35)',
-                    padding: '10px 12px 14px',
-                    maxHeight: 'min(72vh, 760px)',
-                    overflowY: 'auto',
-                    fontSize: ui.body + 'px',
-                    color: '#0c4a6e',
-                    background: 'rgba(255,255,255,0.5)',
-                  }}
-                >
-            <div style={{ fontSize: ui.hint + 'px', color: '#075985', marginBottom: '10px', lineHeight: 1.45 }}>
-              Pulsa un formato para ver u ocultar slots y opciones; el estado abierto/cerrado se recuerda en este navegador.
-              {esPerfilInterventoria && (
-                <span style={{ display: 'block', marginTop: '6px' }}>
-                  Con tu perfil solo se listan formatos pensados para interventoría; el resto queda oculto.
-                </span>
-              )}
-            </div>
+        </div>
+      </div>
+
+      {ubicacionInformes && (
+        <InformesBreadcrumb
+          sheet={
+            ubicacionInformes.grupo === 'biblio' ? sheetBiblio
+              : ubicacionInformes.grupo === 'sub' ? sheetSub
+                : ubicacionInformes.grupo === 'sem' ? sheetSem
+                  : ubicacionInformes.grupo === 'ger' ? sheetGer
+                    : ubicacionInformes.grupo === 'mes' ? sheetMes
+                      : sheetEnt
+          }
+          crumbs={[
+            { kind: 'root', label: 'Informes' },
+            {
+              kind: 'grupo',
+              grupoId: ubicacionInformes.grupo,
+              label: gruposInformes[ubicacionInformes.grupo]?.label || ubicacionInformes.grupo,
+            },
+            ...(ubicacionInformes.formato
+              ? [{ kind: 'formato', label: `${ubicacionInformes.formato}${ubicacionInformes.nombre ? ` — ${ubicacionInformes.nombre}` : ''}` }]
+              : []),
+          ]}
+          onGoRoot={irARaizInformes}
+          onGoGrupo={irAGrupoInformes}
+          onBack={
+            ubicacionInformes.grupo === 'biblio'
+              ? () => setBiblioPanelAbierto(false)
+              : ubicacionInformes.formato
+                ? cerrarFormatoActivo
+                : null
+          }
+          backLabel={
+            ubicacionInformes.grupo === 'biblio'
+              ? '← Cerrar biblioteca'
+              : ubicacionInformes.formato
+                ? '← Volver al grupo'
+                : undefined
+          }
+        />
+      )}
+
+      {error && (
+        <div style={{ background:'#fee2e2', border:'1px solid #fca5a5', borderRadius:'8px',
+                      padding:'10px 14px', color:'#dc2626', fontSize: f.sub + 'px', marginBottom:'14px' }}>
+          ⚠️ {error}
+        </div>
+      )}
+
+
+      {biblioCcd.length > 0 && (
+      <InformesGrupoPanel
+        sheet={sheetBiblio}
+        grupoMeta={gruposInformes.biblio}
+        abierto={biblioPanelAbierto}
+        onToggle={() => {
+          setBiblioPanelAbierto((v) => {
+            const next = !v
+            if (next) {
+              setFormatosSubAbierto(false)
+              setFormatosSemAbierto(false)
+              setFormatosInformeGerAbierto(false)
+              setFormatosMesAbierto(false)
+              setFormatosEntExtAbierto(false)
+              setFormatoCorte001Abierto(false)
+              setFormatoMemorias002Abierto(false)
+              setFormatoSem001Abierto(false)
+              setFormatoSem002Abierto(false)
+              setFormatoGer001Abierto(false)
+              setFormatoMes001Abierto(false)
+              setFormatoMes002Abierto(false)
+            }
+            return next
+          })
+        }}
+        styleVars={cssVarsBiblio}
+      >
             {biblioCcdVisible.length === 0 && esPerfilInterventoria ? (
               <div
                 style={{
+                  margin: '14px',
                   padding: '12px',
-                  borderRadius: '8px',
-                  border: `1px dashed ${t.border}`,
-                  background: t.bgCard,
-                  color: t.textMuted,
-                  fontSize: Math.max(12, f.sub) + 'px',
+                  borderRadius: 4,
+                  border: `1px dashed ${sheetBiblio.border}`,
+                  background: sheetBiblio.bgCard,
+                  color: sheetBiblio.textMuted,
+                  fontSize: 'var(--cc-sm)',
                 }}
               >
                 No hay formatos CCD habilitados para interventoría en este contrato. Los de subcontratista suelen gestionarlos contratista / operativo contratista.
@@ -3707,18 +3703,7 @@ export default function ModuloInformes({
             biblioCcdListaPlana.map((row) => {
               if (row._tipo === 'titulo') {
                 return (
-                  <div
-                    key={row._key}
-                    style={{
-                      fontWeight: '800',
-                      fontSize: Math.max(12, f.sub) + 'px',
-                      color: t.text,
-                      marginBottom: '6px',
-                      marginTop: row._key === 'tit-clara' ? '2px' : '16px',
-                      paddingLeft: '2px',
-                      letterSpacing: '0.02em',
-                    }}
-                  >
+                  <div key={row._key} style={sheetBiblio.typeSectionTitle}>
                     {row.texto}
                   </div>
                 )
@@ -3747,40 +3732,25 @@ export default function ModuloInformes({
               <div
                 key={fmt.codigo}
                 style={{
-                  marginBottom: '10px',
-                  borderRadius: '8px',
-                  border: `1px solid ${t.border}`,
-                  overflow: 'hidden',
-                  background: t.bgCard,
+                  ...sheetBiblio.biblioFmtWrap,
+                  ...(abierto ? { borderLeft: `4px solid ${sheetBiblio.accent}` } : null),
                 }}
               >
                 <button
                   type="button"
                   onClick={() => toggleCcdFormato(fmt.codigo)}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '10px',
-                    padding: '10px 12px',
-                    border: 'none',
-                    background: t.bg,
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    font: 'inherit',
-                  }}
+                  style={sheetBiblio.biblioFmtHead}
                 >
                   <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '6px', minWidth: 0 }}>
                     <span>
-                      <span style={{ color: t.primary, fontWeight: '800' }}>{fmt.codigo}</span>
+                      <span style={{ color: sheetBiblio.headerColor, fontWeight: '800' }}>{fmt.codigo}</span>
                       {fmt.titulo ? ` — ${fmt.titulo}` : ''}
                     </span>
                     <span
                       style={{
-                        fontSize: Math.max(11, f.sub - 1) + 'px',
+                        fontSize: 'var(--cc-caption)',
                         fontWeight: '600',
-                        color: fmt.acceso_interventoria === true ? '#059669' : '#64748b',
+                        color: fmt.acceso_interventoria === true ? sheetBiblio.accent : sheetBiblio.textMuted,
                         whiteSpace: 'nowrap',
                       }}
                       title="Si es «No», el formato no se muestra a usuarios de interventoría en esta biblioteca."
@@ -3788,12 +3758,12 @@ export default function ModuloInformes({
                       · Interventoría: {fmt.acceso_interventoria === true ? 'sí' : 'no'}
                     </span>
                   </span>
-                  <span style={{ color: t.textMuted, fontSize: '14px', flexShrink: 0 }} aria-hidden>
+                  <span style={{ color: sheetBiblio.textMuted, fontSize: 'var(--cc-body)', flexShrink: 0 }} aria-hidden>
                     {abierto ? '▼' : '▶'}
                   </span>
                 </button>
                 {abierto && (
-                <div style={{ padding: '12px', borderTop: `1px solid ${t.border}` }}>
+                <div style={sheetBiblio.biblioFmtBody}>
                 {fmt.codigo === 'FO-IDU-EO-04-V2' && (
                   <div style={{ marginBottom: '12px', fontSize: '10px', color: t.textMuted, lineHeight: 1.4 }}>
                     Vista previa y generación del PDF del acta: use el bloque «Formatos Entidades Externas» más abajo
@@ -4230,55 +4200,19 @@ export default function ModuloInformes({
             );
           })
             )}
-            <div style={{ fontSize: ui.hint + 'px', marginTop: '6px', color: '#075985', lineHeight: 1.4 }}>
-              Las plantillas PDF están en código; la visibilidad para interventoría la define cada formato (metadato en servidor).
-            </div>
-                </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
 
-      {ubicacionInformes && (
-        <InformesBreadcrumb
-          sheet={
-            ubicacionInformes.grupo === 'sub' ? sheetSub
-              : ubicacionInformes.grupo === 'sem' ? sheetSem
-                : ubicacionInformes.grupo === 'ger' ? sheetGer
-                  : ubicacionInformes.grupo === 'mes' ? sheetMes
-                    : sheetEnt
-          }
-          crumbs={[
-            { kind: 'root', label: 'Informes' },
-            {
-              kind: 'grupo',
-              grupoId: ubicacionInformes.grupo,
-              label: INFORMES_GRUPOS[ubicacionInformes.grupo]?.label || ubicacionInformes.grupo,
-            },
-            ...(ubicacionInformes.formato
-              ? [{ kind: 'formato', label: `${ubicacionInformes.formato}${ubicacionInformes.nombre ? ` — ${ubicacionInformes.nombre}` : ''}` }]
-              : []),
-          ]}
-          onGoRoot={irARaizInformes}
-          onGoGrupo={irAGrupoInformes}
-          onBack={ubicacionInformes.formato ? cerrarFormatoActivo : null}
-          backLabel={ubicacionInformes.formato ? '← Volver al grupo' : undefined}
-        />
-      )}
-
-      {error && (
-        <div style={{ background:'#fee2e2', border:'1px solid #fca5a5', borderRadius:'8px',
-                      padding:'10px 14px', color:'#dc2626', fontSize: f.sub + 'px', marginBottom:'14px' }}>
-          ⚠️ {error}
-        </div>
+        <InformesZona sheet={sheetBiblio} titulo="Uso en el contrato">
+          <div style={{ fontSize: 'var(--cc-body)', fontWeight: 400, color: sheetBiblio.infoColor, lineHeight: 1.6 }}>
+            Las firmas y estilos configurados aquí se aplican al generar cada formato del contrato. La visibilidad para interventoría depende de la configuración de cada código.
+          </div>
+        </InformesZona>
+      </InformesGrupoPanel>
       )}
 
       {mostrarBloqueFormatosSub && (
       <InformesGrupoPanel
         sheet={sheetSub}
-        grupoMeta={INFORMES_GRUPOS.sub}
+        grupoMeta={gruposInformes.sub}
         abierto={formatosSubAbierto}
         onToggle={toggleFormatosSub}
         styleVars={cssVarsSub}
@@ -4802,7 +4736,7 @@ export default function ModuloInformes({
 
       <InformesGrupoPanel
         sheet={sheetSem}
-        grupoMeta={INFORMES_GRUPOS.sem}
+        grupoMeta={gruposInformes.sem}
         abierto={formatosSemAbierto}
         onToggle={toggleFormatosSem}
         styleVars={cssVarsSem}
@@ -5276,7 +5210,7 @@ export default function ModuloInformes({
 
       <InformesGrupoPanel
         sheet={sheetGer}
-        grupoMeta={INFORMES_GRUPOS.ger}
+        grupoMeta={gruposInformes.ger}
         abierto={formatosInformeGerAbierto}
         onToggle={toggleFormatosInformeGer}
         styleVars={cssVarsGer}
@@ -5465,7 +5399,7 @@ export default function ModuloInformes({
 
       <InformesGrupoPanel
         sheet={sheetMes}
-        grupoMeta={INFORMES_GRUPOS.mes}
+        grupoMeta={gruposInformes.mes}
         abierto={formatosMesAbierto}
         onToggle={toggleFormatosMes}
         styleVars={cssVarsMes}
@@ -5980,7 +5914,7 @@ export default function ModuloInformes({
 
       <InformesGrupoPanel
         sheet={sheetEnt}
-        grupoMeta={INFORMES_GRUPOS.ent}
+        grupoMeta={gruposInformes.ent}
         abierto={formatosEntExtAbierto}
         onToggle={() => setFormatosEntExtAbierto((v) => !v)}
         styleVars={cssVarsEnt}
