@@ -75,6 +75,7 @@ from azure_blob_storage import (
     path_perfil,
     path_sicoe_foto,
     path_sicoe_grafico,
+    path_validacion_adjunto,
     sicoe_blob_path,
     upload_blob,
 )
@@ -25214,6 +25215,50 @@ async def check_foto_hash(
     }
 
 
+@app.post("/validacion-adjuntos/{contrato_id}")
+async def upload_validacion_adjunto(
+    contrato_id: int,
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """Imagen de respaldo en popups de validación (SICOE Obra, Topografía, etc.)."""
+    _require_contract_access(current_user, contrato_id)
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=422, detail="Archivo vacío.")
+    if len(contents) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="La imagen no puede superar 12 MB.")
+    ct = (file.content_type or "").strip().lower() or "image/jpeg"
+    if not ct.startswith("image/"):
+        raise HTTPException(status_code=422, detail="Solo se admiten archivos de imagen.")
+    ext = _ext_desde_content_type(ct)
+    import uuid as _uuid
+    nombre = f"val_{int(time.time())}_{_uuid.uuid4().hex[:10]}"
+    blob_path = path_validacion_adjunto(contrato_id, nombre, ext)
+    try:
+        url = upload_blob(
+            blob_path,
+            contents,
+            ct,
+            overwrite=True,
+            contrato_id=contrato_id,
+            storage_tipo="fotos",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log_api.warning("Azure Blob upload validacion-adjunto %s: %s", blob_path, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo subir la imagen de validación a Azure Blob Storage.",
+        ) from exc
+    return {
+        "url": url,
+        "nombre": (file.filename or f"{nombre}{ext}")[:200],
+        "mime": ct,
+    }
+
+
 @app.post("/sicoe-obra/{contrato_id}/upload-foto")
 async def upload_foto(
     contrato_id: int,
@@ -28567,6 +28612,25 @@ def _macro_roles_destinatarios(destinatarios: list) -> set:
     return roles_dest
 
 
+def _normalizar_adjuntos_validacion(raw) -> list:
+    """Lista acotada de adjuntos {url, nombre, mime} desde comentario_data."""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw[:5]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        out.append({
+            "url": url[:2000],
+            "nombre": str(item.get("nombre") or "imagen")[:200],
+            "mime": str(item.get("mime") or "image/jpeg")[:100],
+        })
+    return out
+
+
 def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
                          comentario_data: dict, tipo_override: str = None, nivel_validacion_override: str = None,
                          audit_user=None):
@@ -28594,6 +28658,13 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
         else:
             confidencialidad = "cruzado"
 
+    enlaces = list(comentario_data.get("enlaces") or [])
+    adjuntos = _normalizar_adjuntos_validacion(comentario_data.get("adjuntos"))
+    for a in adjuntos:
+        u = a.get("url")
+        if u and u not in enlaces:
+            enlaces.append(u)
+
     row = {
         "registro_id":        registro_id,
         "contrato_id":        contrato_id,
@@ -28603,8 +28674,8 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
         "destinatarios":      destinatarios,
         "etiqueta":           comentario_data.get("etiqueta"),
         "asunto":             comentario_data.get("asunto"),
-        "mensaje":            comentario_data.get("mensaje"),
-        "enlaces":            comentario_data.get("enlaces") or [],
+        "mensaje":            comentario_data.get("mensaje") or ( "(Soporte fotográfico)" if adjuntos else None),
+        "enlaces":            enlaces,
         "cantidad_verificada": comentario_data.get("cantidad_verificada"),
         "tipo":               tipo_override or comentario_data.get("tipo"),
         "nivel_validacion":   nivel_validacion_override or comentario_data.get("nivel_validacion"),

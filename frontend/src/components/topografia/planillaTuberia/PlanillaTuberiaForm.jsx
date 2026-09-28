@@ -175,6 +175,12 @@ export default function PlanillaTuberiaForm({
   const sellada = ['cerrado', 'validado'].includes(String(planilla?.estado || '').toLowerCase())
   const editable = editablePerm && !sellada && !modoSoloLectura
   const comentarioInterventoria = String(planilla?.comentario_interventoria || '').trim()
+  const adjuntosValidacion = (() => {
+    const raw = planilla?.comentario_validacion_adjuntos
+    if (!raw || typeof raw !== 'object') return []
+    const list = Array.isArray(raw.adjuntos) ? raw.adjuntos : []
+    return list.filter((a) => a && typeof a === 'object' && String(a.url || '').trim())
+  })()
   const conDatos = useMemo(() => tieneDatosExportables(filas, detalle), [filas, detalle])
   const puedeExportar = puede(permisos, 'exportar') || esDev
   const puedeEliminar = puede(permisos, 'eliminar')
@@ -1444,7 +1450,7 @@ export default function PlanillaTuberiaForm({
 
   <div style={{ ...cardPad, minWidth: 0 }}>
     <div style={sheet.sectionTitle}>Cartera de campo</div>
-    {comentarioInterventoria ? (
+    {(comentarioInterventoria || adjuntosValidacion.length > 0) ? (
       <div
         data-comentario-interventoria
         style={{
@@ -1462,7 +1468,35 @@ export default function PlanillaTuberiaForm({
           Comentario interventoría
           {planilla?.nivel2_estado ? ` · ${planilla.nivel2_estado}` : ''}
         </div>
-        <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{comentarioInterventoria}</div>
+        {comentarioInterventoria ? (
+          <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{comentarioInterventoria}</div>
+        ) : null}
+        {adjuntosValidacion.length > 0 ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: comentarioInterventoria ? 8 : 0 }}>
+            {adjuntosValidacion.map((a, i) => (
+              <a
+                key={`${a.url}-${i}`}
+                href={a.url}
+                target="_blank"
+                rel="noreferrer"
+                title={a.nombre || 'Adjunto'}
+                style={{ display: 'inline-block' }}
+              >
+                <img
+                  src={a.url}
+                  alt={a.nombre || 'Adjunto validación'}
+                  style={{
+                    width: 72,
+                    height: 72,
+                    objectFit: 'cover',
+                    borderRadius: 8,
+                    border: '1px solid #fcd34d',
+                  }}
+                />
+              </a>
+            ))}
+          </div>
+        ) : null}
       </div>
     ) : null}
     <div
