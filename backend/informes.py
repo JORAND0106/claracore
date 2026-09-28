@@ -1689,7 +1689,7 @@ def _contexto_memoria_item(
         "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
         "infraestructura, enlace_soporte, longitud, ancho, espesor, cantidad, cantidad_total, "
         "observacion, foto_url, foto_numero, grafico_url, grafico_numero, graficos_historial, "
-        "item_numero, item_descripcion, unidad, capitulo"
+        "item_numero, item_descripcion, unidad, capitulo, tramo"
     )
     try:
         q = (
@@ -10963,6 +10963,14 @@ body.mem002-doc .mem002-detail .total-td {
   font-size: 6pt;
   padding: 2px 3px;
 }
+body.mem002-doc .mem002-detail tr.subtramo td.mem002-subtramo,
+body.mem002-doc .mem002-detail td.mem002-subtramo {
+  background: #dbeafe !important;
+  font-weight: bold;
+  font-size: 6pt;
+  padding: 2px 3px;
+  border: 1px solid #9ca3af;
+}
 /* Totales fuera de .mem002-detail: evita colspan que en xhtml2pdf deforma la última hoja del detalle */
 body.mem002-doc .mem002-total-wrap {
   width: 100%;
@@ -11331,12 +11339,122 @@ def _excel_formula_cantidad_total(row: int) -> str:
     )
 
 
+def _parse_abscisa_metros_memoria(val: Any) -> Optional[float]:
+    """Convierte abscisa (metros, 1+000 o K1+000.00) a float metros."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, (int, float)):
+        n = float(val)
+        return n if math.isfinite(n) and n >= 0 else None
+    s = str(val).strip().replace(",", ".")
+    m = re.match(r"^K?(\d+)\+(\d+(?:\.\d+)?)$", s, re.I)
+    if m:
+        return int(m.group(1)) * 1000 + float(m.group(2))
+    try:
+        n = float(s)
+        return n if math.isfinite(n) and n >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_abscisa_k(val: Any) -> str:
+    """Formato de abscisa K0+000.00 (ej. 11090.0 → K11+090.00; 1+314.5 → K1+314.50)."""
+    n = _parse_abscisa_metros_memoria(val)
+    if n is None:
+        s = str(val or "").strip()
+        return s if s else ""
+    km = int(n // 1000)
+    rest = n - km * 1000
+    return f"K{km}+{rest:06.2f}"
+
+
 def _memoria_abscisas_txt(r: dict) -> str:
-    a = str(r.get("abs_inicio") or "").strip()
-    b = str(r.get("abs_final") or "").strip()
+    """Abscisas concatenadas inicial – final en formato K0+000.00."""
+    a = _fmt_abscisa_k(r.get("abs_inicio"))
+    b = _fmt_abscisa_k(r.get("abs_final"))
     if a and b:
         return f"{a} – {b}"
     return a or b or "—"
+
+
+def _memoria_tramo_label(r: dict) -> str:
+    t = str(r.get("tramo") or "").strip()
+    return t if t else "—"
+
+
+def _memoria_sort_key_registro(r: dict) -> tuple:
+    """Orden: abs_inicio ↑, abs_final ↑, número de registro."""
+    a = _parse_abscisa_metros_memoria(r.get("abs_inicio"))
+    b = _parse_abscisa_metros_memoria(r.get("abs_final"))
+    return (
+        a if a is not None else float("inf"),
+        b if b is not None else float("inf"),
+        str(r.get("numero_registro") or ""),
+    )
+
+
+def _memoria_tramo_group_sort_key(tramo: str, regs: List[dict]) -> tuple:
+    """Tramos ordenados por su abscisado (mín. abs_inicio del grupo), luego etiqueta."""
+    mins = [
+        _parse_abscisa_metros_memoria(r.get("abs_inicio"))
+        for r in (regs or [])
+    ]
+    finite = [x for x in mins if x is not None]
+    min_abs = min(finite) if finite else float("inf")
+    try:
+        tnum = float(str(tramo).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        tnum = float("inf")
+    return (min_abs, tnum, str(tramo or ""))
+
+
+def _memoria_plan_filas_detalle(registros: Optional[List[dict]]) -> List[Dict[str, Any]]:
+    """
+    Plan de filas del detalle: registros ordenados por tramo/abscisa + marcadores de subtotal.
+
+    Cada entrada:
+      {"kind": "reg", "reg": dict}
+      {"kind": "subtramo", "tramo": str, "regs": [dict, ...]}
+    """
+    regs = list(registros or [])
+    by_tramo: Dict[str, List[dict]] = {}
+    for r in regs:
+        lab = _memoria_tramo_label(r)
+        by_tramo.setdefault(lab, []).append(r)
+    ordered_tramos = sorted(
+        by_tramo.keys(),
+        key=lambda t: _memoria_tramo_group_sort_key(t, by_tramo[t]),
+    )
+    plan: List[Dict[str, Any]] = []
+    for tramo in ordered_tramos:
+        group = sorted(by_tramo[tramo], key=_memoria_sort_key_registro)
+        for r in group:
+            plan.append({"kind": "reg", "reg": r})
+        if group:
+            plan.append({"kind": "subtramo", "tramo": tramo, "regs": group})
+    return plan
+
+
+def _excel_sum_rows_formula(col: str, rows: List[int]) -> Any:
+    """Fórmula SUM de celdas no contiguas o rango; 0 si no hay filas."""
+    if not rows:
+        return 0
+    rows = sorted(int(r) for r in rows)
+    # Compactar rangos consecutivos: H9:H11+H13
+    parts: List[str] = []
+    start = prev = rows[0]
+    for r in rows[1:]:
+        if r == prev + 1:
+            prev = r
+            continue
+        parts.append(f"{col}{start}" if start == prev else f"{col}{start}:{col}{prev}")
+        start = prev = r
+    parts.append(f"{col}{start}" if start == prev else f"{col}{start}:{col}{prev}")
+    if len(parts) == 1 and ":" in parts[0]:
+        return f"=SUM({parts[0]})"
+    if len(parts) == 1:
+        return f"={parts[0]}"
+    return "=" + "+".join(f"SUM({p})" if ":" in p else p for p in parts)
 
 
 def _memoria_parse_enlaces_soporte(raw: object) -> List[str]:
@@ -11872,59 +11990,96 @@ def _fill_memoria_excel_ws(
         cell.border = bd
 
     data_row = hr + 1
-    for i, r in enumerate(registros):
-        obs = r.get("observacion") or ""
-        fn = r.get("foto_numero")
-        if fn:
-            obs = f"{obs} [Foto {fn}]".strip()
-        obs = _descripcion_memoria_compacta(obs)
-        links = _memoria_enlaces_soporte(r)
-        infra = _memoria_infraestructura_txt(r)
-        row = data_row + i
-        # Orden: N°, Abscisas, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot (fórmula), Enlace, Obs.
-        vals = [
-            r.get("numero_registro"),
-            _memoria_abscisas_txt(r),
-            infra or "—",
-            _excel_num_or_blank(r.get("longitud")),
-            _excel_num_or_blank(r.get("ancho")),
-            _excel_num_or_blank(r.get("espesor")),
-            _excel_num_or_blank(r.get("cantidad")),
-            _excel_formula_cantidad_total(row),
-            None,  # Enlace: se escribe abajo con hipervínculos
-            (obs or "")[:500],
-        ]
-        for col, v in enumerate(vals, start=1):
-            if col == 9:
-                cell = ws.cell(row=row, column=col)
+    plan = _memoria_plan_filas_detalle(registros)
+    unidad_item = str(item_info.get("unidad") or "").strip()
+    fill_sub = PatternFill("solid", fgColor="DBEAFE")
+    row = data_row
+    data_h_rows: List[int] = []
+    reg_parity = 0
+    for entry in plan:
+        if entry.get("kind") == "reg":
+            r = entry["reg"]
+            obs = r.get("observacion") or ""
+            fn = r.get("foto_numero")
+            if fn:
+                obs = f"{obs} [Foto {fn}]".strip()
+            obs = _descripcion_memoria_compacta(obs)
+            links = _memoria_enlaces_soporte(r)
+            infra = _memoria_infraestructura_txt(r)
+            vals = [
+                r.get("numero_registro"),
+                _memoria_abscisas_txt(r),
+                infra or "—",
+                _excel_num_or_blank(r.get("longitud")),
+                _excel_num_or_blank(r.get("ancho")),
+                _excel_num_or_blank(r.get("espesor")),
+                _excel_num_or_blank(r.get("cantidad")),
+                _excel_formula_cantidad_total(row),
+                None,  # Enlace
+                (obs or "")[:500],
+            ]
+            for col, v in enumerate(vals, start=1):
+                if col == 9:
+                    cell = ws.cell(row=row, column=col)
+                    cell.border = bd
+                    _excel_write_enlaces_soporte(cell, links)
+                    continue
+                cell = ws.cell(row=row, column=col, value=v)
                 cell.border = bd
-                _excel_write_enlaces_soporte(cell, links)
-                continue
-            cell = ws.cell(row=row, column=col, value=v)
-            cell.border = bd
-            cell.font = Font(size=8)
-            if col in (4, 5, 6, 7, 8):
-                cell.alignment = Alignment(horizontal="right", vertical="center")
-                if col == 8:
-                    cell.number_format = "0.000"
-            elif col == 10:
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
-            else:
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        if i % 2 == 0:
-            for col in range(1, 11):
-                ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F8FAFC")
+                cell.font = Font(size=8)
+                if col in (4, 5, 6, 7, 8):
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    if col == 8:
+                        cell.number_format = "0.000"
+                elif col == 10:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+                else:
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            if reg_parity % 2 == 0:
+                for col in range(1, 11):
+                    ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F8FAFC")
+            data_h_rows.append(row)
+            reg_parity += 1
+            row += 1
+            continue
 
-    tot_r = data_row + len(registros)
+        # Subtotal por tramo
+        tramo = str(entry.get("tramo") or "—")
+        n_regs = len(entry.get("regs") or [])
+        # Filas de datos de este tramo: las n_regs anteriores en data_h_rows
+        tramo_rows = data_h_rows[-n_regs:] if n_regs else []
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        lab = ws.cell(row=row, column=1, value=f"Total tramo {tramo}")
+        lab.font = Font(bold=True, size=8)
+        lab.alignment = Alignment(horizontal="right", vertical="center")
+        lab.fill = fill_sub
+        lab.border = bd
+        for cc in range(2, 8):
+            ws.cell(row=row, column=cc).border = bd
+            ws.cell(row=row, column=cc).fill = fill_sub
+        c_sub = ws.cell(row=row, column=8, value=_excel_sum_rows_formula("H", tramo_rows))
+        c_sub.font = Font(bold=True, size=8)
+        c_sub.alignment = Alignment(horizontal="right", vertical="center")
+        c_sub.number_format = "0.000"
+        c_sub.border = bd
+        c_sub.fill = fill_sub
+        c_und = ws.cell(row=row, column=9, value=unidad_item or None)
+        c_und.font = Font(bold=True, size=8)
+        c_und.alignment = Alignment(horizontal="left", vertical="center")
+        c_und.border = bd
+        c_und.fill = fill_sub
+        c_obs = ws.cell(row=row, column=10, value=None)
+        c_obs.border = bd
+        c_obs.fill = fill_sub
+        row += 1
+
+    tot_r = row
     ws.merge_cells(start_row=tot_r, start_column=1, end_row=tot_r, end_column=7)
     ws.cell(row=tot_r, column=1, value="CANTIDAD TOTAL DEL ÍTEM").alignment = Alignment(
         horizontal="right", vertical="center"
     )
     ws.cell(row=tot_r, column=1).font = Font(bold=True, size=9)
-    if registros:
-        tot_formula = f"=SUM(H{data_row}:H{data_row + len(registros) - 1})"
-    else:
-        tot_formula = 0
+    tot_formula = _excel_sum_rows_formula("H", data_h_rows)
     c_tot = ws.cell(row=tot_r, column=8, value=tot_formula)
     c_tot.font = Font(bold=True, size=9)
     c_tot.alignment = Alignment(horizontal="right")
@@ -11934,10 +12089,17 @@ def _fill_memoria_excel_ws(
     c_lab = ws.cell(row=tot_r, column=1)
     c_lab.border = bd
     c_lab.fill = fill_tot
-    for cc in (9, 10):
-        c_e = ws.cell(row=tot_r, column=cc)
-        c_e.border = bd
-        c_e.fill = fill_tot
+    for cc in range(2, 8):
+        ws.cell(row=tot_r, column=cc).border = bd
+        ws.cell(row=tot_r, column=cc).fill = fill_tot
+    c_und_tot = ws.cell(row=tot_r, column=9, value=unidad_item or None)
+    c_und_tot.font = Font(bold=True, size=9)
+    c_und_tot.alignment = Alignment(horizontal="left", vertical="center")
+    c_und_tot.border = bd
+    c_und_tot.fill = fill_tot
+    c_e = ws.cell(row=tot_r, column=10)
+    c_e.border = bd
+    c_e.fill = fill_tot
 
     fotos = _dedupe_fotos_memoria(registros)
     graficos = _dedupe_graficos_memoria(registros)
@@ -13982,21 +14144,38 @@ def _html_corte_sub_minima(contrato, sub, corte, items, total_costo, usuario_nom
 def _html_memoria_minima(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo, err_note: str) -> str:
     """Si la plantilla completa falla (datos raros / xhtml2pdf), al menos un PDF legible."""
     filas = ""
-    for r in registros:
+    plan = _memoria_plan_filas_detalle(registros)
+    unidad = str(item_info.get("unidad") or "").strip()
+    for entry in plan:
+        if entry.get("kind") == "subtramo":
+            tramo = str(entry.get("tramo") or "—")
+            sub_sum = sum(_sf(r.get("cantidad_total"), 0.0) for r in (entry.get("regs") or []))
+            filas += f"""<tr style="background:#dbeafe">
+          <td colspan="3" style="border:1px solid #999;padding:4px;text-align:right;font-weight:bold">Total tramo {_h(tramo)}</td>
+          <td style="border:1px solid #999;padding:4px;text-align:right;font-weight:bold">{_fn_cant(sub_sum)}</td>
+          <td style="border:1px solid #999;padding:4px;font-weight:bold">{_h(unidad)}</td>
+        </tr>"""
+            continue
+        r = entry.get("reg") or {}
         filas += f"""<tr>
           <td style="border:1px solid #999;padding:4px">{_h(r.get("numero_registro"))}</td>
-          <td style="border:1px solid #999;padding:4px">{_h(r.get("abs_inicio"))}</td>
-          <td style="border:1px solid #999;padding:4px">{_h(r.get("abs_final"))}</td>
+          <td style="border:1px solid #999;padding:4px">{_h(_memoria_abscisas_txt(r))}</td>
           <td style="border:1px solid #999;padding:4px">{_fn_cant(r.get("cantidad_total"))}</td>
           <td style="border:1px solid #999;padding:4px">{_h((r.get("observacion") or "")[:300])}</td>
+          <td style="border:1px solid #999;padding:4px">&nbsp;</td>
         </tr>"""
+    total_cant = sum(_sf(r.get("cantidad_total"), 0.0) for r in (registros or []))
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
 <body style="font-family:Arial,sans-serif;font-size:9pt;color:#111">
   <p style="color:#b45309;font-size:8pt">Vista simplificada (hubo un problema al armar el formato completo): {_h(err_note[:400])}</p>
   <h2 style="margin:0 0 8px 0">CC-SUB-002 · {_h(item_info.get("item_numero", ""))}</h2>
   <p><b>Contrato:</b> {_h(contrato.get("numero", ""))} &nbsp; <b>Sub:</b> {_h(sub.get("razon_social", ""))} &nbsp; <b>Corte:</b> {_h(corte.get("consecutivo", ""))}</p>
-  <p><b>Usuario:</b> {_h(usuario_nombre)} — {_h(usuario_cargo)}</p>
-  <table style="width:100%;border-collapse:collapse">{filas}</table>
+  <table border="1" cellpadding="4" style="border-collapse:collapse;width:100%">
+    <tr><th>N°</th><th>Abscisas</th><th>Cant tot</th><th>Observación</th><th>Und</th></tr>
+    {filas}
+    <tr style="background:#e5e7eb"><td colspan="2" align="right"><b>CANTIDAD TOTAL DEL ÍTEM</b></td><td align="right"><b>{_fn_cant(total_cant)}</b></td><td colspan="2"><b>{_h(unidad)}</b></td></tr>
+  </table>
+  <p>{_h(usuario_nombre)} — {_h(usuario_cargo)}</p>
 </body></html>"""
 
 
@@ -14083,6 +14262,7 @@ def _memoria_pdf_estilo_css(est: Dict[str, str]) -> str:
         f"body.mem002-doc .mem002-detail th.data-th{{background:{th}!important;}}"
         f"body.mem002-doc .mem002-detail tr.even td{{background:{ev}!important;}}"
         f"body.mem002-doc .mem002-detail tr.odd td{{background:{od}!important;}}"
+        f"body.mem002-doc .mem002-detail tr.subtramo td.mem002-subtramo{{background:{su}!important;}}"
         f"body.mem002-doc .mem002-total-wrap td.total-td{{background:{su}!important;}}"
     )
 
@@ -14217,7 +14397,9 @@ def _html_memoria_item_body(
 
     chunks_foto = [fotos[i : i + FOTOS_PER_PAGE] for i in range(0, len(fotos), FOTOS_PER_PAGE)]
     chunks_graf = [graficos[i : i + FOTOS_PER_PAGE] for i in range(0, len(graficos), FOTOS_PER_PAGE)]
-    chunks_reg = _chunks_memoria_detalle(registros, ROWS_MEMORIA_PRIMERA_HOJA, ROWS_MEMORIA_SIGUIENTES)
+    plan_filas = _memoria_plan_filas_detalle(registros)
+    unidad_item = str(item_info.get("unidad") or "").strip()
+    chunks_reg = _chunks_memoria_detalle(plan_filas, ROWS_MEMORIA_PRIMERA_HOJA, ROWS_MEMORIA_SIGUIENTES)
 
     # Orden: N°, Abscisas, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot, Enlace, Observación (sin PK ID).
     thead_detalle = """<tr>
@@ -14243,11 +14425,23 @@ def _html_memoria_item_body(
         body += '<div class="section-bar mem002-section">DETALLE DE CANTIDADES APROBADAS</div>'
         body += f"""<table class="w100 mem002-detail" cellspacing="0" cellpadding="0">{thead_detalle}"""
 
-        for j, r in enumerate(chunk):
+        for j, entry in enumerate(chunk):
             i = row_offset + j
+            if isinstance(entry, dict) and entry.get("kind") == "subtramo":
+                tramo = str(entry.get("tramo") or "—")
+                regs_g = entry.get("regs") or []
+                sub_sum = sum(_sf(r.get("cantidad_total"), 0.0) for r in regs_g)
+                body += f"""<tr class="subtramo">
+                <td class="data-td mem002-subtramo" colspan="7" style="text-align:right;font-weight:bold">Total tramo {_h(tramo)}</td>
+                <td class="data-td mem002-subtramo" style="text-align:right;font-weight:bold">{_fn_cant(sub_sum)}</td>
+                <td class="data-td mem002-subtramo" style="text-align:left;font-weight:bold">{_h(unidad_item)}</td>
+                <td class="data-td mem002-subtramo">&nbsp;</td>
+            </tr>"""
+                continue
+            r = entry.get("reg") if isinstance(entry, dict) and entry.get("kind") == "reg" else entry
             cls = "even" if i % 2 == 0 else "odd"
-            obs = r.get("observacion") or ""
-            fn = r.get("foto_numero")
+            obs = (r or {}).get("observacion") or ""
+            fn = (r or {}).get("foto_numero")
             if fn:
                 obs = f"{obs} [Foto {fn}]".strip()
             obs = _descripcion_memoria_compacta(obs)
@@ -14274,9 +14468,11 @@ def _html_memoria_item_body(
         <tr>
             <td class="total-td" style="width:60%;text-align:right;padding-right:8px">CANTIDAD TOTAL DEL ÍTEM</td>
             <td class="total-td" style="width:8%;text-align:right">{_fn_cant(total_cant)}</td>
-            <td class="total-td" style="width:32%">&nbsp;</td>
+            <td class="total-td" style="width:8%;text-align:left;padding-left:4px">{_h(unidad_item)}</td>
+            <td class="total-td" style="width:24%">&nbsp;</td>
         </tr>
     </table>"""
+
 
     body += '<div class="doc-footer">Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>'
 

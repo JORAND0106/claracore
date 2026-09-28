@@ -272,7 +272,7 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
     assert "PK ID" not in html
     assert "COSTADO" not in html
     assert "ABS INI" not in html
-    assert "1+000 – 1+010" in html
+    assert "K1+000.00 – K1+010.00" in html
     assert "Ciclorruta" in html
     assert 'href="https://drive.google.com/file/d/abc/view"' in html
     assert "Drive 1" in html
@@ -402,8 +402,14 @@ def test_fill_memoria_excel_ws_formulas_columnas_y_grafico():
     assert "D9" in ws2["H9"].value and "G9" in ws2["H9"].value
     assert ws2["D9"].value == 2
     assert ws2["G10"].value == 5
-    assert ws2["H11"].value == "=SUM(H9:H10)"
-    assert ws2["B9"].value == "1+000 – 1+010"
+    # Subtotal por tramo (ambos sin tramo → grupo «—») + total del ítem (solo filas de registro)
+    assert str(ws2["A11"].value or "").startswith("Total tramo")
+    assert isinstance(ws2["H11"].value, str) and ("H9" in ws2["H11"].value and "H10" in ws2["H11"].value)
+    assert ws2["I11"].value == "m3"
+    assert isinstance(ws2["H12"].value, str) and ("H9" in ws2["H12"].value and "H10" in ws2["H12"].value)
+    assert "H11" not in str(ws2["H12"].value)  # total no incluye subtotales
+    assert ws2["I12"].value == "m3"
+    assert ws2["B9"].value == "K1+000.00 – K1+010.00"
     # Enlace: etiquetas cortas (no URL completa) + hipervínculo al primero
     assert ws2["I9"].value == "Drive 1\ndoc.pdf"
     assert ws2["I9"].hyperlink is not None

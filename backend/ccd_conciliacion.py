@@ -352,7 +352,7 @@ def fetch_registros_memoria_conciliacion(
         "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
         "infraestructura, enlace_soporte, longitud, ancho, espesor, "
         "cantidad, cantidad_total, observacion, foto_url, foto_numero, grafico_url, grafico_numero, "
-        "graficos_historial, capitulo, item_numero, item_descripcion, unidad, "
+        "graficos_historial, capitulo, item_numero, item_descripcion, unidad, tramo, "
         "bloqueado, acta_rpo_id, semana_id"
     )
 
@@ -555,7 +555,7 @@ _SEL_MEMORIA_CC_MES = (
     "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
     "infraestructura, enlace_soporte, longitud, ancho, espesor, "
     "cantidad, cantidad_total, observacion, foto_url, foto_numero, grafico_url, grafico_numero, "
-    "graficos_historial, item_numero, item_descripcion, unidad, "
+    "graficos_historial, item_numero, item_descripcion, unidad, tramo, "
     "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
     "bloqueado, acta_rpo_id, semana_id, costo_directo, vlr_unitario, capitulo"
 )
