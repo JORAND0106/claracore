@@ -8,6 +8,7 @@ import { seguimientoModalOverlayStyle, seguimientoModalSheetStyle, useSeguimient
 /**
  * Formulario para generar compromiso(s) desde una idea de acta,
  * o de forma libre (sin idea) cuando textoIdea llega vacío.
+ * También edita un compromiso existente (mode=edit + compromisoInicial).
  * Asignables: usuarios de plataforma + asistentes externos del acta actual.
  * Origen atribuido al acta/comité (no al operador del formulario).
  */
@@ -22,15 +23,42 @@ export default function CompromisoFormModal({
   onClose,
   onSubmit,
   viewportCompact: viewportCompactProp,
+  mode = 'create',
+  compromisoInicial = null,
 }) {
   const viewportCompactHook = useSeguimientoCompact()
   const viewportCompact = viewportCompactProp ?? viewportCompactHook
+  const esEdicion = mode === 'edit' && compromisoInicial?.id != null
+
+  const redaccionInicial = esEdicion
+    ? String(compromisoInicial.descripcion || compromisoInicial.titulo || textoIdea || '').trim()
+    : (textoIdea || '')
+
   const [form, setForm] = useState({
-    fecha_vencimiento: '',
-    hora_vencimiento: '',
-    redaccion: textoIdea || '',
+    fecha_vencimiento: esEdicion
+      ? String(compromisoInicial.fecha_vencimiento || '').slice(0, 10)
+      : '',
+    hora_vencimiento: esEdicion && compromisoInicial.hora_vencimiento
+      ? String(compromisoInicial.hora_vencimiento).slice(0, 5)
+      : '',
+    redaccion: redaccionInicial,
+    estado_gestion: esEdicion ? (compromisoInicial.estado_gestion || 'abierto') : 'abierto',
   })
-  const [asignadosKeys, setAsignadosKeys] = useState([])
+
+  const initialAsignadoKey = (() => {
+    if (!esEdicion) return []
+    const c = compromisoInicial
+    const extId = c.asignado_externo_id
+      ?? (c.campos_libres && c.campos_libres.externo_id)
+    if (extId != null && Number(extId) > 0) return [`ext-${Number(extId)}`]
+    if (c.asignado_a_id && Number(c.asignado_a_id) > 0) return [`usr-${Number(c.asignado_a_id)}`]
+    if ((c.asignado_a_nombre || '').trim()) {
+      return [`ext-nom-${String(c.asignado_a_nombre).trim().toLowerCase()}`]
+    }
+    return []
+  })()
+
+  const [asignadosKeys, setAsignadosKeys] = useState(initialAsignadoKey)
   const [q, setQ] = useState('')
   const [highlight, setHighlight] = useState(-1)
   const [busy, setBusy] = useState(false)
@@ -104,8 +132,38 @@ export default function CompromisoFormModal({
         _key: k,
       })
     }
+    // En edición: asegurar que el responsable actual aparezca aunque no esté en el pool.
+    if (esEdicion && compromisoInicial) {
+      const c = compromisoInicial
+      const extId = c.asignado_externo_id
+        ?? (c.campos_libres && c.campos_libres.externo_id)
+      if (extId != null && Number(extId) > 0) {
+        const k = `ext-${Number(extId)}`
+        if (!byKey.has(k)) {
+          byKey.set(k, {
+            id: -Number(extId),
+            externo_id: Number(extId),
+            nombre: c.asignado_a_nombre || 'Externo',
+            apellidos: '',
+            es_externo: true,
+            _key: k,
+          })
+        }
+      } else if (c.asignado_a_id && Number(c.asignado_a_id) > 0) {
+        const k = `usr-${Number(c.asignado_a_id)}`
+        if (!byKey.has(k)) {
+          byKey.set(k, {
+            id: Number(c.asignado_a_id),
+            nombre: c.asignado_a_nombre || `Usuario #${c.asignado_a_id}`,
+            apellidos: '',
+            es_externo: false,
+            _key: k,
+          })
+        }
+      }
+    }
     return Array.from(byKey.values())
-  }, [usuarios, asistentesActa])
+  }, [usuarios, asistentesActa, esEdicion, compromisoInicial])
 
   const filtrados = useMemo(() => {
     const s = q.trim().toLowerCase()
@@ -158,14 +216,37 @@ export default function CompromisoFormModal({
       setError('Seleccione al menos un asignado, vencimiento y redacción.')
       return
     }
+    if (esEdicion && asignadosKeys.length > 1) {
+      setError('Al editar solo puede haber un responsable. Quite los extras o cree otro compromiso.')
+      return
+    }
     submittingRef.current = true
     setBusy(true)
     setError('')
     try {
       // Deduplicar claves por si el estado local quedó con repeticiones.
       const keysUnicos = [...new Set(asignadosKeys)]
-      const asignadosUnicos = pool.filter((u) => keysUnicos.includes(u._key))
-      await onSubmit({
+      let asignadosUnicos = pool.filter((u) => keysUnicos.includes(u._key))
+      // Si el asignado actual no está en el pool (p.ej. nombre libre), conservar payload mínimo.
+      if (esEdicion && !asignadosUnicos.length && keysUnicos.length) {
+        const k = keysUnicos[0]
+        if (k.startsWith('usr-')) {
+          asignadosUnicos = [{
+            id: Number(k.slice(4)),
+            es_externo: false,
+            _key: k,
+            nombre: compromisoInicial?.asignado_a_nombre || '',
+          }]
+        } else if (k.startsWith('ext-') && !k.startsWith('ext-nom-')) {
+          asignadosUnicos = [{
+            externo_id: Number(k.slice(4)),
+            es_externo: true,
+            _key: k,
+            nombre: compromisoInicial?.asignado_a_nombre || '',
+          }]
+        }
+      }
+      const payload = {
         solicitante_id: usuario?.id || null,
         solicitante_nombre: origenLabel,
         asignados: asignadosUnicos.map((u) => {
@@ -173,7 +254,7 @@ export default function CompromisoFormModal({
             return {
               asignado_a_id: null,
               asignado_externo_id: u.externo_id != null ? Number(u.externo_id) : null,
-              asignado_a_nombre: nombreUser(u),
+              asignado_a_nombre: nombreUser(u) || u.nombre || '',
               es_externo: true,
               asignado_cargo: u.cargo_nombre || null,
               asignado_entidad: u.empresa || null,
@@ -182,7 +263,7 @@ export default function CompromisoFormModal({
           }
           return {
             asignado_a_id: Number(u.id),
-            asignado_a_nombre: nombreUser(u),
+            asignado_a_nombre: nombreUser(u) || u.nombre || '',
             es_externo: false,
           }
         }),
@@ -191,10 +272,15 @@ export default function CompromisoFormModal({
         redaccion: form.redaccion.trim(),
         titulo: form.redaccion.trim().slice(0, 200),
         descripcion: form.redaccion.trim(),
-      })
+      }
+      if (esEdicion) {
+        payload.estado_gestion = form.estado_gestion || 'abierto'
+        payload.compromiso_id = compromisoInicial.id
+      }
+      await onSubmit(payload)
       // Éxito: el padre cierra el modal; mantener candado para no reenviar.
     } catch (e) {
-      setError(e.message || 'No se pudo crear')
+      setError(e.message || (esEdicion ? 'No se pudo guardar' : 'No se pudo crear'))
       submittingRef.current = false
       setBusy(false)
     }
@@ -221,7 +307,9 @@ export default function CompromisoFormModal({
         <div className={viewportCompact ? 'cc-seguim-compromiso-form cc-seguim-compromiso-form--compact' : 'cc-seguim-compromiso-form'}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <div style={{ fontSize: 'var(--cc-title)', fontWeight: 700, color: t.text }}>
-            {(textoIdea || '').trim() ? 'Generar compromiso' : 'Agregar compromiso'}
+            {esEdicion
+              ? 'Editar compromiso'
+              : ((textoIdea || '').trim() ? 'Generar compromiso' : 'Agregar compromiso')}
           </div>
           <button type="button" onClick={onClose} style={ghost(t)}>Cerrar</button>
         </div>
@@ -239,7 +327,12 @@ export default function CompromisoFormModal({
             {origenLabel}
           </div>
         </Field>
-        <Field t={t} label="A quién o a quiénes se asigna">
+        <Field t={t} label={esEdicion ? 'Responsable (notificar a)' : 'A quién o a quiénes se asigna'}>
+          {esEdicion && (
+            <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 6 }}>
+              Al editar, seleccione un único responsable. Para asignar a varias personas cree compromisos adicionales.
+            </div>
+          )}
           {asignados.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
               {asignados.map((u) => (
@@ -329,6 +422,22 @@ export default function CompromisoFormModal({
             />
           </Field>
         </div>
+        {esEdicion && (
+          <Field t={t} label="Estado">
+            <select
+              value={form.estado_gestion || 'abierto'}
+              onChange={(e) => set('estado_gestion', e.target.value)}
+              style={inp(t)}
+            >
+              <option value="abierto">Abierto</option>
+              <option value="en_progreso">En progreso</option>
+              <option value="parcial">Parcial</option>
+              <option value="cumplido">Cumplido</option>
+              <option value="vencido">Vencido</option>
+              <option value="cancelado">Cancelado</option>
+            </select>
+          </Field>
+        )}
         <Field t={t} label="Redacción del compromiso">
           <textarea rows={5} value={form.redaccion} onChange={(e) => set('redaccion', e.target.value)} style={inp(t)} />
           {api && (
@@ -348,7 +457,7 @@ export default function CompromisoFormModal({
         <div className="cc-seguim-modal-footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
           <button type="button" onClick={onClose} style={ghost(t)}>Cancelar</button>
           <button type="button" disabled={busy} onClick={guardar} style={primary(t)}>
-            {busy ? 'Guardando…' : 'Incorporar compromiso'}
+            {busy ? 'Guardando…' : (esEdicion ? 'Guardar cambios' : 'Incorporar compromiso')}
           </button>
         </div>
         </div>

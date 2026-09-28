@@ -5327,11 +5327,181 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
 
 
 def eliminar_item(sb, item_id: int, current_user: dict) -> dict:
-    if not es_desarrollador_seguimiento(current_user):
-        raise ValueError("Solo el rol Desarrollador puede eliminar definitivamente")
+    """
+    Elimina un ítem de seguimiento.
+    - Tareas / ítems generales: solo Desarrollador.
+    - Compromisos de acta: elaborador del acta o Desarrollador.
+    """
     item = get_item(sb, item_id)
+    uid = None
+    try:
+        uid = int(current_user.get("sub") or current_user.get("id") or 0) or None
+    except (TypeError, ValueError):
+        uid = None
+
+    if (item.get("origen") or "") == "compromiso" and item.get("acta_id"):
+        if not es_desarrollador_seguimiento(current_user):
+            if uid is None:
+                raise ValueError(
+                    "Solo el elaborador del acta o el Desarrollador pueden eliminar el compromiso"
+                )
+            acta = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
+            elab = acta.get("elaborador_id")
+            if elab is None or int(elab) != int(uid):
+                raise ValueError(
+                    "Solo el elaborador del acta o el Desarrollador pueden eliminar el compromiso"
+                )
+    elif not es_desarrollador_seguimiento(current_user):
+        raise ValueError("Solo el rol Desarrollador puede eliminar definitivamente")
+
     sb.table("seguimiento_item").delete().eq("id", int(item_id)).execute()
     return {"ok": True, "id": item_id, "origen": item.get("origen")}
+
+
+def actualizar_compromiso(
+    sb,
+    item_id: int,
+    user_id: int,
+    current_user: dict,
+    data: dict,
+) -> dict:
+    """
+    Edita un compromiso existente (descripción, fecha/hora, estado y/o responsable).
+    Solo elaborador del acta o Desarrollador. No requiere acta en borrador
+    (corrige datos operativos sin reabrir el documento).
+    """
+    item = get_item(sb, item_id)
+    if (item.get("origen") or "") != "compromiso":
+        raise ValueError("Solo aplica a compromisos de acta")
+    if not item.get("acta_id"):
+        raise ValueError("El compromiso no está vinculado a un acta")
+    acta = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
+    if not es_desarrollador_seguimiento(current_user):
+        elab = acta.get("elaborador_id")
+        if elab is None or int(elab) != int(user_id):
+            raise ValueError(
+                "Solo el elaborador del acta o el Desarrollador pueden editar el compromiso"
+            )
+
+    patch: Dict[str, Any] = {"updated_at": _now_utc().isoformat()}
+    eventos: List[tuple] = []
+
+    redaccion = (data.get("redaccion") or data.get("descripcion") or data.get("titulo") or "").strip()
+    if redaccion:
+        patch["titulo"] = redaccion[:500]
+        patch["descripcion"] = redaccion
+        eventos.append(("compromiso_editado", {
+            "titulo": patch["titulo"],
+            "descripcion": patch["descripcion"],
+        }))
+
+    if data.get("fecha_vencimiento"):
+        fv = _parse_date(data.get("fecha_vencimiento"))
+        if not fv:
+            raise ValueError("Fecha de vencimiento no válida")
+        cache = CalendarioNoHabilesCache(loader=make_calendar_loader(sb))
+        cid = item.get("contrato_id")
+        limite = calcular_fecha_limite_gracia(cid, fv, cache)
+        patch["fecha_vencimiento"] = fv.isoformat()
+        patch["fecha_limite_gracia"] = limite.astimezone(timezone.utc).isoformat()
+        if "hora_vencimiento" in data:
+            hv = data.get("hora_vencimiento")
+            patch["hora_vencimiento"] = (
+                None if hv is None or str(hv).strip() == "" else _norm_hora(hv)
+            )
+        eventos.append(("fecha_compromiso_corregida", {
+            "fecha_vencimiento": patch["fecha_vencimiento"],
+            "hora_vencimiento": patch.get("hora_vencimiento", item.get("hora_vencimiento")),
+        }))
+
+    estado = (data.get("estado_gestion") or "").strip()
+    if estado:
+        if estado not in ITEM_ESTADOS:
+            raise ValueError("Estado de gestión no válido")
+        if estado == "reprogramado":
+            raise ValueError("Reprogramar no aplica a compromisos de acta")
+        patch["estado_gestion"] = estado
+        eventos.append(("cambio_estado", {"estado": estado}))
+
+    # Cambios de campos básicos primero
+    if any(k != "updated_at" for k in patch):
+        sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+        for tipo, payload in eventos:
+            _registrar_evento(sb, int(item_id), tipo, user_id, payload)
+
+    # Responsable: un solo asignado en edición (el del ítem).
+    asignados = data.get("asignados") if isinstance(data.get("asignados"), list) else None
+    nuevo_aid = data.get("asignado_a_id")
+    nuevo_nombre = data.get("asignado_a_nombre")
+    es_externo = bool(data.get("es_externo")) or data.get("asignado_externo_id") is not None
+    if asignados is not None:
+        if len(asignados) == 0:
+            raise ValueError("Debe indicar al menos un asignado")
+        if len(asignados) > 1:
+            raise ValueError(
+                "Al editar un compromiso solo puede cambiar el responsable actual "
+                "(un asignado). Para varios responsables cree compromisos adicionales."
+            )
+        a0 = asignados[0] or {}
+        nuevo_aid = a0.get("asignado_a_id")
+        nuevo_nombre = a0.get("asignado_a_nombre") or nuevo_nombre
+        es_externo = bool(a0.get("es_externo")) or a0.get("asignado_externo_id") is not None
+        if es_externo:
+            # Reasignar a externo: actualizar campos directamente
+            ext_id = a0.get("asignado_externo_id")
+            nombre_asig = (nuevo_nombre or "").strip()
+            if not nombre_asig:
+                raise ValueError("Indique el nombre del asignado externo")
+            libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+            libres["asignado_externo"] = True
+            if ext_id is not None:
+                libres["externo_id"] = int(ext_id)
+            ext_patch: Dict[str, Any] = {
+                "asignado_a_id": None,
+                "asignado_a_nombre": nombre_asig[:200],
+                "relacion_destinatario": "asignacion",
+                "campos_libres": libres,
+                "updated_at": _now_utc().isoformat(),
+            }
+            if _schema_has(sb, "asignado_externo_id"):
+                ext_patch["asignado_externo_id"] = int(ext_id) if ext_id is not None else None
+            try:
+                sb.table("seguimiento_item").update(ext_patch).eq("id", int(item_id)).execute()
+            except Exception as exc:
+                if "asignado_externo_id" in ext_patch and _is_missing_column_error(exc, "asignado_externo_id"):
+                    ext_patch.pop("asignado_externo_id", None)
+                    sb.table("seguimiento_item").update(ext_patch).eq("id", int(item_id)).execute()
+                else:
+                    raise
+            _registrar_evento(sb, int(item_id), "compromiso_reasignado", user_id, {
+                "de_asignado_id": item.get("asignado_a_id"),
+                "de_asignado_nombre": item.get("asignado_a_nombre"),
+                "a_asignado_externo_id": int(ext_id) if ext_id is not None else None,
+                "a_asignado_nombre": nombre_asig[:200],
+                "acta_id": item.get("acta_id"),
+            })
+            return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
+
+    if nuevo_aid is not None and not es_externo:
+        try:
+            dest_id = int(nuevo_aid)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Debe indicar un usuario registrado de destino") from exc
+        prev = int(item.get("asignado_a_id") or 0)
+        if dest_id > 0 and dest_id != prev:
+            return reasignar_responsable_compromiso(
+                sb,
+                item_id,
+                user_id,
+                current_user,
+                nuevo_asignado_id=dest_id,
+                nuevo_asignado_nombre=nuevo_nombre,
+            )
+
+    if not any(k != "updated_at" for k in patch) and asignados is None and nuevo_aid is None:
+        raise ValueError("No hay campos para actualizar")
+
+    return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
 
 
 def eliminar_acta(sb, contrato_id: int, acta_id: int, current_user: dict) -> dict:
