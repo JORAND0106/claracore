@@ -210,11 +210,16 @@ export function createSeguimientoApi(contratoId, token) {
         texto_delta: String(body.texto_delta || '').slice(0, 8000),
         forzar_sintesis: !!body.forzar_sintesis,
       }, 120000),
-    grabacionCheckpointTemas: (sesionId) =>
-      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/checkpoint-temas`, {}),
+    grabacionCheckpointTemas: (sesionId, body = {}) =>
+      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/checkpoint-temas`, {
+        tema_clave_activa: body.tema_clave_activa || null,
+        temas_base: Array.isArray(body.temas_base) ? body.temas_base : undefined,
+      }),
     grabacionActualizarTemas: (sesionId, body = {}) =>
       send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/actualizar-temas`, {
         origen: body.origen || 'manual',
+        tema_clave_activa: body.tema_clave_activa || null,
+        temas_base: Array.isArray(body.temas_base) ? body.temas_base : undefined,
       }, 120000),
     grabacionReintentarTramo: (sesionId, tramoId = null) => {
       const q = tramoId != null ? `?tramo_id=${encodeURIComponent(String(tramoId))}` : ''

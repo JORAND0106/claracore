@@ -12,6 +12,15 @@ import { createGrabacionSessionController } from './actaGrabacionSession'
 import { formatMinutosCupo } from './actaGrabacionHelpers'
 import { mergeTemasGrabacionViva } from './actaGrabacionLive'
 import {
+  agregarTemaManual,
+  abrirTemaEnIdeas,
+  cerrarTemaEnIdeas,
+  claveTemaActivo,
+  indexTemaAbierto,
+  seedIdeasFromOrdenDia,
+  temasBaseDesdeIdeas,
+} from './actaTemasOrdenDia'
+import {
   avanceTrasGuardar,
   flujoInicialNuevaActa,
   flujoLiberado,
@@ -403,11 +412,21 @@ export default function ActaEditor({
   const hydratedActaIdRef = useRef(null)
   const apiRef = useRef(api)
   apiRef.current = api
+  const formRef = useRef(form)
+  formRef.current = form
 
   useEffect(() => () => {
     try { grabacionCtrlRef.current?.dispose?.() } catch { /* ignore */ }
     grabacionCtrlRef.current = null
   }, [])
+
+  /** Pre-crea temas desde el Orden del Día al entrar/habilitar Temas. */
+  const ensureTemasDesdeOrden = (ordenItems, ideasList) => {
+    const next = seedIdeasFromOrdenDia(ordenItems, ideasList, {
+      newRowKey: (p) => newRowKey(p || 'idea'),
+    })
+    return next
+  }
 
   /** Arma checkpoint de Temas sin bloquear Guardar / Detener / busy de UI. */
   const armTemasCheckpointEnBackground = (ctrl = grabacionCtrlRef.current) => {
@@ -457,9 +476,11 @@ export default function ActaEditor({
       const ctrl = createGrabacionSessionController({
         api: apiRef.current,
         getMeta: () => ({
-          fecha: form.fecha_reunion,
+          fecha: formRef.current?.fecha_reunion,
           consecutivo,
         }),
+        getTemaClaveActiva: () => claveTemaActivo(formRef.current?.ideas || []),
+        getTemasBase: () => temasBaseDesdeIdeas(formRef.current?.ideas || []),
         onCupo: (c) => setGrabacionCupo(c),
         onTick: ({ elapsedSec }) => setGrabacionElapsed(elapsedSec),
         onState: (st) => {
@@ -588,24 +609,30 @@ export default function ActaEditor({
             asistentes: (a.asistentes || []).length
               ? a.asistentes.map((x) => mapAsistenteFromApi(x))
               : [emptyAsistente()],
-            ideas: (a.ideas || []).length
-              ? [...(a.ideas || [])]
-                .sort((x, y) => {
-                  const ox = x.orden != null ? Number(x.orden) : 1e9
-                  const oy = y.orden != null ? Number(y.orden) : 1e9
-                  if (ox !== oy) return ox - oy
-                  return (Number(x.id) || 0) - (Number(y.id) || 0)
-                })
-                .map((x, i) => ({
-                  _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
-                  id: x.id,
-                  texto: x.texto || '',
-                  quien_dijo: x.quien_dijo || x.interviniente || '',
-                  titulo: x.titulo || '',
-                  orden: x.orden != null ? Number(x.orden) : i,
-                  imagenes: normalizeIdeaImagenes(x.imagenes),
-                }))
-              : [emptyIdea()],
+            ideas: (() => {
+              const ordenItems = parseOrdenDia(a.orden_del_dia)
+              const loaded = (a.ideas || []).length
+                ? [...(a.ideas || [])]
+                  .sort((x, y) => {
+                    const ox = x.orden != null ? Number(x.orden) : 1e9
+                    const oy = y.orden != null ? Number(y.orden) : 1e9
+                    if (ox !== oy) return ox - oy
+                    return (Number(x.id) || 0) - (Number(y.id) || 0)
+                  })
+                  .map((x, i) => ({
+                    _key: x.id != null ? `idea-id-${x.id}` : newRowKey('idea'),
+                    id: x.id,
+                    texto: x.texto || '',
+                    quien_dijo: x.quien_dijo || x.interviniente || '',
+                    titulo: x.titulo || '',
+                    orden: x.orden != null ? Number(x.orden) : i,
+                    imagenes: normalizeIdeaImagenes(x.imagenes),
+                  }))
+                : [emptyIdea()]
+              return seedIdeasFromOrdenDia(ordenItems, loaded, {
+                newRowKey: (p) => newRowKey(p || 'idea'),
+              })
+            })(),
             apartados: (a.apartados || []).length
               ? a.apartados.map((x) => ({
                 _key: x.id != null ? `ap-id-${x.id}` : newRowKey('ap'),
@@ -989,13 +1016,19 @@ export default function ActaEditor({
       })) {
         setTab(avance.nextTab)
       }
-      // Al habilitar Temas (tras guardar Compromisos abiertos): checkpoint en background
-      // para no dejar Guardar/Actualizar colgados si STT o la red tardan.
+      // Al habilitar Temas (tras guardar Compromisos abiertos): pre-crear desde Orden del Día
+      // y armar checkpoint en background.
       if (
         (avance.nextTab === 'ideas' || (tab === 'compromisos' && flujoMerged?.compromisos))
-        && grabacionCtrlRef.current?.getSesionId?.()
       ) {
-        armTemasCheckpointEnBackground()
+        setForm((prev) => {
+          const seeded = ensureTemasDesdeOrden(prev.orden_items, prev.ideas)
+          if (seeded === prev.ideas) return prev
+          return { ...prev, ideas: seeded }
+        })
+        if (grabacionCtrlRef.current?.getSesionId?.()) {
+          armTemasCheckpointEnBackground()
+        }
       }
     } catch (e) {
       setError(friendlyFetchError(e, 'No se pudo guardar'))
@@ -1293,6 +1326,13 @@ export default function ActaEditor({
               onClick={() => {
                 if (locked) return
                 setTab(tb.id)
+                if (tb.id === 'ideas') {
+                  setForm((prev) => {
+                    const seeded = ensureTemasDesdeOrden(prev.orden_items, prev.ideas)
+                    if (seeded === prev.ideas) return prev
+                    return { ...prev, ideas: seeded }
+                  })
+                }
                 if (
                   tb.id === 'ideas'
                   && grabacionPhase === 'recording'
@@ -1734,9 +1774,10 @@ export default function ActaEditor({
           )}
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-          Informe ejecutivo desde el audio real (Azure Speech): checkpoints automáticos cada ~5 minutos
-          mientras la grabación esté activa, o pulse «Actualizar» para procesar el tramo pendiente de inmediato.
-          Las ideas que cruzan tramos se unifican. Los compromisos de esta acta siguen siendo manuales.
+          Los puntos del Orden del Día llegan pre-creados (cerrados). Use «Abrir tema» para asociar
+          el audio a un punto (solo uno a la vez); «Cerrar tema» sintetiza ese tramo.
+          Sin tema abierto, los checkpoints (~5 min o «Actualizar») quedan como ideas generales.
+          «Agregar tema» cubre puntos no previstos. Los compromisos siguen siendo manuales.
         </p>
         <ActaTemasTable
           t={t}
@@ -1745,6 +1786,7 @@ export default function ActaEditor({
           canCrearCompromiso={!!permisos?.crear}
           saving={saving}
           viewportCompact={viewportCompact}
+          grabacionActiva={grabacionPhase === 'recording'}
           onOpenTema={(idx) => setTemaEditIdx(idx)}
           puedeActualizarTemas={
             !soloLectura
@@ -1753,6 +1795,63 @@ export default function ActaEditor({
           }
           actualizandoTemas={actualizandoTemas}
           tramos={Array.isArray(grabacionLiveInfo?.tramos) ? grabacionLiveInfo.tramos : []}
+          onAbrirTema={async (idx) => {
+            const prevOpen = indexTemaAbierto(form.ideas)
+            // Si había otro abierto: sintetizar su tramo antes de cambiar.
+            if (
+              prevOpen >= 0
+              && prevOpen !== idx
+              && grabacionCtrlRef.current?.actualizarTemas
+            ) {
+              setActualizandoTemas(true)
+              try {
+                await grabacionCtrlRef.current.actualizarTemas({ origen: 'manual' })
+              } catch (e) {
+                setError(friendlyFetchError(e, 'No se pudo cerrar el tema anterior'))
+              } finally {
+                setActualizandoTemas(false)
+              }
+            }
+            setForm((prev) => ({
+              ...prev,
+              ideas: abrirTemaEnIdeas(prev.ideas, idx),
+            }))
+            setOkMsg('Tema abierto: el audio se asociará a este punto hasta que lo cierre.')
+          }}
+          onCerrarTema={async (idx) => {
+            setActualizandoTemas(true)
+            setError('')
+            try {
+              if (grabacionCtrlRef.current?.actualizarTemas) {
+                if (!grabacionCtrlRef.current.isTemasCheckpointArmed?.()) {
+                  await grabacionCtrlRef.current.armTemasCheckpoint?.()
+                }
+                const payload = await grabacionCtrlRef.current.actualizarTemas({ origen: 'manual' })
+                setOkMsg(payload?.detalle || 'Tema cerrado y tramo sintetizado.')
+              } else {
+                setOkMsg('Tema cerrado.')
+              }
+            } catch (e) {
+              setError(friendlyFetchError(e, 'No se pudo sintetizar al cerrar el tema'))
+            } finally {
+              setForm((prev) => ({
+                ...prev,
+                ideas: cerrarTemaEnIdeas(prev.ideas, idx),
+              }))
+              setActualizandoTemas(false)
+            }
+          }}
+          onAgregarTema={() => {
+            const titulo = window.prompt('Título del tema adicional (no previsto en el Orden del Día):', '')
+            if (titulo == null) return
+            setForm((prev) => ({
+              ...prev,
+              ideas: agregarTemaManual(prev.ideas, {
+                titulo: String(titulo || '').trim() || 'Tema adicional',
+                newRowKey: (p) => newRowKey(p || 'idea'),
+              }),
+            }))
+          }}
           onActualizarTemas={async () => {
             if (!grabacionCtrlRef.current?.actualizarTemas) {
               setError('Inicie la grabación para actualizar Temas desde el audio.')

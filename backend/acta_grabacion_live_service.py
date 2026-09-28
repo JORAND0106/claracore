@@ -343,6 +343,7 @@ async def sintetizar_temas(
     *,
     solo_tramo: bool = False,
     cola_previa: str = "",
+    tema_clave_activa: Optional[str] = None,
 ) -> list[dict]:
     api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
@@ -365,26 +366,59 @@ async def sintetizar_temas(
     if len(cola) > COLA_OVERLAP_CHARS:
         cola = cola[-COLA_OVERLAP_CHARS:]
 
+    clave_activa = (tema_clave_activa or "").strip()[:40] or None
+    claves_od = [
+        str(t.get("clave") or "").strip()
+        for t in (temas_previos or [])
+        if str(t.get("clave") or "").strip().startswith("od-")
+        or str(t.get("clave") or "").strip().startswith("manual-")
+    ]
+
     system = (
         "Eres Clara, redactora de actas de obra pública en ClaraCore. "
         "Tu salida es SOLO JSON válido, sin markdown ni explicaciones. "
         "Priorizas un informe ejecutivo coherente: ideas, decisiones y puntos relevantes. "
         "Nunca inventas compromisos ni tareas."
     )
-    if solo_tramo:
+    if clave_activa:
+        user = (
+            "Analiza el TRAMO NUEVO de transcripción de una reunión (audio real).\n"
+            f"TEMA ACTIVO (obligatorio): toda la síntesis de este tramo debe ir en la clave "
+            f"«{clave_activa}».\n"
+            "- Conserva el título e interviniente del tema previo con esa clave.\n"
+            "- Amplía/refina SOLO el campo «texto» con las ideas centrales del tramo.\n"
+            "- No crees claves nuevas. Si la clave no existe en previos, créala con esa clave exacta.\n"
+            "- Continuidad: si la cola del tramo anterior deja una idea inconclusa, únela en el mismo tema.\n\n"
+            f"Formato exacto:\n"
+            f'{{"temas":[{{"clave":"{clave_activa}","titulo":"…","texto":"…","interviniente":null}}]}}\n'
+            f"Máximo 1 tema en la respuesta (la clave activa). Español formal.\n\n"
+            f"Temas previos (contexto):\n{prev_json}\n\n"
+            f"Cola del tramo anterior:\n{cola or '(inicio / sin cola)'}\n\n"
+            f"Tramo nuevo a analizar:\n{texto}"
+        )
+    elif solo_tramo:
+        bloque_sueltas = (
+            "No hay tema del Orden del Día abierto en este momento.\n"
+            "Sintetiza como IDEAS SUELTAS/GENERALES (sin asociar a un punto del orden):\n"
+            "- Usa claves nuevas con prefijo «suelta-» (suelta-1, suelta-2, …).\n"
+            "- Si continúas una idea suelta previa, reutiliza su clave suelta-*.\n"
+        )
+        if claves_od:
+            bloque_sueltas += (
+                "- NO modifiques ni reescribas temas con claves del orden/pre-creados "
+                f"({', '.join(claves_od[:12])}{'…' if len(claves_od) > 12 else ''}).\n"
+            )
         user = (
             "Analiza el TRAMO NUEVO de transcripción de una reunión (audio real). "
             "Sintetiza IDEAS CENTRALES como Temas del acta (informe ejecutivo, no dictado literal).\n\n"
+            f"{bloque_sueltas}\n"
             "CONTINUIDAD ENTRE TRAMOS (obligatorio):\n"
             "- Si la COLA DEL TRAMO ANTERIOR deja una idea inconclusa y el tramo nuevo la continúa, "
-            "REUTILIZA la misma 'clave' del tema previo y completa/refina el texto (un solo tema unificado).\n"
-            "- No crees un tema nuevo que duplique lo ya dicho en la cola o en temas previos.\n"
+            "REUTILIZA la misma 'clave' del tema previo (si es suelta-*) y completa/refina el texto.\n"
             "- No omitas contenido sustancial del tramo nuevo.\n"
-            "- Frases partidas en el corte: únelas en el tema correspondiente.\n"
-            "- Solo agrega claves nuevas para ideas genuinamente nuevas de este tramo.\n"
-            "- Temas previos no mencionados en el tramo: no los reescribas.\n\n"
+            "- Frases partidas en el corte: únelas en el tema correspondiente.\n\n"
             f"Formato exacto:\n"
-            f'{{"temas":[{{"clave":"t1","titulo":"…","texto":"…","interviniente":null}}]}}\n'
+            f'{{"temas":[{{"clave":"suelta-1","titulo":"…","texto":"…","interviniente":null}}]}}\n'
             f"Máximo {MAX_TEMAS} temas. Español formal. "
             f"'interviniente' solo si se identifica con claridad; si no, null.\n\n"
             f"Temas previos (contexto a reutilizar por clave):\n{prev_json}\n\n"
@@ -419,7 +453,25 @@ async def sintetizar_temas(
             txt = getattr(block, "text", None)
             if txt:
                 parts.append(txt)
-        return _normalize_temas(_parse_temas_json("\n".join(parts)))
+        out = _normalize_temas(_parse_temas_json("\n".join(parts)))
+        if clave_activa and out:
+            # Forzar clave activa por si el modelo inventó otra.
+            forced = []
+            for t in out:
+                forced.append({**t, "clave": clave_activa})
+                break
+            # Conservar meta del previo
+            prev_hit = next(
+                (t for t in (temas_previos or []) if str(t.get("clave") or "") == clave_activa),
+                None,
+            )
+            if prev_hit and forced:
+                if prev_hit.get("titulo"):
+                    forced[0]["titulo"] = prev_hit["titulo"]
+                if prev_hit.get("interviniente"):
+                    forced[0]["interviniente"] = prev_hit["interviniente"]
+            return _normalize_temas(forced)
+        return out
     except HTTPException:
         raise
     except Exception as exc:
@@ -449,11 +501,45 @@ def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict
             continue
         if k in by_clave:
             merged = {**by_clave[k], **t}
+            # No pisar título/interviniente de temas pre-creados (od-/manual-) con vacío.
+            if str(k).startswith(("od-", "manual-")):
+                if by_clave[k].get("titulo") and not (t.get("titulo") or "").strip():
+                    merged["titulo"] = by_clave[k]["titulo"]
+                if by_clave[k].get("interviniente") and not t.get("interviniente"):
+                    merged["interviniente"] = by_clave[k]["interviniente"]
             by_clave[k] = merged
         else:
             by_clave[k] = dict(t)
             order.append(k)
     return _normalize_temas([by_clave[k] for k in order if k in by_clave])
+
+
+_TEMA_CLAVE_RE = re.compile(r"^\[\[tema_clave:([^\]]{1,40})\]\]\n?", re.IGNORECASE)
+
+
+def _encode_cola_con_tema(cola: str, tema_clave: Optional[str]) -> Optional[str]:
+    body = (cola or "").strip()
+    clave = (tema_clave or "").strip()[:40]
+    if not clave:
+        return body or None
+    return f"[[tema_clave:{clave}]]\n{body}"
+
+
+def _decode_cola_tema(cola_raw: str) -> Tuple[Optional[str], str]:
+    s = cola_raw or ""
+    m = _TEMA_CLAVE_RE.match(s)
+    if not m:
+        return None, s
+    return (m.group(1) or "").strip() or None, s[m.end():]
+
+
+def _sembrar_temas_base(previos: list[dict], temas_base: Optional[list] = None) -> list[dict]:
+    """Ancla temas pre-creados (orden del día / manual) sin borrar síntesis previa."""
+    base = _normalize_temas(temas_base or [])
+    if not base:
+        return _normalize_temas(previos)
+    # Sembrar primero la base; luego fusionar previos (que pueden tener texto ya).
+    return _merge_temas_por_clave(base, _normalize_temas(previos))
 
 
 def _tramo_public(row: dict) -> dict:
@@ -710,6 +796,9 @@ def armar_checkpoint_temas(
     contrato_id: int,
     sesion_id: int,
     usuario_id: int,
+    *,
+    temas_base: Optional[list] = None,
+    tema_clave_activa: Optional[str] = None,
 ) -> dict:
     """Checkpoint inicial: a partir de ahora se escucha el audio para Temas (sin sintetizar)."""
     _require_live_columns(sb)
@@ -720,22 +809,30 @@ def armar_checkpoint_temas(
 
     trans = sesion.get("transcripcion") or ""
     cp = len(trans)
+    prev = _normalize_temas(sesion.get("temas_propuestos"))
+    seeded = _sembrar_temas_base(prev, temas_base)
     patch = {
         "checkpoint_chars": cp,
         "temas_escucha_activa": True,
+        "temas_propuestos": seeded,
     }
     _patch_sesion(sb, sesion_id, patch)
     sesion["checkpoint_chars"] = cp
     sesion["temas_escucha_activa"] = True
+    sesion["temas_propuestos"] = seeded
+    sesion["tema_clave_activa"] = (tema_clave_activa or "").strip()[:40] or None
     tramos = _listar_tramos(sb, sesion_id)
-    return _live_payload(
+    payload = _live_payload(
         sesion,
         tramos=tramos,
         detalle=(
-            "Escucha de Temas activa. La plataforma generará checkpoints automáticos "
-            "cada ~5 minutos; también puede pulsar Actualizar."
+            "Escucha de Temas activa. Abra un punto del Orden del Día para asociar el audio; "
+            "si ninguno está abierto, los checkpoints quedan como ideas generales. "
+            "Checkpoints automáticos cada ~5 minutos; también puede pulsar Actualizar."
         ),
     )
+    payload["tema_clave_activa"] = sesion.get("tema_clave_activa")
+    return payload
 
 
 async def _sintetizar_tramo_guardado(
@@ -779,12 +876,18 @@ async def _sintetizar_tramo_guardado(
     })
 
     prev_temas = _normalize_temas(sesion.get("temas_propuestos"))
+    clave_en_cola, cola_limpia = _decode_cola_tema(cola)
+    clave_activa = (
+        clave_en_cola
+        or (str(sesion.get("tema_clave_activa") or "").strip()[:40] or None)
+    )
     try:
         nuevos = await sintetizar_temas(
             texto,
             prev_temas,
             solo_tramo=True,
-            cola_previa=cola,
+            cola_previa=cola_limpia,
+            tema_clave_activa=clave_activa,
         )
     except HTTPException as exc:
         detail = str(exc.detail or "Error de síntesis")
@@ -880,10 +983,13 @@ async def actualizar_temas_desde_checkpoint(
     usuario_id: int,
     *,
     origen: str = "manual",
+    tema_clave_activa: Optional[str] = None,
+    temas_base: Optional[list] = None,
 ) -> dict:
     """
     Procesa el tramo pendiente desde el último checkpoint (auto/manual/final).
     Primero drena fallos previos en orden; luego crea y sintetiza el tramo nuevo.
+    Si hay tema_clave_activa, la síntesis se asocia a ese tema; si no, ideas sueltas.
     """
     _require_live_columns(sb)
     sesion = _sesion_row(sb, sesion_id)
@@ -894,6 +1000,14 @@ async def actualizar_temas_desde_checkpoint(
     origen_norm = (origen or "manual").strip().lower()
     if origen_norm not in ("auto", "manual", "final", "reintento"):
         origen_norm = "manual"
+
+    clave = (tema_clave_activa or "").strip()[:40] or None
+    sesion["tema_clave_activa"] = clave
+    if temas_base:
+        seeded = _sembrar_temas_base(sesion.get("temas_propuestos"), temas_base)
+        if seeded != _normalize_temas(sesion.get("temas_propuestos")):
+            _patch_sesion(sb, sesion_id, {"temas_propuestos": seeded})
+            sesion["temas_propuestos"] = seeded
 
     if not sesion.get("temas_escucha_activa"):
         trans0 = sesion.get("transcripcion") or ""
@@ -914,7 +1028,7 @@ async def actualizar_temas_desde_checkpoint(
     sesion, synth_retry, err_retry = await _procesar_tramos_pendientes(sb, sesion)
     if err_retry and not synth_retry:
         tramos = _listar_tramos(sb, sesion_id)
-        return _live_payload(
+        out = _live_payload(
             sesion,
             sintetizado=False,
             tramos=tramos,
@@ -923,6 +1037,8 @@ async def actualizar_temas_desde_checkpoint(
                 "Pulse Actualizar o Reintentar; el contenido no se perdió."
             ),
         )
+        out["tema_clave_activa"] = clave
+        return out
 
     # 2) Tramo nuevo desde checkpoint.
     trans = sesion.get("transcripcion") or ""
@@ -936,14 +1052,17 @@ async def actualizar_temas_desde_checkpoint(
             if synth_retry
             else "No hay audio nuevo suficiente desde el último checkpoint."
         )
-        return _live_payload(
+        out = _live_payload(
             sesion,
             sintetizado=synth_retry,
             tramos=tramos,
             detalle=detalle,
         )
+        out["tema_clave_activa"] = clave
+        return out
 
     cola = _cola_desde_tramos(tramos, trans, cp)
+    cola_encoded = _encode_cola_con_tema(cola or "", clave)
     new_cp = len(trans)
     orden = _siguiente_orden_tramo(sb, sesion_id)
     tramo_payload = {
@@ -954,7 +1073,7 @@ async def actualizar_temas_desde_checkpoint(
         "checkpoint_inicio": cp,
         "checkpoint_fin": new_cp,
         "chars_tramo": len(texto_tramo),
-        "cola_previa": cola or None,
+        "cola_previa": cola_encoded,
         "transcripcion": texto_tramo,
         "error_detalle": None,
         "intentos": 0,
@@ -978,7 +1097,7 @@ async def actualizar_temas_desde_checkpoint(
     sesion, ok, err = await _sintetizar_tramo_guardado(sb, sesion, tramo_row)
     tramos = _listar_tramos(sb, sesion_id)
     if not ok:
-        return _live_payload(
+        out = _live_payload(
             sesion,
             sintetizado=synth_retry,
             delta=texto_tramo,
@@ -989,8 +1108,10 @@ async def actualizar_temas_desde_checkpoint(
                 f"Queda pendiente para reintento. {err or ''}"
             ).strip(),
         )
+        out["tema_clave_activa"] = clave
+        return out
 
-    return _live_payload(
+    out = _live_payload(
         sesion,
         sintetizado=True,
         delta=texto_tramo,
@@ -998,6 +1119,8 @@ async def actualizar_temas_desde_checkpoint(
         tramo_actual={**tramo_row, "estado": "listo"},
         detalle=f"Tramo #{orden} sintetizado ({origen_norm}).",
     )
+    out["tema_clave_activa"] = clave
+    return out
 
 
 async def reintentar_tramo(
