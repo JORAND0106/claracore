@@ -1,9 +1,23 @@
 /**
  * Piezas de presentación Excel para Informes (sin lógica de negocio).
  */
-import { INFORMES_GRUPOS, informesSheetStyles, informesSheetCssVars } from './informesSheetStyles'
+import {
+  INFORMES_GRUPOS,
+  INFORMES_INTRO,
+  getInformesGrupos,
+  resolveInformesBlueScale,
+  informesSheetStyles,
+  informesSheetCssVars,
+} from './informesSheetStyles'
 
-export { INFORMES_GRUPOS, informesSheetStyles, informesSheetCssVars }
+export {
+  INFORMES_GRUPOS,
+  INFORMES_INTRO,
+  getInformesGrupos,
+  resolveInformesBlueScale,
+  informesSheetStyles,
+  informesSheetCssVars,
+}
 
 /** Barra de ubicación: Informes › Grupo › Formato + volver. */
 export function InformesBreadcrumb({
