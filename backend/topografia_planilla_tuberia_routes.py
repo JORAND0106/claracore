@@ -3109,9 +3109,9 @@ def _tiene_datos_exportables(det: dict) -> bool:
     return False
 
 
-def _assert_export_permitido(current_user, det: dict) -> bool:
+def _assert_export_permitido(current_user, det: dict, contrato_id: int) -> bool:
     """
-    Exportación con datos: permiso exportar.
+    Exportación con datos: permiso exportar (scoped al contrato).
     Plantilla vacía (sin datos): solo Desarrollador (para verificar formato).
     Returns True si es plantilla vacía.
     """
@@ -3162,7 +3162,7 @@ def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_u
     """Exporta .xlsx (sin macros) construido desde el inventario JSON versionado."""
     _require_contract_access(current_user, contrato_id)
     det = _detalle(contrato_id, planilla_id)
-    vacia = _assert_export_permitido(current_user, det)
+    vacia = _assert_export_permitido(current_user, det, contrato_id)
     try:
         from topografia_planilla_tuberia_excel import build_planilla_tuberia_xlsx
     except ImportError as exc:
@@ -3194,7 +3194,7 @@ def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_u
 def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     det = _detalle(contrato_id, planilla_id)
-    vacia = _assert_export_permitido(current_user, det)
+    vacia = _assert_export_permitido(current_user, det, contrato_id)
     p = det["planilla"]
     calc = det.get("calculo") or {}
     tipo = p.get("tipo") or "ALCANTARILLA"
