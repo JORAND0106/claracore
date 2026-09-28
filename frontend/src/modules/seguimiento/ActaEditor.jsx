@@ -420,8 +420,8 @@ export default function ActaEditor({
         if (r?.ok) {
           setOkMsg((prev) => (
             prev && !String(prev).includes('Escucha de Temas')
-              ? `${prev} Escucha de Temas activa: pulse Actualizar para sintetizar ideas.`
-              : (prev || 'Escucha de Temas activa: pulse Actualizar para sintetizar ideas.')
+              ? `${prev} Escucha de Temas activa: checkpoints automáticos cada ~5 min (también puede pulsar Actualizar).`
+              : (prev || 'Escucha de Temas activa: checkpoints automáticos cada ~5 min (también puede pulsar Actualizar).')
           ))
         }
       })
@@ -484,7 +484,15 @@ export default function ActaEditor({
           })
           // No forzar cambio de pestaña: el usuario ya está en Temas al pulsar Actualizar.
         },
-        onLiveInfo: (info) => setGrabacionLiveInfo(info || null),
+        onLiveInfo: (info) => setGrabacionLiveInfo((prev) => {
+          const next = { ...(prev || {}), ...(info || {}) }
+          // Los chunks STT no traen tramos: conservar el último estado visible.
+          if (info && !Object.prototype.hasOwnProperty.call(info, 'tramos')) {
+            if (prev?.tramos) next.tramos = prev.tramos
+            if (prev?.tramos_resumen) next.tramos_resumen = prev.tramos_resumen
+          }
+          return next
+        }),
         onError: (msg) => setError(msg || 'Error de grabación'),
         onDownloaded: ({ filename, auto }) => {
           setOkMsg(
@@ -1234,15 +1242,24 @@ export default function ActaEditor({
         <div style={{ fontSize: 'var(--cc-xs, 11px)', color: t.textMuted }}>
           Temas por checkpoint:{' '}
           {grabacionLiveInfo?.temas_escucha_activa
-            ? 'escucha activa — pulse Actualizar en Temas'
+            ? 'escucha activa — auto ~5 min + Actualizar en Temas'
             : 'al guardar Compromisos abiertos se arma el checkpoint'}
-          {grabacionLiveInfo?.stt_disponible
-            ? ' · Azure Speech'
-            : (grabacionLiveInfo?.detalle
-              ? ` · ${String(grabacionLiveInfo.detalle)}`
-              : ' · reconocimiento del navegador')}
+          {grabacionLiveInfo?.stt?.stt_disponible || grabacionLiveInfo?.stt_disponible
+            ? ' · Azure Speech (audio real)'
+            : (grabacionLiveInfo?.detalle || grabacionLiveInfo?.stt?.detalle
+              ? ` · ${String(grabacionLiveInfo.detalle || grabacionLiveInfo?.stt?.detalle)}`
+              : ' · Azure Speech requerido')}
           {grabacionLiveInfo?.transcripcion_chars != null
             ? ` · ${grabacionLiveInfo.transcripcion_chars} caracteres transcritos`
+            : ''}
+          {grabacionLiveInfo?.tramos_resumen
+            ? ` · tramos: ${grabacionLiveInfo.tramos_resumen.listo || 0} ok`
+              + ((grabacionLiveInfo.tramos_resumen.error || 0)
+                ? `, ${grabacionLiveInfo.tramos_resumen.error} por reintento`
+                : '')
+              + ((grabacionLiveInfo.tramos_resumen.procesando || 0)
+                ? `, ${grabacionLiveInfo.tramos_resumen.procesando} en proceso`
+                : '')
             : ''}
           {' · Compromisos siguen siendo manuales'}
         </div>
@@ -1717,9 +1734,9 @@ export default function ActaEditor({
           )}
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-          Pulse «Actualizar» para sintetizar ideas del audio desde el último checkpoint (sin reprocesar
-          tramos ya analizados). Adjuntos, esquemas y gráficos se agregan al abrir cada tema.
-          Los compromisos de esta acta se generan manualmente (botón abajo o desde el editor del tema).
+          Informe ejecutivo desde el audio real (Azure Speech): checkpoints automáticos cada ~5 minutos
+          mientras la grabación esté activa, o pulse «Actualizar» para procesar el tramo pendiente de inmediato.
+          Las ideas que cruzan tramos se unifican. Los compromisos de esta acta siguen siendo manuales.
         </p>
         <ActaTemasTable
           t={t}
@@ -1735,6 +1752,7 @@ export default function ActaEditor({
             && grabacionSesionId != null
           }
           actualizandoTemas={actualizandoTemas}
+          tramos={Array.isArray(grabacionLiveInfo?.tramos) ? grabacionLiveInfo.tramos : []}
           onActualizarTemas={async () => {
             if (!grabacionCtrlRef.current?.actualizarTemas) {
               setError('Inicie la grabación para actualizar Temas desde el audio.')
@@ -1747,14 +1765,34 @@ export default function ActaEditor({
               if (!grabacionCtrlRef.current.isTemasCheckpointArmed?.()) {
                 await grabacionCtrlRef.current.armTemasCheckpoint?.()
               }
-              const payload = await grabacionCtrlRef.current.actualizarTemas()
+              const payload = await grabacionCtrlRef.current.actualizarTemas({ origen: 'manual' })
               if (payload?.sintetizado) {
-                setOkMsg('Temas actualizados desde el audio (checkpoint avanzado).')
+                setOkMsg(payload?.detalle || 'Temas actualizados desde el audio (checkpoint avanzado).')
               } else {
                 setOkMsg(payload?.detalle || 'Sin audio nuevo suficiente desde el último checkpoint.')
               }
             } catch (e) {
               setError(friendlyFetchError(e, 'No se pudieron actualizar los Temas'))
+            } finally {
+              setActualizandoTemas(false)
+            }
+          }}
+          onReintentarTramo={async () => {
+            if (!grabacionCtrlRef.current?.reintentarTramo) {
+              setError('Inicie la grabación para reintentar el tramo pendiente.')
+              return
+            }
+            setActualizandoTemas(true)
+            setError('')
+            try {
+              const payload = await grabacionCtrlRef.current.reintentarTramo()
+              if (payload?.sintetizado) {
+                setOkMsg(payload?.detalle || 'Tramo reintentado con éxito.')
+              } else {
+                setOkMsg(payload?.detalle || 'El tramo sigue pendiente por reintento.')
+              }
+            } catch (e) {
+              setError(friendlyFetchError(e, 'No se pudo reintentar el tramo'))
             } finally {
               setActualizandoTemas(false)
             }

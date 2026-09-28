@@ -1,9 +1,11 @@
 """
-Grabación en vivo → STT (Azure Speech) + síntesis de Temas (Claude).
+Grabación en vivo → STT (Azure Speech sobre audio real) + síntesis de Temas (Claude).
 
-- No almacena audio; solo texto de transcripción y JSON de temas propuestos.
+- Fuente de verdad: audio de MediaRecorder → Azure Speech (no Web Speech del navegador).
+- Checkpoints de Temas: automáticos (~5 min en cliente), manuales (Actualizar) y al detener.
+- Cada tramo se registra con estado (listo/error) para reintento sin perder orden.
+- Continuidad: cola del tramo anterior + temas previos para unificar ideas partidas.
 - NO genera compromisos (permanecen 100% manuales).
-- Síntesis de Temas solo por checkpoints manuales (botón Actualizar), nunca periódica.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import httpx
 from fastapi import HTTPException
@@ -24,7 +26,10 @@ MAX_DELTA_CHARS = 8_000
 MAX_AUDIO_BYTES = 4_500_000  # ~4.5 MB por chunk
 # Umbral mínimo de caracteres nuevos en el tramo para invocar IA.
 TRAMO_MIN_CHARS = 40
+# Solape con el tramo anterior para conectar ideas partidas en el corte.
+COLA_OVERLAP_CHARS = 600
 MAX_TEMAS = 12
+MAX_TRAMO_INTENTOS = 5
 
 _LIVE_COLS = (
     "transcripcion",
@@ -123,12 +128,19 @@ def speech_configured() -> bool:
 
 def speech_status() -> dict:
     region = (os.getenv("AZURE_SPEECH_REGION") or "eastus").strip() or "eastus"
+    azure = speech_configured()
     return {
-        "stt_disponible": speech_configured(),
-        "stt_proveedor": "azure" if speech_configured() else "none",
-        "region": region if speech_configured() else None,
-        "acepta_transcripcion_cliente": True,
+        "stt_disponible": azure,
+        "stt_proveedor": "azure" if azure else "none",
+        "region": region if azure else None,
+        # Temas largos requieren Azure sobre el audio real; Web Speech queda deprecado.
+        "acepta_transcripcion_cliente": False,
         "sintesis_con_ia": bool((os.getenv("ANTHROPIC_API_KEY") or "").strip()),
+        "checkpoint_auto_segundos": 300,
+        "detalle": None if azure else (
+            "Configure AZURE_SPEECH_KEY para transcribir el audio real de la reunión. "
+            "El reconocimiento del navegador ya no se usa para Temas."
+        ),
     }
 
 
@@ -230,9 +242,20 @@ def tramo_desde_checkpoint(transcripcion: str, checkpoint_chars: int) -> str:
 async def transcribe_audio_azure(
     audio_bytes: bytes,
     content_type: str = "audio/webm",
+    *,
+    raise_on_error: bool = False,
 ) -> str:
+    """
+    Transcribe un fragmento de audio real (MediaRecorder) con Azure AI Speech.
+    Modo conversation / español; adecuado para reuniones con varios interlocutores.
+    """
     key = (os.getenv("AZURE_SPEECH_KEY") or "").strip()
     if not key:
+        if raise_on_error:
+            raise HTTPException(
+                status_code=503,
+                detail="AZURE_SPEECH_KEY no configurada. No se puede transcribir el audio real.",
+            )
         return ""
     if not audio_bytes:
         return ""
@@ -251,18 +274,42 @@ async def transcribe_audio_azure(
         "Content-Type": ct,
         "Accept": "application/json",
     }
-    params = {"language": language, "format": "simple"}
+    params = {
+        "language": language,
+        "format": "detailed",
+        "profanity": "raw",
+    }
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=90.0) as client:
             res = await client.post(url, params=params, headers=headers, content=audio_bytes)
         if res.status_code >= 400:
-            _log.warning("Azure STT HTTP %s: %s", res.status_code, (res.text or "")[:300])
+            msg = f"Azure STT HTTP {res.status_code}: {(res.text or '')[:240]}"
+            _log.warning(msg)
+            if raise_on_error:
+                raise HTTPException(status_code=502, detail="No se pudo transcribir el audio con Azure Speech.")
             return ""
         data = res.json() if res.content else {}
+        # detailed → NBest[0].Display; simple → DisplayText
         text = str(data.get("DisplayText") or data.get("Text") or "").strip()
+        if not text:
+            nbest = data.get("NBest") if isinstance(data, dict) else None
+            if isinstance(nbest, list) and nbest:
+                text = str(nbest[0].get("Display") or nbest[0].get("Lexical") or "").strip()
+        status = str(data.get("RecognitionStatus") or "")
+        if status and status not in ("Success", "InitialSilenceTimeout", "EndOfDictation") and not text:
+            _log.warning("Azure STT RecognitionStatus=%s", status)
+            if raise_on_error and status not in ("NoMatch", "InitialSilenceTimeout"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Azure Speech no reconoció el audio ({status}).",
+                )
         return text
+    except HTTPException:
+        raise
     except Exception as exc:
         _log.warning("Azure STT falló: %s", exc)
+        if raise_on_error:
+            raise HTTPException(status_code=502, detail="No se pudo transcribir el audio con Azure Speech.") from exc
         return ""
 
 
@@ -295,6 +342,7 @@ async def sintetizar_temas(
     temas_previos: list[dict],
     *,
     solo_tramo: bool = False,
+    cola_previa: str = "",
 ) -> list[dict]:
     api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
@@ -313,24 +361,35 @@ async def sintetizar_temas(
     prev_json = json.dumps(temas_previos or [], ensure_ascii=False)
     if len(texto) > 14_000:
         texto = texto[-14_000:]
+    cola = (cola_previa or "").strip()
+    if len(cola) > COLA_OVERLAP_CHARS:
+        cola = cola[-COLA_OVERLAP_CHARS:]
 
     system = (
         "Eres Clara, redactora de actas de obra pública en ClaraCore. "
-        "Tu salida es SOLO JSON válido, sin markdown ni explicaciones."
+        "Tu salida es SOLO JSON válido, sin markdown ni explicaciones. "
+        "Priorizas un informe ejecutivo coherente: ideas, decisiones y puntos relevantes. "
+        "Nunca inventas compromisos ni tareas."
     )
     if solo_tramo:
         user = (
-            "Analiza ÚNICAMENTE el siguiente TRAMO NUEVO de transcripción de una reunión "
-            "(audio desde el último checkpoint hasta ahora). Sintetiza las IDEAS CENTRALES "
-            "como Temas del acta. NO hagas dictado literal. NO inventes compromisos ni tareas. "
-            "Si hay temas previos, reutiliza su 'clave' y refínalos solo cuando este tramo "
-            "los desarrolle; agrega claves nuevas solo para ideas nuevas de este tramo. "
-            "No reescribas temas previos que no se mencionen en el tramo.\n\n"
+            "Analiza el TRAMO NUEVO de transcripción de una reunión (audio real). "
+            "Sintetiza IDEAS CENTRALES como Temas del acta (informe ejecutivo, no dictado literal).\n\n"
+            "CONTINUIDAD ENTRE TRAMOS (obligatorio):\n"
+            "- Si la COLA DEL TRAMO ANTERIOR deja una idea inconclusa y el tramo nuevo la continúa, "
+            "REUTILIZA la misma 'clave' del tema previo y completa/refina el texto (un solo tema unificado).\n"
+            "- No crees un tema nuevo que duplique lo ya dicho en la cola o en temas previos.\n"
+            "- No omitas contenido sustancial del tramo nuevo.\n"
+            "- Frases partidas en el corte: únelas en el tema correspondiente.\n"
+            "- Solo agrega claves nuevas para ideas genuinamente nuevas de este tramo.\n"
+            "- Temas previos no mencionados en el tramo: no los reescribas.\n\n"
             f"Formato exacto:\n"
             f'{{"temas":[{{"clave":"t1","titulo":"…","texto":"…","interviniente":null}}]}}\n'
             f"Máximo {MAX_TEMAS} temas. Español formal. "
-            f"'interviniente' solo si se identifica con claridad (nombre/entidad); si no, null.\n\n"
-            f"Temas previos (contexto, no reprocesar):\n{prev_json}\n\n"
+            f"'interviniente' solo si se identifica con claridad; si no, null.\n\n"
+            f"Temas previos (contexto a reutilizar por clave):\n{prev_json}\n\n"
+            f"Cola del tramo anterior (solo continuidad; no la dupliques como tema nuevo):\n"
+            f"{cola or '(inicio de reunión / sin cola)'}\n\n"
             f"Tramo nuevo a analizar:\n{texto}"
         )
     else:
@@ -365,7 +424,13 @@ async def sintetizar_temas(
         raise
     except Exception as exc:
         _log.error("Síntesis de temas falló: %s", exc)
-        raise HTTPException(status_code=502, detail="No se pudo sintetizar los temas con IA.") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "No se pudo sintetizar los temas con IA. "
+                "El tramo queda pendiente para reintento (el audio/transcripción no se pierde)."
+            ),
+        ) from exc
 
 
 def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict]:
@@ -391,13 +456,112 @@ def _merge_temas_por_clave(previos: list[dict], nuevos: list[dict]) -> list[dict
     return _normalize_temas([by_clave[k] for k in order if k in by_clave])
 
 
+def _tramo_public(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "orden": int(row.get("orden") or 0),
+        "origen": row.get("origen") or "auto",
+        "estado": row.get("estado") or "pendiente",
+        "chars_tramo": int(row.get("chars_tramo") or 0),
+        "intentos": int(row.get("intentos") or 0),
+        "error_detalle": row.get("error_detalle"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _listar_tramos(sb: Any, sesion_id: int) -> list[dict]:
+    try:
+        rows = (
+            sb.table("acta_grabacion_tramo")
+            .select("*")
+            .eq("sesion_id", int(sesion_id))
+            .order("orden")
+            .execute()
+            .data
+            or []
+        )
+        return list(rows)
+    except Exception as exc:
+        _log.warning("listar tramos omitido: %s", exc)
+        return []
+
+
+def _siguiente_orden_tramo(sb: Any, sesion_id: int) -> int:
+    rows = _listar_tramos(sb, sesion_id)
+    if not rows:
+        return 1
+    return max(int(r.get("orden") or 0) for r in rows) + 1
+
+
+def _cola_desde_tramos(tramos: list[dict], transcripcion: str, checkpoint_chars: int) -> str:
+    """Cola del tramo anterior (solape) para continuidad de ideas partidas."""
+    prev_ok = None
+    for t in tramos or []:
+        if (t.get("estado") or "") in ("listo", "error", "procesando") and (t.get("transcripcion") or "").strip():
+            prev_ok = t
+    if prev_ok and (prev_ok.get("transcripcion") or "").strip():
+        txt = (prev_ok.get("transcripcion") or "").strip()
+        return txt[-COLA_OVERLAP_CHARS:] if len(txt) > COLA_OVERLAP_CHARS else txt
+    # Fallback: cola desde la transcripción acumulada justo antes del checkpoint.
+    text = transcripcion or ""
+    try:
+        cp = max(0, int(checkpoint_chars or 0))
+    except (TypeError, ValueError):
+        cp = 0
+    if cp <= 0:
+        return ""
+    start = max(0, cp - COLA_OVERLAP_CHARS)
+    return text[start:cp].strip()
+
+
+def _crear_tramo(sb: Any, sesion_id: int, payload: dict) -> Optional[dict]:
+    try:
+        rows = (
+            sb.table("acta_grabacion_tramo")
+            .insert(payload)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else {**payload, "id": None}
+    except Exception as exc:
+        _log.warning("crear tramo omitido: %s", exc)
+        return None
+
+
+def _patch_tramo(sb: Any, tramo_id: int, patch: dict) -> None:
+    if tramo_id is None:
+        return
+    try:
+        sb.table("acta_grabacion_tramo").update(
+            {**patch, "updated_at": _now_iso()}
+        ).eq("id", int(tramo_id)).execute()
+    except Exception as exc:
+        _log.warning("patch tramo %s omitido: %s", tramo_id, exc)
+
+
+def _resumen_tramos(tramos: list[dict]) -> dict:
+    counts = {"listo": 0, "procesando": 0, "pendiente": 0, "error": 0}
+    for t in tramos or []:
+        st = str(t.get("estado") or "pendiente")
+        if st in counts:
+            counts[st] += 1
+        else:
+            counts["pendiente"] += 1
+    return counts
+
+
 def _live_payload(
     sesion: dict,
     *,
     sintetizado: bool = False,
     delta: str = "",
     detalle: Optional[str] = None,
+    tramos: Optional[list[dict]] = None,
+    tramo_actual: Optional[dict] = None,
 ) -> dict:
+    tramos_rows = tramos
     out = {
         "sesion_id": sesion.get("id"),
         "estado": sesion.get("estado"),
@@ -408,8 +572,15 @@ def _live_payload(
         "ultima_sintesis_en": sesion.get("ultima_sintesis_en"),
         "checkpoint_chars": int(sesion.get("checkpoint_chars") or 0),
         "temas_escucha_activa": bool(sesion.get("temas_escucha_activa")),
+        "ultimo_tramo_estado": sesion.get("ultimo_tramo_estado"),
+        "tramos_error_count": int(sesion.get("tramos_error_count") or 0),
         "stt": speech_status(),
     }
+    if tramos_rows is not None:
+        out["tramos"] = [_tramo_public(t) for t in tramos_rows]
+        out["tramos_resumen"] = _resumen_tramos(tramos_rows)
+    if tramo_actual:
+        out["tramo_actual"] = _tramo_public(tramo_actual)
     if detalle:
         out["detalle"] = detalle
     return out
@@ -510,7 +681,10 @@ async def ingest_audio_chunk(
         return {
             **_live_payload(sesion),
             "stt_omitido": True,
-            "detalle": "AZURE_SPEECH_KEY no configurada; use transcripción del navegador.",
+            "detalle": (
+                "AZURE_SPEECH_KEY no configurada. "
+                "Sin Azure Speech no se puede transcribir el audio real para Temas."
+            ),
         }
 
     if not ensure_live_columns(sb):
@@ -553,10 +727,150 @@ def armar_checkpoint_temas(
     _patch_sesion(sb, sesion_id, patch)
     sesion["checkpoint_chars"] = cp
     sesion["temas_escucha_activa"] = True
+    tramos = _listar_tramos(sb, sesion_id)
     return _live_payload(
         sesion,
-        detalle="Checkpoint de Temas armado. Pulse Actualizar para analizar el audio nuevo.",
+        tramos=tramos,
+        detalle=(
+            "Escucha de Temas activa. La plataforma generará checkpoints automáticos "
+            "cada ~5 minutos; también puede pulsar Actualizar."
+        ),
     )
+
+
+async def _sintetizar_tramo_guardado(
+    sb: Any,
+    sesion: dict,
+    tramo_row: dict,
+    *,
+    origen_reintento: bool = False,
+) -> Tuple[dict, bool, Optional[str]]:
+    """
+    Sintetiza un tramo ya registrado. Avance de checkpoint ya ocurrió al crearlo.
+    Devuelve (sesion_actualizada, sintetizado, detalle_error).
+    """
+    tramo_id = tramo_row.get("id")
+    texto = (tramo_row.get("transcripcion") or "").strip()
+    cola = (tramo_row.get("cola_previa") or "").strip()
+    intentos = int(tramo_row.get("intentos") or 0) + 1
+
+    if len(texto) < TRAMO_MIN_CHARS:
+        _patch_tramo(sb, tramo_id, {
+            "estado": "listo",
+            "intentos": intentos,
+            "error_detalle": None,
+            "chars_tramo": len(texto),
+        })
+        return sesion, False, "Tramo demasiado corto; se marcó como listo sin cambios."
+
+    if intentos > MAX_TRAMO_INTENTOS:
+        _patch_tramo(sb, tramo_id, {
+            "estado": "error",
+            "intentos": intentos,
+            "error_detalle": f"Se alcanzó el máximo de {MAX_TRAMO_INTENTOS} intentos.",
+        })
+        return sesion, False, f"Tramo #{tramo_row.get('orden')} agotó reintentos."
+
+    _patch_tramo(sb, tramo_id, {
+        "estado": "procesando",
+        "intentos": intentos,
+        "error_detalle": None,
+        **({"origen": "reintento"} if origen_reintento else {}),
+    })
+
+    prev_temas = _normalize_temas(sesion.get("temas_propuestos"))
+    try:
+        nuevos = await sintetizar_temas(
+            texto,
+            prev_temas,
+            solo_tramo=True,
+            cola_previa=cola,
+        )
+    except HTTPException as exc:
+        detail = str(exc.detail or "Error de síntesis")
+        _patch_tramo(sb, tramo_id, {
+            "estado": "error",
+            "intentos": intentos,
+            "error_detalle": detail[:500],
+        })
+        err_count = int(sesion.get("tramos_error_count") or 0) + 1
+        _patch_sesion(sb, int(sesion["id"]), {
+            "ultimo_tramo_estado": "error",
+            "tramos_error_count": err_count,
+            "temas_escucha_activa": True,
+        })
+        sesion["ultimo_tramo_estado"] = "error"
+        sesion["tramos_error_count"] = err_count
+        return sesion, False, detail
+    except Exception as exc:
+        detail = f"Error inesperado al sintetizar: {exc}"
+        _patch_tramo(sb, tramo_id, {
+            "estado": "error",
+            "intentos": intentos,
+            "error_detalle": detail[:500],
+        })
+        err_count = int(sesion.get("tramos_error_count") or 0) + 1
+        _patch_sesion(sb, int(sesion["id"]), {
+            "ultimo_tramo_estado": "error",
+            "tramos_error_count": err_count,
+            "temas_escucha_activa": True,
+        })
+        sesion["ultimo_tramo_estado"] = "error"
+        sesion["tramos_error_count"] = err_count
+        return sesion, False, detail
+
+    merged = _merge_temas_por_clave(prev_temas, nuevos)
+    now = _now_iso()
+    _patch_tramo(sb, tramo_id, {
+        "estado": "listo",
+        "intentos": intentos,
+        "error_detalle": None,
+        "chars_tramo": len(texto),
+    })
+    _patch_sesion(sb, int(sesion["id"]), {
+        "temas_propuestos": merged,
+        "ultima_sintesis_en": now,
+        "temas_escucha_activa": True,
+        "ultimo_tramo_estado": "listo",
+        "tramos_error_count": 0,
+    })
+    sesion["temas_propuestos"] = merged
+    sesion["ultima_sintesis_en"] = now
+    sesion["temas_escucha_activa"] = True
+    sesion["ultimo_tramo_estado"] = "listo"
+    sesion["tramos_error_count"] = 0
+    tramo_row["estado"] = "listo"
+    tramo_row["intentos"] = intentos
+    return sesion, True, None
+
+
+async def _procesar_tramos_pendientes(
+    sb: Any,
+    sesion: dict,
+    *,
+    max_tramos: int = 3,
+) -> Tuple[dict, bool, Optional[str]]:
+    """Reintenta en orden cronológico tramos en error/pendiente (no procesando)."""
+    tramos = _listar_tramos(sb, int(sesion["id"]))
+    pendientes = [
+        t for t in tramos
+        if (t.get("estado") or "") in ("error", "pendiente")
+        and int(t.get("intentos") or 0) < MAX_TRAMO_INTENTOS
+        and (t.get("transcripcion") or "").strip()
+    ]
+    sintetizado_any = False
+    last_err = None
+    for t in pendientes[:max_tramos]:
+        sesion, ok, err = await _sintetizar_tramo_guardado(
+            sb, sesion, t, origen_reintento=True,
+        )
+        if ok:
+            sintetizado_any = True
+        elif err:
+            last_err = err
+            # Preservar orden: no saltar al siguiente si este falló de nuevo.
+            break
+    return sesion, sintetizado_any, last_err
 
 
 async def actualizar_temas_desde_checkpoint(
@@ -564,20 +878,30 @@ async def actualizar_temas_desde_checkpoint(
     contrato_id: int,
     sesion_id: int,
     usuario_id: int,
+    *,
+    origen: str = "manual",
 ) -> dict:
-    """Analiza el tramo desde el checkpoint vigente hasta ahora y avanza el checkpoint."""
+    """
+    Procesa el tramo pendiente desde el último checkpoint (auto/manual/final).
+    Primero drena fallos previos en orden; luego crea y sintetiza el tramo nuevo.
+    """
     _require_live_columns(sb)
     sesion = _sesion_row(sb, sesion_id)
     if not sesion:
         raise HTTPException(status_code=404, detail="Sesión no encontrada.")
     _assert_sesion_activa(sesion, contrato_id, usuario_id)
 
+    origen_norm = (origen or "manual").strip().lower()
+    if origen_norm not in ("auto", "manual", "final", "reintento"):
+        origen_norm = "manual"
+
     if not sesion.get("temas_escucha_activa"):
         trans0 = sesion.get("transcripcion") or ""
         if not trans0.strip():
             return _live_payload(
                 sesion,
-                detalle="Aún no hay transcripción. Continúe la reunión y pulse Actualizar de nuevo.",
+                tramos=_listar_tramos(sb, sesion_id),
+                detalle="Aún no hay transcripción de Azure Speech. Continúe la reunión.",
             )
         _patch_sesion(sb, sesion_id, {
             "checkpoint_chars": 0,
@@ -586,32 +910,158 @@ async def actualizar_temas_desde_checkpoint(
         sesion["checkpoint_chars"] = 0
         sesion["temas_escucha_activa"] = True
 
-    trans = sesion.get("transcripcion") or ""
-    cp = int(sesion.get("checkpoint_chars") or 0)
-    tramo = tramo_desde_checkpoint(trans, cp)
-    if len(tramo) < TRAMO_MIN_CHARS:
+    # 1) Reintentar fallos previos en orden (conexión de ideas no se rompe).
+    sesion, synth_retry, err_retry = await _procesar_tramos_pendientes(sb, sesion)
+    if err_retry and not synth_retry:
+        tramos = _listar_tramos(sb, sesion_id)
         return _live_payload(
             sesion,
             sintetizado=False,
-            detalle="No hay audio nuevo suficiente desde el último checkpoint.",
+            tramos=tramos,
+            detalle=(
+                f"Hay un tramo pendiente por reintento: {err_retry}. "
+                "Pulse Actualizar o Reintentar; el contenido no se perdió."
+            ),
         )
 
-    prev_temas = _normalize_temas(sesion.get("temas_propuestos"))
-    nuevos = await sintetizar_temas(tramo, prev_temas, solo_tramo=True)
-    merged = _merge_temas_por_clave(prev_temas, nuevos)
-    now = _now_iso()
+    # 2) Tramo nuevo desde checkpoint.
+    trans = sesion.get("transcripcion") or ""
+    cp = int(sesion.get("checkpoint_chars") or 0)
+    texto_tramo = tramo_desde_checkpoint(trans, cp)
+    tramos = _listar_tramos(sb, sesion_id)
+
+    if len(texto_tramo) < TRAMO_MIN_CHARS:
+        detalle = (
+            "Temas actualizados tras reintento."
+            if synth_retry
+            else "No hay audio nuevo suficiente desde el último checkpoint."
+        )
+        return _live_payload(
+            sesion,
+            sintetizado=synth_retry,
+            tramos=tramos,
+            detalle=detalle,
+        )
+
+    cola = _cola_desde_tramos(tramos, trans, cp)
     new_cp = len(trans)
+    orden = _siguiente_orden_tramo(sb, sesion_id)
+    tramo_payload = {
+        "sesion_id": int(sesion_id),
+        "orden": orden,
+        "origen": origen_norm,
+        "estado": "procesando",
+        "checkpoint_inicio": cp,
+        "checkpoint_fin": new_cp,
+        "chars_tramo": len(texto_tramo),
+        "cola_previa": cola or None,
+        "transcripcion": texto_tramo,
+        "error_detalle": None,
+        "intentos": 0,
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    tramo_row = _crear_tramo(sb, sesion_id, tramo_payload)
+    if tramo_row is None:
+        tramo_row = {**tramo_payload, "id": None}
+
+    # Reclamar el tramo en el checkpoint aunque la síntesis falle (queda en el registro).
     _patch_sesion(sb, sesion_id, {
-        "temas_propuestos": merged,
-        "ultima_sintesis_en": now,
         "checkpoint_chars": new_cp,
         "temas_escucha_activa": True,
+        "ultimo_tramo_estado": "procesando",
     })
-    sesion["temas_propuestos"] = merged
-    sesion["ultima_sintesis_en"] = now
     sesion["checkpoint_chars"] = new_cp
     sesion["temas_escucha_activa"] = True
-    return _live_payload(sesion, sintetizado=True, delta=tramo)
+    sesion["ultimo_tramo_estado"] = "procesando"
+
+    sesion, ok, err = await _sintetizar_tramo_guardado(sb, sesion, tramo_row)
+    tramos = _listar_tramos(sb, sesion_id)
+    if not ok:
+        return _live_payload(
+            sesion,
+            sintetizado=synth_retry,
+            delta=texto_tramo,
+            tramos=tramos,
+            tramo_actual=tramo_row,
+            detalle=(
+                f"No se pudo sintetizar el tramo #{orden}. "
+                f"Queda pendiente para reintento. {err or ''}"
+            ).strip(),
+        )
+
+    return _live_payload(
+        sesion,
+        sintetizado=True,
+        delta=texto_tramo,
+        tramos=tramos,
+        tramo_actual={**tramo_row, "estado": "listo"},
+        detalle=f"Tramo #{orden} sintetizado ({origen_norm}).",
+    )
+
+
+async def reintentar_tramo(
+    sb: Any,
+    contrato_id: int,
+    sesion_id: int,
+    usuario_id: int,
+    tramo_id: Optional[int] = None,
+) -> dict:
+    """Reintenta el tramo fallido más antiguo (o uno concreto) respetando el orden."""
+    _require_live_columns(sb)
+    sesion = _sesion_row(sb, sesion_id)
+    if not sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+    _assert_sesion_activa(sesion, contrato_id, usuario_id)
+
+    tramos = _listar_tramos(sb, sesion_id)
+    target = None
+    if tramo_id is not None:
+        for t in tramos:
+            if int(t.get("id") or 0) == int(tramo_id):
+                target = t
+                break
+        if not target:
+            raise HTTPException(status_code=404, detail="Tramo no encontrado.")
+        # No saltar fallos anteriores en el orden.
+        for t in tramos:
+            if int(t.get("orden") or 0) >= int(target.get("orden") or 0):
+                break
+            if (t.get("estado") or "") in ("error", "pendiente"):
+                target = t
+                break
+    else:
+        for t in tramos:
+            if (t.get("estado") or "") in ("error", "pendiente"):
+                target = t
+                break
+
+    if not target:
+        return _live_payload(
+            sesion,
+            tramos=tramos,
+            detalle="No hay tramos pendientes por reintento.",
+        )
+
+    sesion, ok, err = await _sintetizar_tramo_guardado(
+        sb, sesion, target, origen_reintento=True,
+    )
+    tramos = _listar_tramos(sb, sesion_id)
+    if not ok:
+        return _live_payload(
+            sesion,
+            sintetizado=False,
+            tramos=tramos,
+            tramo_actual=target,
+            detalle=err or "El reintento falló; el tramo sigue pendiente.",
+        )
+    return _live_payload(
+        sesion,
+        sintetizado=True,
+        tramos=tramos,
+        tramo_actual={**target, "estado": "listo"},
+        detalle=f"Tramo #{target.get('orden')} reintentado con éxito.",
+    )
 
 
 def leer_estado_vivo(
@@ -627,7 +1077,8 @@ def leer_estado_vivo(
         raise HTTPException(status_code=404, detail="Sesión no encontrada.")
     if int(sesion.get("usuario_id") or 0) != int(usuario_id):
         raise HTTPException(status_code=403, detail="Sesión de otro usuario.")
-    out = _live_payload(sesion)
+    tramos = _listar_tramos(sb, sesion_id)
+    out = _live_payload(sesion, tramos=tramos)
     out["schema_live_ok"] = ensure_live_columns(sb)
     if not out["schema_live_ok"]:
         out["detalle"] = MSG_SCHEMA_LIVE

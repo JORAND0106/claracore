@@ -28,6 +28,7 @@ from acta_grabacion_live_service import (
     ingest_audio_chunk as grabacion_ingest_audio_chunk,
     ingest_transcript_delta as grabacion_ingest_transcript_delta,
     leer_estado_vivo as grabacion_leer_estado_vivo,
+    reintentar_tramo as grabacion_reintentar_tramo,
     speech_status as grabacion_speech_status,
 )
 from seguimiento_permissions import require_permiso_seguimiento, tiene_permiso_seguimiento
@@ -817,6 +818,10 @@ class GrabacionTranscripcionBody(BaseModel):
     forzar_sintesis: bool = False
 
 
+class GrabacionActualizarTemasBody(BaseModel):
+    origen: Optional[str] = Field("manual", max_length=20)
+
+
 @router.get("/{contrato_id}/grabacion/live-status")
 def route_grabacion_live_status(contrato_id: int, current_user=Depends(get_current_user)):
     """Capacidades STT/síntesis (Azure Speech + Claude)."""
@@ -900,7 +905,7 @@ async def route_grabacion_transcripcion(
     body: GrabacionTranscripcionBody,
     current_user=Depends(get_current_user),
 ):
-    """Ingesta texto STT del cliente (Web Speech). No sintetiza Temas (usar Actualizar)."""
+    """Ingesta texto STT (legado). Temas usan audio real vía Azure Speech + Actualizar."""
     require_permiso_seguimiento(current_user, "crear")
     _check_contrato(current_user, contrato_id)
     return await grabacion_ingest_transcript_delta(
@@ -921,7 +926,7 @@ async def route_grabacion_chunk(
     archivo: UploadFile = File(...),
     forzar_sintesis: bool = Form(False),
 ):
-    """Chunk de audio → Azure Speech. No persiste audio ni sintetiza Temas."""
+    """Chunk de audio real → Azure Speech. No persiste audio ni sintetiza Temas."""
     require_permiso_seguimiento(current_user, "crear")
     _check_contrato(current_user, contrato_id)
     raw = await archivo.read()
@@ -957,16 +962,38 @@ def route_grabacion_checkpoint_temas(
 async def route_grabacion_actualizar_temas(
     contrato_id: int,
     sesion_id: int,
+    body: Optional[GrabacionActualizarTemasBody] = None,
     current_user=Depends(get_current_user),
 ):
-    """Analiza el tramo desde el checkpoint hasta ahora y avanza el checkpoint."""
+    """Analiza el tramo desde el checkpoint (auto ~5 min / manual / final al detener)."""
     require_permiso_seguimiento(current_user, "crear")
     _check_contrato(current_user, contrato_id)
+    origen = (body.origen if body else None) or "manual"
     return await grabacion_actualizar_temas(
         supabase,
         contrato_id,
         sesion_id,
         _uid(current_user),
+        origen=origen,
+    )
+
+
+@router.post("/{contrato_id}/grabacion/sesiones/{sesion_id}/reintentar-tramo")
+async def route_grabacion_reintentar_tramo(
+    contrato_id: int,
+    sesion_id: int,
+    tramo_id: Optional[int] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """Reintenta el tramo fallido más antiguo (o uno concreto) en orden cronológico."""
+    require_permiso_seguimiento(current_user, "crear")
+    _check_contrato(current_user, contrato_id)
+    return await grabacion_reintentar_tramo(
+        supabase,
+        contrato_id,
+        sesion_id,
+        _uid(current_user),
+        tramo_id=tramo_id,
     )
 
 

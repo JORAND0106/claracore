@@ -351,4 +351,79 @@ describe('createGrabacionSessionController', () => {
     assert.equal(phases.includes('stopping'), true)
     assert.equal(phases.at(-1), 'idle')
   })
+
+  it('arma checkpoint, dispara auto CP y procesa tramo final al detener', async () => {
+    const origins = []
+    const api = {
+      async iniciarGrabacion() {
+        return { sesion: { id: 77 }, segundos_restantes: 1000 }
+      },
+      async reclamarGrabacion() {
+        return { claimed: 0, debe_cerrar: false }
+      },
+      async finalizarGrabacion() {
+        return { claimed: 0 }
+      },
+      async grabacionLiveStatus() {
+        return { stt_disponible: true, checkpoint_auto_segundos: 300 }
+      },
+      async grabacionChunk() {
+        return { transcripcion_chars: 120, temas_escucha_activa: true }
+      },
+      async grabacionCheckpointTemas() {
+        return { temas_escucha_activa: true, checkpoint_chars: 0 }
+      },
+      async grabacionActualizarTemas(_id, body = {}) {
+        origins.push(body.origen || 'manual')
+        return {
+          sintetizado: true,
+          temas_escucha_activa: true,
+          temas: [{ clave: 't1', titulo: 'Tema', texto: 'Idea', interviniente: null }],
+          tramos_resumen: { listo: origins.length, error: 0, procesando: 0, pendiente: 0 },
+          tramos: [],
+        }
+      },
+    }
+    class FakeRecorder {
+      constructor() {
+        this.state = 'inactive'
+        this.mimeType = 'audio/webm'
+        this.ondataavailable = null
+        this.onstop = null
+      }
+      start() { this.state = 'recording' }
+      stop() {
+        this.state = 'inactive'
+        this.onstop?.()
+      }
+    }
+    const temas = []
+    const ctrl = createGrabacionSessionController({
+      api,
+      heartbeatMs: 60_000,
+      checkpointAutoMs: 40,
+      openStreams: async () => ({
+        micStream: { getTracks: () => [], getAudioTracks: () => [] },
+        displayStream: null,
+        mixedStream: { getTracks: () => [], getAudioTracks: () => [] },
+        audioCtx: null,
+        tabAudioOk: false,
+        mimeType: 'audio/webm',
+      }),
+      createRecorder: () => new FakeRecorder(),
+      download: () => true,
+      onTemasVivos: (t) => { temas.push(t) },
+    })
+    await ctrl.start({ includeTabAudio: false })
+    const arm = await ctrl.armTemasCheckpoint()
+    assert.equal(arm.ok, true)
+    assert.equal(ctrl.isTemasCheckpointArmed(), true)
+    await new Promise((r) => setTimeout(r, 200))
+    assert.ok(origins.includes('auto'), `esperaba auto en ${JSON.stringify(origins)}`)
+    await ctrl.actualizarTemas({ origen: 'manual' })
+    assert.ok(origins.includes('manual'))
+    await ctrl.stop({ motivo: 'usuario' })
+    assert.ok(origins.includes('final'), `esperaba final en ${JSON.stringify(origins)}`)
+    assert.ok(temas.length >= 1)
+  })
 })

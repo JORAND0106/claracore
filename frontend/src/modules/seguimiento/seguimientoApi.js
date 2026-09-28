@@ -208,8 +208,19 @@ export function createSeguimientoApi(contratoId, token) {
       }, 120000),
     grabacionCheckpointTemas: (sesionId) =>
       send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/checkpoint-temas`, {}),
-    grabacionActualizarTemas: (sesionId) =>
-      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/actualizar-temas`, {}, 120000),
+    grabacionActualizarTemas: (sesionId, body = {}) =>
+      send('POST', `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/actualizar-temas`, {
+        origen: body.origen || 'manual',
+      }, 120000),
+    grabacionReintentarTramo: (sesionId, tramoId = null) => {
+      const q = tramoId != null ? `?tramo_id=${encodeURIComponent(String(tramoId))}` : ''
+      return send(
+        'POST',
+        `/seguimiento/${cid}/grabacion/sesiones/${sesionId}/reintentar-tramo${q}`,
+        {},
+        120000,
+      )
+    },
     async grabacionChunk(sesionId, blob, { forzarSintesis = false } = {}) {
       const fd = new FormData()
       fd.append('archivo', blob, 'chunk.webm')
