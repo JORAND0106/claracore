@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { dilateVisitedIntoBarriers, hatchRasterScale } from './esquemaHatch.js'
+import { dilateVisitedIntoBarriers, hatchBoundsPad, hatchRasterScale } from './esquemaHatch.js'
 import { floodPixelsToM2, PX_PER_METER } from './esquemaGeometry.js'
 
 describe('esquemaHatch dilate + area', () => {
@@ -41,5 +41,14 @@ describe('esquemaHatch dilate + area', () => {
     const pixels = Math.round(worldW * scale) * Math.round(worldH * scale)
     const m2 = floodPixelsToM2(pixels, scale)
     assert.ok(Math.abs(m2 - 2) < 0.05, `expected ~2 m², got ${m2}`)
+  })
+
+  it('hatchBoundsPad deja corona exterior en escenas grandes (evita reject 85 %)', () => {
+    const pad = hatchBoundsPad(1800, 1400, 32)
+    assert.ok(pad > 32)
+    const bw = 1800 + pad * 2
+    const bh = 1400 + pad * 2
+    const frac = (1800 * 1400) / (bw * bh)
+    assert.ok(frac < 0.85, `frac=${frac} aún ≥ 0.85 con pad=${pad}`)
   })
 })
