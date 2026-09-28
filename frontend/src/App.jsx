@@ -57,6 +57,7 @@ import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoFiltroSesion'
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
 import SicoeCantidadesPorItemVista from './modules/sicoe-obra/SicoeCantidadesPorItemVista'
+import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegistrosActasModal'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -8493,6 +8494,7 @@ function ModuloSicoeObra({
   const [cargando, setCargando] = useState(false)
   const [hayMas, setHayMas] = useState(false)
   const [offsetActual, setOffsetActual] = useState(0)
+  const [modalMoverActasDev, setModalMoverActasDev] = useState(false)
   const [filtros, setFiltros] = useState({
     numero_reporte: '', numero_registro: '',
     semana: '', acta_rpo: '',
@@ -11671,6 +11673,27 @@ function ModuloSicoeObra({
         <div className="cc-sicoe-header-actions" style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
           <PrepareOfflineBtn actaRpo={filtros.acta_rpo || null} />
           <ForceOfflineToggle />
+          {esUsuarioDesarrollador(usuario) && (
+            <button
+              type="button"
+              className="cc-sicoe-touch-btn"
+              onClick={() => setModalMoverActasDev(true)}
+              title="Herramienta exclusiva Desarrollador: mover registros entre actas RPO"
+              style={{
+                background: 'transparent',
+                color: t.text,
+                border: `1px solid ${t.border}`,
+                borderRadius: '8px',
+                padding: sicoeCompact ? '10px 14px' : '10px 16px',
+                minHeight: sicoeCompact ? 44 : undefined,
+                fontWeight: 800,
+                fontSize: 'var(--cc-sm)',
+                cursor: 'pointer',
+              }}
+            >
+              ↕ Mover entre actas
+            </button>
+          )}
           {puedeCrear && sicoeModuloVista === 'reportes' && (
             <button type="button" className="cc-sicoe-touch-btn" onClick={() => setModalNuevoReporte(true)} style={{
               background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
@@ -11679,6 +11702,24 @@ function ModuloSicoeObra({
           )}
         </div>
       </div>
+
+      {modalMoverActasDev && esUsuarioDesarrollador(usuario) && (
+        <SicoeMoverRegistrosActasModal
+          t={t}
+          API_URL={API_URL}
+          token={getToken()}
+          contratoId={contrato_id}
+          contratoLabel={usuario?.contrato_numero ? `Contrato ${usuario.contrato_numero}` : `Contrato #${contrato_id}`}
+          onClose={() => setModalMoverActasDev(false)}
+          onDone={() => {
+            invalidateSicoeVistaCache(contrato_id)
+            invalidateDashboardVistaCache(contrato_id)
+            if (busquedaRealizada) {
+              try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
+            }
+          }}
+        />
+      )}
 
       {/* ── Banner semana sin configurar ── */}
       {!semanaVigente && !alertaSemana && puedeEditar && (
