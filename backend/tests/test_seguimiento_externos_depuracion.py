@@ -161,9 +161,32 @@ def _base_store():
             {
                 "id": 200,
                 "contrato_id": 7,
+                "origen": "compromiso",
+                "estado_gestion": "abierto",
                 "asignado_externo_id": 100,
                 "asignado_a_id": None,
                 "asignado_a_nombre": "Pepito Pérez",
+                "campos_libres": {"asignado_externo": True, "externo_id": 100},
+            },
+            {
+                "id": 201,
+                "contrato_id": 7,
+                "origen": "compromiso",
+                "estado_gestion": "cumplido",
+                "asignado_externo_id": 100,
+                "asignado_a_id": None,
+                "asignado_a_nombre": "Pepito Pérez",
+                "campos_libres": {"asignado_externo": True, "externo_id": 100},
+            },
+            {
+                "id": 202,
+                "contrato_id": 7,
+                "origen": "compromiso",
+                "estado_gestion": "abierto",
+                "asignado_externo_id": None,
+                "asignado_a_id": None,
+                "asignado_a_nombre": "Pepito Pérez",
+                "campos_libres": {},
             },
         ],
         "seguimiento_firma_registro": [
@@ -254,6 +277,7 @@ def test_list_externos_depuracion_agrupa_por_email(monkeypatch):
     pepito = next(x for x in out if x.get("externo_id") == 100)
     assert pepito["actas_count"] == 3
     assert pepito["asistentes_count"] == 3
+    assert pepito["compromisos_count"] == 3
     assert pepito["match_key"] == "email:pepito@ext.com"
     assert len(pepito["actas"]) == 3
     # No incluye acta de otro contrato
@@ -284,7 +308,8 @@ def test_reemplazar_externo_en_varias_actas(monkeypatch):
     assert result["ok"] is True
     assert result["actas_count"] == 3
     assert result["asistentes_actualizados"] == 3
-    assert result["compromisos_actualizados"] == 1
+    assert result["compromisos_previstos"] == 3
+    assert result["compromisos_actualizados"] == 3
     assert result["catalogo_inhabilitados"] >= 1
 
     # Asistentes del contrato 7 ahora tienen usuario_id=50 y nombre del registrado
@@ -299,10 +324,20 @@ def test_reemplazar_externo_en_varias_actas(monkeypatch):
     assert firma["asistente_id"] == 10
     assert firma["usuario_id"] == 50
 
-    # Compromiso migrado
-    item = store["seguimiento_item"][0]
-    assert item["asignado_a_id"] == 50
-    assert item["asignado_externo_id"] is None
+    # Compromisos migrados (abiertos, cumplidos y legado solo-nombre)
+    for iid in (200, 201, 202):
+        item = next(r for r in store["seguimiento_item"] if r["id"] == iid)
+        assert item["asignado_a_id"] == 50
+        assert item["asignado_externo_id"] is None
+        assert "Pepito Eduardo" in (item["asignado_a_nombre"] or "")
+        libres = item.get("campos_libres") or {}
+        assert not libres.get("asignado_externo")
+        assert libres.get("externo_id") is None
+        # Estado intacto
+        if iid == 201:
+            assert item["estado_gestion"] == "cumplido"
+        else:
+            assert item["estado_gestion"] == "abierto"
 
     # Catálogo inhabilitado
     cat = next(r for r in store["seguimiento_contacto_externo"] if r["id"] == 100)
@@ -317,6 +352,52 @@ def test_reemplazar_externo_en_varias_actas(monkeypatch):
     remaining = svc.list_externos_depuracion(sb, 7)
     assert not any(x.get("externo_id") == 100 for x in remaining)
     assert not any(x.get("match_key") == "email:pepito@ext.com" for x in remaining)
+
+
+def test_reparar_compromisos_huerfanos_de_reemplazo_previo(monkeypatch):
+    """Tras un reemplazo parcial, los compromisos con FK al catálogo inactivo se reparan."""
+    store = _base_store()
+    # Simula reemplazo previo: catálogo inactivo con usuario, asistentes ya migrados,
+    # pero compromisos aún con asignado_externo_id.
+    for aid in (10, 11, 12):
+        row = next(r for r in store["seguimiento_acta_asistente"] if r["id"] == aid)
+        row["usuario_id"] = 50
+        row["nombre"] = "Pepito Eduardo Pérez"
+    cat = next(r for r in store["seguimiento_contacto_externo"] if r["id"] == 100)
+    cat["activo"] = False
+    cat["usuario_id"] = 50
+    # Deja huérfanos
+    for it in store["seguimiento_item"]:
+        if it.get("asignado_externo_id") == 100:
+            it["asignado_a_id"] = None
+            it["asignado_a_nombre"] = "Pepito Pérez"
+
+    monkeypatch.setattr(svc, "_schema_has", lambda *_a, **_k: True)
+    monkeypatch.setattr(svc, "_ensure_asignado_externo_column", lambda *_a, **_k: True)
+    sb = FakeSb(store)
+
+    out = svc.reparar_compromisos_externos_huerfanos(sb, 7)
+    assert out["ok"] is True
+    assert out["reparados"] >= 2
+    assert out["ambiguos_count"] == 0
+    for it in store["seguimiento_item"]:
+        if it["id"] in (200, 201):
+            assert it["asignado_a_id"] == 50
+            assert it["asignado_externo_id"] is None
+
+
+def test_reparar_reporta_ambiguos_sin_usuario(monkeypatch):
+    store = _base_store()
+    # Catálogo inactivo SIN usuario_id → no se puede auto-asignar
+    cat = next(r for r in store["seguimiento_contacto_externo"] if r["id"] == 100)
+    cat["activo"] = False
+    cat["usuario_id"] = None
+    monkeypatch.setattr(svc, "_schema_has", lambda *_a, **_k: True)
+    monkeypatch.setattr(svc, "_ensure_asignado_externo_column", lambda *_a, **_k: True)
+    out = svc.reparar_compromisos_externos_huerfanos(FakeSb(store), 7)
+    assert out["reparados"] == 0
+    assert out["ambiguos_count"] >= 1
+    assert any(a.get("motivo") == "sin_usuario_de_reemplazo_en_catalogo" for a in out["ambiguos"])
 
 
 def test_reemplazar_fusiona_si_usuario_ya_es_asistente(monkeypatch):

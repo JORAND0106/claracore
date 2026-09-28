@@ -90,6 +90,8 @@ export function createSeguimientoApi(contratoId, token) {
     listUsuarios: () => get(`/seguimiento/${cid}/usuarios`),
     listExternosDepuracion: () => get(`/seguimiento/${cid}/externos-depuracion`),
     reemplazarExterno: (body) => send('POST', `/seguimiento/${cid}/externos-depuracion/reemplazar`, body),
+    repararCompromisosExternosHuerfanos: () =>
+      send('POST', `/seguimiento/${cid}/externos-depuracion/reparar-compromisos`, {}),
     proximoConsecutivo: () => get(`/seguimiento/${cid}/actas/proximo-consecutivo`),
     compromisosAbiertos: (excluirActaId, tipoActa) => {
       const q = new URLSearchParams()
