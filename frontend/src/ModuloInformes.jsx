@@ -595,7 +595,7 @@ export default function ModuloInformes({
 
   /** Vista previa: PDF en modal (blob). */
   const [vistaPrevia, setVistaPrevia] = useState(null)
-  /** null | 'corte' | 'todos' | 'sem001' | 'sem2-all' | 's2:'+item | string (item corte) — Excel en curso */
+  /** null | 'corte' | 'todos' | 'sem001' | 'mes001' | 'sem2-all' | 's2:'+item | string (item corte) — Excel en curso */
   const [excelBusy, setExcelBusy] = useState(null)
   const [firmaCorteBusy, setFirmaCorteBusy] = useState(false)
   /** Firmas ya registradas en el corte por código de formato (misma tabla; slots Elaboró/Revisó). */
@@ -2550,6 +2550,48 @@ export default function ModuloInformes({
       }
       const blob = await r.blob()
       const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-SEM-001.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelCcMes001() {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !actaConcId) {
+      setError('Selecciona contrato y acta RPO de conciliación.')
+      return
+    }
+    setExcelBusy('mes001')
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const aid = encodeURIComponent(actaConcId)
+    const path = withQsNivelAprobacionMes(`/informes/${cid}/excel/cc-mes-001/acta/${aid}`)
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-MES-001.xlsx'
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -4724,7 +4766,7 @@ export default function ModuloInformes({
               >
                 <span style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>
-                    Informe corte semanal (CC-SEM-001)
+                    Informe ejecución semanal (CC-SEM-001)
                   </div>
                   <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
                     Resumen por ítem y total — conciliación interventoría–contratista por semana de aprobación
@@ -5551,12 +5593,15 @@ export default function ModuloInformes({
                     {puedeExportarCcd && (
                     <button
                       type="button"
-                      style={btnCcdToolbar(true, 'excel')}
-                      disabled
-                      title="Exportación Excel aún no disponible para el informe mensual"
-                      aria-label="Excel no disponible"
+                      style={btnCcdToolbar(!!excelBusy, 'excel')}
+                      onClick={descargarExcelCcMes001}
+                      disabled={!!excelBusy}
+                      title="Descargar Excel (mismo contenido que el informe mensual)"
+                      aria-label="Descargar Excel CC-MES-001"
                     >
-                      <IconoDescargaExcel size={ui.iconSvg} />
+                      {excelBusy === 'mes001'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoDescargaExcel size={ui.iconSvg} />}
                     </button>
                     )}
                     {puedeValidarCcd && (

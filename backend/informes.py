@@ -7329,6 +7329,35 @@ def excel_cc_sem_002_semana_completo(
         raise HTTPException(500, f"Error generando Excel CC-SEM-002 completo: {repr(e)}") from e
 
 
+@router.get("/{contrato_id}/excel/cc-mes-001/acta/{acta_id}")
+def excel_cc_mes_001_acta(
+    contrato_id: int,
+    acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    current_user=Depends(_get_user),
+):
+    """Excel CC-MES-001: mismo contenido lógico que el informe mensual (PDF)."""
+    _perm_informes_ccd(current_user, "exportar")
+    try:
+        niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+        xbytes = _cc_mes_001_excel_bytes(
+            contrato_id, acta_id, current_user, nivel_aprobacion=niv
+        )
+        ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+        nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+        fname = _safe_filename_part(f"CC-MES-001_acta_{nrpo}.xlsx")
+        return Response(
+            content=xbytes,
+            media_type=_XLSX_MEDIA,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("excel_cc_mes_001_acta")
+        raise HTTPException(500, f"Error generando Excel CC-MES-001: {repr(e)}") from e
+
+
 @router.get("/{contrato_id}/excel/cc-mes-002/acta/{acta_id}")
 def excel_cc_mes_002_acta(
     contrato_id: int,
@@ -12814,6 +12843,69 @@ def _cc_sem_001_excel_bytes(contrato_id: int, semana_id: int, current_user: dict
         c4_label="VIGENCIA",
         c4_value=f"{fi} — {ff}",
         pie_contexto=f"Semana N° {nsem} · {fi} — {ff} · Registros nivel 3 aprobados y bloqueados",
+    )
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _cc_mes_001_excel_bytes(
+    contrato_id: int,
+    acta_id: int,
+    current_user: dict,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> bytes:
+    """Excel CC-MES-001: misma agregación y costo directo que el PDF mensual."""
+    if not _acta_pertenece_contrato(contrato_id, acta_id):
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    reg = fetch_registros_informe_cc_mes_por_acta(
+        _sb, contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
+    )
+    items, total = aggregate_items_conciliacion(reg)
+    _sort_items_corte_por_item_numero_asc(items)
+    ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
+    nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+    cons = str(ac.get("consecutivo") or "—")
+    contrato = _row(
+        "contratos",
+        "numero, objeto, contratista, nit, interventoria, logo_contratista",
+        id=contrato_id,
+    )
+    if not contrato:
+        raise HTTPException(404, "Contrato no encontrado")
+    u = current_user if isinstance(current_user, dict) else dict(current_user)
+    usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
+    usuario_cargo = u.get("cargo_nombre", "—") or "—"
+    firma_cfg = _get_firma_cfg_para_documento(
+        contrato_id,
+        CODIGO_FORMATO_CCD_CC_MES_001,
+        contexto_tipo="acta_rpo",
+        contexto_id=acta_id,
+    )
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "CC-MES-001"
+    niv_txt = f"N{nivel_aprobacion}" if nivel_aprobacion is not None else "último nivel activo"
+    _fill_cc_conc_001_excel_ws(
+        ws,
+        contrato,
+        items,
+        float(total or 0.0),
+        usuario_nombre,
+        usuario_cargo,
+        firma_cfg,
+        titulo_documento="INFORME EJECUCIÓN MENSUAL (CONCILIACIÓN INTERVENTORÍA–CONTRATISTA)",
+        codigo_ccd=CODIGO_FORMATO_CCD_CC_MES_001,
+        c3_label="ACTA RPO",
+        c3_value=nrpo,
+        c4_label="CONSECUTIVO",
+        c4_value=cons,
+        pie_contexto=(
+            f"Acta RPO {nrpo} · consecutivo {cons} · {niv_txt} · "
+            "Misma lógica que módulo Actas (cascada aprob. y costo directo por línea)"
+        ),
     )
     buf = io.BytesIO()
     wb.save(buf)
