@@ -316,3 +316,180 @@ def test_integral_link_sigue_apuntando_a_tot_r_con_subtotales():
     assert ws.cell(tot_r, 1).value == "CANTIDAD TOTAL DEL ÍTEM"
     assert isinstance(ws.cell(tot_r, 8).value, str)
     assert ws.cell(tot_r, 8).value.startswith("=")
+
+
+def test_paridad_html_excel_item_multitramo_desordenado():
+    """Escenario tipo Acta RPO 1 / ítem 1.1: varios tramos, abscisas desordenadas; HTML=Excel."""
+    inf = _import_informes_with_stubs()
+    # Entrada deliberadamente desordenada (tramos mezclados, abs_inicio descendente).
+    regs = [
+        {
+            "numero_registro": 30,
+            "tramo": "7",
+            "abs_inicio": 11200.0,
+            "abs_final": 11250.0,
+            "longitud": 10.0,
+            "ancho": 2.0,
+            "espesor": 0.5,
+            "cantidad": None,
+            "cantidad_total": 10.0,  # 10×2×0.5
+            "observacion": "",
+            "foto_url": None,
+            "item_numero": "1.1",
+            "item_descripcion": "Excavación",
+            "unidad": "M3",
+            "capitulo": "I",
+        },
+        {
+            "numero_registro": 10,
+            "tramo": "5",
+            "abs_inicio": 1316.0,
+            "abs_final": 1320.0,
+            "longitud": 4.0,
+            "ancho": 1.0,
+            "espesor": 1.0,
+            "cantidad": None,
+            "cantidad_total": 4.0,
+            "observacion": "",
+            "foto_url": None,
+            "item_numero": "1.1",
+            "item_descripcion": "Excavación",
+            "unidad": "M3",
+            "capitulo": "I",
+        },
+        {
+            "numero_registro": 20,
+            "tramo": "7",
+            "abs_inicio": 11090.0,
+            "abs_final": 11100.0,
+            "longitud": 26.16,
+            "ancho": 1.0,
+            "espesor": 1.0,
+            "cantidad": None,
+            "cantidad_total": 26.16,
+            "observacion": "",
+            "foto_url": None,
+            "item_numero": "1.1",
+            "item_descripcion": "Excavación",
+            "unidad": "M3",
+            "capitulo": "I",
+        },
+        {
+            "numero_registro": 11,
+            "tramo": "5",
+            "abs_inicio": 1314.5,
+            "abs_final": 1316.0,
+            "longitud": 1.5,
+            "ancho": 1.0,
+            "espesor": 1.0,
+            "cantidad": None,
+            "cantidad_total": 1.5,
+            "observacion": "",
+            "foto_url": None,
+            "item_numero": "1.1",
+            "item_descripcion": "Excavación",
+            "unidad": "M3",
+            "capitulo": "I",
+        },
+    ]
+    item_info = inf._item_info_desde_registros(regs, "1.1")
+    conc_meta = {
+        "titulo": "MEMORIA MENSUAL",
+        "codigo": "CC-MES-002",
+        "cells": [
+            ("CONTRATO", "C-1"),
+            ("ACTA RPO", "1"),
+            ("CONSECUTIVO", "1"),
+            ("FECHA ACTA", "—"),
+        ],
+    }
+
+    plan = inf._memoria_plan_filas_detalle(regs)
+    assert [p["kind"] for p in plan] == [
+        "reg",
+        "reg",
+        "subtramo",
+        "reg",
+        "reg",
+        "subtramo",
+    ]
+    assert plan[0]["reg"]["numero_registro"] == 11  # K1+314.50 primero
+    assert plan[1]["reg"]["numero_registro"] == 10
+    assert plan[2]["tramo"] == "5"
+    assert plan[3]["reg"]["numero_registro"] == 20  # K11+090.00
+    assert plan[4]["reg"]["numero_registro"] == 30
+    assert plan[5]["tramo"] == "7"
+
+    sub5 = sum(r["cantidad_total"] for r in plan[2]["regs"])
+    sub7 = sum(r["cantidad_total"] for r in plan[5]["regs"])
+    total_item = sum(r["cantidad_total"] for r in regs)
+    assert abs(sub5 - 5.5) < 1e-9
+    assert abs(sub7 - 36.16) < 1e-9
+    assert abs(total_item - 41.66) < 1e-9
+    # El total del ítem no incluye las líneas de subtotal (5.5+36.16).
+    assert abs(total_item - (sub5 + sub7)) < 1e-9
+
+    html = inf._html_memoria_item(
+        {"numero": "C-1"},
+        {"razon_social": "Sub", "nombre_contacto": "Ana"},
+        {"consecutivo": 1, "fecha_inicio": "2026-01-01", "fecha_fin": "2026-01-31"},
+        item_info,
+        regs,
+        "Usuario",
+        "Cargo",
+        conc_meta=conc_meta,
+        aprobo_interventoria_desde_config=True,
+        pie_fotos_contexto="Acta RPO 1",
+    )
+    # Abscisas K ordenadas en el HTML (tramo 5 antes que 7).
+    i_k1314 = html.index("K1+314.50")
+    i_k1316 = html.index("K1+316.00")
+    i_k11090 = html.index("K11+090.00")
+    i_k11200 = html.index("K11+200.00")
+    assert i_k1314 < i_k1316 < i_k11090 < i_k11200
+    assert "Total tramo 5" in html and "Total tramo 7" in html
+    assert inf._fn_cant(5.5) in html
+    assert inf._fn_cant(36.16) in html
+    assert inf._fn_cant(41.66) in html
+    assert "mem002-subtramo" in html
+
+    wb = Workbook()
+    ws = wb.active
+    tot_r = inf._fill_memoria_excel_ws(
+        ws,
+        {"numero": "C-1"},
+        {"razon_social": "Sub", "nombre_contacto": "Ana"},
+        {"consecutivo": 1, "fecha_inicio": "2026-01-01", "fecha_fin": "2026-01-31"},
+        item_info,
+        regs,
+        None,
+        conc_meta=conc_meta,
+        aprobo_interventoria_desde_config=True,
+    )
+    buf = BytesIO()
+    wb.save(buf)
+    ws2 = load_workbook(BytesIO(buf.getvalue())).active
+
+    assert ws2["B9"].value == "K1+314.50 – K1+316.00"
+    assert ws2["B10"].value == "K1+316.00 – K1+320.00"
+    assert str(ws2["A11"].value) == "Total tramo 5"
+    assert "H9" in str(ws2["H11"].value) and "H10" in str(ws2["H11"].value)
+    assert ws2["I11"].value == "M3"
+    assert ws2["B12"].value == "K11+090.00 – K11+100.00"
+    assert ws2["B13"].value == "K11+200.00 – K11+250.00"
+    assert str(ws2["A14"].value) == "Total tramo 7"
+    assert "H12" in str(ws2["H14"].value) and "H13" in str(ws2["H14"].value)
+    assert ws2["I14"].value == "M3"
+    assert tot_r == 15
+    assert str(ws2["A15"].value) == "CANTIDAD TOTAL DEL ÍTEM"
+    tot_f = str(ws2["H15"].value)
+    assert tot_f.startswith("=")
+    for r in (9, 10, 12, 13):
+        assert f"H{r}" in tot_f
+    assert "H11" not in tot_f and "H14" not in tot_f
+    assert ws2["I15"].value == "M3"
+
+    # Contrato del integral: referencia a H{tot_r} de la pestaña de memoria.
+    sheet_ref = f"='I|1.1'!H{tot_r}"
+    assert sheet_ref.endswith(f"H{tot_r}")
+    assert tot_r == 15
