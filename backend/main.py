@@ -28119,6 +28119,386 @@ class ValidarMasivoNivel3Body(BaseModel):
 class ReconciliarActaRpoHistoricoBody(BaseModel):
     dry_run: bool = False
 
+
+class MoverRegistrosEntreActasPreviewBody(BaseModel):
+    acta_origen_id: int
+    acta_destino_id: int
+
+
+class MoverRegistrosEntreActasBody(BaseModel):
+    acta_origen_id: int
+    acta_destino_id: int
+    registro_ids: List[int]
+    incluir_sellados: bool = False
+    confirmacion_sellados: Optional[str] = None
+    motivo: Optional[str] = None
+
+
+SICOE_MOVER_ACTA_CONFIRM_SELLADOS = "INCLUIR-SELLADOS"
+SICOE_MOVER_ACTA_MAX_REGISTROS = 2000
+
+
+def _sicoe_acta_rpo_meta(contrato_id: int, acta_id: int) -> dict:
+    def _q():
+        return (
+            supabase.table("actas")
+            .select("id, contrato_id, numero_rpo, consecutivo, tipo_grupo, fecha_inicio, fecha_fin")
+            .eq("id", int(acta_id))
+            .eq("contrato_id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_q) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Acta {acta_id} no encontrada en este contrato.")
+    a = rows[0]
+    if (a.get("tipo_grupo") or "").strip().upper() != "RPO":
+        raise HTTPException(status_code=422, detail="Solo se pueden mover registros entre actas RPO.")
+    return a
+
+
+def _sicoe_validar_par_actas_mover(contrato_id: int, origen_id: int, destino_id: int) -> Tuple[dict, dict]:
+    if int(origen_id) == int(destino_id):
+        raise HTTPException(status_code=422, detail="El acta de origen y la de destino deben ser distintas.")
+    origen = _sicoe_acta_rpo_meta(contrato_id, origen_id)
+    destino = _sicoe_acta_rpo_meta(contrato_id, destino_id)
+    return origen, destino
+
+
+def _sicoe_registro_sellado_o_bloqueado(row: dict, contrato_id: int) -> bool:
+    if row.get("bloqueado"):
+        return True
+    return _registro_nivel_max_aprobado(row, contrato_id)
+
+
+def _sicoe_fetch_registros_acta_origen(contrato_id: int, acta_origen_id: int) -> List[dict]:
+    """Todos los so_registros del acta de origen (paginado)."""
+    out: List[dict] = []
+    off = 0
+    page = 500
+    campos = (
+        f"id, numero_registro, reporte_id, item_numero, item_descripcion, capitulo, "
+        f"cantidad_total, costo_directo, bloqueado, acta_rpo_id, acta_rpo_id_backup_swap, "
+        f"contrato_id, {SICOE_SELECT_NIVELES_ESTADO}"
+    )
+    while True:
+        def _q(o=off):
+            return (
+                supabase.table("so_registros")
+                .select(campos)
+                .eq("contrato_id", int(contrato_id))
+                .eq("acta_rpo_id", int(acta_origen_id))
+                .order("id")
+                .range(o, o + page - 1)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_q) or []
+        out.extend(batch)
+        if len(batch) < page:
+            break
+        off += page
+        if off >= SICOE_MOVER_ACTA_MAX_REGISTROS + page:
+            break
+    return out
+
+
+def _sicoe_preview_item_mover(reg: dict, contrato_id: int) -> dict:
+    sellado = _sicoe_registro_sellado_o_bloqueado(reg, contrato_id)
+    desc = reg.get("item_descripcion")
+    if desc is not None and not isinstance(desc, str):
+        desc = str(desc)
+    if isinstance(desc, str) and len(desc) > 160:
+        desc = desc[:157] + "..."
+    return {
+        "id": int(reg["id"]),
+        "numero_registro": reg.get("numero_registro"),
+        "reporte_id": reg.get("reporte_id"),
+        "item_numero": (str(reg.get("item_numero") or "").strip() or None),
+        "item_descripcion": (desc or "").strip() or None,
+        "capitulo": (str(reg.get("capitulo") or "").strip() or None),
+        "cantidad_total": float(reg.get("cantidad_total") or 0),
+        "costo_directo": float(reg.get("costo_directo") or 0),
+        "bloqueado": bool(reg.get("bloqueado")),
+        "sellado": sellado,
+        "acta_rpo_id": reg.get("acta_rpo_id"),
+        "acta_rpo_id_backup_swap": reg.get("acta_rpo_id_backup_swap"),
+        "seleccionable_por_defecto": not sellado,
+    }
+
+
+def _sicoe_mover_registros_entre_actas_ejecutar(
+    contrato_id: int,
+    acta_origen_id: int,
+    acta_destino_id: int,
+    ids: List[int],
+    current_user,
+    *,
+    incluir_sellados: bool,
+    motivo: Optional[str],
+) -> dict:
+    """
+    Mueve registros del acta origen al destino.
+    - Respalda el acta previa en acta_rpo_id_backup_swap (conserva el primer original si ya había).
+    - UPDATE por lote filtrado por origen (atómico a nivel de sentencia SQL).
+    - Actualiza cabeceras so_reportes tocadas cuando ya no quedan líneas en el acta origen.
+    """
+    ids_u = sorted({int(x) for x in ids})
+    if not ids_u:
+        raise HTTPException(status_code=422, detail="Debe indicar al menos un registro a mover.")
+    if len(ids_u) > SICOE_MOVER_ACTA_MAX_REGISTROS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No se pueden mover más de {SICOE_MOVER_ACTA_MAX_REGISTROS} registros por operación.",
+        )
+
+    origen, destino = _sicoe_validar_par_actas_mover(contrato_id, acta_origen_id, acta_destino_id)
+
+    por_id: Dict[int, dict] = {}
+    for chunk in _sicoe_chunks_int(ids_u, 200):
+        ch = list(chunk)
+
+        def _q(ids=ch):
+            return (
+                supabase.table("so_registros")
+                .select(
+                    f"id, reporte_id, bloqueado, acta_rpo_id, acta_rpo_id_backup_swap, "
+                    f"numero_registro, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}"
+                )
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", ids)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_q) or []:
+            por_id[int(row["id"])] = row
+
+    faltan = [i for i in ids_u if i not in por_id]
+    if faltan:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Registros no encontrados en el contrato: {faltan[:20]}",
+        )
+
+    fuera_origen = [
+        i for i in ids_u if int(por_id[i].get("acta_rpo_id") or 0) != int(acta_origen_id)
+    ]
+    if fuera_origen:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Algunos registros ya no están en el acta de origen "
+                f"(p. ej. id {fuera_origen[0]}). Recargue la vista previa."
+            ),
+        )
+
+    sellados_sel = [i for i in ids_u if _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id)]
+    if sellados_sel and not incluir_sellados:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Hay {len(sellados_sel)} registro(s) sellado(s)/bloqueado(s) en la selección. "
+                "Confirme explícitamente la inclusión de sellados para continuar."
+            ),
+        )
+
+    sin_backup = [i for i in ids_u if por_id[i].get("acta_rpo_id_backup_swap") is None]
+    for chunk in _sicoe_chunks_int(sin_backup, 200):
+        ch = list(chunk)
+
+        def _bak(ids=ch):
+            return (
+                supabase.table("so_registros")
+                .update({"acta_rpo_id_backup_swap": int(acta_origen_id)})
+                .eq("contrato_id", int(contrato_id))
+                .eq("acta_rpo_id", int(acta_origen_id))
+                .is_("acta_rpo_id_backup_swap", "null")
+                .in_("id", ids)
+                .execute()
+                .data
+            )
+
+        try:
+            supabase_execute(_bak)
+        except Exception as ex:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se pudo guardar el respaldo de acta (acta_rpo_id_backup_swap): {ex}",
+            ) from ex
+
+    try:
+        for chunk in _sicoe_chunks_int(ids_u, 200):
+            ch = list(chunk)
+
+            def _mov(ids=ch):
+                return (
+                    supabase.table("so_registros")
+                    .update({"acta_rpo_id": int(acta_destino_id)})
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("acta_rpo_id", int(acta_origen_id))
+                    .in_("id", ids)
+                    .execute()
+                    .data
+                )
+
+            supabase_execute(_mov)
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=f"Error al mover registros: {ex}") from ex
+
+    en_destino: List[int] = []
+    for chunk in _sicoe_chunks_int(ids_u, 200):
+        ch = list(chunk)
+
+        def _ver(ids=ch):
+            return (
+                supabase.table("so_registros")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("acta_rpo_id", int(acta_destino_id))
+                .in_("id", ids)
+                .execute()
+                .data
+            )
+
+        en_destino.extend(
+            int(r["id"]) for r in (supabase_execute(_ver) or []) if r.get("id") is not None
+        )
+
+    en_destino_set = set(en_destino)
+    no_movidos = [i for i in ids_u if i not in en_destino_set]
+    if no_movidos and not en_destino:
+        raise HTTPException(
+            status_code=500,
+            detail="No se movió ningún registro (posible condición de carrera). Reintente.",
+        )
+    movidos_ids = sorted(en_destino_set)
+
+    reportes_tocados = sorted(
+        {
+            int(por_id[i]["reporte_id"])
+            for i in movidos_ids
+            if por_id[i].get("reporte_id") is not None
+        }
+    )
+    reportes_actualizados: List[int] = []
+    for rid in reportes_tocados:
+        def _quedan(r=rid):
+            return (
+                supabase.table("so_registros")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("reporte_id", r)
+                .eq("acta_rpo_id", int(acta_origen_id))
+                .limit(1)
+                .execute()
+                .data
+            )
+
+        quedan = supabase_execute(_quedan) or []
+        if quedan:
+            continue
+
+        def _upd_rep(r=rid):
+            return (
+                supabase.table("so_reportes")
+                .update({"acta_rpo_id": int(acta_destino_id)})
+                .eq("contrato_id", int(contrato_id))
+                .eq("id", r)
+                .eq("acta_rpo_id", int(acta_origen_id))
+                .execute()
+                .data
+            )
+
+        try:
+            supabase_execute(_upd_rep)
+            reportes_actualizados.append(rid)
+        except Exception:
+            pass
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "MOVER_ACTA_RPO",
+            "SICOE",
+            "acta",
+            str(acta_origen_id),
+            {
+                "accion": "mover_registros_entre_actas",
+                "contrato_id": int(contrato_id),
+                "acta_origen_id": int(acta_origen_id),
+                "acta_destino_id": int(acta_destino_id),
+                "acta_origen_numero_rpo": origen.get("numero_rpo"),
+                "acta_destino_numero_rpo": destino.get("numero_rpo"),
+                "movidos": len(movidos_ids),
+                "no_movidos": len(no_movidos),
+                "incluir_sellados": bool(incluir_sellados),
+                "sellados_en_lote": len(sellados_sel),
+                "reportes_actualizados": len(reportes_actualizados),
+                "motivo": (motivo or "").strip() or None,
+                "ids_movidos_muestra": movidos_ids[:50],
+            },
+            valor_anterior={"acta_rpo_id": int(acta_origen_id), "ids": movidos_ids},
+            valor_nuevo={"acta_rpo_id": int(acta_destino_id), "ids": movidos_ids},
+            severidad="AUDIT",
+            alerta_generada=True,
+        )
+    except Exception:
+        pass
+
+    def _label(meta: dict) -> str:
+        nr = meta.get("numero_rpo")
+        return f"Acta RPO {nr}" if nr is not None else f"Acta #{meta.get('id')}"
+
+    return {
+        "ok": True,
+        "contrato_id": int(contrato_id),
+        "acta_origen": {
+            "id": int(origen["id"]),
+            "numero_rpo": origen.get("numero_rpo"),
+            "label": _label(origen),
+        },
+        "acta_destino": {
+            "id": int(destino["id"]),
+            "numero_rpo": destino.get("numero_rpo"),
+            "label": _label(destino),
+        },
+        "movidos": [
+            {
+                "id": i,
+                "numero_registro": por_id[i].get("numero_registro"),
+                "sellado": _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id),
+                "acta_origen_id": int(acta_origen_id),
+                "acta_destino_id": int(acta_destino_id),
+            }
+            for i in movidos_ids
+        ],
+        "no_movidos": [
+            {
+                "id": i,
+                "numero_registro": por_id[i].get("numero_registro"),
+                "motivo": "no_actualizado",
+            }
+            for i in no_movidos
+        ],
+        "totales": {
+            "solicitados": len(ids_u),
+            "movidos": len(movidos_ids),
+            "no_movidos": len(no_movidos),
+            "sellados_movidos": sum(
+                1
+                for i in movidos_ids
+                if _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id)
+            ),
+            "reportes_actualizados": len(reportes_actualizados),
+        },
+    }
+
+
 def _normalizar_macro_rol(valor: Optional[str]) -> Optional[str]:
     txt = (valor or "").strip().lower()
     if not txt:
@@ -36841,12 +37221,156 @@ def reconciliar_acta_rpo_historico(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/sicoe-obra/{contrato_id}/actas-rpo")
+def sicoe_listar_actas_rpo_contrato(
+    contrato_id: int,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Lista actas RPO del contrato (solo Desarrollador — herramienta mover registros)."""
+    _require_contract_access(current_user, contrato_id)
+    try:
+        def _q():
+            return (
+                supabase.table("actas")
+                .select("id, numero_rpo, consecutivo, fecha_inicio, fecha_fin, tipo_grupo")
+                .eq("contrato_id", int(contrato_id))
+                .eq("tipo_grupo", "RPO")
+                .not_.is_("numero_rpo", "null")
+                .order("numero_rpo", desc=True)
+                .execute()
+                .data
+            )
+
+        rows = supabase_execute(_q) or []
+        return {
+            "ok": True,
+            "contrato_id": int(contrato_id),
+            "actas": [
+                {
+                    "id": int(a["id"]),
+                    "numero_rpo": a.get("numero_rpo"),
+                    "consecutivo": a.get("consecutivo"),
+                    "fecha_inicio": a.get("fecha_inicio"),
+                    "fecha_fin": a.get("fecha_fin"),
+                    "label": (
+                        f"Acta RPO {a.get('numero_rpo')}"
+                        if a.get("numero_rpo") is not None
+                        else f"Acta #{a.get('id')}"
+                    ),
+                }
+                for a in rows
+                if a.get("id") is not None
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/mover-entre-actas/preview")
+def sicoe_mover_registros_entre_actas_preview(
+    contrato_id: int,
+    body: MoverRegistrosEntreActasPreviewBody,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """
+    Vista previa de registros del acta origen candidatas a mover (solo Desarrollador).
+    Los sellados/bloqueados vienen marcados; por defecto no seleccionables.
+    """
+    _require_contract_access(current_user, contrato_id)
+    try:
+        origen, destino = _sicoe_validar_par_actas_mover(
+            contrato_id, body.acta_origen_id, body.acta_destino_id
+        )
+        regs = _sicoe_fetch_registros_acta_origen(contrato_id, body.acta_origen_id)
+        truncado = len(regs) > SICOE_MOVER_ACTA_MAX_REGISTROS
+        if truncado:
+            regs = regs[:SICOE_MOVER_ACTA_MAX_REGISTROS]
+        items = [_sicoe_preview_item_mover(r, contrato_id) for r in regs]
+        n_sell = sum(1 for x in items if x["sellado"])
+        n_ok = len(items) - n_sell
+        return {
+            "ok": True,
+            "contrato_id": int(contrato_id),
+            "acta_origen": {
+                "id": int(origen["id"]),
+                "numero_rpo": origen.get("numero_rpo"),
+                "label": (
+                    f"Acta RPO {origen.get('numero_rpo')}"
+                    if origen.get("numero_rpo") is not None
+                    else f"Acta #{origen.get('id')}"
+                ),
+            },
+            "acta_destino": {
+                "id": int(destino["id"]),
+                "numero_rpo": destino.get("numero_rpo"),
+                "label": (
+                    f"Acta RPO {destino.get('numero_rpo')}"
+                    if destino.get("numero_rpo") is not None
+                    else f"Acta #{destino.get('id')}"
+                ),
+            },
+            "registros": items,
+            "totales": {
+                "total": len(items),
+                "no_sellados": n_ok,
+                "sellados": n_sell,
+                "seleccionados_por_defecto": n_ok,
+            },
+            "confirmacion_sellados_requerida": SICOE_MOVER_ACTA_CONFIRM_SELLADOS,
+            "truncado": truncado,
+            "tope_registros": SICOE_MOVER_ACTA_MAX_REGISTROS,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/mover-entre-actas")
+def sicoe_mover_registros_entre_actas(
+    contrato_id: int,
+    body: MoverRegistrosEntreActasBody,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """
+    Ejecuta el movimiento de registros entre actas RPO (solo Desarrollador).
+    Conserva el acta original en acta_rpo_id_backup_swap. Sellados requieren confirmación.
+    """
+    _require_contract_access(current_user, contrato_id)
+    try:
+        incluir = bool(body.incluir_sellados)
+        if incluir:
+            conf = (body.confirmacion_sellados or "").strip()
+            if conf != SICOE_MOVER_ACTA_CONFIRM_SELLADOS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Para incluir registros sellados/bloqueados debe enviar "
+                        f"confirmacion_sellados='{SICOE_MOVER_ACTA_CONFIRM_SELLADOS}'."
+                    ),
+                )
+        return _sicoe_mover_registros_entre_actas_ejecutar(
+            contrato_id,
+            body.acta_origen_id,
+            body.acta_destino_id,
+            list(body.registro_ids or []),
+            current_user,
+            incluir_sellados=incluir,
+            motivo=body.motivo,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── CORS preflight ASGI (capa más externa que uvicorn carga) ─────────────────
 # En Azure, OPTIONS sobre rutas de APIRouter incluido (/informes, /avi, …) devolvía 500
 # sin cabeceras CORS aunque CORSMiddleware estuviera registrado; el navegador lo reporta como
 # «blocked by CORS policy». Este envoltorio responde el preflight antes del stack FastAPI.
 from starlette.types import ASGIApp, Receive, Scope, Send
-
 
 class _OutermostCorsPreflightASGI:
     def __init__(self, inner: ASGIApp) -> None:
