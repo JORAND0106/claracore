@@ -40,6 +40,9 @@ def _import_informes_with_stubs():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = prev
+    # Evitar HTTP real en tests de HTML (prefetch de fotos/gráficos).
+    inf._memoria_prepare_media_uri = lambda url: ""  # type: ignore
+    inf._memoria_prefetch_media_uris = lambda urls: {str(u or "").strip(): "" for u in urls if str(u or "").strip()}  # type: ignore
     return inf
 
 
@@ -93,6 +96,39 @@ def test_excel_formula_cantidad_total_columnas_defg():
     assert 'IF(D12="",1,D12)' in f
     assert "E12" in f and "F12" in f and "G12" in f
     assert "ROUND(" in f
+
+
+def test_memoria_media_fit_pt_contain_sin_deformar():
+    """xhtml2pdf ignora CSS max-*; el contain se fija en pt conservando proporción."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    inf = _import_informes_with_stubs()
+
+    def _uri(w, h, color=(30, 30, 50)):
+        im = Image.new("RGB", (w, h), color)
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG")
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    box_w, box_h = inf._MEMORIA_MEDIA_BOX_W_PT, inf._MEMORIA_MEDIA_BOX_H_PT
+    # Ancha
+    uri_w = _uri(1600, 400)
+    w, h = inf._memoria_fit_media_pt(uri_w, box_w, box_h)
+    assert w <= box_w + 0.01 and h <= box_h + 0.01
+    assert abs(w / h - 4.0) < 0.08
+    # Alta
+    uri_t = _uri(400, 1200, (200, 200, 200))
+    w2, h2 = inf._memoria_fit_media_pt(uri_t, box_w, box_h)
+    assert w2 <= box_w + 0.01 and h2 <= box_h + 0.01
+    assert abs(w2 / h2 - 400 / 1200) < 0.08
+    # HTML con dims explícitas (attrs + style pt)
+    tag = inf._memoria_media_img_html("https://cdn/x.jpg", {"https://cdn/x.jpg": uri_w})
+    assert f"width:{w}pt" in tag and f"height:{h}pt" in tag
+    assert 'width="' in tag and 'height="' in tag
+    assert "data:image/jpeg;base64," in tag
 
 
 def test_enlaces_soporte_parse_labels_y_html():
@@ -226,9 +262,8 @@ def test_html_memoria_encabezado_grilla6_columnas_sin_pk_y_dedupe():
     assert "height:6.85cm" in html
     assert "height:4.55cm" not in html
     assert 'class="mem002-media-img"' in html
-    assert "max-height:6.55cm" in html
-    assert "max-width:100%" in html
-    # Regresión: max-width:0 en celdas de media colapsa imgs en xhtml2pdf
+    # Contención: dims explícitas en pt y/o tope max-*; nunca max-width:0
+    assert ("pt;" in html and "mem002-media-img" in html) or "max-height:" in html
     assert "max-width:0" not in html
     assert "font-size:0" not in html
     assert "ABSCISAS" in html

@@ -10930,18 +10930,18 @@ body.mem002-doc .mem002-foto-box td {
   vertical-align: middle;
   padding: 2px;
 }
-/* Contención sin colapsar: max-width/max-height en la img (no max-width:0 en el td). */
+/* Contención definitiva: el bitmap ya viene escalado (contain) y la img declara
+   width/height en pt. CSS refuerza el tope de la caja sin max-width:0 en el td. */
 body.mem002-doc .mem002-foto-box img,
 body.mem002-doc .mem002-foto-box img.mem002-media-img {
   max-width: 100%;
   max-height: 6.55cm;
-  width: auto;
-  height: auto;
   display: inline-block;
   margin: 0 auto;
   object-fit: contain;
   object-position: center center;
   vertical-align: middle;
+  border: 0;
 }
 body.mem002-doc .mem002-foto-caption {
   height: 1.15cm;
@@ -11311,6 +11311,121 @@ def _memoria_enlace_txt(r: dict) -> str:
     """Primer URL de soporte (compat); preferir _memoria_enlaces_soporte."""
     links = _memoria_enlaces_soporte(r)
     return links[0]["url"] if links else ""
+
+
+# ── Media contain (foto/gráfico): xhtml2pdf ignora max-width/height CSS ─────────
+# Evidencia: pdf_institucional.py docstring — «ignora max-height/max-width CSS →
+# fijar width/height en pt + attrs HTML». La vista previa de memorias es el PDF
+# (blob), así que la regla explícita en pt aplica a preview y descarga.
+# Letter landscape ~792×612 pt; márgenes MEMORIA002 0.5/0.65 cm → slot ~240 pt;
+# caja CSS 6.85 cm alto → img útil ~6.55 cm ≈ 185.7 pt.
+_MEMORIA_MEDIA_BOX_W_PT = 230.0
+_MEMORIA_MEDIA_BOX_H_PT = 185.0
+_MEMORIA_MEDIA_MAX_PX_W = 460
+_MEMORIA_MEDIA_MAX_PX_H = 370
+_MEMORIA_MEDIA_PREFETCH_WORKERS = 8
+
+
+def _memoria_fit_media_pt(uri: str, max_w: float, max_h: float) -> Tuple[float, float]:
+    """Contain proporcional en pt (misma lógica que pdf_institucional._fit_pt)."""
+    try:
+        from PIL import Image
+
+        m = re.match(r"data:image/[^;]+;base64,(.+)$", str(uri or ""), re.I | re.S)
+        if not m:
+            return round(max_w * 0.55, 2), round(max_h, 2)
+        raw = base64.b64decode(m.group(1))
+        im = Image.open(io.BytesIO(raw))
+        px_w, px_h = im.size
+        if not px_w or not px_h:
+            return round(max_w * 0.55, 2), round(max_h, 2)
+        nat_w = px_w * 72.0 / 96.0
+        nat_h = px_h * 72.0 / 96.0
+        scale = min(max_h / nat_h, max_w / nat_w, 1.0)
+        return round(nat_w * scale, 2), round(nat_h * scale, 2)
+    except Exception:
+        return round(max_w * 0.55, 2), round(max_h, 2)
+
+
+def _memoria_prepare_media_uri(url: str) -> str:
+    """Data-URI JPEG redimensionada (contain) para embeber en PDF/preview."""
+    u = str(url or "").strip()
+    if not u:
+        return ""
+    try:
+        from pdf_institucional import prepare_image_for_pdf
+
+        return (
+            prepare_image_for_pdf(
+                u,
+                max_px_w=_MEMORIA_MEDIA_MAX_PX_W,
+                max_px_h=_MEMORIA_MEDIA_MAX_PX_H,
+                allow_http=True,
+            )
+            or ""
+        )
+    except Exception:
+        return ""
+
+
+def _memoria_prefetch_media_uris(urls: List[str]) -> Dict[str, str]:
+    """Prepara en paralelo URLs únicas → data-URI (vacío si falla)."""
+    uniq: List[str] = []
+    seen = set()
+    for u in urls:
+        s = str(u or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        uniq.append(s)
+    out: Dict[str, str] = {}
+    if not uniq:
+        return out
+    workers = min(_MEMORIA_MEDIA_PREFETCH_WORKERS, max(1, len(uniq)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(_memoria_prepare_media_uri, u): u for u in uniq}
+        for fut in as_completed(futs):
+            u = futs[fut]
+            try:
+                out[u] = fut.result() or ""
+            except Exception:
+                out[u] = ""
+    return out
+
+
+def _memoria_media_img_html(url: str, prepared: Optional[Dict[str, str]] = None) -> str:
+    """Img contenida en la caja fija: width/height explícitos en pt (sin deformar).
+
+    1) Preferir data-URI preparada (PIL thumbnail contain) + dimensiones _fit_pt.
+    2) Si no hay data-URI, usar URL original con caja máxima en pt (best-effort).
+    """
+    raw_url = str(url or "").strip()
+    if not raw_url:
+        return ""
+    uri = ""
+    if prepared is not None:
+        uri = str(prepared.get(raw_url) or "").strip()
+    if not uri:
+        uri = _memoria_prepare_media_uri(raw_url)
+    src = uri if uri.startswith("data:") else raw_url
+    if uri.startswith("data:"):
+        w_pt, h_pt = _memoria_fit_media_pt(uri, _MEMORIA_MEDIA_BOX_W_PT, _MEMORIA_MEDIA_BOX_H_PT)
+    else:
+        # Sin bitmap medible: no inventar alto×ancho que deforme; limitar por CSS+pt.
+        w_pt, h_pt = _MEMORIA_MEDIA_BOX_W_PT, _MEMORIA_MEDIA_BOX_H_PT
+        return (
+            f'<img class="mem002-media-img" src="{html.escape(src, quote=True)}" alt="media" '
+            f'style="max-width:{w_pt}pt;max-height:{h_pt}pt;width:auto;height:auto;'
+            f'display:inline-block;margin:0 auto;object-fit:contain;vertical-align:middle;" />'
+        )
+    w_px = max(1, int(round(w_pt * 96.0 / 72.0)))
+    h_px = max(1, int(round(h_pt * 96.0 / 72.0)))
+    return (
+        f'<img class="mem002-media-img" src="{html.escape(src, quote=True)}" alt="media" '
+        f'width="{w_px}" height="{h_px}" '
+        f'style="width:{w_pt}pt;height:{h_pt}pt;border:0;display:inline-block;'
+        f'margin:0 auto;vertical-align:middle;object-fit:contain;" />'
+    )
 
 
 def _memoria_enlaces_html_cell(r: dict) -> str:
@@ -13563,6 +13678,11 @@ def _html_memoria_item_body(
 
     fotos = _dedupe_fotos_memoria(registros)
     graficos = _dedupe_graficos_memoria(registros)
+    # Prefetch: data-URI contain-escaladas (xhtml2pdf no respeta max-width/height CSS).
+    media_prepared = _memoria_prefetch_media_uris(
+        [f.get("foto_url") for f in fotos]
+        + [g.get("grafico_url") for g in graficos]
+    )
     cap_val = _capitulo_memoria(item_info, registros) or "—"
 
     def encabezado():
@@ -13733,11 +13853,12 @@ def _html_memoria_item_body(
         caption_top: str,
         caption_obs: str,
     ) -> str:
-        # Contenedor de tamaño fijo. Contención en la IMG (max-width/max-height),
-        # no con max-width:0 en el td (colapsa en xhtml2pdf → imgs invisibles).
+        # Contenedor fijo; la IMG lleva width/height en pt (contain) — única regla
+        # que xhtml2pdf respeta (CSS max-* / object-fit no bastan).
         box_td = (
             f'style="width:100%;height:{FOTO_BOX_H};max-height:{FOTO_BOX_H};'
-            'overflow:hidden;text-align:center;vertical-align:middle;padding:2px;"'
+            'overflow:hidden;text-align:center;vertical-align:middle;padding:2px;'
+            'line-height:0;"'
         )
         if not url:
             return (
@@ -13749,14 +13870,7 @@ def _html_memoria_item_body(
                 '<div class="mem002-foto-caption">&nbsp;</div>'
                 "</td>"
             )
-        # width/height auto + max-* : escala sin deformar; overflow:hidden en la caja
-        # recorta cualquier exceso residual del motor PDF.
-        img_html = (
-            f'<img class="mem002-media-img" src="{_h(url)}" alt="media" '
-            f'style="max-width:100%;max-height:6.55cm;width:auto;height:auto;'
-            f'display:inline-block;margin:0 auto;object-fit:contain;vertical-align:middle;" />'
-        )
-        # Pie de alto fijo: truncar de forma legible la relación de registros / obs.
+        img_html = _memoria_media_img_html(url, media_prepared)
         obs_f = _descripcion_memoria_compacta((caption_obs or "")[:120])
         return f"""<td class="mem002-foto-slot">
 <table class="mem002-foto-box" cellspacing="0" cellpadding="0" width="100%" style="table-layout:fixed;width:100%;">
