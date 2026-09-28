@@ -1,6 +1,13 @@
 /** Editor de esquema a mano (PNG) — compartido entre Seguimiento, SicoeObra, etc. */
 export { default as EsquemaEditorModal } from './EsquemaEditorModal'
-export { composeEsquemaExport, sceneExportBounds, drawExportMarginContour } from './esquemaExport'
+export {
+  composeEsquemaExport,
+  sceneExportBounds,
+  drawExportMarginContour,
+  exportCoordTableMetrics,
+  EXPORT_MAX_INNER,
+  EXPORT_SCALE_CAP,
+} from './esquemaExport'
 export { hydrateIaObjects, sceneForIa } from './esquemaIa'
 export { createCota, createCotaAngle, createCotaRadio, createCotaDiametro, drawCota } from './esquemaCota'
 export {

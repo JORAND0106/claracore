@@ -4972,6 +4972,13 @@ def _usuario_datos_firma_sello(uid: int) -> Dict[str, Any]:
 _FO_EO04_IMG_MAX_PX = int(_os.getenv("FO_EO04_IMG_MAX_PX", "480") or "480")
 _FO_EO04_IMG_JPEG_Q = int(_os.getenv("FO_EO04_IMG_JPEG_Q", "58") or "58")
 _FO_EO04_IMG_MAX_BYTES = int(_os.getenv("FO_EO04_IMG_MAX_BYTES", "70000") or "70000")
+# Gráficos/esquemas (texto de tabla de coordenadas): mayor resolución y calidad
+# que las fotos de obra. Env: FO_EO04_GRAFICO_IMG_* .
+_FO_EO04_GRAFICO_IMG_MAX_PX = int(_os.getenv("FO_EO04_GRAFICO_IMG_MAX_PX", "1600") or "1600")
+_FO_EO04_GRAFICO_IMG_JPEG_Q = int(_os.getenv("FO_EO04_GRAFICO_IMG_JPEG_Q", "88") or "88")
+_FO_EO04_GRAFICO_IMG_MAX_BYTES = int(
+    _os.getenv("FO_EO04_GRAFICO_IMG_MAX_BYTES", "320000") or "320000"
+)
 # Firmas/logos (se repiten por página; en pantalla miden ~38–92 px).
 _REPORT_IMG_MAX_PX = int(_os.getenv("REPORT_FIRMA_LOGO_MAX_PX", "320") or "320")
 _REPORT_IMG_JPEG_Q = int(_os.getenv("REPORT_FIRMA_LOGO_JPEG_Q", "72") or "72")
@@ -7571,17 +7578,32 @@ def _fetch_foto_grafico_item(
         return empty
 
 
-def _url_a_data_url_pdf(url: Optional[str], *, for_logo: bool = False) -> Optional[str]:
+def _url_a_data_url_pdf(
+    url: Optional[str],
+    *,
+    for_logo: bool = False,
+    kind: str = "foto",
+) -> Optional[str]:
     """
     Convierte URL http(s) o data: a data-URI comprimida para PDF.
     for_logo=True aplica presupuesto menor (logo entidad, ~12 KB).
+    kind='grafico' usa presupuesto alto (esquemas con tabla de coordenadas).
+    kind='foto' (default) mantiene el presupuesto histórico de fotos de obra.
     """
     if not url or not str(url).strip():
         return None
     u = str(url).strip()
-    max_px = 240 if for_logo else _FO_EO04_IMG_MAX_PX
-    max_bytes = 12_000 if for_logo else _FO_EO04_IMG_MAX_BYTES
-    jpeg_q = 70 if for_logo else _FO_EO04_IMG_JPEG_Q
+    kind_norm = (kind or "foto").strip().lower()
+    if for_logo:
+        max_px, max_bytes, jpeg_q = 240, 12_000, 70
+    elif kind_norm in ("grafico", "esquema", "plano"):
+        max_px = _FO_EO04_GRAFICO_IMG_MAX_PX
+        max_bytes = _FO_EO04_GRAFICO_IMG_MAX_BYTES
+        jpeg_q = _FO_EO04_GRAFICO_IMG_JPEG_Q
+    else:
+        max_px = _FO_EO04_IMG_MAX_PX
+        max_bytes = _FO_EO04_IMG_MAX_BYTES
+        jpeg_q = _FO_EO04_IMG_JPEG_Q
     try:
         if u.startswith("data:") and ";base64," in u:
             raw = base64.b64decode(u.split(",", 1)[1])
@@ -7597,6 +7619,8 @@ def _url_a_data_url_pdf(url: Optional[str], *, for_logo: bool = False) -> Option
             jpeg_q=jpeg_q,
             max_bytes=max_bytes,
             force_jpeg=not for_logo,
+            min_px=480 if kind_norm in ("grafico", "esquema", "plano") else 200,
+            min_q=72 if kind_norm in ("grafico", "esquema", "plano") else 38,
         )
         if comp:
             b, ct = comp
@@ -9558,22 +9582,32 @@ def _fo_eo_04_prefetch_item_imgs_data_uri(
     items_n3: list,
     on_progress=None,
 ) -> List[Tuple[Optional[str], Optional[str]]]:
-    """Data URI por ítem; cada URL única se descarga una sola vez (mismo foto_numero en muchos ítems)."""
+    """Data URI por ítem; cada URL única se descarga una sola vez (mismo foto_numero en muchos ítems).
+
+    Los gráficos usan presupuesto de compresión alto (tabla de coordenadas legible);
+    las fotos conservan el presupuesto histórico.
+    """
     n = len(items_n3)
     if not n:
         return []
-    unique_urls: set = set()
+    # url → kind ('foto' | 'grafico'); si aparece en ambos, prioriza grafico.
+    url_kind: Dict[str, str] = {}
     for item in items_n3:
-        for key in ("foto_url", "grafico_url"):
-            u = (item.get(key) or "").strip()
-            if u.startswith("http"):
-                unique_urls.add(u)
+        fu = (item.get("foto_url") or "").strip()
+        gu = (item.get("grafico_url") or "").strip()
+        if fu.startswith("http") and fu not in url_kind:
+            url_kind[fu] = "foto"
+        if gu.startswith("http"):
+            url_kind[gu] = "grafico"
     url_to_uri: Dict[str, str] = {}
-    if unique_urls:
-        n_u = len(unique_urls)
+    if url_kind:
+        n_u = len(url_kind)
         done_u = 0
         with ThreadPoolExecutor(max_workers=min(_FO_EO04_ITEM_IMG_WORKERS, n_u)) as pool:
-            futs = {pool.submit(_url_a_data_url_pdf, u): u for u in unique_urls}
+            futs = {
+                pool.submit(_url_a_data_url_pdf, u, kind=k): u
+                for u, k in url_kind.items()
+            }
             for fut in as_completed(futs):
                 u = futs[fut]
                 done_u += 1
@@ -9594,9 +9628,9 @@ def _fo_eo_04_prefetch_item_imgs_data_uri(
         ok_embed = sum(1 for v in url_to_uri.values() if v.startswith("data:"))
         _log.info(
             "fo_eo_04 prefetch: %s urls, %s embebidas, %s http para %s ítems",
-            len(unique_urls),
+            len(url_kind),
             ok_embed,
-            len(unique_urls) - ok_embed,
+            len(url_kind) - ok_embed,
             n,
         )
     out: List[Tuple[Optional[str], Optional[str]]] = []

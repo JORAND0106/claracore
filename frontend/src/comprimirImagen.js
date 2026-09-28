@@ -4,6 +4,15 @@ export const COMPRIMIR_IMAGEN_DEFAULTS = {
   calidadJpeg: 0.75,
 }
 
+/**
+ * Esquemas PNG: preservar formato y resolución alta (tabla de coordenadas legible
+ * en memorias). Solo se redimensiona si supera el tope (evita PNG absurdos).
+ */
+export const COMPRIMIR_ESQUEMA_OPTS = {
+  maxWidthPx: 3200,
+  preservarPng: true,
+}
+
 const EXT_IMAGEN = /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i
 
 /** @param {File|Blob|null|undefined} file */
@@ -15,15 +24,24 @@ export function esArchivoImagen(file) {
   return EXT_IMAGEN.test(name)
 }
 
+function isPngFile(file) {
+  const type = (file?.type || '').toLowerCase()
+  if (type === 'image/png') return true
+  const name = file?.name || ''
+  return /\.png$/i.test(name)
+}
+
 /**
  * Redimensiona (si aplica) y comprime a JPEG vía Canvas.
+ * Con `preservarPng: true` y entrada PNG, mantiene PNG (sin pasar a JPEG).
  * @param {File|Blob} file
- * @param {{ maxWidthPx?: number, calidadJpeg?: number }} [opts]
+ * @param {{ maxWidthPx?: number, calidadJpeg?: number, preservarPng?: boolean }} [opts]
  * @returns {Promise<Blob>}
  */
 export async function comprimirImagen(file, opts = {}) {
   const maxWidthPx = opts.maxWidthPx ?? COMPRIMIR_IMAGEN_DEFAULTS.maxWidthPx
   const calidadJpeg = opts.calidadJpeg ?? COMPRIMIR_IMAGEN_DEFAULTS.calidadJpeg
+  const preservarPng = !!opts.preservarPng && isPngFile(file)
 
   let bitmap
   try {
@@ -36,7 +54,13 @@ export async function comprimirImagen(file, opts = {}) {
 
   try {
     let { width, height } = bitmap
-    if (width > maxWidthPx) {
+    const needsResize = width > maxWidthPx
+    if (preservarPng && !needsResize) {
+      // PNG del esquema ya en rango: no re-encodear (evita pérdida/peso extra).
+      if (file instanceof Blob) return file
+      return new Blob([file], { type: 'image/png' })
+    }
+    if (needsResize) {
       height = Math.round((height * maxWidthPx) / width)
       width = maxWidthPx
     }
@@ -46,11 +70,12 @@ export async function comprimirImagen(file, opts = {}) {
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('Canvas no disponible')
     ctx.drawImage(bitmap, 0, 0, width, height)
+    const mime = preservarPng ? 'image/png' : 'image/jpeg'
     const blob = await new Promise((resolve, reject) => {
       canvas.toBlob(
         (b) => (b ? resolve(b) : reject(new Error('No se pudo comprimir la imagen'))),
-        'image/jpeg',
-        calidadJpeg,
+        mime,
+        preservarPng ? undefined : calidadJpeg,
       )
     })
     return blob
@@ -61,7 +86,7 @@ export async function comprimirImagen(file, opts = {}) {
 
 /**
  * @param {File|Blob} file
- * @param {{ maxWidthPx?: number, calidadJpeg?: number, nombre?: string }} [opts]
+ * @param {{ maxWidthPx?: number, calidadJpeg?: number, nombre?: string, preservarPng?: boolean }} [opts]
  * @returns {Promise<File>}
  */
 export async function prepararImagenParaUpload(file, opts = {}) {
@@ -69,16 +94,31 @@ export async function prepararImagenParaUpload(file, opts = {}) {
   const blob = await comprimirImagen(file, opts)
   const rawName = opts.nombre || file.name || 'imagen'
   const base = rawName.replace(/\.[^.]+$/, '') || 'imagen'
-  return new File([blob], `${base}.jpg`, {
-    type: 'image/jpeg',
+  const preservarPng = !!opts.preservarPng && isPngFile(file)
+  const ext = preservarPng ? 'png' : 'jpg'
+  const type = preservarPng ? 'image/png' : 'image/jpeg'
+  return new File([blob], `${base}.${ext}`, {
+    type,
     lastModified: Date.now(),
   })
 }
 
 /**
+ * Atajo: preparar un PNG de esquema sin degradarlo a JPEG 1280.
  * @param {File|Blob} file
- * @param {{ maxWidthPx?: number, calidadJpeg?: number }} [opts]
- * @returns {Promise<string>} data URL (image/jpeg)
+ * @param {{ nombre?: string }} [opts]
+ */
+export async function prepararEsquemaParaUpload(file, opts = {}) {
+  return prepararImagenParaUpload(file, {
+    ...COMPRIMIR_ESQUEMA_OPTS,
+    nombre: opts.nombre,
+  })
+}
+
+/**
+ * @param {File|Blob} file
+ * @param {{ maxWidthPx?: number, calidadJpeg?: number, preservarPng?: boolean }} [opts]
+ * @returns {Promise<string>} data URL
  */
 export async function comprimirImagenADataUrl(file, opts = {}) {
   const blob = await comprimirImagen(file, opts)

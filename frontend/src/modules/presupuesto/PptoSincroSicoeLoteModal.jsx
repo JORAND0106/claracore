@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
-import { prepararImagenParaUpload } from '../../comprimirImagen'
+import { prepararEsquemaParaUpload, prepararImagenParaUpload } from '../../comprimirImagen'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
@@ -86,7 +86,9 @@ export default function PptoSincroSicoeLoteModal({
     const next = []
     for (const file of files) {
       try {
-        const prepared = await prepararImagenParaUpload(file)
+        const prepared = origen === 'esquema'
+          ? await prepararEsquemaParaUpload(file)
+          : await prepararImagenParaUpload(file)
         const named = prepared instanceof File
           ? prepared
           : new File([prepared], file.name || `grafico-${Date.now()}.jpg`, {
