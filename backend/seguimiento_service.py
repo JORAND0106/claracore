@@ -2031,7 +2031,7 @@ def compromisos_abiertos_contrato(
     acta_ids = list({int(r["acta_id"]) for r in rows if r.get("acta_id")})
     actas_map: Dict[int, dict] = {}
     if acta_ids:
-        select_cols = "id, consecutivo, fecha_reunion, tipo_acta, orden_del_dia"
+        select_cols = "id, consecutivo, fecha_reunion, tipo_acta, orden_del_dia, elaborador_id, elaborador_nombre"
         try:
             arows = (
                 sb.table("seguimiento_acta")
@@ -2044,7 +2044,7 @@ def compromisos_abiertos_contrato(
         except Exception:
             arows = (
                 sb.table("seguimiento_acta")
-                .select("id, consecutivo, fecha_reunion, orden_del_dia")
+                .select("id, consecutivo, fecha_reunion, orden_del_dia, elaborador_id, elaborador_nombre")
                 .in_("id", acta_ids)
                 .execute()
                 .data
@@ -2077,6 +2077,8 @@ def compromisos_abiertos_contrato(
         r["acta_fecha"] = a.get("fecha_reunion") if a else None
         r["acta_numero"] = f"Acta Nº {a['consecutivo']}" if a and a.get("consecutivo") is not None else None
         r["acta_tipo"] = origen_tipo if a else None
+        r["acta_elaborador_id"] = a.get("elaborador_id") if a else None
+        r["acta_elaborador_nombre"] = a.get("elaborador_nombre") if a else None
         out.append(r)
     return out
 
@@ -4792,14 +4794,24 @@ def list_bandeja(
     acta_ids = list({int(r["acta_id"]) for r in out if r.get("acta_id") and r.get("origen") == "compromiso"})
     actas_map: Dict[int, dict] = {}
     if acta_ids:
-        arows = (
-            sb.table("seguimiento_acta")
-            .select("id, consecutivo, fecha_reunion")
-            .in_("id", acta_ids)
-            .execute()
-            .data
-            or []
-        )
+        try:
+            arows = (
+                sb.table("seguimiento_acta")
+                .select("id, consecutivo, fecha_reunion, elaborador_id, elaborador_nombre")
+                .in_("id", acta_ids)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            arows = (
+                sb.table("seguimiento_acta")
+                .select("id, consecutivo, fecha_reunion")
+                .in_("id", acta_ids)
+                .execute()
+                .data
+                or []
+            )
         actas_map = {int(a["id"]): a for a in arows}
     creator_ids = list({int(r["created_by"]) for r in out if r.get("created_by")})
     creators: Dict[int, dict] = {}
@@ -4813,6 +4825,8 @@ def list_bandeja(
                 r["acta_consecutivo"] = a.get("consecutivo")
                 r["acta_fecha"] = a.get("fecha_reunion")
                 r["acta_numero"] = f"Acta Nº {a.get('consecutivo')}"
+                r["acta_elaborador_id"] = a.get("elaborador_id")
+                r["acta_elaborador_nombre"] = a.get("elaborador_nombre")
         if r.get("created_by") and not r.get("created_by_nombre"):
             c = creators.get(int(r["created_by"]))
             if c:
@@ -4848,18 +4862,28 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
 
     Si se indica checklist_id en una tarea, la notificación queda anclada al sub-ítem
     (columna Notificar a) y no altera destinatarios/cumplimiento del nivel Tarea.
+
+    En compromisos, la asignación formal (cambio de responsable) solo la pueden
+    hacer el elaborador del acta o el Desarrollador.
     """
     item = get_item(sb, item_id)
     es_dev = es_desarrollador_seguimiento(current_user)
-    if (
+    modo = (data.get("relacion_destinatario") or data.get("modo") or "").strip().lower()
+    if modo not in ("asignacion", "referencia"):
+        raise ValueError("Indique si es asignación formal o referencia")
+
+    # Compromiso: reasignar responsable → solo elaborador / Dev (también vía destinar).
+    if (item.get("origen") or "") == "compromiso" and modo == "asignacion":
+        _assert_puede_reasignar_responsable_compromiso(
+            sb, item, user_id, current_user,
+        )
+    elif (
         not es_dev
         and int(item.get("created_by") or 0) != int(user_id)
         and int(item.get("asignado_a_id") or 0) != int(user_id)
     ):
         raise ValueError("No puede destinar este ítem")
-    modo = (data.get("relacion_destinatario") or data.get("modo") or "").strip().lower()
-    if modo not in ("asignacion", "referencia"):
-        raise ValueError("Indique si es asignación formal o referencia")
+
     dest_id = int(data["destinatario_id"])
     dest = _usuario_row(sb, dest_id)
     if not dest:
@@ -4902,6 +4926,17 @@ def destinar_item(sb, item_id: int, user_id: int, current_user: dict, data: dict
             entidad_id=str(item_id),
         )
         return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
+
+    # Compromiso + asignación formal: usar el flujo dedicado (trazabilidad + limpia externo).
+    if (item.get("origen") or "") == "compromiso" and modo == "asignacion":
+        return reasignar_responsable_compromiso(
+            sb,
+            item_id,
+            user_id,
+            current_user,
+            nuevo_asignado_id=dest_id,
+            nuevo_asignado_nombre=nombre,
+        )
 
     prev_asignado = int(item.get("asignado_a_id") or 0)
     patch: Dict[str, Any] = {
@@ -5152,6 +5187,134 @@ def actualizar_fecha_compromiso(
         "fecha_compromiso_corregida",
         user_id,
         {"fecha_vencimiento": fv.isoformat(), "hora_vencimiento": hora},
+    )
+    return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
+
+
+def _assert_puede_reasignar_responsable_compromiso(
+    sb,
+    item: dict,
+    user_id: int,
+    current_user: Optional[dict] = None,
+) -> dict:
+    """
+    Solo el elaborador del acta del compromiso o el Desarrollador pueden
+    reasignar el responsable. Aplica aunque el acta esté sellada (no edita el acta).
+    Devuelve el acta asociada.
+    """
+    if (item.get("origen") or "") != "compromiso":
+        raise ValueError("Solo aplica a compromisos de acta")
+    if not item.get("acta_id"):
+        raise ValueError("El compromiso no está vinculado a un acta")
+    acta = get_acta(sb, int(item["acta_id"]), item.get("contrato_id"))
+    if es_desarrollador_seguimiento(current_user):
+        return acta
+    elab = acta.get("elaborador_id")
+    if elab is None or int(elab) != int(user_id):
+        raise ValueError(
+            "Solo el elaborador del acta o el Desarrollador pueden reasignar "
+            "el responsable del compromiso"
+        )
+    return acta
+
+
+def reasignar_responsable_compromiso(
+    sb,
+    item_id: int,
+    user_id: int,
+    current_user: dict,
+    *,
+    nuevo_asignado_id: int,
+    nuevo_asignado_nombre: Optional[str] = None,
+) -> dict:
+    """
+    Reasigna el responsable (comprometido) de un compromiso.
+    Conserva historial (fecha, estado, acta); solo cambia asignado_a_*.
+    Registra trazabilidad: quién, cuándo, de quién a quién.
+    """
+    item = get_item(sb, item_id)
+    acta = _assert_puede_reasignar_responsable_compromiso(
+        sb, item, user_id, current_user,
+    )
+    try:
+        dest_id = int(nuevo_asignado_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Debe indicar un usuario registrado de destino") from exc
+    if dest_id <= 0:
+        raise ValueError("Debe indicar un usuario registrado de destino")
+
+    dest = _usuario_row(sb, dest_id)
+    if not dest:
+        raise ValueError("Usuario de destino no encontrado")
+    cid = item.get("contrato_id")
+    if cid is not None:
+        # Usuario registrado activo del contrato (no catálogo externo).
+        dest = _usuario_contrato_para_reemplazo(sb, int(cid), dest_id)
+
+    nombre = (nuevo_asignado_nombre or "").strip() or _nombre_usuario(dest) or (
+        dest.get("email") or f"Usuario #{dest_id}"
+    )
+    try:
+        prev_id = int(item.get("asignado_a_id") or 0) or None
+    except (TypeError, ValueError):
+        prev_id = None
+    prev_nombre = (item.get("asignado_a_nombre") or "").strip() or None
+    prev_ext = item.get("asignado_externo_id")
+
+    if prev_id == dest_id and prev_ext is None:
+        return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
+
+    libres = dict(item.get("campos_libres") or {}) if isinstance(item.get("campos_libres"), dict) else {}
+    libres.pop("asignado_externo", None)
+    libres.pop("externo_id", None)
+    libres.pop("asignado_email", None)
+
+    now = _now_utc().isoformat()
+    patch: Dict[str, Any] = {
+        "asignado_a_id": dest_id,
+        "asignado_a_nombre": str(nombre)[:200],
+        "relacion_destinatario": "asignacion",
+        "referido_a_id": None,
+        "referido_a_nombre": None,
+        "campos_libres": libres,
+        "updated_at": now,
+    }
+    if _schema_has(sb, "asignado_externo_id"):
+        patch["asignado_externo_id"] = None
+
+    try:
+        sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+    except Exception as exc:
+        if "asignado_externo_id" in patch and _is_missing_column_error(exc, "asignado_externo_id"):
+            _SCHEMA_CAPS["asignado_externo_id"] = None
+            patch.pop("asignado_externo_id", None)
+            sb.table("seguimiento_item").update(patch).eq("id", int(item_id)).execute()
+        else:
+            raise
+
+    _registrar_evento(sb, int(item_id), "compromiso_reasignado", user_id, {
+        "de_asignado_id": prev_id,
+        "de_asignado_nombre": prev_nombre,
+        "de_asignado_externo_id": int(prev_ext) if prev_ext is not None else None,
+        "a_asignado_id": dest_id,
+        "a_asignado_nombre": str(nombre)[:200],
+        "acta_id": item.get("acta_id"),
+        "reasignado_por_id": int(user_id),
+        "reasignado_en": now,
+    })
+
+    _notificar_compromiso_asignado(
+        sb,
+        destinatario_id=dest_id,
+        remitente_id=user_id,
+        titulo=item.get("titulo") or "",
+        fecha_vencimiento=item.get("fecha_vencimiento"),
+        contrato_id=item.get("contrato_id"),
+        item_id=item_id,
+        acta=acta,
+        reasignacion=True,
+        hora_vencimiento=item.get("hora_vencimiento"),
+        descripcion=item.get("descripcion"),
     )
     return get_item_detalle(sb, item_id, user_id=user_id, current_user=current_user)
 

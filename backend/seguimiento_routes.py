@@ -65,6 +65,7 @@ from seguimiento_service import (
     proximo_consecutivo,
     redaccion_asistida_clara,
     registrar_firma_asistente,
+    reasignar_responsable_compromiso,
     reemplazar_externo_por_usuario,
     revertir_acta_a_borrador,
     revisar_justificacion,
@@ -284,6 +285,11 @@ class FechaCompromisoBody(BaseModel):
     hora_vencimiento: Optional[str] = None
 
 
+class ReasignarResponsableBody(BaseModel):
+    asignado_a_id: int = Field(..., description="Usuario registrado que será el nuevo responsable")
+    asignado_a_nombre: Optional[str] = None
+
+
 class JustificacionBody(BaseModel):
     motivo: str = Field(..., min_length=5)
     nueva_fecha_vencimiento: str
@@ -468,6 +474,31 @@ def route_fecha_compromiso(
             current_user=current_user,
         )
         registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_compromiso_fecha", str(item_id), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.post("/items/{item_id}/reasignar-responsable")
+def route_reasignar_responsable(
+    item_id: int, body: ReasignarResponsableBody, current_user=Depends(get_current_user)
+):
+    """Reasigna el responsable de un compromiso (solo elaborador del acta o Desarrollador)."""
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        row = reasignar_responsable_compromiso(
+            supabase,
+            item_id,
+            _uid(current_user),
+            current_user,
+            nuevo_asignado_id=body.asignado_a_id,
+            nuevo_asignado_nombre=body.asignado_a_nombre,
+        )
+        registrar_log(
+            current_user, "EDITAR", "SEGUIMIENTO",
+            "seguimiento_compromiso_reasignar", str(item_id),
+            {"asignado_a_id": body.asignado_a_id},
+        )
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc

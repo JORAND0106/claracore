@@ -446,18 +446,34 @@ export default function ActaCompromisosAbiertosTable({
                         >
                           {destLabel}
                         </span>
-                        {(esDev || Number(c.created_by) === Number(usuario?.id) || Number(c.solicitante_id) === Number(usuario?.id)) && puedeEditar && (
-                          <button
-                            type="button"
-                            style={iconBtn(t)}
-                            title="Notificar a (asignar o enviar referencia)"
-                            aria-label="Notificar a"
-                            disabled={busy}
-                            onClick={() => openPanel('notify', c)}
-                          >
-                            <IconNotify />
-                          </button>
-                        )}
+                        {(() => {
+                          const esComp = String(c.origen || '').toLowerCase() !== 'tarea'
+                          const elabId = c.acta_elaborador_id ?? c.acta?.elaborador_id
+                          const puedeReasignar = esComp && puedeEditar && (
+                            esDev || (elabId != null && Number(elabId) === Number(usuario?.id))
+                          )
+                          const puedeRef = puedeEditar && (
+                            esDev
+                            || Number(c.created_by) === Number(usuario?.id)
+                            || Number(c.solicitante_id) === Number(usuario?.id)
+                            || puedeReasignar
+                          )
+                          if (!puedeReasignar && !puedeRef) return null
+                          return (
+                            <button
+                              type="button"
+                              style={iconBtn(t)}
+                              title={puedeReasignar
+                                ? 'Reasignar responsable o notificar por referencia'
+                                : 'Notificar por referencia'}
+                              aria-label={puedeReasignar ? 'Reasignar responsable' : 'Notificar a'}
+                              disabled={busy}
+                              onClick={() => openPanel('notify', c)}
+                            >
+                              <IconNotify />
+                            </button>
+                          )
+                        })()}
                       </div>
                     </td>
                     <td data-label="Acciones" style={{ ...td, whiteSpace: 'nowrap' }}>
@@ -593,7 +609,7 @@ function ActionPanel({
   t, api, panel, usuario, usuarios, viewportCompact, onClose, onChanged, setError, onPickFile,
 }) {
   const { type, item } = panel
-  const [loading, setLoading] = useState(['comment', 'postpone', 'adjuntos'].includes(type))
+  const [loading, setLoading] = useState(['comment', 'postpone', 'adjuntos', 'notify'].includes(type))
   const [detail, setDetail] = useState(null)
   const [comentario, setComentario] = useState('')
   const [justForm, setJustForm] = useState({ motivo: '', nueva_fecha_vencimiento: '' })
@@ -608,7 +624,7 @@ function ActionPanel({
 
   useEffect(() => {
     let cancelled = false
-    if (['comment', 'postpone', 'adjuntos'].includes(type)) {
+    if (['comment', 'postpone', 'adjuntos', 'notify'].includes(type)) {
       setLoading(true)
       api.getItem(item.id).then((d) => {
         if (!cancelled) setDetail(d)
@@ -631,9 +647,18 @@ function ActionPanel({
     comment: 'Comentarios',
     postpone: 'Solicitar aplazamiento',
     pdf: 'PDF del acta de origen',
-    notify: 'Notificar a',
+    notify: 'Responsable / notificación',
     adjuntos: 'Adjuntos / evidencias',
   }[type] || 'Detalle'
+
+  const esCompromisoPanel = String(item.origen || '').toLowerCase() !== 'tarea'
+  const elabIdPanel = item.acta_elaborador_id
+    ?? item.acta?.elaborador_id
+    ?? detail?.acta?.elaborador_id
+  const puedeReasignarPanel = esCompromisoPanel && (
+    esDesarrolladorUsuario(usuario)
+    || (elabIdPanel != null && Number(elabIdPanel) === Number(usuario?.id))
+  )
 
   const loadPdf = async () => {
     if (!item.acta_id || pdfBusy) return
@@ -949,49 +974,56 @@ function ActionPanel({
         )}
 
         {type === 'notify' && (
+          loading ? <div style={{ color: t.textMuted }}>Cargando…</div> : (
           <>
             <p style={{ margin: '0 0 10px', fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-              Destinatario actual: <b style={{ color: t.text }}>{item.asignado_a_nombre || '—'}</b>
+              Responsable actual:{' '}
+              <b style={{ color: t.text }}>
+                {(detail?.asignado_a_nombre || item.asignado_a_nombre) || '—'}
+              </b>
             </p>
             <UserSearchSelect
               t={t}
               usuarios={usuarios}
               mode="strict"
-              placeholder="Buscar a quién notificar…"
+              placeholder={puedeReasignarPanel ? 'Buscar nuevo responsable…' : 'Buscar a quién notificar…'}
               style={inp(t)}
               onSelect={setDestPick}
             />
             {destPick && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-                <button
-                  type="button"
-                  disabled={busy}
-                  style={primary(t)}
-                  onClick={async () => {
-                    setBusy(true)
-                    try {
-                      await api.destinarItem(item.id, {
-                        destinatario_id: destPick.id,
-                        destinatario_nombre: nombreUser(destPick),
-                        relacion_destinatario: 'asignacion',
-                      })
-                      await onChanged?.()
-                      onClose()
-                    } catch (e) {
-                      setLocalErr(e.message || 'No se pudo notificar')
-                    } finally {
-                      setBusy(false)
-                    }
-                  }}
-                >
-                  Asignación formal
-                </button>
+                {puedeReasignarPanel && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    style={primary(t)}
+                    onClick={async () => {
+                      setBusy(true)
+                      setLocalErr('')
+                      try {
+                        await api.reasignarResponsable(item.id, {
+                          asignado_a_id: destPick.id,
+                          asignado_a_nombre: nombreUser(destPick),
+                        })
+                        await onChanged?.()
+                        onClose()
+                      } catch (e) {
+                        setLocalErr(e.message || 'No se pudo reasignar')
+                      } finally {
+                        setBusy(false)
+                      }
+                    }}
+                  >
+                    Reasignar responsable
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={busy}
                   style={ghost(t)}
                   onClick={async () => {
                     setBusy(true)
+                    setLocalErr('')
                     try {
                       await api.destinarItem(item.id, {
                         destinatario_id: destPick.id,
@@ -1011,7 +1043,13 @@ function ActionPanel({
                 </button>
               </div>
             )}
+            {puedeReasignarPanel && (
+              <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
+                La reasignación conserva fecha, estado e historial; solo cambia el responsable.
+              </div>
+            )}
           </>
+          )
         )}
       </div>
     </div>
