@@ -415,6 +415,43 @@ def _notas_planilla_para_excel(calculo: Optional[dict], planilla: Optional[dict]
     return lines
 
 
+# Firmas / pie: el inventario ya mergea A63:G63 y H63:N63 (y 64–66).
+# El bloque Notas NO puede llegar a la fila 63 — merges solapados corrompen el OOXML
+# y Excel pide «recuperar contenido» al abrir el .xlsx.
+NOTAS_LAST_ROW = 62
+FIRMAS_FIRST_ROW = 63
+
+
+def _merge_range_safe(ws, *, start_row: int, end_row: int, start_column: int, end_column: int) -> None:
+    """Merge sin solapar rangos existentes (evita xlsx corrupto / repair de Excel)."""
+    if end_row < start_row or end_column < start_column:
+        return
+    # Quitar merges del inventario (u otros) que intersecten el rango pedido.
+    overlapping = []
+    for rng in list(ws.merged_cells.ranges):
+        if not (
+            rng.max_col < start_column
+            or rng.min_col > end_column
+            or rng.max_row < start_row
+            or rng.min_row > end_row
+        ):
+            overlapping.append(str(rng))
+    for ref in overlapping:
+        try:
+            ws.unmerge_cells(ref)
+        except Exception:
+            pass
+    try:
+        ws.merge_cells(
+            start_row=start_row,
+            start_column=start_column,
+            end_row=end_row,
+            end_column=end_column,
+        )
+    except Exception:
+        pass
+
+
 def _write_bloque_notas(
     ws,
     *,
@@ -425,32 +462,29 @@ def _write_bloque_notas(
     """
     Bloque «Notas» entre tablas de cantidades y firmas (fila 64).
     Reserva varias filas para notas dinámicas y futuras anotaciones manuales.
+    Termina en NOTAS_LAST_ROW (62) para no solapar merges A63:G63 / H63:N63.
     """
     start = max(int(after_row or 51) + 2, 53)
     max_start = 56
     start = min(start, max_start)
-    end = 63
+    end = NOTAS_LAST_ROW
     if end < start:
         end = start
 
     notas = _notas_planilla_para_excel(calculo, planilla)
     _set(ws, f"A{start}", "Notas")
     _style(ws, f"A{start}", font=FONT_LABEL, fill=FILL_HDR, border=THIN)
-    try:
-        ws.merge_cells(start_row=start, start_column=1, end_row=start, end_column=14)
-    except Exception:
-        pass
+    _merge_range_safe(
+        ws, start_row=start, end_row=start, start_column=1, end_column=14,
+    )
 
     cuerpo = "\n".join(f"• {n}" for n in notas) if notas else ""
     body_row = start + 1
     body_end = end
     _set(ws, f"A{body_row}", cuerpo)
-    try:
-        ws.merge_cells(
-            start_row=body_row, start_column=1, end_row=body_end, end_column=14,
-        )
-    except Exception:
-        pass
+    _merge_range_safe(
+        ws, start_row=body_row, end_row=body_end, start_column=1, end_column=14,
+    )
     cell = ws.cell(row=body_row, column=1)
     cell.alignment = Alignment(wrap_text=True, vertical="top", horizontal="left")
     cell.font = Font(name="Arial", size=9)
