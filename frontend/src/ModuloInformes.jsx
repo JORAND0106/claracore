@@ -1,4 +1,4 @@
-import { useState, useEffect, useId, useRef } from 'react'
+import { useState, useEffect, useId, useRef, useMemo } from 'react'
 import CcModalBrandHeader from './components/CcModalBrandHeader'
 import { API_BASE as API, API_FALLBACK } from './apiBase'
 import { formatCOP } from './utils/formatCOP'
@@ -10,6 +10,16 @@ import {
 } from './informesVistaPreviaPdf'
 import { decidirPollEstadoJobPdf } from './informesPdfJobPoll'
 import { pathConFiltroSubAprobacion } from './informesSubAprobacionFiltro'
+import {
+  INFORMES_GRUPOS,
+  informesSheetStyles,
+  informesSheetCssVars,
+  InformesBreadcrumb,
+  InformesGrupoPanel,
+  InformesZona,
+  InformesParamTable,
+  InformesFormatosTable,
+} from './informes/InformesLayout'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -2802,6 +2812,83 @@ export default function ModuloInformes({
     border: `1px solid ${t.primary}40`,
     boxShadow: `0 12px 28px ${t.primary}18`,
   }
+  const sheetSub = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.sub.accent), [t])
+  const sheetSem = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.sem.accent), [t])
+  const sheetGer = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.ger.accent), [t])
+  const sheetMes = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.mes.accent), [t])
+  const sheetEnt = useMemo(() => informesSheetStyles(t, INFORMES_GRUPOS.ent.accent), [t])
+  const sheetRoot = useMemo(() => informesSheetStyles(t, t?.primary), [t])
+  const cssVarsSub = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.sub.accent), [t])
+  const cssVarsSem = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.sem.accent), [t])
+  const cssVarsGer = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.ger.accent), [t])
+  const cssVarsMes = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.mes.accent), [t])
+  const cssVarsEnt = useMemo(() => informesSheetCssVars(t, INFORMES_GRUPOS.ent.accent), [t])
+
+  const ubicacionInformes = useMemo(() => {
+    if (formatoCorte001Abierto) return { grupo: 'sub', formato: 'CC-SUB-001', nombre: 'Informe corte de subcontratista' }
+    if (formatoMemorias002Abierto) return { grupo: 'sub', formato: 'CC-SUB-002', nombre: 'Memoria por ítem (corte)' }
+    if (formatoSem001Abierto) return { grupo: 'sem', formato: 'CC-SEM-001', nombre: 'Informe ejecución semanal' }
+    if (formatoSem002Abierto) return { grupo: 'sem', formato: 'CC-SEM-002', nombre: 'Memorias corte semanal' }
+    if (formatoGer001Abierto) return { grupo: 'ger', formato: 'CC-GER-001', nombre: 'Informe de gerencia' }
+    if (formatoMes001Abierto) return { grupo: 'mes', formato: 'CC-MES-001', nombre: 'Informe ejecución mensual' }
+    if (formatoMes002Abierto) return { grupo: 'mes', formato: 'CC-MES-002', nombre: 'Memorias mensuales' }
+    if (formatosEntExtAbierto) return { grupo: 'ent', formato: 'FO-IDU-EO-04-V2', nombre: 'FO-IDU-EO-04-V2' }
+    if (formatosSubAbierto) return { grupo: 'sub', formato: null, nombre: null }
+    if (formatosSemAbierto) return { grupo: 'sem', formato: null, nombre: null }
+    if (formatosInformeGerAbierto) return { grupo: 'ger', formato: null, nombre: null }
+    if (formatosMesAbierto) return { grupo: 'mes', formato: null, nombre: null }
+    return null
+  }, [
+    formatoCorte001Abierto, formatoMemorias002Abierto,
+    formatoSem001Abierto, formatoSem002Abierto,
+    formatoGer001Abierto, formatoMes001Abierto, formatoMes002Abierto,
+    formatosEntExtAbierto, formatosSubAbierto, formatosSemAbierto,
+    formatosInformeGerAbierto, formatosMesAbierto,
+  ])
+
+  function cerrarFormatoActivo() {
+    setFormatoCorte001Abierto(false)
+    setFormatoMemorias002Abierto(false)
+    setFormatoSem001Abierto(false)
+    setFormatoSem002Abierto(false)
+    setFormatoGer001Abierto(false)
+    setFormatoMes001Abierto(false)
+    setFormatoMes002Abierto(false)
+  }
+
+  function irAGrupoInformes(grupoId) {
+    cerrarFormatoActivo()
+    setFormatosSubAbierto(grupoId === 'sub')
+    setFormatosSemAbierto(grupoId === 'sem')
+    setFormatosInformeGerAbierto(grupoId === 'ger')
+    setFormatosMesAbierto(grupoId === 'mes')
+    setFormatosEntExtAbierto(grupoId === 'ent')
+  }
+
+  function irARaizInformes() {
+    cerrarFormatoActivo()
+    setFormatosSubAbierto(false)
+    setFormatosSemAbierto(false)
+    setFormatosInformeGerAbierto(false)
+    setFormatosMesAbierto(false)
+    setFormatosEntExtAbierto(false)
+  }
+
+  function abrirFormatoEnGrupo(grupoId, codigo) {
+    setFormatosSubAbierto(grupoId === 'sub')
+    setFormatosSemAbierto(grupoId === 'sem')
+    setFormatosInformeGerAbierto(grupoId === 'ger')
+    setFormatosMesAbierto(grupoId === 'mes')
+    setFormatosEntExtAbierto(grupoId === 'ent')
+    setFormatoCorte001Abierto(codigo === 'CC-SUB-001')
+    setFormatoMemorias002Abierto(codigo === 'CC-SUB-002')
+    setFormatoSem001Abierto(codigo === 'CC-SEM-001')
+    setFormatoSem002Abierto(codigo === 'CC-SEM-002')
+    setFormatoGer001Abierto(codigo === 'CC-GER-001')
+    setFormatoMes001Abierto(codigo === 'CC-MES-001')
+    setFormatoMes002Abierto(codigo === 'CC-MES-002')
+  }
+
   const sectionTitle = {
     fontSize: f.base + 'px', fontWeight: '800', color: t.text, marginBottom: '14px'
   }
@@ -2938,10 +3025,10 @@ export default function ModuloInformes({
     background: t.bg,
   }
   const tarjetaFormato = {
-    border: `1px solid ${t.border}`,
-    borderRadius: '10px',
+    border: `1px solid ${t.sheetGridBorder || t.border}`,
+    borderRadius: '4px',
     overflow: 'hidden',
-    background: `linear-gradient(180deg, ${t.primary}0a 0%, ${t.bgCard} 100%)`,
+    background: t.bgCard,
   }
   const tarjetaFormatoHead = {
     width: '100%',
@@ -2951,8 +3038,8 @@ export default function ModuloInformes({
     gap: '10px',
     padding: ui.pHead,
     border: 'none',
-    borderBottom: `1px solid ${t.border}`,
-    background: t.primary + '0c',
+    borderBottom: `1px solid ${t.sheetGridBorder || t.border}`,
+    background: t.sheetHeaderBg || `${t.primary}14`,
     cursor: 'pointer',
     textAlign: 'left',
     font: 'inherit',
@@ -3484,7 +3571,7 @@ export default function ModuloInformes({
   }
 
   return (
-    <div style={{ maxWidth: '1080px', margin: '0 auto', padding: '8px' }}>
+    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '8px' }}>
 
       <div style={{ marginBottom: '14px' }}>
         <div
@@ -3501,8 +3588,18 @@ export default function ModuloInformes({
             <div style={{ fontSize: f.title + 'px', fontWeight: '800', color: t.text }}>
               Informes
             </div>
-            <div style={{ fontSize: f.sub + 'px', color: t.textMuted, marginTop: '2px', lineHeight: 1.45 }}>
-              Vista previa del mismo PDF que genera el servidor (informe de corte y memorias por ítem).
+            <div
+              style={{
+                fontSize: 'var(--cc-body)',
+                color: sheetRoot.infoColor,
+                marginTop: '6px',
+                lineHeight: 1.55,
+                fontWeight: 400,
+                maxWidth: 640,
+              }}
+            >
+              Generación de formatos CCD por grupo: parámetros, vista previa PDF y descargas (PDF / Excel) según permiso.
+              Cada área de grupo tiene identidad propia; use la ruta de ubicación para orientarse.
             </div>
           </div>
           {biblioCcd.length > 0 && (
@@ -4144,6 +4241,33 @@ export default function ModuloInformes({
         </div>
       </div>
 
+      {ubicacionInformes && (
+        <InformesBreadcrumb
+          sheet={
+            ubicacionInformes.grupo === 'sub' ? sheetSub
+              : ubicacionInformes.grupo === 'sem' ? sheetSem
+                : ubicacionInformes.grupo === 'ger' ? sheetGer
+                  : ubicacionInformes.grupo === 'mes' ? sheetMes
+                    : sheetEnt
+          }
+          crumbs={[
+            { kind: 'root', label: 'Informes' },
+            {
+              kind: 'grupo',
+              grupoId: ubicacionInformes.grupo,
+              label: INFORMES_GRUPOS[ubicacionInformes.grupo]?.label || ubicacionInformes.grupo,
+            },
+            ...(ubicacionInformes.formato
+              ? [{ kind: 'formato', label: `${ubicacionInformes.formato}${ubicacionInformes.nombre ? ` — ${ubicacionInformes.nombre}` : ''}` }]
+              : []),
+          ]}
+          onGoRoot={irARaizInformes}
+          onGoGrupo={irAGrupoInformes}
+          onBack={ubicacionInformes.formato ? cerrarFormatoActivo : null}
+          backLabel={ubicacionInformes.formato ? '← Volver al grupo' : undefined}
+        />
+      )}
+
       {error && (
         <div style={{ background:'#fee2e2', border:'1px solid #fca5a5', borderRadius:'8px',
                       padding:'10px 14px', color:'#dc2626', fontSize: f.sub + 'px', marginBottom:'14px' }}>
@@ -4152,156 +4276,145 @@ export default function ModuloInformes({
       )}
 
       {mostrarBloqueFormatosSub && (
-      <div style={cardFormatosSub}>
-        <button
-          type="button"
-          onClick={toggleFormatosSub}
-          style={{
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-            padding: '0',
-            marginBottom: formatosSubAbierto ? '14px' : '0',
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            textAlign: 'left',
-            font: 'inherit',
-            borderBottom: formatosSubAbierto ? `1px solid ${t.border}` : 'none',
-            paddingBottom: formatosSubAbierto ? '14px' : '0',
-          }}
-        >
-          <span style={{ minWidth: 0 }}>
-            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
-              Formatos Subcontratista
-            </div>
-            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
-              Corte Subcontratista · vista previa PDF (CC-SUB-001 / CC-SUB-002). Cada formato en su tarjeta; el mismo patrón servirá para nuevos formatos.
-            </div>
-          </span>
-          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
-            {formatosSubAbierto ? '▼' : '▶'}
-          </span>
-        </button>
-
-        {formatosSubAbierto && (
-        <>
-        <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
-          «Vista previa» abre el PDF en una ventana dentro de la página (mismo documento que imprimirías o guardarías).
-        </div>
-
-        <div style={{ marginBottom: ui.gap + 'px' }}>
-          <label style={labelSub}>Subcontratista</label>
-          <select
-            style={selectSub}
-            value={subId}
-            onChange={onSubChange}
-            disabled={cargandoSub}
-          >
-            <option value=''>
-              {cargandoSub ? 'Cargando...' : subs.length === 0 ? 'Sin subcontratistas' : '— Selecciona —'}
-            </option>
-            {subs.map(s => (
-              <option key={s.id} value={s.id}>{s.razon_social}</option>
-            ))}
-          </select>
-          {subSel && (
-            <div style={infoBoxSub}>
-              <span><b>NIT:</b> {subSel.nit || '—'}</span>
-              <span><b>Contacto:</b> {subSel.nombre_contacto || '—'}</span>
-              <span><b>Tel:</b> {subSel.telefono || '—'}</span>
-            </div>
-          )}
-        </div>
+      <InformesGrupoPanel
+        sheet={sheetSub}
+        grupoMeta={INFORMES_GRUPOS.sub}
+        abierto={formatosSubAbierto}
+        onToggle={toggleFormatosSub}
+        styleVars={cssVarsSub}
+      >
+        <InformesZona sheet={sheetSub} titulo="Parámetros de generación">
+          <InformesParamTable
+            sheet={sheetSub}
+            rows={[
+              {
+                key: 'sub',
+                label: 'Subcontratista',
+                control: (
+                  <select style={sheetSub.cellSelect} value={subId} onChange={onSubChange} disabled={cargandoSub}>
+                    <option value="">
+                      {cargandoSub ? 'Cargando...' : subs.length === 0 ? 'Sin subcontratistas' : '— Selecciona —'}
+                    </option>
+                    {subs.map((s) => (
+                      <option key={s.id} value={s.id}>{s.razon_social}</option>
+                    ))}
+                  </select>
+                ),
+              },
+              ...(subSel ? [{
+                key: 'sub-meta',
+                label: 'Datos',
+                control: (
+                  <span style={{ fontSize: 'var(--cc-sm)', color: sheetSub.textMuted }}>
+                    NIT {subSel.nit || '—'} · {subSel.nombre_contacto || '—'} · {subSel.telefono || '—'}
+                  </span>
+                ),
+              }] : []),
+            ]}
+          />
+        </InformesZona>
 
         {subId && (
-          <div style={{ marginBottom: ui.gap + 'px' }}>
-            <label style={labelSub}>Corte</label>
-            <select
-              style={selectSub}
-              value={corteId}
-              onChange={onCorteChange}
-              disabled={cargandoCor}
-            >
-              <option value=''>
-                {cargandoCor ? 'Cargando cortes...' : cortes.length === 0 ? 'Sin cortes registrados' : '— Selecciona el corte —'}
-              </option>
-              {cortes.map(c => (
-                <option key={c.id} value={c.id}>
-                  Corte N° {c.consecutivo} · {fmtFecha(c.fecha_inicio)} → {fmtFecha(c.fecha_fin)} · {(c.tipo_periodo || '').toUpperCase()}
-                </option>
-              ))}
-            </select>
-            {corteSel && (
-              <div style={infoBoxSub}>
-                <span><b>Período:</b> {fmtFecha(corteSel.fecha_inicio)} → {fmtFecha(corteSel.fecha_fin)}</span>
-                <span><b>Tipo:</b> {(corteSel.tipo_periodo || '').toUpperCase()}</span>
-                <span><b>Corte N°:</b> {corteSel.consecutivo}</span>
-              </div>
-            )}
-          </div>
+          <InformesZona sheet={sheetSub} titulo="Corte y filtro">
+            <InformesParamTable
+              sheet={sheetSub}
+              rows={[
+                {
+                  key: 'corte',
+                  label: 'Corte',
+                  control: (
+                    <select style={sheetSub.cellSelect} value={corteId} onChange={onCorteChange} disabled={cargandoCor}>
+                      <option value="">
+                        {cargandoCor ? 'Cargando cortes...' : cortes.length === 0 ? 'Sin cortes registrados' : '— Selecciona el corte —'}
+                      </option>
+                      {cortes.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          Corte N° {c.consecutivo} · {fmtFecha(c.fecha_inicio)} → {fmtFecha(c.fecha_fin)} · {(c.tipo_periodo || '').toUpperCase()}
+                        </option>
+                      ))}
+                    </select>
+                  ),
+                },
+                ...(corteSel ? [{
+                  key: 'corte-meta',
+                  label: 'Periodo',
+                  control: (
+                    <span style={{ fontSize: 'var(--cc-sm)', color: sheetSub.textMuted }}>
+                      {fmtFecha(corteSel.fecha_inicio)} → {fmtFecha(corteSel.fecha_fin)} · {(corteSel.tipo_periodo || '').toUpperCase()} · N° {corteSel.consecutivo}
+                    </span>
+                  ),
+                }] : []),
+                {
+                  key: 'filtro',
+                  label: 'Registros',
+                  control: (
+                    <div role="group" aria-label="Filtro de aprobación del subcontratista" style={{ display: 'inline-flex', gap: 0 }}>
+                      {[
+                        { id: 'todo', label: 'Todo' },
+                        { id: 'aprobado', label: 'Aprobado' },
+                      ].map((opt) => {
+                        const activo = filtroSubAprobacion === opt.id
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            aria-pressed={activo}
+                            onClick={() => onFiltroSubAprobacionChange(opt.id)}
+                            style={{
+                              padding: '6px 12px',
+                              border: `1px solid ${sheetSub.border}`,
+                              background: activo ? sheetSub.accent : 'transparent',
+                              color: activo ? '#fff' : sheetSub.text,
+                              fontWeight: activo ? 700 : 500,
+                              fontSize: 'var(--cc-sm)',
+                              cursor: 'pointer',
+                              fontFamily: 'inherit',
+                            }}
+                            title={opt.id === 'todo' ? 'Todos los registros del corte' : 'Solo aprobados por el subcontratista'}
+                          >
+                            {opt.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </InformesZona>
         )}
 
-        {subId && (
-          <div style={{ marginBottom: ui.gap + 'px' }}>
-            <label style={labelSub}>Registros del corte</label>
-            <div
-              role="group"
-              aria-label="Filtro de aprobación del subcontratista"
-              style={{
-                display: 'inline-flex',
-                border: `1px solid ${t.border}`,
-                borderRadius: '8px',
-                overflow: 'hidden',
-                background: t.bgCard || t.bg,
-              }}
-            >
-              {[
-                { id: 'todo', label: 'Todo' },
-                { id: 'aprobado', label: 'Aprobado' },
-              ].map((opt) => {
-                const activo = filtroSubAprobacion === opt.id
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    aria-pressed={activo}
-                    onClick={() => onFiltroSubAprobacionChange(opt.id)}
-                    style={{
-                      padding: '7px 14px',
-                      border: 'none',
-                      borderRight: opt.id === 'todo' ? `1px solid ${t.border}` : 'none',
-                      background: activo ? t.primary : 'transparent',
-                      color: activo ? '#fff' : t.text,
-                      fontWeight: activo ? 800 : 600,
-                      fontSize: ui.body + 'px',
-                      cursor: 'pointer',
-                      minWidth: 88,
-                    }}
-                    title={
-                      opt.id === 'todo'
-                        ? 'Mostrar todos los registros del corte (aprobados y no aprobados)'
-                        : 'Solo registros ya aprobados por el subcontratista'
-                    }
-                  >
-                    {opt.label}
-                  </button>
-                )
-              })}
-            </div>
-            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '4px', lineHeight: 1.35 }}>
-              Por defecto «Aprobado». «Todo» incluye registros pendientes o no aprobados del mismo corte.
-            </div>
-          </div>
-        )}
+        <InformesZona sheet={sheetSub} titulo="Formatos del grupo">
+          <InformesFormatosTable
+            sheet={sheetSub}
+            formatoActivoCodigo={formatoCorte001Abierto ? 'CC-SUB-001' : formatoMemorias002Abierto ? 'CC-SUB-002' : null}
+            onAbrir={(cod) => abrirFormatoEnGrupo('sub', cod)}
+            formatos={[
+              ...(subCcd001Vis ? [{
+                codigo: 'CC-SUB-001',
+                nombre: 'Informe corte de subcontratista',
+                descripcion: 'Preacta / corte de cantidades aprobadas por subcontratista',
+                descargas: 'PDF · Excel',
+              }] : []),
+              ...(subCcd002Vis ? [{
+                codigo: 'CC-SUB-002',
+                nombre: 'Memoria por ítem (corte)',
+                descripcion: 'Detalle de cantidades y registro fotográfico por ítem',
+                descargas: 'PDF · Excel',
+              }] : []),
+            ]}
+          />
+        </InformesZona>
 
         {corteId && (
-          <div
+          <InformesZona
+            sheet={sheetSub}
+            titulo={formatoCorte001Abierto || formatoMemorias002Abierto
+              ? `Generación · ${formatoCorte001Abierto ? 'CC-SUB-001' : 'CC-SUB-002'}`
+              : 'Generación (seleccione un formato en la tabla)'}
+          >
+            <div
             style={{
-              borderTop: `1px solid ${t.border}`,
-              paddingTop: ui.gap + 'px',
               display: 'flex',
               flexDirection: 'column',
               gap: ui.gap + 'px',
@@ -4682,76 +4795,77 @@ export default function ModuloInformes({
             </div>
             )}
           </div>
+          </InformesZona>
         )}
-        </>
-        )}
-      </div>
+      </InformesGrupoPanel>
       )}
 
-      <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
-        <button
-          type="button"
-          onClick={toggleFormatosSem}
-          style={{
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-            padding: '0',
-            marginBottom: formatosSemAbierto ? '14px' : '0',
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            textAlign: 'left',
-            font: 'inherit',
-            borderBottom: formatosSemAbierto ? `1px solid ${t.border}` : 'none',
-            paddingBottom: formatosSemAbierto ? '14px' : '0',
-          }}
-        >
-          <span style={{ minWidth: 0 }}>
-            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
-              Formatos Semanales
-            </div>
-            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
-              Conciliación por semana (CC-SEM-001 / CC-SEM-002). Elige la semana y usa las mismas acciones que en Formatos Subcontratista.
-            </div>
-          </span>
-          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
-            {formatosSemAbierto ? '▼' : '▶'}
-          </span>
-        </button>
-
-        {formatosSemAbierto && (
-        <>
-        <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
-          Solo registros nivel 3 aprobados y bloqueados. Configura Elaboró, Revisó y Aprobó en la biblioteca CCD para cada código.
-        </div>
-
-        <div style={{ marginBottom: ui.gap + 'px' }}>
-          <label style={labelSub}>Semana</label>
-          <select
-            style={selectSub}
-            value={semanaConcId}
-            onChange={(e) => setSemanaConcId(e.target.value)}
-            disabled={cargandoSemanasConc}
-          >
-            <option value="">
-              {cargandoSemanasConc ? 'Cargando semanas…' : '— Selecciona la semana —'}
-            </option>
-            {semanasConc.map((s) => (
-              <option key={s.id} value={s.id}>
-                N° {s.numero_semana} · {fmtFecha(s.fecha_inicio)} → {fmtFecha(s.fecha_fin)}
-              </option>
-            ))}
-          </select>
-        </div>
+      <InformesGrupoPanel
+        sheet={sheetSem}
+        grupoMeta={INFORMES_GRUPOS.sem}
+        abierto={formatosSemAbierto}
+        onToggle={toggleFormatosSem}
+        styleVars={cssVarsSem}
+      >
+        <InformesZona sheet={sheetSem} titulo="Parámetros de generación">
+          <InformesParamTable
+            sheet={sheetSem}
+            rows={[
+              {
+                key: 'semana',
+                label: 'Semana',
+                control: (
+                  <select
+                    style={sheetSem.cellSelect}
+                    value={semanaConcId}
+                    onChange={(e) => setSemanaConcId(e.target.value)}
+                    disabled={cargandoSemanasConc}
+                  >
+                    <option value="">
+                      {cargandoSemanasConc ? 'Cargando semanas…' : '— Selecciona la semana —'}
+                    </option>
+                    {semanasConc.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        N° {s.numero_semana} · {fmtFecha(s.fecha_inicio)} → {fmtFecha(s.fecha_fin)}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+            ]}
+          />
+        </InformesZona>
+        <InformesZona sheet={sheetSem} titulo="Formatos del grupo">
+          <InformesFormatosTable
+            sheet={sheetSem}
+            formatoActivoCodigo={formatoSem001Abierto ? 'CC-SEM-001' : formatoSem002Abierto ? 'CC-SEM-002' : null}
+            onAbrir={(cod) => abrirFormatoEnGrupo('sem', cod)}
+            formatos={[
+              {
+                codigo: 'CC-SEM-001',
+                nombre: 'Informe ejecución semanal',
+                descripcion: 'Resumen por ítem y total — conciliación por semana de aprobación',
+                descargas: 'PDF · Excel',
+              },
+              {
+                codigo: 'CC-SEM-002',
+                nombre: 'Memorias corte semanal',
+                descripcion: 'Detalle y anexo fotográfico por ítem de la semana',
+                descargas: 'PDF · Excel',
+              },
+            ]}
+          />
+        </InformesZona>
 
         {semanaConcId && (
-          <div
+          <InformesZona
+            sheet={sheetSem}
+            titulo={formatoSem001Abierto || formatoSem002Abierto
+              ? `Generación · ${formatoSem001Abierto ? 'CC-SEM-001' : 'CC-SEM-002'}`
+              : 'Generación (seleccione un formato en la tabla)'}
+          >
+            <div
             style={{
-              borderTop: `1px solid ${t.border}`,
-              paddingTop: ui.gap + 'px',
               display: 'flex',
               flexDirection: 'column',
               gap: ui.gap + 'px',
@@ -5156,63 +5270,34 @@ export default function ModuloInformes({
               )}
             </div>
           </div>
+          </InformesZona>
         )}
-        </>
-        )}
-      </div>
+      </InformesGrupoPanel>
 
-      <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
-        <button
-          type="button"
-          onClick={toggleFormatosInformeGer}
-          style={{
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-            padding: '0',
-            marginBottom: formatosInformeGerAbierto ? '14px' : '0',
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            textAlign: 'left',
-            font: 'inherit',
-            borderBottom: formatosInformeGerAbierto ? `1px solid ${t.border}` : 'none',
-            paddingBottom: formatosInformeGerAbierto ? '14px' : '0',
-          }}
-        >
-          <span style={{ minWidth: 0 }}>
-            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
-              Informe de gerencia
-            </div>
-            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
-              <strong>CC-GER-001</strong> — matriz SICOE (4 columnas), acta de cobro vigente, totales de obra (AIU) y de ensayos
-              (IVA), y valor total del acta. Abre el bloque para detalle y acciones.
-            </div>
-          </span>
-          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
-            {formatosInformeGerAbierto ? '▼' : '▶'}
-          </span>
-        </button>
-        {formatosInformeGerAbierto && (
-        <div
-          style={{
-            border: `1px solid ${t.border}`,
-            borderRadius: '10px',
-            padding: '12px 14px',
-            marginBottom: ui.gap + 4 + 'px',
-            background: t.bgCard,
-            boxShadow: t.shadow || '0 1px 4px rgba(15, 23, 42, 0.08)',
-          }}
-        >
-          <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text, marginBottom: '6px' }}>CC-GER-001</div>
-          <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginBottom: ui.gap + 'px', lineHeight: 1.45, fontWeight: '500' }}>
-            Puedes abrir <strong>vista previa</strong> o descargar el <strong>PDF con sello</strong>, y registrar <strong>Elaboró / Revisó / Aprobó</strong> sobre el acta
-            RPO asociada. Incluye totales por sección, tasas de contrato (AIU, IVA) y el monto de cierre (valor total acta) en
-            <strong>columna 1</strong> (con la misma estructura en aprobados y pendientes en las otras columnas). «CCD» es el sello
-            de <strong>ClaraCore Documentación</strong> (código de documento; la biblioteca define estilo y firmas por código).
-          </div>
+      <InformesGrupoPanel
+        sheet={sheetGer}
+        grupoMeta={INFORMES_GRUPOS.ger}
+        abierto={formatosInformeGerAbierto}
+        onToggle={toggleFormatosInformeGer}
+        styleVars={cssVarsGer}
+      >
+        <>
+        <InformesZona sheet={sheetGer} titulo="Formatos del grupo">
+          <InformesFormatosTable
+            sheet={sheetGer}
+            formatoActivoCodigo={formatoGer001Abierto ? 'CC-GER-001' : null}
+            onAbrir={(cod) => abrirFormatoEnGrupo('ger', cod)}
+            formatos={[
+              {
+                codigo: 'CC-GER-001',
+                nombre: 'Informe de gerencia',
+                descripcion: 'Matriz SICOE 4 columnas, AIU/IVA y valor total del acta RPO',
+                descargas: 'PDF',
+              },
+            ]}
+          />
+        </InformesZona>
+        <InformesZona sheet={sheetGer} titulo="Contexto del periodo (matriz SICOE)">
           {gerMatrizCargando && (
             <div
               style={{
@@ -5374,120 +5459,110 @@ export default function ModuloInformes({
               )}
             </div>
           )}
-        </div>
-        )}
-      </div>
+        </InformesZona>
+        </>
+      </InformesGrupoPanel>
 
-      <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
-        <button
-          type="button"
-          onClick={toggleFormatosMes}
-          style={{
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-            padding: '0',
-            marginBottom: formatosMesAbierto ? '14px' : '0',
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            textAlign: 'left',
-            font: 'inherit',
-            borderBottom: formatosMesAbierto ? `1px solid ${t.border}` : 'none',
-            paddingBottom: formatosMesAbierto ? '14px' : '0',
-          }}
-        >
-          <span style={{ minWidth: 0 }}>
-            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
-              Preacta mensual (conciliación SICOE)
-            </div>
-            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
-              <strong>CC-MES-001 / 002</strong> — corte o detalle de cantidades aprobadas <strong>por un acta RPO</strong> que tú
-              eliges, con <strong>totales y cascada N1·N2·N3</strong> como en el módulo Actas (cierre real de aprobado, no solo
-              registro CCD de firma). Plantillas, firmas y colores CCD se configuran en la biblioteca del contrato.
-            </div>
-          </span>
-          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
-            {formatosMesAbierto ? '▼' : '▶'}
-          </span>
-        </button>
+      <InformesGrupoPanel
+        sheet={sheetMes}
+        grupoMeta={INFORMES_GRUPOS.mes}
+        abierto={formatosMesAbierto}
+        onToggle={toggleFormatosMes}
+        styleVars={cssVarsMes}
+      >
+        <InformesZona sheet={sheetMes} titulo="Parámetros de generación">
+          <InformesParamTable
+            sheet={sheetMes}
+            rows={[
+              {
+                key: 'acta',
+                label: 'Acta RPO',
+                control: (
+                  <select
+                    style={sheetMes.cellSelect}
+                    value={actaConcId}
+                    onChange={(e) => setActaConcId(e.target.value)}
+                  >
+                    <option value="">
+                      {actasConc.length === 0 ? 'Sin actas RPO en este contrato' : '— Selecciona el acta —'}
+                    </option>
+                    {actasConc.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        RPO {a.numero_rpo ?? '—'} · cons. {a.consecutivo ?? '—'}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+              ...(actaSel ? [{
+                key: 'acta-meta',
+                label: 'Datos acta',
+                control: (
+                  <span style={{ fontSize: 'var(--cc-sm)', color: sheetMes.textMuted }}>
+                    RPO {actaSel.numero_rpo ?? '—'} · Cons. {actaSel.consecutivo ?? '—'}
+                  </span>
+                ),
+              }] : []),
+              {
+                key: 'nivel',
+                label: 'Nivel aprobación',
+                control: (
+                  <select
+                    style={sheetMes.cellSelect}
+                    value={nivelAprobacionMes ?? ''}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10)
+                      setNivelAprobacionMes(Number.isFinite(v) ? v : null)
+                    }}
+                    disabled={cargandoNivelesMes || nivelesValidacionMes.length === 0}
+                    title="Filtra registros Aprobados en cascada hasta el nivel elegido. Por defecto: último nivel activo del contrato."
+                  >
+                    {cargandoNivelesMes && <option value="">Cargando niveles…</option>}
+                    {!cargandoNivelesMes && nivelesValidacionMes.length === 0 && (
+                      <option value="">Sin niveles configurados</option>
+                    )}
+                    {nivelesValidacionMes.map((n) => (
+                      <option key={n.nivel} value={n.nivel}>
+                        {n.encabezado || `Nivel ${n.nivel}`}
+                      </option>
+                    ))}
+                  </select>
+                ),
+              },
+            ]}
+          />
+        </InformesZona>
+        <InformesZona sheet={sheetMes} titulo="Formatos del grupo">
+          <InformesFormatosTable
+            sheet={sheetMes}
+            formatoActivoCodigo={formatoMes001Abierto ? 'CC-MES-001' : formatoMes002Abierto ? 'CC-MES-002' : null}
+            onAbrir={(cod) => abrirFormatoEnGrupo('mes', cod)}
+            formatos={[
+              {
+                codigo: 'CC-MES-001',
+                nombre: 'Informe ejecución mensual',
+                descripcion: 'Resumen por ítem y total — conciliación por acta RPO',
+                descargas: 'PDF · Excel',
+              },
+              {
+                codigo: 'CC-MES-002',
+                nombre: 'Memorias mensuales',
+                descripcion: 'Detalle y anexo fotográfico por ítem del acta',
+                descargas: 'PDF · Excel',
+              },
+            ]}
+          />
+        </InformesZona>
 
-        {formatosMesAbierto && (
-        <>
-        <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
-          Misma lógica de costo directo que la lista de actas (cascada N1·N2·N3). Configura Elaboró, Revisó y Aprobó en la biblioteca CCD para CC-MES-001 y CC-MES-002.
-        </div>
-
-        <div
-          style={{
-            fontSize: f.base + 'px',
-            fontWeight: '800',
-            color: t.text,
-            marginBottom: '8px',
-            marginTop: '2px',
-            letterSpacing: 0.2,
-          }}
-        >
-          Formato: CC-MES-001 (tabla) y CC-MES-002 (memorias)
-        </div>
-        <div style={{ marginBottom: ui.gap + 'px' }}>
-          <label style={labelSub}>Acta RPO (para preacta mensual)</label>
-          <select
-            style={selectSub}
-            value={actaConcId}
-            onChange={(e) => setActaConcId(e.target.value)}
+{actaConcId && (
+          <InformesZona
+            sheet={sheetMes}
+            titulo={formatoMes001Abierto || formatoMes002Abierto
+              ? `Generación · ${formatoMes001Abierto ? 'CC-MES-001' : 'CC-MES-002'}`
+              : 'Generación (seleccione un formato en la tabla)'}
           >
-            <option value="">
-              {actasConc.length === 0 ? 'Sin actas RPO en este contrato' : '— Selecciona el acta —'}
-            </option>
-            {actasConc.map((a) => (
-              <option key={a.id} value={a.id}>
-                RPO {a.numero_rpo ?? '—'} · cons. {a.consecutivo ?? '—'}
-              </option>
-            ))}
-          </select>
-          {actaSel && (
-            <div style={infoBoxSub}>
-              <span><b>RPO:</b> {actaSel.numero_rpo ?? '—'}</span>
-              <span><b>Cons.:</b> {actaSel.consecutivo ?? '—'}</span>
-            </div>
-          )}
-        </div>
-
-        <div style={{ marginBottom: ui.gap + 'px' }}>
-          <label style={labelSub}>Nivel de aprobación (cantidades Aprobadas)</label>
-          <select
-            style={selectSub}
-            value={nivelAprobacionMes ?? ''}
-            onChange={(e) => {
-              const v = parseInt(e.target.value, 10)
-              setNivelAprobacionMes(Number.isFinite(v) ? v : null)
-            }}
-            disabled={cargandoNivelesMes || nivelesValidacionMes.length === 0}
-            title="Filtra registros Aprobados en cascada hasta el nivel elegido. Por defecto: último nivel activo del contrato."
-          >
-            {cargandoNivelesMes && <option value="">Cargando niveles…</option>}
-            {!cargandoNivelesMes && nivelesValidacionMes.length === 0 && (
-              <option value="">Sin niveles configurados</option>
-            )}
-            {nivelesValidacionMes.map((n) => (
-              <option key={n.nivel} value={n.nivel}>
-                {n.encabezado || `Nivel ${n.nivel}`}
-              </option>
-            ))}
-          </select>
-          <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '4px', lineHeight: 1.35 }}>
-            Por defecto el último nivel activo del contrato. Al cambiar el nivel se regeneran tabla y memorias solo con lo aprobado hasta ese nivel.
-          </div>
-        </div>
-
-        {actaConcId && (
-          <div
+            <div
             style={{
-              borderTop: `1px solid ${t.border}`,
-              paddingTop: ui.gap + 'px',
               display: 'flex',
               flexDirection: 'column',
               gap: ui.gap + 'px',
@@ -5899,50 +5974,34 @@ export default function ModuloInformes({
               )}
             </div>
           </div>
+          </InformesZona>
         )}
-        </>
-        )}
-      </div>
+      </InformesGrupoPanel>
 
-      <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
-        <button
-          type="button"
-          onClick={() => setFormatosEntExtAbierto((v) => !v)}
-          style={{
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-            padding: '0',
-            marginBottom: formatosEntExtAbierto ? '14px' : '0',
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            textAlign: 'left',
-            font: 'inherit',
-            borderBottom: formatosEntExtAbierto ? `1px solid ${t.border}` : 'none',
-            paddingBottom: formatosEntExtAbierto ? '14px' : '0',
-          }}
-        >
-          <span style={{ minWidth: 0 }}>
-            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
-              Formatos Entidades Externas
-            </div>
-            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
-              Plantillas exigidas por la entidad contratante (p. ej. IDU). Vista previa sin datos de obra.
-            </div>
-          </span>
-          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
-            {formatosEntExtAbierto ? '▼' : '▶'}
-          </span>
-        </button>
-
-        {formatosEntExtAbierto && (
-          <>
-            <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
-              Configuración de firmas y colores (si aplica) sigue en la biblioteca CCD arriba; aquí solo la vista previa del diseño del formulario.
-            </div>
+      <InformesGrupoPanel
+        sheet={sheetEnt}
+        grupoMeta={INFORMES_GRUPOS.ent}
+        abierto={formatosEntExtAbierto}
+        onToggle={() => setFormatosEntExtAbierto((v) => !v)}
+        styleVars={cssVarsEnt}
+      >
+<>
+        <InformesZona sheet={sheetEnt} titulo="Formatos del grupo">
+          <InformesFormatosTable
+            sheet={sheetEnt}
+            formatoActivoCodigo="FO-IDU-EO-04-V2"
+            onAbrir={(cod) => abrirFormatoEnGrupo('ent', cod)}
+            formatos={[
+              {
+                codigo: 'FO-IDU-EO-04-V2',
+                nombre: 'FO-IDU-EO-04-V2',
+                descripcion: 'Formato entidad IDU — supervisor, subsistema, acta RPO y PDF con sello',
+                descargas: 'PDF',
+              },
+            ]}
+          />
+        </InformesZona>
+        <InformesZona sheet={sheetEnt} titulo="Generación · FO-IDU-EO-04-V2">
             <div style={tarjetaFormato}>
               <div
                 style={{
@@ -6199,9 +6258,9 @@ export default function ModuloInformes({
                 </div>
               </div>
             </div>
-          </>
-        )}
-      </div>
+        </InformesZona>
+        </>
+      </InformesGrupoPanel>
 
       {/* Modal orientar fotos FO-EO-04 (visor grande + carrete, antes del PDF) */}
       {foEo04OrientarModal && actaIdFoEo04 && (
