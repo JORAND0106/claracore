@@ -14144,21 +14144,38 @@ def _html_corte_sub_minima(contrato, sub, corte, items, total_costo, usuario_nom
 def _html_memoria_minima(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo, err_note: str) -> str:
     """Si la plantilla completa falla (datos raros / xhtml2pdf), al menos un PDF legible."""
     filas = ""
-    for r in registros:
+    plan = _memoria_plan_filas_detalle(registros)
+    unidad = str(item_info.get("unidad") or "").strip()
+    for entry in plan:
+        if entry.get("kind") == "subtramo":
+            tramo = str(entry.get("tramo") or "—")
+            sub_sum = sum(_sf(r.get("cantidad_total"), 0.0) for r in (entry.get("regs") or []))
+            filas += f"""<tr style="background:#dbeafe">
+          <td colspan="3" style="border:1px solid #999;padding:4px;text-align:right;font-weight:bold">Total tramo {_h(tramo)}</td>
+          <td style="border:1px solid #999;padding:4px;text-align:right;font-weight:bold">{_fn_cant(sub_sum)}</td>
+          <td style="border:1px solid #999;padding:4px;font-weight:bold">{_h(unidad)}</td>
+        </tr>"""
+            continue
+        r = entry.get("reg") or {}
         filas += f"""<tr>
           <td style="border:1px solid #999;padding:4px">{_h(r.get("numero_registro"))}</td>
-          <td style="border:1px solid #999;padding:4px">{_h(r.get("abs_inicio"))}</td>
-          <td style="border:1px solid #999;padding:4px">{_h(r.get("abs_final"))}</td>
+          <td style="border:1px solid #999;padding:4px">{_h(_memoria_abscisas_txt(r))}</td>
           <td style="border:1px solid #999;padding:4px">{_fn_cant(r.get("cantidad_total"))}</td>
           <td style="border:1px solid #999;padding:4px">{_h((r.get("observacion") or "")[:300])}</td>
+          <td style="border:1px solid #999;padding:4px">&nbsp;</td>
         </tr>"""
+    total_cant = sum(_sf(r.get("cantidad_total"), 0.0) for r in (registros or []))
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
 <body style="font-family:Arial,sans-serif;font-size:9pt;color:#111">
   <p style="color:#b45309;font-size:8pt">Vista simplificada (hubo un problema al armar el formato completo): {_h(err_note[:400])}</p>
   <h2 style="margin:0 0 8px 0">CC-SUB-002 · {_h(item_info.get("item_numero", ""))}</h2>
   <p><b>Contrato:</b> {_h(contrato.get("numero", ""))} &nbsp; <b>Sub:</b> {_h(sub.get("razon_social", ""))} &nbsp; <b>Corte:</b> {_h(corte.get("consecutivo", ""))}</p>
-  <p><b>Usuario:</b> {_h(usuario_nombre)} — {_h(usuario_cargo)}</p>
-  <table style="width:100%;border-collapse:collapse">{filas}</table>
+  <table border="1" cellpadding="4" style="border-collapse:collapse;width:100%">
+    <tr><th>N°</th><th>Abscisas</th><th>Cant tot</th><th>Observación</th><th>Und</th></tr>
+    {filas}
+    <tr style="background:#e5e7eb"><td colspan="2" align="right"><b>CANTIDAD TOTAL DEL ÍTEM</b></td><td align="right"><b>{_fn_cant(total_cant)}</b></td><td colspan="2"><b>{_h(unidad)}</b></td></tr>
+  </table>
+  <p>{_h(usuario_nombre)} — {_h(usuario_cargo)}</p>
 </body></html>"""
 
 
