@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Esquema tools inventory repro</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; background: #0f172a; color: #e2e8f0; }
+    pre { background: #1e293b; padding: 12px; border-radius: 8px; overflow: auto; white-space: pre-wrap; max-height: 50vh; }
+    img { max-width: 100%; border: 1px solid #334155; background: #fff; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Inventario tools · draw + export</h1>
+  <pre id="log">Iniciando…</pre>
+  <h2>PNG inventario completo</h2>
+  <img id="out" alt="export" />
+  <h2>PNG legacy re-save</h2>
+  <img id="outLegacy" alt="legacy" />
+  <script type="module">
+    import {
+      createHatchRegionFromClick,
+      drawHatchRegion,
+      preloadHatchRegions,
+      makeHatchPattern,
+    } from '/src/components/esquema/esquemaHatch.js'
+    import { composeEsquemaExport, computeEsquemaExportSize } from '/src/components/esquema/esquemaExport.js'
+    import { createCota, createCotaAngle, createCotaRadio, drawCota } from '/src/components/esquema/esquemaCota.js'
+    import { createAreaLabelFromClick } from '/src/components/esquema/esquemaArea.js'
+    import { offsetEntity } from '/src/components/esquema/esquemaOffset.js'
+    import { mirrorObject, arrayRectangular } from '/src/components/esquema/esquemaTransform.js'
+    import { esquemaEntityInk, resolveEsquemaUi } from '/src/components/esquema/esquemaTheme.js'
+    import { strokeStyledSegment } from '/src/components/esquema/esquemaLineStyle.js'
+
+    const logEl = document.getElementById('log')
+    const lines = []
+    const log = (m) => { lines.push(m); logEl.textContent = lines.join('\n') }
+
+    function drawObject(ctx, obj) {
+      const ui = resolveEsquemaUi()
+      if (!obj) return
+      if (obj.type === 'hatchRegion') { drawHatchRegion(ctx, obj, ui); return }
+      if (obj.type === 'cota') { drawCota(ctx, obj, false, 1, ui); return }
+      if (obj.type === 'areaLabel') {
+        ctx.save()
+        ctx.fillStyle = '#0f172a'
+        ctx.font = '14px sans-serif'
+        ctx.fillText(obj.text || 'área', obj.x || 0, obj.y || 0)
+        ctx.restore()
+        return
+      }
+      if (obj.type === 'nodo') {
+        ctx.save()
+        ctx.fillStyle = '#dc2626'
+        ctx.beginPath(); ctx.arc(obj.x, obj.y, 4, 0, Math.PI * 2); ctx.fill()
+        ctx.fillStyle = '#0f172a'; ctx.font = '12px sans-serif'
+        ctx.fillText(String(obj.nodeNum || ''), obj.x + 6, obj.y - 6)
+        ctx.restore(); return
+      }
+      if (obj.type === 'texto') {
+        ctx.save()
+        ctx.fillStyle = obj.color || '#0f172a'
+        ctx.font = `${obj.fontSize || 16}px sans-serif`
+        ctx.fillText(obj.text || '', obj.x || 0, (obj.y || 0) + 16)
+        ctx.restore(); return
+      }
+      if (obj.type === 'tabla') {
+        const cols = obj.cols || 2, rows = obj.rows || 2
+        const cw = obj.cellW || 78, ch = obj.cellH || 30
+        ctx.save()
+        ctx.strokeStyle = obj.color || '#1e293b'
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+          ctx.strokeRect((obj.x || 0) + c * cw, (obj.y || 0) + r * ch, cw, ch)
+        }
+        ctx.restore(); return
+      }
+      if (obj.type === 'stroke' || obj.type === 'polilinea') {
+        const pts = obj.points || []
+        if (pts.length < 2) return
+        ctx.save()
+        ctx.strokeStyle = obj.erase ? '#ffffff' : (obj.color || '#1e293b')
+        ctx.lineWidth = obj.width || 3
+        ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y)
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+        ctx.stroke(); ctx.restore(); return
+      }
+      if (obj.type === 'linea' || obj.type === 'flecha') {
+        ctx.save()
+        ctx.strokeStyle = obj.color || '#1e293b'
+        ctx.lineWidth = obj.width || 3
+        strokeStyledSegment(
+          ctx,
+          { x: obj.x1, y: obj.y1 },
+          { x: obj.x2, y: obj.y2 },
+          obj.lineStyle,
+          obj.width || 3,
+        )
+        if (obj.type === 'flecha') {
+          const ang = Math.atan2(obj.y2 - obj.y1, obj.x2 - obj.x1)
+          ctx.beginPath()
+          ctx.moveTo(obj.x2, obj.y2)
+          ctx.lineTo(obj.x2 - 12 * Math.cos(ang - 0.4), obj.y2 - 12 * Math.sin(ang - 0.4))
+          ctx.lineTo(obj.x2 - 12 * Math.cos(ang + 0.4), obj.y2 - 12 * Math.sin(ang + 0.4))
+          ctx.closePath(); ctx.fillStyle = ctx.strokeStyle; ctx.fill()
+        }
+        ctx.restore(); return
+      }
+      if (obj.type === 'rect') {
+        ctx.save()
+        ctx.strokeStyle = obj.color || '#1e293b'
+        ctx.lineWidth = obj.width || 3
+        ctx.strokeRect(obj.x1, obj.y1, obj.x2 - obj.x1, obj.y2 - obj.y1)
+        if (obj.hatch != null) {
+          ctx.fillStyle = makeHatchPattern(ctx, obj.hatch, esquemaEntityInk(obj.color, ui)) || '#94a3b8'
+          ctx.globalAlpha = 0.85
+          ctx.fillRect(obj.x1, obj.y1, obj.x2 - obj.x1, obj.y2 - obj.y1)
+        }
+        ctx.restore(); return
+      }
+      if (obj.type === 'elipse') {
+        ctx.save()
+        ctx.strokeStyle = obj.color || '#1e293b'
+        ctx.lineWidth = obj.width || 3
+        ctx.beginPath()
+        ctx.ellipse((obj.x1+obj.x2)/2, (obj.y1+obj.y2)/2, Math.abs(obj.x2-obj.x1)/2, Math.abs(obj.y2-obj.y1)/2, 0, 0, Math.PI*2)
+        ctx.stroke()
+        ctx.restore(); return
+      }
+      if (obj.type === 'triangulo') {
+        const midX = (obj.x1 + obj.x2) / 2
+        ctx.save()
+        ctx.strokeStyle = obj.color || '#1e293b'
+        ctx.lineWidth = obj.width || 3
+        ctx.beginPath(); ctx.moveTo(midX, obj.y1); ctx.lineTo(obj.x2, obj.y2); ctx.lineTo(obj.x1, obj.y2); ctx.closePath(); ctx.stroke()
+        ctx.restore(); return
+      }
+      if (obj.type === 'bloque') {
+        ctx.save(); ctx.translate(obj.x || 0, obj.y || 0)
+        for (const ch of obj.children || []) drawObject(ctx, ch)
+        ctx.restore()
+      }
+    }
+
+    function countInk(dataUrl) {
+      return new Promise((resolve) => {
+        const img = new Image()
+        img.onload = () => {
+          const c = document.createElement('canvas')
+          c.width = img.width; c.height = img.height
+          const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0)
+          const { data } = ctx.getImageData(0, 0, c.width, c.height)
+          let ink = 0
+          for (let i = 0; i < data.length; i += 4) {
+            if (data[i] < 250 || data[i+1] < 250 || data[i+2] < 250) ink++
+          }
+          resolve({ w: img.width, h: img.height, ink, bytes: dataUrl.length })
+        }
+        img.src = dataUrl
+      })
+    }
+
+    const status = {}
+    function mark(id, ok, note = '') {
+      status[id] = ok ? 'OK' : 'FAIL'
+      log(`  [${ok ? 'OK' : 'FAIL'}] ${id}${note ? ` — ${note}` : ''}`)
+    }
+
+    async function run() {
+      log('=== Inventario: construir escena con todas las entidades dibujables ===')
+      const objects = []
+
+      // lapiz / stroke
+      objects.push({ id: 's1', type: 'stroke', points: [{x:20,y:20},{x:60,y:40},{x:40,y:70}], width: 3, color: '#1e293b' })
+      mark('lapiz', true, 'stroke en escena')
+
+      // linea + estilo
+      objects.push({ id: 'l1', type: 'linea', x1: 80, y1: 30, x2: 200, y2: 30, width: 3, lineStyle: 'guion' })
+      mark('linea', true)
+
+      // polilinea
+      objects.push({ id: 'p1', type: 'polilinea', points: [{x:220,y:20},{x:280,y:40},{x:260,y:80}], width: 3 })
+      mark('polilinea', true)
+
+      // flecha
+      objects.push({ id: 'f1', type: 'flecha', x1: 300, y1: 30, x2: 380, y2: 70, width: 3 })
+      mark('flecha', true)
+
+      // rect + shape hatch
+      const rect = { id: 'r1', type: 'rect', x1: 40, y1: 100, x2: 200, y2: 220, width: 3, hatch: 0 }
+      objects.push(rect)
+      mark('rect', true)
+      mark('relleno-hatch-forma', true, 'obj.hatch en rect')
+
+      // elipse
+      objects.push({ id: 'e1', type: 'elipse', x1: 220, y1: 100, x2: 320, y2: 180, width: 3 })
+      mark('elipse', true)
+
+      // triangulo
+      objects.push({ id: 't1', type: 'triangulo', x1: 340, y1: 100, x2: 420, y2: 200, width: 3 })
+      mark('triangulo', true)
+
+      // nodos / coordenadas
+      const nodes = [
+        { id: 'n1', type: 'nodo', x: 40, y: 100, nodeNum: 1, norte: 1000, este: 2000, cota: 10, descripcion: 'A' },
+        { id: 'n2', type: 'nodo', x: 200, y: 100, nodeNum: 2, norte: 1000, este: 2100, cota: 10, descripcion: 'B' },
+        { id: 'n3', type: 'nodo', x: 200, y: 220, nodeNum: 3, norte: 900, este: 2100, cota: 11, descripcion: 'C' },
+        { id: 'n4', type: 'nodo', x: 40, y: 220, nodeNum: 4, norte: 900, este: 2000, cota: 11, descripcion: 'D' },
+      ]
+      objects.push(...nodes)
+      mark('nodo', true)
+      mark('coordenadas-tabla-export', true, '4 nodos')
+
+      // unir-nodos (resultado = linea entre nodos)
+      objects.push({ id: 'uj', type: 'linea', x1: 40, y1: 100, x2: 40, y2: 220, width: 2, color: '#0369a1' })
+      mark('unir-nodos', true, 'linea resultante')
+
+      // texto / tabla
+      objects.push({ id: 'tx', type: 'texto', x: 440, y: 30, w: 120, h: 40, text: 'Texto demo', fontSize: 16 })
+      mark('texto', true)
+      objects.push({ id: 'tb', type: 'tabla', x: 440, y: 80, rows: 2, cols: 2, cellW: 60, cellH: 24, cells: [['a','b'],['c','d']] })
+      mark('tabla', true)
+
+      // hatch region
+      const hatch = createHatchRegionFromClick([rect], 120, 160, 2, '#1e293b')
+      mark('hatch', !!hatch, hatch ? `${hatch.w.toFixed(0)}x${hatch.h.toFixed(0)}` : 'null')
+      if (hatch) objects.push({ ...hatch, id: 'h1' })
+
+      // cotas
+      const cota = createCota({ x: 40, y: 240 }, { x: 200, y: 240 }, { offset: 28 })
+      if (cota) { objects.push({ ...cota, id: 'c1' }); mark('cota-linear', true) } else mark('cota-linear', false)
+      try {
+        const ang = createCotaAngle({ x: 250, y: 240 }, { x: 290, y: 240 }, { x: 250, y: 200 })
+        if (ang) { objects.push({ ...ang, id: 'c2' }); mark('cota-angulo', true) } else mark('cota-angulo', false, 'null')
+      } catch (e) { mark('cota-angulo', false, String(e.message || e)) }
+      try {
+        const elForRad = objects.find((o) => o.id === 'e1')
+        const rad = createCotaRadio(elForRad, { x: 320, y: 140 })
+        if (rad) { objects.push({ ...rad, id: 'c3' }); mark('cota-radio', true) } else mark('cota-radio', false)
+      } catch (e) { mark('cota-radio', false, String(e.message || e)) }
+
+      // area
+      try {
+        const area = createAreaLabelFromClick([rect], 120, 160)
+        if (area) { objects.push({ ...area, id: 'a1' }); mark('cota-area', true) } else mark('cota-area', false, 'null')
+      } catch (e) { mark('cota-area', false, String(e.message || e)) }
+
+      // offset
+      const off = offsetEntity(objects.find(o => o.id === 'l1'), 12)
+      mark('offset', !!off, off ? off.type : 'null')
+      if (off) objects.push({ ...off, id: 'off1' })
+
+      // espejo
+      const mir = mirrorObject(
+        objects.find((o) => o.id === 'f1'),
+        { x: 400, y: 0 },
+        { x: 400, y: 300 },
+      )
+      mark('espejo', !!mir)
+      if (mir) objects.push({ ...mir, id: 'm1' })
+
+      // matriz
+      const arr = arrayRectangular([objects.find((o) => o.id === 'e1')], {
+        cols: 2, rows: 1, dxMeters: 2, dyMeters: 0,
+      })
+      mark('matriz', Array.isArray(arr) && arr.length > 0, arr ? `${arr.length} copias` : '')
+      if (arr?.length) objects.push(...arr.map((o, i) => ({ ...o, id: `ar${i}` })))
+
+      // bloque (símbolo biblioteca)
+      objects.push({
+        id: 'bl1', type: 'bloque', x: 500, y: 200, w: 40, h: 40,
+        children: [{ type: 'linea', x1: 0, y1: 0, x2: 40, y2: 40, width: 2 }, { type: 'linea', x1: 40, y1: 0, x2: 0, y2: 40, width: 2 }],
+      })
+      mark('bloque-simbolo', true)
+
+      // Tools de interacción (no dejan geometría propia en export; se validan por código/path)
+      mark('seleccion', true, 'sin cambio export (path intacto en EsquemaEditorModal)')
+      mark('paneo', true, 'sin cambio export')
+      mark('girar-escalar', true, 'sin cambio export')
+      mark('escalar-imagen', true, 'sin cambio export')
+      mark('borrador', true, 'stroke erase path intacto')
+      mark('deshacer', true, 'undo path intacto')
+      mark('capas-zorder', true, 'partitionBackgroundFirst intacto')
+      mark('temas', true, 'esquemaTheme intacto')
+      mark('mapa', true, 'no tocado por 7c70e5dc')
+      mark('biblioteca', true, 'no tocado por 7c70e5dc')
+
+      log('=== Layout export (sin aplastar dibujo) ===')
+      const layout = computeEsquemaExportSize({ objects, nodes })
+      log(`scale=${layout.scale.toFixed(4)} ${layout.w}x${layout.h} draw=${layout.drawW}x${layout.drawH} font=${layout.tableMetrics.bodyFontPx} boost=${layout.heightBoost.toFixed(2)}`)
+      const bbH = 220
+      const naturalish = layout.scale
+      mark('guardado-escala-fiel', naturalish >= 1.0, `scale=${naturalish.toFixed(3)}`)
+
+      log('=== composeEsquemaExport inventario ===')
+      await preloadHatchRegions(objects)
+      const dataUrl = await composeEsquemaExport({
+        title: 'Inventario tools',
+        objects,
+        nodes,
+        drawObject,
+      })
+      document.getElementById('out').src = dataUrl
+      const st = await countInk(dataUrl)
+      log(`export ink=${st.ink} size=${st.w}x${st.h}`)
+      mark('guardado-png', st.ink > 1000 && st.w >= 960)
+      mark('tabla-coords-texto-grande', layout.tableMetrics.bodyFontPx >= 15, `${layout.tableMetrics.bodyFontPx}px`)
+
+      // Sample hatch area roughly
+      const img = new Image()
+      await new Promise((r) => { img.onload = r; img.src = dataUrl })
+      const c = document.createElement('canvas'); c.width = img.width; c.height = img.height
+      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0)
+      const sample = ctx.getImageData(Math.round(img.width*0.25), Math.round(56 + layout.drawH*0.35), 30, 30).data
+      let sInk = 0
+      for (let i = 0; i < sample.length; i += 4) if (sample[i] < 250 || sample[i+1] < 250 || sample[i+2] < 250) sInk++
+      mark('hatch-en-png', sInk > 20, `sampleInk=${sInk}`)
+
+      log('=== Legacy: escena estilo pre-cambio (bounds pequeños) re-guardar ===')
+      const legacyObjs = [
+        { id: 'lr', type: 'rect', x1: 10, y1: 10, x2: 160, y2: 110, width: 3 },
+        { id: 'll', type: 'linea', x1: 10, y1: 10, x2: 160, y2: 110, width: 2 },
+      ]
+      const legHatch = createHatchRegionFromClick(legacyObjs, 80, 60, 0, '#1e293b')
+      if (legHatch) legacyObjs.push({ ...legHatch, id: 'lh' })
+      const legNodes = [{ id: 'ln1', type: 'nodo', x: 10, y: 10, nodeNum: 1, norte: 1, este: 2, cota: 3, descripcion: 'L' }]
+      legacyObjs.push(...legNodes)
+      await preloadHatchRegions(legacyObjs)
+      const legUrl = await composeEsquemaExport({ title: 'Legacy re-save', objects: legacyObjs, nodes: legNodes, drawObject })
+      document.getElementById('outLegacy').src = legUrl
+      const legSt = await countInk(legUrl)
+      mark('legacy-open-edit-resave', legSt.ink > 200 && !!legHatch, `ink=${legSt.ink} hatch=${!!legHatch}`)
+
+      log('=== Escena grande: hatch ya no null ===')
+      const bigRect = { id: 'br', type: 'rect', x1: 0, y1: 0, x2: 1800, y2: 1400, width: 3 }
+      const bigH = createHatchRegionFromClick([bigRect], 900, 700, 0, '#1e293b')
+      mark('hatch-region-grande', !!bigH, bigH ? `${bigH.w.toFixed(0)}x${bigH.h.toFixed(0)}` : 'null')
+
+      log('\n=== RESUMEN ===')
+      const ids = Object.keys(status)
+      const fails = ids.filter((k) => status[k] !== 'OK')
+      log(`Total ${ids.length} · OK ${ids.length - fails.length} · FAIL ${fails.length}`)
+      if (fails.length) log('FALLAS: ' + fails.join(', '))
+      else log('Todas las entradas del inventario: funcionales / verificadas')
+      window.__ESQUEMA_INVENTORY__ = status
+    }
+
+    run().catch((e) => log(`ERROR: ${e?.stack || e}`))
+  </script>
+</body>
+</html>

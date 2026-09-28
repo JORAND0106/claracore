@@ -229,34 +229,16 @@ export function computeEsquemaExportSize({ objects, nodes } = {}) {
   const titleH = EXPORT_TITLE_H
   const rows = nodes || []
   const bb = sceneExportBounds(objects)
-  let scale = Math.min(EXPORT_SCALE_CAP, EXPORT_MAX_INNER / bb.w, EXPORT_MAX_INNER / bb.h)
-  let drawW = Math.round(bb.w * scale + margin * 2)
-  let drawH = Math.round(bb.h * scale + margin * 2)
+  // Escala natural hi-res: NO aplastar el dibujo cuando hay tabla de coordenadas.
+  // (Regresión 7c70e5dc: reducir scale para “ganar” alto de tabla hacía trazos/
+  // achurados ilegibles en el PNG; la tipografía de tabla se agranda vía heightBoost.)
+  const scale = Math.min(EXPORT_SCALE_CAP, EXPORT_MAX_INNER / bb.w, EXPORT_MAX_INNER / bb.h)
+  const drawW = Math.round(bb.w * scale + margin * 2)
+  const drawH = Math.round(bb.h * scale + margin * 2)
   const minW = rows.length ? EXPORT_MIN_WIDTH_WITH_TABLE : EXPORT_MIN_WIDTH
   const provisionalW = Math.max(minW, drawW)
   const wGuess = landscapeExportSize(provisionalW, titleH + drawH + margin).w
   const tableW = wGuess - margin * 2
-
-  // Con tabla: limitar el alto del dibujo para que, al caber en el contenedor
-  // de memoria (~240 px), el texto de la tabla quede ≥ EXPORT_TABLE_MIN_SCREEN_PX.
-  // Si solo agrandamos la tabla, el PNG crece y object-fit vuelve a achicar el texto.
-  if (rows.length && bb.h > 0) {
-    const baseMetrics = exportCoordTableMetrics(tableW, { heightBoost: 1 })
-    const tableAtBase = exportCoordTableBlockHeight(rows.length, tableW, margin, 1)
-    // h_max ≈ bodyFont * containerH / minScreenPx  → bodyFont * (containerH/h) ≥ minScreenPx
-    const maxTotalH = Math.floor(
-      (baseMetrics.bodyFontPx * EXPORT_MEMORIA_CONTAINER_H) / EXPORT_TABLE_MIN_SCREEN_PX,
-    )
-    const minDrawH = 220
-    const maxDrawH = Math.max(minDrawH, maxTotalH - titleH - tableAtBase)
-    const contentH = Math.max(1, bb.h * scale)
-    const maxContentH = Math.max(80, maxDrawH - margin * 2)
-    if (contentH > maxContentH) {
-      scale = maxContentH / bb.h
-      drawW = Math.round(bb.w * scale + margin * 2)
-      drawH = Math.round(bb.h * scale + margin * 2)
-    }
-  }
 
   let heightBoost = exportCoordTableHeightBoost(rows.length, tableW, drawH, margin)
   let tableBlock = exportCoordTableBlockHeight(rows.length, tableW, margin, heightBoost)
@@ -264,15 +246,20 @@ export function computeEsquemaExportSize({ objects, nodes } = {}) {
   let w = landscapeExportSize(Math.max(minW, drawW), h).w
   let tableMetrics = exportCoordTableMetrics(w - margin * 2, { heightBoost })
 
-  // Ajuste fino: tipografía efectiva en el contenedor FO-EO-04 (object-fit).
+  // Ajuste fino: tipografía efectiva en el contenedor FO-EO-04 (object-fit),
+  // solo agrandando la tabla — nunca reduciendo la escala del dibujo.
+  // Se itera porque al crecer la tabla cambia el fit (object-fit:contain).
   if (rows.length) {
     const memoriaW = 380
     const memoriaH = EXPORT_MEMORIA_CONTAINER_H
-    const fit0 = Math.min(memoriaW / w, memoriaH / h)
-    const screen0 = tableMetrics.bodyFontPx * fit0
-    if (screen0 + 0.05 < EXPORT_TABLE_MIN_SCREEN_PX) {
+    for (let i = 0; i < 6; i += 1) {
+      const fit0 = Math.min(memoriaW / w, memoriaH / h)
+      const screen0 = tableMetrics.bodyFontPx * fit0
+      if (screen0 + 0.05 >= EXPORT_TABLE_MIN_SCREEN_PX) break
       const need = EXPORT_TABLE_MIN_SCREEN_PX / Math.max(0.25, screen0)
-      heightBoost = Math.min(3.0, heightBoost * need)
+      const nextBoost = Math.min(3.0, heightBoost * need)
+      if (nextBoost <= heightBoost + 1e-4) break
+      heightBoost = nextBoost
       tableBlock = exportCoordTableBlockHeight(rows.length, w - margin * 2, margin, heightBoost)
       h = titleH + drawH + tableBlock
       w = landscapeExportSize(Math.max(minW, drawW), h).w

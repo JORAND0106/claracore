@@ -42,11 +42,29 @@ export default function ExternosDepuracionModal({
       return
     }
     try {
-      const [ext, users] = await Promise.all([
+      const [extPayload, users] = await Promise.all([
         api.listExternosDepuracion(),
         api.listUsuarios(),
       ])
-      setRows(Array.isArray(ext) ? ext : [])
+      // Compat: array legado o { externos, reparacion_huerfanos }
+      const list = Array.isArray(extPayload)
+        ? extPayload
+        : (Array.isArray(extPayload?.externos) ? extPayload.externos : [])
+      setRows(list)
+      const rep = (!Array.isArray(extPayload) && extPayload?.reparacion_huerfanos) || null
+      if (rep && Number(rep.reparados) > 0) {
+        setOkMsg(
+          `Se repararon ${rep.reparados} compromiso${rep.reparados === 1 ? '' : 's'} `
+          + 'huérfano(s) de reemplazos anteriores.',
+        )
+      }
+      if (rep && Number(rep.ambiguos_count) > 0) {
+        setError(
+          `${rep.ambiguos_count} compromiso${rep.ambiguos_count === 1 ? '' : 's'} `
+          + 'no se pudieron reasignar automáticamente (sin usuario de reemplazo claro). '
+          + 'Revise la reasignación manual.',
+        )
+      }
       setUsuarios((Array.isArray(users) ? users : []).filter((u) => !u?.es_externo && Number(u?.id) > 0))
     } catch (e) {
       setError(e.message || 'No se pudo cargar el listado de externos')
@@ -104,9 +122,13 @@ export default function ExternosDepuracionModal({
         nombre: selected.nombre || undefined,
       })
       const nActas = result?.actas_count ?? selected.actas_count
+      const nComp = result?.compromisos_actualizados ?? selected.compromisos_count ?? 0
       setOkMsg(
-        `Reemplazo aplicado en ${nActas} acta${nActas === 1 ? '' : 's'}: `
-        + `${selected.nombre || 'externo'} → ${nombreUser(usuarioDestino)}.`,
+        `Reemplazo aplicado en ${nActas} acta${nActas === 1 ? '' : 's'}`
+        + (nComp
+          ? ` y ${nComp} compromiso${nComp === 1 ? '' : 's'} trasladado${nComp === 1 ? '' : 's'}`
+          : '')
+        + `: ${selected.nombre || 'externo'} → ${nombreUser(usuarioDestino)}.`,
       )
       setSelected(null)
       setUsuarioDestino(null)
@@ -192,7 +214,7 @@ export default function ExternosDepuracionModal({
               </div>
               <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 3, lineHeight: 1.45 }}>
                 {selected
-                  ? 'Elija el usuario registrado que sustituirá a este externo en todas sus actas.'
+                  ? 'Elija el usuario registrado que sustituirá a este externo en todas sus actas y compromisos.'
                   : 'Seleccione un externo del histórico. Al elegirlo pasará a la pantalla de reemplazo.'}
               </div>
             </div>
@@ -286,6 +308,9 @@ export default function ExternosDepuracionModal({
                             <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.primary }}>
                               {r.actas_count} acta{r.actas_count === 1 ? '' : 's'}
                             </span>
+                            <span style={{ fontSize: 'var(--cc-xs)', fontWeight: 700, color: t.textMuted }}>
+                              {Number(r.compromisos_count) || 0} compromiso{(Number(r.compromisos_count) || 0) === 1 ? '' : 's'}
+                            </span>
                           </div>
                         </div>
                       </button>
@@ -338,12 +363,24 @@ export default function ExternosDepuracionModal({
                   {[selected.cargo, selected.entidad, selected.email].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
                 </div>
                 <div style={{
-                  marginTop: 12, display: 'inline-flex', alignItems: 'center', gap: 8,
-                  padding: '6px 12px', borderRadius: 8,
-                  background: `${t.primary}14`, color: t.text, fontWeight: 720,
-                  fontSize: 'var(--cc-sm)',
+                  marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8,
                 }}>
-                  Participó en {selected.actas_count} reunión{selected.actas_count === 1 ? '' : 'es'} / acta{selected.actas_count === 1 ? '' : 's'}
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                    padding: '6px 12px', borderRadius: 8,
+                    background: `${t.primary}14`, color: t.text, fontWeight: 720,
+                    fontSize: 'var(--cc-sm)',
+                  }}>
+                    Participó en {selected.actas_count} reunión{selected.actas_count === 1 ? '' : 'es'} / acta{selected.actas_count === 1 ? '' : 's'}
+                  </span>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                    padding: '6px 12px', borderRadius: 8,
+                    background: `${t.primary}14`, color: t.text, fontWeight: 720,
+                    fontSize: 'var(--cc-sm)',
+                  }}>
+                    {Number(selected.compromisos_count) || 0} compromiso{(Number(selected.compromisos_count) || 0) === 1 ? '' : 's'} a trasladar
+                  </span>
                 </div>
               </div>
 
@@ -385,6 +422,14 @@ export default function ExternosDepuracionModal({
                     {[usuarioDestino.cargo_nombre, usuarioDestino.empresa, usuarioDestino.email]
                       .filter(Boolean)
                       .join(' · ')}
+                  </div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.text, marginTop: 10, lineHeight: 1.45 }}>
+                    Al confirmar: se actualizará la participación en{' '}
+                    <b>{selected.actas_count}</b> acta{selected.actas_count === 1 ? '' : 's'}
+                    {' '}y se trasladarán{' '}
+                    <b>{Number(selected.compromisos_count) || 0}</b>
+                    {' '}compromiso{(Number(selected.compromisos_count) || 0) === 1 ? '' : 's'}
+                    {' '}(cualquier estado), conservando su historial.
                   </div>
                 </div>
               ) : (

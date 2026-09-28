@@ -2633,6 +2633,22 @@ def list_externos_depuracion(sb, contrato_id: int) -> List[dict]:
             g["entidad"] = entidad
 
     out: List[dict] = []
+    catalog_all: List[dict] = []
+    if _schema_has(sb, "contacto_externo"):
+        try:
+            catalog_all = (
+                sb.table("seguimiento_contacto_externo")
+                .select("id, nombre, email, email_norm")
+                .eq("contrato_id", int(contrato_id))
+                .limit(2000)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            catalog_all = []
+    compromisos_contrato = _listar_compromisos_contrato(sb, int(contrato_id))
+
     for g in clusters.values():
         keys_sorted = sorted(g["match_keys"])
         email_keys = [k for k in keys_sorted if k.startswith("email:")]
@@ -2665,6 +2681,22 @@ def list_externos_depuracion(sb, contrato_id: int) -> List[dict]:
             "estado": (actas_by_id.get(aid) or {}).get("estado"),
         } for aid in acta_ids_sorted[:80]]
 
+        keys_set = set(keys_sorted)
+        eids = [int(g["externo_id"])] if g["externo_id"] is not None else []
+        for cext in catalog_all:
+            ckeys = _claves_identidad_externo(
+                email=cext.get("email_norm") or cext.get("email"),
+                nombre=cext.get("nombre"),
+            )
+            if any(k in keys_set for k in ckeys):
+                eid = int(cext["id"])
+                if eid not in eids:
+                    eids.append(eid)
+        compromisos_count = _contar_compromisos_externo(
+            sb, int(contrato_id), keys=keys_set, externo_ids=eids,
+            items=compromisos_contrato,
+        )
+
         out.append({
             "match_key": primary,
             "match_keys": keys_sorted,
@@ -2675,6 +2707,7 @@ def list_externos_depuracion(sb, contrato_id: int) -> List[dict]:
             "entidad": g["entidad"] or None,
             "actas_count": len(g["acta_ids"]),
             "asistentes_count": len(g["asistente_ids"]),
+            "compromisos_count": compromisos_count,
             "actas": actas_info,
         })
 
@@ -2750,9 +2783,22 @@ def _resolver_claves_y_catalogo_externo(
     if not keys:
         raise ValueError("Indique el asistente externo a reemplazar")
 
-    # Ampliar: mismas claves de catálogo activo del contrato
+    # Ampliar con catálogo del contrato (activos e inactivos): los compromisos
+    # pueden seguir apuntando a un contacto ya desactivado tras un reemplazo parcial.
     if _schema_has(sb, "contacto_externo"):
-        for ext in list_contactos_externos_activos(sb, cid):
+        try:
+            catalog = (
+                sb.table("seguimiento_contacto_externo")
+                .select("id, nombre, email, email_norm, activo, usuario_id")
+                .eq("contrato_id", cid)
+                .limit(2000)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            catalog = list_contactos_externos_activos(sb, cid)
+        for ext in catalog:
             ckeys = _claves_identidad_externo(
                 email=ext.get("email_norm") or ext.get("email"),
                 nombre=ext.get("nombre"),
@@ -2772,6 +2818,168 @@ def _asistente_coincide_claves(row: dict, keys: Set[str]) -> bool:
         if k in keys:
             return True
     return False
+
+
+def _item_campos_libres(item: Optional[dict]) -> dict:
+    raw = (item or {}).get("campos_libres")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _compromiso_coincide_externo(
+    item: dict,
+    *,
+    keys: Set[str],
+    externo_ids: Set[int],
+) -> bool:
+    """True si el compromiso sigue asignado al externo (por id de catálogo, campos_libres o nombre)."""
+    if (item.get("origen") or "") != "compromiso":
+        return False
+    # Ya reasignado a usuario de plataforma → no tocar.
+    try:
+        if item.get("asignado_a_id") is not None and int(item.get("asignado_a_id") or 0) > 0:
+            if item.get("asignado_externo_id") is None:
+                libres = _item_campos_libres(item)
+                if not libres.get("asignado_externo") and libres.get("externo_id") is None:
+                    return False
+    except (TypeError, ValueError):
+        pass
+
+    eid = item.get("asignado_externo_id")
+    try:
+        if eid is not None and int(eid) in externo_ids:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    libres = _item_campos_libres(item)
+    try:
+        le = libres.get("externo_id")
+        if le is not None and int(le) in externo_ids:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    # Legado / sin FK: sin usuario y nombre (o email en libres) coincide con el externo.
+    try:
+        aid = int(item.get("asignado_a_id") or 0)
+    except (TypeError, ValueError):
+        aid = 0
+    if aid > 0 and eid is None and not libres.get("asignado_externo"):
+        return False
+
+    for k in _claves_identidad_externo(
+        email=libres.get("asignado_email") or libres.get("email"),
+        nombre=item.get("asignado_a_nombre"),
+    ):
+        if k in keys:
+            return True
+    return False
+
+
+def _listar_compromisos_contrato(sb, contrato_id: int) -> List[dict]:
+    cols = (
+        "id, origen, contrato_id, acta_id, estado_gestion, "
+        "asignado_a_id, asignado_a_nombre, campos_libres"
+    )
+    if _schema_has(sb, "asignado_externo_id"):
+        cols += ", asignado_externo_id"
+    try:
+        return (
+            sb.table("seguimiento_item")
+            .select(cols)
+            .eq("contrato_id", int(contrato_id))
+            .eq("origen", "compromiso")
+            .limit(5000)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if _schema_has(sb, "asignado_externo_id") and _is_missing_column_error(exc, "asignado_externo_id"):
+            _SCHEMA_CAPS["asignado_externo_id"] = None
+            return (
+                sb.table("seguimiento_item")
+                .select(
+                    "id, origen, contrato_id, acta_id, estado_gestion, "
+                    "asignado_a_id, asignado_a_nombre, campos_libres"
+                )
+                .eq("contrato_id", int(contrato_id))
+                .eq("origen", "compromiso")
+                .limit(5000)
+                .execute()
+                .data
+                or []
+            )
+        raise
+
+
+def _contar_compromisos_externo(
+    sb,
+    contrato_id: int,
+    *,
+    keys: Set[str],
+    externo_ids: List[int],
+    items: Optional[List[dict]] = None,
+) -> int:
+    eids = {int(x) for x in (externo_ids or [])}
+    rows = items if items is not None else _listar_compromisos_contrato(sb, contrato_id)
+    n = 0
+    for it in rows:
+        if _compromiso_coincide_externo(it, keys=keys, externo_ids=eids):
+            n += 1
+    return n
+
+
+def _trasladar_compromisos_a_usuario(
+    sb,
+    contrato_id: int,
+    *,
+    usuario_id: int,
+    nombre_usuario: str,
+    keys: Set[str],
+    externo_ids: List[int],
+) -> int:
+    """
+    Reasigna todos los compromisos del externo al usuario registrado.
+    Conserva historial (fechas, estado, acta, eventos): solo cambia el responsable.
+    """
+    uid = int(usuario_id)
+    eids = {int(x) for x in (externo_ids or [])}
+    now = _now_utc().isoformat()
+    nombre = (nombre_usuario or "").strip()[:200] or f"Usuario #{uid}"
+    has_ext_col = _ensure_asignado_externo_column(sb) if eids else _schema_has(sb, "asignado_externo_id")
+
+    actualizados = 0
+    for it in _listar_compromisos_contrato(sb, contrato_id):
+        if not _compromiso_coincide_externo(it, keys=keys, externo_ids=eids):
+            continue
+        libres = _item_campos_libres(it)
+        libres.pop("asignado_externo", None)
+        libres.pop("externo_id", None)
+        libres.pop("asignado_email", None)
+        patch = {
+            "asignado_a_id": uid,
+            "asignado_a_nombre": nombre,
+            "updated_at": now,
+            "campos_libres": libres,
+        }
+        if has_ext_col:
+            patch["asignado_externo_id"] = None
+        try:
+            sb.table("seguimiento_item").update(patch).eq("id", int(it["id"])).eq(
+                "contrato_id", int(contrato_id)
+            ).execute()
+        except Exception as exc:
+            if has_ext_col and "asignado_externo_id" in patch and _is_missing_column_error(exc, "asignado_externo_id"):
+                _SCHEMA_CAPS["asignado_externo_id"] = None
+                patch.pop("asignado_externo_id", None)
+                sb.table("seguimiento_item").update(patch).eq("id", int(it["id"])).eq(
+                    "contrato_id", int(contrato_id)
+                ).execute()
+            else:
+                raise
+        actualizados += 1
+    return actualizados
 
 
 def _migrar_firmas_asistente(sb, *, acta_id: int, from_asistente_id: int, to_asistente_id: int, usuario_id: int) -> int:
@@ -2812,6 +3020,122 @@ def _migrar_firmas_asistente(sb, *, acta_id: int, from_asistente_id: int, to_asi
     return n
 
 
+def reparar_compromisos_externos_huerfanos(sb, contrato_id: int) -> dict:
+    """
+    Traslada compromisos que quedaron con asignado_externo_id tras reemplazos previos
+    (catálogo inactivo con usuario_id). Casos ambiguos (sin usuario vinculado) se reportan.
+    """
+    cid = int(contrato_id)
+    if not _schema_has(sb, "contacto_externo"):
+        return {
+            "ok": True,
+            "reparados": 0,
+            "ambiguos": [],
+            "detalle": "Catálogo de contactos externos no disponible.",
+        }
+
+    try:
+        catalog = (
+            sb.table("seguimiento_contacto_externo")
+            .select("id, nombre, email, email_norm, activo, usuario_id")
+            .eq("contrato_id", cid)
+            .limit(3000)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("reparar huérfanos: no se pudo leer catálogo: %s", exc)
+        return {"ok": False, "reparados": 0, "ambiguos": [], "detalle": str(exc)}
+
+    by_id = {int(c["id"]): c for c in catalog if c.get("id") is not None}
+    reparados = 0
+    ambiguos: List[dict] = []
+    items = _listar_compromisos_contrato(sb, cid)
+
+    # Agrupar por contacto externo aún referenciado
+    pending_by_ext: Dict[int, List[dict]] = {}
+    for it in items:
+        eid = it.get("asignado_externo_id")
+        if eid is None:
+            libres = _item_campos_libres(it)
+            if libres.get("asignado_externo") and libres.get("externo_id") is not None:
+                try:
+                    eid = int(libres["externo_id"])
+                except (TypeError, ValueError):
+                    eid = None
+        if eid is None:
+            continue
+        try:
+            eid_i = int(eid)
+        except (TypeError, ValueError):
+            continue
+        # Si ya tiene usuario asignado y no hay FK externa, omitir
+        try:
+            if int(it.get("asignado_a_id") or 0) > 0 and it.get("asignado_externo_id") is None:
+                libres = _item_campos_libres(it)
+                if not libres.get("asignado_externo"):
+                    continue
+        except (TypeError, ValueError):
+            pass
+        pending_by_ext.setdefault(eid_i, []).append(it)
+
+    for eid, group in pending_by_ext.items():
+        ext = by_id.get(eid)
+        if not ext:
+            for it in group:
+                ambiguos.append({
+                    "compromiso_id": it.get("id"),
+                    "asignado_a_nombre": it.get("asignado_a_nombre"),
+                    "asignado_externo_id": eid,
+                    "motivo": "contacto_externo_inexistente",
+                })
+            continue
+        try:
+            uid = int(ext.get("usuario_id") or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        # Solo auto-reparar si el catálogo ya fue vinculado a un usuario (reemplazo previo).
+        if uid <= 0:
+            for it in group:
+                ambiguos.append({
+                    "compromiso_id": it.get("id"),
+                    "asignado_a_nombre": it.get("asignado_a_nombre"),
+                    "asignado_externo_id": eid,
+                    "externo_nombre": ext.get("nombre"),
+                    "motivo": "sin_usuario_de_reemplazo_en_catalogo",
+                })
+            continue
+
+        try:
+            user = _usuario_row(sb, uid) or {}
+        except Exception:
+            user = {}
+        nombre = _nombre_usuario(user) or (user.get("email") if isinstance(user, dict) else None) or (
+            ext.get("nombre") or f"Usuario #{uid}"
+        )
+        keys = set(_claves_identidad_externo(
+            email=ext.get("email_norm") or ext.get("email"),
+            nombre=ext.get("nombre"),
+        ))
+        n = _trasladar_compromisos_a_usuario(
+            sb,
+            cid,
+            usuario_id=uid,
+            nombre_usuario=str(nombre),
+            keys=keys,
+            externo_ids=[eid],
+        )
+        reparados += n
+
+    return {
+        "ok": True,
+        "reparados": reparados,
+        "ambiguos": ambiguos,
+        "ambiguos_count": len(ambiguos),
+    }
+
+
 def reemplazar_externo_por_usuario(
     sb,
     contrato_id: int,
@@ -2825,8 +3149,8 @@ def reemplazar_externo_por_usuario(
 ) -> dict:
     """
     Sustituye un asistente externo del histórico por un usuario registrado en todas
-    las actas donde participó. Conserva filas de asistencia (y firmas) cuando es posible;
-    no elimina la participación: el reemplazo de usuario es obligatorio.
+    las actas donde participó, y traslada TODOS sus compromisos (cualquier estado)
+    al mismo usuario. Conserva filas de asistencia/firmas e historial de compromisos.
     """
     if usuario_id is None:
         raise ValueError("Debe seleccionar un usuario registrado de reemplazo")
@@ -2851,7 +3175,10 @@ def reemplazar_externo_por_usuario(
 
     asistentes, actas_by_id = _fetch_asistentes_externos_contrato(sb, cid)
     targets = [a for a in asistentes if _asistente_coincide_claves(a, keys)]
-    if not targets and not externo_ids:
+    compromisos_previstos = _contar_compromisos_externo(
+        sb, cid, keys=keys, externo_ids=externo_ids,
+    )
+    if not targets and not externo_ids and compromisos_previstos == 0:
         raise ValueError("No se encontraron asistencias externas para reemplazar")
 
     nombre_user = _nombre_usuario(user) or (user.get("email") or f"Usuario #{uid}")
@@ -2859,6 +3186,16 @@ def reemplazar_externo_por_usuario(
     email_user = (user.get("email") or "").strip() or None
     include_email = _schema_has(sb, "asistente_email")
     now = _now_utc().isoformat()
+
+    # 1) Compromisos PRIMERO: si falla, no se toca participación ni catálogo.
+    compromisos_actualizados = _trasladar_compromisos_a_usuario(
+        sb,
+        cid,
+        usuario_id=uid,
+        nombre_usuario=nombre_user,
+        keys=keys,
+        externo_ids=externo_ids,
+    )
 
     # Asistentes ya registrados del usuario, por acta (para fusionar duplicados)
     user_asis_by_acta: Dict[int, dict] = {}
@@ -2922,26 +3259,6 @@ def reemplazar_externo_por_usuario(
             asistentes_actualizados += 1
         actas_tocadas.add(aid)
 
-    compromisos_actualizados = 0
-    if externo_ids and _schema_has(sb, "asignado_externo_id"):
-        for eid in externo_ids:
-            items = (
-                sb.table("seguimiento_item")
-                .select("id")
-                .eq("asignado_externo_id", int(eid))
-                .execute()
-                .data
-                or []
-            )
-            for it in items:
-                sb.table("seguimiento_item").update({
-                    "asignado_a_id": uid,
-                    "asignado_externo_id": None,
-                    "asignado_a_nombre": nombre_user[:200],
-                    "updated_at": now,
-                }).eq("id", int(it["id"])).execute()
-                compromisos_actualizados += 1
-
     catalog_inhabilitados = 0
     if _schema_has(sb, "contacto_externo"):
         patch_cat = {
@@ -2994,6 +3311,7 @@ def reemplazar_externo_por_usuario(
         "asistentes_actualizados": asistentes_actualizados,
         "asistentes_fusionados": asistentes_fusionados,
         "firmas_migradas": firmas_migradas,
+        "compromisos_previstos": compromisos_previstos,
         "compromisos_actualizados": compromisos_actualizados,
         "catalogo_inhabilitados": catalog_inhabilitados,
     }
