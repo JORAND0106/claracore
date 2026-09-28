@@ -40,6 +40,7 @@ export default function ItemDetalleModal({
   const [horaReprog, setHoraReprog] = useState('')
   const [destCtx, setDestCtx] = useState(null)
   const [destPick, setDestPick] = useState(null)
+  const [reasignPick, setReasignPick] = useState(null)
   const [checklist, setChecklist] = useState([])
   const [checklistDirty, setChecklistDirty] = useState(false)
   const [fechaEdit, setFechaEdit] = useState('')
@@ -144,6 +145,12 @@ export default function ItemDetalleModal({
     String(item.acta?.estado || '').toLowerCase(),
   )
   const puedeEditarFechaCompromiso = esCompromiso && (soyElaboradorActa || esDev) && !actaSellada && permisos?.editar
+  // Reasignar responsable: elaborador del acta o Dev (también con acta sellada).
+  const puedeReasignarResponsable = esCompromiso && (soyElaboradorActa || esDev) && permisos?.editar
+  // Referencia (sin cambiar responsable): creador / elaborador / Dev.
+  const puedeNotificarReferencia = esCompromiso
+    && (soyCreador || soyElaboradorActa || esDev)
+    && permisos?.editar
   // Asignado deja observaciones; elaborador/Dev también al revisar (p.ej. cumplimiento anticipado).
   const puedeComentarCompromiso = esCompromiso && (
     (Number(item.asignado_a_id) === Number(usuario?.id) && Number(item.asignado_a_id) > 0)
@@ -210,6 +217,25 @@ export default function ItemDetalleModal({
       onChanged?.()
     } catch (e) {
       setError(e.message || 'No se pudo destinar')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const confirmarReasignacion = async () => {
+    if (!reasignPick?.id) return
+    setBusy(true)
+    setError('')
+    try {
+      await api.reasignarResponsable(item.id, {
+        asignado_a_id: reasignPick.id,
+        asignado_a_nombre: nombreUser(reasignPick),
+      })
+      setReasignPick(null)
+      await reload()
+      onChanged?.()
+    } catch (e) {
+      setError(e.message || 'No se pudo reasignar el responsable')
     } finally {
       setBusy(false)
     }
@@ -577,10 +603,51 @@ export default function ItemDetalleModal({
         </div>
       )}
 
-      {/* Notificar a (solo compromisos): en tareas vive en la columna del sub-ítem */}
-      {esCompromiso && (soyCreador || esDev) && permisos?.editar && (
+      {esCompromiso && puedeReasignarResponsable && (
         <section style={{ marginTop: 12 }}>
-          <h4 style={h4(t)}>Notificar a</h4>
+          <h4 style={h4(t)}>Reasignar responsable</h4>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+            Actual: <b style={{ color: t.text }}>{item.asignado_a_nombre || '—'}</b>.
+            Solo el elaborador del acta o Desarrollador pueden corregir el responsable.
+            Se conserva fecha, estado e historial del compromiso.
+          </div>
+          <UserSearchSelect
+            t={t}
+            usuarios={usuarios}
+            mode="strict"
+            placeholder="Buscar nuevo responsable…"
+            style={inp(t)}
+            onSelect={setReasignPick}
+          />
+          {reasignPick && (
+            <div style={{
+              marginTop: 10, padding: 12, borderRadius: 8,
+              border: `1px solid ${t.border}`, background: t.bg || `${t.primary}08`,
+              fontSize: 'var(--cc-sm)', color: t.text,
+            }}>
+              <div style={{ marginBottom: 8 }}>
+                ¿Reasignar el compromiso a {nombreUser(reasignPick)}?
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button type="button" disabled={busy} style={primary(t)} onClick={confirmarReasignacion}>
+                  Confirmar reasignación
+                </button>
+                <button type="button" style={ghost(t)} onClick={() => setReasignPick(null)}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Notificar por referencia (sin cambiar responsable) */}
+      {esCompromiso && puedeNotificarReferencia && (
+        <section style={{ marginTop: 12 }}>
+          <h4 style={h4(t)}>Notificar por referencia</h4>
+          <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginBottom: 8 }}>
+            Comparte el compromiso sin cambiar al responsable formal.
+          </div>
           <UserSearchSelect
             t={t}
             usuarios={usuarios}
@@ -599,21 +666,15 @@ export default function ItemDetalleModal({
               fontSize: 'var(--cc-sm)', color: t.text,
             }}>
               <div style={{ marginBottom: 8 }}>
-                ¿Cómo desea notificar «{item.titulo}» a {nombreUser(destCtx.user)}?
+                ¿Enviar «{item.titulo}» como referencia a {nombreUser(destCtx.user)}?
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                <button type="button" disabled={busy} style={primary(t)} onClick={() => confirmarDestino('asignacion')}>
-                  Asignación formal
-                </button>
-                <button type="button" disabled={busy} style={ghost(t)} onClick={() => confirmarDestino('referencia')}>
+                <button type="button" disabled={busy} style={primary(t)} onClick={() => confirmarDestino('referencia')}>
                   Solo referencia
                 </button>
                 <button type="button" style={ghost(t)} onClick={() => { setDestCtx(null); setDestPick(null) }}>
                   Cancelar
                 </button>
-              </div>
-              <div style={{ marginTop: 8, fontSize: 'var(--cc-xs)', color: t.textMuted }}>
-                En ambos casos el ítem permanece visible en su bandeja y aparece en la del destinatario.
               </div>
             </div>
           )}
