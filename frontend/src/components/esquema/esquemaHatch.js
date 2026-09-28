@@ -174,6 +174,12 @@ export function hatchRasterScale(worldW, worldH, maxPixels = 4_000_000) {
   if (area * scale * scale > maxPixels) {
     scale = Math.sqrt(maxPixels / area)
   }
+  // Tras redondear rw/rh el producto puede superar maxPixels por 1 fila/columna.
+  const rw = Math.max(1, Math.round(worldW * scale))
+  const rh = Math.max(1, Math.round(worldH * scale))
+  if (rw * rh > maxPixels) {
+    scale = Math.sqrt(maxPixels / area) * 0.999
+  }
   return Math.max(0.25, scale)
 }
 
@@ -181,13 +187,35 @@ export function hatchRasterScale(worldW, worldH, maxPixels = 4_000_000) {
  * Misma detección de contorno que el hatch: rasteriza bordes y hace flood-fill
  * desde el clic. No cambia el algoritmo; hatch y área lo reutilizan.
  */
+/**
+ * Padding del raster de flood-fill. Un pad fijo de 32 px-mundo hace que un
+ * rectángulo grande ocupe >85 % del lienzo y el detector lo rechace como
+ * “región abierta”. Se usa una fracción del tamaño de la escena para dejar
+ * siempre corona exterior suficiente.
+ */
+export function hatchBoundsPad(worldW, worldH, minPad = 32) {
+  const m = Math.min(Math.max(1, worldW), Math.max(1, worldH))
+  return Math.max(minPad, Math.ceil(m * 0.18))
+}
+
 export function detectClosedRegionFromClick(objects, worldX, worldY) {
-  const bounds = expandBounds(objects, worldX, worldY, 32)
+  // Primera pasada con pad mínimo para medir la escena; luego pad proporcional.
+  const seed = expandBounds(objects, worldX, worldY, 32)
+  const seedW = Math.max(1, seed.maxX - seed.minX)
+  const seedH = Math.max(1, seed.maxY - seed.minY)
+  const pad = hatchBoundsPad(seedW, seedH, 32)
+  const bounds = pad === 32 ? seed : expandBounds(objects, worldX, worldY, pad)
   const w = Math.max(1, bounds.maxX - bounds.minX)
   const h = Math.max(1, bounds.maxY - bounds.minY)
-  const scale = hatchRasterScale(w, h)
-  const rw = Math.max(1, Math.round(w * scale))
-  const rh = Math.max(1, Math.round(h * scale))
+  let scale = hatchRasterScale(w, h)
+  let rw = Math.max(1, Math.round(w * scale))
+  let rh = Math.max(1, Math.round(h * scale))
+  // Defensa: si el redondeo aún supera el tope, bajar escala (no abortar el hatch).
+  if (rw * rh > 4_000_000) {
+    scale = Math.max(0.25, Math.sqrt(4_000_000 / (w * h)) * 0.99)
+    rw = Math.max(1, Math.round(w * scale))
+    rh = Math.max(1, Math.round(h * scale))
+  }
   if (rw * rh > 4_000_000) return null
 
   const ox = bounds.minX
@@ -466,10 +494,13 @@ export function drawHatchRegion(ctx, obj, ui) {
     paint(cache[key])
     return
   }
-  const img = new Image()
-  cache[key] = img
-  img.onload = () => paint(img)
-  img.src = key
+  // No pintar en onload sobre un ctx que puede quedar obsoleto tras un redraw.
+  // El editor / preloadHatchRegions vuelven a dibujar cuando la máscara está lista.
+  if (!cache[key]) {
+    const img = new Image()
+    cache[key] = img
+    img.src = key
+  }
 }
 
 /** Espera a que todas las imágenes de hatchRegion estén listas (p. ej. antes de exportar PNG). */

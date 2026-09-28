@@ -80,6 +80,27 @@ describe('esquemaExport · rotulado', () => {
     assert.ok(screenPx + 0.35 >= 8, `texto en contenedor ≈ ${screenPx}px < 8`)
   })
 
+  it('con tabla NO aplasta la escala del dibujo (fidelidad hatch/trazos)', () => {
+    const objects = [
+      { type: 'rect', x1: -100, y1: -100, x2: 1900, y2: 1500 },
+      { type: 'rect', x1: 200, y1: 200, x2: 1600, y2: 1200 },
+      { type: 'hatchRegion', x: 200, y: 200, w: 1400, h: 1000, livePattern: true, hatch: 0 },
+    ]
+    const nodes = [1, 2, 3, 4].map((i) => ({
+      nodeNum: i, norte: 1000 + i, este: 2000 + i, cota: 10, desc: `N${i}`,
+    }))
+    const bb = sceneExportBounds(objects)
+    const natural = Math.min(EXPORT_SCALE_CAP, EXPORT_MAX_INNER / bb.w, EXPORT_MAX_INNER / bb.h)
+    const size = computeEsquemaExportSize({ objects, nodes })
+    assert.ok(
+      Math.abs(size.scale - natural) < 1e-9,
+      `scale aplastada: got ${size.scale}, natural ${natural}`,
+    )
+    // Trazo de 3 px-mundo debe mapear a ≥ 2 px de dispositivo
+    assert.ok(size.scale * 3 >= 2, `escala ${size.scale} deja trazos ilegibles`)
+    assert.ok(size.tableMetrics.bodyFontPx >= 15)
+  })
+
   it('ignora la imagen de fondo fit al calcular bounds', () => {
     const bb = sceneExportBounds([
       { type: 'image', fit: true, x: 0, y: 0, w: 2000, h: 2000 },
