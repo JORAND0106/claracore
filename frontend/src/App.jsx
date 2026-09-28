@@ -118,6 +118,11 @@ import SicoeGraficosWizardPanel from './modules/sicoe-obra/SicoeGraficosWizardPa
 import EsquemaEditorModal from './components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from './components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromRegistro } from './components/adjuntos/adjuntosMedia'
+import ValidacionAdjuntoImagen from './components/validacion/ValidacionAdjuntoImagen'
+import {
+  subirAdjuntosValidacionPendientes,
+  urlPareceImagen,
+} from './components/validacion/validacionAdjuntoHelpers'
 import SicoeMediaLightbox from './modules/sicoe-obra/SicoeMediaLightbox'
 import SicoeItemInfoPopup from './modules/sicoe-obra/SicoeItemInfoPopup'
 import SicoeReporteItemsTabla from './modules/sicoe-obra/SicoeReporteItemsTabla'
@@ -2509,7 +2514,9 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
   const [mensaje,       setMensaje]       = useState('')
   const [enlaceInput,   setEnlaceInput]   = useState('')
   const [enlaces,       setEnlaces]       = useState([])
+  const [adjuntos,      setAdjuntos]      = useState([])
   const [error,         setError]         = useState('')
+  const [subiendo,      setSubiendo]      = useState(false)
 
   const esObligatorio = modoConversacion
     ? !!obligatorio
@@ -2571,15 +2578,36 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
     return true
   }
 
-  const confirmar = () => {
+  const confirmar = async () => {
     if (!validar()) return
-    onConfirmar({
-      destinatarios,
-      etiqueta: modoConversacion ? null : etiqueta,
-      asunto: asunto.trim() || null,
-      mensaje,
-      enlaces,
-    })
+    setSubiendo(true)
+    setError('')
+    try {
+      const adjuntosUp = adjuntos.length
+        ? await subirAdjuntosValidacionPendientes({
+          apiBase: API_URL,
+          token: (hdrs?.Authorization || '').replace(/^Bearer\s+/i, ''),
+          contratoId: contrato_id,
+          locales: adjuntos,
+        })
+        : []
+      const enlacesFinal = [...enlaces]
+      for (const a of adjuntosUp) {
+        if (a?.url && !enlacesFinal.includes(a.url)) enlacesFinal.push(a.url)
+      }
+      onConfirmar({
+        destinatarios,
+        etiqueta: modoConversacion ? null : etiqueta,
+        asunto: asunto.trim() || null,
+        mensaje: mensaje.trim() || (adjuntosUp.length ? '(Soporte fotográfico)' : mensaje),
+        enlaces: enlacesFinal,
+        adjuntos: adjuntosUp,
+      })
+    } catch (e) {
+      setError(e?.message || 'No se pudo subir la imagen.')
+    } finally {
+      setSubiendo(false)
+    }
   }
 
   const confirmarSinComentario = () => {
@@ -2715,6 +2743,14 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
                       placeholder='Detalle del comentario…' />
           </div>
 
+          {/* Imagen de respaldo (archivo / Ctrl+V) — los tres estados */}
+          <ValidacionAdjuntoImagen
+            value={adjuntos}
+            onChange={setAdjuntos}
+            t={t}
+            disabled={subiendo}
+          />
+
           {/* Enlaces */}
           <div>
             <div style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
@@ -2755,22 +2791,23 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
         {/* Footer */}
         <div style={{ padding: '16px 24px', borderTop: `1px solid ${t.border}`,
                       display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-          <button onClick={onCancelar}
+          <button onClick={onCancelar} disabled={subiendo}
             style={{ padding: '10px 18px', background: 'none', border: `1.5px solid ${t.border}`,
                      borderRadius: '10px', color: t.textMuted, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}>
             Cancelar
           </button>
           {!esObligatorio && !modoConversacion && (
-            <button onClick={confirmarSinComentario}
+            <button onClick={confirmarSinComentario} disabled={subiendo}
               style={{ padding: '10px 18px', background: `${colorEstado}22`, border: `1.5px solid ${colorEstado}55`,
                        borderRadius: '10px', color: colorEstado, fontSize: 'var(--cc-sm)', fontWeight: '600', cursor: 'pointer' }}>
               Confirmar sin comentario
             </button>
           )}
-          <button onClick={confirmar}
+          <button onClick={() => void confirmar()} disabled={subiendo}
             style={{ padding: '10px 18px', background: colorEstado, border: 'none',
-                     borderRadius: '10px', color: '#fff', fontSize: 'var(--cc-sm)', fontWeight: '700', cursor: 'pointer' }}>
-            {modoConversacion ? 'Enviar mensaje' : 'Confirmar con comentario'}
+                     borderRadius: '10px', color: '#fff', fontSize: 'var(--cc-sm)', fontWeight: '700', cursor: 'pointer',
+                     opacity: subiendo ? 0.7 : 1 }}>
+            {subiendo ? 'Subiendo…' : (modoConversacion ? 'Enviar mensaje' : 'Confirmar con comentario')}
           </button>
         </div>
       </div>
@@ -7967,8 +8004,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       {c.asunto && <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, marginBottom:'3px' }}>{c.asunto}</div>}
                       <div style={{ fontSize:'var(--cc-sm)', color:t.text, lineHeight:1.5 }}>{c.mensaje}</div>
                       {(c.enlaces||[]).length > 0 && (
-                        <div style={{ marginTop:'6px', display:'flex', flexDirection:'column', gap:'3px' }}>
-                          {c.enlaces.map((url,i) => <a key={i} href={url} target="_blank" rel="noreferrer" style={{ fontSize:'var(--cc-label)', color:color }}>🔗 {url}</a>)}
+                        <div style={{ marginTop:'6px', display:'flex', flexDirection:'column', gap:'6px' }}>
+                          {c.enlaces.map((url,i) => (
+                            urlPareceImagen(url)
+                              ? (
+                                <a key={i} href={url} target="_blank" rel="noreferrer" style={{ display:'inline-block' }}>
+                                  <img src={url} alt="Adjunto validación" style={{ maxWidth: 180, maxHeight: 120, borderRadius: 8, border: `1px solid ${color}44`, objectFit: 'cover' }} />
+                                </a>
+                              )
+                              : <a key={i} href={url} target="_blank" rel="noreferrer" style={{ fontSize:'var(--cc-label)', color:color }}>🔗 {url}</a>
+                          ))}
                         </div>
                       )}
                       {/* Respuestas anidadas */}

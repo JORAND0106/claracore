@@ -29,6 +29,12 @@ describe('Planilla tubería — panel validación contratista/interventoría', (
     assert.match(modalSrc, /El mensaje es obligatorio/)
   })
 
+  it('admite adjunto de imagen (archivo / Ctrl+V) en los tres estados', () => {
+    assert.match(modalSrc, /ValidacionAdjuntoImagen/)
+    assert.match(modalSrc, /subirAdjuntosValidacionPendientes/)
+    assert.match(modalSrc, /adjuntos/)
+  })
+
   it('comentario interventoría visible en la cartera', () => {
     assert.match(formSrc, /data-comentario-interventoria/)
     assert.match(formSrc, /comentarioInterventoria/)

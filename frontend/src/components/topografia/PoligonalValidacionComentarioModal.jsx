@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import { API_BASE } from '../../apiBase'
 import { ETIQUETAS_VALIDACION_TOPO, useTopoTheme } from './topografiaShared'
+import ValidacionAdjuntoImagen from '../validacion/ValidacionAdjuntoImagen'
+import { subirAdjuntosValidacionPendientes } from '../validacion/validacionAdjuntoHelpers'
 
 /**
- * Comentario obligatorio para validación Pendiente/Rechazado (estilo SICOE simplificado).
+ * Comentario de validación Pendiente/Rechazado/Aprobado (estilo SICOE simplificado).
+ * Admite imagen de respaldo (archivo o Ctrl+V) para los tres estados.
  */
 export default function PoligonalValidacionComentarioModal({
   open,
@@ -20,7 +23,9 @@ export default function PoligonalValidacionComentarioModal({
   const [destinatarios, setDestinatarios] = useState([])
   const [etiqueta, setEtiqueta] = useState('')
   const [mensaje, setMensaje] = useState('')
+  const [adjuntos, setAdjuntos] = useState([])
   const [error, setError] = useState('')
+  const [subiendo, setSubiendo] = useState(false)
 
   const esObligatorio = estado === 'Pendiente' || estado === 'Rechazado'
   const colorEstado = estado === 'Aprobado' ? '#166534' : estado === 'Rechazado' ? '#991b1b' : '#92400e'
@@ -39,7 +44,9 @@ export default function PoligonalValidacionComentarioModal({
       setDestinatarios([])
       setEtiqueta('')
       setMensaje('')
+      setAdjuntos([])
       setError('')
+      setSubiendo(false)
     }
   }, [open])
 
@@ -51,7 +58,11 @@ export default function PoligonalValidacionComentarioModal({
     )
   }
 
-  const confirmar = () => {
+  const confirmar = async (forzarSinComentario = false) => {
+    if (forzarSinComentario) {
+      onConfirm(null)
+      return
+    }
     if (esObligatorio) {
       if (!destinatarios.length) {
         setError('Indique al menos un destinatario.')
@@ -66,18 +77,50 @@ export default function PoligonalValidacionComentarioModal({
         return
       }
     }
-    onConfirm(
-      esObligatorio
-        ? {
-            destinatarios: destinatarios.map((d) => ({ id: d.id, nombre: d.nombre, apellidos: d.apellidos })),
-            etiqueta,
-            mensaje: mensaje.trim(),
-          }
-        : null,
-    )
+    const tieneTexto = Boolean(mensaje.trim())
+    const tieneAdj = adjuntos.length > 0
+    if (!esObligatorio && !tieneTexto && !tieneAdj) {
+      onConfirm(null)
+      return
+    }
+    setSubiendo(true)
+    setError('')
+    try {
+      const adjuntosUp = tieneAdj
+        ? await subirAdjuntosValidacionPendientes({
+          apiBase: API_BASE,
+          token,
+          contratoId,
+          locales: adjuntos,
+        })
+        : []
+      const payload = {
+        destinatarios: destinatarios.map((d) => ({ id: d.id, nombre: d.nombre, apellidos: d.apellidos })),
+        etiqueta: etiqueta || null,
+        mensaje: mensaje.trim() || (adjuntosUp.length ? '(Soporte fotográfico)' : ''),
+        adjuntos: adjuntosUp,
+      }
+      if (esObligatorio || payload.mensaje || adjuntosUp.length) {
+        onConfirm(payload)
+      } else {
+        onConfirm(null)
+      }
+    } catch (e) {
+      setError(e?.message || 'No se pudo subir la imagen.')
+    } finally {
+      setSubiendo(false)
+    }
   }
 
   const inp = { ...ui.inputStyle, fontSize: 'var(--cc-sm)' }
+  const themeAdj = {
+    bg: ui.t?.bg,
+    inputBg: ui.t?.inputBg || ui.t?.bg,
+    text: ui.t?.text || ui.text,
+    textMuted: ui.textMuted,
+    border: ui.t?.border || '#e2e8f0',
+    primary: ui.t?.primary || '#2563eb',
+  }
 
   return (
     <div
@@ -109,8 +152,8 @@ export default function PoligonalValidacionComentarioModal({
         </div>
         <p style={{ margin: '0 0 12px', fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
           {esObligatorio
-            ? 'Pendiente y Rechazado requieren comentario con destinatario, etiqueta y mensaje.'
-            : 'El comentario es opcional para Aprobado.'}
+            ? 'Pendiente y Rechazado requieren comentario con destinatario, etiqueta y mensaje. Puede adjuntar una imagen de respaldo.'
+            : 'El comentario y la imagen son opcionales para Aprobado.'}
         </p>
 
         {error && (
@@ -119,45 +162,67 @@ export default function PoligonalValidacionComentarioModal({
           </div>
         )}
 
-        {esObligatorio && (
-          <>
-            <label style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.textMuted }}>Destinatarios</label>
-            <div style={{ maxHeight: 100, overflowY: 'auto', border: `1px solid ${ui.t?.border || '#e2e8f0'}`, borderRadius: 8, padding: 8, marginBottom: 10 }}>
-              {usuarios.map((u) => (
-                <label key={u.id} style={{ display: 'flex', gap: 6, fontSize: 'var(--cc-xs)', marginBottom: 4, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={!!destinatarios.find((d) => d.id === u.id)} onChange={() => toggleDest(u)} />
-                  {[u.nombre, u.apellidos].filter(Boolean).join(' ')}
-                </label>
-              ))}
-              {!usuarios.length && <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Sin usuarios del contrato.</span>}
-            </div>
+        <>
+            {esObligatorio && (
+              <>
+                <label style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.textMuted }}>Destinatarios</label>
+                <div style={{ maxHeight: 100, overflowY: 'auto', border: `1px solid ${ui.t?.border || '#e2e8f0'}`, borderRadius: 8, padding: 8, marginBottom: 10 }}>
+                  {usuarios.map((u) => (
+                    <label key={u.id} style={{ display: 'flex', gap: 6, fontSize: 'var(--cc-xs)', marginBottom: 4, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={!!destinatarios.find((d) => d.id === u.id)} onChange={() => toggleDest(u)} />
+                      {[u.nombre, u.apellidos].filter(Boolean).join(' ')}
+                    </label>
+                  ))}
+                  {!usuarios.length && <span style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>Sin usuarios del contrato.</span>}
+                </div>
 
-            <label style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.textMuted }}>Etiqueta</label>
-            <select value={etiqueta} onChange={(e) => setEtiqueta(e.target.value)} style={{ ...inp, marginBottom: 10 }}>
-              <option value="">— Seleccione —</option>
-              {ETIQUETAS_VALIDACION_TOPO.map((e) => (
-                <option key={e} value={e}>{e}</option>
-              ))}
-            </select>
+                <label style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.textMuted }}>Etiqueta</label>
+                <select value={etiqueta} onChange={(e) => setEtiqueta(e.target.value)} style={{ ...inp, marginBottom: 10 }}>
+                  <option value="">— Seleccione —</option>
+                  {ETIQUETAS_VALIDACION_TOPO.map((e) => (
+                    <option key={e} value={e}>{e}</option>
+                  ))}
+                </select>
+              </>
+            )}
 
-            <label style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.textMuted }}>Mensaje</label>
+            <label style={{ fontSize: 'var(--cc-xs)', fontWeight: 600, color: ui.textMuted }}>
+              Mensaje{esObligatorio ? '' : ' (opcional)'}
+            </label>
             <textarea
               value={mensaje}
               onChange={(e) => setMensaje(e.target.value)}
-              rows={4}
+              rows={esObligatorio ? 4 : 3}
               style={{ ...inp, marginBottom: 12, resize: 'vertical' }}
-              placeholder="Explique el motivo de la observación o el rechazo…"
+              placeholder={esObligatorio
+                ? 'Explique el motivo de la observación o el rechazo…'
+                : 'Comentario opcional…'}
             />
-          </>
-        )}
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" style={ui.btnSecondary} onClick={onCancel}>Cancelar</button>
+            <div style={{ marginBottom: 12 }}>
+              <ValidacionAdjuntoImagen
+                value={adjuntos}
+                onChange={setAdjuntos}
+                t={themeAdj}
+                disabled={subiendo}
+              />
+            </div>
+          </>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button type="button" style={ui.btnSecondary} onClick={onCancel} disabled={subiendo}>Cancelar</button>
           {!esObligatorio && (
-            <button type="button" style={ui.btnSecondary} onClick={() => onConfirm(null)}>Aprobar sin comentario</button>
+            <button
+              type="button"
+              style={ui.btnSecondary}
+              disabled={subiendo}
+              onClick={() => void confirmar(true)}
+            >
+              Aprobar sin comentario
+            </button>
           )}
-          <button type="button" style={ui.btnPrimary} onClick={confirmar}>
-            Confirmar
+          <button type="button" style={ui.btnPrimary} disabled={subiendo} onClick={() => void confirmar(false)}>
+            {subiendo ? 'Subiendo…' : 'Confirmar'}
           </button>
         </div>
       </div>

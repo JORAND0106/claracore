@@ -2892,12 +2892,38 @@ def _aplicar_validacion_planilla_tuberia(
         "updated_at": now,
     }
 
+    # Adjuntos de imagen (archivo / Ctrl+V) asociados a esta validación (N1 o N2).
+    adjuntos: list[dict[str, Any]] = []
+    if body.comentario_data and isinstance(body.comentario_data, dict):
+        raw_adj = body.comentario_data.get("adjuntos") or []
+        if isinstance(raw_adj, list):
+            for item in raw_adj[:5]:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    continue
+                adjuntos.append({
+                    "url": url[:2000],
+                    "nombre": str(item.get("nombre") or "imagen")[:200],
+                    "mime": str(item.get("mime") or "image/jpeg")[:100],
+                })
+    if adjuntos:
+        update["comentario_validacion_adjuntos"] = {
+            "nivel": nivel,
+            "estado": body.estado,
+            "adjuntos": adjuntos,
+            "at": now,
+        }
+
     if nivel == 2:
         msg = ""
         if body.comentario_data and isinstance(body.comentario_data, dict):
             msg = (body.comentario_data.get("mensaje") or "").strip()
-        if body.estado in ("Pendiente", "Rechazado") and not msg:
+        if body.estado in ("Pendiente", "Rechazado") and not msg and not adjuntos:
             raise HTTPException(422, "El comentario debe incluir un mensaje.")
+        if not msg and adjuntos:
+            msg = "(Soporte fotográfico)"
         update["comentario_interventoria"] = msg or None
         update["comentario_interventoria_at"] = now if msg else None
         if body.estado == "Aprobado":
@@ -2924,13 +2950,32 @@ def _aplicar_validacion_planilla_tuberia(
     except Exception as exc:
         # Columnas de validación pueden faltar si la migración SQL no se aplicó.
         err = str(exc).lower()
-        if "nivel1_estado" in err or "comentario_interventoria" in err or "column" in err:
+        if "comentario_validacion_adjuntos" in err and "comentario_validacion_adjuntos" in update:
+            update.pop("comentario_validacion_adjuntos", None)
+            # Fallback: URLs en el texto de interventoría (N2) para no perder el respaldo.
+            if nivel == 2 and adjuntos and update.get("comentario_interventoria"):
+                urls = "\n".join(f"[adjunto] {a['url']}" for a in adjuntos)
+                update["comentario_interventoria"] = f"{update['comentario_interventoria']}\n\n{urls}".strip()
+            try:
+                supabase.table("topo_planillas_tuberia").update(update).eq("id", planilla_id).execute()
+            except Exception as exc2:
+                err2 = str(exc2).lower()
+                if "nivel1_estado" in err2 or "comentario_interventoria" in err2 or "column" in err2:
+                    raise HTTPException(
+                        503,
+                        "Faltan columnas de validación en topo_planillas_tuberia. "
+                        "Ejecute backend/sql/topo_alter_planillas_tuberia_validacion.sql",
+                    ) from exc2
+                raise
+        elif "nivel1_estado" in err or "comentario_interventoria" in err or "column" in err:
             raise HTTPException(
                 503,
                 "Faltan columnas de validación en topo_planillas_tuberia. "
-                "Ejecute backend/sql/topo_alter_planillas_tuberia_validacion.sql",
+                "Ejecute backend/sql/topo_alter_planillas_tuberia_validacion.sql "
+                "y backend/sql/topo_alter_validacion_adjuntos.sql",
             ) from exc
-        raise
+        else:
+            raise
 
     _audit(
         contrato_id,

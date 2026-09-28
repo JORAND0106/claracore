@@ -241,6 +241,15 @@ def path_presupuesto_grafico(contrato_id: int, nombre: str, ext: str = ".jpg") -
     return f"{int(contrato_id)}/presupuesto-graficos/{safe}{ext}"
 
 
+def path_validacion_adjunto(contrato_id: int, nombre: str, ext: str = ".jpg") -> str:
+    """Imágenes de respaldo en popups de validación (SICOE / Topografía)."""
+    safe = (nombre or "adjunto").strip().replace("/", "_").replace(" ", "_")
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "", safe) or "adjunto"
+    if not ext.startswith("."):
+        ext = f".{ext}"
+    return f"{int(contrato_id)}/validacion-adjuntos/{safe}{ext}"
+
+
 def path_perfil(uid: int, ext: str = ".jpg") -> str:
     return f"perfiles/{int(uid)}{ext}"
 

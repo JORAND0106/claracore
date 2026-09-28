@@ -367,6 +367,28 @@ def _exigir_poligonal_lista_validar(pol: dict, poligonal_id: str) -> dict:
     return cierre
 
 
+def _normalizar_adjuntos_comentario_topo(comentario_data: dict | None) -> list[dict]:
+    """Adjuntos {url, nombre, mime} desde comentario_data (máx. 5)."""
+    if not isinstance(comentario_data, dict):
+        return []
+    raw = comentario_data.get("adjuntos") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw[:5]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        out.append({
+            "url": url[:2000],
+            "nombre": str(item.get("nombre") or "imagen")[:200],
+            "mime": str(item.get("mime") or "image/jpeg")[:100],
+        })
+    return out
+
+
 def _insertar_comentario_poligonal(
     contrato_id: int,
     poligonal_id: str,
@@ -376,25 +398,39 @@ def _insertar_comentario_poligonal(
     comentario_data: dict,
     rol_origen: str,
 ) -> None:
+    adjuntos = _normalizar_adjuntos_comentario_topo(comentario_data)
     mensaje = (comentario_data.get("mensaje") or "").strip()
+    if not mensaje and adjuntos:
+        mensaje = "(Soporte fotográfico)"
     if not mensaje:
         raise HTTPException(status_code=422, detail="El comentario debe incluir un mensaje.")
     dest = comentario_data.get("destinatarios") or []
-    if not dest:
+    if not dest and estado in ("Pendiente", "Rechazado"):
         raise HTTPException(status_code=422, detail="Indique al menos un destinatario del comentario.")
-    supabase.table("topo_poligonal_comentarios").insert(
-        {
-            "poligonal_id": poligonal_id,
-            "contrato_id": contrato_id,
-            "autor_id": autor_id,
-            "nivel": nivel,
-            "estado": estado,
-            "rol_origen": rol_origen,
-            "etiqueta": comentario_data.get("etiqueta"),
-            "mensaje": mensaje,
-            "destinatarios": dest,
-        }
-    ).execute()
+    row = {
+        "poligonal_id": poligonal_id,
+        "contrato_id": contrato_id,
+        "autor_id": autor_id,
+        "nivel": nivel,
+        "estado": estado,
+        "rol_origen": rol_origen,
+        "etiqueta": comentario_data.get("etiqueta"),
+        "mensaje": mensaje,
+        "destinatarios": dest,
+        "adjuntos": adjuntos,
+    }
+    try:
+        supabase.table("topo_poligonal_comentarios").insert(row).execute()
+    except Exception as exc:
+        low = str(exc).lower()
+        if "adjuntos" in low or "column" in low:
+            row.pop("adjuntos", None)
+            if adjuntos:
+                urls = "\n".join(f"[adjunto] {a['url']}" for a in adjuntos)
+                row["mensaje"] = f"{mensaje}\n\n{urls}".strip()
+            supabase.table("topo_poligonal_comentarios").insert(row).execute()
+        else:
+            raise
 
 
 def _opciones_bd_desde_calc(calc: dict) -> dict:
@@ -673,25 +709,39 @@ def _insertar_comentario_newpoint(
     comentario_data: dict,
     rol_origen: str,
 ) -> None:
+    adjuntos = _normalizar_adjuntos_comentario_topo(comentario_data)
     mensaje = (comentario_data.get("mensaje") or "").strip()
+    if not mensaje and adjuntos:
+        mensaje = "(Soporte fotográfico)"
     if not mensaje:
         raise HTTPException(status_code=422, detail="El comentario debe incluir un mensaje.")
     dest = comentario_data.get("destinatarios") or []
-    if not dest:
+    if not dest and estado in ("Pendiente", "Rechazado"):
         raise HTTPException(status_code=422, detail="Indique al menos un destinatario del comentario.")
-    supabase.table("topo_newpoint_comentarios").insert(
-        {
-            "newpoint_id": newpoint_id,
-            "contrato_id": contrato_id,
-            "autor_id": autor_id,
-            "nivel": nivel,
-            "estado": estado,
-            "rol_origen": rol_origen,
-            "etiqueta": comentario_data.get("etiqueta"),
-            "mensaje": mensaje,
-            "destinatarios": dest,
-        }
-    ).execute()
+    row = {
+        "newpoint_id": newpoint_id,
+        "contrato_id": contrato_id,
+        "autor_id": autor_id,
+        "nivel": nivel,
+        "estado": estado,
+        "rol_origen": rol_origen,
+        "etiqueta": comentario_data.get("etiqueta"),
+        "mensaje": mensaje,
+        "destinatarios": dest,
+        "adjuntos": adjuntos,
+    }
+    try:
+        supabase.table("topo_newpoint_comentarios").insert(row).execute()
+    except Exception as exc:
+        low = str(exc).lower()
+        if "adjuntos" in low or "column" in low:
+            row.pop("adjuntos", None)
+            if adjuntos:
+                urls = "\n".join(f"[adjunto] {a['url']}" for a in adjuntos)
+                row["mensaje"] = f"{mensaje}\n\n{urls}".strip()
+            supabase.table("topo_newpoint_comentarios").insert(row).execute()
+        else:
+            raise
 
 
 def _exigir_newpoint_lista_validar(row: dict) -> None:
@@ -3332,25 +3382,39 @@ def _insertar_comentario_nivelacion(
     comentario_data: dict,
     rol_origen: str,
 ) -> None:
+    adjuntos = _normalizar_adjuntos_comentario_topo(comentario_data)
     mensaje = (comentario_data.get("mensaje") or "").strip()
+    if not mensaje and adjuntos:
+        mensaje = "(Soporte fotográfico)"
     if not mensaje:
         raise HTTPException(status_code=422, detail="El comentario debe incluir un mensaje.")
     dest = comentario_data.get("destinatarios") or []
-    if not dest:
+    if not dest and estado in ("Pendiente", "Rechazado"):
         raise HTTPException(status_code=422, detail="Indique al menos un destinatario del comentario.")
-    supabase.table("topo_nivelacion_comentarios").insert(
-        {
-            "nivelacion_id": nivelacion_id,
-            "contrato_id": contrato_id,
-            "autor_id": autor_id,
-            "nivel": nivel,
-            "estado": estado,
-            "rol_origen": rol_origen,
-            "etiqueta": comentario_data.get("etiqueta"),
-            "mensaje": mensaje,
-            "destinatarios": dest,
-        }
-    ).execute()
+    row = {
+        "nivelacion_id": nivelacion_id,
+        "contrato_id": contrato_id,
+        "autor_id": autor_id,
+        "nivel": nivel,
+        "estado": estado,
+        "rol_origen": rol_origen,
+        "etiqueta": comentario_data.get("etiqueta"),
+        "mensaje": mensaje,
+        "destinatarios": dest,
+        "adjuntos": adjuntos,
+    }
+    try:
+        supabase.table("topo_nivelacion_comentarios").insert(row).execute()
+    except Exception as exc:
+        low = str(exc).lower()
+        if "adjuntos" in low or "column" in low:
+            row.pop("adjuntos", None)
+            if adjuntos:
+                urls = "\n".join(f"[adjunto] {a['url']}" for a in adjuntos)
+                row["mensaje"] = f"{mensaje}\n\n{urls}".strip()
+            supabase.table("topo_nivelacion_comentarios").insert(row).execute()
+        else:
+            raise
 
 
 ORDEN_CONTRA_BASE = 100_000
