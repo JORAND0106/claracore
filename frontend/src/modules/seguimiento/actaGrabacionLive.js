@@ -1,9 +1,11 @@
 /**
  * Fusión de temas sintetizados en vivo → filas del TAB Temas.
  * No toca compromisos.
+ * Respeta título/expositor de temas pre-creados (Orden del Día / manual).
  */
 
 import { plainTextToHtml } from './richTextUtils.js'
+import { isClaveOrdenDia, isClaveSuelta } from './actaTemasOrdenDia.js'
 
 export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = [], { newRowKey } = {}) {
   const list = Array.isArray(ideasActuales) ? [...ideasActuales] : []
@@ -29,8 +31,12 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
     if (!textoPlano && !titulo) return
     const quien = String(tema?.interviniente || '').trim()
     const html = plainTextToHtml(textoPlano)
+    const idxExistente = byClave.get(clave)
+    const protegerMeta = isClaveOrdenDia(clave)
+      || String(clave).startsWith('manual-')
+      || !!(idxExistente != null && list[idxExistente]?._desdeOrdenDia)
 
-    const idx = byClave.get(clave)
+    const idx = idxExistente
     if (idx != null) {
       const prev = list[idx]
       if (prev?._editadoUsuario) return
@@ -38,10 +44,15 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
         ...prev,
         _claveGrabacion: clave,
         _desdeGrabacion: true,
-        titulo: titulo || prev.titulo || '',
+        titulo: protegerMeta
+          ? (prev.titulo || titulo || '')
+          : (titulo || prev.titulo || ''),
         texto: html,
-        quien_dijo: quien || prev.quien_dijo || '',
+        quien_dijo: protegerMeta
+          ? (prev.quien_dijo || quien || '')
+          : (quien || prev.quien_dijo || ''),
       }
+      if (isClaveSuelta(clave)) next._ideaSuelta = true
       if (
         next.titulo !== prev.titulo
         || next.texto !== prev.texto
@@ -64,9 +75,11 @@ export function mergeTemasGrabacionViva(ideasActuales = [], temasPropuestos = []
       _key: makeKey('idea'),
       _claveGrabacion: clave,
       _desdeGrabacion: true,
+      _temaAbierto: false,
+      _ideaSuelta: isClaveSuelta(clave),
       texto: html,
       quien_dijo: quien,
-      titulo: titulo || '',
+      titulo: titulo || (isClaveSuelta(clave) ? 'Idea general' : ''),
       imagenes: [],
     }
     if (onlyEmpty) {

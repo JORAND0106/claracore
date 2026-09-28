@@ -72,6 +72,7 @@ function truncate(text, max = 90) {
 /**
  * Tabla compacta de Temas (ideas) del acta.
  * El diligenciamiento completo se abre en TemaEditorModal vía onOpenTema.
+ * Temas pre-creados desde Orden del Día: Abrir/Cerrar (un solo abierto).
  * La redacción desde audio usa checkpoints automáticos (~5 min) + botón Actualizar.
  */
 export default function ActaTemasTable({
@@ -89,10 +90,15 @@ export default function ActaTemasTable({
   tramos = [],
   onGenerarCompromiso,
   onVerAdjuntos,
+  onAbrirTema,
+  onCerrarTema,
+  onAgregarTema,
+  grabacionActiva = false,
 }) {
   const tramosList = Array.isArray(tramos) ? tramos : []
   const hayError = tramosList.some((tr) => (tr?.estado || '') === 'error')
   const hayProcesando = tramosList.some((tr) => (tr?.estado || '') === 'procesando')
+  const hayAbierto = ideas.some((idea) => !!idea?._temaAbierto)
 
   return (
     <div className="cc-seguim-temas-table">
@@ -124,6 +130,19 @@ export default function ActaTemasTable({
           </button>
         )}
       </div>
+      {grabacionActiva && (
+        <div style={{
+          marginBottom: 10,
+          fontSize: 'var(--cc-xs, 11px)',
+          color: t.textMuted,
+          lineHeight: 1.45,
+        }}
+        >
+          {hayAbierto
+            ? 'Hay un tema abierto: el audio y los checkpoints se asocian a ese punto.'
+            : 'Ningún tema abierto: los checkpoints se guardan como ideas generales (sueltas).'}
+        </div>
+      )}
       {tramosList.length > 0 && (
         <div
           style={{
@@ -160,8 +179,9 @@ export default function ActaTemasTable({
       )}
       {!ideas.length ? (
         <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-          Aún no hay temas. Con la grabación activa, la plataforma sintetiza ideas cada ~5 minutos
-          (o pulse «Actualizar»). Adjuntos, esquemas y gráficos se agregan al editar cada tema.
+          Aún no hay temas. Los puntos del Orden del Día se pre-crean aquí al habilitar esta pestaña.
+          También puede «Agregar tema» para un punto no previsto. Con la grabación activa, abra un tema
+          para asociar el audio (checkpoints ~5 min o «Actualizar»).
         </div>
       ) : (
         <div
@@ -180,15 +200,16 @@ export default function ActaTemasTable({
               width: '100%',
               borderCollapse: 'collapse',
               fontSize: 'var(--cc-sm)',
-              minWidth: viewportCompact ? 640 : 860,
+              minWidth: viewportCompact ? 700 : 920,
               background: 'transparent',
             }}
           >
             <thead>
               <tr style={{ background: t.bg || `${t.primary}08`, color: t.textMuted, textAlign: 'left' }}>
                 <th style={th}>#</th>
+                <th style={th}>Estado</th>
                 <th style={th}>Interviniente</th>
-                <th style={{ ...th, minWidth: 220 }}>Tema</th>
+                <th style={{ ...th, minWidth: 200 }}>Tema</th>
                 <th style={{ ...th, textAlign: 'center' }}>Adjuntos</th>
                 <th style={{ ...th, textAlign: 'center' }}>Acciones</th>
               </tr>
@@ -201,18 +222,37 @@ export default function ActaTemasTable({
                 const preview = titulo || truncate(plano, 100)
                 const imgs = Array.isArray(idea.imagenes) ? idea.imagenes : []
                 const empty = isRichTextEmpty(idea.texto)
+                const abierto = !!idea._temaAbierto
+                const esSuelta = !!idea._ideaSuelta || /^suelta-/i.test(String(idea._claveGrabacion || ''))
                 return (
                   <tr
                     key={idea._key || idea.id || `idea-${idx}`}
                     style={{
                       borderTop: `1px solid ${t.border}`,
-                      background: t.bgCard || 'transparent',
+                      background: abierto
+                        ? `${t.primary}12`
+                        : (t.bgCard || 'transparent'),
                       cursor: 'pointer',
                     }}
                     onClick={() => onOpenTema?.(idx)}
                     title="Abrir diligenciamiento del tema"
                   >
                     <td data-label="#" style={{ ...td, fontWeight: 700, color: t.textMuted }}>{n}</td>
+                    <td data-label="Estado" style={td} onClick={(e) => e.stopPropagation()}>
+                      <span style={{
+                        display: 'inline-block',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: 999,
+                        border: `1px solid ${abierto ? t.primary : t.border}`,
+                        color: abierto ? t.primary : t.textMuted,
+                        background: abierto ? `${t.primary}14` : 'transparent',
+                      }}
+                      >
+                        {abierto ? 'Abierto' : (esSuelta ? 'Idea general' : 'Cerrado')}
+                      </span>
+                    </td>
                     <td data-label="Interviniente" style={td}>
                       <span style={{ color: t.text }}>
                         {String(idea.quien_dijo || '').trim() || '—'}
@@ -257,7 +297,30 @@ export default function ActaTemasTable({
                       </button>
                     </td>
                     <td data-label="Acciones" style={{ ...td, whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
-                      <div style={{ display: 'inline-flex', gap: 4 }}>
+                      <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {!soloLectura && !esSuelta && (
+                          abierto ? (
+                            <button
+                              type="button"
+                              style={{ ...ghost(t), padding: '4px 10px', fontSize: 12 }}
+                              disabled={saving || actualizandoTemas}
+                              title="Cierra el tema y sintetiza el tramo hablado desde que se abrió"
+                              onClick={() => onCerrarTema?.(idx)}
+                            >
+                              Cerrar tema
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              style={{ ...primary(t), padding: '4px 10px', fontSize: 12 }}
+                              disabled={saving || actualizandoTemas}
+                              title="Abre este tema para asociar el audio (cierra automáticamente otro si hubiera)"
+                              onClick={() => onAbrirTema?.(idx)}
+                            >
+                              Abrir tema
+                            </button>
+                          )
+                        )}
                         <button
                           type="button"
                           style={iconBtn(t)}
@@ -286,6 +349,19 @@ export default function ActaTemasTable({
               })}
             </tbody>
           </table>
+        </div>
+      )}
+      {!soloLectura && typeof onAgregarTema === 'function' && (
+        <div style={{ marginTop: 10 }}>
+          <button
+            type="button"
+            style={ghost(t)}
+            disabled={saving}
+            onClick={() => onAgregarTema()}
+            title="Agregar un tema no previsto en el Orden del Día"
+          >
+            + Agregar tema
+          </button>
         </div>
       )}
     </div>

@@ -891,6 +891,13 @@ class GrabacionTranscripcionBody(BaseModel):
 
 class GrabacionActualizarTemasBody(BaseModel):
     origen: Optional[str] = Field("manual", max_length=20)
+    tema_clave_activa: Optional[str] = Field(None, max_length=40)
+    temas_base: Optional[List[Dict[str, Any]]] = None
+
+
+class GrabacionCheckpointTemasBody(BaseModel):
+    tema_clave_activa: Optional[str] = Field(None, max_length=40)
+    temas_base: Optional[List[Dict[str, Any]]] = None
 
 
 @router.get("/{contrato_id}/grabacion/live-status")
@@ -1016,6 +1023,7 @@ async def route_grabacion_chunk(
 def route_grabacion_checkpoint_temas(
     contrato_id: int,
     sesion_id: int,
+    body: Optional[GrabacionCheckpointTemasBody] = None,
     current_user=Depends(get_current_user),
 ):
     """Checkpoint inicial al habilitar TAB Temas: escucha audio sin generar temas aún."""
@@ -1026,6 +1034,8 @@ def route_grabacion_checkpoint_temas(
         contrato_id,
         sesion_id,
         _uid(current_user),
+        temas_base=(body.temas_base if body else None),
+        tema_clave_activa=(body.tema_clave_activa if body else None),
     )
 
 
@@ -1046,6 +1056,8 @@ async def route_grabacion_actualizar_temas(
         sesion_id,
         _uid(current_user),
         origen=origen,
+        tema_clave_activa=(body.tema_clave_activa if body else None),
+        temas_base=(body.temas_base if body else None),
     )
 
 

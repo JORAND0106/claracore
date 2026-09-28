@@ -29,6 +29,10 @@ export function createGrabacionSessionController({
   onDownloaded,
   onTemasVivos,
   onLiveInfo,
+  /** Clave del tema abierto (od-N / manual-*); null → ideas sueltas. */
+  getTemaClaveActiva,
+  /** Temas pre-creados a sembrar en la sesión [{clave,titulo,texto,interviniente}]. */
+  getTemasBase,
   /** Inyectables para tests */
   openStreams = openGrabacionStreams,
   createRecorder = createMediaRecorder,
@@ -213,7 +217,10 @@ export function createGrabacionSessionController({
       /* STT best-effort: el checkpoint puede armarse igual */
     }
     try {
-      const payload = await api.grabacionCheckpointTemas?.(sesionId)
+      const payload = await api.grabacionCheckpointTemas?.(sesionId, {
+        tema_clave_activa: typeof getTemaClaveActiva === 'function' ? getTemaClaveActiva() : null,
+        temas_base: typeof getTemasBase === 'function' ? getTemasBase() : undefined,
+      })
       temasCheckpointArmed = true
       applyLivePayload(payload, { applyTemas: false })
       emitState({ temasCheckpointArmed: true })
@@ -248,7 +255,11 @@ export function createGrabacionSessionController({
     emitState({ temasBusy: true })
     try {
       try { await audioBatcher?.flush?.() } catch { /* ignore */ }
-      const payload = await api.grabacionActualizarTemas(sesionId, { origen })
+      const payload = await api.grabacionActualizarTemas(sesionId, {
+        origen,
+        tema_clave_activa: typeof getTemaClaveActiva === 'function' ? getTemaClaveActiva() : null,
+        temas_base: typeof getTemasBase === 'function' ? getTemasBase() : undefined,
+      })
       if (payload?.temas_escucha_activa) temasCheckpointArmed = true
       applyLivePayload(payload, { applyTemas: true })
       // Reinicia el intervalo automático tras cualquier checkpoint efectivo.

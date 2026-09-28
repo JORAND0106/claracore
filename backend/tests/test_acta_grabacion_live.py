@@ -12,10 +12,13 @@ from acta_grabacion_live_service import (
     MSG_SCHEMA_LIVE,
     TRAMO_MIN_CHARS,
     _cola_desde_tramos,
+    _decode_cola_tema,
+    _encode_cola_con_tema,
     _is_missing_live_column_error,
     _merge_temas_por_clave,
     _normalize_temas,
     _parse_temas_json,
+    _sembrar_temas_base,
     append_transcript,
     append_transcript_tracking_checkpoint,
     speech_status,
@@ -65,6 +68,38 @@ def test_merge_temas_por_clave_actualiza_y_agrega():
     assert out[0]["texto"] == "actualizado"
     assert out[0]["interviniente"] == "Ana"
     assert out[1]["clave"] == "t2"
+
+
+def test_encode_decode_cola_tema_clave():
+    raw = _encode_cola_con_tema("cola previa de audio", "od-2")
+    assert raw.startswith("[[tema_clave:od-2]]")
+    clave, cola = _decode_cola_tema(raw)
+    assert clave == "od-2"
+    assert cola == "cola previa de audio"
+    assert _decode_cola_tema("sin marcador") == (None, "sin marcador")
+    assert _encode_cola_con_tema("", None) is None
+
+
+def test_sembrar_temas_base_ancla_orden_sin_borrar_texto():
+    prev = [{"clave": "od-1", "titulo": "Avance", "texto": "Ya sintetizado", "interviniente": "Ana"}]
+    base = [
+        {"clave": "od-1", "titulo": "Avance", "texto": "", "interviniente": "Ana"},
+        {"clave": "od-2", "titulo": "Calidad", "texto": "", "interviniente": "Luis"},
+    ]
+    out = _sembrar_temas_base(prev, base)
+    assert len(out) == 2
+    assert out[0]["texto"] == "Ya sintetizado"
+    assert out[1]["clave"] == "od-2"
+    assert out[1]["titulo"] == "Calidad"
+
+
+def test_merge_od_conserva_titulo_si_nuevo_vacio():
+    prev = [{"clave": "od-1", "titulo": "Punto OD", "texto": "a", "interviniente": "Ana"}]
+    nuevos = [{"clave": "od-1", "titulo": "", "texto": "ampliado", "interviniente": None}]
+    out = _merge_temas_por_clave(prev, nuevos)
+    assert out[0]["titulo"] == "Punto OD"
+    assert out[0]["interviniente"] == "Ana"
+    assert out[0]["texto"] == "ampliado"
 
 
 def test_normalize_temas_limita_y_completa_titulo():
