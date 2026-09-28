@@ -2,7 +2,7 @@ import { useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import AdjuntosMediaSlider from '../../components/adjuntos/AdjuntosMediaSlider'
 import { slidesFromImagenes } from '../../components/adjuntos/adjuntosMedia'
-import { prepararImagenParaUpload } from '../../comprimirImagen'
+import { prepararEsquemaParaUpload, prepararImagenParaUpload } from '../../comprimirImagen'
 import {
   agregarEntradaGraficoHistorial,
   fmtFechaGrafico,
@@ -78,7 +78,9 @@ export default function SicoeGraficosWizardPanel({
     const origen = opts.origen || 'manual'
     setSubiendo(true)
     try {
-      const prepared = await prepararImagenParaUpload(file)
+      const prepared = origen === 'esquema'
+        ? await prepararEsquemaParaUpload(file)
+        : await prepararImagenParaUpload(file)
       const fd = new FormData()
       fd.append('file', prepared)
       const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method: 'POST', headers: hdrs })

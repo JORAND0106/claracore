@@ -28,7 +28,7 @@ import {
 } from './offline/offlineRouter'
 import { db, savePendingBlob, countAllPendingBlobs } from './offline/db'
 import { comprimirImagenOffline, warnPendingBlobsLimit } from './offline/offlineUtils'
-import { prepararImagenParaUpload, sha256Hex } from './comprimirImagen'
+import { prepararEsquemaParaUpload, prepararImagenParaUpload, sha256Hex } from './comprimirImagen'
 import ModalPkMapaLeaflet from './offline/ModalPkMapaLeaflet'
 import AdminPanel from './AdminPanel'
 import { openAdminUsuarios } from './openAdminListadoPrecios'
@@ -3408,7 +3408,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       const numRes = await sicoeFetchJsonOThrow(resNum)
       const numero = sicoeNumeroDesdeNextApi(numRes)
       if (numero == null) throw new Error('No se obtuvo el consecutivo de gráfico')
-      const prepared = await prepararImagenParaUpload(file)
+      // Esquemas: preservar PNG hi-res (tabla de coordenadas legible en memorias).
+      const prepared = origen === 'esquema'
+        ? await prepararEsquemaParaUpload(file)
+        : await prepararImagenParaUpload(file)
       const fd = new FormData(); fd.append('file', prepared); fd.append('numero', String(numero)); fd.append('descripcion', '')
       const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
       const res = await sicoeFetchJsonOThrow(up)
