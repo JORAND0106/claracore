@@ -37,6 +37,8 @@ describe('Asociar planilla a reporte SICOE existente', () => {
     assert.match(modalSrc, /data-asociar-numero-reporte/)
     assert.match(modalSrc, /data-asociar-esquema-btn/)
     assert.match(modalSrc, /al Guardar se sincronizan/i)
+    assert.match(modalSrc, /ASOCIAR_POPUP_ANCHO_PX/)
+    assert.match(modalSrc, /data-asociar-zona-comparacion/)
   })
 
   it('mini tabla de cantidades con checks desmarcados por defecto', () => {

@@ -12,11 +12,28 @@ import {
   CREAR_REPORTE_ESQUEMA_Z_INDEX,
   CREAR_REPORTE_Z_INDEX,
 } from './PlanillaTuberiaCrearReporteModal'
+import { topoSheetStyles } from '../topoSheetStyles'
+import {
+  ASOCIAR_POPUP_ANCHO_PX,
+  registrosComparacionDesdeReporte,
+} from './planillaTuberiaAsociarComparacion'
 import {
   filtrarReportesSicoeAutocomplete,
   formatoPreviewReporteSicoe,
   origenKeyLineaAsociarSicoe,
 } from './planillaTuberiaUtils'
+
+async function fetchRegistrosReporte(contratoId, token, reporteId) {
+  const res = await fetch(
+    `${API_BASE}/sicoe-obra/${contratoId}/reportes/${reporteId}?ligero=1`,
+    { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+  )
+  if (!res.ok) {
+    const t = await res.text().catch(() => '')
+    throw new Error(t || `No se pudieron cargar ítems del reporte (${res.status})`)
+  }
+  return res.json()
+}
 
 async function fetchReportesBuscar(contratoId, token, params = {}) {
   const q = new URLSearchParams()
@@ -78,10 +95,15 @@ export default function PlanillaTuberiaAsociarReporteModal({
   const [esquemaDataUri, setEsquemaDataUri] = useState(null)
   /** Orígenes marcados para crear en Sin Asignar Ítem (desmarcados por defecto). */
   const [origenesSel, setOrigenesSel] = useState(() => new Set())
+  /** Filas de comparación (ítems cobrados en el reporte seleccionado). */
+  const [regsComparacion, setRegsComparacion] = useState([])
+  const [cargandoRegs, setCargandoRegs] = useState(false)
+  const [errRegs, setErrRegs] = useState('')
   const wrapRef = useRef(null)
   const pickingRef = useRef(false)
   const reactId = useId()
   const listId = `cc-topo-asociar-rep-${String(reactId).replace(/:/g, '')}`
+  const sheet = useMemo(() => topoSheetStyles(ui?.t || ui), [ui])
 
   useEffect(() => {
     if (!open) return
@@ -94,7 +116,37 @@ export default function PlanillaTuberiaAsociarReporteModal({
     setEsquemaDataUri(null)
     setReportes([])
     setOrigenesSel(new Set())
+    setRegsComparacion([])
+    setErrRegs('')
+    setCargandoRegs(false)
   }, [open, planilla?.id])
+
+  // Tabla de comparación: se actualiza al elegir otro reporte (mismo endpoint SICOE Obra).
+  useEffect(() => {
+    if (!open || !contratoId || !token || selected?.id == null) {
+      setRegsComparacion([])
+      setErrRegs('')
+      setCargandoRegs(false)
+      return undefined
+    }
+    let cancelled = false
+    setCargandoRegs(true)
+    setErrRegs('')
+    ;(async () => {
+      try {
+        const data = await fetchRegistrosReporte(contratoId, token, selected.id)
+        if (!cancelled) setRegsComparacion(registrosComparacionDesdeReporte(data))
+      } catch (e) {
+        if (!cancelled) {
+          setRegsComparacion([])
+          setErrRegs(e?.message || 'No se pudieron cargar los ítems del reporte')
+        }
+      } finally {
+        if (!cancelled) setCargandoRegs(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, contratoId, token, selected?.id])
 
   // Carga inicial de reportes existentes (SICOE Obra).
   useEffect(() => {
@@ -304,9 +356,11 @@ export default function PlanillaTuberiaAsociarReporteModal({
       <div
         data-asociar-reporte-popup
         style={{
-          width: 'min(720px, 100%)',
-          maxHeight: '90vh',
-          overflow: 'auto',
+          width: `min(${ASOCIAR_POPUP_ANCHO_PX}px, 100%)`,
+          maxHeight: '92vh',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
           background: ui?.cardBg || '#fff',
           borderRadius: 12,
           border: `1px solid ${ui?.border || '#e2e8f0'}`,
@@ -350,7 +404,32 @@ export default function PlanillaTuberiaAsociarReporteModal({
           </table>
         </div>
 
-        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div
+          data-asociar-reporte-body
+          style={{
+            padding: 16,
+            display: 'grid',
+            gridTemplateColumns: 'minmax(280px, 1fr) minmax(280px, 1.15fr)',
+            gap: 16,
+            alignItems: 'stretch',
+            minHeight: 0,
+            flex: 1,
+            overflow: 'auto',
+          }}
+        >
+          <style>{`
+            @media (max-width: 900px) {
+              [data-asociar-reporte-body] {
+                grid-template-columns: 1fr !important;
+              }
+            }
+          `}</style>
+
+          {/* Zona asociación */}
+          <div
+            data-asociar-zona-asociacion
+            style={{ display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}
+          >
           <div style={{
             background: '#eff6ff',
             border: '1px solid #bfdbfe',
@@ -369,6 +448,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
             {' '}Sin checks solo se adjuntan coords/fotos/gráfico.
             {' '}Mientras la planilla no esté validada por interventoría, al Guardar se sincronizan
             las cantidades del resumen/descuentos al reporte (las casillas en SICOE siguen editables).
+            {' '}A la derecha ve los ítems ya cobrados en el reporte (solo lectura).
           </div>
 
           <div ref={wrapRef} style={{ position: 'relative' }}>
@@ -647,7 +727,175 @@ export default function PlanillaTuberiaAsociarReporteModal({
               </div>
             </div>
           )}
+          </div>
 
+          {/* Zona comparación — ítems cobrados en el reporte seleccionado */}
+          <div
+            data-asociar-zona-comparacion
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              minWidth: 0,
+              minHeight: 200,
+              border: `1px solid ${ui?.border || '#e2e8f0'}`,
+              borderRadius: 10,
+              padding: 10,
+              background: ui?.inputBg || '#f8fafc',
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', color: ui?.text || '#0f172a' }}>
+              Ítems cobrados en el reporte
+              {selected?.numero_reporte != null && (
+                <span style={{
+                  fontWeight: 500,
+                  color: ui?.textMuted || '#64748b',
+                  marginLeft: 8,
+                  fontSize: 'var(--cc-xs)',
+                }}
+                >
+                  Nº {selected.numero_reporte}
+                  {regsComparacion.length > 0 ? ` · ${regsComparacion.length} registro(s)` : ''}
+                </span>
+              )}
+            </div>
+            <div style={{
+              fontSize: 'var(--cc-xxs)',
+              color: ui?.textMuted || '#64748b',
+              lineHeight: 1.35,
+            }}
+            >
+              Solo lectura · mismos datos/formatos de SICOE Obra (dims 3 dec., cantidad dinámica 2/3).
+              Se actualiza al cambiar el reporte.
+            </div>
+            {!selected && (
+              <div
+                data-asociar-comparacion-vacio
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 'var(--cc-xs)',
+                  color: ui?.textMuted || '#64748b',
+                  padding: 16,
+                  textAlign: 'center',
+                }}
+              >
+                Seleccione un reporte para ver sus ítems cobrados.
+              </div>
+            )}
+            {selected && cargandoRegs && (
+              <div data-asociar-comparacion-loading style={{
+                fontSize: 'var(--cc-xs)', color: ui?.textMuted || '#64748b', padding: 12,
+              }}
+              >
+                Cargando ítems del reporte…
+              </div>
+            )}
+            {selected && errRegs && (
+              <div data-asociar-comparacion-error style={{
+                color: '#b91c1c', background: '#fef2f2', borderRadius: 8,
+                padding: 8, fontSize: 'var(--cc-xs)',
+              }}
+              >
+                {errRegs}
+              </div>
+            )}
+            {selected && !cargandoRegs && !errRegs && (
+              <div
+                data-asociar-comparacion-tabla
+                style={{
+                  ...sheet.sheetWrap,
+                  flex: 1,
+                  maxHeight: 'min(420px, 50vh)',
+                  minHeight: 120,
+                }}
+              >
+                {regsComparacion.length === 0 ? (
+                  <div style={{
+                    padding: 14,
+                    fontSize: 'var(--cc-xs)',
+                    color: ui?.textMuted || '#64748b',
+                  }}
+                  >
+                    Este reporte no tiene registros cobrados.
+                  </div>
+                ) : (
+                  <table style={{ ...sheet.sheetTable, tableLayout: 'auto' }}>
+                    <thead>
+                      <tr>
+                        <th style={sheet.th}>Ítem</th>
+                        <th style={{ ...sheet.th, minWidth: 120 }}>Descripción / Obs.</th>
+                        <th style={sheet.th}>Und</th>
+                        <th style={{ ...sheet.th, textAlign: 'right' }}>Long</th>
+                        <th style={{ ...sheet.th, textAlign: 'right' }}>Ancho</th>
+                        <th style={{ ...sheet.th, textAlign: 'right' }}>Espesor</th>
+                        <th style={{ ...sheet.th, textAlign: 'right' }}>Cantidad</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {regsComparacion.map((row) => (
+                        <tr key={row.key} data-asociar-comparacion-fila={row.key}>
+                          <td style={{ ...sheet.td, fontWeight: 700, whiteSpace: 'nowrap' }}>{row.item}</td>
+                          <td
+                            style={{ ...sheet.td, maxWidth: 220 }}
+                            title={row.descripcion}
+                          >
+                            <div style={{
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            >
+                              {row.descripcion}
+                            </div>
+                          </td>
+                          <td style={{ ...sheet.td, color: sheet.textMuted }}>{row.unidad}</td>
+                          <td style={{
+                            ...sheet.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                          }}
+                          >
+                            {row.longitud}
+                          </td>
+                          <td style={{
+                            ...sheet.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                          }}
+                          >
+                            {row.ancho}
+                          </td>
+                          <td style={{
+                            ...sheet.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                          }}
+                          >
+                            {row.espesor}
+                          </td>
+                          <td style={{
+                            ...sheet.td, textAlign: 'right', fontWeight: 700,
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                          >
+                            {row.cantidad}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{
+          padding: '12px 16px',
+          borderTop: `1px solid ${ui?.border || '#e2e8f0'}`,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          flexShrink: 0,
+        }}
+        >
           {err && (
             <div style={{
               color: '#b91c1c', background: '#fef2f2', borderRadius: 8,
@@ -658,7 +906,7 @@ export default function PlanillaTuberiaAsociarReporteModal({
             </div>
           )}
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
             <button
               type="button"
               disabled={busy}
