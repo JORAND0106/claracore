@@ -65,6 +65,7 @@ from seguimiento_service import (
     proximo_consecutivo,
     redaccion_asistida_clara,
     registrar_firma_asistente,
+    reparar_compromisos_externos_huerfanos,
     reemplazar_externo_por_usuario,
     revertir_acta_a_borrador,
     revisar_justificacion,
@@ -704,7 +705,45 @@ def route_list_externos_depuracion(contrato_id: int, current_user=Depends(get_cu
     """Listado de asistentes externos del histórico de actas (depuración)."""
     require_permiso_seguimiento(current_user, "editar")
     _check_contrato(current_user, contrato_id)
-    return list_externos_depuracion(supabase, contrato_id)
+    # Auto-repara compromisos huérfanos de reemplazos previos (catálogo ya vinculado).
+    try:
+        reparacion = reparar_compromisos_externos_huerfanos(supabase, contrato_id)
+    except Exception as exc:
+        _log.warning("reparación huérfanos externos contrato=%s: %s", contrato_id, exc)
+        reparacion = {"ok": False, "reparados": 0, "ambiguos": [], "detalle": str(exc)}
+    rows = list_externos_depuracion(supabase, contrato_id)
+    return {
+        "externos": rows,
+        "reparacion_huerfanos": {
+            "reparados": int(reparacion.get("reparados") or 0),
+            "ambiguos_count": int(reparacion.get("ambiguos_count") or len(reparacion.get("ambiguos") or [])),
+            "ambiguos": reparacion.get("ambiguos") or [],
+        },
+    }
+
+
+@router.post("/{contrato_id}/externos-depuracion/reparar-compromisos")
+def route_reparar_compromisos_huerfanos(contrato_id: int, current_user=Depends(get_current_user)):
+    """Repara compromisos que quedaron con externo tras reemplazos previos."""
+    require_permiso_seguimiento(current_user, "editar")
+    _check_contrato(current_user, contrato_id)
+    try:
+        result = reparar_compromisos_externos_huerfanos(supabase, contrato_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "SEGUIMIENTO",
+        "seguimiento_externo_reparar_compromisos",
+        str(contrato_id),
+        {
+            "contrato_id": contrato_id,
+            "reparados": result.get("reparados"),
+            "ambiguos_count": result.get("ambiguos_count"),
+        },
+    )
+    return result
 
 
 @router.post("/{contrato_id}/externos-depuracion/reemplazar")
@@ -714,8 +753,8 @@ def route_reemplazar_externo(
     current_user=Depends(get_current_user),
 ):
     """
-    Sustituye al externo por el usuario registrado en todas las actas donde participó.
-    El usuario_id de destino es obligatorio (nunca eliminación simple).
+    Sustituye al externo por el usuario registrado en todas las actas donde participó
+    y traslada todos sus compromisos (cualquier estado) al mismo usuario.
     """
     require_permiso_seguimiento(current_user, "editar")
     _check_contrato(current_user, contrato_id)
@@ -760,6 +799,7 @@ def route_reemplazar_externo(
             "usuario_id": body.usuario_id,
             "actas_count": result.get("actas_count"),
             "asistentes_actualizados": result.get("asistentes_actualizados"),
+            "compromisos_actualizados": result.get("compromisos_actualizados"),
         },
     )
     return result
