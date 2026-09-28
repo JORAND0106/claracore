@@ -102,6 +102,27 @@ function IconEye() {
   )
 }
 
+function IconEdit() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  )
+}
+
+function IconTrash() {
+  return (
+    <svg {...iconSvgProps()}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  )
+}
+
 function iconBtn(t, { accent = false } = {}) {
   return {
     width: 30,
@@ -167,6 +188,13 @@ export default function ActaCompromisosAbiertosTable({
   showOrigenBadge = false,
   /** Abre detalle completo (checklist multi-destinatario, etc.) sin sustituir la tabla. */
   onOpenDetalle = null,
+  /** Edita un compromiso existente (modal del padre; elaborador/Dev). */
+  onEditCompromiso = null,
+  /**
+   * Elaborador del acta actual (p. ej. presentes en ActaEditor).
+   * Complementa `acta_elaborador_id` en filas enriquecidas (previos / bandeja).
+   */
+  actaElaboradorId = null,
   usuario,
   usuarios = [],
   permisos,
@@ -184,6 +212,20 @@ export default function ActaCompromisosAbiertosTable({
   const puedeEditar = !!permisos?.editar
   const esDev = esDesarrolladorUsuario(usuario) || permisos?.esDesarrollador
   const doFilterArchivados = filtrarArchivados == null ? !!permitirArchivar : !!filtrarArchivados
+
+  const elaboradorIdDe = (row) => (
+    row?.acta_elaborador_id
+    ?? row?.acta?.elaborador_id
+    ?? actaElaboradorId
+  )
+
+  const puedeGestionarCompromiso = (row) => {
+    if (!puedeEditar || !row) return false
+    if (String(row.origen || '').toLowerCase() === 'tarea') return false
+    if (esDev) return true
+    const elabId = elaboradorIdDe(row)
+    return elabId != null && Number(elabId) === Number(usuario?.id)
+  }
 
   const visibles = useMemo(() => {
     let list = Array.isArray(items) ? items : []
@@ -254,6 +296,25 @@ export default function ActaCompromisosAbiertosTable({
       return
     }
     await patchEstado(row, 'cumplido', { archivar: true })
+  }
+
+  const eliminarCompromiso = async (row) => {
+    const label = (row.titulo || row.descripcion || `#${row.id}`).toString().slice(0, 80)
+    if (!window.confirm(
+      `¿Eliminar definitivamente este compromiso?\n\n«${label}»\n\nEsta acción no se puede deshacer.`,
+    )) {
+      return
+    }
+    setBusyId(row.id)
+    setError('')
+    try {
+      await api.deleteItem(row.id)
+      await refresh()
+    } catch (e) {
+      setError(e.message || 'No se pudo eliminar el compromiso')
+    } finally {
+      setBusyId(null)
+    }
   }
 
   const openPanel = (type, item) => setPanel({ type, item })
@@ -448,7 +509,7 @@ export default function ActaCompromisosAbiertosTable({
                         </span>
                         {(() => {
                           const esComp = String(c.origen || '').toLowerCase() !== 'tarea'
-                          const elabId = c.acta_elaborador_id ?? c.acta?.elaborador_id
+                          const elabId = elaboradorIdDe(c)
                           const puedeReasignar = esComp && puedeEditar && (
                             esDev || (elabId != null && Number(elabId) === Number(usuario?.id))
                           )
@@ -500,6 +561,34 @@ export default function ActaCompromisosAbiertosTable({
                             onClick={() => onOpenDetalle(c)}
                           >
                             <IconEye />
+                          </button>
+                        )}
+                        {!esTarea && puedeGestionarCompromiso(c) && typeof onEditCompromiso === 'function' && (
+                          <button
+                            type="button"
+                            style={iconBtn(t)}
+                            title="Editar compromiso"
+                            aria-label="Editar compromiso"
+                            disabled={busy}
+                            onClick={() => onEditCompromiso(c)}
+                          >
+                            <IconEdit />
+                          </button>
+                        )}
+                        {!esTarea && puedeGestionarCompromiso(c) && (
+                          <button
+                            type="button"
+                            style={{
+                              ...iconBtn(t),
+                              color: 'var(--cc-color-danger,#b91c1c)',
+                              borderColor: 'color-mix(in srgb, var(--cc-color-danger,#b91c1c) 45%, transparent)',
+                            }}
+                            title="Eliminar compromiso"
+                            aria-label="Eliminar compromiso"
+                            disabled={busy}
+                            onClick={() => eliminarCompromiso(c)}
+                          >
+                            <IconTrash />
                           </button>
                         )}
                         <button

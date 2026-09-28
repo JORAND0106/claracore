@@ -40,6 +40,7 @@ from seguimiento_service import (
     actualizar_estado_asignado,
     actualizar_estado_gestion,
     actualizar_fecha_compromiso,
+    actualizar_compromiso,
     adjuntar_imagen_idea_base64,
     adjuntar_imagen_tarea_base64,
     agregar_comentario,
@@ -286,6 +287,20 @@ class FechaCompromisoBody(BaseModel):
     hora_vencimiento: Optional[str] = None
 
 
+class CompromisoUpdateBody(BaseModel):
+    redaccion: Optional[str] = None
+    titulo: Optional[str] = None
+    descripcion: Optional[str] = None
+    fecha_vencimiento: Optional[str] = None
+    hora_vencimiento: Optional[str] = None
+    estado_gestion: Optional[str] = None
+    asignado_a_id: Optional[int] = None
+    asignado_a_nombre: Optional[str] = None
+    asignado_externo_id: Optional[int] = None
+    es_externo: Optional[bool] = None
+    asignados: Optional[List[AsignadoCompromisoBody]] = None
+
+
 class ReasignarResponsableBody(BaseModel):
     asignado_a_id: int = Field(..., description="Usuario registrado que será el nuevo responsable")
     asignado_a_nombre: Optional[str] = None
@@ -439,7 +454,8 @@ def route_destinar_item(item_id: int, body: DestinarBody, current_user=Depends(g
 
 @router.delete("/items/{item_id}")
 def route_eliminar_item(item_id: int, current_user=Depends(get_current_user)):
-    require_permiso_seguimiento(current_user, "eliminar")
+    # Compromisos: elaborador/Dev (editar). Otros ítems: solo Dev (service).
+    require_permiso_seguimiento(current_user, "editar")
     try:
         row = eliminar_item(supabase, item_id, current_user)
         registrar_log(current_user, "ELIMINAR", "SEGUIMIENTO", "seguimiento_item", str(item_id), {})
@@ -475,6 +491,26 @@ def route_fecha_compromiso(
             current_user=current_user,
         )
         registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_compromiso_fecha", str(item_id), {})
+        return row
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.patch("/items/{item_id}/compromiso")
+def route_actualizar_compromiso(
+    item_id: int, body: CompromisoUpdateBody, current_user=Depends(get_current_user)
+):
+    """Edita un compromiso existente (elaborador del acta o Desarrollador)."""
+    require_permiso_seguimiento(current_user, "editar")
+    try:
+        row = actualizar_compromiso(
+            supabase,
+            item_id,
+            _uid(current_user),
+            current_user,
+            body.model_dump(exclude_unset=True),
+        )
+        registrar_log(current_user, "EDITAR", "SEGUIMIENTO", "seguimiento_compromiso", str(item_id), {})
         return row
     except ValueError as exc:
         raise _http_value_error(exc) from exc

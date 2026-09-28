@@ -1091,6 +1091,23 @@ export default function ActaEditor({
     }
   }
 
+  /** Edita un compromiso ya creado (presentes / previos). */
+  const abrirEditarCompromiso = (compromiso) => {
+    if (!compromiso?.id) return
+    const aid = localActaId || compromiso.acta_id
+    if (!aid) {
+      setError('No se pudo identificar el acta del compromiso')
+      return
+    }
+    setCompromisoCtx({
+      actaId: aid,
+      ideaId: compromiso.idea_id || null,
+      texto: compromiso.descripcion || compromiso.titulo || '',
+      edit: true,
+      compromiso,
+    })
+  }
+
   const previewPdf = async () => {
     setPdfBusy(true)
     setError('')
@@ -1912,6 +1929,8 @@ export default function ActaEditor({
           highlightId={highlightCompromisoId}
           showActaOrigen={false}
           permitirArchivar={false}
+          actaElaboradorId={form.elaborador_id}
+          onEditCompromiso={abrirEditarCompromiso}
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
@@ -1947,6 +1966,7 @@ export default function ActaEditor({
           emptyMessage={`No hay compromisos abiertos previos de actas ${form.tipo_acta === 'externa' ? 'externas' : 'internas'}.`}
           showActaOrigen
           permitirArchivar
+          onEditCompromiso={abrirEditarCompromiso}
           usuario={usuario}
           usuarios={usuariosContrato}
           permisos={permisos}
@@ -2359,8 +2379,39 @@ export default function ActaEditor({
           usuarios={usuariosContrato}
           asistentesActa={form.asistentes || []}
           actaConsecutivo={consecutivo}
+          mode={compromisoCtx.edit ? 'edit' : 'create'}
+          compromisoInicial={compromisoCtx.compromiso || null}
           onClose={() => setCompromisoCtx(null)}
           onSubmit={async (body) => {
+            if (compromisoCtx.edit && compromisoCtx.compromiso?.id) {
+              const updated = await api.updateCompromiso(compromisoCtx.compromiso.id, body)
+              const aid = localActaId || compromisoCtx.actaId
+              if (aid) {
+                try {
+                  const a = await api.getActa(aid)
+                  setActaCompromisos(Array.isArray(a?.compromisos) ? a.compromisos : [])
+                } catch {
+                  if (updated?.id) {
+                    setActaCompromisos((prev) => (prev || []).map((x) => (
+                      Number(x.id) === Number(updated.id) ? { ...x, ...updated } : x
+                    )))
+                  }
+                }
+              }
+              setHighlightCompromisoId(compromisoCtx.compromiso.id)
+              setCompromisoCtx(null)
+              setError('')
+              setOkMsg('Compromiso actualizado.')
+              setTab('ideas')
+              try {
+                const abiertos = await api.compromisosAbiertos(
+                  localActaId || undefined,
+                  form.tipo_acta || 'interna',
+                )
+                setPrevios(abiertos || [])
+              } catch { /* ignore */ }
+              return
+            }
             const created = compromisoCtx.libre || compromisoCtx.ideaId == null
               ? await api.crearCompromisoLibre(compromisoCtx.actaId, body)
               : await api.crearCompromiso(compromisoCtx.actaId, compromisoCtx.ideaId, body)

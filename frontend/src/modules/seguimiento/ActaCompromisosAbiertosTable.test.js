@@ -69,6 +69,62 @@ describe('visibilidad tabla: estado vs archivar', () => {
   })
 })
 
+describe('permiso gestionar compromiso (elaborador / Dev)', () => {
+  function puedeGestionar({ row, usuarioId, esDev, puedeEditar, actaElaboradorId = null }) {
+    if (!puedeEditar || !row) return false
+    if (String(row.origen || '').toLowerCase() === 'tarea') return false
+    if (esDev) return true
+    const elabId = row.acta_elaborador_id ?? row.acta?.elaborador_id ?? actaElaboradorId
+    return elabId != null && Number(elabId) === Number(usuarioId)
+  }
+
+  it('elaborador del acta puede editar/eliminar', () => {
+    assert.equal(puedeGestionar({
+      row: { origen: 'compromiso', acta_elaborador_id: 10 },
+      usuarioId: 10,
+      esDev: false,
+      puedeEditar: true,
+    }), true)
+  })
+
+  it('usa actaElaboradorId de presentes cuando la fila no lo trae', () => {
+    assert.equal(puedeGestionar({
+      row: { origen: 'compromiso' },
+      usuarioId: 10,
+      esDev: false,
+      puedeEditar: true,
+      actaElaboradorId: 10,
+    }), true)
+  })
+
+  it('niega a no elaborador sin ser Dev', () => {
+    assert.equal(puedeGestionar({
+      row: { origen: 'compromiso', acta_elaborador_id: 10 },
+      usuarioId: 99,
+      esDev: false,
+      puedeEditar: true,
+    }), false)
+  })
+
+  it('Desarrollador puede aunque no sea elaborador', () => {
+    assert.equal(puedeGestionar({
+      row: { origen: 'compromiso', acta_elaborador_id: 10 },
+      usuarioId: 99,
+      esDev: true,
+      puedeEditar: true,
+    }), true)
+  })
+
+  it('no aplica a tareas', () => {
+    assert.equal(puedeGestionar({
+      row: { origen: 'tarea', acta_elaborador_id: 10 },
+      usuarioId: 10,
+      esDev: true,
+      puedeEditar: true,
+    }), false)
+  })
+})
+
 describe('orden por vencimiento (más próxima primero)', () => {
   it('ordena ascendente por fecha_vencimiento', async () => {
     const { sortByProximidadVencimiento } = await import('./vencimientoLevels.js')

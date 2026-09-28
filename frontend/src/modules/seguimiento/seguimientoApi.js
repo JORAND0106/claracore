@@ -160,6 +160,8 @@ export function createSeguimientoApi(contratoId, token) {
     destinarItem: (itemId, body) => send('POST', `/seguimiento/items/${itemId}/destinar`, body),
     reasignarResponsable: (itemId, body) =>
       send('POST', `/seguimiento/items/${itemId}/reasignar-responsable`, body),
+    updateCompromiso: (itemId, body) =>
+      send('PATCH', `/seguimiento/items/${itemId}/compromiso`, body),
     deleteItem: (itemId) => send('DELETE', `/seguimiento/items/${itemId}`),
     comentar: (itemId, mensaje) => send('POST', `/seguimiento/items/${itemId}/comentarios`, { mensaje }),
     patchFechaCompromiso: (itemId, body) =>

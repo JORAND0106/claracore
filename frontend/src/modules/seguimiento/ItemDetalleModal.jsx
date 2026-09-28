@@ -921,12 +921,13 @@ export default function ItemDetalleModal({
       )}
 
       <div className="cc-seguim-modal-footer" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 18, flexWrap: 'wrap' }}>
-        {esDev && (
+        {((esCompromiso && (soyElaboradorActa || esDev)) || (!esCompromiso && esDev)) && (
           <button
             type="button"
             style={{ ...ghost(t), color: 'var(--cc-color-danger,#b91c1c)', borderColor: 'var(--cc-color-danger,#b91c1c)' }}
             onClick={async () => {
-              if (!window.confirm('¿Eliminar definitivamente este ítem? Esta acción no se puede deshacer.')) return
+              const label = esCompromiso ? 'compromiso' : 'ítem'
+              if (!window.confirm(`¿Eliminar definitivamente este ${label}? Esta acción no se puede deshacer.`)) return
               try {
                 await api.deleteItem(item.id)
                 onChanged?.()
