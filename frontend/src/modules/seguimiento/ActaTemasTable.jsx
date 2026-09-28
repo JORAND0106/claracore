@@ -72,7 +72,7 @@ function truncate(text, max = 90) {
 /**
  * Tabla compacta de Temas (ideas) del acta.
  * El diligenciamiento completo se abre en TemaEditorModal vía onOpenTema.
- * La redacción desde audio usa el botón Actualizar (checkpoints manuales).
+ * La redacción desde audio usa checkpoints automáticos (~5 min) + botón Actualizar.
  */
 export default function ActaTemasTable({
   t,
@@ -85,12 +85,29 @@ export default function ActaTemasTable({
   onActualizarTemas,
   actualizandoTemas = false,
   puedeActualizarTemas = false,
+  onReintentarTramo,
+  tramos = [],
   onGenerarCompromiso,
   onVerAdjuntos,
 }) {
+  const tramosList = Array.isArray(tramos) ? tramos : []
+  const hayError = tramosList.some((tr) => (tr?.estado || '') === 'error')
+  const hayProcesando = tramosList.some((tr) => (tr?.estado || '') === 'procesando')
+
   return (
     <div className="cc-seguim-temas-table">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
+        {!soloLectura && hayError && (
+          <button
+            type="button"
+            style={ghost(t)}
+            disabled={saving || actualizandoTemas || !puedeActualizarTemas}
+            onClick={() => onReintentarTramo?.()}
+            title="Reintenta el tramo pendiente más antiguo sin saltar el orden"
+          >
+            Reintentar tramo
+          </button>
+        )}
         {!soloLectura && (
           <button
             type="button"
@@ -99,7 +116,7 @@ export default function ActaTemasTable({
             onClick={() => onActualizarTemas?.()}
             title={
               puedeActualizarTemas
-                ? 'Analiza el audio desde el último checkpoint hasta ahora'
+                ? 'Procesa de inmediato el tramo pendiente desde el último checkpoint y reinicia el automático (~5 min)'
                 : 'Inicie la grabación y habilite Temas (tras Compromisos abiertos) para actualizar'
             }
           >
@@ -107,10 +124,44 @@ export default function ActaTemasTable({
           </button>
         )}
       </div>
+      {tramosList.length > 0 && (
+        <div
+          style={{
+            marginBottom: 10,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: `1px solid ${t.border}`,
+            background: t.bg || `${t.primary}06`,
+            fontSize: 'var(--cc-xs, 11px)',
+            color: t.textMuted,
+            lineHeight: 1.45,
+          }}
+        >
+          <div style={{ fontWeight: 600, color: t.text, marginBottom: 4 }}>
+            Tramos de audio (informe ejecutivo)
+            {hayProcesando ? ' · en proceso…' : ''}
+            {hayError ? ' · hay pendientes por reintento' : ''}
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {tramosList.map((tr) => (
+              <li key={tr.id || `tr-${tr.orden}`} style={{ marginBottom: 2 }}>
+                Tramo #{tr.orden}
+                {' · '}
+                {labelEstadoTramo(tr.estado)}
+                {tr.origen ? ` · ${tr.origen}` : ''}
+                {tr.chars_tramo ? ` · ${tr.chars_tramo} caracteres` : ''}
+                {tr.estado === 'error' && tr.error_detalle
+                  ? ` — ${String(tr.error_detalle).slice(0, 120)}`
+                  : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {!ideas.length ? (
         <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>
-          Aún no hay temas. Pulse «Actualizar» para sintetizar ideas del audio desde el checkpoint,
-          o abra un tema existente cuando aparezca. Adjuntos, esquemas y gráficos se agregan al editar cada tema.
+          Aún no hay temas. Con la grabación activa, la plataforma sintetiza ideas cada ~5 minutos
+          (o pulse «Actualizar»). Adjuntos, esquemas y gráficos se agregan al editar cada tema.
         </div>
       ) : (
         <div
@@ -296,6 +347,15 @@ export function TemaAdjuntosPanel({ t, imagenes = [], onClose, viewportCompact =
 
 const th = { padding: '7px 8px', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 'var(--cc-xs)' }
 const td = { padding: '6px 8px', verticalAlign: 'middle', color: 'inherit' }
+
+function labelEstadoTramo(estado) {
+  const s = String(estado || '').toLowerCase()
+  if (s === 'listo') return 'procesado'
+  if (s === 'procesando') return 'en proceso'
+  if (s === 'error') return 'pendiente por reintento'
+  if (s === 'pendiente') return 'pendiente'
+  return s || 'pendiente'
+}
 
 function primary(t) {
   return { border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', background: t.primary, color: '#fff', fontWeight: 700, fontSize: 'var(--cc-sm)' }

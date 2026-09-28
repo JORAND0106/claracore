@@ -1,6 +1,6 @@
 /**
  * Orquestación de una sesión de grabación (cupo + MediaRecorder + descarga local)
- * + pipeline STT para Temas por checkpoints manuales (sin síntesis periódica).
+ * + pipeline Azure Speech sobre audio real + checkpoints de Temas (auto ~5 min / manual / final).
  */
 import {
   HEARTBEAT_MS,
@@ -11,13 +11,13 @@ import {
   segundosAReclamar,
   stopMediaStream,
 } from './actaGrabacionHelpers.js'
-import {
-  createAudioBatcher,
-  startWebSpeechTranscript,
-} from './actaGrabacionLive.js'
+import { createAudioBatcher } from './actaGrabacionLive.js'
 
 /** Tope para no dejar Detener colgado si MediaRecorder no dispara onstop. */
 export const RECORDER_STOP_TIMEOUT_MS = 4000
+
+/** Intervalo de checkpoint automático de Temas (~5 min). */
+export const CHECKPOINT_AUTO_MS = 5 * 60 * 1000
 
 export function createGrabacionSessionController({
   api,
@@ -36,6 +36,7 @@ export function createGrabacionSessionController({
   heartbeatMs = HEARTBEAT_MS,
   chunkIntervalMs = 15000,
   recorderStopTimeoutMs = RECORDER_STOP_TIMEOUT_MS,
+  checkpointAutoMs = CHECKPOINT_AUTO_MS,
   /** Si true, inicia STT al start; si false, solo tras armTemasCheckpoint. */
   enableLiveOnStart = false,
 } = {}) {
@@ -45,16 +46,17 @@ export function createGrabacionSessionController({
   let claimed = 0
   let heartbeatTimer = null
   let tickTimer = null
+  let autoCheckpointTimer = null
   let recorder = null
   let chunks = []
   let mimeType = ''
   let handles = null
   let stopping = false
   let audioBatcher = null
-  let webSpeech = null
-  let liveMode = 'none' // azure | webspeech | none
+  let liveMode = 'none' // azure | none
   let liveStarted = false
   let temasCheckpointArmed = false
+  let temasBusy = false
 
   const emitState = (patch) => {
     try { onState?.(patch) } catch { /* ignore */ }
@@ -71,9 +73,14 @@ export function createGrabacionSessionController({
     }
   }
 
+  const clearAutoCheckpoint = () => {
+    if (autoCheckpointTimer) {
+      clearInterval(autoCheckpointTimer)
+      autoCheckpointTimer = null
+    }
+  }
+
   const stopLivePipeline = async () => {
-    try { webSpeech?.stop?.() } catch { /* ignore */ }
-    webSpeech = null
     try { await audioBatcher?.flush?.() } catch { /* ignore */ }
     try { audioBatcher?.stop?.() } catch { /* ignore */ }
     audioBatcher = null
@@ -91,6 +98,21 @@ export function createGrabacionSessionController({
     ) {
       try { onTemasVivos?.(payload.temas, payload) } catch { /* ignore */ }
     }
+  }
+
+  const scheduleAutoCheckpoint = () => {
+    clearAutoCheckpoint()
+    if (!temasCheckpointArmed || closed || stopping) return
+    const raw = Number(checkpointAutoMs)
+    const ms = Number.isFinite(raw) && raw > 0
+      ? Math.max(20, raw)
+      : CHECKPOINT_AUTO_MS
+    autoCheckpointTimer = setInterval(() => {
+      if (closed || stopping || !temasCheckpointArmed || temasBusy) return
+      actualizarTemas({ origen: 'auto' }).catch((e) => {
+        onError?.(e?.message || 'No se pudo procesar el checkpoint automático de Temas')
+      })
+    }, ms)
   }
 
   const cleanupMedia = () => {
@@ -130,11 +152,14 @@ export function createGrabacionSessionController({
     liveStarted = true
     let sttAzure = false
     try {
-      // No bloquear la UI si live-status tarda: techo corto y seguir con Web Speech.
+      let timeoutId = null
       const st = await Promise.race([
         Promise.resolve(api.grabacionLiveStatus?.()).then((r) => r),
-        new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+        new Promise((resolve) => {
+          timeoutId = setTimeout(() => resolve(null), 8000)
+        }),
       ])
+      if (timeoutId) clearTimeout(timeoutId)
       if (st) {
         sttAzure = !!st?.stt_disponible
         onLiveInfo?.(st || {})
@@ -151,10 +176,9 @@ export function createGrabacionSessionController({
           if (closed || stopping || !sesionId) return
           try {
             const payload = await api.grabacionChunk(sesionId, blob)
-            // Solo acumula STT; no aplica temas hasta Actualizar.
             applyLivePayload(payload, { applyTemas: false })
           } catch (e) {
-            onError?.(e?.message || 'No se pudo transcribir el audio en vivo')
+            onError?.(e?.message || 'No se pudo transcribir el audio con Azure Speech')
           }
         },
       })
@@ -162,36 +186,22 @@ export function createGrabacionSessionController({
       return liveMode
     }
 
-    webSpeech = startWebSpeechTranscript({
-      onDelta: async (text) => {
-        if (closed || stopping || !sesionId) return
-        try {
-          const payload = await api.grabacionTranscripcion(sesionId, { texto_delta: text })
-          applyLivePayload(payload, { applyTemas: false })
-        } catch (e) {
-          onError?.(e?.message || 'No se pudo enviar la transcripción en vivo')
-        }
-      },
-      onError: (code) => {
-        if (code === 'not-allowed') {
-          onError?.('Permiso de reconocimiento de voz denegado en el navegador.')
-        }
-      },
+    liveMode = 'none'
+    onLiveInfo?.({
+      stt_disponible: false,
+      acepta_transcripcion_cliente: false,
+      detalle: (
+        'Configure Azure Speech (AZURE_SPEECH_KEY) para transcribir el audio real. '
+        + 'El reconocimiento del navegador ya no se usa para Temas.'
+      ),
     })
-    liveMode = webSpeech ? 'webspeech' : 'none'
-    if (!webSpeech) {
-      onLiveInfo?.({
-        stt_disponible: false,
-        acepta_transcripcion_cliente: false,
-        detalle: 'Sin Azure Speech ni Web Speech en este navegador.',
-      })
-    }
     emitState({ liveMode })
     return liveMode
   }
 
   /**
-   * Al habilitar TAB Temas: inicia STT (si hace falta) y fija el checkpoint inicial.
+   * Al habilitar TAB Temas: inicia Azure STT (si hace falta) y fija el checkpoint inicial.
+   * Arranca el timer de checkpoints automáticos (~5 min).
    */
   async function armTemasCheckpoint() {
     if (closed || stopping || !sesionId) {
@@ -207,6 +217,7 @@ export function createGrabacionSessionController({
       temasCheckpointArmed = true
       applyLivePayload(payload, { applyTemas: false })
       emitState({ temasCheckpointArmed: true })
+      scheduleAutoCheckpoint()
       return { ok: true, payload }
     } catch (e) {
       const msg = e?.message || 'No se pudo armar el checkpoint de Temas'
@@ -216,20 +227,66 @@ export function createGrabacionSessionController({
   }
 
   /**
-   * Botón Actualizar: flush STT pendiente + analiza tramo desde checkpoint.
+   * Procesa el tramo pendiente (manual / auto / final) y reinicia el conteo automático.
    */
-  async function actualizarTemas() {
-    if (closed || stopping || !sesionId) {
+  async function actualizarTemas({ origen = 'manual' } = {}) {
+    if (closed || !sesionId) {
       throw new Error('No hay sesión de grabación activa para actualizar Temas.')
+    }
+    // Esperar un tramo en curso (p.ej. auto CP al detener) sin descartar el final.
+    const waitUntil = Date.now() + 90_000
+    while (temasBusy && Date.now() < waitUntil) {
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    if (temasBusy) {
+      return { sintetizado: false, detalle: 'Ya hay un tramo de Temas en proceso.' }
     }
     if (!liveStarted) {
       await startLivePipeline()
     }
-    try { await audioBatcher?.flush?.() } catch { /* ignore */ }
-    const payload = await api.grabacionActualizarTemas(sesionId)
-    if (payload?.temas_escucha_activa) temasCheckpointArmed = true
-    applyLivePayload(payload, { applyTemas: true })
-    return payload
+    temasBusy = true
+    emitState({ temasBusy: true })
+    try {
+      try { await audioBatcher?.flush?.() } catch { /* ignore */ }
+      const payload = await api.grabacionActualizarTemas(sesionId, { origen })
+      if (payload?.temas_escucha_activa) temasCheckpointArmed = true
+      applyLivePayload(payload, { applyTemas: true })
+      // Reinicia el intervalo automático tras cualquier checkpoint efectivo.
+      if (temasCheckpointArmed && !stopping && !closed) {
+        scheduleAutoCheckpoint()
+      }
+      // Auto-reintento suave si quedó un tramo en error.
+      const resumen = payload?.tramos_resumen || {}
+      if ((resumen.error || 0) > 0 && origen !== 'reintento' && !stopping && !closed) {
+        setTimeout(() => {
+          if (closed || stopping || temasBusy) return
+          reintentarTramo().catch(() => { /* best-effort */ })
+        }, 4000)
+      }
+      return payload
+    } finally {
+      temasBusy = false
+      emitState({ temasBusy: false })
+    }
+  }
+
+  async function reintentarTramo(tramoId = null) {
+    if (closed || stopping || !sesionId) {
+      throw new Error('No hay sesión de grabación activa para reintentar.')
+    }
+    if (temasBusy) {
+      return { sintetizado: false, detalle: 'Ya hay un tramo de Temas en proceso.' }
+    }
+    temasBusy = true
+    emitState({ temasBusy: true })
+    try {
+      const payload = await api.grabacionReintentarTramo?.(sesionId, tramoId)
+      applyLivePayload(payload, { applyTemas: true })
+      return payload
+    } finally {
+      temasBusy = false
+      emitState({ temasBusy: false })
+    }
   }
 
   async function start({ includeTabAudio = true } = {}) {
@@ -301,10 +358,20 @@ export function createGrabacionSessionController({
     stopping = true
     emitState({ phase: 'stopping', stopping: true })
     clearTimers()
+    clearAutoCheckpoint()
+
+    // Último tramo pendiente mientras la sesión sigue activa (antes de finalizar cupo).
+    if (temasCheckpointArmed && sesionId) {
+      try {
+        await actualizarTemas({ origen: 'final' })
+      } catch (e) {
+        onError?.(e?.message || 'No se pudo sintetizar el último tramo de Temas al detener')
+      }
+    }
+
     try {
       await stopLivePipeline()
     } catch { /* ignore */ }
-    // Sin síntesis forzada al detener: Temas solo avanzan con Actualizar.
 
     const blob = await new Promise((resolve) => {
       let settled = false
@@ -369,6 +436,7 @@ export function createGrabacionSessionController({
     }
 
     closed = true
+    temasCheckpointArmed = false
     emitState({
       phase: 'idle',
       stopping: false,
@@ -382,7 +450,7 @@ export function createGrabacionSessionController({
 
   function dispose() {
     clearTimers()
-    try { webSpeech?.stop?.() } catch { /* ignore */ }
+    clearAutoCheckpoint()
     try { audioBatcher?.stop?.() } catch { /* ignore */ }
     cleanupMedia()
     closed = true
@@ -394,6 +462,7 @@ export function createGrabacionSessionController({
     dispose,
     armTemasCheckpoint,
     actualizarTemas,
+    reintentarTramo,
     getSesionId: () => sesionId,
     getLiveMode: () => liveMode,
     isTemasCheckpointArmed: () => temasCheckpointArmed,
