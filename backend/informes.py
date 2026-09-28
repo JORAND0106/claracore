@@ -7418,6 +7418,61 @@ def excel_cc_mes_002_acta_completo(
         raise HTTPException(500, f"Error generando Excel CC-MES-002 completo: {repr(e)}") from e
 
 
+
+@router.get("/{contrato_id}/excel/cc-sem-integral/semana/{semana_id}")
+def excel_cc_sem_integral_semana(
+    contrato_id: int,
+    semana_id: int,
+    current_user=Depends(_get_user),
+):
+    """Excel integral semanal: CC-SEM-001 + memorias CC-SEM-002 (una pestaña por capítulo|ítem), formulado."""
+    _perm_informes_ccd(current_user, "exportar")
+    try:
+        xbytes = _cc_sem_integral_excel_bytes(contrato_id, semana_id, current_user)
+        sm = _row("so_semanas", "numero_semana", id=semana_id) or {}
+        nsem = sm.get("numero_semana")
+        fname = _safe_filename_part(f"CC-SEM-integral_semana_{nsem}.xlsx")
+        return Response(
+            content=xbytes,
+            media_type=_XLSX_MEDIA,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("excel_cc_sem_integral_semana")
+        raise HTTPException(500, f"Error generando Excel integral semanal: {repr(e)}") from e
+
+
+@router.get("/{contrato_id}/excel/cc-mes-integral/acta/{acta_id}")
+def excel_cc_mes_integral_acta(
+    contrato_id: int,
+    acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    current_user=Depends(_get_user),
+):
+    """Excel integral mensual: CC-MES-001 + memorias CC-MES-002 (una pestaña por capítulo|ítem), formulado."""
+    _perm_informes_ccd(current_user, "exportar")
+    try:
+        niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+        xbytes = _cc_mes_integral_excel_bytes(
+            contrato_id, acta_id, current_user, nivel_aprobacion=niv
+        )
+        ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+        nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+        fname = _safe_filename_part(f"CC-MES-integral_acta_{nrpo}.xlsx")
+        return Response(
+            content=xbytes,
+            media_type=_XLSX_MEDIA,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("excel_cc_mes_integral_acta")
+        raise HTTPException(500, f"Error generando Excel integral mensual: {repr(e)}") from e
+
+
 # ── Preview / desarrollo ───────────────────────────────────────────────────────
 
 def _orden_item_numero(num: str) -> tuple:
@@ -11164,8 +11219,40 @@ def _excel_sheet_name(item_numero: object) -> str:
     return t or "Item"
 
 
+def _excel_sheet_name_cap_item(capitulo: object, item_numero: object) -> str:
+    """Hoja de memoria identificada por capítulo + ítem (mismo código puede repetirse en capítulos)."""
+    cap = re.sub(r"[\[\]\*\?\/\\:]", "-", str(capitulo or "").strip()) or "Cap"
+    item = re.sub(r"[\[\]\*\?\/\\:]", "-", str(item_numero or "").strip()) or "Item"
+    joined = f"{cap}|{item}"
+    if len(joined) <= 31:
+        return joined
+    # Prioriza el ítem; acorta el capítulo si hace falta.
+    room_item = max(8, 31 - len(cap) - 1)
+    return f"{cap[: max(1, 31 - room_item - 1)]}|{item[:room_item]}"[:31]
+
+
+def _excel_quote_sheet_ref(sheet_name: str) -> str:
+    """Referencia de hoja para fórmulas Excel (comillas si hace falta)."""
+    name = str(sheet_name or "").strip() or "Hoja"
+    esc = name.replace("'", "''")
+    return f"'{esc}'"
+
+
 def _excel_unique_sheet_name(wb: Workbook, base: str) -> str:
     b = _excel_sheet_name(base)
+    if b not in wb.sheetnames:
+        return b
+    for i in range(2, 500):
+        suf = f"_{i}"
+        t = (b[: 31 - len(suf)] + suf)[:31]
+        if t not in wb.sheetnames:
+            return t
+    return f"H{len(wb.sheetnames)}"[:31]
+
+
+def _excel_unique_sheet_name_raw(wb: Workbook, base: str) -> str:
+    """Como _excel_unique_sheet_name pero respeta el nombre ya saneado (p. ej. Cap|Ítem)."""
+    b = str(base or "Item").strip()[:31] or "Item"
     if b not in wb.sheetnames:
         return b
     for i in range(2, 500):
@@ -11996,6 +12083,7 @@ def _fill_memoria_excel_ws(
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = 9
     ws.print_options.horizontalCentered = True
+    return tot_r
 
 
 def _memoria_item_excel_bytes(
@@ -12603,8 +12691,13 @@ def _fill_cc_conc_001_excel_ws(
     c4_label: str,
     c4_value: str,
     pie_contexto: str,
+    memoria_links: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> None:
-    """Hoja tipo CC-SEM-001 / CC-MES-001: encabezado conciliación, tabla de ítems, subtotal, firmas interventoría."""
+    """Hoja tipo CC-SEM-001 / CC-MES-001: encabezado conciliación, tabla de ítems, subtotal, firmas interventoría.
+
+    Si `memoria_links` está presente (clave = ítem o «capítulo||ítem»), la cantidad y el costo
+    directo se escriben como fórmulas que referencian el total de la pestaña de memoria.
+    """
     fc = firma_cfg or {}
     est = _merge_estilo_pdf(fc.get("estilo_pdf"), codigo_ccd)
     thead_bg = _ccd_hex_to_excel_rgb(est.get("thead_bg"), "E8E8E8")
@@ -12612,6 +12705,7 @@ def _fill_cc_conc_001_excel_ws(
     row_odd = _ccd_hex_to_excel_rgb(est.get("row_odd_bg"), "FFFFFF")
     subtotal_bg = _ccd_hex_to_excel_rgb(est.get("subtotal_bg"), "DBEAFE")
     cap_sub_bg = _ccd_hex_to_excel_rgb(est.get("capitulo_subtotal_bg"), "93C5FD")
+    use_formulas = bool(memoria_links)
 
     elaboro_n = str(fc.get("elaboro_nombre") or "").strip() or "—"
     elaboro_c = str(fc.get("elaboro_cargo") or "").strip() or "—"
@@ -12637,6 +12731,16 @@ def _fill_cc_conc_001_excel_ws(
         v.alignment = Alignment(vertical="center", wrap_text=True)
         ws.cell(row=r, column=1).border = bd
         v.border = bd
+
+    def _link_for_item(it: dict) -> Optional[Dict[str, Any]]:
+        if not memoria_links:
+            return None
+        inum = str(it.get("item_numero") or "").strip()
+        cap = str(it.get("capitulo") or "").strip()
+        for key in (f"{cap}||{inum}", inum):
+            if key and key in memoria_links:
+                return memoria_links[key]
+        return None
 
     fecha_gen = _fmt_informe_fecha_generacion()
     nit_raw = str(contrato.get("nit") or "").strip()
@@ -12692,6 +12796,7 @@ def _fill_cc_conc_001_excel_ws(
     item_list = list(items or [])
     row = data0
     data_idx = 0
+    costo_item_rows: List[int] = []
     if not item_list:
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         emp = ws.cell(row=row, column=1, value="Sin registros nivel 3 aprobados para este filtro.")
@@ -12705,6 +12810,7 @@ def _fill_cc_conc_001_excel_ws(
             cap = _capitulo_norm_conc(item_list[i])
             j = i
             sub_sum = 0.0
+            cap_cost_rows: List[int] = []
             while j < len(item_list) and _capitulo_norm_conc(item_list[j]) == cap:
                 it = item_list[j]
                 cap_cell = (it.get("capitulo") or "").strip() or "—"
@@ -12713,15 +12819,36 @@ def _fill_cc_conc_001_excel_ws(
                 if vu is None:
                     vu = it.get("vlr_unitario_sub")
                 bg = row_even if data_idx % 2 == 0 else row_odd
-                vals = [
-                    cap_cell,
-                    it.get("item_numero", ""),
-                    desc,
-                    it.get("unidad", ""),
-                    _fm(vu),
-                    _fn(it.get("cantidad")),
-                    _fm(it.get("costo_directo")),
-                ]
+                link = _link_for_item(it) if use_formulas else None
+                if link:
+                    sheet_ref = _excel_quote_sheet_ref(link.get("sheet") or "")
+                    tot_row = int(link.get("tot_row") or 0)
+                    qty_val = f"={sheet_ref}!H{tot_row}" if tot_row else 0
+                    vu_num = _excel_num_or_blank(vu)
+                    if vu_num is None:
+                        vu_num = 0.0
+                    cost_val = (
+                        f'=IF(OR(E{row}="",F{row}=""),0,ROUND(ROUND(F{row},2)*E{row},0))'
+                    )
+                    vals = [
+                        cap_cell,
+                        it.get("item_numero", ""),
+                        desc,
+                        it.get("unidad", ""),
+                        vu_num,
+                        qty_val,
+                        cost_val,
+                    ]
+                else:
+                    vals = [
+                        cap_cell,
+                        it.get("item_numero", ""),
+                        desc,
+                        it.get("unidad", ""),
+                        _fm(vu),
+                        _fn(it.get("cantidad")),
+                        _fm(it.get("costo_directo")),
+                    ]
                 for col, v in enumerate(vals, start=1):
                     cell = ws.cell(row=row, column=col, value=v)
                     cell.border = bd
@@ -12731,9 +12858,19 @@ def _fill_cc_conc_001_excel_ws(
                         cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
                     elif col in (5, 6, 7):
                         cell.alignment = Alignment(horizontal="right", vertical="center")
+                        if link and col == 5:
+                            cell.number_format = '#,##0.00'
+                        if link and col == 6:
+                            cell.number_format = "0.000"
+                        if link and col == 7:
+                            cell.number_format = '"$"#,##0'
                     else:
                         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                sub_sum += _sf(it.get("costo_directo"))
+                if link:
+                    cap_cost_rows.append(row)
+                    costo_item_rows.append(row)
+                else:
+                    sub_sum += _sf(it.get("costo_directo"))
                 data_idx += 1
                 row += 1
                 j += 1
@@ -12744,7 +12881,12 @@ def _fill_cc_conc_001_excel_ws(
             cs1.fill = PatternFill("solid", fgColor=cap_sub_bg)
             cs1.border = bd
             ws.merge_cells(start_row=row, start_column=6, end_row=row, end_column=7)
-            cs2 = ws.cell(row=row, column=6, value=_fm(sub_sum))
+            if use_formulas and cap_cost_rows:
+                sub_formula = "=" + "+".join(f"G{r}" for r in cap_cost_rows)
+                cs2 = ws.cell(row=row, column=6, value=sub_formula)
+                cs2.number_format = '"$"#,##0'
+            else:
+                cs2 = ws.cell(row=row, column=6, value=_fm(sub_sum))
             cs2.font = Font(bold=True, size=9)
             cs2.alignment = Alignment(horizontal="right", vertical="center")
             cs2.fill = PatternFill("solid", fgColor=cap_sub_bg)
@@ -12755,13 +12897,18 @@ def _fill_cc_conc_001_excel_ws(
     tot_r = row
     st_r = tot_r
     ws.merge_cells(start_row=st_r, start_column=1, end_row=st_r, end_column=5)
-    s1 = ws.cell(row=st_r, column=1, value="SUB TOTAL:")
+    s1 = ws.cell(row=st_r, column=1, value="SUBTOTAL:")
     s1.font = Font(bold=True, size=9)
     s1.alignment = Alignment(horizontal="right", vertical="center")
     s1.fill = PatternFill("solid", fgColor=subtotal_bg)
     s1.border = bd
     ws.merge_cells(start_row=st_r, start_column=6, end_row=st_r, end_column=7)
-    s2 = ws.cell(row=st_r, column=6, value=_fm(total_costo))
+    if use_formulas and costo_item_rows:
+        tot_formula = "=" + "+".join(f"G{r}" for r in costo_item_rows)
+        s2 = ws.cell(row=st_r, column=6, value=tot_formula)
+        s2.number_format = '"$"#,##0'
+    else:
+        s2 = ws.cell(row=st_r, column=6, value=_fm(total_costo))
     s2.font = Font(bold=True, size=9)
     s2.alignment = Alignment(horizontal="right", vertical="center")
     s2.fill = PatternFill("solid", fgColor=subtotal_bg)
@@ -12910,6 +13057,215 @@ def _cc_mes_001_excel_bytes(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _cc_sem_mes_integral_excel_bytes(
+    contrato_id: int,
+    current_user: dict,
+    *,
+    modo: str,
+    semana_id: Optional[int] = None,
+    acta_id: Optional[int] = None,
+    nivel_aprobacion: Optional[int] = None,
+) -> bytes:
+    """Libro integral: hoja 1 = ejecución (001) formulada; siguientes = memorias (002) por capítulo|ítem."""
+    modo = (modo or "").strip().lower()
+    if modo not in ("sem", "mes"):
+        raise HTTPException(400, "modo integral inválido")
+    if modo == "sem":
+        if semana_id is None:
+            raise HTTPException(400, "semana_id requerido")
+        if not _semana_pertenece_contrato(contrato_id, semana_id):
+            raise HTTPException(404, "Semana no encontrada en este contrato")
+        reg = fetch_registros_conciliacion(_sb, contrato_id, semana_id=semana_id)
+        items, total = aggregate_items_conciliacion(reg)
+        _sort_items_corte_por_item_numero_asc(items)
+        sm = _row("so_semanas", "id, numero_semana, fecha_inicio, fecha_fin", id=semana_id) or {}
+        nsem = sm.get("numero_semana")
+        fi = str(sm.get("fecha_inicio") or "—")
+        ff = str(sm.get("fecha_fin") or "—")
+        codigo_001 = CODIGO_FORMATO_CCD_CC_SEM_001
+        codigo_002 = CODIGO_FORMATO_CCD_CC_SEM_002
+        titulo_001 = "INFORME EJECUCIÓN SEMANAL (CONCILIACIÓN INTERVENTORÍA–CONTRATISTA)"
+        c3_label, c3_value = "SEMANA", f"N° {nsem}"
+        c4_label, c4_value = "VIGENCIA", f"{fi} — {ff}"
+        pie_001 = f"Semana N° {nsem} · {fi} — {ff} · Registros nivel 3 aprobados y bloqueados"
+        conc_meta = {
+            "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN SEMANAL (INTERVENTORÍA–CONTRATISTA)",
+            "codigo": codigo_002,
+            "cells": [
+                ("CONTRATO", None),  # se completa abajo
+                ("SEMANA", f"N° {nsem}"),
+                ("VIGENCIA", f"{fi} — {ff}"),
+                ("REFERENCIA", "Cantidades ejecutadas — conciliación"),
+            ],
+        }
+        pie_fotos = f"Semana N° {nsem} · {fi} — {ff}"
+        ctx_tipo, ctx_id = "semana", semana_id
+        sheet_ejec = "CC-SEM-001"
+    else:
+        if acta_id is None:
+            raise HTTPException(400, "acta_id requerido")
+        if not _acta_pertenece_contrato(contrato_id, acta_id):
+            raise HTTPException(404, "Acta no encontrada en este contrato")
+        reg = fetch_registros_informe_cc_mes_por_acta(
+            _sb, contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
+        )
+        items, total = aggregate_items_conciliacion(reg)
+        _sort_items_corte_por_item_numero_asc(items)
+        ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
+        nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+        cons = str(ac.get("consecutivo") or "—")
+        codigo_001 = CODIGO_FORMATO_CCD_CC_MES_001
+        codigo_002 = CODIGO_FORMATO_CCD_CC_MES_002
+        titulo_001 = "INFORME EJECUCIÓN MENSUAL (CONCILIACIÓN INTERVENTORÍA–CONTRATISTA)"
+        c3_label, c3_value = "ACTA RPO", nrpo
+        c4_label, c4_value = "CONSECUTIVO", cons
+        niv_txt = f"N{nivel_aprobacion}" if nivel_aprobacion is not None else "último nivel activo"
+        pie_001 = (
+            f"Acta RPO {nrpo} · consecutivo {cons} · {niv_txt} · "
+            "Misma lógica que módulo Actas (cascada aprob. y costo directo por línea)"
+        )
+        conc_meta = {
+            "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
+            "codigo": codigo_002,
+            "cells": [
+                ("CONTRATO", None),
+                ("ACTA RPO", nrpo),
+                ("CONSECUTIVO", cons),
+                ("FECHA ACTA", "—"),
+            ],
+        }
+        pie_fotos = f"Acta RPO {nrpo} · cons. {cons}"
+        ctx_tipo, ctx_id = "acta_rpo", acta_id
+        sheet_ejec = "CC-MES-001"
+
+    contrato = _row(
+        "contratos",
+        "numero, objeto, contratista, nit, interventoria, logo_contratista",
+        id=contrato_id,
+    )
+    if not contrato:
+        raise HTTPException(404, "Contrato no encontrado")
+    # Completar CONTRATO en meta de memorias
+    cells = list(conc_meta.get("cells") or [])
+    if cells:
+        cells[0] = (cells[0][0], str(contrato.get("numero") or ""))
+        conc_meta["cells"] = cells
+
+    u = current_user if isinstance(current_user, dict) else dict(current_user)
+    usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
+    usuario_cargo = u.get("cargo_nombre", "—") or "—"
+    firma_001 = _get_firma_cfg_para_documento(contrato_id, codigo_001, contexto_tipo=ctx_tipo, contexto_id=ctx_id)
+    firma_002 = _get_firma_cfg_para_documento(contrato_id, codigo_002, contexto_tipo=ctx_tipo, contexto_id=ctx_id)
+    sub, corte = _sub_corte_dummy_memoria()
+
+    wb = Workbook()
+    # Reservar hoja de ejecución; se llena al final con links a memorias.
+    ws_ejec = wb.active
+    assert ws_ejec is not None
+    ws_ejec.title = sheet_ejec
+
+    memoria_links: Dict[str, Dict[str, Any]] = {}
+    for it in items:
+        inum = str(it.get("item_numero") or "").strip()
+        if not inum:
+            continue
+        cap = str(it.get("capitulo") or "").strip()
+        if modo == "sem":
+            registros = fetch_registros_memoria_conciliacion(
+                _sb, contrato_id, inum, semana_id=semana_id, item_exacto=True
+            )
+        else:
+            registros = fetch_registros_memoria_cc_mes_alineado_acta(
+                _sb,
+                contrato_id,
+                inum,
+                acta_rpo_id=acta_id,
+                item_exacto=True,
+                nivel_aprobacion=nivel_aprobacion,
+            )
+        if cap:
+            registros = [
+                r for r in (registros or [])
+                if str(r.get("capitulo") or "").strip() == cap
+                or not str(r.get("capitulo") or "").strip()
+            ] or registros
+        if not registros:
+            # Memoria vacía: aún así crea hoja mínima para no romper el vínculo.
+            registros = []
+        item_info = _item_info_desde_registros(registros, inum) if registros else {
+            "item_numero": inum,
+            "item_descripcion": it.get("item_descripcion") or "",
+            "unidad": it.get("unidad") or "",
+            "capitulo": cap,
+        }
+        if not item_info.get("capitulo"):
+            item_info["capitulo"] = cap
+        base_name = _excel_sheet_name_cap_item(item_info.get("capitulo") or cap, inum)
+        sheet_name = _excel_unique_sheet_name_raw(wb, base_name)
+        ws_m = wb.create_sheet(title=sheet_name)
+        tot_row = _fill_memoria_excel_ws(
+            ws_m,
+            contrato,
+            sub,
+            corte,
+            item_info,
+            registros,
+            firma_002,
+            conc_meta=conc_meta,
+            pie_fotos_contexto=pie_fotos,
+            aprobo_interventoria_desde_config=True,
+        )
+        link = {"sheet": sheet_name, "tot_row": int(tot_row or 0)}
+        memoria_links[inum] = link
+        if cap:
+            memoria_links[f"{cap}||{inum}"] = link
+
+    _fill_cc_conc_001_excel_ws(
+        ws_ejec,
+        contrato,
+        items,
+        float(total or 0.0),
+        usuario_nombre,
+        usuario_cargo,
+        firma_001,
+        titulo_documento=titulo_001,
+        codigo_ccd=codigo_001,
+        c3_label=c3_label,
+        c3_value=c3_value,
+        c4_label=c4_label,
+        c4_value=c4_value,
+        pie_contexto=pie_001,
+        memoria_links=memoria_links or None,
+    )
+    # Orden: ejecución primero (ya es active), memorias en el orden creado.
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _cc_sem_integral_excel_bytes(contrato_id: int, semana_id: int, current_user: dict) -> bytes:
+    return _cc_sem_mes_integral_excel_bytes(
+        contrato_id, current_user, modo="sem", semana_id=semana_id
+    )
+
+
+def _cc_mes_integral_excel_bytes(
+    contrato_id: int,
+    acta_id: int,
+    current_user: dict,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> bytes:
+    return _cc_sem_mes_integral_excel_bytes(
+        contrato_id,
+        current_user,
+        modo="mes",
+        acta_id=acta_id,
+        nivel_aprobacion=nivel_aprobacion,
+    )
+
 
 
 # Objetivo: ~26 ítems en la 1ª hoja (con encabezado + subtotal + firmas sin página casi vacía).

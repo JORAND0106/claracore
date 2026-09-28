@@ -17,6 +17,7 @@ import {
   informesSheetCssVars,
   InformesBreadcrumb,
   InformesGrupoPanel,
+  InformesBiblioConfigPanel,
   InformesZona,
   InformesParamTable,
   InformesFormatosTable,
@@ -810,7 +811,8 @@ export default function ModuloInformes({
   function toggleCcdFormato(codigo) {
     if (!ccdExpandedStorageKey) return
     setCcdExpanded((prev) => {
-      const next = { ...prev, [codigo]: !prev[codigo] }
+      const was = !!prev[codigo]
+      const next = was ? {} : { [codigo]: true }
       try {
         localStorage.setItem(ccdExpandedStorageKey, JSON.stringify(next))
       } catch {
@@ -837,22 +839,22 @@ export default function ModuloInformes({
   }, [formatosSubStorageKey])
 
   function toggleFormatosSub() {
-    setFormatosSubAbierto((prev) => {
-      const next = !prev
-      if (formatosSubStorageKey) {
-        try {
-          localStorage.setItem(formatosSubStorageKey, String(next))
-        } catch {
-          /* noop */
-        }
+    const next = !formatosSubAbierto
+    if (next) irAGrupoInformes('sub')
+    else irARaizInformes()
+    if (formatosSubStorageKey) {
+      try {
+        localStorage.setItem(formatosSubStorageKey, String(next))
+      } catch {
+        /* noop */
       }
-      return next
-    })
+    }
   }
 
   /** Siempre recogido al cargar; no persistir en localStorage (evita que quede abierto entre visitas). */
   function toggleFormatosSem() {
-    setFormatosSemAbierto((prev) => !prev)
+    if (formatosSemAbierto) irARaizInformes()
+    else irAGrupoInformes('sem')
   }
 
   useEffect(() => {
@@ -863,11 +865,13 @@ export default function ModuloInformes({
   }, [formatosSemAbierto])
 
   function toggleFormatosMes() {
-    setFormatosMesAbierto((prev) => !prev)
+    if (formatosMesAbierto) irARaizInformes()
+    else irAGrupoInformes('mes')
   }
 
   function toggleFormatosInformeGer() {
-    setFormatosInformeGerAbierto((prev) => !prev)
+    if (formatosInformeGerAbierto) irARaizInformes()
+    else irAGrupoInformes('ger')
   }
 
   useEffect(() => {
@@ -2607,6 +2611,91 @@ export default function ModuloInformes({
     }
   }
 
+
+  async function descargarExcelIntegralSem() {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !semanaConcId) {
+      setError('Selecciona contrato y semana de conciliación.')
+      return
+    }
+    setExcelBusy('sem-integral')
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const sid = encodeURIComponent(semanaConcId)
+    const path = `/informes/${cid}/excel/cc-sem-integral/semana/${sid}`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-SEM-integral.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelIntegralMes() {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !actaConcId) {
+      setError('Selecciona contrato y acta RPO de conciliación.')
+      return
+    }
+    setExcelBusy('mes-integral')
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const aid = encodeURIComponent(actaConcId)
+    const path = withQsNivelAprobacionMes(`/informes/${cid}/excel/cc-mes-integral/acta/${aid}`)
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-MES-integral.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
   async function descargarExcelCcSem002Completo() {
     if (!puedeExportarCcd) {
       setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
@@ -3659,29 +3748,13 @@ export default function ModuloInformes({
 
 
       {biblioCcd.length > 0 && (
-      <InformesGrupoPanel
+      <InformesBiblioConfigPanel
         sheet={sheetBiblio}
         grupoMeta={gruposInformes.biblio}
         abierto={biblioPanelAbierto}
         onToggle={() => {
-          setBiblioPanelAbierto((v) => {
-            const next = !v
-            if (next) {
-              setFormatosSubAbierto(false)
-              setFormatosSemAbierto(false)
-              setFormatosInformeGerAbierto(false)
-              setFormatosMesAbierto(false)
-              setFormatosEntExtAbierto(false)
-              setFormatoCorte001Abierto(false)
-              setFormatoMemorias002Abierto(false)
-              setFormatoSem001Abierto(false)
-              setFormatoSem002Abierto(false)
-              setFormatoGer001Abierto(false)
-              setFormatoMes001Abierto(false)
-              setFormatoMes002Abierto(false)
-            }
-            return next
-          })
+          if (biblioPanelAbierto) irARaizInformes()
+          else irAGrupoInformes('biblio')
         }}
         styleVars={cssVarsBiblio}
       >
@@ -4206,7 +4279,7 @@ export default function ModuloInformes({
             Las firmas y estilos configurados aquí se aplican al generar cada formato del contrato. La visibilidad para interventoría depende de la configuración de cada código.
           </div>
         </InformesZona>
-      </InformesGrupoPanel>
+      </InformesBiblioConfigPanel>
       )}
 
       {mostrarBloqueFormatosSub && (
@@ -4360,7 +4433,7 @@ export default function ModuloInformes({
               <button
                 type="button"
                 style={tarjetaFormatoHead}
-                onClick={() => setFormatoCorte001Abierto((v) => !v)}
+                onClick={() => { if (formatoCorte001Abierto) setFormatoCorte001Abierto(false); else { setFormatoCorte001Abierto(true); setFormatoMemorias002Abierto(false) } }}
                 aria-expanded={formatoCorte001Abierto}
               >
                 <span style={{ minWidth: 0 }}>
@@ -4492,7 +4565,7 @@ export default function ModuloInformes({
               <button
                 type="button"
                 style={tarjetaFormatoHead}
-                onClick={() => setFormatoMemorias002Abierto((v) => !v)}
+                onClick={() => { if (formatoMemorias002Abierto) setFormatoMemorias002Abierto(false); else { setFormatoMemorias002Abierto(true); setFormatoCorte001Abierto(false) } }}
                 aria-expanded={formatoMemorias002Abierto}
               >
                 <span style={{ minWidth: 0 }}>
@@ -4779,17 +4852,39 @@ export default function ModuloInformes({
                 codigo: 'CC-SEM-001',
                 nombre: 'Informe ejecución semanal',
                 descripcion: 'Resumen por ítem y total — conciliación por semana de aprobación',
-                descargas: 'PDF · Excel',
+                descargas: 'PDF',
               },
               {
                 codigo: 'CC-SEM-002',
                 nombre: 'Memorias corte semanal',
                 descripcion: 'Detalle y anexo fotográfico por ítem de la semana',
-                descargas: 'PDF · Excel',
+                descargas: 'PDF',
               },
             ]}
           />
         </InformesZona>
+
+        {semanaConcId && puedeExportarCcd && (
+          <InformesZona sheet={sheetSem} titulo="Excel integral">
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
+              <button
+                type="button"
+                style={btnCcdToolbar(!!excelBusy, 'excel')}
+                onClick={descargarExcelIntegralSem}
+                disabled={!!excelBusy}
+                title="Un solo Excel: informe de ejecución + una pestaña de memoria por capítulo e ítem, con fórmulas"
+                aria-label="Descargar Excel integral semanal"
+              >
+                {excelBusy === 'sem-integral'
+                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                  : <IconoDescargaExcel size={ui.iconSvg} />}
+              </button>
+              <span style={{ fontSize: 'var(--cc-sm)', color: sheetSem.textMuted, lineHeight: 1.45 }}>
+                Informe de ejecución + memorias en un libro formulado. Las descargas parciales quedan solo en PDF.
+              </span>
+            </div>
+          </InformesZona>
+        )}
 
         {semanaConcId && (
           <InformesZona
@@ -4809,7 +4904,10 @@ export default function ModuloInformes({
               <button
                 type="button"
                 style={tarjetaFormatoHead}
-                onClick={() => setFormatoSem001Abierto((v) => !v)}
+                onClick={() => {
+                  if (formatoSem001Abierto) setFormatoSem001Abierto(false)
+                  else { setFormatoSem001Abierto(true); setFormatoSem002Abierto(false) }
+                }}
                 aria-expanded={formatoSem001Abierto}
               >
                 <span style={{ minWidth: 0 }}>
@@ -4900,20 +4998,6 @@ export default function ModuloInformes({
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoPdfSello size={ui.iconSvg} />}
                     </button>
-                    {puedeExportarCcd && (
-                    <button
-                      type="button"
-                      style={btnCcdToolbar(!!excelBusy, 'excel')}
-                      onClick={descargarExcelCcSem001}
-                      disabled={!!excelBusy}
-                      title="Descargar Excel (mismo contenido que el informe semanal)"
-                      aria-label="Descargar Excel CC-SEM-001"
-                    >
-                      {excelBusy === 'sem001'
-                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                        : <IconoDescargaExcel size={ui.iconSvg} />}
-                    </button>
-                    )}
                     {puedeValidarCcd && (
                     <button
                       type="button"
@@ -4937,7 +5021,10 @@ export default function ModuloInformes({
               <button
                 type="button"
                 style={tarjetaFormatoHead}
-                onClick={() => setFormatoSem002Abierto((v) => !v)}
+                onClick={() => {
+                  if (formatoSem002Abierto) setFormatoSem002Abierto(false)
+                  else { setFormatoSem002Abierto(true); setFormatoSem001Abierto(false) }
+                }}
                 aria-expanded={formatoSem002Abierto}
               >
                 <span style={{ minWidth: 0 }}>
@@ -5091,20 +5178,6 @@ export default function ModuloInformes({
                               ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                               : <IconoVistaPrevia size={ui.iconSvg} />}
                           </button>
-                          {puedeExportarCcd && (
-                          <button
-                            type="button"
-                            style={btnCcdToolbar(!!excelBusy, 'excel')}
-                            onClick={descargarExcelCcSem002Completo}
-                            disabled={!!excelBusy}
-                            title="Descargar Excel: todas las memorias (una hoja por ítem, mismo orden que el PDF)"
-                            aria-label="Descargar Excel todas las memorias semanales"
-                          >
-                            {excelBusy === 'sem2-all'
-                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                              : <IconoDescargaExcel size={ui.iconSvg} />}
-                          </button>
-                          )}
                           <button
                             type="button"
                             style={btnCcdToolbar(concPdfBusy, 'pdf')}
@@ -5132,7 +5205,6 @@ export default function ModuloInformes({
                           vistaPrevia?.fase === 'cargando' &&
                           vistaPrevia?.tipo === 'memoria-sem' &&
                           vistaPrevia?.itemNumero === item.item_numero
-                        const busyX = excelBusy === `s2:${item.item_numero}`
                         return (
                           <div key={item.item_numero} style={{ ...itemRowFmt, padding: '6px 10px' }}>
                             <div style={{ minWidth: 0 }}>
@@ -5159,20 +5231,6 @@ export default function ModuloInformes({
                                   ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                                   : <IconoVistaPrevia size={ui.iconSvg} />}
                               </button>
-                              {puedeExportarCcd && (
-                              <button
-                                type="button"
-                                style={btnCcdToolbar(!!excelBusy, 'excel')}
-                                onClick={() => descargarExcelCcSem002Item(item.item_numero)}
-                                disabled={!!excelBusy}
-                                title={`Descargar Excel · ${item.item_numero}`}
-                                aria-label={`Descargar Excel ${item.item_numero}`}
-                              >
-                                {busyX
-                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                                  : <IconoDescargaExcel size={ui.iconSvg} />}
-                              </button>
-                              )}
                               <button
                                 type="button"
                                 style={btnCcdToolbar(concPdfBusy, 'pdf')}
@@ -5476,17 +5534,39 @@ export default function ModuloInformes({
                 codigo: 'CC-MES-001',
                 nombre: 'Informe ejecución mensual',
                 descripcion: 'Resumen por ítem y total — conciliación por acta RPO',
-                descargas: 'PDF · Excel',
+                descargas: 'PDF',
               },
               {
                 codigo: 'CC-MES-002',
                 nombre: 'Memorias mensuales',
                 descripcion: 'Detalle y anexo fotográfico por ítem del acta',
-                descargas: 'PDF · Excel',
+                descargas: 'PDF',
               },
             ]}
           />
         </InformesZona>
+
+        {actaConcId && puedeExportarCcd && (
+          <InformesZona sheet={sheetMes} titulo="Excel integral">
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
+              <button
+                type="button"
+                style={btnCcdToolbar(!!excelBusy, 'excel')}
+                onClick={descargarExcelIntegralMes}
+                disabled={!!excelBusy}
+                title="Un solo Excel: informe de ejecución + una pestaña de memoria por capítulo e ítem, con fórmulas"
+                aria-label="Descargar Excel integral mensual"
+              >
+                {excelBusy === 'mes-integral'
+                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                  : <IconoDescargaExcel size={ui.iconSvg} />}
+              </button>
+              <span style={{ fontSize: 'var(--cc-sm)', color: sheetMes.textMuted, lineHeight: 1.45 }}>
+                Informe de ejecución + memorias en un libro formulado. Las descargas parciales quedan solo en PDF.
+              </span>
+            </div>
+          </InformesZona>
+        )}
 
 {actaConcId && (
           <InformesZona
@@ -5506,7 +5586,10 @@ export default function ModuloInformes({
               <button
                 type="button"
                 style={tarjetaFormatoHead}
-                onClick={() => setFormatoMes001Abierto((v) => !v)}
+                onClick={() => {
+                  if (formatoMes001Abierto) setFormatoMes001Abierto(false)
+                  else { setFormatoMes001Abierto(true); setFormatoMes002Abierto(false) }
+                }}
                 aria-expanded={formatoMes001Abierto}
               >
                 <span style={{ minWidth: 0 }}>
@@ -5599,20 +5682,6 @@ export default function ModuloInformes({
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoPdfSello size={ui.iconSvg} />}
                     </button>
-                    {puedeExportarCcd && (
-                    <button
-                      type="button"
-                      style={btnCcdToolbar(!!excelBusy, 'excel')}
-                      onClick={descargarExcelCcMes001}
-                      disabled={!!excelBusy}
-                      title="Descargar Excel (mismo contenido que el informe mensual)"
-                      aria-label="Descargar Excel CC-MES-001"
-                    >
-                      {excelBusy === 'mes001'
-                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                        : <IconoDescargaExcel size={ui.iconSvg} />}
-                    </button>
-                    )}
                     {puedeValidarCcd && (
                     <button
                       type="button"
@@ -5636,7 +5705,10 @@ export default function ModuloInformes({
               <button
                 type="button"
                 style={tarjetaFormatoHead}
-                onClick={() => setFormatoMes002Abierto((v) => !v)}
+                onClick={() => {
+                  if (formatoMes002Abierto) setFormatoMes002Abierto(false)
+                  else { setFormatoMes002Abierto(true); setFormatoMes001Abierto(false) }
+                }}
                 aria-expanded={formatoMes002Abierto}
               >
                 <span style={{ minWidth: 0 }}>
@@ -5790,20 +5862,6 @@ export default function ModuloInformes({
                               ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                               : <IconoVistaPrevia size={ui.iconSvg} />}
                           </button>
-                          {puedeExportarCcd && (
-                          <button
-                            type="button"
-                            style={btnCcdToolbar(!!excelBusy, 'excel')}
-                            onClick={descargarExcelCcMes002Completo}
-                            disabled={!!excelBusy}
-                            title="Descargar Excel: todas las memorias (una hoja por ítem, mismo orden que el PDF)"
-                            aria-label="Descargar Excel todas las memorias mensuales"
-                          >
-                            {excelBusy === 'mes2-all'
-                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                              : <IconoDescargaExcel size={ui.iconSvg} />}
-                          </button>
-                          )}
                           <button
                             type="button"
                             style={btnCcdToolbar(concPdfBusy, 'pdf')}
@@ -5860,20 +5918,6 @@ export default function ModuloInformes({
                                   ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                                   : <IconoVistaPrevia size={ui.iconSvg} />}
                               </button>
-                              {puedeExportarCcd && (
-                              <button
-                                type="button"
-                                style={btnCcdToolbar(!!excelBusy, 'excel')}
-                                onClick={() => descargarExcelCcMes002Item(item.item_numero)}
-                                disabled={!!excelBusy}
-                                title={`Descargar Excel · ${item.item_numero}`}
-                                aria-label={`Descargar Excel ${item.item_numero}`}
-                              >
-                                {busyX
-                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
-                                  : <IconoDescargaExcel size={ui.iconSvg} />}
-                              </button>
-                              )}
                               <button
                                 type="button"
                                 style={btnCcdToolbar(concPdfBusy, 'pdf')}
@@ -5916,7 +5960,7 @@ export default function ModuloInformes({
         sheet={sheetEnt}
         grupoMeta={gruposInformes.ent}
         abierto={formatosEntExtAbierto}
-        onToggle={() => setFormatosEntExtAbierto((v) => !v)}
+        onToggle={() => { if (formatosEntExtAbierto) irARaizInformes(); else irAGrupoInformes('ent') }}
         styleVars={cssVarsEnt}
       >
 <>

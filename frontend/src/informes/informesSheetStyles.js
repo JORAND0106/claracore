@@ -74,7 +74,7 @@ const INFO = {
   root:
     'Genere los informes oficiales del contrato: cortes de subcontratista, ejecución semanal y mensual, gerencia y formatos de entidades externas. Configure firmas y estilos en la Biblioteca CCD y elija el grupo según el periodo o alcance que requiera.',
   biblio:
-    'Defina quién elabora, revisa y aprueba cada plantilla CCD y, si aplica, los colores del PDF. Los cambios se guardan por contrato y se aplican al generar vista previa o descargas.',
+    'Configure plantillas CCD, firmas (elaboró / revisó / aprobó) y estilos PDF del contrato. Los cambios se aplican al generar vista previa o descargas de cualquier formato.',
   sub:
     'Obtenga el corte de cantidades y las memorias fotográficas por subcontratista. Seleccione subcontratista, corte y filtro de aprobación; luego abra el formato para vista previa, descarga o firma.',
   sem:
@@ -444,6 +444,60 @@ export function informesSheetStyles(t, accentHex) {
       padding: 12,
       borderTop: `1px solid ${border}`,
       background: bgCard,
+    },
+    /** Zona de configuración Biblioteca (distinta a barras de grupo de generación). */
+    biblioConfigWrap: {
+      marginTop: 8,
+      marginBottom: 28,
+      border: `1px dashed ${border}`,
+      borderRadius: 8,
+      background: darkish ? `${accent}18` : `${accent}0c`,
+      overflow: 'hidden',
+      boxShadow: `inset 0 0 0 1px ${accent}33`,
+    },
+    biblioConfigHead: {
+      width: '100%',
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: 12,
+      padding: '12px 16px',
+      border: 'none',
+      background: 'transparent',
+      cursor: 'pointer',
+      textAlign: 'left',
+      font: 'inherit',
+      color: text,
+    },
+    biblioConfigBadge: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '4px 10px',
+      borderRadius: 6,
+      border: `1px solid ${accent}55`,
+      background: headerBg,
+      color: headerColor,
+      fontSize: 'var(--cc-caption)',
+      fontWeight: 700,
+      letterSpacing: '0.04em',
+      textTransform: 'uppercase',
+    },
+    biblioConfigTitle: {
+      fontSize: 'var(--cc-body)',
+      fontWeight: 700,
+      color: text,
+      lineHeight: 1.35,
+      marginTop: 6,
+    },
+    biblioConfigHint: {
+      margin: 0,
+      padding: '12px 16px 4px',
+      color: infoColor,
+      fontSize: 'var(--cc-body)',
+      fontWeight: 400,
+      lineHeight: 1.6,
+      letterSpacing: '0.01em',
     },
   }
 }

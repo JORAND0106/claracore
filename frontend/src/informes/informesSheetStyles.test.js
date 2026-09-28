@@ -57,6 +57,8 @@ describe('informesSheetStyles', () => {
     expect(s.zoneWrap.border).toContain('2px solid')
     expect(s.typeSectionTitle.borderLeft).toContain('6px solid')
     expect(s.biblioFmtWrap.border).toContain('1px solid')
+    expect(s.biblioConfigWrap.border).toContain('dashed')
+    expect(s.biblioConfigBadge.fontWeight).toBe(700)
   })
 
   it('adapta contraste en tema oscuro y Descansar', () => {

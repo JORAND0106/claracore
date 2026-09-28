@@ -101,6 +101,54 @@ export function InformesGrupoPanel({
   )
 }
 
+/** Zona de configuración Biblioteca CCD (visualmente distinta a los grupos de generación). */
+export function InformesBiblioConfigPanel({
+  sheet,
+  grupoMeta,
+  abierto,
+  onToggle,
+  children,
+  styleVars,
+}) {
+  return (
+    <section
+      style={{ ...sheet.biblioConfigWrap, ...styleVars }}
+      aria-labelledby={`informes-biblio-config-title`}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={abierto}
+        style={{
+          ...sheet.biblioConfigHead,
+          borderBottom: abierto ? `1px solid ${sheet.border}` : 'none',
+        }}
+      >
+        <span style={{ minWidth: 0 }}>
+          <span style={sheet.biblioConfigBadge}>
+            <span aria-hidden>⚙</span>
+            Configuración
+          </span>
+          <div id="informes-biblio-config-title" style={sheet.biblioConfigTitle}>
+            {grupoMeta.label}
+          </div>
+        </span>
+        <span style={{ color: sheet.textMuted, fontSize: 'var(--cc-body)', flexShrink: 0 }} aria-hidden>
+          {abierto ? '▼' : '▶'}
+        </span>
+      </button>
+      {abierto && (
+        <>
+          <p style={sheet.biblioConfigHint} role="note">
+            {grupoMeta.info}
+          </p>
+          <div style={{ padding: '4px 0 14px' }}>{children}</div>
+        </>
+      )}
+    </section>
+  )
+}
+
 /** Zona delimitada (Parámetros / Formatos / Acciones / Vista). */
 export function InformesZona({ sheet, titulo, children, right }) {
   return (
