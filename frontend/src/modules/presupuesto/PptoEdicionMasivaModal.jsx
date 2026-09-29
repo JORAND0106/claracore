@@ -21,6 +21,7 @@ import {
   PPTO_MASIVA_TIP_COMPETENCIA,
   PPTO_MASIVA_TIP_OBS,
   PPTO_MASIVA_TIP_DIMS,
+  PPTO_MASIVA_TIP_NODOS,
   PPTO_MASIVA_TIP_DEP,
   PPTO_MASIVA_TIP_INTERV,
 } from './pptoEdicionMasivaTips'
@@ -198,6 +199,7 @@ export default function PptoEdicionMasivaModal({
   puedeTabDepuracion = false,
   puedeTabInterventoria = false,
   puedeEditarDimensiones = false,
+  puedeEditarNodos = false,
   requiereDepuracionAprobadaInterv = true,
   capitulosListado,
   listadoPrecios,
@@ -246,7 +248,7 @@ export default function PptoEdicionMasivaModal({
       out.push({ id: 'tipo', label: 'Tipo de ejecución', icon: '↔' })
       out.push({ id: 'tramos', label: 'Tramos', icon: '🧭' })
     }
-    if (puedeTabDepuracion) out.push({ id: 'depuracion', label: 'Validación por depuración', icon: '🔎' })
+    if (puedeTabDepuracion) out.push({ id: 'depuracion', label: 'Validación Contratista', icon: '🔎' })
     if (puedeTabInterventoria) out.push({ id: 'interv', label: 'Validación por Interventoría', icon: '✓' })
     return out
   }, [puedeTabEditar, puedeEditarDimensiones, puedeTabDepuracion, puedeTabInterventoria])
@@ -261,6 +263,8 @@ export default function PptoEdicionMasivaModal({
   const [obsCapItem, setObsCapItem] = useState('')
   const [dimAncho, setDimAncho] = useState('')
   const [dimEspesor, setDimEspesor] = useState('')
+  const [dimNodoIni, setDimNodoIni] = useState('')
+  const [dimNodoFin, setDimNodoFin] = useState('')
   const [obsDims, setObsDims] = useState('')
   const [tipoEjecucion, setTipoEjecucion] = useState('')
   const [obsTipo, setObsTipo] = useState('')
@@ -303,6 +307,8 @@ export default function PptoEdicionMasivaModal({
     setObsCapItem('')
     setDimAncho('')
     setDimEspesor('')
+    setDimNodoIni('')
+    setDimNodoFin('')
     setObsDims('')
     setTipoEjecucion('')
     setObsTipo('')
@@ -459,39 +465,51 @@ export default function PptoEdicionMasivaModal({
   const previewDims = useMemo(() => {
     const hasAn = dimAncho.trim() !== ''
     const hasE = dimEspesor.trim() !== ''
+    const hasNodI = puedeEditarNodos && dimNodoIni.trim() !== ''
+    const hasNodF = puedeEditarNodos && dimNodoFin.trim() !== ''
     const hasObs = obsDims.trim() !== ''
-    if (!hasAn && !hasE && !hasObs) return []
+    if (!hasAn && !hasE && !hasNodI && !hasNodF && !hasObs) return []
     const parseDim = (s) => {
       const n = parseFloat(String(s).replace(',', '.'))
       return Number.isFinite(n) ? n : null
     }
     const anNum = hasAn ? parseDim(dimAncho.trim()) : null
     const espNum = hasE ? parseDim(dimEspesor.trim()) : null
-    return editables.map((r) => {
+    const nodI = hasNodI ? dimNodoIni.trim() : null
+    const nodF = hasNodF ? dimNodoFin.trim() : null
+    // Nodos incluyen sellados; dims/obs solo editables.
+    const filasBase = (hasNodI || hasNodF) ? filasSel : editables
+    return filasBase.map((r) => {
+      const sellado = typeof esSellado === 'function' && esSellado(r)
       const partes = []
-      if (hasAn && anNum != null) partes.push(`Ancho: ${fmtDim(r.ancho)} → ${anNum}`)
-      if (hasE && espNum != null) partes.push(`Espesor: ${fmtDim(r.espesor)} → ${espNum}`)
-      if (anNum != null || espNum != null) {
-        const area = parseFloat(r.area_long_nod) || 0
-        const w = anNum ?? (parseFloat(r.ancho) || 0)
-        const e = espNum ?? (parseFloat(r.espesor) || 0)
-        const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
-        const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
-        partes.push(`Cant → ${cant}`)
-        partes.push(`CD → ${formatCOP(costo)}`)
+      if (nodI != null && nodI !== (r.no_inicio || '')) partes.push(`Nodo I: ${(r.no_inicio || '—')} → ${nodI}`)
+      if (nodF != null && nodF !== (r.no_final || '')) partes.push(`Nodo F: ${(r.no_final || '—')} → ${nodF}`)
+      if (!sellado) {
+        if (hasAn && anNum != null) partes.push(`Ancho: ${fmtDim(r.ancho)} → ${anNum}`)
+        if (hasE && espNum != null) partes.push(`Espesor: ${fmtDim(r.espesor)} → ${espNum}`)
+        if (anNum != null || espNum != null) {
+          const area = parseFloat(r.area_long_nod) || 0
+          const w = anNum ?? (parseFloat(r.ancho) || 0)
+          const e = espNum ?? (parseFloat(r.espesor) || 0)
+          const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
+          const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
+          partes.push(`Cant → ${cant}`)
+          partes.push(`CD → ${formatCOP(costo)}`)
+        }
+        if (hasObs) partes.push(`Obs: ${obsDims.trim()}`)
       }
-      if (hasObs) partes.push(`Obs: ${obsDims.trim()}`)
+      if (!partes.length) return null
       return {
         id: r.id,
         ref: r.pk_id || r.id,
         capitulo: r.capitulo,
         item: r.item,
         campo: 'Dimensiones',
-        antiguo: `a/l/n ${fmtDim(r.area_long_nod)} · ${fmtDim(r.ancho)} × ${fmtDim(r.espesor)}`,
+        antiguo: `${r.no_inicio || '—'} → ${r.no_final || '—'} · a/l/n ${fmtDim(r.area_long_nod)} · ${fmtDim(r.ancho)} × ${fmtDim(r.espesor)}`,
         nuevo: partes.join(' · '),
       }
-    })
-  }, [dimAncho, dimEspesor, obsDims, editables])
+    }).filter(Boolean)
+  }, [dimAncho, dimEspesor, dimNodoIni, dimNodoFin, obsDims, editables, filasSel, esSellado, puedeEditarNodos])
 
   const previewTipo = useMemo(() => {
     if (!tipoEjecucion) return []
@@ -517,7 +535,7 @@ export default function PptoEdicionMasivaModal({
         ref: r.pk_id || r.id,
         capitulo: r.capitulo,
         item: r.item,
-        campo: 'Depuración',
+        campo: 'Validación Contratista',
         antiguo: r.pre_interv_estado || 'No Revisado',
         nuevo: estadoDep + (obsDep.trim() ? ` · Obs: ${obsDep.trim()}` : ''),
       }))
@@ -564,14 +582,17 @@ export default function PptoEdicionMasivaModal({
           subcontratistaId: editSubcontratistaId || null,
         })
       } else if (tabSafe === 'dims') {
-        if (!dimAncho.trim() && !dimEspesor.trim() && !obsDims.trim()) {
-          setErrorApply('Indique al menos una dimensión u observación (opcional).')
+        const hasNodos = puedeEditarNodos && (dimNodoIni.trim() || dimNodoFin.trim())
+        if (!dimAncho.trim() && !dimEspesor.trim() && !obsDims.trim() && !hasNodos) {
+          setErrorApply('Indique al menos una dimensión, nodo u observación (opcional).')
           return
         }
         resumen = await onApplyDimensiones({
           ancho: dimAncho,
           espesor: dimEspesor,
           observacion: obsDims,
+          ...(puedeEditarNodos && dimNodoIni.trim() ? { no_inicio: dimNodoIni.trim() } : {}),
+          ...(puedeEditarNodos && dimNodoFin.trim() ? { no_final: dimNodoFin.trim() } : {}),
         })
       } else if (tabSafe === 'tipo') {
         if (!tipoEjecucion) {
@@ -618,7 +639,7 @@ export default function PptoEdicionMasivaModal({
         }
       } else if (tabSafe === 'depuracion') {
         if (!estadoDep) {
-          setErrorApply('Seleccione un estado de depuración.')
+          setErrorApply('Seleccione un estado de Validación Contratista.')
           return
         }
         resumen = await onApplyDepuracion({ estado: estadoDep, observacion: obsDep })
@@ -893,6 +914,8 @@ export default function PptoEdicionMasivaModal({
               <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
                 <thead>
                   <tr>
+                    {puedeEditarNodos && th('Nodo Inicial', PPTO_MASIVA_TIP_NODOS)}
+                    {puedeEditarNodos && th('Nodo Final', PPTO_MASIVA_TIP_NODOS)}
                     {th('Ancho', PPTO_MASIVA_TIP_DIMS)}
                     {th('Espesor', PPTO_MASIVA_TIP_DIMS)}
                     {th('Obs.', PPTO_MASIVA_TIP_OBS)}
@@ -900,6 +923,32 @@ export default function PptoEdicionMasivaModal({
                 </thead>
                 <tbody>
                   <tr>
+                    {puedeEditarNodos && (
+                      <td style={sheet.td}>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          value={dimNodoIni}
+                          onChange={(e) => setDimNodoIni(e.target.value)}
+                          placeholder="— Sin cambio —"
+                          style={sheetInp(sheet, t, !!dimNodoIni)}
+                          title="Se aplica también a sellados sin perder el sello"
+                        />
+                      </td>
+                    )}
+                    {puedeEditarNodos && (
+                      <td style={sheet.td}>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          value={dimNodoFin}
+                          onChange={(e) => setDimNodoFin(e.target.value)}
+                          placeholder="— Sin cambio —"
+                          style={sheetInp(sheet, t, !!dimNodoFin)}
+                          title="Se aplica también a sellados sin perder el sello"
+                        />
+                      </td>
+                    )}
                     <td style={sheet.td}>
                       <input
                         type="text"
@@ -960,7 +1009,7 @@ export default function PptoEdicionMasivaModal({
           )}
 
           {tabSafe === 'depuracion' && (
-            <GrupoSheet titulo="Depuración" tip={`${tipSel} ${PPTO_MASIVA_TIP_DEP}`} sheet={sheet}>
+            <GrupoSheet titulo="Validación Contratista" tip={`${tipSel} ${PPTO_MASIVA_TIP_DEP}`} sheet={sheet}>
               <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
                 <thead>
                   <tr>
@@ -990,7 +1039,7 @@ export default function PptoEdicionMasivaModal({
             <GrupoSheet titulo="Interventoría" tip={`${tipSelInterv} ${PPTO_MASIVA_TIP_INTERV}`} sheet={sheet}>
               {requiereDepuracionAprobadaInterv && nBloqueadosInterv > 0 && (
                 <div style={{ ...sheet.td, color: '#B45309', fontSize: cc.caption, borderBottom: `1px solid ${sheet.border}` }}>
-                  {nBloqueadosInterv} sin depuración aprobada — Interventoría solo con depuración «Aprobado».
+                  {nBloqueadosInterv} sin Validación Contratista aprobada — Interventoría solo con estado «Aprobado».
                 </div>
               )}
               <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>

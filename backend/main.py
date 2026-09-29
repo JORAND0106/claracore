@@ -1226,6 +1226,13 @@ class PresupuestoBulkCompetencia(BaseModel):
     competencia: str
 
 
+class PresupuestoBulkNodos(BaseModel):
+    """Actualiza solo nodos (no_inicio / no_final) en lote — sin tocar validación ni sellado."""
+    ids: List[int]
+    no_inicio: Optional[str] = None
+    no_final: Optional[str] = None
+
+
 class PresupuestoBulkSubcontratista(BaseModel):
     """Asigna subcontratista_id a registros de presupuesto (edición masiva)."""
     ids: List[int]
@@ -12715,7 +12722,8 @@ def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
     return row
 
 # Campos que cuentan como “edición” para reapertura de registro sellado (no basta con el motivo solo).
-# Nota: competencia es solo clasificación/agrupación — no dispara reapertura ni motivo (usar bulk-competencia).
+# Nota: competencia y nodos (no_inicio/no_final) son identificación/clasificación —
+# no disparan reapertura ni motivo (usar bulk-competencia / bulk-nodos).
 _PPTO_REABRIR_CAMPOS = frozenset(
     {
         "capitulo", "item", "descripcion", "und", "calzada", "tramo",
@@ -12725,7 +12733,7 @@ _PPTO_REABRIR_CAMPOS = frozenset(
 )
 
 # Cambios de datos “de negocio” por contratista que invalidan un estado ya asignado por Interventoría (sin sellado).
-# competencia excluida: no afecta financieros ni validación.
+# competencia y nodos excluidos: no afectan financieros ni validación.
 _PPTO_CT_SUBSTANTIVE = frozenset(
     {
         "capitulo", "item", "descripcion", "und",
@@ -14152,6 +14160,69 @@ def bulk_competencia(contrato_id: int, body: PresupuestoBulkCompetencia, current
         det_bulk,
     )
     return {"actualizados": len(ids_ok), "competencia": comp}
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-nodos")
+def bulk_nodos(contrato_id: int, body: PresupuestoBulkNodos, current_user=Depends(get_current_user)):
+    """Actualiza solo `no_inicio` / `no_final` en lote (edición masiva · Dimensiones).
+
+    Identificación/ubicación: no modifica `revisado`, `pre_interv_estado`, `sellado`
+    ni otros campos de validación. Permite registros sellados (igual que competencia).
+    """
+    _require_contract_access(current_user, contrato_id)
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    if not _ppto_puede_editar_nodos_y_area_long_como_dev(contrato_id, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo Desarrollador o (contrato autorizado con permiso «editar registros presupuesto») pueden modificar nodos.",
+        )
+    raw = body.dict(exclude_unset=True)
+    patch = {}
+    if "no_inicio" in raw:
+        v = raw.get("no_inicio")
+        patch["no_inicio"] = (str(v).strip() if v is not None and str(v).strip() != "" else None)
+    if "no_final" in raw:
+        v = raw.get("no_final")
+        patch["no_final"] = (str(v).strip() if v is not None and str(v).strip() != "" else None)
+    if not patch:
+        raise HTTPException(status_code=422, detail="Indique Nodo Inicial y/o Nodo Final.")
+    rows = (
+        supabase.table("presupuesto")
+        .select("id, contrato_id, id_pol, no_inicio, no_final, sellado, revisado, pre_interv_estado")
+        .in_("id", body.ids)
+        .execute()
+        .data
+        or []
+    )
+    ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
+    if not ids_ok:
+        raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+    rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
+    # Solo nodos (+ updated_at): no tocar validación / sellado.
+    supabase.table("presupuesto").update(
+        {**patch, "updated_at": "now()"}
+    ).in_("id", ids_ok).execute()
+    try:
+        _invalidate_dashboard_financial_caches(contrato_id)
+    except Exception:
+        pass
+    det_bulk = {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok), **patch}
+    audit_filas = [(dict(r), {**dict(r), **patch}) for r in rows_ok]
+    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRESUPUESTO",
+        "presupuesto_bulk_nodos",
+        str(contrato_id),
+        det_bulk,
+    )
+    return {"actualizados": len(ids_ok), **patch}
 
 
 @app.put("/presupuesto/{contrato_id}/bulk-subcontratista")

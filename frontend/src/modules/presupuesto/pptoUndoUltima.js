@@ -50,6 +50,7 @@ export async function restaurarSnapshotPresupuesto({
   snap,
   aplicaReglasCadPresupuesto = true,
   puedeEditarAreaLongNod = false,
+  puedeEditarNodos = false,
 }) {
   const ids = Object.keys(snap).map(Number)
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
@@ -106,6 +107,30 @@ export async function restaurarSnapshotPresupuesto({
     }
   }
 
+  // Nodos: agrupar por par inicio|final (restaura sin tocar sello).
+  if (puedeEditarNodos) {
+    const groups = new Map()
+    for (const [idStr, row] of Object.entries(snap)) {
+      const ini = row.no_inicio != null ? String(row.no_inicio) : ''
+      const fin = row.no_final != null ? String(row.no_final) : ''
+      const key = `${ini}\0${fin}`
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(Number(idStr))
+    }
+    for (const [key, gids] of groups) {
+      const [ini, fin] = key.split('\0')
+      const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-nodos`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ ids: gids, no_inicio: ini, no_final: fin }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.detail || 'No se pudo restaurar nodos.')
+      }
+    }
+  }
+
   for (const [estado, gids] of agruparPorCampo(snap, 'pre_interv_estado', 'No Revisado')) {
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-pre-interv`, {
       method: 'PUT',
@@ -114,7 +139,7 @@ export async function restaurarSnapshotPresupuesto({
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      throw new Error(err?.detail || 'No se pudo restaurar depuración.')
+      throw new Error(err?.detail || 'No se pudo restaurar Validación Contratista.')
     }
   }
 

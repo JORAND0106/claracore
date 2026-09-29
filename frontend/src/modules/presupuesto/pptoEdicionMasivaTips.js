@@ -12,13 +12,16 @@ export const PPTO_MASIVA_TIP_OBS =
   'Opcional. Aparece en Excel (columna Observación). Si ya hay texto, se pregunta historial o reemplazo.'
 
 export const PPTO_MASIVA_TIP_DIMS =
-  'Ancho y espesor se editan en masa. Ár/L/Nd del plano no cambia aquí (viene de ClaraLink/DWG). Cant. = área plano × Ancho × Espesor → recalcula costo directo.'
+  'Ancho y espesor se editan en masa (omitidos en sellados). Nodo Inicial/Final son identificación: se aplican también a sellados sin perder el sello. Ár/L/Nd del plano no cambia aquí. Cant. = área plano × Ancho × Espesor → recalcula costo directo.'
+
+export const PPTO_MASIVA_TIP_NODOS =
+  'Solo identificación/ubicación: se aplica de inmediato (también en sellados) sin motivo de edición ni pérdida de sello.'
 
 export const PPTO_MASIVA_TIP_DEP =
-  'Depuración (Residente Costos/Obra). Pendiente o Rechazado abren el comentario de validación.'
+  'Validación Contratista (Residente Costos/Obra). Pendiente o Rechazado abren el comentario de validación.'
 
 export const PPTO_MASIVA_TIP_INTERV =
-  'Interventoría (rol Interventoría/Gerencial). Pendiente o Rechazado abren el comentario de validación. Requiere depuración contratista en «Aprobado» cuando aplique.'
+  'Interventoría (rol Interventoría/Gerencial). Pendiente o Rechazado abren el comentario de validación. Requiere Validación Contratista en «Aprobado» cuando aplique.'
 
 export const PPTO_MASIVA_TIP_TRAMOS_LISTA =
   'Misma lógica que el botón Tramos: pares nodo inicio → nodo fin con los filtros activos de la obra.'
