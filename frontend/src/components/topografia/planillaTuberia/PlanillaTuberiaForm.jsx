@@ -17,6 +17,7 @@ import PlanillaTuberiaCrearReporteModal from './PlanillaTuberiaCrearReporteModal
 import PlanillaTuberiaAsociarReporteModal from './PlanillaTuberiaAsociarReporteModal'
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
 import PlanillaTuberiaTramoMapaModal from './PlanillaTuberiaTramoMapaModal'
+import TopoTrazabilidadButton, { ENTIDAD_PLANILLA_TUBERIA } from '../TopoTrazabilidadButton'
 import { calcularPlanillaLocal, CAMPOS_DESCUENTO_ALTURA, esCodigoOtros, esCodigoDescOtros } from './planillaTuberiaCalc'
 import {
   CALC_CELL_BG,
@@ -1216,6 +1217,17 @@ export default function PlanillaTuberiaForm({
               <svg {...ico}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
             </AccionIcono>
           )}
+          {planilla?.id && token && (
+            <TopoTrazabilidadButton
+              token={token}
+              theme={ui.t}
+              ui={ui}
+              compact
+              entidadTipo={ENTIDAD_PLANILLA_TUBERIA}
+              entidadId={planilla.id}
+              titulo={`Planilla tubería · ${planilla.nombre || planilla.tipo || planilla.id}`}
+            />
+          )}
           {puedeExportar && (
             <>
               <AccionIcono
@@ -2035,6 +2047,7 @@ export default function PlanillaTuberiaForm({
                 <th style={thLista}>Validación Contratista</th>
                 <th style={thLista}>Validación Interventoría</th>
                 <th style={thLista}>Reporte asociado</th>
+                <th style={{ ...thLista, width: 56, textAlign: 'center' }}>Logs</th>
               </tr>
             </thead>
             <tbody>
@@ -2068,11 +2081,26 @@ export default function PlanillaTuberiaForm({
                     {etiquetaValidacionLista(p.nivel2_estado, p.nivel2_fecha)}
                   </td>
                   <td style={tdLista}>{etiquetaReportesAsociadosLista(p)}</td>
+                  <td
+                    style={{ ...tdLista, textAlign: 'center' }}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <TopoTrazabilidadButton
+                      token={token}
+                      theme={ui.t}
+                      ui={ui}
+                      compact
+                      entidadTipo={ENTIDAD_PLANILLA_TUBERIA}
+                      entidadId={p.id}
+                      titulo={`Planilla tubería · ${p.nombre || p.tipo || p.id}`}
+                    />
+                  </td>
                 </tr>
               ))}
               {!lista.length && (
                 <tr>
-                  <td colSpan={6} style={{ ...tdLista, color: ui.textMuted, textAlign: 'center' }}>
+                  <td colSpan={7} style={{ ...tdLista, color: ui.textMuted, textAlign: 'center' }}>
                     Sin planillas aún. Use «Nueva planilla» para crear la primera.
                   </td>
                 </tr>

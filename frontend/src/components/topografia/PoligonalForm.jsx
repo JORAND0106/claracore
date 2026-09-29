@@ -9,6 +9,7 @@ import TopoConfirmModal from './TopoConfirmModal'
 import TopoRenderErrorBoundary from './TopoRenderErrorBoundary'
 
 import { parseApiError, PermisoAviso, puede, poligonalSellada, useTopografiaApi, useTopoTheme } from './topografiaShared'
+import TopoTrazabilidadButton, { ENTIDAD_POLIGONAL } from './TopoTrazabilidadButton'
 
 export default function PoligonalForm({ contratoId, token, permisos, usuario }) {
   const ui = useTopoTheme()
@@ -280,6 +281,16 @@ export default function PoligonalForm({ contratoId, token, permisos, usuario }) 
                 <small style={{ color: ui.textMuted, fontWeight: 400 }}>({p.estado}{p.nivel1_estado && p.nivel1_estado !== 'No Revisado' ? ` · C:${p.nivel1_estado}` : ''}{p.nivel2_estado && p.nivel2_estado !== 'No Revisado' ? ` · I:${p.nivel2_estado}` : ''})</small>
 
               </button>
+
+              <TopoTrazabilidadButton
+                token={token}
+                theme={ui.t}
+                ui={ui}
+                compact
+                entidadTipo={ENTIDAD_POLIGONAL}
+                entidadId={p.id}
+                titulo={`Poligonal · ${p.nombre || p.id}`}
+              />
 
               {puede(permisos, 'eliminar') && (
 
