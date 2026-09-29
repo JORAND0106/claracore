@@ -8,6 +8,8 @@ import {
   pptoOrigenTramoBadgeStyle,
 } from './pptoTramoBusqueda'
 import { PPTO_TRAMOS_COMPETENCIA_AYUDA } from './pptoSubcontratistaMasiva'
+import { pptoSheetStyles, pptoSheetTipStyle } from './pptoSheetStyles'
+import { PPTO_MASIVA_TIP_TRAMOS_LISTA } from './pptoEdicionMasivaTips'
 
 const cc = {
   caption: 'var(--cc-caption)',
@@ -22,9 +24,11 @@ const cc = {
  * Tab Tramos de edición masiva — misma lógica que el botón «Tramos»:
  * pares `no_inicio → no_final` sobre registros cargados con fObra
  * (`pptoEp().list` / conteo), luego lista → detalle.
+ * Presentación: hoja Excel (pptoSheetStyles).
  */
 export default function PptoEdicionMasivaTramosPanel({
   t,
+  sheet: sheetProp,
   filasFuente = [],
   cargando = false,
   meta = null,
@@ -39,6 +43,7 @@ export default function PptoEdicionMasivaTramosPanel({
   busy = false,
   onAplicar,
 }) {
+  const sheet = sheetProp || pptoSheetStyles(t)
   const [busqueda, setBusqueda] = useState('')
 
   const tramosUnicos = useMemo(
@@ -141,8 +146,8 @@ export default function PptoEdicionMasivaTramosPanel({
 
   const navBtn = (disabled) => ({
     background: disabled ? t.bg : t.bgCard,
-    border: `1px solid ${disabled ? t.border : t.primary + '55'}`,
-    borderRadius: 8,
+    border: `1px solid ${disabled ? sheet.border : t.primary + '55'}`,
+    borderRadius: 4,
     padding: '5px 12px',
     fontSize: cc.sm,
     fontWeight: 600,
@@ -154,16 +159,8 @@ export default function PptoEdicionMasivaTramosPanel({
 
   if (cargando) {
     return (
-      <div style={{
-        padding: 28,
-        textAlign: 'center',
-        color: t.textMuted,
-        fontSize: cc.sm,
-        background: t.bg,
-        borderRadius: 10,
-        border: `1px dashed ${t.border}`,
-      }}>
-        Cargando tramos con los filtros activos de la obra…
+      <div style={{ ...sheet.tdMuted, padding: 20, textAlign: 'center', border: `1px dashed ${sheet.border}` }}>
+        Cargando tramos…
       </div>
     )
   }
@@ -171,147 +168,102 @@ export default function PptoEdicionMasivaTramosPanel({
   // ── Vista lista ──────────────────────────────────────────────────────────
   if (!tramoSelec) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-          <div style={{ fontSize: cc.sm, fontWeight: 800, color: t.text, letterSpacing: 0.3 }}>
-            TRAMOS DISPONIBLES
+      <div style={{ marginBottom: 12 }}>
+        <div style={sheet.sectionBar}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            Tramos disponibles
+            <span title={PPTO_MASIVA_TIP_TRAMOS_LISTA} aria-label={PPTO_MASIVA_TIP_TRAMOS_LISTA} style={pptoSheetTipStyle(sheet)}>?</span>
             <span style={{
-              marginLeft: 8,
+              marginLeft: 4,
               background: t.primary + '22',
               color: t.primary,
               borderRadius: 20,
-              padding: '2px 10px',
-              fontSize: cc.sm,
+              padding: '1px 8px',
+              fontSize: cc.caption,
               fontWeight: 700,
             }}>
               {tramosUnicos.length}
             </span>
-          </div>
+          </span>
           {meta?.cap && (
-            <div style={{ fontSize: cc.caption, color: t.textMuted }}>
-              Cap: {meta.cap}
-              {meta.fuente === 'api' ? ' · filtros fObra' : ''}
+            <span style={{ fontSize: cc.caption, color: t.textMuted, fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>
+              Cap: {meta.cap}{meta.fuente === 'api' ? ' · fObra' : ''}
+            </span>
+          )}
+        </div>
+        <div style={sheet.sheetWrapFlush}>
+          {(meta?.aviso || meta?.error) && (
+            <div style={{
+              ...sheet.td,
+              color: meta.error ? '#B91C1C' : '#D97706',
+              background: meta.error ? '#FEE2E2' : '#FEF9C3',
+              fontSize: cc.caption,
+            }}>
+              {meta.error || meta.aviso}
+            </div>
+          )}
+          <div style={{ ...sheet.td, padding: 6 }}>
+            <input
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="Buscar nodo inicio / fin…"
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                border: 'none',
+                outline: 'none',
+                background: 'transparent',
+                color: sheet.text,
+                fontSize: 'var(--cc-input)',
+                padding: '4px 2px',
+              }}
+            />
+          </div>
+          {tramosUnicos.length === 0 ? (
+            <div style={{ ...sheet.tdMuted, padding: 16, textAlign: 'center', fontStyle: 'italic' }}>
+              No hay tramos definidos en este capítulo
+            </div>
+          ) : tramosFiltrados.length === 0 ? (
+            <div style={{ ...sheet.tdMuted, padding: 12, textAlign: 'center', fontStyle: 'italic' }}>
+              Sin coincidencias para «{busqueda.trim()}».
+            </div>
+          ) : (
+            <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+              <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th style={sheet.th}>Tramo</th>
+                    <th style={{ ...sheet.th, width: 72, textAlign: 'right' }}>Regs.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tramosFiltrados.map((tr) => {
+                    const nRegs = pptoFilasDetalleTramo(filasFuente, tr).length
+                    return (
+                      <tr
+                        key={tr.key}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => { setBusqueda(''); onSelectTramo(tr) }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            setBusqueda('')
+                            onSelectTramo(tr)
+                          }
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td style={{ ...sheet.td, fontWeight: 700 }}>{tr.label}</td>
+                        <td style={{ ...sheet.tdMuted, textAlign: 'right' }}>{nRegs}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
-
-        <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, lineHeight: 1.45 }}>
-          Misma lógica que el botón Tramos: pares nodo inicio → nodo fin sobre los registros
-          del capítulo con los filtros activos de la obra.
-        </p>
-
-        {meta?.aviso && (
-          <div style={{ fontSize: cc.caption, color: '#D97706', background: '#FEF9C3', borderRadius: 8, padding: '8px 10px' }}>
-            {meta.aviso}
-          </div>
-        )}
-        {meta?.error && (
-          <div style={{ fontSize: cc.caption, color: '#B91C1C', background: '#FEE2E2', borderRadius: 8, padding: '8px 10px' }}>
-            {meta.error}
-          </div>
-        )}
-
-        <div style={{ position: 'relative' }}>
-          <span style={{
-            position: 'absolute',
-            left: 10,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            fontSize: cc.label,
-            pointerEvents: 'none',
-          }}>
-            🔍
-          </span>
-          <input
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="Buscar por nodo inicio o fin…"
-            style={{
-              width: '100%',
-              background: t.inputBg,
-              border: `1.5px solid ${busqueda ? t.primary : t.border}`,
-              borderRadius: 10,
-              padding: '9px 12px 9px 32px',
-              color: t.text,
-              fontSize: cc.sm,
-              boxSizing: 'border-box',
-              outline: 'none',
-            }}
-          />
-        </div>
-
-        {tramosUnicos.length === 0 ? (
-          <div style={{
-            padding: 20,
-            textAlign: 'center',
-            color: t.textMuted,
-            fontSize: cc.sm,
-            fontStyle: 'italic',
-            background: t.bg,
-            borderRadius: 10,
-            border: `1px dashed ${t.border}`,
-          }}>
-            No hay tramos definidos en este capítulo
-          </div>
-        ) : tramosFiltrados.length === 0 ? (
-          <div style={{
-            padding: 16,
-            textAlign: 'center',
-            color: t.textMuted,
-            fontSize: cc.sm,
-            fontStyle: 'italic',
-          }}>
-            Sin coincidencias para «{busqueda.trim()}».
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 320, overflowY: 'auto' }}>
-            {tramosFiltrados.map((tr) => {
-              const nRegs = pptoFilasDetalleTramo(filasFuente, tr).length
-              return (
-                <div
-                  key={tr.key}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => {
-                    setBusqueda('')
-                    onSelectTramo(tr)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      setBusqueda('')
-                      onSelectTramo(tr)
-                    }
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '10px 14px',
-                    borderRadius: 10,
-                    cursor: 'pointer',
-                    background: t.bg,
-                    border: `1.5px solid ${t.border}`,
-                    transition: 'all .15s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = t.primary
-                    e.currentTarget.style.background = t.primary + '0D'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = t.border
-                    e.currentTarget.style.background = t.bg
-                  }}
-                >
-                  <div style={{ fontSize: cc.sm, fontWeight: 700, color: t.text }}>{tr.label}</div>
-                  <div style={{ fontSize: cc.caption, color: t.textMuted, fontWeight: 600 }}>
-                    {nRegs} reg.
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
       </div>
     )
   }
@@ -320,334 +272,200 @@ export default function PptoEdicionMasivaTramosPanel({
   const puedeAplicar = tramosSelIds.size > 0 && !!String(editCompetenciaTramos || '').trim() && !busy
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10,
-        flexWrap: 'wrap',
-      }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
         <button
           type="button"
           onClick={() => onSelectTramo(null)}
           style={{
             background: 'transparent',
-            border: `1px solid ${t.border}`,
-            borderRadius: 7,
+            border: `1px solid ${sheet.border}`,
+            borderRadius: 4,
             padding: '5px 12px',
             fontSize: cc.sm,
             cursor: 'pointer',
             color: t.textMuted,
           }}
         >
-          ← Volver a tramos
+          ← Volver
         </button>
         {tramosUnicos.length > 1 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button
-              type="button"
-              disabled={tramoIdx <= 0}
-              onClick={() => irRelativo(-1)}
-              style={navBtn(tramoIdx <= 0)}
-            >
-              ‹ Anterior
-            </button>
-            <span style={{ fontSize: cc.caption, color: t.textMuted, fontWeight: 600, whiteSpace: 'nowrap' }}>
-              {tramoIdx + 1} / {tramosUnicos.length}
-            </span>
-            <button
-              type="button"
-              disabled={tramoIdx < 0 || tramoIdx >= tramosUnicos.length - 1}
-              onClick={() => irRelativo(1)}
-              style={navBtn(tramoIdx < 0 || tramoIdx >= tramosUnicos.length - 1)}
-            >
-              Siguiente ›
-            </button>
+            <button type="button" disabled={tramoIdx <= 0} onClick={() => irRelativo(-1)} style={navBtn(tramoIdx <= 0)}>‹ Ant.</button>
+            <span style={{ fontSize: cc.caption, color: t.textMuted, fontWeight: 600 }}>{tramoIdx + 1}/{tramosUnicos.length}</span>
+            <button type="button" disabled={tramoIdx < 0 || tramoIdx >= tramosUnicos.length - 1} onClick={() => irRelativo(1)} style={navBtn(tramoIdx < 0 || tramoIdx >= tramosUnicos.length - 1)}>Sig. ›</button>
           </div>
         )}
       </div>
 
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10,
-        flexWrap: 'wrap',
-      }}>
-        <div>
-          <div style={{ fontSize: cc.md, fontWeight: 800, color: t.primary }}>
+      <div style={{ marginBottom: 0 }}>
+        <div style={sheet.sectionBar}>
+          <span>
             {tramoSelec.label}
-          </div>
-          <div style={{ fontSize: cc.caption, color: t.textMuted, marginTop: 2 }}>
-            {filasTramo.length} registro{filasTramo.length !== 1 ? 's' : ''}
-            {' · '}
-            {tramosSelIds.size} seleccionado{tramosSelIds.size !== 1 ? 's' : ''}
-            {nSellados > 0 ? ` · ${nSellados} sellado(s) (competencia permitida)` : ''}
-            {' · '}
-            <span title="Shift+clic selecciona un rango">Shift+clic = rango</span>
-          </div>
-        </div>
-      </div>
-
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 10,
-        alignItems: 'flex-end',
-        padding: cc.padSm,
-        background: t.bg,
-        borderRadius: 10,
-        border: `1px solid ${t.border}`,
-      }}>
-        <div style={{ flex: '1 1 220px' }}>
-          <div style={{
-            fontSize: cc.caption,
-            fontWeight: 700,
-            color: t.textMuted,
-            marginBottom: 6,
-            letterSpacing: 0.3,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}>
-            NUEVA COMPETENCIA
-            <span
-              title={PPTO_TRAMOS_COMPETENCIA_AYUDA}
-              aria-label={`Ayuda: ${PPTO_TRAMOS_COMPETENCIA_AYUDA}`}
-              style={{
-                display: 'inline-flex',
-                width: '1.25em',
-                height: '1.25em',
-                borderRadius: '50%',
-                background: '#64748b',
-                color: '#fff',
-                fontSize: '0.85em',
-                fontWeight: 700,
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'help',
-                flexShrink: 0,
-                lineHeight: 1,
-              }}
-            >
-              ?
+            <span style={{ marginLeft: 8, fontWeight: 600, textTransform: 'none', letterSpacing: 0, color: t.textMuted }}>
+              {filasTramo.length} reg. · {tramosSelIds.size} sel.
+              {nSellados > 0 ? ` · ${nSellados} sellado(s)` : ''}
+              {' · '}
+              <span title="Shift+clic selecciona un rango">Shift+clic = rango</span>
             </span>
-          </div>
-          <select
-            value={editCompetenciaTramos}
-            onChange={(e) => setEditCompetenciaTramos(e.target.value)}
-            disabled={busy}
-            style={{
-              width: '100%',
-              background: t.inputBg,
-              border: `1.5px solid ${editCompetenciaTramos ? t.primary : t.border}`,
-              borderRadius: 9,
-              padding: '9px 12px',
-              color: t.text,
-              fontSize: cc.sm,
-              cursor: 'pointer',
-            }}
-          >
-            <option value="">— Seleccione —</option>
-            {(competenciasOpciones || []).map((c) => {
-              const val = typeof c === 'string' ? c : (c?.value ?? c?.nombre ?? '')
-              const lab = typeof c === 'string' ? c : (c?.label ?? c?.nombre ?? val)
-              return <option key={val} value={val}>{lab}</option>
-            })}
-          </select>
+          </span>
         </div>
-        <button
-          type="button"
-          onClick={() => onAplicar?.()}
-          disabled={!puedeAplicar}
-          style={{
-            background: puedeAplicar ? t.primary : t.bgCard,
-            color: puedeAplicar ? '#fff' : t.textMuted,
-            border: puedeAplicar ? 'none' : `1px solid ${t.border}`,
-            borderRadius: 9,
-            padding: '10px 18px',
-            fontWeight: 700,
-            fontSize: cc.sm,
-            cursor: puedeAplicar ? 'pointer' : 'not-allowed',
-            opacity: busy ? 0.7 : 1,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {busy ? 'Aplicando…' : 'Aplicar a seleccionados'}
-        </button>
-      </div>
-
-      {filasTramo.length === 0 ? (
-        <div style={{
-          padding: cc.pad,
-          background: t.bg,
-          borderRadius: 10,
-          border: `1px dashed ${t.border}`,
-          color: t.textMuted,
-          fontSize: cc.sm,
-        }}>
-          No hay registros en este tramo.
-        </div>
-      ) : (
-        <div style={{
-          border: `1px solid ${t.border}`,
-          borderRadius: 10,
-          overflow: 'hidden',
-          background: t.bgCard,
-        }}>
-          <div style={{ maxHeight: 280, overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: cc.sm }}>
-              <thead>
-                <tr style={{ background: t.bg, position: 'sticky', top: 0, zIndex: 1 }}>
-                  <th
+        <div style={sheet.sheetWrapFlush}>
+          <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={sheet.th}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    Competencia
+                    <span title={PPTO_TRAMOS_COMPETENCIA_AYUDA} aria-label={PPTO_TRAMOS_COMPETENCIA_AYUDA} style={pptoSheetTipStyle(sheet)}>?</span>
+                  </span>
+                </th>
+                <th style={{ ...sheet.th, width: 160 }}>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={sheet.td}>
+                  <select
+                    value={editCompetenciaTramos}
+                    onChange={(e) => setEditCompetenciaTramos(e.target.value)}
+                    disabled={busy}
                     style={{
-                      padding: `${cc.padSm} 10px`,
-                      textAlign: 'left',
-                      color: t.textMuted,
-                      fontWeight: 700,
-                      fontSize: cc.caption,
-                      borderBottom: `1px solid ${t.border}`,
-                      whiteSpace: 'nowrap',
-                      width: 36,
+                      width: '100%',
+                      border: 'none',
+                      outline: 'none',
+                      background: editCompetenciaTramos ? `${t.primary}12` : 'transparent',
+                      color: sheet.text,
+                      fontSize: 'var(--cc-input)',
+                      padding: '6px 4px',
+                      minHeight: 32,
+                      cursor: 'pointer',
                     }}
-                    title="Seleccionar todos los registros del tramo"
                   >
-                    <input
-                      type="checkbox"
-                      checked={todosSel}
-                      ref={(el) => {
-                        if (el) el.indeterminate = algunosSel
-                      }}
-                      disabled={!idsTodos.length}
-                      onChange={toggleTodosTramo}
-                      aria-label="Seleccionar todos"
-                      style={{ width: 16, height: 16, accentColor: t.primary, cursor: idsTodos.length ? 'pointer' : 'default' }}
-                    />
-                  </th>
-                  {[
-                    { h: 'ID_POL', align: 'left' },
-                    { h: 'Ítem', align: 'left' },
-                    { h: 'Descripción', align: 'left' },
-                    { h: 'Cantidad', align: 'right' },
-                    { h: 'Costo Directo', align: 'right' },
-                    { h: 'Competencia actual', align: 'left' },
-                    { h: 'Origen', align: 'center' },
-                  ].map(({ h, align }) => (
-                    <th
-                      key={h}
-                      style={{
-                        padding: `${cc.padSm} 10px`,
-                        textAlign: align,
-                        color: t.textMuted,
-                        fontWeight: 700,
-                        fontSize: cc.caption,
-                        borderBottom: `1px solid ${t.border}`,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {h}
+                    <option value="">— Seleccione —</option>
+                    {(competenciasOpciones || []).map((c) => {
+                      const val = typeof c === 'string' ? c : (c?.value ?? c?.nombre ?? '')
+                      const lab = typeof c === 'string' ? c : (c?.label ?? c?.nombre ?? val)
+                      return <option key={val} value={val}>{lab}</option>
+                    })}
+                  </select>
+                </td>
+                <td style={sheet.td}>
+                  <button
+                    type="button"
+                    onClick={() => onAplicar?.()}
+                    disabled={!puedeAplicar}
+                    style={{
+                      background: puedeAplicar ? t.primary : t.bgCard,
+                      color: puedeAplicar ? '#fff' : t.textMuted,
+                      border: puedeAplicar ? 'none' : `1px solid ${sheet.border}`,
+                      borderRadius: 4,
+                      padding: '8px 12px',
+                      fontWeight: 700,
+                      fontSize: cc.sm,
+                      cursor: puedeAplicar ? 'pointer' : 'not-allowed',
+                      opacity: busy ? 0.7 : 1,
+                      width: '100%',
+                    }}
+                  >
+                    {busy ? 'Aplicando…' : 'Aplicar'}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          {filasTramo.length === 0 ? (
+            <div style={{ ...sheet.tdMuted, padding: 12 }}>No hay registros en este tramo.</div>
+          ) : (
+            <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+              <table style={{ ...sheet.sheetTable, minWidth: 640, width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...sheet.th, width: 36 }} title="Seleccionar todos">
+                      <input
+                        type="checkbox"
+                        checked={todosSel}
+                        ref={(el) => { if (el) el.indeterminate = algunosSel }}
+                        disabled={!idsTodos.length}
+                        onChange={toggleTodosTramo}
+                        aria-label="Seleccionar todos"
+                        style={{ width: 16, height: 16, accentColor: t.primary, cursor: idsTodos.length ? 'pointer' : 'default' }}
+                      />
                     </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filasTramo.map(({ registro: r, origen }) => {
-                  const sellado = typeof esSellado === 'function' && esSellado(r)
-                  const checked = tramosSelIds.has(r.id)
-                  const badge = pptoOrigenTramoBadgeStyle(origen)
-                  return (
-                    <tr
-                      key={`${origen}-${r.id}`}
-                      style={{
-                        borderBottom: `1px solid ${t.border}`,
-                        background: sellado ? (t.bg || 'transparent') : undefined,
-                      }}
-                    >
-                      <td style={{ padding: `${cc.padSm} 10px`, width: 36 }}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          title={sellado
-                            ? 'Sellado: se puede cambiar competencia (Shift+clic = rango)'
-                            : 'Marque filas (Shift+clic = rango)'}
-                          onClick={(e) => onChkClick(r.id, e)}
-                          onChange={(e) => onChkChange(r.id, e)}
-                          style={{ width: 16, height: 16, accentColor: t.primary, cursor: 'pointer' }}
-                        />
-                      </td>
-                      <td
-                        style={{
-                          padding: `${cc.padSm} 10px`,
-                          color: t.text,
-                          fontFamily: 'ui-monospace, monospace',
-                          fontSize: cc.caption,
-                          fontWeight: 600,
-                          maxWidth: 140,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                        title={String(r.id_pol || r.pk_id || '')}
-                      >
-                        {r.id_pol || r.pk_id || '—'}
-                        {sellado ? (
-                          <span style={{ marginLeft: 6, color: t.textMuted, fontWeight: 600 }} title="Sellado">🔒</span>
-                        ) : null}
-                      </td>
-                      <td style={{ padding: `${cc.padSm} 10px`, color: t.text, fontWeight: 600, whiteSpace: 'nowrap' }}>
-                        {r.item || '—'}
-                      </td>
-                      <td
-                        style={{
-                          padding: `${cc.padSm} 10px`,
-                          color: t.textMuted,
-                          maxWidth: 220,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                        title={r.descripcion || ''}
-                      >
-                        {r.descripcion || '—'}
-                      </td>
-                      <td style={{ padding: `${cc.padSm} 10px`, textAlign: 'right', color: t.text }}>
-                        {r.cant_total != null
-                          ? Number(r.cant_total).toLocaleString('es-CO', { maximumFractionDigits: 2 })
-                          : '—'}
-                      </td>
-                      <td style={{ padding: `${cc.padSm} 10px`, textAlign: 'right', color: t.text }}>
-                        {r.costo_directo != null ? formatCOP(r.costo_directo) : '—'}
-                      </td>
-                      <td style={{ padding: `${cc.padSm} 10px`, color: t.text }}>
-                        {r.competencia || '—'}
-                      </td>
-                      <td style={{ padding: `${cc.padSm} 10px`, textAlign: 'center' }}>
-                        <span
-                          title={badge.title}
-                          style={{
-                            display: 'inline-block',
-                            background: badge.bg,
-                            color: badge.color,
-                            borderRadius: 6,
-                            padding: '2px 8px',
-                            fontSize: cc.caption,
-                            fontWeight: 800,
-                            letterSpacing: 0.4,
-                            lineHeight: 1.35,
-                          }}
-                        >
-                          {badge.label}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+                    {[
+                      { h: 'ID_POL', align: 'left' },
+                      { h: 'Ítem', align: 'left' },
+                      { h: 'Descripción', align: 'left' },
+                      { h: 'Cant.', align: 'right' },
+                      { h: 'C. directo', align: 'right' },
+                      { h: 'Competencia', align: 'left' },
+                      { h: 'Origen', align: 'center' },
+                    ].map(({ h, align }) => (
+                      <th key={h} style={{ ...sheet.th, textAlign: align }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filasTramo.map(({ registro: r, origen }) => {
+                    const sellado = typeof esSellado === 'function' && esSellado(r)
+                    const checked = tramosSelIds.has(r.id)
+                    const badge = pptoOrigenTramoBadgeStyle(origen)
+                    return (
+                      <tr key={`${origen}-${r.id}`} style={{ background: sellado ? (t.bg || 'transparent') : undefined }}>
+                        <td style={{ ...sheet.td, width: 36 }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            title={sellado
+                              ? 'Sellado: se puede cambiar competencia (Shift+clic = rango)'
+                              : 'Marque filas (Shift+clic = rango)'}
+                            onClick={(e) => onChkClick(r.id, e)}
+                            onChange={(e) => onChkChange(r.id, e)}
+                            style={{ width: 16, height: 16, accentColor: t.primary, cursor: 'pointer' }}
+                          />
+                        </td>
+                        <td style={{ ...sheet.tdEllipsis, fontFamily: 'ui-monospace, monospace', fontWeight: 600, color: sheet.text }} title={String(r.id_pol || r.pk_id || '')}>
+                          {r.id_pol || r.pk_id || '—'}
+                          {sellado ? <span style={{ marginLeft: 6, color: t.textMuted }} title="Sellado">🔒</span> : null}
+                        </td>
+                        <td style={{ ...sheet.td, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.item || '—'}</td>
+                        <td style={sheet.tdEllipsis} title={r.descripcion || ''}>{r.descripcion || '—'}</td>
+                        <td style={{ ...sheet.td, textAlign: 'right' }}>
+                          {r.cant_total != null
+                            ? Number(r.cant_total).toLocaleString('es-CO', { maximumFractionDigits: 2 })
+                            : '—'}
+                        </td>
+                        <td style={{ ...sheet.td, textAlign: 'right' }}>
+                          {r.costo_directo != null ? formatCOP(r.costo_directo) : '—'}
+                        </td>
+                        <td style={sheet.td}>{r.competencia || '—'}</td>
+                        <td style={{ ...sheet.td, textAlign: 'center' }}>
+                          <span
+                            title={badge.title}
+                            style={{
+                              display: 'inline-block',
+                              background: badge.bg,
+                              color: badge.color,
+                              borderRadius: 4,
+                              padding: '2px 8px',
+                              fontSize: cc.caption,
+                              fontWeight: 800,
+                              letterSpacing: 0.4,
+                            }}
+                          >
+                            {badge.label}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   )
 }

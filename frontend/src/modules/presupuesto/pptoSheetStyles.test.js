@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 import {
   pptoSheetStyles,
   pptoSheetCssVars,
+  pptoSheetTipStyle,
   PPTO_Z_REVISOR_TRAMOS,
   PPTO_Z_DETALLE_REGISTRO,
   PPTO_Z_AGREGAR_CANTIDAD,
+  PPTO_Z_EDICION_MASIVA,
 } from './pptoSheetStyles.js'
 
 const light = {
@@ -83,5 +85,12 @@ describe('pptoSheetStyles', () => {
   it('apila detalle de registro por encima del Revisor de Tramos', () => {
     assert.ok(PPTO_Z_DETALLE_REGISTRO > PPTO_Z_REVISOR_TRAMOS)
     assert.ok(PPTO_Z_DETALLE_REGISTRO > PPTO_Z_AGREGAR_CANTIDAD)
+  })
+
+  it('define z-index de edición masiva y tip style', () => {
+    assert.ok(PPTO_Z_EDICION_MASIVA >= PPTO_Z_DETALLE_REGISTRO)
+    const tip = pptoSheetTipStyle(pptoSheetStyles(light))
+    assert.equal(tip.cursor, 'help')
+    assert.match(String(tip.border), /1px solid/)
   })
 })

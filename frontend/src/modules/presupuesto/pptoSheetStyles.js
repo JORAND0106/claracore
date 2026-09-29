@@ -220,3 +220,30 @@ export function pptoSheetStyles(t) {
 export const PPTO_Z_REVISOR_TRAMOS = 3500
 export const PPTO_Z_AGREGAR_CANTIDAD = 4000
 export const PPTO_Z_DETALLE_REGISTRO = 4200
+export const PPTO_Z_EDICION_MASIVA = 5000
+
+/** Estilo del chip «(?)» junto a encabezados de hoja Excel. */
+export function pptoSheetTipStyle(sheetOrBorder, textMuted) {
+  const isObj = sheetOrBorder && typeof sheetOrBorder === 'object'
+  const border = isObj
+    ? (sheetOrBorder.border || '#94a3b8')
+    : (sheetOrBorder || '#94a3b8')
+  const muted = textMuted
+    || (isObj ? sheetOrBorder.textMuted : null)
+    || '#64748b'
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 14,
+    height: 14,
+    borderRadius: '50%',
+    border: `1px solid ${border}`,
+    fontSize: 10,
+    fontWeight: 800,
+    color: muted,
+    cursor: 'help',
+    lineHeight: 1,
+    flexShrink: 0,
+  }
+}
