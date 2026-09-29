@@ -8078,6 +8078,7 @@ _FUNCIONES_REQUERIDAS = (
     {"codigo": "PROGOB", "nombre": "Programación de obra", "modulo": "Programación"},
     {"codigo": "ALMACEN", "nombre": "Almacén", "modulo": "Obra"},
     {"codigo": "CATINS", "nombre": "Catálogo de insumos", "modulo": "Obra"},
+    {"codigo": "ENTSAL", "nombre": "Entradas y Salidas", "modulo": "Obra"},
     {"codigo": "SEGUIMIENTO", "nombre": "Seguimiento", "modulo": "Obra"},
     {"codigo": "BITACORA", "nombre": "Bitácora", "modulo": "Obra"},
     {"codigo": "RRHH", "nombre": "Recursos Humanos", "modulo": "Gestión"},

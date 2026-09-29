@@ -33,8 +33,10 @@ from almacen_insumos_service import (
 from almacen_permissions import (
     es_contratista_gerencial,
     puede_ver_valores_economicos_almacen,
+    require_acceso_ui_modulo_almacen,
     require_contratista_gerencial_almacen,
     require_editar_cantidad_salida_almacen,
+    require_lectura_almacen,
     require_permiso_almacen,
     tiene_permiso_almacen,
 )
@@ -46,7 +48,16 @@ from almacen_audit import (
     snapshot_salida,
     snapshot_solicitud,
 )
-from catalogo_insumos_permissions import require_permiso_catalogo_insumos
+from catalogo_insumos_permissions import (
+    require_permiso_catalogo_insumos,
+    tiene_permiso_catalogo_insumos,
+)
+from entradas_salidas_permissions import (
+    require_lectura_entradas_salidas,
+    require_permiso_entradas_salidas,
+    tiene_alguna_accion_entradas_salidas,
+    tiene_permiso_entradas_salidas,
+)
 from catalogo_insumos_service import delete_insumo_catalogo
 from almacen_service import (
     add_cotizacion,
@@ -111,6 +122,41 @@ from main import _require_contract_access, get_current_user, registrar_log, supa
 _log = logging.getLogger("claracore.almacen.routes")
 
 router = APIRouter(prefix="/almacen", tags=["almacen"])
+
+
+def _require_almacen_o_entsal(current_user, accion: str) -> None:
+    """Recursos compartidos (p. ej. OC): basta Almacén o Entradas y Salidas."""
+    from almacen_permissions import tiene_alguna_accion_almacen
+    if accion == "ver":
+        if tiene_alguna_accion_almacen(current_user) or tiene_alguna_accion_entradas_salidas(current_user):
+            return
+    if tiene_permiso_almacen(current_user, accion) or tiene_permiso_entradas_salidas(current_user, accion):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"No tiene permiso (Almacén o Entradas y Salidas · {accion}). "
+            "Configúrelo en Control de accesos."
+        ),
+    )
+
+
+def _require_ver_ambito_obra(current_user) -> None:
+    """Lecturas ligeras compartidas entre los tres ámbitos del módulo."""
+    if (
+        tiene_permiso_almacen(current_user, "ver")
+        or tiene_permiso_entradas_salidas(current_user, "ver")
+        or tiene_permiso_catalogo_insumos(current_user, "ver")
+        or tiene_permiso_almacen(current_user, "crear")
+        or tiene_permiso_entradas_salidas(current_user, "crear")
+        or tiene_permiso_catalogo_insumos(current_user, "crear")
+        or tiene_permiso_almacen(current_user, "editar")
+        or tiene_permiso_entradas_salidas(current_user, "editar")
+        or tiene_permiso_catalogo_insumos(current_user, "editar")
+    ):
+        return
+    require_acceso_ui_modulo_almacen(current_user)
+
 
 
 def _uid(current_user) -> int:
@@ -272,7 +318,7 @@ class EntradaCreateBody(BaseModel):
 @router.get("/{contrato_id}/config")
 def route_get_config(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_acceso_ui_modulo_almacen(current_user)
     return get_config(contrato_id)
 
 
@@ -289,14 +335,14 @@ def route_put_config(contrato_id: int, body: ConfigUpdateBody, current_user=Depe
 @router.get("/{contrato_id}/presupuesto-items")
 def route_presupuesto_items(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return list_presupuesto_items(contrato_id)
 
 
 @router.get("/{contrato_id}/listado-capitulos")
 def route_listado_capitulos(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return list_listado_capitulos(contrato_id)
 
 
@@ -307,7 +353,7 @@ def route_listado_items(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return list_listado_items_capitulo(contrato_id, capitulo)
 
 
@@ -319,7 +365,7 @@ def route_search_insumos(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return search_insumos(contrato_id, q, min(limit, 50))
 
 
@@ -332,7 +378,7 @@ def route_insumos_catalog(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     rows, total, catalog_total = search_insumos_solo_catalogo(contrato_id, q, min(limit, 100), max(offset, 0))
     return {"items": rows, "total": total, "catalogo_vacio": catalog_total == 0}
 
@@ -354,7 +400,6 @@ async def route_create_insumo(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
     require_permiso_catalogo_insumos(current_user, "crear")
     soporte = None
     if soporte_pdf and soporte_pdf.filename:
@@ -384,7 +429,6 @@ async def route_create_insumo(
 @router.post("/{contrato_id}/insumos/json")
 def route_create_insumo_json(contrato_id: int, body: InsumoCreateBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
     require_permiso_catalogo_insumos(current_user, "crear")
     try:
         return create_insumo(contrato_id, _uid(current_user), {
@@ -398,7 +442,7 @@ def route_create_insumo_json(contrato_id: int, body: InsumoCreateBody, current_u
 @router.get("/{contrato_id}/insumos/{insumo_id}/precios-proveedor")
 def route_precios_insumo(contrato_id: int, insumo_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     try:
         return list_precios_insumo_proveedor(contrato_id, insumo_id)
     except ValueError as exc:
@@ -428,14 +472,19 @@ def route_search_proveedores(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_acceso_ui_modulo_almacen(current_user)
     return search_proveedores(contrato_id, q, min(limit, 50))
 
 
 @router.post("/{contrato_id}/proveedores")
 def route_create_proveedor(contrato_id: int, body: ProveedorCreateBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    if not (
+        tiene_permiso_catalogo_insumos(current_user, "crear")
+        or tiene_permiso_almacen(current_user, "editar")
+        or tiene_permiso_entradas_salidas(current_user, "editar")
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para crear proveedores.")
     try:
         return create_proveedor(contrato_id, _uid(current_user), body.model_dump())
     except ValueError as exc:
@@ -449,7 +498,7 @@ def route_transportador_por_placa(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "crear")
+    require_permiso_entradas_salidas(current_user, "crear")
     row = get_transportador_por_placa(contrato_id, placa)
     if not row:
         return {"encontrado": False}
@@ -464,7 +513,7 @@ def route_search_transportadores(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "crear")
+    require_permiso_entradas_salidas(current_user, "crear")
     return search_transportadores(contrato_id, q, min(limit, 50))
 
 
@@ -478,7 +527,7 @@ def route_presupuesto_registros(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     try:
         return list_presupuesto_registros(
             contrato_id,
@@ -494,7 +543,7 @@ def route_presupuesto_registros(
 @router.post("/{contrato_id}/insumos/preview-line")
 def route_preview_insumo_line(contrato_id: int, body: InsumoPreviewBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     try:
         resolved = resolve_insumo_for_solicitud(contrato_id, _uid(current_user), body.model_dump())
         return {
@@ -525,7 +574,7 @@ def route_presupuesto_context(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     try:
         return get_presupuesto_context(
             contrato_id,
@@ -549,7 +598,7 @@ def route_list_solicitudes(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     ver_eco = puede_ver_valores_economicos_almacen(current_user)
     items = list_solicitudes(
         contrato_id,
@@ -577,7 +626,7 @@ def route_count_solicitudes(
 ):
     """Conteo ligero (p. ej. badge de enviadas pendientes de validar)."""
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return {"count": count_solicitudes(contrato_id, estado)}
 
 
@@ -597,7 +646,7 @@ def route_get_solicitud(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     ver_eco = puede_ver_valores_economicos_almacen(current_user)
     try:
         return get_solicitud(
@@ -954,7 +1003,7 @@ def route_delete_cotizacion(contrato_id: int, cotizacion_id: int, current_user=D
 @router.get("/{contrato_id}/ordenes-compra")
 def route_list_oc(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    _require_almacen_o_entsal(current_user, "ver")
     return list_ordenes_compra(contrato_id)
 
 
@@ -965,7 +1014,7 @@ def route_buscar_oc_por_pk(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    _require_almacen_o_entsal(current_user, "ver")
     try:
         return buscar_ordenes_compra_por_pk(contrato_id, pk_id)
     except ValueError as exc:
@@ -979,7 +1028,7 @@ def route_contexto_oc_por_pk(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    _require_almacen_o_entsal(current_user, "ver")
     try:
         return contexto_ordenes_compra_por_pk(contrato_id, pk_id)
     except ValueError as exc:
@@ -994,7 +1043,7 @@ def route_buscar_oc_vigentes(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    _require_almacen_o_entsal(current_user, "ver")
     try:
         return buscar_ordenes_compra_vigentes(contrato_id, proveedor_id, insumo_id)
     except ValueError as exc:
@@ -1004,7 +1053,7 @@ def route_buscar_oc_vigentes(
 @router.get("/{contrato_id}/ordenes-compra/{oc_id}")
 def route_get_oc(contrato_id: int, oc_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    _require_almacen_o_entsal(current_user, "ver")
     try:
         return get_orden_compra(contrato_id, oc_id)
     except ValueError as exc:
@@ -1019,7 +1068,7 @@ def route_insumos_por_proveedor(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     try:
         return list_insumos_por_proveedor(contrato_id, proveedor_id, q)
     except ValueError as exc:
@@ -1033,7 +1082,7 @@ async def route_ocr_remision(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "crear")
+    require_permiso_entradas_salidas(current_user, "crear")
     data = await archivo.read()
     mime = archivo.content_type or "application/octet-stream"
     return ocr_remision_entrada(data, mime)
@@ -1047,7 +1096,7 @@ async def route_upload_factura(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "crear")
+    _require_almacen_o_entsal(current_user, "crear")
     data = await archivo.read()
     mime = archivo.content_type or "application/octet-stream"
     try:
@@ -1059,7 +1108,7 @@ async def route_upload_factura(
 @router.get("/{contrato_id}/ordenes-compra/{oc_id}/factura/download")
 def route_download_factura(contrato_id: int, oc_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    _require_almacen_o_entsal(current_user, "ver")
     try:
         oc = get_orden_compra(contrato_id, oc_id)
         data, mime = download_soporte(oc.get("factura_blob_path"))
@@ -1076,7 +1125,7 @@ def route_download_factura(contrato_id: int, oc_id: int, current_user=Depends(ge
 @router.get("/{contrato_id}/ordenes-compra/{oc_id}/pdf/download")
 def route_download_oc_pdf(contrato_id: int, oc_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "exportar")
+    _require_almacen_o_entsal(current_user, "exportar")
     try:
         data, fname = download_pdf_oc(contrato_id, oc_id, _uid(current_user))
         safe_name = fname.replace('"', "'")
@@ -1095,7 +1144,7 @@ def route_download_oc_pdf(contrato_id: int, oc_id: int, current_user=Depends(get
 @router.get("/{contrato_id}/entradas/proximo-numero-disposicion")
 def route_proximo_numero_disposicion(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "crear")
+    require_permiso_entradas_salidas(current_user, "crear")
     return preview_proximo_numero_disposicion(contrato_id)
 
 
@@ -1106,7 +1155,7 @@ def route_entradas_disponibles_por_pk(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     try:
         return entradas_disponibles_por_pk(contrato_id, pk_id)
     except ValueError as exc:
@@ -1116,14 +1165,14 @@ def route_entradas_disponibles_por_pk(
 @router.get("/{contrato_id}/entradas")
 def route_list_entradas(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     return list_entradas(contrato_id)
 
 
 @router.get("/{contrato_id}/entradas/{entrada_id}")
 def route_get_entrada(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     try:
         return get_entrada(contrato_id, entrada_id)
     except ValueError as exc:
@@ -1152,7 +1201,7 @@ async def route_create_entrada(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "crear")
+    require_permiso_entradas_salidas(current_user, "crear")
     import json
     try:
         items = json.loads(items_json)
@@ -1235,7 +1284,7 @@ async def route_create_entrada(
 @router.delete("/{contrato_id}/entradas/{entrada_id}")
 def route_eliminar_entrada(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    require_permiso_entradas_salidas(current_user, "editar")
     try:
         prev = get_entrada(contrato_id, entrada_id, incluir_movimientos=False)
         result = eliminar_entrada(contrato_id, entrada_id, ent_prefetched=prev)
@@ -1257,7 +1306,7 @@ def route_eliminar_entrada(contrato_id: int, entrada_id: int, current_user=Depen
 @router.get("/{contrato_id}/entradas/{entrada_id}/remision/download")
 def route_download_remision(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     try:
         ent = get_entrada(contrato_id, entrada_id)
         data, mime = download_soporte(ent.get("remision_blob_path"))
@@ -1274,7 +1323,7 @@ def route_download_remision(contrato_id: int, entrada_id: int, current_user=Depe
 @router.get("/{contrato_id}/entradas/{entrada_id}/disposicion/download")
 def route_download_disposicion(contrato_id: int, entrada_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     try:
         data, fname = download_disposicion_pdf(contrato_id, entrada_id)
         return StreamingResponse(
@@ -1320,14 +1369,14 @@ def route_usuarios_receptor_obra(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     return list_usuarios_receptor_obra(contrato_id, q, min(limit, 50))
 
 
 @router.get("/{contrato_id}/salidas")
 def route_list_salidas(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     return list_salidas(contrato_id)
 
 
@@ -1339,7 +1388,7 @@ def route_salidas_devolvibles_por_pk(
 ):
     """Debe ir antes de /salidas/{salida_id} para no capturar el path como id."""
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     try:
         return salidas_devolvibles_por_pk(contrato_id, pk_id)
     except ValueError as exc:
@@ -1349,7 +1398,7 @@ def route_salidas_devolvibles_por_pk(
 @router.get("/{contrato_id}/salidas/{salida_id}")
 def route_get_salida(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     try:
         return get_salida(contrato_id, salida_id)
     except ValueError as exc:
@@ -1359,7 +1408,7 @@ def route_get_salida(contrato_id: int, salida_id: int, current_user=Depends(get_
 @router.post("/{contrato_id}/salidas")
 def route_create_salida(contrato_id: int, body: SalidaCreateBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "crear")
+    require_permiso_entradas_salidas(current_user, "crear")
     try:
         payload = body.dict()
         if body.items:
@@ -1437,7 +1486,7 @@ def route_update_salida_cantidad(
 @router.delete("/{contrato_id}/salidas/{salida_id}")
 def route_eliminar_salida(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    require_permiso_entradas_salidas(current_user, "editar")
     try:
         prev = get_salida(contrato_id, salida_id)
         result = eliminar_salida(contrato_id, salida_id, sal_prefetched=prev)
@@ -1463,7 +1512,7 @@ def route_eliminar_salida(contrato_id: int, salida_id: int, current_user=Depends
 @router.get("/{contrato_id}/salidas/{salida_id}/recibo/download")
 def route_download_salida_pdf(contrato_id: int, salida_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     try:
         data, fname = download_salida_pdf(contrato_id, salida_id)
         return StreamingResponse(
@@ -1492,14 +1541,14 @@ class DevolucionCreateBody(BaseModel):
 @router.get("/{contrato_id}/devoluciones")
 def route_list_devoluciones(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_entradas_salidas(current_user)
     return list_devoluciones(contrato_id)
 
 
 @router.post("/{contrato_id}/devoluciones")
 def route_create_devolucion(contrato_id: int, body: DevolucionCreateBody, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "crear")
+    require_permiso_entradas_salidas(current_user, "crear")
     try:
         salida_prev = get_salida(contrato_id, int(body.salida_id))
         result = create_devolucion(contrato_id, _uid(current_user), body.dict())
@@ -1557,7 +1606,7 @@ def route_eliminar_devolucion(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    require_permiso_entradas_salidas(current_user, "editar")
     try:
         prev = get_devolucion(contrato_id, devolucion_id)
         salida_id = prev.get("salida_id")
@@ -1615,7 +1664,7 @@ def route_inventario_graficos(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return get_inventario_graficos(contrato_id, capitulo=capitulo, item=item)
 
 
@@ -1629,7 +1678,7 @@ def route_inventario_arbol(
     from almacen_inventario_arbol import invalidar_cache_inventario_arbol
 
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     if refresh:
         invalidar_cache_inventario_arbol(contrato_id)
     data = list_inventario_arbol(contrato_id)
@@ -1712,7 +1761,7 @@ def route_inventario_arbol(
 @router.get("/{contrato_id}/inventario")
 def route_inventario(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return list_inventario(contrato_id)
 
 
@@ -1724,7 +1773,7 @@ def route_movimientos(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return list_movimientos(contrato_id, presupuesto_id, material)
 
 
@@ -1754,14 +1803,14 @@ def route_export_inventario(contrato_id: int, current_user=Depends(get_current_u
 @router.get("/{contrato_id}/alertas-vencimiento")
 def route_alertas(contrato_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     return alertas_vencimiento(contrato_id)
 
 
 @router.get("/{contrato_id}/expedientes/{oc_id}")
 def route_expediente(contrato_id: int, oc_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "ver")
+    require_lectura_almacen(current_user)
     try:
         return get_expediente(contrato_id, oc_id)
     except ValueError as exc:

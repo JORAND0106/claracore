@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ModuloDataRefreshBar from '../components/ModuloDataRefreshBar'
 import { useModulo } from '../context/ModuloContext'
 import SeccionCatalogoInsumos from '../admin/SeccionCatalogoInsumos'
-import { permisosCatalogoInsumos } from '../admin/catalogoInsumosPermisos'
 import EntradasPanel from './EntradasPanel'
 import InventarioPanel from './InventarioPanel'
 import SalidasPanel from './SalidasPanel'
 import SolicitudesPanel from './SolicitudesPanel'
+import { puedeCrearSolicitudAlmacen } from './almacenPermisos'
 import {
   AlmacenProviders,
   buildAlmacenCssVars,
@@ -16,17 +16,17 @@ import {
 } from './almacenShared'
 
 const TABS = [
-  { id: 'solicitudes', label: 'Solicitudes', icon: '📋', ayuda: 'Crear, consultar y revisar solicitudes de materiales.' },
-  { id: 'entradas', label: 'Entradas', icon: '📥', ayuda: 'Registrar ingreso de material contra OC.' },
-  { id: 'salidas', label: 'Salidas', icon: '📤', ayuda: 'Despachar material hacia obra contra entradas por PK-ID.' },
-  { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Capítulo → Ítem → Insumos: valores financieros y rentabilidad.' },
+  { id: 'solicitudes', label: 'Solicitudes', icon: '📋', ayuda: 'Crear, consultar y revisar solicitudes de materiales.', ambito: 'almacen' },
+  { id: 'entradas', label: 'Entradas', icon: '📥', ayuda: 'Registrar ingreso de material contra OC.', ambito: 'entsal' },
+  { id: 'salidas', label: 'Salidas', icon: '📤', ayuda: 'Despachar material hacia obra contra entradas por PK-ID.', ambito: 'entsal' },
+  { id: 'inventario', label: 'Inventario', icon: '📊', ayuda: 'Capítulo → Ítem → Insumos: valores financieros y rentabilidad.', ambito: 'almacen' },
 ]
 
 function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = null }) {
   const ui = useAlmacenTheme()
   const api = useAlmacenApi()
   const { setModuloRefresh, clearModuloRefresh } = useModulo()
-  const [tab, setTab] = useState('solicitudes')
+  const [tab, setTab] = useState(null)
   const [vistaCatalogo, setVistaCatalogo] = useState(false)
   const [pendientes, setPendientes] = useState(0)
   const [updatedAt, setUpdatedAt] = useState(null)
@@ -34,33 +34,47 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
   const [refreshSignal, setRefreshSignal] = useState(0)
   const refreshPendingRef = useRef(false)
 
-  const catalogoPermsRaw = useMemo(
-    () => permisosCatalogoInsumos(usuario, permisos?.contratoId),
-    [usuario, permisos?.contratoId],
-  )
-  // Botón Insumos + crear/editar insumos: solo con permiso Almacén · editar.
-  const puedeVerCatalogo = Boolean(permisos?.editar)
-  const catalogoPerms = useMemo(() => {
-    if (!puedeVerCatalogo) {
-      return {
-        ver: false,
-        crear: false,
-        editar: false,
-        eliminar: false,
-        validar: false,
-        exportar: false,
-      }
-    }
-    return {
-      ...catalogoPermsRaw,
-      ver: true,
-      crear: true,
-      editar: true,
-      eliminar: Boolean(catalogoPermsRaw?.eliminar),
-      validar: Boolean(catalogoPermsRaw?.validar),
-      exportar: Boolean(catalogoPermsRaw?.exportar),
-    }
-  }, [puedeVerCatalogo, catalogoPermsRaw])
+  const catalogoPerms = useMemo(() => ({
+    ver: Boolean(permisos?.catalogo?.ver),
+    crear: Boolean(permisos?.catalogo?.crear),
+    editar: Boolean(permisos?.catalogo?.editar),
+    eliminar: Boolean(permisos?.catalogo?.eliminar),
+    validar: Boolean(permisos?.catalogo?.validar),
+    exportar: Boolean(permisos?.catalogo?.exportar),
+  }), [permisos?.catalogo])
+
+  const entsalPerms = useMemo(() => ({
+    ver: Boolean(permisos?.entradasSalidas?.ver),
+    crear: Boolean(permisos?.entradasSalidas?.crear),
+    editar: Boolean(permisos?.entradasSalidas?.editar),
+    eliminar: Boolean(permisos?.entradasSalidas?.eliminar),
+    validar: Boolean(permisos?.entradasSalidas?.validar),
+    exportar: Boolean(permisos?.entradasSalidas?.exportar),
+    esContratistaGerencial: Boolean(permisos?.esContratistaGerencial),
+    esDesarrollador: Boolean(permisos?.esDesarrollador),
+    contratoId: permisos?.contratoId,
+    userId: permisos?.userId,
+    verEconomicos: permisos?.verEconomicos,
+  }), [permisos])
+
+  /** Permisos de Solicitudes/Inventario: solo función Almacén (sin herencia). */
+  const almacenPerms = useMemo(() => ({
+    ver: Boolean(permisos?.ver),
+    crear: Boolean(permisos?.crear),
+    editar: Boolean(permisos?.editar),
+    eliminar: Boolean(permisos?.eliminar),
+    validar: Boolean(permisos?.validar),
+    exportar: Boolean(permisos?.exportar),
+    esContratistaGerencial: Boolean(permisos?.esContratistaGerencial),
+    esDesarrollador: Boolean(permisos?.esDesarrollador),
+    contratoId: permisos?.contratoId,
+    userId: permisos?.userId,
+    verEconomicos: permisos?.verEconomicos,
+  }), [permisos])
+
+  const puedeVerCatalogo = Boolean(permisos?.verCatalogo)
+  const puedeVerEntsal = Boolean(permisos?.verEntradasSalidas)
+  const puedeVerSolicitudesInventario = Boolean(permisos?.verSolicitudesInventario)
 
   const theme = useMemo(() => t || {
     primary: ui.accent,
@@ -79,8 +93,6 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
   }, [])
 
   const bumpRelatedPanels = useCallback(() => {
-    // Sube refreshSignal para que Entradas/Inventario recalculen saldos al volver a la pestaña
-    // o si ya están montados. Salidas ya recargó en local.
     setRefreshSignal((s) => s + 1)
   }, [])
 
@@ -88,13 +100,13 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
     refreshPendingRef.current = true
     setRefreshBusy(true)
     setRefreshSignal((s) => s + 1)
-    if (permisos?.validar && (permisos?.esContratistaGerencial || permisos?.esDesarrollador)) {
+    if (almacenPerms.validar && (almacenPerms.esContratistaGerencial || almacenPerms.esDesarrollador)) {
       try {
         const n = await api.countSolicitudes('enviada')
         setPendientes(n)
       } catch { /* ignore */ }
     }
-  }, [api, permisos?.validar, permisos?.esContratistaGerencial, permisos?.esDesarrollador])
+  }, [api, almacenPerms.validar, almacenPerms.esContratistaGerencial, almacenPerms.esDesarrollador])
 
   useEffect(() => {
     setModuloRefresh({
@@ -107,18 +119,37 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
   }, [setModuloRefresh, clearModuloRefresh, doRefresh, refreshBusy])
 
   useEffect(() => {
-    if (!(permisos?.validar && (permisos?.esContratistaGerencial || permisos?.esDesarrollador))) return
+    if (!(almacenPerms.validar && (almacenPerms.esContratistaGerencial || almacenPerms.esDesarrollador))) return
     api.countSolicitudes('enviada').then(setPendientes).catch(() => {})
-  }, [api, permisos?.validar, permisos?.esContratistaGerencial, permisos?.esDesarrollador, tab])
+  }, [api, almacenPerms.validar, almacenPerms.esContratistaGerencial, almacenPerms.esDesarrollador, tab])
 
   const visibleTabs = useMemo(() => TABS.filter((tb) => {
-    if (tb.id === 'entradas' || tb.id === 'salidas') {
-      return permisos?.crear || permisos?.editar || permisos?.ver
+    if (tb.ambito === 'entsal') return puedeVerEntsal
+    if (tb.ambito === 'almacen') return puedeVerSolicitudesInventario
+    return false
+  }), [puedeVerEntsal, puedeVerSolicitudesInventario])
+
+  // Tab / vista inicial según permisos (sin mezclar ámbitos).
+  useEffect(() => {
+    if (visibleTabs.length) {
+      if (!tab || !visibleTabs.some((tb) => tb.id === tab)) {
+        setTab(visibleTabs[0].id)
+      }
+      return
     }
-    return true
-  }), [permisos])
+    if (puedeVerCatalogo) {
+      setVistaCatalogo(true)
+      setTab(null)
+    }
+  }, [visibleTabs, tab, puedeVerCatalogo])
 
   const cssVars = useMemo(() => buildAlmacenCssVars(t), [t])
+
+  const solicitudesPerms = useMemo(() => ({
+    ...almacenPerms,
+    // Crear solicitud exige Ver + Crear en Almacén.
+    crear: puedeCrearSolicitudAlmacen(almacenPerms),
+  }), [almacenPerms])
 
   if (vistaCatalogo && puedeVerCatalogo) {
     return (
@@ -127,23 +158,25 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
         style={{ ...cssVars, maxWidth: '100%', width: '100%', margin: 0, boxSizing: 'border-box' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={() => setVistaCatalogo(false)}
-            style={{
-              border: `1px solid ${theme.border}`,
-              background: theme.bgCard,
-              color: theme.text,
-              borderRadius: 8,
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontWeight: 600,
-              fontSize: 'var(--cc-sm)',
-              minHeight: 40,
-            }}
-          >
-            ← Volver a Almacén
-          </button>
+          {visibleTabs.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setVistaCatalogo(false)}
+              style={{
+                border: `1px solid ${theme.border}`,
+                background: theme.bgCard,
+                color: theme.text,
+                borderRadius: 8,
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: 'var(--cc-sm)',
+                minHeight: 40,
+              }}
+            >
+              ← Volver a Almacén
+            </button>
+          )}
           <span style={{ fontSize: 'var(--cc-sm)', color: theme.textMuted }}>
             Catálogo de insumos del contrato
           </span>
@@ -156,6 +189,15 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
           t={theme}
           embedded
         />
+      </div>
+    )
+  }
+
+  if (!visibleTabs.length && !puedeVerCatalogo) {
+    return (
+      <div style={{ textAlign: 'center', padding: 40, color: ui.textMuted }}>
+        No tiene permisos para ninguna sección de Almacén. Un administrador puede habilitarlos en
+        Control de accesos (Almacén, Entradas y Salidas o Catálogo de insumos).
       </div>
     )
   }
@@ -184,7 +226,7 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
           {puedeVerCatalogo && (
             <button
               type="button"
-              title="Catálogo de insumos: crear y editar materiales del contrato (con AIU e IVA independientes)."
+              title="Catálogo de insumos: materiales del contrato (permiso Catálogo de insumos)."
               onClick={() => setVistaCatalogo(true)}
               style={{
                 border: `1px solid ${theme.border}`,
@@ -211,36 +253,38 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
         </div>
       </div>
 
-      <div style={ui.tabBar} className="cc-almacen-tab-bar">
-        {visibleTabs.map((tb) => (
-          <button
-            key={tb.id}
-            type="button"
-            title={tb.ayuda}
-            style={ui.tabBtn(tab === tb.id)}
-            onClick={() => setTab(tb.id)}
-          >
-            <span>{tb.icon}</span>
-            <span>{tb.label}</span>
-            {tb.id === 'solicitudes' && pendientes > 0 && permisos?.validar && (permisos?.esContratistaGerencial || permisos?.esDesarrollador) && (
-              <span style={{
-                background: '#dc2626',
-                color: '#fff',
-                borderRadius: 10,
-                padding: '0 6px',
-                fontSize: 'var(--cc-xs)',
-              }}
-              >
-                {pendientes}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      {visibleTabs.length > 0 && (
+        <div style={ui.tabBar} className="cc-almacen-tab-bar">
+          {visibleTabs.map((tb) => (
+            <button
+              key={tb.id}
+              type="button"
+              title={tb.ayuda}
+              style={ui.tabBtn(tab === tb.id)}
+              onClick={() => setTab(tb.id)}
+            >
+              <span>{tb.icon}</span>
+              <span>{tb.label}</span>
+              {tb.id === 'solicitudes' && pendientes > 0 && almacenPerms.validar && (almacenPerms.esContratistaGerencial || almacenPerms.esDesarrollador) && (
+                <span style={{
+                  background: '#dc2626',
+                  color: '#fff',
+                  borderRadius: 10,
+                  padding: '0 6px',
+                  fontSize: 'var(--cc-xs)',
+                }}
+                >
+                  {pendientes}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {tab === 'solicitudes' && (
+      {tab === 'solicitudes' && puedeVerSolicitudesInventario && (
         <SolicitudesPanel
-          permisos={permisos}
+          permisos={solicitudesPerms}
           t={t}
           token={token}
           contratoId={permisos?.contratoId}
@@ -248,18 +292,18 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
           onDataLoaded={onDataLoaded}
         />
       )}
-      {tab === 'entradas' && (
+      {tab === 'entradas' && puedeVerEntsal && (
         <EntradasPanel
-          permisos={permisos}
+          permisos={entsalPerms}
           t={t}
           token={token}
           refreshSignal={refreshSignal}
           onDataLoaded={onDataLoaded}
         />
       )}
-      {tab === 'salidas' && (
+      {tab === 'salidas' && puedeVerEntsal && (
         <SalidasPanel
-          permisos={permisos}
+          permisos={entsalPerms}
           t={t}
           token={token}
           refreshSignal={refreshSignal}
@@ -267,9 +311,9 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
           onSalidaMutated={bumpRelatedPanels}
         />
       )}
-      {tab === 'inventario' && (
+      {tab === 'inventario' && puedeVerSolicitudesInventario && (
         <InventarioPanel
-          permisos={permisos}
+          permisos={almacenPerms}
           token={token}
           refreshSignal={refreshSignal}
           onDataLoaded={onDataLoaded}
