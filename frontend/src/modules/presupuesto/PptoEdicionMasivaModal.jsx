@@ -10,12 +10,23 @@ import {
   pptoClonarFilasFuenteTramos,
 } from './pptoTramoBusqueda'
 import { pptoLabelSubcontratista } from './pptoSubcontratistaMasiva'
+import {
+  pptoSheetStyles,
+  pptoSheetCssVars,
+  pptoSheetTipStyle,
+  PPTO_Z_EDICION_MASIVA,
+} from './pptoSheetStyles'
+import {
+  PPTO_MASIVA_TIP_SELECCION,
+  PPTO_MASIVA_TIP_COMPETENCIA,
+  PPTO_MASIVA_TIP_OBS,
+  PPTO_MASIVA_TIP_DIMS,
+  PPTO_MASIVA_TIP_DEP,
+  PPTO_MASIVA_TIP_INTERV,
+} from './pptoEdicionMasivaTips'
 
 const PPTO_TIPO_DEFAULT = 'Presupuesto de Obra'
 const PPTO_TIPO_OBRA = 'Obra Ejecutada'
-
-const HINT_EXCEL_OBS =
-  'Opcional. El texto se verá en la exportación Excel de presupuesto, columna «Observación» del detalle por ítem. Si algún registro ya tiene observación, se preguntará si se agrega al historial o se reemplaza.'
 
 const SEMAFORO = [
   { valor: 'No Revisado', color: '#3B82F6', label: '🔵 No Revisado' },
@@ -36,96 +47,85 @@ const cc = {
   padSm: 'var(--cc-space-2)',
 }
 
-function AvisoMasivaSeleccion({ t, n }) {
-  if (!n) return null
+function TipMark({ tip, sheet }) {
+  if (!tip) return null
   return (
-    <p
-      style={{
-        margin: 0,
-        fontSize: cc.caption,
-        color: t.textMuted,
-        fontStyle: 'italic',
-        opacity: 0.82,
-        lineHeight: 1.45,
-      }}
-    >
-      Los valores que defina aquí se aplicarán a los {n} registro{n !== 1 ? 's' : ''} seleccionado{n !== 1 ? 's' : ''} editables de esta pestaña.
-    </p>
+    <span title={tip} aria-label={tip} style={pptoSheetTipStyle(sheet)}>
+      ?
+    </span>
   )
 }
 
-function ResumenCambios({ filas, t, titulo }) {
+function GrupoSheet({ titulo, tip, sheet, children, extra }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={sheet.sectionBar}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {titulo}
+          <TipMark tip={tip} sheet={sheet} />
+        </span>
+        {extra || null}
+      </div>
+      <div style={sheet.sheetWrapFlush}>{children}</div>
+    </div>
+  )
+}
+
+function sheetInp(sheet, t, active) {
+  return {
+    width: '100%',
+    boxSizing: 'border-box',
+    border: 'none',
+    outline: 'none',
+    background: active ? `${t.primary}12` : 'transparent',
+    color: sheet.text,
+    fontSize: 'var(--cc-input)',
+    padding: '6px 4px',
+    minHeight: 32,
+    fontFamily: 'inherit',
+  }
+}
+
+function ResumenCambios({ filas, t, sheet, titulo }) {
   if (!filas?.length) {
     return (
-      <div
-        style={{
-          padding: cc.pad,
-          background: t.bg,
-          borderRadius: 10,
-          border: `1px dashed ${t.border}`,
-          color: t.textMuted,
-          fontSize: cc.sm,
-        }}
-      >
-        Configure los valores arriba para ver el resumen de cambios.
-      </div>
+      <GrupoSheet titulo={titulo} sheet={sheet}>
+        <div style={{ ...sheet.tdMuted, padding: 12 }}>
+          Configure los valores arriba para ver el resumen.
+        </div>
+      </GrupoSheet>
     )
   }
   return (
-    <div style={{ border: `1px solid ${t.border}`, borderRadius: 10, overflow: 'hidden' }}>
-      <div
-        style={{
-          padding: `${cc.padSm} ${cc.pad}`,
-          background: t.primary + '14',
-          borderBottom: `1px solid ${t.border}`,
-          fontSize: cc.sm,
-          fontWeight: 700,
-          color: t.primary,
-        }}
-      >
-        {titulo} — {filas.length} registro{filas.length !== 1 ? 's' : ''}
-      </div>
+    <GrupoSheet titulo={`${titulo} · ${filas.length} reg.`} sheet={sheet}>
       <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: cc.sm }}>
+        <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
           <thead>
-            <tr style={{ background: t.bg, position: 'sticky', top: 0 }}>
+            <tr>
               {['Ref.', 'Capítulo', 'Ítem', 'Campo', 'Anterior', 'Nuevo'].map((h) => (
-                <th
-                  key={h}
-                  style={{
-                    padding: `${cc.padSm} 10px`,
-                    textAlign: 'left',
-                    color: t.textMuted,
-                    fontWeight: 700,
-                    fontSize: cc.caption,
-                    borderBottom: `1px solid ${t.border}`,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {h}
-                </th>
+                <th key={h} style={sheet.th}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {filas.map((f) => (
-              <tr key={f.id} style={{ borderBottom: `1px solid ${t.border}` }}>
-                <td style={{ padding: `${cc.padSm} 10px`, color: t.textMuted, fontFamily: 'monospace', fontSize: cc.caption }}>{f.ref}</td>
-                <td style={{ padding: `${cc.padSm} 10px`, color: t.text, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.capitulo || '—'}</td>
-                <td style={{ padding: `${cc.padSm} 10px`, color: t.text, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.item || '—'}</td>
-                <td style={{ padding: `${cc.padSm} 10px`, color: t.textMuted, fontSize: cc.caption }}>{f.campo}</td>
-                <td style={{ padding: `${cc.padSm} 10px`, color: '#94A3B8', maxWidth: 140, wordBreak: 'break-word' }}>{f.antiguo}</td>
-                <td style={{ padding: `${cc.padSm} 10px`, color: t.primary, fontWeight: 600, maxWidth: 140, wordBreak: 'break-word' }}>{f.nuevo}</td>
+              <tr key={f.id}>
+                <td style={{ ...sheet.tdMuted, fontFamily: 'monospace', fontSize: cc.caption }}>{f.ref}</td>
+                <td style={{ ...sheet.td, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.capitulo || ''}>{f.capitulo || '—'}</td>
+                <td style={{ ...sheet.td, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.item || ''}>{f.item || '—'}</td>
+                <td style={sheet.tdMuted}>{f.campo}</td>
+                <td style={{ ...sheet.tdMuted, maxWidth: 140, wordBreak: 'break-word' }}>{f.antiguo}</td>
+                <td style={{ ...sheet.td, color: t.primary, fontWeight: 600, maxWidth: 140, wordBreak: 'break-word' }}>{f.nuevo}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-    </div>
+    </GrupoSheet>
   )
 }
 
-function RadioOpcion({ valor, label, color, seleccionado, onSelect, disabled, name = 'opc-masiva' }) {
+function RadioOpcion({ valor, label, color, seleccionado, onSelect, disabled, name = 'opc-masivo' }) {
   const activo = seleccionado === valor
   const c = color || '#3B82F6'
   return (
@@ -133,10 +133,10 @@ function RadioOpcion({ valor, label, color, seleccionado, onSelect, disabled, na
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
-        padding: `${cc.padSm} ${cc.pad}`,
-        borderRadius: 10,
-        border: `2px solid ${activo ? c : 'transparent'}`,
+        gap: 8,
+        padding: '6px 8px',
+        borderRadius: 4,
+        border: `1.5px solid ${activo ? c : 'transparent'}`,
         background: activo ? c + '18' : 'transparent',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
@@ -163,89 +163,20 @@ function RadioEstado({ valor, seleccionado, onSelect, disabled, name }) {
   )
 }
 
-function DimInput({ label, value, onChange, disabled, t, title }) {
+function ObservacionCell({ value, onChange, sheet, t }) {
   return (
-    <div style={{ flex: '1 1 140px' }} title={title}>
-      <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.3 }}>{label}</div>
-      <input
-        type="text"
-        inputMode="decimal"
-        autoComplete="off"
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="— Sin cambio —"
-        style={{
-          width: '100%',
-          boxSizing: 'border-box',
-          background: t.inputBg,
-          border: `1.5px solid ${value ? t.primary : t.border}`,
-          borderRadius: 8,
-          padding: `${cc.padSm} 12px`,
-          color: t.text,
-          fontSize: cc.sm,
-          opacity: disabled ? 0.5 : 1,
-        }}
-      />
-    </div>
-  )
-}
-
-function CompetenciaSelect({ value, onChange, opciones, t, label = 'NUEVA COMPETENCIA', allowEmpty = true }) {
-  return (
-    <div style={{ flex: '1 1 200px' }}>
-      <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.3 }}>
-        {label}
-      </div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          width: '100%',
-          background: t.inputBg,
-          border: `1.5px solid ${value ? t.primary : t.border}`,
-          borderRadius: 8,
-          padding: `${cc.padSm} 12px`,
-          color: t.text,
-          fontSize: cc.sm,
-        }}
-      >
-        {allowEmpty ? <option value="">— Sin cambio —</option> : <option value="">— Seleccione —</option>}
-        {(opciones || []).map((c) => (
-          <option key={c} value={c}>{c}</option>
-        ))}
-      </select>
-    </div>
-  )
-}
-
-function SubcontratistaSelect({ value, onChange, opciones, t, disabled = false }) {
-  return (
-    <div style={{ flex: '1 1 240px' }}>
-      <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.3 }}>
-        SUBCONTRATISTA
-      </div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        style={{
-          width: '100%',
-          background: t.inputBg,
-          border: `1.5px solid ${value ? t.primary : t.border}`,
-          borderRadius: 8,
-          padding: `${cc.padSm} 12px`,
-          color: t.text,
-          fontSize: cc.sm,
-          opacity: disabled ? 0.55 : 1,
-        }}
-      >
-        <option value="">— Sin cambio —</option>
-        {(opciones || []).map((s) => (
-          <option key={s.id} value={String(s.id)}>{s.label}</option>
-        ))}
-      </select>
-    </div>
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="Opcional…"
+      rows={2}
+      style={{
+        ...sheetInp(sheet, t, !!value),
+        resize: 'vertical',
+        textAlign: 'left',
+        lineHeight: 1.35,
+      }}
+    />
   )
 }
 
@@ -731,6 +662,21 @@ export default function PptoEdicionMasivaModal({
   const nEditablesInterv = editablesInterv.length
   const nBloqueadosInterv = editables.length - nEditablesInterv
 
+
+  const sheet = pptoSheetStyles(t)
+  const sheetCss = pptoSheetCssVars(t)
+  const tipSel = `${PPTO_MASIVA_TIP_SELECCION} (${nEditables} editable${nEditables !== 1 ? 's' : ''}).`
+  const tipSelInterv = `${PPTO_MASIVA_TIP_SELECCION} (${nEditablesInterv} editable${nEditablesInterv !== 1 ? 's' : ''} para Interventoría).`
+
+  const th = (label, tip) => (
+    <th style={sheet.th}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        {label}
+        <TipMark tip={tip} sheet={sheet} />
+      </span>
+    </th>
+  )
+
   return (
     <div
       role="dialog"
@@ -739,8 +685,8 @@ export default function PptoEdicionMasivaModal({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        zIndex: 5000,
+        background: t.overlay || 'rgba(0,0,0,0.55)',
+        zIndex: PPTO_Z_EDICION_MASIVA,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -748,15 +694,16 @@ export default function PptoEdicionMasivaModal({
         fontSize: cc.body,
         lineHeight: 1.45,
         fontFamily: 'inherit',
+        ...sheetCss,
       }}
       onClick={(e) => e.target === e.currentTarget && !busy && onClose()}
     >
       <div
-        className="cc-ppto-modal-sheet"
+        className="cc-ppto-modal-sheet cc-ppto-edicion-excel"
         style={{
           background: t.bgCard,
-          border: `1px solid ${t.border}`,
-          borderRadius: 16,
+          border: `1px solid ${sheet.border}`,
+          borderRadius: 8,
           width: 'min(1104px, 96vw)',
           maxHeight: '92vh',
           display: 'flex',
@@ -769,8 +716,8 @@ export default function PptoEdicionMasivaModal({
         <CcModalBrandHeader theme={t} />
         <div
           style={{
-            padding: `${cc.pad} 22px ${cc.padSm}`,
-            borderBottom: `1px solid ${t.border}`,
+            padding: `${cc.pad} 16px ${cc.padSm}`,
+            borderBottom: `1px solid ${sheet.border}`,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
@@ -795,7 +742,7 @@ export default function PptoEdicionMasivaModal({
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: 4, padding: `10px 14px 0`, borderBottom: `1px solid ${t.border}`, overflowX: 'auto' }}>
+        <div style={{ display: 'flex', gap: 2, padding: '8px 10px 0', borderBottom: `1px solid ${sheet.border}`, overflowX: 'auto', background: sheet.headerBg }}>
           {tabs.map((tab) => {
             const activo = tabSafe === tab.id
             return (
@@ -805,16 +752,18 @@ export default function PptoEdicionMasivaModal({
                 onClick={() => { setTabActivo(tab.id); setResumenPost(null); setErrorApply('') }}
                 style={{
                   flex: '0 0 auto',
-                  padding: `10px 16px`,
-                  border: 'none',
-                  borderBottom: activo ? `3px solid ${t.primary}` : '3px solid transparent',
-                  background: activo ? t.primary + '12' : 'transparent',
+                  padding: '8px 12px',
+                  border: `1px solid ${activo ? sheet.border : 'transparent'}`,
+                  borderBottom: activo ? `2px solid ${t.primary}` : '2px solid transparent',
+                  background: activo ? t.bgCard : 'transparent',
                   color: activo ? t.primary : t.textMuted,
-                  fontWeight: activo ? 700 : 500,
-                  fontSize: cc.sm,
+                  fontWeight: activo ? 800 : 600,
+                  fontSize: cc.caption,
                   cursor: 'pointer',
-                  borderRadius: '8px 8px 0 0',
+                  borderRadius: '4px 4px 0 0',
                   whiteSpace: 'nowrap',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.03em',
                 }}
               >
                 {tab.icon} {tab.label}
@@ -823,87 +772,106 @@ export default function PptoEdicionMasivaModal({
           })}
         </div>
 
-        <div className="cc-ppto-modal-body cc-ppto-edicion-body" style={{ padding: `18px 22px`, overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch' }}>
+        <div className="cc-ppto-modal-body cc-ppto-edicion-body" style={{ padding: 14, overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch' }}>
           {tabSafe === 'capitem' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <AvisoMasivaSeleccion t={t} n={nEditables} />
-              <div className="cc-ppto-edicion-fields" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
-                <div style={{ flex: '1 1 200px' }}>
-                  <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>NUEVO CAPÍTULO</div>
-                  <select
-                    value={editCapitulo}
-                    onChange={(e) => { setEditCapitulo(e.target.value); setEditItem(''); setItemBusqueda('') }}
-                    style={{ width: '100%', background: t.inputBg, border: `1.5px solid ${editCapitulo ? t.primary : t.border}`, borderRadius: 8, padding: `${cc.padSm} 12px`, color: t.text, fontSize: cc.sm }}
-                  >
-                    <option value="">— Sin cambio —</option>
-                    {capitulosListado.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-                <div style={{ flex: '2 1 280px', position: 'relative' }}>
-                  <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>NUEVO ÍTEM</div>
-                  <input
-                    value={itemBusqueda}
-                    onChange={(e) => { setItemBusqueda(e.target.value); setItemDropOpen(true); if (!e.target.value) setEditItem('') }}
-                    onFocus={() => setItemDropOpen(true)}
-                    onBlur={() => setTimeout(() => setItemDropOpen(false), 180)}
-                    placeholder={editCapitulo ? 'Buscar ítem…' : 'Primero seleccione capítulo'}
-                    disabled={!editCapitulo}
-                    style={{ width: '100%', background: t.inputBg, border: `1.5px solid ${editItem ? t.primary : t.border}`, borderRadius: 8, padding: `${cc.padSm} 12px`, color: t.text, fontSize: cc.sm, opacity: editCapitulo ? 1 : 0.5 }}
-                  />
-                  {itemDropOpen && editCapitulo && itemBusqueda.length > 0 && (
-                    <div ref={itemDropRef} style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, maxHeight: 200, overflowY: 'auto', marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.15)', fontSize: cc.sm }}>
-                      {itemsListado
-                        .filter((p) => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase()))
-                        .slice(0, 40)
-                        .map((p) => (
-                          <div
-                            key={p.id}
-                            onMouseDown={() => {
-                              setEditItem(p.item_numero)
-                              setItemBusqueda(`${p.item_numero} · ${p.descripcion}`)
-                              setItemDropOpen(false)
-                            }}
-                            style={{ padding: `${cc.padSm} 12px`, cursor: 'pointer', borderBottom: `1px solid ${t.border}` }}
-                          >
-                            <strong>{p.item_numero}</strong> · {p.descripcion}
-                          </div>
+            <GrupoSheet titulo="Capítulo / Ítem" tip={tipSel} sheet={sheet}>
+              <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
+                <thead>
+                  <tr>
+                    {th('Capítulo', tipSel)}
+                    {th('Ítem', null)}
+                    {th('V. unit.', null)}
+                    {th('Competencia', PPTO_MASIVA_TIP_COMPETENCIA)}
+                    {th('Subcontratista', null)}
+                    {th('Obs.', PPTO_MASIVA_TIP_OBS)}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={sheet.td}>
+                      <select
+                        value={editCapitulo}
+                        onChange={(e) => { setEditCapitulo(e.target.value); setEditItem(''); setItemBusqueda('') }}
+                        style={sheetInp(sheet, t, !!editCapitulo)}
+                      >
+                        <option value="">— Sin cambio —</option>
+                        {capitulosListado.map((c) => (
+                          <option key={c} value={c}>{c}</option>
                         ))}
-                    </div>
-                  )}
-                </div>
-                {precioSeleccionado && (
-                  <span style={{ fontSize: cc.sm, fontWeight: 700, color: t.primary, padding: `${cc.padSm} 12px`, background: t.primary + '14', borderRadius: 8 }}>
-                    {formatCOP(precioSeleccionado.precio_unitario)}
-                  </span>
-                )}
-                <CompetenciaSelect
-                  value={editCompetencia}
-                  onChange={setEditCompetencia}
-                  opciones={competenciasOpciones}
-                  t={t}
-                  label="NUEVA COMPETENCIA"
-                  allowEmpty
-                />
-                <div style={{ flex: '1 1 100%', marginTop: -8, fontSize: cc.caption, color: t.textMuted, lineHeight: 1.4 }}>
-                  La competencia es solo clasificación: se aplica de inmediato (también en sellados) sin motivo de edición.
-                </div>
-                <SubcontratistaSelect
-                  value={editSubcontratistaId}
-                  onChange={setEditSubcontratistaId}
-                  opciones={subcontratistasOpciones}
-                  t={t}
-                  disabled={!nEditables}
-                />
-              </div>
-              <ObservacionBox t={t} value={obsCapItem} onChange={setObsCapItem} />
-            </div>
+                      </select>
+                    </td>
+                    <td style={{ ...sheet.td, position: 'relative' }}>
+                      <input
+                        value={itemBusqueda}
+                        onChange={(e) => { setItemBusqueda(e.target.value); setItemDropOpen(true); if (!e.target.value) setEditItem('') }}
+                        onFocus={() => setItemDropOpen(true)}
+                        onBlur={() => setTimeout(() => setItemDropOpen(false), 180)}
+                        placeholder={editCapitulo ? 'Buscar ítem…' : 'Elija capítulo'}
+                        disabled={!editCapitulo}
+                        style={{ ...sheetInp(sheet, t, !!editItem), opacity: editCapitulo ? 1 : 0.5 }}
+                      />
+                      {itemDropOpen && editCapitulo && itemBusqueda.length > 0 && (
+                        <div ref={itemDropRef} style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, background: t.bgCard, border: `1px solid ${sheet.border}`, maxHeight: 200, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.15)', fontSize: cc.sm }}>
+                          {itemsListado
+                            .filter((p) => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase()))
+                            .slice(0, 40)
+                            .map((p) => (
+                              <div
+                                key={p.id}
+                                onMouseDown={() => {
+                                  setEditItem(p.item_numero)
+                                  setItemBusqueda(`${p.item_numero} · ${p.descripcion}`)
+                                  setItemDropOpen(false)
+                                }}
+                                style={{ padding: `${cc.padSm} 12px`, cursor: 'pointer', borderBottom: `1px solid ${sheet.border}` }}
+                              >
+                                <strong>{p.item_numero}</strong> · {p.descripcion}
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ ...sheet.td, fontWeight: 700, color: t.primary, whiteSpace: 'nowrap' }}>
+                      {precioSeleccionado ? formatCOP(precioSeleccionado.precio_unitario) : '—'}
+                    </td>
+                    <td style={sheet.td}>
+                      <select
+                        value={editCompetencia}
+                        onChange={(e) => setEditCompetencia(e.target.value)}
+                        style={sheetInp(sheet, t, !!editCompetencia)}
+                      >
+                        <option value="">— Sin cambio —</option>
+                        {(competenciasOpciones || []).map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={sheet.td}>
+                      <select
+                        value={editSubcontratistaId}
+                        onChange={(e) => setEditSubcontratistaId(e.target.value)}
+                        disabled={!nEditables}
+                        style={{ ...sheetInp(sheet, t, !!editSubcontratistaId), opacity: nEditables ? 1 : 0.55 }}
+                      >
+                        <option value="">— Sin cambio —</option>
+                        {(subcontratistasOpciones || []).map((s) => (
+                          <option key={s.id} value={String(s.id)}>{s.label}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={sheet.td}>
+                      <ObservacionCell value={obsCapItem} onChange={setObsCapItem} sheet={sheet} t={t} />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </GrupoSheet>
           )}
 
           {tabSafe === 'tramos' && (
             <PptoEdicionMasivaTramosPanel
               t={t}
+              sheet={sheet}
               filasFuente={filasFuenteTramos}
               cargando={tramosCargando}
               meta={tramosMeta}
@@ -921,95 +889,163 @@ export default function PptoEdicionMasivaModal({
           )}
 
           {tabSafe === 'dims' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <AvisoMasivaSeleccion t={t} n={nEditables} />
-              <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, fontStyle: 'italic', opacity: 0.82 }}>
-                <strong>Ancho</strong> y <strong>espesor</strong> se editan aquí (también en registros enlazados al plano). El <strong>área/long/nodo</strong> del plano no se cambia en masa — viene de ClaraLink/DWG.
-              </p>
-              <div className="cc-ppto-edicion-fields" style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-                <DimInput label="ANCHO" value={dimAncho} onChange={setDimAncho} disabled={!nEditables} t={t} />
-                <DimInput label="ESPESOR" value={dimEspesor} onChange={setDimEspesor} disabled={!nEditables} t={t} />
-              </div>
-              <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted }}>
-                Cant. total usa el área del plano × Ancho × Espesor (si aplica) → se recalcula costo directo por registro.
-              </p>
-              <ObservacionBox t={t} value={obsDims} onChange={setObsDims} />
-            </div>
+            <GrupoSheet titulo="Dimensiones" tip={`${tipSel} ${PPTO_MASIVA_TIP_DIMS}`} sheet={sheet}>
+              <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
+                <thead>
+                  <tr>
+                    {th('Ancho', PPTO_MASIVA_TIP_DIMS)}
+                    {th('Espesor', PPTO_MASIVA_TIP_DIMS)}
+                    {th('Obs.', PPTO_MASIVA_TIP_OBS)}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={sheet.td}>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        value={dimAncho}
+                        disabled={!nEditables}
+                        onChange={(e) => setDimAncho(e.target.value)}
+                        placeholder="— Sin cambio —"
+                        style={{ ...sheetInp(sheet, t, !!dimAncho), opacity: nEditables ? 1 : 0.5, textAlign: 'right' }}
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        value={dimEspesor}
+                        disabled={!nEditables}
+                        onChange={(e) => setDimEspesor(e.target.value)}
+                        placeholder="— Sin cambio —"
+                        style={{ ...sheetInp(sheet, t, !!dimEspesor), opacity: nEditables ? 1 : 0.5, textAlign: 'right' }}
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <ObservacionCell value={obsDims} onChange={setObsDims} sheet={sheet} t={t} />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </GrupoSheet>
           )}
 
           {tabSafe === 'tipo' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <AvisoMasivaSeleccion t={t} n={nEditables} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <RadioOpcion valor={PPTO_TIPO_DEFAULT} label={`📋 ${PPTO_TIPO_DEFAULT}`} color="#7C3AED" seleccionado={tipoEjecucion} onSelect={setTipoEjecucion} disabled={!nEditables} name="tipo-masivo" />
-                <RadioOpcion valor={PPTO_TIPO_OBRA} label={`🏗 ${PPTO_TIPO_OBRA}`} color="#7C3AED" seleccionado={tipoEjecucion} onSelect={setTipoEjecucion} disabled={!nEditables} name="tipo-masivo" />
-              </div>
-              <ObservacionBox t={t} value={obsTipo} onChange={setObsTipo} />
-            </div>
+            <GrupoSheet titulo="Tipo de ejecución" tip={tipSel} sheet={sheet}>
+              <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
+                <thead>
+                  <tr>
+                    {th('Tipo', tipSel)}
+                    {th('Obs.', PPTO_MASIVA_TIP_OBS)}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={sheet.td}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        <RadioOpcion valor={PPTO_TIPO_DEFAULT} label={`📋 ${PPTO_TIPO_DEFAULT}`} color="#7C3AED" seleccionado={tipoEjecucion} onSelect={setTipoEjecucion} disabled={!nEditables} name="tipo-masivo" />
+                        <RadioOpcion valor={PPTO_TIPO_OBRA} label={`🏗 ${PPTO_TIPO_OBRA}`} color="#7C3AED" seleccionado={tipoEjecucion} onSelect={setTipoEjecucion} disabled={!nEditables} name="tipo-masivo" />
+                      </div>
+                    </td>
+                    <td style={sheet.td}>
+                      <ObservacionCell value={obsTipo} onChange={setObsTipo} sheet={sheet} t={t} />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </GrupoSheet>
           )}
 
           {tabSafe === 'depuracion' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <AvisoMasivaSeleccion t={t} n={nEditables} />
-              <div style={{ fontSize: cc.sm, color: t.textMuted }}>
-                Depuración (Residente de Costos / Obra). Pendiente o Rechazado abren el comentario de validación del sistema.
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
-                {SEMAFORO.map((s) => (
-                  <RadioEstado key={s.valor} name="dep-masivo" valor={s.valor} seleccionado={estadoDep} onSelect={setEstadoDep} disabled={!nEditables} />
-                ))}
-              </div>
-              <ObservacionBox t={t} value={obsDep} onChange={setObsDep} />
-            </div>
+            <GrupoSheet titulo="Depuración" tip={`${tipSel} ${PPTO_MASIVA_TIP_DEP}`} sheet={sheet}>
+              <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
+                <thead>
+                  <tr>
+                    {th('Estado', PPTO_MASIVA_TIP_DEP)}
+                    {th('Obs.', PPTO_MASIVA_TIP_OBS)}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={sheet.td}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 4 }}>
+                        {SEMAFORO.map((s) => (
+                          <RadioEstado key={s.valor} name="dep-masivo" valor={s.valor} seleccionado={estadoDep} onSelect={setEstadoDep} disabled={!nEditables} />
+                        ))}
+                      </div>
+                    </td>
+                    <td style={sheet.td}>
+                      <ObservacionCell value={obsDep} onChange={setObsDep} sheet={sheet} t={t} />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </GrupoSheet>
           )}
 
           {tabSafe === 'interv' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <AvisoMasivaSeleccion t={t} n={nEditablesInterv} />
+            <GrupoSheet titulo="Interventoría" tip={`${tipSelInterv} ${PPTO_MASIVA_TIP_INTERV}`} sheet={sheet}>
               {requiereDepuracionAprobadaInterv && nBloqueadosInterv > 0 && (
-                <p style={{ margin: 0, fontSize: cc.caption, color: '#B45309', fontStyle: 'italic', lineHeight: 1.45 }}>
-                  {nBloqueadosInterv} registro{nBloqueadosInterv !== 1 ? 's' : ''} sin depuración aprobada: Interventoría solo aplica cuando depuración contratista está en «Aprobado».
-                </p>
+                <div style={{ ...sheet.td, color: '#B45309', fontSize: cc.caption, borderBottom: `1px solid ${sheet.border}` }}>
+                  {nBloqueadosInterv} sin depuración aprobada — Interventoría solo con depuración «Aprobado».
+                </div>
               )}
-              <div style={{ fontSize: cc.sm, color: t.textMuted }}>
-                Validación Interventoría (rol Interventoría / Gerencial). Pendiente o Rechazado abren el comentario de validación del sistema.
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
-                {SEMAFORO.map((s) => (
-                  <RadioEstado key={s.valor} name="interv-masivo" valor={s.valor} seleccionado={estadoInterv} onSelect={setEstadoInterv} disabled={!nEditablesInterv} />
-                ))}
-              </div>
-              <ObservacionBox t={t} value={obsInterv} onChange={setObsInterv} />
-            </div>
+              <table style={{ ...sheet.sheetTable, minWidth: 0, width: '100%' }}>
+                <thead>
+                  <tr>
+                    {th('Estado', PPTO_MASIVA_TIP_INTERV)}
+                    {th('Obs.', PPTO_MASIVA_TIP_OBS)}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={sheet.td}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 4 }}>
+                        {SEMAFORO.map((s) => (
+                          <RadioEstado key={s.valor} name="interv-masivo" valor={s.valor} seleccionado={estadoInterv} onSelect={setEstadoInterv} disabled={!nEditablesInterv} />
+                        ))}
+                      </div>
+                    </td>
+                    <td style={sheet.td}>
+                      <ObservacionCell value={obsInterv} onChange={setObsInterv} sheet={sheet} t={t} />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </GrupoSheet>
           )}
 
-          <div style={{ marginTop: 20 }}>
+          <div style={{ marginTop: 8 }}>
             <ResumenCambios
               filas={resumenMostrar}
               t={t}
-              titulo={resumenPost?.length ? 'Cambios aplicados' : 'Vista previa de cambios'}
+              sheet={sheet}
+              titulo={resumenPost?.length ? 'Cambios aplicados' : 'Vista previa'}
             />
           </div>
 
           {mensajeExito && (
-            <div style={{ marginTop: 12, padding: `${cc.padSm} ${cc.pad}`, background: '#DCFCE7', border: '1px solid #86EFAC', borderRadius: 8, color: '#166534', fontSize: cc.sm, fontWeight: 600 }}>
+            <div style={{ marginTop: 10, padding: `${cc.padSm} ${cc.pad}`, background: '#DCFCE7', border: '1px solid #86EFAC', borderRadius: 4, color: '#166534', fontSize: cc.sm, fontWeight: 600 }}>
               {mensajeExito}
             </div>
           )}
 
           {errorApply && (
-            <div style={{ marginTop: 12, padding: `${cc.padSm} ${cc.pad}`, background: '#FEE2E2', border: '1px solid #FECACA', borderRadius: 8, color: '#B91C1C', fontSize: cc.sm }}>
+            <div style={{ marginTop: 10, padding: `${cc.padSm} ${cc.pad}`, background: '#FEE2E2', border: '1px solid #FECACA', borderRadius: 4, color: '#B91C1C', fontSize: cc.sm }}>
               {errorApply}
             </div>
           )}
         </div>
 
-        <div className="cc-ppto-modal-footer" style={{ padding: `14px 22px`, borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10, flexShrink: 0 }}>
+        <div className="cc-ppto-modal-footer" style={{ padding: `12px 16px`, borderTop: `1px solid ${sheet.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10, flexShrink: 0 }}>
           <button
             type="button"
             onClick={onClose}
             disabled={busy}
-            style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: `10px 20px`, color: t.textMuted, cursor: 'pointer', fontSize: cc.label }}
+            style={{ background: 'transparent', border: `1px solid ${sheet.border}`, borderRadius: 6, padding: `10px 20px`, color: t.textMuted, cursor: 'pointer', fontSize: cc.label }}
           >
             Cancelar
           </button>
@@ -1025,7 +1061,6 @@ export default function PptoEdicionMasivaModal({
                     ? (tramosSelIds.size === 0 || !String(editCompetenciaTramos || '').trim() || filasFuenteTramos.length === 0)
                     : tabSafe === 'capitem'
                       ? (
-                        // Competencia sola: permitir aunque todos los seleccionados estén sellados.
                         !(nEditables > 0 || (String(editCompetencia || '').trim() && filasSel.length > 0))
                       )
                       : nEditables === 0)
@@ -1034,7 +1069,7 @@ export default function PptoEdicionMasivaModal({
                 background: t.primary,
                 color: '#fff',
                 border: 'none',
-                borderRadius: 8,
+                borderRadius: 6,
                 padding: `10px 24px`,
                 fontWeight: 700,
                 fontSize: cc.label,
@@ -1051,36 +1086,6 @@ export default function PptoEdicionMasivaModal({
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-function ObservacionBox({ value, onChange, t }) {
-  return (
-    <div>
-      <div style={{ fontSize: cc.caption, fontWeight: 700, color: t.textMuted, marginBottom: 6, letterSpacing: 0.4 }}>
-        ACTUALIZAR OBSERVACIÓN <span style={{ fontWeight: 500, opacity: 0.75 }}>(opcional)</span>
-      </div>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="Texto para el informe Excel…"
-        rows={3}
-        style={{
-          width: '100%',
-          boxSizing: 'border-box',
-          background: t.inputBg,
-          border: `1.5px solid ${t.border}`,
-          borderRadius: 8,
-          padding: `${cc.padSm} 12px`,
-          color: t.text,
-          fontSize: cc.sm,
-          lineHeight: 1.45,
-          resize: 'vertical',
-          fontFamily: 'inherit',
-        }}
-      />
-      <div style={{ fontSize: cc.caption, color: t.textMuted, marginTop: 6, lineHeight: 1.4 }}>{HINT_EXCEL_OBS}</div>
     </div>
   )
 }
