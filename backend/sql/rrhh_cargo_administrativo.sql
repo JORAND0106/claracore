@@ -37,12 +37,13 @@ BEGIN
   FOR v_func IN
     SELECT id FROM public.funciones
     WHERE upper(trim(coalesce(codigo::text, ''))) IN (
-      'RRHH', 'SEGUIMIENTO', 'BITACORA', 'ALMACEN', 'CATINS',
+      'RRHH', 'SEGUIMIENTO', 'BITACORA', 'ALMACEN', 'CATINS', 'ENTSAL',
       'PROGOB', 'DASHBOARD', 'INFCCD', 'AUDSST'
     )
     OR lower(trim(coalesce(nombre::text, ''))) IN (
       'recursos humanos', 'rrhh', 'seguimiento', 'bitácora', 'bitacora',
       'almacén', 'almacen', 'catálogo de insumos', 'catalogo de insumos',
+      'entradas y salidas',
       'programación de obra', 'programacion de obra', 'dashboard',
       'informes ccd', 'auditor sst (ia)'
     )

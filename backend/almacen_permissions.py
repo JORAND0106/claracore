@@ -11,6 +11,7 @@ from fastapi import HTTPException
 AlmacenAccion = Literal["ver", "crear", "editar", "eliminar", "validar", "exportar"]
 
 _FUNC_NOMBRES = frozenset({"almacén", "almacen"})
+_ACCIONES = ("ver", "crear", "editar", "eliminar", "validar", "exportar")
 
 _ROLES_EXCLUIDOS_ALMACEN = frozenset({
     "interventoria",
@@ -112,7 +113,9 @@ def require_contratista_gerencial_almacen(current_user) -> None:
 
 def require_editar_cantidad_salida_almacen(current_user) -> None:
     """Gate duro: solo Contratista Gerencial o Desarrollador editan cantidad de salida."""
-    require_permiso_almacen(current_user, "editar")
+    from entradas_salidas_permissions import require_permiso_entradas_salidas
+
+    require_permiso_entradas_salidas(current_user, "editar")
     if not es_contratista_gerencial(current_user):
         raise HTTPException(
             status_code=403,
@@ -178,8 +181,60 @@ def tiene_permiso_almacen(current_user, accion: AlmacenAccion) -> bool:
     return _cargo_permiso_almacen(current_user, accion)
 
 
+def tiene_alguna_accion_almacen(current_user) -> bool:
+    """True si el cargo tiene al menos un flag en la función Almacén (general)."""
+    if rol_excluido_almacen(current_user):
+        return False
+    for accion in _ACCIONES:
+        if _cargo_permiso_almacen(current_user, accion):  # type: ignore[arg-type]
+            return True
+    return False
+
+
+def tiene_acceso_ui_modulo_almacen(current_user) -> bool:
+    """
+    Llave de entrada al módulo Almacén:
+    - algún permiso en Almacén (general), o
+    - algún permiso en Catálogo de insumos, o
+    - algún permiso en Entradas y Salidas.
+
+    No otorga por sí solo visibilidad de Solicitudes/Inventario (eso exige
+    permiso propio en Almacén).
+    """
+    if rol_excluido_almacen(current_user):
+        return False
+    if tiene_alguna_accion_almacen(current_user):
+        return True
+    try:
+        from catalogo_insumos_permissions import tiene_alguna_accion_catalogo_insumos
+
+        if tiene_alguna_accion_catalogo_insumos(current_user):
+            return True
+    except Exception:
+        pass
+    try:
+        from entradas_salidas_permissions import tiene_alguna_accion_entradas_salidas
+
+        if tiene_alguna_accion_entradas_salidas(current_user):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def require_acceso_ui_modulo_almacen(current_user) -> None:
+    if not tiene_acceso_ui_modulo_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "No tiene acceso al módulo Almacén de Obra. "
+                "Configure permisos en Almacén, Catálogo de insumos o Entradas y Salidas."
+            ),
+        )
+
+
 def require_acceso_almacen(current_user, accion: AlmacenAccion) -> None:
-    """Bloqueo duro por rol + permiso de acción."""
+    """Bloqueo duro por rol + permiso de acción en la función Almacén (general)."""
     if rol_excluido_almacen(current_user):
         raise HTTPException(
             status_code=403,
@@ -240,3 +295,18 @@ def require_permiso_almacen(current_user, accion: AlmacenAccion) -> None:
             status_code=403,
             detail=f"No tiene permiso (Almacén · {accion}). Configúrelo en Control de accesos.",
         )
+
+
+def require_lectura_almacen(current_user) -> None:
+    """GET de Solicitudes/Inventario: basta cualquier flag propio en Almacén."""
+    if rol_excluido_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="El módulo Almacén de Obra no está disponible para su rol.",
+        )
+    if tiene_alguna_accion_almacen(current_user):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="No tiene permiso (Almacén). Configúrelo en Control de accesos.",
+    )

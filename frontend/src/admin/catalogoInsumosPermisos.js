@@ -1,7 +1,12 @@
 /**
  * Permisos del módulo «Catálogo de insumos» (matriz Control de accesos).
  */
-import { esDesarrolladorUsuario, tienePermisoFlag } from '../utils/permisosContrato'
+import {
+  esDesarrolladorUsuario,
+  permisoFuncionContrato,
+  tienePermisoAlgunaAccion,
+  tienePermisoFlag,
+} from '../utils/permisosContrato'
 
 export const CATALOGO_INSUMOS_FUNCIONES = ['catálogo de insumos', 'catalogo de insumos']
 
@@ -17,6 +22,15 @@ const TODOS_PERMISOS = {
 function matchCatalogoFuncion(nombreFuncion) {
   const want = (nombreFuncion || '').toLowerCase().trim()
   return CATALOGO_INSUMOS_FUNCIONES.some((n) => n === want)
+}
+
+function filaCatalogo(usuario, contratoId) {
+  const cid = contratoId ?? usuario?.contrato_id
+  for (const nombre of CATALOGO_INSUMOS_FUNCIONES) {
+    const row = permisoFuncionContrato(usuario, nombre, cid)
+    if (row) return row
+  }
+  return (usuario?.permisos || []).find((p) => matchCatalogoFuncion(p.funcion_nombre)) || null
 }
 
 export function permisoCatalogoInsumos(usuario, accion, contratoId) {
@@ -41,6 +55,12 @@ export function permisosCatalogoInsumos(usuario, contratoId) {
     validar: permisoCatalogoInsumos(usuario, 'validar', cid),
     exportar: permisoCatalogoInsumos(usuario, 'exportar', cid),
   }
+}
+
+/** True si el cargo tiene al menos un flag en Catálogo de insumos. */
+export function tieneAlgunaAccionCatalogoInsumos(usuario, contratoId) {
+  if (esDesarrolladorUsuario(usuario)) return true
+  return tienePermisoAlgunaAccion(filaCatalogo(usuario, contratoId))
 }
 
 export const PERMISOS_ADMIN_TODOS = { ...TODOS_PERMISOS }

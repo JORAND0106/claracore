@@ -12,6 +12,7 @@ from fastapi import HTTPException
 CatalogoInsumosAccion = Literal["ver", "crear", "editar", "eliminar", "validar", "exportar"]
 
 _FUNC_NOMBRES = frozenset({"catalogo de insumos", "catálogo de insumos"})
+_ACCIONES = ("ver", "crear", "editar", "eliminar", "validar", "exportar")
 
 
 def _norm(txt: str) -> str:
@@ -62,6 +63,13 @@ def _cargo_permiso_catalogo(current_user, accion: CatalogoInsumosAccion) -> bool
 
 def tiene_permiso_catalogo_insumos(current_user, accion: CatalogoInsumosAccion) -> bool:
     return _cargo_permiso_catalogo(current_user, accion)
+
+
+def tiene_alguna_accion_catalogo_insumos(current_user) -> bool:
+    for accion in _ACCIONES:
+        if _cargo_permiso_catalogo(current_user, accion):  # type: ignore[arg-type]
+            return True
+    return False
 
 
 def require_permiso_catalogo_insumos(current_user, accion: CatalogoInsumosAccion) -> None:

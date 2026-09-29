@@ -19922,7 +19922,8 @@ const [navReporteId, setNavReporteId] = useState(null)
   const almacenAcceso = accesoAlmacen(usuario, usuario?.contrato_id)
   const almacenPerm = almacenAcceso.permisos
   const almacenRolBloqueado = almacenAcceso.bloqueado
-  const tienePermisoAlmacen = esDeveloper || (!almacenRolBloqueado && almacenPerm.ver)
+  // Entrada al módulo: Ver sintético si hay permiso en Almacén, CATINS o Entradas y Salidas.
+  const tienePermisoAlmacen = esDeveloper || (!almacenRolBloqueado && almacenAcceso.puedeEntrar)
   const puedeCrearAlmacen = esDeveloper || almacenPerm.crear
   const puedeEditarAlmacen = esDeveloper || almacenPerm.editar
   const puedeValidarAlmacen = esDeveloper || almacenPerm.validar
@@ -23588,12 +23589,19 @@ const [navReporteId, setNavReporteId] = useState(null)
                 userId: usuario?.id,
                 esDesarrollador: esDeveloper,
                 esContratistaGerencial: esDeveloper || almacenAcceso.esContratistaGerencial,
-                ver: tienePermisoAlmacen,
+                // Flags propios de Almacén (solicitudes/inventario) — sin Ver sintético.
+                ver: esDeveloper || Boolean(almacenPerm.ver),
                 crear: puedeCrearAlmacen,
                 editar: puedeEditarAlmacen,
                 validar: puedeValidarAlmacen,
                 exportar: puedeExportarAlmacen,
+                eliminar: esDeveloper || Boolean(almacenPerm.eliminar),
                 verEconomicos: almacenVerEconomicos,
+                verSolicitudesInventario: esDeveloper || Boolean(almacenAcceso.verSolicitudesInventario),
+                verCatalogo: esDeveloper || Boolean(almacenAcceso.verCatalogo),
+                verEntradasSalidas: esDeveloper || Boolean(almacenAcceso.verEntradasSalidas),
+                catalogo: almacenAcceso.catalogo,
+                entradasSalidas: almacenAcceso.entradasSalidas,
               }}
             />
           ) : (
@@ -23602,7 +23610,7 @@ const [navReporteId, setNavReporteId] = useState(null)
               <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
                 {almacenRolBloqueado
                   ? 'El módulo Almacén de Obra está reservado para el contratista. Su rol no tiene acceso a este módulo.'
-                  : 'Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Almacén» (acción Ver).'}
+                  : 'Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → funciones «Almacén», «Entradas y Salidas» o «Catálogo de insumos».'}
               </div>
             </div>
           )
