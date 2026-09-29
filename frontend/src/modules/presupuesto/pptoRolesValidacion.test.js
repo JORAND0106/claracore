@@ -10,8 +10,8 @@ function puedeTabDepuracion(usuario, { esDev = false, puedeValidar = false } = {
   return !esLadoInterv && (esDev || (puedeValidar && esRolContratistaDepuracion(usuario)))
 }
 
-describe('visibilidad pestaña Validación por depuración', () => {
-  it('oculta depuración a roles de Interventoría (incl. gerencial y operativo)', () => {
+describe('visibilidad pestaña Validación Contratista', () => {
+  it('oculta Validación Contratista a roles de Interventoría (incl. gerencial y operativo)', () => {
     assert.equal(esRolInterventoriaValidacion({ rol_nombre: 'Interventoría' }), true)
     assert.equal(esRolInterventoriaValidacion({ rol_nombre: 'Operativo Interventoría' }), true)
     assert.equal(esRolInterventoriaValidacion({ rol_nombre: 'Interventoría Gerencial' }), true)

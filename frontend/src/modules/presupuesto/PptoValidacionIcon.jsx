@@ -25,7 +25,7 @@ export default function PptoValidacionIcon({
   const btnRef = useRef(null)
   const menuRef = useRef(null)
   const color = pptoEstadoValidacionColor(estado)
-  const labelEje = eje === 'depuracion' ? 'Depuración' : 'Interventoría'
+  const labelEje = eje === 'depuracion' ? 'Validación Contratista' : 'Interventoría'
 
   const updatePosition = useCallback(() => {
     const btn = btnRef.current

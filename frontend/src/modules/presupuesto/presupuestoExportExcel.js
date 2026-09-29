@@ -1067,7 +1067,7 @@ function colectarFirmantes(registros) {
   for (const reg of registros || []) {
     const depPor = safeStr(reg?.pre_interv_por).trim()
     if (depPor && !revisores.has(depPor)) {
-      revisores.set(depPor, { nombre: depPor, rol: 'Depuración contratista' })
+      revisores.set(depPor, { nombre: depPor, rol: 'Validación Contratista' })
     }
     const intPor = safeStr(reg?.validado_por).trim()
     if (intPor && !aprobadores.has(intPor)) {

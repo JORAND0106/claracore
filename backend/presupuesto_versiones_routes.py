@@ -56,6 +56,7 @@ from main import (
     supabase,
     PresupuestoBulkEstado,
     PresupuestoBulkCompetencia,
+    PresupuestoBulkNodos,
     PresupuestoBulkSubcontratista,
     PresupuestoBulkObservacion,
     PresupuestoBulkPreInterv,
@@ -739,6 +740,29 @@ def post_presupuesto_version_biblioteca_bulk_competencia(
         raise HTTPException(status_code=422, detail="competencia no puede estar vacía.")
     return bulk_patch_biblioteca_ids(
         supabase, contrato_id, version_id, body.ids, {"competencia": comp}
+    )
+
+
+@router.post("/presupuesto/{contrato_id}/versiones/{version_id}/bulk-nodos")
+def post_presupuesto_version_biblioteca_bulk_nodos(
+    contrato_id: int,
+    version_id: str,
+    body: PresupuestoBulkNodos,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    raw = body.dict(exclude_unset=True)
+    patch = {}
+    if "no_inicio" in raw:
+        v = raw.get("no_inicio")
+        patch["no_inicio"] = (str(v).strip() if v is not None and str(v).strip() != "" else None)
+    if "no_final" in raw:
+        v = raw.get("no_final")
+        patch["no_final"] = (str(v).strip() if v is not None and str(v).strip() != "" else None)
+    if not patch:
+        raise HTTPException(status_code=422, detail="Indique Nodo Inicial y/o Nodo Final.")
+    return bulk_patch_biblioteca_ids(
+        supabase, contrato_id, version_id, body.ids, patch
     )
 
 

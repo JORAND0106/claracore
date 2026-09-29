@@ -45,7 +45,7 @@ export const PPTO_FILTRO_CATALOGO = [
   { key: 'cant_total', label: 'Cant. total', tipo: 'rango_numerico', categoria: 'valores', campoFObra: 'cantTotalMin', campoFObraHasta: 'cantTotalMax' },
   { key: 'costo_directo', label: 'Costo directo', tipo: 'rango_numerico', categoria: 'valores', campoFObra: 'costoDirectoMin', campoFObraHasta: 'costoDirectoMax' },
   { key: 'revisado', label: 'Estado interventoría', tipo: 'select', categoria: 'validacion', campoFObra: 'revisado', opcionesKey: 'revisados' },
-  { key: 'pre_interv_estado', label: 'Estado depuración', tipo: 'select', categoria: 'validacion', campoFObra: 'preInterv', opcionesKey: 'pre_interv_estados' },
+  { key: 'pre_interv_estado', label: 'Estado Validación Contratista', tipo: 'select', categoria: 'validacion', campoFObra: 'preInterv', opcionesKey: 'pre_interv_estados' },
   { key: 'sellado', label: 'Sellado', tipo: 'boolean', categoria: 'validacion', campoFObra: 'sellado' },
   { key: 'texto', label: 'Texto (registro / descripción)', tipo: 'text', categoria: 'otros', campoFObra: 'texto' },
   { key: 'dado_de_baja', label: 'Dado de baja', tipo: 'boolean', categoria: 'otros', campoFObra: 'dadoDeBaja' },

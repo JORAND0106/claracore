@@ -1154,9 +1154,9 @@ useEffect(() => {
   function cuerpoTieneCambioSustantivo(reg, body) {
     if (!reg || !body || typeof body !== 'object') return false
     const keys = [
-      // competencia excluida a propósito: clasificación administrativa, sin motivo.
+      // competencia y nodos (no_inicio/no_final) excluidos: identificación/clasificación, sin motivo ni reset de sello.
       'capitulo', 'item', 'descripcion', 'und', 'vlr_unitario', 'observacion_externa', 'costo_directo',
-      'area_long_nod', 'ancho', 'espesor', 'no_inicio', 'no_final', 'tipo_ejecucion',
+      'area_long_nod', 'ancho', 'espesor', 'tipo_ejecucion',
     ]
     return keys.some((k) => k in body && valorCampoCambio(reg, body, k))
   }
@@ -1346,6 +1346,7 @@ useEffect(() => {
         snap,
         aplicaReglasCadPresupuesto: aplicaReglasCadPresupuesto,
         puedeEditarAreaLongNod: puedeEditarAreaLongNodInline(),
+        puedeEditarNodos: puedeEditarNodosGrilla,
       })
       const byId = Object.fromEntries(filasDesdeSnapshot(snap).map((r) => [r.id, r]))
       setRegistros((prev) => prev.map((r) => (byId[r.id] ? { ...r, ...byId[r.id] } : r)))
@@ -1749,7 +1750,7 @@ useEffect(() => {
     else if (Array.isArray(payload.tramos) && payload.tramos.length) partes.push(`${payload.tramos.length} tramos`)
     if (payload.calzada) partes.push(`Calzada: ${payload.calzada}`)
     if (payload.revisado) partes.push(`Int.: ${payload.revisado}`)
-    if (payload.pre_interv_estado) partes.push(`Dep.: ${payload.pre_interv_estado}`)
+    if (payload.pre_interv_estado) partes.push(`Cont.: ${payload.pre_interv_estado}`)
     if (payload.id_pol) partes.push(`ID-POL: ${payload.id_pol}`)
     if (payload.pk_criterio) partes.push(`PK: ${payload.pk_criterio}`)
     if (payload.texto) partes.push('Texto filtrado')
@@ -4124,7 +4125,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       modoComentario = await resolverModoSiHayHistorial(selIds, 'validacion')
       if (modoComentario == null) return false
     }
-    registrarUndoPresupuesto('Depuración (selección)', selIds)
+    registrarUndoPresupuesto('Validación Contratista (selección)', selIds)
     const snapOriginal = registros.filter(r => selIds.includes(r.id))
     pptoIniciarValidacionOptimista((r) => aplicarCambioPreIntervLocal(r, selIds, estadoPre))
     setBulkPreInterv(''); setSeleccionados(new Set())
@@ -4145,9 +4146,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       })
       try {
         const d = await res.json()
-        alert(d.detail || 'No se pudo aplicar la depuración previa.')
+        alert(d.detail || 'No se pudo aplicar la Validación Contratista.')
       } catch {
-        alert('No se pudo aplicar la depuración previa.')
+        alert('No se pudo aplicar la Validación Contratista.')
       }
       return false
     } finally {
@@ -4290,6 +4291,27 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     const idSet = new Set(ids.map((id) => String(id)))
     setRegistros((prev) => prev.map((r) => (idSet.has(String(r.id)) ? { ...r, competencia: comp } : r)))
+  }
+
+  async function aplicarNodosMasiva(ids, { no_inicio, no_final }) {
+    const patch = {}
+    if (no_inicio !== undefined) patch.no_inicio = no_inicio
+    if (no_final !== undefined) patch.no_final = no_final
+    if (!ids.length || !Object.keys(patch).length) return
+    const ep = pptoEp()
+    if (!ep.bulkNodos) throw new Error('Edición masiva de nodos no disponible.')
+    const method = ep.mode === 'version' ? 'POST' : 'PUT'
+    const res = await fetch(`${ep.bulkNodos}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids, ...patch }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.detail || 'No se pudieron actualizar los nodos.')
+    }
+    const idSet = new Set(ids.map((id) => String(id)))
+    setRegistros((prev) => prev.map((r) => (idSet.has(String(r.id)) ? { ...r, ...patch } : r)))
   }
 
   async function aplicarSubcontratistaMasiva(ids, subcontratistaId) {
@@ -4447,10 +4469,17 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     return resumen
   }
 
-  async function aplicarMasivoDimensiones({ ancho, espesor, observacion }) {
+  async function aplicarMasivoDimensiones({ ancho, espesor, observacion, no_inicio, no_final }) {
     const obs = String(observacion || '').trim()
-    const ids = idsSeleccionadosEditables()
-    if (!ids.length) throw new Error('No hay registros editables (los sellados se omiten).')
+    const nodIniRaw = no_inicio !== undefined && no_inicio !== null ? String(no_inicio).trim() : ''
+    const nodFinRaw = no_final !== undefined && no_final !== null ? String(no_final).trim() : ''
+    // Vacío en UI = sin cambio (como Ancho/Espesor). Solo aplica valores no vacíos.
+    const tieneNodIni = nodIniRaw !== ''
+    const tieneNodFin = nodFinRaw !== ''
+    const tieneNodos = tieneNodIni || tieneNodFin
+    const idsEditables = idsSeleccionadosEditables()
+    // Nodos son identificación (como competencia): incluyen sellados vía bulk-nodos.
+    const idsTodos = [...seleccionados].filter((id) => id != null && id !== '')
 
     const parseDim = (s) => {
       const n = parseFloat(String(s ?? '').replace(',', '.'))
@@ -4460,87 +4489,148 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const tieneEsp = String(espesor ?? '').trim() !== ''
     const anNum = tieneAn ? parseDim(ancho) : null
     const espNum = tieneEsp ? parseDim(espesor) : null
-    if (!tieneAn && !tieneEsp && !obs) {
-      throw new Error('Indique al menos una dimensión u observación (opcional).')
+    const tieneDims = anNum != null || espNum != null
+
+    if (!tieneDims && !obs && !tieneNodos) {
+      throw new Error('Indique al menos una dimensión, nodo u observación (opcional).')
     }
     if ((tieneAn && anNum === null) || (tieneEsp && espNum === null)) {
       throw new Error('Ancho y espesor deben ser valores numéricos válidos.')
     }
+    if (tieneNodos && !puedeEditarNodosGrilla) {
+      throw new Error('No tiene permiso para editar Nodo Inicial / Nodo Final.')
+    }
+    if ((tieneDims || obs) && !idsEditables.length && !tieneNodos) {
+      throw new Error('No hay registros editables (los sellados se omiten).')
+    }
+    if (tieneNodos && !idsTodos.length) {
+      throw new Error('No hay registros seleccionados.')
+    }
+    if (!tieneNodos && !idsEditables.length) {
+      throw new Error('No hay registros editables (los sellados se omiten).')
+    }
 
     const fmtD = (v) => (v != null && v !== '' ? String(v) : '—')
-    const resumen = ids.map((id) => {
+    const idsParaResumen = tieneNodos && !tieneDims && !obs ? idsTodos : (
+      tieneNodos ? [...new Set([...idsEditables, ...idsTodos])] : idsEditables
+    )
+
+    const resumen = idsParaResumen.map((id) => {
       const r = registros.find((x) => x.id === id)
       if (!r) return null
+      const sellado = esSellado(r)
       const partes = []
-      if (anNum != null) partes.push(`Ancho: ${fmtD(r.ancho)} → ${anNum}`)
-      if (espNum != null) partes.push(`Espesor: ${fmtD(r.espesor)} → ${espNum}`)
-      if (anNum != null || espNum != null) {
-        const area = parseFloat(r.area_long_nod) || 0
-        const w = anNum ?? (parseFloat(r.ancho) || 0)
-        const e = espNum ?? (parseFloat(r.espesor) || 0)
-        const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
-        const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
-        partes.push(`Cant: ${fmtD(r.cant_total)} → ${cant}`)
-        partes.push(`CD: ${formatCOP(r.costo_directo)} → ${formatCOP(costo)}`)
+      if (tieneNodos) {
+        if (tieneNodIni && nodIniRaw !== (r.no_inicio || '')) {
+          partes.push(`Nodo I: ${fmtD(r.no_inicio)} → ${nodIniRaw}`)
+        }
+        if (tieneNodFin && nodFinRaw !== (r.no_final || '')) {
+          partes.push(`Nodo F: ${fmtD(r.no_final)} → ${nodFinRaw}`)
+        }
       }
-      if (obs) partes.push(`Obs: ${obs}`)
+      if (!sellado) {
+        if (anNum != null) partes.push(`Ancho: ${fmtD(r.ancho)} → ${anNum}`)
+        if (espNum != null) partes.push(`Espesor: ${fmtD(r.espesor)} → ${espNum}`)
+        if (anNum != null || espNum != null) {
+          const area = parseFloat(r.area_long_nod) || 0
+          const w = anNum ?? (parseFloat(r.ancho) || 0)
+          const e = espNum ?? (parseFloat(r.espesor) || 0)
+          const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
+          const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
+          partes.push(`Cant: ${fmtD(r.cant_total)} → ${cant}`)
+          partes.push(`CD: ${formatCOP(r.costo_directo)} → ${formatCOP(costo)}`)
+        }
+        if (obs) partes.push(`Obs: ${obs}`)
+      }
+      if (!partes.length) return null
       return filaResumenMasivo(
         r,
         'Dimensiones',
-        `${fmtD(r.area_long_nod)} · ${fmtD(r.ancho)} · ${fmtD(r.espesor)}`,
+        `${fmtD(r.no_inicio)} → ${fmtD(r.no_final)} · ${fmtD(r.area_long_nod)} · ${fmtD(r.ancho)} · ${fmtD(r.espesor)}`,
         partes.join(' · '),
       )
     }).filter(Boolean)
 
-    if (anNum != null || espNum != null) {
-      const comentarioData = await pedirComentario('dims', true, ids)
-      if (comentarioData === null) throw new Error('Operación cancelada.')
-
-      registrarUndoPresupuesto('Edición masiva: Dimensiones', ids)
-      const dims = ids.map((id) => {
-        const o = { id }
-        if (anNum != null) o.ancho = anNum
-        if (espNum != null) o.espesor = espNum
-        return o
+    if (tieneNodos) {
+      const patchNodos = {}
+      if (tieneNodIni) patchNodos.no_inicio = nodIniRaw
+      if (tieneNodFin) patchNodos.no_final = nodFinRaw
+      const idsNodos = idsTodos.filter((id) => {
+        const r = registros.find((x) => x.id === id)
+        if (!r) return true
+        if (tieneNodIni && nodIniRaw !== (r.no_inicio || '')) return true
+        if (tieneNodFin && nodFinRaw !== (r.no_final || '')) return true
+        return false
       })
-      const snapOriginal = registros.filter((r) => ids.includes(r.id))
-      setRegistros((prev) => prev.map((r) => {
-        if (!ids.includes(r.id)) return r
-        const area = parseFloat(r.area_long_nod) || 0
-        const w = anNum ?? (parseFloat(r.ancho) || 0)
-        const e = espNum ?? (parseFloat(r.espesor) || 0)
-        const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
-        const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
-        return {
-          ...r,
-          ...(anNum != null && { ancho: anNum }),
-          ...(espNum != null && { espesor: espNum }),
-          cant_total: cant,
-          costo_directo: costo,
-        }
-      }))
-      _lastWriteAtRef.current = Date.now()
-      setGuardandoBulk(true)
-      const res = await fetch(`${pptoEp().bulkRecalcular}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ids, dims }),
-      })
-      setGuardandoBulk(false)
-      if (!res.ok) {
-        setRegistros((prev) => prev.map((r) => {
-          const orig = snapOriginal.find((x) => x.id === r.id)
-          return orig || r
-        }))
-        const err = await res.json().catch(() => ({}))
-        const detail = err?.detail
-        throw new Error(typeof detail === 'string' ? detail : 'No se pudieron aplicar las dimensiones.')
+      if (!idsNodos.length && !tieneDims && !obs) {
+        throw new Error('Ningún registro requiere ese cambio de nodos.')
       }
-      const comentario = comentarioData?.mensaje || ''
-      if (comentario.trim()) await crearComentarios(ids, 'dims', comentario, comentarioData?.destinatarioId || null, comentarioData?.modo || null)
-      cargarCapitulos({ silent: true }).catch(() => {})
+      if (idsNodos.length) {
+        registrarUndoPresupuesto('Edición masiva: Nodos', idsNodos)
+        await aplicarNodosMasiva(idsNodos, patchNodos)
+      }
     }
-    if (obs) await aplicarObservacionMasiva(ids, obs)
+
+    if (tieneDims) {
+      const ids = idsEditables
+      if (!ids.length) {
+        if (!tieneNodos) throw new Error('No hay registros editables (los sellados se omiten).')
+      } else {
+        const comentarioData = await pedirComentario('dims', true, ids)
+        if (comentarioData === null) throw new Error('Operación cancelada.')
+
+        registrarUndoPresupuesto('Edición masiva: Dimensiones', ids)
+        const dims = ids.map((id) => {
+          const o = { id }
+          if (anNum != null) o.ancho = anNum
+          if (espNum != null) o.espesor = espNum
+          return o
+        })
+        const snapOriginal = registros.filter((r) => ids.includes(r.id))
+        setRegistros((prev) => prev.map((r) => {
+          if (!ids.includes(r.id)) return r
+          const area = parseFloat(r.area_long_nod) || 0
+          const w = anNum ?? (parseFloat(r.ancho) || 0)
+          const e = espNum ?? (parseFloat(r.espesor) || 0)
+          const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
+          const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
+          return {
+            ...r,
+            ...(anNum != null && { ancho: anNum }),
+            ...(espNum != null && { espesor: espNum }),
+            cant_total: cant,
+            costo_directo: costo,
+          }
+        }))
+        _lastWriteAtRef.current = Date.now()
+        setGuardandoBulk(true)
+        const res = await fetch(`${pptoEp().bulkRecalcular}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ ids, dims }),
+        })
+        setGuardandoBulk(false)
+        if (!res.ok) {
+          setRegistros((prev) => prev.map((r) => {
+            const orig = snapOriginal.find((x) => x.id === r.id)
+            return orig || r
+          }))
+          const err = await res.json().catch(() => ({}))
+          const detail = err?.detail
+          throw new Error(typeof detail === 'string' ? detail : 'No se pudieron aplicar las dimensiones.')
+        }
+        const comentario = comentarioData?.mensaje || ''
+        if (comentario.trim()) await crearComentarios(ids, 'dims', comentario, comentarioData?.destinatarioId || null, comentarioData?.modo || null)
+        cargarCapitulos({ silent: true }).catch(() => {})
+      }
+    }
+    if (obs) {
+      if (!idsEditables.length) {
+        if (!tieneNodos) throw new Error('No hay registros editables (los sellados se omiten).')
+      } else {
+        await aplicarObservacionMasiva(idsEditables, obs)
+      }
+    }
     return resumen
   }
 
@@ -4566,16 +4656,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const obs = String(observacion || '').trim()
     const ids = idsSeleccionadosEditables()
     if (!ids.length) throw new Error('No hay registros editables.')
-    registrarUndoPresupuesto('Edición masiva: Depuración', ids)
+    registrarUndoPresupuesto('Edición masiva: Validación Contratista', ids)
     const resumen = ids.map((id) => {
       const r = registros.find((x) => x.id === id)
       if (!r) return null
       const ant = r.pre_interv_estado || 'No Revisado'
-      return filaResumenMasivo(r, 'Depuración', ant, estado + (obs ? ` · Obs: ${obs}` : ''))
+      return filaResumenMasivo(r, 'Validación Contratista', ant, estado + (obs ? ` · Obs: ${obs}` : ''))
     }).filter(Boolean)
 
     const ok = await ejecutarBulkPreInterv(estado, { idsOverride: ids, skipPedirComentario: true })
-    if (!ok) throw new Error('No se pudo aplicar la depuración.')
+    if (!ok) throw new Error('No se pudo aplicar la Validación Contratista.')
     if (obs) await aplicarObservacionMasiva(ids, obs)
     return resumen
   }
@@ -4591,7 +4681,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     if (!ids.length) {
       throw new Error(
-        'Ningún registro seleccionado tiene depuración contratista aprobada. Interventoría solo valida tras «Aprobado» en depuración.',
+        'Ningún registro seleccionado tiene Validación Contratista aprobada. Interventoría solo valida tras «Aprobado» en Validación Contratista.',
       )
     }
     registrarUndoPresupuesto('Edición masiva: Interventoría', ids)
@@ -4859,7 +4949,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (esSellado(row)) return
     if (puedeValidarInterventoriaUI && !esDevPpto && !preIntervLiberadoParaInterventoria(row)) {
       window.alert(
-        'El registro debe estar aprobado en depuración contratista (Residente de Costos u Obra) antes de la validación de Interventoría.',
+        'El registro debe estar aprobado en Validación Contratista (Residente de Costos u Obra) antes de la validación de Interventoría.',
       )
       return
     }
@@ -4900,7 +4990,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
     const modoComentario = comentarioData?.modo || null
-    registrarUndoPresupuesto('Depuración', [id])
+    registrarUndoPresupuesto('Validación Contratista', [id])
     pptoIniciarValidacionOptimista((r) => aplicarCambioPreIntervLocal(r, [id], nuevoEstado))
     try {
       const tok = getToken()
@@ -4914,9 +5004,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         pptoParchearRegistrosOptimista((r) => (r.id === id ? row : r))
         try {
           const d = await res.json()
-          alert(d.detail || 'No se pudo guardar la depuración previa.')
+          alert(d.detail || 'No se pudo guardar la Validación Contratista.')
         } catch {
-          alert('No se pudo guardar la depuración previa.')
+          alert('No se pudo guardar la Validación Contratista.')
         }
         return
       }
@@ -5831,7 +5921,7 @@ async function darDeBaja(id) {
                     if (!ids.length) {
                       if (puedeValidarInterventoriaUI && !esDevPpto) {
                         window.alert(
-                          'Ningún registro seleccionado tiene depuración contratista aprobada. Interventoría solo valida tras «Aprobado» en depuración.',
+                          'Ningún registro seleccionado tiene Validación Contratista aprobada. Interventoría solo valida tras «Aprobado» en Validación Contratista.',
                         )
                       }
                       return
@@ -5951,7 +6041,7 @@ async function darDeBaja(id) {
                                   <th style={{ ...sheet.th, width: 96, textAlign: 'right' }}>C. directo</th>
                                 )}
                                 {mostrarColumnaDepuracion && (
-                                  <th style={{ ...sheet.th, width: 52, textAlign: 'center' }} title="Depuración (contratista / obra)">Dep.</th>
+                                  <th style={{ ...sheet.th, width: 52, textAlign: 'center' }} title="Validación Contratista (contratista / obra)">Cont.</th>
                                 )}
                                 <th style={{ ...sheet.th, width: 56, textAlign: 'center' }} title="Interventoría">Rev.</th>
                                 <th style={{ ...sheet.th, width: 48 }} />
@@ -6123,7 +6213,7 @@ async function darDeBaja(id) {
                                           compact
                                           tituloBloqueo={
                                             puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
-                                              ? 'Requiere depuración aprobada'
+                                              ? 'Requiere Validación Contratista aprobada'
                                               : ''
                                           }
                                           puedeSeleccionar={() => puedeValidarInterventoriaRegistro(r)}
@@ -6795,7 +6885,7 @@ async function darDeBaja(id) {
                       {filaCampos([
                         { label: 'Tipo de ejecución', val: r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT },
                         ...(mostrarColumnaDepuracion
-                          ? [{ label: 'Depuración', val: depVal }]
+                          ? [{ label: 'Validación Contratista', val: depVal }]
                           : []),
                         { label: 'Revisado Interventoría', val: r.revisado || 'No Revisado' },
                       ])}
@@ -7430,6 +7520,7 @@ async function darDeBaja(id) {
         puedeTabDepuracion={puedeTabDepuracionMasiva}
         puedeTabInterventoria={puedeTabInterventoriaMasiva}
         puedeEditarDimensiones={puedeEditarDimensiones || esDevPpto}
+        puedeEditarNodos={puedeEditarNodosGrilla}
         requiereDepuracionAprobadaInterv={!esDevPpto}
         capitulosListado={capitulosListado}
         listadoPrecios={listadoPrecios}
@@ -8451,7 +8542,7 @@ async function darDeBaja(id) {
                       compact
                       tituloBloqueo={
                         puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
-                          ? 'Requiere depuración aprobada'
+                          ? 'Requiere Validación Contratista aprobada'
                           : ''
                       }
                       puedeSeleccionar={() => puedeValidarInterventoriaRegistro(r)}
@@ -8628,7 +8719,7 @@ async function darDeBaja(id) {
                   <th className="cc-ppto-col-costo" style={thStyle}>Costo Directo</th>
                 )}
                 {mostrarColumnaDepuracion && (
-                  <th className="cc-ppto-col-semaforo" style={thStyle} title="Residente de Costos u Obra — antes de Interventoría">Depuración</th>
+                  <th className="cc-ppto-col-semaforo" style={thStyle} title="Validación Contratista — Residente de Costos u Obra (antes de Interventoría)">Validación Contratista</th>
                 )}
                 <th className="cc-ppto-col-semaforo" style={thStyle}>Revisado</th>
                 <th className="cc-ppto-col-icon" style={thStyle} title="Trazabilidad / auditoría">📜</th>
@@ -8784,7 +8875,7 @@ async function darDeBaja(id) {
                           t={t}
                           tituloBloqueo={
                             puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
-                              ? 'Requiere depuración aprobada'
+                              ? 'Requiere Validación Contratista aprobada'
                               : ''
                           }
                           puedeSeleccionar={() => puedeValidarInterventoriaRegistro(r)}

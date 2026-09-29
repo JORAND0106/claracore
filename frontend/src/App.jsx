@@ -22813,7 +22813,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                       <span style={{ background: '#0077B618', color: '#0369a1', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>
                         Interventoría (N3): {r.revisado || 'No Revisado'}
                       </span>
-                      <span style={{ background: '#64748b18', color: '#475569', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>Depuración: {depTxt}</span>
+                      <span style={{ background: '#64748b18', color: '#475569', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>Validación Contratista: {depTxt}</span>
                       {r.sellado && <span style={{ background: '#0f766e22', color: '#0f766e', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>Sellado ✓</span>}
                     </div>
                   </div>
@@ -22884,7 +22884,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                       <F label="Tipo">{tipoTxt}</F>
                     </Row>
                     <div style={{ width: '100%', ...cell }}>
-                      <div style={lbl}>Depuración</div>
+                      <div style={lbl}>Validación Contratista</div>
                       <div style={val}>{depTxt}</div>
                     </div>
                     <Row>
@@ -22930,7 +22930,7 @@ const [navReporteId, setNavReporteId] = useState(null)
                 {(r.validado_por || r.pre_interv_por) && (
                   <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '12px', paddingTop: '10px', borderTop: `1px solid ${t.border}` }}>
                     {r.validado_por && <div>Validado por: {r.validado_por}</div>}
-                    {r.pre_interv_por && <div>Depuración por: {r.pre_interv_por}</div>}
+                    {r.pre_interv_por && <div>Validación Contratista por: {r.pre_interv_por}</div>}
                   </div>
                 )}
 

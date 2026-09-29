@@ -5,6 +5,7 @@ import {
   PPTO_MASIVA_TIP_COMPETENCIA,
   PPTO_MASIVA_TIP_OBS,
   PPTO_MASIVA_TIP_DIMS,
+  PPTO_MASIVA_TIP_NODOS,
   PPTO_MASIVA_TIP_DEP,
   PPTO_MASIVA_TIP_INTERV,
   PPTO_MASIVA_TIP_TRAMOS_LISTA,
@@ -18,14 +19,21 @@ describe('pptoEdicionMasivaTips', () => {
       PPTO_MASIVA_TIP_COMPETENCIA,
       PPTO_MASIVA_TIP_OBS,
       PPTO_MASIVA_TIP_DIMS,
+      PPTO_MASIVA_TIP_NODOS,
       PPTO_MASIVA_TIP_DEP,
       PPTO_MASIVA_TIP_INTERV,
       PPTO_MASIVA_TIP_TRAMOS_LISTA,
     ]) {
       assert.equal(typeof tip, 'string')
       assert.ok(tip.length > 20)
-      assert.ok(tip.length < 280)
+      assert.ok(tip.length < 320)
     }
+  })
+
+  it('renombra Validación Contratista en tips visibles', () => {
+    assert.ok(PPTO_MASIVA_TIP_DEP.includes('Validación Contratista'))
+    assert.ok(!PPTO_MASIVA_TIP_DEP.toLowerCase().includes('depuración'))
+    assert.ok(PPTO_MASIVA_TIP_NODOS.toLowerCase().includes('sellado'))
   })
 })
 

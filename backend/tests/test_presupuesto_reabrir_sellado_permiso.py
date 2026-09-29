@@ -48,3 +48,25 @@ def test_competencia_no_es_campo_sustantivo_ni_reapertura():
     prev = {"competencia": "IDU", "revisado": "Aprobado", "capitulo": "1", "item": "1.1"}
     assert main._ppto_substantive_contractor_fields_changed(prev, {"competencia": "ETB"}) is False
     assert main._ppto_substantive_contractor_fields_changed(prev, {"capitulo": "2"}) is True
+
+
+def test_nodos_no_son_campo_sustantivo_ni_reapertura():
+    """Nodo Inicial/Final son identificación: no deben exigir motivo ni contar como reapertura."""
+    import main
+
+    assert "no_inicio" not in main._PPTO_CT_SUBSTANTIVE
+    assert "no_final" not in main._PPTO_CT_SUBSTANTIVE
+    assert "no_inicio" not in main._PPTO_REABRIR_CAMPOS
+    assert "no_final" not in main._PPTO_REABRIR_CAMPOS
+    prev = {
+        "no_inicio": "A",
+        "no_final": "B",
+        "revisado": "Aprobado",
+        "capitulo": "1",
+        "item": "1.1",
+        "sellado": True,
+    }
+    assert main._ppto_substantive_contractor_fields_changed(
+        prev, {"no_inicio": "X", "no_final": "Y"}
+    ) is False
+    assert main._ppto_substantive_contractor_fields_changed(prev, {"ancho": 1.5}) is True
