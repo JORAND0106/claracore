@@ -8,7 +8,12 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from almacen_service import _sb, _to_float
+from almacen_service import (
+    CAPITULO_ADMINISTRACION_AIU,
+    _sb,
+    _to_float,
+    is_administracion_aiu,
+)
 
 # Caché en proceso del listado de precios (escaneo paginado es costoso).
 _LISTADO_CACHE: Dict[Tuple[int, str], Tuple[float, List[dict]]] = {}
@@ -2561,12 +2566,13 @@ def resolve_insumo_for_solicitud(
     capitulo_ppto = (raw.get("presupuesto_capitulo") or raw.get("capitulo") or "").strip()
     item_ppto = (raw.get("presupuesto_item") or raw.get("item") or "").strip()
     cant = _to_float(raw.get("cantidad"))
+    es_aiu = is_administracion_aiu(capitulo_ppto, item_ppto)
 
     if cant <= 0:
         raise ValueError("La cantidad debe ser mayor a cero.")
     if not pk_id:
         raise ValueError("Seleccione la ubicación PK-ID en el mapa.")
-    if not presupuesto_id and (not capitulo_ppto or not item_ppto):
+    if not es_aiu and not presupuesto_id and (not capitulo_ppto or not item_ppto):
         raise ValueError("Seleccione capítulo e ítem de cobro del presupuesto.")
 
     if insumo_id:
@@ -2576,6 +2582,57 @@ def resolve_insumo_for_solicitud(
         insumo_id = insumo.get("id")
     else:
         raise ValueError("Seleccione un insumo del catálogo.")
+
+    # Administración (AIU): sin registro de presupuesto ni control Ppto/Acum/Saldo.
+    if es_aiu:
+        valor_compra_raw = raw.get("valor_compra_unitario")
+        if valor_compra_raw not in (None, ""):
+            valor_compra = _to_float(valor_compra_raw)
+        elif _insumo_tiene_precio_compra({**insumo, "origen": "almacen_insumo"}):
+            valor_compra = _to_float(insumo.get("valor_compra_referencia"))
+        else:
+            valor_compra = None
+        ctx_neg = None
+        if not skip_context:
+            ctx_neg = get_contexto_negociado_insumo(
+                contrato_id,
+                int(insumo_id),
+                cant,
+                exclude_solicitud_id=raw.get("exclude_solicitud_id"),
+                cantidad_extra_borrador=_to_float(raw.get("cantidad_borrador_adicional_insumo")),
+            )
+        return {
+            "insumo_id": insumo_id,
+            "listado_precio_id": insumo.get("listado_precio_id"),
+            "presupuesto_id": None,
+            "pk_id": pk_id,
+            "pk_id_id": raw.get("pk_id_id"),
+            "tramo": (raw.get("tramo") or "").strip() or None,
+            "costado": (raw.get("costado") or "").strip() or None,
+            "abscisa_inicial": _to_float(raw.get("abscisa_inicial")) if raw.get("abscisa_inicial") not in (None, "") else None,
+            "abscisa_final": _to_float(raw.get("abscisa_final")) if raw.get("abscisa_final") not in (None, "") else None,
+            "observacion_residente": (raw.get("observacion_residente") or "").strip() or None,
+            "capitulo": CAPITULO_ADMINISTRACION_AIU,
+            "item": CAPITULO_ADMINISTRACION_AIU,
+            "material_descripcion": _insumo_label(insumo),
+            "unidad": insumo.get("unidad") or "UND",
+            "cantidad": cant,
+            "es_recurrente": bool(raw.get("es_recurrente")),
+            "es_principal": _item_es_principal(raw),
+            "cant_presupuestada": None,
+            "valor_compra_unitario": valor_compra,
+            "tiene_precio_compra": valor_compra is not None and valor_compra > 0,
+            "vlr_unitario_cobro": 0,
+            "cobro_motivo": "administracion_aiu",
+            "supera_presupuesto": False,
+            "supera_negociado": (ctx_neg or {}).get("supera_negociado", False),
+            "contexto_presupuesto": None,
+            "contexto_negociado": ctx_neg,
+            "analisis_valor": _build_analisis_valor(
+                cant, valor_compra, 0,
+                cobro_motivo="administracion_aiu",
+            ),
+        }
 
     if presupuesto_id:
         ppto = resolve_presupuesto_row(

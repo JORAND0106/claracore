@@ -6,6 +6,7 @@ import {
   useAlmacenCompact,
   useAlmacenTheme,
 } from './almacenShared'
+import { isAdministracionAiu } from './solicitudFormHelpers'
 
 /**
  * Popup de finalización de ubicación (tras elegir PK en el mapa satelital):
@@ -26,6 +27,7 @@ export default function SolicitudLineaUbicacionEditor({
   if (!item) return null
 
   const pkLabel = item.pk_label || item.pk_id || ''
+  const esAiu = isAdministracionAiu(item.presupuesto_capitulo, item.presupuesto_item)
 
   return (
     <div
@@ -66,7 +68,9 @@ export default function SolicitudLineaUbicacionEditor({
             <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginTop: 2, lineHeight: 1.35 }}>
               PK-ID <strong style={{ color: ui.text }}>{pkLabel || '—'}</strong>
               {item.tramo ? <> · Tramo <strong style={{ color: ui.text }}>{item.tramo}</strong></> : null}
-              {' · '}Seleccione el registro de presupuesto, costado y abscisas.
+              {esAiu
+                ? ' · Administración (AIU): sin registro de presupuesto de obra.'
+                : ' · Seleccione el registro de presupuesto, costado y abscisas.'}
             </div>
           </div>
           <button type="button" style={{ ...ui.btnSecondary, padding: '6px 12px' }} onClick={onClose} aria-label="Cerrar">
@@ -75,15 +79,32 @@ export default function SolicitudLineaUbicacionEditor({
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <PresupuestoRegistroGrid
-            capitulo={item.presupuesto_capitulo}
-            item={item.presupuesto_item}
-            pkId={item.pk_id}
-            presupuestoId={item.presupuesto_id}
-            excludeSolicitudId={solicitudId || undefined}
-            disabled={busy}
-            onSelect={onRegistroSelect}
-          />
+          {esAiu ? (
+            <div style={{
+              padding: '8px 10px',
+              borderRadius: 6,
+              background: `${ui.textMuted}12`,
+              border: `1px solid ${ui.textMuted}33`,
+              fontSize: 'var(--cc-xs)',
+              color: ui.textMuted,
+              fontWeight: 600,
+              lineHeight: 1.4,
+            }}
+            >
+              Esta línea es Administración (AIU): no aplica control de presupuesto por PK-ID
+              (Ppto / Acum. / Saldo). Puede indicar costado y abscisas si aplica.
+            </div>
+          ) : (
+            <PresupuestoRegistroGrid
+              capitulo={item.presupuesto_capitulo}
+              item={item.presupuesto_item}
+              pkId={item.pk_id}
+              presupuestoId={item.presupuesto_id}
+              excludeSolicitudId={solicitudId || undefined}
+              disabled={busy}
+              onSelect={onRegistroSelect}
+            />
+          )}
 
           <UbicacionSolicitudFields
             variant="excel"

@@ -3,7 +3,7 @@ import AlmacenPkMapaSelector from './AlmacenPkMapaSelector'
 import PresupuestoItemSelector from './PresupuestoItemSelector'
 import SolicitudLineaUbicacionEditor from './SolicitudLineaUbicacionEditor'
 import { AlmacenHelpIcon, useAlmacenTheme } from './almacenShared'
-import { coerceEsPrincipal, MIN_JUSTIFICACION_SUPERA_PPTO } from './solicitudFormHelpers'
+import { coerceEsPrincipal, isAdministracionAiu, MIN_JUSTIFICACION_SUPERA_PPTO } from './solicitudFormHelpers'
 
 const ROW_H = 40
 
@@ -171,6 +171,7 @@ export default function SolicitudFormExcelTable({
               {items.map((it, idx) => {
                 const locked = rowLocked(idx)
                 const rowDisabled = busy || locked
+                const esAiu = isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item)
                 return (
                 <tr
                   key={it.id ?? `new-${idx}`}
@@ -199,9 +200,11 @@ export default function SolicitudFormExcelTable({
                   </td>
                   <td style={{ ...tdBase, textAlign: 'center' }}>
                     <label
-                      title={coerceEsPrincipal(it.es_principal)
-                        ? 'Insumo principal: descuenta presupuesto'
-                        : 'Insumo asociado: no descuenta presupuesto'}
+                      title={esAiu
+                        ? 'Administración (AIU): no descuenta presupuesto de obra'
+                        : (coerceEsPrincipal(it.es_principal)
+                          ? 'Insumo principal: descuenta presupuesto'
+                          : 'Insumo asociado: no descuenta presupuesto')}
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -215,7 +218,7 @@ export default function SolicitudFormExcelTable({
                       <input
                         type="checkbox"
                         checked={coerceEsPrincipal(it.es_principal)}
-                        disabled={rowDisabled}
+                        disabled={rowDisabled || esAiu}
                         onChange={(e) => onPrincipalChange?.(idx, e.target.checked)}
                         aria-label="Insumo principal del ítem"
                       />
@@ -264,7 +267,9 @@ export default function SolicitudFormExcelTable({
                   </td>
                   <td style={tdBase}>
                     {(() => {
-                      const supera = coerceEsPrincipal(it.es_principal) && it.preview?.supera_presupuesto
+                      const supera = !esAiu
+                        && coerceEsPrincipal(it.es_principal)
+                        && it.preview?.supera_presupuesto
                       const justLen = String(it.observacion_residente || '').trim().length
                       const falta = supera && justLen < MIN_JUSTIFICACION_SUPERA_PPTO
                       return (
@@ -282,10 +287,12 @@ export default function SolicitudFormExcelTable({
                           required={!!supera}
                           placeholder={supera
                             ? `Justifique el desfase (mín. ${MIN_JUSTIFICACION_SUPERA_PPTO} caracteres)…`
-                            : 'Opcional…'}
-                          title={supera
-                            ? (it.observacion_residente || `Obligatoria: explique por qué supera el presupuesto del PK-ID (mín. ${MIN_JUSTIFICACION_SUPERA_PPTO} caracteres).`)
-                            : (it.observacion_residente || '')}
+                            : (esAiu ? 'Opcional (AIU)…' : 'Opcional…')}
+                          title={esAiu
+                            ? (it.observacion_residente || 'Administración (AIU): sin control de sobrepresupuesto')
+                            : (supera
+                              ? (it.observacion_residente || `Obligatoria: explique por qué supera el presupuesto del PK-ID (mín. ${MIN_JUSTIFICACION_SUPERA_PPTO} caracteres).`)
+                              : (it.observacion_residente || ''))}
                           aria-invalid={falta || undefined}
                           onChange={(e) => onObservacionChange(idx, e.target.value)}
                         />

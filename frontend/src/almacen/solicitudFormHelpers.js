@@ -50,6 +50,14 @@ export function coerceEsPrincipal(v) {
   return Boolean(v)
 }
 
+/** Capítulo/ítem fijo para insumos cargados a Administración (AIU), sin ítem de obra. */
+export const CAPITULO_ADMINISTRACION_AIU = 'Administración (AIU)'
+
+/** True si la línea usa el capítulo/ítem fijo de Administración (AIU). */
+export function isAdministracionAiu(...parts) {
+  return parts.some((p) => String(p || '').trim() === CAPITULO_ADMINISTRACION_AIU)
+}
+
 /** Orden natural para capítulos e ítems (1, 2, 3 … 10, 11). */
 export function naturalSortKey(text) {
   const s = String(text || '').trim()
@@ -127,6 +135,11 @@ export function mapSolicitudItemsFromServer(s) {
       supera_negociado: it.supera_negociado,
       contexto_negociado: it.contexto_negociado,
       presupuesto_id: it.presupuesto_id,
+      ...(isAdministracionAiu(it.capitulo, it.item) ? {
+        es_administracion_aiu: true,
+        supera_presupuesto: false,
+        supera_negociado: false,
+      } : {}),
     },
   }))
 }
@@ -135,6 +148,7 @@ export function validateSolicitudItems(items) {
   const errors = []
   items.forEach((it, idx) => {
     const n = idx + 1
+    const esAiu = isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item)
     if (!it.presupuesto_capitulo || !it.presupuesto_item) {
       errors.push(`Línea ${n}: seleccione capítulo e ítem de cobro.`)
     }
@@ -145,7 +159,8 @@ export function validateSolicitudItems(items) {
     if (!it.pk_id) {
       errors.push(`Línea ${n}: seleccione la ubicación PK-ID en el mapa.`)
     }
-    if (!it.presupuesto_id) {
+    // AIU no tiene registro de presupuesto de obra: no exigir presupuesto_id.
+    if (!esAiu && !it.presupuesto_id) {
       errors.push(`Línea ${n}: seleccione el registro de presupuesto en la grilla.`)
     }
     if (!it.cantidad || Number(it.cantidad) <= 0) {
@@ -169,7 +184,10 @@ export function validateSolicitudItems(items) {
 }
 
 export function lineasSuperanPresupuesto(items) {
-  return items.filter((it) => coerceEsPrincipal(it.es_principal) && it.preview?.supera_presupuesto)
+  return items.filter((it) => (
+    !isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item, it.capitulo, it.item)
+    && coerceEsPrincipal(it.es_principal) && it.preview?.supera_presupuesto
+  ))
 }
 
 /** Mínimo de caracteres para justificar desfase vs presupuesto (mismo espíritu SICOE Obra). */

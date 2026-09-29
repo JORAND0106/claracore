@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AlmacenFieldLabel, useAlmacenApi, useAlmacenTheme } from './almacenShared'
-import { itemLabelFull, sortNatural } from './solicitudFormHelpers'
+import {
+  CAPITULO_ADMINISTRACION_AIU,
+  isAdministracionAiu,
+  itemLabelFull,
+  sortNatural,
+} from './solicitudFormHelpers'
 
 export function normPptoItem(item) {
   return String(item || '').trim().replace(/\.+$/, '')
@@ -29,13 +34,26 @@ export default function PresupuestoItemSelector({
 
   useEffect(() => {
     api.getListadoCapitulos()
-      .then((caps) => setCapitulos([...(caps || [])].sort(sortNatural)))
-      .catch(() => setCapitulos([]))
+      .then((caps) => {
+        const sorted = [...(caps || [])].sort(sortNatural)
+        // Opción fija siempre presente (no viene del listado de precios).
+        if (!sorted.some((c) => isAdministracionAiu(c))) {
+          sorted.push(CAPITULO_ADMINISTRACION_AIU)
+        }
+        setCapitulos(sorted)
+      })
+      .catch(() => setCapitulos([CAPITULO_ADMINISTRACION_AIU]))
   }, [api])
 
   useEffect(() => {
     if (!capitulo) {
       setItemsCap([])
+      setOpen(false)
+      return
+    }
+    if (isAdministracionAiu(capitulo)) {
+      setItemsCap([])
+      setLoadingItems(false)
       setOpen(false)
       return
     }
@@ -56,12 +74,16 @@ export default function PresupuestoItemSelector({
     return () => { cancelled = true }
   }, [api, capitulo])
 
+  const esAiu = isAdministracionAiu(capitulo, item)
+
   const selectedRow = useMemo(
     () => itemsCap.find((p) => normPptoItem(p.item) === normPptoItem(item)),
     [itemsCap, item],
   )
 
-  const selectedLabel = selectedRow ? itemLabelFull(selectedRow) : (item ? String(item) : '')
+  const selectedLabel = esAiu
+    ? CAPITULO_ADMINISTRACION_AIU
+    : (selectedRow ? itemLabelFull(selectedRow) : (item ? String(item) : ''))
 
   useEffect(() => {
     if (!item) {
@@ -120,6 +142,12 @@ export default function PresupuestoItemSelector({
   }
 
   const onCapChange = (cap) => {
+    if (isAdministracionAiu(cap)) {
+      onChange?.({ capitulo: CAPITULO_ADMINISTRACION_AIU, item: CAPITULO_ADMINISTRACION_AIU })
+      setItemQuery(CAPITULO_ADMINISTRACION_AIU)
+      setOpen(false)
+      return
+    }
     onChange?.({ capitulo: cap, item: '' })
     setItemQuery('')
     setOpen(!!cap)
@@ -243,21 +271,33 @@ export default function PresupuestoItemSelector({
       <input
         style={inputStyle}
         value={itemQuery}
-        disabled={disabled || !capitulo || loadingItems}
-        placeholder={!capitulo ? 'Elija capítulo' : loadingItems ? 'Cargando…' : 'Buscar ítem…'}
-        title={selectedLabel || itemQuery || 'Ítem de cobro'}
+        disabled={disabled || !capitulo || loadingItems || esAiu}
+        readOnly={esAiu}
+        placeholder={
+          !capitulo
+            ? 'Elija capítulo'
+            : esAiu
+              ? CAPITULO_ADMINISTRACION_AIU
+              : (loadingItems ? 'Cargando…' : 'Buscar ítem…')
+        }
+        title={esAiu
+          ? 'Administración (AIU): sin ítem de obra asociado'
+          : (selectedLabel || itemQuery || 'Ítem de cobro')}
         onChange={(e) => {
+          if (esAiu) return
           setItemQuery(e.target.value)
           setOpen(true)
           if (!e.target.value.trim()) onChange?.({ capitulo, item: '' })
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          if (!esAiu) setOpen(true)
+        }}
         onBlur={() => {
           clearTimeout(blurTimer.current)
           blurTimer.current = setTimeout(() => setOpen(false), 180)
         }}
       />
-      {dropdown}
+      {esAiu ? null : dropdown}
     </div>
   )
 
