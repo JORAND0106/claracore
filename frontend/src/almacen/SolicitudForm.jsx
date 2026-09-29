@@ -8,6 +8,8 @@ import OrdenCompraPdfClip from './OrdenCompraPdfClip'
 import {
   coerceEsPrincipal,
   formatSolicitudTituloAuto,
+  isAdministracionAiu,
+  CAPITULO_ADMINISTRACION_AIU,
   lineasSuperanPresupuesto,
   lineasSinJustificacionSobrepresupuesto,
   lineasSuperanNegociado,
@@ -87,7 +89,26 @@ function ubicacionPayload(it) {
   }
 }
 
-function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg, ui, sinPrecio, verEconomicos = true, esPrincipal = true }) {
+function PresupuestoContextBox({ ctx, analisis, supera, superaNegociado, ctxNeg, ui, sinPrecio, verEconomicos = true, esPrincipal = true, esAdministracionAiu = false }) {
+  if (esAdministracionAiu) {
+    return (
+      <div style={{
+        marginTop: 6,
+        padding: '8px 10px',
+        borderRadius: 6,
+        border: `1px solid ${ui.textMuted}44`,
+        background: `${ui.textMuted}12`,
+        fontSize: 'var(--cc-xs)',
+        color: ui.textMuted,
+        fontWeight: 600,
+        lineHeight: 1.4,
+      }}
+      >
+        Administración (AIU) — esta línea no está sujeta al control de presupuesto por PK-ID
+        (Ppto / Acum. / Saldo). El AIU no es una cantidad de obra con saldo físico.
+      </div>
+    )
+  }
   if (!ctx && !ctxNeg?.tiene_negociado && !analisis && !sinPrecio) return null
   return (
     <LineaResumenExcelTable
@@ -184,6 +205,19 @@ export default function SolicitudForm({
 
   const refreshPreview = useCallback(async (idx, draftItems) => {
     const it = draftItems[idx]
+    if (isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item)) {
+      // AIU: sin control Ppto/Acum/Saldo ni alertas de sobrepresupuesto.
+      setItems((prev) => prev.map((row, i) => (i === idx ? {
+        ...row,
+        presupuesto_id: null,
+        preview: {
+          es_administracion_aiu: true,
+          supera_presupuesto: false,
+          supera_negociado: false,
+        },
+      } : row)))
+      return
+    }
     if (!it.presupuesto_capitulo || !it.presupuesto_item || !it.pk_id || !it.presupuesto_id || !it.cantidad || Number(it.cantidad) <= 0) {
       setItems((prev) => prev.map((row, i) => (i === idx ? { ...row, preview: null } : row)))
       return
@@ -278,12 +312,18 @@ export default function SolicitudForm({
 
   const onPptoChange = (idx, { capitulo, item }) => {
     markDirty()
+    const esAiu = isAdministracionAiu(capitulo, item)
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? {
         ...it,
-        presupuesto_capitulo: capitulo ?? it.presupuesto_capitulo,
-        presupuesto_item: item ?? it.presupuesto_item,
+        presupuesto_capitulo: esAiu
+          ? CAPITULO_ADMINISTRACION_AIU
+          : (capitulo ?? it.presupuesto_capitulo),
+        presupuesto_item: esAiu
+          ? CAPITULO_ADMINISTRACION_AIU
+          : (item ?? it.presupuesto_item),
         ...clearUbicacionPresupuesto(),
+        ...(esAiu ? { presupuesto_id: null } : {}),
       } : it))
       triggerPreview(idx, next)
       return next
@@ -410,15 +450,16 @@ export default function SolicitudForm({
       // El backend regenera el título automático; se envía para compatibilidad.
       titulo: formatSolicitudTituloAuto(sol?.consecutivo ?? proximoConsecutivo, sol?.created_at),
       items: sourceItems.map((it) => {
+        const esAiu = isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item)
         const base = {
           id: it.id || undefined,
           cantidad: Number(it.cantidad),
           es_recurrente: !!it.es_recurrente,
           es_principal: coerceEsPrincipal(it.es_principal),
           pk_id: String(it.pk_id || '').trim(),
-          presupuesto_capitulo: it.presupuesto_capitulo,
-          presupuesto_item: it.presupuesto_item,
-          presupuesto_id: it.presupuesto_id,
+          presupuesto_capitulo: esAiu ? CAPITULO_ADMINISTRACION_AIU : it.presupuesto_capitulo,
+          presupuesto_item: esAiu ? CAPITULO_ADMINISTRACION_AIU : it.presupuesto_item,
+          presupuesto_id: esAiu ? null : it.presupuesto_id,
           descripcion_solicitada: String(it.descripcion_solicitada || '').trim(),
           ...ubicacionPayload(it),
         }
@@ -799,8 +840,15 @@ export default function SolicitudForm({
             onRemoveRow={removeItem}
             isRowLocked={(it) => isRowLocked(it)}
           />
-          {items.map((it, idx) => (
-            (it.preview?.error || it.preview?.contexto_presupuesto || it.preview?.contexto_negociado?.tiene_negociado) ? (
+          {items.map((it, idx) => {
+            const esAiu = isAdministracionAiu(it.presupuesto_capitulo, it.presupuesto_item)
+              || Boolean(it.preview?.es_administracion_aiu)
+            const showPreview = esAiu
+              || it.preview?.error
+              || it.preview?.contexto_presupuesto
+              || it.preview?.contexto_negociado?.tiene_negociado
+            if (!showPreview) return null
+            return (
               <div key={`prev-${it.id ?? idx}`} style={{ marginTop: 6, marginBottom: 4 }}>
                 {items.length > 1 && (
                   <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted, marginBottom: 2 }}>
@@ -811,19 +859,20 @@ export default function SolicitudForm({
                   <div style={{ color: '#dc2626', fontSize: 'var(--cc-sm)' }}>{it.preview.error}</div>
                 )}
                 <PresupuestoContextBox
-                  ctx={it.preview?.contexto_presupuesto}
-                  analisis={it.preview?.analisis_valor}
-                  supera={it.preview?.supera_presupuesto}
-                  superaNegociado={it.preview?.supera_negociado}
-                  ctxNeg={it.preview?.contexto_negociado}
+                  ctx={esAiu ? null : it.preview?.contexto_presupuesto}
+                  analisis={esAiu ? null : it.preview?.analisis_valor}
+                  supera={esAiu ? false : it.preview?.supera_presupuesto}
+                  superaNegociado={esAiu ? false : it.preview?.supera_negociado}
+                  ctxNeg={esAiu ? null : it.preview?.contexto_negociado}
                   sinPrecio={false}
                   verEconomicos={verEconomicos}
                   esPrincipal={coerceEsPrincipal(it.es_principal)}
+                  esAdministracionAiu={esAiu}
                   ui={ui}
                 />
               </div>
-            ) : null
-          ))}
+            )
+          })}
         </>
       )}
 

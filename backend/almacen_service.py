@@ -28,6 +28,9 @@ MAX_SOPORTE_BYTES = 20 * 1024 * 1024
 
 ESTADOS_SOLICITUD = frozenset({"borrador", "enviada", "aprobada", "rechazada"})
 
+# Capítulo/ítem fijo: insumos cargados a Administración (AIU), sin ítem de obra.
+CAPITULO_ADMINISTRACION_AIU = "Administración (AIU)"
+
 SOLICITUD_ITEM_DB_COLUMNS = frozenset({
     "solicitud_id",
     "presupuesto_id",
@@ -68,6 +71,15 @@ def _solicitud_editable(estado: str) -> bool:
 
 def _norm_pk_id(pk) -> str:
     return str(pk or "").strip()
+
+
+def is_administracion_aiu(*parts) -> bool:
+    """True si algún valor es el capítulo/ítem fijo Administración (AIU)."""
+    label = CAPITULO_ADMINISTRACION_AIU.strip().lower()
+    for p in parts:
+        if str(p or "").strip().lower() == label:
+            return True
+    return False
 
 
 def _pk_digit_key(pk) -> str:
@@ -161,6 +173,15 @@ def _item_for_db_insert(item: dict) -> dict:
         row["pk_id"] = _norm_pk_id(row.get("pk_id")) or None
     # Persistir siempre el booleano explícito (evita perder asociados por omisión/default).
     row["es_principal"] = _coerce_es_principal(item.get("es_principal"), default=True)
+    # AIU: sin registro de presupuesto de obra.
+    if is_administracion_aiu(row.get("capitulo"), row.get("item")):
+        row["presupuesto_id"] = None
+        row["capitulo"] = CAPITULO_ADMINISTRACION_AIU
+        row["item"] = CAPITULO_ADMINISTRACION_AIU
+        row["supera_presupuesto"] = False
+        row["cant_presupuestada"] = None
+    elif "presupuesto_id" in row and row.get("presupuesto_id") in (None, "", 0, "0"):
+        row["presupuesto_id"] = None
     return row
 
 
@@ -427,6 +448,17 @@ def _humanize_solicitud_db_error(exc: BaseException) -> str:
             f"Detalle: {str(exc)[:280]}"
         )
     text = str(exc or "").strip()
+    low = text.lower()
+    # NOT NULL / FK en presupuesto_id → migración AIU pendiente.
+    if "presupuesto_id" in low and any(
+        tok in low for tok in ("null value", "not-null", "not null", "23502")
+    ):
+        return (
+            "La columna presupuesto_id aún no admite NULL (líneas Administración AIU). "
+            "Ejecute en Supabase SQL Editor el script "
+            "backend/sql/almacen_solicitud_administracion_aiu.sql "
+            "(ALTER COLUMN … DROP NOT NULL + NOTIFY pgrst) y reintente."
+        )
     if text:
         return f"No se pudo guardar la solicitud en la base de datos: {text[:400]}"
     return "No se pudo guardar la solicitud en la base de datos (error desconocido)."
@@ -1177,6 +1209,46 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
         # Flujo nuevo: Contratista describe en texto libre (sin insumo).
         # Solo resuelve catálogo si llega insumo_id/listado (legado o mapeo Gerencial vía PATCH).
         desc_sol = (raw.get("descripcion_solicitada") or "").strip()
+        cap_in = (raw.get("presupuesto_capitulo") or raw.get("capitulo") or "").strip()
+        item_in = (raw.get("presupuesto_item") or raw.get("item") or "").strip()
+        es_aiu = is_administracion_aiu(cap_in, item_in)
+
+        if es_aiu and desc_sol and not raw.get("insumo_id") and not raw.get("listado_precio_id"):
+            cant = _to_float(raw.get("cantidad"))
+            if cant <= 0:
+                raise ValueError("La cantidad debe ser mayor a cero.")
+            if len(desc_sol) < 3:
+                raise ValueError("Describa el material solicitado (mínimo 3 caracteres).")
+            pk = (raw.get("pk_id") or "").strip()
+            if not pk:
+                raise ValueError("Seleccione la ubicación PK-ID en el mapa.")
+            out.append({
+                "presupuesto_id": None,
+                "pk_id": pk or None,
+                "pk_id_id": raw.get("pk_id_id"),
+                "capitulo": CAPITULO_ADMINISTRACION_AIU,
+                "item": CAPITULO_ADMINISTRACION_AIU,
+                "descripcion_solicitada": desc_sol,
+                "material_descripcion": desc_sol,
+                "unidad": (raw.get("unidad") or "UND").strip(),
+                "cantidad": cant,
+                "es_recurrente": bool(raw.get("es_recurrente")),
+                "es_principal": _coerce_es_principal(raw.get("es_principal"), default=True),
+                "cant_presupuestada": None,
+                "valor_compra_unitario": None,
+                "vlr_unitario_cobro": 0,
+                "supera_presupuesto": False,
+                "supera_negociado": False,
+                "tramo": raw.get("tramo"),
+                "costado": raw.get("costado"),
+                "abscisa_inicial": raw.get("abscisa_inicial"),
+                "abscisa_final": raw.get("abscisa_final"),
+                "observacion_residente": raw.get("observacion_residente"),
+                "insumo_id": None,
+                "listado_precio_id": None,
+            })
+            continue
+
         if desc_sol and not raw.get("insumo_id") and not raw.get("listado_precio_id"):
             pid = int(raw["presupuesto_id"])
             ppto = ppto_cache.get(pid) or _fetch_ppto_row(pid, contrato_id)
@@ -1258,6 +1330,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
     if out:
         # Borrador/guardar: no escanear listado_precios (cobro se define al mapear Gerencial).
         # Solo acumulados + flags de sobrepresupuesto — evita 5–40s de full-scan.
+        # Líneas AIU no tienen presupuesto_id: apply_saldo_flags las omite.
         apply_saldo_flags_batch(
             contrato_id,
             out,
@@ -1917,7 +1990,7 @@ def _insertar_items_en_oc(
             "unidad": it["unidad"],
             "cantidad": it["cantidad"],
             "valor_unitario": vu,
-            "presupuesto_id": it["presupuesto_id"],
+            "presupuesto_id": it.get("presupuesto_id"),
         }).execute()
 
 
@@ -4635,29 +4708,31 @@ def create_entrada(contrato_id: int, user_id: int, body: dict, remision_data: Op
                 primera_cantidad = qty
                 primera_oci = oci
 
-            sb.table("almacen_movimiento").insert({
-                "contrato_id": contrato_id,
-                "presupuesto_id": oci["presupuesto_id"],
-                "material_descripcion": oci["material_descripcion"],
-                "unidad": oci["unidad"],
-                "tipo": "entrada",
-                "cantidad": qty,
-                "entrada_item_id": ei_id,
-                "referencia_tipo": "entrada",
-                "referencia_id": entrada_id,
-                "lote": ei_row["lote"],
-                "fecha_vencimiento": ei_row["fecha_vencimiento"],
-                "created_by": user_id,
-            }).execute()
+            # AIU / sin presupuesto_id: no hay saldo físico de obra ni inventario por ítem.
+            if oci.get("presupuesto_id"):
+                sb.table("almacen_movimiento").insert({
+                    "contrato_id": contrato_id,
+                    "presupuesto_id": oci["presupuesto_id"],
+                    "material_descripcion": oci["material_descripcion"],
+                    "unidad": oci["unidad"],
+                    "tipo": "entrada",
+                    "cantidad": qty,
+                    "entrada_item_id": ei_id,
+                    "referencia_tipo": "entrada",
+                    "referencia_id": entrada_id,
+                    "lote": ei_row["lote"],
+                    "fecha_vencimiento": ei_row["fecha_vencimiento"],
+                    "created_by": user_id,
+                }).execute()
 
-            _upsert_inventario(
-                contrato_id,
-                oci["presupuesto_id"],
-                oci["material_descripcion"],
-                oci["unidad"],
-                qty,
-                _to_float(oci.get("cantidad")),
-            )
+                _upsert_inventario(
+                    contrato_id,
+                    oci["presupuesto_id"],
+                    oci["material_descripcion"],
+                    oci["unidad"],
+                    qty,
+                    _to_float(oci.get("cantidad")),
+                )
         else:
             meta_mat = _presupuesto_material_pk_insumo(contrato_id, pk_id, insumo_id)
             material = meta_mat.get("material_descripcion") or "—"
