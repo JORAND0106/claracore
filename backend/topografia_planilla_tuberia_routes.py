@@ -15,6 +15,11 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from main import _es_desarrollador, _require_contract_access, get_current_user, supabase
+from topografia_audit import (
+    ENTIDAD_PLANILLA_TUBERIA,
+    log_topo,
+    snapshot_planilla_tuberia,
+)
 from topografia_permissions import require_permiso_topografia, require_topo_puede_validar_nivel
 from topografia_planilla_tuberia import (
     FILAS_INICIALES_CARTERA,
@@ -548,7 +553,17 @@ def _calcular(planilla: dict, filas_db: list[dict], desc_db: list[dict]) -> dict
     )
 
 
-def _audit(contrato_id: int, planilla_id: str, accion: str, user, detalle: dict) -> None:
+def _audit(
+    contrato_id: int,
+    planilla_id: str,
+    accion: str,
+    user,
+    detalle: dict,
+    *,
+    valor_anterior=None,
+    valor_nuevo=None,
+) -> None:
+    """Auditoría local (tabla topo) + sistema de logs plataforma (tabla `logs`)."""
     try:
         supabase.table("topo_planilla_tuberia_auditoria").insert({
             "planilla_id": planilla_id,
@@ -559,6 +574,18 @@ def _audit(contrato_id: int, planilla_id: str, accion: str, user, detalle: dict)
         }).execute()
     except Exception:
         logger.exception("audit")
+    det = dict(detalle or {})
+    det.setdefault("contrato_id", contrato_id)
+    det.setdefault("planilla_id", planilla_id)
+    log_topo(
+        user,
+        accion,
+        ENTIDAD_PLANILLA_TUBERIA,
+        planilla_id,
+        det,
+        valor_anterior=valor_anterior,
+        valor_nuevo=valor_nuevo,
+    )
 
 
 def _detalle(contrato_id: int, planilla_id: str) -> dict:
@@ -914,7 +941,16 @@ def crear(contrato_id: int, body: CrearBody, current_user=Depends(get_current_us
     row = supabase.table("topo_planillas_tuberia").insert(payload).execute().data
     if not row:
         raise HTTPException(500, "No se pudo crear la planilla")
-    return _detalle(contrato_id, row[0]["id"])
+    planilla_id = row[0]["id"]
+    _audit(
+        contrato_id,
+        planilla_id,
+        "CREAR",
+        current_user,
+        {"nombre": nombre, "tipo": tipo},
+        valor_nuevo=snapshot_planilla_tuberia(row[0]),
+    )
+    return _detalle(contrato_id, planilla_id)
 
 
 @router.get("/{contrato_id}/planillas-tuberia/por-reporte-sicoe/{reporte_id}")
@@ -1066,6 +1102,15 @@ def actualizar_params(contrato_id: int, planilla_id: str, body: ParamsBody, curr
                 detalle = {**detalle, "sicoe_sync": sync}
     except Exception:
         logger.exception("sync sicoe tras actualizar params planilla=%s", planilla_id)
+    _audit(
+        contrato_id,
+        planilla_id,
+        "EDITAR",
+        current_user,
+        {"ambito": "params"},
+        valor_anterior=snapshot_planilla_tuberia(p),
+        valor_nuevo=snapshot_planilla_tuberia((detalle or {}).get("planilla")),
+    )
     return detalle
 
 
@@ -1287,6 +1332,15 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
             sync_info = _sincronizar_so_registros_desde_calc(detalle.get("planilla") or p, calc_final, contrato_id)
     except Exception:
         logger.exception("sync sicoe tras guardar cartera planilla=%s", planilla_id)
+    _audit(
+        contrato_id,
+        planilla_id,
+        "EDITAR",
+        current_user,
+        {"ambito": "cartera", "n_filas": len(rows), "version": nueva_v},
+        valor_anterior=snapshot_planilla_tuberia(p),
+        valor_nuevo=snapshot_planilla_tuberia((detalle or {}).get("planilla")),
+    )
     return {
         **detalle,
         "verified": True,
@@ -2289,6 +2343,18 @@ def crear_reporte_sicoe_desde_planilla(
             )
     except Exception:
         logger.exception("audit crear reporte desde planilla")
+    _audit(
+        contrato_id,
+        planilla_id,
+        "GENERAR_REPORTE",
+        current_user,
+        {
+            "reporte_id": reporte_id,
+            "numero_reporte": reporte.get("numero_reporte"),
+            "n_registros": len(inserted) or len(rows_ins),
+        },
+        valor_anterior=snapshot_planilla_tuberia(p),
+    )
     try:
         _invalidate_dashboard_financial_caches(int(contrato_id))
     except Exception:
@@ -2715,6 +2781,18 @@ def asociar_reporte_sicoe_existente(
             )
     except Exception:
         logger.exception("audit asociar reporte desde planilla")
+    _audit(
+        contrato_id,
+        planilla_id,
+        "ASOCIAR_REPORTE",
+        current_user,
+        {
+            "reporte_id": reporte_id,
+            "numero_reporte": reporte.get("numero_reporte"),
+            "n_registros_creados": n_creados,
+        },
+        valor_anterior=snapshot_planilla_tuberia(p),
+    )
 
     return {
         "ok": True,
@@ -3127,6 +3205,14 @@ def eliminar(contrato_id: int, planilla_id: str, current_user=Depends(get_curren
     supabase.table("topo_planillas_tuberia").delete().eq("id", planilla_id).eq(
         "contrato_id", contrato_id
     ).execute()
+    _audit(
+        contrato_id,
+        planilla_id,
+        "ELIMINAR",
+        current_user,
+        {"tenia_datos": tenia_datos, "nombre": p.get("nombre"), "tipo": p.get("tipo")},
+        valor_anterior=snapshot_planilla_tuberia(p),
+    )
     return {"ok": True, "id": planilla_id, "tenia_datos": tenia_datos}
 
 
@@ -3224,6 +3310,13 @@ def excel(contrato_id: int, planilla_id: str, current_user=Depends(get_current_u
         raise HTTPException(500, f"No se pudo generar Excel: {exc}") from exc
 
     suffix = "_plantilla" if vacia else ""
+    _audit(
+        contrato_id,
+        planilla_id,
+        "EXPORTAR",
+        current_user,
+        {"formato": "excel", "plantilla_vacia": vacia},
+    )
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3420,6 +3513,13 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     except Exception:
         content, media = html_doc.encode("utf-8"), "text/html; charset=utf-8"
     suffix = "_plantilla" if vacia else ""
+    _audit(
+        contrato_id,
+        planilla_id,
+        "EXPORTAR",
+        current_user,
+        {"formato": "pdf", "plantilla_vacia": vacia},
+    )
     return Response(
         content=content, media_type=media,
         headers={"Content-Disposition": f'attachment; filename="planilla_tuberia_{planilla_id[:8]}{suffix}.pdf"'},

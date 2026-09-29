@@ -23,6 +23,7 @@ import {
   useTopoTheme,
   useTopoViewport,
 } from './topografiaShared'
+import TopoTrazabilidadButton, { ENTIDAD_NIVELACION } from './TopoTrazabilidadButton'
 import {
   inferirTipoNivelFilas,
   filaCierreInfo,
@@ -1102,6 +1103,15 @@ export default function NivelacionForm({ contratoId, token, permisos, usuario })
                   )
                 </small>
               </button>
+              <TopoTrazabilidadButton
+                token={token}
+                theme={ui.t}
+                ui={ui}
+                compact
+                entidadTipo={ENTIDAD_NIVELACION}
+                entidadId={n.id}
+                titulo={`Nivelación · ${label}`}
+              />
               {puede(permisos, 'eliminar') && !tabSellada && (
                 <button
                   type="button"

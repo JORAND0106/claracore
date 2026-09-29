@@ -1891,8 +1891,18 @@ function SeccionLogs({ call, theme }) {
   const [offset,        setOffset]        = useState(0)
   const LIMIT = 100
 
-  const MODULOS = ["AUTH","SICOE","PRESUPUESTO","COBRO","USUARIOS","CONTRATOS","PERMISOS","PRECIOS","SISTEMA","INFORMES","NOTIFICACIONES","ACTAS","SUBCONTRATISTAS"]
-  const ACCIONES = ["LOGIN","LOGOUT","LOGIN_FAIL","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","COMENTAR","CONSULTAR","ASIGNAR_ITEM","MOVER","IMPORTAR","CREAR","ELIMINAR","EXPORTAR","ERROR_SISTEMA","DEPLOY","BROADCAST"]
+  const MODULOS = [
+    "AUTH", "SICOE", "PRESUPUESTO", "COBRO", "USUARIOS", "CONTRATOS", "PERMISOS",
+    "PRECIOS", "SISTEMA", "INFORMES", "NOTIFICACIONES", "ACTAS", "SUBCONTRATISTAS",
+    "ALMACEN", "SEGUIMIENTO", "BITACORA", "RRHH", "TOPOGRAFIA",
+  ]
+  const ACCIONES = [
+    "LOGIN", "LOGOUT", "LOGIN_FAIL", "APROBAR", "RECHAZAR", "EDITAR", "RECALCULAR",
+    "VALIDAR", "COMENTAR", "CONSULTAR", "ASIGNAR_ITEM", "MOVER", "IMPORTAR", "CREAR",
+    "ELIMINAR", "EXPORTAR", "CERRAR", "REABRIR", "REABRIR_POLIGONAL", "ABRIR",
+    "GENERAR_REPORTE", "ASOCIAR_REPORTE", "REVOCAR_VALIDACION", "FIRMAR",
+    "ERROR_SISTEMA", "DEPLOY", "BROADCAST",
+  ]
   const CATEGORIAS = ["auditoria", "sistema"]
   const SEVERIDADES = ["INFO", "WARNING", "ERROR", "AUDIT"]
   const ACCION_COLOR = {
@@ -2043,6 +2053,14 @@ function SeccionLogs({ call, theme }) {
           <button type="button" onClick={() => { setFiltModulo("SICOE"); setFiltAccion("VALIDAR"); setFiltOcultarLogin(true) }}
             style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 10px", color: col.textTable, fontSize:11, cursor:"pointer" }}>
             SICOE · VALIDAR
+          </button>
+          <button type="button" onClick={() => { setFiltModulo("TOPOGRAFIA"); setFiltAccion(""); setFiltOcultarLogin(true) }}
+            style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 10px", color: col.textTable, fontSize:11, cursor:"pointer" }}>
+            Topografía
+          </button>
+          <button type="button" onClick={() => { setFiltModulo("ALMACEN"); setFiltAccion(""); setFiltOcultarLogin(true) }}
+            style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 10px", color: col.textTable, fontSize:11, cursor:"pointer" }}>
+            Almacén
           </button>
           <button type="button" onClick={() => { setFiltModulo(""); setFiltAccion("VALIDAR"); setFiltOcultarLogin(true) }}
             style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 10px", color: col.textTable, fontSize:11, cursor:"pointer" }}>

@@ -11,6 +11,13 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from main import _require_contract_access, get_current_user, supabase, supabase_execute
+from topografia_audit import (
+    ENTIDAD_NIVELACION,
+    ENTIDAD_POLIGONAL,
+    log_topo,
+    snapshot_nivelacion,
+    snapshot_poligonal,
+)
 from topografia_cargos import es_cargo_topografia
 from topografia_poligonal_papelera import (
     DIAS_PURGA_PAPELERA,
@@ -993,6 +1000,22 @@ def _aplicar_validacion_poligonal(
         # Refresco idempotente: los puntos ya se publicaron al terminar.
         _publicar_poligonal_en_biblioteca(contrato_id, poligonal_id, pol_upd)
 
+    log_topo(
+        current_user,
+        "VALIDAR",
+        ENTIDAD_POLIGONAL,
+        poligonal_id,
+        {
+            "contrato_id": contrato_id,
+            "nivel": nivel,
+            "estado": body.estado,
+            "comentario": bool(body.comentario_data),
+        },
+        valor_anterior=snapshot_poligonal(pol),
+        valor_nuevo=snapshot_poligonal(
+            {**pol, **update, f"nivel{nivel}_estado": body.estado}
+        ),
+    )
     return {
         "ok": True,
         "nivel": nivel,
@@ -2070,6 +2093,14 @@ def crear_poligonal(contrato_id: int, body: PoligonalBody, current_user=Depends(
             "altura_instrumento": None,
         }
     ).execute()
+    log_topo(
+        current_user,
+        "CREAR",
+        ENTIDAD_POLIGONAL,
+        pol["id"],
+        {"contrato_id": contrato_id, "nombre": pol.get("nombre")},
+        valor_nuevo=snapshot_poligonal(pol),
+    )
     return pol
 
 
@@ -2240,7 +2271,17 @@ def actualizar_poligonal(contrato_id: int, poligonal_id: str, body: PoligonalBod
         .execute()
         .data
     )
-    return row[0] if row else pol
+    out = row[0] if row else pol
+    log_topo(
+        current_user,
+        "EDITAR",
+        ENTIDAD_POLIGONAL,
+        poligonal_id,
+        {"contrato_id": contrato_id, "ambito": "cabecera"},
+        valor_anterior=snapshot_poligonal(pol),
+        valor_nuevo=snapshot_poligonal(out),
+    )
+    return out
 
 
 @router.put("/{contrato_id}/poligonales/{poligonal_id}/amarres")
@@ -2291,6 +2332,14 @@ def eliminar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends
     # desvincula la referencia al circuito eliminado.
     supabase.table("topo_puntos").update({"circuito_id": None}).eq("circuito_id", poligonal_id).execute()
     supabase.table("topo_poligonales").delete().eq("id", poligonal_id).eq("contrato_id", contrato_id).execute()
+    log_topo(
+        current_user,
+        "ELIMINAR",
+        ENTIDAD_POLIGONAL,
+        poligonal_id,
+        {"contrato_id": contrato_id, "nombre": pol.get("nombre")},
+        valor_anterior=snapshot_poligonal(pol),
+    )
     return {"ok": True}
 
 
@@ -2952,6 +3001,15 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
     _publicar_poligonal_en_biblioteca(contrato_id, poligonal_id, pol_cerrada)
     pol_final = _row("topo_poligonales", id=poligonal_id, contrato_id=contrato_id) or pol_cerrada
 
+    log_topo(
+        current_user,
+        "CERRAR",
+        ENTIDAD_POLIGONAL,
+        poligonal_id,
+        {"contrato_id": contrato_id, "ajustada_at": now},
+        valor_anterior=snapshot_poligonal(pol),
+        valor_nuevo=snapshot_poligonal(pol_final),
+    )
     return {
         "ok": True,
         "cierre": cierre,
@@ -3097,6 +3155,13 @@ def pdf_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_
         pdf = to_pdf_bytes(html_doc)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+    log_topo(
+        current_user,
+        "EXPORTAR",
+        ENTIDAD_POLIGONAL,
+        poligonal_id,
+        {"contrato_id": contrato_id, "formato": "pdf"},
+    )
     return Response(
         content=pdf,
         media_type="application/pdf",
@@ -3140,6 +3205,13 @@ def excel_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(ge
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"No se pudo generar el Excel: {exc}") from exc
     nombre = (pol.get("nombre") or poligonal_id[:8] or "poligonal").replace(" ", "_")[:40]
+    log_topo(
+        current_user,
+        "EXPORTAR",
+        ENTIDAD_POLIGONAL,
+        poligonal_id,
+        {"contrato_id": contrato_id, "formato": "excel"},
+    )
     return Response(
         content=xbytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3582,6 +3654,20 @@ def _aplicar_validacion_nivelacion(
             body.comentario_data,
             _rol_origen_topo(current_user, contrato_id),
         )
+    log_topo(
+        current_user,
+        "VALIDAR",
+        ENTIDAD_NIVELACION,
+        nivelacion_id,
+        {
+            "contrato_id": contrato_id,
+            "nivel": nivel,
+            "estado": body.estado,
+            "comentario": bool(body.comentario_data),
+        },
+        valor_anterior=snapshot_nivelacion(row),
+        valor_nuevo=snapshot_nivelacion({**row, **update}),
+    )
     return {"ok": True, f"nivel{nivel}_estado": body.estado}
 
 
@@ -3659,7 +3745,17 @@ def crear_nivelacion(contrato_id: int, body: NivelacionBody, current_user=Depend
     if body.bm_final_id:
         _punto_verificado(body.bm_final_id, contrato_id)
     row = supabase.table("topo_nivelaciones").insert({**_dump_model(body, ("bm_inicial_id", "bm_final_id")), "contrato_id": contrato_id}).execute().data
-    return row[0] if row else {}
+    out = row[0] if row else {}
+    if out.get("id"):
+        log_topo(
+            current_user,
+            "CREAR",
+            ENTIDAD_NIVELACION,
+            out["id"],
+            {"contrato_id": contrato_id, "nombre": out.get("nombre")},
+            valor_nuevo=snapshot_nivelacion(out),
+        )
+    return out
 
 
 @router.get("/{contrato_id}/nivelaciones/{nivelacion_id}")
@@ -3687,6 +3783,14 @@ def eliminar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depen
         )
     supabase.table("topo_nivelacion_lecturas").delete().eq("nivelacion_id", nivelacion_id).execute()
     supabase.table("topo_nivelaciones").delete().eq("id", nivelacion_id).eq("contrato_id", contrato_id).execute()
+    log_topo(
+        current_user,
+        "ELIMINAR",
+        ENTIDAD_NIVELACION,
+        nivelacion_id,
+        {"contrato_id": contrato_id, "nombre": niv.get("nombre")},
+        valor_anterior=snapshot_nivelacion(niv),
+    )
     return {"ok": True}
 
 
@@ -3705,7 +3809,17 @@ def actualizar_nivelacion(contrato_id: int, nivelacion_id: str, body: Nivelacion
     payload = _dump_model(body, ("bm_inicial_id", "bm_final_id"))
     payload = {k: v for k, v in payload.items() if v is not None}
     row = supabase.table("topo_nivelaciones").update(payload).eq("id", nivelacion_id).execute().data
-    return row[0] if row else niv
+    out = row[0] if row else niv
+    log_topo(
+        current_user,
+        "EDITAR",
+        ENTIDAD_NIVELACION,
+        nivelacion_id,
+        {"contrato_id": contrato_id, "ambito": "cabecera"},
+        valor_anterior=snapshot_nivelacion(niv),
+        valor_nuevo=snapshot_nivelacion(out),
+    )
+    return out
 
 
 @router.put("/{contrato_id}/nivelaciones/{nivelacion_id}/lecturas")
@@ -3866,6 +3980,15 @@ def abrir_circuito_nivelacion(contrato_id: int, nivelacion_id: str, current_user
             ),
         ) from exc
     actualizado = (row or [None])[0] or {**niv, "circuito_abierto_at": ahora}
+    log_topo(
+        current_user,
+        "ABRIR",
+        ENTIDAD_NIVELACION,
+        nivelacion_id,
+        {"contrato_id": contrato_id, "circuito_abierto_at": ahora},
+        valor_anterior=snapshot_nivelacion(niv),
+        valor_nuevo=snapshot_nivelacion(actualizado),
+    )
     return {"ok": True, "nivelacion": actualizado, "ya_abierto": False}
 
 
@@ -3900,6 +4023,15 @@ def cerrar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends
     if calc.get("error_cierre") is None or calc.get("tolerancia_calculada") is None:
         raise HTTPException(status_code=422, detail="No hay cierre calculado. Verifique BM final y lecturas.")
     supabase.table("topo_nivelaciones").update({"estado": "cerrado"}).eq("id", nivelacion_id).execute()
+    log_topo(
+        current_user,
+        "CERRAR",
+        ENTIDAD_NIVELACION,
+        nivelacion_id,
+        {"contrato_id": contrato_id},
+        valor_anterior=snapshot_nivelacion(niv),
+        valor_nuevo=snapshot_nivelacion({**niv, "estado": "cerrado"}),
+    )
     return {"ok": True, "resultado": calc}
 
 
@@ -4047,6 +4179,13 @@ def pdf_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends(ge
         pdf = to_pdf_bytes(html_doc)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"No se pudo generar el PDF: {exc}") from exc
+    log_topo(
+        current_user,
+        "EXPORTAR",
+        ENTIDAD_NIVELACION,
+        nivelacion_id,
+        {"contrato_id": contrato_id, "formato": "pdf"},
+    )
     return Response(
         content=pdf,
         media_type="application/pdf",
