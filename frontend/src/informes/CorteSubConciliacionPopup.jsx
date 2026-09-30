@@ -269,6 +269,7 @@ export default function CorteSubConciliacionPopup({
   if (!open) return null
 
   const lineas = data?.aiu_lineas || []
+  const resumen4 = data?.resumen_4cols?.lineas || []
   const filtroLbl = filtroSubAprobacion === 'todo' ? 'Todo' : 'Aprobado'
   const sheet = {
     borderCollapse: 'collapse',
@@ -380,44 +381,103 @@ export default function CorteSubConciliacionPopup({
                     {(data.items_sin_precio || []).join(', ')}
                   </div>
                 )}
-                <table style={sheet}>
-                  <tbody>
-                    {lineas.map((ln) => {
-                      const label =
-                        ln.key === 'cd'
-                          ? 'Costo Directo'
-                          : ln.key === 'cd_aiu'
-                            ? 'Costo Directo + AIU'
-                            : `${ln.nombre} ${ln.abrev} (${fmtPct(ln.pct)})`
-                      const strong = ln.key === 'cd_aiu'
-                      return (
-                        <tr key={ln.key} style={{ background: strong ? '#dbeafe' : undefined }}>
-                          <td style={{ ...td, fontWeight: strong ? 700 : 500 }}>{label}</td>
-                          <td style={{ ...td, textAlign: 'right', fontWeight: 700, width: 140 }}>
-                            {fmtMoney(ln.valor)}
-                          </td>
+                {resumen4.length > 0 ? (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={sheet}>
+                      <thead>
+                        <tr>
+                          <th style={{ ...th, minWidth: 180 }}>Concepto</th>
+                          <th style={{ ...th, width: 110, textAlign: 'right' }}>Actualizadas</th>
+                          <th style={{ ...th, width: 110, textAlign: 'right' }}>Presente acta</th>
+                          <th style={{ ...th, width: 110, textAlign: 'right' }}>Acumulado</th>
+                          <th style={{ ...th, width: 110, textAlign: 'right' }}>Saldo</th>
                         </tr>
-                      )
-                    })}
-                    {(data.amortizacion_lineas || []).map((ln) => {
-                      let label = ln.nombre
-                      if (ln.key === 'amort_pres') {
-                        label = ln.pct != null && ln.pct !== ''
-                          ? `Amortización presente corte (${fmtPct(ln.pct)})`
-                          : 'Amortización presente corte'
-                      }
-                      const strong = ln.key === 'sub_amort'
-                      return (
-                        <tr key={ln.key} style={{ background: strong ? '#fef3c7' : '#fffbeb' }}>
-                          <td style={{ ...td, fontWeight: strong ? 700 : 500 }}>{label}</td>
-                          <td style={{ ...td, textAlign: 'right', fontWeight: 700, width: 140 }}>
-                            {fmtMoney(ln.valor)}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {resumen4.map((ln) => {
+                          const pct =
+                            ln.pct != null && ln.pct !== ''
+                              ? Number.isInteger(Number(ln.pct))
+                                ? `${ln.pct}%`
+                                : `${ln.pct}%`
+                              : ''
+                          let label = ln.nombre || ln.key
+                          if (ln.key === 'cd') label = 'Costo Directo'
+                          else if (ln.key === 'cd_aiu') label = 'Costo Directo + AIU'
+                          else if (ln.key === 'amort') {
+                            label = pct ? `Anticipo / amortización (${pct})` : 'Anticipo / amortización'
+                          } else if (ln.key === 'sub_amort') label = 'Subtotal después de amortización'
+                          else if (ln.key === 'otros') label = 'Otros conceptos'
+                          else if (ln.key === 'gran_total') label = 'Gran total'
+                          else if (ln.abrev && pct) label = `${ln.nombre} ${ln.abrev} (${pct})`
+                          else if (ln.abrev) label = `${ln.nombre} ${ln.abrev}`
+                          const vals = ln.valores || {}
+                          const strong = !!ln.strong || ln.key === 'gran_total'
+                          const bg =
+                            ln.key === 'gran_total'
+                              ? '#1e40af'
+                              : ln.key === 'cd_aiu'
+                                ? '#dbeafe'
+                                : ln.key === 'sub_amort'
+                                  ? '#fef3c7'
+                                  : ln.key === 'amort'
+                                    ? '#fffbeb'
+                                    : undefined
+                          const color = ln.key === 'gran_total' ? '#fff' : undefined
+                          const cell = (v) => (v == null || v === '' ? '—' : fmtMoney(v))
+                          return (
+                            <tr key={ln.key} style={{ background: bg, color }}>
+                              <td style={{ ...td, fontWeight: strong ? 700 : 500 }}>{label}</td>
+                              <td style={{ ...td, textAlign: 'right', fontWeight: strong ? 700 : 500 }}>{cell(vals.actualizadas)}</td>
+                              <td style={{ ...td, textAlign: 'right', fontWeight: strong ? 700 : 500 }}>{cell(vals.presente)}</td>
+                              <td style={{ ...td, textAlign: 'right', fontWeight: strong ? 700 : 500 }}>{cell(vals.acumulado)}</td>
+                              <td style={{ ...td, textAlign: 'right', fontWeight: strong ? 700 : 500 }}>{cell(vals.saldo)}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <table style={sheet}>
+                    <tbody>
+                      {lineas.map((ln) => {
+                        const label =
+                          ln.key === 'cd'
+                            ? 'Costo Directo'
+                            : ln.key === 'cd_aiu'
+                              ? 'Costo Directo + AIU'
+                              : `${ln.nombre} ${ln.abrev} (${fmtPct(ln.pct)})`
+                        const strong = ln.key === 'cd_aiu'
+                        return (
+                          <tr key={ln.key} style={{ background: strong ? '#dbeafe' : undefined }}>
+                            <td style={{ ...td, fontWeight: strong ? 700 : 500 }}>{label}</td>
+                            <td style={{ ...td, textAlign: 'right', fontWeight: 700, width: 140 }}>
+                              {fmtMoney(ln.valor)}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {(data.amortizacion_lineas || []).map((ln) => {
+                        let label = ln.nombre
+                        if (ln.key === 'amort_pres') {
+                          label = ln.pct != null && ln.pct !== ''
+                            ? `Amortización presente corte (${fmtPct(ln.pct)})`
+                            : 'Amortización presente corte'
+                        }
+                        const strong = ln.key === 'sub_amort'
+                        return (
+                          <tr key={ln.key} style={{ background: strong ? '#fef3c7' : '#fffbeb' }}>
+                            <td style={{ ...td, fontWeight: strong ? 700 : 500 }}>{label}</td>
+                            <td style={{ ...td, textAlign: 'right', fontWeight: 700, width: 140 }}>
+                              {fmtMoney(ln.valor)}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </section>
 
               <section>
