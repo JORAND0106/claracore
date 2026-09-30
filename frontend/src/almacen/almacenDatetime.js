@@ -1,46 +1,23 @@
 /** Zona horaria oficial del módulo Almacén de Obra (Colombia). */
-export const ALMACEN_TIMEZONE = 'America/Bogota'
+import {
+  TZ_COLOMBIA,
+  parseTimestampUtc,
+  formatFechaHoraColombia,
+} from '../utils/fechaColombia'
+
+export const ALMACEN_TIMEZONE = TZ_COLOMBIA
 
 /** Interpreta ISO de API/Postgres; sin huso explícito se asume UTC. */
 export function parseIsoAlmacen(iso) {
-  if (iso == null || iso === '') return null
-  try {
-    let s = String(iso).trim().replace(' ', 'T')
-    const hasZone = /Z$/i.test(s) || /[+-]\d{2}:?\d{2}$/.test(s.slice(10))
-    if (!hasZone && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) s = `${s}Z`
-    const d = new Date(s)
-    return Number.isNaN(d.getTime()) ? null : d
-  } catch {
-    return null
-  }
+  return parseTimestampUtc(iso)
 }
 
 /** Fecha y hora en Colombia (listados, trazabilidad, salidas). */
 export function fmtFechaAlmacen(iso, { withTime = true } = {}) {
   if (!iso) return null
-  const d = parseIsoAlmacen(iso)
-  if (!d) return String(iso).slice(0, 16).replace('T', ' ')
-  try {
-    if (withTime) {
-      return d.toLocaleString('es-CO', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-        timeZone: ALMACEN_TIMEZONE,
-      })
-    }
-    return d.toLocaleDateString('es-CO', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      timeZone: ALMACEN_TIMEZONE,
-    })
-  } catch {
-    return String(iso).slice(0, 16).replace('T', ' ')
-  }
+  const txt = formatFechaHoraColombia(iso, { withTime, fallback: '' })
+  if (txt) return txt
+  return String(iso).slice(0, 16).replace('T', ' ')
 }
 
 /** Solo fecha (desde timestamp UTC) en Colombia. */

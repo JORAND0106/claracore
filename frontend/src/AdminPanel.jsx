@@ -25,35 +25,10 @@ import { PERMISOS_ADMIN_TODOS } from "./admin/catalogoInsumosPermisos";
 import SeccionAlmacenamientoAzure from "./admin/SeccionAlmacenamientoAzure";
 import { notifyListadoMetaChanged } from "./cache/listadoMetaEvents";
 import SeccionSubcontratistas from "./modules/subcontratistas";
+import { formatFechaLogBogota } from "./utils/fechaColombia";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
-
-/**
- * Fechas de logs / API (Postgres, ISO). Si el string no trae huso (Z u offset),
- * se asume UTC — evita que el navegador lo interprete como hora local y desalinee Bogotá.
- * Salida siempre en zona Colombia.
- */
-function formatFechaLogBogota(iso) {
-  if (iso == null || iso === "") return "—"
-  try {
-    let s = String(iso).trim().replace(" ", "T")
-    const hasZone = /Z$/i.test(s) || /[+-]\d{2}:\d{2}$/.test(s) || /[+-]\d{4}$/.test(s)
-    if (!hasZone && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
-      s = `${s}Z`
-    }
-    const d = new Date(s)
-    if (Number.isNaN(d.getTime())) return String(iso)
-    return d.toLocaleString("es-CO", {
-      dateStyle: "short",
-      timeStyle: "short",
-      hour12: true,
-      timeZone: "America/Bogota",
-    })
-  } catch {
-    return String(iso)
-  }
-}
 
 /** JSON para pegar en Cursor/soporte sin capturas de pantalla. */
 function truncParaPortapapeles(val, max = 2000) {
@@ -1554,14 +1529,7 @@ function SeccionInicioNovedades({ call, theme, token, isDeveloper, user, contrat
     setMejorandoResumen(false);
   };
 
-  const fmtCreada = (iso) => {
-    if (!iso) return "—";
-    try {
-      return new Date(iso).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" });
-    } catch {
-      return String(iso).slice(0, 19);
-    }
-  };
+  const fmtCreada = (iso) => formatFechaLogBogota(iso);
 
   const labelStyle = { fontSize: 11, color: col.textMuted, marginBottom: 4, fontWeight: 600 };
   const inputStyle = {
@@ -2364,8 +2332,8 @@ function SeccionLicenciasClaraCAD({ call, theme }) {
                         {row.estado}
                       </span>
                     </td>
-                    <td style={{ ...tdS, fontSize: 11, color: col.textMuted }}>{row.generado_at ? new Date(row.generado_at).toLocaleString() : "—"}</td>
-                    <td style={{ ...tdS, fontSize: 11, color: col.textMuted }}>{row.activado_at ? new Date(row.activado_at).toLocaleString() : "—"}</td>
+                    <td style={{ ...tdS, fontSize: 11, color: col.textMuted }}>{row.generado_at ? formatFechaLogBogota(row.generado_at) : "—"}</td>
+                    <td style={{ ...tdS, fontSize: 11, color: col.textMuted }}>{row.activado_at ? formatFechaLogBogota(row.activado_at) : "—"}</td>
                     <td style={{ ...tdS, fontSize: 11, color: col.textMuted }}>{row.ip_activacion || "—"}</td>
                     <td style={{ ...tdS, fontSize: 11, color: col.textMuted, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }} title={row.equipo_info || ""}>{row.equipo_info || "—"}</td>
                     <td style={tdS}>

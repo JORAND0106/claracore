@@ -6,34 +6,18 @@ import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL } from '../apiBase'
 import { createRealtimeDebouncer, isEfectivoOffline } from '../realtimeUtils'
 import { supabase } from '../supabaseClient'
 import { useClaraViewport } from '../useClaraViewport'
+import { formatFechaLogBogota, parseTimestampUtc } from '../utils/fechaColombia'
 
 const SOPORTE_Z_PANEL = 11000
 const SOPORTE_Z_MODAL = 11001
 const SOPORTE_Z_PANEL_MOBILE = 13000
 const SOPORTE_Z_MODAL_MOBILE = 14000
 
-function formatFechaLogBogota(iso) {
-  if (!iso) return '—'
-  try {
-    let s = String(iso).trim().replace(' ', 'T')
-    if (!/Z$/i.test(s) && !/[+-]\d{2}:\d{2}$/.test(s)) s += 'Z'
-    return new Date(s).toLocaleString('es-CO', {
-      timeZone: 'America/Bogota',
-      dateStyle: 'short',
-      timeStyle: 'short',
-    })
-  } catch {
-    return '—'
-  }
-}
-
 function tiempoRelativo(iso) {
   if (!iso) return '—'
   try {
-    let s = String(iso).trim().replace(' ', 'T')
-    if (!/Z$/i.test(s) && !/[+-]\d{2}:\d{2}$/.test(s)) s += 'Z'
-    const d = new Date(s)
-    if (Number.isNaN(d.getTime())) return '—'
+    const d = parseTimestampUtc(iso)
+    if (!d) return '—'
     const sec = Math.floor((Date.now() - d.getTime()) / 1000)
     if (sec < 45) return 'hace un momento'
     if (sec < 3600) return `hace ${Math.floor(sec / 60)} min`
