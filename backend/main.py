@@ -21296,12 +21296,22 @@ def _sicoe_masivo_filtro_to_export_body(b: ValidarNivelMasivoFiltroBody) -> Expo
 
 
 def _sicoe_colectar_registros_masivo_desde_filtros(
-    contrato_id: int, body: ExportarRegistrosBody, current_user=None
+    contrato_id: int,
+    body: ExportarRegistrosBody,
+    current_user=None,
+    *,
+    excluir_objeto_pago_sub: bool = True,
+    max_registros: Optional[int] = None,
+    campos_extra: Optional[List[str]] = None,
 ) -> Tuple[List[dict], Dict[str, Any]]:
     """
     Registros elegibles para validación masiva (misma semántica que exportar), excluyendo
-    flujo objeto de pago a subcontratista, con tope SICOE_MASIVO_MAX_REGISTROS.
+    flujo objeto de pago a subcontratista por defecto, con tope SICOE_MASIVO_MAX_REGISTROS
+    (o max_registros si se indica).
     """
+    tope = int(max_registros) if max_registros is not None else int(SICOE_MASIVO_MAX_REGISTROS)
+    if tope < 1:
+        tope = int(SICOE_MASIVO_MAX_REGISTROS)
     consulta_directa_identificador = (
         body.numero_reporte is not None or body.numero_registro is not None
     )
@@ -21503,6 +21513,13 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
         "cantidad_total",
         "costo_directo",
     ]
+    if campos_extra:
+        seen_c = set(campos_aux)
+        for c in campos_extra:
+            cs = str(c or "").strip()
+            if cs and cs not in seen_c:
+                campos_aux.append(cs)
+                seen_c.add(cs)
     batch_size = 999
     candidatos: List[dict] = []
     excluidos_objeto_pago_sub = 0
@@ -21522,11 +21539,11 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                 batch, capas_exp_export, None, "or", contrato_id
             )
         for row in batch:
-            if row.get("nivel2_objeto_pago_sub"):
+            if excluir_objeto_pago_sub and row.get("nivel2_objeto_pago_sub"):
                 excluidos_objeto_pago_sub += 1
                 continue
             candidatos.append(row)
-            if len(candidatos) > SICOE_MASIVO_MAX_REGISTROS:
+            if len(candidatos) > tope:
                 truncado = True
                 return True
         return False
@@ -21630,10 +21647,11 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
             if truncado:
                 break
 
-    out = candidatos[:SICOE_MASIVO_MAX_REGISTROS]
+    out = candidatos[:tope]
     stats = {
         "excluidos_objeto_pago_sub": excluidos_objeto_pago_sub,
         "truncado": truncado,
+        "tope_registros": tope,
     }
     return out, stats
 
@@ -28612,6 +28630,699 @@ def _sicoe_mover_registros_entre_actas_ejecutar(
                 if _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id)
             ),
             "reportes_actualizados": len(reportes_actualizados),
+        },
+    }
+
+
+# ── Mover entre cortes / reasignar subcontratistas (Desarrollador) ──────────
+
+class MoverRegistrosEntreCortesPreviewBody(BaseModel):
+    subcontratista_id: int
+    corte_origen_id: int
+    corte_destino_id: int
+
+
+class MoverRegistrosEntreCortesBody(BaseModel):
+    subcontratista_id: int
+    corte_origen_id: int
+    corte_destino_id: int
+    registro_ids: List[int]
+    incluir_sellados: bool = False
+    confirmacion_sellados: Optional[str] = None
+    motivo: Optional[str] = None
+
+
+class ReasignarSubcontratistaBuscarBody(BaseModel):
+    """Mismos filtros que validación masiva / grilla SICOE Obra."""
+    numero_reporte: Optional[int] = None
+    numero_registro: Optional[int] = None
+    semana: Optional[int] = None
+    acta_rpo: Optional[int] = None
+    subcontratista_id: Optional[int] = None
+    capitulo: Optional[str] = None
+    item: Optional[str] = None
+    items_filtro: Optional[str] = None
+    items_filtro_op: Optional[str] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    pk_id: Optional[int] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
+    estado: Optional[str] = None
+
+    cargo_id: Optional[int] = None
+    estado_validacion: Optional[str] = None
+    validacion_capas: Optional[str] = None
+    validacion_capas_op: Optional[str] = None
+
+    q_observacion: Optional[str] = None
+    q_nodo: Optional[str] = None
+    etiqueta_validacion: Optional[str] = None
+    pendiente_item: bool = False
+
+
+class ReasignarSubcontratistaEjecutarBody(BaseModel):
+    subcontratista_destino_id: int
+    registro_ids: List[int]
+    incluir_sellados: bool = False
+    confirmacion_sellados: Optional[str] = None
+    motivo: Optional[str] = None
+    # Opcional: si se omite, se usa el corte vigente del destino.
+    corte_destino_id: Optional[int] = None
+
+
+SICOE_MOVER_CORTE_CONFIRM_SELLADOS = SICOE_MOVER_ACTA_CONFIRM_SELLADOS
+SICOE_MOVER_CORTE_MAX_REGISTROS = SICOE_MOVER_ACTA_MAX_REGISTROS
+SICOE_REASIGNAR_SUB_MAX_REGISTROS = SICOE_MOVER_ACTA_MAX_REGISTROS
+
+
+def _sicoe_subcontratista_meta(contrato_id: int, sub_id: int) -> dict:
+    def _q():
+        return (
+            supabase.table("subcontratistas")
+            .select("id, contrato_id, razon_social, nit, activo")
+            .eq("id", int(sub_id))
+            .eq("contrato_id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_q) or []
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Subcontratista {sub_id} no encontrado en este contrato.",
+        )
+    return rows[0]
+
+
+def _sicoe_corte_meta(contrato_id: int, sub_id: int, corte_id: int) -> dict:
+    def _q():
+        return (
+            supabase.table("subcontratista_cortes")
+            .select(
+                "id, subcontratista_id, contrato_id, consecutivo, fecha_inicio, fecha_fin, tipo_periodo"
+            )
+            .eq("id", int(corte_id))
+            .eq("subcontratista_id", int(sub_id))
+            .eq("contrato_id", int(contrato_id))
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_q) or []
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Corte {corte_id} no encontrado para el subcontratista en este contrato.",
+        )
+    return rows[0]
+
+
+def _sicoe_label_corte(meta: dict) -> str:
+    cons = meta.get("consecutivo")
+    fi = meta.get("fecha_inicio") or ""
+    ff = meta.get("fecha_fin") or ""
+    if cons is not None:
+        return f"Corte #{cons} ({fi} → {ff})".strip()
+    return f"Corte #{meta.get('id')} ({fi} → {ff})".strip()
+
+
+def _sicoe_label_sub(meta: dict) -> str:
+    rs = (meta.get("razon_social") or "").strip()
+    if rs:
+        return rs
+    return f"Subcontratista #{meta.get('id')}"
+
+
+def _sicoe_validar_par_cortes_mover(
+    contrato_id: int, sub_id: int, origen_id: int, destino_id: int
+) -> Tuple[dict, dict, dict]:
+    if int(origen_id) == int(destino_id):
+        raise HTTPException(
+            status_code=422,
+            detail="El corte de origen y el de destino deben ser distintos.",
+        )
+    sub = _sicoe_subcontratista_meta(contrato_id, sub_id)
+    origen = _sicoe_corte_meta(contrato_id, sub_id, origen_id)
+    destino = _sicoe_corte_meta(contrato_id, sub_id, destino_id)
+    return sub, origen, destino
+
+
+def _sicoe_fetch_registros_corte_origen(
+    contrato_id: int, sub_id: int, corte_origen_id: int
+) -> List[dict]:
+    out: List[dict] = []
+    off = 0
+    page = 500
+    campos = (
+        f"id, numero_registro, reporte_id, item_numero, item_descripcion, capitulo, "
+        f"cantidad_total, bloqueado, subcontratista_id, corte_id, "
+        f"contrato_id, {SICOE_SELECT_NIVELES_ESTADO}"
+    )
+    while True:
+        def _q(o=off):
+            return (
+                supabase.table("so_registros")
+                .select(campos)
+                .eq("contrato_id", int(contrato_id))
+                .eq("subcontratista_id", int(sub_id))
+                .eq("corte_id", int(corte_origen_id))
+                .order("id")
+                .range(o, o + page - 1)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_q) or []
+        out.extend(batch)
+        if len(batch) < page:
+            break
+        off += page
+        if off >= SICOE_MOVER_CORTE_MAX_REGISTROS + page:
+            break
+    return out
+
+
+def _sicoe_preview_item_mover_corte(reg: dict, contrato_id: int) -> dict:
+    """Vista previa sin costo_directo (aislamiento de precios entre contextos)."""
+    sellado = _sicoe_registro_sellado_o_bloqueado(reg, contrato_id)
+    desc = reg.get("item_descripcion")
+    if desc is not None and not isinstance(desc, str):
+        desc = str(desc)
+    if isinstance(desc, str) and len(desc) > 160:
+        desc = desc[:157] + "..."
+    return {
+        "id": int(reg["id"]),
+        "numero_registro": reg.get("numero_registro"),
+        "reporte_id": reg.get("reporte_id"),
+        "item_numero": (str(reg.get("item_numero") or "").strip() or None),
+        "item_descripcion": (desc or "").strip() or None,
+        "capitulo": (str(reg.get("capitulo") or "").strip() or None),
+        "cantidad_total": float(reg.get("cantidad_total") or 0),
+        "bloqueado": bool(reg.get("bloqueado")),
+        "sellado": sellado,
+        "subcontratista_id": reg.get("subcontratista_id"),
+        "corte_id": reg.get("corte_id"),
+        "seleccionable_por_defecto": not sellado,
+    }
+
+
+def _sicoe_mover_registros_entre_cortes_ejecutar(
+    contrato_id: int,
+    sub_id: int,
+    corte_origen_id: int,
+    corte_destino_id: int,
+    ids: List[int],
+    current_user,
+    *,
+    incluir_sellados: bool,
+    motivo: Optional[str],
+) -> dict:
+    ids_u = sorted({int(x) for x in ids})
+    if not ids_u:
+        raise HTTPException(status_code=422, detail="Debe indicar al menos un registro a mover.")
+    if len(ids_u) > SICOE_MOVER_CORTE_MAX_REGISTROS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No se pueden mover más de {SICOE_MOVER_CORTE_MAX_REGISTROS} registros por operación.",
+        )
+
+    sub, origen, destino = _sicoe_validar_par_cortes_mover(
+        contrato_id, sub_id, corte_origen_id, corte_destino_id
+    )
+
+    por_id: Dict[int, dict] = {}
+    for chunk in _sicoe_chunks_int(ids_u, 200):
+        ch = list(chunk)
+
+        def _q(ids=ch):
+            return (
+                supabase.table("so_registros")
+                .select(
+                    f"id, reporte_id, bloqueado, subcontratista_id, corte_id, "
+                    f"numero_registro, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}"
+                )
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", ids)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_q) or []:
+            por_id[int(row["id"])] = row
+
+    faltan = [i for i in ids_u if i not in por_id]
+    if faltan:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Registros no encontrados en el contrato: {faltan[:20]}",
+        )
+
+    fuera = [
+        i
+        for i in ids_u
+        if int(por_id[i].get("subcontratista_id") or 0) != int(sub_id)
+        or int(por_id[i].get("corte_id") or 0) != int(corte_origen_id)
+    ]
+    if fuera:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Algunos registros ya no están en el corte de origen "
+                f"(p. ej. id {fuera[0]}). Recargue la vista previa."
+            ),
+        )
+
+    sellados_sel = [i for i in ids_u if _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id)]
+    if sellados_sel and not incluir_sellados:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Hay {len(sellados_sel)} registro(s) sellado(s)/bloqueado(s) en la selección. "
+                "Confirme explícitamente la inclusión de sellados para continuar."
+            ),
+        )
+
+    uid = _sicoe_uid_from_user(current_user)
+    patch: Dict[str, Any] = {"corte_id": int(corte_destino_id)}
+    if uid is not None:
+        patch["modificado_por_reg"] = int(uid)
+
+    try:
+        for chunk in _sicoe_chunks_int(ids_u, 200):
+            ch = list(chunk)
+
+            def _mov(ids=ch):
+                return (
+                    supabase.table("so_registros")
+                    .update(patch)
+                    .eq("contrato_id", int(contrato_id))
+                    .eq("subcontratista_id", int(sub_id))
+                    .eq("corte_id", int(corte_origen_id))
+                    .in_("id", ids)
+                    .execute()
+                    .data
+                )
+
+            supabase_execute(_mov)
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=f"Error al mover registros entre cortes: {ex}") from ex
+
+    en_destino: List[int] = []
+    for chunk in _sicoe_chunks_int(ids_u, 200):
+        ch = list(chunk)
+
+        def _ver(ids=ch):
+            return (
+                supabase.table("so_registros")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("corte_id", int(corte_destino_id))
+                .in_("id", ids)
+                .execute()
+                .data
+            )
+
+        en_destino.extend(
+            int(r["id"]) for r in (supabase_execute(_ver) or []) if r.get("id") is not None
+        )
+
+    en_destino_set = set(en_destino)
+    no_movidos = [i for i in ids_u if i not in en_destino_set]
+    if no_movidos and not en_destino:
+        raise HTTPException(
+            status_code=500,
+            detail="No se movió ningún registro (posible condición de carrera). Reintente.",
+        )
+    movidos_ids = sorted(en_destino_set)
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "MOVER_CORTE_SUB",
+            "SICOE",
+            "corte",
+            str(corte_origen_id),
+            {
+                "accion": "mover_registros_entre_cortes",
+                "contrato_id": int(contrato_id),
+                "subcontratista_id": int(sub_id),
+                "subcontratista": _sicoe_label_sub(sub),
+                "corte_origen_id": int(corte_origen_id),
+                "corte_destino_id": int(corte_destino_id),
+                "corte_origen_label": _sicoe_label_corte(origen),
+                "corte_destino_label": _sicoe_label_corte(destino),
+                "movidos": len(movidos_ids),
+                "no_movidos": len(no_movidos),
+                "incluir_sellados": bool(incluir_sellados),
+                "sellados_en_lote": len(sellados_sel),
+                "motivo": (motivo or "").strip() or None,
+                "ids_movidos_muestra": movidos_ids[:50],
+            },
+            valor_anterior={"corte_id": int(corte_origen_id), "ids": movidos_ids},
+            valor_nuevo={"corte_id": int(corte_destino_id), "ids": movidos_ids},
+            severidad="AUDIT",
+            alerta_generada=True,
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "contrato_id": int(contrato_id),
+        "subcontratista": {
+            "id": int(sub["id"]),
+            "razon_social": sub.get("razon_social"),
+            "label": _sicoe_label_sub(sub),
+        },
+        "corte_origen": {
+            "id": int(origen["id"]),
+            "consecutivo": origen.get("consecutivo"),
+            "label": _sicoe_label_corte(origen),
+        },
+        "corte_destino": {
+            "id": int(destino["id"]),
+            "consecutivo": destino.get("consecutivo"),
+            "label": _sicoe_label_corte(destino),
+        },
+        "movidos": [
+            {
+                "id": i,
+                "numero_registro": por_id[i].get("numero_registro"),
+                "sellado": _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id),
+                "corte_origen_id": int(corte_origen_id),
+                "corte_destino_id": int(corte_destino_id),
+            }
+            for i in movidos_ids
+        ],
+        "no_movidos": [
+            {
+                "id": i,
+                "numero_registro": por_id[i].get("numero_registro"),
+                "motivo": "no_actualizado",
+            }
+            for i in no_movidos
+        ],
+        "totales": {
+            "solicitados": len(ids_u),
+            "movidos": len(movidos_ids),
+            "no_movidos": len(no_movidos),
+            "sellados_movidos": sum(
+                1
+                for i in movidos_ids
+                if _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id)
+            ),
+        },
+    }
+
+
+def _sicoe_reasignar_filtro_to_export_body(b: ReasignarSubcontratistaBuscarBody) -> ExportarRegistrosBody:
+    _dump = getattr(b, "model_dump", None)
+    if _dump:
+        d = _dump()
+    else:
+        d = b.dict()
+    return ExportarRegistrosBody(
+        campos=[
+            "id",
+            "reporte_id",
+            "numero_registro",
+            "bloqueado",
+            "subcontratista_id",
+            "corte_id",
+            "item_numero",
+            "item_descripcion",
+            "capitulo",
+            "cantidad_total",
+            "nivel2_objeto_pago_sub",
+        ],
+        **d,
+    )
+
+
+def _sicoe_preview_item_reasignar(reg: dict, contrato_id: int) -> dict:
+    """Sin campos económicos: aislamiento de precios entre subcontratistas."""
+    sellado = _sicoe_registro_sellado_o_bloqueado(reg, contrato_id)
+    desc = reg.get("item_descripcion")
+    if desc is not None and not isinstance(desc, str):
+        desc = str(desc)
+    if isinstance(desc, str) and len(desc) > 160:
+        desc = desc[:157] + "..."
+    return {
+        "id": int(reg["id"]),
+        "numero_registro": reg.get("numero_registro"),
+        "reporte_id": reg.get("reporte_id"),
+        "item_numero": (str(reg.get("item_numero") or "").strip() or None),
+        "item_descripcion": (desc or "").strip() or None,
+        "capitulo": (str(reg.get("capitulo") or "").strip() or None),
+        "cantidad_total": float(reg.get("cantidad_total") or 0),
+        "bloqueado": bool(reg.get("bloqueado")),
+        "sellado": sellado,
+        "subcontratista_id": reg.get("subcontratista_id"),
+        "corte_id": reg.get("corte_id"),
+        "seleccionable_por_defecto": not sellado,
+        # Explícitamente sin costo_directo / valores económicos.
+    }
+
+
+def _sicoe_reasignar_subcontratista_ejecutar(
+    contrato_id: int,
+    sub_destino_id: int,
+    ids: List[int],
+    current_user,
+    *,
+    incluir_sellados: bool,
+    motivo: Optional[str],
+    corte_destino_id: Optional[int] = None,
+) -> dict:
+    ids_u = sorted({int(x) for x in ids})
+    if not ids_u:
+        raise HTTPException(status_code=422, detail="Debe indicar al menos un registro a reasignar.")
+    if len(ids_u) > SICOE_REASIGNAR_SUB_MAX_REGISTROS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No se pueden reasignar más de {SICOE_REASIGNAR_SUB_MAX_REGISTROS} registros por operación.",
+        )
+
+    dest = _sicoe_subcontratista_meta(contrato_id, sub_destino_id)
+    if corte_destino_id is not None:
+        corte_dest = _sicoe_corte_meta(contrato_id, sub_destino_id, int(corte_destino_id))
+    else:
+        vigente = _asegurar_corte_vigente_subcontratista(int(sub_destino_id))
+        if not vigente or vigente.get("id") is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "El subcontratista destino no tiene un corte vigente abierto. "
+                    "Genere o revise los cortes antes de reasignar."
+                ),
+            )
+        corte_dest = vigente
+        try:
+            corte_dest = _sicoe_corte_meta(contrato_id, sub_destino_id, int(vigente["id"]))
+        except HTTPException:
+            corte_dest = {
+                "id": int(vigente["id"]),
+                "consecutivo": vigente.get("consecutivo"),
+                "fecha_inicio": vigente.get("fecha_inicio"),
+                "fecha_fin": vigente.get("fecha_fin"),
+            }
+
+    por_id: Dict[int, dict] = {}
+    for chunk in _sicoe_chunks_int(ids_u, 200):
+        ch = list(chunk)
+
+        def _q(ids=ch):
+            return (
+                supabase.table("so_registros")
+                .select(
+                    f"id, reporte_id, bloqueado, subcontratista_id, corte_id, "
+                    f"numero_registro, contrato_id, nivel2_objeto_pago_sub, "
+                    f"{SICOE_SELECT_NIVELES_ESTADO}"
+                )
+                .eq("contrato_id", int(contrato_id))
+                .in_("id", ids)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_q) or []:
+            por_id[int(row["id"])] = row
+
+    faltan = [i for i in ids_u if i not in por_id]
+    if faltan:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Registros no encontrados en el contrato: {faltan[:20]}",
+        )
+
+    ya_destino = [
+        i for i in ids_u if int(por_id[i].get("subcontratista_id") or 0) == int(sub_destino_id)
+    ]
+    # Permitir re-asignar al mismo sub si cambian de corte; no es error de negocio.
+
+    sellados_sel = [i for i in ids_u if _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id)]
+    if sellados_sel and not incluir_sellados:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Hay {len(sellados_sel)} registro(s) sellado(s)/bloqueado(s) en la selección. "
+                "Confirme explícitamente la inclusión de sellados para continuar."
+            ),
+        )
+
+    uid = _sicoe_uid_from_user(current_user)
+    patch: Dict[str, Any] = {
+        "subcontratista_id": int(sub_destino_id),
+        "corte_id": int(corte_dest["id"]),
+    }
+    if uid is not None:
+        patch["modificado_por_reg"] = int(uid)
+
+    try:
+        for chunk in _sicoe_chunks_int(ids_u, 200):
+            ch = list(chunk)
+
+            def _mov(ids=ch):
+                return (
+                    supabase.table("so_registros")
+                    .update(patch)
+                    .eq("contrato_id", int(contrato_id))
+                    .in_("id", ids)
+                    .execute()
+                    .data
+                )
+
+            supabase_execute(_mov)
+    except Exception as ex:
+        raise HTTPException(
+            status_code=500, detail=f"Error al reasignar registros a subcontratista: {ex}"
+        ) from ex
+
+    en_destino: List[int] = []
+    for chunk in _sicoe_chunks_int(ids_u, 200):
+        ch = list(chunk)
+
+        def _ver(ids=ch):
+            return (
+                supabase.table("so_registros")
+                .select("id, subcontratista_id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("subcontratista_id", int(sub_destino_id))
+                .in_("id", ids)
+                .execute()
+                .data
+            )
+
+        en_destino.extend(
+            int(r["id"]) for r in (supabase_execute(_ver) or []) if r.get("id") is not None
+        )
+
+    en_destino_set = set(en_destino)
+    no_movidos = [i for i in ids_u if i not in en_destino_set]
+    if no_movidos and not en_destino:
+        raise HTTPException(
+            status_code=500,
+            detail="No se reasignó ningún registro (posible condición de carrera). Reintente.",
+        )
+    movidos_ids = sorted(en_destino_set)
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "REASIGNAR_SUBCONTRATISTA",
+            "SICOE",
+            "subcontratista",
+            str(sub_destino_id),
+            {
+                "accion": "reasignar_registros_entre_subcontratistas",
+                "contrato_id": int(contrato_id),
+                "subcontratista_destino_id": int(sub_destino_id),
+                "subcontratista_destino": _sicoe_label_sub(dest),
+                "corte_destino_id": int(corte_dest["id"]),
+                "corte_destino_label": _sicoe_label_corte(corte_dest),
+                "movidos": len(movidos_ids),
+                "no_movidos": len(no_movidos),
+                "ya_en_destino": len(ya_destino),
+                "incluir_sellados": bool(incluir_sellados),
+                "sellados_en_lote": len(sellados_sel),
+                "motivo": (motivo or "").strip() or None,
+                "ids_movidos_muestra": movidos_ids[:50],
+                "subs_origen_muestra": sorted(
+                    {
+                        int(por_id[i].get("subcontratista_id") or 0)
+                        for i in movidos_ids
+                        if por_id[i].get("subcontratista_id") is not None
+                    }
+                )[:20],
+            },
+            valor_anterior={
+                "ids": movidos_ids,
+                "subcontratista_id_prev_muestra": [
+                    {
+                        "id": i,
+                        "subcontratista_id": por_id[i].get("subcontratista_id"),
+                        "corte_id": por_id[i].get("corte_id"),
+                    }
+                    for i in movidos_ids[:30]
+                ],
+            },
+            valor_nuevo={
+                "subcontratista_id": int(sub_destino_id),
+                "corte_id": int(corte_dest["id"]),
+                "ids": movidos_ids,
+            },
+            severidad="AUDIT",
+            alerta_generada=True,
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "contrato_id": int(contrato_id),
+        "subcontratista_destino": {
+            "id": int(dest["id"]),
+            "razon_social": dest.get("razon_social"),
+            "label": _sicoe_label_sub(dest),
+        },
+        "corte_destino": {
+            "id": int(corte_dest["id"]),
+            "consecutivo": corte_dest.get("consecutivo"),
+            "label": _sicoe_label_corte(corte_dest),
+        },
+        "movidos": [
+            {
+                "id": i,
+                "numero_registro": por_id[i].get("numero_registro"),
+                "sellado": _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id),
+                "subcontratista_origen_id": por_id[i].get("subcontratista_id"),
+                "subcontratista_destino_id": int(sub_destino_id),
+            }
+            for i in movidos_ids
+        ],
+        "no_movidos": [
+            {
+                "id": i,
+                "numero_registro": por_id[i].get("numero_registro"),
+                "motivo": "no_actualizado",
+            }
+            for i in no_movidos
+        ],
+        "totales": {
+            "solicitados": len(ids_u),
+            "movidos": len(movidos_ids),
+            "no_movidos": len(no_movidos),
+            "sellados_movidos": sum(
+                1
+                for i in movidos_ids
+                if _sicoe_registro_sellado_o_bloqueado(por_id[i], contrato_id)
+            ),
         },
     }
 
@@ -37502,6 +38213,275 @@ def sicoe_mover_registros_entre_actas(
             current_user,
             incluir_sellados=incluir,
             motivo=body.motivo,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/dev/subcontratistas")
+def sicoe_dev_listar_subcontratistas(
+    contrato_id: int,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Lista completa de subcontratistas del contrato (herramienta Desarrollador)."""
+    _require_contract_access(current_user, contrato_id)
+    try:
+        def _q():
+            return (
+                supabase.table("subcontratistas")
+                .select("id, razon_social, nit, activo")
+                .eq("contrato_id", int(contrato_id))
+                .order("razon_social")
+                .execute()
+                .data
+            )
+
+        rows = supabase_execute(_q) or []
+        return {
+            "ok": True,
+            "contrato_id": int(contrato_id),
+            "subcontratistas": [
+                {
+                    "id": int(r["id"]),
+                    "razon_social": r.get("razon_social"),
+                    "nit": r.get("nit"),
+                    "activo": r.get("activo"),
+                    "label": _sicoe_label_sub(r),
+                }
+                for r in rows
+                if r.get("id") is not None
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/dev/subcontratistas/{sub_id}/cortes")
+def sicoe_dev_listar_cortes_sub(
+    contrato_id: int,
+    sub_id: int,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Lista cortes de un subcontratista (herramienta Desarrollador; incluye cerrados)."""
+    _require_contract_access(current_user, contrato_id)
+    try:
+        _sicoe_subcontratista_meta(contrato_id, sub_id)
+
+        def _q():
+            return (
+                supabase.table("subcontratista_cortes")
+                .select("id, consecutivo, fecha_inicio, fecha_fin, tipo_periodo, subcontratista_id")
+                .eq("subcontratista_id", int(sub_id))
+                .eq("contrato_id", int(contrato_id))
+                .order("consecutivo", desc=True)
+                .execute()
+                .data
+            )
+
+        rows = supabase_execute(_q) or []
+        return {
+            "ok": True,
+            "contrato_id": int(contrato_id),
+            "subcontratista_id": int(sub_id),
+            "cortes": [
+                {
+                    "id": int(c["id"]),
+                    "consecutivo": c.get("consecutivo"),
+                    "fecha_inicio": c.get("fecha_inicio"),
+                    "fecha_fin": c.get("fecha_fin"),
+                    "tipo_periodo": c.get("tipo_periodo"),
+                    "label": _sicoe_label_corte(c),
+                }
+                for c in rows
+                if c.get("id") is not None
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/mover-entre-cortes/preview")
+def sicoe_mover_registros_entre_cortes_preview(
+    contrato_id: int,
+    body: MoverRegistrosEntreCortesPreviewBody,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Vista previa de registros del corte origen (solo Desarrollador)."""
+    _require_contract_access(current_user, contrato_id)
+    try:
+        sub, origen, destino = _sicoe_validar_par_cortes_mover(
+            contrato_id, body.subcontratista_id, body.corte_origen_id, body.corte_destino_id
+        )
+        regs = _sicoe_fetch_registros_corte_origen(
+            contrato_id, body.subcontratista_id, body.corte_origen_id
+        )
+        truncado = len(regs) > SICOE_MOVER_CORTE_MAX_REGISTROS
+        if truncado:
+            regs = regs[:SICOE_MOVER_CORTE_MAX_REGISTROS]
+        items = [_sicoe_preview_item_mover_corte(r, contrato_id) for r in regs]
+        n_sell = sum(1 for x in items if x["sellado"])
+        n_ok = len(items) - n_sell
+        return {
+            "ok": True,
+            "contrato_id": int(contrato_id),
+            "subcontratista": {
+                "id": int(sub["id"]),
+                "razon_social": sub.get("razon_social"),
+                "label": _sicoe_label_sub(sub),
+            },
+            "corte_origen": {
+                "id": int(origen["id"]),
+                "consecutivo": origen.get("consecutivo"),
+                "label": _sicoe_label_corte(origen),
+            },
+            "corte_destino": {
+                "id": int(destino["id"]),
+                "consecutivo": destino.get("consecutivo"),
+                "label": _sicoe_label_corte(destino),
+            },
+            "registros": items,
+            "totales": {
+                "total": len(items),
+                "no_sellados": n_ok,
+                "sellados": n_sell,
+                "seleccionados_por_defecto": n_ok,
+            },
+            "confirmacion_sellados_requerida": SICOE_MOVER_CORTE_CONFIRM_SELLADOS,
+            "truncado": truncado,
+            "tope_registros": SICOE_MOVER_CORTE_MAX_REGISTROS,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/mover-entre-cortes")
+def sicoe_mover_registros_entre_cortes(
+    contrato_id: int,
+    body: MoverRegistrosEntreCortesBody,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """Mueve registros entre cortes del mismo subcontratista (solo Desarrollador)."""
+    _require_contract_access(current_user, contrato_id)
+    try:
+        incluir = bool(body.incluir_sellados)
+        if incluir:
+            conf = (body.confirmacion_sellados or "").strip()
+            if conf != SICOE_MOVER_CORTE_CONFIRM_SELLADOS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Para incluir registros sellados/bloqueados debe enviar "
+                        f"confirmacion_sellados='{SICOE_MOVER_CORTE_CONFIRM_SELLADOS}'."
+                    ),
+                )
+        return _sicoe_mover_registros_entre_cortes_ejecutar(
+            contrato_id,
+            body.subcontratista_id,
+            body.corte_origen_id,
+            body.corte_destino_id,
+            list(body.registro_ids or []),
+            current_user,
+            incluir_sellados=incluir,
+            motivo=body.motivo,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/reasignar-subcontratista/buscar")
+def sicoe_reasignar_subcontratista_buscar(
+    contrato_id: int,
+    body: ReasignarSubcontratistaBuscarBody,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """
+    Busca registros individuales según filtros SICOE Obra (solo Desarrollador).
+    Nunca incluye costo_directo ni otros valores económicos (aislamiento de precios).
+    """
+    _require_contract_access(current_user, contrato_id)
+    try:
+        exp = _sicoe_reasignar_filtro_to_export_body(body)
+        candidatos, st = _sicoe_colectar_registros_masivo_desde_filtros(
+            contrato_id,
+            exp,
+            current_user,
+            excluir_objeto_pago_sub=False,
+            max_registros=SICOE_REASIGNAR_SUB_MAX_REGISTROS,
+            campos_extra=[
+                "bloqueado",
+                "subcontratista_id",
+                "corte_id",
+                "capitulo",
+            ],
+        )
+        # Strip any accidental economic fields before mapping.
+        items = []
+        for r in candidatos:
+            safe = {k: v for k, v in r.items() if k not in ("costo_directo", "valor_unitario", "vr_unitario")}
+            items.append(_sicoe_preview_item_reasignar(safe, contrato_id))
+        n_sell = sum(1 for x in items if x["sellado"])
+        return {
+            "ok": True,
+            "contrato_id": int(contrato_id),
+            "registros": items,
+            "totales": {
+                "total": len(items),
+                "sellados": n_sell,
+                "no_sellados": len(items) - n_sell,
+            },
+            "truncado": bool(st.get("truncado")),
+            "tope_registros": SICOE_REASIGNAR_SUB_MAX_REGISTROS,
+            "confirmacion_sellados_requerida": SICOE_MOVER_CORTE_CONFIRM_SELLADOS,
+            "aislamiento_precios": True,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/reasignar-subcontratista")
+def sicoe_reasignar_subcontratista(
+    contrato_id: int,
+    body: ReasignarSubcontratistaEjecutarBody,
+    current_user=Depends(require_solo_desarrollador),
+):
+    """
+    Reasigna registros a otro subcontratista (solo Desarrollador).
+    Asigna el corte vigente del destino (o corte_destino_id si se indica).
+    No expone ni copia valores económicos entre subcontratistas.
+    """
+    _require_contract_access(current_user, contrato_id)
+    try:
+        incluir = bool(body.incluir_sellados)
+        if incluir:
+            conf = (body.confirmacion_sellados or "").strip()
+            if conf != SICOE_MOVER_CORTE_CONFIRM_SELLADOS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Para incluir registros sellados/bloqueados debe enviar "
+                        f"confirmacion_sellados='{SICOE_MOVER_CORTE_CONFIRM_SELLADOS}'."
+                    ),
+                )
+        return _sicoe_reasignar_subcontratista_ejecutar(
+            contrato_id,
+            body.subcontratista_destino_id,
+            list(body.registro_ids or []),
+            current_user,
+            incluir_sellados=incluir,
+            motivo=body.motivo,
+            corte_destino_id=body.corte_destino_id,
         )
     except HTTPException:
         raise
