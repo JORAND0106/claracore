@@ -6,6 +6,7 @@ import {
   presentarEvento,
   etiquetaCampo,
 } from './trazabilidadPresentacion'
+import { formatFechaHoraColombia } from './utils/fechaColombia'
 
 function SheetTable({ sheet, children, minWidth = 480 }) {
   return (
@@ -285,22 +286,8 @@ export default function TrazabilidadRegistroModal({
       .finally(() => setLoading(false))
   }, [apiBase, token, entidadTipo, entidadId])
 
-  const fmtFecha = (iso) => {
-    if (!iso) return '—'
-    try {
-      const utc = iso.endsWith('Z') ? iso : `${iso}Z`
-      return new Date(utc).toLocaleString('es-CO', {
-        dateStyle: 'short',
-        timeStyle: 'short',
-        timeZone: 'America/Bogota',
-      })
-    } catch {
-      return iso
-    }
-  }
-
   const eventos = useMemo(
-    () => (Array.isArray(rows) ? rows.map((h) => presentarEvento(h, { fmtFecha })) : []),
+    () => (Array.isArray(rows) ? rows.map((h) => presentarEvento(h, { fmtFecha: formatFechaHoraColombia })) : []),
     [rows],
   )
 

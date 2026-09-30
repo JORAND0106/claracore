@@ -95,12 +95,14 @@ describe('trazabilidadPresentacion — tablas legibles', () => {
       usuario_nombre: 'Ana',
       modulo: 'TOPOGRAFIA',
       tipo_entidad: 'topo_planilla_tuberia',
+      created_at: '2026-09-16T16:27:27.68935+00:00',
       detalle: {
         estado: 'validado',
         consolidado: {
           c01_planilla_id: 'x',
           c04_nombre: 'Tramo A',
           c20_estado: 'validado',
+          c21_cerrado_at: '2026-09-16T16:27:27.68935+00:00',
         },
       },
     })
@@ -108,6 +110,25 @@ describe('trazabilidadPresentacion — tablas legibles', () => {
     assert.ok(ev.objectTables.some((t) => t.title === 'Consolidado' && t.rows.length >= 3))
     assert.equal(ev.fallbackAntes, null)
     assert.equal(ev.fallbackNuevo, null)
+    // Cabecera: Colombia UTC−5, sin ISO crudo ni fracciones
+    assert.match(ev.fecha, /11:27/)
+    assert.ok(!ev.fecha.includes('T'))
+    assert.ok(!ev.fecha.includes('.689'))
+    // Campo timestamp dentro del consolidado también formateado
+    const cons = ev.objectTables.find((t) => t.title === 'Consolidado')
+    const cerrado = cons.rows.find((r) => r.key === 'c21_cerrado_at')
+    assert.ok(cerrado)
+    assert.match(fmtAuditVal(cerrado.value), /11:27/)
+  })
+
+  it('por defecto formatea created_at en Colombia aunque no se pase fmtFecha', () => {
+    const ev = presentarEvento({
+      id: 1,
+      accion: 'EDITAR',
+      created_at: '2026-09-16T16:27:27.68935+00:00',
+    })
+    assert.match(ev.fecha, /11:27/)
+    assert.ok(!String(ev.fecha).includes('+00:00'))
   })
 
   it('array de objetos → grilla columnar', () => {
@@ -132,12 +153,15 @@ describe('trazabilidadPresentacion — tablas legibles', () => {
 describe('TrazabilidadRegistroModal — rediseño compartido', () => {
   it('usa presentación tabular y ancho amplio; consumidores siguen apuntando al mismo modal', () => {
     const modal = readFileSync(join(dir, 'TrazabilidadRegistroModal.jsx'), 'utf8')
+    assert.match(modal, /formatFechaHoraColombia/)
     assert.match(modal, /presentarEvento/)
     assert.match(modal, /min\(1280px/)
     assert.match(modal, /Campos modificados/)
     assert.match(modal, /Propiedad/)
     assert.match(modal, /pptoSheetStyles/)
     assert.doesNotMatch(modal, /JSON\.stringify\(v\)/)
+    // No debe reaparecer el bug de append ciego de Z
+    assert.doesNotMatch(modal, /endsWith\(['\"]Z['\"]\)/)
 
     const topo = readFileSync(join(dir, 'components/topografia/TopoTrazabilidadButton.jsx'), 'utf8')
     const alm = readFileSync(join(dir, 'almacen/AlmacenTrazabilidadButton.jsx'), 'utf8')

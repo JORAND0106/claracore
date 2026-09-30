@@ -3,6 +3,7 @@
  * Solo transforma visualización; no cambia qué se registra en backend.
  */
 
+import { formatFechaHoraColombia, pareceTimestampIso } from './utils/fechaColombia.js'
 export const CAMPO_ETIQUETAS = {
   id: 'ID',
   contrato_id: 'Contrato',
@@ -170,6 +171,10 @@ export function fmtAuditVal(v) {
   if (v === null || v === undefined || v === '') return '—'
   if (typeof v === 'boolean') return v ? 'Sí' : 'No'
   if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '—'
+  if (pareceTimestampIso(v)) {
+    const fmt = formatFechaHoraColombia(v, { fallback: '' })
+    if (fmt) return fmt
+  }
   if (Array.isArray(v)) {
     if (v.length === 0) return '—'
     if (v.every((x) => x == null || typeof x !== 'object')) {
@@ -390,6 +395,8 @@ export function presentarEvento(h, { fmtFecha } = {}) {
     if (isPlainObject(vn) || Array.isArray(vn)) afterTable = tablaDesdeValor(vn, 'Valor nuevo')
   }
 
+  const fmt = typeof fmtFecha === 'function' ? fmtFecha : formatFechaHoraColombia
+
   return {
     id: h?.id,
     accion: h?.accion || '—',
@@ -397,7 +404,7 @@ export function presentarEvento(h, { fmtFecha } = {}) {
     modulo: h?.modulo || '—',
     ambito: h?.tipo_entidad || det?.tipo_entidad || '—',
     severidad: h?.severidad || '',
-    fecha: typeof fmtFecha === 'function' ? fmtFecha(h?.created_at) : h?.created_at || '—',
+    fecha: fmt(h?.created_at),
     scalarRows,
     objectTables,
     cambios,
