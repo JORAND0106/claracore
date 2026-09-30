@@ -828,10 +828,11 @@ def amortizacion_lineas_resumen(amort: Optional[dict]) -> List[Dict[str, Any]]:
         },
         {
             "key": "amort_pres",
-            "nombre": "Amortización presente corte",
+            "nombre": "Amortización del anticipo",
             "abrev": "AM",
             "pct": pct,
             "valor": a.get("amortizacion_presente"),
+            "tope_por_saldo": bool(a.get("tope_por_saldo")),
         },
         {
             "key": "saldo_amort",
@@ -1127,9 +1128,10 @@ def build_resumen_conciliacion_4cols(
         },
         {
             "key": "amort",
-            "nombre": "Anticipo / amortización",
+            "nombre": "Amortización del anticipo",
             "abrev": "AM",
             "pct": pct_am,
+            "tope_por_saldo": bool(amort_live.get("tope_por_saldo")),
             "valores": _cols4(anticipo_val, amort_pres, amort_acum, amort_saldo),
             "strong": False,
             "hint": "Actualizadas=anticipo; Presente=amort. corte; Acumulado=ant+pres; Saldo=anticipo−acum",
@@ -1160,6 +1162,9 @@ def build_resumen_conciliacion_4cols(
         },
     ]
 
+    for ln in lineas:
+        ln["label"] = label_linea_resumen_4cols(ln)
+
     return {
         "lineas": lineas,
         "cd_bloques": cds,
@@ -1175,7 +1180,11 @@ def build_resumen_conciliacion_4cols(
 
 
 def label_linea_resumen_4cols(line: dict) -> str:
-    """Etiqueta visible de una línea del resumen 4 columnas."""
+    """Etiqueta visible de una línea del resumen 4 columnas.
+
+    AIU: «Nombre Abrev (X%)». Amortización: «Amortización del anticipo (X%)»
+    y, si el presente se topó por saldo pendiente, «(X% · por saldo)».
+    """
     key = line.get("key")
     pct = pct_label(line.get("pct")) if line.get("pct") is not None else ""
     if key == "cd":
@@ -1183,9 +1192,14 @@ def label_linea_resumen_4cols(line: dict) -> str:
     if key == "cd_aiu":
         return "Costo Directo + AIU"
     if key == "amort":
+        tope = bool(line.get("tope_por_saldo"))
         if pct and pct != "—":
-            return f"Anticipo / amortización ({pct})"
-        return "Anticipo / amortización"
+            if tope:
+                return f"Amortización del anticipo ({pct} · por saldo)"
+            return f"Amortización del anticipo ({pct})"
+        if tope:
+            return "Amortización del anticipo (por saldo)"
+        return "Amortización del anticipo"
     if key == "sub_amort":
         return "Subtotal después de amortización"
     if key == "otros":

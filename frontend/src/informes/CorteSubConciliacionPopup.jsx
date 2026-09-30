@@ -395,22 +395,27 @@ export default function CorteSubConciliacionPopup({
                       </thead>
                       <tbody>
                         {resumen4.map((ln) => {
-                          const pct =
-                            ln.pct != null && ln.pct !== ''
-                              ? Number.isInteger(Number(ln.pct))
+                          const label = ln.label || (() => {
+                            const pct =
+                              ln.pct != null && ln.pct !== ''
                                 ? `${ln.pct}%`
-                                : `${ln.pct}%`
-                              : ''
-                          let label = ln.nombre || ln.key
-                          if (ln.key === 'cd') label = 'Costo Directo'
-                          else if (ln.key === 'cd_aiu') label = 'Costo Directo + AIU'
-                          else if (ln.key === 'amort') {
-                            label = pct ? `Anticipo / amortización (${pct})` : 'Anticipo / amortización'
-                          } else if (ln.key === 'sub_amort') label = 'Subtotal después de amortización'
-                          else if (ln.key === 'otros') label = 'Otros conceptos'
-                          else if (ln.key === 'gran_total') label = 'Gran total'
-                          else if (ln.abrev && pct) label = `${ln.nombre} ${ln.abrev} (${pct})`
-                          else if (ln.abrev) label = `${ln.nombre} ${ln.abrev}`
+                                : ''
+                            if (ln.key === 'cd') return 'Costo Directo'
+                            if (ln.key === 'cd_aiu') return 'Costo Directo + AIU'
+                            if (ln.key === 'amort') {
+                              const tope = !!ln.tope_por_saldo
+                              if (pct && tope) return `Amortización del anticipo (${pct} · por saldo)`
+                              if (pct) return `Amortización del anticipo (${pct})`
+                              if (tope) return 'Amortización del anticipo (por saldo)'
+                              return 'Amortización del anticipo'
+                            }
+                            if (ln.key === 'sub_amort') return 'Subtotal después de amortización'
+                            if (ln.key === 'otros') return 'Otros conceptos'
+                            if (ln.key === 'gran_total') return 'Gran total'
+                            if (ln.abrev && pct) return `${ln.nombre} ${ln.abrev} (${pct})`
+                            if (ln.abrev) return `${ln.nombre} ${ln.abrev}`
+                            return ln.nombre || ln.key
+                          })()
                           const vals = ln.valores || {}
                           const strong = !!ln.strong || ln.key === 'gran_total'
                           const bg =
@@ -461,9 +466,12 @@ export default function CorteSubConciliacionPopup({
                       {(data.amortizacion_lineas || []).map((ln) => {
                         let label = ln.nombre
                         if (ln.key === 'amort_pres') {
-                          label = ln.pct != null && ln.pct !== ''
-                            ? `Amortización presente corte (${fmtPct(ln.pct)})`
-                            : 'Amortización presente corte'
+                          const pct = ln.pct != null && ln.pct !== '' ? fmtPct(ln.pct) : ''
+                          const tope = !!ln.tope_por_saldo
+                          if (pct && tope) label = `Amortización del anticipo (${pct} · por saldo)`
+                          else if (pct) label = `Amortización del anticipo (${pct})`
+                          else if (tope) label = 'Amortización del anticipo (por saldo)'
+                          else label = 'Amortización del anticipo'
                         }
                         const strong = ln.key === 'sub_amort'
                         return (

@@ -13526,7 +13526,7 @@ def _fill_corte_sub_001_excel_ws(
 
     for ln in lineas:
         key = ln.get("key")
-        label = csc.label_linea_resumen_4cols(ln)
+        label = ln.get("label") or csc.label_linea_resumen_4cols(ln)
         vals = ln.get("valores") or {}
         strong = bool(ln.get("strong"))
         if key == "gran_total":
@@ -14686,7 +14686,7 @@ INFORME CORTE DE SUB CONTRATISTA
         for line in lineas4:
             if line.get("key") == "otros":
                 continue  # detalle de filas abajo; fila resumen "Otros conceptos" se pinta tras el detalle
-            label = csc.label_linea_resumen_4cols(line)
+            label = line.get("label") or csc.label_linea_resumen_4cols(line)
             vals = line.get("valores") or {}
             key = line.get("key")
             if key == "gran_total":
