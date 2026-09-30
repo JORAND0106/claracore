@@ -6990,7 +6990,24 @@ def obtener_contrato(contrato_id: int, include_plano: bool = Query(False)):
     `GET /contratos/{id}/plano-geojson` (con caché en cliente) o `?include_plano=1` (p. ej. panel Admin al editar).
     """
     sel = _CONTRATOS_SELECT_DETALLE if include_plano else _CONTRATOS_SELECT_DETALLE_SIN_PLANO
-    r = supabase.table("contratos").select(sel).eq("id", contrato_id).limit(1).execute()
+    try:
+        r = supabase.table("contratos").select(sel).eq("id", contrato_id).limit(1).execute()
+    except Exception as exc:
+        if (
+            not include_plano
+            and (
+                _is_pgrst_missing_column(exc, "anticipo")
+                or _is_pgrst_missing_column(exc, "amortizacion_pct")
+            )
+        ):
+            sel_fb = (
+                _CONTRATOS_SELECT_LISTA
+                + ",aiu,iva,valor_componente_ambiental,valor_componente_social,valor_componente_pmt,"
+                "costo_directo_contrato,costos_adicionales_lista,sicoe_consecutivos_desde_uno,ccd_firma_config"
+            )
+            r = supabase.table("contratos").select(sel_fb).eq("id", contrato_id).limit(1).execute()
+        else:
+            raise
     row = r.data[0] if r.data else None
     if not row:
         raise HTTPException(status_code=404, detail="Contrato no encontrado")
