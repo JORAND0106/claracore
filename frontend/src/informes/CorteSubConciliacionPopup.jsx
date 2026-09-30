@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import CcModalBrandHeader from '../components/CcModalBrandHeader'
 import { formatCOP } from '../utils/formatCOP'
 import { UNIDADES_LISTADO_PRECIOS } from '../utils/unidadesListadoPrecios'
+import { pathConFiltroSubAprobacion } from '../informesSubAprobacionFiltro'
 
 const fmtMoney = (n) =>
   n == null || n === '' || (typeof n === 'number' && !Number.isFinite(n)) ? '—' : formatCOP(n)
@@ -40,6 +41,7 @@ function costoFila(cant, vu) {
  * props:
  *  - open, onClose
  *  - contratoId, corteId
+ *  - filtroSubAprobacion ('todo' | 'aprobado') — mismo selector de Corte y filtro
  *  - fetchConFallback, getAuthToken
  *  - puedeEditarCcd
  *  - onEnviado → callback tras enviar (habilita vista previa)
@@ -51,6 +53,7 @@ export default function CorteSubConciliacionPopup({
   onClose,
   contratoId,
   corteId,
+  filtroSubAprobacion = 'aprobado',
   fetchConFallback,
   getAuthToken,
   puedeEditarCcd = false,
@@ -71,6 +74,13 @@ export default function CorteSubConciliacionPopup({
   const bloqueado = !!data?.bloqueado
   const soloLectura = bloqueado && !puedeEditarCcd
 
+  const pathConciliacion = useCallback(() => {
+    return pathConFiltroSubAprobacion(
+      `/informes/${encodeURIComponent(contratoId)}/corte-sub/${encodeURIComponent(corteId)}/conciliacion`,
+      filtroSubAprobacion,
+    )
+  }, [contratoId, corteId, filtroSubAprobacion])
+
   const cargar = useCallback(async () => {
     if (!contratoId || !corteId) return
     const token = getAuthToken?.()
@@ -81,10 +91,9 @@ export default function CorteSubConciliacionPopup({
     setLoading(true)
     setError(null)
     try {
-      const r = await fetchConFallback(
-        `/informes/${encodeURIComponent(contratoId)}/corte-sub/${encodeURIComponent(corteId)}/conciliacion`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      )
+      const r = await fetchConFallback(pathConciliacion(), {
+        headers: { Authorization: `Bearer ${token}` },
+      })
       if (!r?.ok) {
         const msg = r ? await r.text() : 'Sin respuesta'
         throw new Error(msg.slice(0, 300) || 'Error al cargar conciliación')
@@ -120,7 +129,7 @@ export default function CorteSubConciliacionPopup({
     } finally {
       setLoading(false)
     }
-  }, [contratoId, corteId, fetchConFallback, getAuthToken])
+  }, [contratoId, corteId, fetchConFallback, getAuthToken, pathConciliacion])
 
   useEffect(() => {
     if (open) cargar()
@@ -191,17 +200,14 @@ export default function CorteSubConciliacionPopup({
             soporte_mime: f.soporte_mime || null,
           })),
       }
-      const r = await fetchConFallback(
-        `/informes/${encodeURIComponent(contratoId)}/corte-sub/${encodeURIComponent(corteId)}/conciliacion`,
-        {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
+      const r = await fetchConFallback(pathConciliacion(), {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
-      )
+        body: JSON.stringify(payload),
+      })
       if (!r?.ok) {
         let msg = 'No se pudo guardar'
         try {
@@ -263,6 +269,7 @@ export default function CorteSubConciliacionPopup({
   if (!open) return null
 
   const lineas = data?.aiu_lineas || []
+  const filtroLbl = filtroSubAprobacion === 'todo' ? 'Todo' : 'Aprobado'
   const sheet = {
     borderCollapse: 'collapse',
     width: '100%',
@@ -335,6 +342,7 @@ export default function CorteSubConciliacionPopup({
             </div>
             <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
               {bloqueado ? 'Enviado (bloqueado)' : 'Borrador — complete AIU y otros conceptos'}
+              {' · '}Registros: {filtroLbl}
             </div>
           </div>
           <button
