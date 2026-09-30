@@ -114,3 +114,53 @@ def test_validate_soporte_rechaza_office():
         assert False, "debió rechazar Office"
     except ValueError as e:
         assert "Office" in str(e) or "permitido" in str(e).lower()
+
+
+def test_aplicar_precios_sub_marca_sin_precio():
+    from corte_sub_conciliacion import aplicar_precios_sub_a_items
+
+    items = [
+        {"item_numero": "1.1", "cantidad": 10, "vlr_unitario_sub": 0},
+        {"item_numero": "2.1", "cantidad": 5, "vlr_unitario_sub": 0},
+    ]
+    out, sin = aplicar_precios_sub_a_items(items, {"1.1": 25000})
+    by = {i["item_numero"]: i for i in out}
+    assert by["1.1"]["vlr_unitario_sub"] == 25000
+    assert by["1.1"]["costo_directo"] == valor_por_cantidad_vu(10, 25000)
+    assert by["1.1"].get("sin_precio") is False
+    assert by["2.1"]["sin_precio"] is True
+    assert "2.1" in sin
+
+
+def test_calc_amortizacion_tope_por_saldo():
+    from corte_sub_conciliacion import calc_amortizacion
+
+    # Anticipo 1_000_000, ya amortizado 900_000, CD+AIU=500_000, 30% → bruto 150k > saldo 100k
+    a = calc_amortizacion(
+        500_000,
+        anticipo=1_000_000,
+        amortizacion_pct=30,
+        amortizado_anterior=900_000,
+    )
+    assert a["amortizacion_presente"] == 100_000
+    assert a["saldo_por_amortizar"] == 0
+    assert a["tope_por_saldo"] is True
+    assert a["subtotal_despues_amortizacion"] == 400_000
+
+    # Sin anticipo: no afecta
+    z = calc_amortizacion(500_000, anticipo=0, amortizacion_pct=30, amortizado_anterior=0)
+    assert z["amortizacion_presente"] == 0
+    assert z["subtotal_despues_amortizacion"] == 500_000
+
+    # Saldo ya 0
+    z2 = calc_amortizacion(
+        500_000, anticipo=1_000_000, amortizacion_pct=10, amortizado_anterior=1_000_000
+    )
+    assert z2["amortizacion_presente"] == 0
+    assert z2["saldo_por_amortizar"] == 0
+
+
+def test_gran_total_usa_subtotal_despues_amortizacion():
+    from corte_sub_conciliacion import gran_total_con_amortizacion
+
+    assert gran_total_con_amortizacion(400_000, 50_000) == 450_000

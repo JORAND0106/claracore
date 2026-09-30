@@ -1561,11 +1561,18 @@ def _contexto_corte_sub(
     if sub_id is None:
         raise HTTPException(400, "Corte sin subcontratista asociado (subcontratista_id nulo)")
 
-    sub = _row(
-        "subcontratistas",
-        "razon_social, nit, nombre_contacto, objeto_contrato",
-        id=sub_id,
-    ) or {}
+    try:
+        sub = _row(
+            "subcontratistas",
+            "razon_social, nit, nombre_contacto, objeto_contrato, anticipo, amortizacion_pct",
+            id=sub_id,
+        ) or {}
+    except Exception:
+        sub = _row(
+            "subcontratistas",
+            "razon_social, nit, nombre_contacto, objeto_contrato",
+            id=sub_id,
+        ) or {}
 
     try:
         try:
@@ -1613,6 +1620,7 @@ def _contexto_corte_sub(
                 "vlr_unitario_sub": 0.0,
                 "costo_directo":    0.0,
                 "capitulo":         "",
+                "sin_precio":       False,
             }
         cap = str(r.get("capitulo") or "").strip()
         if cap and not items_map[k].get("capitulo"):
@@ -1622,13 +1630,14 @@ def _contexto_corte_sub(
         if items_map[k]["vlr_unitario_sub"] == 0.0 and vu != 0.0:
             items_map[k]["vlr_unitario_sub"] = vu
 
-    for _k, it in items_map.items():
-        cd = _sf(it.get("cantidad"), 0.0) * _sf(it.get("vlr_unitario_sub"), 0.0)
-        if not math.isfinite(cd):
-            cd = 0.0
-        it["costo_directo"] = cd
+    # Causa raíz del VU=0: so_registros.vlr_unitario_subcontratista casi nunca se sella.
+    # Fuente de verdad: subcontratista_precios del sub del corte (nunca precios del contrato).
+    import corte_sub_conciliacion as csc
 
-    items = list(items_map.values())
+    vu_map = csc.precios_vu_sub_por_item(
+        _sb, contrato_id=int(contrato_id), subcontratista_id=int(sub_id)
+    )
+    items, items_sin_precio = csc.aplicar_precios_sub_a_items(list(items_map.values()), vu_map)
     _sort_items_corte_por_item_numero_asc(items)
     total_costo = sum(_sf(i.get("costo_directo"), 0.0) for i in items)
     if not math.isfinite(total_costo):
@@ -1650,6 +1659,9 @@ def _contexto_corte_sub(
         "aiu_resumen": None,
         "otros_conceptos": [],
         "gran_total": None,
+        "items_sin_precio": items_sin_precio,
+        "vu_por_item": vu_map,
+        "amortizacion": None,
     }
     try:
         _enriquecer_ctx_corte_sub_conciliacion(ctx, contrato_id, solo_aprobados=solo_aprobados)
@@ -1664,7 +1676,7 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     *,
     solo_aprobados: bool = True,
 ) -> None:
-    """Bloques Actualizadas/Acumulado/Saldo + snapshot de conciliación (si existe)."""
+    """Bloques Actualizadas/Acumulado/Saldo + AIU + amortización + snapshot."""
     import corte_sub_conciliacion as csc
 
     corte = ctx.get("corte") or {}
@@ -1676,6 +1688,9 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     except (TypeError, ValueError):
         consecutivo = 0
 
+    vu_map = ctx.get("vu_por_item") or csc.precios_vu_sub_por_item(
+        _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
+    )
     cant_act = csc.cantidades_actualizadas_sub(
         _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
     )
@@ -1694,19 +1709,40 @@ def _enriquecer_ctx_corte_sub_conciliacion(
         list(ctx.get("items") or []),
         cant_actualizadas=cant_act,
         cant_acum_anterior=cant_ant,
+        vu_por_item=vu_map,
     )
+    # Reaplicar sin_precio tras enriquecer
+    for it in items:
+        if _sf(it.get("vlr_unitario_sub")) <= 0:
+            it["sin_precio"] = True
     _sort_items_corte_por_item_numero_asc(items)
     total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
     ctx["items"] = items
     ctx["total_costo"] = total_costo if math.isfinite(total_costo) else 0.0
+    ctx["items_sin_precio"] = [
+        str(i.get("item_numero") or "")
+        for i in items
+        if i.get("sin_precio") and str(i.get("item_numero") or "").strip()
+    ]
 
     tributos = csc.resolve_tributos_sub(_sb, sub_id)
     aiu = csc.calc_aiu_desglose(ctx["total_costo"], tributos)
+
+    ant_cfg = csc.fetch_anticipo_amortizacion_sub(_sb, sub_id)
+    amort_ant = csc.amortizado_en_cortes_enviados_anteriores(
+        _sb, subcontratista_id=sub_id, consecutivo_actual=consecutivo
+    )
+    amort = csc.calc_amortizacion(
+        aiu.get("costo_directo_mas_aiu") or 0,
+        anticipo=ant_cfg.get("anticipo"),
+        amortizacion_pct=ant_cfg.get("amortizacion_pct"),
+        amortizado_anterior=amort_ant,
+    )
+
     conc = csc.fetch_conciliacion(_sb, int(corte.get("id") or 0))
     otros: List[dict] = []
     if conc and conc.get("id"):
         otros = csc.fetch_otros_conceptos(_sb, int(conc["id"]))
-        # Si ya enviado, usar snapshot guardado para el resumen del PDF
         if str(conc.get("estado") or "") == csc.ESTADO_ENVIADO:
             aiu = {
                 "pct_administracion": conc.get("pct_administracion"),
@@ -1720,15 +1756,34 @@ def _enriquecer_ctx_corte_sub_conciliacion(
                 "valor_iva_utilidad": conc.get("valor_iva_utilidad"),
                 "costo_directo_mas_aiu": conc.get("costo_directo_mas_aiu"),
             }
+            amort = {
+                "anticipo_entregado": conc.get("anticipo_entregado", amort.get("anticipo_entregado")),
+                "amortizado_anterior": conc.get("amortizado_anterior", amort.get("amortizado_anterior")),
+                "pct_amortizacion": conc.get("pct_amortizacion", amort.get("pct_amortizacion")),
+                "amortizacion_presente": conc.get("amortizacion_presente", amort.get("amortizacion_presente")),
+                "saldo_por_amortizar": conc.get("saldo_por_amortizar", amort.get("saldo_por_amortizar")),
+                "subtotal_despues_amortizacion": conc.get(
+                    "subtotal_despues_amortizacion", amort.get("subtotal_despues_amortizacion")
+                ),
+                "tope_por_saldo": False,
+            }
     tot_otros = csc.total_otros_conceptos(otros)
     if conc and str(conc.get("estado") or "") == csc.ESTADO_ENVIADO:
         tot_otros = _sf(conc.get("total_otros_conceptos"), tot_otros)
-        gt = _sf(conc.get("gran_total"), csc.gran_total(aiu.get("costo_directo_mas_aiu"), tot_otros))
+        gt = _sf(
+            conc.get("gran_total"),
+            csc.gran_total_con_amortizacion(
+                amort.get("subtotal_despues_amortizacion"), tot_otros
+            ),
+        )
     else:
-        gt = csc.gran_total(aiu.get("costo_directo_mas_aiu"), tot_otros)
+        gt = csc.gran_total_con_amortizacion(
+            amort.get("subtotal_despues_amortizacion"), tot_otros
+        )
 
     ctx["conciliacion"] = conc
     ctx["aiu_resumen"] = aiu
+    ctx["amortizacion"] = amort
     ctx["otros_conceptos"] = otros
     ctx["gran_total"] = gt
     ctx["cortes_acum_anteriores_ids"] = prev_ids
@@ -4902,6 +4957,8 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
                 aiu_resumen=ctx.get("aiu_resumen"),
                 otros_conceptos=ctx.get("otros_conceptos") or [],
                 gran_total=ctx.get("gran_total"),
+                amortizacion=ctx.get("amortizacion"),
+                items_sin_precio=ctx.get("items_sin_precio") or [],
             ),
         ),
         ("modo_seguro", lambda: _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)),
@@ -4932,6 +4989,8 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
                 aiu_resumen=ctx.get("aiu_resumen"),
                 otros_conceptos=ctx.get("otros_conceptos") or [],
                 gran_total=ctx.get("gran_total"),
+                amortizacion=ctx.get("amortizacion"),
+                items_sin_precio=ctx.get("items_sin_precio") or [],
             )
             pdf_bytes = _to_pdf_corte_garantizado(html_last)
         except Exception as e:
@@ -5647,6 +5706,9 @@ def get_corte_sub_conciliacion(
         "costo_directo": aiu.get("costo_directo"),
         "aiu": aiu,
         "aiu_lineas": csc.aiu_lineas_resumen(aiu),
+        "amortizacion": ctx.get("amortizacion"),
+        "amortizacion_lineas": csc.amortizacion_lineas_resumen(ctx.get("amortizacion") or {}),
+        "items_sin_precio": ctx.get("items_sin_precio") or [],
         "otros_conceptos": otros,
         "total_otros_conceptos": csc.total_otros_conceptos(otros)
             if estado != csc.ESTADO_ENVIADO
@@ -5705,6 +5767,7 @@ def put_corte_sub_conciliacion(
     # AIU siempre recalculado con % del sub y CD del presente acta (salvo snapshot al enviar)
     tributos = csc.resolve_tributos_sub(_sb, int(corte["subcontratista_id"]))
     aiu = csc.calc_aiu_desglose(ctx.get("total_costo") or 0, tributos)
+    amort = ctx.get("amortizacion") or csc.calc_amortizacion(aiu.get("costo_directo_mas_aiu") or 0)
     uid = str(current_user.get("id") or "") or None
     try:
         saved = csc.guardar_conciliacion(
@@ -5717,6 +5780,7 @@ def put_corte_sub_conciliacion(
             usuario_id=uid,
             enviar=bool(body.enviar) and not bool(body.reabrir),
             reabrir=bool(body.reabrir),
+            amortizacion=amort,
         )
     except PermissionError as e:
         raise HTTPException(409, str(e)) from e
@@ -5730,7 +5794,9 @@ def put_corte_sub_conciliacion(
         "enviado": str(saved.get("estado")) == csc.ESTADO_ENVIADO,
         "conciliacion": saved,
         "aiu": aiu,
+        "amortizacion": amort,
         "gran_total": saved.get("gran_total"),
+        "items_sin_precio": ctx.get("items_sin_precio") or [],
     }
 
 
@@ -13185,20 +13251,24 @@ def _fill_corte_sub_001_excel_ws(
         row = data0 + idx
         cap = (it.get("capitulo") or "").strip() or "—"
         desc = str(it.get("item_descripcion", "") or "").lower()
-        bg = row_even if idx % 2 == 0 else row_odd
+        sin_p = bool(it.get("sin_precio"))
+        if sin_p:
+            desc = f"⚠ SIN PRECIO SUB · {desc}".strip()
+        bg = "FEF3C7" if sin_p else (row_even if idx % 2 == 0 else row_odd)
+        vu_cell = "⚠ SIN PRECIO" if sin_p else _fm(it.get("vlr_unitario_sub"))
         vals = [
             cap,
             it.get("item_numero", ""),
             desc,
             it.get("unidad", ""),
-            _fm(it.get("vlr_unitario_sub")),
+            vu_cell,
             _fn(it.get("cantidad")),
             _fm(it.get("costo_directo")),
         ]
         for col, v in enumerate(vals, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.border = bd
-            cell.font = Font(size=8)
+            cell.font = Font(size=8, bold=(sin_p and col == 5), color="B45309" if sin_p and col == 5 else "000000")
             cell.fill = PatternFill("solid", fgColor=bg)
             if col == 3:
                 cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
@@ -13912,16 +13982,21 @@ def _cc_sub_001_chunk_items(items: List[dict]) -> List[List[dict]]:
 def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
     cap = (item.get("capitulo") or "").strip() or "—"
     desc = str(item.get("item_descripcion", "") or "").lower()
+    if item.get("sin_precio"):
+        desc = f"⚠ SIN PRECIO SUB · {desc}".strip()
     trs = f"background:{row_bg};" if row_bg else ""
+    if item.get("sin_precio"):
+        trs = "background:#fef3c7;"
     fs = "5.5pt"
     pad = "padding:1px 2px"
+    vu_txt = "⚠ SIN PRECIO" if item.get("sin_precio") else _fm(item.get("vlr_unitario_sub"))
     return (
         f"<tr style=\"{trs}\">"
         f"<td style=\"{bd};{pad};font-size:{fs};vertical-align:top\">{_h(cap)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:left\">{_h(desc)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:center\">{_h(item.get('unidad', ''))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('vlr_unitario_sub'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right;{'color:#b45309;font-weight:bold;' if item.get('sin_precio') else ''}\">{vu_txt}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_actualizadas', item.get('cantidad')))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_actualizadas'))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_presente', item.get('cantidad')))}</td>"
@@ -14034,6 +14109,8 @@ def _html_cc_sub_v1_plain(
     aiu_resumen: Optional[Dict[str, Any]] = None,
     otros_conceptos: Optional[List[dict]] = None,
     gran_total: Optional[float] = None,
+    amortizacion: Optional[Dict[str, Any]] = None,
+    items_sin_precio: Optional[List[str]] = None,
 ) -> str:
     """CC-SUB-001 landscape: bloques Actualizadas/Presente/Acumulado/Saldo + resumen conciliación."""
     import corte_sub_conciliacion as csc
@@ -14181,6 +14258,27 @@ INFORME CORTE DE SUB CONTRATISTA
                 f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:left;">{_h(label)}</td>'
                 f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:right;font-weight:bold;width:35%;">{_fm(line.get("valor"))}</td>'
                 f"</tr>"
+            )
+        for line in csc.amortizacion_lineas_resumen(amortizacion or {}):
+            pct = csc.pct_label(line.get("pct")) if line.get("pct") is not None else ""
+            if line["key"] == "amort_pres":
+                label = f'Amortización presente corte ({pct})' if pct and pct != "—" else "Amortización presente corte"
+            elif line["key"] == "sub_amort":
+                label = "Subtotal después de amortización"
+            else:
+                label = line["nombre"]
+            bg = "#fef3c7" if line["key"] == "sub_amort" else "#fffbeb"
+            parts.append(
+                f'<tr style="background:{bg};">'
+                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:left;">{_h(label)}</td>'
+                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:right;font-weight:bold;width:35%;">{_fm(line.get("valor"))}</td>'
+                f"</tr>"
+            )
+        sinp = [str(x) for x in (items_sin_precio or []) if str(x).strip()]
+        if sinp:
+            parts.append(
+                f'<tr style="background:#fee2e2;"><td colspan="2" style="{bd};padding:3px 6px;font-size:6.5pt;color:#991b1b;font-weight:bold;">'
+                f'Ítems sin precio en listado del subcontratista: {_h(", ".join(sinp))}</td></tr>'
             )
         if otros:
             parts.append(
