@@ -112,7 +112,7 @@ def _gerencia_caches_clear() -> None:
         _GERENCIA_PDF_CACHE.clear()
 
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -409,6 +409,7 @@ FORMATOS_CCD: Dict[str, Dict[str, Any]] = {
         "plantilla_html": "cc_sub_001_v1_plain",
         "motor_pdf": "xhtml2pdf",
         "layout": {
+            "orientacion": "landscape",
             "encabezado_institucional_solo_primera_hoja": True,
             "tabla_items_continua_en_siguientes_hojas": True,
             "firmas_solo_ultima_hoja": True,
@@ -1636,7 +1637,7 @@ def _contexto_corte_sub(
     usuario_nombre = f"{current_user.get('nombre','')} {current_user.get('apellidos','')}".strip() or "—"
     usuario_cargo = current_user.get("cargo_nombre", "—") or "—"
 
-    return {
+    ctx = {
         "contrato": contrato,
         "sub": sub,
         "corte": corte,
@@ -1645,7 +1646,92 @@ def _contexto_corte_sub(
         "usuario_nombre": usuario_nombre,
         "usuario_cargo": usuario_cargo,
         "solo_aprobados": bool(solo_aprobados),
+        "conciliacion": None,
+        "aiu_resumen": None,
+        "otros_conceptos": [],
+        "gran_total": None,
     }
+    try:
+        _enriquecer_ctx_corte_sub_conciliacion(ctx, contrato_id, solo_aprobados=solo_aprobados)
+    except Exception as exc:
+        _log.warning("enriquecer conciliación corte %s: %s", corte_id, exc)
+    return ctx
+
+
+def _enriquecer_ctx_corte_sub_conciliacion(
+    ctx: Dict[str, Any],
+    contrato_id: int,
+    *,
+    solo_aprobados: bool = True,
+) -> None:
+    """Bloques Actualizadas/Acumulado/Saldo + snapshot de conciliación (si existe)."""
+    import corte_sub_conciliacion as csc
+
+    corte = ctx.get("corte") or {}
+    sub_id = int(corte.get("subcontratista_id") or 0)
+    if not sub_id:
+        return
+    try:
+        consecutivo = int(corte.get("consecutivo") or 0)
+    except (TypeError, ValueError):
+        consecutivo = 0
+
+    cant_act = csc.cantidades_actualizadas_sub(
+        _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
+    )
+    previos = csc.cortes_enviados_anteriores(
+        _sb, subcontratista_id=sub_id, consecutivo_actual=consecutivo
+    )
+    prev_ids = [int(c["id"]) for c in previos if c.get("id") is not None]
+    cant_ant = csc.cantidades_por_item_cortes(
+        _sb,
+        contrato_id=int(contrato_id),
+        subcontratista_id=sub_id,
+        corte_ids=prev_ids,
+        solo_aprobados=solo_aprobados,
+    )
+    items = csc.enriquecer_items_bloques(
+        list(ctx.get("items") or []),
+        cant_actualizadas=cant_act,
+        cant_acum_anterior=cant_ant,
+    )
+    _sort_items_corte_por_item_numero_asc(items)
+    total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
+    ctx["items"] = items
+    ctx["total_costo"] = total_costo if math.isfinite(total_costo) else 0.0
+
+    tributos = csc.resolve_tributos_sub(_sb, sub_id)
+    aiu = csc.calc_aiu_desglose(ctx["total_costo"], tributos)
+    conc = csc.fetch_conciliacion(_sb, int(corte.get("id") or 0))
+    otros: List[dict] = []
+    if conc and conc.get("id"):
+        otros = csc.fetch_otros_conceptos(_sb, int(conc["id"]))
+        # Si ya enviado, usar snapshot guardado para el resumen del PDF
+        if str(conc.get("estado") or "") == csc.ESTADO_ENVIADO:
+            aiu = {
+                "pct_administracion": conc.get("pct_administracion"),
+                "pct_imprevistos": conc.get("pct_imprevistos"),
+                "pct_utilidad": conc.get("pct_utilidad"),
+                "pct_iva_utilidad": conc.get("pct_iva_utilidad"),
+                "costo_directo": conc.get("costo_directo"),
+                "valor_administracion": conc.get("valor_administracion"),
+                "valor_imprevistos": conc.get("valor_imprevistos"),
+                "valor_utilidad": conc.get("valor_utilidad"),
+                "valor_iva_utilidad": conc.get("valor_iva_utilidad"),
+                "costo_directo_mas_aiu": conc.get("costo_directo_mas_aiu"),
+            }
+    tot_otros = csc.total_otros_conceptos(otros)
+    if conc and str(conc.get("estado") or "") == csc.ESTADO_ENVIADO:
+        tot_otros = _sf(conc.get("total_otros_conceptos"), tot_otros)
+        gt = _sf(conc.get("gran_total"), csc.gran_total(aiu.get("costo_directo_mas_aiu"), tot_otros))
+    else:
+        gt = csc.gran_total(aiu.get("costo_directo_mas_aiu"), tot_otros)
+
+    ctx["conciliacion"] = conc
+    ctx["aiu_resumen"] = aiu
+    ctx["otros_conceptos"] = otros
+    ctx["gran_total"] = gt
+    ctx["cortes_acum_anteriores_ids"] = prev_ids
 
 
 def _contexto_memoria_item(
@@ -4813,6 +4899,9 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
                 firma_cfg=firma_cfg,
                 elaboro_firma_data_uri=elaboro_firma_uri,
                 reviso_firma_data_uri=reviso_firma_uri,
+                aiu_resumen=ctx.get("aiu_resumen"),
+                otros_conceptos=ctx.get("otros_conceptos") or [],
+                gran_total=ctx.get("gran_total"),
             ),
         ),
         ("modo_seguro", lambda: _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)),
@@ -4840,6 +4929,9 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
                 firma_cfg=firma_cfg,
                 elaboro_firma_data_uri=elaboro_firma_uri,
                 reviso_firma_data_uri=reviso_firma_uri,
+                aiu_resumen=ctx.get("aiu_resumen"),
+                otros_conceptos=ctx.get("otros_conceptos") or [],
+                gran_total=ctx.get("gran_total"),
             )
             pdf_bytes = _to_pdf_corte_garantizado(html_last)
         except Exception as e:
@@ -5499,6 +5591,341 @@ def pdf_corte_sub_con_sello_firma(
     except Exception as e:
         _log.exception("pdf_corte_sub_con_sello_firma")
         raise HTTPException(status_code=500, detail=f"PDF firmado: {e!s}") from e
+
+
+# ── CC-SUB-001 conciliación (popup + Enviar + consolidado) ─────────────────────
+
+class CorteSubConciliacionBody(BaseModel):
+    otros_conceptos: Optional[List[dict]] = None
+    enviar: bool = False
+    reabrir: bool = False
+
+
+def _corte_pertenece_contrato(corte_id: int, contrato_id: int) -> dict:
+    corte = _row("subcontratista_cortes", "*", id=int(corte_id))
+    if not corte:
+        raise HTTPException(404, "Corte no encontrado")
+    if int(corte.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(403, "El corte no pertenece a este contrato")
+    if corte.get("subcontratista_id") is None:
+        raise HTTPException(400, "Corte sin subcontratista asociado")
+    return corte
+
+
+@router.get("/{contrato_id}/corte-sub/{corte_id}/conciliacion")
+def get_corte_sub_conciliacion(
+    contrato_id: int,
+    corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
+    current_user: dict = Depends(_get_user),
+):
+    """Datos del popup de conciliación: AIU vivo, otros conceptos, estado enviado."""
+    _perm_informes_ccd_lectura(current_user)
+    corte = _corte_pertenece_contrato(corte_id, contrato_id)
+    ctx = _contexto_corte_sub(
+        contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+    )
+    import corte_sub_conciliacion as csc
+
+    aiu = ctx.get("aiu_resumen") or csc.calc_aiu_desglose(ctx.get("total_costo") or 0)
+    conc = ctx.get("conciliacion")
+    otros = ctx.get("otros_conceptos") or []
+    estado = str((conc or {}).get("estado") or csc.ESTADO_BORRADOR)
+    puede_reabrir = False
+    try:
+        _perm_informes_ccd(current_user, "editar", contrato_id=contrato_id)
+        puede_reabrir = True
+    except HTTPException:
+        puede_reabrir = False
+    return {
+        "corte_id": int(corte_id),
+        "subcontratista_id": int(corte["subcontratista_id"]),
+        "estado": estado,
+        "enviado": estado == csc.ESTADO_ENVIADO,
+        "bloqueado": estado == csc.ESTADO_ENVIADO,
+        "puede_reabrir": puede_reabrir,
+        "costo_directo": aiu.get("costo_directo"),
+        "aiu": aiu,
+        "aiu_lineas": csc.aiu_lineas_resumen(aiu),
+        "otros_conceptos": otros,
+        "total_otros_conceptos": csc.total_otros_conceptos(otros)
+            if estado != csc.ESTADO_ENVIADO
+            else _sf((conc or {}).get("total_otros_conceptos"), csc.total_otros_conceptos(otros)),
+        "gran_total": ctx.get("gran_total"),
+        "items_resumen": {
+            "n_items": len(ctx.get("items") or []),
+            "total_presente": ctx.get("total_costo"),
+        },
+        "conciliacion_id": (conc or {}).get("id"),
+    }
+
+
+@router.get("/{contrato_id}/corte-sub/conceptos-catalogo")
+def get_corte_sub_conceptos_catalogo(
+    contrato_id: int,
+    q: str = Query(""),
+    current_user: dict = Depends(_get_user),
+):
+    _perm_informes_ccd_lectura(current_user)
+    import corte_sub_conciliacion as csc
+
+    return {"descripciones": csc.list_catalogo_descripciones(_sb, int(contrato_id), q)}
+
+
+@router.put("/{contrato_id}/corte-sub/{corte_id}/conciliacion")
+def put_corte_sub_conciliacion(
+    contrato_id: int,
+    corte_id: int,
+    body: CorteSubConciliacionBody,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
+    current_user: dict = Depends(_get_user),
+):
+    """Guarda borrador o envía (bloquea). Reabrir requiere permiso editar en Informes."""
+    import corte_sub_conciliacion as csc
+
+    corte = _corte_pertenece_contrato(corte_id, contrato_id)
+    prev = csc.fetch_conciliacion(_sb, int(corte_id))
+    enviado = bool(prev and str(prev.get("estado")) == csc.ESTADO_ENVIADO)
+
+    if body.reabrir:
+        _perm_informes_ccd(current_user, "editar", contrato_id=contrato_id)
+        if not enviado:
+            raise HTTPException(400, "El corte no está enviado.")
+    elif enviado:
+        raise HTTPException(
+            409,
+            "El corte ya fue enviado. Reábralo con permiso de edición para modificarlo.",
+        )
+    else:
+        _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
+
+    ctx = _contexto_corte_sub(
+        contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+    )
+    # AIU siempre recalculado con % del sub y CD del presente acta (salvo snapshot al enviar)
+    tributos = csc.resolve_tributos_sub(_sb, int(corte["subcontratista_id"]))
+    aiu = csc.calc_aiu_desglose(ctx.get("total_costo") or 0, tributos)
+    uid = str(current_user.get("id") or "") or None
+    try:
+        saved = csc.guardar_conciliacion(
+            _sb,
+            contrato_id=int(contrato_id),
+            corte_id=int(corte_id),
+            subcontratista_id=int(corte["subcontratista_id"]),
+            aiu=aiu,
+            otros=list(body.otros_conceptos or []),
+            usuario_id=uid,
+            enviar=bool(body.enviar) and not bool(body.reabrir),
+            reabrir=bool(body.reabrir),
+        )
+    except PermissionError as e:
+        raise HTTPException(409, str(e)) from e
+    except Exception as e:
+        _log.exception("put_corte_sub_conciliacion")
+        raise HTTPException(503, f"No se pudo guardar la conciliación: {e!s}") from e
+
+    return {
+        "ok": True,
+        "estado": saved.get("estado"),
+        "enviado": str(saved.get("estado")) == csc.ESTADO_ENVIADO,
+        "conciliacion": saved,
+        "aiu": aiu,
+        "gran_total": saved.get("gran_total"),
+    }
+
+
+@router.post("/{contrato_id}/corte-sub/{corte_id}/otros-conceptos/soporte")
+async def post_corte_sub_otro_concepto_soporte(
+    contrato_id: int,
+    corte_id: int,
+    archivo: UploadFile = File(...),
+    current_user: dict = Depends(_get_user),
+):
+    """Sube soporte JPG/PNG/PDF de un otro concepto (devuelve path para incluir en PUT)."""
+    _perm_informes_ccd_lectura(current_user)
+    import corte_sub_conciliacion as csc
+    from azure_blob_storage import path_subcontratista_documento, upload_blob_private
+
+    corte = _corte_pertenece_contrato(corte_id, contrato_id)
+    prev = csc.fetch_conciliacion(_sb, int(corte_id))
+    if prev and str(prev.get("estado")) == csc.ESTADO_ENVIADO:
+        raise HTTPException(409, "Corte enviado: reabra antes de adjuntar soportes.")
+
+    data = await archivo.read()
+    try:
+        mime = csc.validate_soporte_upload(archivo.content_type, len(data or b""))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    fname = csc.sanitize_filename(archivo.filename or "soporte.pdf")
+    blob_path = path_subcontratista_documento(
+        int(contrato_id),
+        int(corte["subcontratista_id"]),
+        "otro_concepto",
+        fname,
+    )
+    try:
+        upload_blob_private(blob_path, data, mime, overwrite=True)
+    except Exception as e:
+        _log.exception("upload soporte otro concepto")
+        raise HTTPException(503, f"No se pudo subir el soporte: {e!s}") from e
+
+    return {
+        "soporte_azure_path": blob_path,
+        "soporte_nombre": fname,
+        "soporte_mime": mime,
+    }
+
+
+def _bytes_adjunto_a_pdf(data: bytes, mime: str, titulo: str = "") -> Optional[bytes]:
+    """Convierte PDF/imagen a bytes PDF (una o más páginas)."""
+    mime = (mime or "").split(";")[0].strip().lower()
+    if mime == "application/pdf" or (data[:4] == b"%PDF"):
+        return data
+    if mime in ("image/jpeg", "image/jpg", "image/png", "image/webp"):
+        try:
+            import fitz  # PyMuPDF
+
+            doc = fitz.open()
+            page = doc.new_page(width=792, height=612)  # letter landscape
+            page.insert_image(page.rect, stream=data, keep_proportion=True)
+            if titulo:
+                page.insert_text((36, 24), titulo[:120], fontsize=8, color=(0.2, 0.2, 0.2))
+            out = doc.tobytes()
+            doc.close()
+            return out
+        except Exception as exc:
+            _log.warning("imagen→pdf falló (%s): %s", mime, exc)
+            # Fallback HTML via xhtml2pdf
+            import base64
+
+            b64 = base64.b64encode(data).decode("ascii")
+            html = (
+                f'<!DOCTYPE html><html><body style="margin:0;text-align:center;">'
+                f'<img src="data:{mime};base64,{b64}" style="max-width:100%;max-height:100%;"/>'
+                f"</body></html>"
+            )
+            try:
+                return _to_pdf(html)
+            except Exception:
+                return None
+    return None
+
+
+@router.get("/{contrato_id}/pdf/corte-subcontratista/{corte_id}/consolidado")
+def pdf_corte_sub_consolidado(
+    contrato_id: int,
+    corte_id: int,
+    solo_aprobados: bool = _SOLO_APROBADOS_SUB_Q,
+    current_user: dict = Depends(_get_user),
+):
+    """
+    PDF único: corte conciliado + seguridad social del sub en el corte + soportes de otros conceptos.
+    Solo cortes enviados. Informa documentos faltantes en cabecera Content-Warning / JSON paralelo no;
+    se incluye portada de avisos si falta algo.
+    """
+    _perm_informes_ccd(current_user, "ver")
+    import corte_sub_conciliacion as csc
+    from azure_blob_storage import download_blob_bytes_private
+    from subcontratistas_docs_service import periodo_corte, _docs_visibles
+
+    corte = _corte_pertenece_contrato(corte_id, contrato_id)
+    conc = csc.fetch_conciliacion(_sb, int(corte_id))
+    if not conc or str(conc.get("estado")) != csc.ESTADO_ENVIADO:
+        raise HTTPException(
+            409,
+            "La descarga consolidada requiere un corte enviado y conciliado.",
+        )
+
+    ctx = _contexto_corte_sub(
+        contrato_id, corte_id, current_user, solo_aprobados=solo_aprobados
+    )
+    pdf_corte = _generar_pdf_bytes_corte_sub_desde_ctx(ctx, contrato_id, corte_id, current_user)
+    partes: List[bytes] = [pdf_corte]
+    avisos: List[str] = []
+
+    # Seguridad social del subcontratista para el periodo / corte
+    sub_id = int(corte["subcontratista_id"])
+    ss_found = False
+    try:
+        periodo = periodo_corte(corte.get("fecha_inicio"), corte.get("fecha_fin"))
+        docs = _docs_visibles(_sb, sub_id, "seguridad_social")
+        candidatos = [
+            d for d in docs
+            if int(d.get("corte_id") or 0) == int(corte_id)
+            or str(d.get("periodo") or "") == periodo
+        ]
+        # Preferir el ligado al corte_id
+        candidatos.sort(key=lambda d: 0 if int(d.get("corte_id") or 0) == int(corte_id) else 1)
+        for d in candidatos:
+            path = d.get("azure_blob_path")
+            if not path:
+                continue
+            try:
+                raw = download_blob_bytes_private(path)
+                pdf_ss = _bytes_adjunto_a_pdf(
+                    raw, str(d.get("mime_type") or "application/pdf"), "Seguridad social"
+                )
+                if pdf_ss:
+                    partes.append(pdf_ss)
+                    ss_found = True
+                    break
+            except Exception as exc:
+                _log.warning("SS consolidado: %s", exc)
+        if not ss_found:
+            avisos.append("No se encontró seguridad social adjunta para este corte/periodo.")
+    except Exception as exc:
+        avisos.append(f"Seguridad social no disponible: {exc!s}"[:200])
+
+    # Soportes de otros conceptos (orden de filas)
+    otros = csc.fetch_otros_conceptos(_sb, int(conc["id"]))
+    for i, oc in enumerate(otros):
+        path = oc.get("soporte_azure_path")
+        if not path:
+            avisos.append(
+                f"Sin soporte: fila {i + 1} «{str(oc.get('descripcion') or '')[:60]}»."
+            )
+            continue
+        try:
+            raw = download_blob_bytes_private(path)
+            pdf_oc = _bytes_adjunto_a_pdf(
+                raw,
+                str(oc.get("soporte_mime") or "application/pdf"),
+                str(oc.get("descripcion") or "Soporte"),
+            )
+            if pdf_oc:
+                partes.append(pdf_oc)
+            else:
+                avisos.append(
+                    f"No se pudo incorporar soporte de «{str(oc.get('descripcion') or '')[:60]}»."
+                )
+        except Exception as exc:
+            avisos.append(
+                f"Error soporte «{str(oc.get('descripcion') or '')[:40]}»: {exc!s}"[:180]
+            )
+
+    if avisos:
+        avisos_html = "".join(f"<li>{_h(a)}</li>" for a in avisos)
+        portada = (
+            "<!DOCTYPE html><html><head><meta charset='UTF-8'/></head>"
+            "<body style='font-family:Arial;font-size:10pt;padding:20px'>"
+            "<h2>Descarga consolidada — avisos</h2>"
+            "<p>El consolidado se generó con los documentos disponibles. "
+            "Faltaron o no se pudieron incorporar:</p>"
+            f"<ul>{avisos_html}</ul></body></html>"
+        )
+        try:
+            partes.insert(1, _to_pdf(portada))
+        except Exception:
+            pass
+
+    merged = _merge_pdf_bytes_list(partes)
+    sub = ctx.get("sub") or {}
+    fname = _nombre_archivo_cc_sub_001(corte, sub, corte_id).replace(".pdf", "_consolidado.pdf")
+    headers = {"Content-Disposition": f'attachment; filename="{fname}"'}
+    if avisos:
+        headers["X-ClaraCore-Avisos"] = " | ".join(avisos)[:900]
+    return Response(content=merged, media_type="application/pdf", headers=headers)
 
 
 # ── CC-SUB-002 : Memorias Corte Subcontratista ─────────────────────────────────
@@ -13465,8 +13892,8 @@ def _cc_mes_integral_excel_bytes(
 
 
 # Objetivo: ~26 ítems en la 1ª hoja (con encabezado + subtotal + firmas sin página casi vacía).
-_CC_SUB_001_ROWS_PAGINA_1 = 26
-_CC_SUB_001_ROWS_PAGINA_SIG = 32
+_CC_SUB_001_ROWS_PAGINA_1 = 18
+_CC_SUB_001_ROWS_PAGINA_SIG = 22
 
 
 def _cc_sub_001_chunk_items(items: List[dict]) -> List[List[dict]]:
@@ -13486,30 +13913,53 @@ def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
     cap = (item.get("capitulo") or "").strip() or "—"
     desc = str(item.get("item_descripcion", "") or "").lower()
     trs = f"background:{row_bg};" if row_bg else ""
+    fs = "5.5pt"
+    pad = "padding:1px 2px"
     return (
         f"<tr style=\"{trs}\">"
-        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;vertical-align:top\">{_h(cap)}</td>"
-        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
-        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:left\">{_h(desc)}</td>"
-        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:center\">{_h(item.get('unidad', ''))}</td>"
-        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fm(item.get('vlr_unitario_sub'))}</td>"
-        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fn(item.get('cantidad'))}</td>"
-        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fm(item.get('costo_directo'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};vertical-align:top\">{_h(cap)}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:left\">{_h(desc)}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:center\">{_h(item.get('unidad', ''))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('vlr_unitario_sub'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_actualizadas', item.get('cantidad')))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_actualizadas'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_presente', item.get('cantidad')))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_presente', item.get('costo_directo')))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_acumulado'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_acumulado'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_saldo'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_saldo'))}</td>"
         "</tr>"
     )
 
 
 def _html_cc_sub_001_thead_items(bd: str, thead_bg: str) -> str:
     th = _sanitize_ccd_hex_color(thead_bg, "#e8e8e8")
+    th2 = "#dbeafe"
+    fs = "5.5pt"
+    pad = "padding:2px 1px"
     return f"""<thead>
 <tr style="background:{th};">
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:16%;">CAPITULO</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:8%;">ITEM</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:left;width:40%;">DESCRIPCIÓN</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:6%;">UNIDAD</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:10%;">VALOR UNIT.</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:9%;">CANTIDAD</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:11%;">COSTO DIR</th>
+<th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;width:7%;">CAP.</th>
+<th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;width:5%;">ÍTEM</th>
+<th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:left;width:18%;">DESCRIPCIÓN</th>
+<th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;width:4%;">UND</th>
+<th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;width:7%;">V. UNIT.</th>
+<th colspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;background:{th2};">ACTUALIZADAS</th>
+<th colspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;">PRESENTE ACTA</th>
+<th colspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;background:{th2};">ACUMULADO</th>
+<th colspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;">SALDO</th>
+</tr>
+<tr style="background:{th};">
+<th style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;background:{th2};">Cant.</th>
+<th style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;background:{th2};">Valor</th>
+<th style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;">Cant.</th>
+<th style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;">Valor</th>
+<th style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;background:{th2};">Cant.</th>
+<th style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;background:{th2};">Valor</th>
+<th style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;">Cant.</th>
+<th style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;">Valor</th>
 </tr>
 </thead>"""
 
@@ -13580,8 +14030,14 @@ def _html_cc_sub_v1_plain(
     firma_cfg: Optional[Dict[str, Any]] = None,
     elaboro_firma_data_uri: Optional[str] = None,
     reviso_firma_data_uri: Optional[str] = None,
+    *,
+    aiu_resumen: Optional[Dict[str, Any]] = None,
+    otros_conceptos: Optional[List[dict]] = None,
+    gran_total: Optional[float] = None,
 ) -> str:
-    """CC-SUB-001: encabezado solo 1ª hoja; ítems paginados; firmas al cierre (Elaboró/Revisó configurables; Aprobó desde subcontratista)."""
+    """CC-SUB-001 landscape: bloques Actualizadas/Presente/Acumulado/Saldo + resumen conciliación."""
+    import corte_sub_conciliacion as csc
+
     bd = "border:1px solid #9ca3af"
     bd_blk = "border:1px solid #1f2937"
     codigo_ccd = CODIGO_FORMATO_CCD_CC_SUB_001
@@ -13611,68 +14067,45 @@ def _html_cc_sub_v1_plain(
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
 <head><meta charset="UTF-8"/><title>{_h(codigo_ccd)}</title>
 <style type="text/css">
-@page {{ size: letter; margin: 8mm 10mm; }}
+@page {{ size: letter landscape; margin: 6mm 7mm; }}
 .cc001-tabla-items {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
 .cc001-tabla-items thead {{ display: table-header-group; }}
-.ccd-cc001-firmas-wrap {{ margin-top: 5mm; page-break-inside: avoid; }}
+.ccd-cc001-firmas-wrap {{ margin-top: 4mm; page-break-inside: avoid; }}
 .ccd-cc001-firmas-tbl {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
 .ccd-cc001-firmas-tbl td {{ vertical-align: top; }}
-/* Altura fija por columna (0.75cm, mitad de 1.5cm); overflow recorta texto muy largo. */
 .ccd-firma-slot-hdr {{ font-weight: bold; font-size: 6.5pt; margin: 0 0 1px 0; padding: 0; color: #111; line-height: 1.1; }}
 .ccd-firma-slot-body {{
-  height: 0.75cm;
-  min-height: 0.75cm;
-  max-height: 0.75cm;
-  overflow: hidden;
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+  height: 0.75cm; min-height: 0.75cm; max-height: 0.75cm;
+  overflow: hidden; box-sizing: border-box; padding: 0; margin: 0;
 }}
-/* xhtml2pdf: un div vacío con solo border-top a veces ocupa toda la altura del padre; forzar altura 0. */
 .ccd-firma-line {{
-  border: none;
-  border-top: 1px solid #111;
-  width: 100%;
-  height: 0;
-  line-height: 0;
-  font-size: 0;
-  margin: 0 0 2px 0;
-  padding: 0;
-  overflow: hidden;
+  border: none; border-top: 1px solid #111; width: 100%; height: 0;
+  line-height: 0; font-size: 0; margin: 0 0 2px 0; padding: 0; overflow: hidden;
 }}
 .ccd-firma-nombre {{ font-weight: bold; font-size: 7pt; line-height: 1.1; margin: 1px 0 0 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-cargo {{ font-size: 6.5pt; color: #444; line-height: 1.08; margin: 0; padding: 0; word-wrap: break-word; }}
 .ccd-firma-rep {{ font-size: 6.5pt; color: #333; line-height: 1.1; margin: 1px 0 0 0; padding: 0; word-wrap: break-word; }}
-/* Refuerzo: tabla .ccd-firma-img-cage (altura en línea en el HTML). */
-.ccd-firma-img-cage td {{
-  overflow: hidden !important;
-  padding: 0 !important;
-}}
+.ccd-firma-img-cage td {{ overflow: hidden !important; padding: 0 !important; }}
 .ccd-firma-img-cage img {{
-  max-width: 100% !important;
-  height: {_CCD_FIRMA_IMG_INNER_PT} !important;
-  max-height: {_CCD_FIRMA_IMG_INNER_PT} !important;
-  width: auto !important;
-  display: block !important;
-  margin: 0 auto !important;
+  max-width: 100% !important; height: {_CCD_FIRMA_IMG_INNER_PT} !important;
+  max-height: {_CCD_FIRMA_IMG_INNER_PT} !important; width: auto !important;
+  display: block !important; margin: 0 auto !important;
 }}
+.cc001-resumen {{ width:55%; border-collapse:collapse; margin-top:4mm; page-break-inside:avoid; }}
 </style></head>
-<body style="margin:0;padding:4px;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#111;">
+<body style="margin:0;padding:3px;font-family:Arial,Helvetica,sans-serif;font-size:7pt;color:#111;">
 """)
 
-    # ── Bloque encabezado (solo antes del primer corte de tabla de ítems = primera hoja) ──
     parts.append(f"""
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};table-layout:fixed;">
 <tr>
-<td style="width:20%;{bd_blk};vertical-align:middle;padding:2px;text-align:center;background:#fff">
-{logo_html}
-</td>
-<td style="width:48%;{bd_blk};vertical-align:middle;text-align:center;font-weight:bold;font-size:8.2pt;padding:3px 5px;line-height:1.1;height:32px;">
+<td style="width:18%;{bd_blk};vertical-align:middle;padding:2px;text-align:center;background:#fff">{logo_html}</td>
+<td style="width:52%;{bd_blk};vertical-align:middle;text-align:center;font-weight:bold;font-size:8.2pt;padding:3px 5px;line-height:1.1;">
 INFORME CORTE DE SUB CONTRATISTA
 </td>
-<td style="width:32%;{bd_blk};vertical-align:middle;text-align:center;padding:3px 5px;">
-<div style="color:#1e3a8a;font-weight:bold;font-size:12.5pt;letter-spacing:0.5px;line-height:1;">{_h(codigo_ccd)}</div>
-<div style="font-size:8.5pt;color:#1e3a8a;font-weight:bold;margin-top:2px;">CCD · ClaraCore</div>
+<td style="width:30%;{bd_blk};vertical-align:middle;text-align:center;padding:3px 5px;">
+<div style="color:#1e3a8a;font-weight:bold;font-size:12pt;letter-spacing:0.5px;">{_h(codigo_ccd)}</div>
+<div style="font-size:8pt;color:#1e3a8a;font-weight:bold;margin-top:2px;">CCD · ClaraCore</div>
 </td>
 </tr>
 <tr><td colspan="3" style="padding:0;border:none;">
@@ -13681,48 +14114,34 @@ INFORME CORTE DE SUB CONTRATISTA
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:none;">
 <tr>
 <td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
-<div style="{lbl}">CONTRATO</div>
-<div style="{und}">{_h(contrato.get('numero', ''))}</div>
-</td>
+<div style="{lbl}">CONTRATO</div><div style="{und}">{_h(contrato.get('numero', ''))}</div></td>
 <td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
-<div style="{lbl}">FECHA</div>
-<div style="{und}">{_h(fecha_gen)}</div>
-</td>
+<div style="{lbl}">FECHA</div><div style="{und}">{_h(fecha_gen)}</div></td>
 <td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
-<div style="{lbl}">SUB CONTRATISTA</div>
-<div style="{und}">{_h(sub.get('razon_social', ''))}</div>
-</td>
+<div style="{lbl}">SUB CONTRATISTA</div><div style="{und}">{_h(sub.get('razon_social', ''))}</div></td>
 <td style="width:25%;padding:0 0 2px 0;border:none;vertical-align:top;">
-<div style="{lbl}">CORTE</div>
-<div style="{und}">{_h(corte_lbl)}</div>
-</td>
+<div style="{lbl}">CORTE</div><div style="{und}">{_h(corte_lbl)}</div></td>
 </tr>
 <tr>
 <td colspan="2" style="padding:3px 5px 1px 0;border:none;vertical-align:top;">
-<div style="{lbl}">CONTRATISTA</div>
-<div style="{und}">{contratista_nom}{nit_en_valor}</div>
-</td>
+<div style="{lbl}">CONTRATISTA</div><div style="{und}">{contratista_nom}{nit_en_valor}</div></td>
 <td colspan="2" style="padding:3px 0 1px 0;border:none;vertical-align:top;">
-<div style="{lbl}">INTERVENTORÍA</div>
-<div style="{und}">{interv}</div>
-</td>
+<div style="{lbl}">INTERVENTORÍA</div><div style="{und}">{interv}</div></td>
 </tr>
 </table>
-</td></tr>
-</table>
-</td></tr>
-</table>
+</td></tr></table>
+</td></tr></table>
 """)
 
     for ci, chunk in enumerate(chunks):
         if ci > 0:
             parts.append('<pdf:nextpage />')
-        parts.append(f'<table class="cc001-tabla-items" cellspacing="0" cellpadding="0">')
+        parts.append('<table class="cc001-tabla-items" cellspacing="0" cellpadding="0">')
         parts.append(_html_cc_sub_001_thead_items(bd, est["thead_bg"]))
         parts.append("<tbody>")
         if not chunk and not items:
             parts.append(
-                f"<tr><td colspan=\"7\" style=\"{bd};padding:5px;font-size:7pt;color:#6b7280\">"
+                f'<tr><td colspan="13" style="{bd};padding:5px;font-size:7pt;color:#6b7280">'
                 "Sin ítems con estado Aprobado en este corte.</td></tr>"
             )
         else:
@@ -13733,16 +14152,62 @@ INFORME CORTE DE SUB CONTRATISTA
             st = _sanitize_ccd_hex_color(est.get("subtotal_bg"), "#dbeafe")
             parts.append(
                 f"""<tr style="background:{st};">
-<td colspan="5" style="{bd};text-align:right;padding:4px 6px;font-weight:bold;font-size:7.5pt;">SUB TOTAL:</td>
-<td colspan="2" style="{bd};text-align:right;padding:4px 6px;font-weight:bold;font-size:7.5pt;">{_fm(total_costo)}</td>
+<td colspan="8" style="{bd};text-align:right;padding:3px 6px;font-weight:bold;font-size:7pt;">COSTO DIRECTO (PRESENTE ACTA):</td>
+<td style="{bd};text-align:right;padding:3px 4px;font-weight:bold;font-size:7pt;">{_fm(total_costo)}</td>
+<td colspan="4" style="{bd};padding:3px;">&nbsp;</td>
 </tr>"""
             )
         parts.append("</tbody></table>")
 
+    aiu = aiu_resumen or {}
+    otros = list(otros_conceptos or [])
+    if aiu:
+        parts.append('<table class="cc001-resumen" cellspacing="0" cellpadding="0">')
+        parts.append(
+            f'<tr style="background:#1e3a8a;color:#fff;">'
+            f'<td colspan="2" style="{bd};padding:3px 6px;font-size:7pt;font-weight:bold;">RESUMEN DE CONCILIACIÓN</td></tr>'
+        )
+        for line in csc.aiu_lineas_resumen(aiu):
+            pct = csc.pct_label(line.get("pct")) if line.get("pct") is not None else ""
+            if line["key"] == "cd":
+                label = "Costo Directo"
+            elif line["key"] == "cd_aiu":
+                label = "Costo Directo + AIU"
+            else:
+                label = f'{line["nombre"]} {line["abrev"]} ({pct})'
+            bg = "#dbeafe" if line["key"] == "cd_aiu" else "#fff"
+            parts.append(
+                f'<tr style="background:{bg};">'
+                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:left;">{_h(label)}</td>'
+                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:right;font-weight:bold;width:35%;">{_fm(line.get("valor"))}</td>'
+                f"</tr>"
+            )
+        if otros:
+            parts.append(
+                f'<tr style="background:#f3f4f6;"><td colspan="2" style="{bd};padding:3px 6px;font-size:6.5pt;font-weight:bold;">'
+                "Otros conceptos</td></tr>"
+            )
+            for oc in otros:
+                desc = str(oc.get("descripcion") or "—")
+                und_o = str(oc.get("unidad") or "—")
+                det = f'{desc} · {und_o} · {_fn(oc.get("cantidad"))} · {_fm(oc.get("valor_unitario"))}'
+                parts.append(
+                    f"<tr>"
+                    f'<td style="{bd};padding:2px 4px;font-size:6pt;">{_h(det)}</td>'
+                    f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">{_fm(oc.get("costo_total"))}</td>'
+                    f"</tr>"
+                )
+        gt_val = gran_total if gran_total is not None else aiu.get("costo_directo_mas_aiu")
+        parts.append(
+            f'<tr style="background:#1e40af;color:#fff;">'
+            f'<td style="{bd};padding:3px 6px;font-size:7.5pt;font-weight:bold;">GRAN TOTAL</td>'
+            f'<td style="{bd};padding:3px 6px;font-size:7.5pt;font-weight:bold;text-align:right;">{_fm(gt_val)}</td>'
+            f"</tr></table>"
+        )
+
     elaboro_td = _html_cc_sub_td_firma_columna(bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri)
     reviso_td = _html_cc_sub_td_firma_columna(bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri)
 
-    # Firmas: solo tras cerrar la última tabla de ítems (última hoja). Izq=Elaboró, Centro=Revisó, Der=Aprobó (datos del sub en módulo administrativo).
     parts.append(f"""
 <div class="ccd-cc001-firmas-wrap">
 <table class="ccd-cc001-firmas-tbl" cellspacing="0" cellpadding="0">
