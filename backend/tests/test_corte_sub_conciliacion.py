@@ -76,6 +76,7 @@ def test_enriquecer_bloques_acumulado_y_saldo():
     a = by["1.1"]
     assert a["cant_presente"] == 10
     assert a["cant_acumulado"] == 50  # 40 + 10
+    assert a["cant_acum_anterior"] == 40
     assert a["cant_saldo"] == 50  # 100 - 50
     assert a["valor_presente"] == valor_por_cantidad_vu(10, 1000)
     assert a["valor_acumulado"] == valor_por_cantidad_vu(50, 1000)

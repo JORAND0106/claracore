@@ -10,6 +10,7 @@ import {
 } from './informesVistaPreviaPdf'
 import { decidirPollEstadoJobPdf } from './informesPdfJobPoll'
 import { pathConFiltroSubAprobacion } from './informesSubAprobacionFiltro'
+import { esDesarrolladorUsuario } from './utils/permisosContrato'
 import {
   INFORMES_INTRO,
   getInformesGrupos,
@@ -439,6 +440,10 @@ export default function ModuloInformes({
   puedeValidarCcd = false,
   puedeExportarCcd = false,
 }) {
+  const esDesarrollador = esDesarrolladorUsuario(usuario)
+  /** Desarrollador: vista previa del corte sin conciliar; demás roles requieren enviado. */
+  const puedeVistaPreviaCorteSinConciliar = esDesarrollador
+
   const getAuthToken = () =>
     token ||
     localStorage.getItem('cc_token') ||
@@ -1458,10 +1463,11 @@ export default function ModuloInformes({
     cargarItemsCorte(id, filtroSubAprobacion)
     const authToken = getAuthToken()
     if (authToken && contratoId != null) {
-      fetchConFallback(
+      const pathConc = pathConFiltroSubAprobacion(
         `/informes/${encodeURIComponent(contratoId)}/corte-sub/${encodeURIComponent(id)}/conciliacion`,
-        { headers: { Authorization: `Bearer ${authToken}` } },
+        filtroSubAprobacion,
       )
+      fetchConFallback(pathConc, { headers: { Authorization: `Bearer ${authToken}` } })
         .then(async (r) => {
           if (!r?.ok) return
           const j = await r.json()
@@ -1632,6 +1638,7 @@ export default function ModuloInformes({
         pdfBlob: blob,
         mimeTipo: 'application/pdf',
         nombreArchivo,
+        sinConciliar: !corteConcEnviado,
         rutaSello: pathSubConFiltro(`/informes/${cid}/pdf/corte-subcontratista/${cor}/con-sello-firma`),
         nombreArchivoSello: asegurarNombreArchivoPdf(nombreArchivo.replace(/\.pdf$/i, '') + '_firmado.pdf'),
       })
@@ -4599,7 +4606,7 @@ export default function ModuloInformes({
                         type="button"
                         style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte', 'vista')}
                         onClick={() => {
-                          if (!corteConcEnviado) {
+                          if (!corteConcEnviado && !puedeVistaPreviaCorteSinConciliar) {
                             abrirConciliacionCorte()
                             return
                           }
@@ -4608,7 +4615,9 @@ export default function ModuloInformes({
                         disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte'}
                         title={corteConcEnviado
                           ? 'Vista previa PDF (mismo documento que imprimirías)'
-                          : 'Primero concilie y envíe el corte'}
+                          : puedeVistaPreviaCorteSinConciliar
+                            ? 'Vista previa sin conciliar (solo Desarrollador)'
+                            : 'Primero concilie y envíe el corte'}
                         aria-label="Vista previa PDF"
                       >
                         {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte'
@@ -6602,6 +6611,7 @@ export default function ModuloInformes({
         onClose={() => setCorteConcPopupOpen(false)}
         contratoId={contratoId}
         corteId={corteId}
+        filtroSubAprobacion={filtroSubAprobacion}
         fetchConFallback={fetchConFallback}
         getAuthToken={getAuthToken}
         puedeEditarCcd={!!puedeEditarCcd}
@@ -6727,6 +6737,24 @@ export default function ModuloInformes({
                           : 'Documento listo. «Descargar PDF» guarda el archivo de esta vista previa sin regenerarlo.')
                       : 'Documento final. Imprimir o guardar desde el visor del navegador. El sello SHA se descarga aparte (rápido si ya generó el PDF).'}
                 </div>
+                {vistaPrevia.sinConciliar && (vistaPrevia.tipo === 'corte' || vistaPrevia.tipo === 'corte-pdf') ? (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      padding: '8px 10px',
+                      borderRadius: '8px',
+                      background: '#fef3c7',
+                      border: '1px solid #f59e0b',
+                      color: '#92400e',
+                      fontSize: f.sub + 'px',
+                      fontWeight: 700,
+                      lineHeight: 1.4,
+                      maxWidth: '720px',
+                    }}
+                  >
+                    Vista sin conciliar — borrador de revisión (solo Desarrollador). El corte aún no está enviado.
+                  </div>
+                ) : null}
                 {vistaPrevia.avisoAcumulados ? (
                   <div
                     style={{

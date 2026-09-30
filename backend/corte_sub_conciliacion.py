@@ -365,11 +365,28 @@ def enriquecer_items_bloques(
         base["valor_actualizadas"] = valor_por_cantidad_vu(cant_act, vu)
         base["cant_presente"] = cant_pres
         base["valor_presente"] = base["costo_directo"]
+        base["cant_acum_anterior"] = cant_ant
         base["cant_acumulado"] = cant_acum
         base["valor_acumulado"] = valor_por_cantidad_vu(cant_acum, vu)
         base["cant_saldo"] = cant_saldo
         base["valor_saldo"] = valor_por_cantidad_vu(cant_saldo, vu)
         out.append(base)
+    return out
+
+
+def filtrar_items_con_cantidades(items: Optional[Iterable[dict]]) -> List[dict]:
+    """
+    Solo ítems con cantidad en presente acta o en acumulado.
+    Excluye filas que solo existen por «actualizadas» sin movimiento.
+    """
+    out: List[dict] = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        cant_p = _sf(it.get("cant_presente"), _sf(it.get("cantidad")))
+        cant_a = _sf(it.get("cant_acumulado"))
+        if cant_p > 0 or cant_a > 0:
+            out.append(it)
     return out
 
 
