@@ -77,6 +77,25 @@ function IconoDescargaExcel({ size = 18 }) {
   )
 }
 
+/** Conciliar — balanza/checklist verde-azul (solo ícono, barra CCD). */
+function IconoConciliar({ size = 18 }) {
+  const id = useId().replace(/:/g, '')
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <defs>
+        <linearGradient id={`ccdCo${id}`} x1="3" y1="3" x2="20" y2="21" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#34d399" />
+          <stop offset="1" stopColor="#0ea5e9" />
+        </linearGradient>
+      </defs>
+      <rect x="3.5" y="4" width="17" height="16" rx="2.5" fill={`url(#ccdCo${id})`} />
+      <path d="M7.5 12.2l2.2 2.2 5.3-5.5" fill="none" stroke="#f0fdf4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="17.2" cy="16.8" r="3.2" fill="#0369a1" />
+      <path d="M16 16.8h2.4M17.2 15.6v2.4" stroke="#e0f2fe" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 /** Vista previa — documento azul con brillo y lupa. */
 function IconoVistaPrevia({ size = 18 }) {
   const id = useId().replace(/:/g, '')
@@ -4571,10 +4590,10 @@ export default function ModuloInformes({
                         type="button"
                         style={btnCcdToolbar(false, 'vista')}
                         onClick={abrirConciliacionCorte}
-                        title="Conciliar corte (AIU, otros conceptos) antes de generar"
-                        aria-label="Conciliar corte"
+                        title="Conciliar"
+                        aria-label="Conciliar"
                       >
-                        Conciliar
+                        <IconoConciliar size={ui.iconSvg} />
                       </button>
                       <button
                         type="button"

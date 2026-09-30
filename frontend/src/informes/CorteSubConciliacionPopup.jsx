@@ -130,8 +130,12 @@ export default function CorteSubConciliacionPopup({
     () => filas.reduce((s, f) => s + costoFila(f.cantidad, f.valor_unitario), 0),
     [filas],
   )
-  const cdAiu = Number(data?.aiu?.costo_directo_mas_aiu || 0)
-  const granTotalLive = Math.round(cdAiu + totalOtros)
+  const subAmort = Number(
+    data?.amortizacion?.subtotal_despues_amortizacion
+      ?? data?.aiu?.costo_directo_mas_aiu
+      ?? 0,
+  )
+  const granTotalLive = Math.round(subAmort + totalOtros)
 
   function patchFila(idx, patch) {
     setFilas((prev) =>
@@ -362,6 +366,12 @@ export default function CorteSubConciliacionPopup({
             <>
               <section>
                 <h3 style={{ margin: '0 0 8px', fontSize: 14, color: '#1e3a8a' }}>1. Resumen del corte</h3>
+                {(data.items_sin_precio || []).length > 0 && (
+                  <div style={{ background: '#fef3c7', color: '#92400e', padding: '8px 10px', borderRadius: 8, fontSize: 12, marginBottom: 8, fontWeight: 600 }}>
+                    Ítems sin precio en el listado del subcontratista:{' '}
+                    {(data.items_sin_precio || []).join(', ')}
+                  </div>
+                )}
                 <table style={sheet}>
                   <tbody>
                     {lineas.map((ln) => {
@@ -374,6 +384,23 @@ export default function CorteSubConciliacionPopup({
                       const strong = ln.key === 'cd_aiu'
                       return (
                         <tr key={ln.key} style={{ background: strong ? '#dbeafe' : undefined }}>
+                          <td style={{ ...td, fontWeight: strong ? 700 : 500 }}>{label}</td>
+                          <td style={{ ...td, textAlign: 'right', fontWeight: 700, width: 140 }}>
+                            {fmtMoney(ln.valor)}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    {(data.amortizacion_lineas || []).map((ln) => {
+                      let label = ln.nombre
+                      if (ln.key === 'amort_pres') {
+                        label = ln.pct != null && ln.pct !== ''
+                          ? `Amortización presente corte (${fmtPct(ln.pct)})`
+                          : 'Amortización presente corte'
+                      }
+                      const strong = ln.key === 'sub_amort'
+                      return (
+                        <tr key={ln.key} style={{ background: strong ? '#fef3c7' : '#fffbeb' }}>
                           <td style={{ ...td, fontWeight: strong ? 700 : 500 }}>{label}</td>
                           <td style={{ ...td, textAlign: 'right', fontWeight: 700, width: 140 }}>
                             {fmtMoney(ln.valor)}
