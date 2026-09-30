@@ -18,6 +18,11 @@ import {
   mergeExportPalette,
   setExportPaletteTier,
 } from "./utils/exportPalette";
+import {
+  decimalAPuntosPct,
+  fmtPctDesdeDecimal,
+  puntosPctADecimal,
+} from "./admin/catalogoInsumosTributos";
 
 const ALL_TABS = [
   { id: "info", label: "Información del contrato" },
@@ -717,6 +722,80 @@ export default function ContratoEditModal({
                   <div key="iva">
                     <input style={cellInp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.19 → 19%" value={form.iva} onChange={(e) => setForm((f) => ({ ...f, iva: e.target.value }))} />
                     {pctHint(form.iva)}
+                  </div>,
+                ]}
+              />
+
+              <TopoExcelSheet
+                sheet={sheet}
+                compact={compact}
+                title="Anticipo y amortización (informe mensual)"
+                columns={[
+                  { key: "anticipo", label: "Valor del anticipo", width: "50%" },
+                  { key: "amort", label: "Porcentaje de amortización", width: "50%" },
+                ]}
+                cells={[
+                  <div key="anticipo" style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <input
+                      style={{ ...cellInp, flex: "1 1 auto", minWidth: 0, textAlign: "right" }}
+                      type="number"
+                      min="0"
+                      step="any"
+                      placeholder="0"
+                      title="Valor en COP"
+                      value={form.anticipo}
+                      onChange={(e) => setForm((f) => ({ ...f, anticipo: e.target.value }))}
+                    />
+                    <span
+                      style={{
+                        flex: "0 0 auto",
+                        minWidth: 72,
+                        textAlign: "right",
+                        fontSize: "var(--cc-caption)",
+                        color: ui.textMuted,
+                        fontVariantNumeric: "tabular-nums",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {form.anticipo !== "" && !Number.isNaN(parseFloat(form.anticipo))
+                        ? formatCOP(form.anticipo)
+                        : "—"}
+                    </span>
+                  </div>,
+                  <div key="amort" style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <input
+                      style={{ ...cellInp, flex: "1 1 auto", minWidth: 0, textAlign: "right" }}
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="any"
+                      inputMode="decimal"
+                      placeholder="0.05"
+                      title="Decimal (0.05 = 5%)"
+                      value={puntosPctADecimal(form.amortizacion_pct)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setForm((f) => ({
+                          ...f,
+                          amortizacion_pct: v === "" ? "" : String(decimalAPuntosPct(v) ?? ""),
+                        }));
+                      }}
+                    />
+                    <span
+                      style={{
+                        flex: "0 0 auto",
+                        minWidth: 52,
+                        textAlign: "right",
+                        fontWeight: 700,
+                        fontSize: "var(--cc-sm)",
+                        color: ui.primary,
+                        fontVariantNumeric: "tabular-nums",
+                        whiteSpace: "nowrap",
+                      }}
+                      title="Equivalente %"
+                    >
+                      {fmtPctDesdeDecimal(puntosPctADecimal(form.amortizacion_pct))}
+                    </span>
                   </div>,
                 ]}
               />
