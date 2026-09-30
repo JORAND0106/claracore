@@ -7,7 +7,9 @@ import { formatCOP } from "./utils/formatCOP";
 import CcConfirmModal from "./components/CcConfirmModal";
 import CcDatePickerInput, { normalizeDateInputValue } from "./components/CcDatePickerInput";
 import { ContratoDocumentosPanel } from "./ContratoDocumentosContractuales";
-import { buildContratoUiTheme, CC_TYPO } from "./theme/adminPanelTheme";
+import { buildContratoUiTheme } from "./theme/adminPanelTheme";
+import TopoExcelSheet from "./components/topografia/TopoExcelSheet";
+import { topoSheetStyles } from "./components/topografia/topoSheetStyles";
 
 const ORDEN_ESTADOS = [
   { id: "emitida", label: "Emitida", color: "#00afc5" },
@@ -34,27 +36,6 @@ const PERIODO_VACIO = {
   fecha_emision: "",
   fecha_vencimiento: "",
   descripcion_servicio: "",
-};
-
-const inp = {
-  width: "100%",
-  background: "#0a1628",
-  border: "1.5px solid #1E3A5F",
-  borderRadius: 8,
-  padding: "9px 12px",
-  color: "#E0F2FE",
-  fontSize: CC_TYPO.input,
-  outline: "none",
-  boxSizing: "border-box",
-  marginBottom: 10,
-};
-const lbl = {
-  fontSize: CC_TYPO.label,
-  fontWeight: 700,
-  color: "#4a7a87",
-  letterSpacing: 1,
-  display: "block",
-  marginBottom: 4,
 };
 
 function fmtFecha(iso) {
@@ -218,17 +199,10 @@ export function ContratoOrdenesPagoPanel({
   t: tProp = null,
 }) {
   const ui = useMemo(() => uiTheme || buildContratoUiTheme(theme, tProp), [uiTheme, theme, tProp]);
-  const { inp, lbl, confirmTheme, font } = ui;
-  const cardStyle = {
-    marginBottom: 16,
-    padding: 12,
-    background: ui.bg,
-    border: `1px solid ${ui.border}`,
-    borderRadius: 8,
-    fontSize: font.body,
-    color: ui.text,
-    lineHeight: 1.6,
-  };
+  const { confirmTheme, font } = ui;
+  const sheet = useMemo(() => topoSheetStyles(ui.tok || tProp), [ui.tok, tProp]);
+  const cellInp = useMemo(() => ({ ...sheet.cellInp, textAlign: "left", minHeight: 32, height: "auto", marginBottom: 0 }), [sheet]);
+  const cellSelect = useMemo(() => ({ ...sheet.cellSelect, minHeight: 32, height: "auto", marginBottom: 0 }), [sheet]);
 
   const [resumen, setResumen] = useState(null);
   const [usuarios, setUsuarios] = useState([]);
@@ -579,67 +553,81 @@ export function ContratoOrdenesPagoPanel({
 
           <div>
             <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: font.body, fontWeight: 700, color: ui.text, marginBottom: 10 }}>
-                Configuración de cobro
-              </div>
-
-              <label style={lbl}>DESCRIPCIÓN DEL PLAN / SERVICIO (PDF)</label>
-              <textarea
-                style={{ ...inp, minHeight: 56, resize: "vertical", marginBottom: 12 }}
-                value={cfgForm.plan_descripcion}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setCfgForm((f) => ({ ...f, plan_descripcion: v }));
-                  setPeriodoForm((p) => ({ ...p, descripcion_servicio: v }));
-                }}
-              />
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-                  gap: "0 16px",
-                  marginBottom: 12,
-                }}
-              >
-                <div>
-                  <label style={lbl}>TIPO DE PERÍODO</label>
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Configuración de cobro"
+                titleRight={
+                  <button
+                    type="button"
+                    disabled={guardandoCfg}
+                    onClick={() => void guardarConfig()}
+                    style={{
+                      background: ui.cardSubtle,
+                      border: `1px solid ${sheet.border}`,
+                      borderRadius: 4,
+                      padding: "4px 12px",
+                      color: ui.primary,
+                      fontWeight: 700,
+                      cursor: guardandoCfg ? "wait" : "pointer",
+                      fontSize: "var(--cc-caption)",
+                    }}
+                  >
+                    {guardandoCfg ? "Guardando…" : "Guardar configuración"}
+                  </button>
+                }
+                columns={[
+                  { key: "plan", label: "Descripción del plan / servicio (PDF)", compactFull: true },
+                  { key: "tipo", label: "Tipo de período" },
+                  { key: "dia", label: "Día de vencimiento" },
+                  { key: "logo", label: "Logo receptor" },
+                  { key: "auth", label: "Autoriza (usuario)" },
+                  { key: "nombre", label: "Nombre en PDF" },
+                  { key: "cargo", label: "Cargo en PDF" },
+                  { key: "correos", label: "Correos de notificación", compactFull: true },
+                  { key: "msg", label: "Mensaje adicional en correo", compactFull: true },
+                ]}
+                cells={[
+                  <textarea
+                    key="plan"
+                    style={{ ...cellInp, minHeight: 56, resize: "vertical", height: "auto" }}
+                    value={cfgForm.plan_descripcion}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setCfgForm((f) => ({ ...f, plan_descripcion: v }));
+                      setPeriodoForm((p) => ({ ...p, descripcion_servicio: v }));
+                    }}
+                  />,
                   <select
-                    style={inp}
+                    key="tipo"
+                    style={cellSelect}
                     value={cfgForm.tipo_periodo}
                     onChange={(e) => setCfgForm((f) => ({ ...f, tipo_periodo: e.target.value }))}
                   >
                     <option value="mensual">Mensual</option>
                     <option value="quincenal">Quincenal</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={lbl}>DÍA DE VENCIMIENTO</label>
+                  </select>,
                   <input
-                    style={inp}
+                    key="dia"
+                    style={cellInp}
                     type="number"
                     min="1"
                     max="28"
                     value={cfgForm.dia_vencimiento}
                     onChange={(e) => setCfgForm((f) => ({ ...f, dia_vencimiento: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label style={lbl}>LOGO RECEPTOR</label>
+                  />,
                   <select
-                    style={inp}
+                    key="logo"
+                    style={cellSelect}
                     value={cfgForm.logo_receptor}
                     onChange={(e) => setCfgForm((f) => ({ ...f, logo_receptor: e.target.value }))}
                   >
                     <option value="contratista">Contratista</option>
                     <option value="interventoria">Interventoría</option>
                     <option value="ninguno">Ninguno</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={lbl}>AUTORIZA (USUARIO)</label>
+                  </select>,
                   <select
-                    style={inp}
+                    key="auth"
+                    style={cellSelect}
                     value={cfgForm.autorizo_usuario_id}
                     onChange={(e) => seleccionarAutorizador(e.target.value)}
                   >
@@ -650,193 +638,115 @@ export function ContratoOrdenesPagoPanel({
                         {u.cargo_nombre ? ` · ${u.cargo_nombre}` : ""}
                       </option>
                     ))}
-                  </select>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0 16px",
-                  marginBottom: 12,
-                }}
-              >
-                <div>
-                  <label style={lbl}>NOMBRE EN PDF</label>
-                  <input style={{ ...inp, opacity: 0.85 }} value={cfgForm.autorizo_nombre} readOnly placeholder="Se completa al seleccionar usuario" />
-                </div>
-                <div>
-                  <label style={lbl}>CARGO EN PDF</label>
-                  <input style={{ ...inp, opacity: 0.85 }} value={cfgForm.autorizo_cargo} readOnly placeholder="Se completa al seleccionar usuario" />
-                </div>
-              </div>
-
-              <label style={lbl}>CORREOS DE NOTIFICACIÓN</label>
-              <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-                <input
-                  style={{ ...inp, flex: "1 1 220px", marginBottom: 0 }}
-                  type="email"
-                  placeholder="correo@empresa.com"
-                  value={nuevoCorreo}
-                  onChange={(e) => setNuevoCorreo(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      agregarCorreo();
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={agregarCorreo}
-                  style={{
-                    background: ui.cardSubtle,
-                    border: `1px solid ${ui.tabBorderActive}`,
-                    borderRadius: 8,
-                    padding: "8px 14px",
-                    color: ui.primary,
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    fontSize: font.sm,
-                    flexShrink: 0,
-                  }}
-                >
-                  Agregar
-                </button>
-              </div>
-              {cfgForm.correos_notificacion.length > 0 ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                  {cfgForm.correos_notificacion.map((email) => (
-                    <span
-                      key={email}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "4px 10px",
-                        borderRadius: 16,
-                        background: ui.cardSubtle,
-                        border: `1px solid ${ui.border}`,
-                        fontSize: font.caption,
-                        color: ui.text,
-                      }}
-                    >
-                      {email}
+                  </select>,
+                  <input key="nombre" style={{ ...cellInp, opacity: 0.85 }} value={cfgForm.autorizo_nombre} readOnly placeholder="Se completa al seleccionar usuario" />,
+                  <input key="cargo" style={{ ...cellInp, opacity: 0.85 }} value={cfgForm.autorizo_cargo} readOnly placeholder="Se completa al seleccionar usuario" />,
+                  <div key="correos" style={{ padding: 2 }}>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                      <input
+                        style={{ ...cellInp, flex: "1 1 220px" }}
+                        type="email"
+                        placeholder="correo@empresa.com"
+                        value={nuevoCorreo}
+                        onChange={(e) => setNuevoCorreo(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            agregarCorreo();
+                          }
+                        }}
+                      />
                       <button
                         type="button"
-                        onClick={() => quitarCorreo(email)}
+                        onClick={agregarCorreo}
                         style={{
-                          background: "none",
-                          border: "none",
-                          color: ui.errorText,
+                          background: ui.cardSubtle,
+                          border: `1px solid ${sheet.border}`,
+                          borderRadius: 4,
+                          padding: "6px 12px",
+                          color: ui.primary,
+                          fontWeight: 700,
                           cursor: "pointer",
-                          fontSize: font.caption,
-                          padding: 0,
-                          lineHeight: 1,
+                          fontSize: "var(--cc-caption)",
+                          flexShrink: 0,
                         }}
-                        title="Quitar correo"
                       >
-                        ✕
+                        Agregar
                       </button>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ fontSize: font.caption, color: ui.textMuted, marginBottom: 12 }}>
-                  Agregue al menos un correo para poder generar y enviar órdenes de pago.
-                </div>
-              )}
-
-              <label style={lbl}>MENSAJE ADICIONAL EN CORREO (opcional, por contrato)</label>
-              <textarea
-                style={{ ...inp, minHeight: 56, resize: "vertical", marginBottom: 12 }}
-                value={cfgForm.email_mensaje_adicional}
-                onChange={(e) => setCfgForm((f) => ({ ...f, email_mensaje_adicional: e.target.value }))}
-                placeholder="Párrafo opcional incluido en la plantilla estándar del correo de orden de pago."
+                    </div>
+                    {cfgForm.correos_notificacion.length > 0 ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {cfgForm.correos_notificacion.map((email) => (
+                          <span
+                            key={email}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              padding: "4px 10px",
+                              borderRadius: 4,
+                              background: ui.cardSubtle,
+                              border: `1px solid ${sheet.border}`,
+                              fontSize: "var(--cc-caption)",
+                              color: ui.text,
+                            }}
+                          >
+                            {email}
+                            <button
+                              type="button"
+                              onClick={() => quitarCorreo(email)}
+                              style={{ background: "none", border: "none", color: ui.errorText, cursor: "pointer", fontSize: "var(--cc-caption)", padding: 0, lineHeight: 1 }}
+                              title="Quitar correo"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: "var(--cc-caption)", color: ui.textMuted }}>
+                        Agregue al menos un correo para poder generar y enviar órdenes de pago.
+                      </div>
+                    )}
+                  </div>,
+                  <textarea
+                    key="msg"
+                    style={{ ...cellInp, minHeight: 56, resize: "vertical", height: "auto" }}
+                    value={cfgForm.email_mensaje_adicional}
+                    onChange={(e) => setCfgForm((f) => ({ ...f, email_mensaje_adicional: e.target.value }))}
+                    placeholder="Párrafo opcional incluido en la plantilla estándar del correo de orden de pago."
+                  />,
+                ]}
               />
-
-              <button
-                type="button"
-                disabled={guardandoCfg}
-                onClick={() => void guardarConfig()}
-                style={{
-                  background: ui.cardSubtle,
-                  border: `1px solid ${ui.tabBorderActive}`,
-                  borderRadius: 8,
-                  padding: "8px 16px",
-                  color: ui.primary,
-                  fontWeight: 700,
-                  cursor: guardandoCfg ? "wait" : "pointer",
-                  fontSize: font.sm,
-                }}
-              >
-                {guardandoCfg ? "Guardando…" : "Guardar configuración"}
-              </button>
             </div>
 
             <div
               style={{
                 display: "grid",
                 gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)",
-                gap: 20,
+                gap: 16,
                 marginBottom: 20,
                 alignItems: "start",
               }}
             >
               <div>
-                <div style={{ fontSize: font.body, fontWeight: 700, color: ui.text, marginBottom: 10 }}>
-                  Próximo corte
-                </div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                    gap: "0 16px",
-                  }}
-                >
-                  <div>
-                    <label style={lbl}>PERÍODO INICIO</label>
-                    <CcDatePickerInput
-                      style={inp}
-                      value={periodoForm.periodo_inicio}
-                      onChange={(v) => setPeriodoForm((p) => ({ ...p, periodo_inicio: v }))}
-                      aria-label="Período inicio"
-                    />
-                  </div>
-                  <div>
-                    <label style={lbl}>PERÍODO FIN</label>
-                    <CcDatePickerInput
-                      style={inp}
-                      value={periodoForm.periodo_fin}
-                      onChange={(v) => setPeriodoForm((p) => ({ ...p, periodo_fin: v }))}
-                      aria-label="Período fin"
-                    />
-                  </div>
-                  <div>
-                    <label style={lbl}>FECHA EMISIÓN</label>
-                    <CcDatePickerInput
-                      style={inp}
-                      value={periodoForm.fecha_emision}
-                      onChange={(v) => setPeriodoForm((p) => ({ ...p, fecha_emision: v }))}
-                      aria-label="Fecha de emisión"
-                    />
-                  </div>
-                  <div>
-                    <label style={lbl}>FECHA VENCIMIENTO</label>
-                    <CcDatePickerInput
-                      style={inp}
-                      value={periodoForm.fecha_vencimiento}
-                      onChange={(v) => setPeriodoForm((p) => ({ ...p, fecha_vencimiento: v }))}
-                      aria-label="Fecha de vencimiento"
-                    />
-                  </div>
-                </div>
-                <label style={lbl}>DESCRIPCIÓN EN ESTE CORTE (opcional)</label>
-                <input
-                  style={inp}
-                  value={periodoForm.descripcion_servicio}
-                  onChange={(e) => setPeriodoForm((p) => ({ ...p, descripcion_servicio: e.target.value }))}
+                <TopoExcelSheet
+                  sheet={sheet}
+                  title="Próximo corte"
+                  columns={[
+                    { key: "pi", label: "Período inicio" },
+                    { key: "pf", label: "Período fin" },
+                    { key: "fe", label: "Fecha emisión" },
+                    { key: "fv", label: "Fecha vencimiento" },
+                    { key: "desc", label: "Descripción en este corte", compactFull: true },
+                  ]}
+                  cells={[
+                    <CcDatePickerInput key="pi" style={cellInp} value={periodoForm.periodo_inicio} onChange={(v) => setPeriodoForm((p) => ({ ...p, periodo_inicio: v }))} aria-label="Período inicio" />,
+                    <CcDatePickerInput key="pf" style={cellInp} value={periodoForm.periodo_fin} onChange={(v) => setPeriodoForm((p) => ({ ...p, periodo_fin: v }))} aria-label="Período fin" />,
+                    <CcDatePickerInput key="fe" style={cellInp} value={periodoForm.fecha_emision} onChange={(v) => setPeriodoForm((p) => ({ ...p, fecha_emision: v }))} aria-label="Fecha de emisión" />,
+                    <CcDatePickerInput key="fv" style={cellInp} value={periodoForm.fecha_vencimiento} onChange={(v) => setPeriodoForm((p) => ({ ...p, fecha_vencimiento: v }))} aria-label="Fecha de vencimiento" />,
+                    <input key="desc" style={cellInp} value={periodoForm.descripcion_servicio} onChange={(e) => setPeriodoForm((p) => ({ ...p, descripcion_servicio: e.target.value }))} />,
+                  ]}
                 />
                 <button
                   type="button"
@@ -845,7 +755,7 @@ export function ContratoOrdenesPagoPanel({
                   style={{
                     background: ui.primary,
                     border: "none",
-                    borderRadius: 8,
+                    borderRadius: 4,
                     padding: "10px 18px",
                     color: "#fff",
                     fontWeight: 700,
@@ -859,10 +769,8 @@ export function ContratoOrdenesPagoPanel({
               </div>
 
               <div>
-                <div style={{ fontSize: font.body, fontWeight: 700, color: ui.text, marginBottom: 12 }}>
-                  Vista previa de montos
-                </div>
-                <div style={{ ...cardStyle, marginBottom: 0 }}>
+                <div style={{ ...sheet.sectionTitle, marginBottom: 6 }}>Vista previa de montos</div>
+                <div style={{ ...sheet.sheetWrap, padding: 12 }}>
                   {montos ? (
                     <>
                       <div>Subtotal licencia: {formatCOP(montos.subtotal)}</div>
@@ -877,7 +785,7 @@ export function ContratoOrdenesPagoPanel({
                         Total a pagar (este corte): {formatCOP(montos.total)}
                       </div>
                       {resumen?.sugerencia_periodo?.proximo_numero_corte != null && (
-                        <div style={{ marginTop: 8, color: ui.textMuted, fontSize: font.caption }}>
+                        <div style={{ marginTop: 8, color: ui.textMuted, fontSize: "var(--cc-caption)" }}>
                           Próximo corte N.° {String(resumen.sugerencia_periodo.proximo_numero_corte).padStart(3, "0")}
                         </div>
                       )}
@@ -890,14 +798,12 @@ export function ContratoOrdenesPagoPanel({
             </div>
 
             <div>
-              <div style={{ fontSize: font.body, fontWeight: 700, color: ui.text, marginBottom: 8 }}>
-                Historial de órdenes
-              </div>
+              <div style={{ ...sheet.sectionTitle, marginBottom: 6 }}>Historial de órdenes</div>
               {historial.length === 0 ? (
                 <div style={{ fontSize: font.sm, color: ui.textMuted }}>Aún no hay órdenes generadas.</div>
               ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: font.caption, tableLayout: "fixed" }}>
+                <div style={sheet.sheetWrap} className="cc-admin-table-scroll">
+                  <table style={{ ...sheet.sheetTable, tableLayout: "fixed", minWidth: 720 }}>
                     <colgroup>
                       <col style={{ width: "7%" }} />
                       <col style={{ width: "16%" }} />
@@ -909,17 +815,7 @@ export function ContratoOrdenesPagoPanel({
                     <thead>
                       <tr>
                         {["Corte", "Período", "Total", "Estado", "Envío correo", "Acciones"].map((h) => (
-                          <th
-                            key={h}
-                            style={{
-                              textAlign: "left",
-                              color: ui.textMuted,
-                              padding: "6px 8px",
-                              borderBottom: `1px solid ${ui.border}`,
-                              fontSize: font.caption,
-                              textTransform: "uppercase",
-                            }}
-                          >
+                          <th key={h} style={sheet.th}>
                             {h}
                           </th>
                         ))}
@@ -934,16 +830,16 @@ export function ContratoOrdenesPagoPanel({
                         const puedeReenviar = o.envio_estado !== "enviado";
                         return (
                           <tr key={o.id}>
-                            <td style={{ padding: "8px", color: ui.text, borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
+                            <td style={{ ...sheet.td, verticalAlign: "top" }}>
                               {String(o.numero_corte).padStart(3, "0")}
                             </td>
-                            <td style={{ padding: "8px", color: ui.textMuted, borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
+                            <td style={{ ...sheet.td, color: ui.textMuted, verticalAlign: "top" }}>
                               {fmtFechaCorta(o.periodo_inicio)} — {fmtFechaCorta(o.periodo_fin)}
                             </td>
-                            <td style={{ padding: "8px", color: ui.text, borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
+                            <td style={{ ...sheet.td, verticalAlign: "top" }}>
                               {formatCOP(o.total ?? o.total_a_pagar)}
                             </td>
-                            <td style={{ padding: "8px", borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
+                            <td style={{ ...sheet.td, verticalAlign: "top" }}>
                               <span
                                 style={{
                                   display: "inline-block",
@@ -959,13 +855,13 @@ export function ContratoOrdenesPagoPanel({
                                 {est.label}
                               </span>
                             </td>
-                            <td style={{ padding: "8px", borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
+                            <td style={{ ...sheet.td, verticalAlign: "top" }}>
                               <span
                                 style={{
                                   display: "inline-block",
                                   padding: "2px 8px",
-                                  borderRadius: 10,
-                                  fontSize: font.caption,
+                                  borderRadius: 4,
+                                  fontSize: "var(--cc-caption)",
                                   fontWeight: 700,
                                   background: `${envMeta.color}22`,
                                   color: envMeta.color,
@@ -993,7 +889,7 @@ export function ContratoOrdenesPagoPanel({
                                 </div>
                               )}
                             </td>
-                            <td style={{ padding: "8px", borderBottom: `1px solid ${ui.border}`, verticalAlign: "top" }}>
+                            <td style={{ ...sheet.td, verticalAlign: "top" }}>
                               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                                   {puedeReenviar && (
