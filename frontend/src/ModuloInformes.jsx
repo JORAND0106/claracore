@@ -24,6 +24,7 @@ import {
   InformesFormatosTable,
 } from './informes/InformesLayout'
 import CorteSubConciliacionPopup from './informes/CorteSubConciliacionPopup'
+import ActaMesConciliacionPopup from './informes/ActaMesConciliacionPopup'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -613,6 +614,9 @@ export default function ModuloInformes({
   const [rotandoImagenFoEo04, setRotandoImagenFoEo04] = useState(null)
   const [formatoMes001Abierto, setFormatoMes001Abierto] = useState(false)
   const [formatoMes002Abierto, setFormatoMes002Abierto] = useState(false)
+  /** Popup de conciliación CC-MES-001 (antes de vista previa / tras Enviar). */
+  const [actaMesConcPopupOpen, setActaMesConcPopupOpen] = useState(false)
+  const [actaMesConcEnviado, setActaMesConcEnviado] = useState(false)
   /** CC-MES-002: filas por ítem; recogido por defecto (mismo criterio que CC-SUB/CC-SEM). */
   const [ccMes002ListadoItemsAbierto, setCcMes002ListadoItemsAbierto] = useState(false)
   const [itemsSemanal, setItemsSemanal] = useState([])
@@ -1938,6 +1942,14 @@ export default function ModuloInformes({
     }
   }
 
+  async function abrirConciliacionActaMes() {
+    if (contratoId == null || contratoId === '' || !actaConcId) {
+      setError('Selecciona el acta RPO.')
+      return
+    }
+    setActaMesConcPopupOpen(true)
+  }
+
   async function abrirVistaPreviaCorteMensual() {
     const authToken = getAuthToken()
     if (!authToken) {
@@ -1972,7 +1984,12 @@ export default function ModuloInformes({
       }
       const blob = await r.blob()
       const pdfUrl = URL.createObjectURL(blob)
-      setVistaPrevia({ fase: 'ok', tipo: 'corte-mes-pdf', pdfUrl })
+      setVistaPrevia({
+        fase: 'ok',
+        tipo: 'corte-mes-pdf',
+        pdfUrl,
+        sinConciliar: !actaMesConcEnviado,
+      })
     } catch (e) {
       const msg = String(e?.message || e)
       setVistaPrevia({ fase: 'error', tipo: 'corte-mes', mensaje: msg })
@@ -5605,7 +5622,25 @@ export default function ModuloInformes({
                   <select
                     style={sheetMes.cellSelect}
                     value={actaConcId}
-                    onChange={(e) => setActaConcId(e.target.value)}
+                    onChange={(e) => {
+                      const id = e.target.value
+                      setActaConcId(id)
+                      setActaMesConcEnviado(false)
+                      setActaMesConcPopupOpen(false)
+                      if (!id || contratoId == null) return
+                      const authToken = getAuthToken()
+                      if (!authToken) return
+                      const pathConc = withQsNivelAprobacionMes(
+                        `/informes/${encodeURIComponent(contratoId)}/acta-mes/${encodeURIComponent(id)}/conciliacion`
+                      )
+                      fetchConFallback(pathConc, { headers: { Authorization: `Bearer ${authToken}` } })
+                        .then(async (r) => {
+                          if (!r?.ok) return
+                          const j = await r.json()
+                          setActaMesConcEnviado(!!j.enviado)
+                        })
+                        .catch(() => {})
+                    }}
                   >
                     <option value="">
                       {actasConc.length === 0 ? 'Sin actas RPO en este contrato' : '— Selecciona el acta —'}
@@ -5783,10 +5818,29 @@ export default function ModuloInformes({
                     <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
                     <button
                       type="button"
+                      style={btnCcdToolbar(false, 'vista')}
+                      onClick={abrirConciliacionActaMes}
+                      title="Conciliar"
+                      aria-label="Conciliar informe mensual"
+                    >
+                      <IconoConciliar size={ui.iconSvg} />
+                    </button>
+                    <button
+                      type="button"
                       style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-mes', 'vista')}
-                      onClick={abrirVistaPreviaCorteMensual}
+                      onClick={() => {
+                        if (!actaMesConcEnviado && !puedeVistaPreviaCorteSinConciliar) {
+                          abrirConciliacionActaMes()
+                          return
+                        }
+                        abrirVistaPreviaCorteMensual()
+                      }}
                       disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-mes'}
-                      title="Vista previa PDF"
+                      title={actaMesConcEnviado
+                        ? 'Vista previa PDF'
+                        : puedeVistaPreviaCorteSinConciliar
+                          ? 'Vista previa sin conciliar (solo Desarrollador)'
+                          : 'Primero concilie y envíe el acta'}
                       aria-label="Vista previa PDF CC-MES-001"
                     >
                       {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-mes'
@@ -5796,7 +5850,11 @@ export default function ModuloInformes({
                     <button
                       type="button"
                       style={btnCcdToolbar(concPdfBusy, 'pdf')}
-                      onClick={() =>
+                      onClick={() => {
+                        if (!actaMesConcEnviado && !puedeVistaPreviaCorteSinConciliar) {
+                          abrirConciliacionActaMes()
+                          return
+                        }
                         descargarPdfConc(
                           rutaPdfConcConSello(
                             withQsNivelAprobacionMes(
@@ -5805,7 +5863,7 @@ export default function ModuloInformes({
                           ),
                           'CC-MES-001.pdf'
                         )
-                      }
+                      }}
                       disabled={concPdfBusy}
                       title="Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)"
                       aria-label="Descargar PDF CC-MES-001 con sello"
@@ -6629,6 +6687,32 @@ export default function ModuloInformes({
         onDescargarConsolidado={() => {
           setCorteConcPopupOpen(false)
           descargarPdfCorteConsolidado()
+        }}
+      />
+
+      <ActaMesConciliacionPopup
+        open={actaMesConcPopupOpen}
+        onClose={() => setActaMesConcPopupOpen(false)}
+        contratoId={contratoId}
+        actaId={actaConcId}
+        qsNivelAprobacion={
+          nivelAprobacionMes != null && nivelAprobacionMes !== ''
+            ? `?nivel_aprobacion=${encodeURIComponent(nivelAprobacionMes)}`
+            : ''
+        }
+        fetchConFallback={fetchConFallback}
+        getAuthToken={getAuthToken}
+        puedeEditarCcd={!!puedeEditarCcd}
+        t={t}
+        fontSize={f?.base || 14}
+        onEnviado={() => {
+          setActaMesConcEnviado(true)
+          setActaMesConcPopupOpen(false)
+          abrirVistaPreviaCorteMensual()
+        }}
+        onAbrirVistaPrevia={() => {
+          setActaMesConcPopupOpen(false)
+          abrirVistaPreviaCorteMensual()
         }}
       />
 

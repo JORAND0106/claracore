@@ -982,6 +982,8 @@ class ContratoCreate(BaseModel):
     numero_interventoria: Optional[str] = None
     aiu: Optional[float] = None
     iva: Optional[float] = None
+    anticipo: Optional[float] = None
+    amortizacion_pct: Optional[float] = None
     valor_componente_ambiental: Optional[float] = None
     valor_componente_social: Optional[float] = None
     valor_componente_pmt: Optional[float] = None
@@ -1047,6 +1049,8 @@ class ContratoUpdate(BaseModel):
     fase: Optional[str] = None  # 'PRESUPUESTO' | 'LIQUIDACION'
     aiu: Optional[float] = None
     iva: Optional[float] = None
+    anticipo: Optional[float] = None
+    amortizacion_pct: Optional[float] = None
     valor_componente_ambiental: Optional[float] = None
     valor_componente_social: Optional[float] = None
     valor_componente_pmt: Optional[float] = None
@@ -5960,8 +5964,9 @@ _CONTRATOS_SELECT_LISTA = (
 # Detalle sin plano_geojson (decenas de MB): el plano se pide con GET .../plano-geojson o ?include_plano=1.
 _CONTRATOS_SELECT_DETALLE_SIN_PLANO = (
     _CONTRATOS_SELECT_LISTA
-    + ",aiu,iva,valor_componente_ambiental,valor_componente_social,valor_componente_pmt,"
-    "costo_directo_contrato,costos_adicionales_lista,sicoe_consecutivos_desde_uno,ccd_firma_config"
+    + ",aiu,iva,anticipo,amortizacion_pct,valor_componente_ambiental,valor_componente_social,"
+    "valor_componente_pmt,costo_directo_contrato,costos_adicionales_lista,"
+    "sicoe_consecutivos_desde_uno,ccd_firma_config"
 )
 # Al editar con include_plano=1, traemos * para no romper si faltan columnas nuevas en un entorno.
 _CONTRATOS_SELECT_DETALLE = "*"
@@ -8385,6 +8390,8 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "numero_interventoria": (contrato.numero_interventoria or "").strip() or None,
         "aiu": contrato.aiu,
         "iva": contrato.iva,
+        "anticipo": contrato.anticipo,
+        "amortizacion_pct": contrato.amortizacion_pct,
         "valor_componente_ambiental": contrato.valor_componente_ambiental,
         "valor_componente_social": contrato.valor_componente_social,
         "valor_componente_pmt": contrato.valor_componente_pmt,
@@ -8396,11 +8403,24 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
     def _ins():
         return supabase.table("contratos").insert(payload).execute()
 
-    result = _contratos_write_with_schema_retry(
-        "insert",
-        _ins,
-        has_numero_interventoria=("numero_interventoria" in payload),
-    )
+    try:
+        result = _contratos_write_with_schema_retry(
+            "insert",
+            _ins,
+            has_numero_interventoria=("numero_interventoria" in payload),
+        )
+    except Exception as exc:
+        # Columnas anticipo / amortizacion_pct aún no migradas
+        if _is_pgrst_missing_column(exc, "anticipo") or _is_pgrst_missing_column(exc, "amortizacion_pct"):
+            payload.pop("anticipo", None)
+            payload.pop("amortizacion_pct", None)
+            result = _contratos_write_with_schema_retry(
+                "insert",
+                _ins,
+                has_numero_interventoria=("numero_interventoria" in payload),
+            )
+        else:
+            raise
     nuevo = result.data[0]
     if contrato.export_palette is not None:
         try:
@@ -8427,11 +8447,24 @@ def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Dep
         def _upd():
             return supabase.table("contratos").update(data).eq("id", contrato_id).execute()
 
-        _contratos_write_with_schema_retry(
-            "update",
-            _upd,
-            has_numero_interventoria=("numero_interventoria" in data),
-        )
+        try:
+            _contratos_write_with_schema_retry(
+                "update",
+                _upd,
+                has_numero_interventoria=("numero_interventoria" in data),
+            )
+        except Exception as exc:
+            if _is_pgrst_missing_column(exc, "anticipo") or _is_pgrst_missing_column(exc, "amortizacion_pct"):
+                data.pop("anticipo", None)
+                data.pop("amortizacion_pct", None)
+                if data:
+                    _contratos_write_with_schema_retry(
+                        "update",
+                        _upd,
+                        has_numero_interventoria=("numero_interventoria" in data),
+                    )
+            else:
+                raise
     if palette_payload is not None:
         _guardar_export_palette_contrato(contrato_id, palette_payload)
     return {"mensaje": "Contrato actualizado"}

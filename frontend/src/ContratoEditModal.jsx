@@ -16,6 +16,11 @@ import {
   mergeExportPalette,
   setExportPaletteTier,
 } from "./utils/exportPalette";
+import {
+  decimalAPuntosPct,
+  fmtPctDesdeDecimal,
+  puntosPctADecimal,
+} from "./admin/catalogoInsumosTributos";
 
 const ALL_TABS = [
   { id: "info", label: "Información del contrato" },
@@ -707,6 +712,124 @@ export default function ContratoEditModal({
                     </div>
                   )}
                 </div>
+              </div>
+              <div style={{ fontSize: font.caption, color: ui.textMuted, letterSpacing: 0.6, margin: "12px 0 8px" }}>
+                ANTICIPO Y AMORTIZACIÓN (informe mensual)
+              </div>
+              <div
+                style={{
+                  border: `1px solid ${ui.border || "#cbd5e1"}`,
+                  borderRadius: 6,
+                  overflow: "hidden",
+                  marginBottom: 12,
+                  background: ui.inputBg || "#fff",
+                }}
+              >
+                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                  <tbody>
+                    <tr>
+                      <td
+                        style={{
+                          ...lbl,
+                          width: "22%",
+                          padding: "8px 10px",
+                          borderRight: `1px solid ${ui.border || "#e2e8f0"}`,
+                          borderBottom: `1px solid ${ui.border || "#e2e8f0"}`,
+                          background: ui.theadBg || "#f1f5f9",
+                          margin: 0,
+                        }}
+                      >
+                        Valor del anticipo
+                      </td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          borderBottom: `1px solid ${ui.border || "#e2e8f0"}`,
+                          borderRight: `1px solid ${ui.border || "#e2e8f0"}`,
+                          width: "28%",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                          <input
+                            style={{ ...inp, flex: "1 1 auto", minWidth: 0, textAlign: "right", marginBottom: 0 }}
+                            type="number"
+                            min="0"
+                            step="any"
+                            placeholder="0"
+                            title="Valor en COP"
+                            value={form.anticipo}
+                            onChange={(e) => setForm((f) => ({ ...f, anticipo: e.target.value }))}
+                          />
+                          <span
+                            style={{
+                              flex: "0 0 auto",
+                              minWidth: 72,
+                              textAlign: "right",
+                              fontSize: font.caption,
+                              color: ui.textMuted,
+                              fontVariantNumeric: "tabular-nums",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {form.anticipo !== "" && !Number.isNaN(parseFloat(form.anticipo))
+                              ? formatCOP(form.anticipo)
+                              : "—"}
+                          </span>
+                        </div>
+                      </td>
+                      <td
+                        style={{
+                          ...lbl,
+                          width: "22%",
+                          padding: "8px 10px",
+                          borderRight: `1px solid ${ui.border || "#e2e8f0"}`,
+                          borderBottom: `1px solid ${ui.border || "#e2e8f0"}`,
+                          background: ui.theadBg || "#f1f5f9",
+                          margin: 0,
+                        }}
+                      >
+                        Porcentaje de amortización
+                      </td>
+                      <td style={{ padding: "6px 8px", borderBottom: `1px solid ${ui.border || "#e2e8f0"}`, width: "28%" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                          <input
+                            style={{ ...inp, flex: "1 1 auto", minWidth: 0, textAlign: "right", marginBottom: 0 }}
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="any"
+                            inputMode="decimal"
+                            placeholder="0.05"
+                            title="Decimal (0.05 = 5%)"
+                            value={puntosPctADecimal(form.amortizacion_pct)}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setForm((f) => ({
+                                ...f,
+                                amortizacion_pct: v === "" ? "" : String(decimalAPuntosPct(v) ?? ""),
+                              }));
+                            }}
+                          />
+                          <span
+                            style={{
+                              flex: "0 0 auto",
+                              minWidth: 52,
+                              textAlign: "right",
+                              fontWeight: 700,
+                              fontSize: font.sm || font.caption,
+                              color: ui.primary,
+                              fontVariantNumeric: "tabular-nums",
+                              whiteSpace: "nowrap",
+                            }}
+                            title="Equivalente %"
+                          >
+                            {fmtPctDesdeDecimal(puntosPctADecimal(form.amortizacion_pct))}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
               <div style={{ fontSize: font.caption, color: ui.textMuted, letterSpacing: 0.6, margin: "4px 0 8px" }}>VALORES CONTRATUALES (COP$)</div>
               <div className="cc-contrato-modal-body-grid" style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 8 }}>

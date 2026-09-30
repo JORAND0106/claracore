@@ -1811,6 +1811,185 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     ctx["cortes_acum_anteriores_ids"] = prev_ids
 
 
+def _contexto_acta_mes_conciliacion(
+    contrato_id: int,
+    acta_id: int,
+    current_user: dict,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Contexto CC-MES-001 con bloques Actualizadas/Presente/Acumulado/Saldo,
+    AIU del contrato, amortización de anticipo y resumen 4 cols.
+    Reutiliza acta_mes_conciliacion → corte_sub_conciliacion (misma matemática).
+    """
+    import acta_mes_conciliacion as amc
+    from ccd_conciliacion import aggregate_items_conciliacion
+
+    if not _acta_pertenece_contrato(contrato_id, acta_id):
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+
+    acta = _row(
+        "actas",
+        "id, contrato_id, consecutivo, numero_rpo, fecha_inicio, fecha_fin, tipo_grupo",
+        id=int(acta_id),
+    ) or {}
+    try:
+        consecutivo = int(acta.get("consecutivo") or 0)
+    except (TypeError, ValueError):
+        consecutivo = 0
+
+    contrato = _row(
+        "contratos",
+        "id, numero, objeto, contratista, nit, interventoria, logo_contratista, aiu, iva, anticipo, amortizacion_pct",
+        id=int(contrato_id),
+    )
+    if not contrato:
+        # Degradación si faltan columnas anticipo
+        contrato = _row(
+            "contratos",
+            "id, numero, objeto, contratista, nit, interventoria, logo_contratista, aiu, iva",
+            id=int(contrato_id),
+        )
+    if not contrato:
+        raise HTTPException(404, "Contrato no encontrado")
+
+    reg = fetch_registros_informe_cc_mes_por_acta(
+        _sb, int(contrato_id), int(acta_id), nivel_aprobacion=nivel_aprobacion
+    )
+    items_pres, _total_raw = aggregate_items_conciliacion(reg)
+
+    cfg = amc.fetch_anticipo_amortizacion_contrato(_sb, int(contrato_id))
+    vu_map = amc.precios_vu_contrato(_sb, contrato_id=int(contrato_id))
+    items_pres, sin_precio = amc.aplicar_precios_contrato_a_items(items_pres, vu_map)
+
+    cant_act = amc.cantidades_actualizadas_contrato(_sb, contrato_id=int(contrato_id))
+    previos = amc.actas_enviadas_anteriores(
+        _sb, contrato_id=int(contrato_id), consecutivo_actual=consecutivo
+    )
+    prev_ids = [int(c["id"]) for c in previos if c.get("id") is not None]
+    cant_ant = amc.cantidades_por_item_actas(
+        _sb,
+        contrato_id=int(contrato_id),
+        acta_ids=prev_ids,
+        nivel_aprobacion=nivel_aprobacion,
+    )
+    items = amc.enriquecer_items_bloques(
+        list(items_pres or []),
+        cant_actualizadas=cant_act,
+        cant_acum_anterior=cant_ant,
+        vu_por_item=vu_map,
+    )
+    for it in items:
+        if _sf(it.get("vlr_unitario")) <= 0 and _sf(it.get("vlr_unitario_sub")) <= 0:
+            it["sin_precio"] = True
+    items = amc.filtrar_items_con_cantidades(items)
+    _sort_items_corte_por_item_numero_asc(items)
+    total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
+
+    tributos = amc.tributos_from_contrato(cfg.get("aiu"), cfg.get("iva"))
+    aiu = amc.calc_aiu_desglose(total_costo, tributos)
+    aiu["pct_aiu"] = aiu.get("pct_utilidad")
+    aiu["valor_aiu"] = aiu.get("valor_utilidad")
+
+    amort_ant = amc.amortizado_en_actas_enviadas_anteriores(
+        _sb, contrato_id=int(contrato_id), consecutivo_actual=consecutivo
+    )
+    amort = amc.calc_amortizacion(
+        aiu.get("costo_directo_mas_aiu") or 0,
+        anticipo=cfg.get("anticipo"),
+        amortizacion_pct=cfg.get("amortizacion_pct"),
+        amortizado_anterior=amort_ant,
+    )
+
+    conc = amc.fetch_conciliacion(_sb, int(acta_id))
+    otros: List[dict] = []
+    if conc and conc.get("id"):
+        otros = amc.fetch_otros_conceptos(_sb, int(conc["id"]))
+        if str(conc.get("estado") or "") == amc.ESTADO_ENVIADO:
+            aiu = {
+                "pct_administracion": conc.get("pct_administracion"),
+                "pct_imprevistos": conc.get("pct_imprevistos"),
+                "pct_utilidad": conc.get("pct_utilidad"),
+                "pct_iva_utilidad": conc.get("pct_iva_utilidad"),
+                "pct_aiu": conc.get("pct_aiu", conc.get("pct_utilidad")),
+                "costo_directo": conc.get("costo_directo"),
+                "valor_administracion": conc.get("valor_administracion"),
+                "valor_imprevistos": conc.get("valor_imprevistos"),
+                "valor_utilidad": conc.get("valor_utilidad"),
+                "valor_iva_utilidad": conc.get("valor_iva_utilidad"),
+                "valor_aiu": conc.get("valor_aiu", conc.get("valor_utilidad")),
+                "costo_directo_mas_aiu": conc.get("costo_directo_mas_aiu"),
+            }
+            amort = {
+                "anticipo_entregado": conc.get("anticipo_entregado", amort.get("anticipo_entregado")),
+                "amortizado_anterior": conc.get("amortizado_anterior", amort.get("amortizado_anterior")),
+                "pct_amortizacion": conc.get("pct_amortizacion", amort.get("pct_amortizacion")),
+                "amortizacion_presente": conc.get("amortizacion_presente", amort.get("amortizacion_presente")),
+                "saldo_por_amortizar": conc.get("saldo_por_amortizar", amort.get("saldo_por_amortizar")),
+                "subtotal_despues_amortizacion": conc.get(
+                    "subtotal_despues_amortizacion", amort.get("subtotal_despues_amortizacion")
+                ),
+                "tope_por_saldo": False,
+            }
+    tot_otros = amc.total_otros_conceptos(otros)
+    if conc and str(conc.get("estado") or "") == amc.ESTADO_ENVIADO:
+        tot_otros = _sf(conc.get("total_otros_conceptos"), tot_otros)
+        gt = _sf(
+            conc.get("gran_total"),
+            amc.gran_total_con_amortizacion(amort.get("subtotal_despues_amortizacion"), tot_otros),
+        )
+    else:
+        gt = amc.gran_total_con_amortizacion(amort.get("subtotal_despues_amortizacion"), tot_otros)
+
+    aiu_otros_ant = amc.fetch_aiu_otros_anteriores_enviados(
+        _sb, contrato_id=int(contrato_id), consecutivo_actual=consecutivo
+    )
+    aiu_override = None
+    amort_override = None
+    if conc and str(conc.get("estado") or "") == amc.ESTADO_ENVIADO:
+        aiu_override = aiu
+        amort_override = amort
+    resumen4 = amc.build_resumen_contrato_4cols(
+        items=items,
+        tributos=tributos,
+        anticipo=cfg.get("anticipo"),
+        amortizacion_pct=cfg.get("amortizacion_pct"),
+        amortizado_anterior=amort_ant,
+        otros_presente=tot_otros,
+        aiu_otros_anterior=aiu_otros_ant,
+        aiu_presente_override=aiu_override,
+        amort_presente_override=amort_override,
+    )
+
+    u = current_user if isinstance(current_user, dict) else dict(current_user)
+    usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
+    usuario_cargo = u.get("cargo_nombre", "—") or "—"
+
+    return {
+        "contrato": contrato,
+        "acta": acta,
+        "items": items,
+        "total_costo": total_costo if math.isfinite(total_costo) else 0.0,
+        "items_sin_precio": [
+            str(i.get("item_numero") or "")
+            for i in items
+            if i.get("sin_precio") and str(i.get("item_numero") or "").strip()
+        ] or sin_precio,
+        "conciliacion": conc,
+        "aiu_resumen": aiu,
+        "amortizacion": amort,
+        "otros_conceptos": otros,
+        "gran_total": gt,
+        "resumen_4cols": resumen4,
+        "actas_acum_anteriores_ids": prev_ids,
+        "usuario_nombre": usuario_nombre,
+        "usuario_cargo": usuario_cargo,
+        "nivel_aprobacion": nivel_aprobacion,
+        "cfg_anticipo": cfg,
+    }
+
+
 def _contexto_memoria_item(
     contrato_id: int,
     corte_id: int,
@@ -5688,6 +5867,12 @@ class CorteSubConciliacionBody(BaseModel):
     reabrir: bool = False
 
 
+class ActaMesConciliacionBody(BaseModel):
+    otros_conceptos: Optional[List[dict]] = None
+    enviar: bool = False
+    reabrir: bool = False
+
+
 def _corte_pertenece_contrato(corte_id: int, contrato_id: int) -> dict:
     corte = _row("subcontratista_cortes", "*", id=int(corte_id))
     if not corte:
@@ -5826,6 +6011,173 @@ def put_corte_sub_conciliacion(
         "amortizacion": amort,
         "gran_total": saved.get("gran_total"),
         "items_sin_precio": ctx.get("items_sin_precio") or [],
+    }
+
+
+# ── CC-MES-001 conciliación mensual (reutiliza matemática CC-SUB) ──────────────
+
+@router.get("/{contrato_id}/acta-mes/{acta_id}/conciliacion")
+def get_acta_mes_conciliacion(
+    contrato_id: int,
+    acta_id: int,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    current_user: dict = Depends(_get_user),
+):
+    """Datos del popup de conciliación mensual: AIU contrato, amortización, otros, 4 cols."""
+    _perm_informes_ccd_lectura(current_user)
+    import acta_mes_conciliacion as amc
+
+    niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+    ctx = _contexto_acta_mes_conciliacion(
+        contrato_id, acta_id, current_user, nivel_aprobacion=niv
+    )
+    aiu = ctx.get("aiu_resumen") or amc.calc_aiu_desglose(ctx.get("total_costo") or 0)
+    conc = ctx.get("conciliacion")
+    otros = ctx.get("otros_conceptos") or []
+    estado = str((conc or {}).get("estado") or amc.ESTADO_BORRADOR)
+    puede_reabrir = False
+    try:
+        _perm_informes_ccd(current_user, "editar", contrato_id=contrato_id)
+        puede_reabrir = True
+    except HTTPException:
+        puede_reabrir = False
+    return {
+        "acta_id": int(acta_id),
+        "estado": estado,
+        "enviado": estado == amc.ESTADO_ENVIADO,
+        "bloqueado": estado == amc.ESTADO_ENVIADO,
+        "puede_reabrir": puede_reabrir,
+        "costo_directo": aiu.get("costo_directo"),
+        "aiu": aiu,
+        "aiu_lineas": amc.aiu_lineas_resumen(aiu),
+        "amortizacion": ctx.get("amortizacion"),
+        "amortizacion_lineas": amc.amortizacion_lineas_resumen(ctx.get("amortizacion") or {}),
+        "resumen_4cols": ctx.get("resumen_4cols"),
+        "items_sin_precio": ctx.get("items_sin_precio") or [],
+        "otros_conceptos": otros,
+        "total_otros_conceptos": amc.total_otros_conceptos(otros)
+            if estado != amc.ESTADO_ENVIADO
+            else _sf((conc or {}).get("total_otros_conceptos"), amc.total_otros_conceptos(otros)),
+        "gran_total": ctx.get("gran_total"),
+        "items_resumen": {
+            "n_items": len(ctx.get("items") or []),
+            "total_presente": ctx.get("total_costo"),
+        },
+        "conciliacion_id": (conc or {}).get("id"),
+        "actas_acum_anteriores_ids": ctx.get("actas_acum_anteriores_ids") or [],
+    }
+
+
+@router.put("/{contrato_id}/acta-mes/{acta_id}/conciliacion")
+def put_acta_mes_conciliacion(
+    contrato_id: int,
+    acta_id: int,
+    body: ActaMesConciliacionBody,
+    nivel_aprobacion: Optional[int] = _NIVEL_APROBACION_MES_Q,
+    current_user: dict = Depends(_get_user),
+):
+    """Guarda borrador o envía (bloquea). Reabrir requiere permiso editar en Informes."""
+    import acta_mes_conciliacion as amc
+
+    if not _acta_pertenece_contrato(contrato_id, acta_id):
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    prev = amc.fetch_conciliacion(_sb, int(acta_id))
+    enviado = bool(prev and str(prev.get("estado")) == amc.ESTADO_ENVIADO)
+
+    if body.reabrir:
+        _perm_informes_ccd(current_user, "editar", contrato_id=contrato_id)
+        if not enviado:
+            raise HTTPException(400, "El acta no está enviada.")
+    elif enviado:
+        raise HTTPException(
+            409,
+            "El acta ya fue enviada. Reábrala con permiso de edición para modificarla.",
+        )
+    else:
+        _perm_informes_ccd_lectura(current_user, contrato_id=contrato_id)
+
+    niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
+    ctx = _contexto_acta_mes_conciliacion(
+        contrato_id, acta_id, current_user, nivel_aprobacion=niv
+    )
+    cfg = ctx.get("cfg_anticipo") or amc.fetch_anticipo_amortizacion_contrato(_sb, int(contrato_id))
+    tributos = amc.tributos_from_contrato(cfg.get("aiu"), cfg.get("iva"))
+    aiu = amc.calc_aiu_desglose(ctx.get("total_costo") or 0, tributos)
+    aiu["pct_aiu"] = aiu.get("pct_utilidad")
+    aiu["valor_aiu"] = aiu.get("valor_utilidad")
+    amort = ctx.get("amortizacion") or amc.calc_amortizacion(aiu.get("costo_directo_mas_aiu") or 0)
+    uid = str(current_user.get("id") or "") or None
+    try:
+        saved = amc.guardar_conciliacion(
+            _sb,
+            contrato_id=int(contrato_id),
+            acta_id=int(acta_id),
+            aiu=aiu,
+            otros=list(body.otros_conceptos or []),
+            usuario_id=uid,
+            enviar=bool(body.enviar) and not bool(body.reabrir),
+            reabrir=bool(body.reabrir),
+            amortizacion=amort,
+        )
+    except PermissionError as e:
+        raise HTTPException(409, str(e)) from e
+    except Exception as e:
+        _log.exception("put_acta_mes_conciliacion")
+        raise HTTPException(503, f"No se pudo guardar la conciliación mensual: {e!s}") from e
+
+    return {
+        "ok": True,
+        "estado": saved.get("estado"),
+        "enviado": str(saved.get("estado")) == amc.ESTADO_ENVIADO,
+        "conciliacion": saved,
+        "aiu": aiu,
+        "amortizacion": amort,
+        "gran_total": saved.get("gran_total"),
+        "items_sin_precio": ctx.get("items_sin_precio") or [],
+        "resumen_4cols": ctx.get("resumen_4cols"),
+    }
+
+
+@router.post("/{contrato_id}/acta-mes/{acta_id}/otros-conceptos/soporte")
+async def post_acta_mes_otro_concepto_soporte(
+    contrato_id: int,
+    acta_id: int,
+    archivo: UploadFile = File(...),
+    current_user: dict = Depends(_get_user),
+):
+    """Sube soporte JPG/PNG/PDF de un otro concepto del informe mensual."""
+    _perm_informes_ccd_lectura(current_user)
+    import acta_mes_conciliacion as amc
+    from azure_blob_storage import path_subcontratista_documento, upload_blob_private
+
+    if not _acta_pertenece_contrato(contrato_id, acta_id):
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    prev = amc.fetch_conciliacion(_sb, int(acta_id))
+    if prev and str(prev.get("estado")) == amc.ESTADO_ENVIADO:
+        raise HTTPException(409, "Acta enviada: reabra antes de adjuntar soportes.")
+
+    data = await archivo.read()
+    try:
+        mime = amc.validate_soporte_upload(archivo.content_type, len(data or b""))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    fname = amc.sanitize_filename(archivo.filename or "soporte.pdf")
+    # subcontratista_id=0: ruta por contrato para soportes del informe mensual
+    blob_path = path_subcontratista_documento(
+        int(contrato_id),
+        0,
+        f"acta_mes_{int(acta_id)}_otro",
+        fname,
+    )
+    try:
+        upload_blob_private(blob_path, data, mime, overwrite=True)
+    except Exception as e:
+        _log.exception("post_acta_mes_otro_concepto_soporte upload")
+        raise HTTPException(503, f"No se pudo subir el soporte: {e!s}") from e
+    return {
+        "soporte_azure_path": blob_path,
+        "soporte_nombre": fname,
+        "soporte_mime": mime,
     }
 
 
@@ -6247,36 +6599,178 @@ def pdf_cc_mes_001_acta(
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
     niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
-    reg = fetch_registros_informe_cc_mes_por_acta(
-        _sb, contrato_id, acta_id, nivel_aprobacion=niv
+    pdf_bytes = _pdf_bytes_cc_mes_001_desde_ctx(
+        contrato_id, acta_id, current_user, nivel_aprobacion=niv
     )
-    items, total = aggregate_items_conciliacion(reg)
-    _sort_items_corte_por_item_numero_asc(items)
     ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
-    cons = str(ac.get("consecutivo") or "—")
-    fa = "—"
-    pdf_bytes = _pdf_bytes_conciliacion_informe_v1(
-        contrato_id,
-        current_user,
-        formato_codigo=CODIGO_FORMATO_CCD_CC_MES_001,
-        contexto_tipo="acta_rpo",
-        contexto_id=acta_id,
-        titulo_documento="INFORME EJECUCIÓN MENSUAL (CONCILIACIÓN INTERVENTORÍA–CONTRATISTA)",
-        c3_label="ACTA RPO",
-        c3_value=nrpo,
-        c4_label="FECHA ACTA",
-        c4_value=fa,
-        pie_contexto=f"Acta RPO {nrpo} · consecutivo {cons} · Misma lógica que módulo Actas (N1·N2·N3 aprob. en cascada, costo directo por línea)",
-        items=items,
-        total_costo=total,
-    )
     fname = _safe_filename_part(f"CC-MES-001_acta_{nrpo}.pdf")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+def _pdf_bytes_cc_mes_001_desde_ctx(
+    contrato_id: int,
+    acta_id: int,
+    current_user: dict,
+    *,
+    nivel_aprobacion: Optional[int] = None,
+) -> bytes:
+    """PDF CC-MES-001 landscape: ítems 4 bloques + resumen conciliación (misma lógica que popup)."""
+    ctx = _contexto_acta_mes_conciliacion(
+        contrato_id, acta_id, current_user, nivel_aprobacion=nivel_aprobacion
+    )
+    contrato = ctx["contrato"]
+    acta = ctx["acta"]
+    items = ctx["items"]
+    total_costo = ctx["total_costo"]
+    usuario_nombre = ctx["usuario_nombre"]
+    usuario_cargo = ctx["usuario_cargo"]
+    nrpo = str(acta.get("numero_rpo") or acta.get("consecutivo") or acta_id)
+    cons = str(acta.get("consecutivo") or "—")
+    fa = "—"
+    firma_cfg = _get_firma_cfg_para_documento(
+        contrato_id, CODIGO_FORMATO_CCD_CC_MES_001, contexto_tipo="acta_rpo", contexto_id=acta_id
+    )
+    fc = firma_cfg or {}
+    e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
+    r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
+    a_uid = _opt_usuario_id(fc.get("aprobo_usuario_id"))
+    enom = str(fc.get("elaboro_nombre") or "").strip()
+    rnom = str(fc.get("reviso_nombre") or "").strip()
+    anom = str(fc.get("aprobo_nombre") or "").strip()
+    elaboro_uri = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, CODIGO_FORMATO_CCD_CC_MES_001, "elaboro", e_uid, enom, current_user
+    )
+    reviso_uri = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, CODIGO_FORMATO_CCD_CC_MES_001, "reviso", r_uid, rnom, current_user
+    )
+    aprobo_uri = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, CODIGO_FORMATO_CCD_CC_MES_001, "aprobo", a_uid, anom, current_user
+    )
+    _conc = ctx.get("conciliacion") or {}
+    vista_sin_conciliar = str(_conc.get("estado") or "") != "enviado"
+    html = _html_cc_mes_001_v1(
+        contrato,
+        acta,
+        items,
+        total_costo,
+        usuario_nombre,
+        usuario_cargo,
+        firma_cfg=firma_cfg,
+        elaboro_firma_data_uri=elaboro_uri,
+        reviso_firma_data_uri=reviso_uri,
+        aprobo_firma_data_uri=aprobo_uri,
+        aiu_resumen=ctx.get("aiu_resumen"),
+        otros_conceptos=ctx.get("otros_conceptos") or [],
+        gran_total=ctx.get("gran_total"),
+        amortizacion=ctx.get("amortizacion"),
+        items_sin_precio=ctx.get("items_sin_precio") or [],
+        vista_sin_conciliar=vista_sin_conciliar,
+        resumen_4cols=ctx.get("resumen_4cols"),
+        c3_label="ACTA RPO",
+        c3_value=nrpo,
+        c4_label="CONSECUTIVO",
+        c4_value=cons,
+        pie_contexto=(
+            f"Acta RPO {nrpo} · consecutivo {cons} · fecha {fa} · "
+            "Bloques Actualizadas|Presente|Acumulado|Saldo · acumulado solo actas enviadas"
+        ),
+    )
+    return _to_pdf(html)
+
+
+def _html_cc_mes_001_v1(
+    contrato,
+    acta,
+    items,
+    total_costo,
+    usuario_nombre,
+    usuario_cargo,
+    firma_cfg: Optional[Dict[str, Any]] = None,
+    elaboro_firma_data_uri: Optional[str] = None,
+    reviso_firma_data_uri: Optional[str] = None,
+    aprobo_firma_data_uri: Optional[str] = None,
+    *,
+    aiu_resumen: Optional[Dict[str, Any]] = None,
+    otros_conceptos: Optional[List[dict]] = None,
+    gran_total: Optional[float] = None,
+    amortizacion: Optional[Dict[str, Any]] = None,
+    items_sin_precio: Optional[List[str]] = None,
+    vista_sin_conciliar: bool = False,
+    resumen_4cols: Optional[Dict[str, Any]] = None,
+    c3_label: str = "ACTA RPO",
+    c3_value: str = "—",
+    c4_label: str = "CONSECUTIVO",
+    c4_value: str = "—",
+    pie_contexto: str = "",
+) -> str:
+    """CC-MES-001 landscape: mismos bloques/resumen que CC-SUB-001, encabezado de acta mensual."""
+    # Valores en celdas meta: c3_value en slot SUBCONTRATISTA, c4_value vía consecutivo del corte
+    sub = {
+        "razon_social": c3_value,
+        "nombre_contacto": str((firma_cfg or {}).get("aprobo_nombre") or "").strip() or "—",
+    }
+    try:
+        cons_int = int(float(str(c4_value).replace(",", "."))) if str(c4_value).strip() not in ("", "—") else 0
+    except (TypeError, ValueError):
+        cons_int = 0
+    corte = {
+        "consecutivo": cons_int or (acta or {}).get("consecutivo"),
+        "fecha_inicio": (acta or {}).get("fecha_inicio") if isinstance(acta, dict) else None,
+        "fecha_fin": (acta or {}).get("fecha_fin") if isinstance(acta, dict) else None,
+    }
+    html = _html_cc_sub_v1_plain(
+        contrato,
+        sub,
+        corte,
+        items,
+        total_costo,
+        usuario_nombre,
+        usuario_cargo,
+        firma_cfg=firma_cfg,
+        elaboro_firma_data_uri=elaboro_firma_data_uri,
+        reviso_firma_data_uri=reviso_firma_data_uri,
+        aiu_resumen=aiu_resumen,
+        otros_conceptos=otros_conceptos,
+        gran_total=gran_total,
+        amortizacion=amortizacion,
+        items_sin_precio=items_sin_precio,
+        vista_sin_conciliar=vista_sin_conciliar,
+        resumen_4cols=resumen_4cols,
+    )
+    html = html.replace(CODIGO_FORMATO_CCD_CC_SUB_001, CODIGO_FORMATO_CCD_CC_MES_001)
+    html = html.replace(
+        "INFORME CORTE DE SUB CONTRATISTA",
+        "INFORME EJECUCIÓN MENSUAL (CONCILIACIÓN INTERVENTORÍA–CONTRATISTA)",
+    )
+    html = html.replace(">SUB CONTRATISTA<", f">{_h(c3_label)}<")
+    html = html.replace(">CORTE<", f">{_h(c4_label)}<")
+    if aprobo_firma_data_uri:
+        bd = "border:1px solid #9ca3af"
+        fc = firma_cfg or {}
+        aprobo_n = _h(str(fc.get("aprobo_nombre") or "").strip() or "—")
+        aprobo_c = _h(str(fc.get("aprobo_cargo") or "").strip() or "—")
+        aprobo_td = _html_cc_sub_td_firma_columna(bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri)
+        import re as _re
+
+        html = _re.sub(
+            r'<td style="width:33\.33%;[^>]*>\s*<div class="ccd-firma-slot-hdr">Aprobó:</div>.*?</td>\s*</tr>',
+            aprobo_td + "\n</tr>",
+            html,
+            count=1,
+            flags=_re.DOTALL,
+        )
+    if pie_contexto:
+        html = html.replace(
+            "Período del corte:",
+            f"{_h(pie_contexto)} · Período:",
+            1,
+        )
+    return html
 
 
 @router.get("/{contrato_id}/pdf/cc-sem-002/semana/{semana_id}")
@@ -6639,30 +7133,11 @@ def pdf_cc_mes_001_acta_con_sello_firma(
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
     niv = _nivel_aprobacion_mes_query(contrato_id, nivel_aprobacion)
-    reg = fetch_registros_informe_cc_mes_por_acta(
-        _sb, contrato_id, acta_id, nivel_aprobacion=niv
+    pdf_bytes = _pdf_bytes_cc_mes_001_desde_ctx(
+        contrato_id, acta_id, current_user, nivel_aprobacion=niv
     )
-    items, total = aggregate_items_conciliacion(reg)
-    _sort_items_corte_por_item_numero_asc(items)
     ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
     nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
-    cons = str(ac.get("consecutivo") or "—")
-    fa = "—"
-    pdf_bytes = _pdf_bytes_conciliacion_informe_v1(
-        contrato_id,
-        current_user,
-        formato_codigo=CODIGO_FORMATO_CCD_CC_MES_001,
-        contexto_tipo="acta_rpo",
-        contexto_id=acta_id,
-        titulo_documento="INFORME EJECUCIÓN MENSUAL (CONCILIACIÓN INTERVENTORÍA–CONTRATISTA)",
-        c3_label="ACTA RPO",
-        c3_value=nrpo,
-        c4_label="FECHA ACTA",
-        c4_value=fa,
-        pie_contexto=f"Acta RPO {nrpo} · consecutivo {cons} · Misma lógica que módulo Actas (N1·N2·N3 aprob. en cascada, costo directo por línea)",
-        items=items,
-        total_costo=total,
-    )
     fname = _safe_filename_part(f"CC-MES-001_acta_{nrpo}.pdf")
     ctr = _row("contratos", "numero", id=contrato_id) or {}
     return _attachment_pdf_con_pagina_sello_usuario(
@@ -13205,8 +13680,13 @@ def _fill_corte_sub_001_excel_ws(
     *,
     resumen_4cols: Optional[Dict[str, Any]] = None,
     otros_conceptos: Optional[List[dict]] = None,
+    memoria_links: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> None:
-    """Hoja CC-SUB-001: encabezado tipo PDF, ítems 4 bloques, resumen 4 cols formulado, firmas."""
+    """Hoja CC-SUB-001: encabezado tipo PDF, ítems 4 bloques, resumen 4 cols formulado, firmas.
+
+    Si `memoria_links` está presente, la cantidad Presente acta (col H) referencia
+    por fórmula el total de la pestaña de memoria del ítem.
+    """
     import corte_sub_conciliacion as csc
 
     fc = firma_cfg or {}
@@ -13231,6 +13711,16 @@ def _fill_corte_sub_001_excel_ws(
     fill_blk = PatternFill("solid", fgColor=blk_bg)
     fill_hdr = PatternFill("solid", fgColor="1E3A8A")
     ncols = 13
+
+    def _link_for_item(it: dict) -> Optional[Dict[str, Any]]:
+        if not memoria_links:
+            return None
+        inum = str(it.get("item_numero") or "").strip()
+        cap = str(it.get("capitulo") or "").strip()
+        for key in (f"{cap}||{inum}", inum):
+            if key and key in memoria_links:
+                return memoria_links[key]
+        return None
 
     widths = [8, 8, 28, 6, 11, 9, 12, 9, 12, 9, 12, 9, 12]
     for i, w in enumerate(widths, start=1):
@@ -13385,6 +13875,11 @@ def _fill_corte_sub_001_excel_ws(
         act_valor_rows.append(row)
 
         c_h = ws.cell(row=row, column=8, value=cant_pres)
+        link = _link_for_item(it)
+        if link and link.get("sheet") and link.get("tot_row"):
+            # Cantidad Presente = total de la pestaña de memoria del ítem (col H)
+            sh = str(link["sheet"]).replace("'", "''")
+            c_h.value = f"='{sh}'!H{int(link['tot_row'])}"
         c_h.border = bd; c_h.font = Font(size=7); c_h.fill = fill
         c_h.alignment = Alignment(horizontal="right", vertical="center"); c_h.number_format = "0.000"
 
@@ -14096,57 +14591,67 @@ def _cc_mes_001_excel_bytes(
     *,
     nivel_aprobacion: Optional[int] = None,
 ) -> bytes:
-    """Excel CC-MES-001: misma agregación y costo directo que el PDF mensual."""
+    """Excel CC-MES-001: misma estructura 4 bloques + resumen que el PDF mensual."""
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    reg = fetch_registros_informe_cc_mes_por_acta(
-        _sb, contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
+    ctx = _contexto_acta_mes_conciliacion(
+        contrato_id, acta_id, current_user, nivel_aprobacion=nivel_aprobacion
     )
-    items, total = aggregate_items_conciliacion(reg)
-    _sort_items_corte_por_item_numero_asc(items)
-    ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
-    nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
-    cons = str(ac.get("consecutivo") or "—")
-    contrato = _row(
-        "contratos",
-        "numero, objeto, contratista, nit, interventoria, logo_contratista",
-        id=contrato_id,
-    )
-    if not contrato:
-        raise HTTPException(404, "Contrato no encontrado")
-    u = current_user if isinstance(current_user, dict) else dict(current_user)
-    usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
-    usuario_cargo = u.get("cargo_nombre", "—") or "—"
+    contrato = ctx["contrato"]
+    acta = ctx["acta"]
+    items = ctx["items"]
+    total = ctx["total_costo"]
+    nrpo = str(acta.get("numero_rpo") or acta.get("consecutivo") or acta_id)
+    cons = str(acta.get("consecutivo") or "—")
     firma_cfg = _get_firma_cfg_para_documento(
         contrato_id,
         CODIGO_FORMATO_CCD_CC_MES_001,
         contexto_tipo="acta_rpo",
         contexto_id=acta_id,
     )
+    # Reutilizar fill SUB (13 cols + resumen 4cols formulado) con sub/corte sintéticos
+    sub = {
+        "razon_social": nrpo,
+        "nombre_contacto": str((firma_cfg or {}).get("aprobo_nombre") or "").strip() or "—",
+    }
+    corte = {
+        "consecutivo": acta.get("consecutivo"),
+        "fecha_inicio": acta.get("fecha_inicio"),
+        "fecha_fin": acta.get("fecha_fin"),
+    }
     wb = Workbook()
     ws = wb.active
     assert ws is not None
     ws.title = "CC-MES-001"
-    niv_txt = f"N{nivel_aprobacion}" if nivel_aprobacion is not None else "último nivel activo"
-    _fill_cc_conc_001_excel_ws(
+    _fill_corte_sub_001_excel_ws(
         ws,
         contrato,
+        sub,
+        corte,
         items,
         float(total or 0.0),
-        usuario_nombre,
-        usuario_cargo,
+        ctx["usuario_nombre"],
+        ctx["usuario_cargo"],
         firma_cfg,
-        titulo_documento="INFORME EJECUCIÓN MENSUAL (CONCILIACIÓN INTERVENTORÍA–CONTRATISTA)",
-        codigo_ccd=CODIGO_FORMATO_CCD_CC_MES_001,
-        c3_label="ACTA RPO",
-        c3_value=nrpo,
-        c4_label="CONSECUTIVO",
-        c4_value=cons,
-        pie_contexto=(
-            f"Acta RPO {nrpo} · consecutivo {cons} · {niv_txt} · "
-            "Misma lógica que módulo Actas (cascada aprob. y costo directo por línea)"
-        ),
+        resumen_4cols=ctx.get("resumen_4cols"),
+        otros_conceptos=ctx.get("otros_conceptos") or [],
     )
+    # Retitular cabecera a CC-MES
+    try:
+        for row in ws.iter_rows(min_row=1, max_row=2, max_col=13):
+            for cell in row:
+                if cell.value == CODIGO_FORMATO_CCD_CC_SUB_001:
+                    cell.value = CODIGO_FORMATO_CCD_CC_MES_001
+                if isinstance(cell.value, str) and "CORTE DE SUBcontratista" in cell.value.upper().replace(" ", ""):
+                    pass
+                if cell.value == "INFORME CORTE DE SUB CONTRATISTA":
+                    cell.value = "INFORME EJECUCIÓN MENSUAL (CONCILIACIÓN INTERVENTORÍA–CONTRATISTA)"
+                if cell.value == "SUBcontratista" or cell.value == "SUBCONTRATISTA":
+                    cell.value = "ACTA RPO"
+                if cell.value == "CORTE":
+                    cell.value = "CONSECUTIVO"
+    except Exception:
+        pass
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -14196,17 +14701,20 @@ def _cc_sem_mes_integral_excel_bytes(
         pie_fotos = f"Semana N° {nsem} · {fi} — {ff}"
         ctx_tipo, ctx_id = "semana", semana_id
         sheet_ejec = "CC-SEM-001"
+        mes_resumen_4cols = None
+        mes_otros = None
+        mes_acta = None
     else:
         if acta_id is None:
             raise HTTPException(400, "acta_id requerido")
         if not _acta_pertenece_contrato(contrato_id, acta_id):
             raise HTTPException(404, "Acta no encontrada en este contrato")
-        reg = fetch_registros_informe_cc_mes_por_acta(
-            _sb, contrato_id, acta_id, nivel_aprobacion=nivel_aprobacion
+        ctx_mes = _contexto_acta_mes_conciliacion(
+            contrato_id, int(acta_id), current_user, nivel_aprobacion=nivel_aprobacion
         )
-        items, total = aggregate_items_conciliacion(reg)
-        _sort_items_corte_por_item_numero_asc(items)
-        ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
+        items = list(ctx_mes.get("items") or [])
+        total = float(ctx_mes.get("total_costo") or 0.0)
+        ac = ctx_mes.get("acta") or {}
         nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
         cons = str(ac.get("consecutivo") or "—")
         codigo_001 = CODIGO_FORMATO_CCD_CC_MES_001
@@ -14217,7 +14725,7 @@ def _cc_sem_mes_integral_excel_bytes(
         niv_txt = f"N{nivel_aprobacion}" if nivel_aprobacion is not None else "último nivel activo"
         pie_001 = (
             f"Acta RPO {nrpo} · consecutivo {cons} · {niv_txt} · "
-            "Misma lógica que módulo Actas (cascada aprob. y costo directo por línea)"
+            "4 bloques + resumen conciliación (acumulado solo actas enviadas)"
         )
         conc_meta = {
             "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
@@ -14232,6 +14740,10 @@ def _cc_sem_mes_integral_excel_bytes(
         pie_fotos = f"Acta RPO {nrpo} · cons. {cons}"
         ctx_tipo, ctx_id = "acta_rpo", acta_id
         sheet_ejec = "CC-MES-001"
+        mes_resumen_4cols = ctx_mes.get("resumen_4cols")
+        mes_otros = ctx_mes.get("otros_conceptos") or []
+        mes_acta = ac
+
 
     contrato = _row(
         "contratos",
@@ -14332,6 +14844,48 @@ def _cc_sem_mes_integral_excel_bytes(
         pie_contexto=pie_001,
         memoria_links=memoria_links or None,
     )
+    if modo == "mes" and mes_resumen_4cols is not None:
+        # Reemplazar hoja 1 con layout 4 bloques + resumen (como PDF), manteniendo
+        # referencias de presente acta a pestañas de memoria cuando existan.
+        sub_m = {
+            "razon_social": c3_value,
+            "nombre_contacto": str((firma_001 or {}).get("aprobo_nombre") or "").strip() or "—",
+        }
+        corte_m = {
+            "consecutivo": (mes_acta or {}).get("consecutivo"),
+            "fecha_inicio": (mes_acta or {}).get("fecha_inicio"),
+            "fecha_fin": (mes_acta or {}).get("fecha_fin"),
+        }
+        # Limpiar y rellenar
+        wb.remove(ws_ejec)
+        ws_ejec = wb.create_sheet(title=sheet_ejec, index=0)
+        _fill_corte_sub_001_excel_ws(
+            ws_ejec,
+            contrato,
+            sub_m,
+            corte_m,
+            items,
+            float(total or 0.0),
+            usuario_nombre,
+            usuario_cargo,
+            firma_001,
+            resumen_4cols=mes_resumen_4cols,
+            otros_conceptos=mes_otros or [],
+            memoria_links=memoria_links or None,
+        )
+        try:
+            for row in ws_ejec.iter_rows(min_row=1, max_row=2, max_col=13):
+                for cell in row:
+                    if cell.value == CODIGO_FORMATO_CCD_CC_SUB_001:
+                        cell.value = CODIGO_FORMATO_CCD_CC_MES_001
+                    if cell.value == "INFORME CORTE DE SUB CONTRATISTA":
+                        cell.value = titulo_001
+                    if cell.value == "SUBCONTRATISTA":
+                        cell.value = c3_label
+                    if cell.value == "CORTE":
+                        cell.value = c4_label
+        except Exception:
+            pass
     # Orden: ejecución primero (ya es active), memorias en el orden creado.
     buf = io.BytesIO()
     wb.save(buf)
