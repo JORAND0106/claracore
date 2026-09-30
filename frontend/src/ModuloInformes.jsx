@@ -22,6 +22,7 @@ import {
   InformesParamTable,
   InformesFormatosTable,
 } from './informes/InformesLayout'
+import CorteSubConciliacionPopup from './informes/CorteSubConciliacionPopup'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -555,6 +556,9 @@ export default function ModuloInformes({
   const [formatosSemAbierto, setFormatosSemAbierto] = useState(false)
   /** Sub-tarjetas por formato CCD (plantilla escalable: primera = corte, segunda = memorias). Por defecto recogidas. */
   const [formatoCorte001Abierto, setFormatoCorte001Abierto] = useState(false)
+  /** Popup de conciliación CC-SUB-001 (antes de vista previa / tras Enviar). */
+  const [corteConcPopupOpen, setCorteConcPopupOpen] = useState(false)
+  const [corteConcEnviado, setCorteConcEnviado] = useState(false)
   const [formatoMemorias002Abierto, setFormatoMemorias002Abierto] = useState(false)
   /** CC-SUB-002: bloque «Todos los ítems» + filas por código; recogido por defecto. */
   const [ccSub002ListadoItemsAbierto, setCcSub002ListadoItemsAbierto] = useState(false)
@@ -1429,8 +1433,23 @@ export default function ModuloInformes({
   function onCorteChange(e) {
     const id = e.target.value
     setCorteId(id); setItems([]); setError(null)
+    setCorteConcEnviado(false)
+    setCorteConcPopupOpen(false)
     if (!id) return
     cargarItemsCorte(id, filtroSubAprobacion)
+    const authToken = getAuthToken()
+    if (authToken && contratoId != null) {
+      fetchConFallback(
+        `/informes/${encodeURIComponent(contratoId)}/corte-sub/${encodeURIComponent(id)}/conciliacion`,
+        { headers: { Authorization: `Bearer ${authToken}` } },
+      )
+        .then(async (r) => {
+          if (!r?.ok) return
+          const j = await r.json()
+          setCorteConcEnviado(!!j.enviado)
+        })
+        .catch(() => {})
+    }
   }
 
   function cargarItemsCorte(id, filtro = filtroSubAprobacion) {
@@ -1493,6 +1512,54 @@ export default function ModuloInformes({
       }
       return null
     })
+  }
+
+  /** Abre popup de conciliación; la vista previa PDF solo tras (o con) corte enviado. */
+  async function abrirConciliacionCorte() {
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setError('Selecciona contrato y corte.')
+      return
+    }
+    setCorteConcPopupOpen(true)
+  }
+
+  async function descargarPdfCorteConsolidado() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setError('Selecciona contrato y corte.')
+      return
+    }
+    setFirmaCorteBusy(true)
+    setError(null)
+    try {
+      const cid = encodeURIComponent(contratoId)
+      const cor = encodeURIComponent(corteId)
+      const pathPdf = pathSubConFiltro(`/informes/${cid}/pdf/corte-subcontratista/${cor}/consolidado`)
+      const r = await fetchConFallback(pathPdf, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setError(msg)
+        return
+      }
+      const avisos = r.headers.get('X-ClaraCore-Avisos')
+      if (avisos) {
+        setError(`Consolidado con avisos: ${avisos}`)
+      }
+      const blob = await r.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `CC-SUB-001_corte_${corteId}_consolidado.pdf`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setFirmaCorteBusy(false)
+    }
   }
 
   /** Vista previa = mismo PDF que genera el servidor (la ruta JSON fallaba en algunos entornos). */
@@ -4502,10 +4569,27 @@ export default function ModuloInformes({
                       <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
                       <button
                         type="button"
+                        style={btnCcdToolbar(false, 'vista')}
+                        onClick={abrirConciliacionCorte}
+                        title="Conciliar corte (AIU, otros conceptos) antes de generar"
+                        aria-label="Conciliar corte"
+                      >
+                        Conciliar
+                      </button>
+                      <button
+                        type="button"
                         style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte', 'vista')}
-                        onClick={abrirVistaPreviaCorte}
+                        onClick={() => {
+                          if (!corteConcEnviado) {
+                            abrirConciliacionCorte()
+                            return
+                          }
+                          abrirVistaPreviaCorte()
+                        }}
                         disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte'}
-                        title="Vista previa PDF (mismo documento que imprimirías)"
+                        title={corteConcEnviado
+                          ? 'Vista previa PDF (mismo documento que imprimirías)'
+                          : 'Primero concilie y envíe el corte'}
                         aria-label="Vista previa PDF"
                       >
                         {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte'
@@ -4515,8 +4599,28 @@ export default function ModuloInformes({
                       <button
                         type="button"
                         style={btnCcdToolbar(firmaCorteBusy, 'pdf')}
-                        onClick={descargarPdfCorteConSello}
+                        onClick={() => {
+                          if (!corteConcEnviado) {
+                            abrirConciliacionCorte()
+                            return
+                          }
+                          descargarPdfCorteConsolidado()
+                        }}
                         disabled={firmaCorteBusy}
+                        title={corteConcEnviado
+                          ? 'Descarga consolidada: corte + seguridad social + soportes'
+                          : 'Disponible tras enviar la conciliación'}
+                        aria-label="Descarga consolidada"
+                      >
+                        {firmaCorteBusy
+                          ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                          : '📦'}
+                      </button>
+                      <button
+                        type="button"
+                        style={btnCcdToolbar(firmaCorteBusy, 'pdf')}
+                        onClick={descargarPdfCorteConSello}
+                        disabled={firmaCorteBusy || !corteConcEnviado}
                         title="Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)"
                         aria-label="Descargar PDF firmado con sello"
                       >
@@ -6473,6 +6577,31 @@ export default function ModuloInformes({
           </div>
         </div>
       )}
+
+      <CorteSubConciliacionPopup
+        open={corteConcPopupOpen}
+        onClose={() => setCorteConcPopupOpen(false)}
+        contratoId={contratoId}
+        corteId={corteId}
+        fetchConFallback={fetchConFallback}
+        getAuthToken={getAuthToken}
+        puedeEditarCcd={!!puedeEditarCcd}
+        t={t}
+        fontSize={f?.base || 14}
+        onEnviado={() => {
+          setCorteConcEnviado(true)
+          setCorteConcPopupOpen(false)
+          abrirVistaPreviaCorte()
+        }}
+        onAbrirVistaPrevia={() => {
+          setCorteConcPopupOpen(false)
+          abrirVistaPreviaCorte()
+        }}
+        onDescargarConsolidado={() => {
+          setCorteConcPopupOpen(false)
+          descargarPdfCorteConsolidado()
+        }}
+      />
 
       {/* Modal: vista previa = PDF embebido (misma ruta que descarga el backend).
           Fondos opacos fijos: en producción t.bgCard/t.bg pueden ser transparentes y el modal se mezcla con la página. */}
