@@ -1782,11 +1782,32 @@ def _enriquecer_ctx_corte_sub_conciliacion(
             amort.get("subtotal_despues_amortizacion"), tot_otros
         )
 
+    aiu_otros_ant = csc.fetch_aiu_otros_anteriores_enviados(
+        _sb, subcontratista_id=sub_id, consecutivo_actual=consecutivo
+    )
+    aiu_override = None
+    amort_override = None
+    if conc and str(conc.get("estado") or "") == csc.ESTADO_ENVIADO:
+        aiu_override = aiu
+        amort_override = amort
+    resumen4 = csc.build_resumen_conciliacion_4cols(
+        items=items,
+        tributos=tributos,
+        anticipo=ant_cfg.get("anticipo"),
+        amortizacion_pct=ant_cfg.get("amortizacion_pct"),
+        amortizado_anterior=amort_ant,
+        otros_presente=tot_otros,
+        aiu_otros_anterior=aiu_otros_ant,
+        aiu_presente_override=aiu_override,
+        amort_presente_override=amort_override,
+    )
+
     ctx["conciliacion"] = conc
     ctx["aiu_resumen"] = aiu
     ctx["amortizacion"] = amort
     ctx["otros_conceptos"] = otros
     ctx["gran_total"] = gt
+    ctx["resumen_4cols"] = resumen4
     ctx["cortes_acum_anteriores_ids"] = prev_ids
 
 
@@ -4963,6 +4984,7 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
                 amortizacion=ctx.get("amortizacion"),
                 items_sin_precio=ctx.get("items_sin_precio") or [],
                 vista_sin_conciliar=vista_sin_conciliar,
+                resumen_4cols=ctx.get("resumen_4cols"),
             ),
         ),
         ("modo_seguro", lambda: _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)),
@@ -4996,6 +5018,7 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
                 amortizacion=ctx.get("amortizacion"),
                 items_sin_precio=ctx.get("items_sin_precio") or [],
                 vista_sin_conciliar=vista_sin_conciliar,
+                resumen_4cols=ctx.get("resumen_4cols"),
             )
             pdf_bytes = _to_pdf_corte_garantizado(html_last)
         except Exception as e:
@@ -5713,6 +5736,7 @@ def get_corte_sub_conciliacion(
         "aiu_lineas": csc.aiu_lineas_resumen(aiu),
         "amortizacion": ctx.get("amortizacion"),
         "amortizacion_lineas": csc.amortizacion_lineas_resumen(ctx.get("amortizacion") or {}),
+        "resumen_4cols": ctx.get("resumen_4cols"),
         "items_sin_precio": ctx.get("items_sin_precio") or [],
         "otros_conceptos": otros,
         "total_otros_conceptos": csc.total_otros_conceptos(otros)
@@ -7743,6 +7767,8 @@ def excel_corte_subcontratista(
             ctx["usuario_nombre"],
             ctx["usuario_cargo"],
             firma_cfg,
+            resumen_4cols=ctx.get("resumen_4cols"),
+            otros_conceptos=ctx.get("otros_conceptos") or [],
         )
         fname = _nombre_archivo_cc_sub_001(ctx["corte"], ctx["sub"], corte_id).replace(".pdf", ".xlsx")
         return Response(
@@ -13176,8 +13202,13 @@ def _fill_corte_sub_001_excel_ws(
     usuario_nombre: str,
     usuario_cargo: str,
     firma_cfg: Optional[Dict[str, Any]],
+    *,
+    resumen_4cols: Optional[Dict[str, Any]] = None,
+    otros_conceptos: Optional[List[dict]] = None,
 ) -> None:
-    """Hoja CC-SUB-001 landscape: mismos bloques del PDF (Actualizadas/Presente/Acumulado/Saldo) con fórmulas."""
+    """Hoja CC-SUB-001: encabezado tipo PDF, ítems 4 bloques, resumen 4 cols formulado, firmas."""
+    import corte_sub_conciliacion as csc
+
     fc = firma_cfg or {}
     est = _merge_estilo_pdf(fc.get("estilo_pdf"), CODIGO_FORMATO_CCD_CC_SUB_001)
     thead_bg = _ccd_hex_to_excel_rgb(est.get("thead_bg"), "E8E8E8")
@@ -13198,21 +13229,12 @@ def _fill_corte_sub_001_excel_ws(
     fill_bar = PatternFill("solid", fgColor="E5E7EB")
     fill_th = PatternFill("solid", fgColor=thead_bg)
     fill_blk = PatternFill("solid", fgColor=blk_bg)
+    fill_hdr = PatternFill("solid", fgColor="1E3A8A")
     ncols = 13
 
-    widths = [8, 8, 28, 6, 11, 9, 11, 9, 11, 9, 11, 9, 11]
+    widths = [8, 8, 28, 6, 11, 9, 12, 9, 12, 9, 12, 9, 12]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
-
-    def meta_row(r: int, label: str, value: object) -> None:
-        ws.cell(row=r, column=1, value=label).font = Font(size=8, bold=True, color="374151")
-        ws.cell(row=r, column=1).alignment = Alignment(vertical="center")
-        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=ncols)
-        v = ws.cell(row=r, column=2, value=value if value is not None else "—")
-        v.font = Font(size=8)
-        v.alignment = Alignment(vertical="center", wrap_text=True)
-        ws.cell(row=r, column=1).border = bd
-        v.border = bd
 
     fecha_gen = _fmt_informe_fecha_generacion()
     corte_lbl = _corte_consecutivo_fmt(corte)
@@ -13222,34 +13244,70 @@ def _fill_corte_sub_001_excel_ws(
         contratista_val = f"{contratista_val} (NIT: {nit_raw})"
     periodo = f"{_fd(corte.get('fecha_inicio'))} — {_fd(corte.get('fecha_fin'))}"
 
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
-    t1 = ws.cell(row=1, column=1, value="INFORME CORTE DE SUB CONTRATISTA")
+    # ── Encabezado tipo PDF: logo | título | código ──────────────────────────
+    ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=3)
+    logo_c = ws.cell(row=1, column=1, value="LOGO")
+    logo_c.font = Font(size=9, color="94A3B8", italic=True)
+    logo_c.alignment = Alignment(horizontal="center", vertical="center")
+    for r in (1, 2):
+        for c in range(1, 4):
+            ws.cell(row=r, column=c).border = bd
+
+    ws.merge_cells(start_row=1, start_column=4, end_row=2, end_column=9)
+    t1 = ws.cell(row=1, column=4, value="INFORME CORTE DE SUB CONTRATISTA")
     t1.font = Font(bold=True, size=12)
     t1.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    t1.border = bd
+    for r in (1, 2):
+        for c in range(4, 10):
+            ws.cell(row=r, column=c).border = bd
 
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
-    t2 = ws.cell(row=2, column=1, value=f"{CODIGO_FORMATO_CCD_CC_SUB_001} · CCD · ClaraCore")
-    t2.font = Font(bold=True, size=10, color="1E40AF")
+    ws.merge_cells(start_row=1, start_column=10, end_row=1, end_column=ncols)
+    t2 = ws.cell(row=1, column=10, value=CODIGO_FORMATO_CCD_CC_SUB_001)
+    t2.font = Font(bold=True, size=14, color="1E40AF")
     t2.alignment = Alignment(horizontal="center", vertical="center")
-    t2.border = bd
+    ws.merge_cells(start_row=2, start_column=10, end_row=2, end_column=ncols)
+    t2b = ws.cell(row=2, column=10, value="CCD · ClaraCore")
+    t2b.font = Font(bold=True, size=9, color="1E40AF")
+    t2b.alignment = Alignment(horizontal="center", vertical="center")
+    for c in range(10, ncols + 1):
+        ws.cell(row=1, column=c).border = bd
+        ws.cell(row=2, column=c).border = bd
 
-    meta_row(3, "CONTRATO", str(contrato.get("numero") or "—"))
-    meta_row(4, "FECHA", fecha_gen)
-    meta_row(5, "SUB CONTRATISTA", str(sub.get("razon_social") or "—"))
-    meta_row(6, "CORTE N°", corte_lbl)
-    meta_row(7, "CONTRATISTA", contratista_val)
-    meta_row(8, "INTERVENTORÍA", str(contrato.get("interventoria") or "—"))
-    meta_row(9, "PERÍODO DEL CORTE", periodo)
+    def _meta_quad(row: int, pairs: list) -> None:
+        # pairs: [(label, value, c1, c2), ...]
+        for label, value, c1, c2 in pairs:
+            lab = ws.cell(row=row, column=c1, value=label)
+            lab.font = Font(size=7, bold=True, color="374151")
+            lab.alignment = Alignment(horizontal="left", vertical="bottom")
+            lab.border = bd
+            if c2 > c1 + 1:
+                ws.merge_cells(start_row=row, start_column=c1 + 1, end_row=row, end_column=c2)
+            val = ws.cell(row=row, column=c1 + 1, value=value if value is not None else "—")
+            val.font = Font(size=8)
+            val.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            for c in range(c1 + 1, c2 + 1):
+                ws.cell(row=row, column=c).border = bd
 
-    r0 = 11
-    # Cabecera de dos filas (igual PDF): bloques Actualizadas / Presente / Acumulado / Saldo
-    hr = r0
-    hr2 = r0 + 1
-    for col, h in enumerate(
-        ["CAP.", "ÍTEM", "DESCRIPCIÓN", "UND", "V. UNIT."],
-        start=1,
-    ):
+    _meta_quad(3, [
+        ("CONTRATO", str(contrato.get("numero") or "—"), 1, 3),
+        ("FECHA", fecha_gen, 4, 6),
+        ("SUBCONTRATISTA", str(sub.get("razon_social") or "—"), 7, 10),
+        ("CORTE", corte_lbl, 11, 13),
+    ])
+    _meta_quad(4, [
+        ("CONTRATISTA", contratista_val, 1, 7),
+        ("INTERVENTORÍA", str(contrato.get("interventoria") or "—"), 8, 13),
+    ])
+    ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=ncols)
+    per = ws.cell(row=5, column=1, value=f"PERÍODO DEL CORTE: {periodo}")
+    per.font = Font(size=8, bold=True)
+    per.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(1, ncols + 1):
+        ws.cell(row=5, column=c).border = bd
+
+    # ── Cabecera ítems (2 filas) ─────────────────────────────────────────────
+    hr, hr2 = 7, 8
+    for col, h in enumerate(["CAP.", "ÍTEM", "DESCRIPCIÓN", "UND", "V. UNIT."], start=1):
         ws.merge_cells(start_row=hr, start_column=col, end_row=hr2, end_column=col)
         cell = ws.cell(row=hr, column=col, value=h)
         cell.fill = fill_th
@@ -13283,6 +13341,9 @@ def _fill_corte_sub_001_excel_ws(
     data0 = hr2 + 1
     item_list = list(items or [])
     presente_valor_rows: List[int] = []
+    act_valor_rows: List[int] = []
+    acum_valor_rows: List[int] = []
+    saldo_valor_rows: List[int] = []
     for idx, it in enumerate(item_list):
         row = data0 + idx
         cap = (it.get("capitulo") or "").strip() or "—"
@@ -13300,16 +13361,11 @@ def _fill_corte_sub_001_excel_ws(
         if sin_p or vu_num is None:
             vu_num = 0.0
 
-        # A–E: identificación + VU
         id_vals = [cap, it.get("item_numero", ""), desc, it.get("unidad", ""), vu_num]
         for col, v in enumerate(id_vals, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.border = bd
-            cell.font = Font(
-                size=7,
-                bold=(sin_p and col == 5),
-                color="B45309" if sin_p and col == 5 else "000000",
-            )
+            cell.font = Font(size=7, bold=(sin_p and col == 5), color="B45309" if sin_p and col == 5 else "000000")
             cell.fill = fill
             if col == 3:
                 cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
@@ -13319,116 +13375,334 @@ def _fill_corte_sub_001_excel_ws(
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        # F: cant actualizadas (dato)
         c_f = ws.cell(row=row, column=6, value=cant_act)
-        c_f.border = bd
-        c_f.font = Font(size=7)
-        c_f.fill = fill
-        c_f.alignment = Alignment(horizontal="right", vertical="center")
-        c_f.number_format = "0.000"
+        c_f.border = bd; c_f.font = Font(size=7); c_f.fill = fill
+        c_f.alignment = Alignment(horizontal="right", vertical="center"); c_f.number_format = "0.000"
 
-        # G: valor actualizadas = cant × VU
         c_g = ws.cell(row=row, column=7, value=_excel_formula_valor_cant_vu(f"F{row}", f"E{row}"))
-        c_g.border = bd
-        c_g.font = Font(size=7)
-        c_g.fill = fill
-        c_g.alignment = Alignment(horizontal="right", vertical="center")
-        c_g.number_format = '"$"#,##0'
+        c_g.border = bd; c_g.font = Font(size=7); c_g.fill = fill
+        c_g.alignment = Alignment(horizontal="right", vertical="center"); c_g.number_format = '"$"#,##0'
+        act_valor_rows.append(row)
 
-        # H: cant presente
         c_h = ws.cell(row=row, column=8, value=cant_pres)
-        c_h.border = bd
-        c_h.font = Font(size=7)
-        c_h.fill = fill
-        c_h.alignment = Alignment(horizontal="right", vertical="center")
-        c_h.number_format = "0.000"
+        c_h.border = bd; c_h.font = Font(size=7); c_h.fill = fill
+        c_h.alignment = Alignment(horizontal="right", vertical="center"); c_h.number_format = "0.000"
 
-        # I: valor presente = cant × VU
         c_i = ws.cell(row=row, column=9, value=_excel_formula_valor_cant_vu(f"H{row}", f"E{row}"))
-        c_i.border = bd
-        c_i.font = Font(size=7)
-        c_i.fill = fill
-        c_i.alignment = Alignment(horizontal="right", vertical="center")
-        c_i.number_format = '"$"#,##0'
+        c_i.border = bd; c_i.font = Font(size=7); c_i.fill = fill
+        c_i.alignment = Alignment(horizontal="right", vertical="center"); c_i.number_format = '"$"#,##0'
         presente_valor_rows.append(row)
 
-        # J: acumulado = anterior + presente (fórmula)
         c_j = ws.cell(row=row, column=10, value=f"=H{row}+{cant_ant}")
-        c_j.border = bd
-        c_j.font = Font(size=7)
-        c_j.fill = fill
-        c_j.alignment = Alignment(horizontal="right", vertical="center")
-        c_j.number_format = "0.000"
+        c_j.border = bd; c_j.font = Font(size=7); c_j.fill = fill
+        c_j.alignment = Alignment(horizontal="right", vertical="center"); c_j.number_format = "0.000"
 
-        # K: valor acumulado
         c_k = ws.cell(row=row, column=11, value=_excel_formula_valor_cant_vu(f"J{row}", f"E{row}"))
-        c_k.border = bd
-        c_k.font = Font(size=7)
-        c_k.fill = fill
-        c_k.alignment = Alignment(horizontal="right", vertical="center")
-        c_k.number_format = '"$"#,##0'
+        c_k.border = bd; c_k.font = Font(size=7); c_k.fill = fill
+        c_k.alignment = Alignment(horizontal="right", vertical="center"); c_k.number_format = '"$"#,##0'
+        acum_valor_rows.append(row)
 
-        # L: saldo = actualizadas − acumulado
         c_l = ws.cell(row=row, column=12, value=f"=F{row}-J{row}")
-        c_l.border = bd
-        c_l.font = Font(size=7)
-        c_l.fill = fill
-        c_l.alignment = Alignment(horizontal="right", vertical="center")
-        c_l.number_format = "0.000"
+        c_l.border = bd; c_l.font = Font(size=7); c_l.fill = fill
+        c_l.alignment = Alignment(horizontal="right", vertical="center"); c_l.number_format = "0.000"
 
-        # M: valor saldo
         c_m = ws.cell(row=row, column=13, value=_excel_formula_valor_cant_vu(f"L{row}", f"E{row}"))
-        c_m.border = bd
-        c_m.font = Font(size=7)
-        c_m.fill = fill
-        c_m.alignment = Alignment(horizontal="right", vertical="center")
-        c_m.number_format = '"$"#,##0'
+        c_m.border = bd; c_m.font = Font(size=7); c_m.fill = fill
+        c_m.alignment = Alignment(horizontal="right", vertical="center"); c_m.number_format = '"$"#,##0'
+        saldo_valor_rows.append(row)
 
     tot_r = data0 + len(item_list)
     if not item_list:
         ws.merge_cells(start_row=tot_r, start_column=1, end_row=tot_r, end_column=ncols)
-        emp = ws.cell(
-            row=tot_r,
-            column=1,
-            value="Sin ítems con cantidad en presente acta o acumulado para este filtro.",
-        )
+        emp = ws.cell(row=tot_r, column=1, value="Sin ítems con cantidad en presente acta o acumulado para este filtro.")
         emp.font = Font(size=8, italic=True, color="64748B")
-        emp.alignment = Alignment(horizontal="left")
         emp.border = bd
         tot_r += 1
 
+    # Fila CD del cuadro (valores = SUM fórmulas de cada bloque)
     st_r = tot_r
-    ws.merge_cells(start_row=st_r, start_column=1, end_row=st_r, end_column=8)
-    s1 = ws.cell(row=st_r, column=1, value="COSTO DIRECTO (PRESENTE ACTA):")
-    s1.font = Font(bold=True, size=9)
+    ws.merge_cells(start_row=st_r, start_column=1, end_row=st_r, end_column=5)
+    s1 = ws.cell(row=st_r, column=1, value="COSTO DIRECTO:")
+    s1.font = Font(bold=True, size=8)
     s1.alignment = Alignment(horizontal="right", vertical="center")
     s1.fill = PatternFill("solid", fgColor=subtotal_bg)
-    s1.border = bd
-    for col in range(2, 9):
+    for col in range(1, 6):
         ws.cell(row=st_r, column=col).border = bd
         ws.cell(row=st_r, column=col).fill = PatternFill("solid", fgColor=subtotal_bg)
-    if presente_valor_rows:
-        tot_formula = "=" + "+".join(f"I{r}" for r in presente_valor_rows)
-        s2 = ws.cell(row=st_r, column=9, value=tot_formula)
-        s2.number_format = '"$"#,##0'
-    else:
-        s2 = ws.cell(row=st_r, column=9, value=float(total_costo or 0))
-        s2.number_format = '"$"#,##0'
-    s2.font = Font(bold=True, size=9)
-    s2.alignment = Alignment(horizontal="right", vertical="center")
-    s2.fill = PatternFill("solid", fgColor=subtotal_bg)
-    s2.border = bd
-    for col in range(10, ncols + 1):
-        c = ws.cell(row=st_r, column=col, value="")
-        c.border = bd
-        c.fill = PatternFill("solid", fgColor=subtotal_bg)
 
-    sr = st_r + 2
+    def _sum_formula(rows: List[int], col_letter: str, fallback: float) -> object:
+        if rows:
+            return "=" + "+".join(f"{col_letter}{r}" for r in rows)
+        return float(fallback or 0)
+
+    cds = (resumen_4cols or {}).get("cd_bloques") or {}
+    for col, letter, rows, key in (
+        (6, None, None, None),
+        (7, "G", act_valor_rows, "actualizadas"),
+        (8, None, None, None),
+        (9, "I", presente_valor_rows, "presente"),
+        (10, None, None, None),
+        (11, "K", acum_valor_rows, "acumulado"),
+        (12, None, None, None),
+        (13, "M", saldo_valor_rows, "saldo"),
+    ):
+        cell = ws.cell(row=st_r, column=col)
+        cell.border = bd
+        cell.fill = PatternFill("solid", fgColor=subtotal_bg)
+        if letter and rows is not None:
+            cell.value = _sum_formula(rows, letter, cds.get(key) or (total_costo if key == "presente" else 0))
+            cell.number_format = '"$"#,##0'
+            cell.font = Font(bold=True, size=8)
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+
+    # ── Resumen 4 columnas ──────────────────────────────────────────────────
+    r4 = resumen_4cols or {}
+    lineas = list(r4.get("lineas") or [])
+    aiu_ant = r4.get("aiu_anterior") or {}
+    otros_ant = float(r4.get("total_otros_anterior") or 0)
+    anticipo_val = float((r4.get("amortizacion") or {}).get("anticipo_entregado") or 0)
+    amort_ant = float((r4.get("amortizacion") or {}).get("amortizado_anterior") or 0)
+
+    # Mapa key → fila Excel para fórmulas entre líneas del resumen
+    res_start = st_r + 2
+    ws.merge_cells(start_row=res_start, start_column=1, end_row=res_start, end_column=ncols)
+    rh = ws.cell(row=res_start, column=1, value="RESUMEN DE CONCILIACIÓN")
+    rh.fill = fill_hdr
+    rh.font = Font(bold=True, size=9, color="FFFFFF")
+    rh.alignment = Alignment(horizontal="left", vertical="center")
+    for c in range(1, ncols + 1):
+        ws.cell(row=res_start, column=c).border = bd
+        ws.cell(row=res_start, column=c).fill = fill_hdr
+
+    hdr_r = res_start + 1
+    # Label en A-E; valores bajo G/I/K/M (columnas Valor de cada bloque)
+    ws.merge_cells(start_row=hdr_r, start_column=1, end_row=hdr_r, end_column=5)
+    h0 = ws.cell(row=hdr_r, column=1, value="Concepto")
+    h0.font = Font(bold=True, size=7)
+    h0.fill = fill_blk
+    h0.border = bd
+    for c in range(1, 6):
+        ws.cell(row=hdr_r, column=c).fill = fill_blk
+        ws.cell(row=hdr_r, column=c).border = bd
+    for col, title in ((6, ""), (7, "Actualizadas"), (8, ""), (9, "Presente acta"), (10, ""), (11, "Acumulado"), (12, ""), (13, "Saldo")):
+        cell = ws.cell(row=hdr_r, column=col, value=title or None)
+        cell.font = Font(bold=True, size=7)
+        cell.fill = fill_blk
+        cell.border = bd
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    # Referencias de filas del resumen para fórmulas encadenadas
+    row_by_key: Dict[str, int] = {}
+    # Columnas valor: Act=G=7, Pres=I=9, Acum=K=11, Saldo=M=13
+    val_cols = {"actualizadas": 7, "presente": 9, "acumulado": 11, "saldo": 13}
+    val_letters = {7: "G", 9: "I", 11: "K", 13: "M"}
+
+    cur = hdr_r + 1
+    # Constantes ant (AIU) para Acumulado = ant + presente
+    ant_map = {
+        "cd": float(aiu_ant.get("costo_directo") or 0),
+        "a": float(aiu_ant.get("valor_administracion") or 0),
+        "i": float(aiu_ant.get("valor_imprevistos") or 0),
+        "u": float(aiu_ant.get("valor_utilidad") or 0),
+        "iva": float(aiu_ant.get("valor_iva_utilidad") or 0),
+        "cd_aiu": float(aiu_ant.get("costo_directo_mas_aiu") or 0),
+    }
+
+    pct_by_key = {}
+    for ln in lineas:
+        if ln.get("pct") is not None:
+            pct_by_key[ln["key"]] = float(ln["pct"])
+
+    def _money_cell(row, col, value, *, bold=False, fill=None, color=None):
+        cell = ws.cell(row=row, column=col, value=value)
+        cell.border = bd
+        cell.font = Font(size=7, bold=bold, color=color or "000000")
+        cell.alignment = Alignment(horizontal="right", vertical="center")
+        if isinstance(value, (int, float)) or (isinstance(value, str) and value.startswith("=")):
+            cell.number_format = '"$"#,##0'
+        if fill:
+            cell.fill = fill
+        return cell
+
+    for ln in lineas:
+        key = ln.get("key")
+        label = csc.label_linea_resumen_4cols(ln)
+        vals = ln.get("valores") or {}
+        strong = bool(ln.get("strong"))
+        if key == "gran_total":
+            bg = PatternFill("solid", fgColor="1E40AF")
+            font_color = "FFFFFF"
+        elif key == "cd_aiu":
+            bg = PatternFill("solid", fgColor="DBEAFE")
+            font_color = "000000"
+        elif key == "sub_amort":
+            bg = PatternFill("solid", fgColor="FEF3C7")
+            font_color = "000000"
+        elif key == "amort":
+            bg = PatternFill("solid", fgColor="FFFBEB")
+            font_color = "000000"
+        else:
+            bg = PatternFill("solid", fgColor="FFFFFF")
+            font_color = "000000"
+
+        ws.merge_cells(start_row=cur, start_column=1, end_row=cur, end_column=5)
+        lab = ws.cell(row=cur, column=1, value=label)
+        lab.font = Font(size=7, bold=strong or key == "gran_total", color=font_color)
+        lab.fill = bg
+        lab.border = bd
+        lab.alignment = Alignment(horizontal="left", vertical="center")
+        for c in range(1, 6):
+            ws.cell(row=cur, column=c).fill = bg
+            ws.cell(row=cur, column=c).border = bd
+
+        # cant cols vacías
+        for col in (6, 8, 10, 12):
+            cell = ws.cell(row=cur, column=col, value="")
+            cell.border = bd
+            cell.fill = bg
+
+        row_by_key[key] = cur
+
+        # Fórmulas por tipo de línea
+        if key == "cd":
+            # Referencia a la fila CD del cuadro de ítems (st_r)
+            formulas = {
+                7: f"=G{st_r}",
+                9: f"=I{st_r}",
+                11: f"=K{st_r}",
+                13: f"=G{cur}-K{cur}",
+            }
+        elif key in ("a", "i", "u"):
+            pct = pct_by_key.get(key, 0.0) / 100.0
+            cd_r = row_by_key.get("cd", cur)
+            ant_c = ant_map.get(key, 0.0)
+            formulas = {
+                7: f"=ROUND(G{cd_r}*{pct},0)",
+                9: f"=ROUND(I{cd_r}*{pct},0)",
+                11: f"=I{cur}+{ant_c}",
+                13: f"=G{cur}-K{cur}",
+            }
+        elif key == "iva":
+            # IVA sobre Utilidad (fila u)
+            pct = pct_by_key.get("iva", 0.0) / 100.0
+            u_r = row_by_key.get("u", cur)
+            ant_c = ant_map.get("iva", 0.0)
+            formulas = {
+                7: f"=ROUND(G{u_r}*{pct},0)",
+                9: f"=ROUND(I{u_r}*{pct},0)",
+                11: f"=I{cur}+{ant_c}",
+                13: f"=G{cur}-K{cur}",
+            }
+        elif key == "cd_aiu":
+            # CD + A + I + U + IVA
+            refs = [row_by_key.get(k) for k in ("cd", "a", "i", "u", "iva")]
+            refs = [r for r in refs if r]
+            def _sum_col(letter):
+                return "=" + "+".join(f"{letter}{r}" for r in refs) if refs else 0
+            formulas = {
+                7: _sum_col("G"),
+                9: _sum_col("I"),
+                11: _sum_col("K"),
+                13: f"=G{cur}-K{cur}",
+            }
+        elif key == "amort":
+            pct = pct_by_key.get("amort")
+            cd_aiu_r = row_by_key.get("cd_aiu", cur)
+            # Actualizadas = anticipo (constante); Presente = MIN(ROUND(CD+AIU*pct,0), anticipo-amort_ant)
+            if pct is not None:
+                bruto = f"ROUND(I{cd_aiu_r}*{float(pct)/100.0},0)"
+                saldo_pend = max(0.0, anticipo_val - amort_ant)
+                pres_f = f"=MIN({bruto},{saldo_pend})"
+            else:
+                pres_f = 0
+            formulas = {
+                7: anticipo_val,
+                9: pres_f,
+                11: f"=I{cur}+{amort_ant}",
+                13: f"=G{cur}-K{cur}",
+            }
+        elif key == "sub_amort":
+            cd_aiu_r = row_by_key.get("cd_aiu", cur)
+            am_r = row_by_key.get("amort", cur)
+            formulas = {
+                7: f"=G{cd_aiu_r}-G{am_r}",
+                9: f"=I{cd_aiu_r}-I{am_r}",
+                11: f"=K{cd_aiu_r}-K{am_r}",
+                13: f"=G{cur}-K{cur}",
+            }
+        elif key == "otros":
+            formulas = {
+                7: None,  # vacío
+                9: float(vals.get("presente") or 0),
+                11: f"=I{cur}+{otros_ant}",
+                13: None,
+            }
+        elif key == "gran_total":
+            sub_r = row_by_key.get("sub_amort", cur)
+            ot_r = row_by_key.get("otros", cur)
+            formulas = {
+                7: f"=G{sub_r}",  # sin otros en Actualizadas
+                9: f"=I{sub_r}+I{ot_r}" if ot_r else f"=I{sub_r}",
+                11: f"=K{sub_r}+K{ot_r}" if ot_r else f"=K{sub_r}",
+                13: f"=G{cur}-K{cur}",
+            }
+        else:
+            formulas = {
+                7: vals.get("actualizadas"),
+                9: vals.get("presente"),
+                11: vals.get("acumulado"),
+                13: vals.get("saldo"),
+            }
+
+        for col in (7, 9, 11, 13):
+            v = formulas.get(col)
+            if v is None:
+                cell = ws.cell(row=cur, column=col, value="—")
+                cell.border = bd
+                cell.fill = bg
+                cell.font = Font(size=7, color=font_color)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                _money_cell(cur, col, v, bold=strong or key == "gran_total", fill=bg, color=font_color)
+
+        # Insertar detalle de otros conceptos justo antes de la fila "otros"
+        if key == "sub_amort" and (otros_conceptos or []):
+            cur += 1
+            ws.merge_cells(start_row=cur, start_column=1, end_row=cur, end_column=ncols)
+            d0 = ws.cell(row=cur, column=1, value="Detalle otros conceptos (presente)")
+            d0.font = Font(size=7, bold=True)
+            d0.fill = PatternFill("solid", fgColor="F3F4F6")
+            for c in range(1, ncols + 1):
+                ws.cell(row=cur, column=c).border = bd
+                ws.cell(row=cur, column=c).fill = PatternFill("solid", fgColor="F3F4F6")
+            for oc in (otros_conceptos or []):
+                cur += 1
+                det = f'{oc.get("descripcion") or "—"} · {oc.get("unidad") or "—"} · {_fn(oc.get("cantidad"))} · {_fm(oc.get("valor_unitario"))}'
+                ws.merge_cells(start_row=cur, start_column=1, end_row=cur, end_column=5)
+                ws.cell(row=cur, column=1, value=det).font = Font(size=6)
+                for c in range(1, 6):
+                    ws.cell(row=cur, column=c).border = bd
+                for col in (6, 7, 8, 10, 11, 12, 13):
+                    cell = ws.cell(row=cur, column=col, value="—" if col != 9 else float(oc.get("costo_total") or 0))
+                    cell.border = bd
+                    if col == 9:
+                        cell.number_format = '"$"#,##0'
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                        cell.font = Font(size=7)
+                    else:
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                        cell.font = Font(size=7, color="94A3B8")
+
+        cur += 1
+
+    # ── Firmas ──────────────────────────────────────────────────────────────
+    sr = cur + 1
     ws.merge_cells(start_row=sr, start_column=1, end_row=sr, end_column=ncols)
     ws.cell(row=sr, column=1, value="FIRMAS").fill = fill_bar
     ws.cell(row=sr, column=1).font = Font(bold=True, size=9)
     ws.cell(row=sr, column=1).alignment = Alignment(horizontal="center")
-    ws.cell(row=sr, column=1).border = bd
+    for c in range(1, ncols + 1):
+        ws.cell(row=sr, column=c).border = bd
 
     def firma_block(r: int, lab: str, txt: str) -> None:
         ws.cell(row=r, column=1, value=lab).font = Font(size=8, bold=True)
@@ -13448,9 +13722,7 @@ def _fill_corte_sub_001_excel_ws(
     pie = ws.cell(
         row=foot_r,
         column=1,
-        value=(
-            f"Período del corte: {periodo} · Generado ClaraCore · {usuario_cargo} · {usuario_nombre}"
-        ),
+        value=f"Período del corte: {periodo} · Generado ClaraCore · {usuario_cargo} · {usuario_nombre}",
     )
     pie.font = Font(size=7, color="64748B")
     pie.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -13470,6 +13742,9 @@ def _corte_sub_001_excel_bytes(
     usuario_nombre: str,
     usuario_cargo: str,
     firma_cfg: Optional[Dict[str, Any]],
+    *,
+    resumen_4cols: Optional[Dict[str, Any]] = None,
+    otros_conceptos: Optional[List[dict]] = None,
 ) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -13485,6 +13760,8 @@ def _corte_sub_001_excel_bytes(
         usuario_nombre,
         usuario_cargo,
         firma_cfg,
+        resumen_4cols=resumen_4cols,
+        otros_conceptos=otros_conceptos,
     )
     buf = io.BytesIO()
     wb.save(buf)
@@ -14235,6 +14512,7 @@ def _html_cc_sub_v1_plain(
     amortizacion: Optional[Dict[str, Any]] = None,
     items_sin_precio: Optional[List[str]] = None,
     vista_sin_conciliar: bool = False,
+    resumen_4cols: Optional[Dict[str, Any]] = None,
 ) -> str:
     """CC-SUB-001 landscape: bloques Actualizadas/Presente/Acumulado/Saldo + resumen conciliación."""
     import corte_sub_conciliacion as csc
@@ -14292,7 +14570,7 @@ def _html_cc_sub_v1_plain(
   max-height: {_CCD_FIRMA_IMG_INNER_PT} !important; width: auto !important;
   display: block !important; margin: 0 auto !important;
 }}
-.cc001-resumen {{ width:55%; border-collapse:collapse; margin-top:4mm; page-break-inside:avoid; }}
+.cc001-resumen {{ width:100%; border-collapse:collapse; margin-top:4mm; page-break-inside:avoid; }}
 </style></head>
 <body style="margin:0;padding:3px;font-family:Arial,Helvetica,sans-serif;font-size:7pt;color:#111;">
 """)
@@ -14369,70 +14647,119 @@ INFORME CORTE DE SUB CONTRATISTA
 
     aiu = aiu_resumen or {}
     otros = list(otros_conceptos or [])
-    if aiu:
+    r4 = resumen_4cols or {}
+    lineas4 = list(r4.get("lineas") or [])
+    if not lineas4 and aiu:
+        # Fallback legacy → construir 4 cols en vivo desde presente
+        lineas4 = (csc.build_resumen_conciliacion_4cols(
+            items=items,
+            tributos={
+                "administracion": aiu.get("pct_administracion"),
+                "imprevistos": aiu.get("pct_imprevistos"),
+                "utilidad": aiu.get("pct_utilidad"),
+                "iva": {"porcentaje": aiu.get("pct_iva_utilidad")},
+            },
+            anticipo=(amortizacion or {}).get("anticipo_entregado"),
+            amortizacion_pct=(amortizacion or {}).get("pct_amortizacion"),
+            amortizado_anterior=(amortizacion or {}).get("amortizado_anterior"),
+            otros_presente=sum(_sf(o.get("costo_total")) for o in otros),
+            aiu_presente_override=aiu,
+            amort_presente_override=amortizacion,
+        ) or {}).get("lineas") or []
+
+    if lineas4:
         parts.append('<table class="cc001-resumen" cellspacing="0" cellpadding="0">')
         parts.append(
             f'<tr style="background:#1e3a8a;color:#fff;">'
-            f'<td colspan="2" style="{bd};padding:3px 6px;font-size:7pt;font-weight:bold;">RESUMEN DE CONCILIACIÓN</td></tr>'
+            f'<td colspan="5" style="{bd};padding:3px 6px;font-size:7pt;font-weight:bold;">'
+            "RESUMEN DE CONCILIACIÓN</td></tr>"
         )
-        for line in csc.aiu_lineas_resumen(aiu):
-            pct = csc.pct_label(line.get("pct")) if line.get("pct") is not None else ""
-            if line["key"] == "cd":
-                label = "Costo Directo"
-            elif line["key"] == "cd_aiu":
-                label = "Costo Directo + AIU"
-            else:
-                label = f'{line["nombre"]} {line["abrev"]} ({pct})'
-            bg = "#dbeafe" if line["key"] == "cd_aiu" else "#fff"
-            parts.append(
-                f'<tr style="background:{bg};">'
-                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:left;">{_h(label)}</td>'
-                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:right;font-weight:bold;width:35%;">{_fm(line.get("valor"))}</td>'
-                f"</tr>"
-            )
-        for line in csc.amortizacion_lineas_resumen(amortizacion or {}):
-            pct = csc.pct_label(line.get("pct")) if line.get("pct") is not None else ""
-            if line["key"] == "amort_pres":
-                label = f'Amortización presente corte ({pct})' if pct and pct != "—" else "Amortización presente corte"
-            elif line["key"] == "sub_amort":
-                label = "Subtotal después de amortización"
-            else:
-                label = line["nombre"]
-            bg = "#fef3c7" if line["key"] == "sub_amort" else "#fffbeb"
-            parts.append(
-                f'<tr style="background:{bg};">'
-                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:left;">{_h(label)}</td>'
-                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:right;font-weight:bold;width:35%;">{_fm(line.get("valor"))}</td>'
-                f"</tr>"
-            )
-        sinp = [str(x) for x in (items_sin_precio or []) if str(x).strip()]
-        if sinp:
-            parts.append(
-                f'<tr style="background:#fee2e2;"><td colspan="2" style="{bd};padding:3px 6px;font-size:6.5pt;color:#991b1b;font-weight:bold;">'
-                f'Ítems sin precio en listado del subcontratista: {_h(", ".join(sinp))}</td></tr>'
-            )
-        if otros:
-            parts.append(
-                f'<tr style="background:#f3f4f6;"><td colspan="2" style="{bd};padding:3px 6px;font-size:6.5pt;font-weight:bold;">'
-                "Otros conceptos</td></tr>"
-            )
-            for oc in otros:
-                desc = str(oc.get("descripcion") or "—")
-                und_o = str(oc.get("unidad") or "—")
-                det = f'{desc} · {und_o} · {_fn(oc.get("cantidad"))} · {_fm(oc.get("valor_unitario"))}'
-                parts.append(
-                    f"<tr>"
-                    f'<td style="{bd};padding:2px 4px;font-size:6pt;">{_h(det)}</td>'
-                    f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">{_fm(oc.get("costo_total"))}</td>'
-                    f"</tr>"
-                )
-        gt_val = gran_total if gran_total is not None else aiu.get("costo_directo_mas_aiu")
         parts.append(
-            f'<tr style="background:#1e40af;color:#fff;">'
-            f'<td style="{bd};padding:3px 6px;font-size:7.5pt;font-weight:bold;">GRAN TOTAL</td>'
-            f'<td style="{bd};padding:3px 6px;font-size:7.5pt;font-weight:bold;text-align:right;">{_fm(gt_val)}</td>'
-            f"</tr></table>"
+            f'<tr style="background:#dbeafe;">'
+            f'<td style="{bd};padding:2px 4px;font-size:6pt;font-weight:bold;width:36%;">Concepto</td>'
+            f'<td style="{bd};padding:2px 4px;font-size:6pt;font-weight:bold;text-align:center;width:16%;">Actualizadas</td>'
+            f'<td style="{bd};padding:2px 4px;font-size:6pt;font-weight:bold;text-align:center;width:16%;">Presente acta</td>'
+            f'<td style="{bd};padding:2px 4px;font-size:6pt;font-weight:bold;text-align:center;width:16%;">Acumulado</td>'
+            f'<td style="{bd};padding:2px 4px;font-size:6pt;font-weight:bold;text-align:center;width:16%;">Saldo</td>'
+            "</tr>"
         )
+        for line in lineas4:
+            if line.get("key") == "otros":
+                continue  # detalle de filas abajo; fila resumen "Otros conceptos" se pinta tras el detalle
+            label = csc.label_linea_resumen_4cols(line)
+            vals = line.get("valores") or {}
+            key = line.get("key")
+            if key == "gran_total":
+                bg = "#1e40af"
+                color = "color:#fff;"
+                fw = "font-weight:bold;"
+            elif line.get("strong") or key in ("cd_aiu", "sub_amort"):
+                bg = "#dbeafe" if key == "cd_aiu" else "#fef3c7"
+                color = ""
+                fw = "font-weight:bold;"
+            elif key == "amort":
+                bg = "#fffbeb"
+                color = ""
+                fw = ""
+            else:
+                bg = "#fff"
+                color = ""
+                fw = ""
+
+            def _cell(v):
+                if v is None:
+                    return "—"
+                return _fm(v)
+
+            parts.append(
+                f'<tr style="background:{bg};">'
+                f'<td style="{bd};padding:2px 6px;font-size:6.5pt;text-align:left;{fw}{color}">{_h(label)}</td>'
+                f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;{fw}{color}">{_cell(vals.get("actualizadas"))}</td>'
+                f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;{fw}{color}">{_cell(vals.get("presente"))}</td>'
+                f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;{fw}{color}">{_cell(vals.get("acumulado"))}</td>'
+                f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;{fw}{color}">{_cell(vals.get("saldo"))}</td>'
+                "</tr>"
+            )
+            if key == "sub_amort":
+                # Insertar detalle de otros conceptos + fila resumen otros antes del gran total
+                sinp = [str(x) for x in (items_sin_precio or []) if str(x).strip()]
+                if sinp:
+                    parts.append(
+                        f'<tr style="background:#fee2e2;"><td colspan="5" style="{bd};padding:3px 6px;font-size:6.5pt;color:#991b1b;font-weight:bold;">'
+                        f'Ítems sin precio en listado del subcontratista: {_h(", ".join(sinp))}</td></tr>'
+                    )
+                if otros:
+                    parts.append(
+                        f'<tr style="background:#f3f4f6;"><td colspan="5" style="{bd};padding:3px 6px;font-size:6.5pt;font-weight:bold;">'
+                        "Detalle otros conceptos (presente)</td></tr>"
+                    )
+                    for oc in otros:
+                        desc = str(oc.get("descripcion") or "—")
+                        und_o = str(oc.get("unidad") or "—")
+                        det = f'{desc} · {und_o} · {_fn(oc.get("cantidad"))} · {_fm(oc.get("valor_unitario"))}'
+                        parts.append(
+                            f"<tr>"
+                            f'<td style="{bd};padding:2px 4px;font-size:6pt;">{_h(det)}</td>'
+                            f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">—</td>'
+                            f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">{_fm(oc.get("costo_total"))}</td>'
+                            f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">—</td>'
+                            f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">—</td>'
+                            "</tr>"
+                        )
+                # fila Otros conceptos del resumen 4 cols
+                otros_line = next((x for x in lineas4 if x.get("key") == "otros"), None)
+                if otros_line:
+                    ov = otros_line.get("valores") or {}
+                    parts.append(
+                        f'<tr style="background:#f8fafc;">'
+                        f'<td style="{bd};padding:2px 6px;font-size:6.5pt;font-weight:bold;">Otros conceptos</td>'
+                        f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;">—</td>'
+                        f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;font-weight:bold;">{_fm(ov.get("presente") or 0)}</td>'
+                        f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;font-weight:bold;">{_fm(ov.get("acumulado") or 0)}</td>'
+                        f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;">—</td>'
+                        "</tr>"
+                    )
+        parts.append("</table>")
 
     elaboro_td = _html_cc_sub_td_firma_columna(bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri)
     reviso_td = _html_cc_sub_td_firma_columna(bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri)

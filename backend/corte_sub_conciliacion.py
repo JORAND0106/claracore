@@ -854,6 +854,355 @@ def gran_total_con_amortizacion(subtotal_despues_amortizacion: float, total_otro
     return _round0(_sf(subtotal_despues_amortizacion) + _sf(total_otros))
 
 
+def sum_valores_bloques_items(items: Optional[Iterable[dict]]) -> Dict[str, float]:
+    """Suma valor_actualizadas / presente / acumulado / saldo de los ítems del cuadro."""
+    act = pres = acum = saldo = 0.0
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        act += _sf(it.get("valor_actualizadas"))
+        pres += _sf(it.get("valor_presente"), it.get("costo_directo"))
+        acum += _sf(it.get("valor_acumulado"))
+        saldo += _sf(it.get("valor_saldo"))
+    return {
+        "actualizadas": _round0(act),
+        "presente": _round0(pres),
+        "acumulado": _round0(acum),
+        "saldo": _round0(saldo),
+    }
+
+
+def _cols4(act: Any, pres: Any, acum: Any, saldo: Any) -> Dict[str, Optional[float]]:
+    def _opt(v: Any) -> Optional[float]:
+        if v is None:
+            return None
+        return _round0(v)
+
+    return {
+        "actualizadas": _opt(act),
+        "presente": _opt(pres),
+        "acumulado": _opt(acum),
+        "saldo": _opt(saldo),
+    }
+
+
+def fetch_aiu_otros_anteriores_enviados(
+    sb,
+    *,
+    subcontratista_id: int,
+    consecutivo_actual: int,
+) -> Dict[str, float]:
+    """
+    Suma de CD/AIU/otros de conciliaciones enviadas del mismo sub con consecutivo < actual.
+    Aislamiento crítico: solo enviados del mismo subcontratista_id.
+    """
+    vacio = {
+        "costo_directo": 0.0,
+        "valor_administracion": 0.0,
+        "valor_imprevistos": 0.0,
+        "valor_utilidad": 0.0,
+        "valor_iva_utilidad": 0.0,
+        "costo_directo_mas_aiu": 0.0,
+        "total_otros": 0.0,
+        "amortizacion_presente": 0.0,
+    }
+    previos = cortes_enviados_anteriores(
+        sb, subcontratista_id=subcontratista_id, consecutivo_actual=consecutivo_actual
+    )
+    if not previos:
+        return vacio
+    ids = [int(c["id"]) for c in previos if c.get("id") is not None]
+    if not ids:
+        return vacio
+    try:
+        rows = (
+            sb.table("corte_sub_conciliacion")
+            .select(
+                "corte_id, subcontratista_id, estado, costo_directo, valor_administracion, "
+                "valor_imprevistos, valor_utilidad, valor_iva_utilidad, costo_directo_mas_aiu, "
+                "total_otros_conceptos, amortizacion_presente"
+            )
+            .eq("subcontratista_id", int(subcontratista_id))
+            .eq("estado", ESTADO_ENVIADO)
+            .in_("corte_id", ids)
+            .execute()
+            .data
+        ) or []
+    except Exception as exc:
+        _log.warning("fetch_aiu_otros_anteriores_enviados: %s", exc)
+        return vacio
+    idset = set(ids)
+    out = dict(vacio)
+    for r in rows:
+        if int(r.get("corte_id") or 0) not in idset:
+            continue
+        if int(r.get("subcontratista_id") or 0) != int(subcontratista_id):
+            continue
+        for k in (
+            "costo_directo",
+            "valor_administracion",
+            "valor_imprevistos",
+            "valor_utilidad",
+            "valor_iva_utilidad",
+            "costo_directo_mas_aiu",
+            "amortizacion_presente",
+        ):
+            out[k] = _round0(out[k] + _sf(r.get(k)))
+        out["total_otros"] = _round0(out["total_otros"] + _sf(r.get("total_otros_conceptos")))
+    return out
+
+
+def build_resumen_conciliacion_4cols(
+    *,
+    items: Optional[Iterable[dict]] = None,
+    tributos: Any = None,
+    anticipo: Any = None,
+    amortizacion_pct: Any = None,
+    amortizado_anterior: Any = None,
+    otros_presente: Any = None,
+    aiu_otros_anterior: Optional[Dict[str, Any]] = None,
+    aiu_presente_override: Optional[Dict[str, Any]] = None,
+    amort_presente_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Resumen de conciliación en 4 columnas: Actualizadas | Presente | Acumulado | Saldo.
+
+    Fuente única para PDF, Excel y popup. Reglas:
+    - CD: suma de valores de ítems por bloque.
+    - A/I/U/IVA: % sobre CD de Actualizadas y Presente; Acumulado = ant(enviados) + presente;
+      Saldo = Actualizadas − Acumulado.
+    - Anticipo/amortización: Act=anticipo; Pres=amort presente (tope); Acum=ant+pres; Saldo=ant−acum.
+    - Otros: solo Presente y Acumulado (ant+pres); Actualizadas/Saldo vacíos.
+    """
+    cds = sum_valores_bloques_items(items)
+    cd_act = cds["actualizadas"]
+    cd_pres = cds["presente"]
+    cd_acum_items = cds["acumulado"]
+    # Saldo CD = Actualizadas − Acumulado (alineado a la regla del resumen)
+    cd_saldo = _round0(cd_act - cd_acum_items)
+
+    aiu_act = calc_aiu_desglose(cd_act, tributos)
+    aiu_pres = calc_aiu_desglose(cd_pres, tributos)
+    if aiu_presente_override:
+        # Snapshot enviado: respeta CD/AIU persistidos del presente
+        merged = dict(aiu_pres)
+        for k, v in aiu_presente_override.items():
+            if v is not None:
+                merged[k] = v
+        aiu_pres = merged
+
+    ant = aiu_otros_anterior or {}
+    aiu_ant = {
+        "costo_directo": _round0(ant.get("costo_directo")),
+        "valor_administracion": _round0(ant.get("valor_administracion")),
+        "valor_imprevistos": _round0(ant.get("valor_imprevistos")),
+        "valor_utilidad": _round0(ant.get("valor_utilidad")),
+        "valor_iva_utilidad": _round0(ant.get("valor_iva_utilidad")),
+        "costo_directo_mas_aiu": _round0(ant.get("costo_directo_mas_aiu")),
+    }
+    # Si no hay snapshot anterior, Acumulado CD de ítems − presente da el CD anterior implícito
+    if aiu_ant["costo_directo"] == 0.0 and cd_acum_items > cd_pres:
+        aiu_ant = calc_aiu_desglose(_round0(cd_acum_items - cd_pres), tributos)
+
+    def _acum(key: str) -> float:
+        return _round0(_sf(aiu_ant.get(key)) + _sf(aiu_pres.get(key)))
+
+    def _saldo_aiu(key: str) -> float:
+        return _round0(_sf(aiu_act.get(key)) - _acum(key))
+
+    # Amortización presente sobre CD+AIU presente (con tope)
+    amort_live = calc_amortizacion(
+        aiu_pres.get("costo_directo_mas_aiu") or 0,
+        anticipo=anticipo,
+        amortizacion_pct=amortizacion_pct,
+        amortizado_anterior=amortizado_anterior if amortizado_anterior is not None else ant.get("amortizacion_presente"),
+    )
+    if amort_presente_override:
+        amort_live = {**amort_live, **{k: v for k, v in amort_presente_override.items() if v is not None}}
+
+    anticipo_val = _round0(amort_live.get("anticipo_entregado"))
+    amort_pres = _round0(amort_live.get("amortizacion_presente"))
+    amort_ant = _round0(amort_live.get("amortizado_anterior"))
+    amort_acum = _round0(amort_ant + amort_pres)
+    amort_saldo = _round0(anticipo_val - amort_acum)  # = saldo_por_amortizar
+
+    tot_otros_pres = _round0(otros_presente)
+    tot_otros_ant = _round0(ant.get("total_otros"))
+    tot_otros_acum = _round0(tot_otros_ant + tot_otros_pres)
+
+    cd_aiu_act = _round0(aiu_act.get("costo_directo_mas_aiu"))
+    cd_aiu_pres = _round0(aiu_pres.get("costo_directo_mas_aiu"))
+    cd_aiu_acum = _acum("costo_directo_mas_aiu")
+    cd_aiu_saldo = _round0(cd_aiu_act - cd_aiu_acum)
+
+    # Subtotal después de amortización por columna
+    # Act: CD+AIU − anticipo (valor total a amortizar en esa columna)
+    # Pres: CD+AIU − amort presente
+    # Acum: CD+AIU acum − amort acum
+    # Saldo: Act − Acum del subtotal (o CD+AIU saldo − amort saldo)
+    sub_act = _round0(cd_aiu_act - anticipo_val)
+    sub_pres = _round0(cd_aiu_pres - amort_pres)
+    sub_acum = _round0(cd_aiu_acum - amort_acum)
+    sub_saldo = _round0(sub_act - sub_acum)
+
+    gt_act = sub_act  # sin otros en Actualizadas
+    gt_pres = _round0(sub_pres + tot_otros_pres)
+    gt_acum = _round0(sub_acum + tot_otros_acum)
+    gt_saldo = sub_saldo  # otros no aplican en Saldo
+
+    pct_a = aiu_pres.get("pct_administracion", aiu_act.get("pct_administracion"))
+    pct_i = aiu_pres.get("pct_imprevistos", aiu_act.get("pct_imprevistos"))
+    pct_u = aiu_pres.get("pct_utilidad", aiu_act.get("pct_utilidad"))
+    pct_iva = aiu_pres.get("pct_iva_utilidad", aiu_act.get("pct_iva_utilidad"))
+    pct_am = amort_live.get("pct_amortizacion")
+
+    lineas: List[Dict[str, Any]] = [
+        {
+            "key": "cd",
+            "nombre": "Costo Directo",
+            "abrev": "CD",
+            "pct": None,
+            "valores": _cols4(cd_act, cd_pres, cd_acum_items, cd_saldo),
+            "strong": False,
+        },
+        {
+            "key": "a",
+            "nombre": "Administración",
+            "abrev": "A",
+            "pct": pct_a,
+            "valores": _cols4(
+                aiu_act.get("valor_administracion"),
+                aiu_pres.get("valor_administracion"),
+                _acum("valor_administracion"),
+                _saldo_aiu("valor_administracion"),
+            ),
+            "strong": False,
+        },
+        {
+            "key": "i",
+            "nombre": "Imprevistos",
+            "abrev": "I",
+            "pct": pct_i,
+            "valores": _cols4(
+                aiu_act.get("valor_imprevistos"),
+                aiu_pres.get("valor_imprevistos"),
+                _acum("valor_imprevistos"),
+                _saldo_aiu("valor_imprevistos"),
+            ),
+            "strong": False,
+        },
+        {
+            "key": "u",
+            "nombre": "Utilidad",
+            "abrev": "U",
+            "pct": pct_u,
+            "valores": _cols4(
+                aiu_act.get("valor_utilidad"),
+                aiu_pres.get("valor_utilidad"),
+                _acum("valor_utilidad"),
+                _saldo_aiu("valor_utilidad"),
+            ),
+            "strong": False,
+        },
+        {
+            "key": "iva",
+            "nombre": "IVA sobre la Utilidad",
+            "abrev": "IVA",
+            "pct": pct_iva,
+            "valores": _cols4(
+                aiu_act.get("valor_iva_utilidad"),
+                aiu_pres.get("valor_iva_utilidad"),
+                _acum("valor_iva_utilidad"),
+                _saldo_aiu("valor_iva_utilidad"),
+            ),
+            "strong": False,
+        },
+        {
+            "key": "cd_aiu",
+            "nombre": "Costo Directo + AIU",
+            "abrev": "CD+AIU",
+            "pct": None,
+            "valores": _cols4(cd_aiu_act, cd_aiu_pres, cd_aiu_acum, cd_aiu_saldo),
+            "strong": True,
+        },
+        {
+            "key": "amort",
+            "nombre": "Anticipo / amortización",
+            "abrev": "AM",
+            "pct": pct_am,
+            "valores": _cols4(anticipo_val, amort_pres, amort_acum, amort_saldo),
+            "strong": False,
+            "hint": "Actualizadas=anticipo; Presente=amort. corte; Acumulado=ant+pres; Saldo=anticipo−acum",
+        },
+        {
+            "key": "sub_amort",
+            "nombre": "Subtotal después de amortización",
+            "abrev": "SUB-AM",
+            "pct": None,
+            "valores": _cols4(sub_act, sub_pres, sub_acum, sub_saldo),
+            "strong": True,
+        },
+        {
+            "key": "otros",
+            "nombre": "Otros conceptos",
+            "abrev": "OTR",
+            "pct": None,
+            "valores": _cols4(None, tot_otros_pres, tot_otros_acum, None),
+            "strong": False,
+        },
+        {
+            "key": "gran_total",
+            "nombre": "Gran total",
+            "abrev": "GT",
+            "pct": None,
+            "valores": _cols4(gt_act, gt_pres, gt_acum, gt_saldo),
+            "strong": True,
+        },
+    ]
+
+    return {
+        "lineas": lineas,
+        "cd_bloques": cds,
+        "aiu_actualizadas": aiu_act,
+        "aiu_presente": aiu_pres,
+        "aiu_anterior": aiu_ant,
+        "amortizacion": amort_live,
+        "total_otros_presente": tot_otros_pres,
+        "total_otros_anterior": tot_otros_ant,
+        "total_otros_acumulado": tot_otros_acum,
+        "gran_total_presente": gt_pres,
+    }
+
+
+def label_linea_resumen_4cols(line: dict) -> str:
+    """Etiqueta visible de una línea del resumen 4 columnas."""
+    key = line.get("key")
+    pct = pct_label(line.get("pct")) if line.get("pct") is not None else ""
+    if key == "cd":
+        return "Costo Directo"
+    if key == "cd_aiu":
+        return "Costo Directo + AIU"
+    if key == "amort":
+        if pct and pct != "—":
+            return f"Anticipo / amortización ({pct})"
+        return "Anticipo / amortización"
+    if key == "sub_amort":
+        return "Subtotal después de amortización"
+    if key == "otros":
+        return "Otros conceptos"
+    if key == "gran_total":
+        return "Gran total"
+    nombre = str(line.get("nombre") or "")
+    abrev = str(line.get("abrev") or "")
+    if pct and pct != "—":
+        return f"{nombre} {abrev} ({pct})".strip()
+    return f"{nombre} {abrev}".strip()
+
+
+def sanitize_filename(name: str) -> str:
+    return re.sub(r"[^\w.\-]", "_", (name or "soporte").strip())[:120]
+
+
 def precios_vu_sub_por_item(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[str, float]:
     """
     Mapa item_numero → precio_unitario_sub del listado del subcontratista.
@@ -1034,7 +1383,3 @@ def fetch_anticipo_amortizacion_sub(sb, subcontratista_id: int) -> Dict[str, Any
     except Exception as exc:
         _log.warning("fetch_anticipo_amortizacion_sub: %s", exc)
     return {"anticipo": 0.0, "amortizacion_pct": None}
-
-
-def sanitize_filename(name: str) -> str:
-    return re.sub(r"[^\w.\-]", "_", (name or "soporte").strip())[:120]
