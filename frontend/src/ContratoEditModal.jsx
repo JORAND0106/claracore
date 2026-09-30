@@ -10,6 +10,8 @@ import { buildContratoUiTheme } from "./theme/adminPanelTheme";
 import { useClaraViewport } from "./useClaraViewport";
 import CcConfirmModal from "./components/CcConfirmModal";
 import PkIdsCsvPanoramaModal from "./components/PkIdsCsvPanoramaModal";
+import TopoExcelSheet from "./components/topografia/TopoExcelSheet";
+import { topoSheetStyles } from "./components/topografia/topoSheetStyles";
 import {
   EXPORT_PALETTE_DEFAULTS,
   EXPORT_PALETTE_TIERS,
@@ -94,15 +96,27 @@ export default function ContratoEditModal({
   const [tab, setTab] = useState(initialTab);
   const isEdit = mode === "edit";
   const ui = useMemo(() => buildContratoUiTheme(theme, tProp), [theme, tProp]);
-  const { inp, lbl, font, fileDrop: fileDropStyle, confirmTheme } = ui;
+  const { font, fileDrop: fileDropStyle, confirmTheme } = ui;
+  const sheet = useMemo(() => topoSheetStyles(ui.tok || tProp), [ui.tok, tProp]);
+  const cellInp = useMemo(() => ({ ...sheet.cellInp, textAlign: "left", minHeight: 32, height: "auto" }), [sheet]);
+  const cellSelect = useMemo(() => ({ ...sheet.cellSelect, minHeight: 32, height: "auto" }), [sheet]);
   const { isMobile: vpMobile, isLandscapeMobile } = useClaraViewport();
   const compact = vpMobile || isLandscapeMobile;
 
   function copHint(val) {
     if (val == null || val === "" || Number.isNaN(Number(val))) return null;
     return (
-      <div style={{ fontSize: font.caption, color: ui.primary, marginTop: -8, marginBottom: 8 }}>
+      <div style={{ fontSize: "var(--cc-caption)", color: ui.primary, marginTop: 2, lineHeight: 1.2 }}>
         {formatCOP(val)}
+      </div>
+    );
+  }
+
+  function pctHint(val) {
+    if (val === "" || val == null || Number.isNaN(parseFloat(val))) return null;
+    return (
+      <div style={{ fontSize: "var(--cc-caption)", color: ui.primary, marginTop: 2, lineHeight: 1.2 }}>
+        = {(parseFloat(val) * 100).toFixed(4).replace(/\.?0+$/, "")}%
       </div>
     );
   }
@@ -252,179 +266,178 @@ export default function ContratoEditModal({
           )}
 
           {tab === "info" && (
-            <div className="cc-contrato-modal-body-grid" style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 16 }}>
-              <div>
-                <label style={lbl}>NÚMERO DE CONTRATO *</label>
-                <input style={{ ...inp, minHeight: 44, fontSize: 16 }} placeholder="Ej: IDU-1551-2017" value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))} />
-                <label style={lbl}>OBJETO DEL CONTRATO</label>
-                <input style={inp} placeholder="Descripción del objeto contractual" value={form.objeto} onChange={(e) => setForm((f) => ({ ...f, objeto: e.target.value }))} />
-                <label style={lbl}>CONTRATISTA *</label>
-                <input style={inp} placeholder="Razón social" value={form.contratista} onChange={(e) => setForm((f) => ({ ...f, contratista: e.target.value }))} />
-                <label style={lbl}>NIT CONTRATISTA</label>
-                <input style={inp} placeholder="Ej: 900.123.456-7" value={form.nit} onChange={(e) => setForm((f) => ({ ...f, nit: e.target.value }))} />
-                <label style={lbl}>LOGO CONTRATISTA</label>
-                <label style={fileDropStyle}>
-                  {form.logo_contratista ? "✅ Logo cargado" : "📂 Cargar logo contratista"}
-                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_contratista", e)} />
-                </label>
-                {form.logo_contratista ? (
-                  <img
-                    src={form.logo_contratista}
-                    alt="Vista previa logo contratista"
-                    style={{ height: 40, maxWidth: "100%", objectFit: "contain", marginTop: 6, borderRadius: 4, background: "#fff", padding: 2, border: `1px solid ${ui.border}` }}
-                  />
-                ) : null}
-              </div>
-              <div>
-                <label style={lbl}>INTERVENTORÍA</label>
-                <input style={inp} placeholder="Razón social interventoría" value={form.interventoria} onChange={(e) => setForm((f) => ({ ...f, interventoria: e.target.value }))} />
-                <label style={lbl}>Nº CONTRATO DE INTERVENTORÍA</label>
-                <input
-                  style={inp}
-                  placeholder="Ej: ICCU-INT-0123-2025"
-                  value={form.numero_interventoria || ''}
-                  onChange={(e) => setForm((f) => ({ ...f, numero_interventoria: e.target.value }))}
-                />
-                <label style={lbl}>LOGO INTERVENTORÍA</label>
-                <label style={fileDropStyle}>
-                  {form.logo_interventoria ? "✅ Logo cargado" : "📂 Cargar logo interventoría"}
-                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_interventoria", e)} />
-                </label>
-                {form.logo_interventoria ? (
-                  <img
-                    src={form.logo_interventoria}
-                    alt="Vista previa logo interventoría"
-                    style={{ height: 40, maxWidth: "100%", objectFit: "contain", marginTop: 6, borderRadius: 4, background: "#fff", padding: 2, border: `1px solid ${ui.border}` }}
-                  />
-                ) : null}
-                <label style={lbl}>ENTIDAD *</label>
-                <select style={inp} value={form.entidad} onChange={(e) => setForm((f) => ({ ...f, entidad: e.target.value, entidad_otra: e.target.value === "OTRA" ? f.entidad_otra : "" }))}>
-                  <option value="">Selecciona entidad...</option>
-                  {ENTIDADES.map((ent) => (
-                    <option key={ent} value={ent}>
-                      {ent === "OTRA" ? "OTRA... (Indique cuál)" : ent}
-                    </option>
-                  ))}
-                </select>
-                {form.entidad === "OTRA" && (
-                  <>
-                    <label style={lbl}>¿CUÁL ENTIDAD?</label>
-                    <input style={inp} placeholder="Escribe la entidad" value={form.entidad_otra} onChange={(e) => setForm((f) => ({ ...f, entidad_otra: e.target.value }))} />
-                  </>
-                )}
-                <label style={lbl}>LOGO ENTIDAD</label>
-                <label style={fileDropStyle}>
-                  {form.logo_entidad ? "✅ Logo entidad cargado" : "📂 Cargar logo de entidad"}
-                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_entidad", e)} />
-                </label>
-                {form.logo_entidad ? (
-                  <img
-                    src={form.logo_entidad}
-                    alt="Vista previa logo entidad"
-                    style={{ height: 40, maxWidth: "100%", objectFit: "contain", marginTop: 6, borderRadius: 4, background: "#fff", padding: 2, border: `1px solid ${ui.border}` }}
-                  />
-                ) : null}
-              </div>
-              <div style={{ gridColumn: "1 / -1" }}>
-                <label style={lbl}>CARGAR PLANO (GEOJSON)</label>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-                  <label style={{ ...fileDropStyle, marginBottom: 0 }}>
-                    {form.plano_geojson ? (planoArchivoLabel ? `✅ ${planoArchivoLabel}` : "✅ Plano GeoJSON cargado") : "📂 Elegir archivo .geojson / .json"}
-                    <input ref={planoFileInputRef} type="file" accept=".geojson,.json,application/geo+json,application/json" style={{ display: "none" }} onChange={handlePlanoGeojson} />
-                  </label>
+            <div>
+              <TopoExcelSheet
+                sheet={sheet}
+                compact={compact}
+                title="Identificación"
+                columns={[
+                  { key: "numero", label: "Nº contrato *", width: "28%" },
+                  { key: "objeto", label: "Objeto", width: "42%", compactFull: true },
+                  { key: "contratista", label: "Contratista *", width: "30%" },
+                ]}
+                cells={[
+                  <input key="numero" style={cellInp} placeholder="Ej: IDU-1551-2017" value={form.numero} onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))} />,
+                  <input key="objeto" style={cellInp} placeholder="Descripción del objeto contractual" value={form.objeto} onChange={(e) => setForm((f) => ({ ...f, objeto: e.target.value }))} />,
+                  <input key="contratista" style={cellInp} placeholder="Razón social" value={form.contratista} onChange={(e) => setForm((f) => ({ ...f, contratista: e.target.value }))} />,
+                ]}
+              />
+              <TopoExcelSheet
+                sheet={sheet}
+                compact={compact}
+                title="Contratista · Interventoría · Entidad"
+                columns={[
+                  { key: "nit", label: "NIT contratista" },
+                  { key: "logo_c", label: "Logo contratista" },
+                  { key: "interv", label: "Interventoría" },
+                  { key: "num_interv", label: "Nº contrato interventoría" },
+                  { key: "logo_i", label: "Logo interventoría" },
+                  { key: "entidad", label: "Entidad *" },
+                  ...(form.entidad === "OTRA" ? [{ key: "entidad_otra", label: "¿Cuál entidad?" }] : []),
+                  { key: "logo_e", label: "Logo entidad" },
+                ]}
+                cells={[
+                  <input key="nit" style={cellInp} placeholder="Ej: 900.123.456-7" value={form.nit} onChange={(e) => setForm((f) => ({ ...f, nit: e.target.value }))} />,
+                  <div key="logo_c" style={{ display: "flex", flexDirection: "column", gap: 4, padding: 2 }}>
+                    <label style={{ ...fileDropStyle, marginBottom: 0, padding: "6px 8px", fontSize: "var(--cc-caption)" }}>
+                      {form.logo_contratista ? "✅ Cargado" : "📂 Cargar"}
+                      <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_contratista", e)} />
+                    </label>
+                    {form.logo_contratista ? <img src={form.logo_contratista} alt="" style={{ height: 28, maxWidth: "100%", objectFit: "contain", background: "#fff", padding: 1, border: `1px solid ${sheet.border}` }} /> : null}
+                  </div>,
+                  <input key="interv" style={cellInp} placeholder="Razón social interventoría" value={form.interventoria} onChange={(e) => setForm((f) => ({ ...f, interventoria: e.target.value }))} />,
+                  <input key="num_interv" style={cellInp} placeholder="Ej: ICCU-INT-0123-2025" value={form.numero_interventoria || ""} onChange={(e) => setForm((f) => ({ ...f, numero_interventoria: e.target.value }))} />,
+                  <div key="logo_i" style={{ display: "flex", flexDirection: "column", gap: 4, padding: 2 }}>
+                    <label style={{ ...fileDropStyle, marginBottom: 0, padding: "6px 8px", fontSize: "var(--cc-caption)" }}>
+                      {form.logo_interventoria ? "✅ Cargado" : "📂 Cargar"}
+                      <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_interventoria", e)} />
+                    </label>
+                    {form.logo_interventoria ? <img src={form.logo_interventoria} alt="" style={{ height: 28, maxWidth: "100%", objectFit: "contain", background: "#fff", padding: 1, border: `1px solid ${sheet.border}` }} /> : null}
+                  </div>,
+                  <select key="entidad" style={cellSelect} value={form.entidad} onChange={(e) => setForm((f) => ({ ...f, entidad: e.target.value, entidad_otra: e.target.value === "OTRA" ? f.entidad_otra : "" }))}>
+                    <option value="">Selecciona entidad...</option>
+                    {ENTIDADES.map((ent) => (
+                      <option key={ent} value={ent}>{ent === "OTRA" ? "OTRA... (Indique cuál)" : ent}</option>
+                    ))}
+                  </select>,
+                  ...(form.entidad === "OTRA"
+                    ? [<input key="entidad_otra" style={cellInp} placeholder="Escribe la entidad" value={form.entidad_otra} onChange={(e) => setForm((f) => ({ ...f, entidad_otra: e.target.value }))} />]
+                    : []),
+                  <div key="logo_e" style={{ display: "flex", flexDirection: "column", gap: 4, padding: 2 }}>
+                    <label style={{ ...fileDropStyle, marginBottom: 0, padding: "6px 8px", fontSize: "var(--cc-caption)" }}>
+                      {form.logo_entidad ? "✅ Cargado" : "📂 Cargar"}
+                      <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleLogo("logo_entidad", e)} />
+                    </label>
+                    {form.logo_entidad ? <img src={form.logo_entidad} alt="" style={{ height: 28, maxWidth: "100%", objectFit: "contain", background: "#fff", padding: 1, border: `1px solid ${sheet.border}` }} /> : null}
+                  </div>,
+                ]}
+              />
+
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ ...sheet.sectionTitle, marginBottom: 6 }}>Plano (GeoJSON)</div>
+                <div style={{ ...sheet.sheetWrap, padding: 10, overflow: "visible" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
+                    <label style={{ ...fileDropStyle, marginBottom: 0 }}>
+                      {form.plano_geojson ? (planoArchivoLabel ? `✅ ${planoArchivoLabel}` : "✅ Plano GeoJSON cargado") : "📂 Elegir archivo .geojson / .json"}
+                      <input ref={planoFileInputRef} type="file" accept=".geojson,.json,application/geo+json,application/json" style={{ display: "none" }} onChange={handlePlanoGeojson} />
+                    </label>
+                    {form.plano_geojson && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                        <button type="button" onClick={abrirSelectorPlanoGeojson} style={{ background: ui.cardSubtle, border: `1px solid ${sheet.border}`, borderRadius: 4, padding: "6px 12px", color: ui.primary, fontSize: font.sm, cursor: "pointer" }}>
+                          📎 Reemplazar por otro archivo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm("¿Quitar el plano del formulario? Si guardas el contrato así, quedará sin plano hasta que subas otro archivo.")) quitarPlanoGeojson();
+                          }}
+                          style={{ background: "transparent", border: `1px solid ${ui.errorText}88`, borderRadius: 4, padding: "6px 12px", color: ui.errorText, fontSize: font.sm, cursor: "pointer" }}
+                        >
+                          🗑️ Quitar plano
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {form.centro_lat != null && form.centro_lng != null && (
+                    <div style={{ fontSize: font.caption, color: ui.primary, marginBottom: 8 }}>
+                      Punto medio detectado: Lat {form.centro_lat} / Lng {form.centro_lng}
+                    </div>
+                  )}
                   {form.plano_geojson && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                      <button type="button" onClick={abrirSelectorPlanoGeojson} style={{ background: ui.cardSubtle, border: `1px solid ${ui.tabBorderActive}`, borderRadius: 6, padding: "6px 12px", color: ui.primary, fontSize: font.sm, cursor: "pointer" }}>
-                        📎 Reemplazar por otro archivo
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm("¿Quitar el plano del formulario? Si guardas el contrato así, quedará sin plano hasta que subas otro archivo.")) quitarPlanoGeojson();
-                        }}
-                        style={{ background: "transparent", border: `1px solid ${ui.errorText}88`, borderRadius: 6, padding: "6px 12px", color: ui.errorText, fontSize: font.sm, cursor: "pointer" }}
-                      >
-                        🗑️ Quitar plano
-                      </button>
+                    <div style={{ marginBottom: 4 }}>
+                      <div style={{ fontSize: font.caption, color: ui.textMuted, letterSpacing: 0.7, marginBottom: 6, fontWeight: 800, textTransform: "uppercase" }}>Previsualización Mapbox</div>
+                      {!import.meta.env.VITE_MAPBOX_TOKEN ? (
+                        <div style={{ padding: 12, borderRadius: 4, border: `1px solid ${ui.warnText}55`, background: ui.warnBg, color: ui.warnText, fontSize: font.sm, lineHeight: 1.45 }}>
+                          El GeoJSON está cargado, pero falta <code style={{ color: ui.warnText }}>VITE_MAPBOX_TOKEN</code> en el frontend.
+                        </div>
+                      ) : (
+                        <div ref={mapContainerRef} style={{ width: "100%", height: 220, borderRadius: 4, border: `1px solid ${sheet.border}`, overflow: "hidden", background: ui.inputBg }} />
+                      )}
                     </div>
                   )}
                 </div>
-                {form.centro_lat != null && form.centro_lng != null && (
-                  <div style={{ fontSize: font.caption, color: ui.primary, marginBottom: 12 }}>
-                    Punto medio detectado: Lat {form.centro_lat} / Lng {form.centro_lng}
-                  </div>
-                )}
-                {form.plano_geojson && (
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: font.caption, color: ui.textMuted, letterSpacing: 0.7, marginBottom: 6 }}>PREVISUALIZACIÓN MAPBOX</div>
-                    {!import.meta.env.VITE_MAPBOX_TOKEN ? (
-                      <div style={{ padding: 16, borderRadius: 8, border: `1px solid ${ui.warnText}55`, background: ui.warnBg, color: ui.warnText, fontSize: font.sm, lineHeight: 1.45 }}>
-                        El GeoJSON está cargado, pero falta <code style={{ color: ui.warnText }}>VITE_MAPBOX_TOKEN</code> en el frontend.
-                      </div>
-                    ) : (
-                      <div ref={mapContainerRef} style={{ width: "100%", height: 220, borderRadius: 8, border: `1px solid ${ui.border}`, overflow: "hidden", background: ui.inputBg }} />
-                    )}
-                  </div>
-                )}
               </div>
+
               {isEdit && perms?.editar && (
-                <div style={{ gridColumn: "1 / -1", marginTop: 4, paddingTop: 16, borderTop: `1px solid ${ui.border}` }}>
-                  <label style={lbl}>MAESTRO PK-ID (CSV)</label>
-                  <div style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.45, marginBottom: 10 }}>
-                    Catálogo de PK por contrato (SICOE, Almacén, mapa). Columnas: CAPA, CIV, TRAMO, INFRAESTRUCTURA, COSTADO, UBICACION, ABS_INICIO, ABS_FINAL, CALZADA. CAPA = código PK.
-                    {pkIdsCount != null && (
-                      <span style={{ display: "block", marginTop: 6, color: ui.primary, fontWeight: 600 }}>
-                        PK en maestro actual: {pkIdsCount}
-                      </span>
-                    )}
-                    {pkIdsSicoeRefs?.total > 0 && (
-                      <span style={{ display: "block", marginTop: 6, color: ui.warnText, fontWeight: 600 }}>
-                        {pkIdsSicoeRefs.total} registro(s) SICOE vinculados al maestro
-                        {pkIdsSicoeRefs.reportes != null && pkIdsSicoeRefs.registros != null && (
-                          <> ({pkIdsSicoeRefs.reportes} reportes · {pkIdsSicoeRefs.registros} registros)</>
-                        )}
-                        . Use Sincronizar para actualizar sin borrar.
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                    <button
-                      type="button"
-                      disabled={pkCsvUploading}
-                      onClick={abrirSelectorPkCsv}
-                      style={{
-                        ...fileDropStyle,
-                        marginBottom: 0,
-                        opacity: pkCsvUploading ? 0.6 : 1,
-                        cursor: pkCsvUploading ? "wait" : "pointer",
-                      }}
-                    >
-                      {pkCsvUploading ? "⏳ Procesando CSV…" : "📂 Cargar maestro PK-ID (CSV)"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={pkCsvUploading}
-                      onClick={onAbrirPanoramaMaestroPkIds}
-                      style={{
-                        background: "transparent",
-                        border: `1px solid ${ui.border}`,
-                        color: ui.primary,
-                        borderRadius: 8,
-                        padding: "9px 14px",
-                        fontSize: font.sm,
-                        fontWeight: 700,
-                        cursor: pkCsvUploading ? "wait" : "pointer",
-                      }}
-                    >
-                      Ver panorama del maestro
-                    </button>
-                    <input
-                      ref={pkCsvFileInputRef}
-                      type="file"
-                      accept=".csv,text/csv"
-                      style={{ display: "none" }}
-                      onChange={handlePkCsvFile}
-                    />
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ ...sheet.sectionTitle, marginBottom: 6 }}>Maestro PK-ID (CSV)</div>
+                  <div style={{ ...sheet.sheetWrap, padding: 10, overflow: "visible" }}>
+                    <div style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.45, marginBottom: 10 }}>
+                      Catálogo de PK por contrato (SICOE, Almacén, mapa). Columnas: CAPA, CIV, TRAMO, INFRAESTRUCTURA, COSTADO, UBICACION, ABS_INICIO, ABS_FINAL, CALZADA. CAPA = código PK.
+                      {pkIdsCount != null && (
+                        <span style={{ display: "block", marginTop: 6, color: ui.primary, fontWeight: 600 }}>
+                          PK en maestro actual: {pkIdsCount}
+                        </span>
+                      )}
+                      {pkIdsSicoeRefs?.total > 0 && (
+                        <span style={{ display: "block", marginTop: 6, color: ui.warnText, fontWeight: 600 }}>
+                          {pkIdsSicoeRefs.total} registro(s) SICOE vinculados al maestro
+                          {pkIdsSicoeRefs.reportes != null && pkIdsSicoeRefs.registros != null && (
+                            <> ({pkIdsSicoeRefs.reportes} reportes · {pkIdsSicoeRefs.registros} registros)</>
+                          )}
+                          . Use Sincronizar para actualizar sin borrar.
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        disabled={pkCsvUploading}
+                        onClick={abrirSelectorPkCsv}
+                        style={{
+                          ...fileDropStyle,
+                          marginBottom: 0,
+                          opacity: pkCsvUploading ? 0.6 : 1,
+                          cursor: pkCsvUploading ? "wait" : "pointer",
+                        }}
+                      >
+                        {pkCsvUploading ? "⏳ Procesando CSV…" : "📂 Cargar maestro PK-ID (CSV)"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={pkCsvUploading}
+                        onClick={onAbrirPanoramaMaestroPkIds}
+                        style={{
+                          background: "transparent",
+                          border: `1px solid ${sheet.border}`,
+                          color: ui.primary,
+                          borderRadius: 4,
+                          padding: "9px 14px",
+                          fontSize: font.sm,
+                          fontWeight: 700,
+                          cursor: pkCsvUploading ? "wait" : "pointer",
+                        }}
+                      >
+                        Ver panorama del maestro
+                      </button>
+                      <input
+                        ref={pkCsvFileInputRef}
+                        type="file"
+                        accept=".csv,text/csv"
+                        style={{ display: "none" }}
+                        onChange={handlePkCsvFile}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -688,343 +701,354 @@ export default function ContratoEditModal({
 
           {tab === "financiera" && (
             <div>
-              <div className="cc-contrato-modal-body-grid" style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 8 }}>
-                <div>
-                  <label style={lbl}>AIU (%)</label>
-                  <input style={inp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.25 → 25%" value={form.aiu} onChange={(e) => setForm((f) => ({ ...f, aiu: e.target.value }))} />
-                  {form.aiu !== "" && !Number.isNaN(parseFloat(form.aiu)) && (
-                    <div style={{ fontSize: font.caption, color: ui.primary, marginTop: -8, marginBottom: 8 }}>
-                      = {(parseFloat(form.aiu) * 100).toFixed(4).replace(/\.?0+$/, "")}%
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label style={lbl}>IVA (%)</label>
-                  <input style={inp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.19 → 19%" value={form.iva} onChange={(e) => setForm((f) => ({ ...f, iva: e.target.value }))} />
-                  {form.iva !== "" && !Number.isNaN(parseFloat(form.iva)) && (
-                    <div style={{ fontSize: font.caption, color: ui.primary, marginTop: -8, marginBottom: 8 }}>
-                      = {(parseFloat(form.iva) * 100).toFixed(4).replace(/\.?0+$/, "")}%
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div style={{ fontSize: font.caption, color: ui.textMuted, letterSpacing: 0.6, margin: "4px 0 8px" }}>VALORES CONTRATUALES (COP$)</div>
-              <div className="cc-contrato-modal-body-grid" style={{ display: "grid", gridTemplateColumns: compact ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 8 }}>
-                <div>
-                  <label style={lbl}>VALOR COMPONENTE AMBIENTAL</label>
-                  <input style={inp} type="number" step="1" min="0" placeholder="COP" value={form.valor_componente_ambiental} onChange={(e) => setForm((f) => ({ ...f, valor_componente_ambiental: e.target.value }))} />
-                  {copHint(form.valor_componente_ambiental)}
-                </div>
-                <div>
-                  <label style={lbl}>VALOR COMPONENTE SOCIAL</label>
-                  <input style={inp} type="number" step="1" min="0" placeholder="COP" value={form.valor_componente_social} onChange={(e) => setForm((f) => ({ ...f, valor_componente_social: e.target.value }))} />
-                  {copHint(form.valor_componente_social)}
-                </div>
-                <div>
-                  <label style={lbl}>VALOR COMPONENTE PMT</label>
-                  <input style={inp} type="number" step="1" min="0" placeholder="COP" value={form.valor_componente_pmt} onChange={(e) => setForm((f) => ({ ...f, valor_componente_pmt: e.target.value }))} />
-                  {copHint(form.valor_componente_pmt)}
-                </div>
-                <div>
-                  <label style={lbl}>COSTO DIRECTO DEL CONTRATO</label>
-                  <input style={inp} type="number" step="1" min="0" placeholder="COP" value={form.costo_directo_contrato} onChange={(e) => setForm((f) => ({ ...f, costo_directo_contrato: e.target.value }))} />
-                  {copHint(form.costo_directo_contrato)}
-                </div>
-              </div>
-              <div style={{ fontSize: font.caption, color: ui.textMuted, letterSpacing: 0.4, margin: "0 0 6px" }}>
-                Costos adicionales: concepto, valor mensual (COP$) y plazo en meses. El valor total del renglón es automático.
-              </div>
-              {(form.costos_adicionales_lista || []).map((row, i) => {
-                const vvm = numONull(row.valor_mensual);
-                const ttm = numONull(row.tiempo_meses);
-                const totalCalc = vvm != null && ttm != null ? Math.round(vvm * ttm) : null;
-                return (
-                  <div key={i} style={{ marginBottom: 10 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.1fr) 0.6fr 0.45fr 0.7fr 36px", gap: 8, alignItems: "end" }}>
-                      <div>
-                        <label style={lbl}>CONCEPTO *</label>
-                        <input
-                          style={inp}
-                          placeholder="Ej. servicio fijo, supervisión"
-                          value={row.concepto_contractual || ""}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setForm((f) => {
-                              const arr = [...(f.costos_adicionales_lista || [])];
-                              arr[i] = { ...arr[i], concepto_contractual: v };
-                              return { ...f, costos_adicionales_lista: arr };
-                            });
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <label style={lbl}>VALOR MENSUAL (COP)</label>
-                        <input
-                          style={inp}
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          placeholder="0"
-                          value={row.valor_mensual}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setForm((f) => {
-                              const arr = [...(f.costos_adicionales_lista || [])];
-                              arr[i] = { ...arr[i], valor_mensual: v };
-                              return { ...f, costos_adicionales_lista: arr };
-                            });
-                          }}
-                        />
-                        {copHint(row.valor_mensual)}
-                      </div>
-                      <div>
-                        <label style={lbl}>MESES</label>
-                        <input
-                          style={inp}
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          placeholder="0"
-                          value={row.tiempo_meses}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setForm((f) => {
-                              const arr = [...(f.costos_adicionales_lista || [])];
-                              arr[i] = { ...arr[i], tiempo_meses: v };
-                              return { ...f, costos_adicionales_lista: arr };
-                            });
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <label style={lbl}>COSTO ADICIONAL (CALC.)</label>
-                        <div style={{ ...inp, display: "flex", alignItems: "center", marginBottom: 12, minHeight: 40, color: totalCalc != null ? ui.primary : ui.textMuted }}>
-                          {totalCalc != null ? formatCOP(totalCalc) : "—"}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setForm((f) => {
-                            const arr = [...(f.costos_adicionales_lista || [])];
-                            arr.splice(i, 1);
-                            return { ...f, costos_adicionales_lista: arr };
-                          });
-                        }}
-                        style={{ background: `${ui.errorText}22`, border: `1px solid ${ui.errorText}55`, color: ui.errorText, borderRadius: 6, padding: "8px 0", cursor: "pointer", fontSize: font.caption }}
-                      >
-                        Quitar
-                      </button>
-                    </div>
-                    <div style={{ fontSize: font.caption, color: ui.primary, marginTop: 4, paddingLeft: 2 }}>
-                      Valor mensual: {vvm != null ? formatCOP(vvm) : "—"}
-                      {totalCalc != null && <> · Total: {formatCOP(totalCalc)}</>}
-                    </div>
-                  </div>
-                );
-              })}
-              <button
-                type="button"
-                onClick={() =>
-                  setForm((f) => ({
-                    ...f,
-                    costos_adicionales_lista: [...(f.costos_adicionales_lista || []), { concepto_contractual: "", valor_mensual: "", tiempo_meses: "" }],
-                  }))
+              <TopoExcelSheet
+                sheet={sheet}
+                compact={compact}
+                title="Tasas (fracción 0–1)"
+                columns={[
+                  { key: "aiu", label: "AIU", width: "50%" },
+                  { key: "iva", label: "IVA", width: "50%" },
+                ]}
+                cells={[
+                  <div key="aiu">
+                    <input style={cellInp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.25 → 25%" value={form.aiu} onChange={(e) => setForm((f) => ({ ...f, aiu: e.target.value }))} />
+                    {pctHint(form.aiu)}
+                  </div>,
+                  <div key="iva">
+                    <input style={cellInp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.19 → 19%" value={form.iva} onChange={(e) => setForm((f) => ({ ...f, iva: e.target.value }))} />
+                    {pctHint(form.iva)}
+                  </div>,
+                ]}
+              />
+              <TopoExcelSheet
+                sheet={sheet}
+                compact={compact}
+                title="Valores contractuales (COP$)"
+                columns={[
+                  { key: "amb", label: "Componente ambiental" },
+                  { key: "soc", label: "Componente social" },
+                  { key: "pmt", label: "Componente PMT" },
+                  { key: "cd", label: "Costo directo del contrato" },
+                ]}
+                cells={[
+                  <div key="amb">
+                    <input style={cellInp} type="number" step="1" min="0" placeholder="COP" value={form.valor_componente_ambiental} onChange={(e) => setForm((f) => ({ ...f, valor_componente_ambiental: e.target.value }))} />
+                    {copHint(form.valor_componente_ambiental)}
+                  </div>,
+                  <div key="soc">
+                    <input style={cellInp} type="number" step="1" min="0" placeholder="COP" value={form.valor_componente_social} onChange={(e) => setForm((f) => ({ ...f, valor_componente_social: e.target.value }))} />
+                    {copHint(form.valor_componente_social)}
+                  </div>,
+                  <div key="pmt">
+                    <input style={cellInp} type="number" step="1" min="0" placeholder="COP" value={form.valor_componente_pmt} onChange={(e) => setForm((f) => ({ ...f, valor_componente_pmt: e.target.value }))} />
+                    {copHint(form.valor_componente_pmt)}
+                  </div>,
+                  <div key="cd">
+                    <input style={cellInp} type="number" step="1" min="0" placeholder="COP" value={form.costo_directo_contrato} onChange={(e) => setForm((f) => ({ ...f, costo_directo_contrato: e.target.value }))} />
+                    {copHint(form.costo_directo_contrato)}
+                  </div>,
+                ]}
+              />
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Costos adicionales"
+                titleRight={
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        costos_adicionales_lista: [...(f.costos_adicionales_lista || []), { concepto_contractual: "", valor_mensual: "", tiempo_meses: "" }],
+                      }))
+                    }
+                    style={{
+                      background: ui.cardSubtle,
+                      border: `1px solid ${sheet.border}`,
+                      color: ui.primary,
+                      borderRadius: 4,
+                      padding: "4px 10px",
+                      fontSize: "var(--cc-caption)",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    + Agregar
+                  </button>
                 }
-                style={{ background: ui.cardSubtle, border: `1px solid ${ui.tabBorderActive}`, color: ui.primary, borderRadius: 8, padding: "8px 14px", fontSize: font.sm, fontWeight: 600, cursor: "pointer", marginBottom: 8 }}
+                columns={[
+                  { key: "concepto", label: "Concepto *", width: "32%" },
+                  { key: "vm", label: "Valor mensual (COP)", width: "20%" },
+                  { key: "meses", label: "Meses", width: "12%" },
+                  { key: "total", label: "Costo adicional (calc.)", width: "24%" },
+                  { key: "acc", label: "", width: "12%" },
+                ]}
+                minWidth={640}
               >
-                + Agregar costo adicional
-              </button>
+                {(form.costos_adicionales_lista || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={5} style={{ ...sheet.td, color: ui.textMuted, textAlign: "center", padding: 12 }}>
+                      Sin costos adicionales. Concepto, valor mensual y plazo en meses; el total del renglón es automático.
+                    </td>
+                  </tr>
+                ) : (
+                  (form.costos_adicionales_lista || []).map((row, i) => {
+                    const vvm = numONull(row.valor_mensual);
+                    const ttm = numONull(row.tiempo_meses);
+                    const totalCalc = vvm != null && ttm != null ? Math.round(vvm * ttm) : null;
+                    return (
+                      <tr key={i}>
+                        <td style={sheet.td}>
+                          <input
+                            style={cellInp}
+                            placeholder="Ej. servicio fijo, supervisión"
+                            value={row.concepto_contractual || ""}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setForm((f) => {
+                                const arr = [...(f.costos_adicionales_lista || [])];
+                                arr[i] = { ...arr[i], concepto_contractual: v };
+                                return { ...f, costos_adicionales_lista: arr };
+                              });
+                            }}
+                          />
+                        </td>
+                        <td style={sheet.td}>
+                          <input
+                            style={cellInp}
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="0"
+                            value={row.valor_mensual}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setForm((f) => {
+                                const arr = [...(f.costos_adicionales_lista || [])];
+                                arr[i] = { ...arr[i], valor_mensual: v };
+                                return { ...f, costos_adicionales_lista: arr };
+                              });
+                            }}
+                          />
+                          {copHint(row.valor_mensual)}
+                        </td>
+                        <td style={sheet.td}>
+                          <input
+                            style={cellInp}
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            placeholder="0"
+                            value={row.tiempo_meses}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setForm((f) => {
+                                const arr = [...(f.costos_adicionales_lista || [])];
+                                arr[i] = { ...arr[i], tiempo_meses: v };
+                                return { ...f, costos_adicionales_lista: arr };
+                              });
+                            }}
+                          />
+                        </td>
+                        <td style={{ ...sheet.td, color: totalCalc != null ? ui.primary : ui.textMuted, fontWeight: 700 }}>
+                          {totalCalc != null ? formatCOP(totalCalc) : "—"}
+                        </td>
+                        <td style={sheet.td}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForm((f) => {
+                                const arr = [...(f.costos_adicionales_lista || [])];
+                                arr.splice(i, 1);
+                                return { ...f, costos_adicionales_lista: arr };
+                              });
+                            }}
+                            style={{
+                              background: `${ui.errorText}22`,
+                              border: `1px solid ${ui.errorText}55`,
+                              color: ui.errorText,
+                              borderRadius: 4,
+                              padding: "4px 8px",
+                              cursor: "pointer",
+                              fontSize: "var(--cc-caption)",
+                              fontWeight: 700,
+                            }}
+                          >
+                            Quitar
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </TopoExcelSheet>
             </div>
           )}
 
-          {tab === "exportacion" && (
-            <div>
-              <div style={{ fontSize: font.body, fontWeight: 700, color: ui.primary, marginBottom: 8 }}>
-                Paleta de colores para exportes
-              </div>
-              <div style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.45, marginBottom: 16 }}>
-                Define los colores que usarán los formatos Excel y PDF de este contrato (presupuesto, comparador de versiones, etc.).
-                Si no configuras un tono, se usa el valor por defecto del sistema.
-              </div>
-              {(() => {
-                const palette = mergeExportPalette(form.export_palette);
-                return (
-                  <>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: vpMobile ? "1fr" : "1fr 1fr",
-                        gap: 12,
-                        marginBottom: 16,
-                      }}
-                    >
-                      {EXPORT_PALETTE_TIERS.map(({ key, label, hint }) => (
-                        <div
-                          key={key}
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 8,
-                            background: ui.inputBg,
-                            border: `1.5px solid ${ui.border}`,
-                            borderRadius: 8,
-                            padding: "10px 12px",
-                          }}
-                        >
-                          <span style={{ fontSize: font.sm, fontWeight: 600, color: ui.text }}>{label}</span>
-                          <span style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.35 }}>{hint}</span>
-                          {[
-                            { field: "bg", label: "Fondo" },
-                            { field: "text", label: "Texto" },
-                          ].map(({ field, label: fieldLabel }) => (
-                            <label
-                              key={field}
-                              style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}
-                            >
-                              <span style={{ fontSize: font.caption, color: ui.textMuted, minWidth: 42 }}>{fieldLabel}</span>
-                              <input
-                                type="color"
-                                value={palette[key][field]}
-                                onChange={(e) =>
-                                  setForm((f) => ({
-                                    ...f,
-                                    export_palette: setExportPaletteTier(f.export_palette, key, field, e.target.value),
-                                  }))
-                                }
-                                style={{ width: 40, height: 28, padding: 0, border: "none", cursor: "pointer", background: "transparent" }}
-                              />
-                              <code style={{ fontSize: font.caption, color: ui.textMuted }}>{palette[key][field]}</code>
-                            </label>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                    <div
-                      style={{
-                        border: `1px solid ${ui.border}`,
-                        borderRadius: 10,
-                        overflow: "hidden",
-                        fontSize: font.caption,
-                      }}
-                    >
-                      {EXPORT_PALETTE_TIERS.map(({ key, label }) => (
-                        <div
-                          key={`prev-${key}`}
-                          style={{
-                            background: palette[key].bg,
-                            color: palette[key].text,
-                            padding: "10px 14px",
-                            fontWeight: key === "encabezado" || key === "titulo_2" ? 700 : 400,
-                            borderBottom: `1px solid ${ui.border}`,
-                          }}
-                        >
-                          Vista previa · {label}
-                        </div>
-                      ))}
-                    </div>
+          {tab === "exportacion" && (() => {
+            const palette = mergeExportPalette(form.export_palette);
+            return (
+              <div>
+                <TopoExcelSheet
+                  sheet={sheet}
+                  title="Paleta de colores para exportes"
+                  titleRight={
                     <button
                       type="button"
                       onClick={() => setForm((f) => ({ ...f, export_palette: { ...EXPORT_PALETTE_DEFAULTS } }))}
                       style={{
-                        marginTop: 12,
                         background: ui.cardSubtle,
-                        border: `1px solid ${ui.tabBorderActive}`,
+                        border: `1px solid ${sheet.border}`,
                         color: ui.primary,
-                        borderRadius: 8,
-                        padding: "8px 14px",
-                        fontSize: font.sm,
-                        fontWeight: 600,
+                        borderRadius: 4,
+                        padding: "4px 10px",
+                        fontSize: "var(--cc-caption)",
+                        fontWeight: 700,
                         cursor: "pointer",
                       }}
                     >
-                      Restaurar colores por defecto
+                      Restaurar por defecto
                     </button>
-                  </>
-                );
-              })()}
-            </div>
-          )}
+                  }
+                  columns={[
+                    { key: "nivel", label: "Nivel", width: "22%" },
+                    { key: "hint", label: "Uso", width: "38%" },
+                    { key: "bg", label: "Fondo", width: "20%" },
+                    { key: "text", label: "Texto", width: "20%" },
+                  ]}
+                  minWidth={560}
+                >
+                  {EXPORT_PALETTE_TIERS.map(({ key, label, hint }) => (
+                    <tr key={key}>
+                      <td style={{ ...sheet.td, fontWeight: 700, color: ui.primary }}>{label}</td>
+                      <td style={{ ...sheet.td, color: ui.textMuted, fontSize: "var(--cc-caption)", lineHeight: 1.35 }}>{hint}</td>
+                      <td style={sheet.td}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <input
+                            type="color"
+                            value={palette[key].bg}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                export_palette: setExportPaletteTier(f.export_palette, key, "bg", e.target.value),
+                              }))
+                            }
+                            style={{ width: 36, height: 28, padding: 0, border: `1px solid ${sheet.border}`, cursor: "pointer", background: "transparent", borderRadius: 4 }}
+                          />
+                          <code style={{ fontSize: "var(--cc-caption)", color: ui.textMuted }}>{palette[key].bg}</code>
+                        </div>
+                      </td>
+                      <td style={sheet.td}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <input
+                            type="color"
+                            value={palette[key].text}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                export_palette: setExportPaletteTier(f.export_palette, key, "text", e.target.value),
+                              }))
+                            }
+                            style={{ width: 36, height: 28, padding: 0, border: `1px solid ${sheet.border}`, cursor: "pointer", background: "transparent", borderRadius: 4 }}
+                          />
+                          <code style={{ fontSize: "var(--cc-caption)", color: ui.textMuted }}>{palette[key].text}</code>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </TopoExcelSheet>
+                <div style={{ ...sheet.sectionTitle, marginBottom: 6 }}>Vista previa</div>
+                <div style={{ ...sheet.sheetWrap, overflow: "hidden" }}>
+                  <table style={{ ...sheet.sheetTable, width: "100%" }}>
+                    <tbody>
+                      {EXPORT_PALETTE_TIERS.map(({ key, label }) => (
+                        <tr key={`prev-${key}`}>
+                          <td
+                            style={{
+                              ...sheet.td,
+                              background: palette[key].bg,
+                              color: palette[key].text,
+                              fontWeight: key === "encabezado" || key === "titulo_2" ? 700 : 400,
+                              borderColor: sheet.border,
+                            }}
+                          >
+                            Vista previa · {label}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: "var(--cc-caption)", color: ui.textMuted, lineHeight: 1.45, marginTop: 8 }}>
+                  Colores para Excel y PDF de este contrato (presupuesto, comparador de versiones, etc.). Sin tono configurado se usa el valor por defecto del sistema.
+                </div>
+              </div>
+            );
+          })()}
 
           {tab === "niveles" && isEdit && (
             <div>
-              <div style={{ fontSize: font.body, fontWeight: 700, color: ui.primary, marginBottom: 8 }}>Niveles de Validación SICOE</div>
-              <div style={{ fontSize: font.caption, color: ui.textMuted, lineHeight: 1.45, marginBottom: 12 }}>
-                Activa los niveles de este contrato y asigna el rol responsable de cada uno (Contratista o Interventoría).
-                El selector Inspector al reportar cantidades lista usuarios del rol configurado en el Nivel 1.
-                El registro se sella al aprobar el nivel más alto activo.
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Niveles de validación SICOE"
+                columns={[
+                  { key: "nivel", label: "Nivel", width: "36%" },
+                  { key: "activo", label: "Activo", width: "14%" },
+                  { key: "rol", label: "Rol responsable", width: "50%" },
+                ]}
+                minWidth={520}
+              >
+                {[1, 2, 3, 4, 5, 6].map((n) => {
+                  const activo = nivelesActivosEdit.includes(n);
+                  const rolVal = rolesPorNivelEdit?.[n] ?? rolesPorNivelEdit?.[String(n)] ?? "";
+                  return (
+                    <tr key={n}>
+                      <td style={{ ...sheet.td, fontWeight: 700 }}>{nivelesLabels[n] || `Nivel ${n}`}</td>
+                      <td style={{ ...sheet.td, textAlign: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={activo}
+                          onChange={() => {
+                            setNivelesActivosEdit((prev) => {
+                              const p = Array.isArray(prev) ? prev : [];
+                              if (p.includes(n)) return [...p.filter((x) => x !== n)].sort((a, b) => a - b);
+                              return [...p, n].sort((a, b) => a - b);
+                            });
+                          }}
+                          style={{ width: 16, height: 16, accentColor: ui.primary, cursor: "pointer" }}
+                          aria-label={`Activar ${nivelesLabels[n] || `nivel ${n}`}`}
+                        />
+                      </td>
+                      <td style={sheet.td}>
+                        {activo && typeof setRolesPorNivelEdit === "function" ? (
+                          <select
+                            value={rolVal === "" || rolVal == null ? "" : String(rolVal)}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value, 10);
+                              setRolesPorNivelEdit((prev) => ({
+                                ...(prev && typeof prev === "object" ? prev : {}),
+                                [n]: Number.isFinite(v) && v > 0 ? v : "",
+                              }));
+                            }}
+                            style={cellSelect}
+                          >
+                            <option value="">Seleccionar rol…</option>
+                            {(Array.isArray(rolesCatalogo) ? rolesCatalogo : []).map((r) => (
+                              <option key={r.id} value={String(r.id)}>
+                                {r.nombre || `Rol #${r.id}`}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span style={{ color: ui.textMuted, fontSize: "var(--cc-caption)" }}>—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </TopoExcelSheet>
+              <div style={{ fontSize: "var(--cc-caption)", color: ui.textMuted, lineHeight: 1.45, marginTop: 4 }}>
+                Activa los niveles de este contrato y asigna el rol responsable de cada uno. El selector Inspector al reportar cantidades lista usuarios del rol del Nivel 1. El registro se sella al aprobar el nivel más alto activo.
               </div>
-              {[1, 2, 3, 4, 5, 6].map((n) => {
-                const activo = nivelesActivosEdit.includes(n);
-                const rolVal = rolesPorNivelEdit?.[n] ?? rolesPorNivelEdit?.[String(n)] ?? "";
-                return (
-                  <div
-                    key={n}
-                    style={{
-                      background: ui.inputBg,
-                      border: `1.5px solid ${ui.border}`,
-                      borderRadius: 8,
-                      padding: "10px 12px",
-                      marginBottom: 10,
-                      color: ui.text,
-                      fontSize: font.body,
-                      lineHeight: 1.35,
-                    }}
-                  >
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: 10,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={activo}
-                        onChange={() => {
-                          setNivelesActivosEdit((prev) => {
-                            const p = Array.isArray(prev) ? prev : [];
-                            if (p.includes(n)) return [...p.filter((x) => x !== n)].sort((a, b) => a - b);
-                            return [...p, n].sort((a, b) => a - b);
-                          });
-                        }}
-                        style={{ width: 16, height: 16, marginTop: 2, accentColor: ui.primary, flexShrink: 0, cursor: "pointer" }}
-                      />
-                      <span style={{ fontWeight: 600 }}>{nivelesLabels[n] || `Nivel ${n}`}</span>
-                    </label>
-                    {activo && typeof setRolesPorNivelEdit === "function" && (
-                      <div style={{ marginTop: 8, marginLeft: 26 }}>
-                        <div style={{ fontSize: font.caption, color: ui.textMuted, marginBottom: 4 }}>
-                          Rol responsable de validar este nivel
-                        </div>
-                        <select
-                          value={rolVal === "" || rolVal == null ? "" : String(rolVal)}
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value, 10);
-                            setRolesPorNivelEdit((prev) => ({
-                              ...(prev && typeof prev === "object" ? prev : {}),
-                              [n]: Number.isFinite(v) && v > 0 ? v : "",
-                            }));
-                          }}
-                          style={{
-                            ...inp,
-                            width: "100%",
-                            maxWidth: 420,
-                          }}
-                        >
-                          <option value="">Seleccionar rol…</option>
-                          {(Array.isArray(rolesCatalogo) ? rolesCatalogo : []).map((r) => (
-                            <option key={r.id} value={String(r.id)}>
-                              {r.nombre || `Rol #${r.id}`}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
             </div>
           )}
 

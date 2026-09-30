@@ -3817,6 +3817,7 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
 
   const col = C(t || theme);
   const tok = tFrom(theme, t);
+  const sheet = useMemo(() => topoSheetStyles(tFrom(theme, t)), [theme, t]);
   const cardListBg = tok.bgCard;
   const cardListBorder = tok.border;
   const cardListHighlight = isDarkMode(theme)
@@ -3825,10 +3826,25 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
       ? "rgba(14,116,144,0.1)"
       : "rgba(0,119,182,0.08)";
 
+  const btnSheet = (opts = {}) => ({
+    background: opts.bg || "transparent",
+    border: `1px solid ${opts.border || sheet.border}`,
+    borderRadius: 4,
+    padding: "4px 8px",
+    color: opts.color || tok.primary,
+    fontSize: "var(--cc-caption)",
+    fontWeight: opts.bold ? 700 : 500,
+    cursor: opts.disabled ? "wait" : "pointer",
+    whiteSpace: "nowrap",
+    fontFamily: "inherit",
+    opacity: opts.disabled ? 0.65 : 1,
+    lineHeight: 1.2,
+  });
+
   return (
-    <div style={{ padding: 28 }}>
+    <div style={{ padding: "var(--cc-space-4, 16px)", fontSize: "var(--cc-body)" }}>
       {isDeveloper && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
           {[
             { id: "gestion", label: "Gestión de contratos" },
             { id: "matriz-documentos", label: "Control documentos contractuales" },
@@ -3838,14 +3854,16 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
               type="button"
               onClick={() => setVistaContratosDev(opt.id)}
               style={{
-                background: vistaContratosDev === opt.id ? "rgba(0,175,197,0.2)" : "transparent",
-                border: `1px solid ${vistaContratosDev === opt.id ? "rgba(0,175,197,0.55)" : "rgba(0,175,197,0.25)"}`,
-                borderRadius: 8,
-                padding: "8px 16px",
-                color: vistaContratosDev === opt.id ? "#00afc5" : "#8acdd8",
-                fontSize: 12,
-                fontWeight: vistaContratosDev === opt.id ? 700 : 500,
+                background: vistaContratosDev === opt.id ? cardListHighlight : "transparent",
+                border: `1px solid ${vistaContratosDev === opt.id ? `${tok.primary}88` : sheet.border}`,
+                borderRadius: 4,
+                padding: "6px 12px",
+                color: vistaContratosDev === opt.id ? tok.primary : tok.textMuted,
+                fontSize: "var(--cc-caption)",
+                fontWeight: vistaContratosDev === opt.id ? 800 : 500,
                 cursor: "pointer",
+                textTransform: "uppercase",
+                letterSpacing: "0.03em",
               }}
             >
               {opt.label}
@@ -3859,122 +3877,150 @@ function SeccionContratos({ call, contratos, recargarContratos, onContratosMutat
           call={call}
           token={token}
           contratos={contratos}
+          theme={theme}
+          t={t}
           onIrAContrato={(id) => void abrirContratoDesdeMatriz(id)}
         />
       ) : (
       <>
       {msg && !modalMode && (
-        <div style={{ background: msg.type === "error" ? (isDarkMode(theme) ? "#2a0a0a" : "#FEE2E2") : (isDarkMode(theme) ? "#0a2a1a" : "#ECFDF5"), color: msg.type === "error" ? (isDarkMode(theme) ? "#f87171" : "#DC2626") : "var(--cc-color-success)", borderRadius: 8, padding: "10px 14px", fontSize: "var(--cc-body)", marginBottom: 16 }}>
+        <div style={{ background: msg.type === "error" ? (isDarkMode(theme) ? "#2a0a0a" : "#FEE2E2") : (isDarkMode(theme) ? "#0a2a1a" : "#ECFDF5"), color: msg.type === "error" ? (isDarkMode(theme) ? "#f87171" : "#DC2626") : "var(--cc-color-success)", borderRadius: 4, padding: "8px 12px", fontSize: "var(--cc-body)", marginBottom: 12, border: `1px solid ${sheet.border}` }}>
           {msg.text}
         </div>
       )}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
-        <div style={{ fontSize: "var(--cc-title)", fontWeight: 700, color: tok.primary }}>📋 Contratos registrados</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: "var(--cc-title)", fontWeight: 800, color: tok.primary }}>📋 Contratos registrados</div>
         {perms?.crear && (
           <button
             type="button"
             onClick={iniciarCreacion}
-            style={{ background: cardListHighlight, border: `1px solid ${tok.primary}88`, borderRadius: 8, padding: "8px 16px", color: tok.primary, fontWeight: 700, fontSize: "var(--cc-sm)", cursor: "pointer" }}
+            style={btnSheet({ bg: cardListHighlight, border: `${tok.primary}88`, color: tok.primary, bold: true })}
           >
             ➕ Nuevo contrato
           </button>
         )}
       </div>
-      <div>
-        {/* LISTA DE CONTRATOS */}
-          {contratos.length === 0 ? (
-            <div style={{ color: col.textMuted, fontSize: "var(--cc-body)" }}>No hay contratos registrados</div>
-          ) : contratos.map(c => {
-            const resumenCtz = tasaYmontosResumenListado(c);
-            const cardSelected = modalMode === "edit" && editandoId === c.id;
-            return (
-            <div key={c.id} style={{ background: cardSelected ? cardListHighlight : cardListBg, border: `1px solid ${cardSelected ? `${tok.primary}88` : cardListBorder}`, borderRadius: 8, padding: '12px 16px', marginBottom: 10, cursor: perms?.editar ? 'pointer' : 'default' }}
-              onClick={perms?.editar ? () => void iniciarEdicion(c) : undefined}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: tok.primary, fontSize: "var(--cc-body)" }}>{c.numero}</div>
-                  <div style={{ color: col.textSecondary, fontSize: "var(--cc-sm)", marginTop: 2 }}>{c.contratista}</div>
-                  {c.entidad && <div style={{ color: col.textMuted, fontSize: "var(--cc-caption)", marginTop: 2 }}>Entidad: {c.entidad === "OTRA" ? (c.entidad_otra || "OTRA") : c.entidad}</div>}
-                  {c.interventoria && <div style={{ color: col.textMuted, fontSize: "var(--cc-caption)", marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
-                  {resumenCtz && (
-                    <div style={{ color: col.textSecondary, fontSize: "var(--cc-caption)", marginTop: 5, lineHeight: 1.4, wordBreak: 'break-word' }} title="Datos guardados en el contrato">
-                      {resumenCtz}
+
+      <div style={{ ...sheet.sheetWrap, maxHeight: "min(72vh, 720px)" }} className="cc-admin-table-scroll">
+        <table style={{ ...sheet.sheetTable, tableLayout: "auto", minWidth: 960 }}>
+          <thead>
+            <tr>
+              {["Número", "Contratista", "Entidad", "Interventoría", "Fase", "Financiero", "Logos", "Acciones"].map((h) => (
+                <th key={h} style={sheet.th}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {contratos.length === 0 ? (
+              <tr>
+                <td colSpan={8} style={{ ...sheet.td, color: tok.textMuted, textAlign: "center", padding: 16 }}>
+                  No hay contratos registrados
+                </td>
+              </tr>
+            ) : contratos.map((c) => {
+              const resumenCtz = tasaYmontosResumenListado(c);
+              const cardSelected = modalMode === "edit" && editandoId === c.id;
+              const faseLiq = (c.fase || "PRESUPUESTO") === "LIQUIDACION";
+              const entidadTxt = c.entidad === "OTRA" ? (c.entidad_otra || "OTRA") : (c.entidad || "—");
+              return (
+                <tr
+                  key={c.id}
+                  style={{ background: cardSelected ? cardListHighlight : undefined, cursor: perms?.editar ? "pointer" : "default" }}
+                  onClick={perms?.editar ? () => void iniciarEdicion(c) : undefined}
+                >
+                  <td style={{ ...sheet.td, fontWeight: 800, color: tok.primary, whiteSpace: "nowrap" }}>{c.numero || "—"}</td>
+                  <td style={sheet.td}>{c.contratista || "—"}</td>
+                  <td style={sheet.td}>{entidadTxt}</td>
+                  <td style={sheet.td}>{c.interventoria || "—"}</td>
+                  <td style={sheet.td}>
+                    {perms?.editar ? (
+                      <div style={{ display: "inline-flex", border: `1px solid ${sheet.border}`, borderRadius: 4, overflow: "hidden" }} onClick={(e) => e.stopPropagation()}>
+                        {["PRESUPUESTO", "LIQUIDACION"].map((fase) => {
+                          const activo = (c.fase || "PRESUPUESTO") === fase;
+                          const colFase = fase === "LIQUIDACION" ? "#F59E0B" : tok.primary;
+                          return (
+                            <button
+                              key={fase}
+                              type="button"
+                              disabled={activo || togglingFase === c.id}
+                              onClick={() => toggleFase(c)}
+                              style={{
+                                background: activo ? `${colFase}22` : "transparent",
+                                color: activo ? colFase : tok.textMuted,
+                                border: "none",
+                                borderRight: fase === "PRESUPUESTO" ? `1px solid ${sheet.border}` : "none",
+                                padding: "4px 8px",
+                                fontSize: "var(--cc-caption)",
+                                fontWeight: activo ? 800 : 400,
+                                cursor: activo ? "default" : "pointer",
+                                whiteSpace: "nowrap",
+                                fontFamily: "inherit",
+                              }}
+                            >
+                              {fase === "PRESUPUESTO" ? "📋 Presupuesto" : "⚖️ Liquidación"}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <span style={{ fontWeight: 700, color: faseLiq ? "#F59E0B" : tok.primary, fontSize: "var(--cc-caption)" }}>
+                        {faseLiq ? "⚖️ LIQUIDACIÓN" : "📋 PRESUPUESTO"}
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ ...sheet.td, fontSize: "var(--cc-caption)", color: tok.textMuted, maxWidth: 280 }} title={resumenCtz || undefined}>
+                    {resumenCtz || "—"}
+                  </td>
+                  <td style={sheet.td}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                      {c.logo_entidad && <img key={`le-${c.id}`} src={c.logo_entidad} alt="" style={{ height: 22, borderRadius: 2, background: "#fff", padding: 1, border: `1px solid ${sheet.border}` }} />}
+                      {c.logo_contratista && <img key={`lc-${c.id}`} src={c.logo_contratista} alt="" style={{ height: 22, borderRadius: 2, background: "#fff", padding: 1, border: `1px solid ${sheet.border}` }} />}
+                      {c.logo_interventoria && <img key={`li-${c.id}`} src={c.logo_interventoria} alt="" style={{ height: 22, borderRadius: 2, background: "#fff", padding: 1, border: `1px solid ${sheet.border}` }} />}
+                      {!c.logo_entidad && !c.logo_contratista && !c.logo_interventoria ? "—" : null}
                     </div>
-                  )}
-                  {/* Badge de fase */}
-                  <div style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6, background: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.12)' : cardListHighlight, border: `1px solid ${(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.4)' : `${tok.primary}55`}`, borderRadius: 20, padding: '3px 10px' }}>
-                    <span style={{ fontSize: "var(--cc-caption)", fontWeight: 700, color: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? '#F59E0B' : tok.primary, letterSpacing: 1 }}>
-                      {(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? '⚖️ LIQUIDACIÓN' : '📋 PRESUPUESTO'}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    {c.logo_entidad && <img key={`le-${c.id}-${String(c.logo_entidad).length}`} src={c.logo_entidad} alt="logo entidad" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
-                    {c.logo_contratista && <img key={`lc-${c.id}-${String(c.logo_contratista).length}`} src={c.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
-                    {c.logo_interventoria && <img key={`li-${c.id}-${String(c.logo_interventoria).length}`} src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-                  {/* Toggle PRESUPUESTO / LIQUIDACIÓN */}
-                  {perms?.editar && (
-                    <div style={{ display: 'flex', gap: 0, background: tok.inputBg, border: `1px solid ${cardListBorder}`, borderRadius: 8, overflow: 'hidden' }}>
-                      {['PRESUPUESTO', 'LIQUIDACION'].map(fase => {
-                        const activo = (c.fase || 'PRESUPUESTO') === fase;
-                        const colFase = fase === 'LIQUIDACION' ? '#F59E0B' : tok.primary;
-                        return (
-                          <button key={fase} disabled={activo || togglingFase === c.id}
-                            onClick={(e) => { e.stopPropagation(); toggleFase(c); }}
-                            style={{ background: activo ? colFase + '22' : 'transparent', color: activo ? colFase : col.textMuted, border: 'none', borderRight: fase === 'PRESUPUESTO' ? `1px solid ${cardListBorder}` : 'none', padding: '5px 10px', fontSize: "var(--cc-caption)", fontWeight: activo ? 700 : 400, cursor: activo ? 'default' : 'pointer', letterSpacing: 0.5, transition: 'all 0.15s', whiteSpace: 'nowrap' }}>
-                            {fase === 'PRESUPUESTO' ? '📋 Presupuesto' : '⚖️ Liquidación'}
-                          </button>
-                        );
-                      })}
+                  </td>
+                  <td style={sheet.td} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      {perms?.editar && (
+                        <button
+                          type="button"
+                          disabled={reseteandoSicoe === c.id}
+                          onClick={() => resetSicoeContadores(c)}
+                          title="Numeración SICOE desde 1 y sincronización de contadores"
+                          style={btnSheet({ border: "rgba(245,158,11,0.45)", color: "#F59E0B", disabled: reseteandoSicoe === c.id })}
+                        >
+                          {reseteandoSicoe === c.id ? "⏳…" : "🔢 Reset SICOE"}
+                        </button>
+                      )}
+                      {perms?.editar && (
+                        <button type="button" onClick={() => void iniciarEdicion(c)} style={btnSheet({ border: `${tok.primary}55`, color: tok.primary })}>
+                          ✏️ Abrir
+                        </button>
+                      )}
+                      {perms?.eliminar && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!window.confirm(`¿Eliminar contrato ${c.numero}? Esta acción no se puede deshacer.`)) return;
+                            try {
+                              await call("DELETE", `/contratos/${c.id}`);
+                              clearContratoPlanoGeojsonCache(c.id);
+                              recargarContratos();
+                            } catch (e) { setMsg({ type: "error", text: e.message }); }
+                          }}
+                          style={btnSheet({ border: "rgba(239,68,68,0.35)", color: "#ef4444" })}
+                        >
+                          🗑
+                        </button>
+                      )}
                     </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  {perms?.editar && (
-                    <button
-                      type="button"
-                      disabled={reseteandoSicoe === c.id}
-                      onClick={(e) => { e.stopPropagation(); resetSicoeContadores(c); }}
-                      title="Numeración SICOE desde 1 y sincronización de contadores de reportes/registros"
-                      style={{ background: 'transparent', border: '1px solid rgba(245,158,11,0.45)', borderRadius: 6, padding: '4px 10px', color: '#F59E0B', fontSize: "var(--cc-caption)", cursor: reseteandoSicoe === c.id ? 'wait' : 'pointer', whiteSpace: 'nowrap', opacity: reseteandoSicoe === c.id ? 0.65 : 1 }}
-                    >
-                      {reseteandoSicoe === c.id ? '⏳ Reseteando…' : '🔢 Reset contadores SICOE'}
-                    </button>
-                  )}
-                  {perms?.editar && (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); void iniciarEdicion(c); }}
-                      style={{ background: 'transparent', border: `1px solid ${tok.primary}55`, borderRadius: 6, padding: '4px 10px', color: tok.primary, fontSize: "var(--cc-caption)", cursor: 'pointer', whiteSpace: 'nowrap' }}
-                    >
-                      ✏️ Abrir
-                    </button>
-                  )}
-                  {perms?.eliminar && (
-                    <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        if (!window.confirm(`¿Eliminar contrato ${c.numero}? Esta acción no se puede deshacer.`)) return;
-                        try {
-                          await call("DELETE", `/contratos/${c.id}`);
-                          clearContratoPlanoGeojsonCache(c.id);
-                          recargarContratos();
-                        } catch (e) { setMsg({ type: 'error', text: e.message }); }
-                      }}
-                      style={{ background: 'transparent', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '4px 10px', color: '#ef4444', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}
-                    >
-                      🗑 Eliminar
-                    </button>
-                  )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-          })}
-        </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
       <ContratoEditModal
         open={!!modalMode}
