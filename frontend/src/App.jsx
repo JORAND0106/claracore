@@ -11726,20 +11726,26 @@ function ModuloSicoeObra({
               type="button"
               className="cc-sicoe-touch-btn"
               onClick={() => setModalMoverActasDev(true)}
-              title="Herramienta exclusiva Desarrollador: mover registros entre actas RPO"
+              title="Mover / reasignar registros (Desarrollador): entre actas, entre cortes de subcontratista, o reasignar entre subcontratistas"
+              aria-label="Mover o reasignar registros entre actas, cortes o subcontratistas"
               style={{
                 background: 'transparent',
                 color: t.text,
                 border: `1px solid ${t.border}`,
                 borderRadius: '8px',
-                padding: sicoeCompact ? '10px 14px' : '10px 16px',
-                minHeight: sicoeCompact ? 44 : undefined,
+                padding: sicoeCompact ? '10px 12px' : '10px 12px',
+                minHeight: sicoeCompact ? 44 : 40,
+                minWidth: sicoeCompact ? 44 : 40,
                 fontWeight: 800,
-                fontSize: 'var(--cc-sm)',
+                fontSize: 'var(--cc-md)',
                 cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                lineHeight: 1,
               }}
             >
-              ↕ Mover entre actas
+              <span aria-hidden="true" style={{ fontSize: 18, letterSpacing: -2 }}>⇄</span>
             </button>
           )}
           {puedeCrear && sicoeModuloVista === 'reportes' && (
@@ -11766,6 +11772,15 @@ function ModuloSicoeObra({
               try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
             }
           }}
+          filtroSubcList={filtroSubcList}
+          pkList={sicoePkList}
+          estadosReporte={estadosReporteFiltro}
+          etiquetasValidacion={ETIQUETAS_VALIDACION}
+          nivelesDisponibles={nivelesDisponiblesEnFiltro}
+          encabezadoPorNivel={encabezadoPorNivelFiltro}
+          estiloChipCapa={sicoeEstiloChipCapa}
+          avisoCapasY={sicoeAvisoCapasYImposibleMismoNivel}
+          puedeVerSubcontratista={puedeVerSubcFiltro}
         />
       )}
 
