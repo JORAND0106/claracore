@@ -161,6 +161,41 @@ def test_calc_amortizacion_tope_por_saldo():
     assert z2["saldo_por_amortizar"] == 0
 
 
+def test_label_amortizacion_incluye_pct_y_tope_saldo():
+    from corte_sub_conciliacion import label_linea_resumen_4cols, build_resumen_conciliacion_4cols
+
+    assert label_linea_resumen_4cols(
+        {"key": "amort", "pct": 30, "tope_por_saldo": False}
+    ) == "Amortización del anticipo (30%)"
+    assert label_linea_resumen_4cols(
+        {"key": "amort", "pct": 30, "tope_por_saldo": True}
+    ) == "Amortización del anticipo (30% · por saldo)"
+    assert label_linea_resumen_4cols(
+        {"key": "amort", "pct": None, "tope_por_saldo": True}
+    ) == "Amortización del anticipo (por saldo)"
+
+    # Tope real: anticipo casi agotado
+    r = build_resumen_conciliacion_4cols(
+        items=[
+            {
+                "valor_actualizadas": 500_000,
+                "valor_presente": 500_000,
+                "valor_acumulado": 500_000,
+                "valor_saldo": 0,
+            }
+        ],
+        tributos={"administracion": 0, "imprevistos": 0, "utilidad": 0, "iva": {"porcentaje": 0}},
+        anticipo=1_000_000,
+        amortizacion_pct=30,
+        amortizado_anterior=900_000,
+        otros_presente=0,
+    )
+    amort_ln = next(x for x in r["lineas"] if x["key"] == "amort")
+    assert amort_ln["tope_por_saldo"] is True
+    assert amort_ln["label"] == "Amortización del anticipo (30% · por saldo)"
+    assert amort_ln["pct"] == 30
+
+
 def test_gran_total_usa_subtotal_despues_amortizacion():
     from corte_sub_conciliacion import gran_total_con_amortizacion
 
