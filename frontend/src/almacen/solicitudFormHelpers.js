@@ -104,6 +104,21 @@ export function mapSolicitudItemsFromServer(s) {
     presupuesto_capitulo: it.capitulo || '',
     presupuesto_item: it.item || '',
     presupuesto_id: it.presupuesto_id,
+    presupuesto_ids: Array.isArray(it.presupuesto_ids) && it.presupuesto_ids.length
+      ? it.presupuesto_ids.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+      : (it.presupuesto_id != null ? [Number(it.presupuesto_id)] : []),
+    registros_presupuesto: Array.isArray(it.repartos)
+      ? it.repartos.map((r) => ({
+        presupuesto_id: r.presupuesto_id,
+        cant_total: r.cant_total,
+        saldo_disponible: r.saldo_disponible,
+        cant_solicitada_acumulada: r.cant_solicitada_acumulada,
+        unidad: r.unidad || it.unidad,
+        tramo: r.tramo,
+        abs_inicio: r.abs_inicio,
+        abs_final: r.abs_final,
+      }))
+      : [],
     pk_id: it.pk_id || '',
     pk_label: it.pk_id || '',
     pk_id_id: it.pk_id_id || null,
@@ -160,8 +175,10 @@ export function validateSolicitudItems(items) {
       errors.push(`Línea ${n}: seleccione la ubicación PK-ID en el mapa.`)
     }
     // AIU no tiene registro de presupuesto de obra: no exigir presupuesto_id.
-    if (!esAiu && !it.presupuesto_id) {
-      errors.push(`Línea ${n}: seleccione el registro de presupuesto en la grilla.`)
+    const hasPpto = it.presupuesto_id
+      || (Array.isArray(it.presupuesto_ids) && it.presupuesto_ids.length > 0)
+    if (!esAiu && !hasPpto) {
+      errors.push(`Línea ${n}: seleccione al menos un registro de presupuesto en la grilla.`)
     }
     if (!it.cantidad || Number(it.cantidad) <= 0) {
       errors.push(`Línea ${n}: indique una cantidad mayor a cero.`)
