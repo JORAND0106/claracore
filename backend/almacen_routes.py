@@ -192,6 +192,7 @@ class ConfigUpdateBody(BaseModel):
 class SolicitudItemBody(BaseModel):
     id: Optional[int] = None
     presupuesto_id: Optional[int] = None
+    presupuesto_ids: Optional[List[int]] = None
     presupuesto_capitulo: Optional[str] = None
     presupuesto_item: Optional[str] = None
     insumo_id: Optional[int] = None
@@ -250,6 +251,7 @@ class InsumoPreviewBody(BaseModel):
     insumo_id: Optional[int] = None
     listado_precio_id: Optional[int] = None
     presupuesto_id: Optional[int] = None
+    presupuesto_ids: Optional[List[int]] = None
     presupuesto_capitulo: Optional[str] = None
     presupuesto_item: Optional[str] = None
     pk_id: str = Field(..., min_length=1)
@@ -548,6 +550,7 @@ def route_preview_insumo_line(contrato_id: int, body: InsumoPreviewBody, current
         resolved = resolve_insumo_for_solicitud(contrato_id, _uid(current_user), body.model_dump())
         return {
             "presupuesto_id": resolved.get("presupuesto_id"),
+            "presupuesto_ids": resolved.get("presupuesto_ids"),
             "pk_id": resolved.get("pk_id"),
             "capitulo": resolved.get("capitulo"),
             "item": resolved.get("item"),
@@ -559,6 +562,8 @@ def route_preview_insumo_line(contrato_id: int, body: InsumoPreviewBody, current
             "supera_presupuesto": resolved.get("supera_presupuesto"),
             "supera_negociado": resolved.get("supera_negociado"),
             "contexto_negociado": resolved.get("contexto_negociado"),
+            "repartos": resolved.get("repartos"),
+            "tiene_precio_compra": resolved.get("tiene_precio_compra"),
         }
     except ValueError as exc:
         raise _http_value_error(exc) from exc

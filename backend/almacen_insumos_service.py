@@ -2121,6 +2121,9 @@ def batch_cantidad_solicitada_acumulada(
     """Acumulado de cantidades solicitadas por (presupuesto_id, pk_id) en una o dos queries.
 
     Solo suma líneas de insumo principal (``es_principal`` distinto de false).
+
+    Si una línea tiene filas en ``almacen_solicitud_item_reparto``, se usa la cantidad
+    de cada reparto (no la cantidad completa de la línea sobre el presupuesto_id primario).
     """
     norm_keys: List[Tuple[int, str]] = []
     seen = set()
@@ -2133,7 +2136,7 @@ def batch_cantidad_solicitada_acumulada(
     if not norm_keys:
         return {}
     pids = list({k[0] for k in norm_keys})
-    select_cols = "cantidad, solicitud_id, pk_id, presupuesto_id, es_principal"
+    select_cols = "id, cantidad, solicitud_id, pk_id, presupuesto_id, es_principal"
     items: List[dict] = []
     try:
         # Preferir excluir asociados en el servidor cuando la columna existe.
@@ -2159,24 +2162,59 @@ def batch_cantidad_solicitada_acumulada(
             # Columna es_principal aún no migrada: tratar todas como principales.
             items = (
                 sb.table("almacen_solicitud_item")
-                .select("cantidad, solicitud_id, pk_id, presupuesto_id")
+                .select("id, cantidad, solicitud_id, pk_id, presupuesto_id")
                 .in_("presupuesto_id", pids)
                 .execute()
                 .data
                 or []
             )
+    # También líneas cuyo primario no está en pids pero sí un reparto.
+    try:
+        rep_rows_probe = (
+            sb.table("almacen_solicitud_item_reparto")
+            .select("solicitud_item_id, presupuesto_id, cantidad")
+            .in_("presupuesto_id", pids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        rep_rows_probe = None  # tabla ausente → modo legado
+
+    extra_item_ids = set()
+    if rep_rows_probe is not None:
+        have_ids = {int(it["id"]) for it in items if it.get("id")}
+        for r in rep_rows_probe:
+            try:
+                iid = int(r["solicitud_item_id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if iid not in have_ids:
+                extra_item_ids.add(iid)
+        if extra_item_ids:
+            try:
+                more = (
+                    sb.table("almacen_solicitud_item")
+                    .select(select_cols)
+                    .in_("id", list(extra_item_ids))
+                    .execute()
+                    .data
+                    or []
+                )
+                items.extend(more)
+            except Exception:
+                pass
+
     want = set(norm_keys)
     filtered = []
     for it in items:
         # Defensa en profundidad: aunque el filtro or_ falle / no aplique.
         if not _item_es_principal(it):
             continue
-        k = (int(it.get("presupuesto_id") or 0), _norm_pk_id(it.get("pk_id")))
-        if k in want:
-            filtered.append((k, it))
+        filtered.append(it)
     if not filtered:
         return {k: 0.0 for k in norm_keys}
-    sol_ids = list({it["solicitud_id"] for _, it in filtered if it.get("solicitud_id")})
+    sol_ids = list({it["solicitud_id"] for it in filtered if it.get("solicitud_id")})
     sols = (
         sb.table("almacen_solicitud")
         .select("id, estado, contrato_id")
@@ -2186,8 +2224,36 @@ def batch_cantidad_solicitada_acumulada(
         or []
     ) if sol_ids else []
     sol_map = {s["id"]: s for s in sols}
+
+    # Mapa de repartos por ítem (si la tabla existe).
+    repartos_by_item: Dict[int, List[dict]] = {}
+    if rep_rows_probe is not None:
+        item_ids = [int(it["id"]) for it in filtered if it.get("id")]
+        if item_ids:
+            try:
+                all_reps = (
+                    sb.table("almacen_solicitud_item_reparto")
+                    .select("solicitud_item_id, presupuesto_id, cantidad")
+                    .in_("solicitud_item_id", item_ids)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception:
+                all_reps = rep_rows_probe
+            for r in all_reps:
+                try:
+                    iid = int(r["solicitud_item_id"])
+                    pid = int(r["presupuesto_id"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                repartos_by_item.setdefault(iid, []).append({
+                    "presupuesto_id": pid,
+                    "cantidad": _to_float(r.get("cantidad")),
+                })
+
     totals: Dict[Tuple[int, str], float] = {k: 0.0 for k in norm_keys}
-    for k, it in filtered:
+    for it in filtered:
         sol = sol_map.get(it.get("solicitud_id")) or {}
         if int(sol.get("contrato_id") or 0) != int(contrato_id):
             continue
@@ -2195,7 +2261,19 @@ def batch_cantidad_solicitada_acumulada(
             continue
         if exclude_solicitud_id and int(it.get("solicitud_id") or 0) == int(exclude_solicitud_id):
             continue
-        totals[k] = totals.get(k, 0.0) + _to_float(it.get("cantidad"))
+        pk = _norm_pk_id(it.get("pk_id"))
+        iid = int(it["id"]) if it.get("id") else None
+        reps = repartos_by_item.get(iid or -1) or []
+        if len(reps) > 1:
+            for r in reps:
+                k = (int(r["presupuesto_id"]), pk)
+                if k in want:
+                    totals[k] = totals.get(k, 0.0) + _to_float(r.get("cantidad"))
+            continue
+        # Legado / selección única: toda la cantidad sobre el presupuesto_id de la línea.
+        k = (int(it.get("presupuesto_id") or 0), pk)
+        if k in want:
+            totals[k] = totals.get(k, 0.0) + _to_float(it.get("cantidad"))
     return totals
 
 
@@ -2264,11 +2342,16 @@ def apply_saldo_flags_batch(
     from collections import defaultdict
 
     sb = _sb()
-    keys = [
-        (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
-        for it in items
-        if it.get("presupuesto_id") and it.get("pk_id")
-    ]
+    keys = []
+    for it in items:
+        if not it.get("pk_id"):
+            continue
+        pids = it.get("presupuesto_ids") or (
+            [it["presupuesto_id"]] if it.get("presupuesto_id") else []
+        )
+        for pid in pids:
+            if pid:
+                keys.append((int(pid), str(it.get("pk_id") or "")))
     acum_map = batch_cantidad_solicitada_acumulada(sb, contrato_id, keys, exclude_solicitud_id)
     lookup = None
     if refresh_listado:
@@ -2283,9 +2366,27 @@ def apply_saldo_flags_batch(
             lookup = get_listado_precio_lookup(contrato_id)
     batch_qty: dict = defaultdict(float)
     for it in items:
-        if it.get("presupuesto_id") and it.get("pk_id") and _item_es_principal(it):
-            key = (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
-            batch_qty[key] += _to_float(it.get("cantidad"))
+        if not it.get("pk_id") or not _item_es_principal(it):
+            continue
+        pids = it.get("presupuesto_ids") or (
+            [it["presupuesto_id"]] if it.get("presupuesto_id") else []
+        )
+        pids = [int(p) for p in pids if p]
+        if not pids:
+            continue
+        cant = _to_float(it.get("cantidad"))
+        reps = it.get("repartos") or []
+        if len(pids) > 1 and reps:
+            for r in reps:
+                try:
+                    pid = int(r.get("presupuesto_id"))
+                except (TypeError, ValueError):
+                    continue
+                key = (pid, str(it.get("pk_id") or ""))
+                batch_qty[key] += _to_float(r.get("cantidad"))
+        else:
+            key = (pids[0], str(it.get("pk_id") or ""))
+            batch_qty[key] += cant
 
     need_ppto_vu: List[int] = []
     for it in items:
@@ -2348,43 +2449,63 @@ def apply_saldo_flags_batch(
                 it["_cobro_sanado"] = True
 
     for it in items:
-        if not it.get("pk_id") or not it.get("presupuesto_id"):
+        pids = it.get("presupuesto_ids") or (
+            [it["presupuesto_id"]] if it.get("presupuesto_id") else []
+        )
+        pids = [int(p) for p in pids if p]
+        if not it.get("pk_id") or not pids:
             it["supera_presupuesto"] = False
             continue
-        key = (int(it["presupuesto_id"]), str(it.get("pk_id") or ""))
-        presupuestada = _to_float(it.get("cant_presupuestada"))
-        acum = acum_map.get((key[0], _norm_pk_id(key[1])), 0.0)
+        pk = str(it.get("pk_id") or "")
+        pk_norm = _norm_pk_id(pk)
         cant = _to_float(it.get("cantidad"))
+        multi = len(pids) > 1
+        if multi:
+            presupuestada = _to_float(it.get("cant_presupuestada"))
+            acum = sum(
+                acum_map.get((pid, pk_norm), 0.0) for pid in pids
+            )
+            batch_total = sum(batch_qty.get((pid, pk), 0.0) for pid in pids)
+        else:
+            key = (pids[0], pk)
+            presupuestada = _to_float(it.get("cant_presupuestada"))
+            acum = acum_map.get((key[0], pk_norm), 0.0)
+            batch_total = batch_qty.get(key, 0.0)
         # Asociados no descuentan ni generan alerta de sobrepresupuesto.
         if not _item_es_principal(it):
             it["supera_presupuesto"] = False
             it["contexto_presupuesto"] = {
-                "presupuesto_id": key[0],
-                "pk_id": key[1],
+                "presupuesto_id": pids[0],
+                "presupuesto_ids": pids,
+                "pk_id": pk,
                 "cant_presupuestada": presupuestada,
                 "cant_solicitada_acumulada": acum,
                 "cantidad_solicitada": cant,
                 "cantidad_borrador_adicional": 0,
                 "saldo_disponible_despues": presupuestada - acum - (
-                    batch_qty[key] if descontar_linea_actual else 0
+                    batch_total if descontar_linea_actual else 0
                 ),
                 "vlr_unitario_cobro": it.get("vlr_unitario_cobro") or 0,
                 "supera_presupuesto": False,
                 "es_principal": False,
                 "capitulo": it.get("capitulo"),
                 "item": it.get("item"),
+                "repartos": it.get("repartos") or [],
             }
             continue
-        extra = batch_qty[key] - cant
+        extra = batch_total - cant
         if descontar_linea_actual:
             saldo = presupuestada - acum - cant - extra
         else:
             saldo = presupuestada - acum
         it["supera_presupuesto"] = saldo < -0.0001
         it["contexto_presupuesto"] = {
-            "presupuesto_id": key[0],
-            "pk_id": key[1],
+            "presupuesto_id": pids[0],
+            "presupuesto_ids": pids,
+            "pk_id": pk,
             "cant_presupuestada": presupuestada,
+            "cant_presupuestada_combo": presupuestada if multi else None,
+            "registros_combo_count": len(pids) if multi else 1,
             "cant_solicitada_acumulada": acum,
             "cantidad_solicitada": cant,
             "cantidad_borrador_adicional": extra if descontar_linea_actual else 0,
@@ -2394,6 +2515,7 @@ def apply_saldo_flags_batch(
             "es_principal": True,
             "capitulo": it.get("capitulo"),
             "item": it.get("item"),
+            "repartos": it.get("repartos") or [],
         }
 
     batch_insumo: dict = defaultdict(float)
@@ -2634,6 +2756,14 @@ def resolve_insumo_for_solicitud(
             ),
         }
 
+    from almacen_presupuesto_reparto import (
+        normalize_presupuesto_ids,
+        repartir_cantidad_proporcional,
+        total_saldo_registros,
+    )
+    pids = normalize_presupuesto_ids(raw.get("presupuesto_ids"), presupuesto_id)
+    if pids:
+        presupuesto_id = pids[0]
     if presupuesto_id:
         ppto = resolve_presupuesto_row(
             contrato_id,
@@ -2644,6 +2774,7 @@ def resolve_insumo_for_solicitud(
         )
     else:
         ppto = resolve_presupuesto_row(contrato_id, capitulo_ppto, item_ppto, pk_id)
+        pids = [int(ppto["id"])]
 
     ubic = _enrich_ppto_ubicacion(ppto)
     tramo_val = (raw.get("tramo") or "").strip() or (ppto.get("tramo") or "").strip() or None
@@ -2709,10 +2840,54 @@ def resolve_insumo_for_solicitud(
     if costo_insumos is not None and vlr_cobro > 0:
         utilidad_estimada = (vlr_cobro * cant) - costo_insumos
 
+    repartos = [{"presupuesto_id": int(ppto["id"]), "cantidad": cant}]
+    if len(pids) > 1:
+        regs_data = list_presupuesto_registros(
+            contrato_id,
+            capitulo_ppto or ppto.get("capitulo") or "",
+            item_ppto or ppto.get("item") or "",
+            pk_id,
+            exclude_solicitud_id=raw.get("exclude_solicitud_id"),
+        )
+        by_id = {int(r["presupuesto_id"]): r for r in (regs_data.get("registros") or [])}
+        selected = []
+        for pid in pids:
+            reg = by_id.get(int(pid))
+            if not reg:
+                raise ValueError(
+                    f"El registro de presupuesto {pid} no coincide con capítulo, ítem y PK-ID."
+                )
+            selected.append(reg)
+        cant_presupuestada = sum(_to_float(r.get("cant_total")) for r in selected)
+        if _item_es_principal(raw):
+            shares = repartir_cantidad_proporcional(cant, selected)
+            repartos = [
+                {"presupuesto_id": int(s["presupuesto_id"]), "cantidad": _to_float(s["cantidad"])}
+                for s in shares
+                if _to_float(s.get("cantidad")) > 0
+            ]
+            saldo_combo = total_saldo_registros(selected)
+            extra = _to_float(raw.get("cantidad_borrador_adicional"))
+            saldo_despues = saldo_combo - cant - extra
+            supera_presupuesto = saldo_despues < -0.0001
+            if ctx is not None:
+                ctx = {
+                    **ctx,
+                    "presupuesto_ids": pids,
+                    "cant_presupuestada": cant_presupuestada,
+                    "cant_presupuestada_combo": cant_presupuestada,
+                    "registros_combo_count": len(pids),
+                    "saldo_disponible_despues": saldo_despues,
+                    "supera_presupuesto": supera_presupuesto,
+                    "repartos": repartos,
+                }
+
     return {
         "insumo_id": insumo_id,
         "listado_precio_id": insumo.get("listado_precio_id"),
         "presupuesto_id": int(ppto["id"]),
+        "presupuesto_ids": pids or [int(ppto["id"])],
+        "repartos": repartos,
         "pk_id": pk_id,
         "pk_id_id": raw.get("pk_id_id"),
         "tramo": tramo_val,

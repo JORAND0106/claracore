@@ -19,6 +19,7 @@ export default function SolicitudLineaUbicacionEditor({
   solicitudId,
   busy,
   onRegistroSelect,
+  onRegistroToggle,
   onUbicacionChange,
   onClose,
 }) {
@@ -70,7 +71,7 @@ export default function SolicitudLineaUbicacionEditor({
               {item.tramo ? <> · Tramo <strong style={{ color: ui.text }}>{item.tramo}</strong></> : null}
               {esAiu
                 ? ' · Administración (AIU): sin registro de presupuesto de obra.'
-                : ' · Seleccione el registro de presupuesto, costado y abscisas.'}
+                : ' · Seleccione uno o más registros de presupuesto, costado y abscisas.'}
             </div>
           </div>
           <button type="button" style={{ ...ui.btnSecondary, padding: '6px 12px' }} onClick={onClose} aria-label="Cerrar">
@@ -100,8 +101,10 @@ export default function SolicitudLineaUbicacionEditor({
               item={item.presupuesto_item}
               pkId={item.pk_id}
               presupuestoId={item.presupuesto_id}
+              presupuestoIds={item.presupuesto_ids}
               excludeSolicitudId={solicitudId || undefined}
               disabled={busy}
+              onToggle={onRegistroToggle}
               onSelect={onRegistroSelect}
             />
           )}

@@ -31,6 +31,11 @@ import {
 import { solicitudAlmacenEditable } from './almacenPermisos'
 import { parseAbscisaMetros } from './almacenAbscisa'
 import { solicitudOrdenesCompra } from './solicitudDetalleHelpers'
+import {
+  normalizePresupuestoIds,
+  repartirCantidadProporcional,
+  totalSaldoRegistros,
+} from './presupuestoReparto'
 
 const emptyItem = () => ({
   descripcion_solicitada: '',
@@ -38,6 +43,8 @@ const emptyItem = () => ({
   presupuesto_capitulo: '',
   presupuesto_item: '',
   presupuesto_id: null,
+  presupuesto_ids: [],
+  registros_presupuesto: [],
   pk_id: '',
   pk_label: '',
   pk_id_id: null,
@@ -61,15 +68,42 @@ function itemEsPrincipal(it) {
   return coerceEsPrincipal(it?.es_principal)
 }
 
-/** Otras líneas principales del mismo presupuesto_id (para preview de saldo). */
-function cantBorradorPrincipales(draftItems, idx, presupuestoId) {
+function itemPresupuestoIds(it) {
+  return normalizePresupuestoIds(it?.presupuesto_ids, it?.presupuesto_id)
+}
+
+/** ¿Comparte algún registro de presupuesto seleccionado? */
+function overlapsPresupuesto(row, presupuestoIds) {
+  const ids = new Set(itemPresupuestoIds(row))
+  return (presupuestoIds || []).some((pid) => ids.has(Number(pid)))
+}
+
+/**
+ * Otras líneas principales cuyo reparto toca alguno de los presupuesto_ids
+ * (para preview de saldo combinado).
+ */
+function cantBorradorPrincipales(draftItems, idx, presupuestoIds) {
+  const pids = normalizePresupuestoIds(presupuestoIds)
+  if (!pids.length) return 0
   return draftItems.reduce((acc, row, i) => {
     if (i === idx) return acc
     if (!itemEsPrincipal(row)) return acc
     if (!row.cantidad || Number(row.cantidad) <= 0) return acc
-    if (Number(row.presupuesto_id) !== Number(presupuestoId)) return acc
+    if (!overlapsPresupuesto(row, pids)) return acc
     return acc + Number(row.cantidad)
   }, 0)
+}
+
+function patchFromRegistro(reg) {
+  return {
+    tramo: reg.tramo || '',
+    abscisa_inicial: reg.abscisa_inicial ?? '',
+    abscisa_final: reg.abscisa_final ?? '',
+    abs_inicio_display: reg.abs_inicio || '',
+    abs_final_display: reg.abs_final || '',
+    nodo_inicio: reg.nodo_inicio || '',
+    nodo_final: reg.nodo_final || '',
+  }
 }
 
 function abscisaPayload(val) {
@@ -210,6 +244,8 @@ export default function SolicitudForm({
       setItems((prev) => prev.map((row, i) => (i === idx ? {
         ...row,
         presupuesto_id: null,
+        presupuesto_ids: [],
+        registros_presupuesto: [],
         preview: {
           es_administracion_aiu: true,
           supera_presupuesto: false,
@@ -218,21 +254,63 @@ export default function SolicitudForm({
       } : row)))
       return
     }
-    if (!it.presupuesto_capitulo || !it.presupuesto_item || !it.pk_id || !it.presupuesto_id || !it.cantidad || Number(it.cantidad) <= 0) {
+    const pids = itemPresupuestoIds(it)
+    if (!it.presupuesto_capitulo || !it.presupuesto_item || !it.pk_id || !pids.length || !it.cantidad || Number(it.cantidad) <= 0) {
       setItems((prev) => prev.map((row, i) => (i === idx ? { ...row, preview: null } : row)))
       return
     }
     const ins = it.insumo
     const esPrincipal = itemEsPrincipal(it)
-    const cantBorradorAdicional = cantBorradorPrincipales(draftItems, idx, it.presupuesto_id)
+    const cantBorradorAdicional = cantBorradorPrincipales(draftItems, idx, pids)
     // Asociado: no descuenta su cantidad. Principal: descuenta la propia + otras principales del borrador.
     const cantidadParaSaldo = esPrincipal ? Number(it.cantidad) : 0
+    const multi = pids.length > 1
+    const regs = (it.registros_presupuesto || []).filter((r) => pids.includes(Number(r.presupuesto_id)))
+    const saldoCombo = regs.length ? totalSaldoRegistros(regs) : null
+    const cantPptoCombo = regs.length
+      ? regs.reduce((a, r) => a + (Number(r.cant_total) || 0), 0)
+      : null
+
+    // Multi-registro: preview local con saldo combinado (reparto proporcional al guardar).
+    if (multi && regs.length) {
+      const consumo = cantidadParaSaldo + cantBorradorAdicional
+      const saldoDespues = (saldoCombo ?? 0) - consumo
+      const supera = esPrincipal && saldoDespues < -0.0001
+      const repartos = esPrincipal
+        ? repartirCantidadProporcional(Number(it.cantidad), regs)
+        : []
+      setItems((prev) => prev.map((row, i) => (i === idx ? {
+        ...row,
+        preview: {
+          contexto_presupuesto: {
+            presupuesto_id: pids[0],
+            presupuesto_ids: pids,
+            pk_id: it.pk_id,
+            cant_presupuestada: cantPptoCombo,
+            cant_presupuestada_combo: cantPptoCombo,
+            registros_combo_count: pids.length,
+            cant_solicitada_acumulada: Math.max(0, (cantPptoCombo || 0) - (saldoCombo || 0)),
+            cantidad_solicitada: Number(it.cantidad),
+            cantidad_borrador_adicional: cantBorradorAdicional,
+            saldo_disponible_despues: saldoDespues,
+            supera_presupuesto: supera,
+            es_principal: esPrincipal,
+            unidad: regs[0]?.unidad || '',
+            repartos,
+          },
+          supera_presupuesto: supera,
+          presupuesto_id: pids[0],
+          presupuesto_ids: pids,
+        },
+      } : row)))
+      return
+    }
 
     // Sin insumo, o asociado: solo contexto presupuestal (asociado nunca alerta sobrepresupuesto).
     if ((!ins?.insumo_id && !ins?.listado_precio_id) || !esPrincipal) {
       try {
         const ctx = await api.getPresupuestoContext(
-          it.presupuesto_id,
+          pids[0],
           it.pk_id,
           cantidadParaSaldo + cantBorradorAdicional,
           solicitudId || undefined,
@@ -244,10 +322,12 @@ export default function SolicitudForm({
               ...ctx,
               es_principal: esPrincipal,
               cantidad_solicitada: Number(it.cantidad),
+              presupuesto_ids: pids,
               supera_presupuesto: esPrincipal ? ctx?.supera_presupuesto : false,
             },
             supera_presupuesto: esPrincipal ? Boolean(ctx?.supera_presupuesto) : false,
-            presupuesto_id: it.presupuesto_id,
+            presupuesto_id: pids[0],
+            presupuesto_ids: pids,
           },
         } : row)))
       } catch (e) {
@@ -267,7 +347,8 @@ export default function SolicitudForm({
       const body = {
         insumo_id: ins.insumo_id || undefined,
         listado_precio_id: ins.listado_precio_id || undefined,
-        presupuesto_id: it.presupuesto_id,
+        presupuesto_id: pids[0],
+        presupuesto_ids: pids,
         presupuesto_capitulo: it.presupuesto_capitulo,
         presupuesto_item: it.presupuesto_item,
         pk_id: it.pk_id,
@@ -285,8 +366,11 @@ export default function SolicitudForm({
       const preview = await api.previewInsumoLine(body)
       setItems((prev) => prev.map((row, i) => (i === idx ? {
         ...row,
-        preview,
-        presupuesto_id: preview.presupuesto_id,
+        preview: {
+          ...preview,
+          presupuesto_ids: pids,
+        },
+        presupuesto_id: preview.presupuesto_id || pids[0],
         valor_compra_unitario: preview.tiene_precio_compra ? (preview.valor_compra_unitario ?? '') : '',
       } : row)))
     } catch (e) {
@@ -296,6 +380,8 @@ export default function SolicitudForm({
 
   const clearUbicacionPresupuesto = () => ({
     presupuesto_id: null,
+    presupuesto_ids: [],
+    registros_presupuesto: [],
     tramo: '',
     abscisa_inicial: '',
     abscisa_final: '',
@@ -323,7 +409,7 @@ export default function SolicitudForm({
           ? CAPITULO_ADMINISTRACION_AIU
           : (item ?? it.presupuesto_item),
         ...clearUbicacionPresupuesto(),
-        ...(esAiu ? { presupuesto_id: null } : {}),
+        ...(esAiu ? { presupuesto_id: null, presupuesto_ids: [], registros_presupuesto: [] } : {}),
       } : it))
       triggerPreview(idx, next)
       return next
@@ -354,20 +440,54 @@ export default function SolicitudForm({
   }
 
   const onRegistroSelect = (idx, reg) => {
+    // Compat: selección única → deja solo ese registro.
+    onRegistroToggle(idx, reg, true, { exclusive: true })
+  }
+
+  const onRegistroToggle = (idx, reg, checked, opts = {}) => {
     markDirty()
     setItems((prev) => {
-      const next = prev.map((it, i) => (i === idx ? {
-        ...it,
-        presupuesto_id: reg.presupuesto_id,
-        tramo: reg.tramo || '',
-        abscisa_inicial: reg.abscisa_inicial ?? '',
-        abscisa_final: reg.abscisa_final ?? '',
-        abs_inicio_display: reg.abs_inicio || '',
-        abs_final_display: reg.abs_final || '',
-        nodo_inicio: reg.nodo_inicio || '',
-        nodo_final: reg.nodo_final || '',
-        preview: null,
-      } : it))
+      const next = prev.map((it, i) => {
+        if (i !== idx) return it
+        const pid = Number(reg.presupuesto_id)
+        let ids = opts.exclusive
+          ? (checked ? [pid] : [])
+          : itemPresupuestoIds(it)
+        if (!opts.exclusive) {
+          if (checked) {
+            if (!ids.includes(pid)) ids = [...ids, pid]
+          } else {
+            ids = ids.filter((x) => x !== pid)
+          }
+        }
+        const prevRegs = it.registros_presupuesto || []
+        let registros = prevRegs.filter((r) => ids.includes(Number(r.presupuesto_id)))
+        if (checked && !registros.some((r) => Number(r.presupuesto_id) === pid)) {
+          registros = [...registros, reg]
+        }
+        // Mantener orden de selección / ids.
+        registros = ids.map((id) => (
+          registros.find((r) => Number(r.presupuesto_id) === id)
+          || (Number(reg.presupuesto_id) === id ? reg : null)
+        )).filter(Boolean)
+        const primary = registros[0] || (checked ? reg : null)
+        return {
+          ...it,
+          presupuesto_id: primary ? primary.presupuesto_id : null,
+          presupuesto_ids: ids,
+          registros_presupuesto: registros,
+          ...(primary ? patchFromRegistro(primary) : {
+            tramo: it.tramo,
+            abscisa_inicial: '',
+            abscisa_final: '',
+            abs_inicio_display: '',
+            abs_final_display: '',
+            nodo_inicio: '',
+            nodo_final: '',
+          }),
+          preview: null,
+        }
+      })
       triggerPreview(idx, next)
       return next
     })
@@ -387,11 +507,12 @@ export default function SolicitudForm({
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? { ...it, cantidad: val } : it))
       triggerPreview(idx, next)
-      // Recalcular otras principales del mismo presupuesto (borrador adicional).
+      // Recalcular otras principales que compartan algún registro seleccionado.
+      const pids = itemPresupuestoIds(next[idx])
       next.forEach((row, i) => {
         if (i === idx) return
         if (!itemEsPrincipal(row)) return
-        if (Number(row.presupuesto_id) !== Number(next[idx].presupuesto_id)) return
+        if (!overlapsPresupuesto(row, pids)) return
         triggerPreview(i, next)
       })
       return next
@@ -402,10 +523,9 @@ export default function SolicitudForm({
     markDirty()
     setItems((prev) => {
       const next = prev.map((it, i) => (i === idx ? { ...it, es_principal: !!checked } : it))
-      // Recalcular esta línea y todas las del mismo presupuesto_id.
-      const pid = next[idx]?.presupuesto_id
+      const pids = itemPresupuestoIds(next[idx])
       next.forEach((row, i) => {
-        if (i === idx || (pid && Number(row.presupuesto_id) === Number(pid))) {
+        if (i === idx || overlapsPresupuesto(row, pids)) {
           triggerPreview(i, next)
         }
       })
@@ -459,7 +579,8 @@ export default function SolicitudForm({
           pk_id: String(it.pk_id || '').trim(),
           presupuesto_capitulo: esAiu ? CAPITULO_ADMINISTRACION_AIU : it.presupuesto_capitulo,
           presupuesto_item: esAiu ? CAPITULO_ADMINISTRACION_AIU : it.presupuesto_item,
-          presupuesto_id: esAiu ? null : it.presupuesto_id,
+          presupuesto_id: esAiu ? null : (itemPresupuestoIds(it)[0] || it.presupuesto_id || null),
+          presupuesto_ids: esAiu ? [] : itemPresupuestoIds(it),
           descripcion_solicitada: String(it.descripcion_solicitada || '').trim(),
           ...ubicacionPayload(it),
         }
@@ -835,6 +956,7 @@ export default function SolicitudForm({
               })
             }}
             onRegistroSelect={onRegistroSelect}
+            onRegistroToggle={onRegistroToggle}
             onUbicacionChange={onUbicacionChange}
             onAddRow={addItemAt}
             onRemoveRow={removeItem}

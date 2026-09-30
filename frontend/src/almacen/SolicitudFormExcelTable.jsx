@@ -92,6 +92,7 @@ export default function SolicitudFormExcelTable({
   onPkSelect,
   onPkClear,
   onRegistroSelect,
+  onRegistroToggle,
   onUbicacionChange,
   onAddRow,
   onRemoveRow,
@@ -360,7 +361,8 @@ export default function SolicitudFormExcelTable({
           t={t}
           solicitudId={solicitudId}
           busy={busy}
-          onRegistroSelect={(reg) => onRegistroSelect(flowIdx, reg)}
+          onRegistroSelect={(reg) => onRegistroSelect?.(flowIdx, reg)}
+          onRegistroToggle={(reg, checked) => onRegistroToggle?.(flowIdx, reg, checked)}
           onUbicacionChange={(patch) => onUbicacionChange(flowIdx, patch)}
           onClose={() => setUbicacionFlow(null)}
         />

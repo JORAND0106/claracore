@@ -5,7 +5,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE } from "./apiBase";
 import { formatCOP } from "./utils/formatCOP";
 import CcConfirmModal from "./components/CcConfirmModal";
-import { buildContratoUiTheme, CC_TYPO } from "./theme/adminPanelTheme";
+import { buildContratoUiTheme, tFrom } from "./theme/adminPanelTheme";
+import TopoExcelSheet from "./components/topografia/TopoExcelSheet";
+import { topoSheetStyles } from "./components/topografia/topoSheetStyles";
 
 const DOC_ESTADOS = [
   { id: "borrador", label: "Borrador", color: "#94a3b8" },
@@ -122,33 +124,14 @@ async function descargarArchivo(token, contratoId, docId, { inline = false, nomb
   URL.revokeObjectURL(url);
 }
 
-const inp = {
-  width: "100%",
-  background: "#0a1628",
-  border: "1.5px solid #1E3A5F",
-  borderRadius: 8,
-  padding: "9px 12px",
-  color: "#E0F2FE",
-  fontSize: CC_TYPO.input,
-  outline: "none",
-  boxSizing: "border-box",
-  marginBottom: 10,
-};
-const lbl = {
-  fontSize: CC_TYPO.label,
-  fontWeight: 700,
-  color: "#4a7a87",
-  letterSpacing: 1,
-  display: "block",
-  marginBottom: 4,
-};
-
 /** Vista matricial — todos los contratos. */
-export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato }) {
+export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato, theme = "dark", t: tProp = null }) {
   const [filas, setFilas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState(null);
   const [filtro, setFiltro] = useState("todos");
+  const tok = useMemo(() => tFrom(theme, tProp), [theme, tProp]);
+  const sheet = useMemo(() => topoSheetStyles(tok), [tok]);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -175,28 +158,25 @@ export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato
     return true;
   });
 
-  const th = {
-    textAlign: "left",
-    fontSize: CC_TYPO.caption,
-    color: "#4a7a87",
+  const btnFiltro = (activo) => ({
+    background: activo ? `color-mix(in srgb, ${tok.primary} 18%, transparent)` : "transparent",
+    border: `1px solid ${activo ? `${tok.primary}88` : sheet.border}`,
+    borderRadius: 4,
+    padding: "5px 12px",
+    color: activo ? tok.primary : tok.textMuted,
+    fontSize: "var(--cc-caption)",
+    fontWeight: activo ? 800 : 500,
+    cursor: "pointer",
     textTransform: "uppercase",
-    padding: "8px 10px",
-    borderBottom: "1px solid rgba(0,175,197,0.25)",
-  };
-  const td = {
-    fontSize: CC_TYPO.sm,
-    padding: "8px 10px",
-    borderBottom: "1px solid rgba(0,175,197,0.12)",
-    color: "#E0F2FE",
-    verticalAlign: "middle",
-  };
+    letterSpacing: "0.03em",
+  });
 
   return (
-    <div style={{ padding: "8px 4px 24px", fontSize: CC_TYPO.body }}>
-      <div style={{ fontSize: CC_TYPO.title, fontWeight: 700, color: "#00afc5", marginBottom: 6 }}>
+    <div style={{ padding: "8px 4px 24px", fontSize: "var(--cc-body)", color: tok.text }}>
+      <div style={{ fontSize: "var(--cc-title)", fontWeight: 800, color: tok.primary, marginBottom: 6 }}>
         Control documentos contractuales
       </div>
-      <div style={{ fontSize: CC_TYPO.sm, color: "#4a7a87", marginBottom: 16, lineHeight: 1.45 }}>
+      <div style={{ fontSize: "var(--cc-sm)", color: tok.textMuted, marginBottom: 16, lineHeight: 1.45 }}>
         Resumen de licenciamiento por contrato: estado documental, último movimiento y documento firmado cargado.
       </div>
 
@@ -207,20 +187,7 @@ export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato
           { id: "pendiente_firma", label: "Sin firmado" },
           { id: "enviado", label: "Enviados" },
         ].map((opt) => (
-          <button
-            key={opt.id}
-            type="button"
-            onClick={() => setFiltro(opt.id)}
-            style={{
-              background: filtro === opt.id ? "rgba(0,175,197,0.2)" : "transparent",
-              border: `1px solid ${filtro === opt.id ? "rgba(0,175,197,0.5)" : "rgba(0,175,197,0.25)"}`,
-              borderRadius: 6,
-              padding: "5px 12px",
-              color: filtro === opt.id ? "#00afc5" : "#8acdd8",
-              fontSize: CC_TYPO.sm,
-              cursor: "pointer",
-            }}
-          >
+          <button key={opt.id} type="button" onClick={() => setFiltro(opt.id)} style={btnFiltro(filtro === opt.id)}>
             {opt.label}
           </button>
         ))}
@@ -231,11 +198,11 @@ export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato
           style={{
             marginLeft: "auto",
             background: "transparent",
-            border: "1px solid rgba(0,175,197,0.3)",
-            borderRadius: 6,
+            border: `1px solid ${sheet.border}`,
+            borderRadius: 4,
             padding: "5px 12px",
-            color: "#8acdd8",
-            fontSize: CC_TYPO.sm,
+            color: tok.textMuted,
+            fontSize: "var(--cc-caption)",
             cursor: loading ? "wait" : "pointer",
           }}
         >
@@ -246,40 +213,38 @@ export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato
       {msg && (
         <div
           style={{
-            background: msg.type === "error" ? "#2a0a0a" : "#0a2a1a",
-            color: msg.type === "error" ? "#f87171" : "var(--cc-color-success)",
-            borderRadius: 8,
+            background: msg.type === "error" ? "color-mix(in srgb, #ef4444 12%, transparent)" : "color-mix(in srgb, #10b981 12%, transparent)",
+            color: msg.type === "error" ? "#ef4444" : "var(--cc-color-success)",
+            borderRadius: 4,
             padding: "10px 14px",
-            fontSize: CC_TYPO.body,
+            fontSize: "var(--cc-body)",
             marginBottom: 12,
+            border: `1px solid ${sheet.border}`,
           }}
         >
           {msg.text}
         </div>
       )}
 
-      <div style={{ overflowX: "auto", border: "1px solid rgba(0,175,197,0.2)", borderRadius: 8 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+      <div style={{ ...sheet.sheetWrap, maxHeight: "min(72vh, 720px)" }} className="cc-admin-table-scroll">
+        <table style={{ ...sheet.sheetTable, tableLayout: "auto", minWidth: 720 }}>
           <thead>
             <tr>
-              <th style={th}>Contrato</th>
-              <th style={th}>Contratista</th>
-              <th style={th}>Estado doc.</th>
-              <th style={th}>Último movimiento</th>
-              <th style={th}>Firmado</th>
-              <th style={th}></th>
+              {["Contrato", "Contratista", "Estado doc.", "Último movimiento", "Firmado", "Acciones"].map((h) => (
+                <th key={h} style={sheet.th}>{h}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} style={{ ...td, color: "#4a7a87", textAlign: "center" }}>
+                <td colSpan={6} style={{ ...sheet.td, color: tok.textMuted, textAlign: "center" }}>
                   Cargando…
                 </td>
               </tr>
             ) : visibles.length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ ...td, color: "#4a7a87", textAlign: "center" }}>
+                <td colSpan={6} style={{ ...sheet.td, color: tok.textMuted, textAlign: "center" }}>
                   No hay registros con el filtro seleccionado.
                 </td>
               </tr>
@@ -289,17 +254,15 @@ export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato
                 const mov = f.ultimo_movimiento_documento_at || f.doc_contractual_updated_at;
                 return (
                   <tr key={f.contrato_id}>
-                    <td style={td}>
-                      <strong style={{ color: "#00afc5" }}>{f.numero || f.contrato_id}</strong>
-                    </td>
-                    <td style={td}>{f.contratista || "—"}</td>
-                    <td style={td}>
+                    <td style={{ ...sheet.td, fontWeight: 800, color: tok.primary }}>{f.numero || f.contrato_id}</td>
+                    <td style={sheet.td}>{f.contratista || "—"}</td>
+                    <td style={sheet.td}>
                       <span
                         style={{
                           display: "inline-block",
                           padding: "2px 8px",
-                          borderRadius: 12,
-                          fontSize: CC_TYPO.caption,
+                          borderRadius: 4,
+                          fontSize: "var(--cc-caption)",
                           fontWeight: 700,
                           background: `${est.color}22`,
                           color: est.color,
@@ -309,21 +272,22 @@ export function ContratoDocumentosMatriz({ call, token, contratos, onIrAContrato
                         {est.label}
                       </span>
                     </td>
-                    <td style={{ ...td, fontSize: CC_TYPO.caption, color: "#8acdd8" }}>{fmtFecha(mov)}</td>
-                    <td style={td}>{f.tiene_documento_firmado ? "✅ Sí" : "—"}</td>
-                    <td style={td}>
+                    <td style={{ ...sheet.td, fontSize: "var(--cc-caption)", color: tok.textMuted }}>{fmtFecha(mov)}</td>
+                    <td style={sheet.td}>{f.tiene_documento_firmado ? "✅ Sí" : "—"}</td>
+                    <td style={sheet.td}>
                       {onIrAContrato && (
                         <button
                           type="button"
                           onClick={() => onIrAContrato(f.contrato_id)}
                           style={{
                             background: "transparent",
-                            border: "1px solid rgba(0,175,197,0.35)",
-                            borderRadius: 6,
+                            border: `1px solid ${sheet.border}`,
+                            borderRadius: 4,
                             padding: "3px 8px",
-                            color: "#00afc5",
-                            fontSize: CC_TYPO.caption,
+                            color: tok.primary,
+                            fontSize: "var(--cc-caption)",
                             cursor: "pointer",
+                            fontWeight: 700,
                           }}
                         >
                           Abrir contrato
@@ -353,7 +317,9 @@ export function ContratoDocumentosPanel({
   t: tProp = null,
 }) {
   const ui = useMemo(() => uiTheme || buildContratoUiTheme(theme, tProp), [uiTheme, theme, tProp]);
-  const { inp, lbl, confirmTheme, font, fileDrop: fileDropStyle } = ui;
+  const { confirmTheme, font, fileDrop: fileDropStyle } = ui;
+  const sheet = useMemo(() => topoSheetStyles(ui.tok || tProp), [ui.tok, tProp]);
+  const cellInp = useMemo(() => ({ ...sheet.cellInp, textAlign: "left", minHeight: 32, height: "auto", marginBottom: 0 }), [sheet]);
 
   const [resumen, setResumen] = useState(null);
   const [licForm, setLicForm] = useState(LIC_VACIO);
@@ -366,15 +332,6 @@ export function ContratoDocumentosPanel({
   const [confirmEliminar, setConfirmEliminar] = useState(null);
   const [eliminando, setEliminando] = useState(false);
   const fileInputRef = useRef(null);
-
-  const cardStyle = {
-    marginBottom: 16,
-    padding: 12,
-    background: ui.bg,
-    border: `1px solid ${ui.border}`,
-    borderRadius: 8,
-    fontSize: font.body,
-  };
 
   const cargar = useCallback(async () => {
     if (!contratoId) return;
@@ -680,106 +637,75 @@ export function ContratoDocumentosPanel({
 
           <div style={{ fontSize: font.body }}>
             <div style={{ marginBottom: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div style={{ fontSize: font.body, fontWeight: 700, color: ui.text }}>Datos del licenciatario</div>
-                <button
-                  type="button"
-                  onClick={() => void prefillDesdeContrato()}
-                  style={{
-                    background: "transparent",
-                    border: `1px solid ${ui.border}`,
-                    borderRadius: 6,
-                    padding: "4px 10px",
-                    color: ui.primary,
-                    fontSize: font.caption,
-                    cursor: "pointer",
-                  }}
-                >
-                  Usar datos del contrato
-                </button>
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                  gap: "0 16px",
-                  alignItems: "start",
-                }}
-              >
-                <div>
-                  <label style={lbl}>RAZÓN SOCIAL *</label>
-                  <input style={inp} value={licForm.razon_social} onChange={(e) => setLicForm((f) => ({ ...f, razon_social: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={lbl}>NIT</label>
-                  <input style={inp} value={licForm.nit} onChange={(e) => setLicForm((f) => ({ ...f, nit: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={lbl}>REPRESENTANTE LEGAL</label>
-                  <input style={inp} value={licForm.representante_nombre} onChange={(e) => setLicForm((f) => ({ ...f, representante_nombre: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={lbl}>CÉDULA REPRESENTANTE</label>
-                  <input style={inp} value={licForm.representante_cedula} onChange={(e) => setLicForm((f) => ({ ...f, representante_cedula: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={lbl}>DIRECCIÓN</label>
-                  <input style={inp} value={licForm.direccion} onChange={(e) => setLicForm((f) => ({ ...f, direccion: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={lbl}>CORREO NOTIFICACIONES</label>
-                  <input style={inp} type="email" value={licForm.email_notificaciones} onChange={(e) => setLicForm((f) => ({ ...f, email_notificaciones: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={lbl}>IDENTIFICACIÓN CONTRATO / OBRA</label>
-                  <input style={inp} value={licForm.identificacion_obra} onChange={(e) => setLicForm((f) => ({ ...f, identificacion_obra: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={lbl}>FECHA INICIO LICENCIA (Cláusula 19)</label>
+              <TopoExcelSheet
+                sheet={sheet}
+                title="Datos del licenciatario"
+                titleRight={
+                  <button
+                    type="button"
+                    onClick={() => void prefillDesdeContrato()}
+                    style={{
+                      background: "transparent",
+                      border: `1px solid ${sheet.border}`,
+                      borderRadius: 4,
+                      padding: "4px 10px",
+                      color: ui.primary,
+                      fontSize: "var(--cc-caption)",
+                      cursor: "pointer",
+                      fontWeight: 700,
+                    }}
+                  >
+                    Usar datos del contrato
+                  </button>
+                }
+                columns={[
+                  { key: "razon", label: "Razón social *", compactFull: true },
+                  { key: "nit", label: "NIT" },
+                  { key: "rep", label: "Representante legal" },
+                  { key: "ced", label: "Cédula representante" },
+                  { key: "dir", label: "Dirección" },
+                  { key: "email", label: "Correo notificaciones" },
+                  { key: "obra", label: "Identificación contrato / obra" },
+                  { key: "fecha", label: "Fecha inicio licencia" },
+                  { key: "valor", label: "Valor mensual licencia (COP)" },
+                  { key: "iva", label: "IVA incluido" },
+                ]}
+                cells={[
+                  <input key="razon" style={cellInp} value={licForm.razon_social} onChange={(e) => setLicForm((f) => ({ ...f, razon_social: e.target.value }))} />,
+                  <input key="nit" style={cellInp} value={licForm.nit} onChange={(e) => setLicForm((f) => ({ ...f, nit: e.target.value }))} />,
+                  <input key="rep" style={cellInp} value={licForm.representante_nombre} onChange={(e) => setLicForm((f) => ({ ...f, representante_nombre: e.target.value }))} />,
+                  <input key="ced" style={cellInp} value={licForm.representante_cedula} onChange={(e) => setLicForm((f) => ({ ...f, representante_cedula: e.target.value }))} />,
+                  <input key="dir" style={cellInp} value={licForm.direccion} onChange={(e) => setLicForm((f) => ({ ...f, direccion: e.target.value }))} />,
+                  <input key="email" style={cellInp} type="email" value={licForm.email_notificaciones} onChange={(e) => setLicForm((f) => ({ ...f, email_notificaciones: e.target.value }))} />,
+                  <input key="obra" style={cellInp} value={licForm.identificacion_obra} onChange={(e) => setLicForm((f) => ({ ...f, identificacion_obra: e.target.value }))} />,
                   <input
-                    style={inp}
+                    key="fecha"
+                    style={cellInp}
                     type="date"
                     value={licForm.fecha_inicio_licencia}
                     onChange={(e) => setLicForm((f) => ({ ...f, fecha_inicio_licencia: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label style={lbl}>VALOR MENSUAL LICENCIA (COP)</label>
+                  />,
                   <input
-                    style={inp}
+                    key="valor"
+                    style={cellInp}
                     type="number"
                     min="0"
                     step="1"
                     value={licForm.valor_mensual}
                     onChange={(e) => setLicForm((f) => ({ ...f, valor_mensual: e.target.value }))}
-                  />
-                </div>
-                <div style={{ alignSelf: "end", paddingBottom: 10 }}>
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      fontSize: font.sm,
-                      color: ui.text,
-                      marginBottom: 0,
-                      cursor: "pointer",
-                    }}
-                  >
+                  />,
+                  <label key="iva" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: font.sm, color: ui.text, cursor: "pointer", padding: "4px 2px" }}>
                     <input
                       type="checkbox"
                       checked={!!licForm.valor_mensual_iva_incluido}
-                      onChange={(e) =>
-                        setLicForm((f) => ({ ...f, valor_mensual_iva_incluido: e.target.checked }))
-                      }
+                      onChange={(e) => setLicForm((f) => ({ ...f, valor_mensual_iva_incluido: e.target.checked }))}
                       style={{ width: 16, height: 16, accentColor: ui.primary }}
                     />
                     IVA incluido
-                    <span style={{ color: ui.textMuted, fontSize: font.caption }}>(IVA: {ivaEtiqueta})</span>
-                  </label>
-                </div>
-              </div>
+                    <span style={{ color: ui.textMuted, fontSize: "var(--cc-caption)" }}>(IVA: {ivaEtiqueta})</span>
+                  </label>,
+                ]}
+              />
 
               {licForm.valor_mensual !== "" && !Number.isNaN(Number(licForm.valor_mensual)) && (
                 <div style={{ fontSize: font.caption, color: ui.successText, marginBottom: 10, lineHeight: 1.45 }}>
@@ -811,7 +737,7 @@ export function ContratoDocumentosPanel({
                 style={{
                   background: ui.primary,
                   border: "none",
-                  borderRadius: 8,
+                  borderRadius: 4,
                   padding: "10px 18px",
                   color: "#fff",
                   fontWeight: 700,
@@ -824,114 +750,55 @@ export function ContratoDocumentosPanel({
               </button>
             </div>
 
-            <div style={{ fontSize: font.body, fontWeight: 700, color: ui.text, marginBottom: 12 }}>Documentos</div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                gap: 16,
-                alignItems: "start",
-              }}
-            >
-              <div style={cardStyle}>
-                <div style={{ fontSize: font.caption, fontWeight: 700, color: ui.textMuted, marginBottom: 8 }}>ÚLTIMO PDF GENERADO</div>
-                {ultimoGen ? (
-                  <>
-                    <div style={{ fontSize: font.sm, color: ui.text, marginBottom: 4 }}>
-                      v{ultimoGen.version_num} · {fmtFecha(ultimoGen.created_at)}
-                    </div>
-                    <div style={{ fontSize: font.caption, color: ui.textMuted, marginBottom: 8 }}>
-                      {(ultimoGen.tamano_bytes / 1024).toFixed(1)} KB
-                    </div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void descargarArchivo(token, contratoId, ultimoGen.id, {
-                            inline: true,
-                            nombre: ultimoGen.nombre_archivo,
-                          })
-                        }
-                        style={btnDocAccion()}
-                      >
-                        Ver PDF
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void descargarArchivo(token, contratoId, ultimoGen.id, {
-                            nombre: ultimoGen.nombre_archivo,
-                          })
-                        }
-                        style={{ ...btnDocAccion(), background: "transparent", border: `1px solid ${ui.border}` }}
-                      >
-                        Descargar
-                      </button>
-                      <button
-                        type="button"
-                        disabled={eliminando}
-                        onClick={() => solicitarEliminar(ultimoGen, "generado")}
-                        style={btnEliminar({ disabled: eliminando })}
-                      >
-                        Eliminar
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ fontSize: font.sm, color: ui.textMuted }}>Aún no se ha generado el contrato de licenciamiento.</div>
-                )}
-              </div>
-
-              <div style={{ ...cardStyle, border: `1px solid ${ui.successText}44` }}>
-                <div style={{ fontSize: font.caption, fontWeight: 700, color: ui.textMuted, marginBottom: 8 }}>DOCUMENTO FIRMADO</div>
-                {ultimoFirm ? (
-                  <>
-                    <div style={{ fontSize: font.sm, color: ui.text, marginBottom: 4 }}>
-                      v{ultimoFirm.version_num} · {fmtFecha(ultimoFirm.created_at)}
-                    </div>
-                    <div style={{ fontSize: font.caption, color: ui.textMuted, marginBottom: 8 }}>{ultimoFirm.nombre_archivo || "documento_firmado.pdf"}</div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void descargarArchivo(token, contratoId, ultimoFirm.id, {
-                            inline: true,
-                            nombre: ultimoFirm.nombre_archivo,
-                          })
-                        }
-                        style={{ ...btnDocAccion(), color: ui.successText, border: `1px solid ${ui.successText}55`, background: `${ui.successText}15` }}
-                      >
-                        Ver firmado
-                      </button>
-                      <button
-                        type="button"
-                        disabled={eliminando}
-                        onClick={() => solicitarEliminar(ultimoFirm, "firmado")}
-                        style={btnEliminar({ disabled: eliminando })}
-                      >
-                        Eliminar
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ fontSize: font.sm, color: ui.textMuted, marginBottom: 8 }}>No hay documento firmado cargado.</div>
-                )}
-                <label
-                  style={{
-                    ...fileDropStyle,
-                    cursor: subiendo ? "wait" : "pointer",
-                    color: ui.successText,
-                    border: `2px dashed ${ui.successText}55`,
-                  }}
-                >
-                  {subiendo ? "Subiendo…" : "📎 Subir contrato firmado (PDF o imagen, máx. 20 MB)"}
-                  <input ref={fileInputRef} type="file" accept=".pdf,image/jpeg,image/png,image/webp" style={{ display: "none" }} onChange={(e) => void subirFirmado(e)} disabled={subiendo} />
-                </label>
-              </div>
-
-              <div style={{ ...cardStyle, maxHeight: 280, overflowY: "auto" }}>
-                <div style={{ fontSize: font.caption, fontWeight: 700, color: ui.textMuted, marginBottom: 8 }}>HISTORIAL DE VERSIONES</div>
-                <div style={{ fontSize: font.caption, color: ui.text }}>
+            <TopoExcelSheet
+              sheet={sheet}
+              title="Documentos"
+              columns={[
+                { key: "gen", label: "Último PDF generado", width: "33%" },
+                { key: "firm", label: "Documento firmado", width: "33%" },
+                { key: "hist", label: "Historial de versiones", width: "34%" },
+              ]}
+              cells={[
+                <div key="gen" style={{ padding: 4, fontSize: font.sm }}>
+                  {ultimoGen ? (
+                    <>
+                      <div style={{ color: ui.text, marginBottom: 4 }}>
+                        v{ultimoGen.version_num} · {fmtFecha(ultimoGen.created_at)}
+                      </div>
+                      <div style={{ fontSize: "var(--cc-caption)", color: ui.textMuted, marginBottom: 8 }}>
+                        {(ultimoGen.tamano_bytes / 1024).toFixed(1)} KB
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button type="button" onClick={() => void descargarArchivo(token, contratoId, ultimoGen.id, { inline: true, nombre: ultimoGen.nombre_archivo })} style={btnDocAccion()}>Ver PDF</button>
+                        <button type="button" onClick={() => void descargarArchivo(token, contratoId, ultimoGen.id, { nombre: ultimoGen.nombre_archivo })} style={{ ...btnDocAccion(), background: "transparent", border: `1px solid ${sheet.border}` }}>Descargar</button>
+                        <button type="button" disabled={eliminando} onClick={() => solicitarEliminar(ultimoGen, "generado")} style={btnEliminar({ disabled: eliminando })}>Eliminar</button>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ color: ui.textMuted }}>Aún no se ha generado el contrato de licenciamiento.</div>
+                  )}
+                </div>,
+                <div key="firm" style={{ padding: 4, fontSize: font.sm }}>
+                  {ultimoFirm ? (
+                    <>
+                      <div style={{ color: ui.text, marginBottom: 4 }}>
+                        v{ultimoFirm.version_num} · {fmtFecha(ultimoFirm.created_at)}
+                      </div>
+                      <div style={{ fontSize: "var(--cc-caption)", color: ui.textMuted, marginBottom: 8 }}>{ultimoFirm.nombre_archivo || "documento_firmado.pdf"}</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                        <button type="button" onClick={() => void descargarArchivo(token, contratoId, ultimoFirm.id, { inline: true, nombre: ultimoFirm.nombre_archivo })} style={{ ...btnDocAccion(), color: ui.successText, border: `1px solid ${ui.successText}55`, background: `${ui.successText}15` }}>Ver firmado</button>
+                        <button type="button" disabled={eliminando} onClick={() => solicitarEliminar(ultimoFirm, "firmado")} style={btnEliminar({ disabled: eliminando })}>Eliminar</button>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ color: ui.textMuted, marginBottom: 8 }}>No hay documento firmado cargado.</div>
+                  )}
+                  <label style={{ ...fileDropStyle, marginBottom: 0, cursor: subiendo ? "wait" : "pointer", color: ui.successText, border: `2px dashed ${ui.successText}55` }}>
+                    {subiendo ? "Subiendo…" : "📎 Subir contrato firmado (PDF o imagen, máx. 20 MB)"}
+                    <input ref={fileInputRef} type="file" accept=".pdf,image/jpeg,image/png,image/webp" style={{ display: "none" }} onChange={(e) => void subirFirmado(e)} disabled={subiendo} />
+                  </label>
+                </div>,
+                <div key="hist" style={{ padding: 4, fontSize: "var(--cc-caption)", color: ui.text, maxHeight: 260, overflowY: "auto" }}>
                   <div style={{ fontWeight: 700, color: ui.textMuted, marginBottom: 6 }}>Generados</div>
                   {(resumen?.historial_generados || []).length === 0 ? (
                     <div style={{ color: ui.textMuted, marginBottom: 10 }}>—</div>
@@ -939,25 +806,10 @@ export function ContratoDocumentosPanel({
                     <div style={{ marginBottom: 12 }}>
                       {(resumen.historial_generados || []).map((d) => (
                         <div key={d.id} style={{ marginBottom: 8, lineHeight: 1.45 }}>
-                          <div>
-                            v{d.version_num} · {fmtFecha(d.created_at)}
-                          </div>
+                          <div>v{d.version_num} · {fmtFecha(d.created_at)}</div>
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
-                            <button
-                              type="button"
-                              onClick={() => void descargarArchivo(token, contratoId, d.id, { nombre: d.nombre_archivo })}
-                              style={{ background: "none", border: "none", color: ui.primary, cursor: "pointer", fontSize: font.caption, padding: 0, textDecoration: "underline" }}
-                            >
-                              descargar
-                            </button>
-                            <button
-                              type="button"
-                              disabled={eliminando}
-                              onClick={() => solicitarEliminar(d, "generado")}
-                              style={{ background: "none", border: "none", color: ui.errorText, cursor: eliminando ? "wait" : "pointer", fontSize: font.caption, padding: 0, textDecoration: "underline" }}
-                            >
-                              eliminar
-                            </button>
+                            <button type="button" onClick={() => void descargarArchivo(token, contratoId, d.id, { nombre: d.nombre_archivo })} style={{ background: "none", border: "none", color: ui.primary, cursor: "pointer", fontSize: "var(--cc-caption)", padding: 0, textDecoration: "underline" }}>descargar</button>
+                            <button type="button" disabled={eliminando} onClick={() => solicitarEliminar(d, "generado")} style={{ background: "none", border: "none", color: ui.errorText, cursor: eliminando ? "wait" : "pointer", fontSize: "var(--cc-caption)", padding: 0, textDecoration: "underline" }}>eliminar</button>
                           </div>
                         </div>
                       ))}
@@ -970,33 +822,18 @@ export function ContratoDocumentosPanel({
                     <div>
                       {(resumen.historial_firmados || []).map((d) => (
                         <div key={d.id} style={{ marginBottom: 8, lineHeight: 1.45 }}>
-                          <div>
-                            v{d.version_num} · {fmtFecha(d.created_at)} · {d.nombre_archivo || "PDF"}
-                          </div>
+                          <div>v{d.version_num} · {fmtFecha(d.created_at)} · {d.nombre_archivo || "PDF"}</div>
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
-                            <button
-                              type="button"
-                              onClick={() => void descargarArchivo(token, contratoId, d.id, { nombre: d.nombre_archivo })}
-                              style={{ background: "none", border: "none", color: ui.successText, cursor: "pointer", fontSize: font.caption, padding: 0, textDecoration: "underline" }}
-                            >
-                              descargar
-                            </button>
-                            <button
-                              type="button"
-                              disabled={eliminando}
-                              onClick={() => solicitarEliminar(d, "firmado")}
-                              style={{ background: "none", border: "none", color: ui.errorText, cursor: eliminando ? "wait" : "pointer", fontSize: font.caption, padding: 0, textDecoration: "underline" }}
-                            >
-                              eliminar
-                            </button>
+                            <button type="button" onClick={() => void descargarArchivo(token, contratoId, d.id, { nombre: d.nombre_archivo })} style={{ background: "none", border: "none", color: ui.successText, cursor: "pointer", fontSize: "var(--cc-caption)", padding: 0, textDecoration: "underline" }}>descargar</button>
+                            <button type="button" disabled={eliminando} onClick={() => solicitarEliminar(d, "firmado")} style={{ background: "none", border: "none", color: ui.errorText, cursor: eliminando ? "wait" : "pointer", fontSize: "var(--cc-caption)", padding: 0, textDecoration: "underline" }}>eliminar</button>
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
-                </div>
-              </div>
-            </div>
+                </div>,
+              ]}
+            />
           </div>
         </>
       )}
