@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import { AlmacenFieldLabel, fmtCant, useAlmacenApi, useAlmacenTheme } from './almacenShared'
+import { normalizePresupuestoIds, totalSaldoRegistros } from './presupuestoReparto'
 
 export default function PresupuestoRegistroGrid({
   capitulo,
   item,
   pkId,
   presupuestoId,
+  presupuestoIds,
   excludeSolicitudId,
   disabled,
+  onToggle,
   onSelect,
 }) {
   const api = useAlmacenApi()
@@ -15,6 +18,11 @@ export default function PresupuestoRegistroGrid({
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  const selectedIds = normalizePresupuestoIds(
+    presupuestoIds?.length ? presupuestoIds : (presupuestoId != null ? [presupuestoId] : []),
+  )
+  const selectedSet = new Set(selectedIds)
 
   useEffect(() => {
     if (!capitulo || !item || !pkId) {
@@ -42,11 +50,13 @@ export default function PresupuestoRegistroGrid({
   }, [api, capitulo, item, pkId, excludeSolicitudId])
 
   useEffect(() => {
-    if (!data?.registros?.length || presupuestoId || disabled) return
+    if (!data?.registros?.length || selectedIds.length || disabled) return
     if (data.registros.length === 1) {
-      onSelect?.(data.registros[0])
+      const reg = data.registros[0]
+      if (onToggle) onToggle(reg, true)
+      else onSelect?.(reg)
     }
-  }, [data, presupuestoId, disabled, onSelect])
+  }, [data, selectedIds.length, disabled, onToggle, onSelect])
 
   if (!pkId || !capitulo || !item) return null
 
@@ -84,6 +94,10 @@ export default function PresupuestoRegistroGrid({
     )
   }
 
+  const selectedRegs = registros.filter((r) => selectedSet.has(Number(r.presupuesto_id)))
+  const saldoSeleccionado = totalSaldoRegistros(selectedRegs)
+  const unidad = registros[0]?.unidad || ''
+
   const th = {
     ...ui.th,
     padding: '5px 6px',
@@ -97,19 +111,45 @@ export default function PresupuestoRegistroGrid({
     padding: '4px 6px',
   }
 
+  const handleToggle = (reg) => {
+    if (disabled) return
+    const pid = Number(reg.presupuesto_id)
+    const nextChecked = !selectedSet.has(pid)
+    if (onToggle) {
+      onToggle(reg, nextChecked)
+      return
+    }
+    onSelect?.(reg)
+  }
+
   return (
     <div style={{ marginTop: 8 }}>
       <AlmacenFieldLabel
         icon="📊"
         label="Registro de presupuesto"
         compact
-        ayuda="Seleccione el tramo/abscisa contra el cual consumirá cantidad."
+        ayuda="Seleccione uno o varios tramos/abscisas; el consumo se reparte proporcionalmente al saldo de cada registro."
       />
       {data?.registros_count > 1 && (
         <div style={{ fontSize: 'var(--cc-caption)', color: ui.textMuted, marginBottom: 4 }}>
           Total ítem en PK ({data.registros_count} registros):{' '}
           <strong>{fmtCant(data.cant_presupuestada_combo)}</strong>
-          {registros[0]?.unidad ? ` ${registros[0].unidad}` : ''}
+          {unidad ? ` ${unidad}` : ''}
+        </div>
+      )}
+      {selectedRegs.length > 0 && (
+        <div style={{
+          fontSize: 'var(--cc-caption)',
+          color: ui.text,
+          marginBottom: 6,
+          fontWeight: 600,
+        }}
+        >
+          Seleccionados ({selectedRegs.length}): saldo disponible{' '}
+          <strong style={{ color: saldoSeleccionado < 0 ? 'var(--cc-color-danger)' : 'var(--cc-color-positive)' }}>
+            {fmtCant(saldoSeleccionado)}
+          </strong>
+          {unidad ? ` ${unidad}` : ''}
         </div>
       )}
       <div style={ui.sheetWrap} className="cc-almacen-table-scroll">
@@ -128,7 +168,7 @@ export default function PresupuestoRegistroGrid({
           </thead>
           <tbody>
             {registros.map((r) => {
-              const selected = presupuestoId && Number(presupuestoId) === Number(r.presupuesto_id)
+              const selected = selectedSet.has(Number(r.presupuesto_id))
               const nodo = [r.nodo_inicio, r.nodo_final].filter(Boolean).join(' → ') || '—'
               return (
                 <tr
@@ -138,15 +178,15 @@ export default function PresupuestoRegistroGrid({
                     cursor: disabled ? 'default' : 'pointer',
                   }}
                   title={`${r.abs_inicio || ''} — ${r.abs_final || ''}`}
-                  onClick={() => !disabled && onSelect?.(r)}
+                  onClick={() => handleToggle(r)}
                 >
-                  <td style={td}>
+                  <td style={td} onClick={(e) => e.stopPropagation()}>
                     <input
-                      type="radio"
+                      type="checkbox"
                       checked={!!selected}
-                      readOnly
                       disabled={disabled}
-                      onChange={() => !disabled && onSelect?.(r)}
+                      onChange={() => handleToggle(r)}
+                      aria-label={`Seleccionar registro ${r.presupuesto_id}`}
                     />
                   </td>
                   <td style={td}>{r.tramo || '—'}</td>

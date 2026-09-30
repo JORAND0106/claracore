@@ -254,6 +254,7 @@ def _sync_solicitud_items(
             sb.table("almacen_solicitud_item").delete().in_("id", chunk).execute()
     if to_insert:
         _insert_solicitud_items_batch(sb, to_insert)
+    _sync_solicitud_item_repartos(sb, solicitud_id, items)
 
 
 def _now_iso() -> str:
@@ -459,9 +460,244 @@ def _humanize_solicitud_db_error(exc: BaseException) -> str:
             "backend/sql/almacen_solicitud_administracion_aiu.sql "
             "(ALTER COLUMN … DROP NOT NULL + NOTIFY pgrst) y reintente."
         )
+    if "almacen_solicitud_item_reparto" in low and any(
+        tok in low for tok in ("does not exist", "pgrst205", "schema cache", "could not find")
+    ):
+        return (
+            "Falta la tabla almacen_solicitud_item_reparto (selección múltiple de registros). "
+            "Ejecute en Supabase SQL Editor el script "
+            "backend/sql/almacen_solicitud_item_reparto.sql "
+            "(CREATE TABLE + NOTIFY pgrst, 'reload schema') y reintente."
+        )
     if text:
         return f"No se pudo guardar la solicitud en la base de datos: {text[:400]}"
     return "No se pudo guardar la solicitud en la base de datos (error desconocido)."
+
+
+def _attach_reparto_meta(
+    contrato_id: int,
+    item: dict,
+    raw: dict,
+    *,
+    exclude_solicitud_id: Optional[int] = None,
+) -> None:
+    """Calcula presupuesto_ids + repartos proporcionales y ajusta cant_presupuestada."""
+    from almacen_insumos_service import list_presupuesto_registros
+    from almacen_presupuesto_reparto import (
+        normalize_presupuesto_ids,
+        repartir_cantidad_proporcional,
+        total_saldo_registros,
+    )
+
+    if is_administracion_aiu(item.get("capitulo"), item.get("item")):
+        item["presupuesto_ids"] = []
+        item["repartos"] = []
+        return
+
+    pids = normalize_presupuesto_ids(
+        raw.get("presupuesto_ids") or item.get("presupuesto_ids"),
+        raw.get("presupuesto_id") or item.get("presupuesto_id"),
+    )
+    if not pids:
+        item["presupuesto_ids"] = []
+        item["repartos"] = []
+        return
+
+    item["presupuesto_id"] = pids[0]
+    item["presupuesto_ids"] = pids
+    if len(pids) == 1:
+        item["repartos"] = [{
+            "presupuesto_id": pids[0],
+            "cantidad": _to_float(item.get("cantidad")),
+        }]
+        return
+
+    pk = (item.get("pk_id") or raw.get("pk_id") or "").strip()
+    cap = (item.get("capitulo") or "").strip()
+    item_n = (item.get("item") or "").strip()
+    if not (pk and cap and item_n):
+        raise ValueError("Seleccione capítulo, ítem y PK-ID para el reparto de presupuesto.")
+
+    data = list_presupuesto_registros(
+        contrato_id, cap, item_n, pk, exclude_solicitud_id=exclude_solicitud_id,
+    )
+    by_id = {int(r["presupuesto_id"]): r for r in (data.get("registros") or [])}
+    selected = []
+    for pid in pids:
+        reg = by_id.get(int(pid))
+        if not reg:
+            raise ValueError(
+                f"El registro de presupuesto {pid} no coincide con capítulo, ítem y PK-ID."
+            )
+        selected.append(reg)
+
+    cant = _to_float(item.get("cantidad"))
+    if _coerce_es_principal(item.get("es_principal"), default=True):
+        shares = repartir_cantidad_proporcional(cant, selected)
+    else:
+        shares = [{"presupuesto_id": int(r["presupuesto_id"]), "cantidad": 0.0} for r in selected]
+
+    item["repartos"] = [
+        {"presupuesto_id": int(s["presupuesto_id"]), "cantidad": _to_float(s["cantidad"])}
+        for s in shares
+        if _to_float(s.get("cantidad")) > 0
+    ]
+    item["cant_presupuestada"] = sum(_to_float(r.get("cant_total")) for r in selected)
+    # Contexto combinado para flags / UI.
+    saldo_combo = total_saldo_registros(selected)
+    if _coerce_es_principal(item.get("es_principal"), default=True):
+        item["supera_presupuesto"] = (saldo_combo - cant) < -0.0001
+    item["contexto_presupuesto"] = {
+        **(item.get("contexto_presupuesto") or {}),
+        "presupuesto_id": pids[0],
+        "presupuesto_ids": pids,
+        "pk_id": pk,
+        "cant_presupuestada": item["cant_presupuestada"],
+        "cant_presupuestada_combo": item["cant_presupuestada"],
+        "registros_combo_count": len(pids),
+        "saldo_disponible_despues": saldo_combo - (
+            cant if _coerce_es_principal(item.get("es_principal"), default=True) else 0
+        ),
+        "supera_presupuesto": item.get("supera_presupuesto", False),
+        "repartos": item["repartos"],
+    }
+
+
+def _sync_solicitud_item_repartos(sb, solicitud_id: int, items: List[dict]) -> None:
+    """Persiste filas de reparto proporcional; omite si la tabla aún no existe."""
+    db_items = list(
+        sb.table("almacen_solicitud_item")
+        .select("id, numero_linea, presupuesto_id")
+        .eq("solicitud_id", int(solicitud_id))
+        .execute()
+        .data
+        or []
+    )
+    db_items.sort(key=lambda r: (int(r.get("numero_linea") or 0), int(r.get("id") or 0)))
+    by_id = {int(r["id"]): r for r in db_items if r.get("id")}
+    by_linea = {}
+    for r in db_items:
+        try:
+            by_linea[int(r.get("numero_linea") or 0)] = r
+        except (TypeError, ValueError):
+            pass
+
+    for i, it in enumerate(items, start=1):
+        iid = None
+        if it.get("id") is not None:
+            try:
+                cand = int(it["id"])
+            except (TypeError, ValueError):
+                cand = None
+            if cand and cand in by_id:
+                iid = cand
+        if iid is None:
+            row = by_linea.get(i)
+            if row and row.get("id"):
+                iid = int(row["id"])
+        if not iid:
+            continue
+
+        repartos = it.get("repartos") or []
+        pids = it.get("presupuesto_ids") or []
+        # Una sola selección: no hace falta tabla (el acumulado usa presupuesto_id de la línea).
+        if len(pids) <= 1 and len(repartos) <= 1:
+            try:
+                sb.table("almacen_solicitud_item_reparto").delete().eq(
+                    "solicitud_item_id", iid
+                ).execute()
+            except Exception as exc:
+                low = str(exc).lower()
+                if "almacen_solicitud_item_reparto" in low and any(
+                    tok in low for tok in ("does not exist", "pgrst205", "schema cache", "could not find")
+                ):
+                    return
+                raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+            continue
+
+        rows = []
+        for r in repartos:
+            try:
+                pid = int(r.get("presupuesto_id"))
+            except (TypeError, ValueError):
+                continue
+            cant = _to_float(r.get("cantidad"))
+            if pid <= 0 or cant <= 0:
+                continue
+            rows.append({
+                "solicitud_item_id": iid,
+                "presupuesto_id": pid,
+                "cantidad": cant,
+            })
+        try:
+            sb.table("almacen_solicitud_item_reparto").delete().eq(
+                "solicitud_item_id", iid
+            ).execute()
+            if rows:
+                sb.table("almacen_solicitud_item_reparto").insert(rows).execute()
+        except Exception as exc:
+            raise ValueError(_humanize_solicitud_db_error(exc)) from exc
+
+
+def _attach_repartos_to_items(sb, items: List[dict]) -> None:
+    """Adjunta presupuesto_ids / repartos a ítems ya cargados (lectura)."""
+    ids = [int(it["id"]) for it in items if it.get("id")]
+    if not ids:
+        for it in items:
+            pid = it.get("presupuesto_id")
+            it["presupuesto_ids"] = [int(pid)] if pid else []
+            it["repartos"] = []
+        return
+    try:
+        rows = (
+            sb.table("almacen_solicitud_item_reparto")
+            .select("solicitud_item_id, presupuesto_id, cantidad")
+            .in_("solicitud_item_id", ids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        low = str(exc).lower()
+        if "almacen_solicitud_item_reparto" in low and any(
+            tok in low for tok in ("does not exist", "pgrst205", "schema cache", "could not find")
+        ):
+            for it in items:
+                pid = it.get("presupuesto_id")
+                it["presupuesto_ids"] = [int(pid)] if pid else []
+                it["repartos"] = []
+            return
+        raise
+    by_item: Dict[int, List[dict]] = {}
+    for r in rows:
+        try:
+            iid = int(r["solicitud_item_id"])
+            pid = int(r["presupuesto_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        by_item.setdefault(iid, []).append({
+            "presupuesto_id": pid,
+            "cantidad": _to_float(r.get("cantidad")),
+        })
+    for it in items:
+        iid = int(it["id"]) if it.get("id") else None
+        reps = by_item.get(iid or -1) or []
+        if reps:
+            # Primario = presupuesto_id de la línea; resto en orden de id.
+            primary = int(it["presupuesto_id"]) if it.get("presupuesto_id") else None
+            ordered = sorted(
+                reps,
+                key=lambda x: (0 if primary and x["presupuesto_id"] == primary else 1, x["presupuesto_id"]),
+            )
+            it["repartos"] = ordered
+            it["presupuesto_ids"] = [r["presupuesto_id"] for r in ordered]
+        else:
+            pid = it.get("presupuesto_id")
+            it["presupuesto_ids"] = [int(pid)] if pid else []
+            it["repartos"] = (
+                [{"presupuesto_id": int(pid), "cantidad": _to_float(it.get("cantidad"))}]
+                if pid else []
+            )
 
 
 # Columnas críticas: si faltan en el esquema, NO omitir en silencio (rompe funcionalidad).
@@ -753,6 +989,7 @@ def _enrich_solicitud(
                     it["item"] = pr.get("item")
             if not ver_economicos:
                 _strip_economics_item(it)
+        _attach_repartos_to_items(sb, items)
         sol["items"] = items
     else:
         from almacen_insumos_service import (
@@ -805,9 +1042,28 @@ def _enrich_solicitud(
             ):
                 prov_names[int(r["id"])] = r.get("razon_social")
 
-        ppto_ids = [int(it["presupuesto_id"]) for it in items if it.get("presupuesto_id")]
+        _attach_repartos_to_items(sb, items)
+        ppto_ids = []
+        for it in items:
+            for pid in (it.get("presupuesto_ids") or (
+                [it["presupuesto_id"]] if it.get("presupuesto_id") else []
+            )):
+                if pid:
+                    ppto_ids.append(int(pid))
         ppto_map = _fetch_ppto_rows_batch(ppto_ids, int(sol["contrato_id"]))
         for it in items:
+            pids = it.get("presupuesto_ids") or (
+                [it["presupuesto_id"]] if it.get("presupuesto_id") else []
+            )
+            pids = [int(p) for p in pids if p]
+            if len(pids) > 1:
+                tot = 0.0
+                for pid in pids:
+                    pr = ppto_map.get(pid)
+                    if pr:
+                        tot += _to_float(pr.get("cant_total"))
+                if tot > 0:
+                    it["cant_presupuestada"] = tot
             pid = it.get("presupuesto_id")
             if pid and int(pid) in ppto_map:
                 pr = ppto_map[int(pid)]
@@ -1192,13 +1448,14 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
     from almacen_insumos_service import apply_saldo_flags_batch, resolve_insumo_for_solicitud
 
     # Prefetch presupuesto rows (una query) para líneas sin resolve_insumo.
+    from almacen_presupuesto_reparto import normalize_presupuesto_ids as _norm_pids_prefetch
     ppto_ids_prefetch = []
     for raw in items:
         desc_sol = (raw.get("descripcion_solicitada") or "").strip()
         if raw.get("insumo_id") or raw.get("listado_precio_id"):
             continue
-        if raw.get("presupuesto_id"):
-            ppto_ids_prefetch.append(int(raw["presupuesto_id"]))
+        for pid in _norm_pids_prefetch(raw.get("presupuesto_ids"), raw.get("presupuesto_id")):
+            ppto_ids_prefetch.append(pid)
     ppto_cache = _fetch_ppto_rows_batch(ppto_ids_prefetch, contrato_id)
 
     out = []
@@ -1250,7 +1507,11 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             continue
 
         if desc_sol and not raw.get("insumo_id") and not raw.get("listado_precio_id"):
-            pid = int(raw["presupuesto_id"])
+            from almacen_presupuesto_reparto import normalize_presupuesto_ids as _norm_pids
+            pids_raw = _norm_pids(raw.get("presupuesto_ids"), raw.get("presupuesto_id"))
+            if not pids_raw:
+                raise ValueError("Seleccione al menos un registro de presupuesto en la grilla.")
+            pid = pids_raw[0]
             ppto = ppto_cache.get(pid) or _fetch_ppto_row(pid, contrato_id)
             cant = _to_float(raw.get("cantidad"))
             if cant <= 0:
@@ -1262,6 +1523,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             item_cobro = (raw.get("presupuesto_item") or raw.get("item") or ppto.get("item") or "").strip()
             out.append({
                 "presupuesto_id": pid,
+                "presupuesto_ids": pids_raw,
                 "pk_id": pk or None,
                 "pk_id_id": raw.get("pk_id_id"),
                 "capitulo": cap_cobro or ppto.get("capitulo"),
@@ -1300,7 +1562,11 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
                 )
             out.append({k: v for k, v in resolved.items() if k not in ("contexto_presupuesto", "analisis_valor")})
             continue
-        pid = int(raw["presupuesto_id"])
+        from almacen_presupuesto_reparto import normalize_presupuesto_ids as _norm_pids2
+        pids_raw = _norm_pids2(raw.get("presupuesto_ids"), raw.get("presupuesto_id"))
+        if not pids_raw:
+            raise ValueError("Seleccione al menos un registro de presupuesto en la grilla.")
+        pid = pids_raw[0]
         ppto = ppto_cache.get(pid) or _fetch_ppto_row(pid, contrato_id)
         cant = _to_float(raw.get("cantidad"))
         if cant <= 0:
@@ -1313,6 +1579,7 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
         item_cobro = (raw.get("presupuesto_item") or raw.get("item") or ppto.get("item") or "").strip()
         out.append({
             "presupuesto_id": pid,
+            "presupuesto_ids": pids_raw,
             "pk_id": pk or None,
             "capitulo": cap_cobro or ppto.get("capitulo"),
             "item": item_cobro or ppto.get("item"),
@@ -1327,6 +1594,20 @@ def _validate_items_payload(items: List[dict], contrato_id: int, user_id: int = 
             "vlr_unitario_cobro": 0,
             "supera_presupuesto": False,
         })
+    # Multi-registro: calcular repartos proporcionales antes de flags de saldo.
+    for src, dst in zip(items, out):
+        if dst.get("presupuesto_id") is None and not (
+            src.get("presupuesto_ids") or src.get("presupuesto_id")
+        ):
+            dst.setdefault("presupuesto_ids", [])
+            dst.setdefault("repartos", [])
+            continue
+        _attach_reparto_meta(
+            contrato_id,
+            dst,
+            src,
+            exclude_solicitud_id=exclude_solicitud_id,
+        )
     if out:
         # Borrador/guardar: no escanear listado_precios (cobro se define al mapear Gerencial).
         # Solo acumulados + flags de sobrepresupuesto — evita 5–40s de full-scan.
@@ -1732,6 +2013,7 @@ def create_solicitud(contrato_id: int, user_id: int, body: dict) -> dict:
         rows.append(row)
     try:
         _insert_solicitud_items_batch(sb, rows)
+        _sync_solicitud_item_repartos(sb, sid, items)
     except ValueError:
         # Cabecera huérfana: limpiar para no dejar borradores vacíos.
         try:
