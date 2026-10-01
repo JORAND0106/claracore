@@ -1692,6 +1692,13 @@ def _enriquecer_ctx_corte_sub_conciliacion(
     vu_map = ctx.get("vu_por_item") or csc.precios_vu_sub_por_item(
         _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
     )
+    meta_map = csc.meta_listado_sub(
+        _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
+    )
+    # Completar VU desde meta si falta
+    for k, m in meta_map.items():
+        if k not in vu_map and _sf(m.get("vlr_unitario")) > 0:
+            vu_map[k] = _sf(m.get("vlr_unitario"))
     cant_act = csc.cantidades_actualizadas_sub(
         _sb, contrato_id=int(contrato_id), subcontratista_id=sub_id
     )
@@ -1711,13 +1718,14 @@ def _enriquecer_ctx_corte_sub_conciliacion(
         cant_actualizadas=cant_act,
         cant_acum_anterior=cant_ant,
         vu_por_item=vu_map,
+        meta_por_item=meta_map,
     )
     # Reaplicar sin_precio tras enriquecer
     for it in items:
         if _sf(it.get("vlr_unitario_sub")) <= 0:
             it["sin_precio"] = True
     items = csc.filtrar_items_con_cantidades(items)
-    _sort_items_corte_por_item_numero_asc(items)
+    items = csc.sort_items_por_orden_listado(items)
     total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
     ctx["items"] = items
     ctx["total_costo"] = total_costo if math.isfinite(total_costo) else 0.0
@@ -1861,7 +1869,12 @@ def _contexto_acta_mes_conciliacion(
     items_pres, _total_raw = aggregate_items_conciliacion(reg)
 
     cfg = amc.fetch_anticipo_amortizacion_contrato(_sb, int(contrato_id))
-    vu_map = amc.precios_vu_contrato(_sb, contrato_id=int(contrato_id))
+    meta_map = amc.meta_listado_contrato(_sb, contrato_id=int(contrato_id))
+    vu_map = {
+        k: amc._sf(v.get("vlr_unitario"))
+        for k, v in meta_map.items()
+        if amc._sf(v.get("vlr_unitario")) > 0
+    }
     items_pres, sin_precio = amc.aplicar_precios_contrato_a_items(items_pres, vu_map)
 
     cant_act = amc.cantidades_actualizadas_contrato(_sb, contrato_id=int(contrato_id))
@@ -1880,12 +1893,13 @@ def _contexto_acta_mes_conciliacion(
         cant_actualizadas=cant_act,
         cant_acum_anterior=cant_ant,
         vu_por_item=vu_map,
+        meta_por_item=meta_map,
     )
     for it in items:
         if _sf(it.get("vlr_unitario")) <= 0 and _sf(it.get("vlr_unitario_sub")) <= 0:
             it["sin_precio"] = True
     items = amc.filtrar_items_con_cantidades(items)
-    _sort_items_corte_por_item_numero_asc(items)
+    items = amc.sort_items_por_orden_listado(items)
     total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
 
     tributos = amc.tributos_from_contrato(cfg.get("aiu"), cfg.get("iva"))
@@ -11831,6 +11845,37 @@ def _fn_cant(n):
     except Exception:
         return _fn(n, 2)
 
+
+def _fn_cant_informe(n):
+    """
+    Cantidades del cuadro CC-SUB/MES: entero → sin decimales; si no → 2 decimales.
+    (Regla de presentación de la plataforma para estos informes.)
+    """
+    if n is None or n == "":
+        return "—"
+    try:
+        x = float(n)
+        if math.isnan(x):
+            return "—"
+        if math.isinf(x):
+            return "> max" if x > 0 else "< min"
+        if abs(x - round(x)) < 1e-9:
+            return f"{int(round(x)):,}"
+        return f"{x:,.2f}"
+    except Exception:
+        return str(n)
+
+
+def _excel_num_format_cant_informe(n: Any) -> str:
+    """Number format Excel alineado a ``_fn_cant_informe``."""
+    try:
+        x = float(n)
+        if math.isfinite(x) and abs(x - round(x)) < 1e-9:
+            return "#,##0"
+    except (TypeError, ValueError):
+        pass
+    return "#,##0.00"
+
 def _sf(n, default=0.0):
     """Convierte a float sin romper el endpoint (strings, comas, vacíos)."""
     if n is None or n == "":
@@ -13919,7 +13964,8 @@ def _fill_corte_sub_001_excel_ws(
 
         c_e = ws.cell(row=row, column=5, value=cant_act)
         c_e.border = bd; c_e.font = Font(size=7); c_e.fill = fill
-        c_e.alignment = Alignment(horizontal="right", vertical="center"); c_e.number_format = "0.000"
+        c_e.alignment = Alignment(horizontal="right", vertical="center")
+        c_e.number_format = _excel_num_format_cant_informe(cant_act)
 
         c_f = ws.cell(row=row, column=6, value=_excel_formula_valor_cant_vu(f"E{row}", f"D{row}"))
         c_f.border = bd; c_f.font = Font(size=7); c_f.fill = fill
@@ -13933,7 +13979,8 @@ def _fill_corte_sub_001_excel_ws(
             sh = str(link["sheet"]).replace("'", "''")
             c_g.value = f"='{sh}'!H{int(link['tot_row'])}"
         c_g.border = bd; c_g.font = Font(size=7); c_g.fill = fill
-        c_g.alignment = Alignment(horizontal="right", vertical="center"); c_g.number_format = "0.000"
+        c_g.alignment = Alignment(horizontal="right", vertical="center")
+        c_g.number_format = _excel_num_format_cant_informe(cant_pres)
 
         c_h = ws.cell(row=row, column=8, value=_excel_formula_valor_cant_vu(f"G{row}", f"D{row}"))
         c_h.border = bd; c_h.font = Font(size=7); c_h.fill = fill
@@ -13942,7 +13989,8 @@ def _fill_corte_sub_001_excel_ws(
 
         c_i = ws.cell(row=row, column=9, value=f"=G{row}+{cant_ant}")
         c_i.border = bd; c_i.font = Font(size=7); c_i.fill = fill
-        c_i.alignment = Alignment(horizontal="right", vertical="center"); c_i.number_format = "0.000"
+        c_i.alignment = Alignment(horizontal="right", vertical="center")
+        c_i.number_format = "#,##0.##"
 
         c_j = ws.cell(row=row, column=10, value=_excel_formula_valor_cant_vu(f"I{row}", f"D{row}"))
         c_j.border = bd; c_j.font = Font(size=7); c_j.fill = fill
@@ -13951,7 +13999,8 @@ def _fill_corte_sub_001_excel_ws(
 
         c_k = ws.cell(row=row, column=11, value=f"=E{row}-I{row}")
         c_k.border = bd; c_k.font = Font(size=7); c_k.fill = fill
-        c_k.alignment = Alignment(horizontal="right", vertical="center"); c_k.number_format = "0.000"
+        c_k.alignment = Alignment(horizontal="right", vertical="center")
+        c_k.number_format = "#,##0.##"
 
         c_l = ws.cell(row=row, column=12, value=_excel_formula_valor_cant_vu(f"K{row}", f"D{row}"))
         c_l.border = bd; c_l.font = Font(size=7); c_l.fill = fill
@@ -15026,13 +15075,13 @@ def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:left\">{_h(desc)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:center\">{_h(item.get('unidad', ''))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right;{'color:#b45309;font-weight:bold;' if item.get('sin_precio') else ''}\">{vu_txt}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_actualizadas', item.get('cantidad')), 3)}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn_cant_informe(item.get('cant_actualizadas', item.get('cantidad')))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_actualizadas'))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_presente', item.get('cantidad')), 3)}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn_cant_informe(item.get('cant_presente', item.get('cantidad')))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_presente', item.get('costo_directo')))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_acumulado'), 3)}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn_cant_informe(item.get('cant_acumulado'))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_acumulado'))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_saldo'), 3)}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn_cant_informe(item.get('cant_saldo'))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_saldo'))}</td>"
         "</tr>"
     )

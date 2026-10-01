@@ -323,41 +323,159 @@ def item_key(item_numero: Any) -> str:
     return str(item_numero or "").strip() or "SIN_ITEM"
 
 
+def _natural_sort_key_item(s: object) -> Tuple[Any, ...]:
+    """Orden natural tipo listado Admin (1.10 < 1.2 numérico; NP-02 < NP-07)."""
+    t = str(s if s is not None else "").strip()
+    if not t:
+        return (2, ())
+    parts: List[Tuple[int, Any]] = []
+    for part in re.split(r"(\d+)", t):
+        if not part:
+            continue
+        if part.isdigit():
+            parts.append((0, int(part)))
+        else:
+            parts.append((1, part.lower()))
+    return (0, tuple(parts))
+
+
+def _capitulo_sort_key_listado(s: object) -> Tuple[Any, ...]:
+    t = str(s if s is not None else "").strip()
+    if not t:
+        return (2, 0, "")
+    m = re.match(r"^\s*(\d+)", t)
+    if m:
+        try:
+            return (0, int(m.group(1)), t.lower())
+        except ValueError:
+            pass
+    return (1, 0, t.lower())
+
+
+def listado_orden_sort_key(row: dict) -> Tuple[Any, ...]:
+    """Misma prioridad que AdminPanel itemsOrdenados: capítulo → competencia → ítem."""
+    return (
+        _capitulo_sort_key_listado(row.get("capitulo")),
+        str(row.get("competencia") or "").strip().lower(),
+        _natural_sort_key_item(row.get("item_numero")),
+    )
+
+
+def sort_items_por_orden_listado(items: Optional[Iterable[dict]]) -> List[dict]:
+    """Orden del listado de precios (orden_listado); fallback capítulo+ítem."""
+    rows = [dict(it) for it in (items or []) if isinstance(it, dict)]
+
+    def _key(it: dict) -> Tuple[Any, ...]:
+        ord_i = it.get("orden_listado")
+        try:
+            if ord_i is not None and str(ord_i).strip() != "":
+                return (0, int(ord_i))
+        except (TypeError, ValueError):
+            pass
+        return (1,) + listado_orden_sort_key(it)
+
+    rows.sort(key=_key)
+    return rows
+
+
+def aplicar_meta_listado_a_items(
+    items: Optional[Iterable[dict]],
+    meta_por_item: Optional[Dict[str, dict]],
+) -> List[dict]:
+    """
+    Completa capitulo / descripción / unidad / VU / orden_listado desde el listado.
+    No pisa valores ya presentes no vacíos (salvo orden_listado y VU pactado > 0).
+    """
+    meta_por_item = meta_por_item or {}
+    out: List[dict] = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        row = dict(it)
+        k = item_key(row.get("item_numero"))
+        meta = meta_por_item.get(k) or {}
+        if meta:
+            if not str(row.get("capitulo") or "").strip() and meta.get("capitulo"):
+                row["capitulo"] = meta["capitulo"]
+            if not str(row.get("item_descripcion") or "").strip() and meta.get("descripcion"):
+                row["item_descripcion"] = meta["descripcion"]
+            if not str(row.get("unidad") or "").strip() and meta.get("unidad"):
+                row["unidad"] = meta["unidad"]
+            if meta.get("orden_listado") is not None:
+                row["orden_listado"] = meta["orden_listado"]
+            vu_meta = _sf(meta.get("vlr_unitario"))
+            if vu_meta > 0:
+                if _sf(row.get("vlr_unitario_sub")) <= 0:
+                    row["vlr_unitario_sub"] = vu_meta
+                if _sf(row.get("vlr_unitario")) <= 0:
+                    row["vlr_unitario"] = vu_meta
+        out.append(row)
+    return out
+
+
 def enriquecer_items_bloques(
     items_presente: List[dict],
     *,
     cant_actualizadas: Dict[str, float],
     cant_acum_anterior: Dict[str, float],
     vu_por_item: Optional[Dict[str, float]] = None,
+    meta_por_item: Optional[Dict[str, dict]] = None,
 ) -> List[dict]:
     """
     Añade bloques Actualizadas / Presente / Acumulado / Saldo (cant + valor) por ítem.
     Acumulado = anterior (solo enviados del mismo sub) + presente.
     Saldo = actualizadas − acumulado.
+
+    Ítems que solo existen en Actualizadas se materializan con la ficha del
+    listado (``meta_por_item``): capítulo, descripción, unidad, VU y orden.
     """
     vu_por_item = vu_por_item or {}
-    keys = set(cant_actualizadas) | set(cant_acum_anterior)
+    meta_por_item = meta_por_item or {}
+    keys = set(cant_actualizadas) | set(cant_acum_anterior) | set(meta_por_item)
     for it in items_presente or []:
         keys.add(item_key(it.get("item_numero")))
 
     by_presente = {item_key(it.get("item_numero")): it for it in (items_presente or [])}
     out: List[dict] = []
-    for k in sorted(keys, key=lambda x: (x == "SIN_ITEM", x)):
+    for k in keys:
+        if k == "SIN_ITEM":
+            continue
         base = dict(by_presente.get(k) or {})
+        meta = meta_por_item.get(k) or {}
         if not base:
             base = {
-                "item_numero": "" if k == "SIN_ITEM" else k,
-                "item_descripcion": "",
-                "unidad": "",
-                "capitulo": "",
+                "item_numero": k,
+                "item_descripcion": str(meta.get("descripcion") or ""),
+                "unidad": str(meta.get("unidad") or ""),
+                "capitulo": str(meta.get("capitulo") or ""),
                 "cantidad": 0.0,
-                "vlr_unitario_sub": vu_por_item.get(k, 0.0),
+                "vlr_unitario_sub": _sf(meta.get("vlr_unitario"), vu_por_item.get(k, 0.0)),
+                "vlr_unitario": _sf(meta.get("vlr_unitario"), vu_por_item.get(k, 0.0)),
                 "costo_directo": 0.0,
             }
+        else:
+            # Completar ficha aunque el registro SICOE venga sin descripción/unidad/capítulo
+            if not str(base.get("capitulo") or "").strip() and meta.get("capitulo"):
+                base["capitulo"] = meta["capitulo"]
+            if not str(base.get("item_descripcion") or "").strip() and meta.get("descripcion"):
+                base["item_descripcion"] = meta["descripcion"]
+            if not str(base.get("unidad") or "").strip() and meta.get("unidad"):
+                base["unidad"] = meta["unidad"]
+
+        if meta.get("orden_listado") is not None:
+            base["orden_listado"] = meta["orden_listado"]
+
         vu = _sf(base.get("vlr_unitario_sub"))
+        if vu == 0.0:
+            vu = _sf(base.get("vlr_unitario"))
         if vu == 0.0 and k in vu_por_item:
             vu = _sf(vu_por_item[k])
+        if vu == 0.0 and meta.get("vlr_unitario"):
+            vu = _sf(meta.get("vlr_unitario"))
+        if vu > 0:
             base["vlr_unitario_sub"] = vu
+            if _sf(base.get("vlr_unitario")) <= 0:
+                base["vlr_unitario"] = vu
 
         # Suma de cantidad_total ya redondeada por registro (misma regla que
         # SicoeObra sumCant). No re-aplicar redondeo dinámico sobre el agregado.
@@ -379,13 +497,14 @@ def enriquecer_items_bloques(
         base["cant_saldo"] = cant_saldo
         base["valor_saldo"] = valor_por_cantidad_vu(cant_saldo, vu)
         out.append(base)
-    return out
+    return sort_items_por_orden_listado(out)
 
 
 def filtrar_items_con_cantidades(items: Optional[Iterable[dict]]) -> List[dict]:
     """
     Incluye todo ítem con cantidad en Actualizadas, Presente acta o Acumulado.
     Solo excluye filas sin cantidad en ninguno de esos bloques.
+    Conserva el orden recibido (listado de precios).
     """
     out: List[dict] = []
     for it in items or []:
@@ -1255,83 +1374,146 @@ def precios_vu_sub_por_item(sb, *, contrato_id: int, subcontratista_id: int) -> 
     Mapa item_numero → precio_unitario_sub del listado del subcontratista.
     Fuente: subcontratista_precios (+ listado_precios), nunca precios del contrato principal.
     """
-    out: Dict[str, float] = {}
+    meta = meta_listado_sub(sb, contrato_id=contrato_id, subcontratista_id=subcontratista_id)
+    return {k: _sf(v.get("vlr_unitario")) for k, v in meta.items() if _sf(v.get("vlr_unitario")) > 0}
+
+
+def meta_listado_contrato(sb, *, contrato_id: int) -> Dict[str, dict]:
+    """
+    Ficha + orden del listado de precios del contrato (Admin itemsOrdenados).
+    Retorna item_key → {capitulo, competencia, descripcion, unidad, vlr_unitario, orden_listado}.
+    """
     rows: List[dict] = []
-    selects = (
-        "listado_precio_id, precio_unitario_sub, listado_precios(item_numero)",
-        "listado_precio_id, precio_unitario_sub",
-    )
-    for sel in selects:
-        try:
-            rows = (
-                sb.table("subcontratista_precios")
-                .select(sel)
-                .eq("subcontratista_id", int(subcontratista_id))
+    try:
+        offset = 0
+        while True:
+            batch = (
+                sb.table("listado_precios")
+                .select(
+                    "id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario"
+                )
+                .eq("contrato_id", int(contrato_id))
+                .order("id")
+                .range(offset, offset + 999)
                 .execute()
                 .data
             ) or []
-            break
-        except Exception as exc:
-            _log.debug("precios_vu_sub_por_item select falló (%s): %s", sel[:40], exc)
-            rows = []
-    if not rows:
-        return out
+            rows.extend(batch)
+            if len(batch) < 1000:
+                break
+            offset += 1000
+    except Exception as exc:
+        _log.warning("meta_listado_contrato: %s", exc)
+        return {}
 
-    # Si no vino el join, resolver item_numero vía listado_precios del contrato.
-    need_lp: List[int] = []
-    for r in rows:
-        lp = r.get("listado_precios")
-        if isinstance(lp, list):
-            lp = lp[0] if lp else {}
-        if not isinstance(lp, dict) or not str(lp.get("item_numero") or "").strip():
-            try:
-                need_lp.append(int(r.get("listado_precio_id")))
-            except (TypeError, ValueError):
-                pass
-    lp_map: Dict[int, str] = {}
-    if need_lp:
-        try:
-            uniq = list({int(x) for x in need_lp})
-            # PostgREST in_ limitado: por lotes
-            for i in range(0, len(uniq), 200):
-                batch = uniq[i : i + 200]
-                lrows = (
-                    sb.table("listado_precios")
-                    .select("id, item_numero")
-                    .eq("contrato_id", int(contrato_id))
-                    .in_("id", batch)
-                    .execute()
-                    .data
-                ) or []
-                for lr in lrows:
-                    try:
-                        lp_map[int(lr["id"])] = str(lr.get("item_numero") or "").strip()
-                    except (TypeError, ValueError, KeyError):
-                        continue
-        except Exception as exc:
-            _log.warning("precios_vu_sub_por_item listado: %s", exc)
+    rows_sorted = sorted(rows, key=listado_orden_sort_key)
+    out: Dict[str, dict] = {}
+    for idx, r in enumerate(rows_sorted):
+        k = item_key(r.get("item_numero"))
+        if k == "SIN_ITEM":
+            continue
+        if k in out:
+            continue  # primera aparición en orden de listado
+        out[k] = {
+            "capitulo": str(r.get("capitulo") or "").strip(),
+            "competencia": str(r.get("competencia") or "").strip(),
+            "descripcion": str(r.get("descripcion") or "").strip(),
+            "unidad": str(r.get("unidad") or "").strip(),
+            "vlr_unitario": _sf(r.get("precio_unitario")),
+            "orden_listado": idx,
+        }
+    return out
 
-    for r in rows:
-        vu = _sf(r.get("precio_unitario_sub"))
+
+def meta_listado_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[str, dict]:
+    """
+    Ficha + orden del listado de precios del sub (hoja build_precios_sheet).
+    """
+    from subcontratistas_items_cobro import (
+        aggregate_presupuesto_cant_map,
+        build_precios_sheet,
+    )
+
+    ppto_rows: List[dict] = []
+    try:
+        offset = 0
+        while True:
+            batch = (
+                sb.table("presupuesto")
+                .select("capitulo, competencia, item, cant_total")
+                .eq("contrato_id", int(contrato_id))
+                .eq("subcontratista_id", int(subcontratista_id))
+                .eq("tipo_ejecucion", "Presupuesto de Obra")
+                .eq("dado_de_baja", False)
+                .order("id")
+                .range(offset, offset + 999)
+                .execute()
+                .data
+            )
+            ppto_rows.extend(batch or [])
+            if len(batch or []) < 1000:
+                break
+            offset += 1000
+    except Exception as exc:
+        _log.warning("meta_listado_sub ppto: %s", exc)
+        ppto_rows = []
+
+    cant_map = aggregate_presupuesto_cant_map(ppto_rows)
+
+    listado: List[dict] = []
+    try:
+        offset = 0
+        while True:
+            batch = (
+                sb.table("listado_precios")
+                .select(
+                    "id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario"
+                )
+                .eq("contrato_id", int(contrato_id))
+                .order("item_numero")
+                .range(offset, offset + 999)
+                .execute()
+                .data
+            )
+            listado.extend(batch or [])
+            if len(batch or []) < 1000:
+                break
+            offset += 1000
+    except Exception as exc:
+        _log.warning("meta_listado_sub listado: %s", exc)
+        return {}
+
+    try:
+        precios_rows = (
+            sb.table("subcontratista_precios")
+            .select("id, listado_precio_id, precio_unitario_sub, origen, cantidad_manual")
+            .eq("subcontratista_id", int(subcontratista_id))
+            .execute()
+            .data
+        ) or []
+    except Exception:
+        precios_rows = []
+
+    sheet = build_precios_sheet(listado, cant_map, precios_rows)
+    out: Dict[str, dict] = {}
+    for idx, row in enumerate(sheet):
+        k = item_key(row.get("item_numero"))
+        if k == "SIN_ITEM" or k in out:
+            continue
+        # VU del sub = vu_costo_mo (precio_unitario_sub); fallback a vu_cobro del contrato
+        vu = _sf(row.get("vu_costo_mo"))
         if vu <= 0:
-            continue
-        item_n = ""
-        lp = r.get("listado_precios")
-        if isinstance(lp, list):
-            lp = lp[0] if lp else {}
-        if isinstance(lp, dict):
-            item_n = str(lp.get("item_numero") or "").strip()
-        if not item_n:
-            try:
-                item_n = lp_map.get(int(r.get("listado_precio_id")), "") or ""
-            except (TypeError, ValueError):
-                item_n = ""
-        if not item_n:
-            continue
-        k = item_key(item_n)
-        # Si hay varios (p. ej. competencias), conserva el primero > 0; no promedia.
-        if k not in out:
-            out[k] = vu
+            vu = _sf(row.get("vu_cobro"))
+        if vu <= 0:
+            vu = _sf(row.get("precio_unitario"))
+        out[k] = {
+            "capitulo": str(row.get("capitulo") or "").strip(),
+            "competencia": str(row.get("competencia") or "").strip(),
+            "descripcion": str(row.get("descripcion") or "").strip(),
+            "unidad": str(row.get("unidad") or "").strip(),
+            "vlr_unitario": vu,
+            "orden_listado": idx,
+        }
     return out
 
 

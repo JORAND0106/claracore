@@ -40,6 +40,10 @@ build_resumen_conciliacion_4cols = csc.build_resumen_conciliacion_4cols
 label_linea_resumen_4cols = csc.label_linea_resumen_4cols
 enriquecer_items_bloques = csc.enriquecer_items_bloques
 filtrar_items_con_cantidades = csc.filtrar_items_con_cantidades
+sort_items_por_orden_listado = csc.sort_items_por_orden_listado
+aplicar_meta_listado_a_items = csc.aplicar_meta_listado_a_items
+meta_listado_contrato = csc.meta_listado_contrato
+meta_listado_sub = csc.meta_listado_sub
 normalizar_otros_conceptos = csc.normalizar_otros_conceptos
 total_otros_conceptos = csc.total_otros_conceptos
 gran_total_con_amortizacion = csc.gran_total_con_amortizacion
@@ -350,32 +354,8 @@ def cantidades_actualizadas_contrato(sb, *, contrato_id: int) -> Dict[str, float
 
 def precios_vu_contrato(sb, *, contrato_id: int) -> Dict[str, float]:
     """Mapa item_numero → precio_unitario del listado de precios del contrato."""
-    out: Dict[str, float] = {}
-    try:
-        offset = 0
-        while True:
-            batch = (
-                sb.table("listado_precios")
-                .select("item_numero, precio_unitario")
-                .eq("contrato_id", int(contrato_id))
-                .order("item_numero")
-                .range(offset, offset + 999)
-                .execute()
-                .data
-            ) or []
-            for r in batch:
-                k = item_key(r.get("item_numero"))
-                vu = _sf(r.get("precio_unitario"))
-                if k == "SIN_ITEM" or vu <= 0:
-                    continue
-                if k not in out:
-                    out[k] = vu
-            if len(batch) < 1000:
-                break
-            offset += 1000
-    except Exception as exc:
-        _log.warning("precios_vu_contrato: %s", exc)
-    return out
+    meta = csc.meta_listado_contrato(sb, contrato_id=contrato_id)
+    return {k: _sf(v.get("vlr_unitario")) for k, v in meta.items() if _sf(v.get("vlr_unitario")) > 0}
 
 
 def aplicar_precios_contrato_a_items(
