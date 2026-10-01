@@ -125,15 +125,15 @@ def test_excel_cd_resumen_suma_items_sin_fila_intermedia():
     ws = wb.active
     labels = []
     cd_resumen_formula = None
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=13):
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=12):
         a = row[0].value
         if isinstance(a, str):
             labels.append(a)
-            # Línea Costo Directo del resumen (no la fila eliminada bajo ítems)
-            if "osto Directo" in a or a.strip().upper() == "COSTO DIRECTO":
-                cd_resumen_formula = row[6].value  # col G
+            # Línea Costo Directo del resumen (exacta; no "Costo Directo + AIU")
+            if a.strip() == "Costo Directo":
+                cd_resumen_formula = row[5].value  # col F (valor Actualizadas)
     assert "COSTO DIRECTO:" not in labels
     assert any(x == "RESUMEN DE CONCILIACIÓN" for x in labels)
     assert cd_resumen_formula is not None
     assert str(cd_resumen_formula).startswith("=")
-    assert "G" in str(cd_resumen_formula)
+    assert "F" in str(cd_resumen_formula)

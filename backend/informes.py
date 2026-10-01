@@ -13688,7 +13688,8 @@ def _fill_corte_sub_001_excel_ws(
 ) -> None:
     """Hoja CC-SUB-001: encabezado tipo PDF, ítems 4 bloques, resumen 4 cols formulado, firmas.
 
-    Si `memoria_links` está presente, la cantidad Presente acta (col H) referencia
+    Sin columna Capítulo: ítems agrupados con fila Subtotal {capítulo}.
+    Si `memoria_links` está presente, la cantidad Presente acta (col G) referencia
     por fórmula el total de la pestaña de memoria del ítem.
     """
     import corte_sub_conciliacion as csc
@@ -13699,6 +13700,7 @@ def _fill_corte_sub_001_excel_ws(
     row_even = _ccd_hex_to_excel_rgb(est.get("row_even_bg"), "F8FAFC")
     row_odd = _ccd_hex_to_excel_rgb(est.get("row_odd_bg"), "FFFFFF")
     blk_bg = "DBEAFE"
+    cap_sub_bg = _ccd_hex_to_excel_rgb(est.get("capitulo_subtotal_bg"), "93C5FD")
 
     elaboro_n = str(fc.get("elaboro_nombre") or "").strip() or "—"
     elaboro_c = str(fc.get("elaboro_cargo") or "").strip() or "—"
@@ -13713,7 +13715,9 @@ def _fill_corte_sub_001_excel_ws(
     fill_th = PatternFill("solid", fgColor=thead_bg)
     fill_blk = PatternFill("solid", fgColor=blk_bg)
     fill_hdr = PatternFill("solid", fgColor="1E3A8A")
-    ncols = 13
+    fill_cap_sub = PatternFill("solid", fgColor=cap_sub_bg)
+    ncols = _CC_SUB_001_NCOLS
+    id_cols = _CC_SUB_001_ID_COLS
 
     def _link_for_item(it: dict) -> Optional[Dict[str, Any]]:
         if not memoria_links:
@@ -13725,7 +13729,8 @@ def _fill_corte_sub_001_excel_ws(
                 return memoria_links[key]
         return None
 
-    widths = [8, 8, 28, 6, 11, 9, 12, 9, 12, 9, 12, 9, 12]
+    # CAP. (8) → Descripción (+8). Total landscape ~145.
+    widths = [8, 36, 6, 11, 9, 12, 9, 12, 9, 12, 9, 12]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -13746,28 +13751,27 @@ def _fill_corte_sub_001_excel_ws(
         for c in range(1, 4):
             ws.cell(row=r, column=c).border = bd
 
-    ws.merge_cells(start_row=1, start_column=4, end_row=2, end_column=9)
+    ws.merge_cells(start_row=1, start_column=4, end_row=2, end_column=8)
     t1 = ws.cell(row=1, column=4, value="INFORME CORTE DE SUB CONTRATISTA")
     t1.font = Font(bold=True, size=12)
     t1.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     for r in (1, 2):
-        for c in range(4, 10):
+        for c in range(4, 9):
             ws.cell(row=r, column=c).border = bd
 
-    ws.merge_cells(start_row=1, start_column=10, end_row=1, end_column=ncols)
-    t2 = ws.cell(row=1, column=10, value=CODIGO_FORMATO_CCD_CC_SUB_001)
+    ws.merge_cells(start_row=1, start_column=9, end_row=1, end_column=ncols)
+    t2 = ws.cell(row=1, column=9, value=CODIGO_FORMATO_CCD_CC_SUB_001)
     t2.font = Font(bold=True, size=14, color="1E40AF")
     t2.alignment = Alignment(horizontal="center", vertical="center")
-    ws.merge_cells(start_row=2, start_column=10, end_row=2, end_column=ncols)
-    t2b = ws.cell(row=2, column=10, value="CCD · ClaraCore")
+    ws.merge_cells(start_row=2, start_column=9, end_row=2, end_column=ncols)
+    t2b = ws.cell(row=2, column=9, value="CCD · ClaraCore")
     t2b.font = Font(bold=True, size=9, color="1E40AF")
     t2b.alignment = Alignment(horizontal="center", vertical="center")
-    for c in range(10, ncols + 1):
+    for c in range(9, ncols + 1):
         ws.cell(row=1, column=c).border = bd
         ws.cell(row=2, column=c).border = bd
 
     def _meta_quad(row: int, pairs: list) -> None:
-        # pairs: [(label, value, c1, c2), ...]
         for label, value, c1, c2 in pairs:
             lab = ws.cell(row=row, column=c1, value=label)
             lab.font = Font(size=7, bold=True, color="374151")
@@ -13784,12 +13788,12 @@ def _fill_corte_sub_001_excel_ws(
     _meta_quad(3, [
         ("CONTRATO", str(contrato.get("numero") or "—"), 1, 3),
         ("FECHA", fecha_gen, 4, 6),
-        ("SUBCONTRATISTA", str(sub.get("razon_social") or "—"), 7, 10),
-        ("CORTE", corte_lbl, 11, 13),
+        ("SUBCONTRATISTA", str(sub.get("razon_social") or "—"), 7, 9),
+        ("CORTE", corte_lbl, 10, 12),
     ])
     _meta_quad(4, [
         ("CONTRATISTA", contratista_val, 1, 7),
-        ("INTERVENTORÍA", str(contrato.get("interventoria") or "—"), 8, 13),
+        ("INTERVENTORÍA", str(contrato.get("interventoria") or "—"), 8, 12),
     ])
     ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=ncols)
     per = ws.cell(row=5, column=1, value=f"PERÍODO DEL CORTE: {periodo}")
@@ -13798,9 +13802,9 @@ def _fill_corte_sub_001_excel_ws(
     for c in range(1, ncols + 1):
         ws.cell(row=5, column=c).border = bd
 
-    # ── Cabecera ítems (2 filas) ─────────────────────────────────────────────
+    # ── Cabecera ítems (2 filas) — sin CAP. ───────────────────────────────────
     hr, hr2 = 7, 8
-    for col, h in enumerate(["CAP.", "ÍTEM", "DESCRIPCIÓN", "UND", "V. UNIT."], start=1):
+    for col, h in enumerate(["ÍTEM", "DESCRIPCIÓN", "UND", "V. UNIT."], start=1):
         ws.merge_cells(start_row=hr, start_column=col, end_row=hr2, end_column=col)
         cell = ws.cell(row=hr, column=col, value=h)
         cell.fill = fill_th
@@ -13811,10 +13815,10 @@ def _fill_corte_sub_001_excel_ws(
         ws.cell(row=hr2, column=col).fill = fill_th
 
     bloques = [
-        (6, 7, "ACTUALIZADAS", True),
-        (8, 9, "PRESENTE ACTA", False),
-        (10, 11, "ACUMULADO", True),
-        (12, 13, "SALDO", False),
+        (5, 6, "ACTUALIZADAS", True),
+        (7, 8, "PRESENTE ACTA", False),
+        (9, 10, "ACUMULADO", True),
+        (11, 12, "SALDO", False),
     ]
     for c1, c2, titulo, alt in bloques:
         ws.merge_cells(start_row=hr, start_column=c1, end_row=hr, end_column=c2)
@@ -13832,14 +13836,59 @@ def _fill_corte_sub_001_excel_ws(
             sc.border = bd
 
     data0 = hr2 + 1
-    item_list = list(items or [])
+    plan = _cc_sub_001_plan_filas_capitulo(list(items or []))
     presente_valor_rows: List[int] = []
     act_valor_rows: List[int] = []
     acum_valor_rows: List[int] = []
     saldo_valor_rows: List[int] = []
-    for idx, it in enumerate(item_list):
-        row = data0 + idx
-        cap = (it.get("capitulo") or "").strip() or "—"
+    # Filas de ítem del capítulo en curso (para fórmulas de subtotal)
+    cap_item_rows: List[int] = []
+    row = data0
+    for entry in plan:
+        kind = entry[0]
+        if kind == "subcap":
+            _, cap_name, _sums = entry
+            label = f"Subtotal {cap_name}" if cap_name and cap_name != "—" else "Subtotal"
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=id_cols)
+            lab = ws.cell(row=row, column=1, value=label)
+            lab.font = Font(size=7, bold=True)
+            lab.alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
+            lab.fill = fill_cap_sub
+            for col in range(1, id_cols + 1):
+                ws.cell(row=row, column=col).border = bd
+                ws.cell(row=row, column=col).fill = fill_cap_sub
+
+            def _sub_sum(letter: str, item_rows: List[int], fallback: float) -> object:
+                if item_rows:
+                    return "=" + "+".join(f"{letter}{r}" for r in item_rows)
+                return float(fallback or 0)
+
+            # Cant vacías + Valor formulado por bloque
+            for col, letter, rows, key in (
+                (5, None, None, None),
+                (6, "F", cap_item_rows, "valor_actualizadas"),
+                (7, None, None, None),
+                (8, "H", cap_item_rows, "valor_presente"),
+                (9, None, None, None),
+                (10, "J", cap_item_rows, "valor_acumulado"),
+                (11, None, None, None),
+                (12, "L", cap_item_rows, "valor_saldo"),
+            ):
+                cell = ws.cell(row=row, column=col)
+                cell.border = bd
+                cell.fill = fill_cap_sub
+                if letter and rows is not None:
+                    cell.value = _sub_sum(letter, rows, _sums.get(key) or 0)
+                    cell.number_format = '"$"#,##0'
+                    cell.font = Font(size=7, bold=True)
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                else:
+                    cell.value = None
+            cap_item_rows = []
+            row += 1
+            continue
+
+        _, it, idx = entry
         desc = str(it.get("item_descripcion", "") or "").lower()
         sin_p = bool(it.get("sin_precio"))
         if sin_p:
@@ -13854,63 +13903,66 @@ def _fill_corte_sub_001_excel_ws(
         if sin_p or vu_num is None:
             vu_num = 0.0
 
-        id_vals = [cap, it.get("item_numero", ""), desc, it.get("unidad", ""), vu_num]
+        id_vals = [it.get("item_numero", ""), desc, it.get("unidad", ""), vu_num]
         for col, v in enumerate(id_vals, start=1):
             cell = ws.cell(row=row, column=col, value=v)
             cell.border = bd
-            cell.font = Font(size=7, bold=(sin_p and col == 5), color="B45309" if sin_p and col == 5 else "000000")
+            cell.font = Font(size=7, bold=(sin_p and col == 4), color="B45309" if sin_p and col == 4 else "000000")
             cell.fill = fill
-            if col == 3:
+            if col == 2:
                 cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-            elif col == 5:
+            elif col == 4:
                 cell.alignment = Alignment(horizontal="right", vertical="center")
                 cell.number_format = "#,##0.00"
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        c_f = ws.cell(row=row, column=6, value=cant_act)
-        c_f.border = bd; c_f.font = Font(size=7); c_f.fill = fill
-        c_f.alignment = Alignment(horizontal="right", vertical="center"); c_f.number_format = "0.000"
+        c_e = ws.cell(row=row, column=5, value=cant_act)
+        c_e.border = bd; c_e.font = Font(size=7); c_e.fill = fill
+        c_e.alignment = Alignment(horizontal="right", vertical="center"); c_e.number_format = "0.000"
 
-        c_g = ws.cell(row=row, column=7, value=_excel_formula_valor_cant_vu(f"F{row}", f"E{row}"))
-        c_g.border = bd; c_g.font = Font(size=7); c_g.fill = fill
-        c_g.alignment = Alignment(horizontal="right", vertical="center"); c_g.number_format = '"$"#,##0'
+        c_f = ws.cell(row=row, column=6, value=_excel_formula_valor_cant_vu(f"E{row}", f"D{row}"))
+        c_f.border = bd; c_f.font = Font(size=7); c_f.fill = fill
+        c_f.alignment = Alignment(horizontal="right", vertical="center"); c_f.number_format = '"$"#,##0'
         act_valor_rows.append(row)
 
-        c_h = ws.cell(row=row, column=8, value=cant_pres)
+        c_g = ws.cell(row=row, column=7, value=cant_pres)
         link = _link_for_item(it)
         if link and link.get("sheet") and link.get("tot_row"):
-            # Cantidad Presente = total de la pestaña de memoria del ítem (col H)
+            # Presente cant (G) ← total col H de la pestaña de memoria del ítem
             sh = str(link["sheet"]).replace("'", "''")
-            c_h.value = f"='{sh}'!H{int(link['tot_row'])}"
-        c_h.border = bd; c_h.font = Font(size=7); c_h.fill = fill
-        c_h.alignment = Alignment(horizontal="right", vertical="center"); c_h.number_format = "0.000"
+            c_g.value = f"='{sh}'!H{int(link['tot_row'])}"
+        c_g.border = bd; c_g.font = Font(size=7); c_g.fill = fill
+        c_g.alignment = Alignment(horizontal="right", vertical="center"); c_g.number_format = "0.000"
 
-        c_i = ws.cell(row=row, column=9, value=_excel_formula_valor_cant_vu(f"H{row}", f"E{row}"))
-        c_i.border = bd; c_i.font = Font(size=7); c_i.fill = fill
-        c_i.alignment = Alignment(horizontal="right", vertical="center"); c_i.number_format = '"$"#,##0'
+        c_h = ws.cell(row=row, column=8, value=_excel_formula_valor_cant_vu(f"G{row}", f"D{row}"))
+        c_h.border = bd; c_h.font = Font(size=7); c_h.fill = fill
+        c_h.alignment = Alignment(horizontal="right", vertical="center"); c_h.number_format = '"$"#,##0'
         presente_valor_rows.append(row)
 
-        c_j = ws.cell(row=row, column=10, value=f"=H{row}+{cant_ant}")
-        c_j.border = bd; c_j.font = Font(size=7); c_j.fill = fill
-        c_j.alignment = Alignment(horizontal="right", vertical="center"); c_j.number_format = "0.000"
+        c_i = ws.cell(row=row, column=9, value=f"=G{row}+{cant_ant}")
+        c_i.border = bd; c_i.font = Font(size=7); c_i.fill = fill
+        c_i.alignment = Alignment(horizontal="right", vertical="center"); c_i.number_format = "0.000"
 
-        c_k = ws.cell(row=row, column=11, value=_excel_formula_valor_cant_vu(f"J{row}", f"E{row}"))
-        c_k.border = bd; c_k.font = Font(size=7); c_k.fill = fill
-        c_k.alignment = Alignment(horizontal="right", vertical="center"); c_k.number_format = '"$"#,##0'
+        c_j = ws.cell(row=row, column=10, value=_excel_formula_valor_cant_vu(f"I{row}", f"D{row}"))
+        c_j.border = bd; c_j.font = Font(size=7); c_j.fill = fill
+        c_j.alignment = Alignment(horizontal="right", vertical="center"); c_j.number_format = '"$"#,##0'
         acum_valor_rows.append(row)
 
-        c_l = ws.cell(row=row, column=12, value=f"=F{row}-J{row}")
-        c_l.border = bd; c_l.font = Font(size=7); c_l.fill = fill
-        c_l.alignment = Alignment(horizontal="right", vertical="center"); c_l.number_format = "0.000"
+        c_k = ws.cell(row=row, column=11, value=f"=E{row}-I{row}")
+        c_k.border = bd; c_k.font = Font(size=7); c_k.fill = fill
+        c_k.alignment = Alignment(horizontal="right", vertical="center"); c_k.number_format = "0.000"
 
-        c_m = ws.cell(row=row, column=13, value=_excel_formula_valor_cant_vu(f"L{row}", f"E{row}"))
-        c_m.border = bd; c_m.font = Font(size=7); c_m.fill = fill
-        c_m.alignment = Alignment(horizontal="right", vertical="center"); c_m.number_format = '"$"#,##0'
+        c_l = ws.cell(row=row, column=12, value=_excel_formula_valor_cant_vu(f"K{row}", f"D{row}"))
+        c_l.border = bd; c_l.font = Font(size=7); c_l.fill = fill
+        c_l.alignment = Alignment(horizontal="right", vertical="center"); c_l.number_format = '"$"#,##0'
         saldo_valor_rows.append(row)
 
-    tot_r = data0 + len(item_list)
-    if not item_list:
+        cap_item_rows.append(row)
+        row += 1
+
+    tot_r = row
+    if not plan:
         ws.merge_cells(start_row=tot_r, start_column=1, end_row=tot_r, end_column=ncols)
         emp = ws.cell(
             row=tot_r,
@@ -13921,8 +13973,7 @@ def _fill_corte_sub_001_excel_ws(
         emp.border = bd
         tot_r += 1
 
-    # Costo Directo vive solo en el resumen de conciliación (fórmulas sobre ítems).
-    # No se emite fila de total bajo el cuadro de ítems.
+    # Costo Directo vive solo en el resumen (suma SOLO filas de ítem, no subtotales).
 
     def _sum_formula(rows: List[int], col_letter: str, fallback: float) -> object:
         if rows:
@@ -13937,7 +13988,6 @@ def _fill_corte_sub_001_excel_ws(
     anticipo_val = float((r4.get("amortizacion") or {}).get("anticipo_entregado") or 0)
     amort_ant = float((r4.get("amortizacion") or {}).get("amortizado_anterior") or 0)
 
-    # Mapa key → fila Excel para fórmulas entre líneas del resumen
     res_start = tot_r + 1
     ws.merge_cells(start_row=res_start, start_column=1, end_row=res_start, end_column=ncols)
     rh = ws.cell(row=res_start, column=1, value="RESUMEN DE CONCILIACIÓN")
@@ -13949,30 +13999,28 @@ def _fill_corte_sub_001_excel_ws(
         ws.cell(row=res_start, column=c).fill = fill_hdr
 
     hdr_r = res_start + 1
-    # Label en A-E; valores bajo G/I/K/M (columnas Valor de cada bloque)
-    ws.merge_cells(start_row=hdr_r, start_column=1, end_row=hdr_r, end_column=5)
+    # Label en A-D; valores bajo F/H/J/L
+    ws.merge_cells(start_row=hdr_r, start_column=1, end_row=hdr_r, end_column=id_cols)
     h0 = ws.cell(row=hdr_r, column=1, value="Concepto")
     h0.font = Font(bold=True, size=7)
     h0.fill = fill_blk
     h0.border = bd
-    for c in range(1, 6):
+    for c in range(1, id_cols + 1):
         ws.cell(row=hdr_r, column=c).fill = fill_blk
         ws.cell(row=hdr_r, column=c).border = bd
-    for col, title in ((6, ""), (7, "Actualizadas"), (8, ""), (9, "Presente acta"), (10, ""), (11, "Acumulado"), (12, ""), (13, "Saldo")):
+    for col, title in ((5, ""), (6, "Actualizadas"), (7, ""), (8, "Presente acta"), (9, ""), (10, "Acumulado"), (11, ""), (12, "Saldo")):
         cell = ws.cell(row=hdr_r, column=col, value=title or None)
         cell.font = Font(bold=True, size=7)
         cell.fill = fill_blk
         cell.border = bd
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    # Referencias de filas del resumen para fórmulas encadenadas
     row_by_key: Dict[str, int] = {}
-    # Columnas valor: Act=G=7, Pres=I=9, Acum=K=11, Saldo=M=13
-    val_cols = {"actualizadas": 7, "presente": 9, "acumulado": 11, "saldo": 13}
-    val_letters = {7: "G", 9: "I", 11: "K", 13: "M"}
+    # Columnas valor: Act=F=6, Pres=H=8, Acum=J=10, Saldo=L=12
+    val_cols = {"actualizadas": 6, "presente": 8, "acumulado": 10, "saldo": 12}
+    val_letters = {6: "F", 8: "H", 10: "J", 12: "L"}
 
     cur = hdr_r + 1
-    # Constantes ant (AIU) para Acumulado = ant + presente
     ant_map = {
         "cd": float(aiu_ant.get("costo_directo") or 0),
         "a": float(aiu_ant.get("valor_administracion") or 0),
@@ -14020,116 +14068,111 @@ def _fill_corte_sub_001_excel_ws(
             bg = PatternFill("solid", fgColor="FFFFFF")
             font_color = "000000"
 
-        ws.merge_cells(start_row=cur, start_column=1, end_row=cur, end_column=5)
+        ws.merge_cells(start_row=cur, start_column=1, end_row=cur, end_column=id_cols)
         lab = ws.cell(row=cur, column=1, value=label)
         lab.font = Font(size=7, bold=strong or key == "gran_total", color=font_color)
         lab.fill = bg
         lab.border = bd
         lab.alignment = Alignment(horizontal="left", vertical="center")
-        for c in range(1, 6):
+        for c in range(1, id_cols + 1):
             ws.cell(row=cur, column=c).fill = bg
             ws.cell(row=cur, column=c).border = bd
 
-        # cant cols vacías
-        for col in (6, 8, 10, 12):
+        for col in (5, 7, 9, 11):
             cell = ws.cell(row=cur, column=col, value="")
             cell.border = bd
             cell.fill = bg
 
         row_by_key[key] = cur
 
-        # Fórmulas por tipo de línea
         if key == "cd":
-            # Suma directa sobre valores de ítems (sin fila intermedia bajo el cuadro)
+            # Solo filas de ítem (nunca subtotales de capítulo)
             formulas = {
-                7: _sum_formula(act_valor_rows, "G", cds.get("actualizadas") or 0),
-                9: _sum_formula(presente_valor_rows, "I", cds.get("presente") or total_costo or 0),
-                11: _sum_formula(acum_valor_rows, "K", cds.get("acumulado") or 0),
-                13: f"=G{cur}-K{cur}",
+                6: _sum_formula(act_valor_rows, "F", cds.get("actualizadas") or 0),
+                8: _sum_formula(presente_valor_rows, "H", cds.get("presente") or total_costo or 0),
+                10: _sum_formula(acum_valor_rows, "J", cds.get("acumulado") or 0),
+                12: f"=F{cur}-J{cur}",
             }
         elif key in ("a", "i", "u"):
             pct = pct_by_key.get(key, 0.0) / 100.0
             cd_r = row_by_key.get("cd", cur)
             ant_c = ant_map.get(key, 0.0)
             formulas = {
-                7: f"=ROUND(G{cd_r}*{pct},0)",
-                9: f"=ROUND(I{cd_r}*{pct},0)",
-                11: f"=I{cur}+{ant_c}",
-                13: f"=G{cur}-K{cur}",
+                6: f"=ROUND(F{cd_r}*{pct},0)",
+                8: f"=ROUND(H{cd_r}*{pct},0)",
+                10: f"=H{cur}+{ant_c}",
+                12: f"=F{cur}-J{cur}",
             }
         elif key == "iva":
-            # IVA sobre Utilidad (fila u)
             pct = pct_by_key.get("iva", 0.0) / 100.0
             u_r = row_by_key.get("u", cur)
             ant_c = ant_map.get("iva", 0.0)
             formulas = {
-                7: f"=ROUND(G{u_r}*{pct},0)",
-                9: f"=ROUND(I{u_r}*{pct},0)",
-                11: f"=I{cur}+{ant_c}",
-                13: f"=G{cur}-K{cur}",
+                6: f"=ROUND(F{u_r}*{pct},0)",
+                8: f"=ROUND(H{u_r}*{pct},0)",
+                10: f"=H{cur}+{ant_c}",
+                12: f"=F{cur}-J{cur}",
             }
         elif key == "cd_aiu":
-            # CD + A + I + U + IVA
             refs = [row_by_key.get(k) for k in ("cd", "a", "i", "u", "iva")]
             refs = [r for r in refs if r]
             def _sum_col(letter):
                 return "=" + "+".join(f"{letter}{r}" for r in refs) if refs else 0
             formulas = {
-                7: _sum_col("G"),
-                9: _sum_col("I"),
-                11: _sum_col("K"),
-                13: f"=G{cur}-K{cur}",
+                6: _sum_col("F"),
+                8: _sum_col("H"),
+                10: _sum_col("J"),
+                12: f"=F{cur}-J{cur}",
             }
         elif key == "amort":
             pct = pct_by_key.get("amort")
             cd_aiu_r = row_by_key.get("cd_aiu", cur)
-            # Actualizadas = anticipo (constante); Presente = MIN(ROUND(CD+AIU*pct,0), anticipo-amort_ant)
             if pct is not None:
-                bruto = f"ROUND(I{cd_aiu_r}*{float(pct)/100.0},0)"
+                bruto = f"ROUND(H{cd_aiu_r}*{float(pct)/100.0},0)"
                 saldo_pend = max(0.0, anticipo_val - amort_ant)
                 pres_f = f"=MIN({bruto},{saldo_pend})"
             else:
                 pres_f = 0
             formulas = {
-                7: anticipo_val,
-                9: pres_f,
-                11: f"=I{cur}+{amort_ant}",
-                13: f"=G{cur}-K{cur}",
+                6: anticipo_val,
+                8: pres_f,
+                10: f"=H{cur}+{amort_ant}",
+                12: f"=F{cur}-J{cur}",
             }
         elif key == "sub_amort":
             cd_aiu_r = row_by_key.get("cd_aiu", cur)
             am_r = row_by_key.get("amort", cur)
             formulas = {
-                7: f"=G{cd_aiu_r}-G{am_r}",
-                9: f"=I{cd_aiu_r}-I{am_r}",
-                11: f"=K{cd_aiu_r}-K{am_r}",
-                13: f"=G{cur}-K{cur}",
+                6: f"=F{cd_aiu_r}-F{am_r}",
+                8: f"=H{cd_aiu_r}-H{am_r}",
+                10: f"=J{cd_aiu_r}-J{am_r}",
+                12: f"=F{cur}-J{cur}",
             }
         elif key == "otros":
             formulas = {
-                7: None,  # vacío
-                9: float(vals.get("presente") or 0),
-                11: f"=I{cur}+{otros_ant}",
-                13: None,
+                6: None,
+                8: float(vals.get("presente") or 0),
+                10: f"=H{cur}+{otros_ant}",
+                12: None,
             }
         elif key == "gran_total":
             sub_r = row_by_key.get("sub_amort", cur)
             ot_r = row_by_key.get("otros", cur)
             formulas = {
-                7: f"=G{sub_r}",  # sin otros en Actualizadas
-                9: f"=I{sub_r}+I{ot_r}" if ot_r else f"=I{sub_r}",
-                11: f"=K{sub_r}+K{ot_r}" if ot_r else f"=K{sub_r}",
-                13: f"=G{cur}-K{cur}",
+                6: f"=F{sub_r}",
+                8: f"=H{sub_r}+H{ot_r}" if ot_r else f"=H{sub_r}",
+                10: f"=J{sub_r}+J{ot_r}" if ot_r else f"=J{sub_r}",
+                12: f"=F{cur}-J{cur}",
             }
         else:
             formulas = {
-                7: vals.get("actualizadas"),
-                9: vals.get("presente"),
-                11: vals.get("acumulado"),
-                13: vals.get("saldo"),
+                6: vals.get("actualizadas"),
+                8: vals.get("presente"),
+                10: vals.get("acumulado"),
+                12: vals.get("saldo"),
             }
 
-        for col in (7, 9, 11, 13):
+        for col in (6, 8, 10, 12):
             v = formulas.get(col)
             if v is None:
                 cell = ws.cell(row=cur, column=col, value="—")
@@ -14140,7 +14183,6 @@ def _fill_corte_sub_001_excel_ws(
             else:
                 _money_cell(cur, col, v, bold=strong or key == "gran_total", fill=bg, color=font_color)
 
-        # Insertar detalle de otros conceptos justo antes de la fila "otros"
         if key == "sub_amort" and (otros_conceptos or []):
             cur += 1
             ws.merge_cells(start_row=cur, start_column=1, end_row=cur, end_column=ncols)
@@ -14153,14 +14195,14 @@ def _fill_corte_sub_001_excel_ws(
             for oc in (otros_conceptos or []):
                 cur += 1
                 det = f'{oc.get("descripcion") or "—"} · {oc.get("unidad") or "—"} · {_fn(oc.get("cantidad"))} · {_fm(oc.get("valor_unitario"))}'
-                ws.merge_cells(start_row=cur, start_column=1, end_row=cur, end_column=5)
+                ws.merge_cells(start_row=cur, start_column=1, end_row=cur, end_column=id_cols)
                 ws.cell(row=cur, column=1, value=det).font = Font(size=6)
-                for c in range(1, 6):
+                for c in range(1, id_cols + 1):
                     ws.cell(row=cur, column=c).border = bd
-                for col in (6, 7, 8, 10, 11, 12, 13):
-                    cell = ws.cell(row=cur, column=col, value="—" if col != 9 else float(oc.get("costo_total") or 0))
+                for col in (5, 6, 7, 9, 10, 11, 12):
+                    cell = ws.cell(row=cur, column=col, value="—" if col != 8 else float(oc.get("costo_total") or 0))
                     cell.border = bd
-                    if col == 9:
+                    if col == 8:
                         cell.number_format = '"$"#,##0'
                         cell.alignment = Alignment(horizontal="right", vertical="center")
                         cell.font = Font(size=7)
@@ -14898,9 +14940,64 @@ def _cc_mes_integral_excel_bytes(
 # Objetivo: ~26 ítems en la 1ª hoja (con encabezado + subtotal + firmas sin página casi vacía).
 _CC_SUB_001_ROWS_PAGINA_1 = 18
 _CC_SUB_001_ROWS_PAGINA_SIG = 22
+# Identificación sin columna Capítulo: ÍTEM | DESCRIPCIÓN | UND | V.UNIT. (4 cols)
+_CC_SUB_001_NCOLS = 12
+_CC_SUB_001_ID_COLS = 4
+
+
+def _cc_sub_001_plan_filas_capitulo(items: List[dict]) -> List[tuple]:
+    """
+    Filas del cuadro CC-SUB/MES-001 tras quitar la columna Capítulo.
+
+    - ``('item', item_dict, idx_paridad)``
+    - ``('subcap', nombre_capitulo, sumas)`` donde ``sumas`` tiene
+      valor_actualizadas / valor_presente / valor_acumulado / valor_saldo
+      (cantidades vacías: unidades distintas dentro del capítulo).
+    """
+    items = list(items or [])
+    if not items:
+        return []
+    out: List[tuple] = []
+    idx = 0
+    i = 0
+    while i < len(items):
+        cap = _capitulo_norm_conc(items[i])
+        j = i
+        sums = {
+            "valor_actualizadas": 0.0,
+            "valor_presente": 0.0,
+            "valor_acumulado": 0.0,
+            "valor_saldo": 0.0,
+        }
+        while j < len(items) and _capitulo_norm_conc(items[j]) == cap:
+            it = items[j]
+            sums["valor_actualizadas"] += _sf(it.get("valor_actualizadas"))
+            sums["valor_presente"] += _sf(it.get("valor_presente"), it.get("costo_directo"))
+            sums["valor_acumulado"] += _sf(it.get("valor_acumulado"))
+            sums["valor_saldo"] += _sf(it.get("valor_saldo"))
+            out.append(("item", it, idx))
+            idx += 1
+            j += 1
+        out.append(("subcap", cap, sums))
+        i = j
+    return out
+
+
+def _cc_sub_001_chunk_plan(plan: List[tuple]) -> List[List[tuple]]:
+    if not plan:
+        return [[]]
+    out: List[List[tuple]] = []
+    i = 0
+    out.append(plan[i : i + _CC_SUB_001_ROWS_PAGINA_1])
+    i += _CC_SUB_001_ROWS_PAGINA_1
+    while i < len(plan):
+        out.append(plan[i : i + _CC_SUB_001_ROWS_PAGINA_SIG])
+        i += _CC_SUB_001_ROWS_PAGINA_SIG
+    return out
 
 
 def _cc_sub_001_chunk_items(items: List[dict]) -> List[List[dict]]:
+    """Compat: chunk solo de ítems (sin subtotales). Preferir ``_cc_sub_001_chunk_plan``."""
     if not items:
         return [[]]
     out: List[List[dict]] = []
@@ -14914,7 +15011,6 @@ def _cc_sub_001_chunk_items(items: List[dict]) -> List[List[dict]]:
 
 
 def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
-    cap = (item.get("capitulo") or "").strip() or "—"
     desc = str(item.get("item_descripcion", "") or "").lower()
     if item.get("sin_precio"):
         desc = f"⚠ SIN PRECIO SUB · {desc}".strip()
@@ -14926,7 +15022,6 @@ def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
     vu_txt = "⚠ SIN PRECIO" if item.get("sin_precio") else _fm(item.get("vlr_unitario_sub"))
     return (
         f"<tr style=\"{trs}\">"
-        f"<td style=\"{bd};{pad};font-size:{fs};vertical-align:top\">{_h(cap)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:left\">{_h(desc)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:center\">{_h(item.get('unidad', ''))}</td>"
@@ -14943,6 +15038,37 @@ def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
     )
 
 
+def _html_cc_sub_001_tr_subtotal_capitulo(
+    bd: str,
+    capitulo: str,
+    sums: dict,
+    bg_hex: str,
+) -> str:
+    """Fila Subtotal {capítulo}: solo valores por bloque; cantidades vacías."""
+    st = _sanitize_ccd_hex_color(bg_hex, "#93c5fd")
+    fs = "5.5pt"
+    pad = "padding:2px 3px"
+    label = f"Subtotal {capitulo}" if capitulo and capitulo != "—" else "Subtotal"
+
+    def _v(key: str) -> str:
+        return _fm(sums.get(key))
+
+    return (
+        f'<tr class="cc001-cap-sub" style="background:{st};">'
+        f'<td colspan="{_CC_SUB_001_ID_COLS}" style="{bd};{pad};font-size:{fs};font-weight:bold;'
+        f'text-align:left;vertical-align:middle;white-space:nowrap;">{_h(label)}</td>'
+        f'<td style="{bd};{pad};font-size:{fs};">&nbsp;</td>'
+        f'<td style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:right;">{_v("valor_actualizadas")}</td>'
+        f'<td style="{bd};{pad};font-size:{fs};">&nbsp;</td>'
+        f'<td style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:right;">{_v("valor_presente")}</td>'
+        f'<td style="{bd};{pad};font-size:{fs};">&nbsp;</td>'
+        f'<td style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:right;">{_v("valor_acumulado")}</td>'
+        f'<td style="{bd};{pad};font-size:{fs};">&nbsp;</td>'
+        f'<td style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:right;">{_v("valor_saldo")}</td>'
+        "</tr>"
+    )
+
+
 def _html_cc_sub_001_thead_items(bd: str, thead_bg: str) -> str:
     th = _sanitize_ccd_hex_color(thead_bg, "#e8e8e8")
     th2 = "#dbeafe"
@@ -14950,9 +15076,8 @@ def _html_cc_sub_001_thead_items(bd: str, thead_bg: str) -> str:
     pad = "padding:2px 1px"
     return f"""<thead>
 <tr style="background:{th};">
-<th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;width:7%;">CAP.</th>
 <th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;width:5%;">ÍTEM</th>
-<th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:left;width:18%;">DESCRIPCIÓN</th>
+<th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:left;width:25%;">DESCRIPCIÓN</th>
 <th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;width:4%;">UND</th>
 <th rowspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;width:7%;">V. UNIT.</th>
 <th colspan="2" style="{bd};{pad};font-size:{fs};font-weight:bold;text-align:center;background:{th2};">ACTUALIZADAS</th>
@@ -15072,8 +15197,9 @@ def _html_cc_sub_v1_plain(
     lbl = "font-size:6pt;font-weight:bold;color:#111;text-transform:uppercase;letter-spacing:0.2px;"
     und = "border-bottom:1px solid #1f2937;font-size:7pt;padding:1px 0 2px 0;margin-top:1px;"
 
-    chunks = _cc_sub_001_chunk_items(list(items or []))
+    chunks = _cc_sub_001_chunk_plan(_cc_sub_001_plan_filas_capitulo(list(items or [])))
     nchunks = len(chunks)
+    cap_sub_bg = est.get("capitulo_subtotal_bg") or "#93c5fd"
 
     parts: list[str] = []
     parts.append(f"""<!DOCTYPE html>
@@ -15161,13 +15287,21 @@ INFORME CORTE DE SUB CONTRATISTA
         parts.append("<tbody>")
         if not chunk and not items:
             parts.append(
-                f'<tr><td colspan="13" style="{bd};padding:5px;font-size:7pt;color:#6b7280">'
+                f'<tr><td colspan="{_CC_SUB_001_NCOLS}" style="{bd};padding:5px;font-size:7pt;color:#6b7280">'
                 "Sin ítems con estado Aprobado en este corte.</td></tr>"
             )
         else:
-            for idx, it in enumerate(chunk):
-                row_bg = est["row_even_bg"] if idx % 2 == 0 else est["row_odd_bg"]
-                parts.append(_html_cc_sub_001_tr_item(it, bd, row_bg))
+            for entry in chunk:
+                kind = entry[0]
+                if kind == "subcap":
+                    _, cap_name, sums = entry
+                    parts.append(
+                        _html_cc_sub_001_tr_subtotal_capitulo(bd, cap_name, sums, cap_sub_bg)
+                    )
+                else:
+                    _, it, idx = entry
+                    row_bg = est["row_even_bg"] if idx % 2 == 0 else est["row_odd_bg"]
+                    parts.append(_html_cc_sub_001_tr_item(it, bd, row_bg))
         # Costo Directo solo en el resumen de conciliación (no fila bajo el cuadro).
         parts.append("</tbody></table>")
 

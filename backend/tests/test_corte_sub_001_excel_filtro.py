@@ -116,18 +116,21 @@ def test_corte_sub_001_excel_bloques_y_formulas():
     assert ws.title == "CC-SUB-001"
     assert ws.page_setup.orientation == "landscape"
     assert ws.cell(1, 4).value == "INFORME CORTE DE SUB CONTRATISTA"
-    assert ws.cell(7, 6).value == "ACTUALIZADAS"
-    assert ws.cell(7, 8).value == "PRESENTE ACTA"
-    assert ws.cell(7, 10).value == "ACUMULADO"
-    assert ws.cell(7, 12).value == "SALDO"
-    # Fila de datos (row 9 = data0)
-    assert ws.cell(9, 2).value == "1.1"
-    assert ws.cell(9, 5).value == 1000.0
-    assert ws.cell(9, 6).value == 100.0
-    assert str(ws.cell(9, 7).value).startswith("=")
-    assert ws.cell(9, 8).value == 10.0
-    assert str(ws.cell(9, 10).value) == "=H9+40.0"
-    assert str(ws.cell(9, 12).value) == "=F9-J9"
+    assert ws.cell(7, 5).value == "ACTUALIZADAS"
+    assert ws.cell(7, 7).value == "PRESENTE ACTA"
+    assert ws.cell(7, 9).value == "ACUMULADO"
+    assert ws.cell(7, 11).value == "SALDO"
+    # Fila de datos (row 9 = data0): sin CAP.; ÍTEM en col 1
+    assert ws.cell(9, 1).value == "1.1"
+    assert ws.cell(9, 4).value == 1000.0
+    assert ws.cell(9, 5).value == 100.0
+    assert str(ws.cell(9, 6).value).startswith("=")
+    assert ws.cell(9, 7).value == 10.0
+    assert str(ws.cell(9, 9).value) == "=G9+40.0"
+    assert str(ws.cell(9, 11).value) == "=E9-I9"
+    # Subtotal del capítulo I
+    assert str(ws.cell(11, 1).value).startswith("Subtotal")
+    assert "F9" in str(ws.cell(11, 6).value)
 
 
 def test_popup_y_excel_usan_filtro_solo_aprobados_en_fuente():
