@@ -129,11 +129,12 @@ def test_amortizacion_tope_y_acumulado_segunda_acta():
     assert "por saldo" in (amort2.get("label") or "")
 
 
-def test_filtrar_items_solo_presente_o_acumulado():
+def test_filtrar_items_incluye_actualizadas_sin_ejecucion():
     items = [
-        {"cant_presente": 0, "cant_acumulado": 0, "item_numero": "x"},
+        {"cant_presente": 0, "cant_acumulado": 0, "cant_actualizadas": 0, "item_numero": "x"},
         {"cant_presente": 1, "cant_acumulado": 0, "item_numero": "y"},
         {"cant_presente": 0, "cant_acumulado": 2, "item_numero": "z"},
+        {"cant_presente": 0, "cant_acumulado": 0, "cant_actualizadas": 8, "item_numero": "w"},
     ]
     out = amc.filtrar_items_con_cantidades(items)
-    assert [i["item_numero"] for i in out] == ["y", "z"]
+    assert [i["item_numero"] for i in out] == ["y", "z", "w"]

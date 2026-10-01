@@ -51,11 +51,12 @@ def test_filtrar_items_con_cantidades():
         {"item_numero": "1.2", "cant_presente": 0, "cant_acumulado": 3},
         {"item_numero": "1.3", "cant_presente": 0, "cant_acumulado": 0, "cant_actualizadas": 10},
         {"item_numero": "1.4", "cantidad": 2, "cant_acumulado": 0},
+        {"item_numero": "1.5", "cant_presente": 0, "cant_acumulado": 0, "cant_actualizadas": 0},
     ]
     out = filtrar_items_con_cantidades(items)
     nums = {i["item_numero"] for i in out}
-    assert nums == {"1.1", "1.2", "1.4"}
-    assert "1.3" not in nums
+    assert nums == {"1.1", "1.2", "1.3", "1.4"}
+    assert "1.5" not in nums
 
 
 def test_corte_sub_001_excel_bloques_y_formulas():

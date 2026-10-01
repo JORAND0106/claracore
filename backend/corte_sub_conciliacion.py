@@ -95,9 +95,15 @@ def _redondear_cant(valor: Any) -> float:
 
 
 def valor_por_cantidad_vu(cantidad: Any, vlr_unitario: Any) -> float:
-    """Cantidad × VU del subcontratista, redondeado a 0 dp (nunca sumar valores almacenados)."""
-    cant = _redondear_cant(cantidad)
-    return _round0(cant * _sf(vlr_unitario))
+    """
+    Cantidad × VU, redondeado a 0 dp (nunca sumar valores almacenados).
+
+    La cantidad ya debe venir agregada a nivel de registro (suma de
+    ``cantidad_total`` persistidos, cada uno con redondeo de plataforma).
+    No se re-aplica el redondeo dinámico sobre la suma: eso divergía de
+    SicoeObra ``agruparRegistrosPorItem`` / ``sumCant``.
+    """
+    return _round0(_sf(cantidad) * _sf(vlr_unitario))
 
 
 def calc_aiu_desglose(costo_directo: float, tributos: Any = None) -> Dict[str, Any]:
@@ -353,11 +359,13 @@ def enriquecer_items_bloques(
             vu = _sf(vu_por_item[k])
             base["vlr_unitario_sub"] = vu
 
-        cant_pres = _redondear_cant(base.get("cantidad") or 0.0)
-        cant_act = _redondear_cant(cant_actualizadas.get(k, 0.0))
-        cant_ant = _redondear_cant(cant_acum_anterior.get(k, 0.0))
-        cant_acum = _redondear_cant(cant_ant + cant_pres)
-        cant_saldo = _redondear_cant(cant_act - cant_acum)
+        # Suma de cantidad_total ya redondeada por registro (misma regla que
+        # SicoeObra sumCant). No re-aplicar redondeo dinámico sobre el agregado.
+        cant_pres = _sf(base.get("cantidad") or 0.0)
+        cant_act = _sf(cant_actualizadas.get(k, 0.0))
+        cant_ant = _sf(cant_acum_anterior.get(k, 0.0))
+        cant_acum = cant_ant + cant_pres
+        cant_saldo = cant_act - cant_acum
 
         base["cantidad"] = cant_pres
         base["costo_directo"] = valor_por_cantidad_vu(cant_pres, vu)
@@ -376,8 +384,8 @@ def enriquecer_items_bloques(
 
 def filtrar_items_con_cantidades(items: Optional[Iterable[dict]]) -> List[dict]:
     """
-    Solo ítems con cantidad en presente acta o en acumulado.
-    Excluye filas que solo existen por «actualizadas» sin movimiento.
+    Incluye todo ítem con cantidad en Actualizadas, Presente acta o Acumulado.
+    Solo excluye filas sin cantidad en ninguno de esos bloques.
     """
     out: List[dict] = []
     for it in items or []:
@@ -385,7 +393,8 @@ def filtrar_items_con_cantidades(items: Optional[Iterable[dict]]) -> List[dict]:
             continue
         cant_p = _sf(it.get("cant_presente"), _sf(it.get("cantidad")))
         cant_a = _sf(it.get("cant_acumulado"))
-        if cant_p > 0 or cant_a > 0:
+        cant_act = _sf(it.get("cant_actualizadas"))
+        if cant_p > 0 or cant_a > 0 or cant_act > 0:
             out.append(it)
     return out
 
@@ -500,31 +509,55 @@ def cantidades_por_item_cortes(
     corte_ids: List[int],
     solo_aprobados: bool = True,
 ) -> Dict[str, float]:
-    """Suma cantidad_total por ítem solo de los corte_ids dados (mismo contrato/sub implícito)."""
+    """
+    Suma cantidad_total por ítem solo de los corte_ids dados (mismo contrato/sub implícito).
+
+    Filtra a nivel de registro (``sub_estado=Aprobado`` si aplica) y suma los
+    ``cantidad_total`` ya redondeados en origen — sin re-redondear el agregado.
+    """
     if not corte_ids:
         return {}
     acc: Dict[str, float] = {}
+    idset = {int(x) for x in corte_ids}
+    rows: List[dict] = []
     try:
-        q = (
-            sb.table("so_registros")
-            .select("item_numero, cantidad_total, corte_id, subcontratista_id")
-            .eq("contrato_id", int(contrato_id))
-            .in_("corte_id", [int(x) for x in corte_ids])
-        )
-        if solo_aprobados:
-            q = q.eq("sub_estado", "Aprobado")
-        rows = q.execute().data or []
-    except Exception:
-        try:
+        offset = 0
+        while True:
             q = (
                 sb.table("so_registros")
-                .select("item_numero, cantidad_total, corte_id")
+                .select("item_numero, cantidad_total, corte_id, subcontratista_id")
                 .eq("contrato_id", int(contrato_id))
                 .in_("corte_id", [int(x) for x in corte_ids])
+                .order("id")
+                .range(offset, offset + 999)
             )
             if solo_aprobados:
                 q = q.eq("sub_estado", "Aprobado")
-            rows = q.execute().data or []
+            batch = q.execute().data or []
+            rows.extend(batch)
+            if len(batch) < 1000:
+                break
+            offset += 1000
+    except Exception:
+        try:
+            offset = 0
+            rows = []
+            while True:
+                q = (
+                    sb.table("so_registros")
+                    .select("item_numero, cantidad_total, corte_id")
+                    .eq("contrato_id", int(contrato_id))
+                    .in_("corte_id", [int(x) for x in corte_ids])
+                    .order("id")
+                    .range(offset, offset + 999)
+                )
+                if solo_aprobados:
+                    q = q.eq("sub_estado", "Aprobado")
+                batch = q.execute().data or []
+                rows.extend(batch)
+                if len(batch) < 1000:
+                    break
+                offset += 1000
         except Exception as exc:
             _log.warning("cantidades_por_item_cortes: %s", exc)
             return {}
@@ -534,11 +567,11 @@ def cantidades_por_item_cortes(
         sid = r.get("subcontratista_id")
         if sid is not None and int(sid) != int(subcontratista_id):
             continue
-        if int(r.get("corte_id") or 0) not in {int(x) for x in corte_ids}:
+        if int(r.get("corte_id") or 0) not in idset:
             continue
         k = item_key(r.get("item_numero"))
         acc[k] = acc.get(k, 0.0) + _sf(r.get("cantidad_total"))
-    return {k: _redondear_cant(v) for k, v in acc.items()}
+    return acc
 
 
 def cantidades_actualizadas_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[str, float]:
@@ -614,7 +647,7 @@ def cantidades_actualizadas_sub(sb, *, contrato_id: int, subcontratista_id: int)
     for row in sheet:
         k = item_key(row.get("item_numero"))
         acc[k] = acc.get(k, 0.0) + _sf(row.get("cantidad"))
-    return {k: _redondear_cant(v) for k, v in acc.items()}
+    return acc
 
 
 def resolve_tributos_sub(sb, subcontratista_id: int) -> dict:

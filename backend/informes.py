@@ -1610,10 +1610,11 @@ def _contexto_corte_sub(
 
     items_map = {}
     for r in registros:
-        k = r.get("item_numero") or "SIN_ITEM"
+        raw_item = r.get("item_numero")
+        k = str(raw_item or "").strip() or "SIN_ITEM"
         if k not in items_map:
             items_map[k] = {
-                "item_numero":      r.get("item_numero", ""),
+                "item_numero":      "" if k == "SIN_ITEM" else k,
                 "item_descripcion": r.get("item_descripcion", ""),
                 "unidad":           r.get("unidad", ""),
                 "cantidad":         0.0,
@@ -12380,9 +12381,12 @@ def _excel_formula_redondeo_cant_ref(cant_ref: str) -> str:
 
 
 def _excel_formula_valor_cant_vu(cant_ref: str, vu_ref: str) -> str:
-    """Valor = cantidad_redondeada × VU, redondeado a 0 dp (alineado a valor_por_cantidad_vu)."""
-    cant_r = _excel_formula_redondeo_cant_ref(cant_ref)
-    return f'=IF(OR({vu_ref}="",{cant_ref}=""),0,ROUND(({cant_r})*{vu_ref},0))'
+    """Valor = cantidad × VU, redondeado a 0 dp (alineado a valor_por_cantidad_vu).
+
+    La cantidad de celda ya es la suma de ``cantidad_total`` por registro; no se
+    re-aplica redondeo dinámico sobre el agregado (misma regla que SicoeObra sumCant).
+    """
+    return f'=IF(OR({vu_ref}="",{cant_ref}=""),0,ROUND({cant_ref}*{vu_ref},0))'
 
 
 def _parse_abscisa_metros_memoria(val: Any) -> Optional[float]:
@@ -13694,7 +13698,6 @@ def _fill_corte_sub_001_excel_ws(
     thead_bg = _ccd_hex_to_excel_rgb(est.get("thead_bg"), "E8E8E8")
     row_even = _ccd_hex_to_excel_rgb(est.get("row_even_bg"), "F8FAFC")
     row_odd = _ccd_hex_to_excel_rgb(est.get("row_odd_bg"), "FFFFFF")
-    subtotal_bg = _ccd_hex_to_excel_rgb(est.get("subtotal_bg"), "DBEAFE")
     blk_bg = "DBEAFE"
 
     elaboro_n = str(fc.get("elaboro_nombre") or "").strip() or "—"
@@ -13909,46 +13912,22 @@ def _fill_corte_sub_001_excel_ws(
     tot_r = data0 + len(item_list)
     if not item_list:
         ws.merge_cells(start_row=tot_r, start_column=1, end_row=tot_r, end_column=ncols)
-        emp = ws.cell(row=tot_r, column=1, value="Sin ítems con cantidad en presente acta o acumulado para este filtro.")
+        emp = ws.cell(
+            row=tot_r,
+            column=1,
+            value="Sin ítems con cantidad en Actualizadas, Presente acta o Acumulado para este filtro.",
+        )
         emp.font = Font(size=8, italic=True, color="64748B")
         emp.border = bd
         tot_r += 1
 
-    # Fila CD del cuadro (valores = SUM fórmulas de cada bloque)
-    st_r = tot_r
-    ws.merge_cells(start_row=st_r, start_column=1, end_row=st_r, end_column=5)
-    s1 = ws.cell(row=st_r, column=1, value="COSTO DIRECTO:")
-    s1.font = Font(bold=True, size=8)
-    s1.alignment = Alignment(horizontal="right", vertical="center")
-    s1.fill = PatternFill("solid", fgColor=subtotal_bg)
-    for col in range(1, 6):
-        ws.cell(row=st_r, column=col).border = bd
-        ws.cell(row=st_r, column=col).fill = PatternFill("solid", fgColor=subtotal_bg)
+    # Costo Directo vive solo en el resumen de conciliación (fórmulas sobre ítems).
+    # No se emite fila de total bajo el cuadro de ítems.
 
     def _sum_formula(rows: List[int], col_letter: str, fallback: float) -> object:
         if rows:
             return "=" + "+".join(f"{col_letter}{r}" for r in rows)
         return float(fallback or 0)
-
-    cds = (resumen_4cols or {}).get("cd_bloques") or {}
-    for col, letter, rows, key in (
-        (6, None, None, None),
-        (7, "G", act_valor_rows, "actualizadas"),
-        (8, None, None, None),
-        (9, "I", presente_valor_rows, "presente"),
-        (10, None, None, None),
-        (11, "K", acum_valor_rows, "acumulado"),
-        (12, None, None, None),
-        (13, "M", saldo_valor_rows, "saldo"),
-    ):
-        cell = ws.cell(row=st_r, column=col)
-        cell.border = bd
-        cell.fill = PatternFill("solid", fgColor=subtotal_bg)
-        if letter and rows is not None:
-            cell.value = _sum_formula(rows, letter, cds.get(key) or (total_costo if key == "presente" else 0))
-            cell.number_format = '"$"#,##0'
-            cell.font = Font(bold=True, size=8)
-            cell.alignment = Alignment(horizontal="right", vertical="center")
 
     # ── Resumen 4 columnas ──────────────────────────────────────────────────
     r4 = resumen_4cols or {}
@@ -13959,7 +13938,7 @@ def _fill_corte_sub_001_excel_ws(
     amort_ant = float((r4.get("amortizacion") or {}).get("amortizado_anterior") or 0)
 
     # Mapa key → fila Excel para fórmulas entre líneas del resumen
-    res_start = st_r + 2
+    res_start = tot_r + 1
     ws.merge_cells(start_row=res_start, start_column=1, end_row=res_start, end_column=ncols)
     rh = ws.cell(row=res_start, column=1, value="RESUMEN DE CONCILIACIÓN")
     rh.fill = fill_hdr
@@ -14019,6 +13998,7 @@ def _fill_corte_sub_001_excel_ws(
             cell.fill = fill
         return cell
 
+    cds = (resumen_4cols or {}).get("cd_bloques") or {}
     for ln in lineas:
         key = ln.get("key")
         label = ln.get("label") or csc.label_linea_resumen_4cols(ln)
@@ -14060,11 +14040,11 @@ def _fill_corte_sub_001_excel_ws(
 
         # Fórmulas por tipo de línea
         if key == "cd":
-            # Referencia a la fila CD del cuadro de ítems (st_r)
+            # Suma directa sobre valores de ítems (sin fila intermedia bajo el cuadro)
             formulas = {
-                7: f"=G{st_r}",
-                9: f"=I{st_r}",
-                11: f"=K{st_r}",
+                7: _sum_formula(act_valor_rows, "G", cds.get("actualizadas") or 0),
+                9: _sum_formula(presente_valor_rows, "I", cds.get("presente") or total_costo or 0),
+                11: _sum_formula(acum_valor_rows, "K", cds.get("acumulado") or 0),
                 13: f"=G{cur}-K{cur}",
             }
         elif key in ("a", "i", "u"):
@@ -14951,13 +14931,13 @@ def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:left\">{_h(desc)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:center\">{_h(item.get('unidad', ''))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right;{'color:#b45309;font-weight:bold;' if item.get('sin_precio') else ''}\">{vu_txt}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_actualizadas', item.get('cantidad')))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_actualizadas', item.get('cantidad')), 3)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_actualizadas'))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_presente', item.get('cantidad')))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_presente', item.get('cantidad')), 3)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_presente', item.get('costo_directo')))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_acumulado'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_acumulado'), 3)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_acumulado'))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_saldo'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn(item.get('cant_saldo'), 3)}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_saldo'))}</td>"
         "</tr>"
     )
@@ -15188,15 +15168,7 @@ INFORME CORTE DE SUB CONTRATISTA
             for idx, it in enumerate(chunk):
                 row_bg = est["row_even_bg"] if idx % 2 == 0 else est["row_odd_bg"]
                 parts.append(_html_cc_sub_001_tr_item(it, bd, row_bg))
-        if ci == nchunks - 1:
-            st = _sanitize_ccd_hex_color(est.get("subtotal_bg"), "#dbeafe")
-            parts.append(
-                f"""<tr style="background:{st};">
-<td colspan="8" style="{bd};text-align:right;padding:3px 6px;font-weight:bold;font-size:7pt;">COSTO DIRECTO (PRESENTE ACTA):</td>
-<td style="{bd};text-align:right;padding:3px 4px;font-weight:bold;font-size:7pt;">{_fm(total_costo)}</td>
-<td colspan="4" style="{bd};padding:3px;">&nbsp;</td>
-</tr>"""
-            )
+        # Costo Directo solo en el resumen de conciliación (no fila bajo el cuadro).
         parts.append("</tbody></table>")
 
     aiu = aiu_resumen or {}
