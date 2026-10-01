@@ -310,7 +310,8 @@ def cantidades_por_item_actas(
         except Exception as exc2:
             _log.warning("cantidades_por_item_actas: %s", exc2)
             return {}
-    return {k: _redondear_cant(v) for k, v in acc.items()}
+    # Suma de cantidad_total ya redondeada por registro (sin re-redondear el agregado).
+    return acc
 
 
 def cantidades_actualizadas_contrato(sb, *, contrato_id: int) -> Dict[str, float]:
@@ -344,7 +345,7 @@ def cantidades_actualizadas_contrato(sb, *, contrato_id: int) -> Dict[str, float
     except Exception as exc:
         _log.warning("cantidades_actualizadas_contrato: %s", exc)
         return {}
-    return {k: _redondear_cant(v) for k, v in acc.items()}
+    return acc
 
 
 def precios_vu_contrato(sb, *, contrato_id: int) -> Dict[str, float]:

@@ -293,13 +293,18 @@ def aggregate_items_conciliacion(registros: List[Dict[str, Any]]) -> Tuple[List[
     Agrega filas SICOE por item_numero. Suma el costo por línea con _linea_costo_registro (alineado
     a lista de actas / matriz) en lugar de (suma cantidades) × (un V.U.), que distorsionaba el total
     con varias líneas por ítem o V.U. distintos.
+
+    Clave = ``item_numero`` strip (misma normalización que SicoeObra
+    ``normalizarItemNumSicoe`` / ``corte_sub_conciliacion.item_key``).
+    Cantidad = suma de ``cantidad_total`` por registro (ya redondeados en origen).
     """
     items_map: Dict[str, Dict[str, Any]] = {}
     for r in registros or []:
-        k = r.get("item_numero") or "SIN_ITEM"
+        raw_item = r.get("item_numero")
+        k = str(raw_item or "").strip() or "SIN_ITEM"
         if k not in items_map:
             items_map[k] = {
-                "item_numero": r.get("item_numero", ""),
+                "item_numero": "" if k == "SIN_ITEM" else k,
                 "item_descripcion": (r.get("item_descripcion") or "") or "",
                 "unidad": (r.get("unidad") or "") or "",
                 "cantidad": 0.0,
