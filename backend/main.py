@@ -22322,20 +22322,21 @@ def _sicoe_analisis_verificacion_totales(
     usa_costo_matriz: bool = False,
     vu_map_matriz: Optional[Dict[Tuple[str, str, str], float]] = None,
 ) -> dict:
-    """Suma línea a línea + comparación con KPI Dashboard / matriz Validación por rol."""
-    from sicoe_costo_aprobado_nivel import costo_directo_linea
+    """Suma canónica (cant×VU listado por cap+ítem) + comparación KPI / matriz."""
+    from sicoe_valor_canonico import sum_valor_canonico
 
+    listado_idx = _listado_precios_vu_by_cap_item(int(contrato_id))
     if usa_costo_matriz and regs and vu_map_matriz is not None:
         suma = _sicoe_costo_regs_estilo_matriz(regs, vu_map_matriz)
         metodo = "net_cant_x_vu_matriz_por_item"
     else:
-        # Misma valuación de línea que el KPI canónico (fallback cant×vlr si CD nulo).
-        suma = round(sum(costo_directo_linea(r) for r in regs), 0)
-        metodo = "suma_linea_a_linea_por_id_unico"
+        suma = sum_valor_canonico(regs or [], listado_idx)
+        metodo = "sum_valor_canonico_cap_item_listado"
     ver: dict = {
         "suma_costo_directo_registros": suma,
         "conteo_registros": len(regs),
         "metodo": metodo,
+        "regla": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem)",
     }
     if len(capas) == 1 and _sicoe_capa_alinea_dashboard_kpi(capas[0], contrato_id):
         try:
@@ -23000,13 +23001,17 @@ def analisis_registros_obra(
     if capas_ana and registros and not _estado_filtro_omite_validacion_por_cargo(estado):
         registros = _sicoe_registros_postfiltro_capas_norm(registros, capas_ana, contrato_id)
 
-    _usa_costo_matriz = False  # Totales SICOE Obra: sum(costo_directo), coherente con SQL Supabase
+    _usa_costo_matriz = False  # Totales: regla canónica cant×VU listado (cap+ítem)
     _acta_id_verif = acta_id
     if _acta_id_verif is None and acta_ids_panel_ana:
         _acta_id_verif = acta_ids_panel_ana[0] if len(acta_ids_panel_ana) == 1 else None
 
+    _listado_idx_ana = _listado_precios_vu_by_cap_item(int(contrato_id))
+
     def _cd_linea(reg: dict) -> float:
-        return float(reg.get("costo_directo") or 0)
+        from sicoe_valor_canonico import valor_linea_canonico
+
+        return valor_linea_canonico(reg, _listado_idx_ana)
 
     verificacion = _sicoe_analisis_verificacion_totales(
         registros,
@@ -23256,7 +23261,14 @@ def analisis_registros_obra(
             )
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
-    tc  = round(sum(_cd_linea(r) for r in registros), 0)
+    from sicoe_valor_canonico import (
+        auditar_integridad_registros,
+        resumen_integridad,
+        sum_valor_canonico,
+        TRAZABILIDAD_PRECIOS_STATUS,
+    )
+
+    tc = sum_valor_canonico(registros or [], _listado_idx_ana)
     tr  = len(registros)
     ta  = sum(g["aprobados"]       for g in grupos_list)
     tp  = sum(g["pendientes"]      for g in grupos_list)
@@ -23267,6 +23279,9 @@ def analisis_registros_obra(
     tnr   = sum(g.get("no_revisados",     0) for g in grupos_list)
     tnrc  = round(sum(g.get("no_revisados_costo", 0.0) for g in grupos_list), 0)
     t_cant = round(sum(float(g.get("cantidad_total") or 0) for g in grupos_list), 2)
+
+    _incs_ana = auditar_integridad_registros(registros or [], _listado_idx_ana)
+    _integ_ana = resumen_integridad(_incs_ana)
 
     result = {
         "modo": modo,
@@ -23284,6 +23299,18 @@ def analisis_registros_obra(
         "total_pendientes_count": tp_c,
         "total_rechazados_count": trj_c,
         "verificacion": verificacion,
+        "integridad": {
+            **_integ_ana,
+            "aviso": (
+                f"{_integ_ana['n_registros_afectados']} registro(s) con inconsistencias "
+                f"vs listado (impacto ≈ ${_integ_ana['impacto_plata']:,.0f}). "
+                "Ver detalle en control de integridad."
+                if _integ_ana.get("tiene_inconsistencias")
+                else None
+            ),
+        },
+        "regla_valor": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem)",
+        "trazabilidad_precios": TRAZABILIDAD_PRECIOS_STATUS,
     }
     _dashboard_response_cache_set(_analisis_cache_key, result)
     return result
@@ -31901,13 +31928,13 @@ def _dashboard_scan_sicoe_by_item(
     Agrega SICOE por (capítulo_norm, ítem_norm).
 
     Aprobado (ap_*): regla canónica sicoe_costo_aprobado_nivel — ítem + prerrequisitos
-    + nmax Aprobado; dinero = SUM(costo_directo) por línea.
-    Cola (nr_*): ítem + prerrequisitos + nmax No Revisado; dinero = cant×listado VU
-    (la cola sigue midiendo cantidad pendiente valorizada a listado).
+    + nmax Aprobado; dinero = ROUND0(ROUND(Σcant,2)×VU_listado) por cap+ítem.
+    Cola (nr_*): ítem + prerrequisitos + nmax No Revisado; dinero = cant×listado VU.
     """
-    from sicoe_costo_aprobado_nivel import costo_directo_linea, registro_aprobado_nivel_max
+    from sicoe_costo_aprobado_nivel import registro_aprobado_nivel_max
+    from sicoe_valor_canonico import valor_cant_vu
 
-    cache_kind = "sicoe_by_item_v3" if acta_id is None else f"sicoe_by_item_v3_acta_{int(acta_id)}"
+    cache_kind = "sicoe_by_item_v4" if acta_id is None else f"sicoe_by_item_v4_acta_{int(acta_id)}"
     cached = _dash_agg_cache_get(cache_kind, contrato_id)
     if cached is not None:
         return cached
@@ -31949,7 +31976,6 @@ def _dashboard_scan_sicoe_by_item(
             cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
             if registro_aprobado_nivel_max(reg, na):
                 sicoe_by_item[k]["ap_q"] += cq
-                sicoe_by_item[k]["ap_c"] += costo_directo_linea(reg)
             elif _so_reg_en_cola_interventoria(reg, contrato_id):
                 sicoe_by_item[k]["nr_q"] += cq
         if len(batch) < 1000:
@@ -31959,8 +31985,8 @@ def _dashboard_scan_sicoe_by_item(
         lp_vu = _dash_listado_vu_resolved(contrato_id, ck, ik, full_listado_idx=listado_idx)
         sg["ap_q"] = cantidad_dashboard(float(sg.get("ap_q") or 0))
         sg["nr_q"] = cantidad_dashboard(float(sg.get("nr_q") or 0))
-        sg["ap_c"] = float(round(float(sg.get("ap_c") or 0), 0))
-        # Cola: valorización a listado (cantidad pendiente × VU vigente).
+        # Aprobado y cola: misma regla cant×VU listado (cap+ítem).
+        sg["ap_c"] = float(valor_cant_vu(sg["ap_q"], lp_vu or 0)) if (lp_vu or 0) > 0 else 0.0
         sg["nr_c"] = float(costo_agregado_cant_vu(sg["nr_q"], lp_vu or 0))
     _dash_agg_cache_set(cache_kind, contrato_id, sicoe_by_item)
     return sicoe_by_item
@@ -31970,17 +31996,18 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
     """
     SICOE agregado por ítem solo para un capítulo (drill rápido).
 
-    Misma regla canónica que `_dashboard_scan_sicoe_by_item` (v3):
-    Aprobado = ítem + prerrequisitos + nmax Aprobado; dinero = SUM(costo_directo).
+    Misma regla canónica que `_dashboard_scan_sicoe_by_item` (v4):
+    Aprobado = ítem + prerrequisitos + nmax Aprobado; dinero = cant×VU listado (cap+ítem).
     Cola = ítem + prerrequisitos + nmax No Revisado; dinero = cant×listado VU.
     """
-    from sicoe_costo_aprobado_nivel import costo_directo_linea, registro_aprobado_nivel_max
+    from sicoe_costo_aprobado_nivel import registro_aprobado_nivel_max
+    from sicoe_valor_canonico import valor_cant_vu
 
     cap_raw = (capitulo or "").strip()
     if not cap_raw:
         return {}
     cap_key = _dash_norm_capitulo_key_py(cap_raw)
-    cache_key = f"sicoe_by_item_cap_v3:{int(contrato_id)}:{cap_key}"
+    cache_key = f"sicoe_by_item_cap_v4:{int(contrato_id)}:{cap_key}"
     now = time.time()
     with _DASH_AGG_CACHE_LOCK:
         hit = _DASH_AGG_CACHE.get(cache_key)
@@ -32012,7 +32039,6 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
             cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
             if registro_aprobado_nivel_max(reg, na):
                 sicoe_by_item[k]["ap_q"] += cq
-                sicoe_by_item[k]["ap_c"] += costo_directo_linea(reg)
             elif _so_reg_en_cola_interventoria(reg, contrato_id):
                 sicoe_by_item[k]["nr_q"] += cq
 
@@ -32043,10 +32069,10 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
         lp_vu = _dash_listado_vu_resolved(contrato_id, ck, ik, full_listado_idx=listado_idx)
         sg["ap_q"] = cantidad_dashboard(float(sg.get("ap_q") or 0))
         sg["nr_q"] = cantidad_dashboard(float(sg.get("nr_q") or 0))
-        sg["ap_c"] = float(round(float(sg.get("ap_c") or 0), 0))
+        sg["ap_c"] = float(valor_cant_vu(sg["ap_q"], lp_vu or 0)) if (lp_vu or 0) > 0 else 0.0
         sg["nr_c"] = float(costo_agregado_cant_vu(sg["nr_q"], lp_vu or 0))
     if not sicoe_by_item:
-        full = _dash_agg_cache_get("sicoe_by_item_v3", contrato_id)
+        full = _dash_agg_cache_get("sicoe_by_item_v4", contrato_id)
         if full is not None:
             for k, v in full.items():
                 if k[0] == cap_key:
@@ -32062,14 +32088,14 @@ def _sicoe_by_item_for_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[s
     if not cap_raw:
         return {}
     cap_key = _dash_norm_capitulo_key_py(cap_raw)
-    cache_key = f"sicoe_by_item_cap_v3:{int(contrato_id)}:{cap_key}"
+    cache_key = f"sicoe_by_item_cap_v4:{int(contrato_id)}:{cap_key}"
     now = time.time()
     with _DASH_AGG_CACHE_LOCK:
         hit = _DASH_AGG_CACHE.get(cache_key)
         if hit and now - hit[0] < _DASH_AGG_CACHE_TTL_SEC:
             return hit[1]
 
-    full = _dash_agg_cache_get("sicoe_by_item_v3", contrato_id)
+    full = _dash_agg_cache_get("sicoe_by_item_v4", contrato_id)
     if full is not None:
         filtered = {k: v for k, v in full.items() if k[0] == cap_key}
         if filtered:
@@ -32081,7 +32107,7 @@ def _sicoe_by_item_for_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[s
     if sicoe_by:
         return sicoe_by
 
-    full = _dash_agg_cache_get("sicoe_by_item_v3", contrato_id)
+    full = _dash_agg_cache_get("sicoe_by_item_v4", contrato_id)
     if full is not None:
         filtered = {k: v for k, v in full.items() if k[0] == cap_key}
         with _DASH_AGG_CACHE_LOCK:
@@ -33597,10 +33623,16 @@ def _dashboard_matriz_validacion_por_niveles(
     """
     Agrega matriz SICOE por cada nivel de validación activo del contrato (1..6).
 
-    Dinero = SUM(costo_directo) por línea (fallback cant×vlr vía costo_directo_linea).
-    Nivel máx. «Aprobado» coincide con sicoe_costo_aprobado_nivel (ítem + prerreqs).
+    Dinero = regla única sicoe_valor_canonico: por celda, Σ ROUND0(ROUND(Σcant,2)×VU_listado)
+    por (capítulo, ítem). Nivel máx. «Aprobado» exige ítem + prerreqs.
     """
-    from sicoe_costo_aprobado_nivel import costo_directo_linea
+    from collections import defaultdict
+
+    from sicoe_valor_canonico import (
+        cap_item_key,
+        round_cant,
+        valor_cant_vu,
+    )
 
     na = sorted({int(x) for x in (niveles_activos or _get_niveles_activos_contrato(contrato_id)) if 1 <= int(x) <= 6})
     if not na:
@@ -33608,6 +33640,13 @@ def _dashboard_matriz_validacion_por_niveles(
     obra_m = _matriz_validacion_empty(na)
     ens_m = _matriz_validacion_empty(na)
     n_min = na[0]
+    listado_idx = _listado_precios_vu_by_cap_item(contrato_id)
+
+    # Acumuladores de cantidad por celda → (cap,item) antes de valorizar.
+    # Clave celda: (bloque, fila, col_nivel) → Dict[(cap,item), cant_sum]
+    qty_cells: Dict[Tuple[str, str, str], Dict[Tuple[str, str], float]] = defaultdict(
+        lambda: defaultdict(float)
+    )
 
     def _fila_estado(est: str) -> str:
         if est == "Aprobado":
@@ -33618,26 +33657,35 @@ def _dashboard_matriz_validacion_por_niveles(
             return "rechazado"
         return "no_revisado"
 
-    def _acc_reg_en_matriz(Mroot: dict, reg: dict) -> None:
-        cd = costo_directo_linea(reg)
+    def _acc_qty(bloque: str, fila: str, col: str, reg: dict) -> None:
+        k = cap_item_key(reg.get("capitulo"), reg.get("item_numero"))
+        if not k[1]:
+            return
+        try:
+            cq = float(reg.get("cantidad_total") or 0)
+        except (TypeError, ValueError):
+            cq = 0.0
+        qty_cells[(bloque, fila, col)][k] += cq
+
+    def _acc_reg_en_matriz(bloque: str, reg: dict) -> None:
         for n in na:
             col = _matriz_col_nivel(n)
             if n == n_min:
                 est = _matriz_estado_en_nivel(reg, n)
-                _matriz_acc_cost(Mroot, _fila_estado(est), col, cd)
-                _matriz_acc_cost(Mroot, "habilitado", col, cd)
+                _acc_qty(bloque, _fila_estado(est), col, reg)
+                _acc_qty(bloque, "habilitado", col, reg)
             elif _matriz_prereqs_aprobados(reg, na, n):
                 est = _matriz_estado_en_nivel(reg, n)
-                _matriz_acc_cost(Mroot, _fila_estado(est), col, cd)
-                _matriz_acc_cost(Mroot, "habilitado", col, cd)
+                _acc_qty(bloque, _fila_estado(est), col, reg)
+                _acc_qty(bloque, "habilitado", col, reg)
         if _matriz_estado_en_nivel(reg, n_min) == "Pendiente":
-            _matriz_acc_cost(Mroot, "pendiente_item", _matriz_col_nivel(n_min), cd)
+            _acc_qty(bloque, "pendiente_item", _matriz_col_nivel(n_min), reg)
 
     off = 0
     while True:
         def _batch(o=off):
             q = supabase.table("so_registros").select(
-                f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
+                f"cantidad_total,vlr_unitario,costo_directo,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
                 "capitulo,acta_rpo_id,item_numero"
             ).eq("contrato_id", contrato_id)
             if acta_id_filtro is not None:
@@ -33649,8 +33697,7 @@ def _dashboard_matriz_validacion_por_niveles(
             if not (reg.get("item_numero") or "").strip():
                 continue
             bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
-            Mroot = ens_m if bloque == "ensayos" else obra_m
-            _acc_reg_en_matriz(Mroot, reg)
+            _acc_reg_en_matriz("ensayos" if bloque == "ensayos" else "obra", reg)
 
         if len(batch) < 1000:
             break
@@ -33661,7 +33708,7 @@ def _dashboard_matriz_validacion_por_niveles(
         while True:
             def _bo(o=off):
                 q = supabase.table("so_registros").select(
-                    f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
+                    f"cantidad_total,vlr_unitario,costo_directo,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
                 ).eq("contrato_id", contrato_id)
                 return q.order("id").range(o, o + 999).execute().data
 
@@ -33672,18 +33719,40 @@ def _dashboard_matriz_validacion_por_niveles(
                 aid = reg.get("acta_rpo_id")
                 if aid is not None and aid == acta_id_filtro:
                     continue
-                cd = costo_directo_linea(reg)
                 bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
-                Ox = ens_m if bloque == "ensayos" else obra_m
+                bloq = "ensayos" if bloque == "ensayos" else "obra"
                 for n in na:
                     if not _matriz_prereqs_aprobados(reg, na, n):
                         continue
                     if _matriz_estado_en_nivel(reg, n) == "Pendiente":
                         col = _matriz_col_nivel(n)
-                        _matriz_acc_cost(Ox, "otras_actas", col, cd)
+                        _acc_qty(bloq, "otras_actas", col, reg)
             if len(batch) < 1000:
                 break
             off += 1000
+
+    def _vu_for(k: Tuple[str, str]) -> float:
+        row = listado_idx.get(k) or {}
+        try:
+            v = float(row.get("precio_unitario") or row.get("vlr_unitario") or 0)
+        except (TypeError, ValueError):
+            v = 0.0
+        return v if v > 0 else 0.0
+
+    def _flush_qty_to_matrix() -> None:
+        for (bloque, fila, col), by_item in qty_cells.items():
+            Mroot = ens_m if bloque == "ensayos" else obra_m
+            if fila not in Mroot or col not in Mroot[fila]:
+                continue
+            total = 0.0
+            for k, cant_sum in by_item.items():
+                vu = _vu_for(k)
+                if vu <= 0:
+                    continue
+                total += valor_cant_vu(round_cant(cant_sum), vu)
+            Mroot[fila][col] = float(round(total, 0))
+
+    _flush_qty_to_matrix()
 
     def round_block(m):
         out = {}
@@ -33733,7 +33802,7 @@ def dashboard_matriz_validacion_obra(
     Preferir función SQL dashboard_matriz_validacion_agg (rápido); si no existe, fallback en Python.
     """
     try:
-        matriz_key = ("dashboard_matriz_v3_cd", int(contrato_id), bool(todo_contrato), acta_rpo)
+        matriz_key = ("dashboard_matriz_v4_canon", int(contrato_id), bool(todo_contrato), acta_rpo)
         cached_matriz = _dashboard_response_cache_get(matriz_key)
         if cached_matriz is not None:
             return cached_matriz
@@ -33872,13 +33941,185 @@ def dashboard_matriz_validacion_obra(
             "niveles_activos": niveles_activos,
             "obra_ejecutada_directo_sin_aiu": payload.get("obra_ejecutada_directo_sin_aiu") or _matriz_validacion_empty(niveles_activos),
             "ensayos_sondeos_directo_sin_iva": payload.get("ensayos_sondeos_directo_sin_iva") or _matriz_validacion_empty(niveles_activos),
+            "regla_valor": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem)",
         }
+        try:
+            result["integridad"] = _sicoe_integridad_resumen_contrato(
+                int(contrato_id), acta_id_filtro=acta_id_filtro
+            )
+        except Exception:
+            result["integridad"] = None
         _dashboard_response_cache_set(matriz_key, result)
         return result
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _sicoe_fetch_regs_integridad(
+    contrato_id: int,
+    *,
+    acta_id_filtro: Optional[int] = None,
+) -> List[dict]:
+    cols = (
+        "id, numero_registro, capitulo, item_numero, cantidad_total, "
+        "vlr_unitario, costo_directo, acta_rpo_id"
+    )
+    regs: List[dict] = []
+    off = 0
+    while True:
+        def _b(o=off, _aid=acta_id_filtro):
+            q = (
+                supabase.table("so_registros")
+                .select(cols)
+                .eq("contrato_id", int(contrato_id))
+            )
+            if _aid is not None:
+                q = q.eq("acta_rpo_id", int(_aid))
+            return q.order("id").range(o, o + 999).execute().data
+
+        batch = supabase_execute(_b) or []
+        regs.extend(batch)
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return regs
+
+
+def _sicoe_integridad_resumen_contrato(
+    contrato_id: int,
+    *,
+    acta_id_filtro: Optional[int] = None,
+) -> dict:
+    from sicoe_valor_canonico import (
+        TRAZABILIDAD_PRECIOS_STATUS,
+        auditar_integridad_registros,
+        load_listado_vu_by_cap_item,
+        resumen_integridad,
+        sum_valor_canonico,
+    )
+
+    # Preferir índice ya cacheado del dashboard si existe
+    try:
+        listado_idx = _listado_precios_vu_by_cap_item(int(contrato_id))
+        # Adaptar precio_unitario → vlr_unitario si viene del índice dashboard
+        adapted = {}
+        for k, row in (listado_idx or {}).items():
+            if isinstance(row, dict) and "vlr_unitario" not in row and "precio_unitario" in row:
+                adapted[k] = {
+                    **row,
+                    "vlr_unitario": float(row.get("precio_unitario") or 0),
+                    "capitulo": row.get("capitulo") or k[0],
+                    "item_numero": row.get("item_numero") or k[1],
+                }
+            else:
+                adapted[k] = row
+        listado_idx = adapted
+    except Exception:
+        listado_idx = load_listado_vu_by_cap_item(supabase, int(contrato_id))
+
+    regs = _sicoe_fetch_regs_integridad(contrato_id, acta_id_filtro=acta_id_filtro)
+    incs = auditar_integridad_registros(regs, listado_idx)
+    resumen = resumen_integridad(incs)
+    return {
+        **resumen,
+        "valor_canonico_filtro": sum_valor_canonico(regs, listado_idx),
+        "aviso": (
+            f"{resumen['n_registros_afectados']} registro(s) inconsistentes vs listado "
+            f"(impacto ≈ ${resumen['impacto_plata']:,.0f})."
+            if resumen.get("tiene_inconsistencias")
+            else None
+        ),
+        "trazabilidad_precios": TRAZABILIDAD_PRECIOS_STATUS,
+    }
+
+
+@app.get("/sicoe-obra/{contrato_id}/integridad-listado")
+def sicoe_integridad_listado(
+    contrato_id: int,
+    acta_rpo: Optional[int] = None,
+    todo_contrato: bool = Query(False),
+    current_user=Depends(get_current_user),
+):
+    """
+    Control de integridad registro ↔ listado de precios (sin modificar datos).
+
+    Detecta: sin capítulo/ítem, ausente en listado, VU≠listado, CD≠cant×VU.
+    """
+    from sicoe_valor_canonico import (
+        TRAZABILIDAD_PRECIOS_STATUS,
+        TIPOS_INCONSISTENCIA,
+        auditar_integridad_registros,
+        load_listado_vu_by_cap_item,
+        resumen_integridad,
+        sum_valor_canonico,
+    )
+
+    acta_id_filtro: Optional[int] = None
+    filtro = "todo_contrato"
+    if not todo_contrato and acta_rpo is not None:
+        filtro = "acta"
+
+        def _aid():
+            rows = (
+                supabase.table("actas")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("numero_rpo", acta_rpo)
+                .execute()
+                .data
+            )
+            if rows:
+                return rows[0]["id"]
+            rows = (
+                supabase.table("actas")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("consecutivo", acta_rpo)
+                .execute()
+                .data
+            )
+            return rows[0]["id"] if rows else None
+
+        acta_id_filtro = supabase_execute(_aid)
+
+    listado_idx = load_listado_vu_by_cap_item(supabase, int(contrato_id))
+    # Enriquecer con índice dashboard (mismo shape)
+    try:
+        dash_idx = _listado_precios_vu_by_cap_item(int(contrato_id))
+        for k, row in (dash_idx or {}).items():
+            if k not in listado_idx and isinstance(row, dict):
+                listado_idx[k] = {
+                    **row,
+                    "vlr_unitario": float(row.get("precio_unitario") or row.get("vlr_unitario") or 0),
+                }
+    except Exception:
+        pass
+
+    regs = _sicoe_fetch_regs_integridad(contrato_id, acta_id_filtro=acta_id_filtro)
+    incs = auditar_integridad_registros(regs, listado_idx)
+    resumen = resumen_integridad(incs)
+    return {
+        "contrato_id": int(contrato_id),
+        "filtro": filtro,
+        "acta_rpo": acta_rpo,
+        "acta_id_resuelto": acta_id_filtro,
+        "tipos": list(TIPOS_INCONSISTENCIA),
+        "resumen": resumen,
+        "valor_canonico": sum_valor_canonico(regs, listado_idx),
+        "inconsistencias": [i.to_dict() for i in incs],
+        "aviso": (
+            f"{resumen['n_registros_afectados']} registro(s) con inconsistencias "
+            f"vs listado de precios (impacto ≈ ${resumen['impacto_plata']:,.0f}). "
+            "Los valores canónicos usan VU del listado; los registros sin cruce "
+            "no se suman en silencio — aparecen aquí."
+            if resumen.get("tiene_inconsistencias")
+            else None
+        ),
+        "regla_valor": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem)",
+        "trazabilidad_precios": TRAZABILIDAD_PRECIOS_STATUS,
+    }
 
 
 _NOTIF_EMAIL_VIEWER = {"id": 0, "rol_nombre": "Desarrollador", "cargo_nombre": "Desarrollador"}

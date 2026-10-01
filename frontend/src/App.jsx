@@ -21344,6 +21344,35 @@ const [navReporteId, setNavReporteId] = useState(null)
                   actaFiltroMatriz={actaFiltroMatriz}
                   actasListaMatriz={actasListaMatriz}
                   onActaFiltroChange={setActaFiltroMatriz}
+                  onVerIntegridad={() => {
+                    const cid = contratoIdDash
+                    if (!cid) return
+                    const pm = new URLSearchParams()
+                    if (actaFiltroMatriz === 'all') pm.set('todo_contrato', 'true')
+                    else if (actaFiltroMatriz && actaFiltroMatriz !== 'vigente') pm.set('acta_rpo', String(actaFiltroMatriz))
+                    else if (matrizValidacion?.acta_rpo != null) pm.set('acta_rpo', String(matrizValidacion.acta_rpo))
+                    const tok = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null
+                    fetch(`${API_URL}/sicoe-obra/${cid}/integridad-listado?${pm}`, {
+                      headers: tok ? { Authorization: `Bearer ${tok}` } : {},
+                    })
+                      .then((r) => (r.ok ? r.json() : null))
+                      .then((j) => {
+                        if (!j) return
+                        const lines = (j.inconsistencias || []).slice(0, 40).map(
+                          (i) =>
+                            `#${i.numero_registro ?? i.registro_id} ${i.item_numero || '—'} · ${i.tipo} · $${Number(i.impacto_plata || 0).toLocaleString('es-CO')}`,
+                        )
+                        window.alert(
+                          (j.aviso || 'Integridad listado') +
+                            '\n\n' +
+                            lines.join('\n') +
+                            ((j.inconsistencias || []).length > 40
+                              ? `\n… +${j.inconsistencias.length - 40} más`
+                              : ''),
+                        )
+                      })
+                      .catch(() => {})
+                  }}
                 />
               </div>
               </div>

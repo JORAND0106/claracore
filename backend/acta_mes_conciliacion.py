@@ -354,35 +354,61 @@ def cantidades_actualizadas_contrato(sb, *, contrato_id: int) -> Dict[str, float
 
 
 def precios_vu_contrato(sb, *, contrato_id: int) -> Dict[str, float]:
-    """Mapa item_numero → precio_unitario del listado de precios del contrato."""
+    """Mapa item_numero → precio_unitario del listado (compat). Preferir by_cap_item."""
     meta = csc.meta_listado_contrato(sb, contrato_id=contrato_id)
     return {k: _sf(v.get("vlr_unitario")) for k, v in meta.items() if _sf(v.get("vlr_unitario")) > 0}
+
+
+def precios_vu_contrato_by_cap_item(sb, *, contrato_id: int):
+    """Índice (cap, ítem) → VU listado — fuente canónica de valor."""
+    return csc.meta_listado_contrato_by_cap_item(sb, contrato_id=int(contrato_id))
 
 
 def aplicar_precios_contrato_a_items(
     items: List[dict],
     vu_por_item: Dict[str, float],
+    *,
+    meta_by_cap_item: Optional[Dict] = None,
 ) -> Tuple[List[dict], List[str]]:
-    """Sobrescribe vlr_unitario con listado del contrato; recalcula costo_directo = cant×VU."""
+    """
+    Sobrescribe vlr_unitario con listado del contrato; recalcula costo_directo = cant×VU.
+
+    Preferencia de VU:
+      1. listado (capítulo, ítem) si ``meta_by_cap_item``;
+      2. listado por ítem solo (``vu_por_item``) — legacy;
+      3. stamp del registro.
+    """
+    from sicoe_valor_canonico import cap_item_key
+
     sin_precio: List[str] = []
     out: List[dict] = []
     for it in items or []:
         row = dict(it)
         k = item_key(row.get("item_numero"))
         stamped = _sf(row.get("vlr_unitario"))
-        pactado = _sf(vu_por_item.get(k)) if k in (vu_por_item or {}) else 0.0
-        if pactado > 0:
-            vu = pactado
-            row["precio_fuente"] = "listado_precios"
-        elif stamped > 0:
+        vu = 0.0
+        fuente = None
+        if meta_by_cap_item:
+            ck = cap_item_key(row.get("capitulo"), row.get("item_numero"))
+            meta = meta_by_cap_item.get(ck) or {}
+            vu_cap = _sf(meta.get("vlr_unitario"))
+            if vu_cap > 0:
+                vu = vu_cap
+                fuente = "listado_precios_cap_item"
+        if vu <= 0:
+            pactado = _sf(vu_por_item.get(k)) if k in (vu_por_item or {}) else 0.0
+            if pactado > 0:
+                vu = pactado
+                fuente = "listado_precios"
+        if vu <= 0 and stamped > 0:
             vu = stamped
-            row["precio_fuente"] = "stamp_registro"
-        else:
-            vu = 0.0
-            row["precio_fuente"] = None
+            fuente = "stamp_registro"
+        if vu <= 0:
+            fuente = None
             row["sin_precio"] = True
             if k and k != "SIN_ITEM":
                 sin_precio.append(str(row.get("item_numero") or k))
+        row["precio_fuente"] = fuente
         row["vlr_unitario"] = vu
         row["vlr_unitario_sub"] = vu  # enriquecer_items_bloques lee vlr_unitario_sub
         row["sin_precio"] = bool(row.get("sin_precio")) or vu <= 0
