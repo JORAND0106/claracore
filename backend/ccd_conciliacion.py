@@ -354,7 +354,7 @@ def fetch_registros_memoria_conciliacion(
     n3v = _n3_in_aprob_interventoria()
     campo_mx, _niveles_mx = matriz_params_contrato(sb, int(contrato_id))
     sel = (
-        "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
+        "id, reporte_id, numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
         "infraestructura, enlace_soporte, longitud, ancho, espesor, "
         "cantidad, cantidad_total, observacion, foto_url, foto_numero, grafico_url, grafico_numero, "
         "graficos_historial, capitulo, item_numero, item_descripcion, unidad, tramo, "
@@ -391,6 +391,7 @@ def fetch_registros_memoria_conciliacion(
         raw = _overlay_sicoe_meta_vivo(int(contrato_id), raw)
     except Exception as exc:
         _log.warning("memoria conc: meta vivo listado (%s)", exc)
+    raw = overlay_enlace_soporte_desde_reporte(sb, raw or [])
     if acta_rpo_id is not None:
         return _aplicar_regla_bloqueado_por_acta(raw)
     if semana_id is not None:
@@ -557,13 +558,78 @@ def registro_tiene_pendiente_matriz(r: Dict[str, Any]) -> bool:
 
 
 _SEL_MEMORIA_CC_MES = (
-    "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
+    "id, reporte_id, numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
     "infraestructura, enlace_soporte, longitud, ancho, espesor, "
     "cantidad, cantidad_total, observacion, foto_url, foto_numero, grafico_url, grafico_numero, "
     "graficos_historial, item_numero, item_descripcion, unidad, tramo, "
     "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
     "bloqueado, acta_rpo_id, semana_id, costo_directo, vlr_unitario, capitulo"
 )
+
+
+def _chunks_ids(ids: List[int], size: int = 200):
+    for i in range(0, len(ids), size):
+        yield ids[i : i + size]
+
+
+def overlay_enlace_soporte_desde_reporte(sb, registros: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Columna Enlace de memorias (SEM/MES/SUB-002): fuente = ``so_reportes.enlace_soporte``.
+
+    Evidencia del vacío histórico: los fetch de memoria leían ``so_registros.enlace_soporte``,
+    pero la biblioteca de soportes se carga en el **reporte** (SicoeObra → reporte.enlace_soporte).
+    Ese campo en el registro suele estar null/[] → celda Enlace en blanco en PDF/Excel/preview.
+
+    Sella ``enlace_soporte`` de cada registro con el del reporte al que pertenece
+    (mismo valor para todos los registros del mismo reporte_id). Si el reporte no tiene
+    enlaces, deja la celda vacía (no inventa URLs del registro).
+    """
+    if not registros:
+        return registros
+    rid_set = set()
+    for r in registros:
+        rid = r.get("reporte_id")
+        if rid is None or rid == "":
+            continue
+        try:
+            rid_set.add(int(rid))
+        except (TypeError, ValueError):
+            continue
+    if not rid_set:
+        return registros
+
+    by_rep: Dict[int, Any] = {}
+    try:
+        for chunk in _chunks_ids(sorted(rid_set), 200):
+            rows = (
+                sb.table("so_reportes")
+                .select("id, enlace_soporte")
+                .in_("id", chunk)
+                .execute()
+                .data
+            ) or []
+            for row in rows:
+                try:
+                    by_rep[int(row["id"])] = row.get("enlace_soporte")
+                except (TypeError, ValueError, KeyError):
+                    continue
+    except Exception as exc:
+        _log.warning("overlay_enlace_soporte_desde_reporte: %s", exc)
+        return registros
+
+    for r in registros:
+        rid = r.get("reporte_id")
+        if rid is None or rid == "":
+            continue
+        try:
+            key = int(rid)
+        except (TypeError, ValueError):
+            continue
+        if key not in by_rep:
+            continue
+        r["enlace_soporte"] = by_rep[key]
+        r["enlace_soporte_fuente"] = "so_reportes"
+    return registros
 
 
 def fetch_registros_memoria_cc_mes_acta_todos(
@@ -611,7 +677,7 @@ def fetch_registros_memoria_cc_mes_acta_todos(
     for r in raw or []:
         if _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
             out.append(r)
-    return out
+    return overlay_enlace_soporte_desde_reporte(sb, out)
 
 
 def group_registros_memoria_por_item(
@@ -682,7 +748,7 @@ def fetch_registros_memoria_cc_mes_alineado_acta(
     for r in raw or []:
         if _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
             out.append(r)
-    return out
+    return overlay_enlace_soporte_desde_reporte(sb, out)
 
 
 def suma_por_capitulo_desde_registros(registros: List[Dict[str, Any]]) -> Dict[str, float]:
