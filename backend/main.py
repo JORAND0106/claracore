@@ -15900,6 +15900,161 @@ def admin_diagnostico_plataforma(current_user=Depends(require_solo_desarrollador
     return out
 
 
+@app.get("/logs/export.xlsx")
+def export_logs_xlsx(
+    usuario_id:  Optional[int] = None,
+    modulo:      Optional[str] = None,
+    accion:      Optional[str] = None,
+    categoria:   Optional[str] = None,
+    severidad:   Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    excluir_accion: Optional[str] = None,
+    excluir_rutina_auth: bool = Query(False),
+    excluir_modulo: Optional[str] = None,
+    contrato_id: Optional[int] = None,
+    max_rows:    int = 5000,
+    current_user=Depends(require_logs_auditoria),
+):
+    """
+    Informe Excel de logs: encabezado institucional (logo ClaraCore + contrato),
+    bloque del usuario filtrado (si aplica), grilla filtrada y gráfico de barras
+    de actividad por día (openpyxl BarChart).
+    """
+    from logs_export_xlsx import (
+        build_filtros_resumen,
+        build_logs_informe_xlsx,
+    )
+
+    cap = min(max(max_rows, 1), 20000)
+    excluir_acciones = None
+    if excluir_rutina_auth and not accion:
+        excluir_acciones = ["LOGIN", "LOGIN_FAIL"]
+    q = _logs_query_base(
+        usuario_id=usuario_id,
+        modulo=modulo,
+        accion=accion,
+        categoria=categoria,
+        severidad=severidad,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        excluir_accion=excluir_accion if not excluir_acciones else None,
+        excluir_acciones=excluir_acciones,
+        excluir_modulo=excluir_modulo,
+    )
+    rows = _sort_logs_rows(q.limit(cap).execute().data or [])
+
+    caller_cid, _ = _caller_contract_scope(current_user)
+    cid_meta = contrato_id or caller_cid
+    contrato_meta = _xlsx_load_contrato_export_meta(int(cid_meta)) if cid_meta else {
+        "numero": "",
+        "objeto": "",
+        "contratista": "",
+        "interventoria": "",
+        "logo_contratista": "",
+        "logo_interventoria": "",
+        "logo_entidad": "",
+    }
+
+    usuario_filtrado = None
+    usuario_nombre_filtro = None
+    if usuario_id:
+        try:
+            urows = (
+                supabase.table("usuarios")
+                .select("id, nombre, apellidos, email, cargo_id, rol_id, contrato_id")
+                .eq("id", int(usuario_id))
+                .limit(1)
+                .execute()
+                .data
+            )
+            u = urows[0] if urows else None
+            if u:
+                cargo_n = ""
+                rol_n = ""
+                if u.get("cargo_id"):
+                    cr = (
+                        supabase.table("cargos")
+                        .select("nombre")
+                        .eq("id", u["cargo_id"])
+                        .limit(1)
+                        .execute()
+                        .data
+                    )
+                    cargo_n = ((cr[0] if cr else {}) or {}).get("nombre") or ""
+                if u.get("rol_id"):
+                    rr = (
+                        supabase.table("roles")
+                        .select("nombre")
+                        .eq("id", u["rol_id"])
+                        .limit(1)
+                        .execute()
+                        .data
+                    )
+                    rol_n = ((rr[0] if rr else {}) or {}).get("nombre") or ""
+                cnum = ""
+                if u.get("contrato_id"):
+                    cm = _xlsx_load_contrato_export_meta(int(u["contrato_id"]))
+                    cnum = cm.get("numero") or ""
+                nombre = f"{u.get('nombre', '')} {u.get('apellidos', '')}".strip() or f"Usuario {usuario_id}"
+                usuario_nombre_filtro = nombre
+                usuario_filtrado = {
+                    "id": u.get("id"),
+                    "nombre": nombre,
+                    "cargo": cargo_n or "—",
+                    "rol": rol_n or "—",
+                    "email": (u.get("email") or "").strip() or "—",
+                    "contrato_numero": cnum or "—",
+                }
+        except Exception:
+            usuario_filtrado = {"id": usuario_id, "nombre": f"Usuario {usuario_id}", "cargo": "—", "rol": "—", "email": "—", "contrato_numero": "—"}
+            usuario_nombre_filtro = usuario_filtrado["nombre"]
+
+    try:
+        uid = int(current_user.get("sub"))
+        me = (
+            supabase.table("usuarios")
+            .select("nombre, apellidos")
+            .eq("id", uid)
+            .limit(1)
+            .execute()
+            .data
+        )
+        descargado_por = (
+            f"{(me[0].get('nombre') if me else '')} {(me[0].get('apellidos') if me else '')}".strip()
+            or current_user.get("email")
+            or f"Usuario {uid}"
+        )
+    except Exception:
+        descargado_por = str(current_user.get("email") or current_user.get("sub") or "Usuario")
+
+    filtros = build_filtros_resumen(
+        usuario_nombre=usuario_nombre_filtro,
+        modulo=modulo,
+        accion=accion,
+        categoria=categoria,
+        severidad=severidad,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        excluir_rutina_auth=bool(excluir_rutina_auth),
+    )
+    payload = build_logs_informe_xlsx(
+        rows,
+        contrato_meta=contrato_meta,
+        usuario_filtrado=usuario_filtrado,
+        filtros_resumen=filtros,
+        accion_filtro=accion,
+        descargado_por=descargado_por,
+    )
+    stamp = datetime.now(pytz.timezone("America/Bogota")).strftime("%Y%m%d_%H%M")
+    filename = f"claracore_logs_{stamp}.xlsx"
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/logs/export.csv")
 def export_logs_csv(
     usuario_id:  Optional[int] = None,
@@ -15915,7 +16070,7 @@ def export_logs_csv(
     max_rows:    int = 5000,
     current_user=Depends(require_logs_auditoria),
 ):
-    """Exportación CSV para interventoría / auditoría externa."""
+    """Exportación CSV legacy (conservada). Preferir /logs/export.xlsx."""
     cap = min(max(max_rows, 1), 20000)
     excluir_acciones = None
     if excluir_rutina_auth and not accion:

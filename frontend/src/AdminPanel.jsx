@@ -1835,7 +1835,7 @@ function SeccionInicioNovedades({ call, theme, token, isDeveloper, user, contrat
 }
 
 // ─── SECCIÓN LOGS ─────────────────────────────────────────────────────────────
-function SeccionLogs({ call, theme }) {
+function SeccionLogs({ call, theme, user = null }) {
   const col = C(theme)
   const token = localStorage.getItem("cc_token") || sessionStorage.getItem("cc_token")
 
@@ -1990,27 +1990,30 @@ function SeccionLogs({ call, theme }) {
           if (filtDesde)   params.set("fecha_desde", filtDesde)
           if (filtHasta)   params.set("fecha_hasta", filtHasta)
           if (filtOcultarLogin && !filtAccion) params.set("excluir_rutina_auth", "true")
+          if (user?.contrato_id) params.set("contrato_id", String(user.contrato_id))
           try {
-            const r = await fetch(`${API}/logs/export.csv?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+            const r = await fetch(`${API}/logs/export.xlsx?${params}`, { headers: { Authorization: `Bearer ${token}` } })
             if (!r.ok) return
             const blob = await r.blob()
             const url = URL.createObjectURL(blob)
             const a = document.createElement("a")
             a.href = url
-            a.download = "claracore_logs.csv"
+            const cd = r.headers.get("content-disposition") || ""
+            const m = cd.match(/filename="?([^";]+)"?/i)
+            a.download = m?.[1] || "claracore_logs.xlsx"
             a.click()
             URL.revokeObjectURL(url)
           } catch { /* ignore */ }
         }}
           style={{ background:"#10B98122", border:"1px solid #10B98166", borderRadius:6, padding:"5px 12px", color:"#10B981", fontSize:11, fontWeight:700, cursor:"pointer" }}>
-          ⬇ CSV
+          ⬇ Excel
         </button>
         <span style={{ marginLeft:"auto", fontSize:12, color: col.textMuted, alignSelf:"center" }}>
           {logs.length} registros · click para ver historial
         </span>
         <div style={{ width:"100%", fontSize:11, color: col.textMuted, lineHeight:1.45, opacity:0.95 }}>
           Si solo ves filas AUTH/LOGIN, suele ser porque hay muchos accesos recientes. Deja activa la casilla de arriba o usa un atajo; validaciones de obra van en módulo <strong style={{ color: col.textTable }}>SICOE</strong>.
-          {" "}Si las fechas parecen viejas con un usuario concreto, prueba sin filtro de usuario o exporta CSV: a veces el mismo correo tiene más de una fila en «usuarios» y el <code style={{ fontSize:10 }}>usuario_id</code> del log no coincide con el del desplegable.
+          {" "}Si las fechas parecen viejas con un usuario concreto, prueba sin filtro de usuario o exporta Excel: a veces el mismo correo tiene más de una fila en «usuarios» y el <code style={{ fontSize:10 }}>usuario_id</code> del log no coincide con el del desplegable.
         </div>
         <div style={{ width:"100%", display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
           <span style={{ fontSize:11, color: col.textMuted, marginRight:4 }}>Atajos:</span>
@@ -8261,7 +8264,7 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
                 contratos={contratosVisibles}
               />
             )}
-              {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
+              {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} user={user} />}
               {tab === "diagnostico" && <SeccionDiagnosticoPlataforma call={call} theme={activeTheme} />}
               {tab === "licencias-claracad" && <SeccionLicenciasClaraCAD call={call} theme={activeTheme} />}
               {tab === "almacenamiento" && <SeccionAlmacenamientoAzure call={call} theme={activeTheme} />}
