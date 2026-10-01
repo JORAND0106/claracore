@@ -145,10 +145,14 @@ function AlmacenLayout({ permisos, token, t, compact, usuario, activeTheme = nul
 
   const cssVars = useMemo(() => buildAlmacenCssVars(t), [t])
 
+  /**
+   * Permisos crudos de Almacén para el panel/formulario.
+   * NO sobrescribir `crear` con ver∧crear: eso apagaba Guardar/Solicitar aprobación
+   * y Anular tras el primer guardado. La regla Ver+Crear aplica solo a «Nueva solicitud».
+   */
   const solicitudesPerms = useMemo(() => ({
     ...almacenPerms,
-    // Crear solicitud exige Ver + Crear en Almacén.
-    crear: puedeCrearSolicitudAlmacen(almacenPerms),
+    puedeNuevaSolicitud: puedeCrearSolicitudAlmacen(almacenPerms),
   }), [almacenPerms])
 
   if (vistaCatalogo && puedeVerCatalogo) {

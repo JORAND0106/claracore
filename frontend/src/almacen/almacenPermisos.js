@@ -237,12 +237,22 @@ export function puedeCrearSolicitudAlmacen(permisos) {
 
 /**
  * Enviar / reenviar solicitud a aprobación: basta Crear o Editar en Almacén.
- * No exige Editar — un usuario con solo Ver+Crear debe poder sacar el borrador.
+ * No exige Editar — un usuario con Crear (aunque Ver venga en otro flag) puede sacar el borrador.
+ *
+ * Si ya hay id pero el estado aún no llegó del GET, se asume borrador editable
+ * (evita ocultar el botón un frame tras «Guardar borrador»).
  */
 export function puedeEnviarSolicitudAlmacen(permisos, sol = null, { modoReabrirOc = false, solicitudId = null } = {}) {
   if (modoReabrirOc) return false
   if (!permisos?.crear && !permisos?.editar) return false
-  const id = solicitudId ?? sol?.id
-  if (!id) return Boolean(permisos?.crear || permisos?.editar)
-  return ['borrador', 'rechazada'].includes(sol?.estado)
+  const id = solicitudId ?? sol?.id ?? null
+  if (!id) return true
+  const estado = sol?.estado
+  if (estado == null || estado === '') return true
+  return estado === 'borrador' || estado === 'rechazada'
+}
+
+/** Guardar borrador / editar líneas: Crear o Editar. */
+export function puedeEditarSolicitudFormAlmacen(permisos) {
+  return Boolean(permisos?.crear || permisos?.editar)
 }
