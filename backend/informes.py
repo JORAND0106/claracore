@@ -11829,8 +11829,8 @@ def _fn_cant(n):
 
 def _fn_cant_informe(n):
     """
-    Cantidades del cuadro CC-SUB/MES: entero → sin decimales; si no → 2 decimales.
-    (Regla de presentación de la plataforma para estos informes.)
+    Cantidades del cuadro CC-SUB/MES: siempre 2 decimales (p. ej. 6.00).
+    Alineado a la regla única de cálculo y al formato Excel.
     """
     if n is None or n == "":
         return "—"
@@ -11840,22 +11840,19 @@ def _fn_cant_informe(n):
             return "—"
         if math.isinf(x):
             return "> max" if x > 0 else "< min"
-        if abs(x - round(x)) < 1e-9:
-            return f"{int(round(x)):,}"
-        return f"{x:,.2f}"
+        return f"{round(x, 2):,.2f}"
     except Exception:
         return str(n)
 
 
-def _excel_num_format_cant_informe(n: Any) -> str:
-    """Number format Excel alineado a ``_fn_cant_informe``."""
-    try:
-        x = float(n)
-        if math.isfinite(x) and abs(x - round(x)) < 1e-9:
-            return "#,##0"
-    except (TypeError, ValueError):
-        pass
+def _excel_num_format_cant_informe(n: Any = None) -> str:
+    """Cantidades de informe en Excel: siempre 2 decimales."""
     return "#,##0.00"
+
+
+_EXCEL_NUM_FMT_DIM = "0.000"  # longitud / ancho / espesor / cant unitaria memorias
+_EXCEL_NUM_FMT_CANT = "#,##0.00"  # Cant. Total y cantidades de bloques
+_EXCEL_NUM_FMT_MONEY = '"$"#,##0.00'  # valores Round0 mostrados con .00
 
 def _sf(n, default=0.0):
     """Convierte a float sin romper el endpoint (strings, comas, vacíos)."""
@@ -12390,29 +12387,23 @@ def _excel_num_or_blank(v: Any) -> Optional[float]:
 
 
 def _excel_formula_cantidad_total(row: int) -> str:
-    """CANT TOT = L×A×E[×C] (cols D–G) con vacíos=1 y redondeo dinámico (2 dp si ≥0.10, si no 3)."""
+    """CANT TOT = L×A×E[×C] (cols D–G) con vacíos=1, redondeo a 2 dp (regla informe)."""
     d, e, f, g = f"D{row}", f"E{row}", f"F{row}", f"G{row}"
     prod = f'IF({d}="",1,{d})*IF({e}="",1,{e})*IF({f}="",1,{f})*IF({g}="",1,{g})'
-    return (
-        f'=IF(AND({d}="",{e}="",{f}="",{g}=""),0,'
-        f'IF(ROUND({prod},2)>=0.1,ROUND({prod},2),ROUND({prod},3)))'
-    )
+    return f'=IF(AND({d}="",{e}="",{f}="",{g}=""),0,ROUND({prod},2))'
 
 
 def _excel_formula_redondeo_cant_ref(cant_ref: str) -> str:
-    """Misma regla de redondeo dinámico de plataforma sobre una celda de cantidad."""
-    return (
-        f'IF(ROUND({cant_ref},2)>=0.1,ROUND({cant_ref},2),ROUND({cant_ref},3))'
-    )
+    """Cantidad de informe: ROUND a 2 dp."""
+    return f"ROUND({cant_ref},2)"
 
 
 def _excel_formula_valor_cant_vu(cant_ref: str, vu_ref: str) -> str:
-    """Valor = cantidad × VU, redondeado a 0 dp (alineado a valor_por_cantidad_vu).
-
-    La cantidad de celda ya es la suma de ``cantidad_total`` por registro; no se
-    re-aplica redondeo dinámico sobre el agregado (misma regla que SicoeObra sumCant).
-    """
-    return f'=IF(OR({vu_ref}="",{cant_ref}=""),0,ROUND({cant_ref}*{vu_ref},0))'
+    """Valor = ROUND(ROUND(cantidad,2)×VU, 0) — misma regla que valor_por_cantidad_vu."""
+    return (
+        f'=IF(OR({vu_ref}="",{cant_ref}=""),0,'
+        f"ROUND(ROUND({cant_ref},2)*{vu_ref},0))"
+    )
 
 
 def _parse_abscisa_metros_memoria(val: Any) -> Optional[float]:
@@ -13103,10 +13094,14 @@ def _fill_memoria_excel_ws(
                 cell = ws.cell(row=row, column=col, value=v)
                 cell.border = bd
                 cell.font = Font(size=8)
-                if col in (4, 5, 6, 7, 8):
+                if col in (4, 5, 6, 7):
+                    # Dimensiones: siempre 3 decimales (1.000)
                     cell.alignment = Alignment(horizontal="right", vertical="center")
-                    if col == 8:
-                        cell.number_format = "0.000"
+                    cell.number_format = _EXCEL_NUM_FMT_DIM
+                elif col == 8:
+                    # Cant. Total: siempre 2 decimales (6.00)
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    cell.number_format = _EXCEL_NUM_FMT_CANT
                 elif col == 10:
                     cell.alignment = Alignment(wrap_text=True, vertical="top")
                 else:
@@ -13136,7 +13131,7 @@ def _fill_memoria_excel_ws(
         c_sub = ws.cell(row=row, column=8, value=_excel_sum_rows_formula("H", tramo_rows))
         c_sub.font = Font(bold=True, size=8)
         c_sub.alignment = Alignment(horizontal="right", vertical="center")
-        c_sub.number_format = "0.000"
+        c_sub.number_format = _EXCEL_NUM_FMT_CANT
         c_sub.border = bd
         c_sub.fill = fill_sub
         c_und = ws.cell(row=row, column=9, value=unidad_item or None)
@@ -13159,7 +13154,7 @@ def _fill_memoria_excel_ws(
     c_tot = ws.cell(row=tot_r, column=8, value=tot_formula)
     c_tot.font = Font(bold=True, size=9)
     c_tot.alignment = Alignment(horizontal="right")
-    c_tot.number_format = "0.000"
+    c_tot.number_format = _EXCEL_NUM_FMT_CANT
     c_tot.border = bd
     c_tot.fill = fill_tot
     c_lab = ws.cell(row=tot_r, column=1)
@@ -13867,6 +13862,8 @@ def _fill_corte_sub_001_excel_ws(
     act_valor_rows: List[int] = []
     acum_valor_rows: List[int] = []
     saldo_valor_rows: List[int] = []
+    # Filas de subtotal por capítulo (Costo Directo = suma de estas, no de ítems)
+    cap_subtotal_rows: List[int] = []
     # Filas de ítem del capítulo en curso (para fórmulas de subtotal)
     cap_item_rows: List[int] = []
     row = data0
@@ -13884,12 +13881,7 @@ def _fill_corte_sub_001_excel_ws(
                 ws.cell(row=row, column=col).border = bd
                 ws.cell(row=row, column=col).fill = fill_cap_sub
 
-            def _sub_sum(letter: str, item_rows: List[int], fallback: float) -> object:
-                if item_rows:
-                    return "=" + "+".join(f"{letter}{r}" for r in item_rows)
-                return float(fallback or 0)
-
-            # Cant vacías + Valor formulado por bloque
+            # Cant vacías + Valor = SUM(rango) de ítems del capítulo (nunca celda+celda)
             for col, letter, rows, key in (
                 (5, None, None, None),
                 (6, "F", cap_item_rows, "valor_actualizadas"),
@@ -13904,12 +13896,17 @@ def _fill_corte_sub_001_excel_ws(
                 cell.border = bd
                 cell.fill = fill_cap_sub
                 if letter and rows is not None:
-                    cell.value = _sub_sum(letter, rows, _sums.get(key) or 0)
-                    cell.number_format = '"$"#,##0'
+                    cell.value = (
+                        _excel_sum_rows_formula(letter, rows)
+                        if rows
+                        else float(_sums.get(key) or 0)
+                    )
+                    cell.number_format = _EXCEL_NUM_FMT_MONEY
                     cell.font = Font(size=7, bold=True)
                     cell.alignment = Alignment(horizontal="right", vertical="center")
                 else:
                     cell.value = None
+            cap_subtotal_rows.append(row)
             cap_item_rows = []
             row += 1
             continue
@@ -13922,9 +13919,9 @@ def _fill_corte_sub_001_excel_ws(
         bg = "FEF3C7" if sin_p else (row_even if idx % 2 == 0 else row_odd)
         fill = PatternFill("solid", fgColor=bg)
 
-        cant_act = _excel_num_or_blank(it.get("cant_actualizadas", it.get("cantidad"))) or 0.0
-        cant_pres = _excel_num_or_blank(it.get("cant_presente", it.get("cantidad"))) or 0.0
-        cant_ant = _excel_num_or_blank(it.get("cant_acum_anterior")) or 0.0
+        cant_act = float(round(_excel_num_or_blank(it.get("cant_actualizadas", it.get("cantidad"))) or 0.0, 2))
+        cant_pres = float(round(_excel_num_or_blank(it.get("cant_presente", it.get("cantidad"))) or 0.0, 2))
+        cant_ant = float(round(_excel_num_or_blank(it.get("cant_acum_anterior")) or 0.0, 2))
         vu_num = _excel_num_or_blank(it.get("vlr_unitario_sub"))
         if sin_p or vu_num is None:
             vu_num = 0.0
@@ -13946,11 +13943,11 @@ def _fill_corte_sub_001_excel_ws(
         c_e = ws.cell(row=row, column=5, value=cant_act)
         c_e.border = bd; c_e.font = Font(size=7); c_e.fill = fill
         c_e.alignment = Alignment(horizontal="right", vertical="center")
-        c_e.number_format = _excel_num_format_cant_informe(cant_act)
+        c_e.number_format = _EXCEL_NUM_FMT_CANT
 
         c_f = ws.cell(row=row, column=6, value=_excel_formula_valor_cant_vu(f"E{row}", f"D{row}"))
         c_f.border = bd; c_f.font = Font(size=7); c_f.fill = fill
-        c_f.alignment = Alignment(horizontal="right", vertical="center"); c_f.number_format = '"$"#,##0'
+        c_f.alignment = Alignment(horizontal="right", vertical="center"); c_f.number_format = _EXCEL_NUM_FMT_MONEY
         act_valor_rows.append(row)
 
         c_g = ws.cell(row=row, column=7, value=cant_pres)
@@ -13958,34 +13955,34 @@ def _fill_corte_sub_001_excel_ws(
         if link and link.get("sheet") and link.get("tot_row"):
             # Presente cant (G) ← total col H de la pestaña de memoria del ítem
             sh = str(link["sheet"]).replace("'", "''")
-            c_g.value = f"='{sh}'!H{int(link['tot_row'])}"
+            c_g.value = f"=ROUND('{sh}'!H{int(link['tot_row'])},2)"
         c_g.border = bd; c_g.font = Font(size=7); c_g.fill = fill
         c_g.alignment = Alignment(horizontal="right", vertical="center")
-        c_g.number_format = _excel_num_format_cant_informe(cant_pres)
+        c_g.number_format = _EXCEL_NUM_FMT_CANT
 
         c_h = ws.cell(row=row, column=8, value=_excel_formula_valor_cant_vu(f"G{row}", f"D{row}"))
         c_h.border = bd; c_h.font = Font(size=7); c_h.fill = fill
-        c_h.alignment = Alignment(horizontal="right", vertical="center"); c_h.number_format = '"$"#,##0'
+        c_h.alignment = Alignment(horizontal="right", vertical="center"); c_h.number_format = _EXCEL_NUM_FMT_MONEY
         presente_valor_rows.append(row)
 
-        c_i = ws.cell(row=row, column=9, value=f"=G{row}+{cant_ant}")
+        c_i = ws.cell(row=row, column=9, value=f"=ROUND(G{row}+{cant_ant},2)")
         c_i.border = bd; c_i.font = Font(size=7); c_i.fill = fill
         c_i.alignment = Alignment(horizontal="right", vertical="center")
-        c_i.number_format = "#,##0.##"
+        c_i.number_format = _EXCEL_NUM_FMT_CANT
 
         c_j = ws.cell(row=row, column=10, value=_excel_formula_valor_cant_vu(f"I{row}", f"D{row}"))
         c_j.border = bd; c_j.font = Font(size=7); c_j.fill = fill
-        c_j.alignment = Alignment(horizontal="right", vertical="center"); c_j.number_format = '"$"#,##0'
+        c_j.alignment = Alignment(horizontal="right", vertical="center"); c_j.number_format = _EXCEL_NUM_FMT_MONEY
         acum_valor_rows.append(row)
 
-        c_k = ws.cell(row=row, column=11, value=f"=E{row}-I{row}")
+        c_k = ws.cell(row=row, column=11, value=f"=ROUND(E{row}-I{row},2)")
         c_k.border = bd; c_k.font = Font(size=7); c_k.fill = fill
         c_k.alignment = Alignment(horizontal="right", vertical="center")
-        c_k.number_format = "#,##0.##"
+        c_k.number_format = _EXCEL_NUM_FMT_CANT
 
         c_l = ws.cell(row=row, column=12, value=_excel_formula_valor_cant_vu(f"K{row}", f"D{row}"))
         c_l.border = bd; c_l.font = Font(size=7); c_l.fill = fill
-        c_l.alignment = Alignment(horizontal="right", vertical="center"); c_l.number_format = '"$"#,##0'
+        c_l.alignment = Alignment(horizontal="right", vertical="center"); c_l.number_format = _EXCEL_NUM_FMT_MONEY
         saldo_valor_rows.append(row)
 
         cap_item_rows.append(row)
@@ -14003,11 +14000,11 @@ def _fill_corte_sub_001_excel_ws(
         emp.border = bd
         tot_r += 1
 
-    # Costo Directo vive solo en el resumen (suma SOLO filas de ítem, no subtotales).
+    # Costo Directo = suma de subtotales por capítulo (no suma celda a celda de ítems).
 
     def _sum_formula(rows: List[int], col_letter: str, fallback: float) -> object:
         if rows:
-            return "=" + "+".join(f"{col_letter}{r}" for r in rows)
+            return _excel_sum_rows_formula(col_letter, rows)
         return float(fallback or 0)
 
     # ── Resumen 4 columnas ──────────────────────────────────────────────────
@@ -14071,7 +14068,7 @@ def _fill_corte_sub_001_excel_ws(
         cell.font = Font(size=7, bold=bold, color=color or "000000")
         cell.alignment = Alignment(horizontal="right", vertical="center")
         if isinstance(value, (int, float)) or (isinstance(value, str) and value.startswith("=")):
-            cell.number_format = '"$"#,##0'
+            cell.number_format = _EXCEL_NUM_FMT_MONEY
         if fill:
             cell.fill = fill
         return cell
@@ -14116,11 +14113,11 @@ def _fill_corte_sub_001_excel_ws(
         row_by_key[key] = cur
 
         if key == "cd":
-            # Solo filas de ítem (nunca subtotales de capítulo)
+            # Suma de subtotales por capítulo (no suma celda a celda de ítems)
             formulas = {
-                6: _sum_formula(act_valor_rows, "F", cds.get("actualizadas") or 0),
-                8: _sum_formula(presente_valor_rows, "H", cds.get("presente") or total_costo or 0),
-                10: _sum_formula(acum_valor_rows, "J", cds.get("acumulado") or 0),
+                6: _sum_formula(cap_subtotal_rows, "F", cds.get("actualizadas") or 0),
+                8: _sum_formula(cap_subtotal_rows, "H", cds.get("presente") or total_costo or 0),
+                10: _sum_formula(cap_subtotal_rows, "J", cds.get("acumulado") or 0),
                 12: f"=F{cur}-J{cur}",
             }
         elif key in ("a", "i", "u"):
@@ -14233,7 +14230,7 @@ def _fill_corte_sub_001_excel_ws(
                     cell = ws.cell(row=cur, column=col, value="—" if col != 8 else float(oc.get("costo_total") or 0))
                     cell.border = bd
                     if col == 8:
-                        cell.number_format = '"$"#,##0'
+                        cell.number_format = _EXCEL_NUM_FMT_MONEY
                         cell.alignment = Alignment(horizontal="right", vertical="center")
                         cell.font = Font(size=7)
                     else:
@@ -14499,11 +14496,11 @@ def _fill_cc_conc_001_excel_ws(
                     elif col in (5, 6, 7):
                         cell.alignment = Alignment(horizontal="right", vertical="center")
                         if link and col == 5:
-                            cell.number_format = '#,##0.00'
+                            cell.number_format = "#,##0.00"  # VU
                         if link and col == 6:
-                            cell.number_format = "0.000"
+                            cell.number_format = _EXCEL_NUM_FMT_CANT  # cantidad
                         if link and col == 7:
-                            cell.number_format = '"$"#,##0'
+                            cell.number_format = _EXCEL_NUM_FMT_MONEY
                     else:
                         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 if link:
@@ -14522,9 +14519,9 @@ def _fill_cc_conc_001_excel_ws(
             cs1.border = bd
             ws.merge_cells(start_row=row, start_column=6, end_row=row, end_column=7)
             if use_formulas and cap_cost_rows:
-                sub_formula = "=" + "+".join(f"G{r}" for r in cap_cost_rows)
+                sub_formula = _excel_sum_rows_formula("G", cap_cost_rows)
                 cs2 = ws.cell(row=row, column=6, value=sub_formula)
-                cs2.number_format = '"$"#,##0'
+                cs2.number_format = _EXCEL_NUM_FMT_MONEY
             else:
                 cs2 = ws.cell(row=row, column=6, value=_fm(sub_sum))
             cs2.font = Font(bold=True, size=9)
@@ -14544,9 +14541,11 @@ def _fill_cc_conc_001_excel_ws(
     s1.border = bd
     ws.merge_cells(start_row=st_r, start_column=6, end_row=st_r, end_column=7)
     if use_formulas and costo_item_rows:
-        tot_formula = "=" + "+".join(f"G{r}" for r in costo_item_rows)
+        # SUBTOTAL = suma de subtotales de capítulo cuando hay filas de capítulo;
+        # aquí el layout legacy suma costos de ítem — preferir SUM de rango.
+        tot_formula = _excel_sum_rows_formula("G", costo_item_rows)
         s2 = ws.cell(row=st_r, column=6, value=tot_formula)
-        s2.number_format = '"$"#,##0'
+        s2.number_format = _EXCEL_NUM_FMT_MONEY
     else:
         s2 = ws.cell(row=st_r, column=6, value=_fm(total_costo))
     s2.font = Font(bold=True, size=9)
