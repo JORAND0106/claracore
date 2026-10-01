@@ -191,18 +191,18 @@ def test_excel_encabezado_y_resumen_4cols():
     assert ws.title == "CC-SUB-001"
     assert ws.page_setup.orientation == "landscape"
     assert ws.cell(1, 4).value == "INFORME CORTE DE SUB CONTRATISTA"
-    assert ws.cell(1, 10).value == "CC-SUB-001"
+    assert ws.cell(1, 9).value == "CC-SUB-001"
     assert ws.cell(3, 1).value == "CONTRATO"
-    assert ws.cell(7, 6).value == "ACTUALIZADAS"
+    assert ws.cell(7, 5).value == "ACTUALIZADAS"
     # Resumen
     found = False
     for r in range(1, 40):
         if ws.cell(r, 1).value == "RESUMEN DE CONCILIACIÓN":
             found = True
-            assert ws.cell(r + 1, 7).value == "Actualizadas"
-            assert ws.cell(r + 1, 9).value == "Presente acta"
-            # CD row uses formulas referencing item totals
-            assert str(ws.cell(r + 2, 7).value).startswith("=")
+            assert ws.cell(r + 1, 6).value == "Actualizadas"
+            assert ws.cell(r + 1, 8).value == "Presente acta"
+            # CD row uses formulas referencing item totals (col F)
+            assert str(ws.cell(r + 2, 6).value).startswith("=")
             break
     assert found
 
