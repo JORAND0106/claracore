@@ -96,7 +96,9 @@ def test_html_sin_columna_cap_con_subtotal_capitulo():
     assert "width:25%" in html  # ancho liberado a descripción
     assert "Subtotal 1. PRELIMINARES" in html
     assert "Subtotal 3. OBRAS DE ARTE (ALCANTARILLA)" in html
-    assert html.count("cc001-cap-sub") == 2
+    assert html.count('class="cc001-cap-sub"') == 2
+    assert "<pdf:nextpage" not in html.lower()
+    assert html.count('class="cc001-tabla-items"') == 1
 
 
 def test_excel_subtotales_formulas_y_cd_solo_items():

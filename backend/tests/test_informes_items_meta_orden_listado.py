@@ -77,7 +77,7 @@ def test_causa_stub_vacio_queda_completo_con_meta_listado():
     assert by["NP-02"]["item_descripcion"] == "Ítem no previsto 02"
     assert by["2.4"]["capitulo"] == "2. MOVIMIENTO"
 
-    # Orden listado: 1.1, 1.3, 2.4, NP-02 (no NP al final suelto sin capítulo)
+    # Orden capítulo+ítem (ignora orden_listado): 1.1, 1.3, 2.4, NP-02
     orden = [it["item_numero"] for it in items]
     assert orden == ["1.1", "1.3", "2.4", "NP-02"]
 

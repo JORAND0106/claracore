@@ -41,6 +41,7 @@ label_linea_resumen_4cols = csc.label_linea_resumen_4cols
 enriquecer_items_bloques = csc.enriquecer_items_bloques
 filtrar_items_con_cantidades = csc.filtrar_items_con_cantidades
 sort_items_por_orden_listado = csc.sort_items_por_orden_listado
+sort_items_capitulo_item_asc = csc.sort_items_capitulo_item_asc
 aplicar_meta_listado_a_items = csc.aplicar_meta_listado_a_items
 meta_listado_contrato = csc.meta_listado_contrato
 meta_listado_sub = csc.meta_listado_sub
