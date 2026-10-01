@@ -3407,14 +3407,15 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
         }
         for it in ITEMS_CANTIDADES
     ]
+    # Resumen / Descuentos: presentación a 2 decimales (no aplica a cartera ni a SICOE).
     cants = "".join(
         f"<tr><td class='item'>{n['nombre']}</td>"
         f"<td class='calc num'>{n.get('unidad') or ''}</td>"
-        f"<td class='calc num'>{fmt(n.get('long'))}</td>"
-        f"<td class='calc num'>{fmt(n.get('ancho'))}</td>"
-        f"<td class='calc num'>{fmt(n.get('espesor'))}</td>"
-        f"<td class='calc num'>{fmt(n.get('descuentos'))}</td>"
-        f"<td class='calc num'>{fmt(n.get('neto') if n.get('neto') is not None else n.get('bruto'))}</td></tr>"
+        f"<td class='calc num'>{fmt(n.get('long'), 2)}</td>"
+        f"<td class='calc num'>{fmt(n.get('ancho'), 2)}</td>"
+        f"<td class='calc num'>{fmt(n.get('espesor'), 2)}</td>"
+        f"<td class='calc num'>{fmt(n.get('descuentos'), 2)}</td>"
+        f"<td class='calc num'>{fmt(n.get('neto') if n.get('neto') is not None else n.get('bruto'), 2)}</td></tr>"
         for n in netos
     )
     descuentos = calc.get("descuentos") or [
@@ -3423,10 +3424,10 @@ def pdf(contrato_id: int, planilla_id: str, current_user=Depends(get_current_use
     ]
     descs = "".join(
         f"<tr><td class='item'>{d['nombre']}</td>"
-        f"<td class='calc num'>{fmt(d.get('long'))}</td>"
-        f"<td class='calc num'>{fmt(d.get('ancho'))}</td>"
-        f"<td class='calc num'>{fmt(d.get('espesor'))}</td>"
-        f"<td class='calc num'>{fmt(d.get('cantidad'))}</td></tr>"
+        f"<td class='calc num'>{fmt(d.get('long'), 2)}</td>"
+        f"<td class='calc num'>{fmt(d.get('ancho'), 2)}</td>"
+        f"<td class='calc num'>{fmt(d.get('espesor'), 2)}</td>"
+        f"<td class='calc num'>{fmt(d.get('cantidad'), 2)}</td></tr>"
         for d in descuentos
         if d.get("nombre")
     )

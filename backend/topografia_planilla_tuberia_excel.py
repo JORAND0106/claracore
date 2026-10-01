@@ -86,6 +86,20 @@ PERFIL_GRID_LINE_COLOR = "E2E8F0"
 PANEL_RESULTADO_CELDAS = ("L18", "K23", "K30")
 NO_BORDER = Border()
 
+# Presentación Long/Ancho/Espesor/Desc./Cantidad en Resumen y Descuentos (2 dec).
+# No altera el criterio SICOE (dims 3 / cantidad 2 / CD 0).
+NUM_FMT_RESUMEN_CANTIDADES = "0.00"
+
+
+def _num_resumen_2(v: Any) -> Optional[float]:
+    """Literal numérico de presentación a 2 decimales (None si no convertible)."""
+    if v is None or v == "":
+        return None
+    try:
+        return round(float(v), 2)
+    except (TypeError, ValueError):
+        return None
+
 
 def _perfil_chart_gridlines() -> ChartLines:
     """Líneas de grilla mayor: gris claro y trazo fino."""
@@ -524,11 +538,17 @@ def _set_nombre_item_descuento(ws, row: int, nombre: Any) -> None:
 def _style_fila_cantidad(ws, r: int) -> None:
     for col in ("B", "C", "D", "E", "F", "G", "H"):
         _style(ws, f"{col}{r}", border=THIN)
+    # Long/Ancho/Espesor/Desc./Cantidad → 2 decimales de presentación.
+    for col in ("D", "E", "F", "G", "H"):
+        ws[f"{col}{r}"].number_format = NUM_FMT_RESUMEN_CANTIDADES
 
 
 def _style_fila_descuento(ws, r: int) -> None:
     for col in ("I", "J", "K", "L", "M", "N"):
         _style(ws, f"{col}{r}", border=THIN)
+    # Long/Ancho/Área/Cantidad → 2 decimales de presentación.
+    for col in ("K", "L", "M", "N"):
+        ws[f"{col}{r}"].number_format = NUM_FMT_RESUMEN_CANTIDADES
 
 
 def _write_descuento_fila_formula(ws, r: int, codigo: str, es_alc: bool) -> None:
@@ -537,15 +557,15 @@ def _write_descuento_fila_formula(ws, r: int, codigo: str, es_alc: bool) -> None
     if es_alc and cod == "DESC_A1":
         _set(ws, f"K{r}", "=$B$41")
         _set(ws, f"M{r}", "=$B$15")
-        _set(ws, f"N{r}", f"=PRODUCT(K{r}:M{r})")
+        _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
     elif es_alc and cod == "DESC_A2":
         _set(ws, f"K{r}", "=$B$41")
         _set(ws, f"M{r}", "=$C$15")
-        _set(ws, f"N{r}", f"=PRODUCT(K{r}:M{r})")
+        _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
     elif (not es_alc) and cod == "DESC_TUB_FILT":
         _set(ws, f"K{r}", "=$B$41")
         _set(ws, f"M{r}", "=$K$13")
-        _set(ws, f"N{r}", f"=PRODUCT(K{r}:M{r})")
+        _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
     elif cod == "DESC_OTROS" or cod.startswith("DESC_OTROS_"):
         _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
 
@@ -660,16 +680,16 @@ def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
         _set_nombre_item_descuento(ws, 46, "Area 1")
         _set(ws, "K46", "=$B$41")
         _set(ws, "M46", "=$B$15")
-        _set(ws, "N46", "=PRODUCT(K46:M46)")
+        _set(ws, "N46", "=ROUND(PRODUCT(K46:M46),2)")
         _set_nombre_item_descuento(ws, 47, "Area 2")
         _set(ws, "K47", "=$B$41")
         _set(ws, "M47", "=$C$15")
-        _set(ws, "N47", "=PRODUCT(K47:M47)")
+        _set(ws, "N47", "=ROUND(PRODUCT(K47:M47),2)")
     else:
         _set_nombre_item_descuento(ws, 45, "Tubería Filtro")
         _set(ws, "K45", "=$B$41")
         _set(ws, "M45", "=$K$13")
-        _set(ws, "N45", "=PRODUCT(K45:M45)")
+        _set(ws, "N45", "=ROUND(PRODUCT(K45:M45),2)")
         _set(ws, "I46", "")
         _set(ws, "K46", "")
         _set(ws, "M46", "")
@@ -679,6 +699,10 @@ def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
         _set(ws, "M47", "")
         _set(ws, "N47", "")
     _set_nombre_item_descuento(ws, 48, "Otros")
+    # Formato 2 decimales en columnas numéricas del bloque (plantilla fija).
+    for r in range(45, 52):
+        _style_fila_cantidad(ws, r)
+        _style_fila_descuento(ws, r)
 
 
 def _overlay_valores_editables_resumen(ws, calculo: dict) -> None:
@@ -695,25 +719,25 @@ def _overlay_valores_editables_resumen(ws, calculo: dict) -> None:
                 _set_nombre_item_cantidad(ws, r, ws[f"B{r}"].value, n.get("unidad"))
             if cod == "EXC_ROC":
                 if n.get("long") is not None:
-                    _set(ws, f"D{r}", float(n["long"]))
+                    _set(ws, f"D{r}", _num_resumen_2(n["long"]))
                 if n.get("ancho") is not None:
-                    _set(ws, f"E{r}", float(n["ancho"]))
+                    _set(ws, f"E{r}", _num_resumen_2(n["ancho"]))
                 if n.get("espesor") is not None:
-                    _set(ws, f"F{r}", float(n["espesor"]))
+                    _set(ws, f"F{r}", _num_resumen_2(n["espesor"]))
                 if n.get("neto") is not None:
-                    _set(ws, f"H{r}", float(n["neto"]))
+                    _set(ws, f"H{r}", _num_resumen_2(n["neto"]))
     otros = [n for n in netos if str(n.get("codigo") or "").upper().startswith("OTROS")]
     for i, n in enumerate(otros):
         r = 51 + i
         _set_nombre_item_cantidad(ws, r, n.get("nombre") or "Otros: ____", n.get("unidad") or "m³")
         if n.get("long") is not None:
-            _set(ws, f"D{r}", float(n["long"]))
+            _set(ws, f"D{r}", _num_resumen_2(n["long"]))
         if n.get("ancho") is not None:
-            _set(ws, f"E{r}", float(n["ancho"]))
+            _set(ws, f"E{r}", _num_resumen_2(n["ancho"]))
         if n.get("espesor") is not None:
-            _set(ws, f"F{r}", float(n["espesor"]))
+            _set(ws, f"F{r}", _num_resumen_2(n["espesor"]))
         if n.get("neto") is not None:
-            _set(ws, f"H{r}", float(n["neto"]))
+            _set(ws, f"H{r}", _num_resumen_2(n["neto"]))
         else:
             _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
         _style_fila_cantidad(ws, r)
@@ -764,11 +788,11 @@ def _write_tablas_cantidades_descuentos(
         es_otros_desc = cod_u == "DESC_OTROS" or cod_u.startswith("DESC_OTROS_")
         if es_otros_desc:
             if d.get("long") is not None:
-                _set(ws, f"K{r}", float(d["long"]))
+                _set(ws, f"K{r}", _num_resumen_2(d["long"]))
             if d.get("ancho") is not None:
-                _set(ws, f"L{r}", float(d["ancho"]))
+                _set(ws, f"L{r}", _num_resumen_2(d["ancho"]))
             if d.get("espesor") is not None:
-                _set(ws, f"M{r}", float(d["espesor"]))
+                _set(ws, f"M{r}", _num_resumen_2(d["espesor"]))
             # Si no hay dims, dejar cantidad numérica (compat legacy).
             if (
                 d.get("long") is None
@@ -776,16 +800,16 @@ def _write_tablas_cantidades_descuentos(
                 and d.get("espesor") is None
                 and d.get("cantidad") is not None
             ):
-                _set(ws, f"N{r}", float(d["cantidad"]))
+                _set(ws, f"N{r}", _num_resumen_2(d["cantidad"]))
         elif ws[f"N{r}"].value is None:
             if d.get("long") is not None:
-                _set(ws, f"K{r}", float(d["long"]))
+                _set(ws, f"K{r}", _num_resumen_2(d["long"]))
             if d.get("ancho") is not None:
-                _set(ws, f"L{r}", float(d["ancho"]))
+                _set(ws, f"L{r}", _num_resumen_2(d["ancho"]))
             if d.get("espesor") is not None:
-                _set(ws, f"M{r}", float(d["espesor"]))
+                _set(ws, f"M{r}", _num_resumen_2(d["espesor"]))
             if d.get("cantidad") is not None:
-                _set(ws, f"N{r}", float(d["cantidad"]))
+                _set(ws, f"N{r}", _num_resumen_2(d["cantidad"]))
         _style_fila_descuento(ws, r)
 
     exc_row = None
@@ -808,13 +832,13 @@ def _write_tablas_cantidades_descuentos(
         cod_u = cod.upper()
         if cod_u == "EXC_ROC" or cod_u == "OTROS" or cod_u.startswith("OTROS_"):
             if n.get("long") is not None:
-                _set(ws, f"D{r}", float(n["long"]))
+                _set(ws, f"D{r}", _num_resumen_2(n["long"]))
             if n.get("ancho") is not None:
-                _set(ws, f"E{r}", float(n["ancho"]))
+                _set(ws, f"E{r}", _num_resumen_2(n["ancho"]))
             if n.get("espesor") is not None:
-                _set(ws, f"F{r}", float(n["espesor"]))
+                _set(ws, f"F{r}", _num_resumen_2(n["espesor"]))
             if n.get("neto") is not None:
-                _set(ws, f"H{r}", float(n["neto"]))
+                _set(ws, f"H{r}", _num_resumen_2(n["neto"]))
             elif ws[f"H{r}"].value is None:
                 _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
         _style_fila_cantidad(ws, r)

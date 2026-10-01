@@ -6,7 +6,9 @@ import { describe, it } from 'node:test'
 import {
   CALC_CELL_BG,
   confirmarGuardadoCartera,
+  DECIMALES_RESUMEN_CANTIDADES,
   fingerprintFilasCartera,
+  fmtResumenCantidades,
   payloadFilas,
   tieneDatosExportables,
   TIPOS_PLANILLA,
@@ -40,6 +42,15 @@ describe('planillaTuberiaUtils', () => {
   it('tipos y relaciones de atraque', () => {
     assert.deepEqual(TIPOS_PLANILLA.map((t) => t.value), ['ALCANTARILLA', 'FILTRO'])
     assert.deepEqual(RELACIONES_ATRAQUE, ['1:1', '1:2', '1:3', '1:4', '1:6'])
+  })
+
+  it('fmtResumenCantidades presenta Long/Ancho/Espesor/Desc./Cantidad a 2 dec', () => {
+    assert.equal(DECIMALES_RESUMEN_CANTIDADES, 2)
+    assert.equal(fmtResumenCantidades(10.1234), '10.12')
+    assert.equal(fmtResumenCantidades(1.5678), '1.57')
+    assert.equal(fmtResumenCantidades(0.1), '0.10')
+    assert.equal(fmtResumenCantidades(null), '—')
+    assert.equal(fmtResumenCantidades(''), '—')
   })
 
   it('confirmarGuardadoCartera exige verified + count > 0 y huella', () => {
