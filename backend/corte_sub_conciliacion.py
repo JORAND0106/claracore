@@ -324,10 +324,10 @@ def item_key(item_numero: Any) -> str:
 
 
 def _natural_sort_key_item(s: object) -> Tuple[Any, ...]:
-    """Orden natural tipo listado Admin (1.10 < 1.2 numérico; NP-02 < NP-07)."""
+    """Partes numéricas/texto: 2.9 < 2.10; NP-02 < NP-07."""
     t = str(s if s is not None else "").strip()
     if not t:
-        return (2, ())
+        return ()
     parts: List[Tuple[int, Any]] = []
     for part in re.split(r"(\d+)", t):
         if not part:
@@ -336,7 +336,30 @@ def _natural_sort_key_item(s: object) -> Tuple[Any, ...]:
             parts.append((0, int(part)))
         else:
             parts.append((1, part.lower()))
-    return (0, tuple(parts))
+    return tuple(parts)
+
+
+def _es_item_no_previsto(s: object) -> bool:
+    """Ítems No Previstos: NP, NP-01, NP 02, np07, etc."""
+    t = str(s if s is not None else "").strip()
+    return bool(re.match(r"^NP([\s\-_/]|$|\d)", t, flags=re.IGNORECASE))
+
+
+def item_numero_sort_key_asc(s: object) -> Tuple[Any, ...]:
+    """
+    Orden de código de ítem dentro de un capítulo:
+    1) numéricos ascendentes por nivel (2.9 antes de 2.10);
+    2) No Previstos (NP…) al final, ordenados entre sí;
+    3) resto de códigos no numéricos.
+    """
+    t = str(s if s is not None else "").strip()
+    if not t:
+        return (3, ())
+    if _es_item_no_previsto(t):
+        return (1, _natural_sort_key_item(t))
+    if re.match(r"^\d", t):
+        return (0, _natural_sort_key_item(t))
+    return (2, _natural_sort_key_item(t))
 
 
 def _capitulo_sort_key_listado(s: object) -> Tuple[Any, ...]:
@@ -357,12 +380,35 @@ def listado_orden_sort_key(row: dict) -> Tuple[Any, ...]:
     return (
         _capitulo_sort_key_listado(row.get("capitulo")),
         str(row.get("competencia") or "").strip().lower(),
-        _natural_sort_key_item(row.get("item_numero")),
+        item_numero_sort_key_asc(row.get("item_numero")),
     )
 
 
+def capitulo_item_sort_key(row: dict) -> Tuple[Any, ...]:
+    """Capítulo numérico ascendente → ítem numérico ascendente (NP al final del capítulo)."""
+    return (
+        _capitulo_sort_key_listado(row.get("capitulo")),
+        item_numero_sort_key_asc(row.get("item_numero")),
+    )
+
+
+def sort_items_capitulo_item_asc(items: Optional[Iterable[dict]]) -> List[dict]:
+    """
+    Orden definitivo del cuadro CC-SUB/MES-001 (vista previa, PDF y Excel):
+    capítulo ascendente, luego ítem ascendente; NP después de los numéricos del capítulo.
+    Ignora ``orden_listado`` (índice del Admin) para no desordenar 2.9/2.10 ni capítulos.
+    """
+    rows = [dict(it) for it in (items or []) if isinstance(it, dict)]
+    rows.sort(key=capitulo_item_sort_key)
+    return rows
+
+
 def sort_items_por_orden_listado(items: Optional[Iterable[dict]]) -> List[dict]:
-    """Orden del listado de precios (orden_listado); fallback capítulo+ítem."""
+    """Orden del listado de precios (orden_listado); fallback capítulo+ítem.
+
+    Conservado para usos Admin/listado. Los informes CC-SUB/MES usan
+    ``sort_items_capitulo_item_asc``.
+    """
     rows = [dict(it) for it in (items or []) if isinstance(it, dict)]
 
     def _key(it: dict) -> Tuple[Any, ...]:
@@ -497,14 +543,14 @@ def enriquecer_items_bloques(
         base["cant_saldo"] = cant_saldo
         base["valor_saldo"] = valor_por_cantidad_vu(cant_saldo, vu)
         out.append(base)
-    return sort_items_por_orden_listado(out)
+    return sort_items_capitulo_item_asc(out)
 
 
 def filtrar_items_con_cantidades(items: Optional[Iterable[dict]]) -> List[dict]:
     """
     Incluye todo ítem con cantidad en Actualizadas, Presente acta o Acumulado.
     Solo excluye filas sin cantidad en ninguno de esos bloques.
-    Conserva el orden recibido (listado de precios).
+    Conserva el orden recibido (capítulo+ítem tras ``sort_items_capitulo_item_asc``).
     """
     out: List[dict] = []
     for it in items or []:

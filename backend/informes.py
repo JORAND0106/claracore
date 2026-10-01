@@ -580,33 +580,17 @@ def _safe_filename_pdf(s: object) -> str:
 
 
 def _natural_sort_key_cadena(s: object) -> Tuple[Any, ...]:
-    """Orden natural por trozos numéricos vs texto: 1.10.1 < 1.10.2; NP-004 < NP-205; 4.01. < 4.26."""
-    t = str(s if s is not None else "").strip()
-    if not t:
-        return (2, ())
-    parts: List[Tuple[int, Any]] = []
-    for part in re.split(r"(\d+)", t):
-        if not part:
-            continue
-        if part.isdigit():
-            parts.append((0, int(part)))
-        else:
-            parts.append((1, part.lower()))
-    return (0, tuple(parts))
+    """Orden de código de ítem: numérico por nivel; NP al final (misma regla que CC-SUB/MES)."""
+    import corte_sub_conciliacion as csc
+
+    return csc.item_numero_sort_key_asc(s)
 
 
 def _capitulo_sort_key_asc(s: object) -> Tuple[Any, ...]:
-    """Primer entero al inicio del texto de capítulo (1.PRELIMIN… → 1; 16. ZONA… → 16). Sin número: antes que vacío."""
-    t = str(s if s is not None else "").strip()
-    if not t:
-        return (2, 0, "")
-    m = re.match(r"^\s*(\d+)", t)
-    if m:
-        try:
-            return (0, int(m.group(1)), t.lower())
-        except ValueError:
-            pass
-    return (1, t.lower())
+    """Primer entero al inicio del texto de capítulo (1.PRELIMIN… → 1; 16. ZONA… → 16)."""
+    import corte_sub_conciliacion as csc
+
+    return csc._capitulo_sort_key_listado(s)
 
 
 def _capitulos_por_item_numero_desde_items(items: List[dict]) -> Dict[str, str]:
@@ -640,13 +624,10 @@ def _sort_identificadores_item_asc(
 
 
 def _sort_items_corte_por_item_numero_asc(items: List[dict]) -> None:
-    """Orden in-place: primero por capítulo (número inicial), luego por código de ítem (orden natural)."""
-    items.sort(
-        key=lambda it: (
-            _capitulo_sort_key_asc(it.get("capitulo")),
-            _natural_sort_key_cadena(it.get("item_numero")),
-        )
-    )
+    """Orden in-place: capítulo → ítem numérico ascendente; NP al final de cada capítulo."""
+    import corte_sub_conciliacion as csc
+
+    items[:] = csc.sort_items_capitulo_item_asc(items)
 
 
 def _nombre_archivo_cc_sub_001(corte: dict, sub: dict, corte_id: int) -> str:
@@ -1725,7 +1706,7 @@ def _enriquecer_ctx_corte_sub_conciliacion(
         if _sf(it.get("vlr_unitario_sub")) <= 0:
             it["sin_precio"] = True
     items = csc.filtrar_items_con_cantidades(items)
-    items = csc.sort_items_por_orden_listado(items)
+    items = csc.sort_items_capitulo_item_asc(items)
     total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
     ctx["items"] = items
     ctx["total_costo"] = total_costo if math.isfinite(total_costo) else 0.0
@@ -1899,7 +1880,7 @@ def _contexto_acta_mes_conciliacion(
         if _sf(it.get("vlr_unitario")) <= 0 and _sf(it.get("vlr_unitario_sub")) <= 0:
             it["sin_precio"] = True
     items = amc.filtrar_items_con_cantidades(items)
-    items = amc.sort_items_por_orden_listado(items)
+    items = amc.sort_items_capitulo_item_asc(items)
     total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
 
     tributos = amc.tributos_from_contrato(cfg.get("aiu"), cfg.get("iva"))
@@ -14986,10 +14967,9 @@ def _cc_mes_integral_excel_bytes(
 
 
 
-# Objetivo: ~26 ítems en la 1ª hoja (con encabezado + subtotal + firmas sin página casi vacía).
-_CC_SUB_001_ROWS_PAGINA_1 = 18
-_CC_SUB_001_ROWS_PAGINA_SIG = 22
 # Identificación sin columna Capítulo: ÍTEM | DESCRIPCIÓN | UND | V.UNIT. (4 cols)
+# Paginación: una sola tabla continua (xhtml2pdf + thead table-header-group).
+# No chunkear con <pdf:nextpage/>: eso dejaba páginas a medias (espacios muertos).
 _CC_SUB_001_NCOLS = 12
 _CC_SUB_001_ID_COLS = 4
 
@@ -15033,30 +15013,17 @@ def _cc_sub_001_plan_filas_capitulo(items: List[dict]) -> List[tuple]:
 
 
 def _cc_sub_001_chunk_plan(plan: List[tuple]) -> List[List[tuple]]:
+    """Compat: ya no se pagina por chunks fijos; un solo bloque continuo."""
     if not plan:
         return [[]]
-    out: List[List[tuple]] = []
-    i = 0
-    out.append(plan[i : i + _CC_SUB_001_ROWS_PAGINA_1])
-    i += _CC_SUB_001_ROWS_PAGINA_1
-    while i < len(plan):
-        out.append(plan[i : i + _CC_SUB_001_ROWS_PAGINA_SIG])
-        i += _CC_SUB_001_ROWS_PAGINA_SIG
-    return out
+    return [list(plan)]
 
 
 def _cc_sub_001_chunk_items(items: List[dict]) -> List[List[dict]]:
-    """Compat: chunk solo de ítems (sin subtotales). Preferir ``_cc_sub_001_chunk_plan``."""
+    """Compat: un solo bloque (sin saltos forzados)."""
     if not items:
         return [[]]
-    out: List[List[dict]] = []
-    i = 0
-    out.append(items[i : i + _CC_SUB_001_ROWS_PAGINA_1])
-    i += _CC_SUB_001_ROWS_PAGINA_1
-    while i < len(items):
-        out.append(items[i : i + _CC_SUB_001_ROWS_PAGINA_SIG])
-        i += _CC_SUB_001_ROWS_PAGINA_SIG
-    return out
+    return [list(items)]
 
 
 def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
@@ -15246,8 +15213,7 @@ def _html_cc_sub_v1_plain(
     lbl = "font-size:6pt;font-weight:bold;color:#111;text-transform:uppercase;letter-spacing:0.2px;"
     und = "border-bottom:1px solid #1f2937;font-size:7pt;padding:1px 0 2px 0;margin-top:1px;"
 
-    chunks = _cc_sub_001_chunk_plan(_cc_sub_001_plan_filas_capitulo(list(items or [])))
-    nchunks = len(chunks)
+    plan = _cc_sub_001_plan_filas_capitulo(list(items or []))
     cap_sub_bg = est.get("capitulo_subtotal_bg") or "#93c5fd"
 
     parts: list[str] = []
@@ -15256,8 +15222,14 @@ def _html_cc_sub_v1_plain(
 <head><meta charset="UTF-8"/><title>{_h(codigo_ccd)}</title>
 <style type="text/css">
 @page {{ size: letter landscape; margin: 6mm 7mm; }}
-.cc001-tabla-items {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+.cc001-tabla-items {{
+  width:100%; border-collapse:collapse; table-layout:fixed;
+  page-break-inside: auto;
+}}
 .cc001-tabla-items thead {{ display: table-header-group; }}
+.cc001-tabla-items tbody {{ display: table-row-group; }}
+.cc001-tabla-items tr {{ page-break-inside: avoid; page-break-after: auto; }}
+.cc001-tabla-items tr.cc001-cap-sub {{ page-break-inside: avoid; }}
 .ccd-cc001-firmas-wrap {{ margin-top: 4mm; page-break-inside: avoid; }}
 .ccd-cc001-firmas-tbl {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
 .ccd-cc001-firmas-tbl td {{ vertical-align: top; }}
@@ -15279,7 +15251,10 @@ def _html_cc_sub_v1_plain(
   max-height: {_CCD_FIRMA_IMG_INNER_PT} !important; width: auto !important;
   display: block !important; margin: 0 auto !important;
 }}
-.cc001-resumen {{ width:100%; border-collapse:collapse; margin-top:4mm; page-break-inside:avoid; }}
+/* Sin page-break-inside:avoid en el resumen: evita empujar el bloque entero
+   a la página siguiente dejando un hueco grande tras la tabla. */
+.cc001-resumen {{ width:100%; border-collapse:collapse; margin-top:4mm; page-break-inside: auto; }}
+.cc001-resumen tr {{ page-break-inside: avoid; }}
 </style></head>
 <body style="margin:0;padding:3px;font-family:Arial,Helvetica,sans-serif;font-size:7pt;color:#111;">
 """)
@@ -15328,31 +15303,28 @@ INFORME CORTE DE SUB CONTRATISTA
             '⚠ VISTA SIN CONCILIAR — borrador de revisión (no enviado)</div>'
         )
 
-    for ci, chunk in enumerate(chunks):
-        if ci > 0:
-            parts.append('<pdf:nextpage />')
-        parts.append('<table class="cc001-tabla-items" cellspacing="0" cellpadding="0">')
-        parts.append(_html_cc_sub_001_thead_items(bd, est["thead_bg"]))
-        parts.append("<tbody>")
-        if not chunk and not items:
-            parts.append(
-                f'<tr><td colspan="{_CC_SUB_001_NCOLS}" style="{bd};padding:5px;font-size:7pt;color:#6b7280">'
-                "Sin ítems con estado Aprobado en este corte.</td></tr>"
-            )
-        else:
-            for entry in chunk:
-                kind = entry[0]
-                if kind == "subcap":
-                    _, cap_name, sums = entry
-                    parts.append(
-                        _html_cc_sub_001_tr_subtotal_capitulo(bd, cap_name, sums, cap_sub_bg)
-                    )
-                else:
-                    _, it, idx = entry
-                    row_bg = est["row_even_bg"] if idx % 2 == 0 else est["row_odd_bg"]
-                    parts.append(_html_cc_sub_001_tr_item(it, bd, row_bg))
-        # Costo Directo solo en el resumen de conciliación (no fila bajo el cuadro).
-        parts.append("</tbody></table>")
+    parts.append('<table class="cc001-tabla-items" cellspacing="0" cellpadding="0">')
+    parts.append(_html_cc_sub_001_thead_items(bd, est["thead_bg"]))
+    parts.append("<tbody>")
+    if not plan:
+        parts.append(
+            f'<tr><td colspan="{_CC_SUB_001_NCOLS}" style="{bd};padding:5px;font-size:7pt;color:#6b7280">'
+            "Sin ítems con estado Aprobado en este corte.</td></tr>"
+        )
+    else:
+        for entry in plan:
+            kind = entry[0]
+            if kind == "subcap":
+                _, cap_name, sums = entry
+                parts.append(
+                    _html_cc_sub_001_tr_subtotal_capitulo(bd, cap_name, sums, cap_sub_bg)
+                )
+            else:
+                _, it, idx = entry
+                row_bg = est["row_even_bg"] if idx % 2 == 0 else est["row_odd_bg"]
+                parts.append(_html_cc_sub_001_tr_item(it, bd, row_bg))
+    # Costo Directo solo en el resumen de conciliación (no fila bajo el cuadro).
+    parts.append("</tbody></table>")
 
     aiu = aiu_resumen or {}
     otros = list(otros_conceptos or [])
