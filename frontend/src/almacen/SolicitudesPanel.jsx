@@ -25,7 +25,7 @@ import {
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
-import { puedeEliminarSolicitudDesarrollador } from './almacenPermisos'
+import { puedeCrearSolicitudAlmacen, puedeEliminarSolicitudDesarrollador } from './almacenPermisos'
 import AlmacenTrazabilidadButton from './AlmacenTrazabilidadButton'
 
 export default function SolicitudesPanel({
@@ -168,7 +168,7 @@ export default function SolicitudesPanel({
           >
             🔎 Filtros{filtrosActivos > 0 ? ` (${filtrosActivos})` : ''}
           </button>
-          {permisos?.crear && (
+          {(permisos?.puedeNuevaSolicitud ?? puedeCrearSolicitudAlmacen(permisos)) && (
             <button type="button" style={ui.btnPrimary} onClick={() => { setReabrirOc(false); setCreating(true) }}>
               + Nueva solicitud
             </button>

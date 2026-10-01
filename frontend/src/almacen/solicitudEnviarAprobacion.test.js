@@ -1,5 +1,6 @@
 /**
- * Botón «Solicitar aprobación» visible con permiso Crear (sin Editar).
+ * Botón «Solicitar aprobación» con permiso Crear (sin Editar).
+ * Cubre el bug de fondo: sobrescribir permisos.crear con ver∧crear.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -9,76 +10,116 @@ import { fileURLToPath } from 'node:url'
 
 const dir = dirname(fileURLToPath(import.meta.url))
 
-/** Réplica de puedeEnviarSolicitudAlmacen (evita imports Vite sin extensión). */
 function puedeEnviarSolicitudAlmacen(permisos, sol = null, { modoReabrirOc = false, solicitudId = null } = {}) {
   if (modoReabrirOc) return false
   if (!permisos?.crear && !permisos?.editar) return false
-  const id = solicitudId ?? sol?.id
-  if (!id) return Boolean(permisos?.crear || permisos?.editar)
-  return ['borrador', 'rechazada'].includes(sol?.estado)
+  const id = solicitudId ?? sol?.id ?? null
+  if (!id) return true
+  const estado = sol?.estado
+  if (estado == null || estado === '') return true
+  return estado === 'borrador' || estado === 'rechazada'
+}
+
+function puedeEditarSolicitudFormAlmacen(permisos) {
+  return Boolean(permisos?.crear || permisos?.editar)
 }
 
 describe('enviar solicitud a aprobación con Crear', () => {
   it('Crear sin Editar puede enviar borrador', () => {
-    const p = { ver: true, crear: true, editar: false }
-    assert.equal(
-      puedeEnviarSolicitudAlmacen(p, { id: 4, estado: 'borrador' }, { solicitudId: 4 }),
-      true,
-    )
-  })
-
-  it('solo Ver no puede enviar', () => {
     assert.equal(
       puedeEnviarSolicitudAlmacen(
-        { ver: true, crear: false, editar: false },
-        { id: 1, estado: 'borrador' },
-        { solicitudId: 1 },
-      ),
-      false,
-    )
-  })
-
-  it('Editar sin Crear también puede enviar', () => {
-    assert.equal(
-      puedeEnviarSolicitudAlmacen(
-        { ver: true, crear: false, editar: true },
-        { id: 1, estado: 'borrador' },
-        { solicitudId: 1 },
+        { ver: true, crear: true, editar: false },
+        { id: 5, estado: 'borrador' },
+        { solicitudId: 5 },
       ),
       true,
     )
   })
 
-  it('no muestra el botón en enviada/aprobada ni en reabrir OC', () => {
-    const p = { crear: true, editar: true }
+  it('Crear sin flag Ver también puede enviar (no exigir ver∧crear)', () => {
     assert.equal(
-      puedeEnviarSolicitudAlmacen(p, { id: 1, estado: 'enviada' }, { solicitudId: 1 }),
+      puedeEnviarSolicitudAlmacen(
+        { ver: false, crear: true, editar: false },
+        { id: 5, estado: 'borrador' },
+        { solicitudId: 5 },
+      ),
+      true,
+    )
+    assert.equal(
+      puedeEditarSolicitudFormAlmacen({ ver: false, crear: true, editar: false }),
+      true,
+    )
+  })
+
+  it('muestra el botón justo tras guardar aunque estado aún no esté en props', () => {
+    assert.equal(
+      puedeEnviarSolicitudAlmacen(
+        { crear: true },
+        { id: 5 }, // sin estado
+        { solicitudId: 5 },
+      ),
+      true,
+    )
+  })
+
+  it('usa sol.id si solicitudId del padre aún es null', () => {
+    assert.equal(
+      puedeEnviarSolicitudAlmacen(
+        { crear: true },
+        { id: 5, estado: 'borrador' },
+        { solicitudId: null },
+      ),
+      true,
+    )
+  })
+
+  it('no muestra en enviada ni reabrir OC', () => {
+    assert.equal(
+      puedeEnviarSolicitudAlmacen(
+        { crear: true, editar: true },
+        { id: 1, estado: 'enviada' },
+        { solicitudId: 1 },
+      ),
       false,
     )
     assert.equal(
-      puedeEnviarSolicitudAlmacen(p, { id: 1, estado: 'borrador' }, {
-        solicitudId: 1,
-        modoReabrirOc: true,
-      }),
+      puedeEnviarSolicitudAlmacen(
+        { crear: true },
+        { id: 1, estado: 'borrador' },
+        { solicitudId: 1, modoReabrirOc: true },
+      ),
       false,
     )
   })
 
-  it('formulario y API usan Crear o Editar (no solo Editar)', () => {
+  it('AlmacenMain no sobrescribe crear con ver∧crear', () => {
+    const main = readFileSync(join(dir, 'AlmacenMain.jsx'), 'utf8')
+    assert.match(main, /puedeNuevaSolicitud:\s*puedeCrearSolicitudAlmacen/)
+    assert.doesNotMatch(
+      main,
+      /solicitudesPerms = useMemo\(\(\) => \(\{[\s\S]*?crear:\s*puedeCrearSolicitudAlmacen/,
+    )
+  })
+
+  it('formulario renderiza Solicitar aprobación de forma independiente', () => {
     const form = readFileSync(join(dir, 'SolicitudForm.jsx'), 'utf8')
     const helpers = readFileSync(join(dir, 'almacenPermisos.js'), 'utf8')
-    const routes = readFileSync(join(dir, '../../../backend/almacen_routes.py'), 'utf8')
-    const perms = readFileSync(join(dir, '../../../backend/almacen_permissions.py'), 'utf8')
-    assert.match(helpers, /export function puedeEnviarSolicitudAlmacen/)
     assert.match(form, /puedeEnviarSolicitudAlmacen/)
-    assert.match(form, /permisos\?\.editar \|\| permisos\?\.crear/)
+    assert.match(form, /puedeEditarSolicitudFormAlmacen/)
+    assert.match(form, /data-testid="solicitud-solicitar-aprobacion"/)
+    assert.match(form, /effectiveSolicitudId/)
+    assert.match(helpers, /export function puedeEnviarSolicitudAlmacen/)
+    assert.match(helpers, /export function puedeEditarSolicitudFormAlmacen/)
+    // El botón no debe quedar atrapado solo dentro de permisos\.editar
     assert.doesNotMatch(
       form,
       /solicitudId && \['borrador', 'rechazada'\]\.includes\(sol\?\.estado\) && permisos\?\.editar/,
     )
-    assert.match(routes, /require_crear_o_editar_almacen/)
-    assert.match(routes, /def route_enviar_solicitud[\s\S]*?require_crear_o_editar_almacen/)
-    assert.match(routes, /def route_update_solicitud[\s\S]*?require_crear_o_editar_almacen/)
-    assert.match(perms, /def require_crear_o_editar_almacen/)
+  })
+
+  it('panel usa puedeNuevaSolicitud para el alta, no el flag crear crudo', () => {
+    const panel = readFileSync(join(dir, 'SolicitudesPanel.jsx'), 'utf8')
+    assert.match(panel, /puedeNuevaSolicitud/)
+    assert.match(panel, /puedeCrearSolicitudAlmacen/)
   })
 })

@@ -28,7 +28,11 @@ import {
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
-import { puedeEnviarSolicitudAlmacen, solicitudAlmacenEditable } from './almacenPermisos'
+import {
+  puedeEditarSolicitudFormAlmacen,
+  puedeEnviarSolicitudAlmacen,
+  solicitudAlmacenEditable,
+} from './almacenPermisos'
 import { parseAbscisaMetros } from './almacenAbscisa'
 import { solicitudOrdenesCompra } from './solicitudDetalleHelpers'
 import {
@@ -184,12 +188,13 @@ export default function SolicitudForm({
   const [confirmAnular, setConfirmAnular] = useState(false)
   const [proximoConsecutivo, setProximoConsecutivo] = useState(null)
 
-  const editableBase = solicitudAlmacenEditable(sol) && (
-    solicitudId ? Boolean(permisos?.editar || permisos?.crear) : Boolean(permisos?.crear)
-  )
+  /** Id efectivo: tras el primer guardado `sol.id` existe aunque el padre aún no haya pasado solicitudId. */
+  const effectiveSolicitudId = solicitudId || sol?.id || null
+  const puedeEscribir = puedeEditarSolicitudFormAlmacen(permisos)
+  const editableBase = solicitudAlmacenEditable(sol) && puedeEscribir
   const editable = Boolean(
     editableBase
-    || (modoReabrirOc && (permisos?.editar || permisos?.crear) && (
+    || (modoReabrirOc && puedeEscribir && (
       sol?.estado === 'aprobada' || Boolean(sol?.tiene_orden_compra || sol?.orden_compra?.id)
     )),
   )
@@ -677,8 +682,9 @@ export default function SolicitudForm({
         setBusy(false)
         return
       }
-      const result = solicitudId
-        ? await api.updateSolicitud(solicitudId, payload)
+      const idExistente = solicitudId || sol?.id || null
+      const result = idExistente
+        ? await api.updateSolicitud(idExistente, payload)
         : await api.createSolicitud(payload)
       aplicarSolicitudServidor(result)
       setOkMsg('Borrador guardado correctamente.')
@@ -699,12 +705,14 @@ export default function SolicitudForm({
         setBusy(false)
         return
       }
-      let id = solicitudId
+      let id = solicitudId || sol?.id || null
       if (!id) {
         const created = await api.createSolicitud(payload)
         id = created.id
+        aplicarSolicitudServidor(created)
       } else {
-        await api.updateSolicitud(id, payload)
+        const updated = await api.updateSolicitud(id, payload)
+        aplicarSolicitudServidor(updated)
       }
       const r = await api.enviarSolicitud(id)
       setModalExitoEnvio({
@@ -747,7 +755,7 @@ export default function SolicitudForm({
   const theme = buildAlmacenConfirmTheme(t, ui)
   const puedeReenviar = puedeEnviarSolicitudAlmacen(permisos, sol, {
     modoReabrirOc,
-    solicitudId,
+    solicitudId: effectiveSolicitudId,
   })
 
   const rootStyle = embedded
@@ -1001,24 +1009,29 @@ export default function SolicitudForm({
         </>
       )}
 
-      <div className={`cc-almacen-form-actions${embedded ? ' cc-almacen-form-actions--embedded' : ''}`} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: editable ? 12 : 0 }}>
-        {editable && (solicitudId ? (permisos?.editar || permisos?.crear) : permisos?.crear) && (
-          <>
-            <button type="button" style={ui.btnPrimary} disabled={busy} onClick={guardar}>
-              {busy
-                ? 'Guardando…'
-                : modoReabrirOc
-                  ? 'Agregar líneas a la OC'
-                  : (solicitudId && sol?.estado !== 'borrador' ? 'Guardar cambios' : 'Guardar borrador')}
-            </button>
-            {puedeReenviar && (
-              <button type="button" style={ui.btnPrimary} disabled={busy} onClick={solicitarAprobacion}>
-                {busy ? 'Enviando…' : (sol?.estado === 'rechazada' ? 'Reenviar a aprobación' : 'Solicitar aprobación')}
-              </button>
-            )}
-          </>
+      <div className={`cc-almacen-form-actions${embedded ? ' cc-almacen-form-actions--embedded' : ''}`} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: (editable || puedeReenviar) ? 12 : 0 }}>
+        {editable && puedeEscribir && (
+          <button type="button" style={ui.btnPrimary} disabled={busy} onClick={guardar}>
+            {busy
+              ? 'Guardando…'
+              : modoReabrirOc
+                ? 'Agregar líneas a la OC'
+                : (effectiveSolicitudId && sol?.estado && sol.estado !== 'borrador' ? 'Guardar cambios' : 'Guardar borrador')}
+          </button>
         )}
-        {solicitudId && sol && !modoReabrirOc && puedeAnularSolicitud(sol, permisos) && (
+        {/* Independiente de «Guardar»: Crear basta para sacar el borrador a aprobación. */}
+        {puedeReenviar && (
+          <button
+            type="button"
+            style={ui.btnPrimary}
+            disabled={busy}
+            onClick={solicitarAprobacion}
+            data-testid="solicitud-solicitar-aprobacion"
+          >
+            {busy ? 'Enviando…' : (sol?.estado === 'rechazada' ? 'Reenviar a aprobación' : 'Solicitar aprobación')}
+          </button>
+        )}
+        {effectiveSolicitudId && sol && !modoReabrirOc && puedeAnularSolicitud(sol, permisos) && (
           <button
             type="button"
             style={{ ...ui.btnSecondary, color: '#dc2626', borderColor: '#dc262666' }}
