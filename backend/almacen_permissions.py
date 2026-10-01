@@ -297,6 +297,21 @@ def require_permiso_almacen(current_user, accion: AlmacenAccion) -> None:
         )
 
 
+def require_crear_o_editar_almacen(current_user) -> None:
+    """Crear o Editar: guardar borrador / enviar solicitud a aprobación."""
+    if rol_excluido_almacen(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="El módulo Almacén de Obra no está disponible para su rol.",
+        )
+    if _cargo_permiso_almacen(current_user, "editar") or _cargo_permiso_almacen(current_user, "crear"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="No tiene permiso (Almacén · crear o editar). Configúrelo en Control de accesos.",
+    )
+
+
 def require_lectura_almacen(current_user) -> None:
     """GET de Solicitudes/Inventario: basta cualquier flag propio en Almacén."""
     if rol_excluido_almacen(current_user):
