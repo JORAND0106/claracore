@@ -56,11 +56,51 @@ class TestTopografiaAudit(unittest.TestCase):
         self.assertEqual(mod.ENTIDAD_POLIGONAL, "topo_poligonal")
         self.assertEqual(mod.ENTIDAD_NIVELACION, "topo_nivelacion")
 
+    def test_snapshot_tablas_diff_campo_a_campo(self):
+        mod, _ = _load_audit_module()
+        antes = mod.snapshot_edicion_planilla_tuberia(
+            {"id": "p1", "version": 1, "nombre": "T1"},
+            filas=[
+                {"orden": 1, "abscisa": 0, "terreno_natural": 100.0, "cota_fondo_excavacion": 98},
+                {"orden": 2, "abscisa": 10, "terreno_natural": 100.5, "cota_fondo_excavacion": 98},
+            ],
+            cantidades_manuales=[
+                {"codigo": "EXC_ROC", "long": 10, "ancho": 1.5, "espesor": 0.05},
+            ],
+            descuentos_manuales=[
+                {"codigo": "DESC_OTROS_1", "nombre": "Pozo", "long": 90, "espesor": 0.009},
+            ],
+        )
+        despues = mod.snapshot_edicion_planilla_tuberia(
+            {"id": "p1", "version": 2, "nombre": "T1"},
+            filas=[
+                {"orden": 1, "abscisa": 0, "terreno_natural": 100.0, "cota_fondo_excavacion": 98},
+                {"orden": 2, "abscisa": 10, "terreno_natural": 101.0, "cota_fondo_excavacion": 98},
+            ],
+            cantidades_manuales=[
+                {"codigo": "EXC_ROC", "long": 10, "ancho": 1.5, "espesor": 0.05},
+            ],
+            descuentos_manuales=[
+                {"codigo": "DESC_OTROS_1", "nombre": "Pozo", "long": 90, "espesor": 0.01},
+            ],
+        )
+        # Claves por fila/ítem (no listas) para expandir en Campos modificados
+        self.assertIn("fila_2_abs_10", antes["cartera"])
+        self.assertEqual(antes["cartera"]["fila_2_abs_10"]["terreno_natural"], 100.5)
+        self.assertEqual(despues["cartera"]["fila_2_abs_10"]["terreno_natural"], 101)
+        self.assertEqual(antes["descuentos_especificos"]["DESC_OTROS_1"]["espesor"], 0.009)
+        self.assertEqual(despues["descuentos_especificos"]["DESC_OTROS_1"]["espesor"], 0.01)
+        n = mod.contar_campos_modificados(antes, despues)
+        # version + terreno_natural fila 2 + espesor descuento
+        self.assertGreaterEqual(n, 3)
+
     def test_planilla_routes_dual_write_en_audit(self):
         src = (ROOT / "topografia_planilla_tuberia_routes.py").read_text(encoding="utf-8")
         self.assertIn("from topografia_audit import", src)
         self.assertIn("log_topo(", src)
         self.assertIn('ENTIDAD_PLANILLA_TUBERIA', src)
+        self.assertIn("snapshot_edicion_planilla_tuberia", src)
+        self.assertIn("ambito\": \"cartera_resumen_descuentos\"", src)
         # Acciones clave instrumentadas
         for accion in (
             '"CREAR"',

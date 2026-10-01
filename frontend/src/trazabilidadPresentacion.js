@@ -132,12 +132,52 @@ export const CAMPO_ETIQUETAS = {
   c20_estado: 'Estado',
   c21_cerrado_at: 'Cerrado en',
   c22_contrato_id: 'Contrato',
+  // Planilla tubería — tablas editables (trazabilidad EDITAR)
+  cartera: 'Cartera',
+  resumen_cantidades: 'Resumen de Cantidades',
+  descuentos_especificos: 'Descuentos Específicos',
+  terreno_natural: 'Terreno natural',
+  cota_fondo_excavacion: 'Cota fondo excavación',
+  subrasante_via: 'Subrasante de vía',
+  terminado_filtro: 'Terminado filtro',
+  cota_lomo: 'Cota lomo',
+  abscisa: 'Abscisa',
+  long: 'Long',
+  descontar_de: 'Descontar de',
+  orden: 'Orden',
+  norte: 'Norte',
+  este: 'Este',
+  n_campos_modificados: 'Campos modificados',
+  n_filas: 'N.º filas',
+  ambito: 'Ámbito',
+  EXC: 'Excavación Varias',
+  TUB: 'Long Tubería',
+  TRI: 'Triturado / Atraque',
+  REL: 'Relleno Gran.',
+  GEO: 'Geotextil',
+  EXC_ROC: 'Excavación Roca',
+  DESC_A1: 'Area 1',
+  DESC_A2: 'Area 2',
+  DESC_TUB_FILT: 'Tubería Filtro',
 }
 
 export function etiquetaCampo(key) {
   if (key == null || key === '') return '—'
   const k = String(key)
   if (CAMPO_ETIQUETAS[k]) return CAMPO_ETIQUETAS[k]
+  // Cartera: fila_2_abs_10 → "Fila 2 (Abs 10)"
+  const fila = k.match(/^fila_(\d+)_abs_(.+)$/i)
+  if (fila) {
+    const abs = String(fila[2]).replace(/m(?=\d)/g, '-').replace(/_/g, '.')
+    return `Fila ${fila[1]} (Abs ${abs})`
+  }
+  // OTROS_n / DESC_OTROS_n
+  const otros = k.match(/^OTROS_(\d+)$/i)
+  if (otros) return `Otros (${otros[1]})`
+  const descOtros = k.match(/^DESC_OTROS_(\d+)$/i)
+  if (descOtros) return `Descuento Otros (${descOtros[1]})`
+  if (/^DESC_OTROS$/i.test(k)) return 'Descuento Otros'
+  if (/^OTROS$/i.test(k)) return 'Otros'
   // c01_foo_bar → "Foo bar" si no hay etiqueta; si no, humanizar snake_case
   const bare = k.replace(/^c\d+_/, '')
   return bare

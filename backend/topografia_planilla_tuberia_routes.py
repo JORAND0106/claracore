@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 from main import _es_desarrollador, _require_contract_access, get_current_user, supabase
 from topografia_audit import (
     ENTIDAD_PLANILLA_TUBERIA,
+    contar_campos_modificados,
     log_topo,
+    snapshot_edicion_planilla_tuberia,
     snapshot_planilla_tuberia,
 )
 from topografia_permissions import require_permiso_topografia, require_topo_puede_validar_nivel
@@ -1124,6 +1126,25 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
     _assert_editable(p)
     _assert_version(p, body.version)
 
+    # Snapshot pre-mutación (Cartera + Resumen + Descuentos) para trazabilidad campo a campo.
+    p_antes = dict(p)
+    filas_antes = _as_campo(_filas(planilla_id), tipo=p_antes.get("tipo"))
+    cant_antes = _cantidades_manuales_from_meta(p_antes)
+    desc_antes = _descuentos_manuales_from_meta(p_antes)
+    if not desc_antes:
+        # Fallback legacy: tabla descuentos sin dims en meta.
+        desc_antes = [
+            {"codigo": d.get("codigo"), "cantidad": d.get("cantidad"), "nombre": d.get("nota")}
+            for d in (_descuentos(planilla_id) or [])
+            if d.get("codigo")
+        ]
+    snap_antes = snapshot_edicion_planilla_tuberia(
+        p_antes,
+        filas=filas_antes,
+        cantidades_manuales=cant_antes,
+        descuentos_manuales=desc_antes,
+    )
+
     # Cabecera/tramo + meta (incl. traslapo) en la misma operación que la cartera.
     # Evita el falso rechazo de Traslapo cuando el valor solo está en el form y no aún en DB.
     patch_cab: dict[str, Any] = {}
@@ -1332,14 +1353,35 @@ def guardar_cartera(contrato_id: int, planilla_id: str, body: CarteraBody, curre
             sync_info = _sincronizar_so_registros_desde_calc(detalle.get("planilla") or p, calc_final, contrato_id)
     except Exception:
         logger.exception("sync sicoe tras guardar cartera planilla=%s", planilla_id)
+
+    planilla_despues = (detalle or {}).get("planilla") or p
+    filas_despues = _as_campo(detalle.get("filas_campo") or echo or [], tipo=planilla_despues.get("tipo"))
+    cant_despues = _cantidades_manuales_from_meta(planilla_despues)
+    if body.cantidades_manuales is not None:
+        cant_despues = list(body.cantidades_manuales or [])
+    desc_despues = _descuentos_manuales_from_meta(planilla_despues)
+    if body.descuentos_manuales is not None:
+        desc_despues = [_desc_body_to_dict(d) for d in body.descuentos_manuales if d.codigo]
+    snap_despues = snapshot_edicion_planilla_tuberia(
+        {**planilla_despues, "version": nueva_v},
+        filas=filas_despues,
+        cantidades_manuales=cant_despues,
+        descuentos_manuales=desc_despues,
+    )
+    n_cambios = contar_campos_modificados(snap_antes, snap_despues)
     _audit(
         contrato_id,
         planilla_id,
         "EDITAR",
         current_user,
-        {"ambito": "cartera", "n_filas": len(rows), "version": nueva_v},
-        valor_anterior=snapshot_planilla_tuberia(p),
-        valor_nuevo=snapshot_planilla_tuberia((detalle or {}).get("planilla")),
+        {
+            "ambito": "cartera_resumen_descuentos",
+            "n_filas": len(rows),
+            "version": nueva_v,
+            "n_campos_modificados": n_cambios,
+        },
+        valor_anterior=snap_antes,
+        valor_nuevo=snap_despues,
     )
     return {
         **detalle,
