@@ -18,7 +18,13 @@ import PlanillaTuberiaAsociarReporteModal from './PlanillaTuberiaAsociarReporteM
 import PlanillaTuberiaEvidenciaBtn from './PlanillaTuberiaEvidenciaBtn'
 import PlanillaTuberiaTramoMapaModal from './PlanillaTuberiaTramoMapaModal'
 import TopoTrazabilidadButton, { ENTIDAD_PLANILLA_TUBERIA } from '../TopoTrazabilidadButton'
-import { calcularPlanillaLocal, CAMPOS_DESCUENTO_ALTURA, esCodigoOtros, esCodigoDescOtros } from './planillaTuberiaCalc'
+import {
+  calcularPlanillaLocal,
+  cantidadDesdeDims,
+  CAMPOS_DESCUENTO_ALTURA,
+  esCodigoOtros,
+  esCodigoDescOtros,
+} from './planillaTuberiaCalc'
 import {
   CALC_CELL_BG,
   RELACIONES_ATRAQUE,
@@ -438,14 +444,6 @@ export default function PlanillaTuberiaForm({
       if (!list.some((c) => esCodigoDescOtros(c.codigo))) list.push({ codigo: 'DESC_OTROS_1' })
       return list
     })
-  }
-
-  const cantidadDesdeDims = (long, ancho, espesor) => {
-    const xs = [long, ancho, espesor]
-      .map((v) => (v === '' || v == null ? null : Number(v)))
-      .filter((v) => v != null && !Number.isNaN(v))
-    if (!xs.length) return 0
-    return Math.round(xs.reduce((a, b) => a * b, 1) * 100) / 100
   }
 
   const payloadDescuentosManuales = () => (

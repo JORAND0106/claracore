@@ -148,7 +148,7 @@ def _construir_descuentos_altura_detalle(
         label = CAMPOS_DESCUENTO_ALTURA_LABEL.get(campo, campo)
         h_orig = float(alturas_orig.get(campo) or 0.0)
         h_fin = float(alturas_final.get(campo) or 0.0)
-        vol = _r2(_product([long_m, ancho_m, esp_f])) or 0.0
+        vol = _r2(_product_resumen([long_m, ancho_m, esp_f])) or 0.0
         nota = formatear_nota_descuento_altura(
             actividad=actividad,
             campo_label=label,
@@ -167,9 +167,9 @@ def _construir_descuentos_altura_detalle(
             "altura_original": _r3(h_orig),
             "valor_descontado": _r3(esp_f),
             "altura_final": _r3(h_fin),
-            "long": _r4(long_m),
-            "ancho": _r4(ancho_m),
-            "espesor": _r4(esp_f),
+            "long": _dim_resumen_2(long_m),
+            "ancho": _dim_resumen_2(ancho_m),
+            "espesor": _dim_resumen_2(esp_f),
             "cantidad": round(float(vol), 2),
             "unidad": "m³",
             "nota": nota,
@@ -255,6 +255,23 @@ def _product(vals: list[Optional[float]]) -> Optional[float]:
     for x in xs:
         p *= x
     return p
+
+
+# Decimales de Long/Ancho/Espesor/Desc. en Resumen y Descuentos (entrada del PRODUCT).
+# Coherente con la presentación UI/PDF/Excel; distinto del payload SICOE (dims 3).
+DECIMALES_RESUMEN_CANTIDADES = 2
+
+
+def _dim_resumen_2(v: Optional[float]) -> Optional[float]:
+    """Factor de dimensión para PRODUCT de Resumen/Descuentos (2 dec)."""
+    if v is None:
+        return None
+    return round(float(v), DECIMALES_RESUMEN_CANTIDADES)
+
+
+def _product_resumen(vals: list[Optional[float]]) -> Optional[float]:
+    """PRODUCT redondeando cada factor a 2 dec (valor visto = valor usado)."""
+    return _product([_dim_resumen_2(v) for v in vals])
 
 
 def parse_denominador_relacion(relacion: str) -> int:
@@ -567,16 +584,16 @@ def calcular_cartera(filas_campo: list[dict], seccion: dict) -> dict[str, Any]:
 def _cantidad_desde_dims(
     long: Any, ancho: Any, espesor: Any, cantidad_fallback: Any = None
 ) -> float:
-    """PRODUCT(L,A,E) redondeado a 2; si no hay dims, usa cantidad_fallback."""
+    """PRODUCT(L,A,E) con cada dim a 2 dec, luego ROUND 2; si no hay dims, fallback."""
     dims = []
     for v in (long, ancho, espesor):
         fv = _f(v)
         if fv is not None:
-            dims.append(fv)
+            dims.append(_dim_resumen_2(fv))
     if dims:
         prod = 1.0
         for x in dims:
-            prod *= x
+            prod *= float(x)
         return float(_r2(prod) or 0.0)
     fb = _f(cantidad_fallback)
     return float(fb) if fb is not None else 0.0
@@ -724,7 +741,9 @@ def calcular_cantidades_y_descuentos(
 ) -> dict[str, Any]:
     """
     Resumen de Cantidades + Descuentos Específicos.
-    Cantidad = ROUND(PRODUCT(Long,Ancho,Espesor),2) − Desc (solo Triturado).
+    Cantidad = ROUND(PRODUCT(ROUND(Long,2),ROUND(Ancho,2),ROUND(Espesor,2)),2)
+    − Desc (solo Triturado). Cada dimensión se redondea a 2 dec antes del producto
+    para que el resultado coincida con los valores mostrados en UI/PDF/Excel.
     EXC_ROC y OTROS[_n] admiten Long/Ancho/Espesor (y nombre en OTROS) por override.
     descontar_de resta el espesor del promedio de cartera indicado.
     """
@@ -777,17 +796,17 @@ def calcular_cantidades_y_descuentos(
         d["nota"] for d in descuentos_altura_detalle if d.get("nota")
     ]
 
-    # Descuentos dimensionales automáticos
+    # Descuentos dimensionales automáticos (dims a 2 dec antes del PRODUCT)
     if tipo == "ALCANTARILLA":
-        desc_a1 = _r2(_product([L, a1])) or 0.0
-        desc_a2 = _r2(_product([L, a2])) or 0.0
+        desc_a1 = _r2(_product_resumen([L, a1])) or 0.0
+        desc_a2 = _r2(_product_resumen([L, a2])) or 0.0
         desc_tub_filt = 0.0
         desc_tri = desc_a1
         desc_rel = desc_a2
     else:
         desc_a1 = 0.0
         desc_a2 = 0.0
-        desc_tub_filt = _r2(_product([L, a_tub])) or 0.0
+        desc_tub_filt = _r2(_product_resumen([L, a_tub])) or 0.0
         desc_tri = desc_tub_filt
         desc_rel = 0.0
 
@@ -807,20 +826,21 @@ def calcular_cantidades_y_descuentos(
         descontar_de: Optional[str] = None,
     ) -> dict:
         meta = _meta_item_cantidad(codigo, tipo)
-        prod = _product([long, ancho, espesor])
+        long2, ancho2, esp2 = _dim_resumen_2(long), _dim_resumen_2(ancho), _dim_resumen_2(espesor)
+        prod = _product([long2, ancho2, esp2])
         bruto = _r2(prod) if prod is not None else 0.0
         if bruto is None:
             bruto = 0.0
         cant = round(bruto - desc, 2) if restar_desc else bruto
         row = {
             **meta,
-            "long": _r4(long),
-            "ancho": _r4(ancho),
-            "espesor": _r4(espesor),
+            "long": long2,
+            "ancho": ancho2,
+            "espesor": esp2,
             "desc": round(desc, 2),
             "cantidad": round(cant, 2),
             "bruto": round(bruto, 2),
-            "formula": f"ROUND(PRODUCT({long},{ancho},{espesor}),2)"
+            "formula": f"ROUND(PRODUCT({long2},{ancho2},{esp2}),2)"
             + (f"-{desc}" if restar_desc and desc else ""),
         }
         if nombre is not None:
@@ -892,9 +912,9 @@ def calcular_cantidades_y_descuentos(
             cant, long, ancho, esp = float(manual.get(cod) or 0.0), None, None, None
         descuentos.append({
             **it,
-            "long": _r4(long),
-            "ancho": _r4(ancho),
-            "espesor": _r4(esp),
+            "long": _dim_resumen_2(long),
+            "ancho": _dim_resumen_2(ancho),
+            "espesor": _dim_resumen_2(esp),
             "cantidad": round(float(cant), 2),
         })
 
@@ -903,9 +923,9 @@ def calcular_cantidades_y_descuentos(
         descuentos.append({
             **meta,
             "nombre": _label_desc_otros(ov.get("nombre")),
-            "long": _r4(ov.get("long")),
-            "ancho": _r4(ov.get("ancho")),
-            "espesor": _r4(ov.get("espesor")),
+            "long": _dim_resumen_2(ov.get("long")),
+            "ancho": _dim_resumen_2(ov.get("ancho")),
+            "espesor": _dim_resumen_2(ov.get("espesor")),
             "cantidad": round(float(ov.get("cantidad") or 0.0), 2),
             "editable_dims": True,
             "editable_nombre": True,

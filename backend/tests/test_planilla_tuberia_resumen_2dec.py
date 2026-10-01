@@ -23,8 +23,12 @@ class TestResumen2DecSource(unittest.TestCase):
         src = (ROOT / "topografia_planilla_tuberia_excel.py").read_text(encoding="utf-8")
         self.assertIn('NUM_FMT_RESUMEN_CANTIDADES = "0.00"', src)
         self.assertIn("_num_resumen_2", src)
+        self.assertIn("_xlsx_round2", src)
         self.assertIn("number_format = NUM_FMT_RESUMEN_CANTIDADES", src)
         self.assertIn("=ROUND(PRODUCT(K46:M46),2)", src)
+        # Dims de entrada al PRODUCT vía _xlsx_round2(...)
+        self.assertIn('_xlsx_round2("B41")', src)
+        self.assertIn('_xlsx_round2("$B$15")', src)
         # SICOE dims 3 no deben cambiarse aquí
         self.assertNotIn("_dim_sicoe_3", src)
 
@@ -32,6 +36,8 @@ class TestResumen2DecSource(unittest.TestCase):
         src = (ROOT / "topografia_planilla_tuberia.py").read_text(encoding="utf-8")
         self.assertIn("def _dim_sicoe_3", src)
         self.assertIn("Longitud / Ancho / Espesor → 3 decimales", src)
+        self.assertIn("def _product_resumen", src)
+        self.assertIn("DECIMALES_RESUMEN_CANTIDADES = 2", src)
 
 
 class TestExcelNumFmtRuntime(unittest.TestCase):

@@ -118,7 +118,7 @@ function construirDescuentosAlturaDetalle(overridesList, L, B, alturasOrig, altu
     const label = CAMPOS_DESC_LABEL[campo] || campo
     const hOrig = Number(alturasOrig[campo] || 0)
     const hFin = Number(alturasFinal[campo] || 0)
-    const vol = r2(product([L, B, esp])) || 0
+    const vol = r2(productResumen([L, B, esp])) || 0
     const nota = formatearNotaDescuentoAltura({
       actividad,
       campoLabel: label,
@@ -136,9 +136,9 @@ function construirDescuentosAlturaDetalle(overridesList, L, B, alturasOrig, altu
       altura_original: r4(hOrig),
       valor_descontado: r4(esp),
       altura_final: r4(hFin),
-      long: r4(L),
-      ancho: r4(B),
-      espesor: r4(esp),
+      long: dimResumen2(L),
+      ancho: dimResumen2(B),
+      espesor: dimResumen2(esp),
       cantidad: Math.round(vol * 100) / 100,
       unidad: 'm³',
       nota,
@@ -157,6 +157,13 @@ function r2(v) { return v == null ? null : Math.round(v * 100) / 100 }
 function r3(v) { return v == null ? null : Math.round(v * 1000) / 1000 }
 function r4(v) { return v == null ? null : Math.round(v * 10000) / 10000 }
 
+/** Decimales de Long/Ancho/Espesor en Resumen/Descuentos (entrada del PRODUCT). */
+export const DECIMALES_RESUMEN_CANTIDADES = 2
+
+function dimResumen2(v) {
+  return v == null ? null : Math.round(Number(v) * 100) / 100
+}
+
 function avg(vals) {
   const xs = vals.filter((v) => v != null)
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null
@@ -166,6 +173,11 @@ function product(vals) {
   const xs = vals.filter((v) => v != null).map(Number)
   if (!xs.length) return null
   return xs.reduce((a, b) => a * b, 1)
+}
+
+/** PRODUCT con cada factor redondeado a 2 dec (valor visto = valor usado). */
+function productResumen(vals) {
+  return product(vals.map((v) => (v == null ? null : dimResumen2(v))))
 }
 
 export function parseDenominadorRelacion(relacion) {
@@ -342,8 +354,15 @@ export function calcularCartera(filasCampo, seccion) {
   }
 }
 
-function cantidadDesdeDims(long, ancho, espesor, cantidadFallback = null) {
-  const dims = [long, ancho, espesor].map((v) => f(v)).filter((v) => v != null)
+/**
+ * PRODUCT(L,A,E) con cada dim a 2 dec, luego ROUND 2.
+ * Exportado para preview en vivo del formulario (misma regla que el motor).
+ */
+export function cantidadDesdeDims(long, ancho, espesor, cantidadFallback = null) {
+  const dims = [long, ancho, espesor]
+    .map((v) => f(v))
+    .filter((v) => v != null)
+    .map((v) => dimResumen2(v))
   if (dims.length) {
     const prod = dims.reduce((a, b) => a * b, 1)
     return r2(prod) ?? 0
@@ -500,12 +519,12 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   let descTri = 0
   let descRel = 0
   if (tipo === 'ALCANTARILLA') {
-    descA1 = r2(product([L, a1])) || 0
-    descA2 = r2(product([L, a2])) || 0
+    descA1 = r2(productResumen([L, a1])) || 0
+    descA2 = r2(productResumen([L, a2])) || 0
     descTri = descA1
     descRel = descA2
   } else {
-    descTubFilt = r2(product([L, aTub])) || 0
+    descTubFilt = r2(productResumen([L, aTub])) || 0
     descTri = descTubFilt
   }
 
@@ -517,14 +536,17 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
 
   function row(codigo, long, ancho, espesor, desc = 0, restarDesc = false, nombre = null, descontarDe = null) {
     const meta = metaItemCantidad(codigo, tipo)
-    const prod = product([long, ancho, espesor])
+    const long2 = dimResumen2(long)
+    const ancho2 = dimResumen2(ancho)
+    const esp2 = dimResumen2(espesor)
+    const prod = product([long2, ancho2, esp2])
     const bruto = prod != null ? (r2(prod) ?? 0) : 0
     const cant = restarDesc ? Math.round((bruto - desc) * 100) / 100 : bruto
     const out = {
       ...meta,
-      long: r4(long),
-      ancho: r4(ancho),
-      espesor: r4(espesor),
+      long: long2,
+      ancho: ancho2,
+      espesor: esp2,
       desc: Math.round(desc * 100) / 100,
       cantidad: Math.round(cant * 100) / 100,
       bruto: Math.round(bruto * 100) / 100,
@@ -587,9 +609,9 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
     else { cant = Number(manual[it.codigo] || 0) }
     descuentos.push({
       ...it,
-      long: r4(long),
-      ancho: r4(ancho),
-      espesor: r4(esp),
+      long: dimResumen2(long),
+      ancho: dimResumen2(ancho),
+      espesor: dimResumen2(esp),
       cantidad: Math.round(Number(cant) * 100) / 100,
     })
   }
@@ -598,9 +620,9 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
     descuentos.push({
       ...meta,
       nombre: labelDescOtros(ov.nombre),
-      long: r4(ov.long ?? null),
-      ancho: r4(ov.ancho ?? null),
-      espesor: r4(ov.espesor ?? null),
+      long: dimResumen2(ov.long ?? null),
+      ancho: dimResumen2(ov.ancho ?? null),
+      espesor: dimResumen2(ov.espesor ?? null),
       cantidad: Math.round(Number(ov.cantidad || 0) * 100) / 100,
       editable_dims: true,
       editable_nombre: true,
