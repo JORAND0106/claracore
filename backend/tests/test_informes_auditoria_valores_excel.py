@@ -162,14 +162,13 @@ def test_plataforma_pdf_excel_misma_secuencia_y_valores():
             if pdf_txt != expected:
                 diffs.append(f"{n}.{label}: PDF={pdf_txt!r} ctx={expected!r}")
         for vk in ("valor_actualizadas", "valor_presente", "valor_acumulado", "valor_saldo"):
-            pdf_v = inf._fm(it[vk])
-            # _fm sin .00; valor numérico Round0
+            pdf_v = inf._fm_informe(it[vk])
+            # _fm_informe: Round0 con .00
             if float(it[vk]) != round(float(it[vk]), 0):
                 diffs.append(f"{n}.{vk}: no Round0 {it[vk]!r}")
-            if f"{int(round(float(it[vk]))):,}" not in pdf_v.replace(" ", "") and pdf_v != f"$ {int(round(float(it[vk]))):,}":
-                # soft check: PDF contiene el entero
-                if str(int(round(float(it[vk])))) not in pdf_v.replace(",", ""):
-                    diffs.append(f"{n}.{vk}: PDF={pdf_v!r}")
+            expected_money = f"$ {int(round(float(it[vk]))):,.2f}"
+            if pdf_v != expected_money:
+                diffs.append(f"{n}.{vk}: PDF={pdf_v!r} expected={expected_money!r}")
 
         # Excel: cantidades literales = ctx; fórmulas valor con ROUND(ROUND(,2)*VU,0)
         r = excel_by_item.get(n)
