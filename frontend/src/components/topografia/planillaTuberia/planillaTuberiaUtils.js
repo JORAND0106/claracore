@@ -41,6 +41,17 @@ export function fmtNDash(v, dec = 3) {
 export { fmtNDash as fmtNOrDash }
 
 /**
+ * Presentación de Long/Ancho/Espesor/Desc./Cantidad en Resumen de Cantidades
+ * y Descuentos Específicos (exactamente 2 decimales).
+ * No altera el redondeo del payload SICOE (dims 3 / cantidad 2 / CD 0).
+ */
+export const DECIMALES_RESUMEN_CANTIDADES = 2
+
+export function fmtResumenCantidades(v) {
+  return fmtNDash(v, DECIMALES_RESUMEN_CANTIDADES)
+}
+
+/**
  * Normaliza un valor de celda pegado desde Excel (coma decimal, miles).
  * Devuelve string listo para inputs numéricos de la cartera.
  */

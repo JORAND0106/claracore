@@ -33,6 +33,7 @@ import {
   filaCampoVacia,
   filasDesdeApi,
   fmtNDash,
+  fmtResumenCantidades,
   handleEnterAsTab,
   migrarFilasAlCambiarTipo,
   coordsGeoDesdePlanilla,
@@ -1709,11 +1710,11 @@ export default function PlanillaTuberiaForm({
                           onChange={(e) => setOverrideCantidad(n.codigo, { [k]: e.target.value })}
                           style={inpStyle}
                         />
-                      ) : fmtNDash(n[k])}
+                      ) : fmtResumenCantidades(n[k])}
                     </td>
                   ))}
-                  <td style={tdResumenCalc}>{fmtNDash(n.descuentos)}</td>
-                  <td style={tdResumenCalc}>{fmtNDash(displayNetoCant(n))}</td>
+                  <td style={tdResumenCalc}>{fmtResumenCantidades(n.descuentos)}</td>
+                  <td style={tdResumenCalc}>{fmtResumenCantidades(displayNetoCant(n))}</td>
                   <td style={{ ...tdResumenCalc, padding: 2, textAlign: 'left' }}>
                     {(n.codigo === 'EXC_ROC' || esOtros) ? (
                       <select
@@ -1894,10 +1895,10 @@ export default function PlanillaTuberiaForm({
                           onChange={(e) => setOverrideDescuento(d.codigo, { [k]: e.target.value })}
                           style={inpStyle}
                         />
-                      ) : fmtNDash(d[k])}
+                      ) : fmtResumenCantidades(d[k])}
                     </td>
                   ))}
-                  <td style={tdResumenCalc}>{fmtNDash(esOtrosDesc ? displayCantDesc(d) : d.cantidad)}</td>
+                  <td style={tdResumenCalc}>{fmtResumenCantidades(esOtrosDesc ? displayCantDesc(d) : d.cantidad)}</td>
                   <td style={{ ...tdResumenCalc, textAlign: 'center', padding: '2px 4px' }}>
                     <PlanillaTuberiaEvidenciaBtn
                       scope="descuentos"
