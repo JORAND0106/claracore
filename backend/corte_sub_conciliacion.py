@@ -44,6 +44,11 @@ def _sf(n: Any, default: float = 0.0) -> float:
             return float(default)
 
 
+def _round2(n: Any) -> float:
+    """Cantidad de informe: siempre 2 decimales."""
+    return float(round(_sf(n), 2))
+
+
 def _round0(n: Any) -> float:
     return float(round(_sf(n), 0))
 
@@ -86,24 +91,26 @@ def _extract_tributos_pcts(tributos: Any) -> Dict[str, Optional[float]]:
 
 
 def _redondear_cant(valor: Any) -> float:
+    """Compat SicoeObra (redondeo dinámico 2/3). Informes CC-SUB/MES usan ``_round2``."""
     try:
         from sicoe_cantidad_redondeo import redondear_cantidad_total_dinamico
 
         return redondear_cantidad_total_dinamico(valor)
     except Exception:
-        return float(round(_sf(valor), 2))
+        return _round2(valor)
 
 
 def valor_por_cantidad_vu(cantidad: Any, vlr_unitario: Any) -> float:
     """
-    Cantidad × VU, redondeado a 0 dp (nunca sumar valores almacenados).
+    Regla única CC-SUB/MES (plataforma = PDF = Excel):
 
-    La cantidad ya debe venir agregada a nivel de registro (suma de
-    ``cantidad_total`` persistidos, cada uno con redondeo de plataforma).
-    No se re-aplica el redondeo dinámico sobre la suma: eso divergía de
-    SicoeObra ``agruparRegistrosPorItem`` / ``sumCant``.
+    1. cantidad redondeada a 2 decimales;
+    2. valor = ROUND0(cantidad_2dp × VU del listado).
+
+    Subtotales/totales suman estos valores ya redondeados (nunca re-multiplicar
+    agregados ni sumar valores almacenados con otra precisión).
     """
-    return _round0(_sf(cantidad) * _sf(vlr_unitario))
+    return _round0(_round2(cantidad) * _sf(vlr_unitario))
 
 
 def calc_aiu_desglose(costo_directo: float, tributos: Any = None) -> Dict[str, Any]:
@@ -523,13 +530,12 @@ def enriquecer_items_bloques(
             if _sf(base.get("vlr_unitario")) <= 0:
                 base["vlr_unitario"] = vu
 
-        # Suma de cantidad_total ya redondeada por registro (misma regla que
-        # SicoeObra sumCant). No re-aplicar redondeo dinámico sobre el agregado.
-        cant_pres = _sf(base.get("cantidad") or 0.0)
-        cant_act = _sf(cant_actualizadas.get(k, 0.0))
-        cant_ant = _sf(cant_acum_anterior.get(k, 0.0))
-        cant_acum = cant_ant + cant_pres
-        cant_saldo = cant_act - cant_acum
+        # Regla única: cantidades a 2 dp; valor = ROUND0(cant_2dp × VU).
+        cant_pres = _round2(base.get("cantidad") or 0.0)
+        cant_act = _round2(cant_actualizadas.get(k, 0.0))
+        cant_ant = _round2(cant_acum_anterior.get(k, 0.0))
+        cant_acum = _round2(cant_ant + cant_pres)
+        cant_saldo = _round2(cant_act - cant_acum)
 
         base["cantidad"] = cant_pres
         base["costo_directo"] = valor_por_cantidad_vu(cant_pres, vu)

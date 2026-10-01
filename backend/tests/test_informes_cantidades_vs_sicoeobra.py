@@ -1,23 +1,20 @@
 """
-Evidencia de la causa raíz: re-redondeo del agregado vs suma de registros SicoeObra.
+Consistencia cantidades informes vs SicoeObra — regla unificada 2026-10.
 
-Cuadro comparativo (ejemplo sintético, misma regla que ICCU/ME Obras en producción):
+Regla única CC-SUB/MES (plataforma = PDF = Excel):
+  cant = ROUND(cant_agregada, 2)
+  valor = ROUND(cant × VU, 0)
 
-| Ítem | Registros aprobados (cantidad_total) | SicoeObra sumCant | Informe ANTES (re-redondeo) | Informe DESPUÉS |
-|------|--------------------------------------|-------------------|-----------------------------|-----------------|
-| 1.1  | 0.044 + 0.044 + 0.044                | 0.132             | 0.13                        | 0.132           |
-| 2.1  | 0.055 + 0.055                        | 0.110             | 0.11                        | 0.110           |
-| 3.1  | 1.255 + 1.255                        | 2.510             | 2.51                        | 2.510           |
+Cuadro comparativo (ejemplo sintético):
 
-Causa en código (antes):
-- SicoeObra: ``agruparRegistrosPorItem`` suma ``cantidad_total`` sin re-redondear
-  (frontend/src/modules/sicoe-obra/sicoeReporteItemsTablaHelpers.js).
-- Informes: ``enriquecer_items_bloques`` + ``cantidades_por_item_*`` aplicaban
-  ``redondear_cantidad_total_dinamico`` sobre la suma (2 dp si ≥0.10).
+| Ítem | Registros (cantidad_total) | Suma cruda SicoeObra | Informe (ROUND 2 dp) | Valor VU=1000 |
+|------|----------------------------|----------------------|----------------------|---------------|
+| 1.1  | 0.044+0.044+0.044          | 0.132                | 0.13                 | 130           |
+| 2.1  | 0.055+0.055                | 0.110                | 0.11                 | 110           |
+| 3.1  | 1.255+1.255                | 2.510                | 2.51                 | 2510          |
 
-Filtro de aprobación (sin cambio de eje):
-- CC-MES: cascada matriz ``_registro_aprobado_matriz_panel`` (igual KPI SicoeObra).
-- CC-SUB: ``sub_estado=Aprobado`` (eje subcontratista; distinto de capas nivel*).
+Nota: la suma cruda de registros sigue siendo la de SicoeObra; el informe
+aplica ROUND a 2 dp una sola vez sobre ese agregado para alinear PDF/Excel.
 """
 from __future__ import annotations
 
@@ -27,11 +24,10 @@ from corte_sub_conciliacion import (
     filtrar_items_con_cantidades,
     valor_por_cantidad_vu,
 )
-from sicoe_cantidad_redondeo import redondear_cantidad_total_dinamico
 
 
-def test_suma_registros_no_se_re_redondea_como_sicoeobra_sumcant():
-    """0.044×3 → SicoeObra 0.132; re-redondeo dinámico daba 0.13."""
+def test_informe_redondea_agregado_a_2dp_regla_unica():
+    """0.044×3 → suma 0.132 → informe 0.13; valor ROUND0(0.13×VU)."""
     regs = [
         {"item_numero": "1.1", "cantidad_total": 0.044, "vlr_unitario": 1000, "costo_directo": 44},
         {"item_numero": "1.1", "cantidad_total": 0.044, "vlr_unitario": 1000, "costo_directo": 44},
@@ -39,8 +35,6 @@ def test_suma_registros_no_se_re_redondea_como_sicoeobra_sumcant():
     ]
     items, _ = aggregate_items_conciliacion(regs)
     assert abs(items[0]["cantidad"] - 0.132) < 1e-9
-    # Evidencia de la divergencia histórica
-    assert redondear_cantidad_total_dinamico(0.132) == 0.13
 
     enriched = enriquecer_items_bloques(
         items,
@@ -48,9 +42,10 @@ def test_suma_registros_no_se_re_redondea_como_sicoeobra_sumcant():
         cant_acum_anterior={},
         vu_por_item={"1.1": 1000.0},
     )
-    assert abs(enriched[0]["cant_presente"] - 0.132) < 1e-9
-    assert abs(enriched[0]["cant_acumulado"] - 0.132) < 1e-9
-    assert enriched[0]["valor_presente"] == valor_por_cantidad_vu(0.132, 1000)
+    assert abs(enriched[0]["cant_presente"] - 0.13) < 1e-9
+    assert abs(enriched[0]["cant_acumulado"] - 0.13) < 1e-9
+    assert enriched[0]["valor_presente"] == valor_por_cantidad_vu(0.13, 1000)
+    assert enriched[0]["valor_presente"] == 130.0
 
 
 def test_aggregate_normaliza_espacios_item_como_sicoeobra():
@@ -82,7 +77,7 @@ def test_fuente_sin_fila_cd_presente_acta_bajo_cuadro():
     assert "RESUMEN DE CONCILIACIÓN" in text
 
 
-def test_excel_cd_resumen_suma_items_sin_fila_intermedia():
+def test_excel_cd_resumen_suma_subtotales_capitulo():
     from io import BytesIO
 
     from openpyxl import load_workbook
@@ -123,17 +118,21 @@ def test_excel_cd_resumen_suma_items_sin_fila_intermedia():
     )
     wb = load_workbook(BytesIO(raw))
     ws = wb.active
+    # R9 ítem, R10 subtotal → CD referencia F10
+    assert ws.cell(9, 1).value == "1.1"
+    assert str(ws.cell(10, 1).value).startswith("Subtotal")
+    assert ws.cell(10, 6).value == "=F9"
     labels = []
     cd_resumen_formula = None
     for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=12):
         a = row[0].value
         if isinstance(a, str):
             labels.append(a)
-            # Línea Costo Directo del resumen (exacta; no "Costo Directo + AIU")
             if a.strip() == "Costo Directo":
-                cd_resumen_formula = row[5].value  # col F (valor Actualizadas)
+                cd_resumen_formula = row[5].value
     assert "COSTO DIRECTO:" not in labels
     assert any(x == "RESUMEN DE CONCILIACIÓN" for x in labels)
     assert cd_resumen_formula is not None
     assert str(cd_resumen_formula).startswith("=")
-    assert "F" in str(cd_resumen_formula)
+    assert "F10" in str(cd_resumen_formula)
+    assert "F9" not in str(cd_resumen_formula)

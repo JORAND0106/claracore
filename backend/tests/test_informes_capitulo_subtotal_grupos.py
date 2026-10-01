@@ -128,16 +128,23 @@ def test_excel_subtotales_formulas_y_cd_solo_items():
     # Ítems
     assert ws.cell(9, 1).value == "1.1"
     assert ws.cell(10, 1).value == "1.2"
-    # Subtotal cap 1
+    # Subtotal cap 1: SUM de rango (no F9+F10 celda a celda)
     assert str(ws.cell(11, 1).value).startswith("Subtotal 1. PRELIMINARES")
-    assert str(ws.cell(11, 6).value).startswith("=")  # fórmula suma valores
-    assert "F9" in str(ws.cell(11, 6).value) and "F10" in str(ws.cell(11, 6).value)
+    assert str(ws.cell(11, 6).value).startswith("=")
+    f_sub = str(ws.cell(11, 6).value)
+    assert "F9" in f_sub and "F10" in f_sub
+    assert "+".join(["F9", "F10"]) not in f_sub or "SUM(" in f_sub or "F9:F10" in f_sub
+    # Preferir SUM(F9:F10)
+    assert "SUM(F9:F10)" in f_sub or f_sub in ("=F9+F10",)  # fallback single-join ok if 2 non-contig
+    # Con filas consecutivas debe ser SUM(F9:F10)
+    assert f_sub == "=SUM(F9:F10)"
+    assert ws.cell(11, 6).number_format == '"$"#,##0.00'
     # Cantidad de subtotal vacía
     assert ws.cell(11, 5).value in (None, "")
     # Ítem cap 3 + subtotal
     assert ws.cell(12, 1).value == "3.1"
     assert "ALCANTARILLA" in str(ws.cell(13, 1).value)
-    # CD del resumen suma solo ítems (no filas 11/13 de subtotal)
+    # CD del resumen = suma de subtotales (F11 y F13), no de ítems
     cd_row = None
     for r in range(1, ws.max_row + 1):
         if ws.cell(r, 1).value == "Costo Directo":
@@ -146,9 +153,12 @@ def test_excel_subtotales_formulas_y_cd_solo_items():
     assert cd_row is not None
     cd_f = str(ws.cell(cd_row, 6).value)
     assert cd_f.startswith("=")
-    assert "F9" in cd_f and "F10" in cd_f and "F12" in cd_f
-    assert "F11" not in cd_f and "F13" not in cd_f
-    # Memorias: Presente cant en col G; acum = G+ant
+    assert "F11" in cd_f and "F13" in cd_f
+    assert "F9" not in cd_f and "F10" not in cd_f and "F12" not in cd_f
+    assert ws.cell(cd_row, 6).number_format == '"$"#,##0.00'
+    # Cantidades: 2 dp; acum/saldo con ROUND
     assert ws.cell(9, 7).value == 2.0
-    assert str(ws.cell(9, 9).value) == "=G9+1.0"
-    assert str(ws.cell(9, 11).value) == "=E9-I9"
+    assert ws.cell(9, 5).number_format == "#,##0.00"
+    assert str(ws.cell(9, 9).value) == "=ROUND(G9+1.0,2)"
+    assert str(ws.cell(9, 11).value) == "=ROUND(E9-I9,2)"
+    assert "ROUND(ROUND(" in str(ws.cell(9, 6).value)
