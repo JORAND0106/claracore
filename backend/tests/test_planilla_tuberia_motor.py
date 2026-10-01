@@ -191,6 +191,42 @@ class TestCantidadesDescuentosXlsm(unittest.TestCase):
         self.assertIn("DESC_OTROS_1", cods)
         self.assertNotIn("DESC_A1", cods)
 
+    def test_cantidad_usa_dims_redondeadas_a_2(self):
+        """90 × 0.009 → se ve 0.01; cantidad debe ser 0.90 (no 0.81)."""
+        from topografia_planilla_tuberia import _cantidad_desde_dims, calcular_cantidades_y_descuentos
+
+        self.assertAlmostEqual(_cantidad_desde_dims(90, None, 0.009), 0.90, places=2)
+        self.assertAlmostEqual(_cantidad_desde_dims(90, 1, 0.009), 0.90, places=2)
+
+        seccion = {
+            "tipo": "ALCANTARILLA",
+            "ancho_excavacion_m": 1.5,
+            "area_1_m2": 0.009,
+            "area_2_m2": 0.1234,
+            "area_tuberia_m2": 0.5,
+            "traslapo_m": 0,
+        }
+        cartera = {"totales": {
+            "longitud_m": 90.0,
+            "prom_altura_excavacion": 1.0,
+            "prom_altura_triturado": 0.2,
+            "prom_altura_relleno": 0.5,
+            "prom_ancho_geotextil": 0,
+        }}
+        out = calcular_cantidades_y_descuentos(
+            seccion,
+            cartera,
+            descuentos_manuales=[
+                {"codigo": "DESC_OTROS_1", "nombre": "X", "long": 90, "espesor": 0.009},
+            ],
+        )
+        by = {d["codigo"]: d for d in out["descuentos"]}
+        self.assertAlmostEqual(by["DESC_OTROS_1"]["espesor"], 0.01, places=2)
+        self.assertAlmostEqual(by["DESC_OTROS_1"]["cantidad"], 0.90, places=2)
+        # Area 1: L=90, a1=0.009 → 90×0.01 = 0.90 (no 0.81)
+        self.assertAlmostEqual(by["DESC_A1"]["espesor"], 0.01, places=2)
+        self.assertAlmostEqual(by["DESC_A1"]["cantidad"], 0.90, places=2)
+
     def test_multi_desc_otros_dims_independientes(self):
         r = calcular_planilla_completa(
             tipo="ALCANTARILLA", diametro_m=0.9, espesor_m=0.05,
@@ -388,12 +424,16 @@ class TestDescuentosPorTipoXlsm(unittest.TestCase):
         L = r["cartera"]["totales"]["longitud_m"]
         a1 = r["seccion"]["area_1_m2"]
         a2 = r["seccion"]["area_2_m2"]
-        # N46 = PRODUCT(Long, Ancho vacío, Espesor=Area1) → L·Area1
-        self.assertAlmostEqual(by["DESC_A1"]["long"], L, places=4)
+        # N46 = PRODUCT(ROUND(L,2), Ancho vacío, ROUND(Area1,2))
+        self.assertAlmostEqual(by["DESC_A1"]["long"], round(L, 2), places=2)
         self.assertIsNone(by["DESC_A1"]["ancho"])
-        self.assertAlmostEqual(by["DESC_A1"]["espesor"], a1, places=3)
-        self.assertAlmostEqual(by["DESC_A1"]["cantidad"], round(L * a1, 2), places=2)
-        self.assertAlmostEqual(by["DESC_A2"]["cantidad"], round(L * a2, 2), places=2)
+        self.assertAlmostEqual(by["DESC_A1"]["espesor"], round(a1, 2), places=2)
+        self.assertAlmostEqual(
+            by["DESC_A1"]["cantidad"], round(round(L, 2) * round(a1, 2), 2), places=2
+        )
+        self.assertAlmostEqual(
+            by["DESC_A2"]["cantidad"], round(round(L, 2) * round(a2, 2), 2), places=2
+        )
         netos = {n["codigo"]: n for n in r["netos"]}
         # G48 = N46 restado de TRI; G49 = N47 mostrado en REL sin restar
         self.assertAlmostEqual(netos["TRI"]["descuentos"], by["DESC_A1"]["cantidad"], places=2)
@@ -412,10 +452,14 @@ class TestDescuentosPorTipoXlsm(unittest.TestCase):
         self.assertNotIn("DESC_A2", by)
         L = r["cartera"]["totales"]["longitud_m"]
         a_tub = r["seccion"]["area_tuberia_m2"]
-        self.assertAlmostEqual(by["DESC_TUB_FILT"]["long"], L, places=4)
+        self.assertAlmostEqual(by["DESC_TUB_FILT"]["long"], round(L, 2), places=2)
         self.assertIsNone(by["DESC_TUB_FILT"]["ancho"])
-        self.assertAlmostEqual(by["DESC_TUB_FILT"]["espesor"], a_tub, places=3)
-        self.assertAlmostEqual(by["DESC_TUB_FILT"]["cantidad"], round(L * a_tub, 2), places=2)
+        self.assertAlmostEqual(by["DESC_TUB_FILT"]["espesor"], round(a_tub, 2), places=2)
+        self.assertAlmostEqual(
+            by["DESC_TUB_FILT"]["cantidad"],
+            round(round(L, 2) * round(a_tub, 2), 2),
+            places=2,
+        )
         netos = {n["codigo"]: n for n in r["netos"]}
         self.assertAlmostEqual(netos["TRI"]["descuentos"], by["DESC_TUB_FILT"]["cantidad"], places=2)
         self.assertAlmostEqual(netos["REL"]["descuentos"], 0.0, places=2)

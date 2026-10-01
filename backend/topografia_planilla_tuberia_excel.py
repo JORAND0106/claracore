@@ -101,6 +101,14 @@ def _num_resumen_2(v: Any) -> Optional[float]:
         return None
 
 
+def _xlsx_round2(expr: str) -> str:
+    """Fórmula Excel ROUND(expr,2) — dims de Resumen/Descuentos antes del PRODUCT."""
+    e = str(expr or "").strip()
+    if e.startswith("="):
+        e = e[1:]
+    return f"=ROUND({e},2)"
+
+
 def _perfil_chart_gridlines() -> ChartLines:
     """Líneas de grilla mayor: gris claro y trazo fino."""
     return ChartLines(
@@ -555,16 +563,16 @@ def _write_descuento_fila_formula(ws, r: int, codigo: str, es_alc: bool) -> None
     """Fórmulas vivas de descuentos conocidos (Area1/Area2 / Tubería Filtro / Otros)."""
     cod = str(codigo or "").upper()
     if es_alc and cod == "DESC_A1":
-        _set(ws, f"K{r}", "=$B$41")
-        _set(ws, f"M{r}", "=$B$15")
+        _set(ws, f"K{r}", _xlsx_round2("$B$41"))
+        _set(ws, f"M{r}", _xlsx_round2("$B$15"))
         _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
     elif es_alc and cod == "DESC_A2":
-        _set(ws, f"K{r}", "=$B$41")
-        _set(ws, f"M{r}", "=$C$15")
+        _set(ws, f"K{r}", _xlsx_round2("$B$41"))
+        _set(ws, f"M{r}", _xlsx_round2("$C$15"))
         _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
     elif (not es_alc) and cod == "DESC_TUB_FILT":
-        _set(ws, f"K{r}", "=$B$41")
-        _set(ws, f"M{r}", "=$K$13")
+        _set(ws, f"K{r}", _xlsx_round2("$B$41"))
+        _set(ws, f"M{r}", _xlsx_round2("$K$13"))
         _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
     elif cod == "DESC_OTROS" or cod.startswith("DESC_OTROS_"):
         _set(ws, f"N{r}", f"=ROUND(PRODUCT(K{r}:M{r}),2)")
@@ -589,13 +597,14 @@ def _write_resumen_fila_formulas(
                 return f"=N{rr}"
         return 0
 
-    d_from_exc = f"=D{exc_row}" if exc_row else "=B41"
-    e_from_exc = f"=E{exc_row}" if exc_row else "=G15"
+    # Dims referenciadas a EXC ya van ROUND(...,2); si no hay fila EXC, redondear origen.
+    d_from_exc = f"=D{exc_row}" if exc_row else _xlsx_round2("B41")
+    e_from_exc = f"=E{exc_row}" if exc_row else _xlsx_round2("G15")
 
     if cod == "EXC":
-        _set(ws, f"D{r}", "=B41")
-        _set(ws, f"E{r}", "=G15")
-        _set(ws, f"F{r}", "=IFERROR(G41,0)")
+        _set(ws, f"D{r}", _xlsx_round2("B41"))
+        _set(ws, f"E{r}", _xlsx_round2("G15"))
+        _set(ws, f"F{r}", _xlsx_round2("IFERROR(G41,0)"))
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
     elif cod == "TUB":
         _set(ws, f"D{r}", d_from_exc)
@@ -603,13 +612,13 @@ def _write_resumen_fila_formulas(
     elif cod == "TRI":
         _set(ws, f"D{r}", d_from_exc)
         _set(ws, f"E{r}", e_from_exc)
-        _set(ws, f"F{r}", "=IFERROR(H41,0)")
+        _set(ws, f"F{r}", _xlsx_round2("IFERROR(H41,0)"))
         _set(ws, f"G{r}", _g_ref("DESC_A1", "DESC_TUB_FILT"))
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)-G{r}")
     elif cod == "REL":
         _set(ws, f"D{r}", d_from_exc)
         _set(ws, f"E{r}", e_from_exc)
-        _set(ws, f"F{r}", "=IFERROR(I41,0)")
+        _set(ws, f"F{r}", _xlsx_round2("IFERROR(I41,0)"))
         _set(ws, f"G{r}", _g_ref("DESC_A2") if es_alc else 0)
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
     elif cod == "GEO":
@@ -622,7 +631,7 @@ def _write_resumen_fila_formulas(
         else:
             _set(ws, f"D{r}", d_from_exc)
             # FILTRO: ancho = prom geotextil (J41) + traslapo (F15).
-            _set(ws, f"E{r}", "=IFERROR(J41,0)+IFERROR($F$15,0)")
+            _set(ws, f"E{r}", _xlsx_round2("IFERROR(J41,0)+IFERROR($F$15,0)"))
             _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
     elif cod == "OTROS" or cod.startswith("OTROS_"):
         _set(ws, f"H{r}", f"=ROUND(PRODUCT(D{r}:F{r}),2)")
@@ -643,20 +652,21 @@ def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
     ):
         _set_nombre_item_cantidad(ws, row, name, und)
 
-    _set(ws, "D45", "=B41")
-    _set(ws, "E45", "=G15")
-    _set(ws, "F45", "=IFERROR(G41,0)")
+    # Dims ROUND(...,2) para que PRODUCT use el mismo valor que ve el usuario.
+    _set(ws, "D45", _xlsx_round2("B41"))
+    _set(ws, "E45", _xlsx_round2("G15"))
+    _set(ws, "F45", _xlsx_round2("IFERROR(G41,0)"))
     _set(ws, "H45", "=ROUND(PRODUCT(D45:F45),2)")
     _set(ws, "D46", "=D45")
     _set(ws, "H46", "=ROUND(PRODUCT(D46:F46),2)")
     _set(ws, "D47", "=D45")
     _set(ws, "E47", "=E45")
-    _set(ws, "F47", "=IFERROR(H41,0)")
+    _set(ws, "F47", _xlsx_round2("IFERROR(H41,0)"))
     _set(ws, "G47", "=N46" if es_alc else "=N45")
     _set(ws, "H47", "=ROUND(PRODUCT(D47:F47),2)-G47")
     _set(ws, "D48", "=D45")
     _set(ws, "E48", "=E45")
-    _set(ws, "F48", "=IFERROR(I41,0)")
+    _set(ws, "F48", _xlsx_round2("IFERROR(I41,0)"))
     _set(ws, "G48", "=N47" if es_alc else 0)
     _set(ws, "H48", "=ROUND(PRODUCT(D48:F48),2)")
     _set(ws, "D49", "=D45" if not es_alc else None)
@@ -664,7 +674,7 @@ def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
         _set(ws, "E49", None)
         _set(ws, "H49", 0)
     else:
-        _set(ws, "E49", "=IFERROR(J41,0)+IFERROR($F$15,0)")
+        _set(ws, "E49", _xlsx_round2("IFERROR(J41,0)+IFERROR($F$15,0)"))
         _set(ws, "H49", "=ROUND(PRODUCT(D49:F49),2)")
     _set(ws, "D50", "=D45")
     _set(ws, "E50", "=E45")
@@ -678,17 +688,17 @@ def _write_tablas_cantidades_descuentos_plantilla(ws, *, es_alc: bool) -> None:
         _set(ws, "M45", "")
         _set(ws, "N45", "")
         _set_nombre_item_descuento(ws, 46, "Area 1")
-        _set(ws, "K46", "=$B$41")
-        _set(ws, "M46", "=$B$15")
+        _set(ws, "K46", _xlsx_round2("$B$41"))
+        _set(ws, "M46", _xlsx_round2("$B$15"))
         _set(ws, "N46", "=ROUND(PRODUCT(K46:M46),2)")
         _set_nombre_item_descuento(ws, 47, "Area 2")
-        _set(ws, "K47", "=$B$41")
-        _set(ws, "M47", "=$C$15")
+        _set(ws, "K47", _xlsx_round2("$B$41"))
+        _set(ws, "M47", _xlsx_round2("$C$15"))
         _set(ws, "N47", "=ROUND(PRODUCT(K47:M47),2)")
     else:
         _set_nombre_item_descuento(ws, 45, "Tubería Filtro")
-        _set(ws, "K45", "=$B$41")
-        _set(ws, "M45", "=$K$13")
+        _set(ws, "K45", _xlsx_round2("$B$41"))
+        _set(ws, "M45", _xlsx_round2("$K$13"))
         _set(ws, "N45", "=ROUND(PRODUCT(K45:M45),2)")
         _set(ws, "I46", "")
         _set(ws, "K46", "")

@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   calcularPlanillaLocal,
+  cantidadDesdeDims,
   esCodigoDescOtros,
 } from './planillaTuberiaCalc.js'
 import {
@@ -36,6 +37,29 @@ describe('Descuentos Específicos — multi Otros', () => {
       siguienteCodigoDescOtros([{ codigo: 'DESC_OTROS_1' }, { codigo: 'DESC_OTROS_3' }]),
       'DESC_OTROS_4',
     )
+  })
+
+  it('cantidad usa dims redondeadas a 2 (90×0.009 → 0.90, no 0.81)', () => {
+    assert.equal(cantidadDesdeDims(90, null, 0.009), 0.9)
+    assert.equal(cantidadDesdeDims(90, 1, 0.009), 0.9)
+    const calc = calcularPlanillaLocal({
+      tipo: 'ALCANTARILLA',
+      diametro_m: 0.9,
+      espesor_m: 0.05,
+      ancho_excavacion_m: 1.5,
+      relacion_atraque: '1:3',
+      cama_triturado_m: 0.1,
+      filas_campo: [
+        { orden: 1, abscisa: 0, terreno_natural: 100, subrasante_via: 99, cota_fondo_excavacion: 98 },
+        { orden: 2, abscisa: 90, terreno_natural: 100, subrasante_via: 99, cota_fondo_excavacion: 98 },
+      ],
+      descuentos_manuales: [
+        { codigo: 'DESC_OTROS_1', nombre: 'X', long: 90, espesor: 0.009 },
+      ],
+    })
+    const d = (calc.descuentos || []).find((x) => x.codigo === 'DESC_OTROS_1')
+    assert.equal(d.espesor, 0.01)
+    assert.equal(d.cantidad, 0.9)
   })
 
   it('motor: múltiples DESC_OTROS independientes restan de EXC', () => {
