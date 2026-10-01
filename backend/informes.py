@@ -187,6 +187,7 @@ from ccd_conciliacion import (
     group_registros_memoria_por_item,
     informe_gerencia_matriz_maps_por_rpc,
     _norm_cap_informe_gerencia,
+    overlay_enlace_soporte_desde_reporte,
     rpo_conciliacion_por_contrato,
     rpo_conciliacion_un_acta_rpc,
     rpo_resumen_actas_rpc,
@@ -2055,7 +2056,7 @@ def _contexto_memoria_item(
     ) or {}
 
     sel_mem = (
-        "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
+        "id, reporte_id, numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, "
         "infraestructura, enlace_soporte, longitud, ancho, espesor, cantidad, cantidad_total, "
         "observacion, foto_url, foto_numero, grafico_url, grafico_numero, graficos_historial, "
         "item_numero, item_descripcion, unidad, capitulo, tramo"
@@ -2123,6 +2124,9 @@ def _contexto_memoria_item(
         if solo_aprobados:
             raise HTTPException(404, "No hay registros aprobados para este ítem en el corte")
         raise HTTPException(404, "No hay registros para este ítem en el corte")
+
+    # Enlace de memorias = biblioteca del reporte (so_reportes), no del registro.
+    registros = overlay_enlace_soporte_desde_reporte(_sb, registros)
 
     item_info = _item_info_desde_registros(registros, item_numero)
 
@@ -12564,7 +12568,11 @@ def _excel_sum_rows_formula(col: str, rows: List[int]) -> Any:
 
 
 def _memoria_parse_enlaces_soporte(raw: object) -> List[str]:
-    """Biblioteca de soportes del registro: lista de URLs (JSON array, lista o string suelto)."""
+    """Parsea URLs de soporte (JSON array, lista o string suelto).
+
+    En memorias, tras ``overlay_enlace_soporte_desde_reporte``, ``raw`` es el
+    ``enlace_soporte`` del **reporte** (so_reportes), no el del registro.
+    """
     if raw is None or raw == "":
         return []
     if isinstance(raw, list):
@@ -12639,7 +12647,11 @@ def _memoria_enlace_label(url: str, idx: int) -> str:
 
 
 def _memoria_enlaces_soporte(r: dict) -> List[Dict[str, str]]:
-    """Enlaces de la biblioteca de soportes: [{url, label}, ...] en orden."""
+    """Enlaces de la biblioteca de soportes del reporte: [{url, label}, ...] en orden.
+
+    Requiere que el registro ya traiga ``enlace_soporte`` sellado desde
+    ``so_reportes`` (ver ``overlay_enlace_soporte_desde_reporte``).
+    """
     urls = _memoria_parse_enlaces_soporte(r.get("enlace_soporte"))
     out: List[Dict[str, str]] = []
     for i, url in enumerate(urls, start=1):
