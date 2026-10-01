@@ -11828,31 +11828,39 @@ def _fn_cant(n):
 
 
 def _fn_cant_informe(n):
-    """
-    Cantidades del cuadro CC-SUB/MES: siempre 2 decimales (p. ej. 6.00).
-    Alineado a la regla única de cálculo y al formato Excel.
-    """
-    if n is None or n == "":
-        return "—"
-    try:
-        x = float(n)
-        if math.isnan(x):
-            return "—"
-        if math.isinf(x):
-            return "> max" if x > 0 else "< min"
-        return f"{round(x, 2):,.2f}"
-    except Exception:
-        return str(n)
+    """Cantidades CC-SUB/MES (PDF): siempre 2 dp — misma definición que Excel."""
+    from informes_formatos_numericos import fmt_cant_informe
+
+    return fmt_cant_informe(n)
+
+
+def _fn_dim_informe(n):
+    """Dimensiones memorias (PDF): siempre 3 dp — misma definición que Excel."""
+    from informes_formatos_numericos import fmt_dim_informe
+
+    return fmt_dim_informe(n)
+
+
+def _fm_informe(n):
+    """Valores CC-SUB/MES (PDF): Round0 con .00 — misma definición que Excel."""
+    from informes_formatos_numericos import fmt_money_informe
+
+    return fmt_money_informe(n)
 
 
 def _excel_num_format_cant_informe(n: Any = None) -> str:
     """Cantidades de informe en Excel: siempre 2 decimales."""
-    return "#,##0.00"
+    from informes_formatos_numericos import EXCEL_FMT_CANT
+
+    return EXCEL_FMT_CANT
 
 
-_EXCEL_NUM_FMT_DIM = "0.000"  # longitud / ancho / espesor / cant unitaria memorias
-_EXCEL_NUM_FMT_CANT = "#,##0.00"  # Cant. Total y cantidades de bloques
-_EXCEL_NUM_FMT_MONEY = '"$"#,##0.00'  # valores Round0 mostrados con .00
+# Alias a la definición única compartida con el PDF
+from informes_formatos_numericos import (  # noqa: E402
+    EXCEL_FMT_CANT as _EXCEL_NUM_FMT_CANT,
+    EXCEL_FMT_DIM as _EXCEL_NUM_FMT_DIM,
+    EXCEL_FMT_MONEY as _EXCEL_NUM_FMT_MONEY,
+)
 
 def _sf(n, default=0.0):
     """Convierte a float sin romper el endpoint (strings, comas, vacíos)."""
@@ -15034,7 +15042,7 @@ def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
         trs = "background:#fef3c7;"
     fs = "5.5pt"
     pad = "padding:1px 2px"
-    vu_txt = "⚠ SIN PRECIO" if item.get("sin_precio") else _fm(item.get("vlr_unitario_sub"))
+    vu_txt = "⚠ SIN PRECIO" if item.get("sin_precio") else _fm_informe(item.get("vlr_unitario_sub"))
     return (
         f"<tr style=\"{trs}\">"
         f"<td style=\"{bd};{pad};font-size:{fs};vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
@@ -15042,13 +15050,13 @@ def _html_cc_sub_001_tr_item(item: dict, bd: str, row_bg: str = "") -> str:
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:center\">{_h(item.get('unidad', ''))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right;{'color:#b45309;font-weight:bold;' if item.get('sin_precio') else ''}\">{vu_txt}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn_cant_informe(item.get('cant_actualizadas', item.get('cantidad')))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_actualizadas'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm_informe(item.get('valor_actualizadas'))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn_cant_informe(item.get('cant_presente', item.get('cantidad')))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_presente', item.get('costo_directo')))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm_informe(item.get('valor_presente', item.get('costo_directo')))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn_cant_informe(item.get('cant_acumulado'))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_acumulado'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm_informe(item.get('valor_acumulado'))}</td>"
         f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fn_cant_informe(item.get('cant_saldo'))}</td>"
-        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm(item.get('valor_saldo'))}</td>"
+        f"<td style=\"{bd};{pad};font-size:{fs};text-align:right\">{_fm_informe(item.get('valor_saldo'))}</td>"
         "</tr>"
     )
 
@@ -15066,7 +15074,7 @@ def _html_cc_sub_001_tr_subtotal_capitulo(
     label = f"Subtotal {capitulo}" if capitulo and capitulo != "—" else "Subtotal"
 
     def _v(key: str) -> str:
-        return _fm(sums.get(key))
+        return _fm_informe(sums.get(key))
 
     return (
         f'<tr class="cc001-cap-sub" style="background:{st};">'
@@ -15389,7 +15397,7 @@ INFORME CORTE DE SUB CONTRATISTA
             def _cell(v):
                 if v is None:
                     return "—"
-                return _fm(v)
+                return _fm_informe(v)
 
             parts.append(
                 f'<tr style="background:{bg};">'
@@ -15416,12 +15424,12 @@ INFORME CORTE DE SUB CONTRATISTA
                     for oc in otros:
                         desc = str(oc.get("descripcion") or "—")
                         und_o = str(oc.get("unidad") or "—")
-                        det = f'{desc} · {und_o} · {_fn(oc.get("cantidad"))} · {_fm(oc.get("valor_unitario"))}'
+                        det = f'{desc} · {und_o} · {_fn_cant_informe(oc.get("cantidad"))} · {_fm_informe(oc.get("valor_unitario"))}'
                         parts.append(
                             f"<tr>"
                             f'<td style="{bd};padding:2px 4px;font-size:6pt;">{_h(det)}</td>'
                             f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">—</td>'
-                            f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">{_fm(oc.get("costo_total"))}</td>'
+                            f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">{_fm_informe(oc.get("costo_total"))}</td>'
                             f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">—</td>'
                             f'<td style="{bd};padding:2px 4px;font-size:6pt;text-align:right;">—</td>'
                             "</tr>"
@@ -15434,8 +15442,8 @@ INFORME CORTE DE SUB CONTRATISTA
                         f'<tr style="background:#f8fafc;">'
                         f'<td style="{bd};padding:2px 6px;font-size:6.5pt;font-weight:bold;">Otros conceptos</td>'
                         f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;">—</td>'
-                        f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;font-weight:bold;">{_fm(ov.get("presente") or 0)}</td>'
-                        f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;font-weight:bold;">{_fm(ov.get("acumulado") or 0)}</td>'
+                        f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;font-weight:bold;">{_fm_informe(ov.get("presente") or 0)}</td>'
+                        f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;font-weight:bold;">{_fm_informe(ov.get("acumulado") or 0)}</td>'
                         f'<td style="{bd};padding:2px 4px;font-size:6.5pt;text-align:right;">—</td>'
                         "</tr>"
                     )
@@ -15887,7 +15895,7 @@ def _html_memoria_minima(contrato, sub, corte, item_info, registros, usuario_nom
             sub_sum = sum(_sf(r.get("cantidad_total"), 0.0) for r in (entry.get("regs") or []))
             filas += f"""<tr style="background:#dbeafe">
           <td colspan="3" style="border:1px solid #999;padding:4px;text-align:right;font-weight:bold">Total tramo {_h(tramo)}</td>
-          <td style="border:1px solid #999;padding:4px;text-align:right;font-weight:bold">{_fn_cant(sub_sum)}</td>
+          <td style="border:1px solid #999;padding:4px;text-align:right;font-weight:bold">{_fn_cant_informe(sub_sum)}</td>
           <td style="border:1px solid #999;padding:4px;font-weight:bold">{_h(unidad)}</td>
         </tr>"""
             continue
@@ -15895,7 +15903,7 @@ def _html_memoria_minima(contrato, sub, corte, item_info, registros, usuario_nom
         filas += f"""<tr>
           <td style="border:1px solid #999;padding:4px">{_h(r.get("numero_registro"))}</td>
           <td style="border:1px solid #999;padding:4px">{_h(_memoria_abscisas_txt(r))}</td>
-          <td style="border:1px solid #999;padding:4px">{_fn_cant(r.get("cantidad_total"))}</td>
+          <td style="border:1px solid #999;padding:4px">{_fn_cant_informe(r.get("cantidad_total"))}</td>
           <td style="border:1px solid #999;padding:4px">{_h((r.get("observacion") or "")[:300])}</td>
           <td style="border:1px solid #999;padding:4px">&nbsp;</td>
         </tr>"""
@@ -15908,7 +15916,7 @@ def _html_memoria_minima(contrato, sub, corte, item_info, registros, usuario_nom
   <table border="1" cellpadding="4" style="border-collapse:collapse;width:100%">
     <tr><th>N°</th><th>Abscisas</th><th>Cant tot</th><th>Observación</th><th>Und</th></tr>
     {filas}
-    <tr style="background:#e5e7eb"><td colspan="2" align="right"><b>CANTIDAD TOTAL DEL ÍTEM</b></td><td align="right"><b>{_fn_cant(total_cant)}</b></td><td colspan="2"><b>{_h(unidad)}</b></td></tr>
+    <tr style="background:#e5e7eb"><td colspan="2" align="right"><b>CANTIDAD TOTAL DEL ÍTEM</b></td><td align="right"><b>{_fn_cant_informe(total_cant)}</b></td><td colspan="2"><b>{_h(unidad)}</b></td></tr>
   </table>
   <p>{_h(usuario_nombre)} — {_h(usuario_cargo)}</p>
 </body></html>"""
@@ -16168,7 +16176,7 @@ def _html_memoria_item_body(
                 sub_sum = sum(_sf(r.get("cantidad_total"), 0.0) for r in regs_g)
                 body += f"""<tr class="subtramo">
                 <td class="data-td mem002-subtramo" colspan="7" style="text-align:right;font-weight:bold">Total tramo {_h(tramo)}</td>
-                <td class="data-td mem002-subtramo" style="text-align:right;font-weight:bold">{_fn_cant(sub_sum)}</td>
+                <td class="data-td mem002-subtramo" style="text-align:right;font-weight:bold">{_fn_cant_informe(sub_sum)}</td>
                 <td class="data-td mem002-subtramo" style="text-align:left;font-weight:bold">{_h(unidad_item)}</td>
                 <td class="data-td mem002-subtramo">&nbsp;</td>
             </tr>"""
@@ -16186,11 +16194,11 @@ def _html_memoria_item_body(
                 <td class="data-td" style="text-align:center">{_h(r.get('numero_registro',''))}</td>
                 <td class="data-td" style="text-align:center">{_h(_memoria_abscisas_txt(r))}</td>
                 <td class="data-td" style="text-align:center">{_h(infra)}</td>
-                <td class="data-td" style="text-align:right">{_fn(r.get('longitud'))}</td>
-                <td class="data-td" style="text-align:right">{_fn(r.get('ancho'))}</td>
-                <td class="data-td" style="text-align:right">{_fn(r.get('espesor'))}</td>
-                <td class="data-td" style="text-align:right">{_fn(r.get('cantidad'))}</td>
-                <td class="data-td" style="text-align:right;font-weight:bold">{_fn_cant(r.get('cantidad_total'))}</td>
+                <td class="data-td" style="text-align:right">{_fn_dim_informe(r.get('longitud'))}</td>
+                <td class="data-td" style="text-align:right">{_fn_dim_informe(r.get('ancho'))}</td>
+                <td class="data-td" style="text-align:right">{_fn_dim_informe(r.get('espesor'))}</td>
+                <td class="data-td" style="text-align:right">{_fn_dim_informe(r.get('cantidad'))}</td>
+                <td class="data-td" style="text-align:right;font-weight:bold">{_fn_cant_informe(r.get('cantidad_total'))}</td>
                 <td class="data-td mem002-enlace">{enlace_cell}</td>
                 <td class="data-td mem002-obs">{_h((obs or '')[:500])}</td>
             </tr>"""
@@ -16202,7 +16210,7 @@ def _html_memoria_item_body(
     body += f"""<table class="w100 mem002-total-wrap" cellspacing="0" cellpadding="0">
         <tr>
             <td class="total-td" style="width:60%;text-align:right;padding-right:8px">CANTIDAD TOTAL DEL ÍTEM</td>
-            <td class="total-td" style="width:8%;text-align:right">{_fn_cant(total_cant)}</td>
+            <td class="total-td" style="width:8%;text-align:right">{_fn_cant_informe(total_cant)}</td>
             <td class="total-td" style="width:8%;text-align:left;padding-left:4px">{_h(unidad_item)}</td>
             <td class="total-td" style="width:24%">&nbsp;</td>
         </tr>
