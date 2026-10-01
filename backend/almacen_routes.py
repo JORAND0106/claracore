@@ -35,6 +35,7 @@ from almacen_permissions import (
     puede_ver_valores_economicos_almacen,
     require_acceso_ui_modulo_almacen,
     require_contratista_gerencial_almacen,
+    require_crear_o_editar_almacen,
     require_editar_cantidad_salida_almacen,
     require_lectura_almacen,
     require_permiso_almacen,
@@ -691,7 +692,8 @@ def route_update_solicitud(
     current_user=Depends(get_current_user),
 ):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    # Crear basta para seguir editando/guardando el borrador propio tras el primer alta.
+    require_crear_o_editar_almacen(current_user)
     try:
         prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = update_solicitud(contrato_id, solicitud_id, _uid(current_user), body.model_dump())
@@ -709,7 +711,8 @@ def route_update_solicitud(
 @router.post("/{contrato_id}/solicitudes/{solicitud_id}/enviar")
 def route_enviar_solicitud(contrato_id: int, solicitud_id: int, current_user=Depends(get_current_user)):
     _check_contrato(current_user, contrato_id)
-    require_permiso_almacen(current_user, "editar")
+    # Crear basta para solicitar aprobación (no exigir Editar).
+    require_crear_o_editar_almacen(current_user)
     try:
         prev = _fetch_solicitud_head(contrato_id, solicitud_id)
         result = enviar_solicitud(contrato_id, solicitud_id, _uid(current_user))

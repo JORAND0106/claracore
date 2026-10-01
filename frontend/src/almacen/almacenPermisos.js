@@ -234,3 +234,15 @@ export function puedeEliminarSolicitudDesarrollador(permisos) {
 export function puedeCrearSolicitudAlmacen(permisos) {
   return Boolean(permisos?.ver && permisos?.crear)
 }
+
+/**
+ * Enviar / reenviar solicitud a aprobación: basta Crear o Editar en Almacén.
+ * No exige Editar — un usuario con solo Ver+Crear debe poder sacar el borrador.
+ */
+export function puedeEnviarSolicitudAlmacen(permisos, sol = null, { modoReabrirOc = false, solicitudId = null } = {}) {
+  if (modoReabrirOc) return false
+  if (!permisos?.crear && !permisos?.editar) return false
+  const id = solicitudId ?? sol?.id
+  if (!id) return Boolean(permisos?.crear || permisos?.editar)
+  return ['borrador', 'rechazada'].includes(sol?.estado)
+}

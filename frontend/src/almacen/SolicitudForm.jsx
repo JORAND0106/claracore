@@ -28,7 +28,7 @@ import {
   useAlmacenApi,
   useAlmacenTheme,
 } from './almacenShared'
-import { solicitudAlmacenEditable } from './almacenPermisos'
+import { puedeEnviarSolicitudAlmacen, solicitudAlmacenEditable } from './almacenPermisos'
 import { parseAbscisaMetros } from './almacenAbscisa'
 import { solicitudOrdenesCompra } from './solicitudDetalleHelpers'
 import {
@@ -185,7 +185,7 @@ export default function SolicitudForm({
   const [proximoConsecutivo, setProximoConsecutivo] = useState(null)
 
   const editableBase = solicitudAlmacenEditable(sol) && (
-    solicitudId ? Boolean(permisos?.editar) : Boolean(permisos?.crear)
+    solicitudId ? Boolean(permisos?.editar || permisos?.crear) : Boolean(permisos?.crear)
   )
   const editable = Boolean(
     editableBase
@@ -745,7 +745,10 @@ export default function SolicitudForm({
   }
 
   const theme = buildAlmacenConfirmTheme(t, ui)
-  const puedeReenviar = !modoReabrirOc && solicitudId && ['borrador', 'rechazada'].includes(sol?.estado) && permisos?.editar
+  const puedeReenviar = puedeEnviarSolicitudAlmacen(permisos, sol, {
+    modoReabrirOc,
+    solicitudId,
+  })
 
   const rootStyle = embedded
     ? { padding: 0, border: 'none', boxShadow: 'none', background: 'transparent' }
