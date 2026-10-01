@@ -102,7 +102,7 @@ def _redondear_cant(valor: Any) -> float:
 
 def valor_por_cantidad_vu(cantidad: Any, vlr_unitario: Any) -> float:
     """
-    Regla única CC-SUB/MES (plataforma = PDF = Excel):
+    Regla única plataforma / PDF / Excel (delegada a ``sicoe_valor_canonico``):
 
     1. cantidad redondeada a 2 decimales;
     2. valor = ROUND0(cantidad_2dp × VU del listado).
@@ -110,7 +110,9 @@ def valor_por_cantidad_vu(cantidad: Any, vlr_unitario: Any) -> float:
     Subtotales/totales suman estos valores ya redondeados (nunca re-multiplicar
     agregados ni sumar valores almacenados con otra precisión).
     """
-    return _round0(_round2(cantidad) * _sf(vlr_unitario))
+    from sicoe_valor_canonico import valor_cant_vu
+
+    return valor_cant_vu(cantidad, vlr_unitario)
 
 
 def calc_aiu_desglose(costo_directo: float, tributos: Any = None) -> Dict[str, Any]:
@@ -1434,6 +1436,9 @@ def meta_listado_contrato(sb, *, contrato_id: int) -> Dict[str, dict]:
     """
     Ficha + orden del listado de precios del contrato (Admin itemsOrdenados).
     Retorna item_key → {capitulo, competencia, descripcion, unidad, vlr_unitario, orden_listado}.
+
+    Nota: la clave por ítem solo es compat para UI/orden. El VU canónico debe
+    resolverse con ``meta_listado_contrato_by_cap_item`` / ``sicoe_valor_canonico``.
     """
     rows: List[dict] = []
     try:
@@ -1475,6 +1480,41 @@ def meta_listado_contrato(sb, *, contrato_id: int) -> Dict[str, dict]:
             "orden_listado": idx,
         }
     return out
+
+
+def meta_listado_contrato_by_cap_item(sb, *, contrato_id: int) -> Dict[Tuple[str, str], dict]:
+    """
+    Índice canónico (capítulo_norm, ítem_norm) → ficha listado con vlr_unitario.
+    Fuente única para valor = ROUND0(ROUND(cant,2)×VU) en plataforma / PDF / Excel.
+    """
+    from sicoe_valor_canonico import load_listado_vu_by_cap_item
+
+    idx = load_listado_vu_by_cap_item(sb, int(contrato_id))
+    # Añadir orden_listado desde meta por ítem (compat enriquecer / sort)
+    meta_item = meta_listado_contrato(sb, contrato_id=int(contrato_id))
+    out: Dict[Tuple[str, str], dict] = {}
+    for k, meta in (idx or {}).items():
+        row = dict(meta)
+        ik = item_key(meta.get("item_numero") or k[1])
+        mi = meta_item.get(ik) or {}
+        if mi.get("orden_listado") is not None:
+            row["orden_listado"] = mi["orden_listado"]
+        out[k] = row
+    return out
+
+
+def vu_listado_cap_item(
+    meta_by_cap_item: Optional[Dict[Tuple[str, str], dict]],
+    capitulo: Any,
+    item_numero: Any,
+) -> float:
+    """VU del listado para (capítulo, ítem); 0 si no hay cruce."""
+    from sicoe_valor_canonico import cap_item_key
+
+    if not meta_by_cap_item:
+        return 0.0
+    meta = meta_by_cap_item.get(cap_item_key(capitulo, item_numero)) or {}
+    return _sf(meta.get("vlr_unitario"))
 
 
 def meta_listado_sub(sb, *, contrato_id: int, subcontratista_id: int) -> Dict[str, dict]:

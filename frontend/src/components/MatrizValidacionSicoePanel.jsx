@@ -28,6 +28,54 @@ const TABLAS_MATRIZ = [
   { key: 'ensayos_sondeos_directo_sin_iva', titulo: 'Ensayos y sondeos directo sin IVA' },
 ]
 
+function IntegridadAvisoBanner({ integridad, textColor, borderColor, onVerDetalle }) {
+  if (!integridad?.tiene_inconsistencias) return null
+  const n = integridad.n_registros_afectados ?? integridad.n_inconsistencias ?? 0
+  const impacto = integridad.impacto_plata
+  return (
+    <div
+      role="alert"
+      style={{
+        marginBottom: 12,
+        padding: '10px 12px',
+        borderRadius: 8,
+        border: `1px solid ${borderColor || '#f59e0b'}`,
+        background: 'rgba(245, 158, 11, 0.12)',
+        color: textColor || '#92400e',
+        fontSize: 13,
+        lineHeight: 1.4,
+      }}
+    >
+      <strong>Integridad listado:</strong>{' '}
+      {integridad.aviso ||
+        `${n} registro(s) inconsistentes vs listado de precios` +
+          (impacto != null ? ` (impacto ≈ ${formatCOP(impacto)})` : '') +
+          '.'}
+      {typeof onVerDetalle === 'function' ? (
+        <>
+          {' '}
+          <button
+            type="button"
+            onClick={onVerDetalle}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#b45309',
+              fontWeight: 700,
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              padding: 0,
+              fontSize: 'inherit',
+            }}
+          >
+            Ver detalle
+          </button>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
 /**
  * Panel «Validación por rol · SICOE Obra» compartido entre Dashboard e informe periódico.
  * variant=dashboard: selector de acta y textos de ayuda.
@@ -44,6 +92,7 @@ export default function MatrizValidacionSicoePanel({
   actaFiltroMatriz = 'vigente',
   actasListaMatriz = [],
   onActaFiltroChange,
+  onVerIntegridad,
 }) {
   const du = getDashTypoUI(fontSize)
   const fmtD = (n) => (n != null ? formatCOP(n) : '—')
@@ -172,7 +221,8 @@ export default function MatrizValidacionSicoePanel({
         {!isCapture && (
           <div style={{ fontSize: du.sub, color: textMuted, marginTop: 4 }}>
             Por defecto se usa el acta RPO cuyo período incluye hoy. Control de validación de cantidades
-            ejecutadas (SICOE Obra), independiente del módulo de presupuesto.
+            ejecutadas (SICOE Obra), independiente del módulo de presupuesto. Valor = cant×VU listado
+            (capítulo+ítem).
           </div>
         )}
         {isCapture ? (
@@ -234,6 +284,13 @@ export default function MatrizValidacionSicoePanel({
         )}
       </div>
 
+      <IntegridadAvisoBanner
+        integridad={matriz?.integridad}
+        textColor={isCapture ? '#92400e' : t.text}
+        borderColor="#f59e0b"
+        onVerDetalle={onVerIntegridad}
+      />
+
       {!matriz && !loading ? (
         <div style={{ fontSize: du.body, color: textMuted, padding: '12px 0' }}>Sin datos de validación.</div>
       ) : (
@@ -256,3 +313,5 @@ export default function MatrizValidacionSicoePanel({
     </>
   )
 }
+
+export { IntegridadAvisoBanner }

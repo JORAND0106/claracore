@@ -18,7 +18,8 @@ CANON_ACTA620_LIVE = 78_318_891  # = SQL crudo en este acta (0 filas N4 sin casc
 
 def test_criterio_documentado():
     assert "prerrequisitos" in CRITERIO_COSTO_APROBADO_NIVEL_MAX.lower()
-    assert "costo_directo" in CRITERIO_COSTO_APROBADO_NIVEL_MAX.lower()
+    assert "listado" in CRITERIO_COSTO_APROBADO_NIVEL_MAX.lower() or "vu_listado" in CRITERIO_COSTO_APROBADO_NIVEL_MAX.lower()
+    assert "cap" in CRITERIO_COSTO_APROBADO_NIVEL_MAX.lower()
 
 
 def test_predicado_exige_item_y_cascada():

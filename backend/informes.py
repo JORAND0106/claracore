@@ -1851,12 +1851,20 @@ def _contexto_acta_mes_conciliacion(
 
     cfg = amc.fetch_anticipo_amortizacion_contrato(_sb, int(contrato_id))
     meta_map = amc.meta_listado_contrato(_sb, contrato_id=int(contrato_id))
+    meta_cap_item = amc.precios_vu_contrato_by_cap_item(_sb, contrato_id=int(contrato_id))
     vu_map = {
         k: amc._sf(v.get("vlr_unitario"))
         for k, v in meta_map.items()
         if amc._sf(v.get("vlr_unitario")) > 0
     }
-    items_pres, sin_precio = amc.aplicar_precios_contrato_a_items(items_pres, vu_map)
+    items_pres, sin_precio = amc.aplicar_precios_contrato_a_items(
+        items_pres, vu_map, meta_by_cap_item=meta_cap_item
+    )
+
+    # Total canónico independiente del agrupado por ítem (cap+ítem × VU listado).
+    from sicoe_valor_canonico import sum_valor_canonico
+
+    total_costo_canon = sum_valor_canonico(reg or [], meta_cap_item)
 
     cant_act = amc.cantidades_actualizadas_contrato(_sb, contrato_id=int(contrato_id))
     previos = amc.actas_enviadas_anteriores(
@@ -1881,7 +1889,8 @@ def _contexto_acta_mes_conciliacion(
             it["sin_precio"] = True
     items = amc.filtrar_items_con_cantidades(items)
     items = amc.sort_items_capitulo_item_asc(items)
-    total_costo = sum(_sf(i.get("valor_presente"), i.get("costo_directo")) for i in items)
+    # Total canónico: Σ ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem).
+    total_costo = float(total_costo_canon)
 
     tributos = amc.tributos_from_contrato(cfg.get("aiu"), cfg.get("iva"))
     aiu = amc.calc_aiu_desglose(total_costo, tributos)
@@ -1958,6 +1967,15 @@ def _contexto_acta_mes_conciliacion(
         amort_presente_override=amort_override,
     )
 
+    from sicoe_valor_canonico import (
+        TRAZABILIDAD_PRECIOS_STATUS,
+        auditar_integridad_registros,
+        resumen_integridad,
+    )
+
+    _incs_ctx = auditar_integridad_registros(reg or [], meta_cap_item)
+    _integ_ctx = resumen_integridad(_incs_ctx)
+
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
@@ -1967,6 +1985,19 @@ def _contexto_acta_mes_conciliacion(
         "acta": acta,
         "items": items,
         "total_costo": total_costo if math.isfinite(total_costo) else 0.0,
+        "regla_valor": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem)",
+        "integridad": {
+            **_integ_ctx,
+            "inconsistencias": [i.to_dict() for i in _incs_ctx[:200]],
+            "aviso": (
+                f"{_integ_ctx['n_registros_afectados']} registro(s) inconsistentes vs listado "
+                f"(impacto ≈ ${_integ_ctx['impacto_plata']:,.0f}). "
+                "El total canónico no usa costo_directo guardado; los sin cruce aportan 0 y aparecen aquí."
+                if _integ_ctx.get("tiene_inconsistencias")
+                else None
+            ),
+        },
+        "trazabilidad_precios": TRAZABILIDAD_PRECIOS_STATUS,
         "items_sin_precio": [
             str(i.get("item_numero") or "")
             for i in items

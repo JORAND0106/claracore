@@ -25,6 +25,7 @@ import {
 } from './informes/InformesLayout'
 import CorteSubConciliacionPopup from './informes/CorteSubConciliacionPopup'
 import ActaMesConciliacionPopup from './informes/ActaMesConciliacionPopup'
+import { IntegridadAvisoBanner } from './components/MatrizValidacionSicoePanel'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -628,6 +629,8 @@ export default function ModuloInformes({
 
   /** Vista previa: PDF en modal (blob). */
   const [vistaPrevia, setVistaPrevia] = useState(null)
+  /** Aviso de integridad registro↔listado (CC-MES / validación). */
+  const [integridadInforme, setIntegridadInforme] = useState(null)
   /** null | 'corte' | 'todos' | 'sem001' | 'mes001' | 'sem2-all' | 's2:'+item | string (item corte) — Excel en curso */
   const [excelBusy, setExcelBusy] = useState(null)
   const [firmaCorteBusy, setFirmaCorteBusy] = useState(false)
@@ -1974,6 +1977,19 @@ export default function ModuloInformes({
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
     const cid = encodeURIComponent(contratoId)
     const aid = encodeURIComponent(actaConcId)
+    // Aviso de integridad (no bloquea descarga; debe quedar visible).
+    try {
+      const rInt = await fetchConFallback(
+        `/sicoe-obra/${cid}/integridad-listado?acta_rpo=${encodeURIComponent(actaSel?.numero_rpo || '')}&todo_contrato=${actaSel?.numero_rpo ? 'false' : 'true'}`,
+        opts,
+      )
+      if (rInt?.ok) {
+        const jInt = await rInt.json()
+        setIntegridadInforme(jInt?.resumen?.tiene_inconsistencias ? { ...jInt.resumen, aviso: jInt.aviso } : null)
+      }
+    } catch {
+      /* noop */
+    }
     const pathPdf = withQsNivelAprobacionMes(`/informes/${cid}/pdf/cc-mes-001/acta/${aid}`)
     try {
       const r = await fetchConFallback(pathPdf, opts)
@@ -3855,6 +3871,7 @@ export default function ModuloInformes({
           ⚠️ {error}
         </div>
       )}
+      <IntegridadAvisoBanner integridad={integridadInforme} />
 
 
       {biblioCcd.length > 0 && (
