@@ -9,6 +9,7 @@ from typing import Any, Optional
 # hasta el sellado del último nivel (sin permiso Editar).
 SICOE_CAMPOS_DIMENSIONALES = frozenset({
     "longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion",
+    "es_varilla", "diametro_varilla", "peso_kg_m",
     "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen",
     "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
     "coord_lat", "coord_lng",

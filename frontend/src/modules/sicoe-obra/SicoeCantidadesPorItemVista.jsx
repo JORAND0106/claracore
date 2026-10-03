@@ -18,6 +18,7 @@ import {
   textoTramoTooltip,
 } from './sicoeCantidadesGrillaHelpers'
 import { pastelDeEstadoValidacion, estadoNivelRegistro } from './sicoeReporteItemsTablaHelpers'
+import { sicoeMedicionCeldasDisplay } from './sicoeVarilla.js'
 import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
 
 function fmtNum(v, dig = 2) {
@@ -442,8 +443,8 @@ export default function SicoeCantidadesPorItemVista({
       'Tramo',
       'Abs Inicio & Fin',
       'Long',
-      'Ancho',
-      'Espesor',
+      'Ancho/Ø',
+      'Esp./kg/m',
       'Cantidad',
       'Cant. Total',
     )
@@ -836,17 +837,32 @@ export default function SicoeCantidadesPorItemVista({
                         {fmtNum(reg.abs_inicio, 3)}–{fmtNum(reg.abs_final, 3)}
                       </td>
                       <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.longitud)}</td>
-                      <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.ancho)}</td>
-                      <td
-                        style={{
-                          ...td,
-                          textAlign: 'right',
-                          fontWeight: reg._alertaEspesorAtipico ? 800 : 400,
-                          color: reg._alertaEspesorAtipico ? '#7c3aed' : t.text,
-                        }}
-                      >
-                        {fmtNum(reg.espesor, 3)}
-                      </td>
+                      {(() => {
+                        const cel = sicoeMedicionCeldasDisplay(reg)
+                        if (cel.esVarilla) {
+                          return (
+                            <>
+                              <td style={{ ...td, textAlign: 'right' }}>{cel.col2}</td>
+                              <td style={{ ...td, textAlign: 'right' }}>{cel.col3}</td>
+                            </>
+                          )
+                        }
+                        return (
+                          <>
+                            <td style={{ ...td, textAlign: 'right' }}>{fmtNum(cel.col2)}</td>
+                            <td
+                              style={{
+                                ...td,
+                                textAlign: 'right',
+                                fontWeight: reg._alertaEspesorAtipico ? 800 : 400,
+                                color: reg._alertaEspesorAtipico ? '#7c3aed' : t.text,
+                              }}
+                            >
+                              {fmtNum(reg.espesor, 3)}
+                            </td>
+                          </>
+                        )
+                      })()}
                       <td style={{ ...td, textAlign: 'right' }}>{fmtNum(reg.cantidad)}</td>
                       <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{formatearCantidadTotal(reg.cantidad_total)}</td>
                       {verEco && (
