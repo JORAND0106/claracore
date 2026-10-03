@@ -26297,14 +26297,15 @@ def _sicoe_feature_huella_desde_dibujo_reporte(dibujo_geojson, reporte_id=None) 
         g = f.get("geometry") if f.get("type") == "Feature" else f
         if not isinstance(g, dict):
             continue
-        if dibujo_tipo in ("nodo", "punto") or props.get("es_bloque"):
+        if dibujo_tipo in ("nodo", "punto") or props.get("es_bloque") or props.get("es_entidad"):
             if g.get("type") == "Polygon" and (g.get("coordinates") or [None])[0]:
                 return {
                     "type": "Feature",
                     "geometry": g,
                     "properties": _props_base({
                         **{k: props.get(k) for k in (
-                            "bloque_nodo", "bloque_rotacion_deg", "node_num", "dibujo_tipo",
+                            "entidad_biblioteca", "entidad_id", "entidad_nombre",
+                            "node_num", "dibujo_tipo",
                         ) if props.get(k) is not None},
                         "huella_tipo": "nodo",
                         "dibujo_tipo": "nodo",
@@ -26320,38 +26321,22 @@ def _sicoe_feature_huella_desde_dibujo_reporte(dibujo_geojson, reporte_id=None) 
         if g.get("type") == "Point":
             coords = g.get("coordinates") or []
             if len(coords) >= 2:
-                # Expandir Point a polígono de bloque o círculo pequeño
+                # Preferir polígono de entidad ya en el FC; si no, círculo pequeño
                 poly = None
-                bloque = props.get("bloque_nodo")
-                if isinstance(bloque, dict):
-                    try:
-                        from sicoe_bloques_nodo import bloque_a_poligono_wgs84
-                        poly = bloque_a_poligono_wgs84(
-                            float(coords[0]),
-                            float(coords[1]),
-                            forma=bloque.get("forma"),
-                            ancho_m=bloque.get("ancho_m"),
-                            alto_m=bloque.get("alto_m"),
-                            vertices=bloque.get("vertices"),
-                            rotacion_deg=float(props.get("bloque_rotacion_deg") or 0),
-                        )
-                    except Exception:
-                        poly = None
-                if poly is None:
-                    try:
-                        from sicoe_huellas_espacial import _circle_polygon, SICOE_RADIO_NODO_DEFAULT_M
-                        poly = _circle_polygon(
-                            float(coords[0]), float(coords[1]), SICOE_RADIO_NODO_DEFAULT_M
-                        )
-                    except Exception:
-                        poly = None
+                try:
+                    from sicoe_huellas_espacial import _circle_polygon, SICOE_RADIO_NODO_DEFAULT_M
+                    poly = _circle_polygon(
+                        float(coords[0]), float(coords[1]), SICOE_RADIO_NODO_DEFAULT_M
+                    )
+                except Exception:
+                    poly = None
                 geom_out = poly or g
                 return {
                     "type": "Feature",
                     "geometry": geom_out,
                     "properties": _props_base({
                         **{k: props.get(k) for k in (
-                            "bloque_nodo", "bloque_rotacion_deg", "node_num",
+                            "entidad_biblioteca", "entidad_id", "entidad_nombre", "node_num",
                         ) if props.get(k) is not None},
                         "huella_tipo": "nodo",
                         "dibujo_tipo": "nodo",
@@ -26693,190 +26678,6 @@ def sicoe_borrar_dibujo_reporte(
     except Exception as exc:
         raise HTTPException(500, f"No se pudo borrar el dibujo: {exc}") from exc
     return {"ok": True, "tiene_dibujo": False}
-
-
-# ─── Biblioteca de bloques de nodo ───────────────────────────────────────────
-
-class BloqueNodoBody(BaseModel):
-    nombre: str
-    forma: str = "circulo"
-    ancho_m: float = 1.0
-    alto_m: float = 1.0
-    vertices: Optional[List[List[float]]] = None
-    activo: Optional[bool] = True
-    global_sistema: Optional[bool] = False  # solo Desarrollador
-
-
-@app.get("/sicoe-obra/{contrato_id}/bloques-nodo")
-def listar_bloques_nodo(
-    contrato_id: int,
-    incluir_inactivos: bool = False,
-    current_user=Depends(get_current_user),
-):
-    """Bloques globales + del contrato (para dibujar nodos a tamaño real)."""
-    _ = current_user
-    try:
-        def _q():
-            q = supabase.table("so_bloques_nodo").select("*").order("nombre")
-            return q.execute().data
-        rows = supabase_execute(_q) or []
-    except Exception as exc:
-        if "so_bloques_nodo" in str(exc).lower() or "pgrst" in str(exc).lower():
-            return {"bloques": [], "migracion_pendiente": True}
-        raise HTTPException(500, f"No se pudieron leer bloques: {exc}") from exc
-    out = []
-    for r in rows:
-        cid = r.get("contrato_id")
-        if cid is not None and int(cid) != int(contrato_id):
-            continue
-        if not incluir_inactivos and r.get("activo") is False:
-            continue
-        out.append(r)
-    return {"bloques": out}
-
-
-@app.post("/sicoe-obra/{contrato_id}/bloques-nodo")
-def crear_bloque_nodo(
-    contrato_id: int,
-    body: BloqueNodoBody,
-    current_user=Depends(get_current_user),
-):
-    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
-        raise HTTPException(403, "Se requiere permiso «Editar» para administrar bloques de nodo.")
-    from sicoe_bloques_nodo import normalizar_forma
-    nombre = (body.nombre or "").strip()
-    if not nombre:
-        raise HTTPException(422, "Indique el nombre del bloque.")
-    if body.ancho_m <= 0 or body.alto_m <= 0:
-        raise HTTPException(422, "Las medidas deben ser mayores que cero.")
-    es_global = bool(body.global_sistema) and _es_desarrollador(current_user)
-    uid = _sicoe_uid_from_user(current_user)
-    row = {
-        "contrato_id": None if es_global else int(contrato_id),
-        "nombre": nombre,
-        "forma": normalizar_forma(body.forma),
-        "ancho_m": float(body.ancho_m),
-        "alto_m": float(body.alto_m),
-        "vertices": body.vertices,
-        "activo": True if body.activo is None else bool(body.activo),
-        "creado_por": uid,
-        "modificado_por": uid,
-    }
-    try:
-        def _ins():
-            return supabase.table("so_bloques_nodo").insert(row).execute().data
-        data = supabase_execute(_ins) or []
-    except Exception as exc:
-        raise HTTPException(
-            500,
-            f"No se pudo crear el bloque (¿migración so_bloques_nodo.sql?): {exc}",
-        ) from exc
-    return data[0] if data else row
-
-
-@app.put("/sicoe-obra/{contrato_id}/bloques-nodo/{bloque_id}")
-def actualizar_bloque_nodo(
-    contrato_id: int,
-    bloque_id: int,
-    body: BloqueNodoBody,
-    current_user=Depends(get_current_user),
-):
-    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
-        raise HTTPException(403, "Se requiere permiso «Editar» para administrar bloques de nodo.")
-    from sicoe_bloques_nodo import normalizar_forma
-    from datetime import datetime, timezone
-
-    def _get():
-        return (
-            supabase.table("so_bloques_nodo")
-            .select("*")
-            .eq("id", bloque_id)
-            .limit(1)
-            .execute()
-            .data
-        )
-    rows = supabase_execute(_get) or []
-    if not rows:
-        raise HTTPException(404, "Bloque no encontrado")
-    prev = rows[0]
-    if prev.get("contrato_id") is None and not _es_desarrollador(current_user):
-        raise HTTPException(403, "Solo Desarrollador puede editar bloques globales del sistema.")
-    if prev.get("contrato_id") is not None and int(prev["contrato_id"]) != int(contrato_id):
-        raise HTTPException(404, "Bloque no pertenece a este contrato")
-    nombre = (body.nombre or "").strip()
-    if not nombre:
-        raise HTTPException(422, "Indique el nombre del bloque.")
-    patch = {
-        "nombre": nombre,
-        "forma": normalizar_forma(body.forma),
-        "ancho_m": float(body.ancho_m),
-        "alto_m": float(body.alto_m),
-        "vertices": body.vertices,
-        "modificado_por": _sicoe_uid_from_user(current_user),
-        "actualizado_en": datetime.now(timezone.utc).isoformat(),
-    }
-    if body.activo is not None:
-        patch["activo"] = bool(body.activo)
-    try:
-        def _u():
-            return (
-                supabase.table("so_bloques_nodo")
-                .update(patch)
-                .eq("id", bloque_id)
-                .execute()
-                .data
-            )
-        data = supabase_execute(_u) or []
-    except Exception as exc:
-        raise HTTPException(500, f"No se pudo actualizar el bloque: {exc}") from exc
-    return data[0] if data else {**prev, **patch}
-
-
-@app.delete("/sicoe-obra/{contrato_id}/bloques-nodo/{bloque_id}")
-def desactivar_bloque_nodo(
-    contrato_id: int,
-    bloque_id: int,
-    current_user=Depends(get_current_user),
-):
-    """Retira el bloque (soft-delete: activo=false)."""
-    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
-        raise HTTPException(403, "Se requiere permiso «Editar» para administrar bloques de nodo.")
-    from datetime import datetime, timezone
-
-    def _get():
-        return (
-            supabase.table("so_bloques_nodo")
-            .select("id, contrato_id")
-            .eq("id", bloque_id)
-            .limit(1)
-            .execute()
-            .data
-        )
-    rows = supabase_execute(_get) or []
-    if not rows:
-        raise HTTPException(404, "Bloque no encontrado")
-    prev = rows[0]
-    if prev.get("contrato_id") is None and not _es_desarrollador(current_user):
-        raise HTTPException(403, "Solo Desarrollador puede retirar bloques globales.")
-    if prev.get("contrato_id") is not None and int(prev["contrato_id"]) != int(contrato_id):
-        raise HTTPException(404, "Bloque no pertenece a este contrato")
-    try:
-        def _u():
-            return (
-                supabase.table("so_bloques_nodo")
-                .update({
-                    "activo": False,
-                    "modificado_por": _sicoe_uid_from_user(current_user),
-                    "actualizado_en": datetime.now(timezone.utc).isoformat(),
-                })
-                .eq("id", bloque_id)
-                .execute()
-                .data
-            )
-        supabase_execute(_u)
-    except Exception as exc:
-        raise HTTPException(500, f"No se pudo retirar el bloque: {exc}") from exc
-    return {"ok": True, "activo": False}
 
 
 @app.post("/sicoe-obra/{contrato_id}/reportes/asignar-actores-por-pk")

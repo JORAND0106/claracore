@@ -593,6 +593,13 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           'all',
           ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
           ['!=', ['get', 'is_lod_marker'], 1],
+          ['any',
+            ['all',
+              ['!=', ['get', 'huella_tipo'], 'nodo'],
+              ['!=', ['get', 'huella_tipo'], 'punto'],
+            ],
+            ['>=', ['zoom'], 16],
+          ],
         ],
         paint: {
           'fill-color': [
@@ -703,6 +710,11 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
                       properties: { ...(f.properties || {}), is_lod_marker: 1 },
                     })
                   }
+                }
+              } else if ((ht === 'nodo' || ht === 'punto') && f?.geometry?.type === 'Point') {
+                expanded[expanded.length - 1] = {
+                  ...f,
+                  properties: { ...(f.properties || {}), is_lod_marker: 1 },
                 }
               }
             }

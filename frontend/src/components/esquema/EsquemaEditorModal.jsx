@@ -56,7 +56,6 @@ import {
   snapThresholdWorld,
   worldToMeters,
 } from './esquemaGeometry'
-import { strokeBloqueEnCtx } from '../../modules/sicoe-obra/sicoeBloquesNodo'
 import { finalizeJoinSequence, joinIntersectingLines } from './esquemaJoin'
 import { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 import { parseCoordFile, topoToWorld, coordOriginFromRows } from './esquemaCoords'
@@ -334,10 +333,6 @@ export default function EsquemaEditorModal({
   huellaMode = false,
   /** Tipo de dibujo del reporte: nodo | linea | poligono (solo huellaMode). */
   huellaDibujoTipo = 'poligono',
-  /** Bloque de nodo seleccionado { forma, ancho_m, alto_m, ... } (solo tipo nodo). */
-  huellaBloque = null,
-  /** Rotación del bloque en grados. */
-  huellaBloqueRotacion = 0,
   /** Escena previa (objetos) al reabrir un dibujo de reporte. */
   initialSceneObjects = null,
   /**
@@ -352,11 +347,7 @@ export default function EsquemaEditorModal({
 }) {
   const mapCtx = useMemo(() => normalizeMapContext(mapLocation), [mapLocation])
   const huellaTipoRef = useRef(huellaDibujoTipo)
-  const huellaBloqueRef = useRef(huellaBloque)
-  const huellaRotRef = useRef(huellaBloqueRotacion)
   huellaTipoRef.current = huellaDibujoTipo
-  huellaBloqueRef.current = huellaBloque
-  huellaRotRef.current = huellaBloqueRotacion
   const authToken = useMemo(() => {
     try {
       return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
@@ -648,8 +639,6 @@ export default function EsquemaEditorModal({
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
         zoom: zoomRef.current,
         huellaMode,
-        huellaBloque: huellaBloqueRef.current,
-        huellaBloqueRotacion: huellaRotRef.current,
         skipResize: (() => {
           const isPasteImg = obj.type === 'image' && !obj.fit
           if (isPasteImg && !multi && toolRef.current === 'seleccion') return false
@@ -2152,6 +2141,13 @@ export default function EsquemaEditorModal({
       }
       setZoomPct(Math.round(z * 100))
     }
+    // En modo nodo del reporte: abrir biblioteca de entidades para insertar sobre los nodos.
+    if (huellaMode && huellaTipoRef.current === 'nodo' && nodes.length) {
+      refreshLibrary()
+      setLibOpen(true)
+      setLibNotice('Seleccione una entidad para insertarla sobre el nodo (punto medio). Si no elige ninguna, se guarda el marcador legible.')
+      setInsertHint('Elija una entidad de la biblioteca o guarde solo con el marcador del nodo.')
+    }
     setPanTick((n) => n + 1)
   }
 
@@ -3437,6 +3433,34 @@ export default function EsquemaEditorModal({
 
   const beginInsertLibraryItem = (item) => {
     if (!item?.objects?.length && !item?.children?.length) return
+    // Huella nodo: insertar la entidad centrada en cada nodo del lienzo.
+    if (huellaMode && huellaTipoRef.current === 'nodo') {
+      const nodes = objectsRef.current.filter((o) => o?.type === 'nodo' && Number.isFinite(o.x) && Number.isFinite(o.y))
+      if (nodes.length) {
+        pushHistory()
+        const withoutPrev = objectsRef.current.filter((o) => !(o?.type === 'bloque' && o?.fromLibraryOnNode))
+        const placed = []
+        for (const n of nodes) {
+          const inst = instantiateLibraryItem(item, { x: n.x, y: n.y }).map((b) => ({
+            ...b,
+            libraryId: item.id,
+            libraryNombre: item.nombre,
+            fromLibraryOnNode: true,
+          }))
+          placed.push(...inst)
+        }
+        objectsRef.current = [...withoutPrev, ...placed]
+        pendingInsertRef.current = null
+        setInsertHint('')
+        setLibNotice('')
+        setLibOpen(false)
+        selectIds(placed.map((o) => o.id))
+        setDirty(true)
+        setTool('seleccion')
+        redraw()
+        return
+      }
+    }
     pendingInsertRef.current = item
     setInsertHint(`Clic para insertar «${item.nombre}»`)
     setLibOpen(false)
@@ -4338,7 +4362,15 @@ export default function EsquemaEditorModal({
             <IconBiblioteca />
           </button>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button type="button" style={ghost(t)} onClick={onClose}>Cancelar</button>
+            <button
+              type="button"
+              title="Cerrar"
+              aria-label="Cerrar"
+              onClick={onClose}
+              style={iconBtn(t, false)}
+            >
+              <IconCerrarPanel />
+            </button>
             <button
               type="button"
               title={busy
@@ -5431,8 +5463,6 @@ function drawObject(ctx, obj, selected, opts = {}) {
   if (obj.type === 'nodo') {
     drawNodo(ctx, obj, selected, opts.zoom || 1, ui, {
       huellaMode: !!opts.huellaMode,
-      bloque: opts.huellaBloque,
-      rotacion: opts.huellaBloqueRotacion,
     })
     ctx.restore()
     return
@@ -5624,34 +5654,17 @@ function drawNodo(ctx, obj, selected, zoom = 1, ui, huellaOpts = {}) {
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
 
-  const bloque = huellaOpts?.bloque
-  if (huellaOpts?.huellaMode && bloque) {
-    strokeBloqueEnCtx(ctx, x, y, bloque, huellaOpts.rotacion || 0, {
-      fill: selected ? `${ink}55` : `${ink}33`,
-      stroke: selected ? palette.selection : ink,
-      lineWidth: Math.max(1.4 / z, 0.8),
-    })
-    // Centro legible + número a cualquier zoom
-    const r = Math.max(nodeMarkerWorldRadius(z) * 1.35, 3.2 / z)
-    ctx.fillStyle = ink
-    ctx.strokeStyle = palette.canvas
-    ctx.lineWidth = Math.min(1.4 / z, r * 0.4)
-    ctx.beginPath()
-    ctx.arc(x, y, r, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.stroke()
-  } else {
-    const r = huellaOpts?.huellaMode
-      ? Math.max(nodeMarkerWorldRadius(z) * 1.6, 3.5 / z)
-      : nodeMarkerWorldRadius(z)
-    ctx.fillStyle = ink
-    ctx.strokeStyle = selected ? palette.selection : palette.canvas
-    ctx.lineWidth = Math.min(1.2 / z, r * 0.35)
-    ctx.beginPath()
-    ctx.arc(x, y, r, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.stroke()
-  }
+  // Marcador legible a cualquier zoom (especialmente en dibujo de reporte / huellaMode).
+  const r = huellaOpts?.huellaMode
+    ? Math.max(nodeMarkerWorldRadius(z) * 1.6, 3.5 / z)
+    : nodeMarkerWorldRadius(z)
+  ctx.fillStyle = ink
+  ctx.strokeStyle = selected ? palette.selection : palette.canvas
+  ctx.lineWidth = Math.min(1.2 / z, r * 0.35)
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.stroke()
 
   const labelSize = Math.max(11 / z, 9 / z)
   ctx.font = `700 ${labelSize}px sans-serif`
@@ -6017,6 +6030,14 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImpor
     const next = list.map((r, idx) => (idx === i ? { ...r, [key]: value } : r))
     onRowsChange(next)
   }
+  const iconAction = {
+    ...ghost(t),
+    padding: 4,
+    minWidth: 30,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  }
   return (
     <div
       style={{
@@ -6037,24 +6058,38 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImpor
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <strong style={{ fontSize: 12, color: t.text }}>Coordenadas</strong>
-        <button type="button" style={ghost(t)} onClick={onClose}>Cerrar</button>
+        <button type="button" style={iconAction} title="Cerrar" aria-label="Cerrar" onClick={onClose}>
+          <IconCerrarPanel />
+        </button>
       </div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
         <button
           type="button"
-          style={ghost(t)}
+          style={iconAction}
+          title="Importar CSV / Excel"
+          aria-label="Importar CSV o Excel"
           onClick={() => fileRef.current?.click()}
         >
-          Importar CSV/Excel
+          <IconImportarCoords />
         </button>
         <button
           type="button"
-          style={ghost(t)}
+          style={iconAction}
+          title="Agregar fila"
+          aria-label="Agregar fila"
           onClick={() => onRowsChange([...list, { norte: '', este: '', cota: '', desc: '' }])}
         >
-          + Fila
+          <IconAgregarFila />
         </button>
-        <button type="button" style={primary(t)} onClick={onApply}>Dibujar nodos</button>
+        <button
+          type="button"
+          style={{ ...iconAction, background: t.primary, color: '#fff', border: 'none' }}
+          title="Dibujar nodos"
+          aria-label="Dibujar nodos"
+          onClick={onApply}
+        >
+          <IconDibujarNodos />
+        </button>
       </div>
       <input
         ref={fileRef}
@@ -6106,10 +6141,11 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImpor
                   <button
                     type="button"
                     title="Quitar fila"
+                    aria-label="Quitar fila"
                     onClick={() => onRowsChange(list.filter((_, idx) => idx !== i))}
-                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted, fontWeight: 700 }}
+                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.textMuted, fontWeight: 700, padding: 2 }}
                   >
-                    ×
+                    <IconCerrarPanel />
                   </button>
                 </td>
               </tr>
@@ -6740,6 +6776,38 @@ function IconCerrarPanel() {
     <svg {...iconProps()}>
       <path d="M6 6 18 18" />
       <path d="M18 6 6 18" />
+    </svg>
+  )
+}
+function IconImportarCoords() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M12 3v12" />
+      <path d="m8 11 4 4 4-4" />
+      <path d="M5 19h14" />
+    </svg>
+  )
+}
+function IconAgregarFila() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 7h16" />
+      <path d="M4 12h10" />
+      <path d="M4 17h10" />
+      <path d="M17 14v6" />
+      <path d="M14 17h6" />
+    </svg>
+  )
+}
+function IconDibujarNodos() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="7" cy="12" r="2.5" />
+      <circle cx="17" cy="7" r="2.5" />
+      <circle cx="17" cy="17" r="2.5" />
+      <path d="M9 12h5.5" />
+      <path d="m9.5 13.5 5 3" />
+      <path d="m9.5 10.5 5-3" />
     </svg>
   )
 }

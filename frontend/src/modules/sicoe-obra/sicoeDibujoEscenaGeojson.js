@@ -4,9 +4,10 @@
  *
  * Convención: mundo (0,0) = originLngLat; +X = este; +Y = sur (lienzo Y↓).
  * Soporta tipos de dibujo: nodo | linea | poligono.
+ * Nodo + entidad de biblioteca: Point (marcador LOD) + Polygon del bloque insertado.
  */
 import { worldToMeters } from '../../components/esquema/esquemaGeometry.js'
-import { bloqueAPoligonoGeojson, snapshotBloque } from './sicoeBloquesNodo.js'
+import { packLibraryBlock } from '../../components/esquema/esquemaLibrary.js'
 import { normalizarTipoDibujo, contarPuntosEscena } from './sicoeDibujoTipos.js'
 
 const METERS_PER_DEG_LAT = 111320
@@ -91,7 +92,36 @@ export function objectWorldRings(obj) {
   if (type === 'hatch' && Array.isArray(obj.outer)) {
     return [obj.outer.map((p) => ({ x: Number(p.x), y: Number(p.y) }))]
   }
+  if (type === 'bloque') {
+    const ring = bloqueWorldCorners(obj)
+    return ring ? [ring] : []
+  }
   return []
+}
+
+/** Esquinas del bloque de entidad (bbox) en coords mundo, con rotación. */
+export function bloqueWorldCorners(obj) {
+  if (!obj || obj.type !== 'bloque') return null
+  const x = Number(obj.x) || 0
+  const y = Number(obj.y) || 0
+  const w = Math.max(1, Number(obj.w) || 1)
+  const h = Math.max(1, Number(obj.h) || 1)
+  const rot = Number(obj.rotation) || 0
+  const cx = x + w / 2
+  const cy = y + h / 2
+  const corners = [
+    { x, y },
+    { x: x + w, y },
+    { x: x + w, y: y + h },
+    { x, y: y + h },
+  ]
+  const cos = Math.cos(rot)
+  const sin = Math.sin(rot)
+  return corners.map((p) => {
+    const dx = p.x - cx
+    const dy = p.y - cy
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos }
+  })
 }
 
 function objectWorldLine(obj) {
@@ -129,14 +159,48 @@ function allNodosWorld(objects) {
     .map((o) => ({ x: Number(o.x), y: Number(o.y), num: o.nodeNum, id: o.id }))
 }
 
+function allBloquesWorld(objects) {
+  return (objects || []).filter((o) => o?.type === 'bloque')
+}
+
+/**
+ * Snapshot de la primera entidad (bloque) de la escena para persistir con el dibujo.
+ */
+export function snapshotEntidadDesdeEscena(objects, metaEntidad = null) {
+  const bloques = allBloquesWorld(objects)
+  if (!bloques.length) {
+    if (metaEntidad && (metaEntidad.objects || metaEntidad.children)) {
+      return {
+        id: metaEntidad.id ?? null,
+        nombre: metaEntidad.nombre || 'Entidad',
+        w: metaEntidad.w,
+        h: metaEntidad.h,
+        objects: metaEntidad.objects || metaEntidad.children || [],
+      }
+    }
+    return null
+  }
+  const b = bloques[0]
+  const packed = packLibraryBlock(b.children?.length ? b.children : [b])
+  return {
+    id: b.libraryId || metaEntidad?.id || b.id || null,
+    nombre: b.libraryNombre || metaEntidad?.nombre || 'Entidad',
+    w: packed.w,
+    h: packed.h,
+    objects: packed.children,
+    rotation: Number(b.rotation) || 0,
+    scene_x: Number(b.x) || 0,
+    scene_y: Number(b.y) || 0,
+  }
+}
+
 /**
  * @param {object[]} objects
  * @param {{ lng: number, lat: number }} origin
  * @param {{
  *   reporteId?: number|string,
  *   dibujoTipo?: string,
- *   bloque?: object|null,
- *   rotacionDeg?: number,
+ *   entidad?: object|null,
  * }} [meta]
  */
 export function esquemaSceneToGeojson(objects, origin, meta = {}) {
@@ -153,7 +217,6 @@ export function esquemaSceneToGeojson(objects, origin, meta = {}) {
     let wx = nodo?.x
     let wy = nodo?.y
     if (!Number.isFinite(wx) || !Number.isFinite(wy)) {
-      // fallback: primer punto de cualquier objeto
       for (const o of list) {
         const rings = objectWorldRings(o)
         if (rings[0]?.[0]) {
@@ -174,8 +237,8 @@ export function esquemaSceneToGeojson(objects, origin, meta = {}) {
     }
     const ll = worldPointToLngLat(wx, wy, origin)
     if (!ll) return { type: 'FeatureCollection', features: [] }
-    const bloque = snapshotBloque(meta.bloque)
-    const rot = Number(meta.rotacionDeg) || 0
+
+    const entidad = snapshotEntidadDesdeEscena(list, meta.entidad)
     const features = [{
       type: 'Feature',
       geometry: { type: 'Point', coordinates: ll },
@@ -184,28 +247,35 @@ export function esquemaSceneToGeojson(objects, origin, meta = {}) {
         huella_tipo: 'nodo',
         escena_id: nodo?.id ?? null,
         node_num: nodo?.num ?? null,
-        bloque_nodo: bloque,
-        bloque_rotacion_deg: rot,
+        entidad_biblioteca: entidad,
+        entidad_id: entidad?.id ?? null,
+        entidad_nombre: entidad?.nombre ?? null,
         lod_marker: true,
       },
     }]
-    if (bloque) {
-      const poly = bloqueAPoligonoGeojson(ll[0], ll[1], bloque, rot)
-      if (poly) {
-        features.push({
-          type: 'Feature',
-          geometry: poly,
-          properties: {
-            ...baseProps,
-            huella_tipo: 'nodo',
-            escena_id: nodo?.id ?? null,
-            bloque_nodo: bloque,
-            bloque_rotacion_deg: rot,
-            es_bloque: true,
-          },
-        })
-      }
+
+    const bloques = allBloquesWorld(list)
+    for (const bloque of bloques) {
+      const corners = bloqueWorldCorners(bloque)
+      if (!corners) continue
+      const lnglat = ptsToLngLat(corners, origin)
+      const ring = closeRing(lnglat)
+      if (!ring) continue
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [ring] },
+        properties: {
+          ...baseProps,
+          huella_tipo: 'nodo',
+          escena_id: bloque?.id ?? null,
+          entidad_biblioteca: entidad,
+          entidad_id: entidad?.id ?? null,
+          entidad_nombre: entidad?.nombre ?? null,
+          es_entidad: true,
+        },
+      })
     }
+
     return { type: 'FeatureCollection', features }
   }
 
@@ -279,18 +349,21 @@ export function featureHuellaDesdeDibujo(dibujoFc, extraProps = {}) {
     { fallback: '' },
   )
 
-  // Preferir polígono de bloque si es nodo
+  // Preferir polígono de entidad si es nodo
   if (tipoMeta === 'nodo' || feats.some((f) => f?.properties?.dibujo_tipo === 'nodo' || f?.properties?.huella_tipo === 'nodo')) {
-    const bloquePoly = feats.find((f) => f?.geometry?.type === 'Polygon' && f?.properties?.es_bloque)
+    const entidadPoly = feats.find((f) => (
+      f?.geometry?.type === 'Polygon'
+      && (f?.properties?.es_entidad || f?.properties?.es_bloque)
+    ))
     const point = feats.find((f) => f?.geometry?.type === 'Point')
-    const geom = bloquePoly?.geometry || point?.geometry
+    const geom = entidadPoly?.geometry || point?.geometry
     if (geom) {
       return {
         type: 'Feature',
         geometry: geom,
         properties: {
           ...(point?.properties || {}),
-          ...(bloquePoly?.properties || {}),
+          ...(entidadPoly?.properties || {}),
           ...extraProps,
           origen: 'reporte_dibujo',
           precision: 'precisa',
