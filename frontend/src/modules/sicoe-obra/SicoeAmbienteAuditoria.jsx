@@ -37,6 +37,11 @@ const RESUMEN_KEYS = [
     color: '#ca8a04',
   },
   {
+    key: 'inconsistencias',
+    label: 'Inconsistencias',
+    color: '#ea580c',
+  },
+  {
     key: 'justificados',
     label: 'Justificados',
     color: '#16a34a',
@@ -47,6 +52,9 @@ const TIPO_LABEL = {
   traslapo: 'Traslapo',
   vacio: 'Vacío',
   no_auditable: 'No auditable',
+  ubicacion_inconsistente: 'Ubicación inconsistente',
+  costado_inconsistente: 'Costado inconsistente',
+  cantidad_mayor_area: 'Cantidad > área',
 }
 
 const ESTADO_LABEL = {
@@ -94,6 +102,14 @@ function matchResumenFiltro(h, key) {
   if (key === 'traslapos_sin_justificar') return tipo === 'traslapo' && estado === 'pendiente'
   if (key === 'vacios_sin_justificar') return tipo === 'vacio' && estado === 'pendiente'
   if (key === 'no_auditables') return tipo === 'no_auditable' && estado === 'pendiente'
+  if (key === 'inconsistencias') {
+    return (
+      (tipo === 'ubicacion_inconsistente'
+        || tipo === 'costado_inconsistente'
+        || tipo === 'cantidad_mayor_area') &&
+      estado === 'pendiente'
+    )
+  }
   return true
 }
 
@@ -241,17 +257,19 @@ export default function SicoeAmbienteAuditoria({
   )
 
   const focusPkids = useMemo(() => {
+    // Solo centrar al seleccionar un hallazgo concreto; sin selección → vista completa de la obra.
     const set = new Set()
-    const src = seleccionado ? [seleccionado] : filtrados
-    for (const h of src) {
-      for (const r of h?.registros_involucrados || []) {
-        if (r?.pk_id_id != null && String(r.pk_id_id).trim()) {
-          set.add(String(r.pk_id_id).trim())
-        }
+    if (!seleccionado) return []
+    for (const r of seleccionado?.registros_involucrados || []) {
+      if (r?.pk_id_id != null && String(r.pk_id_id).trim()) {
+        set.add(String(r.pk_id_id).trim())
       }
     }
+    if (seleccionado?.pk_id_id != null && String(seleccionado.pk_id_id).trim()) {
+      set.add(String(seleccionado.pk_id_id).trim())
+    }
     return [...set]
-  }, [seleccionado, filtrados])
+  }, [seleccionado])
 
   const toggleOrden = (col) => {
     setOrden((prev) => {
@@ -365,7 +383,15 @@ export default function SicoeAmbienteAuditoria({
   const renderFila = (h) => {
     const sel = String(h.id) === String(seleccionadoId)
     const tipoColor =
-      h.tipo === 'traslapo' ? '#dc2626' : h.tipo === 'vacio' ? '#d97706' : '#ca8a04'
+      h.tipo === 'traslapo'
+        ? '#dc2626'
+        : h.tipo === 'vacio'
+          ? '#d97706'
+          : h.tipo === 'ubicacion_inconsistente'
+            || h.tipo === 'costado_inconsistente'
+            || h.tipo === 'cantidad_mayor_area'
+            ? '#ea580c'
+            : '#ca8a04'
     const justOpts = justificacionesParaTipo(h.tipo)
     return (
       <tr
@@ -534,7 +560,7 @@ export default function SicoeAmbienteAuditoria({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: isNarrow ? '1fr 1fr' : 'repeat(4, 1fr)',
+          gridTemplateColumns: isNarrow ? '1fr 1fr' : 'repeat(5, 1fr)',
           gap: 8,
         }}
       >
@@ -780,6 +806,22 @@ export default function SicoeAmbienteAuditoria({
               focusPkids,
               seleccionado,
               hallazgos: filtrados,
+              highlightRegistroIds: (seleccionado?.registros_involucrados || [])
+                .map((r) => r?.id)
+                .filter((id) => id != null),
+              highlightPkIds: [
+                ...new Set(
+                  [
+                    seleccionado?.pk_id_id,
+                    ...((seleccionado?.registros_involucrados || []).map((r) => r?.pk_id_id)),
+                  ].filter((id) => id != null).map(String),
+                ),
+              ],
+              filterItemNumeros: [
+                ...new Set(
+                  filtrados.map((h) => h.item_numero).filter(Boolean).map(String),
+                ),
+              ],
             })
           ) : (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', padding: 12 }}>

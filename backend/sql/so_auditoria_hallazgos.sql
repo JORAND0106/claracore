@@ -7,7 +7,13 @@ CREATE TABLE IF NOT EXISTS public.so_auditoria_hallazgos (
   id bigserial PRIMARY KEY,
   contrato_id bigint NOT NULL REFERENCES public.contratos(id) ON DELETE CASCADE,
   fingerprint text NOT NULL,
-  tipo text NOT NULL CHECK (tipo IN ('traslapo', 'vacio', 'no_auditable')),
+  tipo text NOT NULL CHECK (tipo IN (
+    'traslapo',
+    'vacio',
+    'no_auditable',
+    'ubicacion_inconsistente',
+    'costado_inconsistente'
+  )),
   estado text NOT NULL DEFAULT 'pendiente'
     CHECK (estado IN ('pendiente', 'justificado', 'corregido')),
   item_numero text,

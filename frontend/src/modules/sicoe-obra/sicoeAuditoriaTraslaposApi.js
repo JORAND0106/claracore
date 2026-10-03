@@ -9,6 +9,9 @@ export function candidatoAuditoriaDesdeHoja({
   locApi = {},
   cantidadTotal,
   vlrUnitario,
+  ancho,
+  longitud,
+  unidad,
 }) {
   return {
     id: registro?.id ?? null,
@@ -25,6 +28,15 @@ export function candidatoAuditoriaDesdeHoja({
     pk_id_id: locApi.pk_id_id ?? registro?.pk_id_id ?? null,
     cantidad_total: cantidadTotal ?? registro?.cantidad_total ?? null,
     vlr_unitario: vlrUnitario ?? registro?.vlr_unitario ?? null,
+    ancho: ancho ?? registro?.ancho ?? null,
+    longitud: longitud ?? registro?.longitud ?? null,
+    coord_lat: locApi.coord_lat ?? registro?.coord_lat ?? null,
+    coord_lng: locApi.coord_lng ?? registro?.coord_lng ?? null,
+    coord_lat_fin: locApi.coord_lat_fin ?? registro?.coord_lat_fin ?? null,
+    coord_lng_fin: locApi.coord_lng_fin ?? registro?.coord_lng_fin ?? null,
+    geometria_tipo: locApi.geometria_tipo ?? registro?.geometria_tipo ?? null,
+    coords_geojson: locApi.coords_geojson ?? registro?.coords_geojson ?? null,
+    unidad: unidad ?? locApi.unidad ?? registro?.unidad ?? null,
   }
 }
 

@@ -46,6 +46,30 @@ function txt(v) {
 export function justificacionesParaTipo(tipo) {
   const t = txt(tipo).toLowerCase()
   if (t === 'vacio') return SICOE_AUDITORIA_JUSTIFICACIONES_VACIO
+  if (t === 'ubicacion_inconsistente') {
+    return [
+      'Coordenada de referencia del PK, no del elemento',
+      'Abscisado del plano desactualizado',
+      'Elemento en curva compleja',
+      'Error de digitación corregido en campo',
+    ]
+  }
+  if (t === 'costado_inconsistente') {
+    return [
+      'Costado reportado según calzada de cobro',
+      'Eje del plano no coincide con el eje de obra',
+      'Elemento central / sobre el eje',
+      'Error de digitación corregido en campo',
+    ]
+  }
+  if (t === 'cantidad_mayor_area') {
+    return [
+      'Cantidad incluye desperdicio / desperdicios de obra',
+      'Polígono parcial; cobro por sector',
+      'Área levantada pendiente de actualizar',
+      'Error de digitación corregido en campo',
+    ]
+  }
   return SICOE_AUDITORIA_JUSTIFICACIONES
 }
 
@@ -379,6 +403,7 @@ export function resumenAmbienteDesdeFilas(filas) {
     traslapos_sin_justificar: { cantidad: 0, valor: 0 },
     vacios_sin_justificar: { cantidad: 0, valor: 0 },
     no_auditables: { cantidad: 0, valor: 0 },
+    inconsistencias: { cantidad: 0, valor: 0 },
     justificados: { cantidad: 0, valor: 0 },
   }
   for (const f of filas || []) {
@@ -400,6 +425,9 @@ export function resumenAmbienteDesdeFilas(filas) {
     } else if (tipo === 'no_auditable') {
       out.no_auditables.cantidad += 1
       out.no_auditables.valor += valor
+    } else if (tipo === 'ubicacion_inconsistente' || tipo === 'costado_inconsistente' || tipo === 'cantidad_mayor_area') {
+      out.inconsistencias.cantidad += 1
+      out.inconsistencias.valor += valor
     }
   }
   return out

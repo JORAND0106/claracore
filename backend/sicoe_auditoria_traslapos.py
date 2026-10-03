@@ -446,11 +446,19 @@ def justificaciones_para_tipo(tipo: str) -> Tuple[str, ...]:
     t = _txt(tipo).casefold()
     if t == "vacio":
         return SICOE_AUDITORIA_JUSTIFICACIONES_VACIO
+    if t == "ubicacion_inconsistente":
+        from sicoe_eje_franjas import SICOE_AUDITORIA_JUSTIFICACIONES_UBICACION
+        return SICOE_AUDITORIA_JUSTIFICACIONES_UBICACION
+    if t == "costado_inconsistente":
+        from sicoe_eje_franjas import SICOE_AUDITORIA_JUSTIFICACIONES_COSTADO
+        return SICOE_AUDITORIA_JUSTIFICACIONES_COSTADO
+    if t == "cantidad_mayor_area":
+        from sicoe_huellas_espacial import SICOE_AUDITORIA_JUSTIFICACIONES_CANTIDAD_AREA
+        return SICOE_AUDITORIA_JUSTIFICACIONES_CANTIDAD_AREA
     if t == "traslapo":
         return SICOE_AUDITORIA_JUSTIFICACIONES
     # no_auditable: permite justificar con lista de traslapo (dato incompleto)
     return SICOE_AUDITORIA_JUSTIFICACIONES
-
 
 def _abs_key(v: Any) -> str:
     n = parse_abs_num(v)
@@ -644,13 +652,14 @@ def analizar_contrato(
 
 def resumen_ambiente_desde_filas(filas: List[dict]) -> dict:
     """
-    Resumen del ambiente: traslapos/vacíos sin justificar, no auditables y justificados.
-    Solo cuenta hallazgos no corregidos (excepto justificados que siguen justificados).
+    Resumen del ambiente: traslapos/vacíos sin justificar, no auditables,
+    inconsistencias de ubicación/costado y justificados.
     """
     out = {
         "traslapos_sin_justificar": {"cantidad": 0, "valor": 0.0},
         "vacios_sin_justificar": {"cantidad": 0, "valor": 0.0},
         "no_auditables": {"cantidad": 0, "valor": 0.0},
+        "inconsistencias": {"cantidad": 0, "valor": 0.0},
         "justificados": {"cantidad": 0, "valor": 0.0},
     }
     for f in filas or []:
@@ -672,4 +681,7 @@ def resumen_ambiente_desde_filas(filas: List[dict]) -> dict:
         elif tipo == "no_auditable":
             out["no_auditables"]["cantidad"] += 1
             out["no_auditables"]["valor"] += valor
+        elif tipo in ("ubicacion_inconsistente", "costado_inconsistente", "cantidad_mayor_area"):
+            out["inconsistencias"]["cantidad"] += 1
+            out["inconsistencias"]["valor"] += valor
     return out

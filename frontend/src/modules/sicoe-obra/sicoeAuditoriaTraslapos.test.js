@@ -153,6 +153,7 @@ describe('sicoeAuditoriaTraslapos', () => {
       { tipo: 'traslapo', estado: 'pendiente', valor_en_juego: 1000 },
       { tipo: 'vacio', estado: 'pendiente', valor_en_juego: 0 },
       { tipo: 'no_auditable', estado: 'pendiente', valor_en_juego: 50 },
+      { tipo: 'ubicacion_inconsistente', estado: 'pendiente', valor_en_juego: 0 },
       { tipo: 'traslapo', estado: 'justificado', valor_en_juego: 200 },
       { tipo: 'vacio', estado: 'corregido', valor_en_juego: 0 },
     ])
@@ -160,6 +161,7 @@ describe('sicoeAuditoriaTraslapos', () => {
     assert.equal(res.traslapos_sin_justificar.valor, 1000)
     assert.equal(res.vacios_sin_justificar.cantidad, 1)
     assert.equal(res.no_auditables.cantidad, 1)
+    assert.equal(res.inconsistencias.cantidad, 1)
     assert.equal(res.justificados.cantidad, 1)
     assert.equal(res.justificados.valor, 200)
   })

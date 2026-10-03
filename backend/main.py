@@ -26128,6 +26128,8 @@ class RegistroCreate(BaseModel):
     nodo_fin: Optional[str] = None
     margen: Optional[str] = None
     sector: Optional[str] = None
+    geometria_tipo: Optional[str] = None
+    coords_geojson: Optional[Dict[str, Any]] = None
     subcontratista_id: Optional[int] = None
     inspector_id: Optional[int] = None
     creado_por_reg: Optional[int] = None
@@ -26168,6 +26170,8 @@ class RegistroLineaNuevoReporte(BaseModel):
     abs_final: Optional[float] = None
     nodo_ini: Optional[str] = None
     nodo_fin: Optional[str] = None
+    geometria_tipo: Optional[str] = None
+    coords_geojson: Optional[Dict[str, Any]] = None
 
 class AsignarActoresPorPkBody(BaseModel):
     """Inspector y subcontratista en todas las cabeceras `so_reportes` con el mismo `pk_id_id`."""
@@ -27925,6 +27929,16 @@ class AuditoriaTraslaposCandidato(BaseModel):
     pk_id_id: Optional[int] = None
     cantidad_total: Optional[float] = None
     vlr_unitario: Optional[float] = None
+    ancho: Optional[float] = None
+    longitud: Optional[float] = None
+    coord_lat: Optional[float] = None
+    coord_lng: Optional[float] = None
+    coord_lat_fin: Optional[float] = None
+    coord_lng_fin: Optional[float] = None
+    geometria_tipo: Optional[str] = None
+    coords_geojson: Optional[Dict[str, Any]] = None
+    unidad: Optional[str] = None
+    persistir_huella: Optional[bool] = False
 
 
 class AuditoriaTraslaposAnalizarBody(BaseModel):
@@ -27947,7 +27961,9 @@ class AuditoriaTraslaposConfigBody(BaseModel):
 _SICOE_AUDITORIA_PEER_SELECT = (
     "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
     "calzada, margen, sector, abs_inicio, abs_final, pk_id_id, "
-    "cantidad_total, vlr_unitario"
+    "cantidad_total, vlr_unitario, ancho, longitud, "
+    "coord_lat, coord_lng, coord_lat_fin, coord_lng_fin, "
+    "huella_geojson, huella_precision"
 )
 
 
@@ -27975,6 +27991,305 @@ def _sicoe_tolerancia_traslapo_contrato(contrato_id: int) -> float:
     return SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M
 
 
+def _sicoe_tolerancia_ubicacion_contrato(contrato_id: int) -> float:
+    from sicoe_eje_franjas import (
+        SICOE_TOLERANCIA_UBICACION_DEFAULT_M,
+        normalizar_tolerancia_ubicacion_m,
+    )
+    try:
+        def _q():
+            return (
+                supabase.table("contratos")
+                .select("sicoe_tolerancia_ubicacion_m")
+                .eq("id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+        if rows:
+            return normalizar_tolerancia_ubicacion_m(rows[0].get("sicoe_tolerancia_ubicacion_m"))
+    except Exception as exc:
+        _log_api.warning("tolerancia ubicacion contrato=%s: %s", contrato_id, exc)
+    return SICOE_TOLERANCIA_UBICACION_DEFAULT_M
+
+
+def _sicoe_plano_geojson_contrato(contrato_id: int) -> Optional[dict]:
+    try:
+        def _q():
+            return (
+                supabase.table("contratos")
+                .select("plano_geojson")
+                .eq("id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+        if rows:
+            return rows[0].get("plano_geojson")
+    except Exception as exc:
+        _log_api.warning("plano geojson contrato=%s: %s", contrato_id, exc)
+    return None
+
+
+def _sicoe_ejes_contrato(contrato_id: int) -> List[dict]:
+    from sicoe_eje_franjas import reconstruir_ejes_desde_plano
+    plano = _sicoe_plano_geojson_contrato(contrato_id)
+    return reconstruir_ejes_desde_plano(plano) if plano else []
+
+
+def _sicoe_persistir_huella_registro(contrato_id: int, registro_id: int, analisis_franja: dict) -> None:
+    """Guarda huella_geojson / huella_precision / huella_tipo en so_registros (best-effort)."""
+    huella = (analisis_franja or {}).get("huella")
+    precision = (analisis_franja or {}).get("precision")
+    huella_tipo = (analisis_franja or {}).get("huella_tipo")
+    payload = {
+        "huella_geojson": huella,
+        "huella_precision": precision,
+    }
+    if huella_tipo is not None:
+        payload["huella_tipo"] = huella_tipo
+    try:
+        def _u():
+            return (
+                supabase.table("so_registros")
+                .update(payload)
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        supabase_execute(_u)
+    except Exception as exc:
+        # Columnas aún no migradas → intentar sin huella_tipo
+        try:
+            def _u2():
+                return (
+                    supabase.table("so_registros")
+                    .update({
+                        "huella_geojson": huella,
+                        "huella_precision": precision,
+                    })
+                    .eq("id", registro_id)
+                    .eq("contrato_id", contrato_id)
+                    .execute()
+                    .data
+                )
+            supabase_execute(_u2)
+        except Exception as exc2:
+            _log_api.warning("persistir huella reg=%s: %s / %s", registro_id, exc, exc2)
+
+
+def _sicoe_radio_nodo_contrato(contrato_id: int) -> float:
+    from sicoe_huellas_espacial import (
+        SICOE_RADIO_NODO_DEFAULT_M,
+        normalizar_radio_nodo_m,
+    )
+    try:
+        def _q():
+            return (
+                supabase.table("contratos")
+                .select("sicoe_radio_nodo_m")
+                .eq("id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+        if rows:
+            return normalizar_radio_nodo_m(rows[0].get("sicoe_radio_nodo_m"))
+    except Exception as exc:
+        _log_api.warning("radio nodo contrato=%s: %s", contrato_id, exc)
+    return SICOE_RADIO_NODO_DEFAULT_M
+
+
+def _sicoe_nodo_pk_get(contrato_id: int, pk_id_id) -> Optional[dict]:
+    if pk_id_id is None:
+        return None
+    try:
+        def _q():
+            return (
+                supabase.table("so_nodos_pk")
+                .select("*")
+                .eq("contrato_id", contrato_id)
+                .eq("pk_id_id", pk_id_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+        return rows[0] if rows else None
+    except Exception as exc:
+        _log_api.warning("get nodo pk: %s", exc)
+        return None
+
+
+def _sicoe_nodo_pk_upsert(contrato_id: int, nodo_update: dict) -> None:
+    if not nodo_update or nodo_update.get("pk_id_id") is None:
+        return
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    row = {
+        "contrato_id": contrato_id,
+        "pk_id_id": nodo_update["pk_id_id"],
+        "actualizado_en": now,
+    }
+    for k in ("coord_lat", "coord_lng", "poligono_geojson", "abs_aprox"):
+        if k in nodo_update and nodo_update[k] is not None:
+            row[k] = nodo_update[k]
+    try:
+        def _up():
+            return (
+                supabase.table("so_nodos_pk")
+                .upsert(row, on_conflict="contrato_id,pk_id_id")
+                .execute()
+                .data
+            )
+        supabase_execute(_up)
+    except Exception as exc:
+        _log_api.warning("upsert nodo pk: %s", exc)
+
+
+def _sicoe_analizar_huella_registro(contrato_id: int, reg: dict) -> dict:
+    """Despacha franja / nodo / polígono según geometria_tipo."""
+    from sicoe_auditoria_traslapos import canonizar_hallazgo
+    from sicoe_eje_franjas import analizar_registro_franja
+    from sicoe_huellas_espacial import (
+        analizar_nodo,
+        analizar_poligono,
+        normalizar_geometria_tipo,
+    )
+
+    tipo = normalizar_geometria_tipo(reg.get("geometria_tipo"), reg)
+    ejes = _sicoe_ejes_contrato(contrato_id)
+
+    if tipo == "punto":
+        nodo = _sicoe_nodo_pk_get(contrato_id, reg.get("pk_id_id"))
+        # Pares mismo ítem en mismo PK
+        pares = []
+        item = str(reg.get("item_numero") or "").strip()
+        pk = reg.get("pk_id_id")
+        if item and pk is not None:
+            try:
+                def _q():
+                    return (
+                        supabase.table("so_registros")
+                        .select("id, numero_registro, reporte_id, item_numero, pk_id_id")
+                        .eq("contrato_id", contrato_id)
+                        .eq("item_numero", item)
+                        .eq("pk_id_id", pk)
+                        .execute()
+                        .data
+                    )
+                pares = supabase_execute(_q) or []
+            except Exception:
+                pares = []
+        out = analizar_nodo(
+            reg,
+            nodo,
+            radio_m=_sicoe_radio_nodo_contrato(contrato_id),
+            ejes=ejes,
+            pares_mismo_item_en_nodo=pares,
+        )
+        if out.get("nodo_update"):
+            _sicoe_nodo_pk_upsert(contrato_id, out["nodo_update"])
+    elif tipo == "area":
+        pares = []
+        item = str(reg.get("item_numero") or "").strip()
+        if item:
+            try:
+                def _q2():
+                    return (
+                        supabase.table("so_registros")
+                        .select(
+                            "id, numero_registro, reporte_id, item_numero, pk_id_id, "
+                            "coords_geojson, huella_geojson, cantidad_total, unidad"
+                        )
+                        .eq("contrato_id", contrato_id)
+                        .eq("item_numero", item)
+                        .execute()
+                        .data
+                    )
+                pares = supabase_execute(_q2) or []
+            except Exception:
+                try:
+                    def _q3():
+                        return (
+                            supabase.table("so_registros")
+                            .select("id, numero_registro, reporte_id, item_numero, pk_id_id, huella_geojson, cantidad_total, unidad")
+                            .eq("contrato_id", contrato_id)
+                            .eq("item_numero", item)
+                            .execute()
+                            .data
+                        )
+                    pares = supabase_execute(_q3) or []
+                except Exception:
+                    pares = []
+        # Adjuntar perimetro del reporte si existe
+        if reg.get("reporte_id") and not reg.get("perimetro_geojson"):
+            try:
+                def _qr():
+                    return (
+                        supabase.table("so_reportes")
+                        .select("perimetro_geojson")
+                        .eq("id", reg["reporte_id"])
+                        .limit(1)
+                        .execute()
+                        .data
+                    )
+                rr = supabase_execute(_qr) or []
+                if rr:
+                    reg = {**reg, "perimetro_geojson": rr[0].get("perimetro_geojson")}
+            except Exception:
+                pass
+        out = analizar_poligono(reg, pares_mismo_item=pares)
+        # Polígono de un nodo (p. ej. excavación): actualizar huella del PK_ID
+        if reg.get("pk_id_id") is not None:
+            from sicoe_huellas_espacial import coords_desde_registro
+            _pt, poly = coords_desde_registro(reg)
+            if poly and poly.get("type") == "Polygon":
+                nodo_upd = {
+                    "pk_id_id": reg["pk_id_id"],
+                    "poligono_geojson": {
+                        "type": "Feature",
+                        "geometry": poly,
+                        "properties": {"pk_id_id": reg["pk_id_id"]},
+                    },
+                }
+                if _pt:
+                    nodo_upd["coord_lat"] = _pt["lat"]
+                    nodo_upd["coord_lng"] = _pt["lng"]
+                _sicoe_nodo_pk_upsert(contrato_id, nodo_upd)
+    else:
+        # linea (default)
+        if not ejes or reg.get("abs_inicio") is None or reg.get("abs_final") is None:
+            return {
+                "ok": False,
+                "omitido": True,
+                "huella": None,
+                "precision": None,
+                "huella_tipo": None,
+                "hallazgos": [],
+                "semaforo": "verde",
+            }
+        out = analizar_registro_franja(
+            reg, ejes, tolerancia_ubicacion_m=_sicoe_tolerancia_ubicacion_contrato(contrato_id)
+        )
+        out["huella_tipo"] = "franja" if out.get("huella") else None
+
+    hall = []
+    for h in out.get("hallazgos") or []:
+        hall.append(canonizar_hallazgo(h))
+    out["hallazgos"] = hall
+    out["geometria_tipo"] = tipo
+    return out
+
+
+def _sicoe_analizar_franja_candidato(contrato_id: int, candidato: dict) -> dict:
+    return _sicoe_analizar_huella_registro(contrato_id, candidato)
+
+
 def _sicoe_pares_mismo_item(contrato_id: int, item_numeros: List[str]) -> Dict[str, List[dict]]:
     items = sorted({str(x or "").strip() for x in item_numeros if str(x or "").strip()})
     out: Dict[str, List[dict]] = {i: [] for i in items}
@@ -27992,22 +28307,38 @@ def _sicoe_pares_mismo_item(contrato_id: int, item_numeros: List[str]) -> Dict[s
             )
         rows = supabase_execute(_q) or []
     except Exception as exc:
-        # sector column missing → retry without sector
+        # sector / coords fin / huella column missing → retry minimal
         msg = str(exc).lower()
-        if "sector" in msg:
+        if any(k in msg for k in ("sector", "coord_lat_fin", "huella_", "ancho")):
             def _q2():
                 return (
                     supabase.table("so_registros")
                     .select(
                         "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
-                        "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario"
+                        "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario, "
+                        "coord_lat, coord_lng, ancho"
                     )
                     .eq("contrato_id", contrato_id)
                     .in_("item_numero", items)
                     .execute()
                     .data
                 )
-            rows = supabase_execute(_q2) or []
+            try:
+                rows = supabase_execute(_q2) or []
+            except Exception:
+                def _q3():
+                    return (
+                        supabase.table("so_registros")
+                        .select(
+                            "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                            "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario"
+                        )
+                        .eq("contrato_id", contrato_id)
+                        .in_("item_numero", items)
+                        .execute()
+                        .data
+                    )
+                rows = supabase_execute(_q3) or []
         else:
             _log_api.warning("pares auditoria traslapo contrato=%s: %s", contrato_id, exc)
             rows = []
@@ -28026,12 +28357,21 @@ def sicoe_auditoria_traslapos_config(contrato_id: int, current_user=Depends(get_
         SICOE_AUDITORIA_TOLERANCIA_MIN_M,
         usuario_ve_auditoria_traslapos,
     )
+    from sicoe_eje_franjas import (
+        SICOE_AUDITORIA_JUSTIFICACIONES_COSTADO,
+        SICOE_AUDITORIA_JUSTIFICACIONES_UBICACION,
+        SICOE_TOLERANCIA_UBICACION_MIN_M,
+    )
     _ = current_user
     return {
         "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
         "tolerancia_min_m": SICOE_AUDITORIA_TOLERANCIA_MIN_M,
+        "tolerancia_ubicacion_m": _sicoe_tolerancia_ubicacion_contrato(contrato_id),
+        "tolerancia_ubicacion_min_m": SICOE_TOLERANCIA_UBICACION_MIN_M,
         "justificaciones": list(SICOE_AUDITORIA_JUSTIFICACIONES),
         "justificaciones_vacio": list(SICOE_AUDITORIA_JUSTIFICACIONES_VACIO),
+        "justificaciones_ubicacion": list(SICOE_AUDITORIA_JUSTIFICACIONES_UBICACION),
+        "justificaciones_costado": list(SICOE_AUDITORIA_JUSTIFICACIONES_COSTADO),
         "visible": usuario_ve_auditoria_traslapos(current_user),
     }
 
@@ -28070,14 +28410,15 @@ def sicoe_auditoria_traslapos_analizar(
     body: AuditoriaTraslaposAnalizarBody,
     current_user=Depends(get_current_user),
 ):
-    """Análisis inmediato al asignar ítem. Interventoría recibe semáforo verde vacío."""
+    """Análisis inmediato al asignar ítem (traslapos + franja/ubicación). Interventoría → verde."""
     from sicoe_auditoria_traslapos import analizar_varios, usuario_ve_auditoria_traslapos
 
     if not usuario_ve_auditoria_traslapos(current_user):
         return {
             "semaforo": "verde",
             "resumen": {"verde": len(body.candidatos or []), "amarillo": 0, "rojo": 0,
-                        "traslapo": 0, "vacio": 0, "no_auditable": 0},
+                        "traslapo": 0, "vacio": 0, "no_auditable": 0,
+                        "ubicacion_inconsistente": 0, "costado_inconsistente": 0},
             "resultados": [],
             "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
             "oculto_por_rol": True,
@@ -28087,7 +28428,58 @@ def sicoe_auditoria_traslapos_analizar(
         return {"semaforo": "verde", "resumen": {}, "resultados": [], "tolerancia_m": 0.5}
     tol = _sicoe_tolerancia_traslapo_contrato(contrato_id)
     pares = _sicoe_pares_mismo_item(contrato_id, [c.get("item_numero") for c in cands])
-    return analizar_varios(cands, pares, tolerancia_m=tol)
+    out = analizar_varios(cands, pares, tolerancia_m=tol)
+
+    # Enriquecer con alertas de franja / nodo / polígono / ubicación
+    resumen = dict(out.get("resumen") or {})
+    resumen.setdefault("ubicacion_inconsistente", 0)
+    resumen.setdefault("costado_inconsistente", 0)
+    resumen.setdefault("cantidad_mayor_area", 0)
+    resultados = list(out.get("resultados") or [])
+    for i, cand in enumerate(cands):
+        try:
+            fr = _sicoe_analizar_franja_candidato(contrato_id, cand)
+        except Exception as exc:
+            _log_api.warning("franja analizar cand=%s: %s", cand.get("id"), exc)
+            continue
+        if cand.get("persistir_huella") and cand.get("id") and fr.get("huella") is not None:
+            _sicoe_persistir_huella_registro(contrato_id, int(cand["id"]), fr)
+        extra = fr.get("hallazgos") or []
+        if not extra:
+            continue
+        if i < len(resultados):
+            resultados[i] = dict(resultados[i])
+            resultados[i]["hallazgos"] = list(resultados[i].get("hallazgos") or []) + extra
+            if fr.get("semaforo") == "rojo":
+                resultados[i]["semaforo"] = "rojo"
+            elif resultados[i].get("semaforo") != "rojo" and fr.get("semaforo") == "amarillo":
+                resultados[i]["semaforo"] = "amarillo"
+        for h in extra:
+            t = h.get("tipo")
+            if t in resumen:
+                resumen[t] = int(resumen.get(t) or 0) + 1
+            if t == "traslapo":
+                resumen["rojo"] = int(resumen.get("rojo") or 0) + 1
+            if t in ("ubicacion_inconsistente", "costado_inconsistente", "cantidad_mayor_area"):
+                resumen["amarillo"] = int(resumen.get("amarillo") or 0) + 1
+
+    if resumen.get("rojo"):
+        semaforo = "rojo"
+    elif (
+        resumen.get("amarillo")
+        or resumen.get("ubicacion_inconsistente")
+        or resumen.get("costado_inconsistente")
+        or resumen.get("cantidad_mayor_area")
+    ):
+        semaforo = "amarillo"
+    else:
+        semaforo = out.get("semaforo") or "verde"
+
+    out["resultados"] = resultados
+    out["resumen"] = resumen
+    out["semaforo"] = semaforo
+    out["tolerancia_ubicacion_m"] = _sicoe_tolerancia_ubicacion_contrato(contrato_id)
+    return out
 
 
 @app.post("/sicoe-obra/{contrato_id}/auditoria-traslapos/registrar-decision")
@@ -28099,7 +28491,7 @@ def sicoe_auditoria_traslapos_registrar_decision(
     """Persiste la alerta mostrada y la decisión (trazabilidad del registro)."""
     from sicoe_auditoria_traslapos import (
         SICOE_AUDITORIA_ACCION_LOG,
-        SICOE_AUDITORIA_JUSTIFICACIONES,
+        justificaciones_para_tipo,
         usuario_ve_auditoria_traslapos,
     )
 
@@ -28111,7 +28503,11 @@ def sicoe_auditoria_traslapos_registrar_decision(
         raise HTTPException(422, "Decisión inválida.")
     just = (body.justificacion or "").strip() or None
     if decision == "justifico":
-        if just not in SICOE_AUDITORIA_JUSTIFICACIONES:
+        # Acepta cualquier justificación de las listas conocidas (traslapo/vacío/ubicación/costado)
+        permitidas = set()
+        for tipo in ("traslapo", "vacio", "ubicacion_inconsistente", "costado_inconsistente", "no_auditable"):
+            permitidas.update(justificaciones_para_tipo(tipo))
+        if just not in permitidas:
             raise HTTPException(422, "Justificación no permitida.")
     else:
         just = None
@@ -28163,20 +28559,36 @@ def _sicoe_auditoria_regs_contrato(contrato_id: int) -> List[dict]:
         rows = supabase_execute(_q) or []
     except Exception as exc:
         msg = str(exc).lower()
-        if "sector" in msg:
+        if any(k in msg for k in ("sector", "coord_lat_fin", "huella_", "ancho")):
             def _q2():
                 return (
                     supabase.table("so_registros")
                     .select(
                         "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
-                        "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario"
+                        "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario, "
+                        "coord_lat, coord_lng"
                     )
                     .eq("contrato_id", contrato_id)
                     .not_.is_("item_numero", "null")
                     .execute()
                     .data
                 )
-            rows = supabase_execute(_q2) or []
+            try:
+                rows = supabase_execute(_q2) or []
+            except Exception:
+                def _q3():
+                    return (
+                        supabase.table("so_registros")
+                        .select(
+                            "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                            "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario"
+                        )
+                        .eq("contrato_id", contrato_id)
+                        .not_.is_("item_numero", "null")
+                        .execute()
+                        .data
+                    )
+                rows = supabase_execute(_q3) or []
         else:
             _log_api.warning("regs auditoria contrato=%s: %s", contrato_id, exc)
             rows = []
@@ -28253,23 +28665,43 @@ def sicoe_auditoria_hallazgos_sincronizar(
     current_user=Depends(get_current_user),
 ):
     """
-    Recalcula hallazgos del contrato con el mismo motor de asignación,
-    upsert por fingerprint y marca ausentes como corregido.
+    Recalcula hallazgos del contrato (traslapos/vacíos + ubicación/costado),
+    upsert por fingerprint, marca ausentes como corregido y regenera huellas.
     """
     from sicoe_auditoria_traslapos import (
         analizar_contrato,
         resumen_ambiente_desde_filas,
         usuario_ve_auditoria_traslapos,
     )
+    from sicoe_eje_franjas import ejes_to_geojson
     from datetime import datetime, timezone
 
     if not usuario_ve_auditoria_traslapos(current_user):
         return {"ok": True, "oculto_por_rol": True, "hallazgos": [], "resumen": {}}
 
     tol = _sicoe_tolerancia_traslapo_contrato(contrato_id)
+    tol_ubic = _sicoe_tolerancia_ubicacion_contrato(contrato_id)
     regs = _sicoe_auditoria_regs_contrato(contrato_id)
     analisis = analizar_contrato(regs, tolerancia_m=tol)
     vivos = {h["fingerprint"]: h for h in (analisis.get("hallazgos") or []) if h.get("fingerprint")}
+
+    # Huellas (franja / nodo / polígono) + hallazgos espaciales
+    ejes = _sicoe_ejes_contrato(contrato_id)
+    huellas_features = []
+    for reg in regs:
+        try:
+            fr = _sicoe_analizar_huella_registro(contrato_id, reg)
+        except Exception as exc:
+            _log_api.warning("huella sync reg=%s: %s", reg.get("id"), exc)
+            continue
+        if reg.get("id"):
+            _sicoe_persistir_huella_registro(contrato_id, int(reg["id"]), fr)
+            if fr.get("huella") is not None:
+                huellas_features.append(fr["huella"])
+        for h in fr.get("hallazgos") or []:
+            fp = h.get("fingerprint")
+            if fp and fp not in vivos:
+                vivos[fp] = h
 
     existentes = _sicoe_hallazgos_tabla_lista(contrato_id)
     by_fp = {str(r.get("fingerprint")): r for r in existentes if r.get("fingerprint")}
@@ -28326,11 +28758,399 @@ def sicoe_auditoria_hallazgos_sincronizar(
     return {
         "ok": True,
         "tolerancia_m": tol,
+        "tolerancia_ubicacion_m": tol_ubic,
         "sincronizados": len(upserts),
         "corregidos": corregidos,
+        "huellas": len(huellas_features),
         "semaforo": analisis.get("semaforo"),
         "resumen": resumen_ambiente_desde_filas(filas),
         "hallazgos": filas,
+        "eje": ejes_to_geojson(ejes),
+    }
+
+
+@app.get("/sicoe-obra/{contrato_id}/huellas")
+def sicoe_huellas_geojson(
+    contrato_id: int,
+    item_numero: Optional[str] = None,
+    incluir_eje: bool = True,
+    incluir_nodos: bool = True,
+    current_user=Depends(get_current_user),
+):
+    """FeatureCollection de huellas (franja/nodo/polígono) + eje + nodos PK."""
+    from sicoe_eje_franjas import ejes_to_geojson
+    from sicoe_huellas_espacial import nodos_to_geojson
+
+    _ = current_user
+    try:
+        def _q():
+            q = (
+                supabase.table("so_registros")
+                .select(
+                    "id, numero_registro, reporte_id, item_numero, huella_geojson, huella_precision, "
+                    "huella_tipo, geometria_tipo, abs_inicio, abs_final, margen, ancho, pk_id_id"
+                )
+                .eq("contrato_id", contrato_id)
+                .not_.is_("huella_geojson", "null")
+            )
+            if item_numero:
+                q = q.eq("item_numero", item_numero)
+            return q.execute().data
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "huella_" in msg or "geometria_tipo" in msg:
+            # Fallback sin columnas nuevas
+            try:
+                def _q2():
+                    q = (
+                        supabase.table("so_registros")
+                        .select(
+                            "id, numero_registro, reporte_id, item_numero, huella_geojson, huella_precision, "
+                            "abs_inicio, abs_final, margen, ancho"
+                        )
+                        .eq("contrato_id", contrato_id)
+                        .not_.is_("huella_geojson", "null")
+                    )
+                    if item_numero:
+                        q = q.eq("item_numero", item_numero)
+                    return q.execute().data
+                rows = supabase_execute(_q2) or []
+            except Exception as exc2:
+                if "huella_" in str(exc2).lower():
+                    return {
+                        "type": "FeatureCollection",
+                        "features": [],
+                        "eje": {"type": "FeatureCollection", "features": []},
+                        "nodos": {"type": "FeatureCollection", "features": []},
+                        "migracion_pendiente": True,
+                    }
+                raise HTTPException(500, f"No se pudieron leer huellas: {exc2}") from exc2
+        else:
+            raise HTTPException(500, f"No se pudieron leer huellas: {exc}") from exc
+
+    features = []
+    for r in rows:
+        feat = r.get("huella_geojson")
+        if not feat or not isinstance(feat, dict):
+            continue
+        # Omitidas del dibujo masivo (sin geometría) no se dibujan
+        if feat.get("geometry") is None or (feat.get("properties") or {}).get("omitida"):
+            continue
+        props = dict(feat.get("properties") or {})
+        props.update({
+            "registro_id": r.get("id"),
+            "numero_registro": r.get("numero_registro"),
+            "reporte_id": r.get("reporte_id"),
+            "item_numero": r.get("item_numero"),
+            "precision": r.get("huella_precision") or props.get("precision"),
+            "huella_tipo": r.get("huella_tipo") or props.get("huella_tipo") or "franja",
+            "geometria_tipo": r.get("geometria_tipo"),
+            "pk_id_id": r.get("pk_id_id"),
+        })
+        features.append({
+            "type": "Feature",
+            "geometry": feat.get("geometry"),
+            "properties": props,
+        })
+
+    eje = {"type": "FeatureCollection", "features": []}
+    if incluir_eje:
+        try:
+            eje = ejes_to_geojson(_sicoe_ejes_contrato(contrato_id))
+        except Exception:
+            pass
+
+    nodos = {"type": "FeatureCollection", "features": []}
+    if incluir_nodos:
+        try:
+            def _qn():
+                return (
+                    supabase.table("so_nodos_pk")
+                    .select("*")
+                    .eq("contrato_id", contrato_id)
+                    .execute()
+                    .data
+                )
+            nodos = nodos_to_geojson(supabase_execute(_qn) or [])
+        except Exception:
+            pass
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "eje": eje,
+        "nodos": nodos,
+        "total": len(features),
+        "tolerancia_ubicacion_m": _sicoe_tolerancia_ubicacion_contrato(contrato_id),
+        "radio_nodo_m": _sicoe_radio_nodo_contrato(contrato_id),
+    }
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/{registro_id}/sincronizar-huella")
+def sicoe_sincronizar_huella_registro(
+    contrato_id: int,
+    registro_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Regenera la huella (franja/nodo/polígono) tras guardar."""
+    from sicoe_auditoria_traslapos import usuario_ve_auditoria_traslapos
+
+    try:
+        def _q():
+            return (
+                supabase.table("so_registros")
+                .select(_SICOE_AUDITORIA_PEER_SELECT + ", geometria_tipo, coords_geojson, huella_tipo, unidad")
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        msg = str(exc).lower()
+        if any(k in msg for k in ("coord_lat_fin", "huella_", "sector", "geometria_tipo", "coords_geojson")):
+            def _q2():
+                return (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                        "calzada, margen, abs_inicio, abs_final, pk_id_id, "
+                        "coord_lat, coord_lng, ancho, cantidad_total, vlr_unitario, unidad"
+                    )
+                    .eq("id", registro_id)
+                    .eq("contrato_id", contrato_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+            rows = supabase_execute(_q2) or []
+        else:
+            raise HTTPException(500, str(exc)) from exc
+
+    if not rows:
+        raise HTTPException(404, "Registro no encontrado.")
+    reg = rows[0]
+    fr = _sicoe_analizar_huella_registro(contrato_id, reg)
+    if fr.get("omitido"):
+        _sicoe_persistir_huella_registro(contrato_id, registro_id, {"huella": None, "precision": None, "huella_tipo": None})
+        return {"ok": True, "omitido": True, "razon": fr.get("razon") or "sin_datos"}
+    _sicoe_persistir_huella_registro(contrato_id, registro_id, fr)
+
+    hallazgos_out = []
+    if usuario_ve_auditoria_traslapos(current_user):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for canon in fr.get("hallazgos") or []:
+            row = _sicoe_hallazgo_row_from_analisis(contrato_id, canon, None)
+            row["creado_en"] = now
+            try:
+                def _up(r=row):
+                    return (
+                        supabase.table("so_auditoria_hallazgos")
+                        .upsert(r, on_conflict="contrato_id,fingerprint")
+                        .execute()
+                        .data
+                    )
+                supabase_execute(_up)
+                hallazgos_out.append(canon)
+            except Exception as exc:
+                _log_api.warning("upsert hallazgo huella: %s", exc)
+
+    return {
+        "ok": True,
+        "precision": fr.get("precision"),
+        "huella": fr.get("huella"),
+        "huella_tipo": fr.get("huella_tipo"),
+        "geometria_tipo": fr.get("geometria_tipo"),
+        "semaforo": fr.get("semaforo"),
+        "hallazgos": hallazgos_out,
+    }
+
+
+class DibujarMasivoBody(BaseModel):
+    offset: Optional[int] = 0
+    limit: Optional[int] = 40
+
+
+@app.post("/sicoe-obra/{contrato_id}/huellas/dibujar-masivo")
+def sicoe_dibujar_masivo_huellas(
+    contrato_id: int,
+    body: DibujarMasivoBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Desarrollador: dibuja huellas faltantes (franja/nodo/polígono) de registros
+    con ítem asignado. Idempotente: solo procesa huella_geojson IS NULL.
+    No modifica dimensiones ni localización de los registros.
+    """
+    from datetime import datetime, timezone
+    from sicoe_dibujar_masivo import acumular_resultado, resumen_vacio
+
+    if not _es_desarrollador(current_user):
+        raise HTTPException(403, "Solo el rol Desarrollador puede ejecutar el dibujo masivo.")
+
+    limit = max(1, min(100, int(body.limit or 40)))
+    select_cols = (
+        _SICOE_AUDITORIA_PEER_SELECT
+        + ", geometria_tipo, coords_geojson, huella_tipo, unidad"
+    )
+
+    try:
+        def _count():
+            return (
+                supabase.table("so_registros")
+                .select("id", count="exact")
+                .eq("contrato_id", contrato_id)
+                .not_.is_("item_numero", "null")
+                .is_("huella_geojson", "null")
+                .limit(1)
+                .execute()
+            )
+        count_res = supabase_execute(_count)
+        total_pendientes = int(getattr(count_res, "count", None) or 0)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "huella_" in msg or "geometria_tipo" in msg or "coords_geojson" in msg:
+            raise HTTPException(
+                500,
+                f"Migración de huellas pendiente (so_huellas_nodo_poligono.sql / so_eje_franjas.sql): {exc}",
+            ) from exc
+        raise HTTPException(500, f"No se pudo contar pendientes: {exc}") from exc
+
+    # Al persistir, el registro sale del filtro IS NULL → siempre leer desde el inicio.
+    try:
+        def _batch():
+            return (
+                supabase.table("so_registros")
+                .select(select_cols)
+                .eq("contrato_id", contrato_id)
+                .not_.is_("item_numero", "null")
+                .is_("huella_geojson", "null")
+                .order("id")
+                .range(0, limit - 1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_batch) or []
+    except Exception as exc:
+        msg = str(exc).lower()
+        if any(k in msg for k in ("coord_lat_fin", "huella_", "sector", "geometria", "coords_geojson")):
+            def _batch2():
+                return (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                        "calzada, margen, abs_inicio, abs_final, pk_id_id, "
+                        "coord_lat, coord_lng, ancho, cantidad_total, vlr_unitario, unidad, huella_geojson"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .not_.is_("item_numero", "null")
+                    .is_("huella_geojson", "null")
+                    .order("id")
+                    .range(0, limit - 1)
+                    .execute()
+                    .data
+                )
+            rows = supabase_execute(_batch2) or []
+        else:
+            raise HTTPException(500, f"No se pudo leer lote: {exc}") from exc
+
+    rows = [r for r in rows if str(r.get("item_numero") or "").strip()]
+    resumen_batch = resumen_vacio()
+    now = datetime.now(timezone.utc).isoformat()
+    hallazgos_upserted = 0
+
+    def _upsert_hallazgos(fr_obj):
+        nonlocal hallazgos_upserted
+        for canon in (fr_obj or {}).get("hallazgos") or []:
+            try:
+                row = _sicoe_hallazgo_row_from_analisis(contrato_id, canon, None)
+                row["creado_en"] = now
+
+                def _up(r=row):
+                    return (
+                        supabase.table("so_auditoria_hallazgos")
+                        .upsert(r, on_conflict="contrato_id,fingerprint")
+                        .execute()
+                        .data
+                    )
+
+                supabase_execute(_up)
+                hallazgos_upserted += 1
+            except Exception as exc_h:
+                _log_api.warning("dibujar-masivo hallazgo: %s", exc_h)
+
+    for reg in rows:
+        rid = reg.get("id")
+        if rid is None:
+            continue
+        if reg.get("huella_geojson"):
+            acumular_resultado(resumen_batch, None, ya_dibujado=True)
+            continue
+        try:
+            fr = _sicoe_analizar_huella_registro(contrato_id, reg)
+        except Exception as exc:
+            _log_api.warning("dibujar-masivo reg=%s: %s", rid, exc)
+            fr = {"omitido": True, "huella": None, "hallazgos": []}
+
+        if fr.get("omitido") or not fr.get("huella"):
+            # Marker para salir del filtro IS NULL sin dibujar geometría visible.
+            _sicoe_persistir_huella_registro(
+                contrato_id,
+                int(rid),
+                {
+                    "huella": {
+                        "type": "Feature",
+                        "geometry": None,
+                        "properties": {"omitida": True, "registro_id": rid},
+                    },
+                    "precision": None,
+                    "huella_tipo": None,
+                },
+            )
+            acumular_resultado(resumen_batch, fr)
+            _upsert_hallazgos(fr)
+            continue
+
+        _sicoe_persistir_huella_registro(contrato_id, int(rid), fr)
+        acumular_resultado(resumen_batch, fr)
+        _upsert_hallazgos(fr)
+
+    done = len(rows) < limit or total_pendientes == 0
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "DIBUJAR",
+            "SICOE",
+            "huellas_masivo",
+            str(contrato_id),
+            {
+                "limit": limit,
+                "lote": len(rows),
+                "resumen_batch": resumen_batch,
+                "hallazgos_upserted": hallazgos_upserted,
+                "done": done,
+                "total_pendientes_inicio": total_pendientes,
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "offset": 0,
+        "limit": limit,
+        "lote": len(rows),
+        "next_offset": 0,
+        "total_pendientes": total_pendientes,
+        "procesados_acum": int(resumen_batch.get("procesados") or 0),
+        "done": done,
+        "resumen_batch": resumen_batch,
+        "hallazgos_upserted": hallazgos_upserted,
     }
 
 
@@ -28589,6 +29409,8 @@ class AsignarItemBody(BaseModel):
     margen: Optional[str] = None
     pk_id_id: Optional[int] = None
     sector: Optional[str] = None
+    geometria_tipo: Optional[str] = None
+    coords_geojson: Optional[Dict[str, Any]] = None
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/asignar-item")
 def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemBody, current_user=Depends(get_current_user)):
@@ -28633,6 +29455,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
         _pre_loc_keys = (
             "civ", "tramo", "infraestructura", "calzada", "ubicacion", "coord_lat", "coord_lng",
             "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen", "pk_id_id", "sector",
+            "geometria_tipo", "coords_geojson",
         )
         pre_raw = _pydantic_dump_exclude_unset(body)
         pre_patch = {}

@@ -59,7 +59,9 @@ import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
 import SicoeCantidadesPorItemVista from './modules/sicoe-obra/SicoeCantidadesPorItemVista'
 import SicoeAmbienteAuditoria from './modules/sicoe-obra/SicoeAmbienteAuditoria'
 import { usuarioVeAuditoriaTraslapos } from './modules/sicoe-obra/sicoeAuditoriaTraslapos'
+import SicoeMapaHuellas from './modules/sicoe-obra/SicoeMapaHuellas'
 import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegistrosActasModal'
+import SicoeDibujarMasivoModal from './modules/sicoe-obra/SicoeDibujarMasivoModal'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -2025,8 +2027,12 @@ function permisoFuncionContrato(usuario, nombreFuncion, contratoId) {
   return rows[0]
 }
 
-/** Alineado con backend `_es_desarrollador`: cargo o rol «desarrollador». */
+/** Alineado con backend `_es_desarrollador`: cargo o rol «desarrollador» (también rol_id=1). */
 function esUsuarioDesarrollador(usuario) {
+  if (!usuario) return false
+  try {
+    if (Number(usuario.rol_id) === 1) return true
+  } catch { /* ignore */ }
   const norm = (txt) =>
     String(txt || '')
       .normalize('NFD')
@@ -2036,7 +2042,9 @@ function esUsuarioDesarrollador(usuario) {
       .replace(/\s+/g, ' ')
   const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
   const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
-  return cargo === 'desarrollador' || rol === 'desarrollador'
+  if (cargo === 'desarrollador' || rol === 'desarrollador') return true
+  if (usuario?.es_desarrollador === true || usuario?.acceso_total === true) return true
+  return false
 }
 
 /** Alineado con backend: cargo_id → nivel de validación SICOE obra. */
@@ -3887,6 +3895,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         locApi: locApiPreview,
         cantidadTotal: cantTotal,
         vlrUnitario: itemSel?.precio_unitario ?? itemSel?.vlr_unitario ?? registro.vlr_unitario,
+        ancho: registro.ancho,
+        longitud: registro.longitud,
+        unidad: itemSel?.unidad || registro.unidad || unidadMedicion,
       })
       try {
         const aud = await fetchAuditoriaTraslaposAnalizar({
@@ -3913,6 +3924,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               })
               setModalAuditoriaTraslapos(null)
               await encolarGuardado()
+              try {
+                await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/sincronizar-huella`, {
+                  method: 'POST',
+                  headers: { ...hdrs, Authorization: `Bearer ${getToken()}` },
+                })
+              } catch { /* noop */ }
             },
             onCancelar: async () => {
               const resUno = (aud.analisis.resultados && aud.analisis.resultados[0]) || aud.analisis
@@ -3935,6 +3952,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
     }
     await encolarGuardado()
+    // Regenera franja sobre el eje tras guardar (best-effort)
+    if (registro?.id && contrato_id) {
+      try {
+        await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/sincronizar-huella`, {
+          method: 'POST',
+          headers: { ...hdrs, Authorization: `Bearer ${getToken()}` },
+        })
+      } catch { /* noop */ }
+    }
   }
 
   const guardarCorte = async () => {
@@ -5171,6 +5197,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             errores={erroresLocHoja}
             pkIds={pkIdsHoja}
             nodos={nodosHoja}
+            unidadItem={unidadMedicion}
           />
         ) : (
           <SicoeLocalizacionFields
@@ -5178,6 +5205,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             token={getToken()}
             contratoId={contrato_id}
             value={sicoeLocFromRegistro(registro, pkIdsHoja)}
+            unidadItem={unidadMedicion}
             readOnly
           />
         )}
@@ -8769,6 +8797,7 @@ function ModuloSicoeObra({
   const [hayMas, setHayMas] = useState(false)
   const [offsetActual, setOffsetActual] = useState(0)
   const [modalMoverActasDev, setModalMoverActasDev] = useState(false)
+  const [modalDibujarMasivoDev, setModalDibujarMasivoDev] = useState(false)
   const [filtros, setFiltros] = useState({
     numero_reporte: '', numero_registro: '',
     semana: '', acta_rpo: '',
@@ -11951,6 +11980,35 @@ function ModuloSicoeObra({
             <button
               type="button"
               className="cc-sicoe-touch-btn"
+              data-testid="sicoe-dibujar-masivo-btn"
+              onClick={() => setModalDibujarMasivoDev(true)}
+              title="Dibujar huellas faltantes (Desarrollador)"
+              aria-label="Dibujar"
+              style={{
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                padding: sicoeCompact ? '10px 14px' : '10px 16px',
+                minHeight: sicoeCompact ? 44 : 40,
+                fontWeight: 800,
+                fontSize: 'var(--cc-sm)',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                lineHeight: 1,
+              }}
+            >
+              <span aria-hidden="true" style={{ fontSize: 14 }}>✎</span>
+              Dibujar
+            </button>
+          )}
+          {esUsuarioDesarrollador(usuario) && (
+            <button
+              type="button"
+              className="cc-sicoe-touch-btn"
               onClick={() => setModalMoverActasDev(true)}
               title="Mover / reasignar registros (Desarrollador): entre actas, entre cortes de subcontratista, o reasignar entre subcontratistas"
               aria-label="Mover o reasignar registros entre actas, cortes o subcontratistas"
@@ -11983,6 +12041,18 @@ function ModuloSicoeObra({
         </div>
       </div>
 
+      {modalDibujarMasivoDev && esUsuarioDesarrollador(usuario) && (
+        <SicoeDibujarMasivoModal
+          t={t}
+          API_URL={API_URL}
+          token={getToken()}
+          contratoId={contrato_id}
+          onClose={() => setModalDibujarMasivoDev(false)}
+          onDone={() => {
+            invalidateSicoeVistaCache(contrato_id)
+          }}
+        />
+      )}
       {modalMoverActasDev && esUsuarioDesarrollador(usuario) && (
         <SicoeMoverRegistrosActasModal
           t={t}
@@ -12565,17 +12635,15 @@ function ModuloSicoeObra({
             refreshNonce={cpiRefreshNonce}
             filtrosVersion={cpiFiltrosVersion}
             exportMeta={exportMetaContrato || {}}
-            renderMap={({ colores, height, focusPkids }) => (
-              <MiniMapaSemaforo
+            renderMap={({ height, highlightRegistroIds, highlightPkIds, filterItemNumeros, seleccionado }) => (
+              <SicoeMapaHuellas
                 t={t}
-                colores={colores || {}}
                 contratoId={contrato_id}
                 token={getToken()}
                 height={height || 320}
-                bearing={270}
-                soloPkConDatos
-                showToolbar={false}
-                focusPkids={focusPkids || []}
+                highlightRegistroIds={seleccionado ? (highlightRegistroIds || []) : []}
+                highlightPkIds={seleccionado ? (highlightPkIds || []) : []}
+                filterItemNumeros={filterItemNumeros || null}
               />
             )}
           />
@@ -16803,6 +16871,8 @@ function MiniMapaSemaforo({
   t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270, soloPkConDatos = false,
   modo: modoProp, onModoChange, capEtiquetas: capEtiquetasProp, onCapEtiquetasChange, showToolbar = true,
   focusPkids = null,
+  /** Si false, no dispara GPS al abrir (Auditoría / planos de obra). Default true. */
+  autoGeolocate = true,
 }) {
   const mapRef        = useRef(null)
   const mapInstance   = useRef(null)
@@ -16893,7 +16963,7 @@ function MiniMapaSemaforo({
     const unregMiniAttrib = installMapboxAttributionLinksOpenNewTab(map)
     mapInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-    addMapboxGeolocateControl(map)
+    addMapboxGeolocateControl(map, 'top-right', { autoTrigger: autoGeolocate !== false })
     map.on('load', () => {
       const features = buildFeatures(planoBase)
       const data = { ...planoBase, type: planoBase.type || 'FeatureCollection', features }
@@ -16986,7 +17056,7 @@ function MiniMapaSemaforo({
         setListo(false)
       }
     }
-  }, [bearing, contratoId, t.bg, planoBase, soloPkConDatos])
+  }, [bearing, contratoId, t.bg, planoBase, soloPkConDatos, autoGeolocate])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -17011,7 +17081,15 @@ function MiniMapaSemaforo({
     const pks = Array.isArray(focusPkids)
       ? focusPkids.map((p) => String(p || '').trim().toLowerCase().replace(/\s+/g, '')).filter(Boolean)
       : []
-    if (!pks.length) return
+    if (!pks.length) {
+      const bAll = _boundsFromFeatureCollection(planoBase)
+      if (bAll) {
+        try {
+          _mapboxFitBoundsLngLat(map, bAll, { padding: 24, bearing, maxZoom: 17 })
+        } catch { /* ignore */ }
+      }
+      return
+    }
     const pkSet = new Set(pks)
     const feats = (planoBase.features || []).filter((f) => {
       const id = String(_sicoeFeaturePkId(f) || '').toLowerCase().replace(/\s+/g, '')

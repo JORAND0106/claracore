@@ -91,6 +91,17 @@ describe('mapboxGeolocate', () => {
     })
   })
 
+  it('con autoTrigger:false no dispara GPS al cargar', () => {
+    const map = makeMap({ loaded: false })
+    const ctrl = addMapboxGeolocateControl(map, 'top-right', {
+      GeolocateControl: GeolocateStub,
+      autoTrigger: false,
+    })
+    assert.ok(ctrl)
+    map._fire('load')
+    assert.equal(ctrl.triggered, false)
+  })
+
   it('retorna null con mapa inválido', () => {
     assert.equal(addMapboxGeolocateControl(null), null)
     assert.equal(addMapboxGeolocateControl(undefined), null)
