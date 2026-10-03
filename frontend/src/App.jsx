@@ -2027,8 +2027,12 @@ function permisoFuncionContrato(usuario, nombreFuncion, contratoId) {
   return rows[0]
 }
 
-/** Alineado con backend `_es_desarrollador`: cargo o rol «desarrollador». */
+/** Alineado con backend `_es_desarrollador`: cargo o rol «desarrollador» (también rol_id=1). */
 function esUsuarioDesarrollador(usuario) {
+  if (!usuario) return false
+  try {
+    if (Number(usuario.rol_id) === 1) return true
+  } catch { /* ignore */ }
   const norm = (txt) =>
     String(txt || '')
       .normalize('NFD')
@@ -2038,7 +2042,9 @@ function esUsuarioDesarrollador(usuario) {
       .replace(/\s+/g, ' ')
   const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
   const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
-  return cargo === 'desarrollador' || rol === 'desarrollador'
+  if (cargo === 'desarrollador' || rol === 'desarrollador') return true
+  if (usuario?.es_desarrollador === true || usuario?.acceso_total === true) return true
+  return false
 }
 
 /** Alineado con backend: cargo_id → nivel de validación SICOE obra. */
@@ -11974,27 +11980,29 @@ function ModuloSicoeObra({
             <button
               type="button"
               className="cc-sicoe-touch-btn"
+              data-testid="sicoe-dibujar-masivo-btn"
               onClick={() => setModalDibujarMasivoDev(true)}
               title="Dibujar huellas faltantes (Desarrollador)"
-              aria-label="Dibujar huellas de registros sin dibujar"
+              aria-label="Dibujar"
               style={{
-                background: 'transparent',
-                color: t.text,
-                border: `1px solid ${t.border}`,
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
                 borderRadius: '8px',
-                padding: sicoeCompact ? '10px 12px' : '10px 12px',
+                padding: sicoeCompact ? '10px 14px' : '10px 16px',
                 minHeight: sicoeCompact ? 44 : 40,
-                minWidth: sicoeCompact ? 44 : 40,
                 fontWeight: 800,
-                fontSize: 'var(--cc-md)',
+                fontSize: 'var(--cc-sm)',
                 cursor: 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                gap: 6,
                 lineHeight: 1,
               }}
             >
-              <span aria-hidden="true" style={{ fontSize: 16 }}>✎</span>
+              <span aria-hidden="true" style={{ fontSize: 14 }}>✎</span>
+              Dibujar
             </button>
           )}
           {esUsuarioDesarrollador(usuario) && (
@@ -12627,14 +12635,14 @@ function ModuloSicoeObra({
             refreshNonce={cpiRefreshNonce}
             filtrosVersion={cpiFiltrosVersion}
             exportMeta={exportMetaContrato || {}}
-            renderMap={({ height, highlightRegistroIds, highlightPkIds, filterItemNumeros }) => (
+            renderMap={({ height, highlightRegistroIds, highlightPkIds, filterItemNumeros, seleccionado }) => (
               <SicoeMapaHuellas
                 t={t}
                 contratoId={contrato_id}
                 token={getToken()}
                 height={height || 320}
-                highlightRegistroIds={highlightRegistroIds || []}
-                highlightPkIds={highlightPkIds || []}
+                highlightRegistroIds={seleccionado ? (highlightRegistroIds || []) : []}
+                highlightPkIds={seleccionado ? (highlightPkIds || []) : []}
                 filterItemNumeros={filterItemNumeros || null}
               />
             )}
@@ -16863,6 +16871,8 @@ function MiniMapaSemaforo({
   t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270, soloPkConDatos = false,
   modo: modoProp, onModoChange, capEtiquetas: capEtiquetasProp, onCapEtiquetasChange, showToolbar = true,
   focusPkids = null,
+  /** Si false, no dispara GPS al abrir (Auditoría / planos de obra). Default true. */
+  autoGeolocate = true,
 }) {
   const mapRef        = useRef(null)
   const mapInstance   = useRef(null)
@@ -16953,7 +16963,7 @@ function MiniMapaSemaforo({
     const unregMiniAttrib = installMapboxAttributionLinksOpenNewTab(map)
     mapInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-    addMapboxGeolocateControl(map)
+    addMapboxGeolocateControl(map, 'top-right', { autoTrigger: autoGeolocate !== false })
     map.on('load', () => {
       const features = buildFeatures(planoBase)
       const data = { ...planoBase, type: planoBase.type || 'FeatureCollection', features }
@@ -17046,7 +17056,7 @@ function MiniMapaSemaforo({
         setListo(false)
       }
     }
-  }, [bearing, contratoId, t.bg, planoBase, soloPkConDatos])
+  }, [bearing, contratoId, t.bg, planoBase, soloPkConDatos, autoGeolocate])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -17071,7 +17081,15 @@ function MiniMapaSemaforo({
     const pks = Array.isArray(focusPkids)
       ? focusPkids.map((p) => String(p || '').trim().toLowerCase().replace(/\s+/g, '')).filter(Boolean)
       : []
-    if (!pks.length) return
+    if (!pks.length) {
+      const bAll = _boundsFromFeatureCollection(planoBase)
+      if (bAll) {
+        try {
+          _mapboxFitBoundsLngLat(map, bAll, { padding: 24, bearing, maxZoom: 17 })
+        } catch { /* ignore */ }
+      }
+      return
+    }
     const pkSet = new Set(pks)
     const feats = (planoBase.features || []).filter((f) => {
       const id = String(_sicoeFeaturePkId(f) || '').toLowerCase().replace(/\s+/g, '')

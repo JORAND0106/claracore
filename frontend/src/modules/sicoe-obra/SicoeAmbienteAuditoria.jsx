@@ -257,17 +257,19 @@ export default function SicoeAmbienteAuditoria({
   )
 
   const focusPkids = useMemo(() => {
+    // Solo centrar al seleccionar un hallazgo concreto; sin selección → vista completa de la obra.
     const set = new Set()
-    const src = seleccionado ? [seleccionado] : filtrados
-    for (const h of src) {
-      for (const r of h?.registros_involucrados || []) {
-        if (r?.pk_id_id != null && String(r.pk_id_id).trim()) {
-          set.add(String(r.pk_id_id).trim())
-        }
+    if (!seleccionado) return []
+    for (const r of seleccionado?.registros_involucrados || []) {
+      if (r?.pk_id_id != null && String(r.pk_id_id).trim()) {
+        set.add(String(r.pk_id_id).trim())
       }
     }
+    if (seleccionado?.pk_id_id != null && String(seleccionado.pk_id_id).trim()) {
+      set.add(String(seleccionado.pk_id_id).trim())
+    }
     return [...set]
-  }, [seleccionado, filtrados])
+  }, [seleccionado])
 
   const toggleOrden = (col) => {
     setOrden((prev) => {

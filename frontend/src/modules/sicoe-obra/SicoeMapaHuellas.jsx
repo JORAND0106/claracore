@@ -1,14 +1,25 @@
 /**
- * Mapa compacto: eje + huellas (franja / nodo / polígono) + nodos PK.
- * Usado en Ambiente de Auditoría para resaltar hallazgos seleccionados.
+ * Mapa del ambiente de Auditoría: plano de obra (fondo tenue) + eje + huellas.
+ * Vista inicial siempre centrada en la obra; nunca en la ubicación del dispositivo.
  */
 import { useEffect, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
 import { addMapboxGeolocateControl } from '../../mapboxSafe'
+import {
+  MAPBOX_PLANO_PAINT_LABELS,
+  addMapboxAbscisaLabelLayers,
+  mapboxPlanoSymbolLayout,
+} from '../../mapboxPlanoLabels'
 
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
+
+const FILTER_MAPBOX_LABEL_PK = [
+  'all',
+  ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+  ['>', ['length', ['to-string', ['get', 'pk_id']]], 0],
+]
 
 function colorItem(item) {
   const s = String(item || '')
@@ -20,6 +31,7 @@ function colorItem(item) {
 function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
   const hiReg = new Set((highlightRegistroIds || []).map(String))
   const hiPk = new Set((highlightPkIds || []).map(String))
+  const hasHi = hiReg.size > 0 || hiPk.size > 0
   return {
     type: 'FeatureCollection',
     features: (features || []).map((f) => {
@@ -27,13 +39,27 @@ function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
       const rid = String(f?.properties?.registro_id ?? '')
       const pk = String(f?.properties?.pk_id_id ?? '')
       const hi = hiReg.has(rid) || (pk && hiPk.has(pk))
+      // Sin selección: contraste medio. Con selección: resaltados fuertes, resto apagado.
+      let opacity = precis ? 0.4 : 0.22
+      let stroke_w = precis ? 1.4 : 1
+      let color = colorItem(f?.properties?.item_numero)
+      if (hasHi) {
+        if (hi) {
+          opacity = 0.78
+          stroke_w = 2.8
+          color = '#dc2626'
+        } else {
+          opacity = 0.12
+          stroke_w = 0.8
+        }
+      }
       return {
         ...f,
         properties: {
           ...f.properties,
-          color: hi ? '#dc2626' : colorItem(f?.properties?.item_numero),
-          opacity: hi ? 0.72 : precis ? 0.45 : 0.28,
-          stroke_w: hi ? 2.5 : precis ? 1.4 : 1,
+          color,
+          opacity,
+          stroke_w,
           dash: precis ? 0 : 1,
           hi: hi ? 1 : 0,
         },
@@ -44,6 +70,7 @@ function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
 
 function paintNodos(nodosFc, highlightPkIds) {
   const hiPk = new Set((highlightPkIds || []).map(String))
+  const hasHi = hiPk.size > 0
   return {
     type: 'FeatureCollection',
     features: (nodosFc?.features || []).map((f) => {
@@ -54,7 +81,7 @@ function paintNodos(nodosFc, highlightPkIds) {
         properties: {
           ...f.properties,
           color: hi ? '#dc2626' : '#7c3aed',
-          opacity: hi ? 0.75 : 0.35,
+          opacity: hasHi ? (hi ? 0.8 : 0.15) : (hi ? 0.75 : 0.35),
           stroke_w: hi ? 2.5 : 1.5,
           radius: hi ? 8 : 5,
           hi: hi ? 1 : 0,
@@ -62,6 +89,75 @@ function paintNodos(nodosFc, highlightPkIds) {
       }
     }),
   }
+}
+
+function forEachLngLat(node, fn) {
+  if (!Array.isArray(node)) return
+  if (typeof node[0] === 'number' && typeof node[1] === 'number') {
+    fn(node[0], node[1])
+    return
+  }
+  for (let i = 0; i < node.length; i += 1) forEachLngLat(node[i], fn)
+}
+
+function boundsFromFc(fc) {
+  const feats = fc?.features
+  if (!Array.isArray(feats) || !feats.length) return null
+  let minLng = Infinity
+  let maxLng = -Infinity
+  let minLat = Infinity
+  let maxLat = -Infinity
+  let n = 0
+  for (const f of feats) {
+    const g = f?.geometry
+    if (!g?.coordinates) continue
+    forEachLngLat(g.coordinates, (lng, lat) => {
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
+      n += 1
+      if (lng < minLng) minLng = lng
+      if (lng > maxLng) maxLng = lng
+      if (lat < minLat) minLat = lat
+      if (lat > maxLat) maxLat = lat
+    })
+  }
+  if (!n) return null
+  return { minLng, maxLng, minLat, maxLat }
+}
+
+function fitObra(map, bounds, { padding = 40, maxZoom = 16, duration = 0 } = {}) {
+  if (!map || !bounds) return false
+  let { minLng, maxLng, minLat, maxLat } = bounds
+  if (minLng === maxLng) { minLng -= 1e-4; maxLng += 1e-4 }
+  if (minLat === maxLat) { minLat -= 1e-4; maxLat += 1e-4 }
+  try {
+    map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+      padding,
+      bearing: 270,
+      pitch: 0,
+      maxZoom,
+      duration,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function boundsOfHighlights(huellasFeats, nodosFc, highlightRegistroIds, highlightPkIds) {
+  const hiReg = new Set((highlightRegistroIds || []).map(String))
+  const hiPk = new Set((highlightPkIds || []).map(String))
+  if (!hiReg.size && !hiPk.size) return null
+  const feats = []
+  for (const f of huellasFeats || []) {
+    const rid = String(f?.properties?.registro_id ?? '')
+    const pk = String(f?.properties?.pk_id_id ?? '')
+    if (hiReg.has(rid) || (pk && hiPk.has(pk))) feats.push(f)
+  }
+  for (const f of nodosFc?.features || []) {
+    const pk = String(f?.properties?.pk_id_id ?? '')
+    if (pk && hiPk.has(pk)) feats.push(f)
+  }
+  return boundsFromFc({ type: 'FeatureCollection', features: feats })
 }
 
 export default function SicoeMapaHuellas({
@@ -77,6 +173,7 @@ export default function SicoeMapaHuellas({
   const mapInstance = useRef(null)
   const rawHuellasRef = useRef([])
   const rawNodosRef = useRef(EMPTY_FC)
+  const planoBoundsRef = useRef(null)
   const [listo, setListo] = useState(false)
   const [error, setError] = useState('')
   const highlightRef = useRef({ highlightRegistroIds, highlightPkIds })
@@ -100,6 +197,7 @@ export default function SicoeMapaHuellas({
 
         const plano = planoPack?.plano_geojson || EMPTY_FC
         let huellasFeats = Array.isArray(huellasRes?.features) ? huellasRes.features : []
+        // filterItemNumeros solo afecta capas de hallazgos/huellas, NUNCA el plano de fondo
         if (Array.isArray(filterItemNumeros) && filterItemNumeros.length) {
           const set = new Set(filterItemNumeros.map(String))
           huellasFeats = huellasFeats.filter((f) => set.has(String(f?.properties?.item_numero || '')))
@@ -107,6 +205,7 @@ export default function SicoeMapaHuellas({
         rawHuellasRef.current = huellasFeats
         rawNodosRef.current = huellasRes?.nodos || EMPTY_FC
         const eje = huellasRes?.eje || EMPTY_FC
+        planoBoundsRef.current = boundsFromFc(plano) || boundsFromFc(eje)
 
         mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
         if (mapInstance.current) {
@@ -122,23 +221,53 @@ export default function SicoeMapaHuellas({
         })
         mapInstance.current = map
         map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-        addMapboxGeolocateControl(map)
+        // No auto-centrar en GPS: la vista inicial debe ser la obra.
+        addMapboxGeolocateControl(map, 'top-right', { autoTrigger: false })
 
         map.on('load', () => {
+          // Capa de fondo: proyecto (PK-ID + abscisado), siempre tenue y visible
           map.addSource('plano-base', { type: 'geojson', data: plano })
           map.addLayer({
             id: 'plano-base-fill',
             type: 'fill',
             source: 'plano-base',
             filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
-            paint: { 'fill-color': '#94a3b8', 'fill-opacity': 0.12 },
+            paint: { 'fill-color': '#94a3b8', 'fill-opacity': 0.14 },
           })
           map.addLayer({
             id: 'plano-base-line',
             type: 'line',
             source: 'plano-base',
-            paint: { 'line-color': '#64748b', 'line-width': 1, 'line-opacity': 0.35 },
+            paint: { 'line-color': '#64748b', 'line-width': 1, 'line-opacity': 0.4 },
           })
+          map.addLayer({
+            id: 'plano-base-labels-pk',
+            type: 'symbol',
+            source: 'plano-base',
+            filter: FILTER_MAPBOX_LABEL_PK,
+            layout: mapboxPlanoSymbolLayout(['get', 'pk_id'], true),
+            paint: {
+              ...MAPBOX_PLANO_PAINT_LABELS,
+              'text-color': '#64748b',
+              'text-halo-color': '#ffffff',
+              'text-opacity': 0.7,
+            },
+          })
+          try {
+            addMapboxAbscisaLabelLayers(map, {
+              idPrefix: 'plano-base-labels-abscisa',
+              source: 'plano-base',
+              layout: mapboxPlanoSymbolLayout(
+                ['coalesce', ['get', 'etiqueta'], ['get', 'Etiqueta'], ''],
+                true,
+              ),
+              paint: {
+                ...MAPBOX_PLANO_PAINT_LABELS,
+                'text-color': '#64748b',
+                'text-opacity': 0.65,
+              },
+            })
+          } catch { /* ignore */ }
 
           map.addSource('eje-abscisado', { type: 'geojson', data: eje })
           map.addLayer({
@@ -147,8 +276,8 @@ export default function SicoeMapaHuellas({
             source: 'eje-abscisado',
             paint: {
               'line-color': '#0ea5e9',
-              'line-width': 2.5,
-              'line-opacity': 0.85,
+              'line-width': 2,
+              'line-opacity': 0.55,
             },
           })
 
@@ -217,25 +346,8 @@ export default function SicoeMapaHuellas({
             },
           })
 
-          const fitSrc = withColors.features.length
-            ? withColors
-            : (nodosPainted.features.length ? nodosPainted : eje)
-          try {
-            const b = new mapboxgl.LngLatBounds()
-            let any = false
-            for (const f of fitSrc.features || []) {
-              const g = f.geometry
-              if (!g) continue
-              const push = (c) => {
-                if (Array.isArray(c) && typeof c[0] === 'number') {
-                  b.extend(c)
-                  any = true
-                } else if (Array.isArray(c)) c.forEach(push)
-              }
-              push(g.coordinates)
-            }
-            if (any) map.fitBounds(b, { padding: 36, maxZoom: 17, bearing: 270 })
-          } catch { /* ignore */ }
+          // Vista inicial: siempre la obra completa (plano), nunca GPS ni solo hallazgos.
+          fitObra(map, planoBoundsRef.current, { padding: 40, maxZoom: 16, duration: 0 })
 
           setListo(true)
         })
@@ -260,6 +372,20 @@ export default function SicoeMapaHuellas({
     if (srcH) srcH.setData(paintHuellas(rawHuellasRef.current, highlightRegistroIds, highlightPkIds))
     const srcN = map.getSource('huellas-nodos')
     if (srcN) srcN.setData(paintNodos(rawNodosRef.current, highlightPkIds))
+
+    const hasHi = (highlightRegistroIds || []).length > 0 || (highlightPkIds || []).length > 0
+    if (hasHi) {
+      const b = boundsOfHighlights(
+        rawHuellasRef.current,
+        rawNodosRef.current,
+        highlightRegistroIds,
+        highlightPkIds,
+      )
+      if (b) fitObra(map, b, { padding: 48, maxZoom: 17, duration: 450 })
+    } else {
+      // Quitar selección / limpiar filtros → vista completa de la obra
+      fitObra(map, planoBoundsRef.current, { padding: 40, maxZoom: 16, duration: 450 })
+    }
   }, [highlightRegistroIds, highlightPkIds, listo])
 
   return (
@@ -273,7 +399,7 @@ export default function SicoeMapaHuellas({
             color: t?.textMuted, fontSize: 'var(--cc-sm)',
           }}
         >
-          Cargando eje y huellas…
+          Cargando plano de obra…
         </div>
       )}
       {error && (
@@ -294,6 +420,7 @@ export default function SicoeMapaHuellas({
           fontSize: 'var(--cc-caption)', color: t?.textMuted, display: 'flex', gap: 8, flexWrap: 'wrap',
         }}
       >
+        <span style={{ color: '#64748b' }}>▦ Proyecto</span>
         <span style={{ color: '#0ea5e9' }}>━ Eje</span>
         <span>▮ Huella</span>
         <span style={{ color: '#7c3aed' }}>● Nodo</span>
