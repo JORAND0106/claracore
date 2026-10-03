@@ -333,6 +333,11 @@ export default function EsquemaEditorModal({
   huellaMode = false,
   /** Escena previa (objetos) al reabrir un dibujo de reporte. */
   initialSceneObjects = null,
+  /**
+   * Filas iniciales de la tabla de coordenadas (p. ej. puntos de la portada del reporte).
+   * Se recargan al abrir; si la portada no tiene puntos, la tabla queda vacía.
+   */
+  initialCoordRows = null,
   /** ({ objects, originLngLat }) => Promise — solo en huellaMode. */
   onSaveHuella = null,
   onSave,
@@ -751,6 +756,26 @@ export default function EsquemaEditorModal({
     setDirty(false)
     requestAnimationFrame(() => redrawRef.current())
   }, [initialDataUri, initialSceneObjects])
+
+  // Precarga tabla de coordenadas (portada del reporte / puntos topográficos).
+  useEffect(() => {
+    const rows = Array.isArray(initialCoordRows) ? initialCoordRows : []
+    if (!rows.length) {
+      setCoordRows([])
+      return
+    }
+    const normalized = rows
+      .map((r, i) => ({
+        num: String(r?.num ?? r?.punto ?? (i + 1)),
+        norte: r?.norte ?? '',
+        este: r?.este ?? '',
+        cota: r?.cota ?? '',
+        desc: String(r?.desc ?? r?.descripcion ?? '').trim(),
+      }))
+      .filter((r) => r.norte !== '' || r.este !== '')
+    setCoordRows(normalized)
+    if (normalized.length) setCoordPanelOpen(true)
+  }, [initialCoordRows])
 
   // Semilla de tramo (planilla tubería): nodos Inicio/Fin + flecha en canvas.
   useEffect(() => {

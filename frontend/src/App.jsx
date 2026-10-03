@@ -224,6 +224,7 @@ import {
   SICOE_NUEVO_REPORTE_FLUSH_EVENT,
 } from './modules/sicoe-obra/sicoeNuevoReporteDraft'
 import { sicoeEstadoAlEnviarReporte } from './modules/sicoe-obra/sicoeEstadoAlEnviarReporte'
+import { alertaErrorGuardarReporte } from './modules/sicoe-obra/sicoeGuardarReporteError'
 import { sicoeCortesSoloVigente } from './modules/sicoe-obra/sicoeCorteVigente'
 import {
   sicoeCorteNumeroDeRegistro,
@@ -7577,12 +7578,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               <button
                 type="button"
                 data-testid="sicoe-dibujo-reporte-btn"
+                data-dibujo-pendiente={reporteTieneDibujo(reporte) ? '0' : '1'}
                 onClick={() => setEditorDibujoReporte(true)}
-                title={reporteTieneDibujo(reporte) ? 'Editar dibujo del reporte (huella de todos los registros)' : 'Dibujar el reporte sobre el plano semáforo'}
+                title={reporteTieneDibujo(reporte)
+                  ? 'Editar dibujo del reporte (huella de todos los registros)'
+                  : 'Dibujo pendiente: dibujar el reporte sobre el plano semáforo (no bloquea asignar ítem)'}
                 style={{
-                  background: reporteTieneDibujo(reporte) ? t.bgCard : t.primary,
-                  color: reporteTieneDibujo(reporte) ? t.text : '#fff',
-                  border: reporteTieneDibujo(reporte) ? `1px solid ${t.border}` : 'none',
+                  background: reporteTieneDibujo(reporte) ? t.bgCard : '#d9770618',
+                  color: reporteTieneDibujo(reporte) ? t.text : '#b45309',
+                  border: reporteTieneDibujo(reporte)
+                    ? `1px solid ${t.border}`
+                    : '1px solid #d9770644',
                   borderRadius: '8px',
                   padding: carpetaCompact ? '10px 14px' : '6px 14px',
                   minHeight: carpetaCompact ? 44 : undefined,
@@ -7595,7 +7601,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 }}
               >
                 <span aria-hidden>✎</span>
-                {reporteTieneDibujo(reporte) ? 'Editar dibujo' : 'Dibujar'}
+                {reporteTieneDibujo(reporte) ? 'Editar dibujo' : 'Dibujar · pendiente'}
               </button>
             )}
             {puedeEditar && seleccionados.length > 0 && (
@@ -15449,18 +15455,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       })
     } catch (e) {
       try { flushDraftLocal() } catch { /* noop */ }
-      const msg = (e && e.message) ? e.message : String(e)
-      const hintBorrador = borradorId
-        ? `\n\nEl borrador del reporte permanece en el servidor (id ${String(borradorId).slice(0, 8)}…). No cierre el modal: reintente. También hay copia local en este dispositivo.`
-        : '\n\nSe conservó un borrador local en este dispositivo; al reabrir «Nuevo reporte» podrá recuperarlo.'
-      if (msg === 'Failed to fetch') {
-        alert(
-          'Error guardando reporte: no hubo conexión con el servidor a tiempo. Comprueba la red, vuelve a intentar o abre con Wi‑Fi. Si usas móvil, el sistema ya envía las líneas en un solo lote: actualiza la app tras el despliegue.'
-          + hintBorrador,
-        )
-      } else {
-        alert('Error guardando reporte: ' + msg + hintBorrador)
-      }
+      alert(alertaErrorGuardarReporte(e, { borradorId }))
     }
     setGuardando(false)
   }
