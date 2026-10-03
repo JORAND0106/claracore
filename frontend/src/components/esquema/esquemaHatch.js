@@ -59,10 +59,27 @@ function strokeObjectEdges(ctx, obj) {
       ctx.beginPath()
       ctx.moveTo(pts[0].x, pts[0].y)
       for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
+      // Sin closePath el flood-fill escapa: closed=true (huella) o anillo casi cerrado.
+      if (polylineClosedForHatch(obj)) ctx.closePath()
       ctx.stroke()
     }
   }
   ctx.restore()
+}
+
+/**
+ * Una polilínea actúa como frontera cerrada del hatch si está marcada `closed`
+ * o si el último vértice coincide (≈) con el primero.
+ */
+export function polylineClosedForHatch(obj) {
+  if (!obj || (obj.type !== 'polilinea' && obj.type !== 'stroke')) return false
+  if (obj.closed) return true
+  const pts = obj.points || []
+  if (pts.length < 3) return false
+  const a = pts[0]
+  const b = pts[pts.length - 1]
+  if (!a || !b) return false
+  return Math.hypot((a.x || 0) - (b.x || 0), (a.y || 0) - (b.y || 0)) <= 1.5
 }
 
 function objectCenterApprox(obj) {
@@ -337,11 +354,12 @@ export function createHatchRegionFromClick(objects, worldX, worldY, hatchKind, c
   mctx.putImageData(mid, 0, 0)
 
   const maskDataUri = mask.toDataURL('image/png')
-  // Precargar en caché de dibujo
+  // Precargar en caché de dibujo (watch → _onMaskReady → redraw del editor)
   const preload = new Image()
-  preload.src = maskDataUri
   drawHatchRegion._cache = drawHatchRegion._cache || {}
   drawHatchRegion._cache[maskDataUri] = preload
+  watchHatchMaskLoad(preload, maskDataUri)
+  preload.src = maskDataUri
 
   return {
     type: 'hatchRegion',
@@ -444,6 +462,38 @@ function rememberComposedHatch(cache, key, canvas) {
   if (keys.length > 24) delete cache[keys[0]]
 }
 
+/**
+ * Entrada de caché usable para pintar. `complete && naturalWidth===0` es una
+ * imagen rota/vacía: hay que reemplazarla (si no, el hatch nunca aparece).
+ */
+export function hatchMaskEntryReady(entry) {
+  return !!(entry && entry.complete && entry.naturalWidth)
+}
+
+export function hatchMaskEntryBroken(entry) {
+  return !!(entry && entry.complete && !entry.naturalWidth)
+}
+
+function watchHatchMaskLoad(img, key) {
+  if (!img || img._hatchWatching) return
+  img._hatchWatching = true
+  const prevLoad = img.onload
+  const prevErr = img.onerror
+  img.onload = (ev) => {
+    img._hatchWatching = false
+    try { prevLoad?.(ev) } catch { /* ignore */ }
+    // No pintar sobre un ctx posiblemente obsoleto: pedir redraw al editor.
+    drawHatchRegion._onMaskReady?.(key)
+  }
+  img.onerror = (ev) => {
+    img._hatchWatching = false
+    const cache = drawHatchRegion._cache
+    if (cache && cache[key] === img) delete cache[key]
+    try { prevErr?.(ev) } catch { /* ignore */ }
+    drawHatchRegion._onMaskReady?.(key)
+  }
+}
+
 export function drawHatchRegion(ctx, obj, ui) {
   if (!obj?.maskDataUri) return
   const cache = drawHatchRegion._cache || (drawHatchRegion._cache = {})
@@ -490,17 +540,29 @@ export function drawHatchRegion(ctx, obj, ui) {
     ctx.drawImage(off, sx, sy, sw, sh)
     ctx.restore()
   }
-  if (cache[key]?.complete && cache[key].naturalWidth) {
-    paint(cache[key])
+
+  let img = cache[key]
+  if (hatchMaskEntryBroken(img)) {
+    delete cache[key]
+    img = null
+  }
+  if (hatchMaskEntryReady(img)) {
+    paint(img)
     return
   }
-  // No pintar en onload sobre un ctx que puede quedar obsoleto tras un redraw.
-  // El editor / preloadHatchRegions vuelven a dibujar cuando la máscara está lista.
-  if (!cache[key]) {
-    const img = new Image()
+  if (!img) {
+    img = new Image()
     cache[key] = img
+    watchHatchMaskLoad(img, key)
     img.src = key
+    // data: URI puede quedar ready en el mismo tick
+    if (hatchMaskEntryReady(img)) {
+      paint(img)
+    }
+    return
   }
+  // Precarga incompleta (p. ej. createHatchRegionFromClick): asegurar notify al listo.
+  watchHatchMaskLoad(img, key)
 }
 
 /** Espera a que todas las imágenes de hatchRegion estén listas (p. ej. antes de exportar PNG). */

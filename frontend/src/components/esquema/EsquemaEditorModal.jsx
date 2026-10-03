@@ -730,6 +730,8 @@ export default function EsquemaEditorModal({
   }, [selectedId, selectedIds, panTick, selectMode, printAreaTick])
 
   redrawRef.current = redraw
+  // Cuando la máscara del hatch termina de cargar, redibujar (no pintar sobre ctx viejo).
+  drawHatchRegion._onMaskReady = () => { redrawRef.current?.() }
 
   const setupCanvas = useCallback(() => {
     const c = canvasRef.current

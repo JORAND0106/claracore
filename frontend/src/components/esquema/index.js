@@ -32,6 +32,10 @@ export {
   makeHatchPattern,
   preloadHatchRegions,
   dilateVisitedIntoBarriers,
+  hatchBoundsPad,
+  polylineClosedForHatch,
+  hatchMaskEntryReady,
+  hatchMaskEntryBroken,
 } from './esquemaHatch'
 export {
   LINE_STYLE_OPTIONS,
