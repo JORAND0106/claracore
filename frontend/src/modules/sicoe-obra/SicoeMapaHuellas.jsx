@@ -33,39 +33,75 @@ function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
   const hiReg = new Set((highlightRegistroIds || []).map(String))
   const hiPk = new Set((highlightPkIds || []).map(String))
   const hasHi = hiReg.size > 0 || hiPk.size > 0
-  return {
-    type: 'FeatureCollection',
-    features: (features || []).map((f) => {
-      const precis = String(f?.properties?.precision || '') === 'precisa'
-      const rid = String(f?.properties?.registro_id ?? '')
-      const pk = String(f?.properties?.pk_id_id ?? '')
-      const hi = hiReg.has(rid) || (pk && hiPk.has(pk))
-      let opacity = precis ? 0.4 : 0.22
-      let stroke_w = precis ? 1.4 : 1
-      let color = colorItem(f?.properties?.item_numero)
-      if (hasHi) {
-        if (hi) {
-          opacity = 0.78
-          stroke_w = 2.8
-          color = '#dc2626'
-        } else {
-          opacity = 0.12
-          stroke_w = 0.8
-        }
+  const out = []
+  for (const f of features || []) {
+    const precis = String(f?.properties?.precision || '') === 'precisa'
+    const rid = String(f?.properties?.registro_id ?? '')
+    const pk = String(f?.properties?.pk_id_id ?? '')
+    const hi = hiReg.has(rid) || (pk && hiPk.has(pk))
+    let opacity = precis ? 0.4 : 0.22
+    let stroke_w = precis ? 1.4 : 1
+    let color = colorItem(f?.properties?.item_numero)
+    if (hasHi) {
+      if (hi) {
+        opacity = 0.78
+        stroke_w = 2.8
+        color = '#dc2626'
+      } else {
+        opacity = 0.12
+        stroke_w = 0.8
       }
-      return {
-        ...f,
-        properties: {
-          ...f.properties,
-          color,
-          opacity,
-          stroke_w,
-          dash: precis ? 0 : 1,
-          hi: hi ? 1 : 0,
-        },
+    }
+    const props = {
+      ...f.properties,
+      color,
+      opacity,
+      stroke_w,
+      dash: precis ? 0 : 1,
+      hi: hi ? 1 : 0,
+      is_lod_marker: 0,
+    }
+    out.push({ ...f, properties: props })
+    // LOD: nodos con bloque → marcador de punto cuando el zoom no alcanza a distinguir el bloque
+    const ht = String(f?.properties?.huella_tipo || f?.properties?.dibujo_tipo || '').toLowerCase()
+    if ((ht === 'nodo' || ht === 'punto') && f?.geometry?.type === 'Polygon') {
+      const c = centroidOfGeom(f.geometry)
+      if (c) {
+        out.push({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: c },
+          properties: {
+            ...props,
+            is_lod_marker: 1,
+            radius: hi ? 8 : 6,
+          },
+        })
       }
-    }),
+    }
   }
+  return { type: 'FeatureCollection', features: out }
+}
+
+function centroidOfGeom(geom) {
+  if (!geom) return null
+  if (geom.type === 'Point') return geom.coordinates
+  const ring = geom.type === 'Polygon'
+    ? geom.coordinates?.[0]
+    : geom.type === 'MultiPolygon'
+      ? geom.coordinates?.[0]?.[0]
+      : null
+  if (!Array.isArray(ring) || !ring.length) return null
+  let sx = 0
+  let sy = 0
+  let n = 0
+  for (const p of ring) {
+    if (!Array.isArray(p) || p.length < 2) continue
+    sx += Number(p[0])
+    sy += Number(p[1])
+    n += 1
+  }
+  if (!n) return null
+  return [sx / n, sy / n]
 }
 
 function paintNodos(nodosFc, highlightPkIds) {
@@ -340,15 +376,23 @@ export default function SicoeMapaHuellas({
             id: 'huellas-fill',
             type: 'fill',
             source: 'huellas-franjas',
+            filter: [
+              'all',
+              ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+              ['!=', ['get', 'is_lod_marker'], 1],
+            ],
             paint: {
               'fill-color': ['get', 'color'],
               'fill-opacity': ['get', 'opacity'],
             },
+            // Bloques de nodo: visibles al acercar
+            minzoom: 0,
           })
           map.addLayer({
             id: 'huellas-line',
             type: 'line',
             source: 'huellas-franjas',
+            filter: ['!=', ['get', 'is_lod_marker'], 1],
             paint: {
               'line-color': ['get', 'color'],
               'line-width': ['get', 'stroke_w'],
@@ -359,6 +403,20 @@ export default function SicoeMapaHuellas({
                 ['literal', [1.5, 1.5]],
                 ['literal', [1, 0]],
               ],
+            },
+          })
+          map.addLayer({
+            id: 'huellas-nodo-lod',
+            type: 'circle',
+            source: 'huellas-franjas',
+            filter: ['==', ['get', 'is_lod_marker'], 1],
+            maxzoom: 16.5,
+            paint: {
+              'circle-color': ['get', 'color'],
+              'circle-radius': ['coalesce', ['get', 'radius'], 6],
+              'circle-stroke-width': 1.6,
+              'circle-stroke-color': '#fff',
+              'circle-opacity': 0.95,
             },
           })
 

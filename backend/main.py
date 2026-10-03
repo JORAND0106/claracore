@@ -26260,7 +26260,11 @@ class ReemplazarRegistrosNuevoReporteBody(BaseModel):
 
 
 def _sicoe_feature_huella_desde_dibujo_reporte(dibujo_geojson, reporte_id=None) -> Optional[dict]:
-    """Normaliza dibujo_geojson del reporte a un Feature de huella para so_registros."""
+    """Normaliza dibujo_geojson del reporte a un Feature de huella para so_registros.
+
+    Acepta Polygon / MultiPolygon (legacy y polígono), LineString (línea) y Point
+    o Polygon de bloque (nodo). Dibujos antiguos sin tipo se tratan como polígono.
+    """
     if not dibujo_geojson or not isinstance(dibujo_geojson, dict):
         return None
     feats = []
@@ -26269,8 +26273,120 @@ def _sicoe_feature_huella_desde_dibujo_reporte(dibujo_geojson, reporte_id=None) 
         feats = list(dibujo_geojson.get("features") or [])
     elif t == "Feature":
         feats = [dibujo_geojson]
-    elif t in ("Polygon", "MultiPolygon"):
+    elif t in ("Polygon", "MultiPolygon", "LineString", "Point"):
         feats = [{"type": "Feature", "geometry": dibujo_geojson, "properties": {}}]
+    if not feats:
+        return None
+
+    def _props_base(extra=None):
+        p = {
+            "origen": "reporte_dibujo",
+            "reporte_id": reporte_id,
+            "precision": "precisa",
+        }
+        if extra:
+            p.update(extra)
+        return p
+
+    # Nodo: preferir polígono de bloque; si no, Point (+ buffer circular en props)
+    for f in feats:
+        if not isinstance(f, dict):
+            continue
+        props = dict(f.get("properties") or {})
+        dibujo_tipo = str(props.get("dibujo_tipo") or props.get("huella_tipo") or "").lower()
+        g = f.get("geometry") if f.get("type") == "Feature" else f
+        if not isinstance(g, dict):
+            continue
+        if dibujo_tipo in ("nodo", "punto") or props.get("es_bloque"):
+            if g.get("type") == "Polygon" and (g.get("coordinates") or [None])[0]:
+                return {
+                    "type": "Feature",
+                    "geometry": g,
+                    "properties": _props_base({
+                        **{k: props.get(k) for k in (
+                            "bloque_nodo", "bloque_rotacion_deg", "node_num", "dibujo_tipo",
+                        ) if props.get(k) is not None},
+                        "huella_tipo": "nodo",
+                        "dibujo_tipo": "nodo",
+                    }),
+                }
+    for f in feats:
+        if not isinstance(f, dict):
+            continue
+        props = dict(f.get("properties") or {})
+        g = f.get("geometry") if f.get("type") == "Feature" else f
+        if not isinstance(g, dict):
+            continue
+        if g.get("type") == "Point":
+            coords = g.get("coordinates") or []
+            if len(coords) >= 2:
+                # Expandir Point a polígono de bloque o círculo pequeño
+                poly = None
+                bloque = props.get("bloque_nodo")
+                if isinstance(bloque, dict):
+                    try:
+                        from sicoe_bloques_nodo import bloque_a_poligono_wgs84
+                        poly = bloque_a_poligono_wgs84(
+                            float(coords[0]),
+                            float(coords[1]),
+                            forma=bloque.get("forma"),
+                            ancho_m=bloque.get("ancho_m"),
+                            alto_m=bloque.get("alto_m"),
+                            vertices=bloque.get("vertices"),
+                            rotacion_deg=float(props.get("bloque_rotacion_deg") or 0),
+                        )
+                    except Exception:
+                        poly = None
+                if poly is None:
+                    try:
+                        from sicoe_huellas_espacial import _circle_polygon, SICOE_RADIO_NODO_DEFAULT_M
+                        poly = _circle_polygon(
+                            float(coords[0]), float(coords[1]), SICOE_RADIO_NODO_DEFAULT_M
+                        )
+                    except Exception:
+                        poly = None
+                geom_out = poly or g
+                return {
+                    "type": "Feature",
+                    "geometry": geom_out,
+                    "properties": _props_base({
+                        **{k: props.get(k) for k in (
+                            "bloque_nodo", "bloque_rotacion_deg", "node_num",
+                        ) if props.get(k) is not None},
+                        "huella_tipo": "nodo",
+                        "dibujo_tipo": "nodo",
+                        "centro": coords[:2],
+                    }),
+                }
+
+    # Línea
+    for f in feats:
+        if not isinstance(f, dict):
+            continue
+        props = dict(f.get("properties") or {})
+        g = f.get("geometry") if f.get("type") == "Feature" else f
+        if not isinstance(g, dict):
+            continue
+        if g.get("type") == "LineString" and len(g.get("coordinates") or []) >= 2:
+            return {
+                "type": "Feature",
+                "geometry": g,
+                "properties": _props_base({
+                    "huella_tipo": "linea",
+                    "dibujo_tipo": "linea",
+                }),
+            }
+        if g.get("type") == "MultiLineString":
+            return {
+                "type": "Feature",
+                "geometry": g,
+                "properties": _props_base({
+                    "huella_tipo": "linea",
+                    "dibujo_tipo": "linea",
+                }),
+            }
+
+    # Polígono (legacy / default)
     polys = []
     for f in feats:
         if not isinstance(f, dict):
@@ -26286,12 +26402,7 @@ def _sicoe_feature_huella_desde_dibujo_reporte(dibujo_geojson, reporte_id=None) 
                     polys.append({"type": "Polygon", "coordinates": c})
     if not polys:
         return None
-    props = {
-        "origen": "reporte_dibujo",
-        "reporte_id": reporte_id,
-        "precision": "precisa",
-        "huella_tipo": "poligono",
-    }
+    props = _props_base({"huella_tipo": "poligono", "dibujo_tipo": "poligono"})
     if len(polys) == 1:
         return {"type": "Feature", "geometry": polys[0], "properties": props}
     return {
@@ -26309,10 +26420,19 @@ def _sicoe_propagar_dibujo_a_registros(contrato_id: int, reporte_id: int, dibujo
     feat = _sicoe_feature_huella_desde_dibujo_reporte(dibujo_geojson, reporte_id)
     if not feat:
         return 0
+    huella_tipo = (feat.get("properties") or {}).get("huella_tipo") or "poligono"
+    geometria_tipo = {
+        "nodo": "punto",
+        "punto": "punto",
+        "linea": "linea",
+        "poligono": "area",
+        "area": "area",
+    }.get(str(huella_tipo).lower(), "area")
     payload = {
         "huella_geojson": feat,
         "huella_precision": "precisa",
-        "huella_tipo": "poligono",
+        "huella_tipo": huella_tipo,
+        "geometria_tipo": geometria_tipo,
     }
     try:
         def _u():
@@ -26329,13 +26449,14 @@ def _sicoe_propagar_dibujo_a_registros(contrato_id: int, reporte_id: int, dibujo
     except Exception as exc:
         _log_api.warning("propagar dibujo reporte=%s: %s", reporte_id, exc)
         try:
+            light = {
+                "huella_geojson": feat,
+                "huella_precision": "precisa",
+            }
             def _u2():
                 return (
                     supabase.table("so_registros")
-                    .update({
-                        "huella_geojson": feat,
-                        "huella_precision": "precisa",
-                    })
+                    .update(light)
                     .eq("contrato_id", contrato_id)
                     .eq("reporte_id", reporte_id)
                     .execute()
@@ -26375,10 +26496,12 @@ def _sicoe_heredar_dibujo_en_payload_registro(contrato_id: int, reporte_id, payl
     payload = dict(payload)
     payload["huella_geojson"] = feat
     payload["huella_precision"] = "precisa"
-    try:
-        payload["huella_tipo"] = "poligono"
-    except Exception:
-        pass
+    ht = (feat.get("properties") or {}).get("huella_tipo") or "poligono"
+    payload["huella_tipo"] = ht
+    payload["geometria_tipo"] = {
+        "nodo": "punto", "punto": "punto", "linea": "linea",
+        "poligono": "area", "area": "area",
+    }.get(str(ht).lower(), "area")
     return payload
 
 
@@ -26468,18 +26591,24 @@ def sicoe_guardar_dibujo_reporte(
 
     feat = _sicoe_feature_huella_desde_dibujo_reporte(fc, reporte_id)
     if not feat:
-        raise HTTPException(422, "No se encontró un polígono cerrado en el dibujo.")
+        raise HTTPException(
+            422,
+            "No se encontró una geometría válida en el dibujo (nodo, línea o polígono cerrado).",
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     uid = _sicoe_uid_from_user(current_user)
+    # Compat: perimetro_geojson solo admite polígonos; para línea/punto guardar feat tal cual si es polígono
+    perimetro = feat if (feat.get("geometry") or {}).get("type") in ("Polygon", "MultiPolygon") else None
     patch = {
         "dibujo_geojson": fc,
         "dibujo_escena": body.dibujo_escena,
         "dibujo_actualizado_en": now,
         "dibujo_por": uid,
-        "perimetro_geojson": feat,  # compat huellas de área
         "updated_at": "now()",
     }
+    if perimetro is not None:
+        patch["perimetro_geojson"] = perimetro
     try:
         def _u():
             return (
@@ -26500,7 +26629,7 @@ def sicoe_guardar_dibujo_reporte(
                     return (
                         supabase.table("so_reportes")
                         .update({
-                            "perimetro_geojson": feat,
+                            "perimetro_geojson": perimetro or feat,
                             "updated_at": "now()",
                         })
                         .eq("id", reporte_id)
@@ -26564,6 +26693,190 @@ def sicoe_borrar_dibujo_reporte(
     except Exception as exc:
         raise HTTPException(500, f"No se pudo borrar el dibujo: {exc}") from exc
     return {"ok": True, "tiene_dibujo": False}
+
+
+# ─── Biblioteca de bloques de nodo ───────────────────────────────────────────
+
+class BloqueNodoBody(BaseModel):
+    nombre: str
+    forma: str = "circulo"
+    ancho_m: float = 1.0
+    alto_m: float = 1.0
+    vertices: Optional[List[List[float]]] = None
+    activo: Optional[bool] = True
+    global_sistema: Optional[bool] = False  # solo Desarrollador
+
+
+@app.get("/sicoe-obra/{contrato_id}/bloques-nodo")
+def listar_bloques_nodo(
+    contrato_id: int,
+    incluir_inactivos: bool = False,
+    current_user=Depends(get_current_user),
+):
+    """Bloques globales + del contrato (para dibujar nodos a tamaño real)."""
+    _ = current_user
+    try:
+        def _q():
+            q = supabase.table("so_bloques_nodo").select("*").order("nombre")
+            return q.execute().data
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        if "so_bloques_nodo" in str(exc).lower() or "pgrst" in str(exc).lower():
+            return {"bloques": [], "migracion_pendiente": True}
+        raise HTTPException(500, f"No se pudieron leer bloques: {exc}") from exc
+    out = []
+    for r in rows:
+        cid = r.get("contrato_id")
+        if cid is not None and int(cid) != int(contrato_id):
+            continue
+        if not incluir_inactivos and r.get("activo") is False:
+            continue
+        out.append(r)
+    return {"bloques": out}
+
+
+@app.post("/sicoe-obra/{contrato_id}/bloques-nodo")
+def crear_bloque_nodo(
+    contrato_id: int,
+    body: BloqueNodoBody,
+    current_user=Depends(get_current_user),
+):
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(403, "Se requiere permiso «Editar» para administrar bloques de nodo.")
+    from sicoe_bloques_nodo import normalizar_forma
+    nombre = (body.nombre or "").strip()
+    if not nombre:
+        raise HTTPException(422, "Indique el nombre del bloque.")
+    if body.ancho_m <= 0 or body.alto_m <= 0:
+        raise HTTPException(422, "Las medidas deben ser mayores que cero.")
+    es_global = bool(body.global_sistema) and _es_desarrollador(current_user)
+    uid = _sicoe_uid_from_user(current_user)
+    row = {
+        "contrato_id": None if es_global else int(contrato_id),
+        "nombre": nombre,
+        "forma": normalizar_forma(body.forma),
+        "ancho_m": float(body.ancho_m),
+        "alto_m": float(body.alto_m),
+        "vertices": body.vertices,
+        "activo": True if body.activo is None else bool(body.activo),
+        "creado_por": uid,
+        "modificado_por": uid,
+    }
+    try:
+        def _ins():
+            return supabase.table("so_bloques_nodo").insert(row).execute().data
+        data = supabase_execute(_ins) or []
+    except Exception as exc:
+        raise HTTPException(
+            500,
+            f"No se pudo crear el bloque (¿migración so_bloques_nodo.sql?): {exc}",
+        ) from exc
+    return data[0] if data else row
+
+
+@app.put("/sicoe-obra/{contrato_id}/bloques-nodo/{bloque_id}")
+def actualizar_bloque_nodo(
+    contrato_id: int,
+    bloque_id: int,
+    body: BloqueNodoBody,
+    current_user=Depends(get_current_user),
+):
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(403, "Se requiere permiso «Editar» para administrar bloques de nodo.")
+    from sicoe_bloques_nodo import normalizar_forma
+    from datetime import datetime, timezone
+
+    def _get():
+        return (
+            supabase.table("so_bloques_nodo")
+            .select("*")
+            .eq("id", bloque_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+    rows = supabase_execute(_get) or []
+    if not rows:
+        raise HTTPException(404, "Bloque no encontrado")
+    prev = rows[0]
+    if prev.get("contrato_id") is None and not _es_desarrollador(current_user):
+        raise HTTPException(403, "Solo Desarrollador puede editar bloques globales del sistema.")
+    if prev.get("contrato_id") is not None and int(prev["contrato_id"]) != int(contrato_id):
+        raise HTTPException(404, "Bloque no pertenece a este contrato")
+    nombre = (body.nombre or "").strip()
+    if not nombre:
+        raise HTTPException(422, "Indique el nombre del bloque.")
+    patch = {
+        "nombre": nombre,
+        "forma": normalizar_forma(body.forma),
+        "ancho_m": float(body.ancho_m),
+        "alto_m": float(body.alto_m),
+        "vertices": body.vertices,
+        "modificado_por": _sicoe_uid_from_user(current_user),
+        "actualizado_en": datetime.now(timezone.utc).isoformat(),
+    }
+    if body.activo is not None:
+        patch["activo"] = bool(body.activo)
+    try:
+        def _u():
+            return (
+                supabase.table("so_bloques_nodo")
+                .update(patch)
+                .eq("id", bloque_id)
+                .execute()
+                .data
+            )
+        data = supabase_execute(_u) or []
+    except Exception as exc:
+        raise HTTPException(500, f"No se pudo actualizar el bloque: {exc}") from exc
+    return data[0] if data else {**prev, **patch}
+
+
+@app.delete("/sicoe-obra/{contrato_id}/bloques-nodo/{bloque_id}")
+def desactivar_bloque_nodo(
+    contrato_id: int,
+    bloque_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Retira el bloque (soft-delete: activo=false)."""
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(403, "Se requiere permiso «Editar» para administrar bloques de nodo.")
+    from datetime import datetime, timezone
+
+    def _get():
+        return (
+            supabase.table("so_bloques_nodo")
+            .select("id, contrato_id")
+            .eq("id", bloque_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+    rows = supabase_execute(_get) or []
+    if not rows:
+        raise HTTPException(404, "Bloque no encontrado")
+    prev = rows[0]
+    if prev.get("contrato_id") is None and not _es_desarrollador(current_user):
+        raise HTTPException(403, "Solo Desarrollador puede retirar bloques globales.")
+    if prev.get("contrato_id") is not None and int(prev["contrato_id"]) != int(contrato_id):
+        raise HTTPException(404, "Bloque no pertenece a este contrato")
+    try:
+        def _u():
+            return (
+                supabase.table("so_bloques_nodo")
+                .update({
+                    "activo": False,
+                    "modificado_por": _sicoe_uid_from_user(current_user),
+                    "actualizado_en": datetime.now(timezone.utc).isoformat(),
+                })
+                .eq("id", bloque_id)
+                .execute()
+                .data
+            )
+        supabase_execute(_u)
+    except Exception as exc:
+        raise HTTPException(500, f"No se pudo retirar el bloque: {exc}") from exc
+    return {"ok": True, "activo": False}
 
 
 @app.post("/sicoe-obra/{contrato_id}/reportes/asignar-actores-por-pk")
