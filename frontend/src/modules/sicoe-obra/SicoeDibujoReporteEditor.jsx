@@ -9,6 +9,7 @@ import {
   featureHuellaDesdeDibujo,
 } from './sicoeDibujoEscenaGeojson'
 import { guardarDibujoReporte } from './sicoeDibujoReporteApi'
+import { coordRowsDesdePuntosPortada } from './sicoeDibujoCoordsPortada'
 
 export default function SicoeDibujoReporteEditor({
   t,
@@ -35,6 +36,11 @@ export default function SicoeDibujoReporteEditor({
     if (reporte?.abs_final != null) loc.absFinal = reporte.abs_final
     return Object.keys(loc).length ? loc : null
   }, [reporte])
+
+  const initialCoordRows = useMemo(
+    () => coordRowsDesdePuntosPortada(reporte?.puntos),
+    [reporte?.puntos],
+  )
 
   const initialScene = Array.isArray(reporte?.dibujo_escena?.objects)
     ? reporte.dibujo_escena.objects
@@ -97,6 +103,7 @@ export default function SicoeDibujoReporteEditor({
         autoActivateMap
         huellaMode
         initialSceneObjects={initialScene}
+        initialCoordRows={initialCoordRows}
         onSaveHuella={onSaveHuella}
         onClose={onClose}
         onSave={async () => {

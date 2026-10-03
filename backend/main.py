@@ -1497,6 +1497,23 @@ def _logs_pgrst_unknown_column(err: Exception) -> Optional[str]:
     return m.group(1) if m else None
 
 
+# Reexport / wrappers: escritura resiliente so_registros (coords_geojson / huella_* opcionales).
+from sicoe_registros_schema import (  # noqa: E402
+    so_registros_insert_rows_omit_missing as _so_registros_insert_rows_omit_missing_impl,
+    so_registros_pgrst_unknown_column as _so_registros_pgrst_unknown_column,
+    so_registros_strip_omitted as _so_registros_strip_omitted,
+    so_registros_write_omit_missing as _so_registros_write_omit_missing,
+)
+
+
+def _so_registros_insert_rows_omit_missing(rows: List[Dict[str, Any]]):
+    """Insert batch en so_registros con omisión resiliente de columnas opcionales ausentes."""
+    return _so_registros_insert_rows_omit_missing_impl(
+        lambda chunk: supabase.table("so_registros").insert(chunk).execute().data,
+        rows,
+    )
+
+
 def _error_es_columna_reversion_arm(ex: Exception) -> bool:
     """Columnas reversion_arm_* ausentes o caché PostgREST sin recargar tras migración."""
     text = str(ex)
@@ -27133,8 +27150,12 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         data["bloqueado"] = True
 
     def _upd():
-        return supabase.table("so_registros").update(data)\
-            .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+        return _so_registros_write_omit_missing(
+            lambda d: supabase.table("so_registros").update(d)
+                .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data,
+            data,
+            operacion="actualizar_registro",
+        )
 
     try:
         out = supabase_execute(_upd)
@@ -27370,8 +27391,8 @@ def reemplazar_registros_nuevo_reporte(
     total = 0
     for i in range(0, len(rows_to_insert), _BATCH):
         chunk = rows_to_insert[i : i + _BATCH]
-        def _ins():
-            return supabase.table("so_registros").insert(chunk).execute().data
+        def _ins(rows=chunk):
+            return _so_registros_insert_rows_omit_missing(rows)
         supabase_execute(_ins)
         total += len(chunk)
 
@@ -27576,7 +27597,11 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     _so_registro_normalizar_graficos_historial(data)
     data = _sicoe_heredar_dibujo_en_payload_registro(contrato_id, body.reporte_id, data)
     def _ins():
-        return supabase.table("so_registros").insert(data).execute().data
+        return _so_registros_write_omit_missing(
+            lambda d: supabase.table("so_registros").insert(d).execute().data,
+            data,
+            operacion="crear_registro",
+        )
     result = supabase_execute(_ins)
     row = result[0] if result else {}
     try:
@@ -30203,8 +30228,12 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             upd_reg_payload["modificado_por_reg"] = int(uid_asig)
 
         def _upd_reg():
-            return supabase.table("so_registros").update(upd_reg_payload)\
-                .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+            return _so_registros_write_omit_missing(
+                lambda d: supabase.table("so_registros").update(d)
+                    .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data,
+                upd_reg_payload,
+                operacion="asignar_item",
+            )
         try:
             supabase_execute(_upd_reg)
         except Exception as ex:
@@ -30387,7 +30416,11 @@ def nuevo_registro_en_reporte(contrato_id: int, reporte_id: int, current_user=De
         n_prev = 0
 
     def _ins():
-        return supabase.table("so_registros").insert(payload).execute().data
+        return _so_registros_write_omit_missing(
+            lambda d: supabase.table("so_registros").insert(d).execute().data,
+            payload,
+            operacion="crear_registro_hoja",
+        )
 
     result = supabase_execute(_ins)
     row = result[0] if result else {}
