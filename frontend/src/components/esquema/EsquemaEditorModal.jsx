@@ -56,6 +56,7 @@ import {
   snapThresholdWorld,
   worldToMeters,
 } from './esquemaGeometry'
+import { strokeBloqueEnCtx } from '../../modules/sicoe-obra/sicoeBloquesNodo'
 import { finalizeJoinSequence, joinIntersectingLines } from './esquemaJoin'
 import { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 import { parseCoordFile, topoToWorld, coordOriginFromRows } from './esquemaCoords'
@@ -331,6 +332,12 @@ export default function EsquemaEditorModal({
    * No altera el flujo de galería de gráficos.
    */
   huellaMode = false,
+  /** Tipo de dibujo del reporte: nodo | linea | poligono (solo huellaMode). */
+  huellaDibujoTipo = 'poligono',
+  /** Bloque de nodo seleccionado { forma, ancho_m, alto_m, ... } (solo tipo nodo). */
+  huellaBloque = null,
+  /** Rotación del bloque en grados. */
+  huellaBloqueRotacion = 0,
   /** Escena previa (objetos) al reabrir un dibujo de reporte. */
   initialSceneObjects = null,
   /**
@@ -344,6 +351,12 @@ export default function EsquemaEditorModal({
   onClose,
 }) {
   const mapCtx = useMemo(() => normalizeMapContext(mapLocation), [mapLocation])
+  const huellaTipoRef = useRef(huellaDibujoTipo)
+  const huellaBloqueRef = useRef(huellaBloque)
+  const huellaRotRef = useRef(huellaBloqueRotacion)
+  huellaTipoRef.current = huellaDibujoTipo
+  huellaBloqueRef.current = huellaBloque
+  huellaRotRef.current = huellaBloqueRotacion
   const authToken = useMemo(() => {
     try {
       return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
@@ -634,6 +647,9 @@ export default function EsquemaEditorModal({
         skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTablaId,
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
         zoom: zoomRef.current,
+        huellaMode,
+        huellaBloque: huellaBloqueRef.current,
+        huellaBloqueRotacion: huellaRotRef.current,
         skipResize: (() => {
           const isPasteImg = obj.type === 'image' && !obj.fit
           if (isPasteImg && !multi && toolRef.current === 'seleccion') return false
@@ -650,6 +666,31 @@ export default function EsquemaEditorModal({
         })(),
         ui: uiNow,
       })
+    }
+    // Polígono (huellaMode): mientras dibuja, cerrar visualmente al primer punto.
+    if (
+      huellaMode
+      && huellaTipoRef.current === 'poligono'
+      && toolRef.current === 'polilinea'
+      && extraDraft?.type === 'polilinea'
+      && Array.isArray(extraDraft.points)
+      && extraDraft.points.length >= 1
+    ) {
+      const pts = extraDraft.points
+      const first = pts[0]
+      const last = pts[pts.length - 1]
+      if (first && last) {
+        ctx.save()
+        ctx.strokeStyle = uiNow.primary || '#0077B6'
+        ctx.lineWidth = Math.max(1.2 / (zoomRef.current || 1), 0.6)
+        ctx.setLineDash([6 / (zoomRef.current || 1), 4 / (zoomRef.current || 1)])
+        ctx.beginPath()
+        ctx.moveTo(last.x, last.y)
+        ctx.lineTo(first.x, first.y)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.restore()
+      }
     }
     if (toolRef.current === 'girar-escalar' && selSet.size) {
       if (selectedId && selSet.size === 1) {
@@ -1761,6 +1802,10 @@ export default function EsquemaEditorModal({
     }
     pushHistory()
     const obj = { ...draft, points: pts }
+    // En dibujo de reporte tipo Polígono: cerrar automáticamente contra el primer punto.
+    if (huellaMode && huellaTipoRef.current === 'poligono' && pts.length >= 3) {
+      obj.closed = true
+    }
     objectsRef.current = [...objectsRef.current, obj]
     selectOne(obj.id)
     setDirty(true)
@@ -5384,7 +5429,11 @@ function drawObject(ctx, obj, selected, opts = {}) {
   const ink = esquemaEntityInk(obj.color, ui)
   ctx.save()
   if (obj.type === 'nodo') {
-    drawNodo(ctx, obj, selected, opts.zoom || 1, ui)
+    drawNodo(ctx, obj, selected, opts.zoom || 1, ui, {
+      huellaMode: !!opts.huellaMode,
+      bloque: opts.huellaBloque,
+      rotacion: opts.huellaBloqueRotacion,
+    })
     ctx.restore()
     return
   }
@@ -5566,29 +5615,53 @@ function drawObject(ctx, obj, selected, opts = {}) {
   ctx.restore()
 }
 
-function drawNodo(ctx, obj, selected, zoom = 1, ui) {
+function drawNodo(ctx, obj, selected, zoom = 1, ui, huellaOpts = {}) {
   const palette = resolveEsquemaUi(ui)
   const ink = esquemaEntityInk(obj.color, palette)
   const x = obj.x || 0
   const y = obj.y || 0
   const z = zoom || 1
-  const r = nodeMarkerWorldRadius(z)
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
-  ctx.fillStyle = ink
-  ctx.strokeStyle = selected ? palette.selection : palette.canvas
-  ctx.lineWidth = Math.min(1.2 / z, r * 0.35)
-  ctx.beginPath()
-  ctx.arc(x, y, r, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.stroke()
-  ctx.font = `600 ${10 / z}px sans-serif`
+
+  const bloque = huellaOpts?.bloque
+  if (huellaOpts?.huellaMode && bloque) {
+    strokeBloqueEnCtx(ctx, x, y, bloque, huellaOpts.rotacion || 0, {
+      fill: selected ? `${ink}55` : `${ink}33`,
+      stroke: selected ? palette.selection : ink,
+      lineWidth: Math.max(1.4 / z, 0.8),
+    })
+    // Centro legible + número a cualquier zoom
+    const r = Math.max(nodeMarkerWorldRadius(z) * 1.35, 3.2 / z)
+    ctx.fillStyle = ink
+    ctx.strokeStyle = palette.canvas
+    ctx.lineWidth = Math.min(1.4 / z, r * 0.4)
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+  } else {
+    const r = huellaOpts?.huellaMode
+      ? Math.max(nodeMarkerWorldRadius(z) * 1.6, 3.5 / z)
+      : nodeMarkerWorldRadius(z)
+    ctx.fillStyle = ink
+    ctx.strokeStyle = selected ? palette.selection : palette.canvas
+    ctx.lineWidth = Math.min(1.2 / z, r * 0.35)
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  const labelSize = Math.max(11 / z, 9 / z)
+  ctx.font = `700 ${labelSize}px sans-serif`
   ctx.fillStyle = ink
   ctx.strokeStyle = palette.canvas
-  ctx.lineWidth = 2.2 / z
+  ctx.lineWidth = 2.4 / z
   const label = String(obj.nodeNum ?? '')
-  ctx.strokeText(label, x + r + 2.5 / z, y - 1.5 / z)
-  ctx.fillText(label, x + r + 2.5 / z, y - 1.5 / z)
+  const rLabel = Math.max(nodeMarkerWorldRadius(z) * (huellaOpts?.huellaMode ? 1.5 : 1), 3 / z)
+  ctx.strokeText(label, x + rLabel + 3 / z, y - 1.5 / z)
+  ctx.fillText(label, x + rLabel + 3 / z, y - 1.5 / z)
   ctx.restore()
 }
 

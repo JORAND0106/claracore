@@ -8626,6 +8626,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           token={getToken()}
           contratoId={contrato_id}
           reporte={reporte}
+          esDesarrollador={esUsuarioDesarrollador(usuario)}
           onClose={() => setEditorDibujoReporte(false)}
           onGuardado={(data) => {
             const patch = data?.reporte || data || {}

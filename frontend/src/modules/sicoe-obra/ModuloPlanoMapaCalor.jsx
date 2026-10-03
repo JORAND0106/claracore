@@ -589,6 +589,11 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         id: 'sicoe-huellas-fill',
         type: 'fill',
         source: 'sicoe-huellas',
+        filter: [
+          'all',
+          ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+          ['!=', ['get', 'is_lod_marker'], 1],
+        ],
         paint: {
           'fill-color': [
             'case',
@@ -608,6 +613,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         id: 'sicoe-huellas-line',
         type: 'line',
         source: 'sicoe-huellas',
+        filter: ['!=', ['get', 'is_lod_marker'], 1],
         paint: {
           'line-color': [
             'case',
@@ -622,6 +628,20 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
             ['literal', [1.5, 1.5]],
             ['literal', [1, 0]],
           ],
+        },
+      })
+      map.addLayer({
+        id: 'sicoe-huellas-nodo-lod',
+        type: 'circle',
+        source: 'sicoe-huellas',
+        filter: ['==', ['get', 'is_lod_marker'], 1],
+        maxzoom: 16.5,
+        paint: {
+          'circle-color': '#2563eb',
+          'circle-radius': 6,
+          'circle-stroke-width': 1.4,
+          'circle-stroke-color': '#fff',
+          'circle-opacity': 0.95,
         },
       })
       map.addSource('sicoe-nodos', { type: 'geojson', data: EMPTY_FC })
@@ -661,10 +681,32 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           if (!data || !mapInstance.current) return
           try {
             map.getSource('sicoe-eje')?.setData(data.eje || EMPTY_FC)
-            map.getSource('sicoe-huellas')?.setData({
-              type: 'FeatureCollection',
-              features: Array.isArray(data.features) ? data.features : [],
-            })
+            const feats = Array.isArray(data.features) ? data.features : []
+            const expanded = []
+            for (const f of feats) {
+              expanded.push({ ...f, properties: { ...(f.properties || {}), is_lod_marker: 0 } })
+              const ht = String(f?.properties?.huella_tipo || f?.properties?.dibujo_tipo || '').toLowerCase()
+              if ((ht === 'nodo' || ht === 'punto') && f?.geometry?.type === 'Polygon') {
+                const ring = f.geometry.coordinates?.[0]
+                if (Array.isArray(ring) && ring.length) {
+                  let sx = 0
+                  let sy = 0
+                  let n = 0
+                  for (const p of ring) {
+                    if (!Array.isArray(p) || p.length < 2) continue
+                    sx += Number(p[0]); sy += Number(p[1]); n += 1
+                  }
+                  if (n) {
+                    expanded.push({
+                      type: 'Feature',
+                      geometry: { type: 'Point', coordinates: [sx / n, sy / n] },
+                      properties: { ...(f.properties || {}), is_lod_marker: 1 },
+                    })
+                  }
+                }
+              }
+            }
+            map.getSource('sicoe-huellas')?.setData({ type: 'FeatureCollection', features: expanded })
             map.getSource('sicoe-nodos')?.setData(data.nodos || EMPTY_FC)
           } catch { /* ignore */ }
         })
