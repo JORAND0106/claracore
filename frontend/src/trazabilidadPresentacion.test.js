@@ -63,6 +63,48 @@ describe('trazabilidadPresentacion — tablas legibles', () => {
     assert.match(cambios[0].pathLabel, /N2|nivel2/i)
   })
 
+  it('planilla tubería: Cartera/Resumen/Descuentos campo a campo con fila/ítem', () => {
+    assert.equal(etiquetaCampo('cartera'), 'Cartera')
+    assert.equal(etiquetaCampo('resumen_cantidades'), 'Resumen de Cantidades')
+    assert.equal(etiquetaCampo('descuentos_especificos'), 'Descuentos Específicos')
+    assert.match(etiquetaCampo('fila_2_abs_10'), /Fila 2.*Abs 10/)
+    assert.equal(etiquetaCampo('DESC_OTROS_1'), 'Descuento Otros (1)')
+    assert.equal(etiquetaCampo('EXC_ROC'), 'Excavación Roca')
+
+    const antes = {
+      cartera: {
+        fila_2_abs_10: { orden: 2, abscisa: 10, terreno_natural: 100.5 },
+      },
+      resumen_cantidades: {
+        EXC_ROC: { long: 10, espesor: 0.05 },
+      },
+      descuentos_especificos: {
+        DESC_OTROS_1: { long: 90, espesor: 0.009, cantidad: 0.81 },
+      },
+    }
+    const despues = {
+      cartera: {
+        fila_2_abs_10: { orden: 2, abscisa: 10, terreno_natural: 101 },
+      },
+      resumen_cantidades: {
+        EXC_ROC: { long: 10, espesor: 0.05 },
+      },
+      descuentos_especificos: {
+        DESC_OTROS_1: { long: 90, espesor: 0.01, cantidad: 0.9 },
+      },
+    }
+    const cambios = camposModificados(antes, despues)
+    assert.ok(cambios.some((c) => c.key.includes('terreno_natural') && c.before === 100.5 && c.after === 101))
+    assert.ok(cambios.some((c) => c.key.includes('espesor') && c.before === 0.009 && c.after === 0.01))
+    assert.ok(cambios.some((c) => c.key.includes('cantidad') && c.before === 0.81 && c.after === 0.9))
+    const tn = cambios.find((c) => c.key.includes('terreno_natural'))
+    assert.match(tn.pathLabel, /Cartera/)
+    assert.match(tn.pathLabel, /Fila 2/)
+    const esp = cambios.find((c) => c.key.includes('DESC_OTROS_1') && c.key.includes('espesor'))
+    assert.match(esp.pathLabel, /Descuentos Específicos/)
+    assert.match(esp.pathLabel, /Otros/)
+  })
+
   it('VALIDAR_NIVEL2: presentarEvento arma cabecera + detalle tabular', () => {
     const ev = presentarEvento(
       {
