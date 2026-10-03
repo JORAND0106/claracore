@@ -2008,6 +2008,7 @@ from sicoe_cantidad_redondeo import (  # noqa: E402
     redondear_dimension as _sicoe_redondear_dimension,
 )
 from sicoe_varilla import (  # noqa: E402
+# (sicoe_auditoria_traslapos se importa lazy en endpoints para no alargar arranque)
     sicoe_calcular_cantidad_registro as _sicoe_calcular_cantidad_registro,
     sicoe_unidad_es_kg as _sicoe_unidad_es_kg,
     sicoe_validar_y_preparar_medicion_varilla as _sicoe_validar_preparar_varilla,
@@ -16199,6 +16200,16 @@ def get_logs_entidad(
 
     out = list(merged.values())
     out.sort(key=lambda x: (x.get("created_at") or ""))
+    # Auditoría traslapos: exclusiva de roles contratista (interventoría no la ve).
+    try:
+        from sicoe_auditoria_traslapos import (
+            SICOE_AUDITORIA_ACCION_LOG,
+            usuario_ve_auditoria_traslapos,
+        )
+        if not usuario_ve_auditoria_traslapos(current_user):
+            out = [r for r in out if str(r.get("accion") or "") != SICOE_AUDITORIA_ACCION_LOG]
+    except Exception:
+        pass
     return out
 
 
@@ -26114,6 +26125,7 @@ class RegistroCreate(BaseModel):
     nodo_ini: Optional[str] = None
     nodo_fin: Optional[str] = None
     margen: Optional[str] = None
+    sector: Optional[str] = None
     subcontratista_id: Optional[int] = None
     inspector_id: Optional[int] = None
     creado_por_reg: Optional[int] = None
@@ -26149,6 +26161,7 @@ class RegistroLineaNuevoReporte(BaseModel):
     coord_lat: Optional[float] = None
     coord_lng: Optional[float] = None
     margen: Optional[str] = None
+    sector: Optional[str] = None
     abs_inicio: Optional[float] = None
     abs_final: Optional[float] = None
     nodo_ini: Optional[str] = None
@@ -27894,6 +27907,237 @@ def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, co
         return query.order("item_numero").limit(200).execute().data
     return supabase_execute(_q)
 
+# ─── SICOE OBRA: Auditoría traslapos / vacíos (motor único) ───────────────────
+class AuditoriaTraslaposCandidato(BaseModel):
+    id: Optional[int] = None
+    numero_registro: Optional[int] = None
+    reporte_id: Optional[int] = None
+    item_numero: str
+    tramo: Optional[str] = None
+    infraestructura: Optional[str] = None
+    calzada: Optional[str] = None
+    margen: Optional[str] = None
+    sector: Optional[str] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
+    pk_id_id: Optional[int] = None
+    cantidad_total: Optional[float] = None
+    vlr_unitario: Optional[float] = None
+
+
+class AuditoriaTraslaposAnalizarBody(BaseModel):
+    candidatos: List[AuditoriaTraslaposCandidato]
+
+
+class AuditoriaTraslaposDecisionBody(BaseModel):
+    registro_id: int
+    semaforo: str
+    hallazgos: Optional[List[dict]] = None
+    decision: str  # justifico | continuo_sin_justificar | cancelo
+    justificacion: Optional[str] = None
+    item_numero: Optional[str] = None
+
+
+class AuditoriaTraslaposConfigBody(BaseModel):
+    tolerancia_m: float
+
+
+_SICOE_AUDITORIA_PEER_SELECT = (
+    "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+    "calzada, margen, sector, abs_inicio, abs_final, pk_id_id, "
+    "cantidad_total, vlr_unitario"
+)
+
+
+def _sicoe_tolerancia_traslapo_contrato(contrato_id: int) -> float:
+    from sicoe_auditoria_traslapos import (
+        SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M,
+        normalizar_tolerancia_m,
+    )
+    try:
+        def _q():
+            return (
+                supabase.table("contratos")
+                .select("sicoe_tolerancia_traslapo_m")
+                .eq("id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+        if rows:
+            return normalizar_tolerancia_m(rows[0].get("sicoe_tolerancia_traslapo_m"))
+    except Exception as exc:
+        # Columna aún no migrada → default
+        _log_api.warning("tolerancia traslapo contrato=%s: %s", contrato_id, exc)
+    return SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M
+
+
+def _sicoe_pares_mismo_item(contrato_id: int, item_numeros: List[str]) -> Dict[str, List[dict]]:
+    items = sorted({str(x or "").strip() for x in item_numeros if str(x or "").strip()})
+    out: Dict[str, List[dict]] = {i: [] for i in items}
+    if not items:
+        return out
+    try:
+        def _q():
+            return (
+                supabase.table("so_registros")
+                .select(_SICOE_AUDITORIA_PEER_SELECT)
+                .eq("contrato_id", contrato_id)
+                .in_("item_numero", items)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        # sector column missing → retry without sector
+        msg = str(exc).lower()
+        if "sector" in msg:
+            def _q2():
+                return (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                        "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .in_("item_numero", items)
+                    .execute()
+                    .data
+                )
+            rows = supabase_execute(_q2) or []
+        else:
+            _log_api.warning("pares auditoria traslapo contrato=%s: %s", contrato_id, exc)
+            rows = []
+    for r in rows:
+        k = str(r.get("item_numero") or "").strip()
+        if k in out:
+            out[k].append(r)
+    return out
+
+
+@app.get("/sicoe-obra/{contrato_id}/auditoria-traslapos/config")
+def sicoe_auditoria_traslapos_config(contrato_id: int, current_user=Depends(get_current_user)):
+    from sicoe_auditoria_traslapos import (
+        SICOE_AUDITORIA_JUSTIFICACIONES,
+        SICOE_AUDITORIA_TOLERANCIA_MIN_M,
+        usuario_ve_auditoria_traslapos,
+    )
+    _ = current_user
+    return {
+        "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
+        "tolerancia_min_m": SICOE_AUDITORIA_TOLERANCIA_MIN_M,
+        "justificaciones": list(SICOE_AUDITORIA_JUSTIFICACIONES),
+        "visible": usuario_ve_auditoria_traslapos(current_user),
+    }
+
+
+@app.put("/sicoe-obra/{contrato_id}/auditoria-traslapos/config")
+def sicoe_auditoria_traslapos_config_put(
+    contrato_id: int,
+    body: AuditoriaTraslaposConfigBody,
+    current_user=Depends(get_current_user),
+):
+    from sicoe_auditoria_traslapos import normalizar_tolerancia_m
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(403, "Configurar tolerancia requiere permiso «Editar».")
+    tol = normalizar_tolerancia_m(body.tolerancia_m)
+    try:
+        def _u():
+            return (
+                supabase.table("contratos")
+                .update({"sicoe_tolerancia_traslapo_m": tol})
+                .eq("id", contrato_id)
+                .execute()
+                .data
+            )
+        supabase_execute(_u)
+    except Exception as exc:
+        raise HTTPException(
+            500,
+            f"No se pudo guardar tolerancia (¿migración SQL aplicada?): {exc}",
+        ) from exc
+    return {"tolerancia_m": tol}
+
+
+@app.post("/sicoe-obra/{contrato_id}/auditoria-traslapos/analizar")
+def sicoe_auditoria_traslapos_analizar(
+    contrato_id: int,
+    body: AuditoriaTraslaposAnalizarBody,
+    current_user=Depends(get_current_user),
+):
+    """Análisis inmediato al asignar ítem. Interventoría recibe semáforo verde vacío."""
+    from sicoe_auditoria_traslapos import analizar_varios, usuario_ve_auditoria_traslapos
+
+    if not usuario_ve_auditoria_traslapos(current_user):
+        return {
+            "semaforo": "verde",
+            "resumen": {"verde": len(body.candidatos or []), "amarillo": 0, "rojo": 0,
+                        "traslapo": 0, "vacio": 0, "no_auditable": 0},
+            "resultados": [],
+            "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
+            "oculto_por_rol": True,
+        }
+    cands = [c.model_dump() if hasattr(c, "model_dump") else c.dict() for c in (body.candidatos or [])]
+    if not cands:
+        return {"semaforo": "verde", "resumen": {}, "resultados": [], "tolerancia_m": 0.5}
+    tol = _sicoe_tolerancia_traslapo_contrato(contrato_id)
+    pares = _sicoe_pares_mismo_item(contrato_id, [c.get("item_numero") for c in cands])
+    return analizar_varios(cands, pares, tolerancia_m=tol)
+
+
+@app.post("/sicoe-obra/{contrato_id}/auditoria-traslapos/registrar-decision")
+def sicoe_auditoria_traslapos_registrar_decision(
+    contrato_id: int,
+    body: AuditoriaTraslaposDecisionBody,
+    current_user=Depends(get_current_user),
+):
+    """Persiste la alerta mostrada y la decisión (trazabilidad del registro)."""
+    from sicoe_auditoria_traslapos import (
+        SICOE_AUDITORIA_ACCION_LOG,
+        SICOE_AUDITORIA_JUSTIFICACIONES,
+        usuario_ve_auditoria_traslapos,
+    )
+
+    if not usuario_ve_auditoria_traslapos(current_user):
+        return {"ok": True, "omitido": True}
+
+    decision = str(body.decision or "").strip().lower()
+    if decision not in ("justifico", "continuo_sin_justificar", "cancelo"):
+        raise HTTPException(422, "Decisión inválida.")
+    just = (body.justificacion or "").strip() or None
+    if decision == "justifico":
+        if just not in SICOE_AUDITORIA_JUSTIFICACIONES:
+            raise HTTPException(422, "Justificación no permitida.")
+    else:
+        just = None
+
+    detalle = {
+        "tipo": "auditoria_traslapos",
+        "semaforo": body.semaforo,
+        "decision": decision,
+        "justificacion": just,
+        "item_numero": body.item_numero,
+        "hallazgos": body.hallazgos or [],
+        "usuario_id": _sicoe_uid_from_user(current_user),
+    }
+    try:
+        registrar_log(
+            _audit_user_contrato(current_user, contrato_id),
+            SICOE_AUDITORIA_ACCION_LOG,
+            "SICOE_OBRA",
+            "registro",
+            str(body.registro_id),
+            detalle,
+            resultado="ok" if decision != "cancelo" else "cancelado",
+            categoria="auditoria",
+            severidad="WARN" if body.semaforo == "rojo" else "INFO",
+        )
+    except Exception as exc:
+        _log_api.warning("log auditoria traslapo reg=%s: %s", body.registro_id, exc)
+    return {"ok": True}
+
+
 # ─── SICOE OBRA: Asignar ítem a registro ─────────────────────────────────────
 class AsignarItemBody(BaseModel):
     item_listado_id: int
@@ -27920,6 +28164,7 @@ class AsignarItemBody(BaseModel):
     nodo_fin: Optional[str] = None
     margen: Optional[str] = None
     pk_id_id: Optional[int] = None
+    sector: Optional[str] = None
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/asignar-item")
 def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemBody, current_user=Depends(get_current_user)):
@@ -27963,7 +28208,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
         )
         _pre_loc_keys = (
             "civ", "tramo", "infraestructura", "calzada", "ubicacion", "coord_lat", "coord_lng",
-            "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen", "pk_id_id",
+            "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen", "pk_id_id", "sector",
         )
         pre_raw = _pydantic_dump_exclude_unset(body)
         pre_patch = {}
