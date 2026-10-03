@@ -3143,11 +3143,69 @@ def _sicoe_enriquecer_tiene_enlace_soporte(rows: List[dict]) -> None:
     Marca `tiene_enlace_soporte` en cada fila de grilla (in-place).
     Usa la cabecera ya cargada y un batch liviano a so_registros solo para la página
     (típicamente ≤50–100 IDs), sin ampliar filtros ni el universo de búsqueda.
+    También marca `tiene_dibujo` (dibujo_geojson / perimetro_geojson del reporte).
     """
     if not rows:
         return
     for r in rows:
         r["tiene_enlace_soporte"] = _sicoe_enlace_soporte_tiene_urls(r.get("enlace_soporte"))
+        dg = r.get("dibujo_geojson") or r.get("perimetro_geojson")
+        if isinstance(dg, dict):
+            if dg.get("type") == "FeatureCollection":
+                r["tiene_dibujo"] = bool(dg.get("features"))
+            else:
+                r["tiene_dibujo"] = True
+        elif "tiene_dibujo" not in r:
+            r["tiene_dibujo"] = False
+
+    # Batch dibujo si la grilla/MV no trae la columna
+    faltan_dibujo = [
+        int(r["id"])
+        for r in rows
+        if r.get("id") is not None and not r.get("tiene_dibujo") and "dibujo_geojson" not in r
+    ]
+    if faltan_dibujo:
+        con_dibujo: set = set()
+        for chunk in _sicoe_chunks_int(faltan_dibujo, 200):
+            ch = list(chunk)
+            try:
+                def _qd(ids=ch):
+                    return (
+                        supabase.table("so_reportes")
+                        .select("id, dibujo_geojson, perimetro_geojson")
+                        .in_("id", ids)
+                        .execute()
+                        .data
+                    )
+                batch = supabase_execute(_qd) or []
+            except Exception:
+                try:
+                    def _qd2(ids=ch):
+                        return (
+                            supabase.table("so_reportes")
+                            .select("id, perimetro_geojson")
+                            .in_("id", ids)
+                            .execute()
+                            .data
+                        )
+                    batch = supabase_execute(_qd2) or []
+                except Exception:
+                    batch = []
+            for rep in batch:
+                rid = rep.get("id")
+                dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
+                ok = False
+                if isinstance(dg, dict):
+                    if dg.get("type") == "FeatureCollection":
+                        ok = bool(dg.get("features"))
+                    else:
+                        ok = True
+                if ok and rid is not None:
+                    con_dibujo.add(int(rid))
+        for r in rows:
+            if r.get("id") is not None and int(r["id"]) in con_dibujo:
+                r["tiene_dibujo"] = True
+
     faltan = [int(r["id"]) for r in rows if r.get("id") is not None and not r.get("tiene_enlace_soporte")]
     if not faltan:
         return
@@ -26183,6 +26241,136 @@ class AsignarActoresPorPkBody(BaseModel):
 class ReemplazarRegistrosNuevoReporteBody(BaseModel):
     registros: List[RegistroLineaNuevoReporte]
 
+
+def _sicoe_feature_huella_desde_dibujo_reporte(dibujo_geojson, reporte_id=None) -> Optional[dict]:
+    """Normaliza dibujo_geojson del reporte a un Feature de huella para so_registros."""
+    if not dibujo_geojson or not isinstance(dibujo_geojson, dict):
+        return None
+    feats = []
+    t = dibujo_geojson.get("type")
+    if t == "FeatureCollection":
+        feats = list(dibujo_geojson.get("features") or [])
+    elif t == "Feature":
+        feats = [dibujo_geojson]
+    elif t in ("Polygon", "MultiPolygon"):
+        feats = [{"type": "Feature", "geometry": dibujo_geojson, "properties": {}}]
+    polys = []
+    for f in feats:
+        if not isinstance(f, dict):
+            continue
+        g = f.get("geometry") if f.get("type") == "Feature" else f
+        if not isinstance(g, dict):
+            continue
+        if g.get("type") == "Polygon" and (g.get("coordinates") or [None])[0]:
+            polys.append(g)
+        elif g.get("type") == "MultiPolygon":
+            for c in g.get("coordinates") or []:
+                if c:
+                    polys.append({"type": "Polygon", "coordinates": c})
+    if not polys:
+        return None
+    props = {
+        "origen": "reporte_dibujo",
+        "reporte_id": reporte_id,
+        "precision": "precisa",
+        "huella_tipo": "poligono",
+    }
+    if len(polys) == 1:
+        return {"type": "Feature", "geometry": polys[0], "properties": props}
+    return {
+        "type": "Feature",
+        "geometry": {
+            "type": "MultiPolygon",
+            "coordinates": [p.get("coordinates") for p in polys],
+        },
+        "properties": {**props, "partes": len(polys)},
+    }
+
+
+def _sicoe_propagar_dibujo_a_registros(contrato_id: int, reporte_id: int, dibujo_geojson) -> int:
+    """Copia la huella del dibujo del reporte a todos sus registros. Retorna filas tocadas."""
+    feat = _sicoe_feature_huella_desde_dibujo_reporte(dibujo_geojson, reporte_id)
+    if not feat:
+        return 0
+    payload = {
+        "huella_geojson": feat,
+        "huella_precision": "precisa",
+        "huella_tipo": "poligono",
+    }
+    try:
+        def _u():
+            return (
+                supabase.table("so_registros")
+                .update(payload)
+                .eq("contrato_id", contrato_id)
+                .eq("reporte_id", reporte_id)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_u) or []
+        return len(rows)
+    except Exception as exc:
+        _log_api.warning("propagar dibujo reporte=%s: %s", reporte_id, exc)
+        try:
+            def _u2():
+                return (
+                    supabase.table("so_registros")
+                    .update({
+                        "huella_geojson": feat,
+                        "huella_precision": "precisa",
+                    })
+                    .eq("contrato_id", contrato_id)
+                    .eq("reporte_id", reporte_id)
+                    .execute()
+                    .data
+                )
+            rows = supabase_execute(_u2) or []
+            return len(rows)
+        except Exception as exc2:
+            _log_api.warning("propagar dibujo fallback: %s", exc2)
+            return 0
+
+
+def _sicoe_heredar_dibujo_en_payload_registro(contrato_id: int, reporte_id, payload: dict) -> dict:
+    """Si el reporte tiene dibujo, adjuntar huella al payload de insert del registro."""
+    if reporte_id is None or not isinstance(payload, dict):
+        return payload
+    try:
+        def _q():
+            return (
+                supabase.table("so_reportes")
+                .select("dibujo_geojson, perimetro_geojson")
+                .eq("id", int(reporte_id))
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception:
+        return payload
+    if not rows:
+        return payload
+    dibujo = rows[0].get("dibujo_geojson") or rows[0].get("perimetro_geojson")
+    feat = _sicoe_feature_huella_desde_dibujo_reporte(dibujo, reporte_id)
+    if not feat:
+        return payload
+    payload = dict(payload)
+    payload["huella_geojson"] = feat
+    payload["huella_precision"] = "precisa"
+    try:
+        payload["huella_tipo"] = "poligono"
+    except Exception:
+        pass
+    return payload
+
+
+class ReporteDibujoBody(BaseModel):
+    dibujo_geojson: dict
+    dibujo_escena: Optional[dict] = None
+    origen_lnglat: Optional[dict] = None
+
+
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
     def _prev_rep():
@@ -26220,6 +26408,146 @@ def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, c
     except Exception:
         pass
     return out
+
+
+@app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/dibujo")
+def sicoe_guardar_dibujo_reporte(
+    contrato_id: int,
+    reporte_id: int,
+    body: ReporteDibujoBody,
+    current_user=Depends(get_current_user),
+):
+    """Guarda el dibujo del reporte y lo propaga como huella a todos sus registros."""
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(
+            status_code=403,
+            detail="Se requiere permiso «Editar» en Reporte de Cantidades para dibujar el reporte.",
+        )
+    from datetime import datetime, timezone
+
+    def _rep():
+        return (
+            supabase.table("so_reportes")
+            .select("id, estado, bloqueado")
+            .eq("id", reporte_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+    rows = supabase_execute(_rep) or []
+    if not rows:
+        raise HTTPException(404, "Reporte no encontrado")
+    # Respetar bloqueo de cabecera si existe
+    if rows[0].get("bloqueado") is True:
+        raise HTTPException(422, "El reporte está bloqueado; no se puede editar el dibujo.")
+
+    fc = body.dibujo_geojson or {}
+    feats = fc.get("features") if isinstance(fc, dict) else None
+    if not isinstance(fc, dict) or (
+        fc.get("type") == "FeatureCollection" and not (feats or [])
+    ):
+        raise HTTPException(422, "El dibujo debe incluir al menos una geometría.")
+
+    feat = _sicoe_feature_huella_desde_dibujo_reporte(fc, reporte_id)
+    if not feat:
+        raise HTTPException(422, "No se encontró un polígono cerrado en el dibujo.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    uid = _sicoe_uid_from_user(current_user)
+    patch = {
+        "dibujo_geojson": fc,
+        "dibujo_escena": body.dibujo_escena,
+        "dibujo_actualizado_en": now,
+        "dibujo_por": uid,
+        "perimetro_geojson": feat,  # compat huellas de área
+        "updated_at": "now()",
+    }
+    try:
+        def _u():
+            return (
+                supabase.table("so_reportes")
+                .update(patch)
+                .eq("id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        updated = supabase_execute(_u) or []
+    except Exception as exc:
+        # Columnas dibujo_* aún no migradas → al menos perimetro
+        msg = str(exc).lower()
+        if "dibujo_" in msg:
+            try:
+                def _u2():
+                    return (
+                        supabase.table("so_reportes")
+                        .update({
+                            "perimetro_geojson": feat,
+                            "updated_at": "now()",
+                        })
+                        .eq("id", reporte_id)
+                        .eq("contrato_id", contrato_id)
+                        .execute()
+                        .data
+                    )
+                updated = supabase_execute(_u2) or []
+            except Exception as exc2:
+                raise HTTPException(500, f"No se pudo guardar el dibujo (¿migración so_reportes_dibujo.sql?): {exc2}") from exc2
+        else:
+            raise HTTPException(500, f"No se pudo guardar el dibujo: {exc}") from exc
+
+    n = _sicoe_propagar_dibujo_a_registros(contrato_id, reporte_id, fc)
+    out = updated[0] if updated else {"id": reporte_id}
+    out["registros_actualizados"] = n
+    out["tiene_dibujo"] = True
+    try:
+        registrar_log(
+            _audit_user_contrato(current_user, contrato_id),
+            "EDITAR",
+            "SICOE",
+            "reporte",
+            str(reporte_id),
+            {"tipo": "dibujo_reporte", "features": len(feats or [feat]), "registros": n},
+            resultado="ok",
+            categoria="auditoria",
+            severidad="INFO",
+        )
+    except Exception:
+        pass
+    return {"ok": True, "reporte": out, "registros_actualizados": n}
+
+
+@app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/dibujo")
+def sicoe_borrar_dibujo_reporte(
+    contrato_id: int,
+    reporte_id: int,
+    current_user=Depends(get_current_user),
+):
+    if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
+        raise HTTPException(403, "Se requiere permiso «Editar» para quitar el dibujo del reporte.")
+    try:
+        def _u():
+            return (
+                supabase.table("so_reportes")
+                .update({
+                    "dibujo_geojson": None,
+                    "dibujo_escena": None,
+                    "dibujo_actualizado_en": None,
+                    "dibujo_por": None,
+                    "perimetro_geojson": None,
+                    "updated_at": "now()",
+                })
+                .eq("id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        supabase_execute(_u)
+    except Exception as exc:
+        raise HTTPException(500, f"No se pudo borrar el dibujo: {exc}") from exc
+    return {"ok": True, "tiene_dibujo": False}
+
 
 @app.post("/sicoe-obra/{contrato_id}/reportes/asignar-actores-por-pk")
 def asignar_actores_por_pk(
@@ -27246,6 +27574,7 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     except Exception:
         pass
     _so_registro_normalizar_graficos_historial(data)
+    data = _sicoe_heredar_dibujo_en_payload_registro(contrato_id, body.reporte_id, data)
     def _ins():
         return supabase.table("so_registros").insert(data).execute().data
     result = supabase_execute(_ins)
@@ -28953,6 +29282,39 @@ def sicoe_sincronizar_huella_registro(
     if not rows:
         raise HTTPException(404, "Registro no encontrado.")
     reg = rows[0]
+    # Si el reporte tiene dibujo, esa es la huella canónica (no regenerar automática).
+    try:
+        rid_rep = reg.get("reporte_id")
+        if rid_rep is not None:
+            def _qd():
+                return (
+                    supabase.table("so_reportes")
+                    .select("dibujo_geojson, perimetro_geojson")
+                    .eq("id", rid_rep)
+                    .eq("contrato_id", contrato_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+            dr = supabase_execute(_qd) or []
+            dibujo = (dr[0].get("dibujo_geojson") or dr[0].get("perimetro_geojson")) if dr else None
+            feat = _sicoe_feature_huella_desde_dibujo_reporte(dibujo, rid_rep)
+            if feat:
+                _sicoe_persistir_huella_registro(
+                    contrato_id,
+                    registro_id,
+                    {"huella": feat, "precision": "precisa", "huella_tipo": "poligono"},
+                )
+                return {
+                    "ok": True,
+                    "omitido": False,
+                    "origen": "reporte_dibujo",
+                    "huella": feat,
+                    "hallazgos": [],
+                }
+    except Exception as exc:
+        _log_api.warning("sync huella desde dibujo reporte: %s", exc)
+
     fr = _sicoe_analizar_huella_registro(contrato_id, reg)
     if fr.get("omitido"):
         _sicoe_persistir_huella_registro(contrato_id, registro_id, {"huella": None, "precision": None, "huella_tipo": None})
@@ -30006,12 +30368,52 @@ def nuevo_registro_en_reporte(contrato_id: int, reporte_id: int, current_user=De
             payload[f"nivel{ni}_fecha"] = None
 
     _so_registro_normalizar_graficos_historial(payload)
+    payload = _sicoe_heredar_dibujo_en_payload_registro(contrato_id, reporte_id, payload)
+
+    # Contar registros previos para oferta de dibujo (primer registro del reporte)
+    n_prev = 0
+    try:
+        def _cnt2():
+            return (
+                supabase.table("so_registros")
+                .select("id")
+                .eq("reporte_id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        n_prev = len(supabase_execute(_cnt2) or [])
+    except Exception:
+        n_prev = 0
 
     def _ins():
         return supabase.table("so_registros").insert(payload).execute().data
 
     result = supabase_execute(_ins)
     row = result[0] if result else {}
+    es_primer = n_prev == 0
+    tiene_dibujo = False
+    try:
+        def _qd():
+            return (
+                supabase.table("so_reportes")
+                .select("dibujo_geojson, perimetro_geojson")
+                .eq("id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        dr = supabase_execute(_qd) or []
+        if dr:
+            tiene_dibujo = bool(dr[0].get("dibujo_geojson") or dr[0].get("perimetro_geojson"))
+    except Exception:
+        pass
+    if isinstance(row, dict):
+        row = dict(row)
+        row["es_primer_registro_reporte"] = es_primer
+        row["oferta_dibujo_reporte"] = bool(es_primer and not tiene_dibujo and puede_editar)
+        row["reporte_tiene_dibujo"] = tiene_dibujo
 
     # Cabecera: si hay líneas sin ítem, alinear estado (no cambia validaciones de otras líneas).
     try:

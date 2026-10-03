@@ -326,6 +326,15 @@ export default function EsquemaEditorModal({
   seedTramo = null,
   /** Si true, activa el mapa al abrir (p. ej. flujo Crear reporte planilla tubería). */
   autoActivateMap = false,
+  /**
+   * Modo huella SicoeObra: guardar geometrías georreferenciadas (no exige área de impresión PNG).
+   * No altera el flujo de galería de gráficos.
+   */
+  huellaMode = false,
+  /** Escena previa (objetos) al reabrir un dibujo de reporte. */
+  initialSceneObjects = null,
+  /** ({ objects, originLngLat }) => Promise — solo en huellaMode. */
+  onSaveHuella = null,
   onSave,
   onClose,
 }) {
@@ -721,7 +730,9 @@ export default function EsquemaEditorModal({
     drawing.current = false
     pinchRef.current = null
     pointersRef.current.clear()
-    if (!initialDataUri) {
+    if (Array.isArray(initialSceneObjects) && initialSceneObjects.length) {
+      objectsRef.current = cloneScene(initialSceneObjects)
+    } else if (!initialDataUri) {
       objectsRef.current = []
     } else {
       objectsRef.current = [{
@@ -739,7 +750,7 @@ export default function EsquemaEditorModal({
     setCanUndo(false)
     setDirty(false)
     requestAnimationFrame(() => redrawRef.current())
-  }, [initialDataUri])
+  }, [initialDataUri, initialSceneObjects])
 
   // Semilla de tramo (planilla tubería): nodos Inicio/Fin + flecha en canvas.
   useEffect(() => {
@@ -3857,6 +3868,24 @@ export default function EsquemaEditorModal({
 
   const pedirGuardar = () => {
     if (busy) return
+    if (huellaMode) {
+      // Flujo SicoeObra: guardar geometrías sin capturar PNG del mapa
+      void (async () => {
+        setBusy(true)
+        try {
+          const origin = mapGeoOriginRef.current
+          await onSaveHuella?.({
+            objects: cloneScene(objectsRef.current),
+            originLngLat: origin,
+          })
+        } catch {
+          /* el caller muestra el error */
+        } finally {
+          setBusy(false)
+        }
+      })()
+      return
+    }
     if (mapActiveRef.current) {
       printAreaDraftRef.current = null
       printAreaSelectingRef.current = true
@@ -4198,7 +4227,9 @@ export default function EsquemaEditorModal({
           <button
             type="button"
             title={mapActive
-              ? 'Mapa activo — use Paneo para mover el sector; Guardar captura el área de impresión'
+              ? (huellaMode
+                ? 'Mapa activo — dibuje formas cerradas sobre el plano; Guardar aplica la huella al reporte'
+                : 'Mapa activo — use Paneo para mover el sector; Guardar captura el área de impresión')
               : 'Insertar mapa como fondo (ubicación del reporte o selección manual)'}
             aria-label="Insertar mapa"
             onClick={() => { if (mapActive) deactivateMap(); else activateMap() }}
@@ -4242,11 +4273,13 @@ export default function EsquemaEditorModal({
               type="button"
               title={busy
                 ? 'Guardando…'
-                : mapActive
-                  ? 'Seleccionar área de impresión del mapa y guardar'
-                  : 'Guardar esquema (PNG con título y tabla)'}
-              aria-label="Guardar esquema"
-              disabled={busy || (!dirty && !mapActive)}
+                : huellaMode
+                  ? 'Guardar dibujo del reporte (huella georreferenciada)'
+                  : mapActive
+                    ? 'Seleccionar área de impresión del mapa y guardar'
+                    : 'Guardar esquema (PNG con título y tabla)'}
+              aria-label={huellaMode ? 'Guardar dibujo del reporte' : 'Guardar esquema'}
+              disabled={busy || (huellaMode ? false : (!dirty && !mapActive))}
               onClick={pedirGuardar}
               style={{ ...iconBtn(t, printAreaSelecting), opacity: (dirty || mapActive) ? 1 : 0.4 }}
             >
