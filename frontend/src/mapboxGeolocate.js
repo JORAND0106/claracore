@@ -43,13 +43,14 @@ export function __resetGeolocatePointerCssForTests() {
 /**
  * Añade el control de “mi ubicación” (GeolocateControl) de Mapbox.
  * - Muestra punto azul + círculo de precisión y actualiza al desplazarse.
- * - No mueve la cámara al activarse (no interfiere con PK / planos).
+ * - Por defecto dispara GPS al cargar; con `autoTrigger: false` solo queda el botón
+ *   (útil en Auditoría / planos de obra que deben abrir centrados en el proyecto).
  * - Si no hay GPS o se deniega el permiso, falla en silencio.
  * Idempotente por instancia de mapa.
  *
  * @param {import('mapbox-gl').Map | null | undefined} map
  * @param {string} [position='top-right']
- * @param {{ GeolocateControl?: typeof mapboxgl.GeolocateControl }} [deps] — solo para tests
+ * @param {{ GeolocateControl?: typeof mapboxgl.GeolocateControl, autoTrigger?: boolean }} [deps]
  * @returns {import('mapbox-gl').GeolocateControl | null}
  */
 export function addMapboxGeolocateControl(map, position = 'top-right', deps = {}) {
@@ -57,6 +58,7 @@ export function addMapboxGeolocateControl(map, position = 'top-right', deps = {}
   if (map[MAPBOX_GEOLOCATE_FLAG]) return map[MAPBOX_GEOLOCATE_FLAG]
 
   const GeolocateControl = deps.GeolocateControl || mapboxgl.GeolocateControl
+  const autoTrigger = deps.autoTrigger !== false
 
   try {
     ensureGeolocatePointerEventsNone()
@@ -66,6 +68,8 @@ export function addMapboxGeolocateControl(map, position = 'top-right', deps = {}
     })
     map.addControl(geolocate, position)
     map[MAPBOX_GEOLOCATE_FLAG] = geolocate
+
+    if (!autoTrigger) return geolocate
 
     const tryTrigger = () => {
       try {

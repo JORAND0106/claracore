@@ -61,6 +61,7 @@ import SicoeAmbienteAuditoria from './modules/sicoe-obra/SicoeAmbienteAuditoria'
 import { usuarioVeAuditoriaTraslapos } from './modules/sicoe-obra/sicoeAuditoriaTraslapos'
 import SicoeMapaHuellas from './modules/sicoe-obra/SicoeMapaHuellas'
 import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegistrosActasModal'
+import SicoeDibujarMasivoModal from './modules/sicoe-obra/SicoeDibujarMasivoModal'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -2026,8 +2027,12 @@ function permisoFuncionContrato(usuario, nombreFuncion, contratoId) {
   return rows[0]
 }
 
-/** Alineado con backend `_es_desarrollador`: cargo o rol «desarrollador». */
+/** Alineado con backend `_es_desarrollador`: cargo o rol «desarrollador» (también rol_id=1). */
 function esUsuarioDesarrollador(usuario) {
+  if (!usuario) return false
+  try {
+    if (Number(usuario.rol_id) === 1) return true
+  } catch { /* ignore */ }
   const norm = (txt) =>
     String(txt || '')
       .normalize('NFD')
@@ -2037,7 +2042,10 @@ function esUsuarioDesarrollador(usuario) {
       .replace(/\s+/g, ' ')
   const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
   const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
-  return cargo === 'desarrollador' || rol === 'desarrollador'
+  if (cargo === 'desarrollador' || rol === 'desarrollador') return true
+  // Acceso total inyectado por backend para Desarrollador
+  if (usuario?.es_desarrollador === true || usuario?.acceso_total === true) return true
+  return false
 }
 
 /** Alineado con backend: cargo_id → nivel de validación SICOE obra. */
@@ -8794,6 +8802,7 @@ function ModuloSicoeObra({
   const [hayMas, setHayMas] = useState(false)
   const [offsetActual, setOffsetActual] = useState(0)
   const [modalMoverActasDev, setModalMoverActasDev] = useState(false)
+  const [modalDibujarMasivoDev, setModalDibujarMasivoDev] = useState(false)
   const [filtros, setFiltros] = useState({
     numero_reporte: '', numero_registro: '',
     semana: '', acta_rpo: '',
@@ -11976,6 +11985,35 @@ function ModuloSicoeObra({
             <button
               type="button"
               className="cc-sicoe-touch-btn"
+              data-testid="sicoe-dibujar-masivo-btn"
+              onClick={() => setModalDibujarMasivoDev(true)}
+              title="Dibujar huellas faltantes (Desarrollador)"
+              aria-label="Dibujar"
+              style={{
+                background: t.primary,
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                padding: sicoeCompact ? '10px 14px' : '10px 16px',
+                minHeight: sicoeCompact ? 44 : 40,
+                fontWeight: 800,
+                fontSize: 'var(--cc-sm)',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                lineHeight: 1,
+              }}
+            >
+              <span aria-hidden="true" style={{ fontSize: 14 }}>✎</span>
+              Dibujar
+            </button>
+          )}
+          {esUsuarioDesarrollador(usuario) && (
+            <button
+              type="button"
+              className="cc-sicoe-touch-btn"
               onClick={() => setModalMoverActasDev(true)}
               title="Mover / reasignar registros (Desarrollador): entre actas, entre cortes de subcontratista, o reasignar entre subcontratistas"
               aria-label="Mover o reasignar registros entre actas, cortes o subcontratistas"
@@ -12008,6 +12046,18 @@ function ModuloSicoeObra({
         </div>
       </div>
 
+      {modalDibujarMasivoDev && esUsuarioDesarrollador(usuario) && (
+        <SicoeDibujarMasivoModal
+          t={t}
+          API_URL={API_URL}
+          token={getToken()}
+          contratoId={contrato_id}
+          onClose={() => setModalDibujarMasivoDev(false)}
+          onDone={() => {
+            invalidateSicoeVistaCache(contrato_id)
+          }}
+        />
+      )}
       {modalMoverActasDev && esUsuarioDesarrollador(usuario) && (
         <SicoeMoverRegistrosActasModal
           t={t}
@@ -12590,14 +12640,14 @@ function ModuloSicoeObra({
             refreshNonce={cpiRefreshNonce}
             filtrosVersion={cpiFiltrosVersion}
             exportMeta={exportMetaContrato || {}}
-            renderMap={({ height, highlightRegistroIds, highlightPkIds, filterItemNumeros }) => (
+            renderMap={({ height, highlightRegistroIds, highlightPkIds, filterItemNumeros, seleccionado }) => (
               <SicoeMapaHuellas
                 t={t}
                 contratoId={contrato_id}
                 token={getToken()}
                 height={height || 320}
-                highlightRegistroIds={highlightRegistroIds || []}
-                highlightPkIds={highlightPkIds || []}
+                highlightRegistroIds={seleccionado ? (highlightRegistroIds || []) : []}
+                highlightPkIds={seleccionado ? (highlightPkIds || []) : []}
                 filterItemNumeros={filterItemNumeros || null}
               />
             )}
@@ -16826,6 +16876,10 @@ function MiniMapaSemaforo({
   t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270, soloPkConDatos = false,
   modo: modoProp, onModoChange, capEtiquetas: capEtiquetasProp, onCapEtiquetasChange, showToolbar = true,
   focusPkids = null,
+  /** Si false, no dispara GPS al abrir (Auditoría / planos de obra). Default true. */
+  autoGeolocate = true,
+  /** Fondo tenue del proyecto completo aunque no haya cobro/ppto (Auditoría). */
+  fondoProyectoTenue = false,
 }) {
   const mapRef        = useRef(null)
   const mapInstance   = useRef(null)
@@ -16916,16 +16970,22 @@ function MiniMapaSemaforo({
     const unregMiniAttrib = installMapboxAttributionLinksOpenNewTab(map)
     mapInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-    addMapboxGeolocateControl(map)
+    addMapboxGeolocateControl(map, 'top-right', { autoTrigger: autoGeolocate !== false })
     map.on('load', () => {
       const features = buildFeatures(planoBase)
       const data = { ...planoBase, type: planoBase.type || 'FeatureCollection', features }
       map.addSource('mini-pols', { type: 'geojson', data })
+      const fillOpPpto = fondoProyectoTenue
+        ? ['case', ['==', ['get', 'tiene_ppto'], 1], 0.35, 0.12]
+        : ['case', ['==', ['get', 'tiene_ppto'], 1], 0.7, 0.1]
+      const fillOpCobro = fondoProyectoTenue
+        ? ['case', ['==', ['get', 'tiene_cobro'], 1], 0.45, 0.1]
+        : ['case', ['==', ['get', 'tiene_cobro'], 1], 0.7, 0.1]
       map.addLayer({ id: 'mini-fill-ppto', type: 'fill', source: 'mini-pols',
-        paint: { 'fill-color': ['get', 'color_ppto'], 'fill-opacity': ['case', ['==', ['get', 'tiene_ppto'], 1], 0.7, 0.1] }
+        paint: { 'fill-color': ['get', 'color_ppto'], 'fill-opacity': fillOpPpto }
       })
       map.addLayer({ id: 'mini-fill-cobro', type: 'fill', source: 'mini-pols',
-        paint: { 'fill-color': ['get', 'color_cobro'], 'fill-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.7, 0.1] }
+        paint: { 'fill-color': ['get', 'color_cobro'], 'fill-opacity': fillOpCobro }
       })
       map.addLayer({
         id: 'mini-line-ppto',
@@ -17009,7 +17069,7 @@ function MiniMapaSemaforo({
         setListo(false)
       }
     }
-  }, [bearing, contratoId, t.bg, planoBase, soloPkConDatos])
+  }, [bearing, contratoId, t.bg, planoBase, soloPkConDatos, autoGeolocate, fondoProyectoTenue])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -17034,7 +17094,16 @@ function MiniMapaSemaforo({
     const pks = Array.isArray(focusPkids)
       ? focusPkids.map((p) => String(p || '').trim().toLowerCase().replace(/\s+/g, '')).filter(Boolean)
       : []
-    if (!pks.length) return
+    if (!pks.length) {
+      // Sin foco → vista completa de la obra
+      const bAll = _boundsFromFeatureCollection(planoBase)
+      if (bAll) {
+        try {
+          _mapboxFitBoundsLngLat(map, bAll, { padding: 24, bearing, maxZoom: 17 })
+        } catch { /* ignore */ }
+      }
+      return
+    }
     const pkSet = new Set(pks)
     const feats = (planoBase.features || []).filter((f) => {
       const id = String(_sicoeFeaturePkId(f) || '').toLowerCase().replace(/\s+/g, '')
