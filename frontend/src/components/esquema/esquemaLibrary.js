@@ -1,7 +1,12 @@
 /**
  * Biblioteca de entidades reutilizables por contrato (localStorage).
  * Independiente del esquema: se comparte entre Seguimiento, SicoeObra y Presupuesto.
+ *
+ * Medidas reales: world = metros * PX_PER_METER. Las entidades creadas sobre el
+ * plano (mapa/huella) se guardan con medidas_reales=true. Las legacy o creadas
+ * fuera del plano quedan pendientes hasta calibración (ver esquemaLibraryScale).
  */
+import { worldToMeters } from './esquemaGeometry.js'
 
 const PREFIX = 'cc_esquema_biblioteca_'
 
@@ -182,13 +187,21 @@ function persistLibrary(contratoId, items) {
   store.setItem(libraryStorageKey(cid), JSON.stringify(items))
 }
 
-export function saveLibraryItem(contratoId, { nombre, objects }) {
+/**
+ * @param {string|number} contratoId
+ * @param {{ nombre?: string, objects: object[], medidasReales?: boolean }} opts
+ * medidasReales=true → dibujo sobre plano (metros reales); false → pendiente de calibración.
+ */
+export function saveLibraryItem(contratoId, { nombre, objects, medidasReales = false } = {}) {
   const cid = resolveContratoId(contratoId)
   if (!cid) return null
   const cloned = cloneForLibrary(objects)
   if (!cloned.length) return null
   const items = loadLibrary(cid)
   const packed = packLibraryBlock(cloned)
+  const anchoM = worldToMeters(packed.w)
+  const altoM = worldToMeters(packed.h)
+  const reales = !!medidasReales && anchoM > 0 && altoM > 0
   const item = {
     id: `lib${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     nombre: String(nombre || 'Bloque').trim() || 'Bloque',
@@ -196,11 +209,27 @@ export function saveLibraryItem(contratoId, { nombre, objects }) {
     objects: packed.children,
     w: packed.w,
     h: packed.h,
+    medidas_reales: reales,
+    ancho_m: reales ? anchoM : null,
+    alto_m: reales ? altoM : null,
     createdAt: new Date().toISOString(),
   }
   items.unshift(item)
   persistLibrary(cid, items)
   return item
+}
+
+/** Actualiza un ítem existente (p. ej. tras editar geometría). */
+export function updateLibraryItem(contratoId, itemId, patch) {
+  const cid = resolveContratoId(contratoId)
+  if (!cid || !itemId) return null
+  const items = loadLibrary(cid)
+  const idx = items.findIndex((it) => String(it.id) === String(itemId))
+  if (idx < 0) return null
+  const next = items.slice()
+  next[idx] = { ...next[idx], ...patch, actualizado_en: new Date().toISOString() }
+  persistLibrary(cid, next)
+  return next[idx]
 }
 
 export function deleteLibraryItem(contratoId, id) {
