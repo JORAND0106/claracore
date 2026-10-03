@@ -452,11 +452,13 @@ def justificaciones_para_tipo(tipo: str) -> Tuple[str, ...]:
     if t == "costado_inconsistente":
         from sicoe_eje_franjas import SICOE_AUDITORIA_JUSTIFICACIONES_COSTADO
         return SICOE_AUDITORIA_JUSTIFICACIONES_COSTADO
+    if t == "cantidad_mayor_area":
+        from sicoe_huellas_espacial import SICOE_AUDITORIA_JUSTIFICACIONES_CANTIDAD_AREA
+        return SICOE_AUDITORIA_JUSTIFICACIONES_CANTIDAD_AREA
     if t == "traslapo":
         return SICOE_AUDITORIA_JUSTIFICACIONES
     # no_auditable: permite justificar con lista de traslapo (dato incompleto)
     return SICOE_AUDITORIA_JUSTIFICACIONES
-
 
 def _abs_key(v: Any) -> str:
     n = parse_abs_num(v)
@@ -679,7 +681,7 @@ def resumen_ambiente_desde_filas(filas: List[dict]) -> dict:
         elif tipo == "no_auditable":
             out["no_auditables"]["cantidad"] += 1
             out["no_auditables"]["valor"] += valor
-        elif tipo in ("ubicacion_inconsistente", "costado_inconsistente"):
+        elif tipo in ("ubicacion_inconsistente", "costado_inconsistente", "cantidad_mayor_area"):
             out["inconsistencias"]["cantidad"] += 1
             out["inconsistencias"]["valor"] += valor
     return out

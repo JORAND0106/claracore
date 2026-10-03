@@ -1,3 +1,5 @@
+import { sugerirGeometriaTipo } from './sicoeHuellasEspacial.js'
+
 /** Estado de localización reutilizable (wizard + hoja de registro). */
 export function sicoeLocVacia() {
   return {
@@ -10,6 +12,8 @@ export function sicoeLocVacia() {
     nodoFin: '',
     coordLat: null,
     coordLng: null,
+    geometriaTipo: '',
+    coordsVertices: [],
   }
 }
 
@@ -38,6 +42,23 @@ export function sicoePkRowFromRegistro(reg, pkIds = []) {
 
 export function sicoeLocFromRegistro(reg, pkIds = []) {
   const pk = sicoePkRowFromRegistro(reg, pkIds)
+  const vertices = []
+  const cg = reg?.coords_geojson
+  if (cg && typeof cg === 'object') {
+    const geom = cg.type === 'Feature' ? cg.geometry : cg
+    if (geom?.type === 'Polygon' && Array.isArray(geom.coordinates?.[0])) {
+      for (const c of geom.coordinates[0]) {
+        if (Array.isArray(c) && c.length >= 2) vertices.push({ lng: c[0], lat: c[1] })
+      }
+      // quitar cierre(s) duplicado(s)
+      while (vertices.length > 1) {
+        const a = vertices[0]
+        const b = vertices[vertices.length - 1]
+        if (a.lng === b.lng && a.lat === b.lat) vertices.pop()
+        else break
+      }
+    }
+  }
   return {
     pk_id_id: reg?.pk_id_id ?? null,
     pkSeleccionado: pk || null,
@@ -48,6 +69,8 @@ export function sicoeLocFromRegistro(reg, pkIds = []) {
     nodoFin: reg?.nodo_fin || '',
     coordLat: reg?.coord_lat ?? null,
     coordLng: reg?.coord_lng ?? null,
+    geometriaTipo: reg?.geometria_tipo || '',
+    coordsVertices: vertices,
   }
 }
 
@@ -166,6 +189,22 @@ export function localizacionToApiFields(loc) {
   const absFin = loc?.absFinal ?? loc?.abs_final
   const lat = sicoeCoordLatDesdeLoc(loc)
   const lng = sicoeCoordLngDesdeLoc(loc)
+  const verts = Array.isArray(loc?.coordsVertices) ? loc.coordsVertices : []
+  const geoTipo = String(loc?.geometriaTipo || loc?.geometria_tipo || '').trim()
+    || sugerirGeometriaTipo(
+      { unidad: loc?.unidad, abs_inicio: absIni, abs_final: absFin },
+      verts.length || (lat != null ? 1 : 0),
+    )
+  let coordsGeojson = null
+  if (geoTipo === 'area' && verts.length >= 3) {
+    const ring = verts.map((v) => [Number(v.lng), Number(v.lat)])
+    const a = ring[0]
+    const b = ring[ring.length - 1]
+    if (a[0] !== b[0] || a[1] !== b[1]) ring.push([...a])
+    coordsGeojson = { type: 'Polygon', coordinates: [ring] }
+  } else if (lat != null && lng != null && !Number.isNaN(lat) && !Number.isNaN(lng)) {
+    coordsGeojson = { type: 'Point', coordinates: [lng, lat] }
+  }
   return {
     pk_id_id: pk?.id ?? loc?.pk_id_id ?? null,
     civ: pk?.civ ?? loc?.civ ?? null,
@@ -180,6 +219,8 @@ export function localizacionToApiFields(loc) {
     abs_final: absFin !== '' && absFin != null ? parseFloat(absFin) : null,
     nodo_ini: loc?.nodoIni ?? loc?.nodo_ini ?? null,
     nodo_fin: loc?.nodoFin ?? loc?.nodo_fin ?? null,
+    geometria_tipo: geoTipo || null,
+    coords_geojson: coordsGeojson,
   }
 }
 
@@ -201,5 +242,7 @@ export function sicoeLocSpreadEnRegistro(loc) {
     absFinal: loc?.absFinal ?? loc?.abs_final ?? '',
     nodoIni: loc?.nodoIni ?? loc?.nodo_ini ?? '',
     nodoFin: loc?.nodoFin ?? loc?.nodo_fin ?? '',
+    geometriaTipo: api.geometria_tipo || loc?.geometriaTipo || '',
+    coordsVertices: Array.isArray(loc?.coordsVertices) ? loc.coordsVertices : [],
   }
 }
