@@ -61,7 +61,9 @@ import SicoeAmbienteAuditoria from './modules/sicoe-obra/SicoeAmbienteAuditoria'
 import { usuarioVeAuditoriaTraslapos } from './modules/sicoe-obra/sicoeAuditoriaTraslapos'
 import SicoeMapaHuellas from './modules/sicoe-obra/SicoeMapaHuellas'
 import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegistrosActasModal'
-import SicoeDibujarMasivoModal from './modules/sicoe-obra/SicoeDibujarMasivoModal'
+import SicoeOfertaDibujoReporteModal from './modules/sicoe-obra/SicoeOfertaDibujoReporteModal'
+import SicoeDibujoReporteEditor from './modules/sicoe-obra/SicoeDibujoReporteEditor'
+import { reporteTieneDibujo } from './modules/sicoe-obra/sicoeDibujoReporteApi'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -5879,6 +5881,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [reporteDestino, setReporteDestino]       = useState('')
   const [moviendoReg, setMoviendoReg]             = useState(false)
   const [creandoReg, setCreandoReg]               = useState(false)
+  const [ofertaDibujoReporte, setOfertaDibujoReporte] = useState(false)
+  const [editorDibujoReporte, setEditorDibujoReporte] = useState(false)
   const [puntosEdit, setPuntosEdit]               = useState((repoProp.puntos || []).map(p => ({...p})))
   const [editandoTopo, setEditandoTopo]            = useState(false)
   const [guardandoTopo, setGuardandoTopo]          = useState(false)
@@ -6642,6 +6646,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         document.getElementById(`registro-${rid}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       requestAnimationFrame(scrollTo)
       setTimeout(scrollTo, 450)
+      if (row?.oferta_dibujo_reporte && puedeEditar) {
+        setOfertaDibujoReporte(true)
+      }
     } catch (e) {
       alert(e?.message || 'No se pudo crear el registro.')
     } finally {
@@ -7566,6 +7573,31 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
           {/* Botones de acción */}
           <div style={{ marginLeft:'auto', display:'flex', gap:'8px', paddingBottom:'8px', flexShrink:0 }}>
+            {puedeEditar && (
+              <button
+                type="button"
+                data-testid="sicoe-dibujo-reporte-btn"
+                onClick={() => setEditorDibujoReporte(true)}
+                title={reporteTieneDibujo(reporte) ? 'Editar dibujo del reporte (huella de todos los registros)' : 'Dibujar el reporte sobre el plano semáforo'}
+                style={{
+                  background: reporteTieneDibujo(reporte) ? t.bgCard : t.primary,
+                  color: reporteTieneDibujo(reporte) ? t.text : '#fff',
+                  border: reporteTieneDibujo(reporte) ? `1px solid ${t.border}` : 'none',
+                  borderRadius: '8px',
+                  padding: carpetaCompact ? '10px 14px' : '6px 14px',
+                  minHeight: carpetaCompact ? 44 : undefined,
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <span aria-hidden>✎</span>
+                {reporteTieneDibujo(reporte) ? 'Editar dibujo' : 'Dibujar'}
+              </button>
+            )}
             {puedeEditar && seleccionados.length > 0 && (
               <button type="button" onClick={abrirModalCorteMasivo} style={{
                 background:'#0d9488', color:'#fff', border:'none', borderRadius:'8px',
@@ -8569,6 +8601,45 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           onClose={() => setItemInfoPopup(null)}
         />
       )}
+
+      {ofertaDibujoReporte && (
+        <SicoeOfertaDibujoReporteModal
+          t={t}
+          numeroReporte={reporte?.numero_reporte}
+          onDespues={() => setOfertaDibujoReporte(false)}
+          onDibujarAhora={() => {
+            setOfertaDibujoReporte(false)
+            setEditorDibujoReporte(true)
+          }}
+        />
+      )}
+      {editorDibujoReporte && (
+        <SicoeDibujoReporteEditor
+          t={t}
+          API_URL={API_URL}
+          token={getToken()}
+          contratoId={contrato_id}
+          reporte={reporte}
+          onClose={() => setEditorDibujoReporte(false)}
+          onGuardado={(data) => {
+            const patch = data?.reporte || data || {}
+            setReporte((prev) => ({
+              ...prev,
+              ...patch,
+              dibujo_geojson: patch.dibujo_geojson ?? prev.dibujo_geojson,
+              dibujo_escena: patch.dibujo_escena ?? prev.dibujo_escena,
+              tiene_dibujo: true,
+            }))
+            try {
+              propagarReporteGuardado({
+                dibujo_geojson: patch.dibujo_geojson,
+                tiene_dibujo: true,
+              })
+            } catch { /* noop */ }
+            void recargar({ forzarSinFiltros: true })
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -8797,7 +8868,6 @@ function ModuloSicoeObra({
   const [hayMas, setHayMas] = useState(false)
   const [offsetActual, setOffsetActual] = useState(0)
   const [modalMoverActasDev, setModalMoverActasDev] = useState(false)
-  const [modalDibujarMasivoDev, setModalDibujarMasivoDev] = useState(false)
   const [filtros, setFiltros] = useState({
     numero_reporte: '', numero_registro: '',
     semana: '', acta_rpo: '',
@@ -11980,35 +12050,6 @@ function ModuloSicoeObra({
             <button
               type="button"
               className="cc-sicoe-touch-btn"
-              data-testid="sicoe-dibujar-masivo-btn"
-              onClick={() => setModalDibujarMasivoDev(true)}
-              title="Dibujar huellas faltantes (Desarrollador)"
-              aria-label="Dibujar"
-              style={{
-                background: t.primary,
-                color: '#fff',
-                border: 'none',
-                borderRadius: '8px',
-                padding: sicoeCompact ? '10px 14px' : '10px 16px',
-                minHeight: sicoeCompact ? 44 : 40,
-                fontWeight: 800,
-                fontSize: 'var(--cc-sm)',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                lineHeight: 1,
-              }}
-            >
-              <span aria-hidden="true" style={{ fontSize: 14 }}>✎</span>
-              Dibujar
-            </button>
-          )}
-          {esUsuarioDesarrollador(usuario) && (
-            <button
-              type="button"
-              className="cc-sicoe-touch-btn"
               onClick={() => setModalMoverActasDev(true)}
               title="Mover / reasignar registros (Desarrollador): entre actas, entre cortes de subcontratista, o reasignar entre subcontratistas"
               aria-label="Mover o reasignar registros entre actas, cortes o subcontratistas"
@@ -12041,18 +12082,6 @@ function ModuloSicoeObra({
         </div>
       </div>
 
-      {modalDibujarMasivoDev && esUsuarioDesarrollador(usuario) && (
-        <SicoeDibujarMasivoModal
-          t={t}
-          API_URL={API_URL}
-          token={getToken()}
-          contratoId={contrato_id}
-          onClose={() => setModalDibujarMasivoDev(false)}
-          onDone={() => {
-            invalidateSicoeVistaCache(contrato_id)
-          }}
-        />
-      )}
       {modalMoverActasDev && esUsuarioDesarrollador(usuario) && (
         <SicoeMoverRegistrosActasModal
           t={t}
@@ -12831,6 +12860,40 @@ function ModuloSicoeObra({
                 tiene={!!rep.tiene_enlace_soporte || sicoeTieneEnlaceSoporte(rep.enlace_soporte)}
                 t={t}
               />
+              {!reporteTieneDibujo(rep) && !rep.tiene_dibujo && (
+                <span
+                  title="Sin dibujo de reporte"
+                  style={{
+                    fontSize: 'var(--cc-caption)',
+                    fontWeight: 800,
+                    color: '#d97706',
+                    background: '#d9770618',
+                    border: '1px solid #d9770644',
+                    borderRadius: 6,
+                    padding: '1px 6px',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Sin dibujo
+                </span>
+              )}
+              {(reporteTieneDibujo(rep) || rep.tiene_dibujo) && (
+                <span
+                  title="Reporte con dibujo / huella"
+                  style={{
+                    fontSize: 'var(--cc-caption)',
+                    fontWeight: 800,
+                    color: '#0d9488',
+                    background: '#0d948818',
+                    border: '1px solid #0d948844',
+                    borderRadius: 6,
+                    padding: '1px 6px',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  ✎ Dibujo
+                </span>
+              )}
             </div>
             <div
               style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3, whiteSpace:'nowrap' }}
@@ -12961,13 +13024,18 @@ function ModuloSicoeObra({
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{ fontWeight: 800, color: t.primary, fontSize: 'var(--cc-md)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       <span>#{rep.numero_reporte}</span>
                       <SicoeIconoSoporteAdjunto
                         tiene={!!rep.tiene_enlace_soporte || sicoeTieneEnlaceSoporte(rep.enlace_soporte)}
                         t={t}
                         size="var(--cc-body)"
                       />
+                      {!reporteTieneDibujo(rep) && !rep.tiene_dibujo ? (
+                        <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: '#d97706', background: '#d9770618', border: '1px solid #d9770644', borderRadius: 6, padding: '1px 6px' }}>Sin dibujo</span>
+                      ) : (
+                        <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: '#0d9488', background: '#0d948818', border: '1px solid #0d948844', borderRadius: 6, padding: '1px 6px' }}>✎ Dibujo</span>
+                      )}
                     </div>
                     <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
                       {fmtSicoeFechaCreacion(rep.created_at)}
