@@ -7804,19 +7804,23 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         + Agregar punto
                       </button>
                       <label style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'var(--cc-sm)', cursor:'pointer' }}>
-                        📂 Importar CSV
-                        <input type='file' accept='.csv' style={{ display:'none' }} onChange={e => {
-                          const file = e.target.files[0]; if (!file) return
-                          const reader = new FileReader()
-                          reader.onload = ev => {
-                            const lines = ev.target.result.split('\n').filter(l => l.trim())
-                            const rows = lines.slice(1).map(l => {
-                              const cols = l.split(',')
-                              return { punto:cols[0]||'', norte:cols[1]||'', este:cols[2]||'', cota:cols[3]||'', descripcion:cols[4]||'' }
-                            })
-                            if (rows.length) setPuntosEdit(rows)
+                        📂 Importar CSV / Excel
+                        <input type='file' accept='.csv,.txt,.xlsx,.xls' style={{ display:'none' }} onChange={async e => {
+                          const file = e.target.files?.[0]; e.target.value = ''; if (!file) return
+                          try {
+                            const { parseCoordFile } = await import('./components/esquema/esquemaCoords')
+                            const rows = await parseCoordFile(file)
+                            if (!rows.length) { alert('El archivo no tiene puntos válidos.'); return }
+                            setPuntosEdit(rows.map(r => ({
+                              punto: r.num || '',
+                              norte: r.norte ?? '',
+                              este: r.este ?? '',
+                              cota: r.cota ?? '',
+                              descripcion: r.desc || '',
+                            })))
+                          } catch (err) {
+                            alert(err?.message || 'No se pudo leer el archivo')
                           }
-                          reader.readAsText(file)
                         }} />
                       </label>
                     </div>

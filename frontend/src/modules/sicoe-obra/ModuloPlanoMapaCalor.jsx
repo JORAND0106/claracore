@@ -27,6 +27,8 @@ import {
 } from '../../mapboxPlanoLabels'
 import { useTopoNivelacionMapaCapa } from '../../components/topografia/useTopoNivelacionMapaCapa'
 import { addMapboxGeolocateControl } from '../../mapboxSafe'
+import SicoeLevantamientoPanel from './SicoeLevantamientoPanel'
+import { sicoePuedeEditarGraficoRegistro } from './sicoeCreadorEdicionDimensional'
 
 const MAPBOX_TOKEN = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim()
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
@@ -248,6 +250,25 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const [mostrarNodos, setMostrarNodos] = useState(true)
   const getMapNiv = useCallback(() => mapInstance.current, [])
   const capaNiv = useTopoNivelacionMapaCapa(getMapNiv, contratoId, token, { readyKey: mapReady })
+
+  const puedeDibujarLevantamiento = useMemo(() => {
+    const rol = String(usuario?.rol_nombre || usuario?.rol || '').toLowerCase()
+    if (rol.includes('desarrollador') || rol === 'dev' || usuario?.es_desarrollador) return true
+    const rows = (usuario?.permisos || []).filter((p) =>
+      String(p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades'),
+    )
+    const cid = Number(contratoId)
+    const hit = Number.isFinite(cid)
+      ? (rows.find((p) => Number(p.contrato_id) === cid) || rows.find((p) => p.contrato_id == null || p.contrato_id === ''))
+      : rows[0]
+    return sicoePuedeEditarGraficoRegistro({
+      puedeEditar: !!hit?.editar,
+      puedeCrear: !!hit?.crear,
+      esCreador: true,
+      selladoMax: false,
+    })
+  }, [usuario, contratoId])
+
   const [seleccionado, setSeleccionado] = useState(null)
   const [filtroSubcList, setFiltroSubcList] = useState([])
   const [nivelesDisponibles, setNivelesDisponibles] = useState([1, 2, 3])
@@ -834,6 +855,15 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         border: `1px solid ${t.border}`,
       }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+
+        <SicoeLevantamientoPanel
+          t={t}
+          contratoId={contratoId}
+          token={token}
+          getMap={getMapNiv}
+          mapReady={mapReady}
+          puedeDibujar={puedeDibujarLevantamiento}
+        />
 
         <div style={{
           position: 'absolute', top: 12, left: 12, zIndex: 5,
