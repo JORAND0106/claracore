@@ -9,6 +9,11 @@ import { slidesFromRegistro } from '../../components/adjuntos/adjuntosMedia'
 import SicoeMediaLightbox from './SicoeMediaLightbox'
 import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
 import {
+  sicoeHeadersMedicion,
+  sicoeMedicionCeldasDisplay,
+  sicoeKgPendienteRecaptura,
+} from './sicoeVarilla.js'
+import {
   agruparRegistrosPorItem,
   pastelDeEstadoValidacion,
   estadoNivelRegistro,
@@ -1034,12 +1039,19 @@ function FragmentItem({
                 <thead>
                   <tr>
                     <th style={{ ...sheetTh, width: 28, textAlign: 'center' }} />
-                    <th style={sheetTh}># Registro</th>
-                    <th style={{ ...sheetTh, textAlign: 'right' }}>Long</th>
-                    <th style={{ ...sheetTh, textAlign: 'right' }}>Ancho</th>
-                    <th style={{ ...sheetTh, textAlign: 'right' }}>Espesor</th>
-                    <th style={{ ...sheetTh, textAlign: 'right' }}>Cantidad</th>
-                    <th style={{ ...sheetTh, textAlign: 'right' }}>Cant. Total</th>
+                    {(() => {
+                      const hdr = sicoeHeadersMedicion(fila.regs)
+                      return (
+                        <>
+                          <th style={sheetTh}># Registro</th>
+                          <th style={{ ...sheetTh, textAlign: 'right' }}>{hdr.long}</th>
+                          <th style={{ ...sheetTh, textAlign: 'right' }}>{hdr.col2}</th>
+                          <th style={{ ...sheetTh, textAlign: 'right' }}>{hdr.col3}</th>
+                          <th style={{ ...sheetTh, textAlign: 'right' }}>{hdr.cant}</th>
+                          <th style={{ ...sheetTh, textAlign: 'right' }}>{hdr.cantTot}</th>
+                        </>
+                      )
+                    })()}
                     {verValoresEconomicos && (
                       <th style={{ ...sheetTh, textAlign: 'right' }}>Costo Directo</th>
                     )}
@@ -1232,10 +1244,28 @@ function FragmentReg({
         </td>
         <td style={{ ...tdTheme, fontWeight: 800, color: hasPastel ? rowFg : '#D97706', whiteSpace: 'nowrap' }}>
           #{reg.numero_registro}
+          {sicoeKgPendienteRecaptura(reg) ? (
+            <span title="Pendiente de recaptura (Kg)" style={{ marginLeft: 4, color: '#b45309', fontSize: 'var(--cc-caption)' }}>⚠</span>
+          ) : null}
         </td>
         <td style={numStyle}>{fmtNum(reg.longitud)}</td>
-        <td style={numStyle}>{fmtNum(reg.ancho)}</td>
-        <td style={numStyle}>{fmtNum(reg.espesor)}</td>
+        {(() => {
+          const cel = sicoeMedicionCeldasDisplay(reg)
+          if (cel.esVarilla) {
+            return (
+              <>
+                <td style={numStyle}>{cel.col2}</td>
+                <td style={numStyle}>{cel.col3}</td>
+              </>
+            )
+          }
+          return (
+            <>
+              <td style={numStyle}>{fmtNum(cel.col2)}</td>
+              <td style={numStyle}>{fmtNum(cel.col3)}</td>
+            </>
+          )
+        })()}
         <td style={numStyle}>{fmtNum(reg.cantidad)}</td>
         <td style={{ ...numStyle, fontWeight: 700 }}>{formatearCantidadTotal(reg.cantidad_total)}</td>
         {verValoresEconomicos && (

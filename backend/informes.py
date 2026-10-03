@@ -12429,9 +12429,17 @@ def _excel_num_or_blank(v: Any) -> Optional[float]:
             return None
 
 
-def _excel_formula_cantidad_total(row: int) -> str:
-    """CANT TOT = L×A×E[×C] (cols D–G) con vacíos=1, redondeo a 2 dp (regla informe)."""
+def _excel_formula_cantidad_total(row: int, *, es_varilla: bool = False) -> str:
+    """
+    CANT TOT (cols D–G).
+    Estándar: L×A×E×C (vacíos=1).
+    Varilla: L×Peso×Cant — D=long, E=Ø (texto), F=peso kg/m, G=cant.
+    Redondeo a 2 dp (regla informe).
+    """
     d, e, f, g = f"D{row}", f"E{row}", f"F{row}", f"G{row}"
+    if es_varilla:
+        prod = f'IF({d}="",1,{d})*IF({f}="",1,{f})*IF({g}="",1,{g})'
+        return f'=IF(AND({d}="",{f}="",{g}=""),0,ROUND({prod},2))'
     prod = f'IF({d}="",1,{d})*IF({e}="",1,{e})*IF({f}="",1,{f})*IF({g}="",1,{g})'
     return f'=IF(AND({d}="",{e}="",{f}="",{g}=""),0,ROUND({prod},2))'
 
@@ -13087,18 +13095,34 @@ def _fill_memoria_excel_ws(
     bar.alignment = Alignment(horizontal="center", vertical="center")
     bar.border = bd
 
-    hdr = [
-        "N°",
-        "ABSCISAS",
-        "INFRAESTRUCTURA",
-        "LONG",
-        "ANCHO",
-        "ESP",
-        "CANT",
-        "CANT TOT",
-        "ENLACE",
-        "OBSERVACIÓN",
-    ]
+    try:
+        from sicoe_varilla import sicoe_headers_medicion_para_regs
+        hdr_info = sicoe_headers_medicion_para_regs(registros or [])
+        hdr = [
+            "N°",
+            "ABSCISAS",
+            "INFRAESTRUCTURA",
+            hdr_info.get("long") or "LONG",
+            hdr_info.get("col2") or "ANCHO",
+            hdr_info.get("col3") or "ESP",
+            hdr_info.get("cant") or "CANT",
+            hdr_info.get("cant_tot") or "CANT TOT",
+            "ENLACE",
+            "OBSERVACIÓN",
+        ]
+    except Exception:
+        hdr = [
+            "N°",
+            "ABSCISAS",
+            "INFRAESTRUCTURA",
+            "LONG",
+            "ANCHO",
+            "ESP",
+            "CANT",
+            "CANT TOT",
+            "ENLACE",
+            "OBSERVACIÓN",
+        ]
     hr = r0 + 1
     for col, h in enumerate(hdr, start=1):
         cell = ws.cell(row=hr, column=col, value=h)
@@ -13124,15 +13148,27 @@ def _fill_memoria_excel_ws(
             obs = _descripcion_memoria_compacta(obs)
             links = _memoria_enlaces_soporte(r)
             infra = _memoria_infraestructura_txt(r)
+            es_var = False
+            try:
+                from sicoe_varilla import sicoe_es_varilla_registro as _esv
+                es_var = _esv(r)
+            except Exception:
+                es_var = False
+            if es_var:
+                col2_val = f"Ø {r.get('diametro_varilla')}" if r.get("diametro_varilla") else ""
+                col3_val = _excel_num_or_blank(r.get("peso_kg_m"))
+            else:
+                col2_val = _excel_num_or_blank(r.get("ancho"))
+                col3_val = _excel_num_or_blank(r.get("espesor"))
             vals = [
                 r.get("numero_registro"),
                 _memoria_abscisas_txt(r),
                 infra or "—",
                 _excel_num_or_blank(r.get("longitud")),
-                _excel_num_or_blank(r.get("ancho")),
-                _excel_num_or_blank(r.get("espesor")),
+                col2_val,
+                col3_val,
                 _excel_num_or_blank(r.get("cantidad")),
-                _excel_formula_cantidad_total(row),
+                _excel_formula_cantidad_total(row, es_varilla=es_var),
                 None,  # Enlace
                 (obs or "")[:500],
             ]
@@ -13146,9 +13182,10 @@ def _fill_memoria_excel_ws(
                 cell.border = bd
                 cell.font = Font(size=8)
                 if col in (4, 5, 6, 7):
-                    # Dimensiones: siempre 3 decimales (1.000)
+                    # Dimensiones / Ø texto / peso
                     cell.alignment = Alignment(horizontal="right", vertical="center")
-                    cell.number_format = _EXCEL_NUM_FMT_DIM
+                    if not (es_var and col == 5):
+                        cell.number_format = _EXCEL_NUM_FMT_DIM
                 elif col == 8:
                     # Cant. Total: siempre 2 decimales (6.00)
                     cell.alignment = Alignment(horizontal="right", vertical="center")
@@ -16187,14 +16224,20 @@ def _html_memoria_item_body(
     unidad_item = str(item_info.get("unidad") or "").strip()
     chunks_reg = _chunks_memoria_detalle(plan_filas, ROWS_MEMORIA_PRIMERA_HOJA, ROWS_MEMORIA_SIGUIENTES)
 
-    # Orden: N°, Abscisas, Infraestructura, Long, Ancho, Esp, Cant, Cant Tot, Enlace, Observación (sin PK ID).
-    thead_detalle = """<tr>
+    # Orden: N°, Abscisas, Infraestructura, Long, Ancho/Ø, Esp/kg/m, Cant, Cant Tot, Enlace, Observación.
+    try:
+        from sicoe_varilla import sicoe_headers_medicion_para_regs as _hdr_med
+        _hi = _hdr_med(registros or [])
+        _h2, _h3 = _hi.get("col2") or "ANCHO", _hi.get("col3") or "ESP"
+    except Exception:
+        _h2, _h3 = "ANCHO", "ESP"
+    thead_detalle = f"""<tr>
             <th class="data-th" style="width:4%">N°</th>
             <th class="data-th" style="width:12%">ABSCISAS</th>
             <th class="data-th" style="width:11%">INFRAESTRUCTURA</th>
             <th class="data-th" style="width:6%">LONG</th>
-            <th class="data-th" style="width:6%">ANCHO</th>
-            <th class="data-th" style="width:6%">ESP</th>
+            <th class="data-th" style="width:6%">{_h(_h2)}</th>
+            <th class="data-th" style="width:6%">{_h(_h3)}</th>
             <th class="data-th" style="width:7%">CANT</th>
             <th class="data-th" style="width:8%">CANT TOT</th>
             <th class="data-th" style="width:12%">ENLACE</th>
@@ -16233,13 +16276,25 @@ def _html_memoria_item_body(
             obs = _descripcion_memoria_compacta(obs)
             infra = _memoria_infraestructura_txt(r) or "—"
             enlace_cell = _memoria_enlaces_html_cell(r)
+            es_var_pdf = False
+            try:
+                from sicoe_varilla import sicoe_es_varilla_registro as _esv_pdf
+                es_var_pdf = _esv_pdf(r)
+            except Exception:
+                es_var_pdf = False
+            if es_var_pdf:
+                c2 = _h(f"Ø {r.get('diametro_varilla')}" if r.get("diametro_varilla") else "—")
+                c3 = _fn_dim_informe(r.get("peso_kg_m"))
+            else:
+                c2 = _fn_dim_informe(r.get("ancho"))
+                c3 = _fn_dim_informe(r.get("espesor"))
             body += f"""<tr class="{cls}">
                 <td class="data-td" style="text-align:center">{_h(r.get('numero_registro',''))}</td>
                 <td class="data-td" style="text-align:center">{_h(_memoria_abscisas_txt(r))}</td>
                 <td class="data-td" style="text-align:center">{_h(infra)}</td>
                 <td class="data-td" style="text-align:right">{_fn_dim_informe(r.get('longitud'))}</td>
-                <td class="data-td" style="text-align:right">{_fn_dim_informe(r.get('ancho'))}</td>
-                <td class="data-td" style="text-align:right">{_fn_dim_informe(r.get('espesor'))}</td>
+                <td class="data-td" style="text-align:right">{c2}</td>
+                <td class="data-td" style="text-align:right">{c3}</td>
                 <td class="data-td" style="text-align:right">{_fn_dim_informe(r.get('cantidad'))}</td>
                 <td class="data-td" style="text-align:right;font-weight:bold">{_fn_cant_informe(r.get('cantidad_total'))}</td>
                 <td class="data-td mem002-enlace">{enlace_cell}</td>

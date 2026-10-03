@@ -502,6 +502,7 @@ def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
         "id", "reporte_id", "contrato_id", "numero_registro", "capitulo", "competencia",
         "item_numero", "item_descripcion", "unidad", "vlr_unitario", "longitud", "ancho", "espesor",
         "cantidad", "cantidad_total", "costo_directo", "observacion", "corte_id",
+        "es_varilla", "diametro_varilla", "peso_kg_m",
         "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen", "pk_id_id",
         "civ", "tramo", "calzada", "ubicacion", "coord_lat", "coord_lng",
         "nivel1_estado", "nivel2_estado", "nivel3_estado", "nivel4_estado", "nivel5_estado", "nivel6_estado",
@@ -2005,6 +2006,11 @@ from sicoe_cantidad_redondeo import (  # noqa: E402
     calcular_cantidad_con_redondeo as _sicoe_calcular_cantidad_con_redondeo,
     redondear_cantidad_total_dinamico as _sicoe_redondear_cantidad_total,
     redondear_dimension as _sicoe_redondear_dimension,
+)
+from sicoe_varilla import (  # noqa: E402
+    sicoe_calcular_cantidad_registro as _sicoe_calcular_cantidad_registro,
+    sicoe_unidad_es_kg as _sicoe_unidad_es_kg,
+    sicoe_validar_y_preparar_medicion_varilla as _sicoe_validar_preparar_varilla,
 )
 
 
@@ -26000,6 +26006,9 @@ class RegistroCreate(BaseModel):
     cantidad: Optional[float] = None
     cantidad_total: Optional[float] = None
     unidad: Optional[str] = None
+    es_varilla: Optional[bool] = None
+    diametro_varilla: Optional[str] = None
+    peso_kg_m: Optional[float] = None
     observacion: Optional[str] = None
     foto_url: Optional[str] = None
     foto_numero: Optional[int] = None
@@ -26045,6 +26054,9 @@ class RegistroLineaNuevoReporte(BaseModel):
     cantidad: Optional[float] = None
     cantidad_total: Optional[float] = None
     unidad: Optional[str] = None
+    es_varilla: Optional[bool] = None
+    diametro_varilla: Optional[str] = None
+    peso_kg_m: Optional[float] = None
     observacion: Optional[str] = None
     foto_url: Optional[str] = None
     foto_numero: Optional[int] = None
@@ -26289,7 +26301,10 @@ def _pydantic_dump_exclude_unset(model: BaseModel) -> dict:
 
 
 # Dimensiones SICOE: el cliente envía `null` para borrar un campo; no filtrar esos None o la BD nunca se actualiza.
-_REGPUT_DIM_NULLABLE = frozenset({"longitud", "ancho", "espesor", "cantidad"})
+_REGPUT_DIM_NULLABLE = frozenset({
+    "longitud", "ancho", "espesor", "cantidad",
+    "es_varilla", "diametro_varilla", "peso_kg_m",
+})
 _REGPUT_GRAFICO_NULLABLE = frozenset({"grafico_url", "grafico_numero", "grafico_descripcion"})
 
 
@@ -26591,7 +26606,14 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         def _dim_merged(k: str):
             return data[k] if k in data else prev_row.get(k)
 
-        if all(_dim_merged(k) is None for k in ("longitud", "ancho", "espesor", "cantidad")):
+        es_var_chk = _dim_merged("es_varilla")
+        if es_var_chk is True:
+            if all(_dim_merged(k) is None for k in ("longitud", "cantidad")) and _dim_merged("diametro_varilla") is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Varilla: indique Longitud, Diámetro Ø y/o Cantidad.",
+                )
+        elif all(_dim_merged(k) is None for k in ("longitud", "ancho", "espesor", "cantidad")):
             raise HTTPException(
                 status_code=400,
                 detail="Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).",
@@ -26602,16 +26624,27 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             data[dk] = _sicoe_redondear_dimension(data[dk])
     # `id_pol` existe en presupuesto, no en `so_registros`; un cliente antiguo no debe romper el UPDATE.
     data.pop("id_pol", None)
-    # cantidad_total: redondeo dinámico (2 ó 3 dp). Si hay dims en el payload, recalcular desde ellas.
-    _dim_keys_touch = ("longitud", "ancho", "espesor", "cantidad")
+
+    # Esquema varilla (Kg): validar diámetro NTC y preparar peso / limpieza ancho-espesor.
+    _var_keys = ("es_varilla", "diametro_varilla", "peso_kg_m", "longitud", "ancho", "espesor", "cantidad", "unidad")
+    if any(k in data for k in _var_keys):
+        data, _var_err = _sicoe_validar_preparar_varilla(data, prev=prev_row)
+        if _var_err:
+            raise HTTPException(status_code=422, detail=_var_err)
+
+    # cantidad_total: redondeo dinámico (2 ó 3 dp). Si hay dims/esquema en el payload, recalcular.
+    _dim_keys_touch = ("longitud", "ancho", "espesor", "cantidad", "es_varilla", "diametro_varilla", "peso_kg_m")
     if any(k in data for k in _dim_keys_touch):
         def _dim_for_cant(k: str):
             return data[k] if k in data else prev_row.get(k)
-        data["cantidad_total"] = _sicoe_calcular_cantidad_con_redondeo(
-            _dim_for_cant("longitud"),
-            _dim_for_cant("ancho"),
-            _dim_for_cant("espesor"),
-            _dim_for_cant("cantidad"),
+        data["cantidad_total"] = _sicoe_calcular_cantidad_registro(
+            es_varilla=_dim_for_cant("es_varilla"),
+            longitud=_dim_for_cant("longitud"),
+            ancho=_dim_for_cant("ancho"),
+            espesor=_dim_for_cant("espesor"),
+            cantidad=_dim_for_cant("cantidad"),
+            peso_kg_m=_dim_for_cant("peso_kg_m"),
+            diametro_varilla=_dim_for_cant("diametro_varilla"),
         )
     elif "cantidad_total" in data and data["cantidad_total"] is not None:
         data["cantidad_total"] = _sicoe_redondear_cantidad_total(data["cantidad_total"])
@@ -27076,12 +27109,21 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
                 data[dk] = _sicoe_redondear_dimension(data[dk])
             except (TypeError, ValueError):
                 pass
-    if any(data.get(k) is not None for k in ("longitud", "ancho", "espesor", "cantidad")):
-        data["cantidad_total"] = _sicoe_calcular_cantidad_con_redondeo(
-            data.get("longitud"),
-            data.get("ancho"),
-            data.get("espesor"),
-            data.get("cantidad"),
+    if any(
+        data.get(k) is not None
+        for k in ("longitud", "ancho", "espesor", "cantidad", "es_varilla", "diametro_varilla")
+    ):
+        data, _var_err = _sicoe_validar_preparar_varilla(data, prev={})
+        if _var_err:
+            raise HTTPException(status_code=422, detail=_var_err)
+        data["cantidad_total"] = _sicoe_calcular_cantidad_registro(
+            es_varilla=data.get("es_varilla"),
+            longitud=data.get("longitud"),
+            ancho=data.get("ancho"),
+            espesor=data.get("espesor"),
+            cantidad=data.get("cantidad"),
+            peso_kg_m=data.get("peso_kg_m"),
+            diametro_varilla=data.get("diametro_varilla"),
         )
     elif data.get("cantidad_total") is not None:
         data["cantidad_total"] = _sicoe_redondear_cantidad_total(data["cantidad_total"])
@@ -27786,6 +27828,9 @@ class AsignarItemBody(BaseModel):
     espesor: Optional[float] = None
     cantidad: Optional[float] = None
     cantidad_total: Optional[float] = None
+    es_varilla: Optional[bool] = None
+    diametro_varilla: Optional[str] = None
+    peso_kg_m: Optional[float] = None
     observacion: Optional[str] = None
     civ: Optional[str] = None
     tramo: Optional[str] = None
@@ -27822,7 +27867,11 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
 
         def _reg():
             return supabase.table("so_registros")\
-                .select(f"longitud, ancho, espesor, cantidad, cantidad_total, reporte_id, contrato_id, creado_por_reg, {SICOE_SELECT_NIVELES_ESTADO}")\
+                .select(
+                    f"longitud, ancho, espesor, cantidad, cantidad_total, unidad, "
+                    f"es_varilla, diametro_varilla, peso_kg_m, "
+                    f"reporte_id, contrato_id, creado_por_reg, {SICOE_SELECT_NIVELES_ESTADO}"
+                )\
                 .eq("id", registro_id).single().execute().data
         registro = supabase_execute(_reg)
         if not registro:
@@ -27833,7 +27882,10 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                 detail="El registro está aprobado en el último nivel de validación: no puede reasignarse el ítem.",
             )
 
-        _pre_dim_keys = ("longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion")
+        _pre_dim_keys = (
+            "longitud", "ancho", "espesor", "cantidad", "cantidad_total", "observacion",
+            "es_varilla", "diametro_varilla", "peso_kg_m",
+        )
         _pre_loc_keys = (
             "civ", "tramo", "infraestructura", "calzada", "ubicacion", "coord_lat", "coord_lng",
             "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen", "pk_id_id",
@@ -27844,9 +27896,18 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             if k not in pre_raw:
                 continue
             pre_patch[k] = pre_raw[k]
-        if any(k in pre_patch for k in ("longitud", "ancho", "espesor", "cantidad")):
-            merged_dims = {k: pre_patch.get(k, registro.get(k)) for k in ("longitud", "ancho", "espesor", "cantidad")}
-            if all(merged_dims[k] is None for k in merged_dims):
+        if any(k in pre_patch for k in ("longitud", "ancho", "espesor", "cantidad", "es_varilla", "diametro_varilla")):
+            merged_dims = {
+                k: pre_patch.get(k, registro.get(k))
+                for k in ("longitud", "ancho", "espesor", "cantidad", "es_varilla", "diametro_varilla")
+            }
+            if merged_dims.get("es_varilla") is True:
+                if all(merged_dims.get(k) is None for k in ("longitud", "cantidad", "diametro_varilla")):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Varilla: indique Longitud, Diámetro Ø y/o Cantidad.",
+                    )
+            elif all(merged_dims.get(k) is None for k in ("longitud", "ancho", "espesor", "cantidad")):
                 raise HTTPException(
                     status_code=400,
                     detail="Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).",
@@ -27855,16 +27916,26 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             for dk in ("longitud", "ancho", "espesor", "cantidad"):
                 if dk in pre_patch and pre_patch[dk] is not None:
                     pre_patch[dk] = _sicoe_redondear_dimension(pre_patch[dk])
-            if any(k in pre_patch for k in ("longitud", "ancho", "espesor", "cantidad")):
+            # Unidad del ítem destino gobierna el esquema Kg/varilla.
+            uni_dest = item.get("unidad")
+            pre_patch, _var_err = _sicoe_validar_preparar_varilla(
+                pre_patch, unidad=uni_dest, prev=registro
+            )
+            if _var_err:
+                raise HTTPException(status_code=422, detail=_var_err)
+            if any(k in pre_patch for k in ("longitud", "ancho", "espesor", "cantidad", "es_varilla", "diametro_varilla", "peso_kg_m")):
                 merged_for_cant = {
                     k: pre_patch[k] if k in pre_patch else registro.get(k)
-                    for k in ("longitud", "ancho", "espesor", "cantidad")
+                    for k in ("longitud", "ancho", "espesor", "cantidad", "es_varilla", "diametro_varilla", "peso_kg_m")
                 }
-                pre_patch["cantidad_total"] = _sicoe_calcular_cantidad_con_redondeo(
-                    merged_for_cant["longitud"],
-                    merged_for_cant["ancho"],
-                    merged_for_cant["espesor"],
-                    merged_for_cant["cantidad"],
+                pre_patch["cantidad_total"] = _sicoe_calcular_cantidad_registro(
+                    es_varilla=merged_for_cant.get("es_varilla"),
+                    longitud=merged_for_cant.get("longitud"),
+                    ancho=merged_for_cant.get("ancho"),
+                    espesor=merged_for_cant.get("espesor"),
+                    cantidad=merged_for_cant.get("cantidad"),
+                    peso_kg_m=merged_for_cant.get("peso_kg_m"),
+                    diametro_varilla=merged_for_cant.get("diametro_varilla"),
                 )
             elif "cantidad_total" in pre_patch and pre_patch["cantidad_total"] is not None:
                 pre_patch["cantidad_total"] = _sicoe_redondear_cantidad_total(pre_patch["cantidad_total"])

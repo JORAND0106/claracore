@@ -195,6 +195,14 @@ import {
   sicoeDebeResetAlertaPorCambioCantidad,
 } from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
 import { formatearCantidadTotal, formatearDimension, redondearDimension } from './modules/sicoe-obra/sicoeCantidadRedondeo.js'
+import SicoeCamposMedicion from './modules/sicoe-obra/SicoeCamposMedicion.jsx'
+import {
+  calcularCantidadRegistro,
+  sicoeKgPendienteRecaptura,
+  sicoePesoKgMPorDiametro,
+  sicoeUnidadEsKg,
+  sicoeValidarDiametroOError,
+} from './modules/sicoe-obra/sicoeVarilla.js'
 import {
   sicoeNuevoReporteDraftClear,
   sicoeNuevoReporteDraftIsDirty,
@@ -2886,6 +2894,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [ancho,          setAncho]          = useState(registro.ancho      ?? '')
   const [espesor,        setEspesor]        = useState(registro.espesor    ?? '')
   const [cantidad,       setCantidad]       = useState(registro.cantidad   ?? '')
+  const [esVarilla,      setEsVarilla]      = useState(
+    registro.es_varilla === true ? true : registro.es_varilla === false ? false : null,
+  )
+  const [diametroVarilla, setDiametroVarilla] = useState(registro.diametro_varilla ?? '')
   const [guardando,      setGuardando]      = useState(false)
   const [asignando,      setAsignando]      = useState(false)
   const [buscando,       setBuscando]       = useState(false)
@@ -3550,9 +3562,23 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setEliminandoGraf(false)
   }
 
-  const calcCantTotal = (l, a, e, c) => sicoeCalcCantidadTotal(l, a, e, c)
+  const calcCantTotal = (l, a, e, c, opts = {}) => calcularCantidadRegistro({
+    es_varilla: opts.es_varilla,
+    longitud: l,
+    ancho: a,
+    espesor: e,
+    cantidad: c,
+    diametro_varilla: opts.diametro_varilla,
+    peso_kg_m: opts.peso_kg_m,
+  })
 
-  const cantTotal   = calcCantTotal(longitud, ancho, espesor, cantidad)
+  const unidadMedicion = itemSel?.unidad || registro.unidad || ''
+  const pesoVarillaCalc = esVarilla === true ? sicoePesoKgMPorDiametro(diametroVarilla) : null
+  const cantTotal = calcCantTotal(longitud, ancho, espesor, cantidad, {
+    es_varilla: esVarilla === true,
+    diametro_varilla: diametroVarilla,
+    peso_kg_m: pesoVarillaCalc,
+  })
   const vlrUnitario = itemSel?.precio_unitario ?? registro.vlr_unitario ?? 0
   const costoDirecto = Math.round(cantTotal * vlrUnitario)
 
@@ -3623,7 +3649,26 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     const anchoN = redondearDimension(ancho)
     const espeN = redondearDimension(espesor)
     const cantN = redondearDimension(cantidad)
-    if (longN == null && anchoN == null && espeN == null && cantN == null) {
+    const uni = unidadMedicion
+    if (sicoeUnidadEsKg(uni) && esVarilla == null) {
+      alert('Indique si el registro en Kg es Varilla o No es varilla antes de guardar.')
+      return
+    }
+    let diamN = null
+    let pesoN = null
+    if (esVarilla === true) {
+      const chk = sicoeValidarDiametroOError(diametroVarilla)
+      if (!chk.ok) {
+        alert(chk.error)
+        return
+      }
+      diamN = chk.diametro
+      pesoN = chk.peso
+      if (longN == null && cantN == null) {
+        alert('Varilla: indique Longitud y/o Cantidad.')
+        return
+      }
+    } else if (longN == null && anchoN == null && espeN == null && cantN == null) {
       alert('Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).')
       return
     }
@@ -3655,12 +3700,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       let guardadoOk = false
       try {
         const locApi = esLocMultiple && editableCamposDimensionales ? localizacionToApiFields(locRegistro) : {}
-        const patchOptimista = {
+        const medPatch = {
           longitud: longN,
-          ancho: anchoN,
-          espesor: espeN,
+          ancho: esVarilla === true ? null : anchoN,
+          espesor: esVarilla === true ? null : espeN,
           cantidad: cantN,
           cantidad_total: cantTotal,
+          es_varilla: sicoeUnidadEsKg(uni) ? esVarilla : null,
+          diametro_varilla: esVarilla === true ? diamN : null,
+          peso_kg_m: esVarilla === true ? pesoN : null,
+        }
+        const patchOptimista = {
+          ...medPatch,
           observacion: observacion || null,
           ...locApi,
         }
@@ -3679,11 +3730,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               body: JSON.stringify({
                 item_listado_id: idItem,
                 competencia: competencia || null,
-                longitud: longN,
-                ancho: anchoN,
-                espesor: espeN,
-                cantidad: cantN,
-                cantidad_total: cantTotal,
+                ...medPatch,
                 observacion: observacion || null,
                 ...locApi,
               }),
@@ -3715,11 +3762,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             body: JSON.stringify({
               reporte_id:      registro.reporte_id,
               numero_registro: registro.numero_registro,
-              longitud:        longN,
-              ancho:           anchoN,
-              espesor:         espeN,
-              cantidad:        cantN,
-              cantidad_total:  cantTotal,
+              ...medPatch,
               ...(editableCamposFinancieros && (itemSel?.item_numero || registro.item_numero) && vlrUnitario != null && !Number.isNaN(Number(vlrUnitario))
                 ? { costo_directo: Math.round(cantTotal * Number(vlrUnitario)) }
                 : {}),
@@ -4742,45 +4785,35 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {/* ─ Sección: Dimensiones y Cantidades ─ */}
       <div style={{ marginBottom: secMb }}>
         <div style={secTitleSt('#F59E0B')}>📏 Dimensiones y Cantidades</div>
-        <div style={{ display:'grid', gridTemplateColumns: excel ? 'repeat(auto-fit, minmax(88px, 1fr))' : 'repeat(auto-fill, minmax(130px,1fr))', gap: excel ? 4 : 10 }}>
-          {editableCamposDimensionales ? (
-            <>
-              {[
-                ['Longitud', longitud, setLongitud, 'm'],
-                ['Ancho',    ancho,    setAncho,    'm'],
-                ['Espesor',  espesor,  setEspesor,  'm'],
-                ['Cantidad', cantidad, setCantidad, 'und'],
-              ].map(([label, val, setter, ph]) => (
-                <div key={label}>
-                  <div style={labSt}>{label}</div>
-                  <input
-                    value={val}
-                    onChange={e => setter(e.target.value)}
-                    placeholder={ph}
-                    type="number"
-                    step="0.001"
-                    inputMode="decimal"
-                    style={inpSt}
-                  />
-                </div>
-              ))}
-            </>
-          ) : (
-            <>
-              <CampoRO label="Longitud"  valor={formatearDimension(registro.longitud, { locale: false, empty: null })} />
-              <CampoRO label="Ancho"     valor={formatearDimension(registro.ancho, { locale: false, empty: null })} />
-              <CampoRO label="Espesor"   valor={formatearDimension(registro.espesor, { locale: false, empty: null })} />
-              <CampoRO label="Cantidad"  valor={formatearDimension(registro.cantidad, { locale: false, empty: null })} />
-            </>
-          )}
-          <CampoRO label="Cant. Total" labelShort="Cant. Tot." valor={formatearCantidadTotal(cantTotal, { locale: false })} color={t.primary} />
-          {nivelInfo.verValoresEconomicos && (
+        <SicoeCamposMedicion
+          t={t}
+          editable={!!editableCamposDimensionales}
+          unidad={unidadMedicion}
+          esVarilla={esVarilla}
+          onEsVarillaChange={setEsVarilla}
+          longitud={longitud}
+          ancho={ancho}
+          espesor={espesor}
+          cantidad={cantidad}
+          diametroVarilla={diametroVarilla}
+          cantTotalOverride={cantTotal}
+          compact={!!excel}
+          registro={registro}
+          onChange={(patch) => {
+            if ('longitud' in patch) setLongitud(patch.longitud ?? '')
+            if ('ancho' in patch) setAncho(patch.ancho ?? '')
+            if ('espesor' in patch) setEspesor(patch.espesor ?? '')
+            if ('cantidad' in patch) setCantidad(patch.cantidad ?? '')
+            if ('diametro_varilla' in patch) setDiametroVarilla(patch.diametro_varilla ?? '')
+            if ('es_varilla' in patch) setEsVarilla(patch.es_varilla)
+          }}
+        />
+        {nivelInfo.verValoresEconomicos && (
+          <div style={{ display:'grid', gridTemplateColumns: excel ? 'repeat(auto-fit, minmax(88px, 1fr))' : 'repeat(auto-fill, minmax(130px,1fr))', gap: excel ? 4 : 10, marginTop: excel ? 4 : 10 }}>
             <CampoRO label="Vlr. Unitario" labelShort="Vlr. Un." valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
-          )}
-          {nivelInfo.verValoresEconomicos && (
             <CampoRO label="Costo Directo" labelShort="Costo Dir." valor={costoDirecto ? fmtD(costoDirecto) : null} color='#10B981' />
-          )}
-        </div>
+          </div>
+        )}
         <div style={{ marginTop: excel ? 4 : 10 }}>
           {editableCamposDimensionales ? (
             <div>
@@ -14751,6 +14784,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   }
 
   const calcTotal = (reg) => {
+    if (reg.es_varilla === true) {
+      const parts = [reg.longitud, reg.cantidad].map((v) => sicoeNumCampoOmitNull(v))
+      const diamOk = sicoeValidarDiametroOError(reg.diametro_varilla)
+      if (parts.every((v) => v === null) && !diamOk.ok) return null
+      return calcularCantidadRegistro({
+        es_varilla: true,
+        longitud: reg.longitud,
+        cantidad: reg.cantidad,
+        diametro_varilla: reg.diametro_varilla,
+        peso_kg_m: reg.peso_kg_m,
+      })
+    }
     const parts = [reg.longitud, reg.ancho, reg.espesor, reg.cantidad].map((v) => sicoeNumCampoOmitNull(v))
     const fin = parts.filter((v) => v !== null)
     if (fin.length === 0) return null
@@ -14760,7 +14805,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const agregarRegistro = () => {
     setRegistros(prev => [...prev, {
       nombre: '', descripcion: '', longitud: '', ancho: '', espesor: '', cantidad: '',
-      cantidad_total: null, unidad: '', observacion: '',
+      cantidad_total: null, unidad: '', es_varilla: null, diametro_varilla: '', peso_kg_m: null, observacion: '',
       foto_url: null, foto_numero: null, foto_descripcion: '',
       grafico_url: null, grafico_numero: null, grafico_descripcion: '',
       _fotoOk: false, _grafOk: false,
@@ -14933,10 +14978,15 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
       const lineaRegistroWizard = (reg) => ({
         nombre: reg.nombre, descripcion: reg.observacion,
-        longitud: sicoeNumCampoOmitNull(reg.longitud), ancho: sicoeNumCampoOmitNull(reg.ancho),
-        espesor: sicoeNumCampoOmitNull(reg.espesor), cantidad: sicoeNumCampoOmitNull(reg.cantidad),
+        longitud: sicoeNumCampoOmitNull(reg.longitud),
+        ancho: reg.es_varilla === true ? null : sicoeNumCampoOmitNull(reg.ancho),
+        espesor: reg.es_varilla === true ? null : sicoeNumCampoOmitNull(reg.espesor),
+        cantidad: sicoeNumCampoOmitNull(reg.cantidad),
         cantidad_total: reg.cantidad_total,
         unidad: reg.unidad, observacion: reg.observacion,
+        es_varilla: sicoeUnidadEsKg(reg.unidad) ? (reg.es_varilla ?? null) : null,
+        diametro_varilla: reg.es_varilla === true ? (reg.diametro_varilla || null) : null,
+        peso_kg_m: reg.es_varilla === true ? (reg.peso_kg_m ?? sicoePesoKgMPorDiametro(reg.diametro_varilla)) : null,
         foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
         ...payloadGraficosRegistro(reg),
         ...(esMult ? localizacionToApiFields(reg) : localizacionToApiFields(locReporteActual())),
@@ -15598,49 +15648,97 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   📍 Localización del lote #{(registros[modalRegistro].loteLocIdx ?? 0) + 1}: {fmtLocCorta(registros[modalRegistro])}
                 </div>
               )}
-              {/* Dimensiones + Unidad en una sola fila */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', gap:'10px' }}>
-                {[['longitud','Longitud'],['ancho','Ancho'],['espesor','Espesor'],['cantidad','Cantidad (x N)']].map(([campo, label]) => (
-                  <div key={campo}>
-                    <label style={{ fontSize:'var(--cc-label)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>{label}</label>
-                    <input type='number' step='any' value={registros[modalRegistro][campo] ?? ''}
-                      onChange={e => {
-                        const a=[...registros]
-                        a[modalRegistro]={...a[modalRegistro], [campo]: e.target.value}
-                        const parts = ['longitud','ancho','espesor','cantidad'].map((c) => sicoeNumCampoOmitNull(a[modalRegistro][c]))
-                        const fin = parts.filter((v) => v !== null)
-                        a[modalRegistro].cantidad_total = fin.length
-                          ? sicoeCalcCantidadTotal(
-                              a[modalRegistro].longitud,
-                              a[modalRegistro].ancho,
-                              a[modalRegistro].espesor,
-                              a[modalRegistro].cantidad,
-                            )
-                          : null
-                        setRegistros(a)
-                      }}
-                      placeholder='0'
-                      style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
-                  </div>
-                ))}
-                <div>
-                  <label style={{ fontSize:'var(--cc-label)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>Unidad</label>
-                  <select value={registros[modalRegistro].unidad || ''}
-                    onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidad:e.target.value}; setRegistros(a) }}
-                    style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }}>
-                    <option value=''>--</option>
-                    {['m','m²','m³','ml','und','kg','ton','gl','vje','día','mes','Otro'].map(u => (
-                      <option key={u} value={u}>{u}</option>
-                    ))}
-                  </select>
-                  {registros[modalRegistro].unidad === 'Otro' && (
-                    <input value={registros[modalRegistro].unidadOtro || ''}
-                      onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidadOtro:e.target.value}; setRegistros(a) }}
-                      placeholder="Especificar unidad..."
-                      style={{ width:'100%', padding:'6px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', marginTop:'4px' }} />
-                  )}
-                </div>
+              {/* Unidad + dimensiones (esquema varilla si Kg) */}
+              <div>
+                <label style={{ fontSize:'var(--cc-label)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>Unidad</label>
+                <select value={registros[modalRegistro].unidad || ''}
+                  onChange={e => {
+                    const a=[...registros]
+                    const uni = e.target.value
+                    const prev = a[modalRegistro]
+                    a[modalRegistro] = {
+                      ...prev,
+                      unidad: uni,
+                      es_varilla: sicoeUnidadEsKg(uni) ? (prev.es_varilla ?? null) : null,
+                      diametro_varilla: sicoeUnidadEsKg(uni) ? (prev.diametro_varilla ?? '') : null,
+                      peso_kg_m: sicoeUnidadEsKg(uni) && prev.es_varilla === true
+                        ? sicoePesoKgMPorDiametro(prev.diametro_varilla)
+                        : null,
+                    }
+                    if (!sicoeUnidadEsKg(uni)) {
+                      a[modalRegistro].es_varilla = null
+                      a[modalRegistro].diametro_varilla = null
+                      a[modalRegistro].peso_kg_m = null
+                    }
+                    setRegistros(a)
+                  }}
+                  style={{ width:'100%', maxWidth: 220, padding:'8px 10px', borderRadius:'8px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }}>
+                  <option value=''>--</option>
+                  {['m','m²','m³','ml','und','kg','ton','gl','vje','día','mes','Otro'].map(u => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                </select>
+                {registros[modalRegistro].unidad === 'Otro' && (
+                  <input value={registros[modalRegistro].unidadOtro || ''}
+                    onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidadOtro:e.target.value}; setRegistros(a) }}
+                    placeholder="Especificar unidad..."
+                    style={{ width:'100%', maxWidth: 220, padding:'6px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', marginTop:'4px' }} />
+                )}
               </div>
+              <SicoeCamposMedicion
+                t={t}
+                editable
+                unidad={registros[modalRegistro].unidad}
+                esVarilla={registros[modalRegistro].es_varilla === true ? true : registros[modalRegistro].es_varilla === false ? false : null}
+                onEsVarillaChange={(val) => {
+                  const a = [...registros]
+                  a[modalRegistro] = {
+                    ...a[modalRegistro],
+                    es_varilla: val,
+                    ...(val === true
+                      ? { ancho: null, espesor: null }
+                      : { diametro_varilla: null, peso_kg_m: null }),
+                  }
+                  const r = a[modalRegistro]
+                  r.cantidad_total = calcularCantidadRegistro({
+                    es_varilla: val === true,
+                    longitud: r.longitud,
+                    ancho: r.ancho,
+                    espesor: r.espesor,
+                    cantidad: r.cantidad,
+                    diametro_varilla: r.diametro_varilla,
+                    peso_kg_m: r.peso_kg_m,
+                  })
+                  setRegistros(a)
+                }}
+                longitud={registros[modalRegistro].longitud ?? ''}
+                ancho={registros[modalRegistro].ancho ?? ''}
+                espesor={registros[modalRegistro].espesor ?? ''}
+                cantidad={registros[modalRegistro].cantidad ?? ''}
+                diametroVarilla={registros[modalRegistro].diametro_varilla ?? ''}
+                showPendienteBanner={false}
+                onChange={(patch) => {
+                  const a = [...registros]
+                  const r = { ...a[modalRegistro], ...patch }
+                  if (r.es_varilla === true) {
+                    const peso = sicoePesoKgMPorDiametro(r.diametro_varilla)
+                    r.peso_kg_m = peso
+                    r.ancho = null
+                    r.espesor = null
+                  }
+                  r.cantidad_total = calcularCantidadRegistro({
+                    es_varilla: r.es_varilla === true,
+                    longitud: r.longitud,
+                    ancho: r.ancho,
+                    espesor: r.espesor,
+                    cantidad: r.cantidad,
+                    diametro_varilla: r.diametro_varilla,
+                    peso_kg_m: r.peso_kg_m,
+                  })
+                  a[modalRegistro] = r
+                  setRegistros(a)
+                }}
+              />
               {/* Cantidad total */}
               <div style={{ padding:'10px 14px', background:t.bg, borderRadius:'8px', display:'flex', justifyContent:'space-between' }}>
                 <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'600' }}>CANTIDAD TOTAL</span>
@@ -15757,21 +15855,39 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             <div style={{ padding:'14px 20px', borderTop:`1px solid ${t.border}`, display:'flex', justifyContent:'flex-end' }}>
               <button onClick={() => {
                 const reg = registros[modalRegistro]
-                const dims = ['longitud', 'ancho', 'espesor', 'cantidad']
-                  .map((c) => {
-                    const x = reg[c]
-                    if (x === '' || x == null || x === undefined) return NaN
-                    return parseFloat(String(x).replace(',', '.'))
-                  })
-                  .filter((v) => Number.isFinite(v))
-                if (dims.length === 0) {
-                  alert('Debe diligenciar al menos un campo de dimensiones (Longitud, Ancho, Espesor o Cantidad)')
-                  return
-                }
                 const unidadFinal = reg.unidad === 'Otro' ? reg.unidadOtro : reg.unidad
-                if (!unidadFinal || !unidadFinal.trim()) {
+                if (!unidadFinal || !String(unidadFinal).trim()) {
                   alert('La unidad es obligatoria')
                   return
+                }
+                if (sicoeUnidadEsKg(unidadFinal) && reg.es_varilla == null) {
+                  alert('Unidad Kg: indique si es Varilla o No es varilla.')
+                  return
+                }
+                if (reg.es_varilla === true) {
+                  const chk = sicoeValidarDiametroOError(reg.diametro_varilla)
+                  if (!chk.ok) {
+                    alert(chk.error)
+                    return
+                  }
+                  const longOk = Number.isFinite(parseFloat(String(reg.longitud ?? '').replace(',', '.')))
+                  const cantOk = Number.isFinite(parseFloat(String(reg.cantidad ?? '').replace(',', '.')))
+                  if (!longOk && !cantOk) {
+                    alert('Varilla: diligencie Longitud y/o Cantidad')
+                    return
+                  }
+                } else {
+                  const dims = ['longitud', 'ancho', 'espesor', 'cantidad']
+                    .map((c) => {
+                      const x = reg[c]
+                      if (x === '' || x == null || x === undefined) return NaN
+                      return parseFloat(String(x).replace(',', '.'))
+                    })
+                    .filter((v) => Number.isFinite(v))
+                  if (dims.length === 0) {
+                    alert('Debe diligenciar al menos un campo de dimensiones (Longitud, Ancho, Espesor o Cantidad)')
+                    return
+                  }
                 }
                 if (!reg.observacion || !reg.observacion.trim()) {
                   alert('La observación es obligatoria')
