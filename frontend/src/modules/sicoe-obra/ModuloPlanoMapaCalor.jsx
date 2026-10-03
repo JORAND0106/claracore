@@ -243,6 +243,8 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const [mostrarPlano, setMostrarPlano] = useState(true)
   const [mostrarHeat, setMostrarHeat] = useState(true)
   const [mostrarPuntos, setMostrarPuntos] = useState(true)
+  const [mostrarHuellas, setMostrarHuellas] = useState(true)
+  const [mostrarEje, setMostrarEje] = useState(true)
   const getMapNiv = useCallback(() => mapInstance.current, [])
   const capaNiv = useTopoNivelacionMapaCapa(getMapNiv, contratoId, token, { readyKey: mapReady })
   const [seleccionado, setSeleccionado] = useState(null)
@@ -572,6 +574,72 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         },
       })
 
+      // Eje + franjas (huellas de registros lineales)
+      map.addSource('sicoe-eje', { type: 'geojson', data: EMPTY_FC })
+      map.addLayer({
+        id: 'sicoe-eje-line',
+        type: 'line',
+        source: 'sicoe-eje',
+        paint: { 'line-color': '#0ea5e9', 'line-width': 2.2, 'line-opacity': 0.8 },
+        layout: { visibility: 'visible' },
+      })
+      map.addSource('sicoe-huellas', { type: 'geojson', data: EMPTY_FC })
+      map.addLayer({
+        id: 'sicoe-huellas-fill',
+        type: 'fill',
+        source: 'sicoe-huellas',
+        paint: {
+          'fill-color': [
+            'case',
+            ['==', ['get', 'precision'], 'precisa'],
+            '#2563eb',
+            '#94a3b8',
+          ],
+          'fill-opacity': [
+            'case',
+            ['==', ['get', 'precision'], 'precisa'],
+            0.4,
+            0.22,
+          ],
+        },
+      })
+      map.addLayer({
+        id: 'sicoe-huellas-line',
+        type: 'line',
+        source: 'sicoe-huellas',
+        paint: {
+          'line-color': [
+            'case',
+            ['==', ['get', 'precision'], 'precisa'],
+            '#1d4ed8',
+            '#64748b',
+          ],
+          'line-width': 1.4,
+          'line-dasharray': [
+            'case',
+            ['==', ['get', 'precision'], 'aproximada'],
+            ['literal', [1.5, 1.5]],
+            ['literal', [1, 0]],
+          ],
+        },
+      })
+      // Carga asíncrona de huellas/eje
+      fetch(`${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (!data || !mapInstance.current) return
+          try {
+            map.getSource('sicoe-eje')?.setData(data.eje || EMPTY_FC)
+            map.getSource('sicoe-huellas')?.setData({
+              type: 'FeatureCollection',
+              features: Array.isArray(data.features) ? data.features : [],
+            })
+          } catch { /* ignore */ }
+        })
+        .catch(() => {})
+
       map.on('mouseenter', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = '' })
       map.on('click', 'sicoe-calor-puntos', (e) => {
@@ -653,6 +721,8 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     const visPlano = mostrarPlano ? 'visible' : 'none'
     const visHeat = mostrarHeat ? 'visible' : 'none'
     const visPts = mostrarPuntos ? 'visible' : 'none'
+    const visEje = mostrarEje ? 'visible' : 'none'
+    const visHuellas = mostrarHuellas ? 'visible' : 'none'
     for (const id of ['plano-underlay-fill', 'plano-underlay-line', 'plano-underlay-labels-pk']) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visPlano)
     }
@@ -661,7 +731,11 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     } catch { /* ignore */ }
     if (map.getLayer('sicoe-calor-heat')) map.setLayoutProperty('sicoe-calor-heat', 'visibility', visHeat)
     if (map.getLayer('sicoe-calor-puntos')) map.setLayoutProperty('sicoe-calor-puntos', 'visibility', visPts)
-  }, [mostrarPlano, mostrarHeat, mostrarPuntos, mapReady])
+    if (map.getLayer('sicoe-eje-line')) map.setLayoutProperty('sicoe-eje-line', 'visibility', visEje)
+    for (const id of ['sicoe-huellas-fill', 'sicoe-huellas-line']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visHuellas)
+    }
+  }, [mostrarPlano, mostrarHeat, mostrarPuntos, mostrarEje, mostrarHuellas, mapReady])
 
   // Sync puntos cuando el mapa queda listo o cambia la data
   useEffect(() => {
@@ -737,6 +811,8 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
             ['plano', 'Plano base', mostrarPlano, setMostrarPlano],
             ['heat', 'Mapa de calor', mostrarHeat, setMostrarHeat],
             ['pts', 'Puntos', mostrarPuntos, setMostrarPuntos],
+            ['eje', 'Eje', mostrarEje, setMostrarEje],
+            ['huellas', 'Franjas', mostrarHuellas, setMostrarHuellas],
           ].map(([key, label, on, setOn]) => (
             <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.text, cursor: 'pointer' }}>
               <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
