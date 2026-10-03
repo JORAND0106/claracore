@@ -1,12 +1,13 @@
 /**
  * Editor de dibujo del reporte: tipo Nodo / Línea / Polígono,
- * biblioteca de bloques y guardado según el tipo.
+ * biblioteca de entidades del esquema y guardado según el tipo.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import {
   esquemaSceneToGeojson,
   featureHuellaDesdeDibujo,
+  snapshotEntidadDesdeEscena,
 } from './sicoeDibujoEscenaGeojson'
 import { guardarDibujoReporte } from './sicoeDibujoReporteApi'
 import { coordRowsDesdePuntosPortada } from './sicoeDibujoCoordsPortada'
@@ -16,9 +17,6 @@ import {
   validarEscenaPorTipo,
   DIBUJO_TIPOS,
 } from './sicoeDibujoTipos'
-import { snapshotBloque } from './sicoeBloquesNodo'
-import { listarBloquesNodo } from './sicoeBloquesNodoApi'
-import SicoeBloquesNodoAdminModal from './SicoeBloquesNodoAdminModal'
 
 const LABELS = { nodo: 'Nodo', linea: 'Línea', poligono: 'Polígono' }
 
@@ -28,7 +26,7 @@ export default function SicoeDibujoReporteEditor({
   token,
   contratoId,
   reporte,
-  esDesarrollador = false,
+  esDesarrollador: _esDesarrollador = false,
   onClose,
   onGuardado,
 }) {
@@ -41,38 +39,8 @@ export default function SicoeDibujoReporteEditor({
     || sugerirTipoDibujo(nCoordsPortada)
 
   const [dibujoTipo, setDibujoTipo] = useState(tipoInicial)
-  const [bloques, setBloques] = useState([])
-  const [bloqueId, setBloqueId] = useState(escenaPrev?.bloque_nodo_id || escenaPrev?.bloque_nodo?.id || null)
-  const [rotacionDeg, setRotacionDeg] = useState(Number(escenaPrev?.bloque_rotacion_deg) || 0)
-  const [adminOpen, setAdminOpen] = useState(false)
   const [error, setError] = useState('')
   const [guardando, setGuardando] = useState(false)
-
-  const cargarBloques = async () => {
-    try {
-      const data = await listarBloquesNodo({ API_URL, contratoId, token })
-      const list = Array.isArray(data?.bloques) ? data.bloques : []
-      setBloques(list)
-      setBloqueId((prev) => {
-        if (prev && list.some((b) => String(b.id) === String(prev))) return prev
-        if (escenaPrev?.bloque_nodo_id && list.some((b) => String(b.id) === String(escenaPrev.bloque_nodo_id))) {
-          return escenaPrev.bloque_nodo_id
-        }
-        return list[0]?.id ?? null
-      })
-    } catch {
-      setBloques([])
-    }
-  }
-
-  useEffect(() => { void cargarBloques() }, [API_URL, contratoId, token]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const bloqueSel = useMemo(() => {
-    const fromList = bloques.find((b) => String(b.id) === String(bloqueId))
-    if (fromList) return snapshotBloque(fromList)
-    if (escenaPrev?.bloque_nodo) return snapshotBloque(escenaPrev.bloque_nodo)
-    return null
-  }, [bloques, bloqueId, escenaPrev])
 
   const mapLocation = useMemo(() => {
     const lat = Number(reporte?.coord_lat)
@@ -114,15 +82,13 @@ export default function SicoeDibujoReporteEditor({
       setError(valid.mensaje)
       throw new Error(valid.mensaje)
     }
-    if (dibujoTipo === 'nodo' && !bloqueSel) {
-      setError('Elija un bloque de la biblioteca para dibujar el nodo a tamaño real.')
-      throw new Error('Sin bloque')
-    }
+    const entidadSnap = dibujoTipo === 'nodo'
+      ? (snapshotEntidadDesdeEscena(objects) || escenaPrev?.entidad_biblioteca || null)
+      : null
     const fc = esquemaSceneToGeojson(objects, originLngLat, {
       reporteId: reporte?.id,
       dibujoTipo,
-      bloque: dibujoTipo === 'nodo' ? bloqueSel : null,
-      rotacionDeg: dibujoTipo === 'nodo' ? rotacionDeg : 0,
+      entidad: entidadSnap,
     })
     if (!fc.features.length) {
       const msg = validarEscenaPorTipo(objects, dibujoTipo).mensaje
@@ -147,11 +113,11 @@ export default function SicoeDibujoReporteEditor({
         reporteId: reporte.id,
         dibujoGeojson: fc,
         dibujoEscena: {
-          version: 2,
+          version: 3,
           dibujo_tipo: dibujoTipo,
-          bloque_nodo_id: dibujoTipo === 'nodo' ? (bloqueSel?.id ?? null) : null,
-          bloque_nodo: dibujoTipo === 'nodo' ? bloqueSel : null,
-          bloque_rotacion_deg: dibujoTipo === 'nodo' ? Number(rotacionDeg) || 0 : 0,
+          entidad_biblioteca: entidadSnap,
+          entidad_id: entidadSnap?.id ?? null,
+          entidad_nombre: entidadSnap?.nombre ?? null,
           objects,
           origin_lnglat: originLngLat,
         },
@@ -214,55 +180,6 @@ export default function SicoeDibujoReporteEditor({
             {LABELS[tipo]}
           </button>
         ))}
-        {dibujoTipo === 'nodo' && (
-          <>
-            <select
-              data-testid="sicoe-dibujo-bloque-sel"
-              value={bloqueId ?? ''}
-              onChange={(e) => setBloqueId(e.target.value || null)}
-              style={{
-                maxWidth: 220,
-                padding: '6px 8px',
-                borderRadius: 8,
-                border: `1px solid ${t.border}`,
-                background: t.bg,
-                color: t.text,
-                fontWeight: 700,
-                fontSize: 'var(--cc-sm)',
-              }}
-            >
-              {bloques.length === 0 && <option value="">Sin bloques — administre la biblioteca</option>}
-              {bloques.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.nombre} ({b.ancho_m}×{b.alto_m} m)
-                </option>
-              ))}
-            </select>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--cc-sm)', fontWeight: 700 }}>
-              Giro
-              <input
-                data-testid="sicoe-dibujo-bloque-rot"
-                type="number"
-                step="5"
-                value={rotacionDeg}
-                onChange={(e) => setRotacionDeg(Number(e.target.value) || 0)}
-                style={{
-                  width: 72,
-                  padding: '6px 8px',
-                  borderRadius: 8,
-                  border: `1px solid ${t.border}`,
-                  background: t.bg,
-                  color: t.text,
-                  fontWeight: 700,
-                }}
-              />
-              °
-            </label>
-            <button type="button" onClick={() => setAdminOpen(true)} style={barBtn(false)}>
-              Biblioteca…
-            </button>
-          </>
-        )}
       </div>
 
       <EsquemaEditorModal
@@ -273,26 +190,12 @@ export default function SicoeDibujoReporteEditor({
         autoActivateMap
         huellaMode
         huellaDibujoTipo={dibujoTipo}
-        huellaBloque={dibujoTipo === 'nodo' ? bloqueSel : null}
-        huellaBloqueRotacion={dibujoTipo === 'nodo' ? rotacionDeg : 0}
         initialSceneObjects={initialScene}
         initialCoordRows={initialCoordRows}
         onSaveHuella={onSaveHuella}
         onClose={onClose}
         onSave={async () => { /* PNG no aplica en huellaMode */ }}
       />
-
-      {adminOpen && (
-        <SicoeBloquesNodoAdminModal
-          t={t}
-          API_URL={API_URL}
-          token={token}
-          contratoId={contratoId}
-          esDesarrollador={esDesarrollador}
-          onClose={() => setAdminOpen(false)}
-          onChanged={() => { void cargarBloques() }}
-        />
-      )}
 
       {(error || guardando) && (
         <div
@@ -310,7 +213,7 @@ export default function SicoeDibujoReporteEditor({
             padding: '10px 14px',
             fontWeight: 700,
             fontSize: 'var(--cc-sm)',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            boxShadow: '0 8px 24px rgba(15,23,42,0.35)',
           }}
         >
           {guardando ? 'Guardando dibujo del reporte…' : error}

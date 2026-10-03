@@ -62,20 +62,28 @@ function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
       is_lod_marker: 0,
     }
     out.push({ ...f, properties: props })
-    // LOD: nodos con bloque → marcador de punto cuando el zoom no alcanza a distinguir el bloque
+    // LOD: nodos con entidad → marcador de punto cuando el zoom no alcanza a distinguir
     const ht = String(f?.properties?.huella_tipo || f?.properties?.dibujo_tipo || '').toLowerCase()
-    if ((ht === 'nodo' || ht === 'punto') && f?.geometry?.type === 'Polygon') {
-      const c = centroidOfGeom(f.geometry)
-      if (c) {
-        out.push({
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: c },
-          properties: {
-            ...props,
-            is_lod_marker: 1,
-            radius: hi ? 8 : 6,
-          },
-        })
+    if (ht === 'nodo' || ht === 'punto') {
+      if (f?.geometry?.type === 'Point') {
+        // Solo marcador (sin entidad): visible como círculo
+        out[out.length - 1] = {
+          ...f,
+          properties: { ...props, is_lod_marker: 1, radius: hi ? 8 : 6 },
+        }
+      } else if (f?.geometry?.type === 'Polygon') {
+        const c = centroidOfGeom(f.geometry)
+        if (c) {
+          out.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: c },
+            properties: {
+              ...props,
+              is_lod_marker: 1,
+              radius: hi ? 8 : 6,
+            },
+          })
+        }
       }
     }
   }
@@ -380,13 +388,19 @@ export default function SicoeMapaHuellas({
               'all',
               ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
               ['!=', ['get', 'is_lod_marker'], 1],
+              // Entidad de nodo: solo al acercar; de lejos basta el marcador LOD
+              ['any',
+                ['all',
+                  ['!=', ['get', 'huella_tipo'], 'nodo'],
+                  ['!=', ['get', 'huella_tipo'], 'punto'],
+                ],
+                ['>=', ['zoom'], 16],
+              ],
             ],
             paint: {
               'fill-color': ['get', 'color'],
               'fill-opacity': ['get', 'opacity'],
             },
-            // Bloques de nodo: visibles al acercar
-            minzoom: 0,
           })
           map.addLayer({
             id: 'huellas-line',

@@ -55,22 +55,49 @@ describe('sicoeDibujoTipos', () => {
 describe('esquemaSceneToGeojson por tipo', () => {
   const origin = { lng: -74.08, lat: 4.65 }
 
-  it('nodo con bloque genera Point + Polygon', () => {
+  it('nodo con entidad de biblioteca genera Point + Polygon', () => {
     const fc = esquemaSceneToGeojson(
-      [{ id: 'n1', type: 'nodo', x: 0, y: 0, nodeNum: '1' }],
+      [
+        { id: 'n1', type: 'nodo', x: 0, y: 0, nodeNum: '1' },
+        {
+          id: 'b1',
+          type: 'bloque',
+          x: -20,
+          y: -15,
+          w: 40,
+          h: 30,
+          rotation: 0,
+          libraryId: 'lib1',
+          libraryNombre: 'Pozo',
+          children: [
+            { type: 'elipse', x1: 0, y1: 0, x2: 40, y2: 30 },
+          ],
+        },
+      ],
       origin,
       {
         dibujoTipo: 'nodo',
-        bloque: { id: 1, nombre: 'Pozo', forma: 'circulo', ancho_m: 1.2, alto_m: 1.2 },
-        rotacionDeg: 0,
         reporteId: 66,
       },
     )
     assert.ok(fc.features.some((f) => f.geometry.type === 'Point'))
-    assert.ok(fc.features.some((f) => f.geometry.type === 'Polygon'))
+    assert.ok(fc.features.some((f) => f.geometry.type === 'Polygon' && f.properties.es_entidad))
     const feat = featureHuellaDesdeDibujo(fc, { reporte_id: 66 })
     assert.equal(feat.properties.huella_tipo, 'nodo')
     assert.equal(feat.geometry.type, 'Polygon')
+  })
+
+  it('nodo sin entidad genera solo Point (marcador legible)', () => {
+    const fc = esquemaSceneToGeojson(
+      [{ id: 'n1', type: 'nodo', x: 0, y: 0, nodeNum: '1' }],
+      origin,
+      { dibujoTipo: 'nodo', reporteId: 66 },
+    )
+    assert.equal(fc.features.length, 1)
+    assert.equal(fc.features[0].geometry.type, 'Point')
+    const feat = featureHuellaDesdeDibujo(fc, { reporte_id: 66, dibujo_tipo: 'nodo' })
+    assert.equal(feat.properties.huella_tipo, 'nodo')
+    assert.equal(feat.geometry.type, 'Point')
   })
 
   it('línea abierta genera LineString', () => {
