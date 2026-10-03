@@ -196,6 +196,12 @@ import {
 } from './modules/sicoe-obra/sicoeCreadorEdicionDimensional'
 import { formatearCantidadTotal, formatearDimension, redondearDimension } from './modules/sicoe-obra/sicoeCantidadRedondeo.js'
 import SicoeCamposMedicion from './modules/sicoe-obra/SicoeCamposMedicion.jsx'
+import SicoeAuditoriaTraslaposModal from './modules/sicoe-obra/SicoeAuditoriaTraslaposModal.jsx'
+import {
+  candidatoAuditoriaDesdeHoja,
+  fetchAuditoriaTraslaposAnalizar,
+  fetchAuditoriaTraslaposRegistrarDecision,
+} from './modules/sicoe-obra/sicoeAuditoriaTraslaposApi.js'
 import {
   calcularCantidadRegistro,
   sicoeKgPendienteRecaptura,
@@ -2872,6 +2878,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   onEsquemaAutoAbierto = null,
   /** Panel denso (menos padding/scroll). La tipografía siempre sigue --cc-* (Pequeña/Mediana/Grande). */
   panelExcelCompact = true,
+  /** Abrir otro registro involucrado en alerta de traslapo (sin perder contexto). */
+  onAbrirRegistroAuditoria = null,
 }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
@@ -2930,6 +2938,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [galeriaHojaRefreshKey, setGaleriaHojaRefreshKey] = useState(0)
   const [galeriaHojaSeed, setGaleriaHojaSeed] = useState(null)
   const [galeriaGraficoHojaRefreshKey, setGaleriaGraficoHojaRefreshKey] = useState(0)
+  const [modalAuditoriaTraslapos, setModalAuditoriaTraslapos] = useState(null)
   const [fotoImgError, setFotoImgError] = useState(false)
   // Misma fila en el reporte completo: a veces el `reg` del mapa no trae foto_url; el arreglo del GET sí
   const regMismoEnReporte = reporte?.registros?.find((r) => r.id === registro.id) || null
@@ -3706,7 +3715,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       return
     }
 
-    await sicoeEncolarGuardadoReporte(registro.reporte_id, async () => {
+    const locApiPreview = esLocMultiple && editableCamposDimensionales ? localizacionToApiFields(locRegistro) : {}
+    const itemNumAud = itemSel?.item_numero || registro.item_numero
+    const hayItemAud = !!String(itemNumAud || '').trim()
+    const debeAuditarTraslapos = hayItemAud && (
+      !!(editableCamposFinancieros && idItem)
+      || !!String(registro.item_numero || '').trim()
+    )
+
+    const encolarGuardado = () => sicoeEncolarGuardadoReporte(registro.reporte_id, async () => {
       setGuardando(true)
       let guardadoOk = false
       try {
@@ -3860,6 +3877,62 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         setTimeout(() => setToastMsg(null), 2000)
       }
     }, contrato_id)
+
+    if (debeAuditarTraslapos) {
+      const candidato = candidatoAuditoriaDesdeHoja({
+        registro,
+        itemNumero: itemNumAud,
+        locApi: locApiPreview,
+        cantidadTotal: cantTotal,
+        vlrUnitario: itemSel?.precio_unitario ?? itemSel?.vlr_unitario ?? registro.vlr_unitario,
+      })
+      try {
+        const aud = await fetchAuditoriaTraslaposAnalizar({
+          API_URL: API,
+          contratoId: contrato_id,
+          hdrs,
+          candidatos: [candidato],
+          usuario,
+        })
+        if (aud.requiereModal && aud.analisis) {
+          setModalAuditoriaTraslapos({
+            analisis: aud.analisis,
+            modoLote: (aud.analisis.resultados || []).length > 1,
+            onContinuar: async (dec) => {
+              const resUno = (aud.analisis.resultados && aud.analisis.resultados[0]) || aud.analisis
+              await fetchAuditoriaTraslaposRegistrarDecision({
+                API_URL: API,
+                contratoId: contrato_id,
+                hdrs,
+                registroId: registro.id,
+                analisisResultado: resUno,
+                decision: dec.decision,
+                justificacion: dec.justificacion,
+              })
+              setModalAuditoriaTraslapos(null)
+              await encolarGuardado()
+            },
+            onCancelar: async () => {
+              const resUno = (aud.analisis.resultados && aud.analisis.resultados[0]) || aud.analisis
+              await fetchAuditoriaTraslaposRegistrarDecision({
+                API_URL: API,
+                contratoId: contrato_id,
+                hdrs,
+                registroId: registro.id,
+                analisisResultado: resUno,
+                decision: 'cancelo',
+                justificacion: null,
+              })
+              setModalAuditoriaTraslapos(null)
+            },
+          })
+          return
+        }
+      } catch (e) {
+        console.warn('auditoria traslapos', e)
+      }
+    }
+    await encolarGuardado()
   }
 
   const guardarCorte = async () => {
@@ -5467,6 +5540,25 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             </p>
           </div>
         </CcConfirmModal>
+      )}
+
+      {modalAuditoriaTraslapos?.analisis && (
+        <SicoeAuditoriaTraslaposModal
+          t={t}
+          analisis={modalAuditoriaTraslapos.analisis}
+          modoLote={!!modalAuditoriaTraslapos.modoLote}
+          zIndex={10800}
+          onContinuar={(dec) => { void modalAuditoriaTraslapos.onContinuar?.(dec) }}
+          onCancelar={() => { void modalAuditoriaTraslapos.onCancelar?.() }}
+          onAbrirRegistro={(r) => {
+            if (typeof onAbrirRegistroAuditoria === 'function') {
+              onAbrirRegistroAuditoria(r)
+              return
+            }
+            const n = r?.numero_registro ?? r?.id
+            if (n != null) alert(`Registro involucrado: #${n}`)
+          }}
+        />
       )}
 
       {/* ─ Acciones finales ─ */}
@@ -7948,6 +8040,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
+                          onAbrirRegistroAuditoria={(inv) => {
+                            if (inv?.id == null) return
+                            setRegistroExpandido(inv.id)
+                            try {
+                              const el = document.getElementById(`registro-${inv.id}`)
+                              el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+                            } catch { /* noop */ }
+                          }}
                           hdrs={hdrs}
                           pkIdsContrato={listaPkIds}
                           esDeveloper={esDeveloper}
@@ -8035,6 +8135,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                     onOptimisticValidacion={aplicarOptimisticValidacion}
                     onOptimisticRegistroPatch={aplicarOptimisticRegistroPatch}
+                    onAbrirRegistroAuditoria={(inv) => {
+                      if (inv?.id == null) return
+                      setRegistroExpandido(inv.id)
+                      try {
+                        const el = document.getElementById(`registro-${inv.id}`)
+                        el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+                      } catch { /* noop */ }
+                    }}
                     hdrs={hdrs}
                     pkIdsContrato={listaPkIds}
                     esDeveloper={esDeveloper}
