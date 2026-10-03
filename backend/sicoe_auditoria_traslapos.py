@@ -215,15 +215,47 @@ def _hallazgo(
         "valor_en_juego": float(valor or 0),
         "texto": _texto_hallazgo(tipo, medida, abs_desde, abs_hasta, involucrados[1:] or involucrados, valor),
         "registros_involucrados": [
-            {
-                "id": r.get("id"),
-                "numero_registro": r.get("numero_registro"),
-                "reporte_id": r.get("reporte_id"),
-                "item_numero": r.get("item_numero"),
-            }
+            _snapshot_involucrado(r)
             for r in involucrados
             if r is not None
         ],
+    }
+
+
+def _snapshot_involucrado(r: dict) -> dict:
+    """Campos comparables del registro para detalle de hallazgo."""
+    if not r:
+        return {}
+    cant = r.get("cantidad_total")
+    try:
+        cant_n = float(cant) if cant is not None else None
+    except (TypeError, ValueError):
+        cant_n = None
+    vu = r.get("vlr_unitario")
+    try:
+        vu_n = float(vu) if vu is not None else None
+    except (TypeError, ValueError):
+        vu_n = None
+    valor = None
+    if cant_n is not None and vu_n is not None:
+        valor = round(cant_n * vu_n, 2)
+    return {
+        "id": r.get("id"),
+        "numero_registro": r.get("numero_registro"),
+        "reporte_id": r.get("reporte_id"),
+        "numero_reporte": r.get("numero_reporte"),
+        "item_numero": r.get("item_numero"),
+        "tramo": r.get("tramo"),
+        "infraestructura": r.get("infraestructura"),
+        "costado": _txt(r.get("calzada") or r.get("margen") or r.get("costado")),
+        "pk_id_id": r.get("pk_id_id"),
+        "abs_inicio": r.get("abs_inicio"),
+        "abs_final": r.get("abs_final"),
+        "cantidad_total": cant_n,
+        "vlr_unitario": vu_n,
+        "valor": valor if valor is not None else r.get("valor"),
+        "usuario_nombre": r.get("usuario_nombre") or r.get("creado_por_nombre"),
+        "fecha": r.get("fecha") or r.get("created_at") or r.get("fecha_registro"),
     }
 
 
@@ -510,18 +542,21 @@ def canonizar_hallazgo(h: dict, regs_by_id: Optional[Dict[Any, dict]] = None) ->
     """Normaliza involucrados y rellena columnas de informe (ítem, tramo, etc.)."""
     inv = _dedupe_involucrados(list(h.get("registros_involucrados") or []))
     base = dict(h)
-    base["registros_involucrados"] = [
-        {
-            "id": r.get("id"),
-            "numero_registro": r.get("numero_registro"),
-            "reporte_id": r.get("reporte_id"),
-            "item_numero": r.get("item_numero"),
-            "pk_id_id": r.get("pk_id_id"),
-            "abs_inicio": r.get("abs_inicio"),
-            "abs_final": r.get("abs_final"),
-        }
-        for r in inv
-    ]
+    enriched_inv = []
+    for r in inv:
+        src = dict(r or {})
+        rid = src.get("id")
+        if regs_by_id and rid is not None:
+            full = regs_by_id.get(rid) or regs_by_id.get(str(rid))
+            if full:
+                merged = dict(full)
+                # Campos ya enriquecidos en el snapshot (reporte/usuario/fecha) prevalecen
+                for k in ("numero_reporte", "usuario_nombre", "fecha", "creado_por_nombre"):
+                    if src.get(k) is not None:
+                        merged[k] = src[k]
+                src = merged
+        enriched_inv.append(_snapshot_involucrado(src))
+    base["registros_involucrados"] = enriched_inv
 
     meta_src = None
     if regs_by_id:

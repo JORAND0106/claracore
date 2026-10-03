@@ -1,8 +1,9 @@
 /**
  * Mapa del ambiente de Auditoría: plano de obra (fondo tenue) + eje + huellas.
  * Vista inicial siempre centrada en la obra; nunca en la ubicación del dispositivo.
+ * filterItemNumeros solo filtra capas de huellas (no remonta el mapa ni el plano).
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import mapboxgl from 'mapbox-gl'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
@@ -39,7 +40,6 @@ function paintHuellas(features, highlightRegistroIds, highlightPkIds) {
       const rid = String(f?.properties?.registro_id ?? '')
       const pk = String(f?.properties?.pk_id_id ?? '')
       const hi = hiReg.has(rid) || (pk && hiPk.has(pk))
-      // Sin selección: contraste medio. Con selección: resaltados fuertes, resto apagado.
       let opacity = precis ? 0.4 : 0.22
       let stroke_w = precis ? 1.4 : 1
       let color = colorItem(f?.properties?.item_numero)
@@ -160,6 +160,23 @@ function boundsOfHighlights(huellasFeats, nodosFc, highlightRegistroIds, highlig
   return boundsFromFc({ type: 'FeatureCollection', features: feats })
 }
 
+function filterHuellasByItems(features, filterItemNumeros) {
+  if (!Array.isArray(filterItemNumeros) || !filterItemNumeros.length) return features || []
+  const set = new Set(filterItemNumeros.map(String))
+  return (features || []).filter((f) => set.has(String(f?.properties?.item_numero || '')))
+}
+
+function mensajeErrorMapa(err) {
+  const raw = String(err?.message || err || '').trim()
+  if (/load failed|failed to fetch|networkerror|abort/i.test(raw)) {
+    return 'No se pudo cargar el plano de obra. Compruebe la conexión e intente de nuevo.'
+  }
+  if (!raw || raw.length > 200 || /<!DOCTYPE|<html/i.test(raw)) {
+    return 'No se pudo cargar el plano de obra. Intente de nuevo.'
+  }
+  return raw
+}
+
 export default function SicoeMapaHuellas({
   t,
   contratoId,
@@ -171,13 +188,34 @@ export default function SicoeMapaHuellas({
 }) {
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
+  const allHuellasRef = useRef([])
   const rawHuellasRef = useRef([])
   const rawNodosRef = useRef(EMPTY_FC)
   const planoBoundsRef = useRef(null)
+  const filterKeyRef = useRef('')
   const [listo, setListo] = useState(false)
   const [error, setError] = useState('')
+  const [reloadNonce, setReloadNonce] = useState(0)
   const highlightRef = useRef({ highlightRegistroIds, highlightPkIds })
   highlightRef.current = { highlightRegistroIds, highlightPkIds }
+
+  const filterKey = Array.isArray(filterItemNumeros) && filterItemNumeros.length
+    ? [...filterItemNumeros].map(String).sort().join('|')
+    : ''
+  filterKeyRef.current = filterKey
+
+  const aplicarFiltroHuellas = useCallback(() => {
+    const map = mapInstance.current
+    const items = filterKeyRef.current
+      ? filterKeyRef.current.split('|')
+      : []
+    const filtered = filterHuellasByItems(allHuellasRef.current, items)
+    rawHuellasRef.current = filtered
+    if (!map || !listo) return
+    const { highlightRegistroIds: hrs, highlightPkIds: hps } = highlightRef.current
+    const srcH = map.getSource('huellas-franjas')
+    if (srcH) srcH.setData(paintHuellas(filtered, hrs, hps))
+  }, [listo])
 
   useEffect(() => {
     if (!contratoId || !token || !mapRef.current) return undefined
@@ -187,27 +225,42 @@ export default function SicoeMapaHuellas({
 
     const boot = async () => {
       try {
+        const tokenMb = import.meta.env.VITE_MAPBOX_TOKEN
+        if (!tokenMb) {
+          throw new Error('Falta la configuración del mapa (Mapbox). Contacte al administrador.')
+        }
+
         const [planoPack, huellasRes] = await Promise.all([
-          getContratoPlanoGeojson(API_BASE, contratoId, token),
+          getContratoPlanoGeojson(API_BASE, contratoId, token).catch((e) => {
+            throw new Error(mensajeErrorMapa(e))
+          }),
           fetch(`${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`, {
             headers: { Authorization: `Bearer ${token}` },
-          }).then((r) => (r.ok ? r.json() : EMPTY_FC)).catch(() => EMPTY_FC),
+          })
+            .then((r) => (r.ok ? r.json() : EMPTY_FC))
+            .catch(() => EMPTY_FC),
         ])
         if (cancelled) return
 
         const plano = planoPack?.plano_geojson || EMPTY_FC
-        let huellasFeats = Array.isArray(huellasRes?.features) ? huellasRes.features : []
-        // filterItemNumeros solo afecta capas de hallazgos/huellas, NUNCA el plano de fondo
-        if (Array.isArray(filterItemNumeros) && filterItemNumeros.length) {
-          const set = new Set(filterItemNumeros.map(String))
-          huellasFeats = huellasFeats.filter((f) => set.has(String(f?.properties?.item_numero || '')))
-        }
+        const allHuellas = Array.isArray(huellasRes?.features) ? huellasRes.features : []
+        allHuellasRef.current = allHuellas
+        const items = filterKeyRef.current ? filterKeyRef.current.split('|') : []
+        const huellasFeats = filterHuellasByItems(allHuellas, items)
         rawHuellasRef.current = huellasFeats
         rawNodosRef.current = huellasRes?.nodos || EMPTY_FC
         const eje = huellasRes?.eje || EMPTY_FC
-        planoBoundsRef.current = boundsFromFc(plano) || boundsFromFc(eje)
+        planoBoundsRef.current = boundsFromFc(plano) || boundsFromFc(eje) || boundsFromFc({
+          type: 'FeatureCollection',
+          features: allHuellas,
+        })
+        if (!planoBoundsRef.current) {
+          throw new Error(
+            'No se pudo abrir el plano de obra: el contrato no tiene GeoJSON de proyecto ni eje cargado.',
+          )
+        }
 
-        mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
+        mapboxgl.accessToken = tokenMb
         if (mapInstance.current) {
           try { mapInstance.current.remove() } catch { /* ignore */ }
           mapInstance.current = null
@@ -221,11 +274,10 @@ export default function SicoeMapaHuellas({
         })
         mapInstance.current = map
         map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-        // No auto-centrar en GPS: la vista inicial debe ser la obra.
         addMapboxGeolocateControl(map, 'top-right', { autoTrigger: false })
 
-        map.on('load', () => {
-          // Capa de fondo: proyecto (PK-ID + abscisado), siempre tenue y visible
+        const onLoad = () => {
+          if (cancelled) return
           map.addSource('plano-base', { type: 'geojson', data: plano })
           map.addLayer({
             id: 'plano-base-fill',
@@ -346,13 +398,19 @@ export default function SicoeMapaHuellas({
             },
           })
 
-          // Vista inicial: siempre la obra completa (plano), nunca GPS ni solo hallazgos.
           fitObra(map, planoBoundsRef.current, { padding: 40, maxZoom: 16, duration: 0 })
-
           setListo(true)
+        }
+
+        if (map.loaded()) onLoad()
+        else map.once('load', onLoad)
+
+        map.once('error', (ev) => {
+          if (cancelled) return
+          setError(mensajeErrorMapa(ev?.error || 'Error del mapa'))
         })
       } catch (e) {
-        if (!cancelled) setError(e?.message || 'No se pudo cargar el mapa de huellas')
+        if (!cancelled) setError(mensajeErrorMapa(e))
       }
     }
     void boot()
@@ -363,7 +421,13 @@ export default function SicoeMapaHuellas({
         mapInstance.current = null
       }
     }
-  }, [contratoId, token, t?.bg, filterItemNumeros])
+    // filterItemNumeros NO remonta: se aplica en efecto aparte
+  }, [contratoId, token, t?.bg, reloadNonce])
+
+  // Filtrar huellas por ítem sin destruir el mapa / plano de fondo
+  useEffect(() => {
+    aplicarFiltroHuellas()
+  }, [filterKey, aplicarFiltroHuellas])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -383,7 +447,6 @@ export default function SicoeMapaHuellas({
       )
       if (b) fitObra(map, b, { padding: 48, maxZoom: 17, duration: 450 })
     } else {
-      // Quitar selección / limpiar filtros → vista completa de la obra
       fitObra(map, planoBoundsRef.current, { padding: 40, maxZoom: 16, duration: 450 })
     }
   }, [highlightRegistroIds, highlightPkIds, listo])
@@ -406,11 +469,31 @@ export default function SicoeMapaHuellas({
         <div
           style={{
             position: 'absolute', inset: 0, background: t?.bgCard || '#fff',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#dc2626', fontSize: 'var(--cc-sm)', padding: 12, textAlign: 'center',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            gap: 10, color: '#dc2626', fontSize: 'var(--cc-sm)', padding: 12, textAlign: 'center',
           }}
         >
-          {error}
+          <div>{error}</div>
+          <button
+            type="button"
+            onClick={() => {
+              setError('')
+              setListo(false)
+              setReloadNonce((n) => n + 1)
+            }}
+            style={{
+              background: '#dc2626',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: '6px 12px',
+              fontWeight: 800,
+              cursor: 'pointer',
+              fontSize: 'var(--cc-caption)',
+            }}
+          >
+            Reintentar
+          </button>
         </div>
       )}
       <div
