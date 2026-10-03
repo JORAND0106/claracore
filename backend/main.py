@@ -25911,18 +25911,101 @@ def _galeria_merge_fotos_unicas(
     return out
 
 
+def _galeria_parse_historial_graficos(raw: Any) -> List[dict]:
+    """Normaliza graficos_historial (list|json str) a entradas con url."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return []
+        try:
+            raw = json.loads(s)
+        except Exception:
+            return []
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    for x in raw:
+        if not isinstance(x, dict):
+            continue
+        url = (x.get("url") or "").strip()
+        if not url:
+            continue
+        out.append(x)
+    return out
+
+
+def _galeria_extraer_graficos_unicos(filas_registros: Optional[List[dict]]) -> List[dict]:
+    """
+    Galería de gráficos del contrato: une grafico_url actual + entradas de
+    graficos_historial, deduplicadas por url y por numero (sin renumerar).
+    Conserva el numero original de cada gráfico.
+    """
+    seen_urls: Set[str] = set()
+    seen_nums: Set[int] = set()
+    out: List[dict] = []
+
+    def _push(url, numero, descripcion=""):
+        u = (url or "").strip()
+        if not u or u in seen_urls:
+            return
+        num_i = None
+        if numero is not None:
+            try:
+                num_i = int(numero)
+            except (TypeError, ValueError):
+                num_i = None
+        if num_i is not None and num_i in seen_nums:
+            return
+        seen_urls.add(u)
+        if num_i is not None:
+            seen_nums.add(num_i)
+        out.append(
+            {
+                "url": u,
+                "numero": num_i if num_i is not None else numero,
+                "descripcion": descripcion or "",
+            }
+        )
+
+    for r in filas_registros or []:
+        if not isinstance(r, dict):
+            continue
+        hist = _galeria_parse_historial_graficos(r.get("graficos_historial"))
+        # Historial primero (puede incluir gráficos previos no vigentes).
+        for h in hist:
+            _push(
+                h.get("url"),
+                h.get("numero"),
+                h.get("descripcion") or "",
+            )
+        if r.get("grafico_url"):
+            _push(
+                r.get("grafico_url"),
+                r.get("grafico_numero"),
+                r.get("grafico_descripcion") or "",
+            )
+    return out
+
+
 @app.get("/sicoe-obra/{contrato_id}/galeria")
 def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, hasta: str = None, current_user=Depends(get_current_user)):
     """
-    Galería del contrato. Para fotos: une so_registros + so_foto_hashes para que una
-    foto recién subida (hash ya registrado) aparezca aunque el registro aún no exista
-    o el listado de registros esté paginado/incompleto.
+    Galería del contrato.
+    - foto: une so_registros + so_foto_hashes (fotos recién subidas aún sin registro).
+    - grafico: une grafico_url + graficos_historial de so_registros, deduplicado;
+      numeración independiente de fotos; no renumerar ni duplicar archivos.
     """
     _ = current_user
 
     def _q_regs():
         q = supabase.table("so_registros")\
-            .select("foto_url, foto_numero, foto_descripcion, grafico_url, grafico_numero, grafico_descripcion, created_at")\
+            .select(
+                "foto_url, foto_numero, foto_descripcion, "
+                "grafico_url, grafico_numero, grafico_descripcion, graficos_historial, "
+                "created_at"
+            )\
             .eq("contrato_id", contrato_id)
         if desde:
             q = q.gte("created_at", desde)
@@ -25932,15 +26015,7 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
 
     rows = supabase_execute(_q_regs) or []
     if tipo == "grafico":
-        result = []
-        for r in rows:
-            if r.get("grafico_url"):
-                result.append({
-                    "url": r["grafico_url"],
-                    "numero": r.get("grafico_numero"),
-                    "descripcion": r.get("grafico_descripcion") or "",
-                })
-        return result
+        return _galeria_extraer_graficos_unicos(rows)
 
     # tipo == "foto": registros + hashes (fotos subidas al instante)
     desde_regs = [
