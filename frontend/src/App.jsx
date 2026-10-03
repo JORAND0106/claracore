@@ -5881,7 +5881,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [reporteDestino, setReporteDestino]       = useState('')
   const [moviendoReg, setMoviendoReg]             = useState(false)
   const [creandoReg, setCreandoReg]               = useState(false)
-  const [ofertaDibujoReporte, setOfertaDibujoReporte] = useState(false)
+  const [ofertaDibujoReporte, setOfertaDibujoReporte] = useState(!!repoProp?._ofertaDibujo)
   const [editorDibujoReporte, setEditorDibujoReporte] = useState(false)
   const [puntosEdit, setPuntosEdit]               = useState((repoProp.puntos || []).map(p => ({...p})))
   const [editandoTopo, setEditandoTopo]            = useState(false)
@@ -13326,7 +13326,7 @@ function ModuloSicoeObra({
           isOnline={isOnline}
           isOfflineReady={isOfflineReady}
           onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
-          onGuardado={() => {
+          onGuardado={(info) => {
             setModalNuevoReporte(false)
             setReporteEditando(null)
             invalidateSicoeVistaCache(contrato_id)
@@ -13336,6 +13336,18 @@ function ModuloSicoeObra({
               try { sicoeEjecutarBusquedaAhora() } catch { /* noop */ }
             } else {
               void buscarReportes(filtros, 0, capasValidacion)
+            }
+            const rid = info?.reporteId
+            if (rid && info?.ofertaDibujo) {
+              ;(async () => {
+                try {
+                  const data = await fetchDetalleReporteSicoe(rid)
+                  if (!data?.id) return
+                  if (reporteTieneDibujo(data) || data.tiene_dibujo) return
+                  setReporteSeleccionado({ ...data, _ofertaDibujo: true, _cargandoDetalle: false })
+                  setModalCarpeta(true)
+                } catch { /* noop */ }
+              })()
             }
           }}
         />
@@ -15263,7 +15275,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           'Reporte guardado en este dispositivo (modo sin conexión). '
           + 'Se enviará a la base de datos al recuperar red. No borre datos de la app hasta sincronizar.',
         )
-        onGuardado()
+        onGuardado({ ofertaDibujo: false })
       } catch (e) {
         try { flushDraftLocal() } catch { /* noop */ }
         alert(`Error guardando offline: ${e.message}. Se conservó un borrador local en este dispositivo.`)
@@ -15430,7 +15442,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       try {
         sicoeNuevoReporteDraftClear(contrato_id, userIdDraft, idParaGuardar || borradorId || reporteInicial?.id || null)
       } catch { /* noop */ }
-      onGuardado()
+      onGuardado({
+        reporteId: idParaGuardar,
+        ofertaDibujo: !modoEdicion && registros.length > 0,
+        numeroReporte: numeroReporte || null,
+      })
     } catch (e) {
       try { flushDraftLocal() } catch { /* noop */ }
       const msg = (e && e.message) ? e.message : String(e)
