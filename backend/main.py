@@ -32001,13 +32001,13 @@ def _parse_rpc_jsonb_value(raw):
 
 
 def _dash_norm_item_key_py(s: Optional[str]) -> str:
-    """Alinea claves presupuesto.item ↔ so_registros.item_numero (p. ej. '4.22.' → '4.22')."""
-    if s is None:
-        return ""
-    t = str(s).strip()
-    if not t:
-        return ""
-    return re.sub(r"\.+$", "", t)
+    """Alinea claves presupuesto.item ↔ so_registros.item_numero (p. ej. '4.22.' / '2.3._' → '2.3').
+
+    Delega en ``sicoe_valor_canonico.norm_item`` (regla única de cruce listado).
+    """
+    from sicoe_valor_canonico import norm_item
+
+    return norm_item(s)
 
 
 def _dash_norm_capitulo_key_py(s: Optional[str]) -> str:
@@ -32904,10 +32904,13 @@ def _dashboard_scan_sicoe_by_item(
     from sicoe_costo_aprobado_nivel import registro_aprobado_nivel_max
     from sicoe_valor_canonico import valor_cant_vu
 
-    cache_kind = "sicoe_by_item_v4" if acta_id is None else f"sicoe_by_item_v4_acta_{int(acta_id)}"
+    # v5: Σ cant cruda por (cap,ítem) → ROUND2 → ×VU (no redondear cada fila antes de sumar).
+    cache_kind = "sicoe_by_item_v5" if acta_id is None else f"sicoe_by_item_v5_acta_{int(acta_id)}"
     cached = _dash_agg_cache_get(cache_kind, contrato_id)
     if cached is not None:
         return cached
+    from sicoe_valor_canonico import round_cant
+
     sicoe_by_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
     listado_idx = _listado_precios_vu_by_cap_item(contrato_id)
     na = _get_niveles_activos_contrato(contrato_id)
@@ -32943,7 +32946,10 @@ def _dashboard_scan_sicoe_by_item(
                     "ap_q": 0.0,
                     "nr_q": 0.0,
                 }
-            cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
+            try:
+                cq = float(reg.get("cantidad_total") or 0)
+            except (TypeError, ValueError):
+                cq = 0.0
             if registro_aprobado_nivel_max(reg, na):
                 sicoe_by_item[k]["ap_q"] += cq
             elif _so_reg_en_cola_interventoria(reg, contrato_id):
@@ -32953,11 +32959,11 @@ def _dashboard_scan_sicoe_by_item(
         off += 1000
     for (ck, ik), sg in sicoe_by_item.items():
         lp_vu = _dash_listado_vu_resolved(contrato_id, ck, ik, full_listado_idx=listado_idx)
-        sg["ap_q"] = cantidad_dashboard(float(sg.get("ap_q") or 0))
-        sg["nr_q"] = cantidad_dashboard(float(sg.get("nr_q") or 0))
+        sg["ap_q"] = round_cant(sg.get("ap_q") or 0)
+        sg["nr_q"] = round_cant(sg.get("nr_q") or 0)
         # Aprobado y cola: misma regla cant×VU listado (cap+ítem).
         sg["ap_c"] = float(valor_cant_vu(sg["ap_q"], lp_vu or 0)) if (lp_vu or 0) > 0 else 0.0
-        sg["nr_c"] = float(costo_agregado_cant_vu(sg["nr_q"], lp_vu or 0))
+        sg["nr_c"] = float(valor_cant_vu(sg["nr_q"], lp_vu or 0)) if (lp_vu or 0) > 0 else 0.0
     _dash_agg_cache_set(cache_kind, contrato_id, sicoe_by_item)
     return sicoe_by_item
 
@@ -32966,18 +32972,18 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
     """
     SICOE agregado por ítem solo para un capítulo (drill rápido).
 
-    Misma regla canónica que `_dashboard_scan_sicoe_by_item` (v4):
-    Aprobado = ítem + prerrequisitos + nmax Aprobado; dinero = cant×VU listado (cap+ítem).
-    Cola = ítem + prerrequisitos + nmax No Revisado; dinero = cant×listado VU.
+    Misma regla canónica que `_dashboard_scan_sicoe_by_item` (v5):
+    Aprobado = ítem + prerrequisitos + nmax Aprobado; dinero = ROUND0(ROUND(Σcant,2)×VU).
+    Cola = ítem + prerrequisitos + nmax No Revisado; misma valorización.
     """
     from sicoe_costo_aprobado_nivel import registro_aprobado_nivel_max
-    from sicoe_valor_canonico import valor_cant_vu
+    from sicoe_valor_canonico import round_cant, valor_cant_vu
 
     cap_raw = (capitulo or "").strip()
     if not cap_raw:
         return {}
     cap_key = _dash_norm_capitulo_key_py(cap_raw)
-    cache_key = f"sicoe_by_item_cap_v4:{int(contrato_id)}:{cap_key}"
+    cache_key = f"sicoe_by_item_cap_v5:{int(contrato_id)}:{cap_key}"
     now = time.time()
     with _DASH_AGG_CACHE_LOCK:
         hit = _DASH_AGG_CACHE.get(cache_key)
@@ -33006,7 +33012,10 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
                     "ap_q": 0.0,
                     "nr_q": 0.0,
                 }
-            cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
+            try:
+                cq = float(reg.get("cantidad_total") or 0)
+            except (TypeError, ValueError):
+                cq = 0.0
             if registro_aprobado_nivel_max(reg, na):
                 sicoe_by_item[k]["ap_q"] += cq
             elif _so_reg_en_cola_interventoria(reg, contrato_id):
@@ -33037,12 +33046,12 @@ def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> D
     _scan_pages(use_cap_filter=True)
     for (ck, ik), sg in sicoe_by_item.items():
         lp_vu = _dash_listado_vu_resolved(contrato_id, ck, ik, full_listado_idx=listado_idx)
-        sg["ap_q"] = cantidad_dashboard(float(sg.get("ap_q") or 0))
-        sg["nr_q"] = cantidad_dashboard(float(sg.get("nr_q") or 0))
+        sg["ap_q"] = round_cant(sg.get("ap_q") or 0)
+        sg["nr_q"] = round_cant(sg.get("nr_q") or 0)
         sg["ap_c"] = float(valor_cant_vu(sg["ap_q"], lp_vu or 0)) if (lp_vu or 0) > 0 else 0.0
-        sg["nr_c"] = float(costo_agregado_cant_vu(sg["nr_q"], lp_vu or 0))
+        sg["nr_c"] = float(valor_cant_vu(sg["nr_q"], lp_vu or 0)) if (lp_vu or 0) > 0 else 0.0
     if not sicoe_by_item:
-        full = _dash_agg_cache_get("sicoe_by_item_v4", contrato_id)
+        full = _dash_agg_cache_get("sicoe_by_item_v5", contrato_id)
         if full is not None:
             for k, v in full.items():
                 if k[0] == cap_key:
@@ -34599,7 +34608,6 @@ def _dashboard_matriz_validacion_por_niveles(
     from collections import defaultdict
 
     from sicoe_valor_canonico import (
-        cap_item_key,
         round_cant,
         valor_cant_vu,
     )
@@ -34614,6 +34622,7 @@ def _dashboard_matriz_validacion_por_niveles(
 
     # Acumuladores de cantidad por celda → (cap,item) antes de valorizar.
     # Clave celda: (bloque, fila, col_nivel) → Dict[(cap,item), cant_sum]
+    # Claves (cap,ítem) = mismas que listado / Ppto vs Cobro (_dash_norm_*).
     qty_cells: Dict[Tuple[str, str, str], Dict[Tuple[str, str], float]] = defaultdict(
         lambda: defaultdict(float)
     )
@@ -34628,9 +34637,11 @@ def _dashboard_matriz_validacion_por_niveles(
         return "no_revisado"
 
     def _acc_qty(bloque: str, fila: str, col: str, reg: dict) -> None:
-        k = cap_item_key(reg.get("capitulo"), reg.get("item_numero"))
-        if not k[1]:
+        ck = _dash_norm_capitulo_key_py(reg.get("capitulo"))
+        ik = _dash_norm_item_key_py(reg.get("item_numero"))
+        if not ik:
             return
+        k = (ck, ik)
         try:
             cq = float(reg.get("cantidad_total") or 0)
         except (TypeError, ValueError):
@@ -34772,7 +34783,7 @@ def dashboard_matriz_validacion_obra(
     Preferir función SQL dashboard_matriz_validacion_agg (rápido); si no existe, fallback en Python.
     """
     try:
-        matriz_key = ("dashboard_matriz_v4_canon", int(contrato_id), bool(todo_contrato), acta_rpo)
+        matriz_key = ("dashboard_matriz_v5_canon", int(contrato_id), bool(todo_contrato), acta_rpo)
         cached_matriz = _dashboard_response_cache_get(matriz_key)
         if cached_matriz is not None:
             return cached_matriz
@@ -34912,13 +34923,10 @@ def dashboard_matriz_validacion_obra(
             "obra_ejecutada_directo_sin_aiu": payload.get("obra_ejecutada_directo_sin_aiu") or _matriz_validacion_empty(niveles_activos),
             "ensayos_sondeos_directo_sin_iva": payload.get("ensayos_sondeos_directo_sin_iva") or _matriz_validacion_empty(niveles_activos),
             "regla_valor": "ROUND0(ROUND(Σcant,2)×VU_listado) por (capítulo, ítem)",
+            "alcance_obra": "Obra ejecutada directo sin AIU (excluye ensayos/sondeos e IVA)",
+            "alcance_ensayos": "Ensayos y sondeos directo sin IVA (caps. 14–15 / nombre)",
         }
-        try:
-            result["integridad"] = _sicoe_integridad_resumen_contrato(
-                int(contrato_id), acta_id_filtro=acta_id_filtro
-            )
-        except Exception:
-            result["integridad"] = None
+        # Integridad NO se adjunta al tablero público (solo Admin/Desarrollador).
         _dashboard_response_cache_set(matriz_key, result)
         return result
     except HTTPException:
@@ -34992,12 +35000,16 @@ def _sicoe_integridad_resumen_contrato(
     regs = _sicoe_fetch_regs_integridad(contrato_id, acta_id_filtro=acta_id_filtro)
     incs = auditar_integridad_registros(regs, listado_idx)
     resumen = resumen_integridad(incs)
+    at = resumen.get("afectan_totales") or {}
     return {
         **resumen,
         "valor_canonico_filtro": sum_valor_canonico(regs, listado_idx),
         "aviso": (
-            f"{resumen['n_registros_afectados']} registro(s) inconsistentes vs listado "
-            f"(impacto ≈ ${resumen['impacto_plata']:,.0f})."
+            f"Registros por revisar frente al listado de precios: "
+            f"{resumen['n_registros_afectados']} "
+            f"({at.get('n_registros', 0)} afectan totales · "
+            f"{(resumen.get('valor_guardado_desactualizado') or {}).get('n_registros', 0)} "
+            f"solo valor guardado desactualizado)."
             if resumen.get("tiene_inconsistencias")
             else None
         ),
@@ -35013,14 +35025,20 @@ def sicoe_integridad_listado(
     current_user=Depends(get_current_user),
 ):
     """
-    Control de integridad registro ↔ listado de precios (sin modificar datos).
+    Control de integridad registro ↔ listado (solo Administrador / Desarrollador).
 
-    Detecta: sin capítulo/ítem, ausente en listado, VU≠listado, CD≠cant×VU.
+    Clasifica: afectan totales (sin cruce) vs valor guardado desactualizado.
     """
+    if not (_es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user)):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo Administrador o Desarrollador pueden consultar el control de integridad.",
+        )
     from sicoe_valor_canonico import (
         TRAZABILIDAD_PRECIOS_STATUS,
         TIPOS_INCONSISTENCIA,
         auditar_integridad_registros,
+        inconsistencia_con_caso,
         load_listado_vu_by_cap_item,
         resumen_integridad,
         sum_valor_canonico,
@@ -35070,6 +35088,11 @@ def sicoe_integridad_listado(
     regs = _sicoe_fetch_regs_integridad(contrato_id, acta_id_filtro=acta_id_filtro)
     incs = auditar_integridad_registros(regs, listado_idx)
     resumen = resumen_integridad(incs)
+    detalle = [inconsistencia_con_caso(i) for i in incs]
+    afectan = [d for d in detalle if d.get("caso") == "afecta_totales"]
+    stale = [d for d in detalle if d.get("caso") == "valor_guardado_desactualizado"]
+    at = resumen.get("afectan_totales") or {}
+    st = resumen.get("valor_guardado_desactualizado") or {}
     return {
         "contrato_id": int(contrato_id),
         "filtro": filtro,
@@ -35078,12 +35101,16 @@ def sicoe_integridad_listado(
         "tipos": list(TIPOS_INCONSISTENCIA),
         "resumen": resumen,
         "valor_canonico": sum_valor_canonico(regs, listado_idx),
-        "inconsistencias": [i.to_dict() for i in incs],
+        "inconsistencias": detalle,
+        "por_caso": {
+            "afectan_totales": afectan,
+            "valor_guardado_desactualizado": stale,
+        },
         "aviso": (
-            f"{resumen['n_registros_afectados']} registro(s) con inconsistencias "
-            f"vs listado de precios (impacto ≈ ${resumen['impacto_plata']:,.0f}). "
-            "Los valores canónicos usan VU del listado; los registros sin cruce "
-            "no se suman en silencio — aparecen aquí."
+            f"Registros por revisar frente al listado de precios: "
+            f"{resumen['n_registros_afectados']} "
+            f"({at.get('n_registros', 0)} afectan totales · "
+            f"{st.get('n_registros', 0)} valor guardado desactualizado)."
             if resumen.get("tiene_inconsistencias")
             else None
         ),

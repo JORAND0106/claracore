@@ -329,14 +329,17 @@ def rollup_resumen_item_agg(
 
 
 def sicoe_track_row(sg: Dict[str, Any], reg: dict, *, bucket: str) -> None:
-    """Acumula cantidades SICOE en ap_q o nr_q; el costo se calcula al final con V.U. listado."""
-    cq = cantidad_dashboard(float(reg.get("cantidad_total") or 0))
+    """Acumula cantidades SICOE en ap_q o nr_q (crudas); el ROUND2 se aplica al finalizar."""
+    try:
+        cq = float(reg.get("cantidad_total") or 0)
+    except (TypeError, ValueError):
+        cq = 0.0
     qkey = f"{bucket}_q"
     sg[qkey] = float(sg.get(qkey) or 0) + cq
 
 
 def sicoe_finalize_costs(sg: Dict[str, Any], *, listado_vu: Optional[float] = None) -> None:
-    """Convierte cantidades acumuladas en costos agregados (round(cant×VU listado, 0))."""
+    """Convierte cantidades acumuladas en costos agregados (round(ROUND2(Σcant)×VU listado, 0))."""
     sg.pop("_vu", None)
     vu = float(listado_vu or 0)
     sg["item_vu"] = vu
