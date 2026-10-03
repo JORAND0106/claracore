@@ -3,10 +3,14 @@ import { describe, it } from 'node:test'
 import {
   analizarCandidatoContraPares,
   analizarVarios,
+  coloresMapaDesdeHallazgos,
   fmtAbscisaK,
+  justificacionesParaTipo,
   medidaTraslapo,
   normalizarToleranciaM,
+  resumenAmbienteDesdeFilas,
   sectoresSeparan,
+  SICOE_AUDITORIA_JUSTIFICACIONES_VACIO,
   usuarioVeAuditoriaTraslapos,
 } from './sicoeAuditoriaTraslapos.js'
 
@@ -138,5 +142,48 @@ describe('sicoeAuditoriaTraslapos', () => {
     assert.equal(fmtAbscisaK(112.5), 'K0+112,5')
     assert.equal(usuarioVeAuditoriaTraslapos({ rol_nombre: 'Contratista' }), true)
     assert.equal(usuarioVeAuditoriaTraslapos({ rol_nombre: 'Interventoría' }), false)
+  })
+
+  it('justificaciones de vacío y resumen del ambiente', () => {
+    assert.ok(SICOE_AUDITORIA_JUSTIFICACIONES_VACIO.includes('No ejecutado aún'))
+    assert.deepEqual(justificacionesParaTipo('vacio'), SICOE_AUDITORIA_JUSTIFICACIONES_VACIO)
+    assert.ok(justificacionesParaTipo('traslapo').includes('Sector diferente'))
+
+    const res = resumenAmbienteDesdeFilas([
+      { tipo: 'traslapo', estado: 'pendiente', valor_en_juego: 1000 },
+      { tipo: 'vacio', estado: 'pendiente', valor_en_juego: 0 },
+      { tipo: 'no_auditable', estado: 'pendiente', valor_en_juego: 50 },
+      { tipo: 'traslapo', estado: 'justificado', valor_en_juego: 200 },
+      { tipo: 'vacio', estado: 'corregido', valor_en_juego: 0 },
+    ])
+    assert.equal(res.traslapos_sin_justificar.cantidad, 1)
+    assert.equal(res.traslapos_sin_justificar.valor, 1000)
+    assert.equal(res.vacios_sin_justificar.cantidad, 1)
+    assert.equal(res.no_auditables.cantidad, 1)
+    assert.equal(res.justificados.cantidad, 1)
+    assert.equal(res.justificados.valor, 200)
+  })
+
+  it('colores mapa desde hallazgos (capa por PK / selección)', () => {
+    const colores = coloresMapaDesdeHallazgos(
+      [
+        {
+          id: 9,
+          tipo: 'traslapo',
+          item_numero: '1.1',
+          registros_involucrados: [{ id: 1, pk_id_id: 100 }, { id: 2, pk_id_id: 101 }],
+        },
+        {
+          id: 10,
+          tipo: 'vacio',
+          item_numero: '1.1',
+          registros_involucrados: [{ id: 3, pk_id_id: 102 }],
+        },
+      ],
+      { seleccionadoId: 9 },
+    )
+    assert.equal(colores['100'].sobrecosto, true)
+    assert.ok(colores['100'].pct >= 100)
+    assert.equal(colores['102'].pct, 80)
   })
 })

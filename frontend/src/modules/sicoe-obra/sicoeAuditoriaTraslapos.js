@@ -14,7 +14,17 @@ export const SICOE_AUDITORIA_JUSTIFICACIONES = [
   'Complemento de un cobro parcial',
 ]
 
+export const SICOE_AUDITORIA_JUSTIFICACIONES_VACIO = [
+  'No ejecutado aún',
+  'El ítem no aplica en ese tramo',
+  'Ejecutado, pendiente de reportar',
+  'Cobrado en otro ítem',
+]
+
+export const SICOE_AUDITORIA_ESTADOS = ['pendiente', 'justificado', 'corregido']
+
 export const SICOE_AUDITORIA_ACCION_LOG = 'AUDITORIA_TRASLAPO'
+export const SICOE_AUDITORIA_HALLAZGO_ACCION_LOG = 'AUDITORIA_HALLAZGO'
 
 export function normalizarToleranciaM(raw) {
   if (raw == null || raw === '') return SICOE_AUDITORIA_TOLERANCIA_DEFAULT_M
@@ -31,6 +41,12 @@ export function parseAbsNum(v) {
 
 function txt(v) {
   return String(v || '').trim()
+}
+
+export function justificacionesParaTipo(tipo) {
+  const t = txt(tipo).toLowerCase()
+  if (t === 'vacio') return SICOE_AUDITORIA_JUSTIFICACIONES_VACIO
+  return SICOE_AUDITORIA_JUSTIFICACIONES
 }
 
 export function costadoDe(reg) {
@@ -322,4 +338,96 @@ export function etiquetaSemaforo(semaforo) {
   if (semaforo === 'rojo') return 'Traslapo'
   if (semaforo === 'amarillo') return 'Atención'
   return 'Sin hallazgos'
+}
+
+function absKey(v) {
+  const n = parseAbsNum(v)
+  if (n == null) return ''
+  return n.toFixed(3)
+}
+
+/** Huella estable (misma semántica que backend fingerprint_hallazgo). */
+export function fingerprintHallazgo(h) {
+  const tipo = txt(h?.tipo).toLowerCase()
+  const ids = [
+    ...new Set(
+      (h?.registros_involucrados || [])
+        .filter((r) => r && r.id != null && String(r.id).trim() !== '')
+        .map((r) => String(r.id)),
+    ),
+  ].sort()
+  const raw = [
+    tipo,
+    ids.join(','),
+    absKey(h?.abs_desde),
+    absKey(h?.abs_hasta),
+    txt(h?.item_numero),
+    txt(h?.pk_id_id),
+  ].join('|')
+  // Simple FNV-1a 32-bit + hex stretch (browser-safe; backend usa sha256[:40])
+  let hash = 2166136261
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  const hex = (hash >>> 0).toString(16).padStart(8, '0')
+  return `${hex}${ids.length}${tipo.slice(0, 2)}${absKey(h?.abs_desde)}`.slice(0, 40)
+}
+
+export function resumenAmbienteDesdeFilas(filas) {
+  const out = {
+    traslapos_sin_justificar: { cantidad: 0, valor: 0 },
+    vacios_sin_justificar: { cantidad: 0, valor: 0 },
+    no_auditables: { cantidad: 0, valor: 0 },
+    justificados: { cantidad: 0, valor: 0 },
+  }
+  for (const f of filas || []) {
+    const estado = txt(f?.estado).toLowerCase() || 'pendiente'
+    if (estado === 'corregido') continue
+    const tipo = txt(f?.tipo).toLowerCase()
+    const valor = Number(f?.valor_en_juego) || 0
+    if (estado === 'justificado') {
+      out.justificados.cantidad += 1
+      out.justificados.valor += valor
+      continue
+    }
+    if (tipo === 'traslapo') {
+      out.traslapos_sin_justificar.cantidad += 1
+      out.traslapos_sin_justificar.valor += valor
+    } else if (tipo === 'vacio') {
+      out.vacios_sin_justificar.cantidad += 1
+      out.vacios_sin_justificar.valor += valor
+    } else if (tipo === 'no_auditable') {
+      out.no_auditables.cantidad += 1
+      out.no_auditables.valor += valor
+    }
+  }
+  return out
+}
+
+/** Colores MiniMapa a partir de hallazgos filtrados (capa por ítem vía pct). */
+export function coloresMapaDesdeHallazgos(hallazgos, { seleccionadoId = null } = {}) {
+  const colores = {}
+  for (const h of hallazgos || []) {
+    const tipo = txt(h?.tipo).toLowerCase()
+    const esSel = seleccionadoId != null && String(h?.id ?? h?.fingerprint) === String(seleccionadoId)
+    const basePct = tipo === 'traslapo' ? 100 : tipo === 'vacio' ? 80 : 50
+    const pct = esSel ? 110 : basePct
+    for (const r of h?.registros_involucrados || []) {
+      const pk = r?.pk_id_id != null ? String(r.pk_id_id).trim() : ''
+      if (!pk) continue
+      const prev = colores[pk]
+      if (!prev || pct >= (prev.pct || 0)) {
+        colores[pk] = {
+          cobrado: 1,
+          presupuesto: 1,
+          pct,
+          sobrecosto: tipo === 'traslapo' || esSel,
+          item_numero: h?.item_numero || r?.item_numero || null,
+          hallazgo_id: h?.id ?? h?.fingerprint,
+        }
+      }
+    }
+  }
+  return colores
 }

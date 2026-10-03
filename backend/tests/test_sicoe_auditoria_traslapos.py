@@ -146,3 +146,90 @@ def test_analizar_varios_rojo():
         tolerancia_m=0.5,
     )
     assert out["semaforo"] == "rojo"
+
+
+def test_analizar_contrato_dedupe_y_fingerprint():
+    from sicoe_auditoria_traslapos import (
+        analizar_contrato,
+        fingerprint_hallazgo,
+        justificaciones_para_tipo,
+        resumen_ambiente_desde_filas,
+        SICOE_AUDITORIA_JUSTIFICACIONES_VACIO,
+    )
+
+    regs = [
+        {
+            "id": 1,
+            "numero_registro": 1,
+            "item_numero": "1",
+            "tramo": "T",
+            "infraestructura": "I",
+            "calzada": "C",
+            "abs_inicio": 0,
+            "abs_final": 100,
+            "cantidad_total": 100,
+            "vlr_unitario": 1000,
+            "pk_id_id": 10,
+        },
+        {
+            "id": 2,
+            "numero_registro": 2,
+            "item_numero": "1",
+            "tramo": "T",
+            "infraestructura": "I",
+            "calzada": "C",
+            "abs_inicio": 50,
+            "abs_final": 150,
+            "cantidad_total": 100,
+            "vlr_unitario": 1000,
+            "pk_id_id": 11,
+        },
+        {
+            "id": 3,
+            "numero_registro": 3,
+            "item_numero": "1",
+            "tramo": "T",
+            "infraestructura": "I",
+            "calzada": "C",
+            "abs_inicio": 200,
+            "abs_final": 250,
+            "cantidad_total": 50,
+            "vlr_unitario": 1000,
+        },
+        {
+            "id": 4,
+            "numero_registro": 4,
+            "item_numero": "2",
+            "cantidad_total": 1,
+            "vlr_unitario": 1,
+        },
+    ]
+    out = analizar_contrato(regs, tolerancia_m=0.5)
+    assert out["semaforo"] == "rojo"
+    tipos = [h["tipo"] for h in out["hallazgos"]]
+    assert tipos.count("traslapo") == 1  # dedupe A↔B
+    assert "vacio" in tipos
+    assert "no_auditable" in tipos
+    fps = [h["fingerprint"] for h in out["hallazgos"]]
+    assert len(fps) == len(set(fps))
+    assert all(h.get("item_numero") for h in out["hallazgos"])
+    assert fingerprint_hallazgo(out["hallazgos"][0]) == out["hallazgos"][0]["fingerprint"]
+
+    filas = [
+        {**h, "estado": "pendiente"} for h in out["hallazgos"]
+    ]
+    # justificar uno
+    for f in filas:
+        if f["tipo"] == "traslapo":
+            f["estado"] = "justificado"
+            break
+    res = resumen_ambiente_desde_filas(filas)
+    assert res["justificados"]["cantidad"] == 1
+    assert res["traslapos_sin_justificar"]["cantidad"] == 0
+    assert res["vacios_sin_justificar"]["cantidad"] >= 1
+    assert res["no_auditables"]["cantidad"] >= 1
+
+    assert "No ejecutado aún" in SICOE_AUDITORIA_JUSTIFICACIONES_VACIO
+    assert justificaciones_para_tipo("vacio") == SICOE_AUDITORIA_JUSTIFICACIONES_VACIO
+    assert "Sector diferente" in justificaciones_para_tipo("traslapo")
+
