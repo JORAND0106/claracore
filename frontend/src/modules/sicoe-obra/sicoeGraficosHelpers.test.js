@@ -27,6 +27,25 @@ describe('sicoeGraficosHelpers · esquema', () => {
     assert.equal(payload.graficos_historial.length, 1)
   })
 
+  it('galería reutiliza url y numero sin duplicar archivo', () => {
+    const hist = agregarEntradaGraficoHistorial(
+      [{ url: 'https://example.com/a.png', numero: 1, origen: 'manual' }],
+      { url: 'https://example.com/g2.png', numero: 44, origen: 'galeria' },
+    )
+    assert.equal(etiquetaOrigenGrafico('galeria'), 'Galería')
+    assert.equal(hist.length, 2)
+    assert.equal(hist[1].numero, 44)
+    assert.equal(hist[1].origen, 'galeria')
+    // misma URL no se duplica
+    const hist2 = agregarEntradaGraficoHistorial(hist, {
+      url: 'https://example.com/g2.png',
+      numero: 44,
+      origen: 'galeria',
+    })
+    assert.equal(hist2.length, 2)
+    assert.equal(hist2[1].numero, 44)
+  })
+
   it('dataUriEsquemaAFile produce PNG File', async () => {
     const dataUrl =
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='

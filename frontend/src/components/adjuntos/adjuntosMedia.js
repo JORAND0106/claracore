@@ -50,6 +50,7 @@ export function slidesFromImagenes(imagenes, getUrl) {
       label: etiquetaAdjunto(im, esquema ? 'Esquema' : 'Foto'),
       kind: esquema ? 'esquema' : (im?.kind || 'foto'),
       origen: im?.origen || null,
+      numero: im?.numero ?? null,
       source: im,
     })
   }

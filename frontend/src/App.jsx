@@ -574,6 +574,15 @@ function regTieneFotoNumeroEnBd (reg) {
   return reg && reg.foto_numero != null && reg.foto_numero !== ''
 }
 
+/** Número consecutivo de gráfico del registro (independiente de fotos). */
+function strRefGrafico (reg) {
+  if (!reg) return null
+  const n = reg.grafico_numero
+  if (n == null || n === '') return null
+  const v = Number(n)
+  return Number.isNaN(v) ? String(n) : String(v).padStart(4, '0')
+}
+
 /** /next-foto, /next-grafico, /next-registro: `numero` puede ser número, [n] u objeto anidado (PostgREST). */
 function sicoeNumeroDesdeNextApi(j) {
   const walk = (x) => {
@@ -2916,9 +2925,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [editandoSub,    setEditandoSub]    = useState(false)
   const [uploadingGraf,    setUploadingGraf]    = useState(false)
   const [modalGaleriaHoja, setModalGaleriaHoja] = useState(false)
+  const [modalGaleriaGraficoHoja, setModalGaleriaGraficoHoja] = useState(false)
   const [confirmCantidadCambio, setConfirmCantidadCambio] = useState(null)
   const [galeriaHojaRefreshKey, setGaleriaHojaRefreshKey] = useState(0)
   const [galeriaHojaSeed, setGaleriaHojaSeed] = useState(null)
+  const [galeriaGraficoHojaRefreshKey, setGaleriaGraficoHojaRefreshKey] = useState(0)
   const [fotoImgError, setFotoImgError] = useState(false)
   // Misma fila en el reporte completo: a veces el `reg` del mapa no trae foto_url; el arreglo del GET sí
   const regMismoEnReporte = reporte?.registros?.find((r) => r.id === registro.id) || null
@@ -4883,11 +4894,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 )}
                 <div className="cc-sicoe-hoja-media-actions" style={{ color:t.textMuted, background:t.bg }}>
                   <span style={{ fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
-                    title={actualMedia?.kind === 'foto' ? (strRefCarpeta || 'Foto') : (graficoActual ? `${fmtFechaGrafico(graficoActual.creado_en)}${graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}` : 'Adjunto')}
+                    title={actualMedia?.kind === 'foto'
+                      ? (strRefCarpeta || 'Foto')
+                      : (graficoActual
+                        ? `${fmtFechaGrafico(graficoActual.creado_en)}${graficoActual.numero != null ? ` · #${String(graficoActual.numero).padStart(4, '0')}` : ''}`
+                        : 'Adjunto')}
                   >
                     {actualMedia?.kind === 'foto'
                       ? `📷${strRefCarpeta ? ` #${strRefCarpeta}` : ''}`
-                      : `📐${mediaSlides.length > 1 ? ` ${mediaIdx + 1}/${mediaSlides.length}` : ''}`}
+                      : `📐${graficoActual?.numero != null ? ` #${String(graficoActual.numero).padStart(4, '0')}` : ''}${graficosLista.length > 1 ? ` · ${graficoIdx + 1}/${graficosLista.length}` : ''}`}
                   </span>
                   <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
                     {editableFoto && (
@@ -4922,6 +4937,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                           <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
                             onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
                         </label>
+                        <button type="button" onClick={() => {
+                          setGaleriaGraficoHojaRefreshKey((k) => k + 1)
+                          setModalGaleriaGraficoHoja(true)
+                        }}
+                          title="Galería de gráficos"
+                          style={{ cursor:'pointer', color:t.primary, fontWeight:'600', background:'none', border:'none', padding:0 }}>
+                          Galería gráf.
+                        </button>
                         {actualMedia?.kind !== 'foto' && grafVista && (
                           <button type="button" onClick={eliminarGraficoActual} disabled={eliminandoGraf}
                             title="Quitar gráfico"
@@ -4989,6 +5012,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                             <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
                               onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f, { origen: 'manual' }) }} />
                           </label>
+                        )}
+                        {editableGrafico && (
+                          <button type="button" onClick={() => {
+                            setGaleriaGraficoHojaRefreshKey((k) => k + 1)
+                            setModalGaleriaGraficoHoja(true)
+                          }}
+                            title="Galería de gráficos"
+                            style={{
+                              background:'transparent', border:`1px solid ${t.border}`, color:t.primary,
+                              borderRadius:3, padding: '2px 5px', fontSize:'var(--cc-caption)', fontWeight:600, cursor:'pointer',
+                            }}>
+                            Galería gráf.
+                          </button>
                         )}
                       </div>
                     </>
@@ -5147,6 +5183,35 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     notificarTrasEdicionRegistro(fotoPatch, { refrescarPanel: false, invalidarDashboard: false })
                   } catch(e) { alert('Error asignando foto de galería: ' + (e?.message || String(e))) }
                   setModalGaleriaHoja(false)
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─ Modal galería gráficos (por encima de la hoja; solo gráficos) ─ */}
+      {modalGaleriaGraficoHoja && (
+        <div style={{ position:'fixed', inset:0, zIndex:10500, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}
+          onClick={() => setModalGaleriaGraficoHoja(false)}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', padding:'24px', width:'100%', maxWidth:'700px', maxHeight:'80vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+              <span style={{ fontWeight:'800', color:t.text, fontSize:'var(--cc-md)' }}>📐 Galería de Gráficos</span>
+              <button type="button" onClick={() => setModalGaleriaGraficoHoja(false)} style={{ background:'none', border:'none', color:t.textMuted, fontSize:'var(--cc-lg)', cursor:'pointer' }}>✕</button>
+            </div>
+            <div style={{ overflowY:'auto', flex:1 }}>
+              <GaleriaFotos
+                contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
+                tipo="grafico" fechaDesde="" fechaHasta=""
+                refreshKey={galeriaGraficoHojaRefreshKey}
+                onSelect={async (url, numero) => {
+                  try {
+                    await persistirGraficoEnRegistro(url, numero, 'galeria')
+                  } catch (e) {
+                    alert('Error asignando gráfico de galería: ' + (e?.message || String(e)))
+                  }
+                  setModalGaleriaGraficoHoja(false)
                 }}
               />
             </div>
@@ -7817,6 +7882,24 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           }}
                         >
                           📷 {strRefCarpetaFoto(reg)}
+                        </span>
+                      )}
+                      {strRefGrafico(reg) && (
+                        <span
+                          title="N.º consecutivo de gráfico"
+                          style={{
+                            fontSize: 'var(--cc-label)',
+                            fontWeight: '800',
+                            color: '#7c3aed',
+                            flexShrink: 0,
+                            background: '#7c3aed18',
+                            border: '1px solid #7c3aed40',
+                            borderRadius: '8px',
+                            padding: '2px 8px',
+                            fontFamily: 'ui-monospace, Consolas, monospace',
+                          }}
+                        >
+                          📐 {strRefGrafico(reg)}
                         </span>
                       )}
                       <span className="cc-sicoe-reg-obs" style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
@@ -14032,7 +14115,12 @@ function GaleriaFotos({
   }, [contrato_id, API_URL, tipo, fechaDesde, fechaHasta, refreshKey, seedKey])
 
   if (loading) return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>Cargando galería...</div>
-  if (fotos.length === 0) return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>No hay imágenes en este rango de fechas.</div>
+  if (fotos.length === 0) {
+    const vacio = (tipo || 'foto') === 'grafico'
+      ? 'No hay gráficos en este rango de fechas.'
+      : 'No hay imágenes en este rango de fechas.'
+    return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>{vacio}</div>
+  }
 
   return (
     <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'10px' }}>
@@ -15991,7 +16079,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
       {/* ── Modal Galería Gráficos ── */}
       {modalGaleriaGrafico && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:3000,
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:10500,
           display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
           <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'700px',
             maxHeight:'80vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
