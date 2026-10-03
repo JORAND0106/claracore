@@ -1,6 +1,13 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { dilateVisitedIntoBarriers, hatchBoundsPad, hatchRasterScale } from './esquemaHatch.js'
+import {
+  dilateVisitedIntoBarriers,
+  hatchBoundsPad,
+  hatchMaskEntryBroken,
+  hatchMaskEntryReady,
+  hatchRasterScale,
+  polylineClosedForHatch,
+} from './esquemaHatch.js'
 import { floodPixelsToM2, PX_PER_METER } from './esquemaGeometry.js'
 
 describe('esquemaHatch dilate + area', () => {
@@ -50,5 +57,28 @@ describe('esquemaHatch dilate + area', () => {
     const bh = 1400 + pad * 2
     const frac = (1800 * 1400) / (bw * bh)
     assert.ok(frac < 0.85, `frac=${frac} aún ≥ 0.85 con pad=${pad}`)
+  })
+
+  it('polylineClosedForHatch respeta closed=true y anillo casi cerrado', () => {
+    const open = {
+      type: 'polilinea',
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+    }
+    assert.equal(polylineClosedForHatch(open), false)
+    assert.equal(polylineClosedForHatch({ ...open, closed: true }), true)
+    const ring = {
+      type: 'polilinea',
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0.5, y: 0.2 }],
+    }
+    assert.equal(polylineClosedForHatch(ring), true)
+  })
+
+  it('hatchMaskEntryReady/Broken detectan máscara usable vs rota', () => {
+    assert.equal(hatchMaskEntryReady(null), false)
+    assert.equal(hatchMaskEntryBroken(null), false)
+    assert.equal(hatchMaskEntryReady({ complete: true, naturalWidth: 64 }), true)
+    assert.equal(hatchMaskEntryBroken({ complete: true, naturalWidth: 0 }), true)
+    assert.equal(hatchMaskEntryReady({ complete: false, naturalWidth: 0 }), false)
+    assert.equal(hatchMaskEntryBroken({ complete: false, naturalWidth: 0 }), false)
   })
 })
