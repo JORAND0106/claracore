@@ -57,6 +57,8 @@ import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoFiltroSesion'
 import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
 import SicoeCantidadesPorItemVista from './modules/sicoe-obra/SicoeCantidadesPorItemVista'
+import SicoeAmbienteAuditoria from './modules/sicoe-obra/SicoeAmbienteAuditoria'
+import { usuarioVeAuditoriaTraslapos } from './modules/sicoe-obra/sicoeAuditoriaTraslapos'
 import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegistrosActasModal'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
@@ -11938,7 +11940,7 @@ function ModuloSicoeObra({
                 cursor: 'pointer',
               }}
             >
-              Por cantidades
+              {usuarioVeAuditoriaTraslapos(usuario) ? 'Auditoría' : 'Por cantidades'}
             </button>
           </div>
         </div>
@@ -12546,21 +12548,54 @@ function ModuloSicoeObra({
       />
 
       {sicoeModuloVista === 'cantidades_item' ? (
-        <SicoeCantidadesPorItemVista
-          t={t}
-          contratoId={contrato_id}
-          token={getToken()}
-          API_URL={API_URL}
-          nivelInfo={nivelInfo}
-          nivelesContrato={nivelesContrato}
-          busquedaActiva={!!sicoeVistaResultadosActiva}
-          buildFiltrosParams={buildCantidadesItemParams}
-          onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
-          onValidarRapido={validarRapidoCantidadesItem}
-          ejecutandoValidacion={ejecutandoCpiValidacion}
-          refreshNonce={cpiRefreshNonce}
-          filtrosVersion={cpiFiltrosVersion}
-        />
+        usuarioVeAuditoriaTraslapos(usuario) ? (
+          <SicoeAmbienteAuditoria
+            t={t}
+            usuario={usuario}
+            contratoId={contrato_id}
+            token={getToken()}
+            API_URL={API_URL}
+            nivelInfo={nivelInfo}
+            nivelesContrato={nivelesContrato}
+            busquedaActiva={!!sicoeVistaResultadosActiva}
+            buildFiltrosParams={buildCantidadesItemParams}
+            onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
+            onValidarRapido={validarRapidoCantidadesItem}
+            ejecutandoValidacion={ejecutandoCpiValidacion}
+            refreshNonce={cpiRefreshNonce}
+            filtrosVersion={cpiFiltrosVersion}
+            exportMeta={exportMetaContrato || {}}
+            renderMap={({ colores, height, focusPkids }) => (
+              <MiniMapaSemaforo
+                t={t}
+                colores={colores || {}}
+                contratoId={contrato_id}
+                token={getToken()}
+                height={height || 320}
+                bearing={270}
+                soloPkConDatos
+                showToolbar={false}
+                focusPkids={focusPkids || []}
+              />
+            )}
+          />
+        ) : (
+          <SicoeCantidadesPorItemVista
+            t={t}
+            contratoId={contrato_id}
+            token={getToken()}
+            API_URL={API_URL}
+            nivelInfo={nivelInfo}
+            nivelesContrato={nivelesContrato}
+            busquedaActiva={!!sicoeVistaResultadosActiva}
+            buildFiltrosParams={buildCantidadesItemParams}
+            onAbrirRegistro={abrirRegistroDesdeCantidadesItem}
+            onValidarRapido={validarRapidoCantidadesItem}
+            ejecutandoValidacion={ejecutandoCpiValidacion}
+            refreshNonce={cpiRefreshNonce}
+            filtrosVersion={cpiFiltrosVersion}
+          />
+        )
       ) : (
       <>
       {/* ── Grid reportes ── */}
@@ -16767,6 +16802,7 @@ function MiniMapaToolbar({ t, modo, setModo, capEtiquetas, setCapEtiquetas, comp
 function MiniMapaSemaforo({
   t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270, soloPkConDatos = false,
   modo: modoProp, onModoChange, capEtiquetas: capEtiquetasProp, onCapEtiquetasChange, showToolbar = true,
+  focusPkids = null,
 }) {
   const mapRef        = useRef(null)
   const mapInstance   = useRef(null)
@@ -16968,6 +17004,27 @@ function MiniMapaSemaforo({
     const raw = src._data
     if (raw && raw.features) src.setData({ ...raw, features: buildFeatures(raw) })
   }, [colores, listo, soloPkConDatos])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map || !listo || !planoBase) return
+    const pks = Array.isArray(focusPkids)
+      ? focusPkids.map((p) => String(p || '').trim().toLowerCase().replace(/\s+/g, '')).filter(Boolean)
+      : []
+    if (!pks.length) return
+    const pkSet = new Set(pks)
+    const feats = (planoBase.features || []).filter((f) => {
+      const id = String(_sicoeFeaturePkId(f) || '').toLowerCase().replace(/\s+/g, '')
+      return id && pkSet.has(id)
+    })
+    if (!feats.length) return
+    const b = _boundsFromFeatureCollection({ type: 'FeatureCollection', features: feats })
+    if (b) {
+      try {
+        _mapboxFitBoundsLngLat(map, b, { padding: 36, bearing, maxZoom: 17 })
+      } catch { /* ignore */ }
+    }
+  }, [focusPkids, listo, planoBase, bearing])
 
   useEffect(() => {
     const map = mapInstance.current

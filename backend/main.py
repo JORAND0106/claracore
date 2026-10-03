@@ -16200,14 +16200,16 @@ def get_logs_entidad(
 
     out = list(merged.values())
     out.sort(key=lambda x: (x.get("created_at") or ""))
-    # Auditoría traslapos: exclusiva de roles contratista (interventoría no la ve).
+    # Auditoría traslapos/hallazgos: exclusiva de roles contratista (interventoría no la ve).
     try:
         from sicoe_auditoria_traslapos import (
             SICOE_AUDITORIA_ACCION_LOG,
+            SICOE_AUDITORIA_HALLAZGO_ACCION_LOG,
             usuario_ve_auditoria_traslapos,
         )
         if not usuario_ve_auditoria_traslapos(current_user):
-            out = [r for r in out if str(r.get("accion") or "") != SICOE_AUDITORIA_ACCION_LOG]
+            hide = {SICOE_AUDITORIA_ACCION_LOG, SICOE_AUDITORIA_HALLAZGO_ACCION_LOG}
+            out = [r for r in out if str(r.get("accion") or "") not in hide]
     except Exception:
         pass
     return out
@@ -28020,6 +28022,7 @@ def _sicoe_pares_mismo_item(contrato_id: int, item_numeros: List[str]) -> Dict[s
 def sicoe_auditoria_traslapos_config(contrato_id: int, current_user=Depends(get_current_user)):
     from sicoe_auditoria_traslapos import (
         SICOE_AUDITORIA_JUSTIFICACIONES,
+        SICOE_AUDITORIA_JUSTIFICACIONES_VACIO,
         SICOE_AUDITORIA_TOLERANCIA_MIN_M,
         usuario_ve_auditoria_traslapos,
     )
@@ -28028,6 +28031,7 @@ def sicoe_auditoria_traslapos_config(contrato_id: int, current_user=Depends(get_
         "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
         "tolerancia_min_m": SICOE_AUDITORIA_TOLERANCIA_MIN_M,
         "justificaciones": list(SICOE_AUDITORIA_JUSTIFICACIONES),
+        "justificaciones_vacio": list(SICOE_AUDITORIA_JUSTIFICACIONES_VACIO),
         "visible": usuario_ve_auditoria_traslapos(current_user),
     }
 
@@ -28136,6 +28140,426 @@ def sicoe_auditoria_traslapos_registrar_decision(
     except Exception as exc:
         _log_api.warning("log auditoria traslapo reg=%s: %s", body.registro_id, exc)
     return {"ok": True}
+
+
+# ─── Ambiente de Auditoría: hallazgos del contrato ───────────────────────────
+
+class AuditoriaHallazgoJustificarBody(BaseModel):
+    justificacion: str
+
+
+def _sicoe_auditoria_regs_contrato(contrato_id: int) -> List[dict]:
+    """Carga registros con ítem para análisis de contrato (mismo select que pares)."""
+    try:
+        def _q():
+            return (
+                supabase.table("so_registros")
+                .select(_SICOE_AUDITORIA_PEER_SELECT)
+                .eq("contrato_id", contrato_id)
+                .not_.is_("item_numero", "null")
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "sector" in msg:
+            def _q2():
+                return (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                        "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .not_.is_("item_numero", "null")
+                    .execute()
+                    .data
+                )
+            rows = supabase_execute(_q2) or []
+        else:
+            _log_api.warning("regs auditoria contrato=%s: %s", contrato_id, exc)
+            rows = []
+    out = []
+    for r in rows or []:
+        if str(r.get("item_numero") or "").strip():
+            out.append(r)
+    return out
+
+
+def _sicoe_hallazgos_tabla_lista(contrato_id: int) -> List[dict]:
+    try:
+        def _q():
+            return (
+                supabase.table("so_auditoria_hallazgos")
+                .select("*")
+                .eq("contrato_id", contrato_id)
+                .order("valor_en_juego", desc=True)
+                .execute()
+                .data
+            )
+        return supabase_execute(_q) or []
+    except Exception as exc:
+        _log_api.warning("list hallazgos contrato=%s: %s", contrato_id, exc)
+        raise HTTPException(
+            500,
+            f"Tabla de hallazgos no disponible (¿migración so_auditoria_hallazgos.sql?): {exc}",
+        ) from exc
+
+
+def _sicoe_hallazgo_row_from_analisis(contrato_id: int, h: dict, prev: Optional[dict] = None) -> dict:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    prev = prev or {}
+    estado_prev = str(prev.get("estado") or "pendiente").strip().lower()
+    # Si reaparece tras corregido: vuelve a pendiente (salvo que estuviera justificado)
+    if estado_prev == "justificado" and prev.get("justificacion"):
+        estado = "justificado"
+    else:
+        estado = "pendiente"
+    pk = h.get("pk_id_id")
+    return {
+        "contrato_id": contrato_id,
+        "fingerprint": h.get("fingerprint"),
+        "tipo": h.get("tipo"),
+        "estado": estado,
+        "item_numero": h.get("item_numero") or None,
+        "tramo": h.get("tramo") or None,
+        "infraestructura": h.get("infraestructura") or None,
+        "costado": h.get("costado") or None,
+        "ubicacion": h.get("ubicacion") or None,
+        "medida_m": h.get("medida_m"),
+        "abs_desde": h.get("abs_desde"),
+        "abs_hasta": h.get("abs_hasta"),
+        "pk_id_id": None if pk is None else str(pk),
+        "valor_en_juego": float(h.get("valor_en_juego") or 0),
+        "registros_involucrados": h.get("registros_involucrados") or [],
+        "texto": h.get("texto") or None,
+        "payload": {
+            "modo": "contrato",
+        },
+        "actualizado_en": now,
+        # Conserva justificación si aplica
+        "justificacion": prev.get("justificacion") if estado == "justificado" else None,
+        "justificado_por": prev.get("justificado_por") if estado == "justificado" else None,
+        "justificado_por_nombre": prev.get("justificado_por_nombre") if estado == "justificado" else None,
+        "justificado_en": prev.get("justificado_en") if estado == "justificado" else None,
+    }
+
+
+@app.post("/sicoe-obra/{contrato_id}/auditoria-hallazgos/sincronizar")
+def sicoe_auditoria_hallazgos_sincronizar(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """
+    Recalcula hallazgos del contrato con el mismo motor de asignación,
+    upsert por fingerprint y marca ausentes como corregido.
+    """
+    from sicoe_auditoria_traslapos import (
+        analizar_contrato,
+        resumen_ambiente_desde_filas,
+        usuario_ve_auditoria_traslapos,
+    )
+    from datetime import datetime, timezone
+
+    if not usuario_ve_auditoria_traslapos(current_user):
+        return {"ok": True, "oculto_por_rol": True, "hallazgos": [], "resumen": {}}
+
+    tol = _sicoe_tolerancia_traslapo_contrato(contrato_id)
+    regs = _sicoe_auditoria_regs_contrato(contrato_id)
+    analisis = analizar_contrato(regs, tolerancia_m=tol)
+    vivos = {h["fingerprint"]: h for h in (analisis.get("hallazgos") or []) if h.get("fingerprint")}
+
+    existentes = _sicoe_hallazgos_tabla_lista(contrato_id)
+    by_fp = {str(r.get("fingerprint")): r for r in existentes if r.get("fingerprint")}
+
+    now = datetime.now(timezone.utc).isoformat()
+    upserts = []
+    for fp, h in vivos.items():
+        prev = by_fp.get(fp)
+        row = _sicoe_hallazgo_row_from_analisis(contrato_id, h, prev)
+        if prev and prev.get("creado_en"):
+            row["creado_en"] = prev["creado_en"]
+        else:
+            row["creado_en"] = now
+        upserts.append(row)
+
+    corregidos = 0
+    for fp, prev in by_fp.items():
+        if fp in vivos:
+            continue
+        if str(prev.get("estado") or "").lower() == "corregido":
+            continue
+        try:
+            def _u(prev_id=prev["id"]):
+                return (
+                    supabase.table("so_auditoria_hallazgos")
+                    .update({"estado": "corregido", "actualizado_en": now})
+                    .eq("id", prev_id)
+                    .eq("contrato_id", contrato_id)
+                    .execute()
+                    .data
+                )
+            supabase_execute(_u)
+            corregidos += 1
+        except Exception as exc:
+            _log_api.warning("corregir hallazgo %s: %s", prev.get("id"), exc)
+
+    if upserts:
+        try:
+            def _up():
+                return (
+                    supabase.table("so_auditoria_hallazgos")
+                    .upsert(upserts, on_conflict="contrato_id,fingerprint")
+                    .execute()
+                    .data
+                )
+            supabase_execute(_up)
+        except Exception as exc:
+            raise HTTPException(
+                500,
+                f"No se pudieron guardar hallazgos (¿migración SQL?): {exc}",
+            ) from exc
+
+    filas = _sicoe_hallazgos_tabla_lista(contrato_id)
+    return {
+        "ok": True,
+        "tolerancia_m": tol,
+        "sincronizados": len(upserts),
+        "corregidos": corregidos,
+        "semaforo": analisis.get("semaforo"),
+        "resumen": resumen_ambiente_desde_filas(filas),
+        "hallazgos": filas,
+    }
+
+
+@app.get("/sicoe-obra/{contrato_id}/auditoria-hallazgos")
+def sicoe_auditoria_hallazgos_listar(
+    contrato_id: int,
+    sincronizar: bool = False,
+    current_user=Depends(get_current_user),
+):
+    from sicoe_auditoria_traslapos import (
+        SICOE_AUDITORIA_JUSTIFICACIONES,
+        SICOE_AUDITORIA_JUSTIFICACIONES_VACIO,
+        resumen_ambiente_desde_filas,
+        usuario_ve_auditoria_traslapos,
+    )
+
+    if not usuario_ve_auditoria_traslapos(current_user):
+        return {
+            "ok": True,
+            "oculto_por_rol": True,
+            "hallazgos": [],
+            "resumen": {},
+            "justificaciones": [],
+            "justificaciones_vacio": [],
+        }
+
+    if sincronizar:
+        return sicoe_auditoria_hallazgos_sincronizar(contrato_id, current_user)
+
+    filas = _sicoe_hallazgos_tabla_lista(contrato_id)
+    return {
+        "ok": True,
+        "tolerancia_m": _sicoe_tolerancia_traslapo_contrato(contrato_id),
+        "resumen": resumen_ambiente_desde_filas(filas),
+        "hallazgos": filas,
+        "justificaciones": list(SICOE_AUDITORIA_JUSTIFICACIONES),
+        "justificaciones_vacio": list(SICOE_AUDITORIA_JUSTIFICACIONES_VACIO),
+    }
+
+
+@app.post("/sicoe-obra/{contrato_id}/auditoria-hallazgos/{hallazgo_id}/justificar")
+def sicoe_auditoria_hallazgos_justificar(
+    contrato_id: int,
+    hallazgo_id: int,
+    body: AuditoriaHallazgoJustificarBody,
+    current_user=Depends(get_current_user),
+):
+    from sicoe_auditoria_traslapos import (
+        SICOE_AUDITORIA_HALLAZGO_ACCION_LOG,
+        justificaciones_para_tipo,
+        usuario_ve_auditoria_traslapos,
+    )
+    from datetime import datetime, timezone
+
+    if not usuario_ve_auditoria_traslapos(current_user):
+        raise HTTPException(403, "La justificación de hallazgos es exclusiva del contratista.")
+
+    try:
+        def _q():
+            return (
+                supabase.table("so_auditoria_hallazgos")
+                .select("*")
+                .eq("id", hallazgo_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        raise HTTPException(500, f"No se pudo leer hallazgo: {exc}") from exc
+
+    if not rows:
+        raise HTTPException(404, "Hallazgo no encontrado.")
+    row = rows[0]
+    if str(row.get("estado") or "").lower() == "corregido":
+        raise HTTPException(422, "El hallazgo ya está corregido.")
+
+    just = (body.justificacion or "").strip()
+    permitidas = justificaciones_para_tipo(row.get("tipo"))
+    if just not in permitidas:
+        raise HTTPException(422, "Justificación no permitida para este tipo de hallazgo.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    uid = _sicoe_uid_from_user(current_user)
+    nombre = (
+        (current_user.get("nombre") or "")
+        or (current_user.get("email") or "")
+        or str(uid or "")
+    ).strip()
+
+    try:
+        def _u():
+            return (
+                supabase.table("so_auditoria_hallazgos")
+                .update(
+                    {
+                        "estado": "justificado",
+                        "justificacion": just,
+                        "justificado_por": uid,
+                        "justificado_por_nombre": nombre,
+                        "justificado_en": now,
+                        "actualizado_en": now,
+                    }
+                )
+                .eq("id", hallazgo_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        updated = supabase_execute(_u) or []
+    except Exception as exc:
+        raise HTTPException(500, f"No se pudo justificar: {exc}") from exc
+
+    try:
+        registrar_log(
+            _audit_user_contrato(current_user, contrato_id),
+            SICOE_AUDITORIA_HALLAZGO_ACCION_LOG,
+            "SICOE_OBRA",
+            "hallazgo",
+            str(hallazgo_id),
+            {
+                "tipo": "auditoria_hallazgo_justificar",
+                "hallazgo_id": hallazgo_id,
+                "fingerprint": row.get("fingerprint"),
+                "tipo_hallazgo": row.get("tipo"),
+                "justificacion": just,
+                "item_numero": row.get("item_numero"),
+            },
+            resultado="ok",
+            categoria="auditoria",
+            severidad="INFO",
+        )
+    except Exception as exc:
+        _log_api.warning("log justificar hallazgo %s: %s", hallazgo_id, exc)
+
+    return {"ok": True, "hallazgo": (updated[0] if updated else None)}
+
+
+@app.get("/sicoe-obra/{contrato_id}/auditoria-hallazgos/export")
+def sicoe_auditoria_hallazgos_export(
+    contrato_id: int,
+    tipo: Optional[str] = None,
+    estado: Optional[str] = None,
+    item_numero: Optional[str] = None,
+    tramo: Optional[str] = None,
+    usuario: Optional[str] = None,
+    resumen_filtro: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    """Filas para Excel del cliente (respeta filtros)."""
+    from sicoe_auditoria_traslapos import usuario_ve_auditoria_traslapos
+
+    if not usuario_ve_auditoria_traslapos(current_user):
+        raise HTTPException(403, "Exportación de hallazgos exclusiva del contratista.")
+
+    filas = _sicoe_hallazgos_tabla_lista(contrato_id)
+
+    def _ok(f: dict) -> bool:
+        if tipo and str(f.get("tipo") or "").lower() != str(tipo).lower():
+            return False
+        if estado and str(f.get("estado") or "").lower() != str(estado).lower():
+            return False
+        if item_numero and str(f.get("item_numero") or "").strip() != str(item_numero).strip():
+            return False
+        if tramo and str(f.get("tramo") or "").strip().casefold() != str(tramo).strip().casefold():
+            return False
+        if usuario:
+            un = str(f.get("justificado_por_nombre") or "").casefold()
+            if str(usuario).strip().casefold() not in un:
+                return False
+        rf = (resumen_filtro or "").strip().lower()
+        if rf:
+            est = str(f.get("estado") or "").lower()
+            tip = str(f.get("tipo") or "").lower()
+            if rf == "justificados":
+                if est != "justificado":
+                    return False
+            elif rf == "traslapos_sin_justificar":
+                if not (tip == "traslapo" and est == "pendiente"):
+                    return False
+            elif rf == "vacios_sin_justificar":
+                if not (tip == "vacio" and est == "pendiente"):
+                    return False
+            elif rf == "no_auditables":
+                if tip != "no_auditable" or est not in ("pendiente",):
+                    return False
+        return True
+
+    filtradas = [f for f in filas if _ok(f)]
+    headers = [
+        "Tipo",
+        "Ítem",
+        "Tramo",
+        "Infraestructura",
+        "Costado",
+        "Ubicación",
+        "Medida (m)",
+        "Registros",
+        "Valor en juego",
+        "Estado",
+        "Justificación",
+        "Usuario",
+        "Fecha",
+    ]
+    body_rows = []
+    for f in filtradas:
+        regs = f.get("registros_involucrados") or []
+        nums = []
+        for r in regs:
+            n = r.get("numero_registro") if r.get("numero_registro") is not None else r.get("id")
+            if n is not None and n != "":
+                nums.append(str(n))
+        body_rows.append([
+            f.get("tipo") or "",
+            f.get("item_numero") or "",
+            f.get("tramo") or "",
+            f.get("infraestructura") or "",
+            f.get("costado") or "",
+            f.get("ubicacion") or "",
+            f.get("medida_m") if f.get("medida_m") is not None else "",
+            ", ".join(nums),
+            f.get("valor_en_juego") or 0,
+            f.get("estado") or "",
+            f.get("justificacion") or "",
+            f.get("justificado_por_nombre") or "",
+            f.get("justificado_en") or "",
+        ])
+    return {"ok": True, "headers": headers, "rows": body_rows, "total": len(body_rows)}
 
 
 # ─── SICOE OBRA: Asignar ítem a registro ─────────────────────────────────────
