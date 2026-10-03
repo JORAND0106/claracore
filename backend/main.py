@@ -28834,6 +28834,9 @@ def sicoe_huellas_geojson(
         feat = r.get("huella_geojson")
         if not feat or not isinstance(feat, dict):
             continue
+        # Omitidas del dibujo masivo (sin geometría) no se dibujan
+        if feat.get("geometry") is None or (feat.get("properties") or {}).get("omitida"):
+            continue
         props = dict(feat.get("properties") or {})
         props.update({
             "registro_id": r.get("id"),
@@ -28963,6 +28966,191 @@ def sicoe_sincronizar_huella_registro(
         "geometria_tipo": fr.get("geometria_tipo"),
         "semaforo": fr.get("semaforo"),
         "hallazgos": hallazgos_out,
+    }
+
+
+class DibujarMasivoBody(BaseModel):
+    offset: Optional[int] = 0
+    limit: Optional[int] = 40
+
+
+@app.post("/sicoe-obra/{contrato_id}/huellas/dibujar-masivo")
+def sicoe_dibujar_masivo_huellas(
+    contrato_id: int,
+    body: DibujarMasivoBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Desarrollador: dibuja huellas faltantes (franja/nodo/polígono) de registros
+    con ítem asignado. Idempotente: solo procesa huella_geojson IS NULL.
+    No modifica dimensiones ni localización de los registros.
+    """
+    from datetime import datetime, timezone
+    from sicoe_dibujar_masivo import acumular_resultado, resumen_vacio
+
+    if not _es_desarrollador(current_user):
+        raise HTTPException(403, "Solo el rol Desarrollador puede ejecutar el dibujo masivo.")
+
+    limit = max(1, min(100, int(body.limit or 40)))
+    select_cols = (
+        _SICOE_AUDITORIA_PEER_SELECT
+        + ", geometria_tipo, coords_geojson, huella_tipo, unidad"
+    )
+
+    try:
+        def _count():
+            return (
+                supabase.table("so_registros")
+                .select("id", count="exact")
+                .eq("contrato_id", contrato_id)
+                .not_.is_("item_numero", "null")
+                .is_("huella_geojson", "null")
+                .limit(1)
+                .execute()
+            )
+        count_res = supabase_execute(_count)
+        total_pendientes = int(getattr(count_res, "count", None) or 0)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "huella_" in msg or "geometria_tipo" in msg or "coords_geojson" in msg:
+            raise HTTPException(
+                500,
+                f"Migración de huellas pendiente (so_huellas_nodo_poligono.sql / so_eje_franjas.sql): {exc}",
+            ) from exc
+        raise HTTPException(500, f"No se pudo contar pendientes: {exc}") from exc
+
+    # Al persistir, el registro sale del filtro IS NULL → siempre leer desde el inicio.
+    try:
+        def _batch():
+            return (
+                supabase.table("so_registros")
+                .select(select_cols)
+                .eq("contrato_id", contrato_id)
+                .not_.is_("item_numero", "null")
+                .is_("huella_geojson", "null")
+                .order("id")
+                .range(0, limit - 1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_batch) or []
+    except Exception as exc:
+        msg = str(exc).lower()
+        if any(k in msg for k in ("coord_lat_fin", "huella_", "sector", "geometria", "coords_geojson")):
+            def _batch2():
+                return (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                        "calzada, margen, abs_inicio, abs_final, pk_id_id, "
+                        "coord_lat, coord_lng, ancho, cantidad_total, vlr_unitario, unidad, huella_geojson"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .not_.is_("item_numero", "null")
+                    .is_("huella_geojson", "null")
+                    .order("id")
+                    .range(0, limit - 1)
+                    .execute()
+                    .data
+                )
+            rows = supabase_execute(_batch2) or []
+        else:
+            raise HTTPException(500, f"No se pudo leer lote: {exc}") from exc
+
+    rows = [r for r in rows if str(r.get("item_numero") or "").strip()]
+    resumen_batch = resumen_vacio()
+    now = datetime.now(timezone.utc).isoformat()
+    hallazgos_upserted = 0
+
+    def _upsert_hallazgos(fr_obj):
+        nonlocal hallazgos_upserted
+        for canon in (fr_obj or {}).get("hallazgos") or []:
+            try:
+                row = _sicoe_hallazgo_row_from_analisis(contrato_id, canon, None)
+                row["creado_en"] = now
+
+                def _up(r=row):
+                    return (
+                        supabase.table("so_auditoria_hallazgos")
+                        .upsert(r, on_conflict="contrato_id,fingerprint")
+                        .execute()
+                        .data
+                    )
+
+                supabase_execute(_up)
+                hallazgos_upserted += 1
+            except Exception as exc_h:
+                _log_api.warning("dibujar-masivo hallazgo: %s", exc_h)
+
+    for reg in rows:
+        rid = reg.get("id")
+        if rid is None:
+            continue
+        if reg.get("huella_geojson"):
+            acumular_resultado(resumen_batch, None, ya_dibujado=True)
+            continue
+        try:
+            fr = _sicoe_analizar_huella_registro(contrato_id, reg)
+        except Exception as exc:
+            _log_api.warning("dibujar-masivo reg=%s: %s", rid, exc)
+            fr = {"omitido": True, "huella": None, "hallazgos": []}
+
+        if fr.get("omitido") or not fr.get("huella"):
+            # Marker para salir del filtro IS NULL sin dibujar geometría visible.
+            _sicoe_persistir_huella_registro(
+                contrato_id,
+                int(rid),
+                {
+                    "huella": {
+                        "type": "Feature",
+                        "geometry": None,
+                        "properties": {"omitida": True, "registro_id": rid},
+                    },
+                    "precision": None,
+                    "huella_tipo": None,
+                },
+            )
+            acumular_resultado(resumen_batch, fr)
+            _upsert_hallazgos(fr)
+            continue
+
+        _sicoe_persistir_huella_registro(contrato_id, int(rid), fr)
+        acumular_resultado(resumen_batch, fr)
+        _upsert_hallazgos(fr)
+
+    done = len(rows) < limit or total_pendientes == 0
+
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "DIBUJAR",
+            "SICOE",
+            "huellas_masivo",
+            str(contrato_id),
+            {
+                "limit": limit,
+                "lote": len(rows),
+                "resumen_batch": resumen_batch,
+                "hallazgos_upserted": hallazgos_upserted,
+                "done": done,
+                "total_pendientes_inicio": total_pendientes,
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "offset": 0,
+        "limit": limit,
+        "lote": len(rows),
+        "next_offset": 0,
+        "total_pendientes": total_pendientes,
+        "procesados_acum": int(resumen_batch.get("procesados") or 0),
+        "done": done,
+        "resumen_batch": resumen_batch,
+        "hallazgos_upserted": hallazgos_upserted,
     }
 
 

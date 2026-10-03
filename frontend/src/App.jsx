@@ -61,6 +61,7 @@ import SicoeAmbienteAuditoria from './modules/sicoe-obra/SicoeAmbienteAuditoria'
 import { usuarioVeAuditoriaTraslapos } from './modules/sicoe-obra/sicoeAuditoriaTraslapos'
 import SicoeMapaHuellas from './modules/sicoe-obra/SicoeMapaHuellas'
 import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegistrosActasModal'
+import SicoeDibujarMasivoModal from './modules/sicoe-obra/SicoeDibujarMasivoModal'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -8790,6 +8791,7 @@ function ModuloSicoeObra({
   const [hayMas, setHayMas] = useState(false)
   const [offsetActual, setOffsetActual] = useState(0)
   const [modalMoverActasDev, setModalMoverActasDev] = useState(false)
+  const [modalDibujarMasivoDev, setModalDibujarMasivoDev] = useState(false)
   const [filtros, setFiltros] = useState({
     numero_reporte: '', numero_registro: '',
     semana: '', acta_rpo: '',
@@ -11972,6 +11974,33 @@ function ModuloSicoeObra({
             <button
               type="button"
               className="cc-sicoe-touch-btn"
+              onClick={() => setModalDibujarMasivoDev(true)}
+              title="Dibujar huellas faltantes (Desarrollador)"
+              aria-label="Dibujar huellas de registros sin dibujar"
+              style={{
+                background: 'transparent',
+                color: t.text,
+                border: `1px solid ${t.border}`,
+                borderRadius: '8px',
+                padding: sicoeCompact ? '10px 12px' : '10px 12px',
+                minHeight: sicoeCompact ? 44 : 40,
+                minWidth: sicoeCompact ? 44 : 40,
+                fontWeight: 800,
+                fontSize: 'var(--cc-md)',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                lineHeight: 1,
+              }}
+            >
+              <span aria-hidden="true" style={{ fontSize: 16 }}>✎</span>
+            </button>
+          )}
+          {esUsuarioDesarrollador(usuario) && (
+            <button
+              type="button"
+              className="cc-sicoe-touch-btn"
               onClick={() => setModalMoverActasDev(true)}
               title="Mover / reasignar registros (Desarrollador): entre actas, entre cortes de subcontratista, o reasignar entre subcontratistas"
               aria-label="Mover o reasignar registros entre actas, cortes o subcontratistas"
@@ -12004,6 +12033,18 @@ function ModuloSicoeObra({
         </div>
       </div>
 
+      {modalDibujarMasivoDev && esUsuarioDesarrollador(usuario) && (
+        <SicoeDibujarMasivoModal
+          t={t}
+          API_URL={API_URL}
+          token={getToken()}
+          contratoId={contrato_id}
+          onClose={() => setModalDibujarMasivoDev(false)}
+          onDone={() => {
+            invalidateSicoeVistaCache(contrato_id)
+          }}
+        />
+      )}
       {modalMoverActasDev && esUsuarioDesarrollador(usuario) && (
         <SicoeMoverRegistrosActasModal
           t={t}
