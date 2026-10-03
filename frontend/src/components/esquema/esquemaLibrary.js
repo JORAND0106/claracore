@@ -2,9 +2,8 @@
  * Biblioteca de entidades reutilizables por contrato (localStorage).
  * Independiente del esquema: se comparte entre Seguimiento, SicoeObra y Presupuesto.
  *
- * Medidas reales: world = metros * PX_PER_METER. Las entidades creadas sobre el
- * plano (mapa/huella) se guardan con medidas_reales=true. Las legacy o creadas
- * fuera del plano quedan pendientes hasta calibración (ver esquemaLibraryScale).
+ * Dimensiones: world = metros * PX_PER_METER. Lo dibujado se guarda tal cual
+ * y se inserta a escala 1:1 sobre el plano (ver esquemaLibraryScale).
  */
 import { worldToMeters } from './esquemaGeometry.js'
 
@@ -189,19 +188,16 @@ function persistLibrary(contratoId, items) {
 
 /**
  * @param {string|number} contratoId
- * @param {{ nombre?: string, objects: object[], medidasReales?: boolean }} opts
- * medidasReales=true → dibujo sobre plano (metros reales); false → pendiente de calibración.
+ * @param {{ nombre?: string, objects: object[] }} opts
+ * Conserva las dimensiones con las que se dibujó (world = metros * PX_PER_METER).
  */
-export function saveLibraryItem(contratoId, { nombre, objects, medidasReales = false } = {}) {
+export function saveLibraryItem(contratoId, { nombre, objects } = {}) {
   const cid = resolveContratoId(contratoId)
   if (!cid) return null
   const cloned = cloneForLibrary(objects)
   if (!cloned.length) return null
   const items = loadLibrary(cid)
   const packed = packLibraryBlock(cloned)
-  const anchoM = worldToMeters(packed.w)
-  const altoM = worldToMeters(packed.h)
-  const reales = !!medidasReales && anchoM > 0 && altoM > 0
   const item = {
     id: `lib${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     nombre: String(nombre || 'Bloque').trim() || 'Bloque',
@@ -209,9 +205,8 @@ export function saveLibraryItem(contratoId, { nombre, objects, medidasReales = f
     objects: packed.children,
     w: packed.w,
     h: packed.h,
-    medidas_reales: reales,
-    ancho_m: reales ? anchoM : null,
-    alto_m: reales ? altoM : null,
+    ancho_m: worldToMeters(packed.w),
+    alto_m: worldToMeters(packed.h),
     createdAt: new Date().toISOString(),
   }
   items.unshift(item)
