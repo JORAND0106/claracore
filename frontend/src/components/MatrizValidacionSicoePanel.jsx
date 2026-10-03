@@ -24,33 +24,53 @@ function actaVigenteLabel(matriz, loading, actaFiltroMatriz) {
 }
 
 const TABLAS_MATRIZ = [
-  { key: 'obra_ejecutada_directo_sin_aiu', titulo: 'Obra ejecutada directo sin AIU' },
-  { key: 'ensayos_sondeos_directo_sin_iva', titulo: 'Ensayos y sondeos directo sin IVA' },
+  {
+    key: 'obra_ejecutada_directo_sin_aiu',
+    titulo: 'Obra ejecutada directo sin AIU',
+    sub: 'Sin ensayos/sondeos ni IVA · valor = Σ ROUND0(ROUND(Σcant,2)×VU listado) por capítulo+ítem',
+  },
+  {
+    key: 'ensayos_sondeos_directo_sin_iva',
+    titulo: 'Ensayos y sondeos directo sin IVA',
+    sub: 'Caps. 14–15 o nombre con ensayo/sondeo · misma regla de valorización',
+  },
 ]
 
-function IntegridadAvisoBanner({ integridad, textColor, borderColor, onVerDetalle }) {
+function IntegridadAvisoBanner({ integridad, textColor, borderColor, onVerDetalle, tonoNeutral = false }) {
   if (!integridad?.tiene_inconsistencias) return null
   const n = integridad.n_registros_afectados ?? integridad.n_inconsistencias ?? 0
-  const impacto = integridad.impacto_plata
+  const at = integridad.afectan_totales
+  const st = integridad.valor_guardado_desactualizado
+  const msg =
+    integridad.aviso ||
+    (tonoNeutral
+      ? `Registros por revisar frente al listado de precios: ${n}.`
+      : `${n} registro(s) inconsistentes vs listado de precios` +
+        (integridad.impacto_plata != null
+          ? ` (impacto ≈ ${formatCOP(integridad.impacto_plata)})`
+          : '') +
+        '.')
   return (
     <div
-      role="alert"
+      role="status"
       style={{
         marginBottom: 12,
         padding: '10px 12px',
         borderRadius: 8,
-        border: `1px solid ${borderColor || '#f59e0b'}`,
-        background: 'rgba(245, 158, 11, 0.12)',
-        color: textColor || '#92400e',
+        border: `1px solid ${borderColor || '#94a3b8'}`,
+        background: tonoNeutral ? 'rgba(148, 163, 184, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+        color: textColor || '#334155',
         fontSize: 13,
         lineHeight: 1.4,
       }}
     >
-      <strong>Integridad listado:</strong>{' '}
-      {integridad.aviso ||
-        `${n} registro(s) inconsistentes vs listado de precios` +
-          (impacto != null ? ` (impacto ≈ ${formatCOP(impacto)})` : '') +
-          '.'}
+      <strong>{tonoNeutral ? 'Revisión listado:' : 'Integridad listado:'}</strong> {msg}
+      {at || st ? (
+        <div style={{ marginTop: 4, fontSize: 12, opacity: 0.9 }}>
+          {at ? `Afectan totales: ${at.n_registros ?? 0}. ` : ''}
+          {st ? `Valor guardado desactualizado: ${st.n_registros ?? 0}.` : ''}
+        </div>
+      ) : null}
       {typeof onVerDetalle === 'function' ? (
         <>
           {' '}
@@ -60,7 +80,7 @@ function IntegridadAvisoBanner({ integridad, textColor, borderColor, onVerDetall
             style={{
               background: 'transparent',
               border: 'none',
-              color: '#b45309',
+              color: tonoNeutral ? '#334155' : '#b45309',
               fontWeight: 700,
               cursor: 'pointer',
               textDecoration: 'underline',
@@ -92,6 +112,8 @@ export default function MatrizValidacionSicoePanel({
   actaFiltroMatriz = 'vigente',
   actasListaMatriz = [],
   onActaFiltroChange,
+  /** Solo Admin/Desarrollador: el aviso de integridad ya no va en el tablero público. */
+  showIntegridad = false,
   onVerIntegridad,
 }) {
   const du = getDashTypoUI(fontSize)
@@ -112,7 +134,7 @@ export default function MatrizValidacionSicoePanel({
   const colsMatriz = [...naMat].sort((a, b) => b - a)
   const nMinMat = naMat[0] ?? 1
 
-  const renderTabla = (titulo, bloque) => {
+  const renderTabla = (titulo, bloque, sub) => {
     const b = mergeMatrizBloque(bloque, colsMatriz)
     return (
       <div key={titulo} style={{ marginBottom: 18 }}>
@@ -121,12 +143,17 @@ export default function MatrizValidacionSicoePanel({
             fontSize: du.sub,
             fontWeight: 800,
             color: textColor,
-            marginBottom: 8,
+            marginBottom: 4,
             letterSpacing: '0.3px',
           }}
         >
           {titulo}
         </div>
+        {sub ? (
+          <div style={{ fontSize: du.sub, color: textMuted, marginBottom: 8, lineHeight: 1.35 }}>
+            {sub}
+          </div>
+        ) : null}
         <div className={isCapture ? undefined : 'cc-dash-table-wrap'} style={isCapture ? undefined : { overflowX: 'auto' }}>
           <table
             style={{
@@ -220,9 +247,9 @@ export default function MatrizValidacionSicoePanel({
         </div>
         {!isCapture && (
           <div style={{ fontSize: du.sub, color: textMuted, marginTop: 4 }}>
-            Por defecto se usa el acta RPO cuyo período incluye hoy. Control de validación de cantidades
-            ejecutadas (SICOE Obra), independiente del módulo de presupuesto. Valor = cant×VU listado
-            (capítulo+ítem).
+            Por defecto se usa el acta RPO cuyo período incluye hoy. Cada celda = estado en ese nivel
+            (con prerrequisitos aprobados). Valor = ROUND0(ROUND(Σcant,2)×VU listado) por capítulo+ítem —
+            misma regla que Ppto vs Cobro / Total Cobrado para el mismo acta, nivel y capítulos.
           </div>
         )}
         {isCapture ? (
@@ -284,12 +311,15 @@ export default function MatrizValidacionSicoePanel({
         )}
       </div>
 
-      <IntegridadAvisoBanner
-        integridad={matriz?.integridad}
-        textColor={isCapture ? '#92400e' : t.text}
-        borderColor="#f59e0b"
-        onVerDetalle={onVerIntegridad}
-      />
+      {showIntegridad ? (
+        <IntegridadAvisoBanner
+          integridad={matriz?.integridad}
+          textColor={isCapture ? '#334155' : t.text}
+          borderColor="#94a3b8"
+          tonoNeutral
+          onVerDetalle={onVerIntegridad}
+        />
+      ) : null}
 
       {!matriz && !loading ? (
         <div style={{ fontSize: du.body, color: textMuted, padding: '12px 0' }}>Sin datos de validación.</div>
@@ -307,7 +337,7 @@ export default function MatrizValidacionSicoePanel({
               prerequisitos aprobados en niveles inferiores).
             </div>
           )}
-          {TABLAS_MATRIZ.map(({ key, titulo }) => renderTabla(titulo, matriz?.[key]))}
+          {TABLAS_MATRIZ.map(({ key, titulo, sub }) => renderTabla(titulo, matriz?.[key], sub))}
         </>
       )}
     </>

@@ -31,6 +31,25 @@ TIPOS_INCONSISTENCIA = (
     "cd_guardado_distinto_cant_x_vu",
 )
 
+# Afectan totales canónicos (no hay VU listado / no se puede cruzar).
+TIPOS_AFECTAN_TOTALES = frozenset(
+    {
+        "sin_capitulo",
+        "sin_item",
+        "cap_item_ausente_en_listado",
+    }
+)
+# Valores stamp desactualizados: la plataforma ya recalcula con listado; no cambian el total canónico.
+TIPOS_VALOR_GUARDADO_DESACTUALIZADO = frozenset(
+    {
+        "vu_guardado_distinto_listado",
+        "cd_guardado_distinto_cant_x_vu",
+    }
+)
+
+CASO_AFECTA_TOTALES = "afecta_totales"
+CASO_VALOR_GUARDADO = "valor_guardado_desactualizado"
+
 
 def _sf(n: Any, default: float = 0.0) -> float:
     if n is None or n == "":
@@ -384,18 +403,63 @@ def resumen_integridad(incs: Sequence[InconsistenciaRegistro]) -> dict:
     by_tipo: Dict[str, int] = defaultdict(int)
     impacto = 0.0
     ids = set()
+    impacto_afecta = 0.0
+    impacto_stale = 0.0
+    ids_afecta = set()
+    ids_stale = set()
+    n_afecta = 0
+    n_stale = 0
     for i in incs or []:
         by_tipo[i.tipo] += 1
         impacto += abs(i.impacto_plata or 0.0)
         if i.registro_id is not None:
             ids.add(i.registro_id)
+        caso = clasificar_caso_integridad(i.tipo)
+        if caso == CASO_AFECTA_TOTALES:
+            n_afecta += 1
+            impacto_afecta += abs(i.impacto_plata or 0.0)
+            if i.registro_id is not None:
+                ids_afecta.add(i.registro_id)
+        else:
+            n_stale += 1
+            impacto_stale += abs(i.impacto_plata or 0.0)
+            if i.registro_id is not None:
+                ids_stale.add(i.registro_id)
     return {
         "n_inconsistencias": len(incs or []),
         "n_registros_afectados": len(ids),
         "impacto_plata": round_valor(impacto),
         "por_tipo": dict(by_tipo),
         "tiene_inconsistencias": bool(incs),
+        "afectan_totales": {
+            "n_inconsistencias": n_afecta,
+            "n_registros": len(ids_afecta),
+            "impacto_plata": round_valor(impacto_afecta),
+        },
+        "valor_guardado_desactualizado": {
+            "n_inconsistencias": n_stale,
+            "n_registros": len(ids_stale),
+            "impacto_plata": round_valor(impacto_stale),
+        },
     }
+
+
+def clasificar_caso_integridad(tipo: str) -> str:
+    if tipo in TIPOS_AFECTAN_TOTALES:
+        return CASO_AFECTA_TOTALES
+    return CASO_VALOR_GUARDADO
+
+
+def inconsistencia_con_caso(inc: InconsistenciaRegistro) -> dict:
+    d = inc.to_dict()
+    caso = clasificar_caso_integridad(inc.tipo)
+    d["caso"] = caso
+    d["caso_label"] = (
+        "Sin cruce con listado / sin capítulo o ítem (afecta totales calculados)"
+        if caso == CASO_AFECTA_TOTALES
+        else "Valor guardado desactualizado (no afecta cifras calculadas con listado)"
+    )
+    return d
 
 
 # ── Trazabilidad (estado) ────────────────────────────────────────────────────

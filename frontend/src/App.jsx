@@ -21451,16 +21451,36 @@ const [navReporteId, setNavReporteId] = useState(null)
             {/* ── KPIs compactos ── */}
             <div className="cc-dash-kpi-row" style={{ display:'grid', gridTemplateColumns: dashMobile ? '1fr' : (dashTablet ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)'), gap:'10px', marginBottom:'16px' }}>
               {(() => {
+                const cobradoAiu = Number(capFinTot?.cobrado) || 0
+                const cobradoIva = Number(capFinTotIva?.cobrado) || 0
+                const composicionSicoe =
+                  cobradoAiu || cobradoIva
+                    ? `= Ppto vs Cobro AIU (${fmtD(cobradoAiu)}) + IVA (${fmtD(cobradoIva)}) · con AIU e IVA según tabla · ${kpiNm.encabezado} aprobado`
+                    : kpiCobro
+                      ? `${kpiCobro.actas?.length || 0} actas · ${kpiNm.encabezado} aprobado · AIU+IVA+ensayos según listado`
+                      : `${kpiNm.encabezado} aprobado · AIU+IVA`
                 const kpis = [
                   {
                     label: `SICOE ${kpiNm.corto} APROBADO`,
                     value: fmtD(sicoeAp),
-                    sub: kpiCobro ? `${kpiCobro.actas?.length || 0} actas · ${kpiNm.encabezado}` : kpiNm.encabezado,
+                    sub: composicionSicoe,
                     color: '#0077B6',
                     icon: '🏛️',
                   },
-                  { label:'PPTO. CLARACORE APROB. NIVEL MÁX.', value: fmtD(pptoApN3), sub: 'Columna revisado = Aprobado', color:'#0f766e', icon:'✅' },
-                  { label:'PPTO. CLARACORE NO REVIS. NIVEL MÁX.', value: fmtD(pptoNrN3), sub: 'Pendiente / No revisado / Rechazado', color:'#ca8a04', icon:'📋' },
+                  {
+                    label: 'PPTO. CLARACORE APROB. NIVEL MÁX.',
+                    value: fmtD(pptoApN3),
+                    sub: 'Presupuesto ClaraCore · revisado = Aprobado · sin filtro AIU/IVA',
+                    color: '#0f766e',
+                    icon: '✅',
+                  },
+                  {
+                    label: 'PPTO. CLARACORE NO REVIS. NIVEL MÁX.',
+                    value: fmtD(pptoNrN3),
+                    sub: 'Presupuesto ClaraCore · Pendiente / No revisado / Rechazado',
+                    color: '#ca8a04',
+                    icon: '📋',
+                  },
                 ]
                 return kpis.map((k, ki) => (
                   <div key={k.label} className={dashTablet && !dashMobile && ki === 2 ? 'cc-dash-kpi-card-span' : undefined} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
@@ -21487,7 +21507,9 @@ const [navReporteId, setNavReporteId] = useState(null)
                       {panelFoco === 'cobro-acta' ? '⊠' : '⤢'}
                     </button>
                   </div>
-                    <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>{kpiNm.encabezado} aprobado · acumulado por Acta RPO</div>
+                    <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
+                      {kpiNm.encabezado} aprobado · acumulado por Acta RPO · incluye AIU+IVA (misma base que la tarjeta SICOE nivel máx.)
+                    </div>
                   </div>
                   <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:t.primary }}>{fmtD(sicoeAp)}</div>
                 </div>
@@ -21648,10 +21670,11 @@ const [navReporteId, setNavReporteId] = useState(null)
                     </button>
                   </div>
                   <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
-                    Total ClaraCore · Total Cobrado · Δ — vista: <strong style={{ color: t.text }}>{dashVistaEjecucion}</strong>
+                    Total ClaraCore · Total Cobrado (nivel máx. aprobado, cant×VU listado) · Δ — vista:{' '}
+                    <strong style={{ color: t.text }}>{dashVistaEjecucion}</strong>
                     {' · '}
                     <span title="Solo ítems con tipo de cálculo AIU en listado de precios; excluye IVA y capítulos de ensayos/sondeos">
-                      solo AIU
+                      solo AIU (sin ensayos ni IVA)
                     </span>
                     {dashCapFinLoading && capFinRows.length === 0 ? ' · Cargando tabla…' : ''}
                   </div>
@@ -21713,35 +21736,6 @@ const [navReporteId, setNavReporteId] = useState(null)
                   actaFiltroMatriz={actaFiltroMatriz}
                   actasListaMatriz={actasListaMatriz}
                   onActaFiltroChange={setActaFiltroMatriz}
-                  onVerIntegridad={() => {
-                    const cid = contratoIdDash
-                    if (!cid) return
-                    const pm = new URLSearchParams()
-                    if (actaFiltroMatriz === 'all') pm.set('todo_contrato', 'true')
-                    else if (actaFiltroMatriz && actaFiltroMatriz !== 'vigente') pm.set('acta_rpo', String(actaFiltroMatriz))
-                    else if (matrizValidacion?.acta_rpo != null) pm.set('acta_rpo', String(matrizValidacion.acta_rpo))
-                    const tok = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null
-                    fetch(`${API_URL}/sicoe-obra/${cid}/integridad-listado?${pm}`, {
-                      headers: tok ? { Authorization: `Bearer ${tok}` } : {},
-                    })
-                      .then((r) => (r.ok ? r.json() : null))
-                      .then((j) => {
-                        if (!j) return
-                        const lines = (j.inconsistencias || []).slice(0, 40).map(
-                          (i) =>
-                            `#${i.numero_registro ?? i.registro_id} ${i.item_numero || '—'} · ${i.tipo} · $${Number(i.impacto_plata || 0).toLocaleString('es-CO')}`,
-                        )
-                        window.alert(
-                          (j.aviso || 'Integridad listado') +
-                            '\n\n' +
-                            lines.join('\n') +
-                            ((j.inconsistencias || []).length > 40
-                              ? `\n… +${j.inconsistencias.length - 40} más`
-                              : ''),
-                        )
-                      })
-                      .catch(() => {})
-                  }}
                 />
               </div>
               </div>

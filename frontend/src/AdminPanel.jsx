@@ -23,6 +23,7 @@ import { useClaraViewport } from "./useClaraViewport";
 import { esDesarrolladorUsuario } from "./utils/permisosContrato";
 import { PERMISOS_ADMIN_TODOS } from "./admin/catalogoInsumosPermisos";
 import SeccionAlmacenamientoAzure from "./admin/SeccionAlmacenamientoAzure";
+import SeccionIntegridadListado from "./admin/SeccionIntegridadListado";
 import { notifyListadoMetaChanged } from "./cache/listadoMetaEvents";
 import SeccionSubcontratistas from "./modules/subcontratistas";
 import { formatFechaLogBogota } from "./utils/fechaColombia";
@@ -7915,6 +7916,7 @@ const ADMIN_PANEL_TABS = [
   { id: "permisos",  label: "Control de accesos"  },
   { id: "contratos", label: "Contratos"            },
   { id: "precios",          label: "Listado de Precios"   },
+  { id: "integridad-listado", label: "Revisión vs listado", soloAdmin: true },
   { id: "subcontratistas",  label: "Subcontratistas"       },
   { id: "resets",           label: "Reset Claves"          },
   { id: "actas",       label: "Actas", soloAdmin: false },
@@ -8024,6 +8026,10 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
     permisos:  { title: "Control de accesos",     sub: "Configura qué puede hacer cada cargo" },
     contratos: { title: "Contratos",              sub: "Crea y gestiona contratos del sistema" },
     precios:          { title: "Listado de Precios",    sub: "Edita, carga y descarga el listado de precios por contrato" },
+    "integridad-listado": {
+      title: "Revisión vs listado de precios",
+      sub: "Registros por revisar: sin cruce (afectan totales) vs valores guardados desactualizados. Solo Admin/Desarrollador.",
+    },
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },
     resets:           { title: "Reset Claves",          sub: "Autoriza el reset: genera contraseña PRO y la envía por correo con enlace" },
     actas:       { title: "Actas", sub: "Crear actas RPO y administrativas; cierre anticipado y traslado de residuales (RPO)" },
@@ -8061,7 +8067,7 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
   }, [cargarCargos]);
 
   useEffect(() => {
-    const needContratos = ["contratos", "precios", "subcontratistas", "actas", "inicio"].includes(tab);
+    const needContratos = ["contratos", "precios", "integridad-listado", "subcontratistas", "actas", "inicio"].includes(tab);
     if (needContratos && !contratosPanelFetchRef.current) {
       contratosPanelFetchRef.current = true;
       void cargarContratos();
@@ -8251,6 +8257,14 @@ export default function AdminPanel({ user, token, onClose, onContratosMutated, a
             }
           />}
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={permsDevOAdmin || precioPerms} theme={activeTheme} modoCantidad={modoCantidadPrecios} modoVista={modoVistaPrecios} onModoVistaChange={setModoVistaPreciosPersist} />}
+            {tab === "integridad-listado" && (
+              <SeccionIntegridadListado
+                call={call}
+                contratos={contratosVisibles}
+                theme={t}
+                token={token}
+              />
+            )}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={permsDevOAdmin || subPerms} theme={activeTheme} token={token} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
