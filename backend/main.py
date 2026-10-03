@@ -28662,11 +28662,13 @@ def _sicoe_hallazgo_row_from_analisis(contrato_id: int, h: dict, prev: Optional[
 @app.post("/sicoe-obra/{contrato_id}/auditoria-hallazgos/sincronizar")
 def sicoe_auditoria_hallazgos_sincronizar(
     contrato_id: int,
+    incluir_huellas: bool = False,
     current_user=Depends(get_current_user),
 ):
     """
-    Recalcula hallazgos del contrato (traslapos/vacíos + ubicación/costado),
-    upsert por fingerprint, marca ausentes como corregido y regenera huellas.
+    Recalcula hallazgos del contrato (traslapos/vacíos).
+    Por defecto NO regenera todas las huellas (evitar timeout en tablet/móvil).
+    Pass incluir_huellas=true para también refrescar ubicación/costado vía huellas.
     """
     from sicoe_auditoria_traslapos import (
         analizar_contrato,
@@ -28682,26 +28684,37 @@ def sicoe_auditoria_hallazgos_sincronizar(
     tol = _sicoe_tolerancia_traslapo_contrato(contrato_id)
     tol_ubic = _sicoe_tolerancia_ubicacion_contrato(contrato_id)
     regs = _sicoe_auditoria_regs_contrato(contrato_id)
-    analisis = analizar_contrato(regs, tolerancia_m=tol)
+    try:
+        analisis = analizar_contrato(regs, tolerancia_m=tol)
+    except Exception as exc:
+        _log_api.exception("analizar_contrato contrato=%s", contrato_id)
+        raise HTTPException(500, f"No se pudo analizar el contrato: {exc}") from exc
     vivos = {h["fingerprint"]: h for h in (analisis.get("hallazgos") or []) if h.get("fingerprint")}
 
-    # Huellas (franja / nodo / polígono) + hallazgos espaciales
-    ejes = _sicoe_ejes_contrato(contrato_id)
+    ejes = []
     huellas_features = []
-    for reg in regs:
+    if incluir_huellas:
         try:
-            fr = _sicoe_analizar_huella_registro(contrato_id, reg)
+            ejes = _sicoe_ejes_contrato(contrato_id)
         except Exception as exc:
-            _log_api.warning("huella sync reg=%s: %s", reg.get("id"), exc)
-            continue
-        if reg.get("id"):
-            _sicoe_persistir_huella_registro(contrato_id, int(reg["id"]), fr)
-            if fr.get("huella") is not None:
-                huellas_features.append(fr["huella"])
-        for h in fr.get("hallazgos") or []:
-            fp = h.get("fingerprint")
-            if fp and fp not in vivos:
-                vivos[fp] = h
+            _log_api.warning("ejes sync contrato=%s: %s", contrato_id, exc)
+            ejes = []
+        # Límite defensivo: regenerar huellas de a bloques para no tumbar el request
+        _MAX_HUELLAS_SYNC = 200
+        for reg in (regs or [])[:_MAX_HUELLAS_SYNC]:
+            try:
+                fr = _sicoe_analizar_huella_registro(contrato_id, reg)
+            except Exception as exc:
+                _log_api.warning("huella sync reg=%s: %s", reg.get("id"), exc)
+                continue
+            if reg.get("id"):
+                _sicoe_persistir_huella_registro(contrato_id, int(reg["id"]), fr)
+                if fr.get("huella") is not None:
+                    huellas_features.append(fr["huella"])
+            for h in fr.get("hallazgos") or []:
+                fp = h.get("fingerprint")
+                if fp and fp not in vivos:
+                    vivos[fp] = h
 
     existentes = _sicoe_hallazgos_tabla_lista(contrato_id)
     by_fp = {str(r.get("fingerprint")): r for r in existentes if r.get("fingerprint")}
@@ -28755,6 +28768,13 @@ def sicoe_auditoria_hallazgos_sincronizar(
             ) from exc
 
     filas = _sicoe_hallazgos_tabla_lista(contrato_id)
+    eje_fc = {"type": "FeatureCollection", "features": []}
+    try:
+        if not ejes and incluir_huellas is False:
+            ejes = _sicoe_ejes_contrato(contrato_id)
+        eje_fc = ejes_to_geojson(ejes) if ejes else eje_fc
+    except Exception:
+        pass
     return {
         "ok": True,
         "tolerancia_m": tol,
@@ -28762,10 +28782,11 @@ def sicoe_auditoria_hallazgos_sincronizar(
         "sincronizados": len(upserts),
         "corregidos": corregidos,
         "huellas": len(huellas_features),
+        "incluir_huellas": bool(incluir_huellas),
         "semaforo": analisis.get("semaforo"),
         "resumen": resumen_ambiente_desde_filas(filas),
         "hallazgos": filas,
-        "eje": ejes_to_geojson(ejes),
+        "eje": eje_fc,
     }
 
 
@@ -29191,6 +29212,7 @@ def sicoe_auditoria_hallazgos_listar(
     }
 
 
+
 @app.post("/sicoe-obra/{contrato_id}/auditoria-hallazgos/{hallazgo_id}/justificar")
 def sicoe_auditoria_hallazgos_justificar(
     contrato_id: int,
@@ -29411,6 +29433,251 @@ class AsignarItemBody(BaseModel):
     sector: Optional[str] = None
     geometria_tipo: Optional[str] = None
     coords_geojson: Optional[Dict[str, Any]] = None
+
+
+def _sicoe_enriquecer_involucrados_detalle(contrato_id: int, involucrados: List[dict]) -> List[dict]:
+    """Rellena reporte/fecha/usuario/cantidades de registros involucrados para el detalle."""
+    from sicoe_auditoria_traslapos import _snapshot_involucrado
+
+    ids = []
+    for r in involucrados or []:
+        try:
+            if r and r.get("id") is not None:
+                ids.append(int(r["id"]))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return list(involucrados or [])
+
+    regs_by_id: Dict[Any, dict] = {}
+    try:
+        def _q():
+            return (
+                supabase.table("so_registros")
+                .select(
+                    _SICOE_AUDITORIA_PEER_SELECT
+                    + ", creado_por_reg, created_at, updated_at"
+                )
+                .eq("contrato_id", contrato_id)
+                .in_("id", ids)
+                .execute()
+                .data
+            )
+        for r in supabase_execute(_q) or []:
+            regs_by_id[r.get("id")] = r
+            regs_by_id[str(r.get("id"))] = r
+    except Exception as exc:
+        _log_api.warning("enrich involucrados regs contrato=%s: %s", contrato_id, exc)
+        try:
+            def _q2():
+                return (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, tramo, infraestructura, "
+                        "calzada, margen, abs_inicio, abs_final, pk_id_id, cantidad_total, vlr_unitario, "
+                        "creado_por_reg, created_at"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .in_("id", ids)
+                    .execute()
+                    .data
+                )
+            for r in supabase_execute(_q2) or []:
+                regs_by_id[r.get("id")] = r
+                regs_by_id[str(r.get("id"))] = r
+        except Exception as exc2:
+            _log_api.warning("enrich involucrados fallback: %s", exc2)
+
+    rep_ids = []
+    user_ids = []
+    for r in regs_by_id.values():
+        if r.get("reporte_id") is not None:
+            try:
+                rep_ids.append(int(r["reporte_id"]))
+            except (TypeError, ValueError):
+                pass
+        if r.get("creado_por_reg") is not None:
+            try:
+                user_ids.append(int(r["creado_por_reg"]))
+            except (TypeError, ValueError):
+                pass
+    rep_ids = list(dict.fromkeys(rep_ids))
+    user_ids = list(dict.fromkeys(user_ids))
+
+    rep_map: Dict[Any, dict] = {}
+    if rep_ids:
+        try:
+            def _qr():
+                return (
+                    supabase.table("so_reportes")
+                    .select("id, numero_reporte, created_at, creado_por")
+                    .eq("contrato_id", contrato_id)
+                    .in_("id", rep_ids)
+                    .execute()
+                    .data
+                )
+            for rep in supabase_execute(_qr) or []:
+                rep_map[rep.get("id")] = rep
+                rep_map[str(rep.get("id"))] = rep
+                if rep.get("creado_por") is not None:
+                    try:
+                        user_ids.append(int(rep["creado_por"]))
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as exc:
+            _log_api.warning("enrich involucrados reportes: %s", exc)
+
+    user_ids = list(dict.fromkeys(user_ids))
+    user_map: Dict[Any, str] = {}
+    if user_ids:
+        try:
+            def _qu():
+                return (
+                    supabase.table("usuarios")
+                    .select("id, nombre, apellidos, email")
+                    .in_("id", user_ids)
+                    .execute()
+                    .data
+                )
+            for u in supabase_execute(_qu) or []:
+                nom = " ".join(
+                    p for p in [(u.get("nombre") or "").strip(), (u.get("apellidos") or "").strip()] if p
+                ).strip() or (u.get("email") or "")
+                user_map[u.get("id")] = nom
+                user_map[str(u.get("id"))] = nom
+        except Exception as exc:
+            _log_api.warning("enrich involucrados usuarios: %s", exc)
+
+    out = []
+    for snap in involucrados or []:
+        rid = snap.get("id") if snap else None
+        full = regs_by_id.get(rid) or regs_by_id.get(str(rid)) if rid is not None else None
+        merged = dict(full or snap or {})
+        for k, v in (snap or {}).items():
+            if merged.get(k) is None and v is not None:
+                merged[k] = v
+        rep = rep_map.get(merged.get("reporte_id")) or rep_map.get(str(merged.get("reporte_id") or ""))
+        if rep:
+            if merged.get("numero_reporte") is None:
+                merged["numero_reporte"] = rep.get("numero_reporte")
+            if not merged.get("fecha"):
+                merged["fecha"] = rep.get("created_at")
+            if not merged.get("usuario_nombre") and rep.get("creado_por") is not None:
+                merged["usuario_nombre"] = user_map.get(rep.get("creado_por")) or user_map.get(
+                    str(rep.get("creado_por"))
+                )
+        if not merged.get("usuario_nombre") and merged.get("creado_por_reg") is not None:
+            merged["usuario_nombre"] = user_map.get(merged.get("creado_por_reg")) or user_map.get(
+                str(merged.get("creado_por_reg"))
+            )
+        if not merged.get("fecha"):
+            merged["fecha"] = merged.get("created_at") or merged.get("updated_at")
+        out.append(_snapshot_involucrado(merged))
+    return out
+
+
+def _sicoe_historial_hallazgo(hallazgo_id: int) -> List[dict]:
+    """Alertas y decisiones registradas para un hallazgo (logs)."""
+    try:
+        def _q():
+            return (
+                supabase.table("logs")
+                .select(
+                    "id, created_at, accion, usuario_nombre, resultado, detalle, severidad"
+                )
+                .eq("entidad_tipo", "hallazgo")
+                .eq("entidad_id", str(hallazgo_id))
+                .order("created_at", desc=False)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        _log_api.warning("historial hallazgo %s: %s", hallazgo_id, exc)
+        return []
+    out = []
+    for r in rows:
+        det = r.get("detalle") if isinstance(r.get("detalle"), dict) else {}
+        if isinstance(r.get("detalle"), str):
+            try:
+                import json as _json
+                det = _json.loads(r["detalle"]) or {}
+            except Exception:
+                det = {}
+        out.append(
+            {
+                "id": r.get("id"),
+                "fecha": r.get("created_at"),
+                "accion": r.get("accion"),
+                "usuario_nombre": r.get("usuario_nombre"),
+                "resultado": r.get("resultado"),
+                "justificacion": (det or {}).get("justificacion"),
+                "tipo": (det or {}).get("tipo") or (det or {}).get("tipo_hallazgo"),
+                "detalle": det or {},
+            }
+        )
+    return out
+
+
+@app.get("/sicoe-obra/{contrato_id}/auditoria-hallazgos/{hallazgo_id}")
+def sicoe_auditoria_hallazgos_detalle(
+    contrato_id: int,
+    hallazgo_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Detalle completo de un hallazgo: registros enriquecidos + historial."""
+    from sicoe_auditoria_traslapos import usuario_ve_auditoria_traslapos
+
+    if not usuario_ve_auditoria_traslapos(current_user):
+        raise HTTPException(403, "El detalle de hallazgos es exclusivo del contratista.")
+
+    try:
+        def _q():
+            return (
+                supabase.table("so_auditoria_hallazgos")
+                .select("*")
+                .eq("id", hallazgo_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        raise HTTPException(500, f"No se pudo leer el hallazgo: {exc}") from exc
+
+    if not rows:
+        raise HTTPException(404, "Hallazgo no encontrado.")
+    row = dict(rows[0])
+    inv = row.get("registros_involucrados") or []
+    if isinstance(inv, str):
+        try:
+            import json as _json
+            inv = _json.loads(inv) or []
+        except Exception:
+            inv = []
+    row["registros_involucrados"] = _sicoe_enriquecer_involucrados_detalle(contrato_id, inv)
+    historial = _sicoe_historial_hallazgo(hallazgo_id)
+    if (
+        str(row.get("estado") or "").lower() == "justificado"
+        and row.get("justificacion")
+        and not any((h.get("justificacion") == row.get("justificacion")) for h in historial)
+    ):
+        historial.append(
+            {
+                "id": None,
+                "fecha": row.get("justificado_en"),
+                "accion": "AUDITORIA_HALLAZGO",
+                "usuario_nombre": row.get("justificado_por_nombre"),
+                "resultado": "ok",
+                "justificacion": row.get("justificacion"),
+                "tipo": "auditoria_hallazgo_justificar",
+                "detalle": {"sintetico": True},
+            }
+        )
+    return {"ok": True, "hallazgo": row, "historial": historial}
+
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/asignar-item")
 def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemBody, current_user=Depends(get_current_user)):

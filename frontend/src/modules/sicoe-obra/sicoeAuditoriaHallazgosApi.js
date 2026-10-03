@@ -2,6 +2,7 @@
  * API del Ambiente de Auditoría (hallazgos del contrato).
  */
 import { usuarioVeAuditoriaTraslapos } from './sicoeAuditoriaTraslapos'
+import { mensajeErrorCarga } from './sicoeAuditoriaMensajes'
 
 export async function fetchAuditoriaHallazgos({
   API_URL,
@@ -19,22 +20,60 @@ export async function fetchAuditoriaHallazgos({
   })
   if (!res.ok) {
     const txt = await res.text().catch(() => '')
-    throw new Error(txt || `Error ${res.status}`)
+    throw new Error(mensajeErrorCarga({ message: txt || `Error ${res.status}` }, 'No se pudieron cargar los hallazgos.'))
   }
   return res.json()
 }
 
-export async function syncAuditoriaHallazgos({ API_URL, contratoId, token, usuario }) {
+/**
+ * Sincroniza hallazgos (traslapos/vacíos). Por defecto NO regenera todas las huellas
+ * (evita timeout en tablet/móvil). Pass incluirHuellas=true para refresco completo.
+ */
+export async function syncAuditoriaHallazgos({
+  API_URL,
+  contratoId,
+  token,
+  usuario,
+  incluirHuellas = false,
+}) {
   if (!usuarioVeAuditoriaTraslapos(usuario)) {
     return { ok: true, oculto_por_rol: true, hallazgos: [], resumen: {} }
   }
-  const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/sincronizar`, {
+  const q = incluirHuellas ? '?incluir_huellas=true' : '?incluir_huellas=false'
+  const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/sincronizar${q}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) {
     const txt = await res.text().catch(() => '')
-    throw new Error(txt || `Error ${res.status}`)
+    throw new Error(
+      mensajeErrorCarga(
+        { message: txt || `Error ${res.status}` },
+        'No se pudo sincronizar el análisis de hallazgos.',
+      ),
+    )
+  }
+  return res.json()
+}
+
+export async function fetchAuditoriaHallazgoDetalle({
+  API_URL,
+  contratoId,
+  token,
+  hallazgoId,
+}) {
+  const res = await fetch(
+    `${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/${hallazgoId}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(
+      mensajeErrorCarga(
+        { message: txt || `Error ${res.status}` },
+        'No se pudo cargar el detalle del hallazgo.',
+      ),
+    )
   }
   return res.json()
 }
@@ -84,3 +123,5 @@ export async function fetchAuditoriaHallazgosExport({
   }
   return res.json()
 }
+
+export { mensajeErrorCarga } from './sicoeAuditoriaMensajes'

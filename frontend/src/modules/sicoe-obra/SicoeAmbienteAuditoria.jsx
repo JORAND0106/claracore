@@ -19,6 +19,7 @@ import {
 } from './sicoeAuditoriaHallazgosApi'
 import { downloadSicoeRegistrosExcel } from './sicoeExportExcel'
 import SicoeCantidadesPorItemVista from './SicoeCantidadesPorItemVista'
+import SicoeHallazgoDetalle from './SicoeHallazgoDetalle'
 
 const RESUMEN_KEYS = [
   {
@@ -148,6 +149,8 @@ export default function SicoeAmbienteAuditoria({
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState('')
+  /** true solo tras una consulta GET/sync exitosa; evita fingir auditoría limpia. */
+  const [cargaOk, setCargaOk] = useState(false)
   const [resumenFiltro, setResumenFiltro] = useState(null)
   const [colFiltros, setColFiltros] = useState({})
   const [orden, setOrden] = useState({ col: 'valor_en_juego', dir: 'desc' })
@@ -160,30 +163,72 @@ export default function SicoeAmbienteAuditoria({
   const [exportando, setExportando] = useState(false)
   const [mostrarCorregidos, setMostrarCorregidos] = useState(false)
 
+  const aplicarDatos = useCallback((data) => {
+    const list = Array.isArray(data?.hallazgos) ? data.hallazgos : []
+    setHallazgos(list)
+    setResumen(data?.resumen || resumenAmbienteDesdeFilas(list))
+    setCargaOk(true)
+  }, [])
+
   const cargar = useCallback(
     async ({ sincronizar = false } = {}) => {
       if (!veAuditoria || !contratoId || !token) return
       setError('')
-      if (sincronizar) setSyncing(true)
-      else setLoading(true)
+      setLoading(true)
+      let gotList = false
       try {
-        const data = sincronizar
-          ? await syncAuditoriaHallazgos({ API_URL, contratoId, token, usuario })
-          : await fetchAuditoriaHallazgos({ API_URL, contratoId, token, usuario })
-        const list = Array.isArray(data?.hallazgos) ? data.hallazgos : []
-        setHallazgos(list)
-        setResumen(data?.resumen || resumenAmbienteDesdeFilas(list))
+        // 1) GET rápido: muestra hallazgos persistidos sin esperar el análisis completo
+        const data = await fetchAuditoriaHallazgos({ API_URL, contratoId, token, usuario })
+        aplicarDatos(data)
+        gotList = true
       } catch (e) {
-        setError(e?.message || 'No se pudieron cargar los hallazgos')
+        setCargaOk(false)
+        setError(
+          e?.message
+          || 'No se pudieron cargar los hallazgos. Compruebe la conexión e intente de nuevo.',
+        )
       } finally {
         setLoading(false)
+      }
+
+      if (!sincronizar) return
+
+      // 2) Sync ligero (sin regenerar todas las huellas) en segundo plano
+      setSyncing(true)
+      try {
+        const sync = await syncAuditoriaHallazgos({
+          API_URL,
+          contratoId,
+          token,
+          usuario,
+          incluirHuellas: false,
+        })
+        aplicarDatos(sync)
+        setError('')
+      } catch (e) {
+        const msg =
+          e?.message
+          || 'No se pudo actualizar el análisis de hallazgos.'
+        if (gotList) {
+          setError(
+            `${msg} Se muestran los hallazgos guardados. Use Reintentar para volver a sincronizar.`,
+          )
+        } else {
+          setCargaOk(false)
+          setError(msg)
+        }
+      } finally {
         setSyncing(false)
       }
     },
-    [API_URL, contratoId, token, usuario, veAuditoria],
+    [API_URL, aplicarDatos, contratoId, token, usuario, veAuditoria],
   )
 
   useEffect(() => {
+    setCargaOk(false)
+    setHallazgos([])
+    setResumen(resumenAmbienteDesdeFilas([]))
+    setSeleccionadoId(null)
     void cargar({ sincronizar: true })
   }, [contratoId, refreshNonce]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -270,6 +315,19 @@ export default function SicoeAmbienteAuditoria({
     }
     return [...set]
   }, [seleccionado])
+
+  // Clave estable para no remountar el mapa en cada render
+  const filterItemKey = useMemo(() => {
+    const items = [
+      ...new Set(filtrados.map((h) => h.item_numero).filter(Boolean).map(String)),
+    ].sort()
+    return items.join('|')
+  }, [filtrados])
+
+  const filterItemNumeros = useMemo(
+    () => (filterItemKey ? filterItemKey.split('|') : []),
+    [filterItemKey],
+  )
 
   const toggleOrden = (col) => {
     setOrden((prev) => {
@@ -565,31 +623,36 @@ export default function SicoeAmbienteAuditoria({
         }}
       >
         {RESUMEN_KEYS.map(({ key, label, color }) => {
-          const block = resumen?.[key] || { cantidad: 0, valor: 0 }
+          const block = cargaOk ? (resumen?.[key] || { cantidad: 0, valor: 0 }) : null
           const active = resumenFiltro === key
           return (
             <button
               key={key}
               type="button"
-              onClick={() => setResumenFiltro((prev) => (prev === key ? null : key))}
+              disabled={!cargaOk}
+              onClick={() => {
+                if (!cargaOk) return
+                setResumenFiltro((prev) => (prev === key ? null : key))
+              }}
               style={{
                 textAlign: 'left',
                 background: active ? `${color}22` : t.bgCard,
                 border: `1px solid ${active ? color : t.border}`,
                 borderRadius: 10,
                 padding: '10px 12px',
-                cursor: 'pointer',
+                cursor: cargaOk ? 'pointer' : 'default',
                 color: t.text,
+                opacity: cargaOk ? 1 : 0.7,
               }}
             >
               <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>
                 {label}
               </div>
               <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 900, color, marginTop: 2 }}>
-                {block.cantidad ?? 0}
+                {block ? (block.cantidad ?? 0) : '—'}
               </div>
               <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 2 }}>
-                {fmtValorCop(block.valor)}
+                {block ? fmtValorCop(block.valor) : '—'}
               </div>
             </button>
           )
@@ -610,11 +673,8 @@ export default function SicoeAmbienteAuditoria({
           <strong style={{ color: t.text }}>Hallazgos</strong>
           {(loading || syncing) && (
             <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
-              {syncing ? 'Sincronizando…' : 'Cargando…'}
+              {syncing ? 'Sincronizando análisis…' : 'Cargando hallazgos…'}
             </span>
-          )}
-          {error && (
-            <span style={{ color: '#dc2626', fontSize: 'var(--cc-caption)' }}>{error}</span>
           )}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
@@ -648,7 +708,7 @@ export default function SicoeAmbienteAuditoria({
           <button
             type="button"
             onClick={() => cargar({ sincronizar: true })}
-            disabled={syncing}
+            disabled={syncing || loading}
             style={{
               background: t.bgCard,
               color: t.text,
@@ -665,7 +725,7 @@ export default function SicoeAmbienteAuditoria({
           <button
             type="button"
             onClick={onExportExcel}
-            disabled={exportando || !filtrados.length}
+            disabled={exportando || !filtrados.length || !cargaOk}
             style={{
               background: t.primary,
               color: '#fff',
@@ -673,15 +733,51 @@ export default function SicoeAmbienteAuditoria({
               borderRadius: 8,
               padding: '6px 10px',
               fontWeight: 700,
-              cursor: filtrados.length ? 'pointer' : 'not-allowed',
+              cursor: filtrados.length && cargaOk ? 'pointer' : 'not-allowed',
               fontSize: 'var(--cc-caption)',
-              opacity: filtrados.length ? 1 : 0.5,
+              opacity: filtrados.length && cargaOk ? 1 : 0.5,
             }}
           >
             {exportando ? 'Exportando…' : 'Excel'}
           </button>
         </div>
       </div>
+
+      {error && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 10,
+            alignItems: 'center',
+            background: '#dc262612',
+            border: '1px solid #dc262655',
+            borderRadius: 10,
+            padding: '10px 12px',
+          }}
+        >
+          <span style={{ color: '#dc2626', fontSize: 'var(--cc-sm)', flex: '1 1 220px' }}>
+            {error}
+          </span>
+          <button
+            type="button"
+            onClick={() => cargar({ sincronizar: true })}
+            disabled={loading || syncing}
+            style={{
+              background: '#dc2626',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: '6px 12px',
+              fontWeight: 800,
+              cursor: loading || syncing ? 'wait' : 'pointer',
+              fontSize: 'var(--cc-caption)',
+            }}
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
 
       {/* Tabla + plano */}
       <div
@@ -738,12 +834,20 @@ export default function SicoeAmbienteAuditoria({
               </tr>
             </thead>
             <tbody>
-              {!filtrados.length ? (
+              {!cargaOk && !loading && error ? (
+                <tr>
+                  <td colSpan={13} style={{ ...sheet.td, textAlign: 'center', color: '#dc2626' }}>
+                    No se pudieron cargar los hallazgos. Use Reintentar.
+                  </td>
+                </tr>
+              ) : !filtrados.length ? (
                 <tr>
                   <td colSpan={13} style={{ ...sheet.td, textAlign: 'center', color: t.textMuted }}>
                     {loading || syncing
                       ? 'Analizando hallazgos del contrato…'
-                      : 'Sin hallazgos con los filtros actuales'}
+                      : cargaOk
+                        ? 'Sin hallazgos con los filtros actuales'
+                        : 'Cargando hallazgos…'}
                   </td>
                 </tr>
               ) : grupos ? (
@@ -817,11 +921,7 @@ export default function SicoeAmbienteAuditoria({
                   ].filter((id) => id != null).map(String),
                 ),
               ],
-              filterItemNumeros: [
-                ...new Set(
-                  filtrados.map((h) => h.item_numero).filter(Boolean).map(String),
-                ),
-              ],
+              filterItemNumeros,
             })
           ) : (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', padding: 12 }}>
@@ -834,6 +934,29 @@ export default function SicoeAmbienteAuditoria({
           </div>
         </div>
       </div>
+
+      {seleccionado && (
+        <SicoeHallazgoDetalle
+          t={t}
+          hallazgo={seleccionado}
+          API_URL={API_URL}
+          contratoId={contratoId}
+          token={token}
+          onCerrar={() => setSeleccionadoId(null)}
+          onAbrirRegistro={(r) => {
+            if (!onAbrirRegistro || !r) return
+            onAbrirRegistro({
+              id: r.id,
+              reporte_id: r.reporte_id,
+              numero_registro: r.numero_registro,
+              item_numero: r.item_numero || seleccionado.item_numero,
+            })
+          }}
+          onJustificado={async () => {
+            await cargar({ sincronizar: false })
+          }}
+        />
+      )}
 
       {/* Por Cantidades embebido */}
       <div
