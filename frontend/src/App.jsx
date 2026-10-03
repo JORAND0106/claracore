@@ -3890,6 +3890,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         vlrUnitario: itemSel?.precio_unitario ?? itemSel?.vlr_unitario ?? registro.vlr_unitario,
         ancho: registro.ancho,
         longitud: registro.longitud,
+        unidad: itemSel?.unidad || registro.unidad || unidadMedicion,
       })
       try {
         const aud = await fetchAuditoriaTraslaposAnalizar({
@@ -5189,6 +5190,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             errores={erroresLocHoja}
             pkIds={pkIdsHoja}
             nodos={nodosHoja}
+            unidadItem={unidadMedicion}
           />
         ) : (
           <SicoeLocalizacionFields
@@ -5196,6 +5198,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             token={getToken()}
             contratoId={contrato_id}
             value={sicoeLocFromRegistro(registro, pkIdsHoja)}
+            unidadItem={unidadMedicion}
             readOnly
           />
         )}
@@ -12583,13 +12586,14 @@ function ModuloSicoeObra({
             refreshNonce={cpiRefreshNonce}
             filtrosVersion={cpiFiltrosVersion}
             exportMeta={exportMetaContrato || {}}
-            renderMap={({ height, highlightRegistroIds, filterItemNumeros }) => (
+            renderMap={({ height, highlightRegistroIds, highlightPkIds, filterItemNumeros }) => (
               <SicoeMapaHuellas
                 t={t}
                 contratoId={contrato_id}
                 token={getToken()}
                 height={height || 320}
                 highlightRegistroIds={highlightRegistroIds || []}
+                highlightPkIds={highlightPkIds || []}
                 filterItemNumeros={filterItemNumeros || null}
               />
             )}

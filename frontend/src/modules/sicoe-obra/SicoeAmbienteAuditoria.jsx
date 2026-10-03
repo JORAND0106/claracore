@@ -54,6 +54,7 @@ const TIPO_LABEL = {
   no_auditable: 'No auditable',
   ubicacion_inconsistente: 'Ubicación inconsistente',
   costado_inconsistente: 'Costado inconsistente',
+  cantidad_mayor_area: 'Cantidad > área',
 }
 
 const ESTADO_LABEL = {
@@ -103,7 +104,9 @@ function matchResumenFiltro(h, key) {
   if (key === 'no_auditables') return tipo === 'no_auditable' && estado === 'pendiente'
   if (key === 'inconsistencias') {
     return (
-      (tipo === 'ubicacion_inconsistente' || tipo === 'costado_inconsistente') &&
+      (tipo === 'ubicacion_inconsistente'
+        || tipo === 'costado_inconsistente'
+        || tipo === 'cantidad_mayor_area') &&
       estado === 'pendiente'
     )
   }
@@ -382,7 +385,9 @@ export default function SicoeAmbienteAuditoria({
         ? '#dc2626'
         : h.tipo === 'vacio'
           ? '#d97706'
-          : h.tipo === 'ubicacion_inconsistente' || h.tipo === 'costado_inconsistente'
+          : h.tipo === 'ubicacion_inconsistente'
+            || h.tipo === 'costado_inconsistente'
+            || h.tipo === 'cantidad_mayor_area'
             ? '#ea580c'
             : '#ca8a04'
     const justOpts = justificacionesParaTipo(h.tipo)
@@ -802,6 +807,14 @@ export default function SicoeAmbienteAuditoria({
               highlightRegistroIds: (seleccionado?.registros_involucrados || [])
                 .map((r) => r?.id)
                 .filter((id) => id != null),
+              highlightPkIds: [
+                ...new Set(
+                  [
+                    seleccionado?.pk_id_id,
+                    ...((seleccionado?.registros_involucrados || []).map((r) => r?.pk_id_id)),
+                  ].filter((id) => id != null).map(String),
+                ),
+              ],
               filterItemNumeros: [
                 ...new Set(
                   filtrados.map((h) => h.item_numero).filter(Boolean).map(String),
