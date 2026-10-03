@@ -11,6 +11,7 @@ export function candidatoAuditoriaDesdeHoja({
   vlrUnitario,
   ancho,
   longitud,
+  unidad,
 }) {
   return {
     id: registro?.id ?? null,
@@ -33,6 +34,9 @@ export function candidatoAuditoriaDesdeHoja({
     coord_lng: locApi.coord_lng ?? registro?.coord_lng ?? null,
     coord_lat_fin: locApi.coord_lat_fin ?? registro?.coord_lat_fin ?? null,
     coord_lng_fin: locApi.coord_lng_fin ?? registro?.coord_lng_fin ?? null,
+    geometria_tipo: locApi.geometria_tipo ?? registro?.geometria_tipo ?? null,
+    coords_geojson: locApi.coords_geojson ?? registro?.coords_geojson ?? null,
+    unidad: unidad ?? locApi.unidad ?? registro?.unidad ?? null,
   }
 }
 

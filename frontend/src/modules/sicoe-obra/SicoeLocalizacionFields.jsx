@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import SicoeFiltroPkMapa from './SicoeFiltroPkMapa'
+import { sugerirGeometriaTipo } from './sicoeHuellasEspacial.js'
 
 const inpStyle = (t, err) => ({
   width: '100%',
@@ -31,14 +32,27 @@ export default function SicoeLocalizacionFields({
   onGpsCapturado = null,
   /** Pantallazo JPEG del plano en el punto del clic (adjuntar como gráfico desde el padre). */
   onMapaCapturado = null,
+  /** Unidad del ítem (para sugerir punto/línea/área). */
+  unidadItem = '',
 }) {
   const [nodoIniSugg, setNodoIniSugg] = useState([])
   const [nodoFinSugg, setNodoFinSugg] = useState([])
   const [nodoIniWarn, setNodoIniWarn] = useState(false)
   const [nodoFinWarn, setNodoFinWarn] = useState(false)
 
+  const nVerts = Array.isArray(value?.coordsVertices) ? value.coordsVertices.length : 0
+  const sugerido = useMemo(
+    () => sugerirGeometriaTipo(
+      { unidad: unidadItem, abs_inicio: value?.absInicio, abs_final: value?.absFinal },
+      nVerts || (value?.coordLat != null ? 1 : 0),
+    ),
+    [unidadItem, value?.absInicio, value?.absFinal, value?.coordLat, nVerts],
+  )
+  const geoTipo = value?.geometriaTipo || sugerido
+
   const patch = (p) => {
     const next = { ...value, ...p }
+    if (!next.geometriaTipo) next.geometriaTipo = sugerido
     onChange?.(next)
     const lat = p.coordLat ?? next.coordLat
     const lng = p.coordLng ?? next.coordLng
@@ -71,6 +85,7 @@ export default function SicoeLocalizacionFields({
           {(pkRow?.civ || value?.civ) && (
             <span> · CIV: {pkRow?.civ || value?.civ} · {pkRow?.tramo || value?.tramo || '—'} · {pkRow?.infraestructura || value?.infraestructura || '—'} · {pkRow?.calzada || value?.calzada || '—'}</span>
           )}
+          <div style={{ marginTop: 4 }}>Geometría: {geoTipo || '—'}</div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', fontSize: 'var(--cc-sm)' }}>
           <div><span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', fontWeight: 700 }}>Costado</span><div>{value?.margen || '—'}</div></div>
@@ -83,12 +98,48 @@ export default function SicoeLocalizacionFields({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    <div>
       {showTitle && (
-        <div style={{ fontSize: 'var(--cc-label)', fontWeight: 800, color: '#F59E0B', letterSpacing: '1px', textTransform: 'uppercase' }}>
-          📍 Localización *
+        <div style={{ fontSize: 'var(--cc-label)', fontWeight: 800, color: '#F59E0B', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '12px' }}>
+          📍 Localización
         </div>
       )}
+
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ fontSize: 'var(--cc-sm)', fontWeight: 600, color: t.textMuted, display: 'block', marginBottom: 4 }}>
+          Tipo de geometría
+        </label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {['punto', 'linea', 'area'].map((g) => (
+            <button
+              key={g}
+              type="button"
+              onClick={() => patch({ geometriaTipo: g })}
+              style={{
+                background: geoTipo === g ? t.primary : 'transparent',
+                color: geoTipo === g ? '#fff' : t.text,
+                border: `1px solid ${geoTipo === g ? t.primary : t.border}`,
+                borderRadius: 8,
+                padding: '6px 12px',
+                fontWeight: 700,
+                fontSize: 'var(--cc-caption)',
+                cursor: 'pointer',
+                textTransform: 'capitalize',
+              }}
+            >
+              {g === 'linea' ? 'Línea' : g === 'area' ? 'Área' : 'Punto'}
+              {sugerido === g && !value?.geometriaTipo ? ' · sugerido' : ''}
+            </button>
+          ))}
+        </div>
+        <div style={{ marginTop: 4, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+          {geoTipo === 'area'
+            ? 'Cada clic en el mapa agrega un vértice del perímetro (≥3 para cerrar).'
+            : geoTipo === 'punto'
+              ? 'Un clic fija el nodo (PK_ID). Puntos cercanos se pegan al mismo nodo.'
+              : 'Clic = inicio; abscisas definen el tramo de la franja sobre el eje.'}
+        </div>
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px', gap: '12px', alignItems: 'start' }}>
         <div>
@@ -106,18 +157,38 @@ export default function SicoeLocalizacionFields({
               const found = pkIds.find((p) => String(p.id) === String(pk_id_id))
               if (!found) return
               if (!screenshotOnly) {
-                patch({
-                  pkSeleccionado: found,
-                  pk_id_id: found.id,
-                  coordLat: coordLat ?? null,
-                  coordLng: coordLng ?? null,
-                })
+                if (geoTipo === 'area' && coordLat != null && coordLng != null) {
+                  const prev = Array.isArray(value?.coordsVertices) ? [...value.coordsVertices] : []
+                  prev.push({ lat: coordLat, lng: coordLng })
+                  patch({
+                    pkSeleccionado: found,
+                    pk_id_id: found.id,
+                    coordLat: prev[0]?.lat ?? coordLat,
+                    coordLng: prev[0]?.lng ?? coordLng,
+                    coordsVertices: prev,
+                    geometriaTipo: 'area',
+                  })
+                } else {
+                  patch({
+                    pkSeleccionado: found,
+                    pk_id_id: found.id,
+                    coordLat: coordLat ?? null,
+                    coordLng: coordLng ?? null,
+                    geometriaTipo: value?.geometriaTipo || sugerido,
+                  })
+                }
               }
               if (mapaScreenshot && typeof onMapaCapturado === 'function') {
                 onMapaCapturado(mapaScreenshot)
               }
             }}
-            onLimpiar={() => patch({ pkSeleccionado: null, pk_id_id: null, coordLat: null, coordLng: null })}
+            onLimpiar={() => patch({
+              pkSeleccionado: null,
+              pk_id_id: null,
+              coordLat: null,
+              coordLng: null,
+              coordsVertices: [],
+            })}
           />
           {pkRow && (
             <div style={{ marginTop: '6px', padding: '8px 12px', background: t.bg, borderRadius: '6px', fontSize: 'var(--cc-label)', color: t.textMuted }}>
@@ -125,6 +196,26 @@ export default function SicoeLocalizacionFields({
             </div>
           )}
           {errores.pk && <span style={{ color: '#EF4444', fontSize: 'var(--cc-label)' }}>{errores.pk}</span>}
+          {geoTipo === 'area' && nVerts > 0 && (
+            <div style={{ marginTop: 6, fontSize: 'var(--cc-caption)', color: t.textMuted, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span>{nVerts} vértice{nVerts === 1 ? '' : 's'}{nVerts >= 3 ? ' · polígono listo' : ''}</span>
+              <button
+                type="button"
+                onClick={() => patch({ coordsVertices: [] })}
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 6,
+                  color: t.textMuted,
+                  cursor: 'pointer',
+                  fontSize: 'var(--cc-caption)',
+                  padding: '2px 8px',
+                }}
+              >
+                Limpiar vértices
+              </button>
+            </div>
+          )}
           <div style={{ marginTop: '6px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
             Pulse el polígono en el mapa para fijar el punto de localización (coordenadas y pantallazo del plano se guardan automáticamente).
           </div>
@@ -156,7 +247,7 @@ export default function SicoeLocalizacionFields({
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '12px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '12px', marginTop: 12 }}>
         {[
           ['absInicio', 'Abs. inicial', 'absInicio'],
           ['absFinal', 'Abs. final', 'absFinal'],
