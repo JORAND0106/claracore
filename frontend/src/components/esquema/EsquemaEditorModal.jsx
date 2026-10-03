@@ -67,6 +67,16 @@ import {
   resolveContratoId,
   saveLibraryItem,
 } from './esquemaLibrary'
+import {
+  calibrateLibraryItem,
+  canInsertLibraryItemOnPlane,
+  formatLibraryMeasuresLabel,
+  instantiateLibraryItemAtRealScale,
+  isScaleLockedBloque,
+  libraryItemHasRealMeasures,
+  measuresFromObjects,
+  syncSceneBloquesToLibrary,
+} from './esquemaLibraryScale'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import { composeEsquemaExport, sceneExportBounds } from './esquemaExport'
 import { generarEsquemaIa, fetchEsquemaIaUso } from './esquemaIaApi'
@@ -448,6 +458,7 @@ export default function EsquemaEditorModal({
   const [libItems, setLibItems] = useState([])
   const [insertHint, setInsertHint] = useState('')
   const [libNamePrompt, setLibNamePrompt] = useState(null)
+  const [libCalibratePrompt, setLibCalibratePrompt] = useState(null)
   const [libNotice, setLibNotice] = useState('')
   const [iaPrompt, setIaPrompt] = useState(null)
   const [iaUsos, setIaUsos] = useState(0)
@@ -551,6 +562,12 @@ export default function EsquemaEditorModal({
     selectedIdsRef.current = new Set(list)
     setSelectedIds(list)
     setSelectedId(list.length === 1 ? list[0] : (list[0] || null))
+    if (list.length === 1 && (huellaMode || mapActiveRef.current)) {
+      const obj = objectsRef.current.find((o) => o.id === list[0])
+      if (isScaleLockedBloque(obj) && selectModeRef.current === 'dimensionar') {
+        setSelectMode('mover')
+      }
+    }
   }
 
   const selectOne = (id) => selectIds(id ? [id] : [])
@@ -641,6 +658,7 @@ export default function EsquemaEditorModal({
         huellaMode,
         skipResize: (() => {
           const isPasteImg = obj.type === 'image' && !obj.fit
+          if (isScaleLockedBloque(obj) && (huellaMode || mapActiveRef.current)) return true
           if (isPasteImg && !multi && toolRef.current === 'seleccion') return false
           if (toolRef.current === 'girar-escalar') return true
           if (multi) return true
@@ -768,7 +786,13 @@ export default function EsquemaEditorModal({
     pinchRef.current = null
     pointersRef.current.clear()
     if (Array.isArray(initialSceneObjects) && initialSceneObjects.length) {
-      objectsRef.current = cloneScene(initialSceneObjects)
+      let scene = cloneScene(initialSceneObjects)
+      if (huellaMode) {
+        const lib = loadLibrary(contratoId)
+        const synced = syncSceneBloquesToLibrary(scene, lib)
+        scene = synced.objects
+      }
+      objectsRef.current = scene
     } else if (!initialDataUri) {
       objectsRef.current = []
     } else {
@@ -787,7 +811,7 @@ export default function EsquemaEditorModal({
     setCanUndo(false)
     setDirty(false)
     requestAnimationFrame(() => redrawRef.current())
-  }, [initialDataUri, initialSceneObjects])
+  }, [initialDataUri, initialSceneObjects, huellaMode, contratoId])
 
   // Precarga tabla de coordenadas (portada del reporte / puntos topográficos).
   useEffect(() => {
@@ -2191,7 +2215,22 @@ export default function EsquemaEditorModal({
     let p = posFromEvent(e)
     const currentTool = toolRef.current
     if (pendingInsertRef.current) {
-      const placed = instantiateLibraryItem(pendingInsertRef.current, p)
+      const pending = pendingInsertRef.current
+      const item = pending?.item || pending
+      const onPlane = !!(pending?.onPlane || huellaMode || mapActiveRef.current)
+      if (onPlane && !canInsertLibraryItemOnPlane(item)) {
+        pendingInsertRef.current = null
+        setInsertHint('')
+        setLibNotice('Defina las medidas reales de la entidad antes de insertarla en el plano.')
+        setLibCalibratePrompt({ item, axis: 'ancho', metros: '' })
+        setLibOpen(true)
+        drawing.current = false
+        redraw()
+        return
+      }
+      const placed = onPlane
+        ? instantiateLibraryItemAtRealScale(item, p)
+        : instantiateLibraryItem(item, p)
       pushHistory()
       objectsRef.current = [...objectsRef.current, ...placed]
       pendingInsertRef.current = null
@@ -2232,6 +2271,12 @@ export default function EsquemaEditorModal({
         const sel = group[0]
         const th = hitTransformHandle(p, sel, handleHitThreshold() + 4, zoomRef.current)
         if (th) {
+          if (th.id === 'scale' && isScaleLockedBloque(sel) && (huellaMode || mapActiveRef.current)) {
+            setToolHint('Esta entidad tiene medidas reales: use Girar (no redimensionar).')
+            drawing.current = false
+            redraw()
+            return
+          }
           const center = th.id === 'rotate' ? pivot : objectCenter(sel)
           dragRef.current = {
             id: sel.id,
@@ -2391,7 +2436,8 @@ export default function EsquemaEditorModal({
           }
         }
         // Manijas sobre geometría rotada (mundo→local) o modo Dimensionar
-        if (hit.type !== 'image' && (
+        // Entidades de biblioteca a escala real: no redimensionar (solo mover/girar).
+        if (hit.type !== 'image' && !(isScaleLockedBloque(hit) && (huellaMode || mapActiveRef.current)) && (
           selectModeRef.current === 'dimensionar' || hit.rotation
         )) {
           selectOne(hit.id)
@@ -2437,6 +2483,12 @@ export default function EsquemaEditorModal({
           }
         }
         if (selectModeRef.current === 'dimensionar') {
+          if (isScaleLockedBloque(hit) && (huellaMode || mapActiveRef.current)) {
+            setToolHint('Esta entidad tiene medidas reales: solo se puede mover o girar.')
+            drawing.current = false
+            redraw()
+            return
+          }
           selectOne(hit.id)
           const handle = hit.type === 'image' ? null : nearestResizeHandle(p, hit)
           if (handle) {
@@ -2797,7 +2849,7 @@ export default function EsquemaEditorModal({
           if (imgH) setHoverCursor(cursorForHandle(imgH.id))
           else if (hitTest(raw)) setHoverCursor('move')
           else setHoverCursor('crosshair')
-        } else if (sel && selectedIdsRef.current.size <= 1 && (
+        } else if (sel && selectedIdsRef.current.size <= 1 && !(isScaleLockedBloque(sel) && (huellaMode || mapActiveRef.current)) && (
           selectModeRef.current === 'dimensionar' || sel.rotation
         )) {
           const handle = hitResizeHandle(raw, sel, handleHitThreshold() + 6)
@@ -2806,7 +2858,8 @@ export default function EsquemaEditorModal({
         else setHoverCursor('crosshair')
       } else if (currentTool === 'girar-escalar') {
         const th = sel ? hitTransformHandle(raw, sel, handleHitThreshold() + 4, zoomRef.current) : null
-        setHoverCursor(th ? (th.id === 'rotate' ? 'grab' : 'nwse-resize') : (hitTest(raw) ? 'pointer' : null))
+        const scaleBlocked = th?.id === 'scale' && isScaleLockedBloque(sel) && (huellaMode || mapActiveRef.current)
+        setHoverCursor(th && !scaleBlocked ? (th.id === 'rotate' ? 'grab' : 'nwse-resize') : (hitTest(raw) ? 'pointer' : null))
       } else {
         setHoverCursor(null)
       }
@@ -3410,10 +3463,15 @@ export default function EsquemaEditorModal({
       setLibNotice('Seleccione una o varias entidades para guardarlas como bloque.')
       return
     }
+    const medidas = measuresFromObjects(usable)
+    const sobrePlano = !!(huellaMode || mapActiveRef.current)
     setLibNamePrompt({
       objects: usable,
       nombre: usable.length > 1 ? 'Bloque' : entityTypeLabel(usable[0].type),
       preview: libraryPreviewDataUri(usable, 88, ui),
+      medidasReales: sobrePlano,
+      ancho_m: medidas.ancho_m,
+      alto_m: medidas.alto_m,
     })
   }
 
@@ -3423,19 +3481,55 @@ export default function EsquemaEditorModal({
     const item = saveLibraryItem(contratoId, {
       nombre: prompt.nombre,
       objects: prompt.objects,
+      medidasReales: !!prompt.medidasReales,
     })
     setLibNamePrompt(null)
     if (!item) {
       setLibNotice('No se pudo guardar en la biblioteca.')
       return
     }
+    if (item.medidas_reales) {
+      setLibNotice(`Guardada a escala real: ${formatLibraryMeasuresLabel(item)}.`)
+    } else {
+      setLibNotice('Guardada sin medidas reales. Defínalas antes de insertarla en el plano.')
+    }
     refreshLibrary()
     setLibOpen(true)
   }
 
+  const confirmLibraryCalibrate = () => {
+    const prompt = libCalibratePrompt
+    if (!prompt?.item?.id) return
+    const res = calibrateLibraryItem(contratoId, prompt.item.id, {
+      axis: prompt.axis || 'ancho',
+      metros: prompt.metros,
+    })
+    if (!res) {
+      setLibNotice('Indique una medida real válida (mayor que cero).')
+      return
+    }
+    setLibCalibratePrompt(null)
+    setLibItems(res.items)
+    setLibNotice(`Medidas definidas: ${formatLibraryMeasuresLabel(res.item)}. Ya puede insertarla en el plano.`)
+    // Corregir entidades ya insertadas en el lienzo
+    const synced = syncSceneBloquesToLibrary(objectsRef.current, res.items)
+    if (synced.changed) {
+      pushHistory()
+      objectsRef.current = synced.objects
+      setDirty(true)
+      redraw()
+    }
+  }
+
   const beginInsertLibraryItem = (item) => {
     if (!item?.objects?.length && !item?.children?.length) return
-    // Huella nodo: insertar la entidad centrada en cada nodo del lienzo.
+    const onPlane = !!(huellaMode || mapActiveRef.current)
+    if (onPlane && !canInsertLibraryItemOnPlane(item)) {
+      setLibNotice('Esta entidad está pendiente de medidas reales. Defínalas antes de insertarla en el plano.')
+      setLibCalibratePrompt({ item, axis: 'ancho', metros: '' })
+      return
+    }
+    // Huella nodo: insertar la entidad centrada en cada nodo del lienzo (escala real).
     if (huellaMode && huellaTipoRef.current === 'nodo') {
       const nodes = objectsRef.current.filter((o) => o?.type === 'nodo' && Number.isFinite(o.x) && Number.isFinite(o.y))
       if (nodes.length) {
@@ -3443,12 +3537,15 @@ export default function EsquemaEditorModal({
         const withoutPrev = objectsRef.current.filter((o) => !(o?.type === 'bloque' && o?.fromLibraryOnNode))
         const placed = []
         for (const n of nodes) {
-          const inst = instantiateLibraryItem(item, { x: n.x, y: n.y }).map((b) => ({
-            ...b,
-            libraryId: item.id,
-            libraryNombre: item.nombre,
-            fromLibraryOnNode: true,
-          }))
+          const inst = (onPlane
+            ? instantiateLibraryItemAtRealScale(item, { x: n.x, y: n.y }, { fromLibraryOnNode: true })
+            : instantiateLibraryItem(item, { x: n.x, y: n.y }).map((b) => ({
+              ...b,
+              libraryId: item.id,
+              libraryNombre: item.nombre,
+              fromLibraryOnNode: true,
+            }))
+          )
           placed.push(...inst)
         }
         objectsRef.current = [...withoutPrev, ...placed]
@@ -3463,8 +3560,10 @@ export default function EsquemaEditorModal({
         return
       }
     }
-    pendingInsertRef.current = item
-    setInsertHint(`Clic para insertar «${item.nombre}»`)
+    pendingInsertRef.current = { item, onPlane }
+    setInsertHint(onPlane
+      ? `Clic para insertar «${item.nombre}» a escala real (${formatLibraryMeasuresLabel(item)})`
+      : `Clic para insertar «${item.nombre}»`)
     setLibOpen(false)
   }
 
@@ -4126,7 +4225,16 @@ export default function EsquemaEditorModal({
             </span>
           ))}
           {tool === 'seleccion' ? (
-            <SelectModeRadios t={t} value={selectMode} onChange={setSelectMode} />
+            <SelectModeRadios
+              t={t}
+              value={selectMode}
+              onChange={setSelectMode}
+              options={
+                (isScaleLockedBloque(selectedObj) && (huellaMode || mapActive))
+                  ? [{ id: 'mover', label: 'Mover' }]
+                  : undefined
+              }
+            />
           ) : null}
           {tool === 'cota' ? (
             <SelectModeRadios
@@ -4610,6 +4718,7 @@ export default function EsquemaEditorModal({
               obj={selectedObj}
               selectMode={tool === 'seleccion' ? selectMode : null}
               onSelectMode={setSelectMode}
+              scaleLocked={isScaleLockedBloque(selectedObj) && (huellaMode || mapActive)}
               measureW={measureW}
               measureH={measureH}
               onMeasureW={setMeasureW}
@@ -4657,6 +4766,7 @@ export default function EsquemaEditorModal({
               contratoId={contratoId}
               items={libItems}
               notice={libNotice}
+              requireRealMeasures={!!(huellaMode || mapActive)}
               canSaveSelection={selectedIds.some((id) => {
                 const o = objectsRef.current.find((x) => x.id === id)
                 return o && o.type !== 'image'
@@ -4664,6 +4774,7 @@ export default function EsquemaEditorModal({
               onClose={() => setLibOpen(false)}
               onSaveSelection={saveSelectionToLibrary}
               onInsert={beginInsertLibraryItem}
+              onCalibrate={(item) => setLibCalibratePrompt({ item, axis: 'ancho', metros: '' })}
               onDelete={(id) => {
                 setLibItems(deleteLibraryItem(contratoId, id))
               }}
@@ -4741,9 +4852,104 @@ export default function EsquemaEditorModal({
                     }}
                   />
                 </label>
+                {libNamePrompt.medidasReales ? (
+                  <div style={{ fontSize: 12, color: t.textMuted, marginTop: 8 }}>
+                    Medidas reales del dibujo:{' '}
+                    <strong style={{ color: t.text }}>
+                      {(Number(libNamePrompt.ancho_m) || 0).toFixed(2)} × {(Number(libNamePrompt.alto_m) || 0).toFixed(2)} m
+                    </strong>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: t.textMuted, marginTop: 8 }}>
+                    Quedará pendiente de medidas reales hasta que las defina (requerido para insertar en el plano).
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
                   <button type="button" style={ghost(t)} onClick={() => setLibNamePrompt(null)}>Cancelar</button>
                   <button type="button" style={primary(t)} onClick={confirmLibraryName}>Guardar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {libCalibratePrompt && (
+          <div
+            style={{
+              position: 'absolute', inset: 0, zIndex: 23,
+              background: t.overlay || ui.overlay,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="cc-esquema-lib-calibrate"
+              style={{
+                width: 420,
+                borderRadius: 14,
+                overflow: 'hidden',
+                background: t.bgCard || '#fff',
+                border: `1px solid ${t.border}`,
+                boxShadow: t.shadow || '0 12px 32px rgba(15,23,42,0.2)',
+                color: t.text,
+              }}
+            >
+              <CcModalBrandHeader theme={t} />
+              <div style={{
+                padding: '12px 16px 8px',
+                borderBottom: `1px solid ${t.border}`,
+                background: `color-mix(in srgb, ${t.primary || '#0077B6'} 14%, ${t.bgCard || '#fff'})`,
+              }}>
+                <div id="cc-esquema-lib-calibrate" style={{ fontWeight: 800, color: t.primary || '#0077B6', fontSize: 14 }}>
+                  Definir medidas reales
+                </div>
+              </div>
+              <div style={{ padding: 16 }}>
+                <div style={{ fontSize: 12, color: t.textMuted, marginBottom: 10 }}>
+                  Indique cuánto mide en la realidad una dimensión conocida de «{libCalibratePrompt.item?.nombre || 'la entidad'}».
+                  Toda la entidad se ajustará en proporción (una sola vez).
+                </div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: t.textMuted, marginBottom: 8 }}>
+                  Dimensión de referencia
+                  <select
+                    value={libCalibratePrompt.axis || 'ancho'}
+                    onChange={(e) => setLibCalibratePrompt({ ...libCalibratePrompt, axis: e.target.value })}
+                    style={{
+                      display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4,
+                      padding: '8px 10px', borderRadius: 8, border: `1px solid ${t.border}`,
+                      fontSize: 14, color: t.text, background: t.inputBg || t.bg || '#fff',
+                    }}
+                  >
+                    <option value="ancho">Ancho (horizontal)</option>
+                    <option value="alto">Alto (vertical)</option>
+                  </select>
+                </label>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>
+                  Medida real (metros)
+                  <input
+                    autoFocus
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={libCalibratePrompt.metros}
+                    onChange={(e) => setLibCalibratePrompt({ ...libCalibratePrompt, metros: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        confirmLibraryCalibrate()
+                      }
+                    }}
+                    placeholder="Ej. 1.20"
+                    style={{
+                      display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4,
+                      padding: '8px 10px', borderRadius: 8, border: `1px solid ${t.border}`,
+                      fontSize: 14, color: t.text, background: t.inputBg || t.bg || '#fff',
+                    }}
+                  />
+                </label>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                  <button type="button" style={ghost(t)} onClick={() => setLibCalibratePrompt(null)}>Cancelar</button>
+                  <button type="button" style={primary(t)} onClick={confirmLibraryCalibrate}>Aplicar medidas</button>
                 </div>
               </div>
             </div>
@@ -5312,7 +5518,7 @@ function MapaPropiedadesPanel({
 
 function PropiedadesPanel({
   t, ui, obj, measureW, measureH, onMeasureW, onMeasureH, onApplyDims, onColor, onWidth,
-  onLineStyle, onFontSize, onRotationDeg, selectMode, onSelectMode,
+  onLineStyle, onFontSize, onRotationDeg, selectMode, onSelectMode, scaleLocked = false,
 }) {
   const isShape = SHAPE_TOOLS.has(obj.type)
   const isBox = BOX_TOOLS.has(obj.type)
@@ -5341,10 +5547,20 @@ function PropiedadesPanel({
       <div style={{ fontSize: 11, fontWeight: 800, color: t.text, letterSpacing: 0.02 }}>
         Propiedades · {entityTypeLabel(obj.type)}
       </div>
-      {selectMode && onSelectMode ? (
+      {selectMode && onSelectMode && !scaleLocked ? (
         <SelectModeRadios t={t} value={selectMode} onChange={onSelectMode} compact />
       ) : null}
-      {circle ? (
+      {scaleLocked ? (
+        <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>
+          Escala real bloqueada · solo mover o girar
+          {(obj.ancho_m != null || obj.alto_m != null) ? (
+            <div style={{ marginTop: 4, fontWeight: 700, color: t.text }}>
+              {(Number(obj.ancho_m) || 0).toFixed(2)} × {(Number(obj.alto_m) || 0).toFixed(2)} m
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {circle && !scaleLocked ? (
         <PropField
           t={t}
           label="Radio"
@@ -5353,19 +5569,19 @@ function PropiedadesPanel({
           onCommit={() => onApplyDims(measureW, measureW)}
         />
       ) : null}
-      {isShape && !circle && obj.type === 'elipse' ? (
+      {isShape && !circle && obj.type === 'elipse' && !scaleLocked ? (
         <>
           <PropField t={t} label="Semieje X" value={String(measureW ?? '')} onChange={onMeasureW} onCommit={onApplyDims} />
           <PropField t={t} label="Semieje Y" value={String(measureH ?? '')} onChange={onMeasureH} onCommit={onApplyDims} />
         </>
       ) : null}
-      {isShape && !circle && isBox && obj.type !== 'elipse' ? (
+      {isShape && !circle && isBox && obj.type !== 'elipse' && !scaleLocked ? (
         <>
           <PropField t={t} label="Ancho" value={String(measureW ?? '')} onChange={onMeasureW} onCommit={onApplyDims} />
           <PropField t={t} label="Alto" value={String(measureH ?? '')} onChange={onMeasureH} onCommit={onApplyDims} />
         </>
       ) : null}
-      {isShape && !circle && !isBox ? (
+      {isShape && !circle && !isBox && !scaleLocked ? (
         <PropField
           t={t}
           label={obj.type === 'triangulo' ? 'Ancho' : 'Longitud'}
@@ -5374,7 +5590,7 @@ function PropiedadesPanel({
           onCommit={onApplyDims}
         />
       ) : null}
-      {obj.type === 'triangulo' ? (
+      {obj.type === 'triangulo' && !scaleLocked ? (
         <PropField t={t} label="Alto" value={String(measureH ?? '')} onChange={onMeasureH} onCommit={onApplyDims} />
       ) : null}
       {obj.type === 'bloque' ? (
@@ -6292,6 +6508,7 @@ function libraryPreviewDataUri(objects, size = 88, ui) {
 
 function BibliotecaPanel({
   t, ui, contratoId, items, notice, canSaveSelection, onClose, onSaveSelection, onInsert, onDelete,
+  onCalibrate, requireRealMeasures = false,
 }) {
   const sheet = coordSheetStyles(t)
   const iconAction = {
@@ -6309,7 +6526,7 @@ function BibliotecaPanel({
         right: 18,
         bottom: 18,
         zIndex: 6,
-        width: 360,
+        width: 380,
         maxHeight: '62%',
         overflow: 'auto',
         padding: 10,
@@ -6327,8 +6544,8 @@ function BibliotecaPanel({
             type="button"
             style={iconAction}
             disabled={!canSaveSelection}
-            title="Guardar selección como bloque"
-            aria-label="Guardar selección como bloque"
+            title="Guardar selección como entidad"
+            aria-label="Guardar selección como entidad"
             onClick={onSaveSelection}
           >
             <IconGuardar />
@@ -6341,6 +6558,11 @@ function BibliotecaPanel({
       {notice ? (
         <div style={{ fontSize: 11, color: t.danger || '#b91c1c', marginBottom: 8 }}>{notice}</div>
       ) : null}
+      {requireRealMeasures ? (
+        <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 8 }}>
+          En el plano solo se insertan entidades con medidas reales (metros).
+        </div>
+      ) : null}
       {!contratoId ? (
         <div style={{ fontSize: 11, color: t.textMuted }}>No hay contrato activo. Inicie sesión en un contrato para guardar bloques reutilizables.</div>
       ) : !(items || []).length ? (
@@ -6351,7 +6573,7 @@ function BibliotecaPanel({
             <colgroup>
               <col style={{ width: 64 }} />
               <col />
-              <col style={{ width: 72 }} />
+              <col style={{ width: 88 }} />
             </colgroup>
             <thead>
               <tr>
@@ -6361,33 +6583,56 @@ function BibliotecaPanel({
               </tr>
             </thead>
             <tbody>
-              {(items || []).map((it) => (
-                <tr key={it.id}>
-                  <td style={{ ...sheet.td, textAlign: 'center', padding: 4 }}>
-                    <img
-                      src={libraryPreviewDataUri(it.objects?.length ? it.objects : it.children, 88, ui)}
-                      alt=""
-                      width={48}
-                      height={48}
-                      style={{ display: 'block', margin: '0 auto', background: resolveEsquemaUi(ui).previewBg }}
-                    />
-                  </td>
-                  <td style={sheet.td}>
-                    <div style={{ ...sheet.inp, fontWeight: 700 }}>{it.nombre}</div>
-                    <div style={{ ...sheet.inp, color: t.textMuted, fontSize: 10 }}>
-                      {(it.objects || it.children || []).length} parte{(it.objects || it.children || []).length === 1 ? '' : 's'}
-                    </div>
-                  </td>
-                  <td style={{ ...sheet.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
-                    <button type="button" style={iconAction} title="Insertar bloque" aria-label="Insertar bloque" onClick={() => onInsert(it)}>
-                      <IconInsertarBloque />
-                    </button>
-                    <button type="button" style={iconAction} title="Eliminar" aria-label="Eliminar" onClick={() => onDelete(it.id)}>
-                      <IconCerrarPanel />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {(items || []).map((it) => {
+                const hasReal = libraryItemHasRealMeasures(it)
+                const canInsert = !requireRealMeasures || hasReal
+                return (
+                  <tr key={it.id}>
+                    <td style={{ ...sheet.td, textAlign: 'center', padding: 4 }}>
+                      <img
+                        src={libraryPreviewDataUri(it.objects?.length ? it.objects : it.children, 88, ui)}
+                        alt=""
+                        width={48}
+                        height={48}
+                        style={{ display: 'block', margin: '0 auto', background: resolveEsquemaUi(ui).previewBg }}
+                      />
+                    </td>
+                    <td style={sheet.td}>
+                      <div style={{ ...sheet.inp, fontWeight: 700 }}>{it.nombre}</div>
+                      <div style={{
+                        ...sheet.inp,
+                        color: hasReal ? t.textMuted : (t.danger || '#b91c1c'),
+                        fontSize: 10,
+                        fontWeight: hasReal ? 600 : 800,
+                      }}
+                      >
+                        {formatLibraryMeasuresLabel(it)}
+                      </div>
+                    </td>
+                    <td style={{ ...sheet.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      {canInsert ? (
+                        <button type="button" style={iconAction} title="Insertar entidad" aria-label="Insertar entidad" onClick={() => onInsert(it)}>
+                          <IconInsertarBloque />
+                        </button>
+                      ) : null}
+                      {!hasReal ? (
+                        <button
+                          type="button"
+                          style={iconAction}
+                          title="Definir medidas reales"
+                          aria-label="Definir medidas reales"
+                          onClick={() => onCalibrate?.(it)}
+                        >
+                          <IconCalibrarMedidas />
+                        </button>
+                      ) : null}
+                      <button type="button" style={iconAction} title="Eliminar" aria-label="Eliminar" onClick={() => onDelete(it.id)}>
+                        <IconCerrarPanel />
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -6818,6 +7063,18 @@ function IconInsertarBloque() {
     <svg {...iconProps()}>
       <path d="M12 5v14" />
       <path d="M5 12h14" />
+    </svg>
+  )
+}
+function IconCalibrarMedidas() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M4 12h16" />
+      <path d="M4 12v3" />
+      <path d="M20 12v3" />
+      <path d="M8 9v6" />
+      <path d="M12 8v8" />
+      <path d="M16 9v6" />
     </svg>
   )
 }
