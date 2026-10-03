@@ -27272,10 +27272,58 @@ class PuntoTopo(BaseModel):
     este: Optional[float] = None
     cota: Optional[float] = None
     descripcion: Optional[str] = None
+    lng: Optional[float] = None
+    lat: Optional[float] = None
+    origen: Optional[str] = None
 
 class PuntosCreate(BaseModel):
     reporte_id: int
     puntos: List[PuntoTopo]
+    origen: Optional[str] = None
+    validar_ubicacion: bool = False
+
+class LevantamientoCargaBody(BaseModel):
+    """Carga de levantamiento: lista de puntos o texto CSV."""
+    puntos: Optional[List[PuntoTopo]] = None
+    csv_text: Optional[str] = None
+    reemplazar: bool = True
+    validar_ubicacion: bool = True
+
+class HuellaPrecisaBody(BaseModel):
+    """Asocia geometría dibujada sobre el levantamiento como huella precisa."""
+    geometria_tipo: Optional[str] = None
+    vertices: Optional[List[Dict[str, Any]]] = None
+    coords_geojson: Optional[Dict[str, Any]] = None
+    line_style: Optional[str] = None
+
+def _sicoe_punto_topo_row(contrato_id: int, reporte_id: int, p: dict, creado_por: int, origen: str = "manual") -> dict:
+    from sicoe_levantamiento import enriquecer_punto_wgs84
+    d = {
+        "punto": p.get("punto"),
+        "norte": p.get("norte"),
+        "este": p.get("este"),
+        "cota": p.get("cota"),
+        "descripcion": p.get("descripcion"),
+        "contrato_id": contrato_id,
+        "reporte_id": reporte_id,
+        "creado_por": creado_por,
+        "origen": (p.get("origen") or origen or "manual"),
+    }
+    ep = enriquecer_punto_wgs84(d)
+    if ep.get("lng") is not None:
+        d["lng"] = ep["lng"]
+        d["lat"] = ep["lat"]
+    return d
+
+def _sicoe_puede_cargar_levantamiento(current_user, contrato_id: int) -> bool:
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+    if _es_desarrollador(current_user):
+        return True
+    if _cargo_permiso_editar_reporte_cantidades_user_id(uid, contrato_id):
+        return True
+    if _sicoe_puede_editar_full_registro(current_user, contrato_id):
+        return True
+    return False
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/puntos-topograficos")
 def eliminar_puntos_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
@@ -27295,16 +27343,445 @@ def eliminar_puntos_reporte(contrato_id: int, reporte_id: int, current_user=Depe
 
 @app.post("/sicoe-obra/{contrato_id}/puntos-topograficos")
 def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_current_user)):
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+    origen = (body.origen or "manual").strip() or "manual"
     rows = []
     for p in body.puntos:
-        d = p.dict()
-        d["contrato_id"] = contrato_id
-        d["reporte_id"] = body.reporte_id
-        d["creado_por"] = int(current_user.get("sub") or current_user.get("id", 0))
-        rows.append(d)
+        d = p.dict() if hasattr(p, "dict") else dict(p)
+        rows.append(_sicoe_punto_topo_row(contrato_id, body.reporte_id, d, uid, origen=origen))
+
+    if body.validar_ubicacion:
+        from sicoe_levantamiento import validar_puntos_levantamiento
+        ejes = _sicoe_ejes_contrato(contrato_id)
+        check = validar_puntos_levantamiento(rows, ejes)
+        if check["rechazados"]:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "mensaje": "Hay puntos con ubicación inconsistente.",
+                    "rechazados": check["rechazados"],
+                    "aceptados": len(check["aceptados"]),
+                },
+            )
+        rows = [
+            _sicoe_punto_topo_row(contrato_id, body.reporte_id, p, uid, origen=origen)
+            for p in check["aceptados"]
+        ]
+
     def _ins():
-        return supabase.table("so_puntos_topograficos").insert(rows).execute().data
+        try:
+            return supabase.table("so_puntos_topograficos").insert(rows).execute().data
+        except Exception:
+            # Columnas lng/lat/origen aún no migradas
+            slim = []
+            for r in rows:
+                slim.append({
+                    k: r[k]
+                    for k in ("punto", "norte", "este", "cota", "descripcion", "contrato_id", "reporte_id", "creado_por")
+                    if k in r
+                })
+            return supabase.table("so_puntos_topograficos").insert(slim).execute().data
     return supabase_execute(_ins)
+
+
+@app.get("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/puntos-topograficos")
+def listar_puntos_reporte(
+    contrato_id: int,
+    reporte_id: int,
+    as_geojson: bool = False,
+    current_user=Depends(get_current_user),
+):
+    """Lista puntos del reporte; con as_geojson=1 devuelve FeatureCollection WGS84."""
+    _ = current_user
+    from sicoe_levantamiento import enriquecer_punto_wgs84, puntos_a_geojson
+
+    def _q():
+        return (
+            supabase.table("so_puntos_topograficos")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .eq("reporte_id", reporte_id)
+            .order("id")
+            .execute()
+            .data
+        )
+    rows = supabase_execute(_q) or []
+    enriched = [enriquecer_punto_wgs84(r) for r in rows]
+    if as_geojson:
+        return puntos_a_geojson(enriched, reporte_id=reporte_id)
+    return enriched
+
+
+@app.post("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/levantamiento")
+def cargar_levantamiento_reporte(
+    contrato_id: int,
+    reporte_id: int,
+    body: LevantamientoCargaBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Carga archivo/lista de puntos del levantamiento al reporte (EPSG:3116).
+    Valida ubicación contra el eje del contrato. No es requisito para reportar.
+    """
+    from sicoe_levantamiento import (
+        parse_levantamiento_csv,
+        puntos_a_geojson,
+        validar_puntos_levantamiento,
+    )
+
+    if not _sicoe_puede_cargar_levantamiento(current_user, contrato_id):
+        raise HTTPException(403, "No tiene permiso para cargar el levantamiento.")
+
+    # Verificar reporte
+    def _qr():
+        return (
+            supabase.table("so_reportes")
+            .select("id")
+            .eq("id", reporte_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+    if not (supabase_execute(_qr) or []):
+        raise HTTPException(404, "Reporte no encontrado.")
+
+    raw_pts = []
+    if body.csv_text:
+        raw_pts = parse_levantamiento_csv(body.csv_text)
+    elif body.puntos:
+        for p in body.puntos:
+            d = p.dict() if hasattr(p, "dict") else dict(p)
+            raw_pts.append(d)
+    if not raw_pts:
+        raise HTTPException(422, "No se encontraron puntos en el archivo o la lista.")
+
+    ejes = _sicoe_ejes_contrato(contrato_id) if body.validar_ubicacion else []
+    check = (
+        validar_puntos_levantamiento(raw_pts, ejes)
+        if body.validar_ubicacion
+        else {"ok": True, "aceptados": raw_pts, "rechazados": [], "total": len(raw_pts)}
+    )
+    if body.validar_ubicacion and check["rechazados"] and not check["aceptados"]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "mensaje": "Ningún punto pasó la validación de ubicación.",
+                "rechazados": check["rechazados"],
+            },
+        )
+
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+    aceptados = check["aceptados"]
+    if body.reemplazar:
+        def _del():
+            return (
+                supabase.table("so_puntos_topograficos")
+                .delete()
+                .eq("reporte_id", reporte_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        supabase_execute(_del)
+
+    rows = [
+        _sicoe_punto_topo_row(contrato_id, reporte_id, p, uid, origen="levantamiento")
+        for p in aceptados
+    ]
+
+    def _ins():
+        try:
+            return supabase.table("so_puntos_topograficos").insert(rows).execute().data
+        except Exception:
+            slim = [
+                {
+                    k: r[k]
+                    for k in ("punto", "norte", "este", "cota", "descripcion", "contrato_id", "reporte_id", "creado_por")
+                    if k in r
+                }
+                for r in rows
+            ]
+            return supabase.table("so_puntos_topograficos").insert(slim).execute().data
+
+    inserted = supabase_execute(_ins) or []
+    return {
+        "ok": True,
+        "insertados": len(inserted),
+        "rechazados": check.get("rechazados") or [],
+        "advertencias": len(check.get("rechazados") or []),
+        "geojson": puntos_a_geojson(
+            [_sicoe_punto_topo_row(contrato_id, reporte_id, p, uid, origen="levantamiento") for p in aceptados],
+            reporte_id=reporte_id,
+        ),
+    }
+
+
+@app.get("/sicoe-obra/{contrato_id}/levantamiento-mapa")
+def levantamiento_mapa_geojson(
+    contrato_id: int,
+    reporte_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    """Puntos de levantamiento/topografía como GeoJSON para el plano semáforo."""
+    _ = current_user
+    from sicoe_levantamiento import enriquecer_punto_wgs84, puntos_a_geojson
+
+    def _q():
+        q = (
+            supabase.table("so_puntos_topograficos")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+        )
+        if reporte_id is not None:
+            q = q.eq("reporte_id", reporte_id)
+        return q.order("id").limit(5000).execute().data
+
+    rows = supabase_execute(_q) or []
+    enriched = [enriquecer_punto_wgs84(r) for r in rows]
+    fc = puntos_a_geojson(enriched)
+    return {
+        **fc,
+        "total": len(fc.get("features") or []),
+        "reporte_id": reporte_id,
+    }
+
+
+@app.get("/sicoe-obra/{contrato_id}/huellas/indicadores")
+def sicoe_huellas_indicadores(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Conteo de huellas precisas / aproximadas / sin huella (contrato y usuario)."""
+    from sicoe_levantamiento import resumir_precision_huellas
+
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+
+    def _q():
+        return (
+            supabase.table("so_registros")
+            .select("id, huella_precision, creado_por_reg, huella_geojson")
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+        )
+
+    try:
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        if "huella_precision" in str(exc).lower():
+            return {
+                "contrato": {"total": 0, "precisas": 0, "aproximadas": 0, "sin_huella": 0},
+                "usuario": {
+                    "usuario_id": uid,
+                    "total": 0,
+                    "precisas": 0,
+                    "aproximadas": 0,
+                    "sin_huella": 0,
+                },
+                "migracion_pendiente": True,
+            }
+        raise HTTPException(500, str(exc)) from exc
+    return resumir_precision_huellas(rows, usuario_id=uid)
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/{registro_id}/huella-precisa")
+def sicoe_aplicar_huella_precisa(
+    contrato_id: int,
+    registro_id: int,
+    body: HuellaPrecisaBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Asocia geometría dibujada (vértices o GeoJSON) como coords_geojson del registro
+    y regenera la huella como precisa. Misma gate que edición de gráfico:
+    Editar siempre; Crear+creador hasta sellado max.
+    """
+    from sicoe_levantamiento import geometria_desde_vertices
+
+    def _q():
+        return (
+            supabase.table("so_registros")
+            .select(
+                "id, numero_registro, reporte_id, item_numero, creado_por_reg, bloqueado, "
+                "pk_id_id, unidad, cantidad_total, vlr_unitario, ancho, longitud, "
+                "coord_lat, coord_lng, abs_inicio, abs_final, margen, calzada, "
+                "tramo, infraestructura, geometria_tipo, coords_geojson, huella_tipo"
+            )
+            .eq("id", registro_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    try:
+        rows = supabase_execute(_q) or []
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "geometria_tipo" in msg or "coords_geojson" in msg:
+            def _q2():
+                return (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, reporte_id, item_numero, creado_por_reg, bloqueado, "
+                        "pk_id_id, unidad, cantidad_total, vlr_unitario, ancho, longitud, "
+                        "coord_lat, coord_lng, abs_inicio, abs_final, margen, calzada, "
+                        "tramo, infraestructura"
+                    )
+                    .eq("id", registro_id)
+                    .eq("contrato_id", contrato_id)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+            rows = supabase_execute(_q2) or []
+        else:
+            raise HTTPException(500, str(exc)) from exc
+
+    if not rows:
+        raise HTTPException(404, "Registro no encontrado.")
+    reg = rows[0]
+
+    puede_full = _sicoe_puede_editar_full_registro(current_user, contrato_id)
+    puede_creador = _sicoe_puede_editar_dims_como_creador(current_user, contrato_id, reg)
+    sellado_max = bool(reg.get("bloqueado"))
+    # Misma ventana que gráfico: Editar siempre; Crear+creador hasta sellado max.
+    if not puede_full and not (puede_creador and not sellado_max):
+        raise HTTPException(403, "No puede dibujar la huella de este registro (bloqueo o permisos).")
+
+    geom = body.coords_geojson
+    tipo = body.geometria_tipo
+    centro = None
+    if not geom and body.vertices:
+        geom, tipo, centro = geometria_desde_vertices(body.vertices, body.geometria_tipo or "")
+    if not geom:
+        raise HTTPException(422, "Geometría inválida: indique vértices o coords_geojson.")
+
+    # Normalizar Feature → geometry
+    if isinstance(geom, dict) and geom.get("type") == "Feature":
+        geom = geom.get("geometry")
+    if not isinstance(geom, dict) or not geom.get("type"):
+        raise HTTPException(422, "coords_geojson inválido.")
+
+    if centro is None:
+        try:
+            if geom["type"] == "Point":
+                centro = {"lng": geom["coordinates"][0], "lat": geom["coordinates"][1]}
+            elif geom["type"] == "LineString" and geom.get("coordinates"):
+                cs = geom["coordinates"]
+                centro = {
+                    "lng": sum(c[0] for c in cs) / len(cs),
+                    "lat": sum(c[1] for c in cs) / len(cs),
+                }
+            elif geom["type"] == "Polygon" and geom.get("coordinates"):
+                ring = geom["coordinates"][0] or []
+                base = ring[:-1] if len(ring) > 1 else ring
+                if base:
+                    centro = {
+                        "lng": sum(c[0] for c in base) / len(base),
+                        "lat": sum(c[1] for c in base) / len(base),
+                    }
+        except (TypeError, ValueError, IndexError, KeyError):
+            centro = None
+
+    tipo_norm = (tipo or "").strip().lower()
+    if tipo_norm in ("área", "area", "poligono", "polígono"):
+        tipo_norm = "area"
+    elif tipo_norm in ("línea", "linea", "line"):
+        tipo_norm = "linea"
+    elif tipo_norm in ("punto", "point"):
+        tipo_norm = "punto"
+    else:
+        gt = geom.get("type")
+        tipo_norm = "area" if gt == "Polygon" else ("linea" if gt == "LineString" else "punto")
+
+    update = {
+        "geometria_tipo": tipo_norm,
+        "coords_geojson": geom,
+        "huella_origen": "levantamiento",
+    }
+    if centro:
+        update["coord_lat"] = centro["lat"]
+        update["coord_lng"] = centro["lng"]
+
+    def _upd():
+        try:
+            return (
+                supabase.table("so_registros")
+                .update(update)
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+        except Exception:
+            slim = {k: update[k] for k in ("geometria_tipo", "coords_geojson", "coord_lat", "coord_lng") if k in update}
+            return (
+                supabase.table("so_registros")
+                .update(slim)
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+
+    supabase_execute(_upd)
+    reg.update(update)
+
+    # Regenerar huella + hallazgos (reutiliza sincronizar-huella)
+    fr = _sicoe_analizar_huella_registro(contrato_id, reg)
+    if fr.get("omitido"):
+        _sicoe_persistir_huella_registro(
+            contrato_id, registro_id, {"huella": None, "precision": None, "huella_tipo": None}
+        )
+        return {"ok": True, "omitido": True, "razon": fr.get("razon") or "sin_datos"}
+
+    # Forzar precisión precisa cuando viene de levantamiento dibujado
+    if fr.get("huella"):
+        fr = dict(fr)
+        fr["precision"] = "precisa"
+        props = dict((fr["huella"].get("properties") or {}))
+        props["precision"] = "precisa"
+        props["origen"] = "levantamiento"
+        if body.line_style:
+            props["line_style"] = body.line_style
+        fr["huella"] = {**fr["huella"], "properties": props}
+
+    _sicoe_persistir_huella_registro(contrato_id, registro_id, fr)
+
+    hallazgos_out = []
+    from sicoe_auditoria_traslapos import usuario_ve_auditoria_traslapos
+    if usuario_ve_auditoria_traslapos(current_user):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for canon in fr.get("hallazgos") or []:
+            row = _sicoe_hallazgo_row_from_analisis(contrato_id, canon, None)
+            row["creado_en"] = now
+            try:
+                def _up(r=row):
+                    return (
+                        supabase.table("so_auditoria_hallazgos")
+                        .upsert(r, on_conflict="contrato_id,fingerprint")
+                        .execute()
+                        .data
+                    )
+                supabase_execute(_up)
+                hallazgos_out.append(canon)
+            except Exception as exc:
+                _log_api.warning("upsert hallazgo huella-precisa: %s", exc)
+
+    return {
+        "ok": True,
+        "precision": "precisa",
+        "huella": fr.get("huella"),
+        "huella_tipo": fr.get("huella_tipo"),
+        "geometria_tipo": tipo_norm,
+        "coords_geojson": geom,
+        "semaforo": fr.get("semaforo"),
+        "hallazgos": hallazgos_out,
+        "line_style": body.line_style,
+    }
 
 # ─── SICOE OBRA: Verificar acta RPO vigente ──────────────────────────────────
 def _acta_row_normalize(row):
