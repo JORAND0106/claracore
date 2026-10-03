@@ -59,6 +59,7 @@ import SicoeFiltroObraVista from './modules/sicoe-obra/SicoeFiltroObraVista'
 import SicoeCantidadesPorItemVista from './modules/sicoe-obra/SicoeCantidadesPorItemVista'
 import SicoeAmbienteAuditoria from './modules/sicoe-obra/SicoeAmbienteAuditoria'
 import { usuarioVeAuditoriaTraslapos } from './modules/sicoe-obra/sicoeAuditoriaTraslapos'
+import SicoeMapaHuellas from './modules/sicoe-obra/SicoeMapaHuellas'
 import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegistrosActasModal'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
@@ -3887,6 +3888,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         locApi: locApiPreview,
         cantidadTotal: cantTotal,
         vlrUnitario: itemSel?.precio_unitario ?? itemSel?.vlr_unitario ?? registro.vlr_unitario,
+        ancho: registro.ancho,
+        longitud: registro.longitud,
       })
       try {
         const aud = await fetchAuditoriaTraslaposAnalizar({
@@ -3913,6 +3916,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               })
               setModalAuditoriaTraslapos(null)
               await encolarGuardado()
+              try {
+                await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/sincronizar-huella`, {
+                  method: 'POST',
+                  headers: { ...hdrs, Authorization: `Bearer ${getToken()}` },
+                })
+              } catch { /* noop */ }
             },
             onCancelar: async () => {
               const resUno = (aud.analisis.resultados && aud.analisis.resultados[0]) || aud.analisis
@@ -3935,6 +3944,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
     }
     await encolarGuardado()
+    // Regenera franja sobre el eje tras guardar (best-effort)
+    if (registro?.id && contrato_id) {
+      try {
+        await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/sincronizar-huella`, {
+          method: 'POST',
+          headers: { ...hdrs, Authorization: `Bearer ${getToken()}` },
+        })
+      } catch { /* noop */ }
+    }
   }
 
   const guardarCorte = async () => {
@@ -12565,17 +12583,14 @@ function ModuloSicoeObra({
             refreshNonce={cpiRefreshNonce}
             filtrosVersion={cpiFiltrosVersion}
             exportMeta={exportMetaContrato || {}}
-            renderMap={({ colores, height, focusPkids }) => (
-              <MiniMapaSemaforo
+            renderMap={({ height, highlightRegistroIds, filterItemNumeros }) => (
+              <SicoeMapaHuellas
                 t={t}
-                colores={colores || {}}
                 contratoId={contrato_id}
                 token={getToken()}
                 height={height || 320}
-                bearing={270}
-                soloPkConDatos
-                showToolbar={false}
-                focusPkids={focusPkids || []}
+                highlightRegistroIds={highlightRegistroIds || []}
+                filterItemNumeros={filterItemNumeros || null}
               />
             )}
           />
