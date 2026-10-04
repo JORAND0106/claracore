@@ -9,39 +9,6 @@ import {
   reconstruirEjesDesdePlano,
 } from '../../modules/sicoe-obra/sicoeEjeFranjas.js'
 
-function ringSelfIntersectsWorld(points) {
-  const pts = Array.isArray(points) ? points.filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y)) : []
-  if (pts.length < 4) return false
-  const cross = (a, b, c) => {
-    const x1 = Number(b.x) - Number(a.x)
-    const y1 = Number(b.y) - Number(a.y)
-    const x2 = Number(c.x) - Number(a.x)
-    const y2 = Number(c.y) - Number(a.y)
-    return x1 * y2 - y1 * x2
-  }
-  const proper = (a, b, c, d) => {
-    const d1 = cross(a, b, c)
-    const d2 = cross(a, b, d)
-    const d3 = cross(c, d, a)
-    const d4 = cross(c, d, b)
-    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0))
-      && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
-  }
-  const n = pts.length
-  for (let i = 0; i < n; i += 1) {
-    const a = pts[i]
-    const b = pts[(i + 1) % n]
-    for (let j = i + 1; j < n; j += 1) {
-      if (Math.abs(i - j) <= 1) continue
-      if (i === 0 && j === n - 1) continue
-      if ((j + 1) % n === i) continue
-      const c = pts[j]
-      const d = pts[(j + 1) % n]
-      if (proper(a, b, c, d)) return true
-    }
-  }
-  return false
-}
 
 function nearestNodeToPoint(pt, nodes, epsPx) {
   if (!pt || !nodes?.length) return null
@@ -204,7 +171,7 @@ export function buildLineasSentidoEje(nodes, planoFc, opts = {}) {
         stepM: opts.stepM || 2,
       })
     }
-    const along = !!(curved?.along && curved.points && curved.points.length > 2)
+    const along = !!(curved?.points && curved.points.length > 2)
     if (along) {
       const minSepWorld = Math.max(8, (Number(opts.stepM) || 2) * 0.6 * PX_PER_METER)
       let worldPts = curved.points.map((p, idx) => {
@@ -248,8 +215,7 @@ export function buildLineasSentidoEje(nodes, planoFc, opts = {}) {
         continue
       }
     }
-    if (curved?.degraded) failedSegments += 1
-    else if (!(curved?.points && curved.points.length >= 2)) failedSegments += 1
+    if (!(curved?.points && curved.points.length >= 2)) failedSegments += 1
     out.push({
       id: uid(),
       type: 'linea',
@@ -354,7 +320,7 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
         stepM: opts.stepM || 2,
       })
     }
-    const along = !!(curved?.along && curved.points && curved.points.length > 2)
+    const along = !!(curved?.points && curved.points.length > 2)
     if (along) {
       const minSepWorld = Math.max(8, (Number(opts.stepM) || 2) * 0.6 * PX_PER_METER)
       const toWorld = (p, idx) => {
@@ -391,8 +357,6 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
         return
       }
       failedEdges += 1
-    } else if (curved?.degraded) {
-      failedEdges += 1
     } else if (!(curved?.points && curved.points.length === 2)) {
       failedEdges += 1
     }
@@ -404,17 +368,6 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
     const a = list[i]
     const b = list[(i + 1) % list.length]
     appendEdge(a, b)
-  }
-
-  // Anillo auto-cruzado ⇒ descartar densificación y dejar caras rectas (nunca mostrar deformado).
-  if (usedEje && ringSelfIntersectsWorld(ring)) {
-    return {
-      points: list.map((n) => ({ x: Number(n.x), y: Number(n.y) })),
-      usedEje: false,
-      failedEdges: list.length,
-      edgeKinds: list.map(() => 'crossing'),
-      degradedRing: true,
-    }
   }
 
   return { points: ring, usedEje, failedEdges, edgeKinds }
