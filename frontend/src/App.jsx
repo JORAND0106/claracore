@@ -5900,6 +5900,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [creandoReg, setCreandoReg]               = useState(false)
   const [ofertaDibujoReporte, setOfertaDibujoReporte] = useState(!!repoProp?._ofertaDibujo)
   const [editorDibujoReporte, setEditorDibujoReporte] = useState(false)
+  const [dibujoCmdAviso, setDibujoCmdAviso] = useState(null)
   const [puntosEdit, setPuntosEdit]               = useState((repoProp.puntos || []).map(p => ({...p})))
   const [editandoTopo, setEditandoTopo]            = useState(false)
   const [guardandoTopo, setGuardandoTopo]          = useState(false)
@@ -8692,9 +8693,40 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 nodo_contenedor_id: patch.nodo_contenedor_id ?? data?.nodo_contenedor?.nodo_contenedor_id,
               })
             } catch { /* noop */ }
+            const cmd = data?.mensaje_cmd
+              || (data?.nodo_contenedor?.alojado
+                ? 'Ya existe un nodo en ese punto. Este reporte quedó alojado en esa entidad.'
+                : '')
+            if (cmd) {
+              setDibujoCmdAviso(cmd)
+              window.setTimeout(() => setDibujoCmdAviso(null), 4500)
+            }
             void recargar({ forzarSinFiltros: true })
           }}
         />
+      )}
+      {dibujoCmdAviso && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed',
+            left: 16,
+            right: 16,
+            bottom: 16,
+            zIndex: 14000,
+            maxWidth: 560,
+            margin: '0 auto',
+            background: '#0369a1',
+            color: '#fff',
+            borderRadius: 10,
+            padding: '10px 14px',
+            fontWeight: 700,
+            fontSize: 'var(--cc-sm)',
+            boxShadow: '0 8px 24px rgba(15,23,42,0.35)',
+          }}
+        >
+          {`CMD ${dibujoCmdAviso}`}
+        </div>
       )}
     </div>
   )

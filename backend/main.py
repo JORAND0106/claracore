@@ -26719,6 +26719,26 @@ def _sicoe_items_compartidos(regs_a: list, regs_b: list) -> list:
     return sorted(sa & sb)
 
 
+
+def _sicoe_auditoria_dibujos_background(contrato_id: int, reporte_id=None, user_snapshot=None):
+    """Evalúa hallazgos de dibujos fuera del request (no bloquea al usuario)."""
+    try:
+        n = len(_sicoe_auditoria_desde_dibujos(
+            contrato_id,
+            reporte_id=reporte_id,
+            current_user=user_snapshot,
+        ) or [])
+        _log_api.info(
+            "auditoria dibujos background contrato=%s reporte=%s hallazgos=%s",
+            contrato_id, reporte_id, n,
+        )
+    except Exception as exc:
+        _log_api.warning(
+            "auditoria dibujos background contrato=%s reporte=%s: %s",
+            contrato_id, reporte_id, exc,
+        )
+
+
 def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, current_user=None) -> list:
     """
     Genera y persiste hallazgos alimentados por dibujos:
@@ -26791,6 +26811,8 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
     feats = {}
     for rep in reportes:
         dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
+        if not dg:
+            continue
         feat = _sicoe_feature_huella_desde_dibujo_reporte(dg, rep.get("id"))
         if feat:
             feats[rep.get("id")] = feat
@@ -26798,13 +26820,21 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
     hallazgos = []
 
     # 1) Nodo contenedor: traslapo mismo ítem
+    # Si hay reporte_id, solo contenedores que lo incluyen.
     by_cont = {}
     for rep in reportes:
         cid = rep.get("nodo_contenedor_id")
         if cid is None:
             continue
         by_cont.setdefault(cid, []).append(rep)
+    cont_ids_focus = None
+    if reporte_id is not None:
+        focus_rep = next((x for x in reportes if x.get("id") == reporte_id), None)
+        if focus_rep and focus_rep.get("nodo_contenedor_id") is not None:
+            cont_ids_focus = {focus_rep.get("nodo_contenedor_id")}
     for _cid, reps in by_cont.items():
+        if cont_ids_focus is not None and _cid not in cont_ids_focus:
+            continue
         if len(reps) < 2:
             continue
         hallazgos.extend(
@@ -26813,25 +26843,29 @@ def _sicoe_auditoria_desde_dibujos(contrato_id: int, reporte_id: int = None, cur
 
     # 2) Traslapo geométrico línea/polígono entre reportes con ítem en común
     ids = [r.get("id") for r in reportes if r.get("id") in feats]
+    # Tras un guardado puntual: solo pares que involucran ese reporte (O(n) vs O(n²)).
+    if reporte_id is not None and reporte_id in feats:
+        peer_ids = [i for i in ids if i != reporte_id]
+        id_pairs = [(reporte_id, pid) for pid in peer_ids]
+    else:
+        id_pairs = [(ids[i], ids[j]) for i in range(len(ids)) for j in range(i + 1, len(ids))]
     pares = []
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            a_id, b_id = ids[i], ids[j]
-            fa, fb = feats[a_id], feats[b_id]
-            ta, tb = dibujo_tipo_desde_feature(fa), dibujo_tipo_desde_feature(fb)
-            if ta == "nodo" or tb == "nodo":
-                continue
-            if ta != tb:
-                continue
-            ra = next((x for x in reportes if x.get("id") == a_id), {})
-            rb = next((x for x in reportes if x.get("id") == b_id), {})
-            shared = _sicoe_items_compartidos(regs_by_rep.get(a_id) or [], regs_by_rep.get(b_id) or [])
-            for item in shared:
-                regs = [
-                    r for r in (regs_by_rep.get(a_id) or []) + (regs_by_rep.get(b_id) or [])
-                    if str(r.get("item_numero") or "").strip() == item
-                ]
-                pares.append((ra, fa, rb, fb, item, regs))
+    for a_id, b_id in id_pairs:
+        fa, fb = feats[a_id], feats[b_id]
+        ta, tb = dibujo_tipo_desde_feature(fa), dibujo_tipo_desde_feature(fb)
+        if ta == "nodo" or tb == "nodo":
+            continue
+        if ta != tb:
+            continue
+        ra = next((x for x in reportes if x.get("id") == a_id), {})
+        rb = next((x for x in reportes if x.get("id") == b_id), {})
+        shared = _sicoe_items_compartidos(regs_by_rep.get(a_id) or [], regs_by_rep.get(b_id) or [])
+        for item in shared:
+            regs = [
+                r for r in (regs_by_rep.get(a_id) or []) + (regs_by_rep.get(b_id) or [])
+                if str(r.get("item_numero") or "").strip() == item
+            ]
+            pares.append((ra, fa, rb, fb, item, regs))
     hallazgos.extend(hallazgos_traslapo_dibujos_mismo_item(pares))
 
     # 3-4) Por reporte con dibujo: cantidad>área + consistencia abscisa/costado/PK
@@ -26941,9 +26975,13 @@ def sicoe_guardar_dibujo_reporte(
     contrato_id: int,
     reporte_id: int,
     body: ReporteDibujoBody,
+    background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
-    """Guarda el dibujo del reporte y lo propaga como huella a todos sus registros."""
+    """Guarda el dibujo del reporte y lo propaga como huella a todos sus registros.
+
+    La auditoría de hallazgos se encola en background para no demorar la respuesta.
+    """
     if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
         raise HTTPException(
             status_code=403,
@@ -27039,14 +27077,21 @@ def sicoe_guardar_dibujo_reporte(
     except Exception as exc:
         _log_api.warning("alojar nodo contenedor: %s", exc)
 
-    # Auditoría alimentada por dibujos (no bloquea el guardado).
-    hallazgos_dibujo = []
+    # Auditoría completa en background: el dibujo ya está guardado.
+    user_snap = None
     try:
-        hallazgos_dibujo = _sicoe_auditoria_desde_dibujos(
-            contrato_id, reporte_id=reporte_id, current_user=current_user
-        ) or []
+        user_snap = dict(current_user) if isinstance(current_user, dict) else current_user
+    except Exception:
+        user_snap = current_user
+    try:
+        background_tasks.add_task(
+            _sicoe_auditoria_dibujos_background,
+            int(contrato_id),
+            int(reporte_id),
+            user_snap,
+        )
     except Exception as exc:
-        _log_api.warning("auditoria desde dibujos: %s", exc)
+        _log_api.warning("encolar auditoria dibujos: %s", exc)
 
     try:
         registrar_log(
@@ -27061,7 +27106,7 @@ def sicoe_guardar_dibujo_reporte(
                 "registros": n,
                 "nodo_contenedor_id": alojamiento.get("nodo_contenedor_id"),
                 "alojado": bool(alojamiento.get("alojado")),
-                "hallazgos": len(hallazgos_dibujo),
+                "auditoria": "background",
             },
             resultado="ok",
             categoria="auditoria",
@@ -27075,8 +27120,9 @@ def sicoe_guardar_dibujo_reporte(
         "registros_actualizados": n,
         "nodo_contenedor": alojamiento,
         "mensaje_cmd": alojamiento.get("mensaje"),
-        "hallazgos": hallazgos_dibujo,
-        "hallazgos_count": len(hallazgos_dibujo),
+        "auditoria_en_curso": True,
+        "hallazgos": [],
+        "hallazgos_count": 0,
     }
 
 
@@ -27084,6 +27130,7 @@ def sicoe_guardar_dibujo_reporte(
 def sicoe_borrar_dibujo_reporte(
     contrato_id: int,
     reporte_id: int,
+    background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
     if not _sicoe_puede_editar_full_registro(current_user, int(contrato_id)):
@@ -27163,10 +27210,16 @@ def sicoe_borrar_dibujo_reporte(
         raise HTTPException(500, f"No se pudo borrar el dibujo: {exc}") from exc
 
     try:
-        _sicoe_auditoria_desde_dibujos(contrato_id, current_user=current_user)
+        user_snap = dict(current_user) if isinstance(current_user, dict) else current_user
+        background_tasks.add_task(
+            _sicoe_auditoria_dibujos_background,
+            int(contrato_id),
+            None,
+            user_snap,
+        )
     except Exception as exc:
         _log_api.warning("re-audit tras borrar dibujo: %s", exc)
-    return {"ok": True, "tiene_dibujo": False}
+    return {"ok": True, "tiene_dibujo": False, "auditoria_en_curso": True}
 
 
 
@@ -29998,6 +30051,19 @@ def sicoe_auditoria_hallazgos_sincronizar(
         raise HTTPException(500, f"No se pudo analizar el contrato: {exc}") from exc
     vivos = {h["fingerprint"]: h for h in (analisis.get("hallazgos") or []) if h.get("fingerprint")}
 
+    # Unificar nodos encimados + hallazgos alimentados por dibujos (siempre, liviano).
+    try:
+        _sicoe_unificar_nodos_contenedor(contrato_id)
+    except Exception as exc:
+        _log_api.warning("unificar nodos en sync: %s", exc)
+    try:
+        for h in (_sicoe_auditoria_desde_dibujos(contrato_id, current_user=current_user) or []):
+            fp = h.get("fingerprint")
+            if fp and fp not in vivos:
+                vivos[fp] = h
+    except Exception as exc:
+        _log_api.warning("auditoria dibujos en sync: %s", exc)
+
     ejes = []
     huellas_features = []
     if incluir_huellas:
@@ -30284,13 +30350,14 @@ def sicoe_sincronizar_huella_registro(
                     registro_id,
                     {"huella": feat, "precision": "precisa", "huella_tipo": ht},
                 )
-                hallazgos_dibujo = []
                 try:
-                    hallazgos_dibujo = _sicoe_auditoria_desde_dibujos(
-                        contrato_id,
-                        reporte_id=rid_rep,
-                        current_user=current_user,
-                    ) or []
+                    user_snap = dict(current_user) if isinstance(current_user, dict) else current_user
+                    threading.Thread(
+                        target=_sicoe_auditoria_dibujos_background,
+                        args=(int(contrato_id), int(rid_rep) if rid_rep is not None else None, user_snap),
+                        daemon=True,
+                        name=f"sicoe-audit-dibujo-{contrato_id}-{rid_rep}",
+                    ).start()
                 except Exception as exc:
                     _log_api.warning("sync huella audit dibujo: %s", exc)
                 return {
@@ -30298,7 +30365,8 @@ def sicoe_sincronizar_huella_registro(
                     "omitido": False,
                     "origen": "reporte_dibujo",
                     "huella": feat,
-                    "hallazgos": hallazgos_dibujo,
+                    "hallazgos": [],
+                    "auditoria_en_curso": True,
                 }
     except Exception as exc:
         _log_api.warning("sync huella desde dibujo reporte: %s", exc)
