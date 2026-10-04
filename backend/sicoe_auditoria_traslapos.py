@@ -114,6 +114,42 @@ def sectores_separan(a: dict, b: dict) -> bool:
     return bool(sa and sb and sa != sb)
 
 
+def mismo_reporte(a: Optional[dict], b: Optional[dict]) -> bool:
+    """True si ambos registros pertenecen al mismo reporte (ids presentes e iguales)."""
+    if not a or not b:
+        return False
+    ra, rb = a.get("reporte_id"), b.get("reporte_id")
+    if ra is None or rb is None:
+        return False
+    sa, sb = str(ra).strip(), str(rb).strip()
+    if not sa or not sb:
+        return False
+    return sa == sb
+
+
+def es_traslapo_mismo_reporte(hallazgo: Optional[dict]) -> bool:
+    """
+    Hallazgo de traslapo cuyos involucrados son todos del mismo reporte.
+    Esos casos no son problema (varios ítems/registros del mismo reporte en el mismo sitio).
+    """
+    if not hallazgo:
+        return False
+    if _txt(hallazgo.get("tipo")).casefold() != "traslapo":
+        return False
+    regs = hallazgo.get("registros_involucrados") or []
+    if len(regs) < 2:
+        return False
+    rep_ids = []
+    for r in regs:
+        if not r:
+            continue
+        rid = r.get("reporte_id")
+        if rid is None or str(rid).strip() == "":
+            return False
+        rep_ids.append(str(rid).strip())
+    return bool(rep_ids) and len(set(rep_ids)) == 1
+
+
 def costo_directo_parcial(cantidad_total: Any, vlr_unitario: Any, fraccion: float) -> float:
     try:
         q = float(cantidad_total or 0)
@@ -245,6 +281,7 @@ def _snapshot_involucrado(r: dict) -> dict:
         "reporte_id": r.get("reporte_id"),
         "numero_reporte": r.get("numero_reporte"),
         "item_numero": r.get("item_numero"),
+        "item_descripcion": r.get("item_descripcion") or r.get("descripcion"),
         "tramo": r.get("tramo"),
         "infraestructura": r.get("infraestructura"),
         "costado": _txt(r.get("calzada") or r.get("margen") or r.get("costado")),
@@ -256,6 +293,13 @@ def _snapshot_involucrado(r: dict) -> dict:
         "valor": valor if valor is not None else r.get("valor"),
         "usuario_nombre": r.get("usuario_nombre") or r.get("creado_por_nombre"),
         "fecha": r.get("fecha") or r.get("created_at") or r.get("fecha_registro"),
+        "foto_url": r.get("foto_url"),
+        "grafico_url": r.get("grafico_url"),
+        "coord_lat": r.get("coord_lat"),
+        "coord_lng": r.get("coord_lng"),
+        "huella_geojson": r.get("huella_geojson"),
+        "dibujo_geojson": r.get("dibujo_geojson"),
+        "perimetro_geojson": r.get("perimetro_geojson"),
     }
 
 
@@ -301,7 +345,13 @@ def analizar_candidato_contra_pares(
 
     if modo == "puntual":
         pk = candidato.get("pk_id_id")
-        mismos = [p for p in peers if str(p.get("pk_id_id")) == str(pk) and modo_comparacion(p) == "puntual"]
+        mismos = [
+            p
+            for p in peers
+            if str(p.get("pk_id_id")) == str(pk)
+            and modo_comparacion(p) == "puntual"
+            and not mismo_reporte(candidato, p)
+        ]
         for p in mismos:
             hallazgos.append(
                 _hallazgo(
@@ -350,6 +400,9 @@ def analizar_candidato_contra_pares(
                 continue
             del_grupo.append(p)
 
+            # Traslapo solo entre reportes distintos (mismo reporte = normal, no alerta).
+            if mismo_reporte(candidato, p):
+                continue
             ov = medida_traslapo(a0, a1, b0, b1)
             if ov >= tol:
                 frac = (ov / long_c) if long_c > 1e-9 else 1.0
@@ -689,6 +742,7 @@ def resumen_ambiente_desde_filas(filas: List[dict]) -> dict:
     """
     Resumen del ambiente: traslapos/vacíos sin justificar, no auditables,
     inconsistencias de ubicación/costado y justificados.
+    Ignora corregidos y traslapos entre registros del mismo reporte.
     """
     out = {
         "traslapos_sin_justificar": {"cantidad": 0, "valor": 0.0},
@@ -698,6 +752,8 @@ def resumen_ambiente_desde_filas(filas: List[dict]) -> dict:
         "justificados": {"cantidad": 0, "valor": 0.0},
     }
     for f in filas or []:
+        if es_traslapo_mismo_reporte(f):
+            continue
         estado = _txt(f.get("estado")).casefold() or "pendiente"
         if estado == "corregido":
             continue

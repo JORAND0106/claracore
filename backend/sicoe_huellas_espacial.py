@@ -394,11 +394,19 @@ def analizar_nodo(
                         "abs_aprox": abs_m,
                     }
 
-    # Traslapo: mismo ítem más de una vez en el mismo nodo
+    # Traslapo: mismo ítem más de una vez en el mismo nodo (solo reportes distintos)
     pares = pares_mismo_item_en_nodo or []
     item = _txt(reg.get("item_numero"))
     if item and pk is not None and pares:
-        otros = [p for p in pares if str(p.get("id")) != str(reg.get("id"))]
+        otros = [
+            p for p in pares
+            if str(p.get("id")) != str(reg.get("id"))
+            and (
+                reg.get("reporte_id") is None
+                or p.get("reporte_id") is None
+                or str(reg.get("reporte_id")) != str(p.get("reporte_id"))
+            )
+        ]
         if otros:
             inv = [
                 {
@@ -491,6 +499,13 @@ def analizar_poligono(
         item = _txt(reg.get("item_numero"))
         for peer in pares_mismo_item or []:
             if str(peer.get("id")) == str(reg.get("id")):
+                continue
+            # Traslapo solo entre reportes distintos
+            if (
+                reg.get("reporte_id") is not None
+                and peer.get("reporte_id") is not None
+                and str(reg.get("reporte_id")) == str(peer.get("reporte_id"))
+            ):
                 continue
             _, peer_poly = coords_desde_registro(peer)
             if not peer_poly:

@@ -84,7 +84,12 @@ export async function justificarAuditoriaHallazgo({
   token,
   hallazgoId,
   justificacion,
+  observacion,
 }) {
+  const body = { justificacion }
+  if (observacion != null && String(observacion).trim()) {
+    body.observacion = String(observacion).trim()
+  }
   const res = await fetch(
     `${API_URL}/sicoe-obra/${contratoId}/auditoria-hallazgos/${hallazgoId}/justificar`,
     {
@@ -93,7 +98,7 @@ export async function justificarAuditoriaHallazgo({
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ justificacion }),
+      body: JSON.stringify(body),
     },
   )
   if (!res.ok) {
