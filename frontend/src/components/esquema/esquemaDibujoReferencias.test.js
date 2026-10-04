@@ -4,6 +4,7 @@ import {
   buildDibujoReferenciasFeatureCollection,
   geojsonParaReferencia,
   infoFromReferenciaFeatureProps,
+  queryDibujoReferenciaAtPoint,
   ESQUEMA_DIBUJO_REFS_COLOR,
 } from '../../components/esquema/esquemaDibujoReferencias.js'
 import { metersToWorld } from '../../components/esquema/esquemaGeometry.js'
@@ -159,5 +160,25 @@ describe('buildDibujoReferenciasFeatureCollection', () => {
     assert.equal(info.reporte_id, 5)
     assert.equal(info.registros.length, 1)
     assert.equal(info.registros[0].numero_registro, 8)
+  })
+
+  it('queryDibujoReferenciaAtPoint tolera mapa/punto inválidos', () => {
+    assert.equal(queryDibujoReferenciaAtPoint(null, { x: 1, y: 1 }), null)
+    assert.equal(queryDibujoReferenciaAtPoint({}, null), null)
+    const map = {
+      getLayer: () => true,
+      queryRenderedFeatures: () => [{
+        properties: {
+          ref_reporte_id: 11,
+          ref_numero_reporte: 3,
+          ref_items: 'A',
+          ref_costo_directo: 1,
+          ref_registros_json: '[]',
+        },
+      }],
+    }
+    const hit = queryDibujoReferenciaAtPoint(map, { x: 40, y: 50 }, { pad: 8 })
+    assert.equal(hit.reporte_id, 11)
+    assert.equal(hit.numero_reporte, 3)
   })
 })

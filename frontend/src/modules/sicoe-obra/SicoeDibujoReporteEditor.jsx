@@ -30,7 +30,7 @@ function PanelPropiedadesReferencia({ t, refInfo, onClose }) {
         position: 'fixed',
         top: 64,
         right: 12,
-        zIndex: 14060,
+        zIndex: 14080,
         width: 'min(300px, calc(100vw - 24px))',
         maxHeight: 'min(70vh, 420px)',
         overflow: 'auto',
