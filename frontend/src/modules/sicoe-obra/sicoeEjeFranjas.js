@@ -771,6 +771,112 @@ export function construirLineaSentidoEje({
 }
 
 /**
+ * Anillo tipo corredor/franja a lo largo del eje.
+ *
+ * En vez de densificar arista-a-arista (que crea picos en tapas y caústicas),
+ * particiona los vértices en dos costados (izq/der), densifica cada costado
+ * siguiendo el eje y cierra con tapas rectas entre extremos.
+ *
+ * @param {{ ejes: object[], corners: Array<{lng:number,lat:number,key?:any}>, stepM?: number, maxDistM?: number }} args
+ * @returns {null|{ points: Array<{lng:number,lat:number,key?:any,corner?:boolean}>, leftKeys: any[], rightKeys: any[] }}
+ */
+export function construirAnilloCorredorSentidoEje({
+  ejes,
+  corners,
+  stepM = 2,
+  maxDistM = SICOE_EJE_MAX_DIST_PROYECCION_M * 2,
+} = {}) {
+  const list = Array.isArray(corners) ? corners : []
+  if (!ejes?.length || list.length < 3) return null
+
+  const items = []
+  for (const c of list) {
+    const lng = Number(c.lng)
+    const lat = Number(c.lat)
+    if (![lng, lat].every(Number.isFinite)) continue
+    const proy = proyectarSobreEje(ejes, lng, lat, { maxDistM })
+    if (!proy?.sobre_eje) continue
+    items.push({
+      key: c.key,
+      lng,
+      lat,
+      abs: Number(proy.abs_m),
+      dist: distConSignoSobreEje(proy),
+    })
+  }
+  if (items.length < 3) return null
+
+  const dists = items.map((it) => it.dist)
+  const hasLeft = dists.some((d) => d >= 0.35)
+  const hasRight = dists.some((d) => d <= -0.35)
+  if (!hasLeft || !hasRight) return null
+
+  const absSpan = Math.max(...items.map((it) => it.abs)) - Math.min(...items.map((it) => it.abs))
+  if (!(absSpan > 2)) return null
+
+  // Costado +: izquierda (o eje). Costado −: derecha.
+  const left = items.filter((it) => it.dist >= 0).sort((a, b) => (a.abs - b.abs) || (a.dist - b.dist))
+  const right = items.filter((it) => it.dist < 0).sort((a, b) => (a.abs - b.abs) || (b.dist - a.dist))
+  if (left.length < 1 || right.length < 1) return null
+
+  const densifySide = (side) => {
+    const out = []
+    for (let i = 0; i < side.length; i += 1) {
+      const cur = side[i]
+      if (i === 0) {
+        out.push({ lng: cur.lng, lat: cur.lat, key: cur.key, corner: true })
+        continue
+      }
+      const prev = side[i - 1]
+      // Mismo PK (cluster de remate): tapa/tramo corto → recta entre levantados.
+      if (Math.abs(cur.abs - prev.abs) <= 2.5) {
+        out.push({ lng: cur.lng, lat: cur.lat, key: cur.key, corner: true })
+        continue
+      }
+      const line = construirLineaSentidoEje({
+        ejes,
+        inicio: { lng: prev.lng, lat: prev.lat },
+        fin: { lng: cur.lng, lat: cur.lat },
+        stepM,
+        maxDistM,
+      })
+      if (line?.along && Array.isArray(line.points) && line.points.length > 2) {
+        for (let j = 1; j < line.points.length - 1; j += 1) {
+          const p = line.points[j]
+          out.push({ lng: Number(p.lng), lat: Number(p.lat), corner: false })
+        }
+      }
+      out.push({ lng: cur.lng, lat: cur.lat, key: cur.key, corner: true })
+    }
+    return out
+  }
+
+  const leftPath = densifySide(left)
+  const rightPath = densifySide(right)
+  if (leftPath.length < 1 || rightPath.length < 1) return null
+
+  // left abs↑ + right abs↓ ⇒ tapas = un solo segmento entre extremos (sin densificar).
+  let ring = [...leftPath, ...[...rightPath].reverse()]
+
+  // Evitar anillos auto-cruzados: probar la orientación alternativa.
+  const closedForTest = (pts) => {
+    if (pts.length < 4) return false
+    const c = [...pts, pts[0]]
+    return polylineSelfIntersects(c)
+  }
+  if (closedForTest(ring)) {
+    const alt = [...rightPath, ...[...leftPath].reverse()]
+    if (!closedForTest(alt)) ring = alt
+  }
+
+  return {
+    points: ring,
+    leftKeys: left.map((it) => it.key),
+    rightKeys: right.map((it) => it.key),
+  }
+}
+
+/**
  * Construye polígono de franja paralelo al eje.
  * distIni/distFin = distancia del centro de la franja al eje (m).
  * ancho = ancho total de la franja (m).

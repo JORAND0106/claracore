@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   analizarRegistroFranja,
   bearingDeg,
+  construirAnilloCorredorSentidoEje,
   construirFranjaPolygon,
   construirLineaSentidoEje,
   costadosCoinciden,
@@ -397,6 +398,55 @@ describe('sicoeEjeFranjas', () => {
     let path = 0
     for (let i = 1; i < line.points.length; i += 1) path += haversineM(line.points[i - 1], line.points[i])
     assert.ok(path > chord * 1.08, `path=${path.toFixed(1)} chord=${chord.toFixed(1)}`)
+  })
+
+  it('construirAnilloCorredorSentidoEje: curva cerrada sin picos ni auto-cruce; tapas en levantados', () => {
+    // Eje en cuarto de círculo (tipo 9+940–9+970)
+    const R = 40
+    const cx = -74.4
+    const cy = 4.5
+    const ejePts = []
+    for (let m = 9940; m <= 9980; m += 2) {
+      const ang = ((m - 9940) / 40) * (Math.PI / 2)
+      ejePts.push({
+        m,
+        lng: cx + (R / 111320) * Math.cos(ang),
+        lat: cy + (R / 110540) * Math.sin(ang),
+      })
+    }
+    const ejes = [{ id: 0, puntos: ejePts }]
+    const mkOff = (ptIdx, sideSign, distM) => {
+      const a = ejePts[ptIdx]
+      const b = ejePts[Math.min(ptIdx + 1, ejePts.length - 1)]
+      const br = bearingDeg(a, b)
+      const brOff = sideSign >= 0 ? (br + 270) % 360 : (br + 90) % 360
+      return destinationPoint(a.lng, a.lat, brOff, distM)
+    }
+    // 4 esquinas + 2 extras en el remate final (cluster 64-67)
+    const c1 = { ...mkOff(2, 1, 5), key: '1' }
+    const c2 = { ...mkOff(ejePts.length - 4, 1, 5), key: '2' }
+    const c2b = { ...mkOff(ejePts.length - 2, 1, 4.5), key: '2b' } // tip left
+    const c3b = { ...mkOff(ejePts.length - 2, -1, 4.5), key: '3b' } // tip right
+    const c3 = { ...mkOff(ejePts.length - 4, -1, 5), key: '3' }
+    const c4 = { ...mkOff(2, -1, 5), key: '4' }
+    const ring = construirAnilloCorredorSentidoEje({
+      ejes,
+      corners: [c1, c2, c2b, c3b, c3, c4],
+      stepM: 2,
+    })
+    assert.ok(ring)
+    assert.ok(ring.points.length > 6, `n=${ring.points.length}`)
+    // Todos los levantados están como corners
+    for (const k of ['1', '2', '2b', '3b', '3', '4']) {
+      assert.ok(ring.points.some((p) => p.corner && p.key === k), `missing ${k}`)
+    }
+    const closed = [...ring.points, ring.points[0]]
+    assert.equal(polylineSelfIntersects(closed), false)
+    // Ningún interior a > 25 m del eje (sin picos lejanos)
+    for (const p of ring.points) {
+      const proy = proyectarSobreEje(ejes, p.lng, p.lat, { maxDistM: 80 })
+      assert.ok(proy && proy.dist_m < 25, `spike dist=${proy?.dist_m}`)
+    }
   })
 
   it('remate: extremos exactos y sin overshoot/retorno junto al fin', () => {

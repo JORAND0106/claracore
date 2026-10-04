@@ -5,6 +5,7 @@
 import { PX_PER_METER } from './esquemaGeometry.js'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
+  construirAnilloCorredorSentidoEje,
   construirLineaSentidoEje,
   reconstruirEjesDesdePlano,
 } from '../../modules/sicoe-obra/sicoeEjeFranjas.js'
@@ -191,13 +192,14 @@ export function buildLineasUniendoNodos(nodes, opts = {}) {
 
 function nodoToLngLat(node, opts = {}) {
   if (!node) return null
-  // Preferir la posición del lienzo (ya alineada al mapa) para densificar.
+  // Preferir Gauss del levantado (estable vs eje). world→lnglat solo si no hay GK.
+  if (Number.isFinite(node.este) && Number.isFinite(node.norte)) {
+    const ll = gkBogotaToWgs84(node.este, node.norte)
+    if (ll && Number.isFinite(ll.lng) && Number.isFinite(ll.lat)) return ll
+  }
   if (typeof opts.worldToLngLat === 'function' && Number.isFinite(node.x) && Number.isFinite(node.y)) {
     const ll = opts.worldToLngLat(node.x, node.y)
     if (ll && Number.isFinite(ll.lng) && Number.isFinite(ll.lat)) return ll
-  }
-  if (Number.isFinite(node.este) && Number.isFinite(node.norte)) {
-    return gkBogotaToWgs84(node.este, node.norte)
   }
   return null
 }
@@ -329,8 +331,12 @@ export function accionDibujarNodosPorTipo(tipo) {
 }
 
 /**
- * Densifica un anillo de nodos: caras a lo largo del eje siguen la curva;
- * caras transversales (casi misma abscisa o sin eje) quedan rectas.
+ * Densifica un anillo de nodos en sentido del eje.
+ *
+ * Estrategia principal (corredor): particiona izq/der, densifica cada costado
+ * siguiendo el eje y cierra con tapas rectas. Evita picos en extremos y
+ * cruces por densificar arista-a-arista.
+ * Respaldo: densificación por arista (along vs transversal).
  *
  * @param {object[]} nodes nodos en orden de unión (sin repetir el cierre)
  * @param {object|null} planoFc
@@ -354,6 +360,87 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
     ? opts.ejes
     : reconstruirEjesDesdePlano(planoFc)
 
+  // --- Corredor (preferido) ---
+  if (ejes.length) {
+    const corners = []
+    const byKey = new Map()
+    for (let i = 0; i < list.length; i += 1) {
+      const n = list[i]
+      const key = n.nodeNum != null ? String(n.nodeNum) : `i${i}`
+      const ll = nodoToLngLat(n, opts)
+      if (!ll) continue
+      corners.push({ lng: ll.lng, lat: ll.lat, key })
+      byKey.set(key, n)
+    }
+    const corridor = construirAnilloCorredorSentidoEje({
+      ejes,
+      corners,
+      stepM: opts.stepM || 2,
+    })
+    if (corridor?.points?.length >= 4) {
+      const ring = []
+      let ok = true
+      for (const p of corridor.points) {
+        if (p.corner && p.key != null && byKey.has(String(p.key))) {
+          const n = byKey.get(String(p.key))
+          ring.push({
+            x: Number(n.x),
+            y: Number(n.y),
+            lng: p.lng,
+            lat: p.lat,
+            este: n.este,
+            norte: n.norte,
+            _cornerKey: String(p.key),
+          })
+          continue
+        }
+        if (typeof opts.lngLatToWorld === 'function') {
+          const w = opts.lngLatToWorld(p.lng, p.lat)
+          if (w && Number.isFinite(w.x) && Number.isFinite(w.y)) {
+            ring.push({ x: w.x, y: w.y, lng: p.lng, lat: p.lat })
+            continue
+          }
+        }
+        const gk = wgs84ToGkBogota(p.lng, p.lat)
+        if (!gk) {
+          ok = false
+          break
+        }
+        const tw = topoToWorld(gk.este, gk.norte, origin)
+        ring.push({ ...tw, lng: p.lng, lat: p.lat, este: gk.este, norte: gk.norte })
+      }
+      if (ok && ring.length >= 4) {
+        const firstKey = list[0]?.nodeNum != null ? String(list[0].nodeNum) : null
+        if (firstKey) {
+          const idx = ring.findIndex((p) => p._cornerKey === firstKey)
+          if (idx > 0) {
+            const rotated = [...ring.slice(idx), ...ring.slice(0, idx)]
+            ring.length = 0
+            ring.push(...rotated)
+          }
+        }
+        if (list.length >= 2 && list[1]?.nodeNum != null) {
+          const secondKey = String(list[1].nodeNum)
+          const i1 = ring.findIndex((p) => p._cornerKey === secondKey)
+          // Si el 2.º nodo está en la mitad lejana del anillo, invertir sentido.
+          if (i1 > 1 && i1 > ring.filter((p) => p._cornerKey).length / 2) {
+            const head = ring[0]
+            const rest = ring.slice(1).reverse()
+            ring.length = 0
+            ring.push(head, ...rest)
+          }
+        }
+        return {
+          points: ring.map(({ _cornerKey, ...rest }) => rest),
+          usedEje: true,
+          failedEdges: 0,
+          edgeKinds: ['along', 'crossing'],
+        }
+      }
+    }
+  }
+
+  // --- Respaldo: arista a arista ---
   const edgeKinds = []
   const ring = []
   let usedEje = false
@@ -383,8 +470,6 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
       if (worldPts && worldPts.length >= 3) {
         usedEje = true
         edgeKinds.push('along')
-        // Omitir el último de la arista: lo aporta el inicio de la siguiente (o el cierre).
-        // El primero es exactamente el nodo levantado `a`.
         for (let i = 0; i < worldPts.length - 1; i += 1) {
           ring.push(worldPts[i])
         }
