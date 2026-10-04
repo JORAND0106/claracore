@@ -377,6 +377,7 @@ export default function EsquemaEditorModal({
   const mapCtx = useMemo(() => normalizeMapContext(mapLocation), [mapLocation])
   const huellaTipoRef = useRef(huellaDibujoTipo)
   huellaTipoRef.current = huellaDibujoTipo
+
   const authToken = useMemo(() => {
     try {
       return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
@@ -478,6 +479,16 @@ export default function EsquemaEditorModal({
   const [insertHint, setInsertHint] = useState('')
   const [libNamePrompt, setLibNamePrompt] = useState(null)
   const [libNotice, setLibNotice] = useState('')
+  // Biblioteca / mensaje de entidad solo aplican al tipo Nodo.
+  useEffect(() => {
+    if (!huellaMode) return undefined
+    if (huellaDibujoTipo === 'nodo') return undefined
+    setLibOpen(false)
+    setLibNotice('')
+    setInsertHint('')
+    return undefined
+  }, [huellaMode, huellaDibujoTipo])
+
   const [iaPrompt, setIaPrompt] = useState(null)
   const [iaUsos, setIaUsos] = useState(0)
   const [iaBusy, setIaBusy] = useState(false)
@@ -2179,6 +2190,31 @@ export default function EsquemaEditorModal({
         rotation: 0,
       })
     }
+    // Polígono: cerrar visualmente contra el primer nodo (desde 3 vértices).
+    const cerrarPoligono = (
+      huellaMode
+      && huellaTipoRef.current === 'poligono'
+      && nodes.length >= 3
+      && String(nodes[0].nodeNum) !== String(nodes[nodes.length - 1].nodeNum)
+    )
+    if (cerrarPoligono) {
+      const a = nodes[nodes.length - 1]
+      const b = nodes[0]
+      lines.push({
+        id: uid(),
+        type: 'linea',
+        joinSeq: true,
+        joinClosePreview: true,
+        x1: a.x,
+        y1: a.y,
+        x2: b.x,
+        y2: b.y,
+        color: colorRef.current,
+        width: widthRef.current,
+        lineStyle: lineStyleRef.current,
+        rotation: 0,
+      })
+    }
     objectsRef.current = [...objectsRef.current, ...lines]
     setDirty(true)
     redraw()
@@ -2200,6 +2236,29 @@ export default function EsquemaEditorModal({
     chain.push(key)
     setJoinSequence(chain)
     return true
+  }
+
+  /** Digitar / confirmar número en panel de secuencia de unión. */
+  const tryAppendJoinNum = (raw) => {
+    const resolved = resolveNodoPorNumero(raw, objectsRef.current, coordRows)
+    if (resolved.kind === 'missing') {
+      return { ok: false, message: mensajeNodoInexistente(raw) }
+    }
+    let node = resolved.kind === 'canvas' ? resolved.node : null
+    if (!node && resolved.kind === 'table') {
+      const built = applyCoordRowsToCanvas(coordRows, { skipTipoActions: true })
+      node = (built || []).find((o) => String(o.nodeNum) === String(resolved.row.num)) || null
+      if (!node) node = findNodeByNum(resolved.row.num)
+    }
+    if (!node) {
+      return { ok: false, message: mensajeNodoInexistente(raw) }
+    }
+    const ok = appendJoinNode(node)
+    if (!ok) {
+      return { ok: false, message: `El nodo «${node.nodeNum}» ya es el último de la secuencia.` }
+    }
+    setToolHint('')
+    return { ok: true }
   }
 
   const finishJoinCircuit = () => {
@@ -2305,11 +2364,22 @@ export default function EsquemaEditorModal({
       setLibNotice('Seleccione una entidad para insertarla sobre el nodo (punto medio). Si no elige ninguna, se guarda el marcador legible.')
       setInsertHint('Elija una entidad de la biblioteca o guarde solo con el marcador del nodo.')
     }
+    if (!opts.skipTipoActions && huellaMode && tipo !== 'nodo') {
+      setLibOpen(false)
+      setLibNotice('')
+      setInsertHint('')
+    }
     if (!opts.skipTipoActions && accion.abrirUnirPorNumero && nodes.length) {
+      setLibOpen(false)
+      setLibNotice('')
+      setInsertHint('')
       setTool('unir-nodos')
-      setToolHint('Digite o pulse los números de nodo de la tabla para unir el polígono. Enter confirma cada número.')
+      setToolHint('Digite el número de nodo en el panel o pulse nodos en el plano.')
     }
     if (!opts.skipTipoActions && accion.unirEnOrden && nodes.length >= 2) {
+      setLibOpen(false)
+      setLibNotice('')
+      setInsertHint('')
       setToolHint(`Línea: ${nodes.length} nodos unidos en orden (1→${nodes.length}).`)
     }
     setPanTick((n) => n + 1)
@@ -4190,7 +4260,8 @@ export default function EsquemaEditorModal({
             ? 'Área: clic dentro de una región cerrada (rectas y curvas). El valor queda en m².'
             : '')
     : ''
-  const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || insertHint
+  const insertHintVisible = !huellaMode || huellaTipoRef.current === 'nodo'
+  const canvasHint = toolHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || (insertHintVisible ? insertHint : '')
 
   const pedirGuardar = () => {
     if (busy) return
@@ -4830,7 +4901,8 @@ export default function EsquemaEditorModal({
               error={mapError}
               pickInfo={mapPickInfo}
               printAreaSelecting={printAreaSelecting}
-              dodgeCoords={coordPanelOpen}
+              dodgeCoords={coordPanelOpen && !(tool === 'unir-nodos' || joinSeq.length > 0)}
+              besideCoords={coordPanelOpen && (tool === 'unir-nodos' || joinSeq.length > 0)}
               contextHint={mapCtx.hasPk
                 ? `PK ${mapCtx.pkId} resaltado`
                 : mapCtx.hasPoint
@@ -4848,10 +4920,14 @@ export default function EsquemaEditorModal({
               data-testid="esquema-cursor-coords"
               style={{
                 position: 'absolute',
-                left: mapActive && mapPropsOpen ? 270 : 18,
-                bottom: 18,
+                // Evitar solape con Secuencia de unión (izq-abajo) y Biblioteca (der-abajo).
+                ...(tool === 'unir-nodos' || joinSeq.length > 0
+                  ? { right: 18, left: 'auto', bottom: 18 }
+                  : (mapActive && mapPropsOpen && !coordPanelOpen
+                    ? { left: 270, right: 'auto', bottom: 18 }
+                    : { left: 18, right: 'auto', bottom: 18 })),
                 zIndex: 6,
-                maxWidth: 'min(340px, calc(100% - 36px))',
+                maxWidth: 'min(280px, calc(100% - 36px))',
                 padding: '7px 10px',
                 borderRadius: 10,
                 border: `1px solid ${t.border}`,
@@ -4935,9 +5011,10 @@ export default function EsquemaEditorModal({
               seq={joinSeq}
               onChange={setJoinSequence}
               onFinish={finishJoinCircuit}
+              onAppendNum={tryAppendJoinNum}
             />
           ) : null}
-          {libOpen ? (
+          {libOpen && (!huellaMode || huellaTipoRef.current === 'nodo') ? (
             <BibliotecaPanel
               t={t}
               ui={ui}
@@ -4957,11 +5034,25 @@ export default function EsquemaEditorModal({
             />
           ) : null}
           {canvasHint ? (
-            <div style={{
-              position: 'absolute', left: 18, bottom: 72, zIndex: 5,
-              padding: '4px 8px', borderRadius: 6, background: ui.hudBg,
-              border: `1px solid ${t.border}`, fontSize: 12, fontWeight: 700, color: t.text,
-            }}
+            <div
+              data-testid="esquema-canvas-hint"
+              style={{
+                position: 'absolute',
+                top: 52,
+                right: 18,
+                left: 'auto',
+                bottom: 'auto',
+                zIndex: 5,
+                maxWidth: 'min(320px, calc(100% - 36px))',
+                padding: '6px 10px',
+                borderRadius: 8,
+                background: ui.hudBg,
+                border: `1px solid ${t.border}`,
+                fontSize: 12,
+                fontWeight: 700,
+                color: t.text,
+                boxShadow: '0 4px 14px rgba(15,23,42,0.12)',
+              }}
             >
               {canvasHint}
             </div>
@@ -5478,16 +5569,18 @@ function MapaPropiedadesPanel({
   printAreaSelecting,
   contextHint,
   dodgeCoords = false,
+  besideCoords = false,
   onBasemap,
   onOpacity,
   onClose,
   onRemove,
 }) {
   // Izquierda: no compite con Propiedades de entidad (derecha) ni Biblioteca (abajo-derecha).
-  // Si el panel de coordenadas está abierto (también izquierda-arriba), baja el panel del mapa.
+  // Si el panel de coordenadas está abierto (también izquierda-arriba), baja el panel del mapa
+  // o lo desplaza a la derecha cuando el borde inferior está ocupado (secuencia de unión).
   const anchor = dodgeCoords
     ? { left: 18, bottom: 18, top: 'auto' }
-    : { left: 18, top: 18, bottom: 'auto' }
+    : { left: besideCoords ? 340 : 18, top: 18, bottom: 'auto' }
 
   return (
     <div
@@ -6494,9 +6587,20 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImpor
   )
 }
 
-function JoinSeqPanel({ t, seq, onChange, onFinish }) {
+function JoinSeqPanel({ t, seq, onChange, onFinish, onAppendNum }) {
   const list = seq || []
   const sheet = coordSheetStyles(t)
+  const inputRef = useRef(null)
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      try { inputRef.current?.focus?.() } catch { /* ignore */ }
+    }, 40)
+    return () => window.clearTimeout(id)
+  }, [])
+
   const move = (i, dir) => {
     const j = i + dir
     if (j < 0 || j >= list.length) return
@@ -6506,6 +6610,40 @@ function JoinSeqPanel({ t, seq, onChange, onFinish }) {
     next[j] = tmp
     onChange(next)
   }
+
+  const submitDraft = () => {
+    const raw = String(draft || '').trim()
+    if (!raw) return
+    const result = typeof onAppendNum === 'function'
+      ? onAppendNum(raw)
+      : { ok: false, message: 'No se pudo agregar el nodo.' }
+    if (result?.ok) {
+      setDraft('')
+      setError('')
+      window.setTimeout(() => {
+        try { inputRef.current?.focus?.() } catch { /* ignore */ }
+      }, 0)
+      return
+    }
+    setError(result?.message || 'Número de nodo no válido.')
+    window.setTimeout(() => {
+      try {
+        inputRef.current?.select?.()
+        inputRef.current?.focus?.()
+      } catch { /* ignore */ }
+    }, 0)
+  }
+
+  const iconBtn = {
+    ...ghost(t),
+    padding: 6,
+    minWidth: 32,
+    width: 32,
+    height: 32,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  }
   const actionBtn = {
     ...ghost(t),
     padding: '2px 6px',
@@ -6513,14 +6651,18 @@ function JoinSeqPanel({ t, seq, onChange, onFinish }) {
     fontSize: 12,
     lineHeight: 1,
   }
+
   return (
     <div
+      data-testid="esquema-join-seq-panel"
       style={{
         position: 'absolute',
         left: 18,
-        bottom: 72,
-        zIndex: 5,
-        width: 320,
+        bottom: 18,
+        zIndex: 8,
+        width: 'min(320px, calc(100vw - 36px))',
+        maxHeight: 'min(42vh, 360px)',
+        overflow: 'auto',
         padding: 10,
         borderRadius: 10,
         border: `1px solid ${t.border}`,
@@ -6534,25 +6676,127 @@ function JoinSeqPanel({ t, seq, onChange, onFinish }) {
         <div style={{ display: 'flex', gap: 4 }}>
           <button
             type="button"
-            style={ghost(t)}
+            style={iconBtn}
             disabled={!list.length}
-            title="Terminar la secuencia tal como está (no cierra el circuito)"
+            title="Terminar secuencia"
             aria-label="Terminar secuencia"
             onClick={onFinish}
           >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <IconTerminarCircuito />
-              Terminar
-            </span>
+            <IconTerminarCircuito />
           </button>
-          <button type="button" style={ghost(t)} disabled={!list.length} onClick={() => onChange([])}>
-            Reiniciar
+          <button
+            type="button"
+            style={iconBtn}
+            disabled={!list.length}
+            title="Reiniciar secuencia"
+            aria-label="Reiniciar secuencia"
+            onClick={() => { onChange([]); setError(''); setDraft('') }}
+          >
+            <IconReiniciarSecuencia />
           </button>
         </div>
       </div>
-      {!list.length ? (
-        <div style={{ fontSize: 11, color: t.textMuted }}>Digite o pulse nodos. Terminar deja la secuencia como está. Para cerrar el circuito, repita el primer nodo al final.</div>
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+        <input
+          ref={inputRef}
+          data-testid="esquema-join-seq-input"
+          value={draft}
+          inputMode="numeric"
+          autoComplete="off"
+          placeholder="Nº nodo"
+          aria-label="Número de nodo"
+          onChange={(e) => {
+            setDraft(e.target.value)
+            if (error) setError('')
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              e.stopPropagation()
+              submitDraft()
+            }
+          }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: 32,
+            borderRadius: 8,
+            border: `1px solid ${error ? '#dc2626' : t.border}`,
+            padding: '0 10px',
+            fontSize: 13,
+            fontWeight: 700,
+            color: t.text,
+            background: t.bg || '#fff',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        />
+        <button
+          type="button"
+          style={{
+            ...ghost(t),
+            height: 32,
+            padding: '0 10px',
+            fontWeight: 800,
+            fontSize: 12,
+            background: t.primary,
+            color: '#fff',
+            border: 'none',
+          }}
+          title="Agregar nodo a la secuencia"
+          aria-label="Agregar nodo"
+          onClick={submitDraft}
+        >
+          +
+        </button>
+      </div>
+
+      {error ? (
+        <div
+          data-testid="esquema-join-seq-error"
+          style={{
+            marginBottom: 8,
+            fontSize: 11,
+            fontWeight: 700,
+            color: '#b91c1c',
+            lineHeight: 1.35,
+          }}
+        >
+          {error}
+        </div>
       ) : (
+        <div style={{ marginBottom: 8, fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>
+          Digite el número y pulse Enter, o toque nodos en el plano.
+        </div>
+      )}
+
+      {list.length > 0 ? (
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 4,
+          marginBottom: 8,
+          fontSize: 11,
+          fontWeight: 800,
+          color: t.text,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+        >
+          {list.map((num, i) => (
+            <span key={`${num}-${i}`} style={{
+              padding: '2px 7px',
+              borderRadius: 999,
+              border: `1px solid ${t.border}`,
+              background: t.bgMuted || 'rgba(100,116,139,0.08)',
+            }}
+            >
+              {i === 0 ? num : `→ ${num}`}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {list.length > 0 ? (
         <div style={sheet.wrap}>
           <table style={sheet.table}>
             <colgroup>
@@ -6594,7 +6838,7 @@ function JoinSeqPanel({ t, seq, onChange, onFinish }) {
             </tbody>
           </table>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -7098,6 +7342,16 @@ function IconTerminarCircuito() {
     <svg {...iconProps()} width="14" height="14">
       <circle cx="12" cy="12" r="8" />
       <path d="m8.5 12 2.2 2.2 4.8-5" />
+    </svg>
+  )
+}
+function IconReiniciarSecuencia() {
+  return (
+    <svg {...iconProps()} width="14" height="14">
+      <path d="M3 12a9 9 0 0 1 15.5-6.4" />
+      <path d="M21 3v6h-6" />
+      <path d="M21 12a9 9 0 0 1-15.5 6.4" />
+      <path d="M3 21v-6h6" />
     </svg>
   )
 }
