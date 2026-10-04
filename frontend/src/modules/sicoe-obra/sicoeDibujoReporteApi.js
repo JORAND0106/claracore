@@ -24,6 +24,26 @@ export function reporteSinDibujo(reporte) {
   return !reporteTieneDibujo(reporte)
 }
 
+/** Otros reportes del contrato con ítems en común y dibujo (referencia en el plano). */
+export async function fetchDibujoReferencias({
+  API_URL,
+  contratoId,
+  token,
+  reporteId,
+}) {
+  const res = await fetch(
+    `${API_URL}/sicoe-obra/${contratoId}/reportes/${reporteId}/dibujo-referencias`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  )
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(txt || `Error ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function guardarDibujoReporte({
   API_URL,
   contratoId,
