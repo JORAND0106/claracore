@@ -4980,7 +4980,11 @@ export default function EsquemaEditorModal({
               aria-label={huellaMode ? 'Guardar dibujo del reporte' : 'Guardar esquema'}
               disabled={busy || (huellaMode ? false : (!dirty && !mapActive))}
               onClick={pedirGuardar}
-              style={{ ...iconBtn(t, printAreaSelecting), opacity: (dirty || mapActive) ? 1 : 0.4 }}
+              style={{
+                ...iconBtn(t, printAreaSelecting),
+                opacity: busy ? 0.55 : ((dirty || mapActive || huellaMode) ? 1 : 0.4),
+                cursor: busy ? 'wait' : 'pointer',
+              }}
             >
               <IconGuardar />
             </button>

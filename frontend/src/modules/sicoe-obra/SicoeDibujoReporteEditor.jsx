@@ -146,6 +146,8 @@ export default function SicoeDibujoReporteEditor({
       o && o.sentidoEje === true && o.type === 'polilinea' && o.closed
     ))
     setGuardando(true)
+    setError('')
+    setCmdInfo('')
     try {
       const data = await guardarDibujoReporte({
         API_URL,
@@ -170,17 +172,25 @@ export default function SicoeDibujoReporteEditor({
         || (data?.nodo_contenedor?.alojado
           ? 'Ya existe un nodo en ese punto. Este reporte quedó alojado en esa entidad.'
           : '')
-      if (msg) {
-        setCmdInfo(msg)
-        onGuardado?.(data)
-        // Dejar leer el CMD antes de cerrar
-        await new Promise((r) => setTimeout(r, 1600))
-      } else {
-        onGuardado?.(data)
-      }
+      if (msg) setCmdInfo(msg)
+      else if (data?.auditoria_en_curso) setCmdInfo('Dibujo guardado. La auditoría se evalúa en segundo plano.')
+      onGuardado?.(data)
+      // Cerrar de inmediato: no esperar hallazgos ni pausas artificiales.
       onClose?.()
     } catch (e) {
-      setError(e?.message || 'No se pudo guardar el dibujo')
+      const raw = String(e?.message || e || '')
+      let msg = 'No se pudo guardar el dibujo. Revise la conexión e intente de nuevo.'
+      if (/403|permiso|editar/i.test(raw)) {
+        msg = 'No tiene permiso para guardar el dibujo de este reporte.'
+      } else if (/422|geometr/i.test(raw)) {
+        msg = raw.length < 180 ? raw : 'El dibujo no tiene una geometría válida para guardar.'
+      } else if (/network|fetch|failed|timeout|timed out/i.test(raw)) {
+        msg = 'Error de red al guardar. El dibujo sigue en pantalla: puede reintentar.'
+      } else if (raw && raw.length < 180 && !/^Error \d+/.test(raw)) {
+        msg = raw
+      }
+      setError(msg)
+      // Conservar el dibujo en pantalla (no cerrar) para reintentar.
       throw e
     } finally {
       setGuardando(false)
