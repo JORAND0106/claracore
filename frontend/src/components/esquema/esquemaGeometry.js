@@ -934,9 +934,10 @@ export function collectSnapGeometry(objects, excludeId = null) {
           if (!pt) continue
           points.push({ x: pt.x, y: pt.y, kind: 'node' })
         }
-        for (let i = 0; i < pts.length - 1; i += 1) {
+        const edgeCount = obj.closed && pts.length >= 3 ? pts.length : pts.length - 1
+        for (let i = 0; i < edgeCount; i += 1) {
           const a = pts[i]
-          const b = pts[i + 1]
+          const b = pts[(i + 1) % pts.length]
           if (!a || !b) continue
           segments.push({ a, b })
           points.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, kind: 'mid' })
@@ -1422,6 +1423,12 @@ export function objectWorldSegments(obj) {
     for (let i = 0; i < pts.length - 1; i += 1) {
       if (!pts[i] || !pts[i + 1]) continue
       segs.push({ a: pts[i], b: pts[i + 1] })
+    }
+    // Área cerrada: incluir el tramo último→primero (coincide con el dibujo).
+    if (obj.closed && pts.length >= 3) {
+      const a = pts[pts.length - 1]
+      const b = pts[0]
+      if (a && b) segs.push({ a, b })
     }
     return segs
   }

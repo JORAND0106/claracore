@@ -49,6 +49,8 @@ describe('sicoeDibujoTipos', () => {
     const open = validarEscenaPorTipo([{ type: 'polilinea', closed: false, points: pts }], 'poligono')
     assert.equal(open.ok, false)
     assert.match(open.mensaje, /cierre el área|área cerrada|forma cerrada/i)
+    const closed = validarEscenaPorTipo([{ type: 'polilinea', closed: true, points: pts }], 'poligono')
+    assert.equal(closed.ok, true)
   })
 })
 
