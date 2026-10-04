@@ -499,6 +499,8 @@ export default function EsquemaEditorModal({
   /** Pendiente confirmar «En sentido del eje» al dibujar tipo Línea. */
   const [sentidoEjePrompt, setSentidoEjePrompt] = useState(false)
   const pendingDrawRowsRef = useRef(null)
+  /** Preferencia «sentido del eje» para polígono (se aplica al cerrar la secuencia). */
+  const poligonoSentidoEjeRef = useRef(false)
   const [savePrompt, setSavePrompt] = useState(null)
   const [joinSeq, setJoinSeq] = useState([])
   const [libOpen, setLibOpen] = useState(false)
@@ -2378,18 +2380,40 @@ export default function EsquemaEditorModal({
     }
     pushHistory()
     if (isPoligono) {
-      objectsRef.current = materializeJoinAsClosedPolygon(objectsRef.current, nums, {
+      const wantEje = poligonoSentidoEjeRef.current === true
+      const result = materializeJoinAsClosedPolygon(objectsRef.current, nums, {
         color: colorRef.current,
         width: widthRef.current,
         lineStyle: lineStyleRef.current,
         uid,
+        sentidoEje: wantEje,
+        planoFc: mapPlanoFcRef.current,
+        origin: coordOriginRef.current,
+        returnMeta: true,
       })
+      if (result && Array.isArray(result.objects)) {
+        objectsRef.current = result.objects
+        if (wantEje) {
+          if (!result.usedEje) {
+            setToolHint('Sin eje de abscisado usable: se dibujó el polígono con caras rectas.')
+          } else if (result.failedEdges) {
+            setToolHint('Polígono en sentido del eje. Algunas caras sin eje cercano quedaron rectas.')
+          } else {
+            setToolHint('Polígono en sentido del eje. Ya puede guardar.')
+          }
+        } else {
+          setToolHint('Polígono cerrado. Ya puede guardar.')
+        }
+      } else {
+        objectsRef.current = result
+        setToolHint('Polígono cerrado. Ya puede guardar.')
+      }
     } else {
       objectsRef.current = finalizeJoinSequence(objectsRef.current)
+      setToolHint('')
     }
     joinSeqRef.current = []
     setJoinSeq([])
-    setToolHint(isPoligono ? 'Polígono cerrado. Ya puede guardar.' : '')
     setDirty(true)
     redraw()
   }
@@ -2527,7 +2551,7 @@ export default function EsquemaEditorModal({
     return nodes
   }
 
-  /** Botón Dibujar del panel compacto (y atajos): pregunta sentido del eje si tipo Línea. */
+  /** Botón Dibujar del panel compacto (y atajos): pregunta sentido del eje si tipo Línea o Polígono. */
   const requestDrawFromCoords = (rows = coordRows) => {
     pendingDrawRowsRef.current = rows
     const tipo = huellaMode ? (huellaTipoRef.current || 'nodo') : 'nodo'
@@ -2537,6 +2561,7 @@ export default function EsquemaEditorModal({
       setSentidoEjePrompt(true)
       return
     }
+    poligonoSentidoEjeRef.current = false
     applyCoordRowsToCanvas(rows)
   }
 
@@ -2544,6 +2569,12 @@ export default function EsquemaEditorModal({
     const rows = pendingDrawRowsRef.current || coordRows
     pendingDrawRowsRef.current = null
     setSentidoEjePrompt(false)
+    const tipo = huellaTipoRef.current || 'nodo'
+    if (tipo === 'poligono') {
+      poligonoSentidoEjeRef.current = !!si
+    } else {
+      poligonoSentidoEjeRef.current = false
+    }
     applyCoordRowsToCanvas(rows, { sentidoEje: !!si })
   }
 
@@ -4988,6 +5019,7 @@ export default function EsquemaEditorModal({
                       onTipoChange={(next) => {
                         setSentidoEjePrompt(false)
                         pendingDrawRowsRef.current = null
+                        poligonoSentidoEjeRef.current = false
                         onHuellaDibujoTipoChange(next)
                       }}
                       onDibujar={() => requestDrawFromCoords(coordRows)}

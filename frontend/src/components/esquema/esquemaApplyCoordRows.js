@@ -225,6 +225,85 @@ export function mensajeNodoInexistente(num) {
 export function accionDibujarNodosPorTipo(tipo) {
   const t = String(tipo || 'nodo').toLowerCase()
   if (t === 'linea') return { unirEnOrden: true, abrirUnirPorNumero: false, preguntarSentidoEje: true }
-  if (t === 'poligono') return { unirEnOrden: false, abrirUnirPorNumero: true, preguntarSentidoEje: false }
+  if (t === 'poligono') return { unirEnOrden: false, abrirUnirPorNumero: true, preguntarSentidoEje: true }
   return { unirEnOrden: false, abrirUnirPorNumero: false, preguntarSentidoEje: false }
+}
+
+/**
+ * Densifica un anillo de nodos: caras a lo largo del eje siguen la curva;
+ * caras transversales (casi misma abscisa o sin eje) quedan rectas.
+ *
+ * @param {object[]} nodes nodos en orden de unión (sin repetir el cierre)
+ * @param {object|null} planoFc
+ * @param {{ origin?: {este0:number,norte0:number}, ejes?: object[], stepM?: number }} [opts]
+ * @returns {{ points: Array<{x:number,y:number}>, usedEje: boolean, failedEdges: number, edgeKinds: string[] }}
+ */
+export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
+  const list = Array.isArray(nodes)
+    ? nodes.filter((n) => n && Number.isFinite(n.x) && Number.isFinite(n.y))
+    : []
+  if (list.length < 3) {
+    return {
+      points: list.map((n) => ({ x: Number(n.x), y: Number(n.y) })),
+      usedEje: false,
+      failedEdges: 0,
+      edgeKinds: [],
+    }
+  }
+  const origin = opts.origin || coordOriginFromRows(list.map((n) => ({ norte: n.norte, este: n.este })))
+  const ejes = Array.isArray(opts.ejes) && opts.ejes.length
+    ? opts.ejes
+    : reconstruirEjesDesdePlano(planoFc)
+
+  const edgeKinds = []
+  const ring = []
+  let usedEje = false
+  let failedEdges = 0
+
+  const appendEdge = (a, b) => {
+    const llA = nodoToLngLat(a)
+    const llB = nodoToLngLat(b)
+    let curved = null
+    if (llA && llB && ejes.length) {
+      curved = construirLineaSentidoEje({
+        ejes,
+        inicio: llA,
+        fin: llB,
+        stepM: opts.stepM || 2,
+      })
+    }
+    // >2 puntos ⇒ cara a lo largo del eje (curva); 2 puntos ⇒ transversal; null ⇒ sin eje.
+    const along = !!(curved?.points && curved.points.length > 2)
+    if (along) {
+      const worldPts = curved.points.map((p, idx) => {
+        if (idx === 0) return { x: Number(a.x), y: Number(a.y) }
+        if (idx === curved.points.length - 1) return { x: Number(b.x), y: Number(b.y) }
+        const gk = wgs84ToGkBogota(p.lng, p.lat)
+        if (!gk) return null
+        return topoToWorld(gk.este, gk.norte, origin)
+      }).filter(Boolean)
+      if (worldPts.length >= 3) {
+        usedEje = true
+        edgeKinds.push('along')
+        // Omitir el último de la arista: lo aporta el inicio de la siguiente (o el cierre).
+        for (let i = 0; i < worldPts.length - 1; i += 1) {
+          ring.push(worldPts[i])
+        }
+        return
+      }
+      failedEdges += 1
+    } else if (!(curved?.points && curved.points.length === 2)) {
+      failedEdges += 1
+    }
+    edgeKinds.push('crossing')
+    ring.push({ x: Number(a.x), y: Number(a.y) })
+  }
+
+  for (let i = 0; i < list.length; i += 1) {
+    const a = list[i]
+    const b = list[(i + 1) % list.length]
+    appendEdge(a, b)
+  }
+
+  return { points: ring, usedEje, failedEdges, edgeKinds }
 }

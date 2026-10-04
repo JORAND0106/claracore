@@ -138,7 +138,12 @@ export default function SicoeDibujoReporteEditor({
       setError('No se pudo convertir el dibujo a huella geográfica.')
       throw new Error('Sin feature')
     }
-    const lineaSentidoEje = (objects || []).some((o) => o && o.sentidoEje === true)
+    const lineaSentidoEje = (objects || []).some((o) => (
+      o && o.sentidoEje === true && !(o.type === 'polilinea' && o.closed)
+    ))
+    const poligonoSentidoEje = (objects || []).some((o) => (
+      o && o.sentidoEje === true && o.type === 'polilinea' && o.closed
+    ))
     setGuardando(true)
     try {
       const data = await guardarDibujoReporte({
@@ -151,6 +156,7 @@ export default function SicoeDibujoReporteEditor({
           version: 3,
           dibujo_tipo: dibujoTipo,
           linea_sentido_eje: lineaSentidoEje,
+          poligono_sentido_eje: poligonoSentidoEje,
           entidad_biblioteca: entidadSnap,
           entidad_id: entidadSnap?.id ?? null,
           entidad_nombre: entidadSnap?.nombre ?? null,

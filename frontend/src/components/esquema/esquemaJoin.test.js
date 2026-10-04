@@ -143,6 +143,60 @@ describe('esquemaJoin', () => {
     assert.equal(validarEscenaPorTipo(next, 'poligono').ok, false)
   })
 
+  it('materialize con sentidoEje densifica y marca sentidoEje', async () => {
+    const { gkBogotaToWgs84 } = await import('../../utils/epsg3116.js')
+    const nodes = [
+      { id: 'n1', type: 'nodo', nodeNum: '1', x: 0, y: 0, este: 1000010, norte: 1000000 },
+      { id: 'n2', type: 'nodo', nodeNum: '2', x: 0, y: -4000, este: 1000010, norte: 1000080 },
+      { id: 'n3', type: 'nodo', nodeNum: '3', x: 1000, y: -4000, este: 1000030, norte: 1000080 },
+      { id: 'n4', type: 'nodo', nodeNum: '4', x: 1000, y: 0, este: 1000030, norte: 1000000 },
+    ]
+    const p0 = gkBogotaToWgs84(1000000, 1000000)
+    const p1 = gkBogotaToWgs84(1000000, 1000080)
+    const ejes = [{
+      id: 0,
+      puntos: [
+        { m: 0, lng: p0.lng, lat: p0.lat },
+        { m: 40, lng: p0.lng, lat: (p0.lat + p1.lat) / 2 },
+        { m: 80, lng: p1.lng, lat: p1.lat },
+      ],
+    }]
+    const result = materializeJoinAsClosedPolygon(nodes, ['1', '2', '3', '4'], {
+      uid: () => 'poly-eje',
+      sentidoEje: true,
+      ejes,
+      origin: { este0: 1000010, norte0: 1000000 },
+      stepM: 5,
+      returnMeta: true,
+    })
+    assert.equal(result.usedEje, true)
+    const poly = result.objects.find((o) => o.closed)
+    assert.ok(poly)
+    assert.equal(poly.sentidoEje, true)
+    assert.ok(poly.points.length > 4)
+    assert.equal(validarEscenaPorTipo(result.objects, 'poligono').ok, true)
+  })
+
+  it('materialize sentidoEje=false permanece con vértices rectos', () => {
+    const objects = [
+      { id: 'n1', type: 'nodo', nodeNum: '1', x: 0, y: 0 },
+      { id: 'n2', type: 'nodo', nodeNum: '2', x: 40, y: 0 },
+      { id: 'n3', type: 'nodo', nodeNum: '3', x: 40, y: 30 },
+      { id: 'n4', type: 'nodo', nodeNum: '4', x: 0, y: 30 },
+    ]
+    const next = materializeJoinAsClosedPolygon(objects, ['4', '3', '2', '1'], {
+      uid: () => 'poly-rect',
+      sentidoEje: false,
+    })
+    const poly = next.find((o) => o.closed)
+    assert.ok(poly)
+    assert.equal(poly.points.length, 4)
+    assert.equal(poly.sentidoEje, false)
+    // Respeta orden de unión (4→3→2→1)
+    assert.equal(poly.points[0].x, 0)
+    assert.equal(poly.points[0].y, 30)
+  })
+
   it('buildJoinPolygonDraft marca closed desde 3 nodos', () => {
     const open = buildJoinPolygonDraft([
       { x: 0, y: 0 }, { x: 10, y: 0 },

@@ -1,4 +1,5 @@
 import { objectWorldSegments } from './esquemaGeometry.js'
+import { densifyPolygonRingSentidoEje } from './esquemaApplyCoordRows.js'
 
 /**
  * Une líneas / polilíneas que se cruzan o se tocan en una polilínea continua.
@@ -282,9 +283,23 @@ export function finalizeJoinSequence(objects) {
  * Elimina los tramos temporales `joinSeq` y cierra contra el primer nodo
  * sin exigir que el usuario lo repita al final.
  *
+ * Con `opts.sentidoEje === true`, densifica las caras a lo largo del eje
+ * (misma lógica que la línea en sentido del eje); las transversales quedan rectas.
+ *
  * @param {object[]} objects
  * @param {Array<string|number>} nodeNums secuencia (orden de unión)
- * @param {{ color?: string, width?: number, lineStyle?: string, uid?: () => string }} [opts]
+ * @param {{
+ *   color?: string,
+ *   width?: number,
+ *   lineStyle?: string,
+ *   uid?: () => string,
+ *   sentidoEje?: boolean,
+ *   planoFc?: object|null,
+ *   ejes?: object[],
+ *   origin?: {este0:number,norte0:number},
+ *   stepM?: number,
+ * }} [opts]
+ * @returns {object[]|{ objects: object[], usedEje: boolean, failedEdges: number }}
  */
 export function materializeJoinAsClosedPolygon(objects, nodeNums, opts = {}) {
   const list = Array.isArray(objects) ? [...objects] : []
@@ -313,20 +328,43 @@ export function materializeJoinAsClosedPolygon(objects, nodeNums, opts = {}) {
   const uid = typeof opts.uid === 'function'
     ? opts.uid
     : () => `jp${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
-  const points = nodes.map((n) => ({ x: Number(n.x), y: Number(n.y) }))
+
+  let points = nodes.map((n) => ({ x: Number(n.x), y: Number(n.y) }))
+  let usedEje = false
+  let failedEdges = 0
+  let sentidoEje = false
+  if (opts.sentidoEje === true) {
+    const densified = densifyPolygonRingSentidoEje(nodes, opts.planoFc ?? null, {
+      origin: opts.origin,
+      ejes: opts.ejes,
+      stepM: opts.stepM,
+    })
+    if (Array.isArray(densified.points) && densified.points.length >= 3) {
+      points = densified.points
+      usedEje = !!densified.usedEje
+      failedEdges = Number(densified.failedEdges) || 0
+      sentidoEje = usedEje
+    }
+  }
+
   const poly = {
     id: uid(),
     type: 'polilinea',
     closed: true,
     joinSeq: false,
     fromJoinSequence: true,
+    sentidoEje,
     points,
     color: opts.color || nodes[0].color || '#0f172a',
     width: opts.width || 3,
     lineStyle: opts.lineStyle || 'continua',
     rotation: 0,
   }
-  return [...withoutJoin, poly]
+  const next = [...withoutJoin, poly]
+  if (opts.returnMeta) {
+    return { objects: next, usedEje, failedEdges, sentidoEje }
+  }
+  return next
 }
 
 /**
