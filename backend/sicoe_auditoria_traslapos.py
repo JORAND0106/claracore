@@ -291,6 +291,8 @@ def _snapshot_involucrado(r: dict) -> dict:
         "cantidad_total": cant_n,
         "vlr_unitario": vu_n,
         "valor": valor if valor is not None else r.get("valor"),
+        "observacion": r.get("observacion"),
+        "nombre_reporte": r.get("nombre_reporte") or r.get("descripcion_actividad"),
         "usuario_nombre": r.get("usuario_nombre") or r.get("creado_por_nombre"),
         "fecha": r.get("fecha") or r.get("created_at") or r.get("fecha_registro"),
         "foto_url": r.get("foto_url"),

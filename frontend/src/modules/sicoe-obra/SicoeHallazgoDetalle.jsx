@@ -91,6 +91,11 @@ const CMP_ROWS = [
     label: 'Valor',
     render: (r) => (r?.valor == null || r?.valor === '' ? '—' : fmtValorCop(r.valor)),
   },
+  {
+    key: 'observacion',
+    label: 'Observación',
+    render: (r) => txt(r?.observacion) || '—',
+  },
 ]
 
 function IconBtn({ title, onClick, disabled, children, t }) {
@@ -149,6 +154,7 @@ function panelesDesdeRegs(regs) {
       key,
       reporte_id: primary.reporte_id,
       numero_reporte: primary.numero_reporte,
+      nombre_reporte: primary.nombre_reporte || primary.descripcion_actividad || '',
       fecha: primary.fecha,
       usuario_nombre: primary.usuario_nombre,
       regs: list,
@@ -304,6 +310,11 @@ export default function SicoeHallazgoDetalle({
       <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-sm)' }}>
         {panel?.numero_reporte != null ? `Reporte #${panel.numero_reporte}` : 'Reporte'}
       </div>
+      {txt(panel?.nombre_reporte) ? (
+        <div style={{ fontSize: 'var(--cc-caption)', color: t.text, fontWeight: 600 }}>
+          {panel.nombre_reporte}
+        </div>
+      ) : null}
       <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>
         {fmtFecha(panel?.fecha)}
         {panel?.usuario_nombre ? ` · ${panel.usuario_nombre}` : ''}
@@ -512,83 +523,121 @@ export default function SicoeHallazgoDetalle({
           {!regs.length ? (
             <div style={{ color: t.textMuted, fontSize: 'var(--cc-sm)' }}>Sin registros asociados.</div>
           ) : (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: isNarrow || !right ? '1fr' : '1fr 1fr',
-                gap: 10,
-                alignItems: 'start',
-              }}
-            >
-              {[left, right].filter(Boolean).map((panel, pi) => {
-                const reg = panel.regs[0]
-                const other = pi === 0 ? rightReg : leftReg
-                const accent = pi === 0 ? '#0ea5e9' : '#8b5cf6'
-                return (
-                  <div
-                    key={panel.key}
-                    style={{
-                      border: `1px solid ${t.border}`,
-                      borderRadius: 8,
-                      overflow: 'hidden',
-                      background: t.bgCard || t.bg,
-                    }}
-                  >
-                    {headerPanel(panel, accent)}
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                      <tbody>
-                        {CMP_ROWS.map((row) => {
-                          const val = valorCampo(row, reg)
-                          const otherVal = other ? valorCampo(row, other) : ''
-                          const match = other ? valoresCoinciden(val, otherVal) : false
-                          return (
-                            <tr key={row.key}>
-                              <td
-                                style={{
-                                  ...cellStyle(false, 'label'),
-                                  width: '38%',
-                                  color: t.textMuted,
-                                  fontWeight: 700,
-                                  background: t.inputBg || t.bg,
-                                }}
-                              >
-                                {row.label}
-                              </td>
-                              <td style={cellStyle(match, pi === 0 ? 'left' : 'right')}>
-                                {row.key === 'numero_registro' ? (
-                                  <button
-                                    type="button"
-                                    title="Abrir registro"
-                                    aria-label="Abrir registro"
-                                    onClick={() => onAbrirRegistro?.(reg)}
-                                    style={{
-                                      background: 'transparent',
-                                      border: 'none',
-                                      color: t.primary,
-                                      fontWeight: 800,
-                                      cursor: 'pointer',
-                                      padding: 0,
-                                      textDecoration: 'underline',
-                                    }}
-                                  >
-                                    {val}
-                                  </button>
-                                ) : val}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                    <div style={{ borderTop: `1px solid ${t.border}` }}>
-                      <div style={{ padding: '6px 10px', fontWeight: 800, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                        Foto y gráfico
-                      </div>
-                      {mediaBlock(reg, pi === 0 ? 'izq' : 'der')}
-                    </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 0, border: `1px solid ${t.border}`, borderRadius: 8, overflow: 'hidden' }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: isNarrow || !right ? '1fr' : '1fr 1fr',
+                }}
+              >
+                {[left, right].filter(Boolean).map((panel, pi) => (
+                  <div key={`hdr-${panel.key}`} style={{ borderRight: pi === 0 && right && !isNarrow ? `1px solid ${t.border}` : 'none' }}>
+                    {headerPanel(panel, pi === 0 ? '#0ea5e9' : '#8b5cf6')}
                   </div>
-                )
-              })}
+                ))}
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                <tbody>
+                  {CMP_ROWS.map((row) => {
+                    const leftVal = valorCampo(row, leftReg)
+                    const rightVal = right ? valorCampo(row, rightReg) : null
+                    const match = right ? valoresCoinciden(leftVal, rightVal) : false
+                    const renderCell = (reg, val, side) => {
+                      if (row.key === 'numero_registro' && reg) {
+                        return (
+                          <button
+                            type="button"
+                            title="Abrir registro"
+                            aria-label="Abrir registro"
+                            onClick={() => onAbrirRegistro?.(reg)}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: t.primary,
+                              fontWeight: 800,
+                              cursor: 'pointer',
+                              padding: 0,
+                              textDecoration: 'underline',
+                            }}
+                          >
+                            {val}
+                          </button>
+                        )
+                      }
+                      if (row.key === 'observacion') {
+                        return (
+                          <span style={{ whiteSpace: 'pre-wrap', display: 'block' }}>
+                            {val}
+                          </span>
+                        )
+                      }
+                      return val
+                    }
+                    if (isNarrow || !right) {
+                      return (
+                        <tr key={row.key}>
+                          <td
+                            style={{
+                              ...cellStyle(false, 'label'),
+                              width: '38%',
+                              color: t.textMuted,
+                              fontWeight: 700,
+                              background: t.inputBg || t.bg,
+                              verticalAlign: 'top',
+                            }}
+                          >
+                            {row.label}
+                          </td>
+                          <td style={{ ...cellStyle(false, 'left'), verticalAlign: 'top' }}>
+                            {renderCell(leftReg, leftVal, 'left')}
+                          </td>
+                        </tr>
+                      )
+                    }
+                    return (
+                      <tr key={row.key}>
+                        <td
+                          style={{
+                            ...cellStyle(false, 'label'),
+                            width: '18%',
+                            color: t.textMuted,
+                            fontWeight: 700,
+                            background: t.inputBg || t.bg,
+                            verticalAlign: 'top',
+                          }}
+                        >
+                          {row.label}
+                        </td>
+                        <td style={{ ...cellStyle(match, 'left'), width: '41%', verticalAlign: 'top' }}>
+                          {renderCell(leftReg, leftVal, 'left')}
+                        </td>
+                        <td style={{ ...cellStyle(match, 'right'), width: '41%', verticalAlign: 'top' }}>
+                          {renderCell(rightReg, rightVal, 'right')}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: isNarrow || !right ? '1fr' : '1fr 1fr',
+                  borderTop: `1px solid ${t.border}`,
+                }}
+              >
+                {[left, right].filter(Boolean).map((panel, pi) => (
+                  <div
+                    key={`media-${panel.key}`}
+                    style={{ borderRight: pi === 0 && right && !isNarrow ? `1px solid ${t.border}` : 'none' }}
+                  >
+                    <div style={{ padding: '6px 10px', fontWeight: 800, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                      Foto y gráfico
+                    </div>
+                    {mediaBlock(panel.regs[0], pi === 0 ? 'izq' : 'der')}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

@@ -15,6 +15,7 @@ import {
 } from './sicoeFiltroSesion'
 import { fetchSicoeMapaCalor } from './sicoeMapaCalorApi'
 import { fmtCostoMapa } from './sicoeMapaCalorParams'
+import { construirCalorSobreDibujos, weightColorExpr } from './sicoeMapaCalorDibujos'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
 import { sanitizePlanoFeatureCollection } from '../../geoPlanoSanitize'
@@ -245,7 +246,10 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const [mostrarPuntos, setMostrarPuntos] = useState(true)
   const [mostrarHuellas, setMostrarHuellas] = useState(true)
   const [mostrarEje, setMostrarEje] = useState(true)
-  const [mostrarNodos, setMostrarNodos] = useState(true)
+  const [mostrarNodos, setMostrarNodos] = useState(false)
+  const [leyendaVista, setLeyendaVista] = useState({ con_dibujo: 0, sin_dibujo: 0 })
+  const allHuellasRef = useRef([])
+  const heatFcRef = useRef(EMPTY_FC)
   const getMapNiv = useCallback(() => mapInstance.current, [])
   const capaNiv = useTopoNivelacionMapaCapa(getMapNiv, contratoId, token, { readyKey: mapReady })
   const [seleccionado, setSeleccionado] = useState(null)
@@ -357,14 +361,32 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
   const aplicarPuntosAlMapa = useCallback((fc, { fit = false } = {}) => {
     const map = mapInstance.current
     const data = fc?.type === 'FeatureCollection' ? fc : EMPTY_FC
+    heatFcRef.current = data
     puntosRef.current = data
     if (!map || !mapReadyRef.current) return
-    const src = map.getSource('sicoe-calor')
-    if (src) {
-      try { src.setData(data) } catch { /* ignore */ }
+
+    const joined = construirCalorSobreDibujos(data, allHuellasRef.current)
+    setLeyendaVista({
+      con_dibujo: joined.meta.con_dibujo,
+      sin_dibujo: joined.meta.sin_dibujo,
+    })
+
+    const srcDib = map.getSource('sicoe-huellas')
+    if (srcDib) {
+      try { srcDib.setData(joined.dibujosFc) } catch { /* ignore */ }
     }
+    const srcPts = map.getSource('sicoe-calor')
+    if (srcPts) {
+      // Solo puntos de reportes filtrados sin dibujo (distintos del calor sobre geometría).
+      try { srcPts.setData(joined.puntosSinDibujoFc) } catch { /* ignore */ }
+    }
+
     if (fit) {
-      const bPts = boundsFromPoints(data)
+      const feats = [
+        ...(joined.dibujosFc.features || []),
+        ...(joined.puntosSinDibujoFc.features || []),
+      ]
+      const bPts = boundsFromPoints({ type: 'FeatureCollection', features: feats })
       if (bPts) {
         fitMapBounds(map, bPts, { padding: 56, maxZoom: 16, duration: 600 })
       } else {
@@ -453,6 +475,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     setMeta(null)
     setSeleccionado(null)
     setErrorMsg(null)
+    setLeyendaVista({ con_dibujo: 0, sin_dibujo: 0 })
     aplicarPuntosAlMapa(EMPTY_FC)
     const map = mapInstance.current
     if (map) centrarEnProyecto(map, { duration: 400 })
@@ -528,6 +551,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         type: 'heatmap',
         source: 'sicoe-calor',
         maxzoom: 18,
+        layout: { visibility: 'none' },
         paint: {
           // weight ya viene normalizado 0–1 respecto al max costo_directo del filtro activo
           'heatmap-weight': [
@@ -558,20 +582,34 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         paint: {
           'circle-radius': [
             'interpolate', ['linear'], ['zoom'],
-            10, 3.5,
-            14, 6.5,
-            17, 9,
+            10, 5,
+            14, 8,
+            17, 11,
           ],
-          'circle-color': [
-            'interpolate', ['linear'],
-            ['coalesce', ['to-number', ['get', 'weight']], 0],
-            0, '#93c5fd',
-            0.5, '#f59e0b',
-            1, '#dc2626',
-          ],
-          'circle-stroke-width': 1.2,
-          'circle-stroke-color': '#0f172a',
+          // Sin dibujo: anillo oscuro + relleno por peso (distinto de las geometrías coloreadas)
+          'circle-color': weightColorExpr(),
+          'circle-stroke-width': 2.8,
+          'circle-stroke-color': '#f8fafc',
           'circle-opacity': 0.92,
+          'circle-pitch-alignment': 'map',
+        },
+      })
+      // Halo exterior para distinguir puntos sin dibujo de nodos LOD coloreados
+      map.addLayer({
+        id: 'sicoe-calor-puntos-halo',
+        type: 'circle',
+        source: 'sicoe-calor',
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            10, 8,
+            14, 12,
+            17, 16,
+          ],
+          'circle-color': 'transparent',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#0f172a',
+          'circle-opacity': 0.9,
         },
       })
 
@@ -604,15 +642,25 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         paint: {
           'fill-color': [
             'case',
-            ['==', ['get', 'precision'], 'precisa'],
-            '#2563eb',
-            '#94a3b8',
+            ['==', ['get', 'color_mode'], 'calor'],
+            weightColorExpr(),
+            [
+              'case',
+              ['==', ['get', 'precision'], 'precisa'],
+              '#2563eb',
+              '#94a3b8',
+            ],
           ],
           'fill-opacity': [
             'case',
-            ['==', ['get', 'precision'], 'precisa'],
-            0.4,
-            0.22,
+            ['==', ['get', 'color_mode'], 'calor'],
+            0.55,
+            [
+              'case',
+              ['==', ['get', 'precision'], 'precisa'],
+              0.4,
+              0.22,
+            ],
           ],
         },
       })
@@ -624,11 +672,21 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         paint: {
           'line-color': [
             'case',
-            ['==', ['get', 'precision'], 'precisa'],
-            '#1d4ed8',
-            '#64748b',
+            ['==', ['get', 'color_mode'], 'calor'],
+            weightColorExpr(),
+            [
+              'case',
+              ['==', ['get', 'precision'], 'precisa'],
+              '#1d4ed8',
+              '#64748b',
+            ],
           ],
-          'line-width': 1.4,
+          'line-width': [
+            'case',
+            ['==', ['get', 'color_mode'], 'calor'],
+            2.4,
+            1.4,
+          ],
           'line-dasharray': [
             'case',
             ['==', ['get', 'precision'], 'aproximada'],
@@ -644,9 +702,14 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         filter: ['==', ['get', 'is_lod_marker'], 1],
         maxzoom: 16.5,
         paint: {
-          'circle-color': '#2563eb',
-          'circle-radius': 6,
-          'circle-stroke-width': 1.4,
+          'circle-color': [
+            'case',
+            ['==', ['get', 'color_mode'], 'calor'],
+            weightColorExpr(),
+            '#2563eb',
+          ],
+          'circle-radius': 7,
+          'circle-stroke-width': 1.6,
           'circle-stroke-color': '#fff',
           'circle-opacity': 0.95,
         },
@@ -657,6 +720,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         type: 'fill',
         source: 'sicoe-nodos',
         filter: ['==', ['geometry-type'], 'Polygon'],
+        layout: { visibility: 'none' },
         paint: { 'fill-color': '#7c3aed', 'fill-opacity': 0.28 },
       })
       map.addLayer({
@@ -664,6 +728,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         type: 'line',
         source: 'sicoe-nodos',
         filter: ['==', ['geometry-type'], 'Polygon'],
+        layout: { visibility: 'none' },
         paint: { 'line-color': '#6d28d9', 'line-width': 1.5 },
       })
       map.addLayer({
@@ -671,6 +736,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         type: 'circle',
         source: 'sicoe-nodos',
         filter: ['==', ['geometry-type'], 'Point'],
+        layout: { visibility: 'none' },
         paint: {
           'circle-color': '#7c3aed',
           'circle-radius': 5,
@@ -679,7 +745,7 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           'circle-opacity': 0.95,
         },
       })
-      // Carga asíncrona de huellas/eje/nodos
+      // Carga asíncrona de eje + catálogo de huellas (se filtran al aplicar el calor).
       fetch(`${API_BASE}/sicoe-obra/${contratoId}/huellas?incluir_eje=true&incluir_nodos=true`, {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -688,78 +754,66 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           if (!data || !mapInstance.current) return
           try {
             map.getSource('sicoe-eje')?.setData(data.eje || EMPTY_FC)
-            const feats = Array.isArray(data.features) ? data.features : []
-            const expanded = []
-            for (const f of feats) {
-              expanded.push({ ...f, properties: { ...(f.properties || {}), is_lod_marker: 0 } })
-              const ht = String(f?.properties?.huella_tipo || f?.properties?.dibujo_tipo || '').toLowerCase()
-              if ((ht === 'nodo' || ht === 'punto') && f?.geometry?.type === 'Polygon') {
-                const ring = f.geometry.coordinates?.[0]
-                if (Array.isArray(ring) && ring.length) {
-                  let sx = 0
-                  let sy = 0
-                  let n = 0
-                  for (const p of ring) {
-                    if (!Array.isArray(p) || p.length < 2) continue
-                    sx += Number(p[0]); sy += Number(p[1]); n += 1
-                  }
-                  if (n) {
-                    expanded.push({
-                      type: 'Feature',
-                      geometry: { type: 'Point', coordinates: [sx / n, sy / n] },
-                      properties: { ...(f.properties || {}), is_lod_marker: 1 },
-                    })
-                  }
-                }
-              } else if ((ht === 'nodo' || ht === 'punto') && f?.geometry?.type === 'Point') {
-                expanded[expanded.length - 1] = {
-                  ...f,
-                  properties: { ...(f.properties || {}), is_lod_marker: 1 },
-                }
-              }
-            }
-            map.getSource('sicoe-huellas')?.setData({ type: 'FeatureCollection', features: expanded })
+            allHuellasRef.current = Array.isArray(data.features) ? data.features : []
             map.getSource('sicoe-nodos')?.setData(data.nodos || EMPTY_FC)
+            // Reaplicar filtro activo sobre dibujos (si ya hay calor).
+            const joined = construirCalorSobreDibujos(heatFcRef.current || EMPTY_FC, allHuellasRef.current)
+            map.getSource('sicoe-huellas')?.setData(joined.dibujosFc)
+            map.getSource('sicoe-calor')?.setData(joined.puntosSinDibujoFc)
+            setLeyendaVista({
+              con_dibujo: joined.meta.con_dibujo,
+              sin_dibujo: joined.meta.sin_dibujo,
+            })
           } catch { /* ignore */ }
         })
         .catch(() => {})
 
       map.on('mouseenter', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'sicoe-calor-puntos', () => { map.getCanvas().style.cursor = '' })
-      map.on('click', 'sicoe-calor-puntos', (e) => {
-        const f = e.features?.[0]
-        if (!f) return
-        const props = { ...f.properties }
-        if (props.costo_directo != null) props.costo_directo = Number(props.costo_directo)
-        if (props.cantidad_total != null) props.cantidad_total = Number(props.cantidad_total)
-        if (props.weight != null) props.weight = Number(props.weight)
-        setSeleccionado(props)
-        const coords = f.geometry?.coordinates
-        if (coords && popupRef.current) {
+      const abrirPopupProps = (props, lngLat) => {
+        if (!props) return
+        const p = { ...props }
+        if (p.costo_directo != null) p.costo_directo = Number(p.costo_directo)
+        if (p.cantidad_total != null) p.cantidad_total = Number(p.cantidad_total)
+        if (p.weight != null) p.weight = Number(p.weight)
+        setSeleccionado(p)
+        if (lngLat && popupRef.current) {
           const html = `
             <div style="font-family:system-ui,sans-serif;font-size:12px;line-height:1.45;color:#0f172a;">
               <div style="font-weight:800;margin-bottom:6px;color:#0369a1;">
-                Reg. ${props.numero_registro ?? '—'} · Rep. ${props.numero_reporte ?? '—'}
+                Reg. ${p.numero_registro ?? '—'} · Rep. ${p.numero_reporte ?? '—'}
+                ${p.sin_dibujo ? ' · sin dibujo' : ''}
               </div>
-              <div><strong>Costo directo:</strong> ${fmtCostoMapa(props.costo_directo)}</div>
-              <div><strong>Fecha:</strong> ${fmtFechaCorta(props.created_at)}</div>
-              <div><strong>Capítulo:</strong> ${props.capitulo || '—'}</div>
-              <div><strong>Ítem:</strong> ${props.item_numero || '—'} ${props.item_descripcion ? `· ${String(props.item_descripcion).slice(0, 80)}` : ''}</div>
-              <div><strong>Estado reporte:</strong> ${props.estado_reporte || '—'}</div>
-              <div><strong>Validación:</strong> ${nivelEstadoResumen(props)}</div>
+              <div><strong>Costo directo:</strong> ${fmtCostoMapa(p.costo_directo)}</div>
+              <div><strong>Fecha:</strong> ${fmtFechaCorta(p.created_at)}</div>
+              <div><strong>Capítulo:</strong> ${p.capitulo || '—'}</div>
+              <div><strong>Ítem:</strong> ${p.item_numero || '—'} ${p.item_descripcion ? `· ${String(p.item_descripcion).slice(0, 80)}` : ''}</div>
+              <div><strong>Estado reporte:</strong> ${p.estado_reporte || '—'}</div>
+              <div><strong>Validación:</strong> ${nivelEstadoResumen(p)}</div>
             </div>`
-          popupRef.current.setLngLat(coords).setHTML(html).addTo(map)
+          popupRef.current.setLngLat(lngLat).setHTML(html).addTo(map)
         }
+      }
+      map.on('click', 'sicoe-calor-puntos', (e) => {
+        const f = e.features?.[0]
+        if (!f) return
+        abrirPopupProps(f.properties, e.lngLat || f.geometry?.coordinates)
       })
+      for (const layerId of ['sicoe-huellas-fill', 'sicoe-huellas-line', 'sicoe-huellas-nodo-lod']) {
+        map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer' })
+        map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = '' })
+        map.on('click', layerId, (e) => {
+          const f = e.features?.[0]
+          if (!f || f.properties?.color_mode !== 'calor') return
+          abrirPopupProps(f.properties, e.lngLat)
+        })
+      }
 
       try { map.resize() } catch { /* ignore */ }
       mapReadyRef.current = true
       setMapReady(true)
       centrarEnProyecto(map, { duration: 0 })
-      const srcCalor = map.getSource('sicoe-calor')
-      if (srcCalor) {
-        try { srcCalor.setData(puntosRef.current || EMPTY_FC) } catch { /* ignore */ }
-      }
+      // No pintar puntos crudos: el efecto de puntosFc aplica el join con dibujos.
     }
 
     if (map.loaded()) onLoad()
@@ -803,10 +857,9 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     const map = mapInstance.current
     if (!map || !mapReady) return
     const visPlano = mostrarPlano ? 'visible' : 'none'
-    const visHeat = mostrarHeat ? 'visible' : 'none'
     const visPts = mostrarPuntos ? 'visible' : 'none'
     const visEje = mostrarEje ? 'visible' : 'none'
-    const visHuellas = mostrarHuellas ? 'visible' : 'none'
+    const visHuellas = (mostrarHuellas || mostrarHeat) ? 'visible' : 'none'
     const visNodos = mostrarNodos ? 'visible' : 'none'
     for (const id of ['plano-underlay-fill', 'plano-underlay-line', 'plano-underlay-labels-pk']) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visPlano)
@@ -814,10 +867,13 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
     try {
       setMapboxAbscisaLabelsVisibility(map, 'plano-underlay-labels-abscisa', mostrarPlano)
     } catch { /* ignore */ }
-    if (map.getLayer('sicoe-calor-heat')) map.setLayoutProperty('sicoe-calor-heat', 'visibility', visHeat)
+    // Calor clásico de puntos GPS: apagado (el calor va sobre el dibujo).
+    if (map.getLayer('sicoe-calor-heat')) map.setLayoutProperty('sicoe-calor-heat', 'visibility', 'none')
+    // Puntos = solo reportes filtrados sin dibujo.
     if (map.getLayer('sicoe-calor-puntos')) map.setLayoutProperty('sicoe-calor-puntos', 'visibility', visPts)
+    if (map.getLayer('sicoe-calor-puntos-halo')) map.setLayoutProperty('sicoe-calor-puntos-halo', 'visibility', visPts)
     if (map.getLayer('sicoe-eje-line')) map.setLayoutProperty('sicoe-eje-line', 'visibility', visEje)
-    for (const id of ['sicoe-huellas-fill', 'sicoe-huellas-line']) {
+    for (const id of ['sicoe-huellas-fill', 'sicoe-huellas-line', 'sicoe-huellas-nodo-lod']) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visHuellas)
     }
     for (const id of ['sicoe-nodos-fill', 'sicoe-nodos-line', 'sicoe-nodos-point']) {
@@ -897,10 +953,10 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
         }}>
           {[
             ['plano', 'Plano base', mostrarPlano, setMostrarPlano],
-            ['heat', 'Mapa de calor', mostrarHeat, setMostrarHeat],
-            ['pts', 'Puntos', mostrarPuntos, setMostrarPuntos],
+            ['heat', 'Calor en dibujos', mostrarHeat, setMostrarHeat],
+            ['pts', 'Sin dibujo (puntos)', mostrarPuntos, setMostrarPuntos],
             ['eje', 'Eje', mostrarEje, setMostrarEje],
-            ['huellas', 'Huellas', mostrarHuellas, setMostrarHuellas],
+            ['huellas', 'Dibujos filtrados', mostrarHuellas, setMostrarHuellas],
             ['nodos', 'Nodos PK', mostrarNodos, setMostrarNodos],
           ].map(([key, label, on, setOn]) => (
             <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--cc-caption)', color: t.text, cursor: 'pointer' }}>
@@ -985,7 +1041,13 @@ export default function ModuloPlanoMapaCalor({ t, usuario, token }) {
           </div>
           {busquedaRealizada && meta && (
             <div style={{ marginTop: 8, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
-              {nPts} punto{nPts === 1 ? '' : 's'}
+              {(leyendaVista.con_dibujo || 0) + (leyendaVista.sin_dibujo || 0)} en plano
+              {leyendaVista.con_dibujo
+                ? ` · ${leyendaVista.con_dibujo} con dibujo`
+                : ''}
+              {leyendaVista.sin_dibujo
+                ? ` · ${leyendaVista.sin_dibujo} sin dibujo`
+                : ''}
               {meta.max_costo_directo != null ? ` · máx ${fmtCostoMapa(meta.max_costo_directo)}` : ''}
               {meta.sin_coords ? ` · ${meta.sin_coords} sin coords` : ''}
               {meta.truncado ? ` · truncado a ${meta.max_features}` : ''}
