@@ -198,4 +198,27 @@ describe('zoom visual independiente de la escala real', () => {
     const screenFar = world20 * far.zoom
     assert.ok(Math.abs(screenNear / screenFar - 4) < 0.05)
   })
+
+  it('entidad 2.41 m ≈ 2.41×ppm px en pantalla (no manzanas del pueblo)', () => {
+    const ppm = 3
+    const map = makeLinearMap({ ppm, lng0: -74.1, lat0: 4.6 })
+    const sync = syncCanvasTransformToMap(map, { lng: -74.1, lat: 4.6 })
+    assert.ok(sync)
+    const entityM = 2.41
+    const worldW = metersToWorld(entityM)
+    const screenW = worldW * sync.zoom
+    assert.ok(Math.abs(screenW - entityScreenPxForMeters(entityM, sync.pixelsPerMeter)) < 1e-6)
+    assert.ok(screenW < 15)
+    assert.ok(screenW > 5)
+  })
+
+  it('zoom lienzo 2.5 (fit nodos) vs sync: documenta el desfase del bug', () => {
+    const ppm = 3
+    const sync = syncCanvasTransformToMap(makeLinearMap({ ppm }), { lng: -74.1, lat: 4.6 })
+    assert.ok(sync)
+    const worldW = metersToWorld(2.41)
+    const broken = worldW * 2.5
+    const correct = worldW * sync.zoom
+    assert.ok(broken / correct > 30)
+  })
 })
