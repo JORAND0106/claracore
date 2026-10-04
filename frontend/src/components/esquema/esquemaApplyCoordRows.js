@@ -3,6 +3,11 @@
  * y resolución de nodos para «Unir por número» contra lienzo + tabla de coordenadas.
  */
 import { PX_PER_METER } from './esquemaGeometry.js'
+import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
+import {
+  construirLineaSentidoEje,
+  reconstruirEjesDesdePlano,
+} from '../../modules/sicoe-obra/sicoeEjeFranjas.js'
 
 function coordOriginFromRows(rows) {
   const first = (rows || []).find((r) => Number.isFinite(r?.norte) && Number.isFinite(r?.este))
@@ -78,6 +83,7 @@ export function buildLineasUniendoNodos(nodes, opts = {}) {
       type: 'linea',
       joinSeq: true,
       fromCoordTable: true,
+      sentidoEje: false,
       x1: a.x,
       y1: a.y,
       x2: b.x,
@@ -89,6 +95,96 @@ export function buildLineasUniendoNodos(nodes, opts = {}) {
     })
   }
   return lines
+}
+
+function nodoToLngLat(node) {
+  if (!node) return null
+  if (Number.isFinite(node.este) && Number.isFinite(node.norte)) {
+    return gkBogotaToWgs84(node.este, node.norte)
+  }
+  return null
+}
+
+/**
+ * Polilíneas que siguen el eje entre nodos consecutivos (paralelas con transición de offset).
+ * Si no hay eje usable para un tramo, cae a segmento recto.
+ *
+ * @param {object[]} nodes
+ * @param {object|null} planoFc FeatureCollection del abscisado (plano)
+ * @param {{ color?: string, width?: number, lineStyle?: string, uid?: () => string, origin?: {este0:number,norte0:number}, ejes?: object[], stepM?: number }} [opts]
+ * @returns {{ objects: object[], usedEje: boolean, failedSegments: number }}
+ */
+export function buildLineasSentidoEje(nodes, planoFc, opts = {}) {
+  const list = Array.isArray(nodes) ? nodes.filter((n) => n && n.type === 'nodo') : []
+  const uid = typeof opts.uid === 'function' ? opts.uid : (() => `le${Math.random().toString(36).slice(2, 9)}`)
+  const origin = opts.origin || coordOriginFromRows(list.map((n) => ({ norte: n.norte, este: n.este })))
+  const ejes = Array.isArray(opts.ejes) && opts.ejes.length
+    ? opts.ejes
+    : reconstruirEjesDesdePlano(planoFc)
+  const out = []
+  let usedEje = false
+  let failedSegments = 0
+
+  for (let i = 1; i < list.length; i += 1) {
+    const a = list[i - 1]
+    const b = list[i]
+    const llA = nodoToLngLat(a)
+    const llB = nodoToLngLat(b)
+    let curved = null
+    if (llA && llB && ejes.length) {
+      curved = construirLineaSentidoEje({
+        ejes,
+        inicio: llA,
+        fin: llB,
+        stepM: opts.stepM || 2,
+      })
+    }
+    if (curved?.points?.length >= 2) {
+      usedEje = true
+      const worldPts = curved.points.map((p, idx) => {
+        if (idx === 0) return { x: a.x, y: a.y }
+        if (idx === curved.points.length - 1) return { x: b.x, y: b.y }
+        const gk = wgs84ToGkBogota(p.lng, p.lat)
+        if (!gk) return null
+        return topoToWorld(gk.este, gk.norte, origin)
+      }).filter(Boolean)
+      if (worldPts.length >= 2) {
+        out.push({
+          id: uid(),
+          type: 'polilinea',
+          closed: false,
+          joinSeq: false,
+          fromCoordTable: true,
+          sentidoEje: true,
+          points: worldPts,
+          color: opts.color || a.color || '#0f172a',
+          width: opts.width || 3,
+          lineStyle: opts.lineStyle || 'continua',
+          rotation: 0,
+          absIni: curved.absIni,
+          absFin: curved.absFin,
+        })
+        continue
+      }
+    }
+    failedSegments += 1
+    out.push({
+      id: uid(),
+      type: 'linea',
+      joinSeq: true,
+      fromCoordTable: true,
+      sentidoEje: false,
+      x1: a.x,
+      y1: a.y,
+      x2: b.x,
+      y2: b.y,
+      color: opts.color || a.color || '#0f172a',
+      width: opts.width || 3,
+      lineStyle: opts.lineStyle || 'continua',
+      rotation: 0,
+    })
+  }
+  return { objects: out, usedEje, failedSegments }
 }
 
 /**
@@ -128,7 +224,7 @@ export function mensajeNodoInexistente(num) {
  */
 export function accionDibujarNodosPorTipo(tipo) {
   const t = String(tipo || 'nodo').toLowerCase()
-  if (t === 'linea') return { unirEnOrden: true, abrirUnirPorNumero: false }
-  if (t === 'poligono') return { unirEnOrden: false, abrirUnirPorNumero: true }
-  return { unirEnOrden: false, abrirUnirPorNumero: false }
+  if (t === 'linea') return { unirEnOrden: true, abrirUnirPorNumero: false, preguntarSentidoEje: true }
+  if (t === 'poligono') return { unirEnOrden: false, abrirUnirPorNumero: true, preguntarSentidoEje: false }
+  return { unirEnOrden: false, abrirUnirPorNumero: false, preguntarSentidoEje: false }
 }

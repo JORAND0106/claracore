@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   accionDibujarNodosPorTipo,
+  buildLineasSentidoEje,
   buildLineasUniendoNodos,
   buildNodosFromParsedCoords,
   mensajeNodoInexistente,
@@ -27,6 +28,7 @@ describe('esquemaApplyCoordRows', () => {
     assert.deepEqual(accionDibujarNodosPorTipo('linea'), {
       unirEnOrden: true,
       abrirUnirPorNumero: false,
+      preguntarSentidoEje: true,
     })
     const parsed = parseCoordRowsForCanvas([
       { norte: 100, este: 200 },
@@ -37,6 +39,7 @@ describe('esquemaApplyCoordRows', () => {
     assert.equal(nodes.length, 2)
     assert.equal(lines.length, 1)
     assert.equal(lines[0].type, 'linea')
+    assert.equal(lines[0].sentidoEje, false)
     assert.equal(lines[0].x1, nodes[0].x)
     assert.equal(lines[0].y1, nodes[0].y)
     assert.equal(lines[0].x2, nodes[1].x)
@@ -77,5 +80,59 @@ describe('esquemaApplyCoordRows', () => {
     assert.ok(dY < 0)
     const lenMeters = Math.hypot(dX, dY) / 50
     assert.ok(Math.abs(lenMeters - 8.017) < 0.05, `len=${lenMeters}`)
+  })
+
+  it('buildLineasSentidoEje marca sentidoEje y cae a recta sin plano', () => {
+    const parsed = parseCoordRowsForCanvas([
+      { norte: 971988.373, este: 958213.494 },
+      { norte: 971990.132, este: 958205.672 },
+    ])
+    const { origin, nodes } = buildNodosFromParsedCoords(parsed, {
+      uid: (() => { let i = 0; return () => `n${++i}` })(),
+    })
+    const empty = buildLineasSentidoEje(nodes, { type: 'FeatureCollection', features: [] }, {
+      origin,
+      uid: (() => { let i = 0; return () => `e${++i}` })(),
+    })
+    assert.equal(empty.usedEje, false)
+    assert.equal(empty.objects.length, 1)
+    assert.equal(empty.objects[0].type, 'linea')
+    assert.equal(empty.objects[0].sentidoEje, false)
+  })
+
+  it('buildLineasSentidoEje con ejes produce polilínea sentidoEje', async () => {
+    const { gkBogotaToWgs84 } = await import('../../utils/epsg3116.js')
+    const parsed = parseCoordRowsForCanvas([
+      { norte: 1000000, este: 1000000 },
+      { norte: 1000080, este: 1000010 },
+    ])
+    const { origin, nodes } = buildNodosFromParsedCoords(parsed, {
+      uid: (() => { let i = 0; return () => `n${++i}` })(),
+    })
+    const a = gkBogotaToWgs84(nodes[0].este, nodes[0].norte)
+    const b = gkBogotaToWgs84(nodes[1].este, nodes[1].norte)
+    assert.ok(a && b)
+    // Eje ligeramente al oeste de ambos puntos, con un quiebre.
+    const ejes = [{
+      id: 0,
+      puntos: [
+        { m: 0, lng: a.lng - 0.00005, lat: a.lat - 0.0002 },
+        { m: 40, lng: a.lng - 0.00005, lat: (a.lat + b.lat) / 2 },
+        { m: 80, lng: b.lng - 0.00004, lat: b.lat + 0.0002 },
+      ],
+    }]
+    const built = buildLineasSentidoEje(nodes, null, {
+      origin,
+      ejes,
+      uid: (() => { let i = 0; return () => `p${++i}` })(),
+      stepM: 5,
+    })
+    assert.equal(built.usedEje, true)
+    assert.equal(built.objects.length, 1)
+    assert.equal(built.objects[0].type, 'polilinea')
+    assert.equal(built.objects[0].sentidoEje, true)
+    assert.ok(built.objects[0].points.length >= 3)
+    assert.equal(built.objects[0].points[0].x, nodes[0].x)
+    assert.equal(built.objects[0].points[0].y, nodes[0].y)
   })
 })

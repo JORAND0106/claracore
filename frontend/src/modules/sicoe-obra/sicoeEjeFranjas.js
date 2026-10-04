@@ -254,6 +254,119 @@ function offsetBearingForLado(bearing, lado) {
 }
 
 /**
+ * Distancia con signo al eje: + izquierda, − derecha (sentido de avance).
+ */
+export function distConSignoSobreEje(proy) {
+  if (!proy || !Number.isFinite(proy.dist_m)) return 0
+  const lado = normalizarCostadoDigitado(proy.lado) || 'central'
+  if (lado === 'izquierda') return Number(proy.dist_m)
+  if (lado === 'derecha') return -Number(proy.dist_m)
+  return 0
+}
+
+/**
+ * Línea paralela al eje entre dos puntos (inicio→fin), con transición gradual
+ * de distancia si el offset al eje difiere en los extremos.
+ * El primer y último vértice coinciden exactamente con inicio y fin.
+ *
+ * @returns {null|{ points: Array<{lng:number,lat:number}>, absIni:number, absFin:number, distIni:number, distFin:number, eje_id:any }}
+ */
+export function construirLineaSentidoEje({
+  ejes,
+  inicio,
+  fin,
+  stepM = 2,
+  maxDistM = SICOE_EJE_MAX_DIST_PROYECCION_M * 2,
+} = {}) {
+  if (!inicio || !fin) return null
+  const lng0 = Number(inicio.lng)
+  const lat0 = Number(inicio.lat)
+  const lng1 = Number(fin.lng)
+  const lat1 = Number(fin.lat)
+  if (![lng0, lat0, lng1, lat1].every(Number.isFinite)) return null
+
+  const proyIni = proyectarSobreEje(ejes, lng0, lat0, { maxDistM })
+  const proyFin = proyectarSobreEje(ejes, lng1, lat1, { maxDistM })
+  if (!proyIni?.sobre_eje || !proyFin?.sobre_eje) return null
+
+  const ejeId = proyIni.eje_id
+  const eje = (ejes || []).find((e) => e.id === ejeId)
+    || (ejes || []).find((e) => e.id === proyFin.eje_id)
+    || null
+  if (!eje) return null
+
+  // Si están en ejes distintos, intentar el de menor suma de distancias
+  let ejeUsar = eje
+  if (proyIni.eje_id !== proyFin.eje_id) {
+    const eA = (ejes || []).find((e) => e.id === proyIni.eje_id)
+    const eB = (ejes || []).find((e) => e.id === proyFin.eje_id)
+    const dA = proyIni.dist_m + (proyectarSobreEje([eA].filter(Boolean), lng1, lat1, { maxDistM })?.dist_m ?? 1e9)
+    const dB = proyFin.dist_m + (proyectarSobreEje([eB].filter(Boolean), lng0, lat0, { maxDistM })?.dist_m ?? 1e9)
+    ejeUsar = dA <= dB ? eA : eB
+  }
+  if (!ejeUsar) return null
+
+  const p0 = proyectarSobreEje([ejeUsar], lng0, lat0, { maxDistM })
+  const p1 = proyectarSobreEje([ejeUsar], lng1, lat1, { maxDistM })
+  if (!p0 || !p1) return null
+
+  const d0 = distConSignoSobreEje(p0)
+  const d1 = distConSignoSobreEje(p1)
+  const absSpan = Math.abs(Number(p1.abs_m) - Number(p0.abs_m))
+
+  // Tramo casi puntual: recta inicio→fin
+  if (!(absSpan > 0.5)) {
+    return {
+      points: [
+        { lng: lng0, lat: lat0 },
+        { lng: lng1, lat: lat1 },
+      ],
+      absIni: p0.abs_m,
+      absFin: p1.abs_m,
+      distIni: d0,
+      distFin: d1,
+      eje_id: ejeUsar.id,
+    }
+  }
+
+  let samples = sampleAbsRange(ejeUsar, p0.abs_m, p1.abs_m, stepM)
+  if (samples.length < 2) return null
+  // Ordenar en el sentido inicio→fin
+  if (Number(p1.abs_m) < Number(p0.abs_m)) {
+    samples = [...samples].reverse()
+  }
+
+  const points = []
+  for (let i = 0; i < samples.length; i += 1) {
+    const s = samples[i]
+    const t = samples.length === 1 ? 0 : i / (samples.length - 1)
+    const dist = d0 + t * (d1 - d0)
+    if (Math.abs(dist) < 1e-9) {
+      points.push({ lng: s.lng, lat: s.lat })
+      continue
+    }
+    const brOff = dist >= 0
+      ? (s.bearing + 270) % 360 // izquierda
+      : (s.bearing + 90) % 360 // derecha
+    points.push(destinationPoint(s.lng, s.lat, brOff, Math.abs(dist)))
+  }
+
+  if (points.length < 2) return null
+  // Exactitud: pasar por inicio y fin
+  points[0] = { lng: lng0, lat: lat0 }
+  points[points.length - 1] = { lng: lng1, lat: lat1 }
+
+  return {
+    points,
+    absIni: p0.abs_m,
+    absFin: p1.abs_m,
+    distIni: d0,
+    distFin: d1,
+    eje_id: ejeUsar.id,
+  }
+}
+
+/**
  * Construye polígono de franja paralelo al eje.
  * distIni/distFin = distancia del centro de la franja al eje (m).
  * ancho = ancho total de la franja (m).

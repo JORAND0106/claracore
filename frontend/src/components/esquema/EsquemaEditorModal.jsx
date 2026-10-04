@@ -61,12 +61,14 @@ import { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 import { parseCoordFile, topoToWorld, coordOriginFromRows } from './esquemaCoords'
 import {
   accionDibujarNodosPorTipo,
+  buildLineasSentidoEje,
   buildLineasUniendoNodos,
   buildNodosFromParsedCoords,
   mensajeNodoInexistente,
   parseCoordRowsForCanvas,
   resolveNodoPorNumero,
 } from './esquemaApplyCoordRows.js'
+import { DIBUJO_TIPOS } from '../../modules/sicoe-obra/sicoeDibujoTipos.js'
 import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
   deleteLibraryItem,
@@ -357,6 +359,10 @@ export default function EsquemaEditorModal({
   huellaMode = false,
   /** Tipo de dibujo del reporte: nodo | linea | poligono (solo huellaMode). */
   huellaDibujoTipo = 'poligono',
+  /** Cambia el tipo de dibujo desde el panel compacto (huellaMode). */
+  onHuellaDibujoTipoChange = null,
+  /** Cantidad de dibujos de referencia (indicador en panel compacto). */
+  referenciasCount = 0,
   /** Escena previa (objetos) al reabrir un dibujo de reporte. */
   initialSceneObjects = null,
   /**
@@ -474,6 +480,9 @@ export default function EsquemaEditorModal({
   })
   const [coordRows, setCoordRows] = useState([])
   const [coordPanelOpen, setCoordPanelOpen] = useState(false)
+  /** Pendiente confirmar «En sentido del eje» al dibujar tipo Línea. */
+  const [sentidoEjePrompt, setSentidoEjePrompt] = useState(false)
+  const pendingDrawRowsRef = useRef(null)
   const [savePrompt, setSavePrompt] = useState(null)
   const [joinSeq, setJoinSeq] = useState([])
   const [libOpen, setLibOpen] = useState(false)
@@ -2292,15 +2301,33 @@ export default function EsquemaEditorModal({
       ? (huellaTipoRef.current || 'nodo')
       : 'nodo'
     const accion = opts.skipTipoActions
-      ? { unirEnOrden: false, abrirUnirPorNumero: false }
+      ? { unirEnOrden: false, abrirUnirPorNumero: false, preguntarSentidoEje: false }
       : accionDibujarNodosPorTipo(tipo)
     if (accion.unirEnOrden) {
-      extras = buildLineasUniendoNodos(nodes, {
-        color: colorRef.current,
-        width: widthRef.current,
-        lineStyle: lineStyleRef.current,
-        uid,
-      })
+      if (opts.sentidoEje === true) {
+        const built = buildLineasSentidoEje(nodes, mapPlanoFcRef.current, {
+          color: colorRef.current,
+          width: widthRef.current,
+          lineStyle: lineStyleRef.current,
+          uid,
+          origin,
+        })
+        extras = built.objects
+        if (!built.usedEje) {
+          setToolHint('Sin eje de abscisado usable: se dibujó la línea recta.')
+        } else if (built.failedSegments) {
+          setToolHint('Algunos tramos sin eje cercano se dibujaron rectos.')
+        } else {
+          setToolHint('Línea en sentido del eje.')
+        }
+      } else {
+        extras = buildLineasUniendoNodos(nodes, {
+          color: colorRef.current,
+          width: widthRef.current,
+          lineStyle: lineStyleRef.current,
+          uid,
+        })
+      }
     }
     objectsRef.current = [...keep, ...nodes, ...extras]
     setCoordRows(parsed.map((r) => ({
@@ -2383,7 +2410,7 @@ export default function EsquemaEditorModal({
       setTool('unir-nodos')
       setToolHint('Digite el número de nodo en el panel o pulse nodos en el plano.')
     }
-    if (!opts.skipTipoActions && accion.unirEnOrden && nodes.length >= 2) {
+    if (!opts.skipTipoActions && accion.unirEnOrden && nodes.length >= 2 && opts.sentidoEje !== true) {
       setLibOpen(false)
       setLibNotice('')
       setInsertHint('')
@@ -2391,6 +2418,26 @@ export default function EsquemaEditorModal({
     }
     setPanTick((n) => n + 1)
     return nodes
+  }
+
+  /** Botón Dibujar del panel compacto (y atajos): pregunta sentido del eje si tipo Línea. */
+  const requestDrawFromCoords = (rows = coordRows) => {
+    pendingDrawRowsRef.current = rows
+    const tipo = huellaMode ? (huellaTipoRef.current || 'nodo') : 'nodo'
+    const accion = accionDibujarNodosPorTipo(tipo)
+    if (huellaMode && accion.preguntarSentidoEje) {
+      setCoordPanelOpen(true)
+      setSentidoEjePrompt(true)
+      return
+    }
+    applyCoordRowsToCanvas(rows)
+  }
+
+  const confirmSentidoEje = (si) => {
+    const rows = pendingDrawRowsRef.current || coordRows
+    pendingDrawRowsRef.current = null
+    setSentidoEjePrompt(false)
+    applyCoordRowsToCanvas(rows, { sentidoEje: !!si })
   }
 
   const onPointerDown = (e) => {
@@ -4909,7 +4956,8 @@ export default function EsquemaEditorModal({
               pickInfo={mapPickInfo}
               printAreaSelecting={printAreaSelecting}
               dodgeCoords={false}
-              besideCoords={coordPanelOpen}
+              besideCoords={coordPanelOpen || (huellaMode && typeof onHuellaDibujoTipoChange === 'function')}
+              besideWidth={coordPanelOpen ? 460 : 220}
               contextHint={mapCtx.hasPk
                 ? `PK ${mapCtx.pkId} resaltado`
                 : mapCtx.hasPoint
@@ -4996,26 +5044,97 @@ export default function EsquemaEditorModal({
               onRotationDeg={applyRotationDeg}
             />
           )}
+          {huellaMode && typeof onHuellaDibujoTipoChange === 'function' ? (
+            <DibujoTipoCompactPanel
+              t={t}
+              tipo={huellaDibujoTipo}
+              referenciasCount={referenciasCount}
+              onTipoChange={(next) => {
+                setSentidoEjePrompt(false)
+                pendingDrawRowsRef.current = null
+                onHuellaDibujoTipoChange(next)
+              }}
+              onDibujar={() => requestDrawFromCoords(coordRows)}
+            />
+          ) : null}
           {coordPanelOpen && (
             <CoordsPanel
               t={t}
               rows={coordRows}
               fileRef={coordFileRef}
+              topOffset={huellaMode && typeof onHuellaDibujoTipoChange === 'function' ? 58 : 18}
               onClose={() => setCoordPanelOpen(false)}
               onRowsChange={(next) => setCoordRows(renumberCoordRows(next))}
-              onApply={() => applyCoordRowsToCanvas(coordRows)}
               onImport={async (file) => {
                 try {
                   const parsed = await parseCoordFile(file)
                   const numbered = renumberCoordRows(parsed)
                   setCoordRows(numbered)
-                  applyCoordRowsToCanvas(numbered)
+                  requestDrawFromCoords(numbered)
                 } catch (err) {
                   window.alert(err?.message || 'No se pudo leer el archivo')
                 }
               }}
             />
           )}
+          {sentidoEjePrompt ? (
+            <div
+              data-testid="esquema-sentido-eje-prompt"
+              style={{
+                position: 'absolute',
+                left: coordPanelOpen ? 490 : 18,
+                top: coordPanelOpen ? 18 : 64,
+                zIndex: 12,
+                width: 'min(260px, calc(100% - 36px))',
+                padding: '12px 14px',
+                borderRadius: 10,
+                border: `1px solid ${t.border}`,
+                background: t.bgCard || 'rgba(255,255,255,0.98)',
+                boxShadow: '0 10px 28px rgba(15,23,42,0.18)',
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 10 }}>
+                ¿En sentido del eje?
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  data-testid="esquema-sentido-eje-si"
+                  onClick={() => confirmSentidoEje(true)}
+                  style={{
+                    flex: 1,
+                    height: 34,
+                    borderRadius: 8,
+                    border: 'none',
+                    background: t.primary,
+                    color: '#fff',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Sí
+                </button>
+                <button
+                  type="button"
+                  data-testid="esquema-sentido-eje-no"
+                  onClick={() => confirmSentidoEje(false)}
+                  style={{
+                    flex: 1,
+                    height: 34,
+                    borderRadius: 8,
+                    border: `1px solid ${t.border}`,
+                    background: t.bg || '#fff',
+                    color: t.text,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                  }}
+                >
+                  No
+                </button>
+              </div>
+            </div>
+          ) : null}
           {(tool === 'unir-nodos' || joinSeq.length > 0) ? (
             <JoinSeqPanel
               t={t}
@@ -5581,17 +5700,18 @@ function MapaPropiedadesPanel({
   contextHint,
   dodgeCoords = false,
   besideCoords = false,
+  besideWidth = 460,
   onBasemap,
   onOpacity,
   onClose,
   onRemove,
 }) {
-  // Coordenadas (top-left, ~460px): si cabe, este panel va a su derecha;
+  // Coordenadas / panel compacto (top-left): si cabe, este panel va a su derecha;
   // en pantallas angostas, arriba-derecha para verse completo sin montarse.
-  const coordsPanelWidth = 460
+  const leftPanelWidth = Math.max(180, Number(besideWidth) || 460)
   const gap = 12
   const mapPanelWidth = 240
-  const besideLeft = 18 + coordsPanelWidth + gap
+  const besideLeft = 18 + leftPanelWidth + gap
   const viewportW = typeof window !== 'undefined' ? (window.innerWidth || 1200) : 1200
   const fitsBeside = besideCoords && (besideLeft + mapPanelWidth + 18) <= viewportW
   let anchor
@@ -6481,7 +6601,7 @@ function coordSheetStyles(t) {
   }
 }
 
-function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImport }) {
+function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onImport, topOffset = 18 }) {
   const list = rows?.length ? renumberCoordRows(rows) : [{ num: '1', norte: '', este: '', cota: '', desc: '' }]
   const sheet = coordSheetStyles(t)
   const setCell = (i, key, value) => {
@@ -6502,7 +6622,7 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImpor
       style={{
         position: 'absolute',
         left: 18,
-        top: 18,
+        top: topOffset,
         zIndex: 6,
         width: 460,
         maxWidth: 'calc(100% - 36px)',
@@ -6540,15 +6660,6 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImpor
           onClick={() => onRowsChange([...list, { norte: '', este: '', cota: '', desc: '' }])}
         >
           <IconAgregarFila />
-        </button>
-        <button
-          type="button"
-          style={{ ...iconAction, background: t.primary, color: '#fff', border: 'none' }}
-          title="Dibujar nodos"
-          aria-label="Dibujar nodos"
-          onClick={onApply}
-        >
-          <IconDibujarNodos />
         </button>
       </div>
       <input
@@ -6613,6 +6724,96 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImpor
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+const DIBUJO_TIPO_LABELS = { nodo: 'Nodo', linea: 'Línea', poligono: 'Polígono' }
+
+function DibujoTipoCompactPanel({ t, tipo, referenciasCount = 0, onTipoChange, onDibujar }) {
+  const iconBtn = (active) => ({
+    ...ghost(t),
+    width: 32,
+    height: 32,
+    minWidth: 32,
+    padding: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    background: active ? t.primary : (t.bg || '#fff'),
+    color: active ? '#fff' : t.text,
+    border: active ? 'none' : `1px solid ${t.border}`,
+  })
+  return (
+    <div
+      data-testid="sicoe-dibujo-tipo-bar"
+      style={{
+        position: 'absolute',
+        left: 18,
+        top: 18,
+        zIndex: 7,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 8px',
+        borderRadius: 10,
+        border: `1px solid ${t.border}`,
+        background: t.bgCard || 'rgba(255,255,255,0.97)',
+        boxShadow: '0 8px 24px rgba(15,23,42,0.14)',
+        maxWidth: 'calc(100% - 36px)',
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {DIBUJO_TIPOS.map((id) => {
+        const Icon = id === 'nodo' ? IconTipoNodo : id === 'linea' ? IconTipoLinea : IconTipoPoligono
+        return (
+          <button
+            key={id}
+            type="button"
+            data-testid={`sicoe-dibujo-tipo-${id}`}
+            title={DIBUJO_TIPO_LABELS[id]}
+            aria-label={DIBUJO_TIPO_LABELS[id]}
+            aria-pressed={tipo === id}
+            onClick={() => onTipoChange?.(id)}
+            style={iconBtn(tipo === id)}
+          >
+            <Icon />
+          </button>
+        )
+      })}
+      <button
+        type="button"
+        data-testid="esquema-dibujo-aplicar"
+        title="Dibujar"
+        aria-label="Dibujar"
+        onClick={onDibujar}
+        style={{
+          ...iconBtn(false),
+          background: t.primary,
+          color: '#fff',
+          border: 'none',
+          marginLeft: 2,
+        }}
+      >
+        <IconDibujarNodos />
+      </button>
+      {Number(referenciasCount) > 0 ? (
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 800,
+            color: t.textMuted,
+            borderLeft: `1px solid ${t.border}`,
+            paddingLeft: 8,
+            marginLeft: 2,
+            whiteSpace: 'nowrap',
+          }}
+          title="Dibujos de otros reportes con los mismos ítems (solo lectura)"
+        >
+          {referenciasCount} ref.
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -7432,6 +7633,30 @@ function IconDibujarNodos() {
       <path d="M9 12h5.5" />
       <path d="m9.5 13.5 5 3" />
       <path d="m9.5 10.5 5-3" />
+    </svg>
+  )
+}
+function IconTipoNodo() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="12" cy="12" r="4.5" />
+      <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+function IconTipoLinea() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M5 17 19 7" />
+      <circle cx="5" cy="17" r="2" />
+      <circle cx="19" cy="7" r="2" />
+    </svg>
+  )
+}
+function IconTipoPoligono() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M12 4 20 9.5 17 19H7L4 9.5Z" />
     </svg>
   )
 }
