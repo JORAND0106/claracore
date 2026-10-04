@@ -171,6 +171,27 @@ export function lngLatToCanvasWorld(map, lng, lat, pan, zoom) {
   }
 }
 
+/** Inversa de lngLatToCanvasWorld: mundo del lienzo → WGS84 vía unproject del mapa. */
+export function canvasWorldToLngLat(map, wx, wy, pan, zoom) {
+  if (!map || typeof map.unproject !== 'function') return null
+  const z = Number(zoom)
+  if (!(z > 0) || !pan) return null
+  const X = Number(wx)
+  const Y = Number(wy)
+  if (![X, Y].every(Number.isFinite)) return null
+  try {
+    const sx = X * z + Number(pan.x)
+    const sy = Y * z + Number(pan.y)
+    const ll = map.unproject([sx, sy])
+    const lng = Number(ll?.lng ?? ll?.lon)
+    const lat = Number(ll?.lat)
+    if (![lng, lat].every(Number.isFinite)) return null
+    return { lng, lat }
+  } catch {
+    return null
+  }
+}
+
 export function gkToCanvasWorld(map, este, norte, pan, zoom) {
   const ll = gkBogotaToWgs84(Number(este), Number(norte))
   if (!ll) return null

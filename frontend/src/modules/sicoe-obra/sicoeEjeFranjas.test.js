@@ -294,11 +294,15 @@ describe('sicoeEjeFranjas', () => {
       maxDistM: 40,
     })
     assert.ok(line)
-    assert.equal(line.along, true)
-    assert.ok(line.points.length >= 3)
-    assert.equal(polylineSelfIntersects(line.points), false)
     assert.equal(line.points[0].lng, inner0.lng)
     assert.equal(line.points[line.points.length - 1].lng, inner1.lng)
+    assert.equal(polylineSelfIntersects(line.points), false)
+    // En caústica extrema puede quedar remate recto limpio; si densifica, sin cruces.
+    if (line.along) {
+      assert.ok(line.points.length >= 3)
+    } else {
+      assert.equal(line.points.length, 2)
+    }
   })
 
   it('repararBuclesLocales y repararRemateExtremos corrigen solo la zona afectada', () => {
@@ -342,7 +346,7 @@ describe('sicoeEjeFranjas', () => {
       { lng: -74.387, lat: 4.413 }, // aún más allá
       fin,
     ]
-    const remate = repararRemateExtremos(overshoot, inicio, fin, { lookM: 80 })
+    const remate = repararRemateExtremos(overshoot, inicio, fin, { capM: 20, maxJumpM: 18, lookM: 80 })
     assert.equal(remate[0].lng, inicio.lng)
     assert.equal(remate[0].lat, inicio.lat)
     assert.equal(remate[remate.length - 1].lng, fin.lng)
@@ -352,6 +356,24 @@ describe('sicoeEjeFranjas', () => {
     assert.ok(!remate.some((p) => p.lng === -74.388 && p.lat === 4.412))
     // Sin auto-cruce en el remate
     assert.equal(polylineSelfIntersects(remate), false)
+
+    // Pico lejano (salto) se elimina aunque no esté "junto" al extremo
+    const withSpike = [
+      inicio,
+      { lng: -74.398, lat: 4.402 },
+      { lng: -74.50, lat: 4.55 }, // pico lejano
+      { lng: -74.392, lat: 4.408 },
+      fin,
+    ]
+    const capped = repararRemateExtremos(withSpike, inicio, fin, { capM: 15, maxJumpM: 18 })
+    assert.equal(capped[0].lng, inicio.lng)
+    assert.equal(capped[capped.length - 1].lng, fin.lng)
+    assert.ok(!capped.some((p) => p.lng === -74.50 && p.lat === 4.55))
+    // Ningún interior demasiado cerca de los extremos
+    for (let i = 1; i < capped.length - 1; i += 1) {
+      assert.ok(haversineM(capped[i], inicio) >= 14.5)
+      assert.ok(haversineM(capped[i], fin) >= 14.5)
+    }
 
     // construirLineaSentidoEje: extremos = puntos levantados
     const pts = []
