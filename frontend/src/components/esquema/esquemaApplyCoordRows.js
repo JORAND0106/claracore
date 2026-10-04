@@ -12,7 +12,7 @@ import {
 
 /**
  * Convierte una cara densificada (lng/lat) a mundo, fijando extremos en los
- * nodos levantados y eliminando overshoot/retorno junto a ellos.
+ * nodos levantados y limpiando la zona de remate (cap + sin picos/saltos).
  */
 function curvedEdgeToWorldPts(curved, a, b, opts = {}) {
   if (!curved?.points?.length) return null
@@ -50,12 +50,18 @@ function curvedEdgeToWorldPts(curved, a, b, opts = {}) {
 
   if (worldPts.length < 2) return null
 
-  // Extremos exactos + sin prolongarse / devolverse junto a los nodos.
+  // Remate duro: extremos = nodos; cap ~20 m; sin saltos/picos.
   worldPts = repararRemateExtremosWorld(
     worldPts,
     { x: Number(a.x), y: Number(a.y) },
     { x: Number(b.x), y: Number(b.y) },
-    { pxPerMeter: PX_PER_METER, lookM: 45, minSepM: Math.max(1.2, (Number(opts.stepM) || 2) * 0.6) },
+    {
+      pxPerMeter: PX_PER_METER,
+      lookM: 50,
+      minSepM: Math.max(1.5, (Number(opts.stepM) || 2) * 0.75),
+      capM: Number(opts.capM) || 20,
+      maxJumpM: Number(opts.maxJumpM) || 18,
+    },
   )
   worldPts[0] = {
     ...worldPts[0],
@@ -194,8 +200,13 @@ export function buildLineasUniendoNodos(nodes, opts = {}) {
   return lines
 }
 
-function nodoToLngLat(node) {
+function nodoToLngLat(node, opts = {}) {
   if (!node) return null
+  // Preferir la posición del lienzo (ya alineada al mapa) para densificar.
+  if (typeof opts.worldToLngLat === 'function' && Number.isFinite(node.x) && Number.isFinite(node.y)) {
+    const ll = opts.worldToLngLat(node.x, node.y)
+    if (ll && Number.isFinite(ll.lng) && Number.isFinite(ll.lat)) return ll
+  }
   if (Number.isFinite(node.este) && Number.isFinite(node.norte)) {
     return gkBogotaToWgs84(node.este, node.norte)
   }
@@ -225,8 +236,8 @@ export function buildLineasSentidoEje(nodes, planoFc, opts = {}) {
   for (let i = 1; i < list.length; i += 1) {
     const a = list[i - 1]
     const b = list[i]
-    const llA = nodoToLngLat(a)
-    const llB = nodoToLngLat(b)
+    const llA = nodoToLngLat(a, opts)
+    const llB = nodoToLngLat(b, opts)
     let curved = null
     if (llA && llB && ejes.length) {
       curved = construirLineaSentidoEje({
@@ -242,6 +253,8 @@ export function buildLineasSentidoEje(nodes, planoFc, opts = {}) {
         origin,
         lngLatToWorld: opts.lngLatToWorld,
         stepM: opts.stepM || 2,
+        capM: opts.capM,
+        maxJumpM: opts.maxJumpM,
       })
       if (worldPts && worldPts.length >= 3) {
         usedEje = true
@@ -358,8 +371,8 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
   let failedEdges = 0
 
   const appendEdge = (a, b) => {
-    const llA = nodoToLngLat(a)
-    const llB = nodoToLngLat(b)
+    const llA = nodoToLngLat(a, opts)
+    const llB = nodoToLngLat(b, opts)
     let curved = null
     if (llA && llB && ejes.length) {
       curved = construirLineaSentidoEje({
@@ -375,6 +388,8 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
         origin,
         lngLatToWorld: opts.lngLatToWorld,
         stepM: opts.stepM || 2,
+        capM: opts.capM,
+        maxJumpM: opts.maxJumpM,
       })
       if (worldPts && worldPts.length >= 3) {
         usedEje = true

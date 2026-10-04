@@ -146,6 +146,7 @@ import {
 } from './esquemaMapaCapture'
 import {
   lngLatToCanvasWorld,
+  canvasWorldToLngLat,
   mapCenterAsGeoOrigin,
   mapRelativeZoomPercent,
   mapZoomAfterVisualFactor,
@@ -1702,9 +1703,13 @@ export default function EsquemaEditorModal({
             const lngLatToWorld = (mapNow && typeof mapNow.project === 'function')
               ? (lng, lat) => lngLatToCanvasWorld(mapNow, lng, lat, panRef.current, zoomRef.current)
               : null
+            const worldToLngLat = (mapNow && typeof mapNow.unproject === 'function')
+              ? (x, y) => canvasWorldToLngLat(mapNow, x, y, panRef.current, zoomRef.current)
+              : null
             const sanitized = redensifySentidoEjeObjects(objectsRef.current, mapPlanoFcRef.current, {
               origin: coordOriginRef.current,
               lngLatToWorld,
+              worldToLngLat,
             })
             if (sanitized.changed) {
               objectsRef.current = sanitized.objects
@@ -2431,6 +2436,9 @@ export default function EsquemaEditorModal({
       const lngLatToWorld = (map && typeof map.project === 'function')
         ? (lng, lat) => lngLatToCanvasWorld(map, lng, lat, pan, zoom)
         : null
+      const worldToLngLat = (map && typeof map.unproject === 'function')
+        ? (x, y) => canvasWorldToLngLat(map, x, y, pan, zoom)
+        : null
       const wantEje = poligonoSentidoEjeRef.current === true
       const result = materializeJoinAsClosedPolygon(objectsRef.current, nums, {
         color: colorRef.current,
@@ -2441,6 +2449,7 @@ export default function EsquemaEditorModal({
         planoFc: mapPlanoFcRef.current,
         origin: coordOriginRef.current,
         lngLatToWorld,
+        worldToLngLat,
         returnMeta: true,
       })
       if (result && Array.isArray(result.objects)) {
@@ -2548,6 +2557,9 @@ export default function EsquemaEditorModal({
     const lngLatToWorld = (mapActiveRef.current && map && typeof map.project === 'function')
       ? (lng, lat) => lngLatToCanvasWorld(map, lng, lat, panRef.current, zoomRef.current)
       : null
+    const worldToLngLat = (mapActiveRef.current && map && typeof map.unproject === 'function')
+      ? (x, y) => canvasWorldToLngLat(map, x, y, panRef.current, zoomRef.current)
+      : null
 
     if (accion.unirEnOrden) {
       if (opts.sentidoEje === true) {
@@ -2558,6 +2570,7 @@ export default function EsquemaEditorModal({
           uid,
           origin,
           lngLatToWorld,
+          worldToLngLat,
         })
         extras = built.objects
         if (!built.usedEje) {

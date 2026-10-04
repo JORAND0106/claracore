@@ -356,8 +356,13 @@ export function repararBuclesLocales(points, { maxPasses = 8 } = {}) {
 }
 
 /**
- * Remate genérico: fija extremos y elimina overshoot/retorno junto a ellos.
- * `coord` extrae {x,y} (lng/lat o mundo). No altera el tramo intermedio lejos de los extremos.
+ * Remate genérico: fija extremos exactamente y limpia la zona de remate.
+ *
+ * 1) Cap duro: ningún vértice interior a menos de `capM` de inicio/fin
+ *    (el tramo final es recto al punto levantado — sin overshoot ni retorno).
+ * 2) Elimina saltos largos (picos): las muestras densificadas no pueden
+ *    saltar más de `maxJumpM` entre sí.
+ * 3) El recorrido intermedio (lejos de los extremos) se conserva.
  */
 export function rematarCaraEnExtremos(points, inicio, fin, {
   coord = (p) => ({ x: Number(p.lng), y: Number(p.lat) }),
@@ -365,30 +370,68 @@ export function rematarCaraEnExtremos(points, inicio, fin, {
   applyEnd = (p, end) => ({ lng: Number(end.lng), lat: Number(end.lat) }),
   lookM = 45,
   minSepM = 1.5,
+  capM = 20,
+  maxJumpM = 18,
 } = {}) {
   if (!Array.isArray(points) || points.length < 2 || !inicio || !fin) {
     return Array.isArray(points) ? points : []
   }
+  const d = (p, q) => dist(coord(p), coord(q))
   let pts = points.map((p) => ({ ...p }))
   pts[0] = applyEnd(pts[0], inicio)
   pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
 
-  const d = (p, q) => dist(coord(p), coord(q))
-  const xy = (p) => coord(p)
+  // Cap adaptativo: en caras cortas no vaciar el interior; en caras largas ~20 m.
+  let pathLen = 0
+  for (let i = 1; i < pts.length; i += 1) pathLen += d(pts[i - 1], pts[i])
+  const wantCap = Math.max(Number(capM) || 20, Number(minSepM) || 1.5)
+  const cap = Math.min(wantCap, Math.max(5, pathLen * 0.06))
+  const maxJump = Math.max(Number(maxJumpM) || 18, 10)
 
-  // Quitar interiores demasiado cerca de los extremos (evita micro-ganchos).
+  // Cap duro en zona de remate: solo queda el punto levantado + interior lejano.
   if (pts.length > 2) {
-    pts = pts.filter((p, i) => {
-      if (i === 0 || i === pts.length - 1) return true
-      return d(p, pts[0]) >= minSepM && d(p, pts[pts.length - 1]) >= minSepM
-    })
+    const start = pts[0]
+    const end = pts[pts.length - 1]
+    const interior = pts.slice(1, -1).filter((p) => d(p, start) >= cap && d(p, end) >= cap)
+    pts = [applyEnd({}, inicio), ...interior, applyEnd({}, fin)]
   }
-  if (pts.length < 2) return [applyEnd({}, inicio), applyEnd({}, fin)]
-  pts[0] = applyEnd(pts[0], inicio)
-  pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
 
+  // Quitar picos: saltos entre vértices consecutivos mayores a maxJump
+  // (el segmento que toca un extremo puede llegar hasta `cap`).
+  let guard = 0
+  while (pts.length > 2 && guard < 800) {
+    guard += 1
+    let cut = -1
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      const jump = d(pts[i], pts[i + 1])
+      const touchesEnd = i === 0 || i + 1 === pts.length - 1
+      const limit = touchesEnd ? Math.max(cap * 1.35, maxJump) : maxJump
+      if (jump <= limit) continue
+      // Quitar el extremo interior del salto.
+      if (i + 1 < pts.length - 1) cut = i + 1
+      else if (i > 0) cut = i
+      break
+    }
+    if (cut < 0) break
+    pts.splice(cut, 1)
+    pts[0] = applyEnd(pts[0], inicio)
+    pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
+  }
+
+  // Segunda pasada de cap por si el recorte dejó interiores demasiado cerca.
+  if (pts.length > 2) {
+    const start = pts[0]
+    const end = pts[pts.length - 1]
+    const interior = pts.slice(1, -1).filter((p) => d(p, start) >= cap && d(p, end) >= cap)
+    pts = [applyEnd({}, inicio), ...interior, applyEnd({}, fin)]
+  }
+
+  // lookM: compat — si quedó un gancho justo fuera del cap, recortar giro en U.
+  const xy = (p) => coord(p)
   const cosTurn = (a, b, c) => {
-    const A = xy(a), B = xy(b), C = xy(c)
+    const A = xy(a)
+    const B = xy(b)
+    const C = xy(c)
     const vx1 = B.x - A.x
     const vy1 = B.y - A.y
     const vx2 = C.x - B.x
@@ -398,24 +441,16 @@ export function rematarCaraEnExtremos(points, inicio, fin, {
     if (!(len1 > 1e-12) || !(len2 > 1e-12)) return 1
     return (vx1 * vx2 + vy1 * vy2) / (len1 * len2)
   }
-
-  // Desde el fin: quitar vértices que se pasan de largo y se devuelven hacia el
-  // punto levantado (giro en U). No usar umbral de distancia: el overshoot suele
-  // quedar lejos del extremo y hay que recortarlo igual.
-  let guard = 0
-  while (pts.length > 2 && guard < 500) {
+  guard = 0
+  while (pts.length > 2 && guard < 200) {
     guard += 1
     const n = pts.length
     const prev = pts[n - 3]
     const mid = pts[n - 2]
     const end = pts[n - 1]
     if (!prev) break
-    const reverses = cosTurn(prev, mid, end) < -0.05
-    // Segmento final muy largo tras un interior cercano ⇒ gancho típico del remate.
-    const dMid = d(mid, end)
-    const dPrev = d(prev, end)
-    const longHook = dMid > Math.max(8, lookM * 0.25) && dMid > dPrev * 0.9 && cosTurn(prev, mid, end) < 0.35
-    if (reverses || longHook) {
+    if (d(mid, end) > (Number(lookM) || 45) * 1.5 && cosTurn(prev, mid, end) >= -0.05) break
+    if (cosTurn(prev, mid, end) < -0.05) {
       pts.splice(n - 2, 1)
       pts[0] = applyEnd(pts[0], inicio)
       pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
@@ -423,20 +458,15 @@ export function rematarCaraEnExtremos(points, inicio, fin, {
     }
     break
   }
-
-  // Desde el inicio: simétrico (giro en U al salir del punto levantado).
   guard = 0
-  while (pts.length > 2 && guard < 500) {
+  while (pts.length > 2 && guard < 200) {
     guard += 1
     const start = pts[0]
     const mid = pts[1]
     const next = pts[2]
     if (!next) break
-    const reverses = cosTurn(start, mid, next) < -0.05
-    const dMid = d(mid, start)
-    const dNext = d(next, start)
-    const longHook = dMid > Math.max(8, lookM * 0.25) && dMid > dNext * 0.9 && cosTurn(start, mid, next) < 0.35
-    if (reverses || longHook) {
+    if (d(mid, start) > (Number(lookM) || 45) * 1.5 && cosTurn(start, mid, next) >= -0.05) break
+    if (cosTurn(start, mid, next) < -0.05) {
       pts.splice(1, 1)
       pts[0] = applyEnd(pts[0], inicio)
       pts[pts.length - 1] = applyEnd(pts[pts.length - 1], fin)
@@ -463,17 +493,20 @@ export function repararRemateExtremos(points, inicio, fin, opts = {}) {
     applyEnd: (_p, end) => ({ lng: Number(end.lng), lat: Number(end.lat) }),
     lookM: opts.lookM ?? opts.maxHookM ?? 45,
     minSepM: opts.minSepM ?? 1.5,
+    capM: opts.capM ?? 20,
+    maxJumpM: opts.maxJumpM ?? 18,
   })
 }
 
 /**
- * Remate en coordenadas de lienzo (x/y mundo). `lookM`/`minSepM` en metros de mundo
- * (se convierten con pxPerMeter).
+ * Remate en coordenadas de lienzo (x/y mundo). Distancias en metros (vía pxPerMeter).
  */
 export function repararRemateExtremosWorld(points, inicio, fin, {
   pxPerMeter = 50,
   lookM = 45,
   minSepM = 1.5,
+  capM = 20,
+  maxJumpM = 18,
 } = {}) {
   const ppm = Math.max(1e-6, Number(pxPerMeter) || 50)
   return rematarCaraEnExtremos(points, inicio, fin, {
@@ -486,6 +519,8 @@ export function repararRemateExtremosWorld(points, inicio, fin, {
     }),
     lookM,
     minSepM,
+    capM,
+    maxJumpM,
   })
 }
 
@@ -660,13 +695,21 @@ export function construirLineaSentidoEje({
     { lng: lng1, lat: lat1 },
   ]
   points = repararBuclesLocales(points)
-  points = repararRemateExtremos(points, { lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 })
+  points = repararRemateExtremos(points, { lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 }, {
+    capM: 20,
+    maxJumpM: 18,
+    lookM: 50,
+  })
   points[0] = { lng: lng0, lat: lat0 }
   points[points.length - 1] = { lng: lng1, lat: lat1 }
 
   if (points.length > 3) {
     points = repararBuclesLocales(points)
-    points = repararRemateExtremos(points, { lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 })
+    points = repararRemateExtremos(points, { lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 }, {
+      capM: 20,
+      maxJumpM: 18,
+      lookM: 50,
+    })
     points[0] = { lng: lng0, lat: lat0 }
     points[points.length - 1] = { lng: lng1, lat: lat1 }
   }
