@@ -60,6 +60,15 @@ import { finalizeJoinSequence, joinIntersectingLines } from './esquemaJoin'
 import { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 import { parseCoordFile, topoToWorld, coordOriginFromRows } from './esquemaCoords'
 import {
+  accionDibujarNodosPorTipo,
+  buildLineasUniendoNodos,
+  buildNodosFromParsedCoords,
+  mensajeNodoInexistente,
+  parseCoordRowsForCanvas,
+  resolveNodoPorNumero,
+} from './esquemaApplyCoordRows.js'
+import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
+import {
   deleteLibraryItem,
   instantiateLibraryItem,
   loadLibrary,
@@ -493,6 +502,7 @@ export default function EsquemaEditorModal({
   const [mapError, setMapError] = useState('')
   const [mapPickInfo, setMapPickInfo] = useState(null) // { pkId, abscisa, lat, lng }
   const [mapPropsOpen, setMapPropsOpen] = useState(true)
+  const [cursorCoords, setCursorCoords] = useState(null)
   const [printAreaSelecting, setPrintAreaSelecting] = useState(false)
   const [printAreaTick, setPrintAreaTick] = useState(0)
   const mapPlanoFcRef = useRef(null)
@@ -977,6 +987,50 @@ export default function EsquemaEditorModal({
     return { x: src.clientX - r.left, y: src.clientY - r.top }
   }
 
+
+  const updateCursorCoordsFromScreen = (screen) => {
+    if (!screen) {
+      setCursorCoords(null)
+      return
+    }
+    const map = mapRef.current
+    if (mapActiveRef.current && map && typeof map.unproject === 'function') {
+      try {
+        const ll = map.unproject([screen.x, screen.y])
+        const lng = Number(ll?.lng)
+        const lat = Number(ll?.lat)
+        if (Number.isFinite(lng) && Number.isFinite(lat)) {
+          const gk = wgs84ToGkBogota(lng, lat)
+          setCursorCoords({
+            lng,
+            lat,
+            norte: gk?.norte ?? null,
+            este: gk?.este ?? null,
+          })
+          return
+        }
+      } catch { /* fall through */ }
+    }
+    // Sin mapa: Gauss relativo al origen de la tabla de coordenadas
+    const z = zoomRef.current || 1
+    const wx = (screen.x - panRef.current.x) / z
+    const wy = (screen.y - panRef.current.y) / z
+    const origin = coordOriginRef.current
+    if (origin && Number.isFinite(origin.este0) && Number.isFinite(origin.norte0)) {
+      const este = origin.este0 + (wx / 50)
+      const norte = origin.norte0 - (wy / 50)
+      const ll = gkBogotaToWgs84(este, norte)
+      setCursorCoords({
+        norte,
+        este,
+        lng: ll?.lng ?? null,
+        lat: ll?.lat ?? null,
+      })
+      return
+    }
+    setCursorCoords(null)
+  }
+
   const posFromEvent = (e) => {
     const s = screenPosFromEvent(e)
     const z = zoomRef.current || 1
@@ -1417,11 +1471,12 @@ export default function EsquemaEditorModal({
       ? ESQUEMA_MAPA_ZOOM_CON_UBICACION
       : ESQUEMA_MAPA_ZOOM_DEFAULT
     const style = sicoeBasemapStyleUrl(mapBasemap)
+    const mapBearing = huellaMode ? 0 : ESQUEMA_MAPA_NORTH_BEARING
     const { map, error } = crearMapboxMapSeguro(host, {
       style,
       center,
       zoom,
-      bearing: ESQUEMA_MAPA_NORTH_BEARING,
+      bearing: mapBearing,
       preserveDrawingBuffer: true,
       attributionControl: true,
       interactive: true,
@@ -1452,7 +1507,7 @@ export default function EsquemaEditorModal({
         if (!cancelled && mapRef.current === map) {
           ensureEsquemaTramoLayers(map, ctx)
           if (ctx.hasTramo) {
-            fitEsquemaMapCamera(map, { type: 'FeatureCollection', features: [] }, ctx, {})
+            fitEsquemaMapCamera(map, { type: 'FeatureCollection', features: [] }, ctx, { bearing: mapBearing })
           }
           mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
           try { mapZoomBaselineRef.current = map.getZoom() } catch { mapZoomBaselineRef.current = null }
@@ -1478,6 +1533,7 @@ export default function EsquemaEditorModal({
         fitEsquemaMapCamera(map, planoFc, ctx, {
           centro_lat: row?.centro_lat,
           centro_lng: row?.centro_lng,
+          bearing: mapBearing,
         })
         // Origen geo fijo tras el encuadre inicial (no re-fijar en pans posteriores).
         mapGeoOriginRef.current = mapCenterAsGeoOrigin(map)
@@ -1520,7 +1576,7 @@ export default function EsquemaEditorModal({
     }
     // Solo al activar/desactivar: capa vía applyMapBasemap; contexto se lee al montar
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapActive, destroyMap, contratoId, authToken, bindMapPkClick, applyDibujoReferenciasLayers])
+  }, [mapActive, destroyMap, contratoId, authToken, bindMapPkClick, applyDibujoReferenciasLayers, huellaMode])
 
   // Actualizar capas de referencia cuando llegan / cambian (mapa ya activo).
   useEffect(() => {
@@ -2156,35 +2212,31 @@ export default function EsquemaEditorModal({
     redraw()
   }
 
-  const applyCoordRowsToCanvas = (rows) => {
-    const list = (rows || []).filter((r) => r && (r.norte !== '' || r.este !== ''))
-    const parsed = list.map((r, i) => ({
-      num: String(i + 1),
-      norte: Number(r.norte),
-      este: Number(r.este),
-      cota: r.cota === '' || r.cota == null ? null : Number(r.cota),
-      desc: String(r.desc || ''),
-    })).filter((r) => Number.isFinite(r.norte) && Number.isFinite(r.este))
-    const origin = coordOriginFromRows(parsed)
+  const applyCoordRowsToCanvas = (rows, opts = {}) => {
+    const parsed = parseCoordRowsForCanvas(rows)
+    const { origin, nodes } = buildNodosFromParsedCoords(parsed, {
+      color: colorRef.current,
+      uid,
+    })
     coordOriginRef.current = origin
     pushHistory()
-    const keep = objectsRef.current.filter((o) => o.type !== 'nodo')
-    const nodes = parsed.map((r) => {
-      const pt = topoToWorld(r.este, r.norte, origin)
-      return {
-        id: uid(),
-        type: 'nodo',
-        x: pt.x,
-        y: pt.y,
-        nodeNum: r.num,
-        norte: r.norte,
-        este: r.este,
-        cota: r.cota,
-        desc: r.desc,
+    const keep = objectsRef.current.filter((o) => o.type !== 'nodo' && !o.joinSeq && !o.fromCoordTable)
+    let extras = []
+    const tipo = (huellaMode && !opts.skipTipoActions)
+      ? (huellaTipoRef.current || 'nodo')
+      : 'nodo'
+    const accion = opts.skipTipoActions
+      ? { unirEnOrden: false, abrirUnirPorNumero: false }
+      : accionDibujarNodosPorTipo(tipo)
+    if (accion.unirEnOrden) {
+      extras = buildLineasUniendoNodos(nodes, {
         color: colorRef.current,
-      }
-    })
-    objectsRef.current = [...keep, ...nodes]
+        width: widthRef.current,
+        lineStyle: lineStyleRef.current,
+        uid,
+      })
+    }
+    objectsRef.current = [...keep, ...nodes, ...extras]
     setCoordRows(parsed.map((r) => ({
       num: r.num,
       norte: r.norte,
@@ -2195,9 +2247,38 @@ export default function EsquemaEditorModal({
     setCoordPanelOpen(true)
     selectOne(null)
     setDirty(true)
-    if (nodes.length) {
+    // Anclar origen geo al primer punto Gauss (EPSG:3116) para ubicación fiel en el plano.
+    if (mapActiveRef.current && origin && Number.isFinite(origin.este0) && Number.isFinite(origin.norte0)) {
+      const ll = gkBogotaToWgs84(origin.este0, origin.norte0)
+      if (ll) {
+        mapGeoOriginRef.current = ll
+        try {
+          const map = mapRef.current
+          if (map && nodes.length) {
+            const pts = parsed.map((r) => gkBogotaToWgs84(r.este, r.norte)).filter(Boolean)
+            if (pts.length) {
+              const lngs = pts.map((p) => p.lng)
+              const lats = pts.map((p) => p.lat)
+              map.fitBounds(
+                [
+                  [Math.min(...lngs), Math.min(...lats)],
+                  [Math.max(...lngs), Math.max(...lats)],
+                ],
+                {
+                  padding: 80,
+                  maxZoom: 18,
+                  bearing: huellaMode ? 0 : ESQUEMA_MAPA_NORTH_BEARING,
+                  pitch: 0,
+                  duration: 0,
+                },
+              )
+            }
+          }
+        } catch { /* ignore */ }
+      }
+      syncCanvasToMapRef.current()
+    } else if (nodes.length) {
       if (mapActiveRef.current) {
-        // Mantener escala 1:1 con el mapa: no forzar zoom del lienzo.
         syncCanvasToMapRef.current()
       } else {
         const xs = nodes.map((n) => n.x)
@@ -2218,14 +2299,21 @@ export default function EsquemaEditorModal({
         setZoomPct(Math.round(z * 100))
       }
     }
-    // En modo nodo del reporte: abrir biblioteca de entidades para insertar sobre los nodos.
-    if (huellaMode && huellaTipoRef.current === 'nodo' && nodes.length) {
+    if (!opts.skipTipoActions && huellaMode && tipo === 'nodo' && nodes.length) {
       refreshLibrary()
       setLibOpen(true)
       setLibNotice('Seleccione una entidad para insertarla sobre el nodo (punto medio). Si no elige ninguna, se guarda el marcador legible.')
       setInsertHint('Elija una entidad de la biblioteca o guarde solo con el marcador del nodo.')
     }
+    if (!opts.skipTipoActions && accion.abrirUnirPorNumero && nodes.length) {
+      setTool('unir-nodos')
+      setToolHint('Digite o pulse los números de nodo de la tabla para unir el polígono. Enter confirma cada número.')
+    }
+    if (!opts.skipTipoActions && accion.unirEnOrden && nodes.length >= 2) {
+      setToolHint(`Línea: ${nodes.length} nodos unidos en orden (1→${nodes.length}).`)
+    }
     setPanTick((n) => n + 1)
+    return nodes
   }
 
   const onPointerDown = (e) => {
@@ -2236,6 +2324,7 @@ export default function EsquemaEditorModal({
     const screen = screenPosFromEvent(e)
     lastScreenRef.current = screen
     pointersRef.current.set(e.pointerId, screen)
+    updateCursorCoordsFromScreen(screen)
 
     // Clic sobre el lienzo con mapa activo → reabrir panel de propiedades del mapa
     if (mapActiveRef.current) setMapPropsOpen(true)
@@ -2827,8 +2916,11 @@ export default function EsquemaEditorModal({
   }
 
   const onPointerMove = (e) => {
+    const screenMove = screenPosFromEvent(e)
+    lastScreenRef.current = screenMove
+    updateCursorCoordsFromScreen(screenMove)
     if (pointersRef.current.has(e.pointerId)) {
-      pointersRef.current.set(e.pointerId, screenPosFromEvent(e))
+      pointersRef.current.set(e.pointerId, screenMove)
     }
 
     if (printAreaSelectingRef.current && printAreaDraftRef.current?.from) {
@@ -3873,14 +3965,28 @@ export default function EsquemaEditorModal({
   }
   enterActionRef.current = () => {
     if (toolRef.current === 'unir-nodos') {
-      const node = findNodeByNum(dynBufferRef.current)
+      const raw = dynBufferRef.current
+      const resolved = resolveNodoPorNumero(raw, objectsRef.current, coordRows)
+      if (resolved.kind === 'missing') {
+        setToolHint(mensajeNodoInexistente(raw))
+        return true
+      }
+      let node = resolved.kind === 'canvas' ? resolved.node : null
+      if (!node && resolved.kind === 'table') {
+        // Materializar nodos de la tabla sin cambiar el tipo/herramienta
+        const built = applyCoordRowsToCanvas(coordRows, { skipTipoActions: true })
+        node = (built || []).find((o) => String(o.nodeNum) === String(resolved.row.num)) || null
+        if (!node) node = findNodeByNum(resolved.row.num)
+      }
       if (node) {
         appendJoinNode(node)
         dynBufferRef.current = ''
         updateDynHud('', false)
+        setToolHint('')
         return true
       }
-      return false
+      setToolHint(mensajeNodoInexistente(raw))
+      return true
     }
     if (commitDynInput()) return true
     return finishPolyline()
@@ -4736,6 +4842,53 @@ export default function EsquemaEditorModal({
               onRemove={deactivateMap}
             />
           ) : null}
+
+          {cursorCoords ? (
+            <div
+              data-testid="esquema-cursor-coords"
+              style={{
+                position: 'absolute',
+                left: mapActive && mapPropsOpen ? 270 : 18,
+                bottom: 18,
+                zIndex: 6,
+                maxWidth: 'min(340px, calc(100% - 36px))',
+                padding: '7px 10px',
+                borderRadius: 10,
+                border: `1px solid ${t.border}`,
+                background: t.bgCard || 'rgba(255,255,255,0.96)',
+                boxShadow: '0 6px 18px rgba(15,23,42,0.14)',
+                fontSize: 11,
+                fontWeight: 700,
+                color: t.text,
+                lineHeight: 1.35,
+                pointerEvents: 'none',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              <div style={{ color: t.textMuted, fontSize: 10, letterSpacing: '0.04em', marginBottom: 2 }}>
+                COORDENADAS
+              </div>
+              <div>
+                N {cursorCoords.norte != null && Number.isFinite(cursorCoords.norte)
+                  ? cursorCoords.norte.toFixed(3)
+                  : '—'}
+                {' · '}
+                E {cursorCoords.este != null && Number.isFinite(cursorCoords.este)
+                  ? cursorCoords.este.toFixed(3)
+                  : '—'}
+              </div>
+              <div style={{ fontWeight: 600, color: t.textMuted }}>
+                Lat {cursorCoords.lat != null && Number.isFinite(cursorCoords.lat)
+                  ? cursorCoords.lat.toFixed(6)
+                  : '—'}
+                {' · '}
+                Lng {cursorCoords.lng != null && Number.isFinite(cursorCoords.lng)
+                  ? cursorCoords.lng.toFixed(6)
+                  : '—'}
+              </div>
+            </div>
+          ) : null}
+
           {selectedObj && selectedObj.type !== 'image' && (
             <PropiedadesPanel
               t={t}
