@@ -1,15 +1,16 @@
 /**
  * Editor de dibujo del reporte: tipo Nodo / Línea / Polígono,
  * biblioteca de entidades del esquema y guardado según el tipo.
+ * Muestra dibujos de referencia de otros reportes con los mismos ítems.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import EsquemaEditorModal from '../../components/esquema/EsquemaEditorModal'
 import {
   esquemaSceneToGeojson,
   featureHuellaDesdeDibujo,
   snapshotEntidadDesdeEscena,
 } from './sicoeDibujoEscenaGeojson'
-import { guardarDibujoReporte } from './sicoeDibujoReporteApi'
+import { fetchDibujoReferencias, guardarDibujoReporte } from './sicoeDibujoReporteApi'
 import { coordRowsDesdePuntosPortada } from './sicoeDibujoCoordsPortada'
 import {
   sugerirTipoDibujo,
@@ -17,8 +18,77 @@ import {
   validarEscenaPorTipo,
   DIBUJO_TIPOS,
 } from './sicoeDibujoTipos'
+import { formatCOP } from '../../utils/formatCOP'
 
 const LABELS = { nodo: 'Nodo', linea: 'Línea', poligono: 'Polígono' }
+
+function PanelPropiedadesReferencia({ t, refInfo, onClose }) {
+  if (!refInfo) return null
+  const items = Array.isArray(refInfo.items) ? refInfo.items : []
+  return (
+    <div
+      data-testid="sicoe-dibujo-ref-panel"
+      style={{
+        position: 'fixed',
+        top: 64,
+        right: 12,
+        zIndex: 14060,
+        width: 'min(300px, calc(100vw - 24px))',
+        maxHeight: 'min(70vh, 420px)',
+        overflow: 'auto',
+        background: t.bgCard || 'rgba(255,255,255,0.97)',
+        border: `1px solid ${t.border}`,
+        borderRadius: 12,
+        boxShadow: '0 12px 32px rgba(15,23,42,0.22)',
+        padding: '12px 14px',
+        color: t.text,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted, letterSpacing: '0.04em' }}>
+            REFERENCIA
+          </div>
+          <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, marginTop: 2 }}>
+            Reporte #{refInfo.numero_reporte ?? refInfo.reporte_id ?? '—'}
+          </div>
+        </div>
+        <button
+          type="button"
+          aria-label="Cerrar propiedades"
+          onClick={onClose}
+          style={{
+            background: 'transparent',
+            border: `1px solid ${t.border}`,
+            borderRadius: 8,
+            width: 32,
+            height: 32,
+            cursor: 'pointer',
+            color: t.text,
+            fontWeight: 800,
+          }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 'var(--cc-sm)' }}>
+        <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>Ítems</div>
+        <div style={{ fontWeight: 600, lineHeight: 1.4 }}>
+          {items.length ? items.join(', ') : '—'}
+        </div>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 'var(--cc-sm)' }}>
+        <div style={{ fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>Valor del reporte</div>
+        <div style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+          {formatCOP(Number(refInfo.costo_directo) || 0)}
+        </div>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.35 }}>
+        Solo lectura · no modifica su dibujo en curso
+      </div>
+    </div>
+  )
+}
 
 export default function SicoeDibujoReporteEditor({
   t,
@@ -41,6 +111,33 @@ export default function SicoeDibujoReporteEditor({
   const [dibujoTipo, setDibujoTipo] = useState(tipoInicial)
   const [error, setError] = useState('')
   const [guardando, setGuardando] = useState(false)
+  const [referencias, setReferencias] = useState([])
+  const [refSeleccionada, setRefSeleccionada] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const rid = reporte?.id
+    if (!rid || !contratoId || !token) {
+      setReferencias([])
+      return undefined
+    }
+    ;(async () => {
+      try {
+        const data = await fetchDibujoReferencias({
+          API_URL,
+          contratoId,
+          token,
+          reporteId: rid,
+        })
+        if (!cancelled) {
+          setReferencias(Array.isArray(data?.referencias) ? data.referencias : [])
+        }
+      } catch {
+        if (!cancelled) setReferencias([])
+      }
+    })()
+    return () => { cancelled = true }
+  }, [API_URL, contratoId, token, reporte?.id])
 
   const mapLocation = useMemo(() => {
     const lat = Number(reporte?.coord_lat)
@@ -180,7 +277,28 @@ export default function SicoeDibujoReporteEditor({
             {LABELS[tipo]}
           </button>
         ))}
+        {referencias.length > 0 && (
+          <span
+            style={{
+              fontSize: 'var(--cc-caption)',
+              fontWeight: 700,
+              color: t.textMuted,
+              borderLeft: `1px solid ${t.border}`,
+              paddingLeft: 8,
+              marginLeft: 2,
+            }}
+            title="Dibujos de otros reportes con los mismos ítems (solo lectura)"
+          >
+            {referencias.length} ref.
+          </span>
+        )}
       </div>
+
+      <PanelPropiedadesReferencia
+        t={t}
+        refInfo={refSeleccionada}
+        onClose={() => setRefSeleccionada(null)}
+      />
 
       <EsquemaEditorModal
         t={t}
@@ -192,6 +310,8 @@ export default function SicoeDibujoReporteEditor({
         huellaDibujoTipo={dibujoTipo}
         initialSceneObjects={initialScene}
         initialCoordRows={initialCoordRows}
+        referenciaDibujos={referencias}
+        onReferenciaClick={(info) => setRefSeleccionada(info)}
         onSaveHuella={onSaveHuella}
         onClose={onClose}
         onSave={async () => { /* PNG no aplica en huellaMode */ }}

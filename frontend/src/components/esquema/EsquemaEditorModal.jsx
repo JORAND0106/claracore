@@ -151,6 +151,12 @@ import {
   normalizeMapContext,
   queryPkYAbscisaEnPunto,
 } from './esquemaMapaPkLayers'
+import {
+  bindEsquemaDibujoReferenciasClick,
+  buildDibujoReferenciasFeatureCollection,
+  ensureEsquemaDibujoReferenciasLayers,
+  queryDibujoReferenciaAtPoint,
+} from './esquemaDibujoReferencias'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
 
@@ -349,6 +355,13 @@ export default function EsquemaEditorModal({
   initialCoordRows = null,
   /** ({ objects, originLngLat }) => Promise — solo en huellaMode. */
   onSaveHuella = null,
+  /**
+   * Dibujos de otros reportes (mismos ítems) como capa de solo lectura en el mapa.
+   * Array de { reporte_id, numero_reporte, items, costo_directo, dibujo_geojson }.
+   */
+  referenciaDibujos = null,
+  /** (info) => void — clic en un dibujo de referencia. */
+  onReferenciaClick = null,
   onSave,
   onClose,
 }) {
@@ -485,6 +498,11 @@ export default function EsquemaEditorModal({
   const mapPlanoFcRef = useRef(null)
   const mapContratoMetaRef = useRef({})
   const mapClickBoundRef = useRef(false)
+  const refsClickUnbindRef = useRef(null)
+  const referenciaDibujosRef = useRef(referenciaDibujos)
+  referenciaDibujosRef.current = referenciaDibujos
+  const onReferenciaClickRef = useRef(onReferenciaClick)
+  onReferenciaClickRef.current = onReferenciaClick
   /** Origen geo fijo ↔ mundo (0,0) mientras el mapa está activo. */
   const mapGeoOriginRef = useRef(null)
   const syncCanvasToMapRef = useRef(() => {})
@@ -1091,6 +1109,8 @@ export default function EsquemaEditorModal({
   syncCanvasToMapRef.current = syncCanvasToMap
 
   const destroyMap = useCallback(() => {
+    try { refsClickUnbindRef.current?.() } catch { /* ignore */ }
+    refsClickUnbindRef.current = null
     const map = mapRef.current
     mapRef.current = null
     if (map) {
@@ -1176,6 +1196,8 @@ export default function EsquemaEditorModal({
     setMapPropsOpen(true)
     mapPlanoFcRef.current = null
     mapClickBoundRef.current = false
+    try { refsClickUnbindRef.current?.() } catch { /* ignore */ }
+    refsClickUnbindRef.current = null
     printAreaSelectingRef.current = false
     setPrintAreaSelecting(false)
     printAreaDraftRef.current = null
@@ -1277,6 +1299,19 @@ export default function EsquemaEditorModal({
     mapClickBoundRef.current = true
   }, [])
 
+  const applyDibujoReferenciasLayers = useCallback((map) => {
+    if (!map) return
+    try { refsClickUnbindRef.current?.() } catch { /* ignore */ }
+    refsClickUnbindRef.current = null
+    const fc = buildDibujoReferenciasFeatureCollection(referenciaDibujosRef.current || [])
+    ensureEsquemaDibujoReferenciasLayers(map, fc)
+    if ((referenciaDibujosRef.current || []).length && typeof onReferenciaClickRef.current === 'function') {
+      refsClickUnbindRef.current = bindEsquemaDibujoReferenciasClick(map, (info) => {
+        try { onReferenciaClickRef.current?.(info) } catch { /* ignore */ }
+      })
+    }
+  }, [])
+
   const applyMapBasemap = useCallback((mode) => {
     const next = normalizarVistaBasemap(mode)
     const safe = SICOE_MAPA_VISTAS_CALLE.includes(next) ? next : 'calle'
@@ -1299,12 +1334,13 @@ export default function EsquemaEditorModal({
             ensureEsquemaPkLayers(map, mapPlanoFcRef.current, mapCtx.pkId)
             bindMapPkClick(map)
           }
+          applyDibujoReferenciasLayers(map)
           applySicoeBasemapTerrain(map, safe)
         } catch { /* ignore */ }
       })
       map.setStyle(url)
     } catch { /* ignore */ }
-  }, [mapCtx.pkId, bindMapPkClick])
+  }, [mapCtx.pkId, bindMapPkClick, applyDibujoReferenciasLayers])
 
   const finishPrintAreaCapture = async () => {
     const draft = printAreaDraftRef.current
@@ -1438,6 +1474,7 @@ export default function EsquemaEditorModal({
         ensureEsquemaPkLayers(map, planoFc, ctx.pkId)
         ensureEsquemaTramoLayers(map, ctx)
         bindMapPkClick(map)
+        applyDibujoReferenciasLayers(map)
         fitEsquemaMapCamera(map, planoFc, ctx, {
           centro_lat: row?.centro_lat,
           centro_lng: row?.centro_lng,
@@ -1477,11 +1514,20 @@ export default function EsquemaEditorModal({
       ro?.disconnect()
       destroyMap()
       mapClickBoundRef.current = false
+      try { refsClickUnbindRef.current?.() } catch { /* ignore */ }
+      refsClickUnbindRef.current = null
       mapGeoOriginRef.current = null
     }
     // Solo al activar/desactivar: capa vía applyMapBasemap; contexto se lee al montar
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapActive, destroyMap, contratoId, authToken, bindMapPkClick])
+  }, [mapActive, destroyMap, contratoId, authToken, bindMapPkClick, applyDibujoReferenciasLayers])
+
+  // Actualizar capas de referencia cuando llegan / cambian (mapa ya activo).
+  useEffect(() => {
+    const map = mapRef.current
+    if (!mapActive || !map) return
+    applyDibujoReferenciasLayers(map)
+  }, [mapActive, referenciaDibujos, applyDibujoReferenciasLayers])
 
   const pointerDistance = () => {
     const pts = [...pointersRef.current.values()]
@@ -2530,6 +2576,15 @@ export default function EsquemaEditorModal({
         moveGuideRef.current = null
         redraw()
         return
+      }
+      // Clic vacío sobre mapa: consultar dibujo de referencia (otros reportes)
+      if (mapActiveRef.current && mapRef.current && typeof onReferenciaClickRef.current === 'function') {
+        const info = queryDibujoReferenciaAtPoint(mapRef.current, screen)
+        if (info) {
+          try { onReferenciaClickRef.current(info) } catch { /* ignore */ }
+          drawing.current = false
+          return
+        }
       }
       const snapKeep = findSnap(p, objectsRef.current, { threshold: snapThreshold(), allowNear: false })
       if (snapClickKeepsSelection({

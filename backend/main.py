@@ -26692,6 +26692,194 @@ def sicoe_borrar_dibujo_reporte(
     return {"ok": True, "tiene_dibujo": False}
 
 
+def _sicoe_items_de_reporte(contrato_id: int, reporte_id: int) -> List[str]:
+    """Ítems distintos (no vacíos) de los registros del reporte."""
+    try:
+        def _q():
+            return (
+                supabase.table("so_registros")
+                .select("item_numero")
+                .eq("contrato_id", contrato_id)
+                .eq("reporte_id", reporte_id)
+                .execute()
+                .data
+            )
+        rows = supabase_execute(_q) or []
+    except Exception:
+        return []
+    out = []
+    seen = set()
+    for r in rows:
+        it = str(r.get("item_numero") or "").strip()
+        if it and it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+
+def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> dict:
+    """
+    Dibujos de otros reportes del contrato que comparten al menos un ítem
+    con el reporte actual. Solo lectura / referencia para el editor.
+    """
+    items_propios = _sicoe_items_de_reporte(contrato_id, reporte_id)
+    empty = {
+        "reporte_id": int(reporte_id),
+        "items_propios": items_propios,
+        "referencias": [],
+    }
+    if not items_propios:
+        return empty
+
+    # Pares: registros de esos ítems → otros reporte_id
+    peer_ids: set = set()
+    items_por_peer: Dict[int, set] = {}
+    costo_por_peer: Dict[int, float] = {}
+    try:
+        def _q_regs():
+            return (
+                supabase.table("so_registros")
+                .select("reporte_id, item_numero, costo_directo")
+                .eq("contrato_id", contrato_id)
+                .in_("item_numero", items_propios)
+                .execute()
+                .data
+            )
+        regs = supabase_execute(_q_regs) or []
+    except Exception as exc:
+        _log_api.warning("dibujo refs registros contrato=%s: %s", contrato_id, exc)
+        return empty
+
+    # Para valor del reporte peer: sumar costo de TODOS sus registros (no solo ítems compartidos).
+    # Primero identificar peers; luego batch de costos/ítems completos.
+    for r in regs:
+        rid = r.get("reporte_id")
+        if rid is None:
+            continue
+        try:
+            rid_i = int(rid)
+        except (TypeError, ValueError):
+            continue
+        if rid_i == int(reporte_id):
+            continue
+        peer_ids.add(rid_i)
+
+    if not peer_ids:
+        return empty
+
+    peer_list = sorted(peer_ids)
+    for chunk in _sicoe_chunks_int(peer_list, 200):
+        ch = list(chunk)
+        try:
+            def _q_all(ids=ch):
+                return (
+                    supabase.table("so_registros")
+                    .select("reporte_id, item_numero, costo_directo")
+                    .eq("contrato_id", contrato_id)
+                    .in_("reporte_id", ids)
+                    .execute()
+                    .data
+                )
+            batch = supabase_execute(_q_all) or []
+        except Exception:
+            batch = []
+        for r in batch:
+            rid = r.get("reporte_id")
+            if rid is None:
+                continue
+            rid_i = int(rid)
+            it = str(r.get("item_numero") or "").strip()
+            if it:
+                items_por_peer.setdefault(rid_i, set()).add(it)
+            try:
+                cd = float(r.get("costo_directo") or 0)
+            except (TypeError, ValueError):
+                cd = 0.0
+            costo_por_peer[rid_i] = float(costo_por_peer.get(rid_i) or 0) + cd
+
+    # Cabeceras con dibujo
+    reportes_map: Dict[int, dict] = {}
+    for chunk in _sicoe_chunks_int(peer_list, 100):
+        ch = list(chunk)
+        batch = []
+        for cols in (
+            "id, numero_reporte, dibujo_geojson, perimetro_geojson",
+            "id, numero_reporte, dibujo_geojson",
+            "id, numero_reporte, perimetro_geojson",
+        ):
+            try:
+                def _q_rep(ids=ch, select_cols=cols):
+                    return (
+                        supabase.table("so_reportes")
+                        .select(select_cols)
+                        .eq("contrato_id", contrato_id)
+                        .in_("id", ids)
+                        .execute()
+                        .data
+                    )
+                batch = supabase_execute(_q_rep) or []
+                break
+            except Exception:
+                batch = []
+                continue
+        for rep in batch:
+            rid = rep.get("id")
+            if rid is None:
+                continue
+            dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
+            if not _sicoe_reporte_geojson_tiene_dibujo(dg):
+                continue
+            # Normalizar a FeatureCollection
+            if isinstance(dg, dict) and dg.get("type") != "FeatureCollection":
+                if dg.get("type") == "Feature":
+                    dg = {"type": "FeatureCollection", "features": [dg]}
+                elif dg.get("type") in ("Polygon", "MultiPolygon", "Point", "LineString"):
+                    dg = {
+                        "type": "FeatureCollection",
+                        "features": [{"type": "Feature", "geometry": dg, "properties": {}}],
+                    }
+            reportes_map[int(rid)] = {
+                "reporte_id": int(rid),
+                "numero_reporte": rep.get("numero_reporte"),
+                "items": sorted(items_por_peer.get(int(rid)) or []),
+                "costo_directo": round(float(costo_por_peer.get(int(rid)) or 0), 2),
+                "dibujo_geojson": dg,
+            }
+
+    referencias = [reportes_map[i] for i in peer_list if i in reportes_map]
+    return {
+        "reporte_id": int(reporte_id),
+        "items_propios": items_propios,
+        "referencias": referencias,
+    }
+
+
+@app.get("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/dibujo-referencias")
+def sicoe_dibujo_referencias_mismo_item(
+    contrato_id: int,
+    reporte_id: int,
+    current_user=Depends(get_current_user),
+):
+    """Dibujos de referencia: otros reportes del contrato con ítems en común."""
+    _require_contract_access(current_user, contrato_id)
+
+    def _exists():
+        return (
+            supabase.table("so_reportes")
+            .select("id")
+            .eq("id", reporte_id)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_exists) or []
+    if not rows:
+        raise HTTPException(404, "Reporte no encontrado")
+    return _sicoe_dibujo_referencias_mismo_item(contrato_id, reporte_id)
+
+
 @app.post("/sicoe-obra/{contrato_id}/reportes/asignar-actores-por-pk")
 def asignar_actores_por_pk(
     contrato_id: int, body: AsignarActoresPorPkBody, current_user=Depends(get_current_user)
