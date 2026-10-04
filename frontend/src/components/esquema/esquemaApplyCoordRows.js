@@ -7,7 +7,72 @@ import { gkBogotaToWgs84, wgs84ToGkBogota } from '../../utils/epsg3116.js'
 import {
   construirLineaSentidoEje,
   reconstruirEjesDesdePlano,
+  repararRemateExtremosWorld,
 } from '../../modules/sicoe-obra/sicoeEjeFranjas.js'
+
+/**
+ * Convierte una cara densificada (lng/lat) a mundo, fijando extremos en los
+ * nodos levantados y eliminando overshoot/retorno junto a ellos.
+ */
+function curvedEdgeToWorldPts(curved, a, b, opts = {}) {
+  if (!curved?.points?.length) return null
+  const origin = opts.origin
+  let worldPts = curved.points.map((p, idx) => {
+    if (idx === 0) {
+      return {
+        x: Number(a.x),
+        y: Number(a.y),
+        lng: p?.lng,
+        lat: p?.lat,
+        este: a.este,
+        norte: a.norte,
+      }
+    }
+    if (idx === curved.points.length - 1) {
+      return {
+        x: Number(b.x),
+        y: Number(b.y),
+        lng: p?.lng,
+        lat: p?.lat,
+        este: b.este,
+        norte: b.norte,
+      }
+    }
+    if (typeof opts.lngLatToWorld === 'function') {
+      const w = opts.lngLatToWorld(p.lng, p.lat)
+      if (w) return { x: w.x, y: w.y, lng: p.lng, lat: p.lat }
+    }
+    const gk = wgs84ToGkBogota(p.lng, p.lat)
+    if (!gk) return null
+    const tw = topoToWorld(gk.este, gk.norte, origin)
+    return { ...tw, lng: p.lng, lat: p.lat, este: gk.este, norte: gk.norte }
+  }).filter(Boolean)
+
+  if (worldPts.length < 2) return null
+
+  // Extremos exactos + sin prolongarse / devolverse junto a los nodos.
+  worldPts = repararRemateExtremosWorld(
+    worldPts,
+    { x: Number(a.x), y: Number(a.y) },
+    { x: Number(b.x), y: Number(b.y) },
+    { pxPerMeter: PX_PER_METER, lookM: 45, minSepM: Math.max(1.2, (Number(opts.stepM) || 2) * 0.6) },
+  )
+  worldPts[0] = {
+    ...worldPts[0],
+    x: Number(a.x),
+    y: Number(a.y),
+    este: a.este,
+    norte: a.norte,
+  }
+  worldPts[worldPts.length - 1] = {
+    ...worldPts[worldPts.length - 1],
+    x: Number(b.x),
+    y: Number(b.y),
+    este: b.este,
+    norte: b.norte,
+  }
+  return worldPts
+}
 
 
 function nearestNodeToPoint(pt, nodes, epsPx) {
@@ -173,28 +238,12 @@ export function buildLineasSentidoEje(nodes, planoFc, opts = {}) {
     }
     const along = !!(curved?.points && curved.points.length > 2)
     if (along) {
-      const minSepWorld = Math.max(8, (Number(opts.stepM) || 2) * 0.6 * PX_PER_METER)
-      let worldPts = curved.points.map((p, idx) => {
-        if (idx === 0) return { x: a.x, y: a.y, lng: p?.lng, lat: p?.lat }
-        if (idx === curved.points.length - 1) return { x: b.x, y: b.y, lng: p?.lng, lat: p?.lat }
-        if (typeof opts.lngLatToWorld === 'function') {
-          const w = opts.lngLatToWorld(p.lng, p.lat)
-          if (w) return { x: w.x, y: w.y, lng: p.lng, lat: p.lat }
-        }
-        const gk = wgs84ToGkBogota(p.lng, p.lat)
-        if (!gk) return null
-        const tw = topoToWorld(gk.este, gk.norte, origin)
-        return { ...tw, lng: p.lng, lat: p.lat, este: gk.este, norte: gk.norte }
-      }).filter(Boolean)
-      if (worldPts.length > 2) {
-        worldPts = worldPts.filter((p, idx) => {
-          if (idx === 0 || idx === worldPts.length - 1) return true
-          const d0 = Math.hypot(p.x - a.x, p.y - a.y)
-          const d1 = Math.hypot(p.x - b.x, p.y - b.y)
-          return d0 >= minSepWorld && d1 >= minSepWorld
-        })
-      }
-      if (worldPts.length >= 3) {
+      const worldPts = curvedEdgeToWorldPts(curved, a, b, {
+        origin,
+        lngLatToWorld: opts.lngLatToWorld,
+        stepM: opts.stepM || 2,
+      })
+      if (worldPts && worldPts.length >= 3) {
         usedEje = true
         out.push({
           id: uid(),
@@ -322,35 +371,16 @@ export function densifyPolygonRingSentidoEje(nodes, planoFc, opts = {}) {
     }
     const along = !!(curved?.points && curved.points.length > 2)
     if (along) {
-      const minSepWorld = Math.max(8, (Number(opts.stepM) || 2) * 0.6 * PX_PER_METER)
-      const toWorld = (p, idx) => {
-        if (idx === 0) return { x: Number(a.x), y: Number(a.y), lng: p?.lng, lat: p?.lat }
-        if (idx === curved.points.length - 1) {
-          return { x: Number(b.x), y: Number(b.y), lng: p?.lng, lat: p?.lat }
-        }
-        if (typeof opts.lngLatToWorld === 'function') {
-          const w = opts.lngLatToWorld(p.lng, p.lat)
-          if (w) return { x: w.x, y: w.y, lng: p.lng, lat: p.lat }
-        }
-        const gk = wgs84ToGkBogota(p.lng, p.lat)
-        if (!gk) return null
-        const tw = topoToWorld(gk.este, gk.norte, origin)
-        return { ...tw, lng: p.lng, lat: p.lat, este: gk.este, norte: gk.norte }
-      }
-      let worldPts = curved.points.map(toWorld).filter(Boolean)
-      // Evitar ganchos: quitar muestras interiores demasiado cerca de las esquinas.
-      if (worldPts.length > 2) {
-        worldPts = worldPts.filter((p, idx) => {
-          if (idx === 0 || idx === worldPts.length - 1) return true
-          const d0 = Math.hypot(p.x - a.x, p.y - a.y)
-          const d1 = Math.hypot(p.x - b.x, p.y - b.y)
-          return d0 >= minSepWorld && d1 >= minSepWorld
-        })
-      }
-      if (worldPts.length >= 3) {
+      const worldPts = curvedEdgeToWorldPts(curved, a, b, {
+        origin,
+        lngLatToWorld: opts.lngLatToWorld,
+        stepM: opts.stepM || 2,
+      })
+      if (worldPts && worldPts.length >= 3) {
         usedEje = true
         edgeKinds.push('along')
         // Omitir el último de la arista: lo aporta el inicio de la siguiente (o el cierre).
+        // El primero es exactamente el nodo levantado `a`.
         for (let i = 0; i < worldPts.length - 1; i += 1) {
           ring.push(worldPts[i])
         }

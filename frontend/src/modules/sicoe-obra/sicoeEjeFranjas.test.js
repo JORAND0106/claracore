@@ -323,9 +323,51 @@ describe('sicoeEjeFranjas', () => {
       { lng: -74.1005, lat: 4.1005 },
       b,
     ]
-    const remate = repararRemateExtremos(withHook, a, b, { maxHookM: 20, look: 3 })
+    const remate = repararRemateExtremos(withHook, a, b, { lookM: 50 })
     assert.ok(!remate.some((p) => Math.abs(p.lng + 74.3) < 1e-9))
     assert.equal(remate[0].lng, a.lng)
     assert.equal(remate[remate.length - 1].lng, b.lng)
+  })
+
+  it('remate: extremos exactos y sin overshoot/retorno junto al fin', () => {
+    const inicio = { lng: -74.40, lat: 4.40 }
+    const fin = { lng: -74.39, lat: 4.41 }
+    // Camino que se pasa de largo del fin y se devuelve (como en 9+970).
+    const overshoot = [
+      inicio,
+      { lng: -74.398, lat: 4.402 },
+      { lng: -74.395, lat: 4.405 },
+      { lng: -74.392, lat: 4.408 },
+      { lng: -74.388, lat: 4.412 }, // más allá del fin
+      { lng: -74.387, lat: 4.413 }, // aún más allá
+      fin,
+    ]
+    const remate = repararRemateExtremos(overshoot, inicio, fin, { lookM: 80 })
+    assert.equal(remate[0].lng, inicio.lng)
+    assert.equal(remate[0].lat, inicio.lat)
+    assert.equal(remate[remate.length - 1].lng, fin.lng)
+    assert.equal(remate[remate.length - 1].lat, fin.lat)
+    // Los puntos más allá del fin no deben quedar
+    assert.ok(!remate.some((p) => p.lng === -74.387 && p.lat === 4.413))
+    assert.ok(!remate.some((p) => p.lng === -74.388 && p.lat === 4.412))
+    // Sin auto-cruce en el remate
+    assert.equal(polylineSelfIntersects(remate), false)
+
+    // construirLineaSentidoEje: extremos = puntos levantados
+    const pts = []
+    for (let m = 9900; m <= 9980; m += 5) {
+      pts.push({ m, lng: -74.4 + (m - 9900) * 0.00001, lat: 4.5 + Math.sin((m - 9900) / 80 * Math.PI) * 0.00005 })
+    }
+    const ejes = [{ id: 0, puntos: pts }]
+    const br0 = bearingDeg(pts[0], pts[1])
+    const br1 = bearingDeg(pts[pts.length - 2], pts[pts.length - 1])
+    const a = destinationPoint(pts[2].lng, pts[2].lat, (br0 + 270) % 360, 5)
+    const b = destinationPoint(pts[pts.length - 3].lng, pts[pts.length - 3].lat, (br1 + 270) % 360, 5)
+    const line = construirLineaSentidoEje({ ejes, inicio: a, fin: b, stepM: 2, maxDistM: 40 })
+    assert.ok(line)
+    assert.equal(line.points[0].lng, a.lng)
+    assert.equal(line.points[0].lat, a.lat)
+    assert.equal(line.points[line.points.length - 1].lng, b.lng)
+    assert.equal(line.points[line.points.length - 1].lat, b.lat)
   })
 })
