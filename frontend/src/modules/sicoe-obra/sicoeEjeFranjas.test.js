@@ -4,7 +4,9 @@ import {
   analizarRegistroFranja,
   bearingDeg,
   construirFranjaPolygon,
+  construirLineaSentidoEje,
   costadosCoinciden,
+  distConSignoSobreEje,
   haversineM,
   normalizarCostadoDigitado,
   proyectarSobreEje,
@@ -116,5 +118,45 @@ describe('sicoeEjeFranjas', () => {
     assert.ok(d > 100 && d < 130)
     const br = bearingDeg({ lng: -74, lat: 4 }, { lng: -74, lat: 4.01 })
     assert.ok(br < 10 || br > 350)
+  })
+
+  it('construirLineaSentidoEje sigue el eje curvo, interpola offset y pasa por extremos', () => {
+    // Eje con curva: avanza al norte y luego gira al este
+    const pts = []
+    for (let m = 0; m <= 50; m += 5) {
+      pts.push({ m, lng: -74.05, lat: 4.72 + m * 0.000009 })
+    }
+    for (let m = 55; m <= 100; m += 5) {
+      const t = m - 50
+      pts.push({
+        m,
+        lng: -74.05 + t * 0.000009,
+        lat: 4.72 + 50 * 0.000009,
+      })
+    }
+    const ejes = [{ id: 0, puntos: pts }]
+    const inicio = { lng: -74.04992, lat: 4.72018 }
+    const fin = { lng: -74.0497, lat: 4.72045 }
+    const line = construirLineaSentidoEje({
+      ejes,
+      inicio,
+      fin,
+      stepM: 5,
+      maxDistM: 80,
+    })
+    assert.ok(line)
+    assert.ok(line.points.length >= 3)
+    assert.equal(line.points[0].lng, inicio.lng)
+    assert.equal(line.points[0].lat, inicio.lat)
+    assert.equal(line.points[line.points.length - 1].lng, fin.lng)
+    assert.equal(line.points[line.points.length - 1].lat, fin.lat)
+    const mid = line.points[Math.floor(line.points.length / 2)]
+    const t = 0.5
+    const straightLng = inicio.lng + t * (fin.lng - inicio.lng)
+    const straightLat = inicio.lat + t * (fin.lat - inicio.lat)
+    const off = Math.hypot(mid.lng - straightLng, mid.lat - straightLat)
+    assert.ok(off > 1e-6, `mid should leave the chord on a curved axis, off=${off}`)
+    assert.equal(distConSignoSobreEje({ dist_m: 2, lado: 'izquierda' }), 2)
+    assert.equal(distConSignoSobreEje({ dist_m: 2, lado: 'derecha' }), -2)
   })
 })

@@ -16,11 +16,8 @@ import {
   sugerirTipoDibujo,
   tipoDesdeEscenaGuardada,
   validarEscenaPorTipo,
-  DIBUJO_TIPOS,
 } from './sicoeDibujoTipos'
 import { formatCOP } from '../../utils/formatCOP'
-
-const LABELS = { nodo: 'Nodo', linea: 'Línea', poligono: 'Polígono' }
 
 function PanelPropiedadesReferencia({ t, refInfo, onClose }) {
   if (!refInfo) return null
@@ -242,6 +239,7 @@ export default function SicoeDibujoReporteEditor({
       setError('No se pudo convertir el dibujo a huella geográfica.')
       throw new Error('Sin feature')
     }
+    const lineaSentidoEje = (objects || []).some((o) => o && o.sentidoEje === true)
     setGuardando(true)
     try {
       const data = await guardarDibujoReporte({
@@ -253,6 +251,7 @@ export default function SicoeDibujoReporteEditor({
         dibujoEscena: {
           version: 3,
           dibujo_tipo: dibujoTipo,
+          linea_sentido_eje: lineaSentidoEje,
           entidad_biblioteca: entidadSnap,
           entidad_id: entidadSnap?.id ?? null,
           entidad_nombre: entidadSnap?.nombre ?? null,
@@ -271,70 +270,8 @@ export default function SicoeDibujoReporteEditor({
     }
   }
 
-  const barBtn = (active) => ({
-    background: active ? t.primary : (t.bgCard || '#fff'),
-    color: active ? '#fff' : t.text,
-    border: active ? 'none' : `1px solid ${t.border}`,
-    borderRadius: 8,
-    padding: '7px 12px',
-    fontWeight: 800,
-    fontSize: 'var(--cc-sm)',
-    cursor: 'pointer',
-  })
-
   return (
     <>
-      <div
-        style={{
-          position: 'fixed',
-          top: 10,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 14050,
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 8,
-          alignItems: 'center',
-          justifyContent: 'center',
-          maxWidth: '96vw',
-          padding: '8px 12px',
-          borderRadius: 12,
-          background: t.bgCard || 'rgba(255,255,255,0.96)',
-          border: `1px solid ${t.border}`,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
-        }}
-        data-testid="sicoe-dibujo-tipo-bar"
-      >
-        <span style={{ fontWeight: 800, fontSize: 'var(--cc-sm)', color: t.textMuted }}>Tipo:</span>
-        {DIBUJO_TIPOS.map((tipo) => (
-          <button
-            key={tipo}
-            type="button"
-            data-testid={`sicoe-dibujo-tipo-${tipo}`}
-            aria-pressed={dibujoTipo === tipo}
-            onClick={() => setDibujoTipo(tipo)}
-            style={barBtn(dibujoTipo === tipo)}
-          >
-            {LABELS[tipo]}
-          </button>
-        ))}
-        {referencias.length > 0 && (
-          <span
-            style={{
-              fontSize: 'var(--cc-caption)',
-              fontWeight: 700,
-              color: t.textMuted,
-              borderLeft: `1px solid ${t.border}`,
-              paddingLeft: 8,
-              marginLeft: 2,
-            }}
-            title="Dibujos de otros reportes con los mismos ítems (solo lectura)"
-          >
-            {referencias.length} ref.
-          </span>
-        )}
-      </div>
-
       <PanelPropiedadesReferencia
         t={t}
         refInfo={refSeleccionada}
@@ -349,6 +286,8 @@ export default function SicoeDibujoReporteEditor({
         autoActivateMap
         huellaMode
         huellaDibujoTipo={dibujoTipo}
+        onHuellaDibujoTipoChange={setDibujoTipo}
+        referenciasCount={referencias.length}
         initialSceneObjects={initialScene}
         initialCoordRows={initialCoordRows}
         referenciaDibujos={referencias}
