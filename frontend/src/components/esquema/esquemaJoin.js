@@ -276,3 +276,79 @@ export function joinIntersectingLines(objects, selectedIds = null) {
 export function finalizeJoinSequence(objects) {
   return (objects || []).map((o) => (o?.joinSeq ? { ...o, joinSeq: false } : o))
 }
+
+/**
+ * Convierte la secuencia de nodos en una polilínea cerrada (polígono).
+ * Elimina los tramos temporales `joinSeq` y cierra contra el primer nodo
+ * sin exigir que el usuario lo repita al final.
+ *
+ * @param {object[]} objects
+ * @param {Array<string|number>} nodeNums secuencia (orden de unión)
+ * @param {{ color?: string, width?: number, lineStyle?: string, uid?: () => string }} [opts]
+ */
+export function materializeJoinAsClosedPolygon(objects, nodeNums, opts = {}) {
+  const list = Array.isArray(objects) ? [...objects] : []
+  const nums = (nodeNums || []).map((n) => String(n))
+  const nodes = []
+  for (const key of nums) {
+    const node = list.find((o) => o?.type === 'nodo' && String(o.nodeNum) === key)
+    if (node && Number.isFinite(node.x) && Number.isFinite(node.y)) {
+      // Evitar repetir el mismo nodo consecutivo
+      const prev = nodes[nodes.length - 1]
+      if (prev && String(prev.nodeNum) === key) continue
+      nodes.push(node)
+    }
+  }
+  // Si el usuario cerró repitiendo el primero al final, quitar el duplicado final
+  if (
+    nodes.length >= 2
+    && String(nodes[0].nodeNum) === String(nodes[nodes.length - 1].nodeNum)
+  ) {
+    nodes.pop()
+  }
+  const withoutJoin = list.filter((o) => !o?.joinSeq)
+  if (nodes.length < 3) {
+    return finalizeJoinSequence(list)
+  }
+  const uid = typeof opts.uid === 'function'
+    ? opts.uid
+    : () => `jp${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const points = nodes.map((n) => ({ x: Number(n.x), y: Number(n.y) }))
+  const poly = {
+    id: uid(),
+    type: 'polilinea',
+    closed: true,
+    joinSeq: false,
+    fromJoinSequence: true,
+    points,
+    color: opts.color || nodes[0].color || '#0f172a',
+    width: opts.width || 3,
+    lineStyle: opts.lineStyle || 'continua',
+    rotation: 0,
+  }
+  return [...withoutJoin, poly]
+}
+
+/**
+ * Vista previa / trazo en curso de la secuencia como polilínea (cerrada si ≥ 3).
+ * @returns {object|null}
+ */
+export function buildJoinPolygonDraft(nodes, opts = {}) {
+  const list = (nodes || []).filter((n) => n && Number.isFinite(n.x) && Number.isFinite(n.y))
+  if (list.length < 2) return null
+  const uid = typeof opts.uid === 'function'
+    ? opts.uid
+    : () => `jd${Date.now().toString(36)}`
+  return {
+    id: uid(),
+    type: 'polilinea',
+    joinSeq: true,
+    closed: list.length >= 3,
+    points: list.map((n) => ({ x: Number(n.x), y: Number(n.y) })),
+    color: opts.color || '#0f172a',
+    width: opts.width || 3,
+    lineStyle: opts.lineStyle || 'continua',
+    rotation: 0,
+  }
+}
+

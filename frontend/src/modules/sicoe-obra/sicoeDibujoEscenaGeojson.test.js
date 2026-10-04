@@ -51,4 +51,34 @@ describe('sicoeDibujoEscenaGeojson', () => {
     )
     assert.equal(fc.features.length, 0)
   })
+
+  it('polígono de secuencia de unión (closed sin repetir primer punto) → Polygon', () => {
+    const w = metersToWorld(8)
+    const fc = esquemaSceneToGeojson(
+      [
+        { id: 'n1', type: 'nodo', nodeNum: '1', x: 0, y: 0 },
+        { id: 'n2', type: 'nodo', nodeNum: '2', x: w, y: 0 },
+        { id: 'n3', type: 'nodo', nodeNum: '3', x: w, y: w },
+        { id: 'n4', type: 'nodo', nodeNum: '4', x: 0, y: w },
+        {
+          id: 'jp1',
+          type: 'polilinea',
+          closed: true,
+          fromJoinSequence: true,
+          points: [
+            { x: 0, y: 0 },
+            { x: w, y: 0 },
+            { x: w, y: w },
+            { x: 0, y: w },
+          ],
+        },
+      ],
+      origin,
+      { dibujoTipo: 'poligono', reporteId: 62 },
+    )
+    assert.ok(fc.features.some((f) => f.geometry.type === 'Polygon'))
+    const feat = featureHuellaDesdeDibujo(fc, { reporte_id: 62, dibujo_tipo: 'poligono' })
+    assert.equal(feat.geometry.type, 'Polygon')
+    assert.equal(feat.properties.huella_tipo, 'poligono')
+  })
 })

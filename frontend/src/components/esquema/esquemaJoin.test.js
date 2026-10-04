@@ -1,6 +1,13 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { finalizeJoinSequence, joinIntersectingLines, segmentIntersection } from './esquemaJoin.js'
+import {
+  buildJoinPolygonDraft,
+  finalizeJoinSequence,
+  joinIntersectingLines,
+  materializeJoinAsClosedPolygon,
+  segmentIntersection,
+} from './esquemaJoin.js'
+import { validarEscenaPorTipo } from '../../modules/sicoe-obra/sicoeDibujoTipos.js'
 
 describe('esquemaJoin', () => {
   it('detects a real crossing and leaves disjoint lines untouched', () => {
@@ -81,5 +88,77 @@ describe('esquemaJoin', () => {
     assert.equal(next.filter((o) => o.type === 'linea').length, 2)
     assert.ok(next.every((o) => !o.joinSeq))
     assert.equal(next.some((o) => o.type === 'linea' && o.x1 === 40 && o.y1 === 30 && o.x2 === 0 && o.y2 === 0), false)
+  })
+
+  it('materializeJoinAsClosedPolygon cierra sin repetir el primer nodo', () => {
+    const objects = [
+      { id: 'n1', type: 'nodo', nodeNum: '1', x: 0, y: 0, color: '#111' },
+      { id: 'n2', type: 'nodo', nodeNum: '2', x: 40, y: 0 },
+      { id: 'n3', type: 'nodo', nodeNum: '3', x: 40, y: 30 },
+      { id: 'n4', type: 'nodo', nodeNum: '4', x: 0, y: 30 },
+      { id: 'draft', type: 'polilinea', joinSeq: true, closed: true, points: [
+        { x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 },
+      ] },
+    ]
+    const next = materializeJoinAsClosedPolygon(objects, ['1', '2', '3', '4'], {
+      uid: () => 'poly-1',
+      color: '#0f172a',
+    })
+    assert.equal(next.some((o) => o.joinSeq), false)
+    const poly = next.find((o) => o.type === 'polilinea' && o.closed)
+    assert.ok(poly)
+    assert.equal(poly.id, 'poly-1')
+    assert.equal(poly.points.length, 4)
+    assert.equal(poly.fromJoinSequence, true)
+    // No exige repetir el nodo 1 al final
+    assert.notEqual(
+      `${poly.points[0].x},${poly.points[0].y}`,
+      `${poly.points[3].x},${poly.points[3].y}`,
+    )
+    const valid = validarEscenaPorTipo(next, 'poligono')
+    assert.equal(valid.ok, true, valid.mensaje)
+  })
+
+  it('materialize acepta cierre explícito 1-2-3-1 sin duplicar el primer vértice', () => {
+    const objects = [
+      { id: 'n1', type: 'nodo', nodeNum: '1', x: 0, y: 0 },
+      { id: 'n2', type: 'nodo', nodeNum: '2', x: 10, y: 0 },
+      { id: 'n3', type: 'nodo', nodeNum: '3', x: 5, y: 8 },
+    ]
+    const next = materializeJoinAsClosedPolygon(objects, ['1', '2', '3', '1'], { uid: () => 'p' })
+    const poly = next.find((o) => o.closed)
+    assert.ok(poly)
+    assert.equal(poly.points.length, 3)
+  })
+
+  it('materialize con menos de 3 nodos no inventa polígono', () => {
+    const objects = [
+      { id: 'n1', type: 'nodo', nodeNum: '1', x: 0, y: 0 },
+      { id: 'n2', type: 'nodo', nodeNum: '2', x: 10, y: 0 },
+      { id: 'ab', type: 'linea', joinSeq: true, x1: 0, y1: 0, x2: 10, y2: 0 },
+    ]
+    const next = materializeJoinAsClosedPolygon(objects, ['1', '2'])
+    assert.equal(next.some((o) => o.type === 'polilinea' && o.closed), false)
+    assert.ok(next.every((o) => !o.joinSeq))
+    assert.equal(validarEscenaPorTipo(next, 'poligono').ok, false)
+  })
+
+  it('buildJoinPolygonDraft marca closed desde 3 nodos', () => {
+    const open = buildJoinPolygonDraft([
+      { x: 0, y: 0 }, { x: 10, y: 0 },
+    ], { uid: () => 'd1' })
+    assert.ok(open)
+    assert.equal(open.closed, false)
+    assert.equal(open.joinSeq, true)
+    const closed = buildJoinPolygonDraft([
+      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+    ], { uid: () => 'd2' })
+    assert.equal(closed.closed, true)
+    assert.equal(validarEscenaPorTipo([
+      { type: 'nodo', x: 0, y: 0, nodeNum: '1' },
+      { type: 'nodo', x: 10, y: 0, nodeNum: '2' },
+      { type: 'nodo', x: 10, y: 10, nodeNum: '3' },
+      closed,
+    ], 'poligono').ok, true)
   })
 })

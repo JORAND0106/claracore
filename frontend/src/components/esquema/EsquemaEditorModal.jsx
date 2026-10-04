@@ -56,7 +56,7 @@ import {
   snapThresholdWorld,
   worldToMeters,
 } from './esquemaGeometry'
-import { finalizeJoinSequence, joinIntersectingLines } from './esquemaJoin'
+import { finalizeJoinSequence, joinIntersectingLines, materializeJoinAsClosedPolygon, buildJoinPolygonDraft } from './esquemaJoin'
 import { arrayPolar, arrayRectangular, mirrorObject } from './esquemaTransform'
 import { parseCoordFile, topoToWorld, coordOriginFromRows } from './esquemaCoords'
 import {
@@ -302,9 +302,11 @@ function segmentFromEntity(obj, p) {
     const pts = obj.points || []
     let best = null
     let bestD = Infinity
-    for (let i = 0; i < pts.length - 1; i += 1) {
+    const edgeCount = obj.closed && pts.length >= 3 ? pts.length : Math.max(0, pts.length - 1)
+    for (let i = 0; i < edgeCount; i += 1) {
       const a = pts[i]
-      const b = pts[i + 1]
+      const b = pts[(i + 1) % pts.length]
+      if (!a || !b) continue
       const dx = b.x - a.x
       const dy = b.y - a.y
       const len2 = dx * dx + dy * dy
@@ -2172,6 +2174,20 @@ export default function EsquemaEditorModal({
     const nodes = (nums || []).map((n) => findNodeByNum(n)).filter(Boolean)
     pushHistory()
     objectsRef.current = objectsRef.current.filter((o) => !o.joinSeq)
+    const isPoligono = huellaMode && huellaTipoRef.current === 'poligono'
+    if (isPoligono) {
+      // Misma geometría que validará el guardado: polilínea cerrada desde 3 nodos.
+      const draft = buildJoinPolygonDraft(nodes, {
+        color: colorRef.current,
+        width: widthRef.current,
+        lineStyle: lineStyleRef.current,
+        uid,
+      })
+      if (draft) objectsRef.current = [...objectsRef.current, draft]
+      setDirty(true)
+      redraw()
+      return
+    }
     const lines = []
     for (let i = 1; i < nodes.length; i += 1) {
       const a = nodes[i - 1]
@@ -2180,31 +2196,6 @@ export default function EsquemaEditorModal({
         id: uid(),
         type: 'linea',
         joinSeq: true,
-        x1: a.x,
-        y1: a.y,
-        x2: b.x,
-        y2: b.y,
-        color: colorRef.current,
-        width: widthRef.current,
-        lineStyle: lineStyleRef.current,
-        rotation: 0,
-      })
-    }
-    // Polígono: cerrar visualmente contra el primer nodo (desde 3 vértices).
-    const cerrarPoligono = (
-      huellaMode
-      && huellaTipoRef.current === 'poligono'
-      && nodes.length >= 3
-      && String(nodes[0].nodeNum) !== String(nodes[nodes.length - 1].nodeNum)
-    )
-    if (cerrarPoligono) {
-      const a = nodes[nodes.length - 1]
-      const b = nodes[0]
-      lines.push({
-        id: uid(),
-        type: 'linea',
-        joinSeq: true,
-        joinClosePreview: true,
         x1: a.x,
         y1: a.y,
         x2: b.x,
@@ -2262,11 +2253,27 @@ export default function EsquemaEditorModal({
   }
 
   const finishJoinCircuit = () => {
-    if (!joinSeqRef.current.length) return
+    const nums = [...(joinSeqRef.current || [])]
+    if (!nums.length) return
+    const isPoligono = huellaMode && huellaTipoRef.current === 'poligono'
+    if (isPoligono && nums.length < 3) {
+      setToolHint('Se necesitan al menos 3 nodos distintos para cerrar el polígono.')
+      return
+    }
     pushHistory()
-    objectsRef.current = finalizeJoinSequence(objectsRef.current)
+    if (isPoligono) {
+      objectsRef.current = materializeJoinAsClosedPolygon(objectsRef.current, nums, {
+        color: colorRef.current,
+        width: widthRef.current,
+        lineStyle: lineStyleRef.current,
+        uid,
+      })
+    } else {
+      objectsRef.current = finalizeJoinSequence(objectsRef.current)
+    }
     joinSeqRef.current = []
     setJoinSeq([])
+    setToolHint(isPoligono ? 'Polígono cerrado. Ya puede guardar.' : '')
     setDirty(true)
     redraw()
   }
@@ -4901,8 +4908,8 @@ export default function EsquemaEditorModal({
               error={mapError}
               pickInfo={mapPickInfo}
               printAreaSelecting={printAreaSelecting}
-              dodgeCoords={coordPanelOpen && !(tool === 'unir-nodos' || joinSeq.length > 0)}
-              besideCoords={coordPanelOpen && (tool === 'unir-nodos' || joinSeq.length > 0)}
+              dodgeCoords={false}
+              besideCoords={coordPanelOpen}
               contextHint={mapCtx.hasPk
                 ? `PK ${mapCtx.pkId} resaltado`
                 : mapCtx.hasPoint
@@ -4920,12 +4927,16 @@ export default function EsquemaEditorModal({
               data-testid="esquema-cursor-coords"
               style={{
                 position: 'absolute',
-                // Evitar solape con Secuencia de unión (izq-abajo) y Biblioteca (der-abajo).
-                ...(tool === 'unir-nodos' || joinSeq.length > 0
-                  ? { right: 18, left: 'auto', bottom: 18 }
-                  : (mapActive && mapPropsOpen && !coordPanelOpen
-                    ? { left: 270, right: 'auto', bottom: 18 }
-                    : { left: 18, right: 'auto', bottom: 18 })),
+                // Espacio libre: join (izq-abajo), biblioteca (der-abajo), mapa props (arriba).
+                ...((tool === 'unir-nodos' || joinSeq.length > 0)
+                  ? (libOpen
+                    ? { left: '50%', right: 'auto', bottom: 18, transform: 'translateX(-50%)' }
+                    : { right: 18, left: 'auto', bottom: 18 })
+                  : (libOpen
+                    ? { left: 18, right: 'auto', bottom: 18 }
+                    : (mapActive && mapPropsOpen
+                      ? { right: 18, left: 'auto', bottom: 18 }
+                      : { left: 18, right: 'auto', bottom: 18 }))),
                 zIndex: 6,
                 maxWidth: 'min(280px, calc(100% - 36px))',
                 padding: '7px 10px',
@@ -5575,12 +5586,24 @@ function MapaPropiedadesPanel({
   onClose,
   onRemove,
 }) {
-  // Izquierda: no compite con Propiedades de entidad (derecha) ni Biblioteca (abajo-derecha).
-  // Si el panel de coordenadas está abierto (también izquierda-arriba), baja el panel del mapa
-  // o lo desplaza a la derecha cuando el borde inferior está ocupado (secuencia de unión).
-  const anchor = dodgeCoords
-    ? { left: 18, bottom: 18, top: 'auto' }
-    : { left: besideCoords ? 340 : 18, top: 18, bottom: 'auto' }
+  // Coordenadas (top-left, ~460px): si cabe, este panel va a su derecha;
+  // en pantallas angostas, arriba-derecha para verse completo sin montarse.
+  const coordsPanelWidth = 460
+  const gap = 12
+  const mapPanelWidth = 240
+  const besideLeft = 18 + coordsPanelWidth + gap
+  const viewportW = typeof window !== 'undefined' ? (window.innerWidth || 1200) : 1200
+  const fitsBeside = besideCoords && (besideLeft + mapPanelWidth + 18) <= viewportW
+  let anchor
+  if (dodgeCoords) {
+    anchor = { left: 18, bottom: 18, top: 'auto', right: 'auto' }
+  } else if (besideCoords && fitsBeside) {
+    anchor = { left: besideLeft, top: 18, bottom: 'auto', right: 'auto' }
+  } else if (besideCoords) {
+    anchor = { right: 18, top: 18, bottom: 'auto', left: 'auto' }
+  } else {
+    anchor = { left: 18, top: 18, bottom: 'auto', right: 'auto' }
+  }
 
   return (
     <div
@@ -5589,7 +5612,8 @@ function MapaPropiedadesPanel({
         position: 'absolute',
         ...anchor,
         zIndex: 6,
-        width: 240,
+        width: mapPanelWidth,
+        maxWidth: 'calc(100% - 36px)',
         padding: '10px 12px',
         borderRadius: 10,
         border: `1px solid ${t.border}`,
@@ -5992,11 +6016,15 @@ function drawObject(ctx, obj, selected, opts = {}) {
     ctx.globalCompositeOperation = obj.erase ? 'destination-out' : 'source-over'
     ctx.strokeStyle = ink
     const pts = obj.points || []
-    if (pts.length >= 2) {
+    // closed=true (huella / secuencia de unión): dibujar el cierre visual = validación.
+    const ring = (obj.closed && pts.length >= 3)
+      ? [...pts, pts[0]]
+      : pts
+    if (ring.length >= 2) {
       if (obj.erase) {
         ctx.beginPath()
-        ctx.moveTo(pts[0].x, pts[0].y)
-        for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
+        ctx.moveTo(ring[0].x, ring[0].y)
+        for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i].x, ring[i].y)
         ctx.stroke()
       } else {
         if (huella) {
@@ -6005,14 +6033,14 @@ function drawObject(ctx, obj, selected, opts = {}) {
           ctx.lineWidth = lw + Math.max(2.2, lw * 0.45)
           ctx.globalAlpha = 0.92
           ctx.beginPath()
-          ctx.moveTo(pts[0].x, pts[0].y)
-          for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
+          ctx.moveTo(ring[0].x, ring[0].y)
+          for (let i = 1; i < ring.length; i += 1) ctx.lineTo(ring[i].x, ring[i].y)
           ctx.stroke()
           ctx.restore()
           ctx.strokeStyle = ink
           ctx.lineWidth = lw
         }
-        strokeStyledPolyline(ctx, pts, obj.lineStyle, lw)
+        strokeStyledPolyline(ctx, ring, obj.lineStyle, lw)
       }
     }
   } else if (SHAPE_TOOLS.has(obj.type) || obj.type === 'linea' || obj.type === 'flecha') {
@@ -6470,12 +6498,14 @@ function CoordsPanel({ t, rows, fileRef, onClose, onRowsChange, onApply, onImpor
   }
   return (
     <div
+      data-testid="esquema-coords-panel"
       style={{
         position: 'absolute',
         left: 18,
         top: 18,
         zIndex: 6,
         width: 460,
+        maxWidth: 'calc(100% - 36px)',
         maxHeight: '70%',
         overflow: 'auto',
         padding: 10,
