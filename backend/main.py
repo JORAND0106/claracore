@@ -3156,6 +3156,54 @@ def _sicoe_enlace_soporte_tiene_urls(raw) -> bool:
     return bool(str(parsed).strip())
 
 
+def _sicoe_reporte_geojson_tiene_dibujo(dg) -> bool:
+    """True si el geojson de cabecera (dibujo o perímetro) representa un dibujo usable."""
+    if not isinstance(dg, dict):
+        return False
+    if dg.get("type") == "FeatureCollection":
+        return bool(dg.get("features"))
+    return True
+
+
+def _sicoe_batch_reportes_con_dibujo(ids: List[int]) -> set:
+    """
+    Consulta so_reportes omitiendo columnas ausentes (PGRST204).
+    Prod a veces tiene dibujo_* pero no perimetro_geojson (o al revés).
+    """
+    con_dibujo: set = set()
+    if not ids:
+        return con_dibujo
+    select_candidates = (
+        "id, dibujo_geojson, perimetro_geojson",
+        "id, dibujo_geojson",
+        "id, perimetro_geojson",
+    )
+    for chunk in _sicoe_chunks_int(ids, 200):
+        ch = list(chunk)
+        batch = []
+        for cols in select_candidates:
+            try:
+                def _qd(ids=ch, select_cols=cols):
+                    return (
+                        supabase.table("so_reportes")
+                        .select(select_cols)
+                        .in_("id", ids)
+                        .execute()
+                        .data
+                    )
+                batch = supabase_execute(_qd) or []
+                break
+            except Exception:
+                batch = []
+                continue
+        for rep in batch:
+            rid = rep.get("id")
+            dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
+            if _sicoe_reporte_geojson_tiene_dibujo(dg) and rid is not None:
+                con_dibujo.add(int(rid))
+    return con_dibujo
+
+
 def _sicoe_enriquecer_tiene_enlace_soporte(rows: List[dict]) -> None:
     """
     Marca `tiene_enlace_soporte` en cada fila de grilla (in-place).
@@ -3168,58 +3216,20 @@ def _sicoe_enriquecer_tiene_enlace_soporte(rows: List[dict]) -> None:
     for r in rows:
         r["tiene_enlace_soporte"] = _sicoe_enlace_soporte_tiene_urls(r.get("enlace_soporte"))
         dg = r.get("dibujo_geojson") or r.get("perimetro_geojson")
-        if isinstance(dg, dict):
-            if dg.get("type") == "FeatureCollection":
-                r["tiene_dibujo"] = bool(dg.get("features"))
-            else:
-                r["tiene_dibujo"] = True
+        if _sicoe_reporte_geojson_tiene_dibujo(dg):
+            r["tiene_dibujo"] = True
         elif "tiene_dibujo" not in r:
             r["tiene_dibujo"] = False
 
-    # Batch dibujo si la grilla/MV no trae la columna
+    # Batch dibujo: reconsultar filas sin dibujo (aunque el listado traiga dibujo_geojson=null).
+    # Antes se saltaba si la clave existía → nunca se detectaba un dibujo recién guardado.
     faltan_dibujo = [
         int(r["id"])
         for r in rows
-        if r.get("id") is not None and not r.get("tiene_dibujo") and "dibujo_geojson" not in r
+        if r.get("id") is not None and not r.get("tiene_dibujo")
     ]
     if faltan_dibujo:
-        con_dibujo: set = set()
-        for chunk in _sicoe_chunks_int(faltan_dibujo, 200):
-            ch = list(chunk)
-            try:
-                def _qd(ids=ch):
-                    return (
-                        supabase.table("so_reportes")
-                        .select("id, dibujo_geojson, perimetro_geojson")
-                        .in_("id", ids)
-                        .execute()
-                        .data
-                    )
-                batch = supabase_execute(_qd) or []
-            except Exception:
-                try:
-                    def _qd2(ids=ch):
-                        return (
-                            supabase.table("so_reportes")
-                            .select("id, perimetro_geojson")
-                            .in_("id", ids)
-                            .execute()
-                            .data
-                        )
-                    batch = supabase_execute(_qd2) or []
-                except Exception:
-                    batch = []
-            for rep in batch:
-                rid = rep.get("id")
-                dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
-                ok = False
-                if isinstance(dg, dict):
-                    if dg.get("type") == "FeatureCollection":
-                        ok = bool(dg.get("features"))
-                    else:
-                        ok = True
-                if ok and rid is not None:
-                    con_dibujo.add(int(rid))
+        con_dibujo = _sicoe_batch_reportes_con_dibujo(faltan_dibujo)
         for r in rows:
             if r.get("id") is not None and int(r["id"]) in con_dibujo:
                 r["tiene_dibujo"] = True
