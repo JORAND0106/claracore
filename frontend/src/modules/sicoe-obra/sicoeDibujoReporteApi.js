@@ -94,3 +94,44 @@ export async function borrarDibujoReporte({ API_URL, contratoId, token, reporteI
   }
   return res.json()
 }
+
+/** Indicador contrato/usuario: reportes con y sin dibujo. */
+export async function fetchDibujosResumen({ API_URL, contratoId, token }) {
+  const res = await fetch(`${API_URL}/sicoe-obra/${contratoId}/dibujos/resumen`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(txt || `Error ${res.status}`)
+  }
+  return res.json()
+}
+
+/** Detalle de nodo contenedor (reportes alojados). */
+export async function fetchNodoContenedorDetalle({ API_URL, contratoId, token, contenedorId }) {
+  const res = await fetch(
+    `${API_URL}/sicoe-obra/${contratoId}/nodos-contenedor/${contenedorId}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(txt || `Error ${res.status}`)
+  }
+  return res.json()
+}
+
+/** Unifica nodos encimados en contenedores. */
+export async function unificarNodosContenedor({ API_URL, contratoId, token }) {
+  const res = await fetch(
+    `${API_URL}/sicoe-obra/${contratoId}/nodos-contenedor/unificar`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  )
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(txt || `Error ${res.status}`)
+  }
+  return res.json()
+}
