@@ -57,18 +57,21 @@ def test_dibujo_referencias_encuentra_peers(monkeypatch):
                             "reporte_id": 20,
                             "numero_registro": 1,
                             "item_numero": "1.1",
+                            "item_descripcion": "Excavación manual",
                             "costo_directo": 50,
                         },
                         {
                             "reporte_id": 20,
                             "numero_registro": 2,
                             "item_numero": "9.9",
+                            "item_descripcion": "Relleno",
                             "costo_directo": 25,
                         },
                         {
                             "reporte_id": 30,
                             "numero_registro": 5,
                             "item_numero": "1.1",
+                            "item_descripcion": "Excavación manual",
                             "costo_directo": 200,
                         },
                     ]
@@ -127,7 +130,13 @@ def test_dibujo_referencias_encuentra_peers(monkeypatch):
     assert len(ref["registros"]) == 2
     assert ref["registros"][0]["numero_registro"] == 1
     assert ref["registros"][0]["item_numero"] == "1.1"
+    assert ref["registros"][0]["item_descripcion"] == "Excavación manual"
     assert ref["registros"][1]["numero_registro"] == 2
+    assert ref["registros"][1]["item_descripcion"] == "Relleno"
+    assert isinstance(ref.get("items_detalle"), list)
+    by_item = {d["item_numero"]: d.get("item_descripcion") for d in ref["items_detalle"]}
+    assert by_item.get("1.1") == "Excavación manual"
+    assert by_item.get("9.9") == "Relleno"
 
 
 
