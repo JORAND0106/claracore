@@ -6,10 +6,13 @@ import {
   construirFranjaPolygon,
   construirLineaSentidoEje,
   costadosCoinciden,
+  destinationPoint,
   distConSignoSobreEje,
   haversineM,
   normalizarCostadoDigitado,
+  pathSentidoEjeEsValido,
   proyectarSobreEje,
+  proyeccionMasAllaDelEje,
   reconstruirEjesDesdeIndice,
 } from './sicoeEjeFranjas.js'
 
@@ -146,6 +149,7 @@ describe('sicoeEjeFranjas', () => {
     })
     assert.ok(line)
     assert.ok(line.points.length >= 3)
+    assert.equal(line.along, true)
     assert.equal(line.points[0].lng, inicio.lng)
     assert.equal(line.points[0].lat, inicio.lat)
     assert.equal(line.points[line.points.length - 1].lng, fin.lng)
@@ -158,5 +162,110 @@ describe('sicoeEjeFranjas', () => {
     assert.ok(off > 1e-6, `mid should leave the chord on a curved axis, off=${off}`)
     assert.equal(distConSignoSobreEje({ dist_m: 2, lado: 'izquierda' }), 2)
     assert.equal(distConSignoSobreEje({ dist_m: 2, lado: 'derecha' }), -2)
+  })
+
+  it('en extremo / más allá del abscisado no genera pico: cae a recta', () => {
+    const pts = []
+    for (let m = 9130; m <= 9180; m += 5) {
+      pts.push({ m, lng: -74.4 + (m - 9130) * 0.000008, lat: 4.4 })
+    }
+    const ejes = [{ id: 0, puntos: pts }]
+    const first = pts[0]
+    const br = bearingDeg(pts[0], pts[1])
+    const beyond = destinationPoint(first.lng, first.lat, (br + 180) % 360, 8)
+    const leftBeyond = destinationPoint(beyond.lng, beyond.lat, (br + 270) % 360, 6)
+    const mid = pts[6]
+    const leftMid = destinationPoint(mid.lng, mid.lat, (br + 270) % 360, 6)
+    const proy = proyectarSobreEje(ejes, leftBeyond.lng, leftBeyond.lat, { maxDistM: 40 })
+    assert.ok(proyeccionMasAllaDelEje(ejes[0], proy, leftBeyond.lng, leftBeyond.lat))
+    const line = construirLineaSentidoEje({
+      ejes,
+      inicio: leftMid,
+      fin: leftBeyond,
+      stepM: 2,
+      maxDistM: 40,
+    })
+    assert.ok(line)
+    assert.equal(line.points.length, 2)
+    assert.equal(line.along, false)
+    assert.equal(line.degraded, true)
+    assert.equal(line.points[0].lng, leftMid.lng)
+    assert.equal(line.points[line.points.length - 1].lng, leftBeyond.lng)
+  })
+
+  it('transversal cerca del extremo queda recta (sin densificar)', () => {
+    const pts = []
+    for (let m = 0; m <= 50; m += 5) {
+      pts.push({ m, lng: -74.3, lat: 4.5 + m * 0.000009 })
+    }
+    const ejes = [{ id: 0, puntos: pts }]
+    const end = pts[pts.length - 1]
+    const br = bearingDeg(pts[pts.length - 2], end)
+    const left = destinationPoint(end.lng, end.lat, (br + 270) % 360, 5)
+    const right = destinationPoint(end.lng, end.lat, (br + 90) % 360, 5)
+    const line = construirLineaSentidoEje({
+      ejes,
+      inicio: left,
+      fin: right,
+      stepM: 2,
+      maxDistM: 40,
+    })
+    assert.ok(line)
+    assert.equal(line.along, false)
+    assert.equal(line.points.length, 2)
+  })
+
+  it('curva cerrada con offset interno excesivo no auto-cruza: degrada a recta', () => {
+    // Arco ~90° con R≈19 m; offset 14 m interior tiende a caústica.
+    const R2 = 30 / (Math.PI / 2)
+    const cx = -74.4
+    const cy = 4.5
+    const tight = []
+    for (let m = 9940; m <= 9970; m += 1) {
+      const ang = ((m - 9940) / 30) * (Math.PI / 2)
+      tight.push({
+        m,
+        lng: cx + (R2 / 111320) * Math.cos(ang),
+        lat: cy + (R2 / 110540) * Math.sin(ang),
+      })
+    }
+    const ejes = [{ id: 0, puntos: tight }]
+    const i0 = tight[2]
+    const i1 = tight[tight.length - 3]
+    const brI = bearingDeg(tight[2], tight[3])
+    const brF = bearingDeg(tight[tight.length - 4], tight[tight.length - 3])
+    const inner0 = destinationPoint(i0.lng, i0.lat, (brI + 270) % 360, 14)
+    const inner1 = destinationPoint(i1.lng, i1.lat, (brF + 270) % 360, 14)
+    const line = construirLineaSentidoEje({
+      ejes,
+      inicio: inner0,
+      fin: inner1,
+      stepM: 1,
+      maxDistM: 40,
+    })
+    assert.ok(line)
+    // Debe ser válido: o bien along limpio, o recta degradada — nunca auto-cruzado.
+    if (line.along) {
+      assert.equal(pathSentidoEjeEsValido(line.points, {
+        chordM: haversineM(inner0, inner1),
+        absSpan: Math.abs(line.absFin - line.absIni),
+        distIni: line.distIni,
+        distFin: line.distFin,
+      }), true)
+    } else {
+      assert.equal(line.points.length, 2)
+    }
+  })
+
+  it('pathSentidoEjeEsValido rechaza picos evidentes', () => {
+    const a = { lng: -74.1, lat: 4.1 }
+    const spike = { lng: -74.2, lat: 4.3 }
+    const b = { lng: -74.1001, lat: 4.1001 }
+    assert.equal(pathSentidoEjeEsValido([a, spike, b], {
+      chordM: haversineM(a, b),
+      absSpan: 5,
+      distIni: 5,
+      distFin: 5,
+    }), false)
   })
 })

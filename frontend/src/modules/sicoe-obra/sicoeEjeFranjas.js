@@ -264,12 +264,186 @@ export function distConSignoSobreEje(proy) {
   return 0
 }
 
+function ejeAbsRange(eje) {
+  const pts = eje?.puntos || []
+  if (pts.length < 2) return null
+  return { min: Number(pts[0].m), max: Number(pts[pts.length - 1].m) }
+}
+
+/**
+ * True si el pie de proyección cae en un extremo del eje y el punto queda
+ * más allá del abscisado (continuación del tangente), no solo al costado.
+ */
+export function proyeccionMasAllaDelEje(eje, proy, lng, lat, { epsAbsM = 0.75, minAlongM = 1.0 } = {}) {
+  const pts = eje?.puntos || []
+  if (pts.length < 2 || !proy || !Number.isFinite(lng) || !Number.isFinite(lat)) return false
+  const range = ejeAbsRange(eje)
+  if (!range) return false
+  const abs = Number(proy.abs_m)
+  const atStart = Math.abs(abs - range.min) <= epsAbsM
+  const atEnd = Math.abs(abs - range.max) <= epsAbsM
+  if (!atStart && !atEnd) return false
+  const endPt = atStart ? pts[0] : pts[pts.length - 1]
+  // Rumbo hacia afuera del eje (pasado el extremo).
+  const brOut = atStart
+    ? (bearingDeg(pts[0], pts[1]) + 180) % 360
+    : bearingDeg(pts[pts.length - 2], pts[pts.length - 1])
+  const p = { lng, lat }
+  const dist = haversineM(endPt, p)
+  if (!(dist > minAlongM)) return false
+  const brTo = bearingDeg(endPt, p)
+  let dBr = Math.abs(brTo - brOut)
+  if (dBr > 180) dBr = 360 - dBr
+  const along = dist * Math.cos((dBr * Math.PI) / 180)
+  return along > minAlongM
+}
+
+function segmentsIntersectProper(a, b, c, d) {
+  const cross = (p, q, r) => {
+    const x1 = Number(q.lng) - Number(p.lng)
+    const y1 = Number(q.lat) - Number(p.lat)
+    const x2 = Number(r.lng) - Number(p.lng)
+    const y2 = Number(r.lat) - Number(p.lat)
+    return x1 * y2 - y1 * x2
+  }
+  const d1 = cross(a, b, c)
+  const d2 = cross(a, b, d)
+  const d3 = cross(c, d, a)
+  const d4 = cross(c, d, b)
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0))
+    && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true
+  }
+  return false
+}
+
+/** Autocruces de una polilínea abierta (no cuenta vértices compartidos). */
+export function polylineSelfIntersects(points) {
+  const pts = Array.isArray(points) ? points : []
+  if (pts.length < 4) return false
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    for (let j = i + 2; j < pts.length - 1; j += 1) {
+      if (i === 0 && j === pts.length - 2) continue
+      if (segmentsIntersectProper(pts[i], pts[i + 1], pts[j], pts[j + 1])) return true
+    }
+  }
+  return false
+}
+
+function pathLengthM(points) {
+  let s = 0
+  for (let i = 1; i < (points || []).length; i += 1) {
+    s += haversineM(points[i - 1], points[i])
+  }
+  return s
+}
+
+/**
+ * Valida que la densificación no genere picos, ganchos ni bucles.
+ * Si falla, el caller debe caer a segmento recto.
+ */
+export function pathSentidoEjeEsValido(points, {
+  chordM = 0,
+  absSpan = 0,
+  distIni = 0,
+  distFin = 0,
+} = {}) {
+  const pts = Array.isArray(points) ? points : []
+  if (pts.length < 2) return false
+  if (pts.length === 2) return true
+
+  const pathM = pathLengthM(pts)
+  const lateral = Math.abs(Number(distIni) - Number(distFin))
+  const maxOff = Math.max(Math.abs(Number(distIni)), Math.abs(Number(distFin)))
+  const budget = Math.max(Number(absSpan) || 0, Number(chordM) || 0)
+    + lateral
+    + maxOff * 0.25
+    + 8
+  if (pathM > budget * 1.4) return false
+  // Extremos cercanos con trayectoria larga ⇒ pico (p. ej. nodos al final del abscisado).
+  if ((Number(chordM) || 0) < 25 && pathM > (Number(chordM) || 0) * 2.4 + 4) return false
+
+  let maxJump = 0
+  for (let i = 1; i < pts.length; i += 1) {
+    maxJump = Math.max(maxJump, haversineM(pts[i - 1], pts[i]))
+  }
+  const maxJumpOk = Math.max(12, (Number(absSpan) || 0) * 0.4, (Number(chordM) || 0) * 0.5)
+  if (maxJump > maxJumpOk) return false
+
+  if (polylineSelfIntersects(pts)) return false
+
+  // Picos / ganchos: vértice interior muy lejos de la cuerda respecto al offset esperado,
+  // con giro casi de vuelta (no confundir con esquinas reales del eje).
+  const a = pts[0]
+  const b = pts[pts.length - 1]
+  const maxOffExpected = Math.max(Math.abs(Number(distIni)), Math.abs(Number(distFin))) + 4
+  const chordBudget = Math.max(Number(chordM) || 0, Number(absSpan) || 0)
+  for (let i = 1; i < pts.length - 1; i += 1) {
+    const leg0 = haversineM(pts[i - 1], pts[i])
+    const leg1 = haversineM(pts[i], pts[i + 1])
+    if (leg0 < 2 || leg1 < 2) continue
+    const b0 = bearingDeg(pts[i - 1], pts[i])
+    const b1 = bearingDeg(pts[i], pts[i + 1])
+    let turn = Math.abs(b1 - b0)
+    if (turn > 180) turn = 360 - turn
+    // Distancia a la cuerda inicio-fin
+    const abx = Number(b.lng) - Number(a.lng)
+    const aby = Number(b.lat) - Number(a.lat)
+    const ab2 = abx * abx + aby * aby
+    let dChord = 0
+    if (ab2 > 1e-24) {
+      let t = ((Number(pts[i].lng) - Number(a.lng)) * abx
+        + (Number(pts[i].lat) - Number(a.lat)) * aby) / ab2
+      t = Math.max(0, Math.min(1, t))
+      const q = { lng: Number(a.lng) + t * abx, lat: Number(a.lat) + t * aby }
+      dChord = haversineM(pts[i], q)
+    }
+    if (turn > 155 && dChord > maxOffExpected + chordBudget * 0.25 + 8) return false
+  }
+
+  // Bucles: varios retrocesos fuertes a lo largo de la cuerda.
+  const abx = Number(b.lng) - Number(a.lng)
+  const aby = Number(b.lat) - Number(a.lat)
+  const ab2 = abx * abx + aby * aby
+  if (ab2 > 1e-24 && pts.length >= 5) {
+    let prevT = -Infinity
+    let reversals = 0
+    for (let i = 0; i < pts.length; i += 1) {
+      const t = ((Number(pts[i].lng) - Number(a.lng)) * abx
+        + (Number(pts[i].lat) - Number(a.lat)) * aby) / ab2
+      if (Number.isFinite(prevT) && t < prevT - 0.12) reversals += 1
+      prevT = t
+    }
+    if (reversals >= 3) return false
+  }
+
+  return true
+}
+
+function rectaSentidoEje(lng0, lat0, lng1, lat1, meta, degraded = false) {
+  return {
+    points: [
+      { lng: lng0, lat: lat0 },
+      { lng: lng1, lat: lat1 },
+    ],
+    absIni: meta.absIni,
+    absFin: meta.absFin,
+    distIni: meta.distIni,
+    distFin: meta.distFin,
+    eje_id: meta.eje_id,
+    along: false,
+    degraded: !!degraded,
+  }
+}
+
 /**
  * Línea paralela al eje entre dos puntos (inicio→fin), con transición gradual
  * de distancia si el offset al eje difiere en los extremos.
  * El primer y último vértice coinciden exactamente con inicio y fin.
+ * Si el tramo no es confiable (extremo del abscisado, transversal, caústica),
+ * devuelve la cuerda recta con `along: false` y opcionalmente `degraded: true`.
  *
- * @returns {null|{ points: Array<{lng:number,lat:number}>, absIni:number, absFin:number, distIni:number, distFin:number, eje_id:any }}
+ * @returns {null|{ points: Array<{lng:number,lat:number}>, absIni:number, absFin:number, distIni:number, distFin:number, eje_id:any, along?: boolean, degraded?: boolean }}
  */
 export function construirLineaSentidoEje({
   ejes,
@@ -295,7 +469,7 @@ export function construirLineaSentidoEje({
     || null
   if (!eje) return null
 
-  // Si están en ejes distintos, intentar el de menor suma de distancias
+  // Si caen en ejes distintos, intentar el de menor suma de distancias
   let ejeUsar = eje
   if (proyIni.eje_id !== proyFin.eje_id) {
     const eA = (ejes || []).find((e) => e.id === proyIni.eje_id)
@@ -308,32 +482,62 @@ export function construirLineaSentidoEje({
 
   const p0 = proyectarSobreEje([ejeUsar], lng0, lat0, { maxDistM })
   const p1 = proyectarSobreEje([ejeUsar], lng1, lat1, { maxDistM })
-  if (!p0 || !p1) return null
+  if (!p0?.sobre_eje || !p1?.sobre_eje) return null
 
   const d0 = distConSignoSobreEje(p0)
   const d1 = distConSignoSobreEje(p1)
   const absSpan = Math.abs(Number(p1.abs_m) - Number(p0.abs_m))
-
-  // Tramo casi puntual: recta inicio→fin
-  if (!(absSpan > 0.5)) {
-    return {
-      points: [
-        { lng: lng0, lat: lat0 },
-        { lng: lng1, lat: lat1 },
-      ],
-      absIni: p0.abs_m,
-      absFin: p1.abs_m,
-      distIni: d0,
-      distFin: d1,
-      eje_id: ejeUsar.id,
-    }
+  const chordM = haversineM({ lng: lng0, lat: lat0 }, { lng: lng1, lat: lat1 })
+  const lateral = Math.abs(d0 - d1)
+  const meta = {
+    absIni: p0.abs_m,
+    absFin: p1.abs_m,
+    distIni: d0,
+    distFin: d1,
+    eje_id: ejeUsar.id,
   }
 
-  let samples = sampleAbsRange(ejeUsar, p0.abs_m, p1.abs_m, stepM)
+  // Transversal o tramo casi puntual: recta (no densificar a lo largo del eje).
+  const esTransversal = !(absSpan > 2.0)
+    || absSpan < chordM * 0.35
+    || (lateral > absSpan * 1.15 && absSpan < 10)
+  if (esTransversal) {
+    return rectaSentidoEje(lng0, lat0, lng1, lat1, meta, false)
+  }
+
+  // Extremo / más allá del abscisado: no extrapolar → recta confiable.
+  const beyond0 = proyeccionMasAllaDelEje(ejeUsar, p0, lng0, lat0)
+  const beyond1 = proyeccionMasAllaDelEje(ejeUsar, p1, lng1, lat1)
+  if (beyond0 || beyond1) {
+    return rectaSentidoEje(lng0, lat0, lng1, lat1, meta, true)
+  }
+
+  // Limitar el muestreo al rango real del eje (sin colapsar en el extremo).
+  const range = ejeAbsRange(ejeUsar)
+  let absA = Number(p0.abs_m)
+  let absB = Number(p1.abs_m)
+  if (range) {
+    absA = Math.max(range.min, Math.min(range.max, absA))
+    absB = Math.max(range.min, Math.min(range.max, absB))
+  }
+  if (!(Math.abs(absB - absA) > 2.0)) {
+    return rectaSentidoEje(lng0, lat0, lng1, lat1, meta, true)
+  }
+
+  let samples = sampleAbsRange(ejeUsar, absA, absB, stepM)
   if (samples.length < 2) return null
-  // Ordenar en el sentido inicio→fin
-  if (Number(p1.abs_m) < Number(p0.abs_m)) {
-    samples = [...samples].reverse()
+  if (absB < absA) samples = [...samples].reverse()
+
+  // Evitar muestras duplicadas en el mismo pie (colapso en extremos).
+  const dedup = []
+  for (const s of samples) {
+    const prev = dedup[dedup.length - 1]
+    if (prev && haversineM(prev, s) < 0.35) continue
+    dedup.push(s)
+  }
+  samples = dedup
+  if (samples.length < 2) {
+    return rectaSentidoEje(lng0, lat0, lng1, lat1, meta, true)
   }
 
   const points = []
@@ -356,6 +560,15 @@ export function construirLineaSentidoEje({
   points[0] = { lng: lng0, lat: lat0 }
   points[points.length - 1] = { lng: lng1, lat: lat1 }
 
+  if (!pathSentidoEjeEsValido(points, {
+    chordM,
+    absSpan: Math.abs(absB - absA),
+    distIni: d0,
+    distFin: d1,
+  })) {
+    return rectaSentidoEje(lng0, lat0, lng1, lat1, meta, true)
+  }
+
   return {
     points,
     absIni: p0.abs_m,
@@ -363,6 +576,8 @@ export function construirLineaSentidoEje({
     distIni: d0,
     distFin: d1,
     eje_id: ejeUsar.id,
+    along: true,
+    degraded: false,
   }
 }
 

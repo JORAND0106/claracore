@@ -11,6 +11,7 @@ import {
   densifyPolygonRingSentidoEje,
   mensajeNodoInexistente,
   parseCoordRowsForCanvas,
+  redensifySentidoEjeObjects,
   resolveNodoPorNumero,
 } from './esquemaApplyCoordRows.js'
 
@@ -194,5 +195,56 @@ describe('esquemaApplyCoordRows', () => {
     // Orden de unión respetado: primer punto = nodo 1
     assert.equal(ring.points[0].x, nodes[0].x)
     assert.equal(ring.points[0].y, nodes[0].y)
+  })
+
+  it('redensifySentidoEjeObjects reconstruye polígono deformado desde nodos', async () => {
+    const { gkBogotaToWgs84 } = await import('../../utils/epsg3116.js')
+    const corners = [
+      { norte: 1000000, este: 1000010 },
+      { norte: 1000080, este: 1000010 },
+      { norte: 1000080, este: 1000030 },
+      { norte: 1000000, este: 1000030 },
+    ]
+    const parsed = parseCoordRowsForCanvas(corners)
+    const { origin, nodes } = buildNodosFromParsedCoords(parsed, {
+      uid: (() => { let i = 0; return () => `n${++i}` })(),
+    })
+    const p0 = gkBogotaToWgs84(1000000, 1000000)
+    const p1 = gkBogotaToWgs84(1000000, 1000080)
+    const ejes = [{
+      id: 0,
+      puntos: [
+        { m: 0, lng: p0.lng, lat: p0.lat },
+        { m: 40, lng: p0.lng, lat: (p0.lat + p1.lat) / 2 },
+        { m: 80, lng: p1.lng, lat: p1.lat },
+      ],
+    }]
+    // Polígono "deformado" guardado: pico lejano entre nodos.
+    const deformed = {
+      id: 'poly1',
+      type: 'polilinea',
+      closed: true,
+      sentidoEje: true,
+      cornerNodeNums: nodes.map((n) => n.nodeNum),
+      points: [
+        { x: nodes[0].x, y: nodes[0].y },
+        { x: nodes[0].x - 5000, y: nodes[0].y - 5000 }, // pico
+        { x: nodes[1].x, y: nodes[1].y },
+        { x: nodes[2].x, y: nodes[2].y },
+        { x: nodes[3].x, y: nodes[3].y },
+      ],
+    }
+    const scene = [...nodes, deformed]
+    const out = redensifySentidoEjeObjects(scene, null, { origin, ejes, stepM: 5 })
+    assert.equal(out.changed, true)
+    const poly = out.objects.find((o) => o.id === 'poly1')
+    assert.ok(poly)
+    assert.ok(poly.points.every((p) => Math.hypot(p.x - nodes[0].x, p.y - nodes[0].y) < 4000
+      || Math.hypot(p.x - nodes[1].x, p.y - nodes[1].y) < 4000
+      || Math.hypot(p.x - nodes[2].x, p.y - nodes[2].y) < 4000
+      || Math.hypot(p.x - nodes[3].x, p.y - nodes[3].y) < 4000
+      || poly.points.length > 4))
+    // El pico lejano no debe sobrevivir
+    assert.ok(!poly.points.some((p) => Math.hypot(p.x - (nodes[0].x - 5000), p.y - (nodes[0].y - 5000)) < 1))
   })
 })
