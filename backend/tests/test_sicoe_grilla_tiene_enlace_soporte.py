@@ -18,9 +18,9 @@ def test_enlace_soporte_tiene_urls_variantes():
 
 def test_enriquecer_tiene_enlace_desde_cabecera(monkeypatch):
     rows = [
-        {"id": 1, "enlace_soporte": '["https://a.com"]'},
-        {"id": 2, "enlace_soporte": None},
-        {"id": 3, "enlace_soporte": "[]"},
+        {"id": 1, "enlace_soporte": '["https://a.com"]', "dibujo_geojson": {"type": "FeatureCollection", "features": [{"type": "Feature"}]}},
+        {"id": 2, "enlace_soporte": None, "dibujo_geojson": {"type": "FeatureCollection", "features": [{"type": "Feature"}]}},
+        {"id": 3, "enlace_soporte": "[]", "dibujo_geojson": {"type": "FeatureCollection", "features": [{"type": "Feature"}]}},
     ]
     calls = {"n": 0}
     q = MagicMock()
@@ -41,7 +41,7 @@ def test_enriquecer_tiene_enlace_desde_cabecera(monkeypatch):
     assert rows[0]["tiene_enlace_soporte"] is True
     assert rows[1]["tiene_enlace_soporte"] is False
     assert rows[2]["tiene_enlace_soporte"] is False
-    assert calls["n"] == 1  # batch solo para ids sin cabecera
+    assert calls["n"] == 1  # batch enlace solo para ids sin cabecera; dibujo ya viene en payload
 
 
 def test_enriquecer_tiene_enlace_desde_registro(monkeypatch):

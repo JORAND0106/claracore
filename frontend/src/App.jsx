@@ -63,7 +63,7 @@ import SicoeMapaHuellas from './modules/sicoe-obra/SicoeMapaHuellas'
 import SicoeMoverRegistrosActasModal from './modules/sicoe-obra/SicoeMoverRegistrosActasModal'
 import SicoeOfertaDibujoReporteModal from './modules/sicoe-obra/SicoeOfertaDibujoReporteModal'
 import SicoeDibujoReporteEditor from './modules/sicoe-obra/SicoeDibujoReporteEditor'
-import { reporteTieneDibujo } from './modules/sicoe-obra/sicoeDibujoReporteApi'
+import { reporteTieneDibujo, reporteSinDibujo } from './modules/sicoe-obra/sicoeDibujoReporteApi'
 import ModuloPlanoMapaCalor from './modules/sicoe-obra/ModuloPlanoMapaCalor'
 import { useTopoNivelacionMapaCapa } from './components/topografia/useTopoNivelacionMapaCapa'
 import SicoeLocalizacionFields from './modules/sicoe-obra/SicoeLocalizacionFields'
@@ -360,35 +360,46 @@ function sicoeTieneEnlaceSoporte(raw) {
 }
 
 /**
- * Ícono discreto de soporte adjunto para la grilla de reportes.
- * Solo renderiza contenido cuando `tiene` es true (reserva el hueco visual con minWidth).
+ * Ícono discreto de soporte adjunto (clip) para la grilla de reportes.
+ * Solo renderiza cuando `tiene` es true.
  */
 function SicoeIconoSoporteAdjunto({ tiene, t, size = 'var(--cc-sm)' }) {
-  if (!tiene) {
-    return <span aria-hidden style={{ display: 'inline-block', width: '1.1em', flexShrink: 0 }} />
-  }
-  const color = t?.textMuted || 'currentColor'
+  if (!tiene) return null
+  const color = t?.primary || t?.textMuted || '#475569'
   return (
     <span
       role="img"
-      aria-label="Soporte adjunto"
-      title="Soporte adjunto"
+      aria-label="Enlace / soporte adjunto"
+      title="Enlace / soporte adjunto"
       style={{
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: '1.1em',
         flexShrink: 0,
+        width: '1.15em',
+        height: '1.15em',
         fontSize: size,
         lineHeight: 1,
         color,
-        opacity: 0.92,
         cursor: 'default',
         userSelect: 'none',
         WebkitUserSelect: 'none',
       }}
     >
-      📎
+      <svg
+        viewBox="0 0 24 24"
+        width="1em"
+        height="1em"
+        aria-hidden="true"
+        focusable="false"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M21.44 11.05l-8.49 8.49a5.25 5.25 0 01-7.42-7.42l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a1.75 1.75 0 01-2.47-2.47l8.49-8.48" />
+      </svg>
     </span>
   )
 }
@@ -8639,6 +8650,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             }))
             try {
               propagarReporteGuardado({
+                id: reporte?.id,
                 dibujo_geojson: patch.dibujo_geojson,
                 tiene_dibujo: true,
               })
@@ -12728,6 +12740,42 @@ function ModuloSicoeObra({
             </button>
           </div>
         )}
+        {busquedaRealizada && reportesMostrados?.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: '10px 16px',
+              padding: sicoeCompact ? '8px 12px' : '7px 16px',
+              borderBottom: `1px solid ${t.border}`,
+              fontSize: 'var(--cc-caption)',
+              color: t.textMuted,
+              background: t.bgCard,
+            }}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span
+                aria-hidden
+                style={{
+                  width: 14,
+                  height: 10,
+                  borderRadius: 2,
+                  background: '#f59e0b33',
+                  borderLeft: '3px solid #d97706',
+                  flexShrink: 0,
+                }}
+              />
+              Ámbar = sin dibujo
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-8.49 8.49a5.25 5.25 0 01-7.42-7.42l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a1.75 1.75 0 01-2.47-2.47l8.49-8.48" />
+              </svg>
+              Clip = enlace adjunto
+            </span>
+          </div>
+        )}
         {/* Header grid — sticky (desktop) */}
         <div className="cc-sicoe-reportes-grid" style={{
           display:'grid',
@@ -12775,13 +12823,20 @@ function ModuloSicoeObra({
         ) : (
           <>
           <div className="cc-sicoe-reportes-grid cc-sicoe-table-scroll" style={{ overflowX: sicoeCompact ? undefined : undefined }}>
-          {reportesMostrados.map(rep => (
+          {reportesMostrados.map(rep => {
+          const sinDibujo = reporteSinDibujo(rep)
+          return (
           <div key={rep.id} style={{
             display:'grid',
             gridTemplateColumns: sicoeGrillaCols,
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'var(--cc-sm)', color:t.text, cursor:'pointer',
-            transition:'background 0.15s', minWidth: 820 }}
+            transition:'background 0.15s', minWidth: 820,
+            background: sinDibujo ? '#f59e0b14' : 'transparent',
+            borderLeft: sinDibujo ? '3px solid #d97706' : '3px solid transparent',
+            boxSizing: 'border-box',
+          }}
+            title={sinDibujo ? 'Sin dibujo' : undefined}
             onClick={() => {
               if (!esSub && rep.estado === 'Borrador') {
                 ;(async () => {
@@ -12859,48 +12914,14 @@ function ModuloSicoeObra({
                 })()
               }
             }}
-            onMouseEnter={e => e.currentTarget.style.background = t.bg}
-            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+            onMouseEnter={e => { e.currentTarget.style.background = sinDibujo ? '#f59e0b22' : t.bg }}
+            onMouseLeave={e => { e.currentTarget.style.background = sinDibujo ? '#f59e0b14' : 'transparent' }}>
             <div style={{ fontWeight:'700', color:t.primary, display:'flex', alignItems:'center', gap:4, minWidth:0 }}>
               <span>#{rep.numero_reporte}</span>
               <SicoeIconoSoporteAdjunto
                 tiene={!!rep.tiene_enlace_soporte || sicoeTieneEnlaceSoporte(rep.enlace_soporte)}
                 t={t}
               />
-              {!reporteTieneDibujo(rep) && !rep.tiene_dibujo && (
-                <span
-                  title="Sin dibujo de reporte"
-                  style={{
-                    fontSize: 'var(--cc-caption)',
-                    fontWeight: 800,
-                    color: '#d97706',
-                    background: '#d9770618',
-                    border: '1px solid #d9770644',
-                    borderRadius: 6,
-                    padding: '1px 6px',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Sin dibujo
-                </span>
-              )}
-              {(reporteTieneDibujo(rep) || rep.tiene_dibujo) && (
-                <span
-                  title="Reporte con dibujo / huella"
-                  style={{
-                    fontSize: 'var(--cc-caption)',
-                    fontWeight: 800,
-                    color: '#0d9488',
-                    background: '#0d948818',
-                    border: '1px solid #0d948844',
-                    borderRadius: 6,
-                    padding: '1px 6px',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  ✎ Dibujo
-                </span>
-              )}
             </div>
             <div
               style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3, whiteSpace:'nowrap' }}
@@ -12936,22 +12957,27 @@ function ModuloSicoeObra({
               {rep.num_registros != null ? rep.num_registros : '—'}
             </div>
           </div>
-        ))}
+          )
+        })}
           </div>
 
           {/* Móvil: tarjetas de reportes */}
           <div className="cc-sicoe-reportes-cards">
-            {reportesMostrados.map(rep => (
+            {reportesMostrados.map(rep => {
+              const sinDibujo = reporteSinDibujo(rep)
+              return (
               <div
                 key={`card-rep-${rep.id}`}
                 className="cc-sicoe-reporte-card"
                 role="button"
                 tabIndex={0}
                 style={{
-                  background: t.bg,
+                  background: sinDibujo ? '#f59e0b14' : t.bg,
                   border: `1px solid ${t.border}`,
+                  borderLeft: sinDibujo ? '3px solid #d97706' : `1px solid ${t.border}`,
                   boxShadow: t.shadow,
                 }}
+                title={sinDibujo ? 'Sin dibujo' : undefined}
                 onClick={() => {
                   if (!esSub && rep.estado === 'Borrador') {
                     ;(async () => {
@@ -13038,11 +13064,6 @@ function ModuloSicoeObra({
                         t={t}
                         size="var(--cc-body)"
                       />
-                      {!reporteTieneDibujo(rep) && !rep.tiene_dibujo ? (
-                        <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: '#d97706', background: '#d9770618', border: '1px solid #d9770644', borderRadius: 6, padding: '1px 6px' }}>Sin dibujo</span>
-                      ) : (
-                        <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 800, color: '#0d9488', background: '#0d948818', border: '1px solid #0d948844', borderRadius: 6, padding: '1px 6px' }}>✎ Dibujo</span>
-                      )}
                     </div>
                     <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 2 }}>
                       {fmtSicoeFechaCreacion(rep.created_at)}
@@ -13061,7 +13082,8 @@ function ModuloSicoeObra({
                   )}
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
           </>
         )}

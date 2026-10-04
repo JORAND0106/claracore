@@ -2,13 +2,26 @@
  * API dibujo por reporte (huella compartida).
  */
 export function reporteTieneDibujo(reporte) {
-  const g = reporte?.dibujo_geojson
+  if (!reporte || typeof reporte !== 'object') return false
+  if (reporte.tiene_dibujo === true) return true
+  const g = reporte.dibujo_geojson || reporte.perimetro_geojson
   if (!g) return false
   if (typeof g === 'object') {
     if (g.type === 'FeatureCollection') return Array.isArray(g.features) && g.features.length > 0
-    if (g.type === 'Feature' || g.type === 'Polygon' || g.type === 'MultiPolygon') return true
+    if (
+      g.type === 'Feature'
+      || g.type === 'Polygon'
+      || g.type === 'MultiPolygon'
+      || g.type === 'Point'
+      || g.type === 'LineString'
+    ) return true
   }
   return false
+}
+
+/** True cuando el reporte aún no tiene dibujo/huella (para resalte en grilla). */
+export function reporteSinDibujo(reporte) {
+  return !reporteTieneDibujo(reporte)
 }
 
 export async function guardarDibujoReporte({
