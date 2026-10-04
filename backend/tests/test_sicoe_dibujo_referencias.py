@@ -53,9 +53,24 @@ def test_dibujo_referencias_encuentra_peers(monkeypatch):
                 calls["all"] += 1
                 return MagicMock(
                     data=[
-                        {"reporte_id": 20, "item_numero": "1.1", "costo_directo": 50},
-                        {"reporte_id": 20, "item_numero": "9.9", "costo_directo": 25},
-                        {"reporte_id": 30, "item_numero": "1.1", "costo_directo": 200},
+                        {
+                            "reporte_id": 20,
+                            "numero_registro": 1,
+                            "item_numero": "1.1",
+                            "costo_directo": 50,
+                        },
+                        {
+                            "reporte_id": 20,
+                            "numero_registro": 2,
+                            "item_numero": "9.9",
+                            "costo_directo": 25,
+                        },
+                        {
+                            "reporte_id": 30,
+                            "numero_registro": 5,
+                            "item_numero": "1.1",
+                            "costo_directo": 200,
+                        },
                     ]
                 )
             # so_reportes
@@ -73,6 +88,12 @@ def test_dibujo_referencias_encuentra_peers(monkeypatch):
                                     "geometry": {"type": "Point", "coordinates": [0, 0]},
                                 }
                             ],
+                        },
+                        "dibujo_escena": {
+                            "version": 3,
+                            "dibujo_tipo": "nodo",
+                            "origin_lnglat": {"lng": -74.0, "lat": 4.6},
+                            "objects": [{"type": "nodo", "x": 0, "y": 0}],
                         },
                     },
                     {
@@ -101,6 +122,13 @@ def test_dibujo_referencias_encuentra_peers(monkeypatch):
     assert "9.9" in ref["items"]
     assert ref["costo_directo"] == 75.0
     assert ref["dibujo_geojson"]["type"] == "FeatureCollection"
+    assert isinstance(ref.get("dibujo_escena"), dict)
+    assert ref["dibujo_escena"]["dibujo_tipo"] == "nodo"
+    assert len(ref["registros"]) == 2
+    assert ref["registros"][0]["numero_registro"] == 1
+    assert ref["registros"][0]["item_numero"] == "1.1"
+    assert ref["registros"][1]["numero_registro"] == 2
+
 
 
 def test_dibujo_referencias_omite_sin_dibujo(monkeypatch):

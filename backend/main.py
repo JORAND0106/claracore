@@ -26751,7 +26751,8 @@ def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> d
         return empty
 
     # Para valor del reporte peer: sumar costo de TODOS sus registros (no solo ítems compartidos).
-    # Primero identificar peers; luego batch de costos/ítems completos.
+    # Primero identificar peers; luego batch de costos/ítems/registros completos.
+    registros_por_peer: Dict[int, list] = {}
     for r in regs:
         rid = r.get("reporte_id")
         if rid is None:
@@ -26770,19 +26771,26 @@ def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> d
     peer_list = sorted(peer_ids)
     for chunk in _sicoe_chunks_int(peer_list, 200):
         ch = list(chunk)
-        try:
-            def _q_all(ids=ch):
-                return (
-                    supabase.table("so_registros")
-                    .select("reporte_id, item_numero, costo_directo")
-                    .eq("contrato_id", contrato_id)
-                    .in_("reporte_id", ids)
-                    .execute()
-                    .data
-                )
-            batch = supabase_execute(_q_all) or []
-        except Exception:
-            batch = []
+        batch = []
+        for cols in (
+            "reporte_id, numero_registro, item_numero, costo_directo",
+            "reporte_id, item_numero, costo_directo",
+        ):
+            try:
+                def _q_all(ids=ch, select_cols=cols):
+                    return (
+                        supabase.table("so_registros")
+                        .select(select_cols)
+                        .eq("contrato_id", contrato_id)
+                        .in_("reporte_id", ids)
+                        .execute()
+                        .data
+                    )
+                batch = supabase_execute(_q_all) or []
+                break
+            except Exception:
+                batch = []
+                continue
         for r in batch:
             rid = r.get("reporte_id")
             if rid is None:
@@ -26796,13 +26804,24 @@ def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> d
             except (TypeError, ValueError):
                 cd = 0.0
             costo_por_peer[rid_i] = float(costo_por_peer.get(rid_i) or 0) + cd
+            num_reg = r.get("numero_registro")
+            try:
+                num_reg_i = int(num_reg) if num_reg is not None else None
+            except (TypeError, ValueError):
+                num_reg_i = None
+            registros_por_peer.setdefault(rid_i, []).append({
+                "numero_registro": num_reg_i,
+                "item_numero": it or None,
+            })
 
-    # Cabeceras con dibujo
+    # Cabeceras con dibujo (+ escena para forma real en el editor)
     reportes_map: Dict[int, dict] = {}
     for chunk in _sicoe_chunks_int(peer_list, 100):
         ch = list(chunk)
         batch = []
         for cols in (
+            "id, numero_reporte, dibujo_geojson, dibujo_escena, perimetro_geojson",
+            "id, numero_reporte, dibujo_geojson, dibujo_escena",
             "id, numero_reporte, dibujo_geojson, perimetro_geojson",
             "id, numero_reporte, dibujo_geojson",
             "id, numero_reporte, perimetro_geojson",
@@ -26838,12 +26857,26 @@ def _sicoe_dibujo_referencias_mismo_item(contrato_id: int, reporte_id: int) -> d
                         "type": "FeatureCollection",
                         "features": [{"type": "Feature", "geometry": dg, "properties": {}}],
                     }
+            regs_peer = registros_por_peer.get(int(rid)) or []
+            regs_peer_sorted = sorted(
+                regs_peer,
+                key=lambda x: (
+                    x.get("numero_registro") is None,
+                    x.get("numero_registro") if x.get("numero_registro") is not None else 0,
+                    str(x.get("item_numero") or ""),
+                ),
+            )
+            escena = rep.get("dibujo_escena")
+            if escena is not None and not isinstance(escena, dict):
+                escena = None
             reportes_map[int(rid)] = {
                 "reporte_id": int(rid),
                 "numero_reporte": rep.get("numero_reporte"),
                 "items": sorted(items_por_peer.get(int(rid)) or []),
                 "costo_directo": round(float(costo_por_peer.get(int(rid)) or 0), 2),
                 "dibujo_geojson": dg,
+                "dibujo_escena": escena,
+                "registros": regs_peer_sorted,
             }
 
     referencias = [reportes_map[i] for i in peer_list if i in reportes_map]

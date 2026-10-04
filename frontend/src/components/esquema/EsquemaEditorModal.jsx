@@ -5612,11 +5612,16 @@ function drawObject(ctx, obj, selected, opts = {}) {
   if (!obj) return
   const ui = resolveEsquemaUi(opts.ui)
   const selColor = ui.selection
-  const ink = esquemaEntityInk(obj.color, ui)
+  const huella = !!opts.huellaMode
+  // En dibujo de reporte, resaltar el trazo propio frente a referencias (más tinta / primary).
+  const ink = huella
+    ? (ui.primary || esquemaEntityInk(obj.color, ui) || '#0077B6')
+    : esquemaEntityInk(obj.color, ui)
+  const huellaStrokeBoost = huella ? 1.85 : 1
   ctx.save()
   if (obj.type === 'nodo') {
     drawNodo(ctx, obj, selected, opts.zoom || 1, ui, {
-      huellaMode: !!opts.huellaMode,
+      huellaMode: huella,
     })
     ctx.restore()
     return
@@ -5735,7 +5740,8 @@ function drawObject(ctx, obj, selected, opts = {}) {
   if (PATH_TYPES.has(obj.type)) {
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
-    const lw = obj.erase ? Math.max(8, (obj.width || 3) * 3) : (obj.width || 3)
+    const baseLw = obj.erase ? Math.max(8, (obj.width || 3) * 3) : (obj.width || 3)
+    const lw = obj.erase ? baseLw : baseLw * huellaStrokeBoost
     ctx.lineWidth = lw
     ctx.globalCompositeOperation = obj.erase ? 'destination-out' : 'source-over'
     ctx.strokeStyle = ink
@@ -5747,6 +5753,19 @@ function drawObject(ctx, obj, selected, opts = {}) {
         for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
         ctx.stroke()
       } else {
+        if (huella) {
+          ctx.save()
+          ctx.strokeStyle = ui.canvas || '#ffffff'
+          ctx.lineWidth = lw + Math.max(2.2, lw * 0.45)
+          ctx.globalAlpha = 0.92
+          ctx.beginPath()
+          ctx.moveTo(pts[0].x, pts[0].y)
+          for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x, pts[i].y)
+          ctx.stroke()
+          ctx.restore()
+          ctx.strokeStyle = ink
+          ctx.lineWidth = lw
+        }
         strokeStyledPolyline(ctx, pts, obj.lineStyle, lw)
       }
     }
@@ -5754,7 +5773,7 @@ function drawObject(ctx, obj, selected, opts = {}) {
     ctx.globalCompositeOperation = 'source-over'
     ctx.strokeStyle = ink
     ctx.fillStyle = ink
-    const lw = obj.width || 3
+    const lw = (obj.width || 3) * huellaStrokeBoost
     ctx.lineWidth = lw
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
@@ -5801,32 +5820,43 @@ function drawObject(ctx, obj, selected, opts = {}) {
 
 function drawNodo(ctx, obj, selected, zoom = 1, ui, huellaOpts = {}) {
   const palette = resolveEsquemaUi(ui)
-  const ink = esquemaEntityInk(obj.color, palette)
+  const huella = !!huellaOpts?.huellaMode
+  const ink = huella
+    ? (palette.primary || esquemaEntityInk(obj.color, palette) || '#0077B6')
+    : esquemaEntityInk(obj.color, palette)
   const x = obj.x || 0
   const y = obj.y || 0
   const z = zoom || 1
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
 
-  // Marcador legible a cualquier zoom (especialmente en dibujo de reporte / huellaMode).
-  const r = huellaOpts?.huellaMode
-    ? Math.max(nodeMarkerWorldRadius(z) * 1.6, 3.5 / z)
+  // Marcador legible a cualquier zoom; en huellaMode aún más destacado vs referencias.
+  const r = huella
+    ? Math.max(nodeMarkerWorldRadius(z) * 2.15, 4.2 / z)
     : nodeMarkerWorldRadius(z)
+  if (huella) {
+    ctx.beginPath()
+    ctx.arc(x, y, r + Math.max(2.4 / z, 1.2), 0, Math.PI * 2)
+    ctx.fillStyle = palette.canvas || '#ffffff'
+    ctx.globalAlpha = 0.95
+    ctx.fill()
+    ctx.globalAlpha = 1
+  }
   ctx.fillStyle = ink
-  ctx.strokeStyle = selected ? palette.selection : palette.canvas
-  ctx.lineWidth = Math.min(1.2 / z, r * 0.35)
+  ctx.strokeStyle = selected ? palette.selection : (palette.canvas || '#fff')
+  ctx.lineWidth = Math.min(huella ? 2.2 / z : 1.2 / z, r * 0.4)
   ctx.beginPath()
   ctx.arc(x, y, r, 0, Math.PI * 2)
   ctx.fill()
   ctx.stroke()
 
-  const labelSize = Math.max(11 / z, 9 / z)
+  const labelSize = Math.max((huella ? 13 : 11) / z, 9 / z)
   ctx.font = `700 ${labelSize}px sans-serif`
   ctx.fillStyle = ink
   ctx.strokeStyle = palette.canvas
-  ctx.lineWidth = 2.4 / z
+  ctx.lineWidth = (huella ? 3.2 : 2.4) / z
   const label = String(obj.nodeNum ?? '')
-  const rLabel = Math.max(nodeMarkerWorldRadius(z) * (huellaOpts?.huellaMode ? 1.5 : 1), 3 / z)
+  const rLabel = Math.max(nodeMarkerWorldRadius(z) * (huella ? 1.85 : 1), 3 / z)
   ctx.strokeText(label, x + rLabel + 3 / z, y - 1.5 / z)
   ctx.fillText(label, x + rLabel + 3 / z, y - 1.5 / z)
   ctx.restore()

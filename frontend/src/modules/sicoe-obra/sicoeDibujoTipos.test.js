@@ -87,6 +87,36 @@ describe('esquemaSceneToGeojson por tipo', () => {
     assert.equal(feat.geometry.type, 'Polygon')
   })
 
+  it('detalle desde escena expande elipse y línea de la entidad', async () => {
+    const { esquemaEscenaToDetalleGeojson } = await import('./sicoeDibujoEscenaGeojson.js')
+    const w = metersToWorld(2)
+    const h = metersToWorld(1)
+    const fc = esquemaEscenaToDetalleGeojson({
+      dibujo_tipo: 'nodo',
+      origin_lnglat: origin,
+      objects: [
+        { type: 'nodo', x: 0, y: 0, nodeNum: '1' },
+        {
+          type: 'bloque',
+          x: -w / 2,
+          y: -h / 2,
+          w,
+          h,
+          rotation: Math.PI / 6,
+          children: [
+            { type: 'elipse', x1: 0, y1: 0, x2: w, y2: h },
+            { type: 'linea', x1: 0, y1: h / 2, x2: w, y2: h / 2 },
+          ],
+        },
+      ],
+    }, { reporteId: 7 })
+    assert.ok(fc.features.some((f) => f.geometry.type === 'Point'))
+    assert.ok(fc.features.some((f) => f.geometry.type === 'LineString'))
+    const poly = fc.features.find((f) => f.geometry.type === 'Polygon')
+    assert.ok(poly)
+    assert.ok(poly.geometry.coordinates[0].length > 5)
+  })
+
   it('nodo sin entidad genera solo Point (marcador legible)', () => {
     const fc = esquemaSceneToGeojson(
       [{ id: 'n1', type: 'nodo', x: 0, y: 0, nodeNum: '1' }],
