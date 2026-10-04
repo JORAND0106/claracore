@@ -8,6 +8,7 @@ import {
   buildLineasSentidoEje,
   buildLineasUniendoNodos,
   buildNodosFromParsedCoords,
+  densifyPolygonRingSentidoEje,
   mensajeNodoInexistente,
   parseCoordRowsForCanvas,
   resolveNodoPorNumero,
@@ -49,8 +50,12 @@ describe('esquemaApplyCoordRows', () => {
     assert.equal(nodes[1].x, nodes[0].x)
   })
 
-  it('tipo polígono abre unir por número; nodo no une solo', () => {
-    assert.equal(accionDibujarNodosPorTipo('poligono').abrirUnirPorNumero, true)
+  it('tipo polígono abre unir por número y pregunta sentido del eje', () => {
+    assert.deepEqual(accionDibujarNodosPorTipo('poligono'), {
+      unirEnOrden: false,
+      abrirUnirPorNumero: true,
+      preguntarSentidoEje: true,
+    })
     assert.equal(accionDibujarNodosPorTipo('nodo').unirEnOrden, false)
     assert.equal(accionDibujarNodosPorTipo('nodo').abrirUnirPorNumero, false)
   })
@@ -134,5 +139,60 @@ describe('esquemaApplyCoordRows', () => {
     assert.ok(built.objects[0].points.length >= 3)
     assert.equal(built.objects[0].points[0].x, nodes[0].x)
     assert.equal(built.objects[0].points[0].y, nodes[0].y)
+  })
+
+  it('densifyPolygonRingSentidoEje: sin eje deja anillo recto de 4 vértices', () => {
+    const parsed = parseCoordRowsForCanvas([
+      { norte: 100, este: 100 },
+      { norte: 100, este: 200 },
+      { norte: 150, este: 200 },
+      { norte: 150, este: 100 },
+    ])
+    const { origin, nodes } = buildNodosFromParsedCoords(parsed, {
+      uid: (() => { let i = 0; return () => `n${++i}` })(),
+    })
+    const ring = densifyPolygonRingSentidoEje(nodes, { type: 'FeatureCollection', features: [] }, { origin })
+    assert.equal(ring.usedEje, false)
+    assert.equal(ring.points.length, 4)
+    assert.deepEqual(ring.edgeKinds, ['crossing', 'crossing', 'crossing', 'crossing'])
+  })
+
+  it('densifyPolygonRingSentidoEje densifica caras paralelas al eje y deja transversales', async () => {
+    const { gkBogotaToWgs84 } = await import('../../utils/epsg3116.js')
+    // Rectángulo alargado N-S: lados largos siguen el eje; extremos E-O son transversales.
+    const corners = [
+      { norte: 1000000, este: 1000010 }, // 1 SO
+      { norte: 1000080, este: 1000010 }, // 2 NO
+      { norte: 1000080, este: 1000030 }, // 3 NE
+      { norte: 1000000, este: 1000030 }, // 4 SE
+    ]
+    const parsed = parseCoordRowsForCanvas(corners)
+    const { origin, nodes } = buildNodosFromParsedCoords(parsed, {
+      uid: (() => { let i = 0; return () => `n${++i}` })(),
+    })
+    // Eje al oeste de los puntos (este menor), N-S.
+    const p0 = gkBogotaToWgs84(1000000, 1000000)
+    const p1 = gkBogotaToWgs84(1000000, 1000080)
+    assert.ok(p0 && p1)
+    const ejes = [{
+      id: 0,
+      puntos: [
+        { m: 0, lng: p0.lng, lat: p0.lat },
+        { m: 40, lng: p0.lng, lat: (p0.lat + p1.lat) / 2 },
+        { m: 80, lng: p1.lng, lat: p1.lat },
+      ],
+    }]
+    const ring = densifyPolygonRingSentidoEje(nodes, null, {
+      origin,
+      ejes,
+      stepM: 5,
+    })
+    assert.equal(ring.usedEje, true)
+    assert.ok(ring.points.length > 4, `points=${ring.points.length}`)
+    assert.ok(ring.edgeKinds.includes('along'))
+    assert.ok(ring.edgeKinds.includes('crossing'))
+    // Orden de unión respetado: primer punto = nodo 1
+    assert.equal(ring.points[0].x, nodes[0].x)
+    assert.equal(ring.points[0].y, nodes[0].y)
   })
 })
